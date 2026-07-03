@@ -1,0 +1,298 @@
+schema_version: 1
+slug: audit-remediation-wave-3
+intent: >-
+  Harden the dev-loop verification system so its own coverage-selection and liveness oracles are
+  honest: de-vacuum check_coverage, surface a wired coverage advisory (progressive enforcement),
+  and repoint the stale AthenaViews oracle at the live DuckLake decisions surface -- closing audit
+  findings VF-02/VF-03 (T3.16) so verifier signals can be trusted as the executor era approaches.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-audit-remediation-wave-3.yaml
+phase: >-
+  Platform tier T3 / T3.16 "Verifier-coverage selection repair (real covers + wired advisory)";
+  audit-remediation wave 3 of 6 (findings VF-02, VF-03) from audits/verification-system-review-f80508b.yaml.
+closes_criteria:
+  - "T3.16:c1"
+  - "T3.16:c2"
+  - "T3.16:c3"
+scope:
+  - file: scripts/verifiers/__init__.py
+    action: Modify
+    purpose: >-
+      VF-02: make check_coverage() honest. The LOAD-BEARING fix is skipping the "**"/"*" wildcard globs
+      when building all_globs (a verifier claiming "**" makes no selection claim). Also tidy the getattr
+      fallback ["**"]->[] as a defensive/future-proof change -- inert today because the base
+      Verifier.covers=["**"] (harness.py:108) means getattr always finds the attribute and never reaches
+      the default. REGISTRY unchanged. Task-sanctioned "treat ** as non-covering" option; harness.py NOT touched.
+  - file: scripts/verifiers/athena_views.py
+    action: Modify
+    purpose: >-
+      VF-03: repoint the liveness probe off the frozen Athena view ops_decisions_current onto the live
+      DuckLake decisions surface via DuckLakeReader().named("decisions_max_updated") (closed boundary,
+      no caller SQL); drop the unearned "Views are fresh" PASS claim; SKIP honestly when the reader/creds
+      are unavailable and FAIL on unexpected error; declare explicit narrow covers (no longer ["**"]).
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      VF-02(d): give the existing run_coverage_check() an optional changed_files param so the --pre
+      closure can reuse the already-computed diff (avoids a redundant git call; budget-safe).
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      VF-02(d): insert a new scaffold Step _s("coverage_report") into pre_sequence() immediately before
+      _s("budget_assertion"), wiring the advisory into the fast (pr-validate) tier.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      VF-02(d): add the _scaffold_coverage_report closure (calls run_coverage_check(changed)) and register
+      it in the --pre block's scaffold_fns dict. This is the sanctioned Decision 104 scaffold pattern
+      (scaffold closures live in main(); the "never touch validate.py" clause governs registered checks).
+  - file: tests/test_verifiers/test_coverage.py
+    action: Modify
+    purpose: >-
+      VF-02: add a differential test against the REAL registry asserting
+      check_coverage(["zzz/definitely_not_covered.xyz"]) returns the path -- this FAILS on the pre-change
+      tree and passes after the fix (the required differential property).
+  - file: tests/test_verifiers/test_athena_views.py
+    action: Modify
+    purpose: >-
+      VF-03: update the PASS/SKIP/FAIL branch + message assertions for the DuckLake repoint (patch
+      DuckLakeReader, not awswrangler); add assertions that covers is explicit (not ["**"]) and the
+      message asserts no freshness; keep the tier=V3 and NON_HERMETIC_BY_CONSTRUCTION tests.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      VF-02(d): add ("scaffold", "coverage_report") to FROZEN_PRE_SEQUENCE before
+      ("scaffold", "budget_assertion") -- the Decision 104 equivalence oracle for the new step.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      VF-02(d): keep the existing run_coverage_check() tests green under the new optional param and add a
+      changed_files-param test.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    (T3.16:c1) check_coverage(["zzz/definitely_not_covered.xyz"]) returns the path -- verifier-coverage
+    selection is no longer structurally vacuous; a differential unit test asserts it and FAILS on the
+    pre-change tree while a genuinely-covered path (e.g. config/agent/data_quality/ops.yaml) still returns [].
+  - >-
+    (T3.16:c2) the coverage_report advisory is wired into pre_sequence() (FROZEN_PRE_SEQUENCE updated) and
+    prints a "Verifier coverage report (advisory)" section on a validate --pre run that touches an uncovered
+    file; it never fails the build; --coverage no longer stands alone as the only caller.
+  - >-
+    (T3.16:c3) AthenaViewsVerifier probes the live DuckLake ops_decisions surface via
+    named("decisions_max_updated") -- its PASS message asserts no freshness it does not measure, it FAILs/SKIPs
+    honestly when the target is unreachable/dropped, and its covers is explicit (not ["**"]); no
+    scripts/verifiers/ reference to ops_decisions_current remains.
+  - >-
+    validate --pre is GREEN on the branch: the verifier same-PR guard passes (AthenaViews covers match no
+    file in this diff -- exception c), the 5-minute fast-tier budget holds, and all diff-selected tests pass.
+  - >-
+    the V3 live smoke of the repointed verifier PASSes with session creds (or SKIPs with an honest,
+    actionable message when creds/reader are unavailable) -- never a false PASS against a dead surface.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Differential coverage property (c1): the new test passes on the fixed working tree and FAILS when the
+      two source fixes are stashed away (fail-on-revert). Run before committing (working-tree differential).
+    command: >-
+      bin/venv-python -m pytest tests/test_verifiers/test_coverage.py -k differential -q && git stash push -q
+      -m vp-diff -- scripts/verifiers/__init__.py scripts/verifiers/athena_views.py && { bin/venv-python -m
+      pytest tests/test_verifiers/test_coverage.py -k differential -q; rc=$?; git stash pop -q; [ $rc -ne 0 ]; }
+    expected: >-
+      Overall exit 0 -- the test passes with the fix present and fails (non-zero) with the fix stashed; the
+      stash is popped so the fix is restored.
+    fix_if: >-
+      The stashed run still passes (test is not truly differential -- a registered verifier still contributes
+      a "**" glob, or the test does not use the real REGISTRY).
+  - step: 2
+    phase: pre-deploy
+    action: "check_coverage honesty in both directions (c1): absurd path reported uncovered; real cover still covered."
+    command: >-
+      bin/venv-python -c "from scripts.verifiers import check_coverage as c;
+      assert c(['zzz/definitely_not_covered.xyz'])==['zzz/definitely_not_covered.xyz'], 'uncovered not reported';
+      assert c(['config/agent/data_quality/ops.yaml'])==[], 'real cover regressed'; print('coverage honest both directions')"
+    expected: "Prints 'coverage honest both directions'; exit 0."
+    fix_if: "The absurd path returns [] (still vacuous) or the DataQuality-covered path is falsely reported uncovered."
+  - step: 3
+    phase: pre-deploy
+    action: "AthenaViews repoint logic (c3), mocked (V2): PASS/SKIP/FAIL branches and honest message via patched DuckLakeReader."
+    command: "bin/venv-python -m pytest tests/test_verifiers/test_athena_views.py -q"
+    expected: "All tests pass (updated message/branch assertions; covers-explicit; no-freshness-claim; tier V3; NON_HERMETIC)."
+    fix_if: "Any test fails -- branch logic, message wording, covers, or reader mocking is wrong."
+  - step: 4
+    phase: pre-deploy
+    action: "AthenaViews covers + no-freshness-claim (c3), static assertions."
+    command: >-
+      bin/venv-python -c "from scripts.verifiers.athena_views import AthenaViewsVerifier as V;
+      assert V.covers != ['**'] and '**' not in V.covers, V.covers; print('covers=', V.covers)" && ! grep -qi
+      "fresh" scripts/verifiers/athena_views.py && echo "no freshness claim"
+    expected: "Prints an explicit non-'**' covers list; grep finds no 'fresh'; prints 'no freshness claim'."
+    fix_if: "covers is still ['**'] / contains '**', or the file still asserts freshness anywhere."
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      V3 LIVE smoke (c3): invoke the repointed verifier against the live DuckLake reader with session creds;
+      confirm a real PASS (or an honest SKIP if creds/reader unavailable) -- catches a wrong verb/reader before merge.
+    command: "bin/venv-python -m scripts.verifiers.harness --verifier AthenaViewsVerifier --json"
+    expected: >-
+      JSON shows AthenaViewsVerifier PASS with an honest message referencing live ops_decisions reachability
+      (no freshness claim) when creds are present; honest SKIPPED with an actionable message otherwise. Never a false PASS.
+    fix_if: >-
+      FAIL from an unknown named-verb / reader wiring error (fix the verb name or import), or a PASS that still
+      asserts freshness / queries a frozen surface.
+  - step: 6
+    phase: pre-deploy
+    action: "Advisory wiring (c2): FROZEN_PRE_SEQUENCE equivalence + coverage_report present in pre_sequence()."
+    command: >-
+      bin/venv-python -m pytest tests/test_checks_registry.py -q && bin/venv-python -c "from scripts.checks import
+      registry; steps=[(s.kind,s.name) for s in registry.pre_sequence()];
+      assert ('scaffold','coverage_report') in steps, steps; print('coverage_report wired into pre_sequence')"
+    expected: "Registry tests pass (FROZEN_PRE_SEQUENCE updated); prints 'coverage_report wired into pre_sequence'."
+    fix_if: "FROZEN mismatch (update the oracle) or the step is absent from pre_sequence()."
+  - step: 7
+    phase: pre-deploy
+    action: "Advisory renders (c2): the wired report prints its header and an uncovered-files section."
+    command: "bin/venv-python -m scripts.validate --coverage 2>&1 | tee /tmp/vp-cov.out; grep -q 'Verifier coverage report (advisory)' /tmp/vp-cov.out && echo OK-advisory"
+    expected: >-
+      The 'Verifier coverage report (advisory)' header prints followed by an uncovered-files listing (this branch
+      touches files no verifier covers); prints OK-advisory. Exit 0 regardless of uncovered count.
+    fix_if: "No advisory output, an error, or the report crashes on the changed-file set."
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Capstone fast-tier gate: same-PR guard passes (guard exception c), the coverage advisory fires inside
+      pre-validate, the 5-min budget holds, and all diff-selected tests pass.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: >-
+      'All checks passed' (exit 0); output contains the 'Verifier coverage report (advisory)' section and no
+      'Verifier same-PR guard' failure.
+    fix_if: >-
+      Same-PR guard fails (narrow AthenaViews covers so no changed file matches -- exception c), a budget breach,
+      or a changed test fails.
+  - step: 9
+    phase: pre-deploy
+    action: "Closure obligation (VF-03 cutover): stale-reference sweep -- no verifier references the frozen view."
+    command: "! grep -rn 'ops_decisions_current' scripts/verifiers/ && echo 'no stale reference to frozen view'"
+    expected: "No match under scripts/verifiers/; prints 'no stale reference to frozen view'."
+    fix_if: "Any remaining reference to ops_decisions_current in scripts/verifiers/ (finish the repoint)."
+  - step: 10
+    phase: pre-deploy
+    action: "Regression sweep across all touched modules."
+    command: "bin/venv-python -m pytest tests/test_verifiers/ tests/test_checks_registry.py tests/test_validate.py -q"
+    expected: "All tests pass."
+    fix_if: "Any regression in the verifier, check-registry, or validate test suites."
+constraints:
+  - >-
+    Do NOT modify scripts/verifiers/harness.py: any edit trips the CD.29 same-PR guard (its enum/Verifier
+    classes default to ["**"], matching every changed file, no exception applies), a committed test
+    (test_verifier_covers_default) pins Verifier.covers==["**"], and scripts/executor/postflight.py uses
+    res.covers for executor blocking. The VF-02 fix is confined to __init__.py.
+  - Do NOT file or bundle recommendations (task directive; Decision 67 IMPLEMENTATION-only during the executor freeze).
+  - >-
+    Do NOT drop the frozen ops_decisions_current view -- its DROP is owned by T2.26 c4 (a follow-on plan); this
+    plan only removes the verifier's reference to it (the CD.12 "mark" step).
+  - The coverage_report step stays ADVISORY (never appends to failed); gating is a later decision (T3.16 c2), not this plan.
+  - >-
+    AthenaViewsVerifier covers globs must be narrow and must NOT match any file changed in this PR (same-PR
+    guard exception c). Verify with validate --pre before pushing.
+  - Fast-tier 5-minute budget must hold (coverage_report is <100ms; verified by the budget assertion in step 8).
+  - Live DuckLake access only via the closed ducklake_reader boundary named-verb (no caller SQL) -- Decision 84 I-3.
+  - No rescue agents or workaround loops (Decision 55); on unrecoverable V3 live-smoke failure, stop and RCA.
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (77 of 77 triaged). CITE: Decision 104, Decision 84, Decision 55."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Decision 104: the coverage_report scaffold Step in pre_sequence() plus the dispatch closure in
+    scripts/validate.py main() scaffold_fns is the sanctioned scaffold pattern (scaffold steps are NOT
+    registered checks); ci.yml stays `python -m scripts.validate` only. Updating FROZEN_PRE_SEQUENCE is the
+    required equivalence-oracle step.
+  - >-
+    Decision 84 / I-3: VF-03 repoints at the closed-boundary DuckLake named-verb (decisions_max_updated) --
+    the live successor of the frozen ops_decisions_current -- NOT the T2.26-pending Athena ops_execution_plans
+    (which would re-create the stale-oracle risk on another death-row surface).
+  - >-
+    Decision 48: this plan is V3 because the repointed verifier touches an external system (the DuckLake
+    reader Function URL). V2 unit tests prove the branch logic (mocked reader); one creds-gated live smoke
+    (VP step 5) confirms the live verb pre-merge; the standing 3-hourly Main Canary + main-validate are the
+    ongoing independent live check (SKIPPED-is-sound-degradation).
+  - >-
+    Decision 86: the advisory-now / gate-later choice is anchored to T3.16 c2 (which reserves gating for a
+    later decision), not to the grandfathered docs/INTENT-verification-system.md (read for rationale only).
+  - >-
+    CD.12 mark-then-drop: repointing off ops_decisions_current is the "mark" (reversible, in place); the actual
+    DROP of the frozen view is owned by T2.26 c4 in a separate follow-on plan.
+  - >-
+    check_coverage vs scope_intersects_covers asymmetry is intentional: check_coverage treats "**" as
+    NON-covering (honest no-claim, for the coverage advisory); scope_intersects_covers and the same-PR guard
+    treat missing/["**"] as covers-everything (conservative, for executor blocking and the weakening guard).
+    Two functions, two purposes -- document, do not "unify".
+  - >-
+    The class name AthenaViewsVerifier and file athena_views.py are retained despite the DuckLake repoint
+    (documented misnomer; a rename would cascade to the REGISTRY import, the test module, and the filename --
+    deferred to keep this plan's blast radius small).
+  - >-
+    ci-rca hard-block (Decision 73): rec-2482 (tests/test_iceberg_reader.py -- an un-mocked SSM/boto3 call
+    leaks a live DuckLake reader URL into the test env; pytest test-isolation category) is UNRELATED to this
+    verifier-coverage/stale-oracle work -- it fails all three Related-Work conditions (different file, different
+    failure category, no shared Decision). The operator reported it closed at planning time, but a fresh
+    `sync_ops pull` still shows status=open; this plan therefore proceeds via THIS LOGGED DEFERRAL RATIONALE,
+    which clears the hard-block independent of rec-2482's final status. The chosen VF-03 target touches neither
+    test_iceberg_reader.py nor the DuckLakeReader._reader_url()/SSM path; its new unit test patches
+    DuckLakeReader.named per the established _patch_dl_invoke pattern, so rec-2482's leak cannot recur.
+  - >-
+    Same-PR guard: the modified verifier files are __init__.py (no ClassDef -> the guard skips it) and
+    athena_views.py (explicit narrow covers that match no file in this diff -> exception c). harness.py is
+    unmodified, so it is never scanned.
+  - >-
+    Import: athena_views.py will import DuckLakeReader/make_reader from src.common.iceberg_reader -- the same
+    scripts->src.common pattern scripts/data_quality_runner.py already uses; validate_import_contracts confirms
+    it in step 8.
+  - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok); no rebase needed."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md checked via the decision-scout gate (fresh context; full-file read avoided)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "rec-2482 status re-checked at implement time (the logged deferral holds regardless)"
+execution_steps:
+  - >-
+    scripts/verifiers/__init__.py -- in check_coverage(), the OPERATIVE change is skipping the "**"/"*"
+    wildcards when building all_globs (this is what makes coverage honest). Also change the per-verifier
+    fallback getattr(cls,"covers",["**"]) -> getattr(cls,"covers",[]) as a defensive tidy (inert today: the
+    base Verifier.covers=["**"] means getattr never hits the default). Leave REGISTRY and run_all_verifiers untouched.
+  - >-
+    scripts/verifiers/athena_views.py -- repoint verify() at DuckLakeReader().named("decisions_max_updated")
+    (import from src.common.iceberg_reader): PASS on a returned value with an honest message (live ops_decisions
+    reachable; latest update <ts>) that makes NO freshness claim; SKIPPED (honest) when the reader/creds are
+    unavailable; FAIL on unexpected error. Add explicit narrow covers (e.g.
+    ["src/common/iceberg_reader.py","src/common/ducklake_scd2_schema.py"]) that match no file in this diff. Keep
+    tier V3 and NON_HERMETIC_BY_CONSTRUCTION; keep the class/file name (documented misnomer).
+  - >-
+    scripts/checks/_scaffolding.py -- add an optional changed_files: list[str] | None = None param to
+    run_coverage_check() (use it when provided, else _common.get_changed_files()).
+  - scripts/checks/registry.py -- insert _s("coverage_report") into pre_sequence() immediately before _s("budget_assertion").
+  - >-
+    scripts/validate.py -- in the --pre block, define _scaffold_coverage_report() calling run_coverage_check(changed)
+    and add "coverage_report": _scaffold_coverage_report to that block's scaffold_fns dict.
+  - >-
+    tests/test_verifiers/test_coverage.py -- add a differential test (real REGISTRY, no isolated_registry) asserting
+    check_coverage(["zzz/definitely_not_covered.xyz"]) == ["zzz/definitely_not_covered.xyz"].
+  - >-
+    tests/test_verifiers/test_athena_views.py -- rewrite the mock target from awswrangler/boto3 to DuckLakeReader;
+    update PASS/SKIP/FAIL assertions and the honest message; add covers-explicit and no-freshness-claim assertions;
+    keep the tier=V3 and hermeticity tests.
+  - tests/test_checks_registry.py -- add ("scaffold","coverage_report") to FROZEN_PRE_SEQUENCE before ("scaffold","budget_assertion").
+  - tests/test_validate.py -- keep the three existing run_coverage_check tests green under the optional param and add a changed_files-param test.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable V3 live-smoke failure stop and
+    RCA (Decision 55). Confirm validate --pre is GREEN (same-PR guard) before pushing.
+  - "Report: what was implemented and the verification results, including the live V3 smoke outcome."
+work_areas: []
+rollback: >-
+  Revert the branch commit(s). The change is behavioral/additive in verifier + check-registry code with no
+  data-model, schema, or infrastructure change; the frozen ops_decisions_current view is untouched (owned by
+  T2.26 c4), so no surface is lost on rollback.
