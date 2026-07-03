@@ -28,9 +28,13 @@ scope:
   - file: tests/test_build_lambda.py
     action: Modify
     purpose: >-
-      Add a unit test that build_pgclient_layer fails closed (SystemExit) when the staged bundle
-      lacks bin/pg_restore, and version-asserts PG16 when present -- locks the c1 guard so a future
-      bundle re-seed that drops pg_restore cannot ship a silently-broken DR layer.
+      INVERT the now-stale TestBuildPgclientLayerPgDumpOnlyBundle::test_passes_with_pg_dump_only_bundle
+      (it asserts a pg_dump-only bundle does NOT exit, citing Decision 100; the new fail-closed guard
+      reverses exactly that -> it would fail CI). Replace it with guard tests: a bundle missing
+      bin/pg_restore -> SystemExit; a bundle whose pg_restore reports a non-PG16 version -> SystemExit;
+      a bundle with a valid PG16 pg_restore + pg_dump -> succeeds. Holds per-file 100%-new-code coverage
+      over all three guard branches and locks the c1 guard so a future bundle re-seed that drops
+      pg_restore cannot ship a silently-broken DR layer.
   - file: scripts/sync_athena_to_pgvector.py
     action: Delete
     purpose: >-
@@ -38,10 +42,16 @@ scope:
   - file: config/agent/data_quality/ops.yaml
     action: Modify
     purpose: >-
-      Truth-patch: remove the retired OPS_STORAGE_BACKEND dual-backend language (DuckLake is the
-      sole ops backend, Decision 84 I-1); correct the stale "only ops_recommendations is on
-      DuckLake" comment; extend clause8_checks.tables from [ops_recommendations] to the three
-      migrated SCD2 tables (ops_recommendations, ops_decisions, ops_priority_queue). Closes c6.
+      Truth-patch ONLY (no clause8 table extension): remove the retired OPS_STORAGE_BACKEND
+      dual-backend language (DuckLake is the sole ops backend, Decision 84 I-1); correct the stale
+      "only ops_recommendations is on DuckLake" comment to reflect that ops_decisions and
+      ops_priority_queue already read via the DuckLake reader. clause8_checks.tables STAYS
+      [ops_recommendations]: extending it to the other two SCD2 tables would add net-new gate-time
+      live-reader calls (build_clause8_checks -> _execute_check_ducklake at the presubmit gate via
+      ensure_fresh_dq_results), the exact amplification Decision 62's 2026-06-16 amendment blamed for
+      DQ hangs / 502 merge-gate flapping and that T1.6 is chartered to move OFF the gate. The comment
+      records that deferral. Closes c6 (the base column/row_count checks for all three tables already
+      route to DuckLake and are verified to pass).
   - file: docs/runbooks/ducklake-catalog-operations.md
     action: Modify
     purpose: >-
@@ -74,22 +84,27 @@ acceptance_criteria:
     .claude/ .github/) returns no import/caller reference.
   - >-
     c6: config/agent/data_quality/ops.yaml declares DuckLake as the sole ops backend (no
-    OPS_STORAGE_BACKEND dual-backend language) and clause8_checks.tables covers the three migrated
-    SCD2 tables; data_quality_runner runs each migrated table's checks against the DuckLake reader
-    and none returns FAIL/HARD_GATE.
+    OPS_STORAGE_BACKEND dual-backend language), its clause8 comment reflects that
+    ops_decisions/ops_priority_queue now read via DuckLake with clause8 extension deferred to T1.6
+    (Decision 62 gate-amplification avoidance), and clause8_checks.tables is unchanged
+    [ops_recommendations]; data_quality_runner runs each migrated table's checks against the DuckLake
+    reader and none returns FAIL/HARD_GATE.
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Fail-closed guard unit test -- build_pgclient_layer raises SystemExit when the staged bundle
-      lacks bin/pg_restore and asserts PG16 when present.
+      Fail-closed guard unit tests -- build_pgclient_layer raises SystemExit when the staged bundle
+      lacks bin/pg_restore AND when pg_restore reports a non-PG16 version, and succeeds on a valid
+      PG16 bundle. Includes the inverted (formerly Decision-100 pg_dump-only) test.
     command: "bin/venv-python -m pytest tests/test_build_lambda.py -k pgclient -q"
     expected: >-
-      Tests pass, including the missing-pg_restore -> SystemExit case and the present -> PG16
-      version-assert case.
+      Tests pass: missing-pg_restore -> SystemExit, non-PG16-pg_restore -> SystemExit, and the
+      valid PG16 pg_dump+pg_restore bundle -> succeeds. No surviving test asserts a pg_dump-only
+      bundle is accepted.
     fix_if: >-
-      Guard does not exit non-zero on a bundle missing bin/pg_restore, or does not assert PG16 --
-      the layer could ship without pg_restore and the drill would fail only at runtime.
+      Guard does not exit non-zero on a bundle missing bin/pg_restore or on a version mismatch, or
+      the stale pg_dump-only-accepted test still exists -- the layer could ship without pg_restore
+      and the drill would fail only at runtime.
   - step: 2
     phase: pre-deploy
     action: Orphan-deletion stale-reference sweep (c5).
@@ -99,25 +114,46 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: >-
-      ops.yaml truth-patch static checks (c6) -- no OPS_STORAGE_BACKEND language remains and
-      clause8_checks.tables lists all three migrated SCD2 tables.
-    command: "! rg -n 'OPS_STORAGE_BACKEND' config/agent/data_quality/ops.yaml && bin/venv-python -c \"import yaml; c=yaml.safe_load(open('config/agent/data_quality/ops.yaml'))['ducklake']['clause8_checks']['tables']; assert set(c)>={'ops_recommendations','ops_decisions','ops_priority_queue'}, c; print('clause8 tables OK', c)\""
-    expected: No OPS_STORAGE_BACKEND hits; clause8_checks.tables is a superset of the three migrated tables.
-    fix_if: Dual-backend language survives, or clause8_checks.tables omits a migrated table.
+      ops.yaml truth-patch static checks (c6) -- no OPS_STORAGE_BACKEND language remains; the header
+      states DuckLake is the sole ops backend; the clause8 deferral rationale (T1.6 / Decision 62) is
+      recorded; clause8_checks.tables is UNCHANGED at exactly [ops_recommendations].
+    command: "! rg -n 'OPS_STORAGE_BACKEND' config/agent/data_quality/ops.yaml && rg -qn 'sole ops backend|Decision 84' config/agent/data_quality/ops.yaml && rg -qn 'T1.6|Decision 62' config/agent/data_quality/ops.yaml && bin/venv-python -c \"import yaml; t=yaml.safe_load(open('config/agent/data_quality/ops.yaml'))['ducklake']['clause8_checks']['tables']; assert t==['ops_recommendations'], t; print('clause8 tables unchanged', t)\""
+    expected: >-
+      No OPS_STORAGE_BACKEND hits; sole-backend + deferral rationale present; clause8_checks.tables
+      is exactly [ops_recommendations] (no gate-time amplification added).
+    fix_if: Dual-backend language survives, the deferral rationale is missing, or clause8_checks.tables was extended.
   - step: 4
+    phase: pre-deploy
+    action: >-
+      Clone-path-untouched guard (Decision 100) -- the shared pgclient layer now ships pg_restore, so
+      assert executably that the OQ.12 clone-rehearsal action does NOT invoke pg_restore and stays on
+      Neon native branching.
+    command: "! rg -n 'pg_restore' src/lambdas/ducklake_maintenance/handler.py | rg -n 'action_clone_catalog|clone' ; git diff --name-only origin/main...HEAD | rg -q 'ducklake_maintenance/handler.py' && echo 'HANDLER CHANGED -- REVIEW' || echo 'handler untouched'"
+    expected: >-
+      No pg_restore reference inside/around action_clone_catalog; ducklake_maintenance/handler.py is
+      not in the diff ("handler untouched").
+    fix_if: action_clone_catalog gained a pg_restore call, or the maintenance handler was modified -- revert; the clone path must stay on Neon branching.
+  - step: 5
+    phase: pre-deploy
+    action: Runbook Section 4 T2.19 restore-drill carry-item marked resolved (bookkeeping linkage).
+    command: "rg -n 'restore-drill carry' docs/runbooks/ducklake-catalog-operations.md && rg -qn 'resolved|shipped|rec-2113' docs/runbooks/ducklake-catalog-operations.md"
+    expected: The Section 4 carry-item note is present and annotated resolved/shipped (rec-2113).
+    fix_if: The carry item still reads as an open T2.19 carry with no resolution annotation.
+  - step: 6
     phase: pre-deploy
     action: >-
       Rebuild the pgclient layer against the re-seeded S3 bundle; confirm pg_restore is staged and
       PG16-asserted and the layer zip regenerates. PRECONDITION: the operator has re-seeded
       s3://<data-lake>/ducklake-pgclient/pgclient-bundle.tar.gz with bin/pg_restore (runbook Section 4).
-    command: "bin/venv-python -m scripts.build_lambda --ducklake-only 2>&1 | tee /tmp/pgclient_build.log; rg -n 'pg_restore \\(PostgreSQL\\) 16|OK pg_restore' /tmp/pgclient_build.log"
+      The new guard must print the literal "OK pg_restore --version reports PG16" so this step's grep matches.
+    command: "bin/venv-python -m scripts.build_lambda --ducklake-only 2>&1 | tee /tmp/pgclient_build.log; rg -n 'pg_restore \\(PostgreSQL\\) 16|OK pg_restore --version reports PG16' /tmp/pgclient_build.log"
     expected: >-
       Build stages bin/pg_restore, prints the PG16 assertion OK, and (re)writes
       lambda-packages/ducklake-pgclient-layer.zip.
     fix_if: >-
       "did not contain bin/pg_restore" -> operator has not re-seeded the bundle: STOP and surface the
       precondition. Version mismatch -> re-seed with a PG16 build + full lib closure.
-  - step: 5
+  - step: 7
     phase: post-deploy
     action: >-
       After terraform/personal apply republishes the pgclient layer version and re-attaches it to
@@ -130,20 +166,18 @@ verification_plan:
     fix_if: >-
       FileNotFoundError /opt/bin/pg_restore (layer did not ship it -> re-check build + apply) or the
       read-your-write probe is lost -> STOP and RCA (Decision 55); do not loop or bypass the gate.
-  - step: 6
+  - step: 8
     phase: post-deploy
     action: >-
-      Run the DuckLake DQ checks for each migrated ops table via the closed reader; none may return
-      FAIL/HARD_GATE (c6). If a clause8 check rejects a table's physical structure, narrow the
-      extension for that table and file a rec -- do not force it (Decision 55).
+      Run the DuckLake base DQ checks for each migrated ops table via the closed reader; none may
+      return FAIL/HARD_GATE (c6). clause8 checks run for ops_recommendations only (unchanged).
     command: "for t in ops_recommendations ops_decisions ops_priority_queue; do bin/venv-python -m scripts.data_quality_runner --table $t || exit 1; done; bin/venv-python -c \"import json; d=json.load(open('logs/debug/dq-latest.json')); print('verdict', d['verdict'])\""
     expected: >-
       Each migrated table's checks execute against the ducklake backend; the run reports no
       FAIL/HARD_GATE for the three tables (WARN on the empty ops_priority_queue row_count is tolerated).
     fix_if: >-
-      A real column/row_count FAIL on a migrated table -> STOP + RCA. A clause8 HARD_GATE on a table
-      whose SCD2 structure cannot support it -> narrow clause8_checks.tables for that table and file a rec.
-  - step: 7
+      A real column/row_count FAIL on a migrated table -> STOP + RCA (Decision 55); do not force or bypass.
+  - step: 9
     phase: post-deploy
     action: Confirm rec-2113 is closed after the merge Resolves trailer / portal update.
     command: "bin/venv-python -m scripts.sync_ops pull >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; r=next(x for x in rows if x['id']=='rec-2113'); print(r['id'], r['status'])\""
@@ -168,11 +202,18 @@ constraints:
     deterministic guard; there is no fresh re-plan on the push path.
   - No new standing prose-architecture docs (Decision 86); the runbook edit is bookkeeping on an existing file.
   - >-
+    Do NOT extend clause8_checks.tables beyond [ops_recommendations] in this slice. ops.yaml
+    clause8 checks execute against the LIVE DuckLake reader at the presubmit gate (ensure_fresh_dq_results
+    -> data_quality_runner -> build_clause8_checks -> _execute_check_ducklake); adding tables amplifies
+    the gate-time live-reader load Decision 62's 2026-06-16 amendment flagged (DQ hangs / 502 flapping).
+    Relocating clause8 coverage for ops_decisions/ops_priority_queue to the scheduled monitor is T1.6's
+    charter, not this slice's.
+  - >-
     Warehouse-as-source-of-truth: DQ reads transit the closed ducklake_reader; never re-stage ops
     rows from a local cache (Decision 84).
 context:
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (77 of 77 triaged). CITE: dec-84 (sole DuckLake ops backend / retired OPS_STORAGE_BACKEND flag -- governs c6), dec-88 + dec-107 (weekly pg_dump-to-S3 DR path + explicit rec-2113 pg_restore-drill precondition -- authorize c1), dec-100 (managed-service-native carve-out -- see flag below), dec-65 (ops.yaml is the canonical field-semantic authority -- c6), dec-79 (per-Lambda V3 deploy/verify). RELATED: dec-55 (loud-fail), dec-81/CD.33 (maintenance runtime split), dec-103 (closure needs a passing-drill proof), dec-62 (live-reader DQ moves to scheduled monitor -- confirm clause8 checks don't reintroduce gate-time reader hangs), dec-77 (Neon-aware fail-closed apply guard)."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending> after 0 round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round (round 1 REVISE: inverted stale Decision-100 pg_dump-only test; dropped clause8 extension to resolve the Decision 62 gate-amplification finding)"
   - >-
     Decision 100 WARN resolution (human-confirmed, option 1 in-Lambda drill): Decision 100 removed
     pg_restore from build_pgclient_layer as part of moving the OQ.12 CLONE-rehearsal read-path to Neon
@@ -211,17 +252,21 @@ pre_implementation_checklist:
 execution_steps:
   - >-
     scripts/build_lambda.py -- add the fail-closed pg_restore existence + `--version PG16` assertion
-    in build_pgclient_layer (mirror the pg_dump guard at lines 569-593); update the module header
-    (line ~13), the docstring (lines ~514-525), and the S3-bundle error message (lines ~544-547) to
-    name pg_restore alongside pg_dump.
+    in build_pgclient_layer (mirror the pg_dump guard at lines 569-593), printing the literal
+    "OK pg_restore --version reports PG16" on success so VP step 6's grep matches; update the module
+    header (line ~13), the docstring (lines ~514-525), and the S3-bundle error message (lines ~544-547)
+    to name pg_restore alongside pg_dump.
   - >-
-    tests/test_build_lambda.py -- add a test that build_pgclient_layer exits non-zero when the staged
-    bundle omits bin/pg_restore and asserts PG16 when present.
+    tests/test_build_lambda.py -- INVERT the stale TestBuildPgclientLayerPgDumpOnlyBundle test (it
+    asserts a pg_dump-only bundle is accepted, citing Decision 100, which the new guard reverses);
+    replace with three guard cases: missing bin/pg_restore -> SystemExit, non-PG16 pg_restore ->
+    SystemExit, valid PG16 pg_dump+pg_restore -> succeeds.
   - "scripts/sync_athena_to_pgvector.py -- delete (orphan, c5)."
   - >-
     config/agent/data_quality/ops.yaml -- remove the OPS_STORAGE_BACKEND dual-backend header language,
-    state DuckLake is the sole ops backend (Decision 84 I-1), correct the recs-first clause8 comment,
-    and extend clause8_checks.tables to [ops_recommendations, ops_decisions, ops_priority_queue].
+    state DuckLake is the sole ops backend (Decision 84 I-1), and correct the recs-first clause8 comment
+    to record that ops_decisions/ops_priority_queue read via DuckLake with clause8 extension DEFERRED to
+    T1.6 (Decision 62 gate-amplification avoidance). Do NOT change clause8_checks.tables.
   - >-
     docs/runbooks/ducklake-catalog-operations.md -- mark the Section 4 T2.19 restore-drill carry item
     resolved (bookkeeping) once the drill passes.
