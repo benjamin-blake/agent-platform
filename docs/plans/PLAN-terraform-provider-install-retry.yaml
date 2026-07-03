@@ -1,0 +1,203 @@
+schema_version: 1
+slug: "terraform-provider-install-retry"
+intent: >-
+  Harden the terraform-validate merge gate so a transient provider-download network
+  failure (e.g. a releases.hashicorp.com connection reset) no longer reddens main,
+  keeping the CI gate a signal of real regressions rather than upstream flakes.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-terraform-provider-install-retry.yaml
+phase: >-
+  CI/CD reliability hardening -- ci-rca forward-fix for rec-2481 (soft-warn exception
+  category ci_rca; no tier_item). Executes Decision 73 point 3 forward-fix model.
+scope:
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      Extend _TRANSIENT_INIT_SIGNATURES (line 27) with network-layer transient
+      signatures so _terraform_init_with_retry retries provider-download resets, not
+      only registry.terraform.io 5xx query failures. Update the adjacent comment; leave
+      _TRANSIENT_CLAUDE_SIGNATURES untouched.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Mirror the same new signatures into the three init-scoped `grep -qE` retry
+      patterns (~lines 251/578/846) and their enumerating comments, preserving the
+      mandated bash<->Python parity. All three sites are upstream of the guard
+      (Decision 77) -- retry scope is unchanged, only the signature set widens.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Update test_transient_init_signatures_exact_set to the new exact set; add a
+      connection-reset retry test and a bad-pin fails-fast guard proving the widening
+      does not retry genuine non-transient provider errors.
+bundled_recommendations:
+  - rec-2481
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    _TRANSIENT_INIT_SIGNATURES in scripts/checks/_scaffolding.py includes
+    "connection reset by peer", "i/o timeout", "TLS handshake timeout", and
+    "unexpected EOF" (rec-2481 acceptance anchor: grep -q 'connection reset by peer'
+    scripts/checks/_scaffolding.py).
+  - >-
+    The same four signatures appear in all three `grep -qE` retry patterns in
+    .github/workflows/terraform-apply-sandbox.yml, keeping bash<->Python parity intact.
+  - >-
+    A "connection reset by peer" init failure on attempts 1-2 followed by success on
+    attempt 3 causes _terraform_init_with_retry to retry and return success (failed
+    stays empty); a non-transient bad-pin provider error returns failure after a single
+    attempt.
+  - >-
+    tests/test_validate.py (updated exact-set test plus the new connection-reset and
+    bad-pin tests) passes, and `scripts.validate --terraform-only` remains green in CI.
+  - "rec-2481 is closed on merge via the Resolves: trailer."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the terraform-init retry unit tests (updated exact-set test, new
+      connection-reset retry test, new bad-pin fails-fast test, existing tests).
+    command: bin/venv-python -m pytest tests/test_validate.py -q
+    expected: >-
+      All tests pass, including test_transient_init_signatures_exact_set (new 8-element
+      set) and the new connection-reset test asserting init_call_count == 3 and failed == [].
+    fix_if: >-
+      A failure means a signature was not added, the exact-set expected frozenset was
+      not updated, or the retry did not fire on the connection-reset stderr.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert bash<->Python signature parity AND that each new signature lands in all three
+      executable `grep -qE` retry patterns (not merely in a comment or a subset of sites).
+    command: |-
+      for s in "connection reset by peer" "i/o timeout" "TLS handshake timeout" "unexpected EOF"; do n=$(grep -F "$s" .github/workflows/terraform-apply-sandbox.yml | grep -c "grep -qE"); [ "$n" -eq 3 ] || { echo "BASH grep -qE sites=$n (expected 3) for: $s"; exit 1; }; grep -qF "$s" scripts/checks/_scaffolding.py || { echo "PY MISSING: $s"; exit 1; }; done && echo PARITY_OK
+    expected: >-
+      Prints PARITY_OK -- each signature is present in scripts/checks/_scaffolding.py and on
+      exactly three `grep -qE` pattern lines in the workflow.
+    fix_if: >-
+      "BASH grep -qE sites=N (expected 3)" means a pattern was widened at only some sites or
+      the signature landed only in a comment; "PY MISSING" means the Python tuple was not
+      extended. The comment at _scaffolding.py:25-26 mandates both sides stay in lockstep.
+  - step: 3
+    phase: pre-deploy
+    action: Verify rec-2481's own acceptance criterion.
+    command: "grep -q 'connection reset by peer' scripts/checks/_scaffolding.py && echo REC2481_OK"
+    expected: Prints REC2481_OK (exit 0).
+    fix_if: Non-zero exit means the primary signature was not added to _scaffolding.py.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Regression: run the terraform-only validate scope. terraform is absent in the dev
+      container so run_terraform_creds_free degrades to a visible SKIP locally; the
+      authoritative check is the terraform-validate CI job on push.
+    command: bin/venv-python -m scripts.validate --terraform-only
+    expected: >-
+      Exit 0. Locally prints "Terraform checks skipped (terraform not found in PATH)";
+      in CI (terraform present) all four roots init/validate/fmt clean.
+    fix_if: >-
+      A non-zero exit locally indicates an import/syntax error introduced into
+      _scaffolding.py rather than a terraform result.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      Closure obligation: after the squash-merge (Resolves: rec-2481) and an ops cache
+      pull, confirm rec-2481 is closed.
+    command: |-
+      bin/venv-python -m scripts.sync_ops pull && grep '"rec-2481"' logs/.recommendations-log.jsonl | grep -Eq '"status": ?"closed"' && echo REC2481_CLOSED
+    expected: Prints REC2481_CLOSED once rec-autoclose.yml has processed the Resolves trailer.
+    fix_if: >-
+      If still open, run the fallback: bin/venv-python -m scripts.ops_data_portal
+      --update-rec rec-2481 --status closed --resolution "widened transient init signatures
+      to cover provider-download network resets".
+constraints:
+  - Only modify the three files listed in scope.
+  - >-
+    Maintain bash<->Python signature parity (_scaffolding.py:25-26 mandates it). Per
+    Decision 77 the three workflow grep sites are init-provider-download-scoped, upstream
+    of the guard -- do NOT widen retry to wrap the plan/apply/guard step (fail-closed,
+    no-TOCTOU).
+  - >-
+    Do NOT add the generic "Failed to install provider" header to the signature set -- it
+    would retry genuine non-transient bad-pin failures and mask real regressions
+    (Decision 55 no-workaround; the bad-pin negative test enforces this).
+  - No rescue agents or workaround loops (Decision 55); this is a true-locus forward-fix.
+  - >-
+    Python 3.12, type hints, ruff format line length 127, ASCII hyphens, no emojis;
+    invoke Python via bin/venv-python.
+context:
+  - >-
+    rec-2481 (Critical, source=ci_rca) is the plan source per Decision 72
+    (RCA-as-Plan-Source); this plan is its sanctioned /plan consumption and resolves it.
+  - >-
+    Decision 73 point 3 forward-fix-not-auto-revert governs: terraform-validate reddened
+    on push-to-main (CI run 28664603030) and the fix lands forward, never as a revert.
+  - >-
+    Failure evidence: "read: connection reset by peer" installing hashicorp/aws v5.100.0
+    from releases.hashicorp.com during init [terraform/personal]; the same provider
+    version installed cleanly in terraform/bootstrap in the same run, proving a transient
+    network flake rather than a code regression.
+  - >-
+    Precedent rec-2237 (closed, PR #179) added _terraform_init_with_retry for the
+    registry.terraform.io 5xx transient mode; this extends the same mechanism to the next
+    uncovered transient mode (provider-download network resets).
+  - >-
+    Decision 104: _scaffolding.py is a check-registry file whose coverage maps to
+    tests/test_validate.py, so the new unit test lands there (not an unmapped new file).
+  - >-
+    Decision 48 confirms V2: no scope file is a V3 trigger (a .github/workflows/*.yml edit
+    is not a .tf/schedule/Lambda change) and a bash<->Python parity unit test is the only
+    feasible oracle (a registry outage cannot be deployed and invoked).
+  - >-
+    Decision 79: none of the three scope files is Lambda-packaged (validate machinery, a
+    workflow YAML, a test), so no per-Lambda build/deploy/smoke-test tax; corroborates V2.
+  - >-
+    Decision 75 frame-check (considered and deferred): a provider cache (TF_PLUGIN_CACHE_DIR
+    + actions/cache) or a network mirror would reduce the releases.hashicorp.com download
+    dependency at its source, but that is a broader infra change. This plan takes the
+    minimal true-locus fix matching rec-2237's precedent; a provider-cache hardening may be
+    filed as a separate follow-up rec.
+  - >-
+    No .tf files in scope -> CD.35 speculative-plan pipeline assessment does not apply; the
+    workflow edit is bash retry-parity only.
+  - "Decision-scout verdict + CITE list: NO_FLAGS; CITE = Decision 72, Decision 73, Decision 77, Decision 104, Decision 48 (73 of 73 triaged)."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md decisions adjudicated via the decision-scout gate (NO_FLAGS)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/checks/_scaffolding.py: extend _TRANSIENT_INIT_SIGNATURES (line 27) to add
+    "connection reset by peer", "i/o timeout", "TLS handshake timeout", "unexpected EOF"
+    (wrap the tuple across lines to stay within ruff line-length 127); update the comment
+    at lines 25-26 to note the set now also covers provider-download network transients,
+    retain the parity note, and add that parity is substring (Python `in`) vs ERE (bash
+    `grep -qE`) and therefore holds only for metacharacter-free signatures. Do not touch
+    _TRANSIENT_CLAUDE_SIGNATURES.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml: add the same four signatures to the
+    three init-scoped `grep -qE` patterns (~lines 251, 578, 846). Update the two enumerating
+    comments (~240-241 and ~567-568) to list the new signatures; the third site's comment
+    (~835-836) reads "(parity with apply-sandbox)" and does not enumerate, so leave it as-is
+    (or add a matching enumeration) -- consistency, not correctness.
+  - >-
+    tests/test_validate.py: update test_transient_init_signatures_exact_set's expected
+    frozenset to the new 8-element set; add test_creds_free_init_retries_on_connection_reset
+    (mock _common.run to return returncode 1 with stderr "read: connection reset by peer"
+    on attempts 1-2 and returncode 0 on attempt 3; assert init_call_count == 3 and
+    failed == []); add a bad-pin fails-fast test (returncode 1 with stdout containing
+    "Error: Failed to install provider" and "provider registry does not have a provider
+    named" but no network signature; assert init_call_count == 1 and one failed entry).
+    Follow the existing mock pattern (patch scripts.checks._common.run, validate.shutil.which,
+    validate.time.sleep).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable
+    failure stop and RCA (Decision 55).
+  - 'Report: what was implemented and verification results; include the Resolves: rec-2481 trailer in the squash-merge commit body.'
+work_areas: []
+rollback: >-
+  Revert the three edits; the signature set returns to the registry-5xx-only tuple. No
+  state, schema, or data migration is involved.
