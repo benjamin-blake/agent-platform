@@ -1,0 +1,241 @@
+schema_version: 1
+slug: t2-26-restore-drill-gate-orphan-dq
+intent: >-
+  Advance T2.26 toward a fully-closed DuckLake ops boundary by landing the rec-2113
+  restore-drill START GATE (the keystone that unlatches every non-recreatable ops migration and
+  the Athena-estate demolition) plus two ungated cleanups, so the warehouse-as-source-of-truth
+  invariant rests on a proven disaster-recovery restore path.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t2-26-restore-drill-gate-orphan-dq.yaml
+phase: >-
+  Platform tier_item T2.26 (Deferred ops-table DuckLake migrations + ops_compaction retirement) --
+  follow-on slice closing c1 (rec-2113 restore-drill gate), c5 (orphan deletion), c6 (DQ truth-patch).
+closes_criteria:
+  - "T2.26:c1"
+  - "T2.26:c5"
+  - "T2.26:c6"
+scope:
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      Re-add a fail-closed pg_restore existence + `--version PG16` assertion to
+      build_pgclient_layer (symmetric to the existing pg_dump guard); update the module header,
+      the function docstring, and the S3-bundle error message to state the pgclient layer stages
+      pg_dump + pg_restore. The bundle already extracts any bin/ member, so the substantive change
+      is the fail-closed guard, not the extraction. Re-added ONLY for the Decision 88/107 DR
+      restore-drill path; the Decision 100 clone-rehearsal (action_clone_catalog) is untouched.
+  - file: tests/test_build_lambda.py
+    action: Modify
+    purpose: >-
+      Add a unit test that build_pgclient_layer fails closed (SystemExit) when the staged bundle
+      lacks bin/pg_restore, and version-asserts PG16 when present -- locks the c1 guard so a future
+      bundle re-seed that drops pg_restore cannot ship a silently-broken DR layer.
+  - file: scripts/sync_athena_to_pgvector.py
+    action: Delete
+    purpose: >-
+      Delete the audit F-037 orphan (zero live callers; reads the retiring Athena path). Closes c5.
+  - file: config/agent/data_quality/ops.yaml
+    action: Modify
+    purpose: >-
+      Truth-patch: remove the retired OPS_STORAGE_BACKEND dual-backend language (DuckLake is the
+      sole ops backend, Decision 84 I-1); correct the stale "only ops_recommendations is on
+      DuckLake" comment; extend clause8_checks.tables from [ops_recommendations] to the three
+      migrated SCD2 tables (ops_recommendations, ops_decisions, ops_priority_queue). Closes c6.
+  - file: docs/runbooks/ducklake-catalog-operations.md
+    action: Modify
+    purpose: >-
+      Mark the Section 4 "T2.19 restore-drill carry item" resolved once the drill passes
+      (bookkeeping only -- the drill mechanism it prescribed is now shipped). No new prose doc
+      (Decision 86); edits an existing runbook.
+bundled_recommendations:
+  - rec-2113
+infrastructure_dependencies:
+  - >-
+    terraform/personal/ducklake_catalog_dr.tf -- aws_lambda_layer_version.ducklake_pgclient is
+    content-hash tracked via filemd5(ducklake-pgclient-layer.zip). Rebuilding the layer (with
+    pg_restore) changes the hash, so terraform republishes a new layer version. No .tf edit is
+    required; the change is content-driven. Pre-merge: the speculative-plan job posts the predicted
+    (redacted) diff + guard verdict as a PR comment and persists plan.bin. At-merge (push to main):
+    apply-sandbox applies the saved plan -- layer + function are non-IAM, non-destructive resources,
+    so the deterministic guard auto-applies (no human gate, no re-plan / TOCTOU).
+  - >-
+    terraform/personal/ducklake_maintenance.tf -- aws_lambda_function.ducklake_maintenance references
+    aws_lambda_layer_version.ducklake_pgclient.arn (line 156); the new layer version re-attaches to
+    the function on the same apply. catalog_dr re-attaches identically.
+acceptance_criteria:
+  - >-
+    c1: The deployed pgclient Lambda layer ships /opt/bin/pg_restore (PG16) and build_pgclient_layer
+    FAILS CLOSED if it is absent; the ducklake_maintenance restore_drill action completes a
+    custom-format pg_dump -> pg_restore -> read-your-write round-trip; `ducklake_neon_smoke_test
+    --catalog-restore-drill` passes against production-shaped data; rec-2113 is closed.
+  - >-
+    c5: scripts/sync_athena_to_pgvector.py is deleted and rg over the code tree (scripts/ src/
+    .claude/ .github/) returns no import/caller reference.
+  - >-
+    c6: config/agent/data_quality/ops.yaml declares DuckLake as the sole ops backend (no
+    OPS_STORAGE_BACKEND dual-backend language) and clause8_checks.tables covers the three migrated
+    SCD2 tables; data_quality_runner runs each migrated table's checks against the DuckLake reader
+    and none returns FAIL/HARD_GATE.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Fail-closed guard unit test -- build_pgclient_layer raises SystemExit when the staged bundle
+      lacks bin/pg_restore and asserts PG16 when present.
+    command: "bin/venv-python -m pytest tests/test_build_lambda.py -k pgclient -q"
+    expected: >-
+      Tests pass, including the missing-pg_restore -> SystemExit case and the present -> PG16
+      version-assert case.
+    fix_if: >-
+      Guard does not exit non-zero on a bundle missing bin/pg_restore, or does not assert PG16 --
+      the layer could ship without pg_restore and the drill would fail only at runtime.
+  - step: 2
+    phase: pre-deploy
+    action: Orphan-deletion stale-reference sweep (c5).
+    command: "test ! -f scripts/sync_athena_to_pgvector.py && ! rg -n 'sync_athena_to_pgvector' scripts/ src/ .claude/ .github/"
+    expected: File is absent AND rg finds no import/caller reference in the code tree.
+    fix_if: File still present, or any live reference remains in scripts/ src/ .claude/ .github/.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      ops.yaml truth-patch static checks (c6) -- no OPS_STORAGE_BACKEND language remains and
+      clause8_checks.tables lists all three migrated SCD2 tables.
+    command: "! rg -n 'OPS_STORAGE_BACKEND' config/agent/data_quality/ops.yaml && bin/venv-python -c \"import yaml; c=yaml.safe_load(open('config/agent/data_quality/ops.yaml'))['ducklake']['clause8_checks']['tables']; assert set(c)>={'ops_recommendations','ops_decisions','ops_priority_queue'}, c; print('clause8 tables OK', c)\""
+    expected: No OPS_STORAGE_BACKEND hits; clause8_checks.tables is a superset of the three migrated tables.
+    fix_if: Dual-backend language survives, or clause8_checks.tables omits a migrated table.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Rebuild the pgclient layer against the re-seeded S3 bundle; confirm pg_restore is staged and
+      PG16-asserted and the layer zip regenerates. PRECONDITION: the operator has re-seeded
+      s3://<data-lake>/ducklake-pgclient/pgclient-bundle.tar.gz with bin/pg_restore (runbook Section 4).
+    command: "bin/venv-python -m scripts.build_lambda --ducklake-only 2>&1 | tee /tmp/pgclient_build.log; rg -n 'pg_restore \\(PostgreSQL\\) 16|OK pg_restore' /tmp/pgclient_build.log"
+    expected: >-
+      Build stages bin/pg_restore, prints the PG16 assertion OK, and (re)writes
+      lambda-packages/ducklake-pgclient-layer.zip.
+    fix_if: >-
+      "did not contain bin/pg_restore" -> operator has not re-seeded the bundle: STOP and surface the
+      precondition. Version mismatch -> re-seed with a PG16 build + full lib closure.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      After terraform/personal apply republishes the pgclient layer version and re-attaches it to
+      ducklake_maintenance, run the catalog restore drill against production-shaped data (SigV4
+      Lambda invoke from CC-web -- no direct TCP/5432).
+    command: "bin/venv-python -m scripts.ducklake_neon_smoke_test --catalog-restore-drill --profile agent_platform --region eu-west-2"
+    expected: >-
+      "CATALOG_RESTORE_DRILL OK maintenance restore_drill read-your-write verified" -- the
+      pg_dump -> pg_restore -> probe-readback round-trip succeeds inside the Lambda.
+    fix_if: >-
+      FileNotFoundError /opt/bin/pg_restore (layer did not ship it -> re-check build + apply) or the
+      read-your-write probe is lost -> STOP and RCA (Decision 55); do not loop or bypass the gate.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Run the DuckLake DQ checks for each migrated ops table via the closed reader; none may return
+      FAIL/HARD_GATE (c6). If a clause8 check rejects a table's physical structure, narrow the
+      extension for that table and file a rec -- do not force it (Decision 55).
+    command: "for t in ops_recommendations ops_decisions ops_priority_queue; do bin/venv-python -m scripts.data_quality_runner --table $t || exit 1; done; bin/venv-python -c \"import json; d=json.load(open('logs/debug/dq-latest.json')); print('verdict', d['verdict'])\""
+    expected: >-
+      Each migrated table's checks execute against the ducklake backend; the run reports no
+      FAIL/HARD_GATE for the three tables (WARN on the empty ops_priority_queue row_count is tolerated).
+    fix_if: >-
+      A real column/row_count FAIL on a migrated table -> STOP + RCA. A clause8 HARD_GATE on a table
+      whose SCD2 structure cannot support it -> narrow clause8_checks.tables for that table and file a rec.
+  - step: 7
+    phase: post-deploy
+    action: Confirm rec-2113 is closed after the merge Resolves trailer / portal update.
+    command: "bin/venv-python -m scripts.sync_ops pull >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; r=next(x for x in rows if x['id']=='rec-2113'); print(r['id'], r['status'])\""
+    expected: "rec-2113 closed"
+    fix_if: >-
+      Still open -> add "Resolves: rec-2113" to the squash-merge body, or run
+      `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2113 --status closed --resolution "restore drill passed"`.
+constraints:
+  - Only modify the files listed in scope. Out-of-scope bugs become recommendations, not inline fixes.
+  - >-
+    pg_restore is re-added ONLY for the Decision 88/107 DR restore-drill path (action_restore_drill).
+    Do NOT touch action_clone_catalog or the OQ.12 clone-rehearsal -- it stays on Neon native
+    copy-on-write branching (Decision 100). Re-introducing pg_dump->pg_restore cloning would regress
+    Decision 100.
+  - >-
+    Loud-fail, no workaround loops (Decision 55). The restore drill is a HARD GATE: a failure stops
+    the slice and triggers RCA -- never bypass, mock, or retry-around it (Decision 103: closure needs
+    a passing-drill proof, not an assertion).
+  - >-
+    terraform/personal apply is the human-gated speculative-plan pipeline (CD.35 Wave 2 / T2.21). The
+    layer + function updates are non-IAM and non-destructive, so they auto-apply at merge behind the
+    deterministic guard; there is no fresh re-plan on the push path.
+  - No new standing prose-architecture docs (Decision 86); the runbook edit is bookkeeping on an existing file.
+  - >-
+    Warehouse-as-source-of-truth: DQ reads transit the closed ducklake_reader; never re-stage ops
+    rows from a local cache (Decision 84).
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (77 of 77 triaged). CITE: dec-84 (sole DuckLake ops backend / retired OPS_STORAGE_BACKEND flag -- governs c6), dec-88 + dec-107 (weekly pg_dump-to-S3 DR path + explicit rec-2113 pg_restore-drill precondition -- authorize c1), dec-100 (managed-service-native carve-out -- see flag below), dec-65 (ops.yaml is the canonical field-semantic authority -- c6), dec-79 (per-Lambda V3 deploy/verify). RELATED: dec-55 (loud-fail), dec-81/CD.33 (maintenance runtime split), dec-103 (closure needs a passing-drill proof), dec-62 (live-reader DQ moves to scheduled monitor -- confirm clause8 checks don't reintroduce gate-time reader hangs), dec-77 (Neon-aware fail-closed apply guard)."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending> after 0 round(s)"
+  - >-
+    Decision 100 WARN resolution (human-confirmed, option 1 in-Lambda drill): Decision 100 removed
+    pg_restore from build_pgclient_layer as part of moving the OQ.12 CLONE-rehearsal read-path to Neon
+    native branching (avoidable frequent egress). It explicitly PRESERVED the Decision 88 DR
+    pg_dump-to-S3 path. Decision 107 (2026-07-02, later) reaffirms that the rec-2113 pg_restore
+    restore drill MUST pass before the weekly dump is relied on as the swap-back artifact. Re-adding
+    pg_restore solely for the DR action_restore_drill path is therefore authorized by Decision 107 and
+    carved out of Decision 100 -- not a reversal. The clone path (action_clone_catalog) stays on Neon
+    branching; this plan does not touch it.
+  - >-
+    Operator precondition for c1: re-seed s3://<data-lake>/ducklake-pgclient/pgclient-bundle.tar.gz
+    with bin/pg_restore added (same AL2023-ABI PG16 RPM as pg_dump; runbook Section 4 closure-build).
+    Until re-seeded, VP step 4 fails closed with "did not contain bin/pg_restore" and the drill
+    (step 5) fails FileNotFoundError /opt/bin/pg_restore.
+  - >-
+    Follow-on state: ops_recommendations/ops_decisions/ops_priority_queue already migrated to DuckLake
+    (Decision 84, 2026-06-11); the DQ runner already routes all three to the reader. This slice does
+    NOT touch the still-gated criteria: c2 (ops_session_log RETIRE per unratified CD.NN.a + T0.7b
+    Lambda; ops_execution_plans migration, gated on this c1), c3 (ops_compaction retirement -- runbook
+    Section 5, gated on c1 + c2), c4 (Athena _current view drops), c7 (replacement-closure umbrella).
+    Those are later atomic plans.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok, no overlapping scope
+    files); no rebase deferral needed. Decisions 100 and 107 are present on this branch.
+  - >-
+    Closure obligations: rec-resolving (rec-2113 in bundled_recommendations; VP step 7 verifies
+    closed) and surface-retiring (Delete sync_athena_to_pgvector.py; VP step 2 stale-reference sweep).
+    The implement session must include "Resolves: rec-2113" in the squash-merge body.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ducklake-migrations-ops-compaction-1xwt8j)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md 84/88/100/107 read (c1 carve-out + c6 backend authority)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Operator has (or will) re-seed the pgclient S3 bundle with bin/pg_restore before VP steps 4-5
+execution_steps:
+  - >-
+    scripts/build_lambda.py -- add the fail-closed pg_restore existence + `--version PG16` assertion
+    in build_pgclient_layer (mirror the pg_dump guard at lines 569-593); update the module header
+    (line ~13), the docstring (lines ~514-525), and the S3-bundle error message (lines ~544-547) to
+    name pg_restore alongside pg_dump.
+  - >-
+    tests/test_build_lambda.py -- add a test that build_pgclient_layer exits non-zero when the staged
+    bundle omits bin/pg_restore and asserts PG16 when present.
+  - "scripts/sync_athena_to_pgvector.py -- delete (orphan, c5)."
+  - >-
+    config/agent/data_quality/ops.yaml -- remove the OPS_STORAGE_BACKEND dual-backend header language,
+    state DuckLake is the sole ops backend (Decision 84 I-1), correct the recs-first clause8 comment,
+    and extend clause8_checks.tables to [ops_recommendations, ops_decisions, ops_priority_queue].
+  - >-
+    docs/runbooks/ducklake-catalog-operations.md -- mark the Section 4 T2.19 restore-drill carry item
+    resolved (bookkeeping) once the drill passes.
+  - >-
+    Coordinate the operator re-seed of the pgclient S3 bundle with bin/pg_restore; then build + push,
+    let the speculative-plan pipeline apply the layer/function on merge.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 failure
+    (restore drill or a real DQ FAIL) STOP and RCA (Decision 55). Do not bypass the gate.
+  - "Report: what was implemented, per-step verification results, and rec-2113 closure."
+work_areas: []
+rollback: >-
+  The pg_restore guard is fail-closed and additive -- reverting scripts/build_lambda.py restores the
+  pg_dump-only layer. The pgclient layer version is immutable and re-attachable: to roll back, point
+  ducklake_maintenance/catalog_dr at the prior aws_lambda_layer_version. The sync_athena_to_pgvector.py
+  deletion is recoverable from git history (orphan; no runtime dependents). ops.yaml clause8 extension
+  is revertible by trimming clause8_checks.tables back to [ops_recommendations].
