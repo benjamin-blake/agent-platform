@@ -694,6 +694,7 @@ def test_ducklake_reader_url_loud_fail_when_unset(monkeypatch):
     import src.common.iceberg_reader as ir
 
     monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+    monkeypatch.setattr(ir, "_resolve_function_url_via_ssm", lambda *a, **k: None)
     monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     # The AWS-API fallback also fails (no resolvable URL) -> the loud-fail must still fire.
     monkeypatch.setattr(ir, "_resolve_function_url_via_api", lambda *a, **k: None)
@@ -706,6 +707,7 @@ def test_ducklake_reader_url_api_fallback(monkeypatch):
     import src.common.iceberg_reader as ir
 
     monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
+    monkeypatch.setattr(ir, "_resolve_function_url_via_ssm", lambda *a, **k: None)
     monkeypatch.setattr("subprocess.run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
     monkeypatch.setattr(
         ir, "_resolve_function_url_via_api", lambda name, profile=None, region="eu-west-2": "https://api.example/"
