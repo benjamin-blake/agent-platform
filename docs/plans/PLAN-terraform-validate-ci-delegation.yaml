@@ -1,0 +1,430 @@
+schema_version: 1
+slug: "terraform-validate-ci-delegation"
+intent: >-
+  Codify that third-party-provider terraform roots cannot be init/validate/plan-ed from a stock
+  Claude Code on the web (CC-web) session (the provider checksum fetch 403s on github.com via the
+  session proxy), make the local presubmit degrade gracefully on that permanent block instead of
+  reddening on healthy code, and re-ground the ambient docs that falsely claim CC-web runs terraform
+  locally -- so future plans author terraform verification against the authoritative CI gate, not an
+  unrunnable local command.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-terraform-validate-ci-delegation.yaml
+phase: >-
+  Platform CI/CD verification-methodology hardening. Ad-hoc / user_explicit_out_of_scope (names no
+  tier_item; the Tier Item Freshness Gate is skipped for this category). Directionally adjacent to
+  T3.17 (deterministic V-tier floor + VP-step schema hardening) but does not close any T3.17 exit
+  criterion -- no closes_criteria is declared.
+scope:
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      Add a "proxy-blocked -> visible skip" branch to the terraform init path (_terraform_init_with_retry
+      line ~197 + run_terraform_creds_free line ~225). Detect the permanent CC-web proxy-403 via a
+      CO-OCCURRENCE predicate `_is_proxy_blocked_init(output)` -- it matches ONLY when all of ("403"
+      Forbidden) AND (github.com) AND (an authentication-checksum / "failed to retrieve" marker) appear
+      together, i.e. the third-party-provider signing/checksum fetch. A bare-substring tuple matched
+      with `any(...)` (like _TRANSIENT_INIT_SIGNATURES) is FORBIDDEN here: it would skip on ANY "403"
+      (e.g. an S3/backend 403) and mask a genuine failure (Decision 55). On a proxy-blocked init: print
+      a visible SKIP that defers `terraform validate` to the terraform-validate CI job, do NOT append to
+      `failed`, and -- since `terraform fmt -check` needs no provider install -- STILL run fmt-check for
+      that root (only validate is skipped). Genuine permanent errors (bad version pin, HCL error,
+      non-github 403) still append to `failed` and fail loudly; transient 5xx retry behavior is
+      unchanged; the 403 is NEVER added to _TRANSIENT_INIT_SIGNATURES (it is permanent). This
+      generalizes the existing terraform-absent skip (line ~234) so the local terraform gate degrades
+      gracefully for BOTH terraform-absent AND terraform-present-but-proxy-blocked sessions.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add unit tests to the existing TestRunTerraformChecks class (home of the terraform-init tests,
+      line ~569): (a) test_creds_free_init_skips_on_proxy_403 -- a github.com-403 auth-checksum init
+      failure yields a visible skip, leaves `failed` empty, and still runs fmt-check for that root;
+      (b) test_creds_free_init_still_fails_on_non_github_403 -- an init error containing "403" WITHOUT
+      the github.com/checksum co-occurrence (e.g. an S3 backend 403) still appends to `failed` (proves
+      the predicate is narrow, no masking -- Decision 55). The existing test_creds_free_init_fails_fast_on_bad_pin
+      and the transient-retry tests remain green. Tests mock subprocess -- no live terraform calls.
+      Follows the Decision 104 check-registry mapping (scripts/checks/** -> tests/test_validate.py).
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Re-ground the "Running terraform/personal/ on CC-web" section (lines ~21-63), which currently
+      falsely asserts "the agent itself runs `terraform plan`/`apply` for `terraform/personal/` inside
+      the CC-web container" and describes an interactive local plan->apply loop. Correct it: a stock
+      CC-web session CANNOT `terraform init` terraform/personal, because the third-party kislerdm/neon
+      provider's checksum/signing fetch 403s on github.com (the proxy scopes github traffic to
+      repo-scoped API only); hashicorp/* providers init fine (releases.hashicorp.com). Therefore
+      validate/plan/apply for terraform/personal are CI-mediated: validate via the required
+      terraform-validate job (Decision 83), plan/apply via the speculative-plan + apply-the-saved-plan
+      pipeline (Decision 77 / Decision 92). Cite the new Decision as the rationale source-of-truth
+      (single-SoT discipline -- this is the terraform-scoped ambient enforcement note, not a rationale
+      restatement).
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Add a NEW subsection under "## Verification Tier Guidelines" (after line ~279, the V3 bullet),
+      keyed to provider-init egress and kept DISTINCT from the existing shallow-check "Anti-patterns
+      to reject" list (line ~281): terraform roots using a third-party (github.com-hosted) provider
+      cannot init/validate/plan from a stock CC-web session, so author local VP steps as grep-only
+      (and `terraform fmt -check` ONLY when terraform is present -- it needs no provider init), and
+      delegate `terraform validate`/`plan` to CI (name the required terraform-validate check and the
+      speculative-plan job as the authoritative verifiers). Cross-reference terraform/CLAUDE.md and
+      the new Decision -- do NOT restate the rationale (avoids a three-surface drift, agent-first
+      anti-pattern).
+  - file: docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml
+    action: Modify
+    purpose: >-
+      Re-home the blocked plan's terraform-validate verification so its /implement session can
+      complete. VP step 5 (lines ~168-182) currently runs `terraform -chdir=terraform/personal init
+      -backend=false && terraform validate` locally -- unrunnable in CC-web. Split it: keep the grep
+      component (asserts the oidc.tf github_ci_plan grants) as the local pre-deploy check, and re-home
+      the `terraform validate` component to CI evidence (the green required terraform-validate
+      check-run on that plan's own PR). Re-ground acceptance_criteria line ~96 ("grep + `terraform ...
+      validate` passes") the same way. Sanctioned by Decision 87 (plan YAML is git-authoritative,
+      editable by PR). This edits only the two verification anchors -- no code/scope change to that plan.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/checks/_scaffolding.py detects the proxy-403 via a co-occurrence predicate
+    `_is_proxy_blocked_init` (403 AND github.com AND an auth-checksum/retrieve marker -- NOT an
+    any()-over-tuple), and on a match emits a visible validate-skip, does NOT append to `failed`, and
+    STILL runs `terraform fmt -check` for that root (verified by unit test).
+  - >-
+    A non-github 403 (e.g. an S3 backend 403) and a genuine bad-pin/HCL error both still append to
+    `failed` after a single attempt -- the predicate is narrow and does not mask real failures
+    (verified by test_creds_free_init_still_fails_on_non_github_403 + the existing bad-pin test).
+  - >-
+    tests/test_validate.py adds test_creds_free_init_skips_on_proxy_403 and
+    test_creds_free_init_still_fails_on_non_github_403 to TestRunTerraformChecks and they pass; the
+    existing transient-retry and bad-pin tests remain green.
+  - >-
+    terraform/CLAUDE.md no longer asserts the CC-web agent runs `terraform plan`/`apply` for
+    terraform/personal locally; the section states the third-party-provider init constraint and the
+    CI-delegated validate/plan/apply posture, citing the new Decision.
+  - >-
+    .claude/skills/planning/SKILL.md contains a new provider-init-egress subsection under Verification
+    Tier Guidelines instructing grep-only local terraform VP steps + CI delegation, cross-referencing
+    terraform/CLAUDE.md and the Decision.
+  - >-
+    docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml VP step 5 and acceptance line ~96 no longer require
+    a local `terraform validate`; the validate assertion is re-homed to the terraform-validate CI
+    check-run, and the local grep portion is retained.
+  - >-
+    A new Decision codifying the constraint + CI-delegation contract is filed via the ops portal
+    (ops_data_portal --backfill-decisions-md) and appears in the decisions read cache after sync.
+  - >-
+    Two follow-up recommendations are filed via the portal: (a) S3-backed provider_installation
+    filesystem_mirror to restore local terraform init/validate/plan for third-party-provider roots;
+    (b) re-ground the PLAN-t2-24 tfvars-recovery / interactive-loop procedures that assume local init.
+  - "bin/venv-python -m scripts.validate --pre passes on the branch."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Unit test -- proxy-403 init failure is a visible skip (not a red) and fmt-check still runs.
+      Confirm the test method exists first (avoids the silent no-match gotcha), then run the class by
+      ::ClassName (tests/CLAUDE.md: no `pytest -k` selectors in acceptance commands).
+    command: >-
+      grep -q '_is_proxy_blocked_init' scripts/checks/_scaffolding.py && grep -q
+      'def test_creds_free_init_skips_on_proxy_403' tests/test_validate.py && bin/venv-python -m pytest
+      tests/test_validate.py::TestRunTerraformChecks -q
+    expected: >-
+      grep matches the co-occurrence predicate and the new test; TestRunTerraformChecks passes -- a
+      github.com-403 auth-checksum init failure leaves `failed` empty, prints a visible validate-skip,
+      and still runs fmt-check for that root.
+    fix_if: >-
+      No predicate match -> the co-occurrence detector was not added (do NOT use an any()-over-tuple).
+      Test failure -> the init path still appends the proxy-403 label to `failed`, or it skips fmt too;
+      route proxy-block to skip validate only (no append) and keep fmt-check running.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Unit test -- narrowness / no-masking (Decision 55): a non-github 403 and a genuine bad-pin error
+      both still append to `failed`. Run the class by ::ClassName.
+    command: >-
+      grep -q 'def test_creds_free_init_still_fails_on_non_github_403' tests/test_validate.py &&
+      bin/venv-python -m pytest tests/test_validate.py::TestRunTerraformChecks -q
+    expected: >-
+      The class passes; an init error containing "403" WITHOUT the github.com/checksum co-occurrence
+      (e.g. an S3 backend 403) appends to `failed`, and the existing bad-pin test still fails-fast --
+      proving the proxy-skip predicate does not mask real failures.
+    fix_if: >-
+      If a non-github 403 is skipped, the predicate is too broad; require co-occurrence of 403 +
+      github.com + auth-checksum/retrieve marker (all(...) or a regex), not a bare "403" substring.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      terraform/CLAUDE.md re-grounded -- the false local-terraform claim is gone and the constraint +
+      CI-delegation posture is stated. (Negative grep anchored on a single-line substring that exists
+      on the unedited file, so it fails before the edit and passes only after removal -- not a
+      vacuous line-wrap match.)
+    command: >-
+      ! grep -q 'itself runs .terraform plan./.apply. for .terraform/personal' terraform/CLAUDE.md
+      && grep -Eiq 'third-party provider|kislerdm/neon|github.com|CI-delegated|terraform-validate' terraform/CLAUDE.md
+    expected: >-
+      The inaccurate sentence (line ~23) is absent; the section names the third-party-provider init
+      constraint and the CI-delegated validate/plan posture.
+    fix_if: >-
+      grep still finds the old claim -> the "Running terraform/personal on CC-web" section was not
+      re-grounded; rewrite lines ~21-63 per the scope purpose and cite the new Decision.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      planning SKILL has the new provider-init-egress subsection under Verification Tier Guidelines
+      (distinct from the shallow-check anti-patterns).
+    command: >-
+      awk '/## Verification Tier Guidelines/{f=1} /## /{if(f && !/Verification Tier/) exit} f' .claude/skills/planning/SKILL.md
+      | grep -Eiq 'third-party provider|provider-init|grep-only|CI-delegated|terraform-validate'
+    expected: >-
+      The Verification Tier Guidelines section contains the new subsection instructing grep-only local
+      terraform VP steps and CI delegation.
+    fix_if: >-
+      No match -> the subsection was added outside the Verification Tier Guidelines section or
+      co-mingled into the anti-pattern list; add it as its own subsection under that heading.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Blocked plan's VP5 + AC re-homed -- no local `terraform validate` remains; the grep portion is
+      kept and the validate assertion points at the CI check.
+    command: >-
+      ! grep -Eq 'terraform -chdir=terraform/personal (init|validate)' docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml
+      && grep -Eiq 'terraform-validate (job|check|check-run)|CI-delegated' docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml
+    expected: >-
+      No local `terraform -chdir=terraform/personal init/validate` command survives in that plan; the
+      validate assertion references the terraform-validate CI check-run; the oidc.tf grep is retained.
+    fix_if: >-
+      A local terraform validate/init still matches -> VP5 or acceptance line 96 was not fully
+      re-homed; split the grep from the validate and point validate at the CI check-run.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Plan documents remain schema-valid after the edits (this plan and the re-homed one).
+    command: >-
+      bin/venv-python -m scripts.plan_document docs/plans/PLAN-terraform-validate-ci-delegation.yaml &&
+      bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml
+    expected: Both plans validate against the PlanDocument schema (exit 0).
+    fix_if: Schema error -> fix the offending field; unknown keys and missing required fields fail (extra=forbid).
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Full fast presubmit -- authoritative pre-merge gate; confirms the _scaffolding.py change and
+      test additions are green and nothing else regressed.
+    command: >-
+      bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; ruff, mypy, plan-schema, pytest subset (incl. the new tests) all pass.
+    fix_if: Address the specific failing check; re-run until green.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Decision filed -- after /implement runs `ops_data_portal --backfill-decisions-md`, the new
+      Decision codifying the constraint appears in the decisions read cache. (post-merge: the portal
+      write happens behind the /implement execution-time confirmation gate.)
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull >/dev/null && grep -Eiq 'CC-web|third-party provider|terraform.validate.*CI'
+      docs/DECISIONS.md
+    expected: The new Decision text (constraint + CI-delegation contract) is present in DECISIONS.md.
+    fix_if: >-
+      Missing -> the backfill-decisions-md write did not run or the Decision was not appended to
+      DECISIONS.md; re-run the portal backfill after adding the Decision entry.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Follow-up recs filed -- after /implement files them via the portal and the read cache refreshes,
+      both recommendations are present and open.
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull >/dev/null && grep -Eiq 'filesystem_mirror|provider mirror'
+      logs/.recommendations-log.jsonl && grep -Eiq 't2-24|tfvars-recovery|interactive.loop' logs/.recommendations-log.jsonl
+    expected: Both the provider-mirror rec and the PLAN-t2-24 re-ground rec appear in the recs read cache.
+    fix_if: >-
+      Missing -> file the rec(s) via `bin/venv-python -m scripts.ops_data_portal` (file_rec) and
+      re-sync. Do NOT edit logs/.recommendations-log.jsonl directly (Single Portal Invariant).
+constraints:
+  - >-
+    Decision 55 (RCA-first / loud failure): the proxy-blocked skip branch must NOT mask genuine
+    permanent provider errors (bad pin, HCL error, non-github 403) or transient registry 5xx. Detection
+    MUST be a co-occurrence predicate (403 AND github.com AND auth-checksum/retrieve marker), never a
+    bare "403" substring -- an any()-over-tuple is explicitly forbidden here. Everything outside that
+    exact shape keeps its current fail/retry behavior. Follow-up work (provider mirror; PLAN-t2-24
+    re-ground) is filed as recs, not inlined.
+  - >-
+    Code/doc consistency: on a proxy-blocked root the skip applies to `terraform validate` ONLY;
+    `terraform fmt -check` needs no provider install and still runs for that root, matching the SKILL
+    guidance and Decision text that fmt-check is a locally-runnable check when terraform is present.
+  - >-
+    Decision 73 (two-tier presubmit): local validate.py is advisory outside CI; PR CI is the
+    authoritative gate. The skip is the correct expression of that model -- it defers to CI, it does
+    not weaken the gate (CI still runs terraform validate on a networked runner).
+  - >-
+    Decision 104 (validate.py check registry): terraform gate logic stays in scripts/checks/_scaffolding.py
+    (non-check orchestration); shared primitives via _common.<name>; the test lands in
+    tests/test_validate.py per the scripts/checks/** mapping.
+  - >-
+    Decision 86 (rationale -> Decisions; no new standing prose-architecture docs): the rationale lives
+    in a numbered Decision; terraform/CLAUDE.md and the planning SKILL carry enforcement/guidance only.
+    Do NOT create any new docs/*.md standing doc for this constraint.
+  - >-
+    Single-SoT discipline: exactly one rationale home (the Decision). terraform/CLAUDE.md = ambient
+    terraform-scoped note; planning SKILL = plan-time cross-reference. No three-surface restatement.
+  - >-
+    Do NOT touch docs/contracts/verification-registry.yaml (Class A schema for graduated CD.29 kernel
+    checks -- an environment-capability fact is not a graduated check) or docs/contracts/environment-taxonomy.md
+    (guarded two-axis PLATFORM/PRODUCT vocabulary -- not a session-execution-environment surface).
+  - >-
+    Decision 87: editing the already-merged PLAN-ci-ducklake-lambda-rebuild.yaml is sanctioned (plan
+    YAML is git-authoritative, editable by PR). Edit ONLY its VP5 + acceptance line 96 verification
+    anchors -- no change to its scope, code, or infra steps.
+  - >-
+    Public-repo boundary (Decision 101): the re-grounded terraform/CLAUDE.md and the Decision must not
+    emit account IDs, ExternalIds, or ARNs with account numbers. Describe the constraint generically
+    (github.com provider-checksum 403), not with account-specific detail.
+  - No rescue agents or workaround loops (Decision 55); on any unrecoverable failure, stop and RCA.
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (triaged 78 of 78; no
+    contradictions). CITE: Decision 73, Decision 83, Decision 92, Decision 77, Decision 86, Decision 104,
+    Decision 55. RELATED: Decision 87 (sanctions the merged-plan edit), Decision 112 (ratified CD.21 --
+    the OIDC CI-runner substrate), Decision 100/Decision 75 (managed-service-native: the deferred
+    provider-mirror rec must use terraform's native provider_installation block, not a hand-rolled
+    fetch script), Decision 84 (file the Decision via backfill-decisions-md, recs via file_rec). Note:
+    CD.29/CD.30 are candidate_decisions in the roadmap, not Decision headers -- outside DECISIONS.md scope.
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 REVISE round"
+  - >-
+    Direction validated by three zero-context reviewers (human-requested): (1) verification-audit
+    alignment -> ADJUST (confirmed the graduation registry is the WRONG home; enforce single-SoT;
+    keep the SKILL subsection keyed to provider-init egress, not co-mingled with shallow-check
+    anti-patterns; extend the re-home to acceptance line 96); (2) adversarial/blast-radius -> ADJUST
+    (the highest-value change is the proxy-403 visible-skip in _scaffolding.py -- current --pre green
+    is incidental on terraform's absence; honest local check is grep-only, not fmt-check; correcting
+    terraform/CLAUDE.md is in-scope but PLAN-t2-24 procedures get a filed rec not a rewrite; provider
+    mirror is a deferred follow-up rec, not in this plan); (3) terraform mechanism feasibility ->
+    PROCEED (fmt needs no init; validate needs init; a filesystem_mirror/-plugin-dir seeded from S3
+    would work and skips the github.com signing fetch entirely because the lock already carries the
+    kislerdm/neon h1 hashes -- recorded as the deferred durable path). All folded in.
+  - >-
+    Root cause: CC-web outbound proxy scopes github.com to repo-scoped API calls, so `terraform init`
+    of any root with a third-party (github.com-hosted) provider permanently 403s while retrieving the
+    provider's authentication checksums / signing key. hashicorp/* providers init fine
+    (releases.hashicorp.com). terraform is not installed by default in CC-web, so today's local --pre
+    green is incidental on terraform's absence; a CC-web session with terraform installed would red
+    --pre on the permanent 403 (it is absent from _TRANSIENT_INIT_SIGNATURES and would be appended to
+    `failed`). This plan converts that landmine into graceful degradation.
+  - >-
+    CI already enforces this authoritatively: .github/workflows/ci.yml `terraform-validate` job (no
+    `if:`/`paths:` guard -- runs on every PR and push) executes `scripts.validate --terraform-only`
+    (init -backend=false + validate + fmt across terraform/ and terraform/personal) on a github-hosted
+    runner with full network; it is a required check in the main-protection ruleset (Decision 83). The
+    speculative-plan job (terraform-apply-sandbox.yml, Decision 92) runs `terraform plan` for
+    terraform/personal in CI. Local validate is redundant AND impossible.
+  - >-
+    Prior art: PLAN-terraform-provider-install-retry.yaml hardened _terraform_init_with_retry against
+    TRANSIENT provider-download failures (connection resets, i/o timeouts) reddening the CI gate --
+    related but distinct. The permanent github.com 403 is deliberately NOT a transient signature and
+    must not be retried; it gets a separate skip branch. That plan (lines ~155) already considered and
+    deferred the S3 provider mirror -- the follow-up rec should cite it.
+  - >-
+    Drafted Decision text for /implement to file (re-check the next free `## Decision NNN:` number at
+    execution time -- numbering is not reserved at draft time): TITLE "CC-web session-class constraint:
+    third-party terraform provider init is github.com-egress-blocked; validate/plan for such roots is
+    CI-delegated." BODY: In CC-web the outbound proxy scopes github.com to repo-scoped API calls, so
+    `terraform init` of any root using a third-party (github.com-hosted) provider (e.g. kislerdm/neon
+    in terraform/personal) permanently 403s fetching the provider's authentication checksums; HashiCorp
+    providers (releases.hashicorp.com) init fine. Therefore terraform validate/plan for third-party-
+    provider roots is CI-delegated verification, authoritatively enforced by the required terraform-
+    validate job (Decision 83) and the speculative-plan pipeline (Decision 77 / Decision 92). The local
+    presubmit degrades gracefully: run_terraform_creds_free emits a visible skip both when terraform is
+    absent AND when init hits the permanent proxy-403 (the prior green was incidental on terraform's
+    absence). Plan authors write local terraform VP steps as grep-only (fmt-check only when terraform
+    is present); never a local terraform validate/init/plan for third-party-provider roots. REVERSAL
+    CONDITIONS: if the CC-web session class later permits github.com provider-asset egress, or an
+    S3-backed provider_installation filesystem_mirror is adopted (deferred follow-up rec), local
+    init/validate becomes possible and this delegation may relax.
+  - >-
+    HARD-BLOCK DEFERRAL RATIONALE (Related-Work check): four unresolved ci-rca recs
+    (rec-2504/2505/2506/2513) were open at planning time, all citing stale post-CD.25 roadmap-guard
+    tests in tests/test_platform_roadmap.py (a forward_fix_recursion_alert at threshold=3). This plan
+    satisfies NONE of the three Related-Work conditions (different files: _scaffolding.py /
+    test_validate.py / terraform/CLAUDE.md / planning SKILL / PLAN-ci-ducklake; different Decision
+    Records; different failure category: terraform-init egress verification-methodology vs pytest
+    roadmap-fixture regression). The operator explicitly directed proceeding and stated another agent
+    is addressing the ci-rca recs. This deferral is logged per the planning skill's Related-Work
+    escape hatch.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok); no scope-file
+    divergence. Main was RED at planning time (the deferred ci-rca roadmap-test failures), unrelated to
+    this plan's scope.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/terraform-validate-proxy-juzxzf)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant sections read (via decision-scout gate; NO_FLAGS, 78/78)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Re-check the next free Decision number in docs/DECISIONS.md at execution time (numbering race)
+execution_steps:
+  - >-
+    scripts/checks/_scaffolding.py -- add a helper `_is_proxy_blocked_init(output) -> bool` that
+    returns True ONLY on co-occurrence of a 403-Forbidden marker AND "github.com" AND an
+    auth-checksum/"failed to retrieve" marker (use `all(...)` over the required markers or a compiled
+    regex -- NOT an any()-over-tuple, which would skip on any 403 and mask non-github failures). Thread
+    a tri-state through the init path so run_terraform_creds_free can distinguish success / proxy-block
+    / genuine-fail: on success run validate + fmt (unchanged); on genuine permanent fail append to
+    `failed` and skip both (unchanged); on proxy-block print a visible skip (mirroring the
+    invoke_step/skip format, referencing the terraform-validate CI job), do NOT append to `failed`, skip
+    `terraform validate`, but STILL run `terraform fmt -check` for that root. Do NOT add the 403 to
+    _TRANSIENT_INIT_SIGNATURES. Update the adjacent docstring/comment to document the four outcomes
+    (success / proxy-skip-validate-run-fmt / genuine-fail / transient-retry). Existing callers/tests
+    that only exercise success and genuine-fail must keep passing unchanged. Implementer note: the
+    observed error is "403 Forbidden returned from github.com" on the auth-checksum fetch; pick markers
+    robust to the provider-download redirect host (objects.githubusercontent.com does NOT contain the
+    literal "github.com"), and err NARROW -- a too-narrow predicate merely reddens (same as today, no
+    masking), a too-broad one masks real failures.
+  - >-
+    tests/test_validate.py -- in TestRunTerraformChecks add test_creds_free_init_skips_on_proxy_403
+    (a github.com-403 auth-checksum init failure -> visible skip, `failed` empty, fmt-check invoked for
+    that root) and test_creds_free_init_still_fails_on_non_github_403 (an S3/backend-style 403 lacking
+    the github.com/checksum context -> appended to `failed`). Mock subprocess (Popen/run) per the
+    test-isolation patterns; assert on the visible-skip output, the `failed` list contents, and (for
+    the proxy case) that the fmt-check step still ran. Keep the existing transient-retry and bad-pin
+    tests green.
+  - >-
+    terraform/CLAUDE.md -- rewrite the "Running terraform/personal/ on CC-web" section (lines ~21-63):
+    remove the false "the agent itself runs terraform plan/apply locally" claim and the interactive
+    local plan->apply loop as a stock-CC-web capability; state the third-party-provider init 403
+    constraint and the CI-delegated validate/plan/apply posture (terraform-validate job for validate;
+    speculative-plan + apply-the-saved-plan for plan/apply). Cite the new Decision as rationale SoT.
+    Keep the tfvars-from-remote-state facts only where they remain accurate (e.g. the CI apply path
+    sources tfvars from Secrets Manager); do NOT rewrite the PLAN-t2-24 interactive-recovery procedure
+    here -- that is a filed rec.
+  - >-
+    .claude/skills/planning/SKILL.md -- add a new subsection under "## Verification Tier Guidelines"
+    (after the V3 bullet, before "**Anti-patterns to reject:**"), keyed to provider-init egress:
+    third-party-provider terraform roots are un-init-able from stock CC-web; author local terraform VP
+    steps as grep-only (fmt-check only if terraform is present); delegate validate/plan to CI (name the
+    required terraform-validate check + the speculative-plan job). One cross-reference line to
+    terraform/CLAUDE.md and the Decision; do not restate the rationale.
+  - >-
+    docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml -- edit ONLY VP step 5 and acceptance line ~96:
+    keep the grep assertion on the oidc.tf github_ci_plan grants as the VP step's executable `command`
+    (the schema requires a non-empty command -- do NOT leave the step prose-only), and move the
+    `terraform validate` assertion into the step's `expected`/`action` as CI-delegated evidence (the
+    green required terraform-validate check-run on that plan's PR), dropping the local
+    `terraform -chdir=terraform/personal init -backend=false && terraform validate` invocation. Re-run
+    scripts.plan_document on it to confirm it stays schema-valid.
+  - >-
+    File the Decision and the two follow-up recs via the ops portal at execution time (behind the
+    /implement execution-time confirmation gate): the Decision via
+    `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` after appending the drafted
+    entry to docs/DECISIONS.md with the next free number; the two recs via file_rec (provider
+    filesystem_mirror -- cite PLAN-terraform-provider-install-retry:155 and Decision 100 for the native
+    mirror block; and the PLAN-t2-24 tfvars-recovery/interactive-loop re-ground). Call
+    get_rec_write_guidance() before file_rec.
+  - >-
+    Execute Verification Plan -- run each pre-deploy step; loop until pass. Run the post-deploy steps
+    (Decision filed, recs filed) after the portal writes. On any unrecoverable failure, stop and RCA
+    (Decision 55).
+  - "Report: what was implemented, per-step verification results, the new Decision number, and the two filed rec ids."
+work_areas: []
+rollback: >-
+  All changes revert via a normal PR (no infra state). The _scaffolding.py skip branch and its tests
+  revert together. The doc/skill/plan edits revert by restoring the prior text. The filed Decision and
+  recs are warehouse rows -- reverse by a portal status update (supersede the Decision / close the
+  recs), not by deleting rows.
