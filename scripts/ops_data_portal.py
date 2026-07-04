@@ -175,6 +175,12 @@ class CiRcaContext(BaseModel):
         default=None,
         pattern=r"^(high|medium|low|undetermined)$",
     )
+    # Portal-derived (Decision 66 Tier B), never agent-authored -- stamped by
+    # _stamp_warn_mode_reject() when a warn-mode write would have been rejected in strict
+    # mode. Declared explicitly (not left to silent extra) so it survives a round-trip;
+    # CiRcaContext has no extra="forbid" but undeclared fields are dropped by the
+    # pydantic default (extra='ignore').
+    warn_mode_reject: Optional[dict] = None
 
     @field_validator("why_chain")
     @classmethod
@@ -328,6 +334,24 @@ def _check_bundle_s3_existence(
         return "fail_open"
 
 
+_CROSS_CHECK_TAG_RE = re.compile(r"check-(\d+)")
+
+
+def _stamp_warn_mode_reject(context_v2_json: dict, reasons: list[str]) -> None:
+    """Stamp a warn-mode would-reject marker onto context_v2_json IN PLACE (c3 enabler).
+
+    context_v2_json is a shared mutable dict passed by reference through file_rec() and
+    _run_ci_rca_cross_check() -- multiple warn-mode branches (schema-deficiency, bundle-
+    absent, S3-missing, cross-check checks 1-4) may each call this before the final
+    json.dumps, so reasons accumulate rather than overwrite. Callers gate this so it is
+    reached ONLY on the warn-mode branch (strict mode raises before any stamp).
+    """
+    marker = context_v2_json.setdefault("warn_mode_reject", {"reasons": [], "mode_at_write": "warn"})
+    for reason in reasons:
+        if reason not in marker["reasons"]:
+            marker["reasons"].append(reason)
+
+
 def _run_ci_rca_cross_check(
     context_v2_json: dict,
     s3_client_factory: Optional[Callable[[], Any]] = None,
@@ -366,6 +390,7 @@ def _run_ci_rca_cross_check(
         if mode == "strict":
             raise ValueError(f"[CI_RCA_STRICT_MODE=strict] {bundle_absent_msg} rca_confidence={rca_confidence!r}.")
         logger.warning("[CI_RCA_STRICT_MODE=warn] %s rca_confidence=%r (rec filed anyway).", bundle_absent_msg, rca_confidence)
+        _stamp_warn_mode_reject(context_v2_json, ["bundle_absent"])
         return
 
     s3_check = _check_bundle_s3_existence(evidence_bundle_ref, s3_client_factory=s3_client_factory)
@@ -378,6 +403,7 @@ def _run_ci_rca_cross_check(
         if mode == "strict":
             raise ValueError(f"[CI_RCA_STRICT_MODE=strict] {s3_msg}")
         logger.warning("[CI_RCA_STRICT_MODE=warn] %s (rec filed anyway)", s3_msg)
+        _stamp_warn_mode_reject(context_v2_json, ["s3_missing"])
     elif s3_check == "degraded":
         logger.warning(
             "[CI_RCA_EVIDENCE_S3_DEGRADED] evidence_bundle_ref.upload_status=%r (not 'ok') -- S3 existence "
@@ -462,6 +488,8 @@ def _run_ci_rca_cross_check(
     if mode == "strict":
         raise ValueError(f"[CI_RCA_STRICT_MODE=strict] {combined}")
     logger.warning("[CI_RCA_STRICT_MODE=warn] cross-check issues (rec filed anyway): %s", combined)
+    tags = [f"cross_check_check_{m.group(1)}" for m in (_CROSS_CHECK_TAG_RE.search(i) for i in issues) if m]
+    _stamp_warn_mode_reject(context_v2_json, tags or ["cross_check_disagreement"])
 
 
 def _resolve_writer_url(profile: Optional[str] = None) -> str:
@@ -897,6 +925,7 @@ def file_rec(
                     "[CI_RCA_STRICT_MODE=warn] context_v2_json deficiencies (rec filed anyway): %s",
                     "; ".join(deficiencies),
                 )
+                _stamp_warn_mode_reject(context_v2_json, ["schema_deficiency"])
             # Build a >=80-char human summary for the legacy context column from the structured schema.
             parts = []
             if context_v2_json.get("proximate_cause"):
