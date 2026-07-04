@@ -21,8 +21,8 @@ REGISTRY: list[type[Verifier]] = [
     SchemaIntegrityVerifier,
     DataQualityVerifier,
     # CausalChainVerifier deregistered during public-repo CI bootstrap; telemetry tables
-    # are deferred. Reactivate per docs/ROADMAP-PLATFORM.yaml T2.15 and
-    # docs/INTENT-session-log-architecture.md once telemetry_agent_turns is live.
+    # are deferred. Reactivate per docs/ROADMAP-PLATFORM.yaml T2.15, T3.20, and CD.40
+    # once telemetry_agent_turns is live.
 ]
 
 

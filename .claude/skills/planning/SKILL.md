@@ -144,8 +144,8 @@ plan an item. Run four checks, cheapest first:
    bias). If ALL criteria already hold, do NOT plan the item -- propose a status closeout
    instead: stage `status: complete` + `completed_at` + a note citing the evidence, present it
    to the human, and on confirmation land it as a small roadmap-bookkeeping commit. Precedent:
-   T-1.9 sat `not_started` after its deliverable (docs/INTENT-session-log-architecture.md) had
-   already landed, and a downstream item (T2.15) was citing the deliverable as existing.
+   T-1.9 sat `not_started` after its T-1.9 session-log audit deliverable had already landed, and
+   a downstream item (T2.15) was citing the deliverable as existing.
 2. **Stale-reference check.** Verify every `files_in_scope` path exists or is marked `# new`;
    scan the item's intent/exit_criteria for surfaces or substrates that ratified decisions have
    retired (e.g. the EC2 runner per CD.21/Decision 73, Bedrock per CD.28, SSO per CD.26, direct
