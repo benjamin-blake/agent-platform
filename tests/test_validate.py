@@ -5887,3 +5887,43 @@ class TestValidateGhasProbe:
         ):
             _ghas_run_cli()
         assert "super-secret-token" not in capsys.readouterr().out
+
+
+class TestPreRoadmapGuardSelection:
+    """ci-rca-cd25-ratification-tier-gap -- select_roadmap_guard_tests() dynamically pulls tests/ files that reference
+    a roadmap YAML into the --pre fast tier's changed_tests set whenever a roadmap YAML
+    appears in the diff, so live-roadmap guard tests stop being tier_misplaced (they used
+    to run only in the full post-merge tier)."""
+
+    select_roadmap_guard_tests = staticmethod(_validate.select_roadmap_guard_tests)
+
+    def _make_tests_dir(self, tmp_path: Path) -> None:
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_roadmap_guard.py").write_text('ROADMAP = "ROADMAP-PLATFORM.yaml"\n', encoding="utf-8")
+        (tests_dir / "test_unrelated.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
+        pycache_dir = tests_dir / "__pycache__"
+        pycache_dir.mkdir()
+        (pycache_dir / "test_roadmap_guard.cpython-312.pyc").write_bytes(b"ROADMAP-PLATFORM.yaml")
+
+    def test_roadmap_yaml_in_diff_selects_guard_tests(self, tmp_path: Path) -> None:
+        self._make_tests_dir(tmp_path)
+        result = self.select_roadmap_guard_tests(["docs/ROADMAP-PLATFORM.yaml"], repo_root=tmp_path)
+        assert result == ["tests/test_roadmap_guard.py"]
+
+    def test_no_roadmap_yaml_in_diff_does_not_force_select(self, tmp_path: Path) -> None:
+        self._make_tests_dir(tmp_path)
+        result = self.select_roadmap_guard_tests(["scripts/validate.py"], repo_root=tmp_path)
+        assert result == []
+
+    def test_pycache_paths_excluded(self, tmp_path: Path) -> None:
+        self._make_tests_dir(tmp_path)
+        result = self.select_roadmap_guard_tests(["docs/ROADMAP-PLATFORM.yaml"], repo_root=tmp_path)
+        assert all("__pycache__" not in f and f.endswith(".py") for f in result)
+
+    def test_product_roadmap_yaml_also_triggers_selection(self, tmp_path: Path) -> None:
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_product_guard.py").write_text('ROADMAP = "ROADMAP-PRODUCT.yaml"\n', encoding="utf-8")
+        result = self.select_roadmap_guard_tests(["docs/ROADMAP-PRODUCT.yaml"], repo_root=tmp_path)
+        assert result == ["tests/test_product_guard.py"]
