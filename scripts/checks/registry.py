@@ -158,6 +158,7 @@ def full_sequence() -> list[Step]:
         _c("validate_environment_taxonomy"),
         _c("validate_complexity"),
         _c("validate_scheduled_agent_logs"),
+        _c("validate_ghas_probe"),
         _c("validate_hermeticity_flags"),
         _c("validate_verifier_hermeticity"),
         _c("validate_verifier_same_pr_guard"),

@@ -116,6 +116,7 @@ from scripts.checks.lambda_pkg.validate_lambda_manifests import validate_lambda_
 from scripts.checks.misc.validate_ducklake_version_lockstep import (  # noqa: F401,E402
     validate_ducklake_version_lockstep,
 )
+from scripts.checks.misc.validate_ghas_probe import validate_ghas_probe  # noqa: F401,E402
 from scripts.checks.misc.validate_invariants import validate_invariants  # noqa: F401,E402
 from scripts.checks.misc.validate_scheduled_agent_logs import validate_scheduled_agent_logs  # noqa: F401,E402
 from scripts.checks.misc.validate_test_coverage import _load_coverage_checker, validate_test_coverage  # noqa: F401,E402
