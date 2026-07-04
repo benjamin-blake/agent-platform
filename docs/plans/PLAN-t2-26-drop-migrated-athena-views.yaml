@@ -1,0 +1,291 @@
+schema_version: 1
+slug: "t2-26-drop-migrated-athena-views"
+intent: >-
+  Advance tier_item T2.26 by closing criterion c4: remove the two remaining migrated-table Athena
+  _current views (ops_decisions_current, ops_priority_queue_current) so the Athena ops-read estate
+  fully retires behind the DuckLake closed boundary (Decision 84), and re-ground criterion c3 so the
+  roadmap records ops_compaction's real retirement blockers. This shrinks the legacy read surface the
+  platform must keep coherent, a step toward the single-source-of-truth lakehouse North Star.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t2-26-drop-migrated-athena-views.yaml
+phase: >-
+  Platform tier_item T2.26 (Deferred ops-table DuckLake migrations + ops_compaction retirement),
+  follow-on slice closing exit criterion c4. Phase 1 Core Infrastructure (complete); ops-data
+  consolidation (Decision 84).
+scope:
+  - file: terraform/personal/main.tf
+    action: Modify
+    purpose: >-
+      Empty the create_ops_view_queries local (remove the ops_decisions_current and
+      ops_priority_queue_current keys) and add two one-shot DROP VIEW null_resources
+      (drop_ops_decisions_view, drop_ops_priority_queue_view) mirroring the existing
+      drop_ops_recommendations_view. Removing a for_each key destroys the null_resource in state but
+      issues NO DDL, so an explicit DROP VIEW IF EXISTS is required to remove the live Glue view.
+  - file: terraform/iceberg_tables.tf
+    action: Modify
+    purpose: >-
+      Scrub the three migrated-table view entries (ops_recommendations_current, ops_decisions_current,
+      ops_priority_queue_current) from this legacy (CD.21-retained, unapplied) root's
+      create_ops_view_queries local for artefact honesty. Leave the separate
+      create_telemetry_view_queries local untouched. No apply results (root is not applied).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Declare closes_criteria [T2.26:c4]; re-ground criterion c3 text to record its real blockers
+      (telemetry/T2.36 -- ops_compaction also compacts telemetry staging; ops_session_log/T3.20 +
+      unratified CD.40 for c2's remaining half); append a progress_note documenting this slice. NO
+      criterion status flip (that is /implement's bookkeeping walk on a verified VP pass).
+  - file: docs/runbooks/ducklake-catalog-operations.md
+    action: Modify
+    purpose: >-
+      Re-ground Section 5 (ops_compaction decommission) gate text to add telemetry retirement
+      (T2.36 / Phase 4) as an additional c3 blocker and note the c4 migrated-table _current view drops.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/personal/main.tf: emptying create_ops_view_queries destroys the create_ops_views
+    null_resource instances (destroy event). terraform_apply_guard.py exits 2 on any destroy
+    (Decision 77) -> the change routes to the tf-gated-apply GitHub Environment reviewer, which
+    approves the CD apply of the reviewed plan.bin (CD.35 / Decision 92 speculative-plan +
+    apply-the-saved-plan). NOT a laptop apply.
+  - >-
+    Pre-merge: the speculative-plan job posts a redacted diff + PREDICTED verdict = BLOCKED (destroy)
+    as a PR comment. At merge the gated-apply job applies the SAME saved plan.bin after human
+    Environment approval; no re-plan (Decision 77 no-TOCTOU).
+  - >-
+    terraform/personal uses the third-party kislerdm/neon provider: local terraform
+    init/validate/plan is github.com-egress-blocked on this DEV (agent_platform-only) session
+    (Decision 119; Decision 120 mirror is ADMIN-container-only). Local terraform VP is grep +
+    terraform fmt -check (fmt needs no provider) only; terraform validate is delegated to the CI
+    terraform-validate job + speculative-plan job as authoritative.
+  - >-
+    terraform/iceberg_tables.tf is a CD.21-retained legacy root that is NOT applied; editing it
+    triggers no plan/apply and no live infrastructure change.
+acceptance_criteria:
+  - >-
+    terraform/personal/main.tf create_ops_view_queries no longer contains ops_decisions_current or
+    ops_priority_queue_current, and carries explicit DROP VIEW IF EXISTS null_resources
+    (drop_ops_decisions_view, drop_ops_priority_queue_view) for both, mirroring
+    drop_ops_recommendations_view.
+  - >-
+    terraform/iceberg_tables.tf create_ops_view_queries no longer contains any of the three
+    migrated-table _current view entries (recs/decisions/queue); create_telemetry_view_queries is
+    unchanged.
+  - >-
+    Post-apply: neither ops_decisions_current nor ops_priority_queue_current exists in the live
+    agent_platform Glue catalog (Athena information_schema.views returns zero rows for both).
+  - >-
+    No live (non-test, non-historical) code path reads ops_decisions_current or
+    ops_priority_queue_current (rg sweep clean; DQ runner + athena_views verifier already read via
+    the DuckLake closed boundary).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml declares closes_criteria [T2.26:c4] and c3 text names the
+    telemetry/T2.36 and ops_session_log/T3.20/CD.40 blockers; docs/runbooks/ducklake-catalog-operations.md
+    Section 5 gate text updated accordingly.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm both migrated-table view keys are removed from the LIVE root's create_ops_view_queries
+      local.
+    command: >-
+      awk '/create_ops_view_queries = \{/,/^  \}/' terraform/personal/main.tf | grep -Eq
+      'ops_(decisions|priority_queue)_current AS' && echo FAIL || echo OK
+    expected: "OK (no CREATE VIEW for the migrated-table _current views remains in the local)."
+    fix_if: >-
+      Prints FAIL -- an ops_decisions_current / ops_priority_queue_current CREATE VIEW entry still
+      exists in create_ops_view_queries; remove it.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the two explicit DROP VIEW IF EXISTS null_resources exist in terraform/personal/main.tf.
+    command: >-
+      grep -c 'DROP VIEW IF EXISTS ${aws_glue_catalog_database.ops.name}.ops_decisions_current\|DROP
+      VIEW IF EXISTS ${aws_glue_catalog_database.ops.name}.ops_priority_queue_current'
+      terraform/personal/main.tf
+    expected: "2 (one DROP VIEW IF EXISTS for each migrated-table view)."
+    fix_if: >-
+      Prints fewer than 2 -- add the missing drop_ops_decisions_view / drop_ops_priority_queue_view
+      resource mirroring drop_ops_recommendations_view (bash local-exec Athena DROP VIEW,
+      on_failure=continue, depends_on create_ops_views).
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the three migrated-table view entries are scrubbed from the legacy (unapplied) root and
+      telemetry views are untouched.
+    command: >-
+      awk '/create_ops_view_queries = \{/,/^  \}/' terraform/iceberg_tables.tf | grep -Eq
+      'ops_(recommendations|decisions|priority_queue)_current AS' && echo FAIL || echo OK; grep -q
+      'telemetry_sessions_current AS' terraform/iceberg_tables.tf && echo TELEMETRY_KEPT
+    expected: "OK then TELEMETRY_KEPT (migrated-table views gone; telemetry views retained)."
+    fix_if: >-
+      Prints FAIL (a migrated-table view entry remains) or omits TELEMETRY_KEPT (telemetry views were
+      wrongly removed) -- correct the edit.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Stale-reference sweep (closure obligation): confirm no live code reads the two dropped views.
+      migrate_ops_data.py (one-time migration tool) and cleanup_ops_rec_orphans.py (reads the
+      already-dropped recs view) and tests are historical/orphan and excluded.
+    command: >-
+      rg -n 'ops_decisions_current|ops_priority_queue_current' scripts/ src/ --glob '!**/__pycache__/**'
+      --glob '!scripts/migrate_ops_data.py' --glob '!**/test_*.py' || echo NO_LIVE_READERS
+    expected: >-
+      NO_LIVE_READERS, or only ops_writer.py _refresh_view entries (deliberately out of scope --
+      unreachable under the closed boundary; removed with c3 ops-compaction retirement).
+    fix_if: >-
+      A live consumer (DQ, verifier, portal, preflight) still reads either view -- repoint it onto the
+      DuckLake reader boundary before the drop, or add it to scope.
+  - step: 5
+    phase: pre-deploy
+    action: "Validate the plan document schema and roadmap closes_criteria referential integrity."
+    command: >-
+      bin/venv-python -m scripts.plan_document docs/plans/PLAN-t2-26-drop-migrated-athena-views.yaml &&
+      bin/venv-python -m scripts.validate --pre
+    expected: >-
+      plan_document prints OK; validate --pre passes (closes_criteria [T2.26:c4] resolves to a real
+      open criterion; roadmap schema valid).
+    fix_if: >-
+      plan_document errors (schema/slug) or validate --pre fails on closes_criteria referential
+      integrity (nonexistent item:criterion) or roadmap schema -- fix the offending field.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      terraform formatting check on the live root (fmt needs no provider init; validate/plan are
+      CI-delegated per Decision 119).
+    command: "command -v terraform >/dev/null && terraform -chdir=terraform/personal fmt -check || echo TERRAFORM_ABSENT_DELEGATE_TO_CI"
+    expected: >-
+      Exit 0 (formatted) or TERRAFORM_ABSENT_DELEGATE_TO_CI. Authoritative validate is the CI
+      terraform-validate job; the speculative-plan job posts the predicted BLOCKED verdict on the PR.
+    fix_if: "fmt -check reports diffs -- run terraform fmt on terraform/personal and re-commit."
+  - step: 7
+    phase: post-deploy
+    action: >-
+      After the tf-gated-apply Environment approval and CD apply land, confirm both views are absent
+      from the live agent_platform Glue catalog via Athena.
+    command: >-
+      bin/venv-python -m scripts.run_athena_query --workgroup agent-platform-production --database
+      agent_platform "SELECT table_name FROM information_schema.views WHERE table_schema='agent_platform'
+      AND table_name IN ('ops_decisions_current','ops_priority_queue_current')"
+    expected: >-
+      Zero rows returned (both views dropped). If scripts.run_athena_query is unavailable, run the
+      equivalent aws athena start-query-execution against the agent-platform-production workgroup.
+    fix_if: >-
+      Either view still present -- the gated apply did not run the DROP VIEW null_resource; re-check
+      the apply log / convergence record and re-dispatch the acknowledge-and-retry.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Confirm the speculative-plan PR comment recorded predicted verdict BLOCKED (destroy) and the
+      gated-apply job applied the saved plan.bin (convergence record green).
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile
+      agent_platform | grep -E '"status":\s*"green"' && echo CONVERGENCE_GREEN; echo 'Also inspect
+      the PR speculative-plan comment for predicted verdict BLOCKED (destroy).'
+    expected: >-
+      Predicted verdict BLOCKED on the PR; gated-apply applied plan.bin after Environment approval;
+      convergence record status=green with the merge commit sha.
+    fix_if: >-
+      Apply failed / convergence red -- review the ci-rca rec and use the workflow_dispatch
+      acknowledge-and-retry unlatch (never a silent re-plan-and-apply).
+constraints:
+  - >-
+    Do NOT edit scripts/ops_writer.py. Its _refresh_view retains migrated-table entries that are
+    unreachable under the DuckLake closed boundary (fires only on real staged Iceberg writes those
+    tables no longer receive). Removing them would pull data-pipeline + ops-compaction into a
+    Lambda build/deploy/smoke cycle; that cleanup is deferred to c3 (ops-compaction retirement),
+    which deploys/retires that artefact anyway. (Consistent with Decision 84 I-4.)
+  - >-
+    Do NOT modify T2.26 depends_on (currently [T2.19]). c4 is doable now; adding T2.36/T3.20 there
+    would wrongly block the whole item. Re-ground at the criterion level only.
+  - >-
+    Do NOT edit docs/contracts/read-engine.yaml or ops-data-store.md. read-engine.yaml's
+    priority_queue_current is the DuckLake reader VERB (different namespace from the Athena view);
+    Athena-view contract reconciliation is T2.27's domain.
+  - >-
+    No new Decision is filed -- the drop completes the Decision 81 cl.7 / Decision 84 cutover.
+    Criterion status flips happen only in /implement's bookkeeping walk on a verified VP pass
+    (Decision 90/105).
+  - >-
+    Mirror the drop_ops_recommendations_view pattern exactly: constant trigger (one-shot),
+    bash local-exec Athena DROP VIEW IF EXISTS, on_failure=continue, depends_on create_ops_views.
+    No workaround loops (Decision 55).
+  - >-
+    No rescue agents or workaround loops (Decision 55). A failed gated apply routes to ci-rca +
+    workflow_dispatch acknowledge-and-retry, never a silent re-apply.
+context:
+  - "closes_criteria: T2.26:c4 (drop migrated-table Athena _current views). c2/c3/c7 stay open."
+  - >-
+    Tier Item Freshness Gate (c3 re-ground, human-confirmed): ops_compaction_handler compacts
+    telemetry staging too (handler parses both dt= ops keys and trade_date= telemetry keys via
+    TABLE_NAMES), so criterion c3 (retire ops_compaction) is gated on telemetry retirement
+    (T2.36 / Phase 4) in addition to c2; and c2's ops_session_log half is gated on T3.20 +
+    unratified CD.40. The roadmap c3 text previously understated these -- this plan re-grounds it.
+  - >-
+    ci-rca HARD BLOCK cleared at planning time: rec-2530 and rec-2533 (Critical, test-count drift on
+    tests/test_ci_rca_taxonomy.py) were verified resolved by merged PR #447 (main c0c2e6c4, replaced
+    the hard-coded workflow count with an independent-oracle differential; test passes 23/23 with 14
+    workflow files) and closed via the ops portal. ci_rca_unresolved is now empty -- no deferral
+    rationale required.
+  - >-
+    Precedent: terraform/personal/main.tf null_resource.drop_ops_recommendations_view (the T2.19
+    recs-view drop). ops_recommendations_current is already dropped. scripts/verifiers/athena_views.py
+    was already repointed (VF-03) onto the DuckLake reader and does NOT read the _current views.
+  - >-
+    Apply routing: null_resource destroy -> terraform_apply_guard.py exit 2 -> tf-gated-apply
+    Environment approval -> CD applies saved plan.bin (Decision 77 / 92 / CD.35). neon provider-init
+    egress blocks local validate/plan (Decision 119; 120 mirror is ADMIN-only) -> CI-delegated.
+  - >-
+    Decision-scout verdict: NO_FLAGS (80 of 80 triaged). CITE: Decision 84, Decision 81, Decision 77,
+    Decision 92, Decision 119. Related: 120, 94, 88, 90, 105, 86, 55.
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round"
+  - >-
+    Main Divergence Assessment: branch is 0 commits behind origin/main at planning time; no scope-file
+    overlap. Assessment clean.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ducklake-migrations-ops-compaction-w4jpmm)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS relevant to scope triaged via decision-scout (NO_FLAGS, 80/80)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "Precedent resource read: null_resource.drop_ops_recommendations_view (terraform/personal/main.tf)"
+execution_steps:
+  - >-
+    terraform/personal/main.tf: empty local.create_ops_view_queries (remove the ops_decisions_current
+    and ops_priority_queue_current keys, leaving `create_ops_view_queries = {}` with an explanatory
+    comment noting all migrated-table views are now dropped and telemetry survivors are T2.7's
+    domain). Add two one-shot null_resources -- drop_ops_decisions_view and drop_ops_priority_queue_view
+    -- each mirroring drop_ops_recommendations_view exactly (constant trigger dropped_at="2026-07-04-T2.26",
+    bash local-exec running `DROP VIEW IF EXISTS ${aws_glue_catalog_database.ops.name}.<view>`,
+    on_failure=continue, depends_on=[null_resource.create_ops_views]). Update the comment block at
+    lines 288-291 to reflect that decisions/queue are now dropped too.
+  - >-
+    terraform/iceberg_tables.tf: remove the ops_recommendations_current, ops_decisions_current, and
+    ops_priority_queue_current entries from local.create_ops_view_queries (lines ~1024-1057), leaving
+    it empty with a comment; do NOT touch local.create_telemetry_view_queries. This root is unapplied
+    (CD.21 artefact) -- artefact-honesty edit only.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: on tier_item T2.26, re-ground criterion c3 text to name the
+    telemetry/T2.36 and ops_session_log/T3.20+CD.40 blockers (do not change c3 status; it stays open),
+    and append a progress_note dated line summarising this slice (c4 view drops + c3 re-ground). Add
+    the plan's closes_criteria linkage as appropriate. Do NOT flip any criterion status.
+  - >-
+    docs/runbooks/ducklake-catalog-operations.md: in Section 5, add telemetry retirement (T2.36 /
+    Phase 4) as an additional ops_compaction decommission blocker alongside the session_log/
+    execution_plans disposition, and note the migrated-table _current view drops (c4) executed.
+  - >-
+    Execute the Verification Plan -- run each pre-deploy step; commit; open the PR so the
+    speculative-plan job posts the predicted verdict; on the gated apply landing, run the post-deploy
+    Athena verification. Loop until pass; on an unrecoverable V3 apply failure STOP and RCA
+    (Decision 55) -- do not silently re-apply.
+  - >-
+    In /implement's bookkeeping walk, on a verified VP pass, flip T2.26:c4 to met (met_by this plan
+    slug). Report what was implemented and the verification results.
+work_areas: []
+rollback: >-
+  The dropped views are trivially recreatable: git-revert this commit restores the
+  create_ops_view_queries entries and (on the next apply) re-creates ops_decisions_current /
+  ops_priority_queue_current via CREATE OR REPLACE VIEW. The views hold no data (they are ROW_NUMBER
+  projections over the base Iceberg tables), so no data is lost by the drop. Reverting is a fresh
+  gated apply, not a destructive operation.
