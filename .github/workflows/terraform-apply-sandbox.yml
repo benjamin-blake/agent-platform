@@ -283,7 +283,10 @@ jobs:
           BUCKET: agent-platform-data-lake
         run: |
           set -euo pipefail
-          bin/venv-python -m scripts.build_lambda --ducklake-only --skip-upload --profile ""
+          # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
+          # import-time deps directly, mirroring ci.yml's "Install validate.py import-time deps".
+          pip install pyyaml pydantic
+          python -m scripts.build_lambda --ducklake-only --skip-upload --profile ""
           NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
           if [ "${{ github.event_name }}" = "push" ]; then
             echo "Push path: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded S3 objects."
@@ -648,7 +651,10 @@ jobs:
         if: success() && steps.oidc_plan.outcome == 'success'
         run: |
           set -euo pipefail
-          bin/venv-python -m scripts.build_lambda --ducklake-only --profile "" --bucket agent-platform-data-lake
+          # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
+          # import-time deps directly, mirroring ci.yml's "Install validate.py import-time deps".
+          pip install pyyaml pydantic
+          python -m scripts.build_lambda --ducklake-only --profile "" --bucket agent-platform-data-lake
 
       - name: Terraform speculative plan (-lock=false, read-only preview)
         id: spec_plan
