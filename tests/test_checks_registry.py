@@ -67,6 +67,7 @@ FROZEN_PRE_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("check", "validate_lockfile_sync"),
     ("check", "validate_verifier_same_pr_guard"),
     ("check", "validate_verification_registry"),
+    ("check", "validate_vp_replay"),
     ("scaffold", "coverage_report"),
     ("scaffold", "budget_assertion"),
 )

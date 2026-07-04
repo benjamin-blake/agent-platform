@@ -295,6 +295,18 @@ When writing Verification Plan steps, ask: "If this feature had a subtle bug (wr
 - Terraform-only: "Confirm `terraform apply` succeeded" -- infrastructure existing is not enough
 - Prose-only VP step: VP step describes what to check but has no executable command -- the implement agent will substitute a weaker check
 
+**Hermetic authoring (T3.15 / VF-01):** author `pre-deploy` VP steps hermetic where possible --
+narrow, deterministic, creds-free commands with no network or AWS calls -- and mark them
+`hermetic: true`. The `validate_vp_replay` check (`--pre` tier) independently re-executes every
+`phase: pre-deploy` + `hermetic: true` step of a diff-added/modified PLAN-*.yaml, so a hermetic
+pre-deploy step that fails on the PR tree cannot go green on self-report alone -- this is the
+independent re-execution of the per-change proof named in VF-01 /
+`docs/INTENT-verification-system.md`. Never mark a step hermetic if its command transitively
+invokes `scripts/validate.py --pre` or the full check sequence -- the replay would recurse into
+itself. Steps that must invoke pytest, deploy infrastructure, or otherwise cannot run hermetically
+stay `hermetic: false` (the default) and are excluded from replay with a printed reason, not
+silently skipped.
+
 ## Candidate Decision Ratification (Workflow Step 5b, when the plan realizes/ratifies a CD)
 
 Fires when the plan's scope realizes the work a pending `candidate_decision` (CD.NN) gates, OR the

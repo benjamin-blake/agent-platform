@@ -190,6 +190,7 @@ from scripts.checks.verification.validate_verifier_same_pr_guard import (  # noq
     _extract_verifier_covers,  # noqa: F401
     validate_verifier_same_pr_guard,  # noqa: F401
 )
+from scripts.checks.verification.validate_vp_replay import validate_vp_replay  # noqa: F401,E402
 
 _FAST_TIER_BUDGET_SECONDS = 300
 
