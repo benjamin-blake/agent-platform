@@ -1,5 +1,6 @@
 """Tests for scripts/ci_rca_taxonomy.py (100% coverage)."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -38,6 +39,25 @@ def _write_taxonomy(tmp_path: Path, data: dict) -> Path:
     p = tmp_path / "taxonomy.yaml"
     p.write_text(yaml.dump(data), encoding="utf-8")
     return p
+
+
+_TOP_LEVEL_NAME_RE = re.compile(r"^name:\s*(.+?)\s*$")
+
+
+def _oracle_workflow_names(workflows_dir: Path) -> set[str]:
+    """Independent expected-name oracle: line-scans for the top-level 'name:' key.
+
+    Deliberately avoids yaml.safe_load (the SUT's parse mechanism) so the
+    differential retains bug-catching power instead of being circular.
+    """
+    expected = set()
+    for wf_path in Path(workflows_dir).glob("*.yml"):
+        for line in wf_path.read_text(encoding="utf-8").splitlines():
+            match = _TOP_LEVEL_NAME_RE.match(line)
+            if match:
+                expected.add(match.group(1).strip("\"'"))
+                break
+    return expected
 
 
 class TestLoadTaxonomy:
@@ -132,7 +152,18 @@ class TestEnumerateWorkflowNames:
     def test_real_workflows_dir(self):
         names = enumerate_workflow_names()
         assert "CI" in names
-        assert len(names) == 13
+        assert set(names) == _oracle_workflow_names(ROOT / ".github" / "workflows")
+
+    def test_drift_immunity_tracks_added_and_removed_workflow(self, tmp_path):
+        (tmp_path / "a.yml").write_text("name: Alpha\non:\n  push:\n", encoding="utf-8")
+        (tmp_path / "b.yml").write_text("name: Bravo\non:\n  push:\n", encoding="utf-8")
+        assert set(enumerate_workflow_names(tmp_path)) == {"Alpha", "Bravo"}
+
+        (tmp_path / "c.yml").write_text("name: Charlie\non:\n  push:\n", encoding="utf-8")
+        assert set(enumerate_workflow_names(tmp_path)) == {"Alpha", "Bravo", "Charlie"}
+
+        (tmp_path / "b.yml").unlink()
+        assert set(enumerate_workflow_names(tmp_path)) == {"Alpha", "Charlie"}
 
 
 MULTI_TAXONOMY = dict(MINIMAL_TAXONOMY)
