@@ -400,6 +400,29 @@ resource "aws_iam_role_policy" "github_ci_plan" {
         Resource = ["${aws_s3_bucket.data_lake.arn}/tfplan/personal/*"]
       },
       {
+        # rec-2512: fetch the vendored pg_dump/pg_restore bundle + pinned DuckLake extensions at
+        # build time (`scripts.build_lambda --ducklake-only`, run before `terraform plan` so
+        # filemd5() sees real content instead of resolving to null on lambda-packages/, which is
+        # gitignored). Read-only -- these are operator-seeded vendored artefacts, never written by CI.
+        Sid    = "DucklakeBuildInputsRead"
+        Effect = "Allow"
+        Action = ["s3:GetObject"]
+        Resource = [
+          "${aws_s3_bucket.data_lake.arn}/ducklake-pgclient/*",
+          "${aws_s3_bucket.data_lake.arn}/ducklake-extensions/*"
+        ]
+      },
+      {
+        # rec-2512: upload the seven rebuilt DuckLake zips so the reviewed plan.bin's filemd5
+        # corresponds to real S3 content, and so the apply-sandbox job's byte-identical re-upload at
+        # merge time has the PR-job artifact to compare against (Decision 77 no-TOCTOU). No
+        # DeleteObject -- mirrors the plan role's no-delete-anywhere posture.
+        Sid      = "DucklakeLambdaPackagesWrite"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/lambda-packages/*"]
+      },
+      {
         # Bucket-level access + refresh-time bucket-config reads the AWS provider issues on
         # every plan for all managed aws_s3_bucket resources. Mirrors github_ci_apply DataLakeBucketManage.
         Sid    = "DataLakeBucketRead"
