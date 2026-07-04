@@ -2,6 +2,57 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 120: Adopt the S3-backed provider filesystem_mirror as the realized Decision 119 reversal mechanism (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-04
+**Warehouse ID:** dec-120 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Decision 119 named an S3-backed `provider_installation` `filesystem_mirror` as its explicit reversal
+condition (rec-2514). That mechanism is now realized: `.github/workflows/terraform-provider-mirror-seed.yml`
+(the only egress-having actor in this architecture) runs the native `terraform providers mirror`
+subcommand (Decision 100 managed-service-native discipline -- not a hand-rolled fetch/verify script)
+on a GitHub-hosted runner and publishes the resulting tree to
+`s3://agent-platform-data-lake/tf-provider-mirror/`. `bin/setup-cloud-env.sh` syncs that prefix to
+`$HOME/.terraform-mirror/` on the admin (PlatformAdmin) container and resolves
+`config/terraform/cc-web.tfrc`'s `__TF_MIRROR_DIR__` placeholder into a local copy pointed at by
+`TF_CLI_CONFIG_FILE`, gated on the sync being non-empty (an empty/failed sync must not export a
+config that excludes `kislerdm/*` from `direct` with nothing in the mirror to serve it instead).
+With the mirror synced, `terraform init` of `terraform/personal` succeeds locally in a proxy-blocked
+CC-web container (including ADMIN, same session class per Decision 119) without the github.com
+checksum fetch that Decision 119 documented as permanently 403ing.
+
+This RELAXES, but does not REMOVE, the CI-delegation Decision 119 established: `validate`/`plan`/`apply`
+for `terraform/personal` in the routine (non-admin) CC-web flow remain CI-mediated (the required
+`terraform-validate` job, Decision 83; the speculative-plan + apply-the-saved-plan pipeline, Decision
+77 / Decision 92) -- that pipeline is the authoritative, always-available path and is unaffected by
+whether any given admin container happens to have a fresh mirror sync. What changes is that the
+ADMIN container's interactive human-gated apply loop (terraform/CLAUDE.md "Interactive loop
+fallback"), previously unusable for `terraform/personal` per Decision 119, is now available again for
+the cases that loop exists for: IAM/trust/destroy changes that guard-BLOCK the CD pipeline (Decision
+94 escape hatch) and any hand-applied recovery. The IAM write needed to publish to the new
+`tf-provider-mirror/` S3 prefix required NO new grant: `github_ci_apply`'s existing `DataLakeObjectIO`
+Sid already covers `s3:GetObject/PutObject/DeleteObject` on the whole `agent-platform-data-lake`
+bucket (verified before implementation, not assumed) -- so no out-of-band IAM change accompanies this
+Decision.
+
+**Reversal conditions:** if the S3 mirror sync stops being maintained (the seed workflow is retired,
+or the mirror silently drifts stale against `.terraform.lock.hcl`'s `h1:` hashes), `bin/setup-cloud-env.sh`'s
+gate-on-non-empty-sync fails closed to the pre-mirror posture (`TF_CLI_CONFIG_FILE` unset) and
+Decision 119's CI-delegation guidance is the sole path again -- no code change is required to revert,
+only ceasing to seed the mirror.
+
+**Related:** Decision 119 (the constraint this realizes the reversal condition for), Decision 100
+(managed-service-native discipline -- native `terraform providers mirror`, not a hand-rolled script),
+Decision 86 (rationale lives in a numbered Decision, not a new prose doc), Decision 77 (present-before-apply;
+unchanged -- this Decision does not pre-authorize any apply), Decision 92 / Decision 94 (the gated-apply
+/ admin-apply-as-escape-hatch framing this mechanism restores local init for), Decision 83 (the
+required terraform-validate CI job, unaffected), Decision 55 (honest convergence -- no force-write of
+any record; the mirror is purely an init-time enabler).
+
+---
+
 ## Decision 119: CC-web session-class constraint -- third-party terraform provider init is github.com-egress-blocked; validate/plan for such roots is CI-delegated (Decided)
 
 **Status:** Decided

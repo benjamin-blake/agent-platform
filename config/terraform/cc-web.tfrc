@@ -1,0 +1,20 @@
+# Terraform CLI config for CC-web sessions (rec-2514 / Decision 119 reversal mechanism).
+#
+# Routes the kislerdm/neon provider (terraform/personal) through a local filesystem_mirror seeded
+# from s3://agent-platform-data-lake/tf-provider-mirror/ (see
+# .github/workflows/terraform-provider-mirror-seed.yml) instead of a direct github.com checksum
+# fetch, which the CC-web outbound proxy 403s (Decision 119). hashicorp/* providers still resolve
+# direct from releases.hashicorp.com, which the proxy does not block.
+#
+# __TF_MIRROR_DIR__ is a literal placeholder, NOT a shell variable -- it is substituted by
+# bin/setup-cloud-env.sh into a resolved copy of this file before TF_CLI_CONFIG_FILE is exported.
+# This committed copy is never edited in place at runtime.
+provider_installation {
+  filesystem_mirror {
+    path    = "__TF_MIRROR_DIR__"
+    include = ["registry.terraform.io/kislerdm/*"]
+  }
+  direct {
+    exclude = ["registry.terraform.io/kislerdm/*"]
+  }
+}

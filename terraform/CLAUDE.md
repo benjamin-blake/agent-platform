@@ -21,15 +21,31 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 ## Running terraform/personal/ on CC-web (no local machine; vars come from remote state)
 **This project runs ONLY on Claude Code on the web. There is no operator local machine.**
 
-**Third-party-provider init is github.com-egress-blocked (Decision 119):** the CC-web outbound proxy
-scopes github.com to repo-scoped API calls, so a stock CC-web session CANNOT `terraform init`
-`terraform/personal` -- the `kislerdm/neon` provider's authentication-checksum fetch permanently 403s
-on github.com. `hashicorp/*` providers (releases.hashicorp.com) init fine. Because of this,
-`terraform validate`/`plan`/`apply` for `terraform/personal` are CI-mediated, not run locally by the
-agent: `validate` via the required `terraform-validate` job (Decision 83); `plan`/`apply` via the
-speculative-plan + apply-the-saved-plan pipeline described below (Decision 77 / Decision 92). See
-Decision 119 for the full rationale and reversal conditions (an S3-backed provider
-`filesystem_mirror` would restore local init/validate; tracked as a follow-up recommendation).
+**Third-party-provider init is github.com-egress-blocked by default (Decision 119), MIRROR-ENABLED
+on a synced admin container (Decision 120):** the CC-web outbound proxy scopes github.com to
+repo-scoped API calls, so a stock CC-web session CANNOT `terraform init` `terraform/personal` via a
+direct fetch -- the `kislerdm/neon` provider's authentication-checksum fetch permanently 403s on
+github.com. `hashicorp/*` providers (releases.hashicorp.com) init fine regardless. Decision 119 named
+an S3-backed `provider_installation` `filesystem_mirror` as its reversal mechanism; Decision 120
+realized it: `.github/workflows/terraform-provider-mirror-seed.yml` (the sole egress-having actor)
+seeds `s3://agent-platform-data-lake/tf-provider-mirror/`, and `bin/setup-cloud-env.sh` syncs it
+locally on `INSTALL_TERRAFORM=1` containers, resolving `config/terraform/cc-web.tfrc` and setting
+`TF_CLI_CONFIG_FILE` -- gated on a successful, non-empty sync (an empty/stale sync leaves
+`TF_CLI_CONFIG_FILE` unset rather than exporting a config that excludes `kislerdm/*` from `direct`
+with nothing in the mirror to serve). With that mirror synced, local `terraform init` of
+`terraform/personal` succeeds with no github.com fetch (see the Interactive loop fallback section
+below for when this is used).
+
+This RELAXES but does NOT REMOVE the CI-delegation: routine (non-admin) `terraform validate`/`plan`/`apply`
+for `terraform/personal` remain CI-mediated and authoritative regardless of any given container's
+mirror state -- `validate` via the required `terraform-validate` job (Decision 83); `plan`/`apply` via
+the speculative-plan + apply-the-saved-plan pipeline described below (Decision 77 / Decision 92). The
+mirror-enabled local-init path exists for the ADMIN container's interactive human-gated apply loop
+(IAM/trust/destroy changes that guard-BLOCK the CD pipeline, Decision 94 escape hatch; hand-applied
+recovery) -- it is not a general invitation to bypass the CI pipeline for routine changes. See
+Decision 119 for the original constraint and Decision 120 for the realized reversal mechanism and its
+own reversal conditions (mirror sync ceasing to be maintained falls back to this section's original
+CI-delegated posture with no code change required).
 
 `terraform/personal/terraform.personal.tfvars` is **gitignored** (`.gitignore`:
 `terraform/**/terraform.personal.tfvars`), so it is NOT in the fresh clone and there is no standalone
@@ -69,11 +85,18 @@ gated frequency). If an approval is abandoned, reject it in the GitHub Actions U
 **Interactive loop fallback:** if you want to apply any change by hand (e.g. during bootstrap or to
 reverse a manual admin change), the CC-web agent supports the iterative loop: `terraform plan` ->
 PRESENT -> human accepts -> agent runs `terraform apply`. Do not apply without presenting the plan and
-getting acceptance first (Decision 77). **This loop requires local `terraform init` to have succeeded**,
-so per Decision 119 above it is NOT available for `terraform/personal` on a stock CC-web session (the
-third-party provider's github.com checksum fetch 403s) -- for that root, use the CI-mediated
-speculative-plan + apply-the-saved-plan pipeline instead. The loop remains valid for roots using only
-`hashicorp/*` providers (`terraform/`, `terraform/github`, `terraform/bootstrap`), which init fine.
+getting acceptance first (Decision 77). **This loop requires local `terraform init` to have succeeded.**
+The loop is always valid for roots using only `hashicorp/*` providers (`terraform/`, `terraform/github`,
+`terraform/bootstrap`), which init fine with no proxy dependency. For `terraform/personal`
+(third-party `kislerdm/neon` provider): a stock CC-web session still CANNOT locally init it (Decision
+119, direct github.com fetch 403s) -- use the CI-mediated speculative-plan + apply-the-saved-plan
+pipeline instead for routine changes. On an ADMIN container with the S3 filesystem_mirror synced
+(Decision 120 -- `bin/setup-cloud-env.sh` ran with `INSTALL_TERRAFORM=1` and the sync succeeded, so
+`TF_CLI_CONFIG_FILE` is set), local init DOES succeed and this interactive loop IS available for
+`terraform/personal` -- this is the sanctioned path for the guard-BLOCK / out-of-budget-IAM cases the
+CD pipeline cannot apply (Decision 94 escape hatch). Recover the four no-default tfvars from remote
+state / Secrets Manager as described above regardless of which init path was used; never paste their
+values into chat, a PR, or any committed file.
 
 **Apply posture (record-backed sandbox CD, CD.35 / T2.20 Wave 1):** sandbox CD auto-apply
 (`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching `terraform/personal/**` auto-applies

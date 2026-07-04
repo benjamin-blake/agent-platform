@@ -200,6 +200,42 @@ else
     log "Terraform install skipped (set INSTALL_TERRAFORM=1 in the admin env to enable)"
 fi
 
+# 6b. Terraform provider filesystem_mirror sync (rec-2514, Decision 119 reversal mechanism) --------
+# Only meaningful when terraform is installed (INSTALL_TERRAFORM=1, admin container). Syncs the
+# S3-seeded mirror -- populated out-of-band by the ONLY egress-having actor,
+# .github/workflows/terraform-provider-mirror-seed.yml -- so a proxy-blocked CC-web session can
+# `terraform init` terraform/personal locally without the github.com checksum fetch Decision 119
+# 403s. Resolves config/terraform/cc-web.tfrc's __TF_MIRROR_DIR__ placeholder into a copy at a
+# fixed, deterministic path outside the repo (never mutates the git-tracked template in place).
+#
+# CRITICAL (plan-critique #3): the TF_CLI_CONFIG_FILE export is gated on a successful, NON-EMPTY
+# sync -- exporting it unconditionally would exclude neon from `direct` while the mirror is
+# empty/unsynced, producing a more confusing "provider not found in mirror and excluded from
+# direct" failure than the known github.com 403. On sync failure: warn, do NOT export, do NOT fail
+# the session -- the mirror is an enabler, never a hard session dependency; the pre-mirror
+# CI-delegated posture (terraform/CLAUDE.md) remains the fallback.
+#
+# Per AGENTS.md ("each Bash tool invocation is independent" -- the bin/venv-python pattern): this
+# export only affects this setup script's own process tree, not later independent Bash calls in a
+# session. The resolved tfrc is written to the deterministic path logged below so any later
+# terraform invocation can inline `TF_CLI_CONFIG_FILE=<path>` itself rather than depend on
+# inherited shell state.
+if [ "${INSTALL_TERRAFORM:-0}" = "1" ]; then
+    t0=$SECONDS
+    MIRROR_DIR="$HOME/.terraform-mirror"
+    RESOLVED_TFRC="$MIRROR_DIR/cc-web.tfrc"
+    if aws s3 sync "s3://agent-platform-data-lake/tf-provider-mirror/" "$MIRROR_DIR" --only-show-errors \
+        && [ -n "$(ls -A "$MIRROR_DIR" 2>/dev/null)" ]; then
+        sed "s|__TF_MIRROR_DIR__|${MIRROR_DIR}|g" "$REPO_ROOT/config/terraform/cc-web.tfrc" > "$RESOLVED_TFRC"
+        export TF_CLI_CONFIG_FILE="$RESOLVED_TFRC"
+        log "terraform-mirror-sync: $((SECONDS - t0))s (resolved tfrc: $RESOLVED_TFRC)"
+    else
+        log "WARNING: terraform provider mirror sync produced no local mirror (non-fatal); TF_CLI_CONFIG_FILE not set -- terraform/personal init falls back to the pre-mirror CI-delegated posture (terraform/CLAUDE.md)."
+    fi
+else
+    log "Terraform provider mirror sync skipped (INSTALL_TERRAFORM != 1)"
+fi
+
 # 7. github-mcp-server (for the .mcp.json `github-full` MCP server) ------------
 # Idempotent install delegated to bin/ensure-github-mcp-server.sh -- the single
 # source of truth for the version pin + install logic. That script is also run

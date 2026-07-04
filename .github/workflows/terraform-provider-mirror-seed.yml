@@ -1,0 +1,93 @@
+name: terraform-provider-mirror-seed
+
+# Seeds the S3-backed terraform provider filesystem_mirror (rec-2514, Decision 119 reversal
+# mechanism). Decision 119: the CC-web outbound proxy scopes github.com to repo-scoped API calls,
+# so a stock CC-web session (including the ADMIN container, same session class) permanently 403s
+# the kislerdm/neon provider's github.com checksum fetch during `terraform init` of
+# terraform/personal. This is the ONLY egress-having actor that can seed the mirror: a
+# GitHub-hosted runner has unrestricted github.com egress, so `terraform providers mirror` can
+# fetch the neon package once here and publish it to S3. Every CC-web session then consumes the
+# mirror read-only from S3 (bin/setup-cloud-env.sh) -- never fetching github.com directly.
+#
+# Native terraform subcommand (Decision 100 managed-service-native discipline) -- NOT a
+# hand-rolled provider download/verify script.
+#
+# Trust: assumes agent-platform-github-ci-apply (refs/heads/main ONLY, oidc.tf /
+# terraform/bootstrap/github_ci_apply.tf). workflow_dispatch on main mints the same
+# ref:refs/heads/main sub claim as a push, so no new trust condition is required.
+#
+# IAM: writes are covered by github_ci_apply's existing DataLakeObjectIO Sid
+# (s3:GetObject/PutObject/DeleteObject on arn:aws:s3:::agent-platform-data-lake/*, i.e. the WHOLE
+# bucket, not scoped to a specific prefix) plus the DataPlaneAllow permissions-boundary statement
+# (s3:* on Resource "*"). A new S3 prefix under this bucket therefore needs NO new IAM grant --
+# verified before authoring this workflow (2026-07-04); the raw out-of-band put-role-policy grant
+# the plan initially assumed necessary is NOT required and was deliberately skipped.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-provider-mirror-seed
+  cancel-in-progress: false
+
+jobs:
+  seed-mirror:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write   # REQUIRED for OIDC token minting
+      contents: read
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+      MIRROR_DIR: /tmp/tf-mirror
+      MIRROR_PREFIX: tf-provider-mirror
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC -- apply role, main only)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-apply
+          aws-region: eu-west-2
+
+      - name: Read pinned Terraform version
+        id: tfver
+        run: echo "version=$(cat config/terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Terraform init (egress works here; unrelated to the mirror being seeded)
+        working-directory: terraform/personal
+        run: terraform init -input=false -backend-config=backend-sandbox.hcl
+
+      - name: Mirror third-party providers (native terraform subcommand, Decision 100)
+        working-directory: terraform/personal
+        run: |
+          set -euo pipefail
+          mkdir -p "$MIRROR_DIR"
+          terraform providers mirror -platform=linux_amd64 "$MIRROR_DIR"
+          echo "Mirrored tree:"
+          find "$MIRROR_DIR" -type f | sort
+
+      - name: Assert the neon provider package is present (fail closed before publishing)
+        run: |
+          set -euo pipefail
+          if ! find "$MIRROR_DIR/registry.terraform.io/kislerdm/neon" -type f 2>/dev/null | grep -q .; then
+            echo "::error::MIRROR_MISSING_NEON: providers mirror did not produce a kislerdm/neon package; not publishing an incomplete mirror." >&2
+            exit 1
+          fi
+
+      - name: Publish mirror to S3 (provider bytes are public -- nothing to redact)
+        run: |
+          set -euo pipefail
+          aws s3 sync "$MIRROR_DIR" "s3://agent-platform-data-lake/${MIRROR_PREFIX}/" --delete
+          echo "Published mirror to s3://agent-platform-data-lake/${MIRROR_PREFIX}/"
