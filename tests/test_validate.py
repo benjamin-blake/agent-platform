@@ -8,6 +8,7 @@ import importlib.util
 import json
 import sys
 import urllib.error
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -3114,6 +3115,29 @@ class TestRunPytestDiff:
         assert failed == []
 
 
+@pytest.fixture
+def _neutralized_pre_registry():
+    """Patch every check-kind step of pre_sequence() to a no-op on the `validate` namespace.
+
+    Applied via @pytest.mark.usefixtures to the classes whose tests call _validate.main()
+    in --pre mode, so those tests exercise only the scaffold machinery plus whichever
+    check(s) they explicitly patch themselves -- not the real check registry.
+    _dispatch_check resolves each check via globals()[name] on the `validate` module
+    (Decision 104), so patching "validate.<name>" intercepts it. A test's own explicit
+    `with patch("validate.<name>")` still wins for the duration of its body: it is
+    entered inside this fixture's ExitStack, so it becomes the innermost -- and active --
+    patch on that name.
+    """
+    from scripts.checks import registry as _registry  # noqa: PLC0415
+
+    with ExitStack() as stack:
+        for step in _registry.pre_sequence():
+            if step.kind == "check":
+                stack.enter_context(patch(f"validate.{step.name}"))
+        yield
+
+
+@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestPreModeDiffAware:
     """Tests that --pre passes changed files to ruff/mypy/pytest."""
 
@@ -3253,6 +3277,7 @@ class TestPreModeDiffAware:
         assert exc_info.value.code != 0
 
 
+@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestPreModePytestSelection:
     """Regression tests locking the explicit-file pytest selection contract.
 
@@ -3342,6 +3367,7 @@ class TestPreModePytestSelection:
         assert not pytest_cmds, f"pytest must not run when no test files changed, got: {pytest_cmds}"
 
 
+@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestBudgetAssertion:
     """Tests for the 5-minute fast-tier wall-clock budget assertion."""
 
@@ -3408,6 +3434,7 @@ class TestBudgetAssertion:
         assert _FAST_TIER_BUDGET_SECONDS == 300
 
 
+@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestIgnoreBudgetFlag:
     """Tests for the --ignore-budget escape hatch."""
 
@@ -3494,6 +3521,7 @@ class TestIgnoreBudgetFlag:
         mock_breach.assert_not_called()
 
 
+@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestIgnoreBudgetCIGuard:
     """Tests for the CI guard that forbids --ignore-budget in CI environments."""
 
@@ -3622,6 +3650,74 @@ class TestBudgetBreachRecFiling:
         ):
             # Must not raise
             _file_budget_bypass_rec(60.0, [], None)
+
+    def test_breach_priority_is_accepted_value(self) -> None:
+        """_file_budget_breach_rec must pass a title-case priority (rec-2156)."""
+        mock_portal = MagicMock()
+        git_result = MagicMock(returncode=0, stdout="agent/test\n")
+
+        with (
+            patch("scripts.checks._common.run", return_value=git_result),
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_breach_rec(400.0, ["scripts/validate.py"], None)
+
+        fields = mock_portal.file_rec.call_args[0][0]
+        assert fields["priority"] in {"Critical", "High", "Medium", "Low"}
+
+    def test_bypass_priority_is_accepted_value(self) -> None:
+        """_file_budget_bypass_rec must pass a title-case priority (rec-2156)."""
+        mock_portal = MagicMock()
+        git_result = MagicMock(returncode=0, stdout="agent/test\n")
+
+        with (
+            patch("scripts.checks._common.run", return_value=git_result),
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_bypass_rec(60.0, ["scripts/validate.py"], "disk issue")
+
+        fields = mock_portal.file_rec.call_args[0][0]
+        assert fields["priority"] in {"Critical", "High", "Medium", "Low"}
+
+    def test_breach_priority_survives_real_accepted_values_validator(self) -> None:
+        """Anti-vacuous: the priority _file_budget_breach_rec passes must survive the REAL
+        ops.yaml accepted_values validator, not just a hardcoded set in this test."""
+        from scripts.ops_data_portal import _load_write_time_validators  # noqa: PLC0415
+
+        mock_portal = MagicMock()
+        git_result = MagicMock(returncode=0, stdout="agent/test\n")
+
+        with (
+            patch("scripts.checks._common.run", return_value=git_result),
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_breach_rec(400.0, ["scripts/validate.py"], None)
+
+        priority = mock_portal.file_rec.call_args[0][0]["priority"]
+        priority_validators = [fn for col, fn in _load_write_time_validators("ops_recommendations") if col == "priority"]
+        assert priority_validators, "no priority validators loaded from ops.yaml"
+        for validator in priority_validators:
+            validator(priority, "priority")  # must not raise
+
+    def test_bypass_priority_survives_real_accepted_values_validator(self) -> None:
+        """Anti-vacuous: the priority _file_budget_bypass_rec passes must survive the REAL
+        ops.yaml accepted_values validator, not just a hardcoded set in this test."""
+        from scripts.ops_data_portal import _load_write_time_validators  # noqa: PLC0415
+
+        mock_portal = MagicMock()
+        git_result = MagicMock(returncode=0, stdout="agent/test\n")
+
+        with (
+            patch("scripts.checks._common.run", return_value=git_result),
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_bypass_rec(60.0, ["scripts/validate.py"], "disk issue")
+
+        priority = mock_portal.file_rec.call_args[0][0]["priority"]
+        priority_validators = [fn for col, fn in _load_write_time_validators("ops_recommendations") if col == "priority"]
+        assert priority_validators, "no priority validators loaded from ops.yaml"
+        for validator in priority_validators:
+            validator(priority, "priority")  # must not raise
 
 
 class TestValidateCiRcaTrigger:
@@ -3934,6 +4030,7 @@ class TestValidateLambdaDeployGating:
         assert "Lambda deploy gating" in failed
 
 
+@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestSlocLimitsInPreMode:
     """Assert validate_sloc_limits runs in the --pre tier (rec-2106 RCA fix)."""
 
@@ -4777,6 +4874,7 @@ class TestDucklakeVersionLockstepGate:
         assert any("hardcoded" in f or "literal" in f or "ducklake_runtime" in f for f in failed), failed
 
 
+@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestPreModeChecks:
     """Assert validate_subprocess_encoding runs in the --pre tier (rec-2382 RCA fix)."""
 
@@ -4805,6 +4903,40 @@ class TestPreModeChecks:
 
         assert exc_info.value.code == 0
         assert encoding_called, "validate_subprocess_encoding was NOT called in --pre mode"
+
+
+@pytest.mark.usefixtures("_neutralized_pre_registry")
+class TestPreModeRegistryIsolation:
+    """Isolation-guard test (defect 2 lock-in): proves the real check registry is not
+    executed inside a neutralized --pre main() call, so a future edit that silently
+    reintroduces full-registry execution (and its wall-clock cost) is caught here instead
+    of resurfacing as a slow/flaky fast-tier gate."""
+
+    def test_real_registry_check_not_invoked_under_neutralization(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """validate_import_contracts prints a distinctive banner when it actually runs
+        (see scripts/checks/deps/validate_import_contracts.py); the neutralization fixture
+        replaces it with a plain no-op MagicMock, so that banner must never appear here.
+        """
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "Import contracts (Decision 80" not in captured.out, (
+            "validate_import_contracts printed its real banner -- the real check ran "
+            "instead of being neutralized by the _neutralized_pre_registry fixture"
+        )
 
 
 # ---------------------------------------------------------------------------
