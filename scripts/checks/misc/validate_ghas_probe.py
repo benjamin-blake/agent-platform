@@ -164,10 +164,14 @@ def validate_ghas_probe(failed: list[str]) -> None:
 
     disabled = _disabled_controls(state)
     if disabled:
+        # lgtm[py/clear-text-logging-sensitive-data] -- CodeQL's naming heuristic flags this
+        # because `disabled` carries the substring "secret_scanning"; the value is a control-
+        # state enum ("enabled"/"disabled"/"unknown"), never the token or a raw API body
+        # (Decision 101; enforced by test_check_never_prints_token).
         print(f"GHAS probe FAILED -- disabled control(s): {disabled}")
         failed.append(f"GHAS live-probe: disabled control(s) -- {disabled}")
     else:
-        print(f"GHAS probe passed -- {_state_summary(state)}")
+        print(f"GHAS probe passed -- {_state_summary(state)}")  # lgtm[py/clear-text-logging-sensitive-data]
 
 
 def _run_cli() -> int:
@@ -187,10 +191,12 @@ def _run_cli() -> int:
 
     disabled = _disabled_controls(state)
     if disabled:
+        # lgtm[py/clear-text-logging-sensitive-data] -- see the matching comment in
+        # validate_ghas_probe() above: naming-heuristic false positive, control-state only.
         print(f"GHAS probe LOUD-FAIL -- disabled control(s): {disabled}")
         return 1
 
-    print(f"GHAS probe OK -- {_state_summary(state)}")
+    print(f"GHAS probe OK -- {_state_summary(state)}")  # lgtm[py/clear-text-logging-sensitive-data]
     return 0
 
 
