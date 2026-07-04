@@ -1,0 +1,238 @@
+schema_version: 1
+slug: "fast-tier-test-isolation"
+intent: >-
+  Make the fast-tier (--pre) unit tests in tests/test_validate.py hermetic so they no longer
+  depend on the full real check registry succeeding, remove the wall-clock inflation that
+  full-registry execution causes, and fix the lowercase-priority crash in the budget-breach
+  rec-filing path -- keeping the presubmit gate a reliable, self-contained quality signal.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-fast-tier-test-isolation.yaml
+phase: >-
+  Platform hardening -- presubmit gate hermeticity (Decision 104 check registry; Decision 73/60
+  two-tier fast-tier budget). No product-roadmap tier_item; ad-hoc test-isolation + bug fix.
+scope:
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add a fixture that neutralizes every check-kind step of registry.pre_sequence() to a no-op
+      (patched on the `validate` namespace) for the 7 test classes whose tests call the real
+      main() in --pre mode, so those tests exercise only the scaffold machinery + their own
+      explicitly-patched checks. Add an isolation-guard test locking in that the real registry is
+      not executed inside these fast-tier tests. Add regression tests to TestBudgetBreachRecFiling
+      asserting both budget rec-filing helpers pass a title-case priority in the accepted set.
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      Capitalise the two lowercase priority literals so file_rec's accepted_values validator
+      accepts them: "medium" -> "Medium" in _file_budget_breach_rec (line ~150), "low" -> "Low"
+      in _file_budget_bypass_rec (line ~189). Fix at the caller; do NOT loosen the portal validator.
+bundled_recommendations:
+  - rec-2156
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    All 13 named tests pass in this container WITHOUT import-linter/lint-imports installed:
+    TestPreModeDiffAware (test_invokes_pytest_with_explicit_files_when_test_files_changed,
+    test_skips_lint_when_no_files_changed, test_skips_pytest_when_no_test_files_changed,
+    test_passes_changed_py_files_to_ruff), TestPreModeChecks::test_pre_mode_calls_subprocess_encoding,
+    TestBudgetAssertion::test_exits_0_within_budget, TestIgnoreBudgetFlag (test_bypass_skips_budget_assertion,
+    test_bypass_calls_bypass_rec_helper), TestIgnoreBudgetCIGuard::test_allows_ignore_budget_when_ci_not_set,
+    TestSlocLimitsInPreMode::test_sloc_limits_called_in_pre_mode, TestPreModePytestSelection
+    (test_explicit_path_in_argv_no_picked, test_no_pytest_when_no_test_files_changed).
+  - >-
+    An isolation-guard test proves the real check registry is NOT executed inside these fast-tier
+    tests (e.g. validate_import_contracts is not invoked / its banner is not printed), so future
+    edits cannot silently reintroduce full-registry execution and the wall-clock inflation.
+  - >-
+    Tests that assert a specific check runs (validate_sloc_limits, validate_subprocess_encoding,
+    validate_cc_limits/sloc call order) still pass -- their explicit patches take precedence over
+    the neutralization fixture.
+  - >-
+    _file_budget_breach_rec and _file_budget_bypass_rec pass a priority in {Critical, High, Medium, Low};
+    the value survives the real ops.yaml accepted_values validator loaded by ops_data_portal
+    (regression tests assert this without a live warehouse call).
+  - >-
+    The full tests/test_validate.py file passes with no regressions (the 368 previously-passing tests
+    plus the 13 now-fixed, plus the new tests).
+  - rec-2156 is declared in bundled_recommendations and closes via the Resolves trailer on merge.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the 13 named fast-tier tests in this container (import-linter absent) and confirm all pass.
+    command: >-
+      bin/venv-python -m pytest
+      "tests/test_validate.py::TestPreModeDiffAware::test_invokes_pytest_with_explicit_files_when_test_files_changed"
+      "tests/test_validate.py::TestPreModeDiffAware::test_skips_lint_when_no_files_changed"
+      "tests/test_validate.py::TestPreModeDiffAware::test_skips_pytest_when_no_test_files_changed"
+      "tests/test_validate.py::TestPreModeDiffAware::test_passes_changed_py_files_to_ruff"
+      "tests/test_validate.py::TestPreModeChecks::test_pre_mode_calls_subprocess_encoding"
+      "tests/test_validate.py::TestBudgetAssertion::test_exits_0_within_budget"
+      "tests/test_validate.py::TestIgnoreBudgetFlag::test_bypass_skips_budget_assertion"
+      "tests/test_validate.py::TestIgnoreBudgetFlag::test_bypass_calls_bypass_rec_helper"
+      "tests/test_validate.py::TestIgnoreBudgetCIGuard::test_allows_ignore_budget_when_ci_not_set"
+      "tests/test_validate.py::TestSlocLimitsInPreMode::test_sloc_limits_called_in_pre_mode"
+      "tests/test_validate.py::TestPreModePytestSelection::test_explicit_path_in_argv_no_picked"
+      "tests/test_validate.py::TestPreModePytestSelection::test_no_pytest_when_no_test_files_changed"
+      -q
+    expected: "13 passed (0 failed). No 'Import contracts (Decision 80)' failure appears in output."
+    fix_if: >-
+      A test still fails on exit_code != 0 with 'Import contracts (Decision 80)' in Failed checks ->
+      the neutralization fixture is not applied to that test's class, or a check-kind step is running
+      for real. Confirm the fixture patches on the `validate` namespace (not scripts.checks.*) and
+      iterates registry.pre_sequence() check steps.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the new isolation-guard test proving the real registry is not executed inside the
+      fast-tier tests (defect 2 lock-in).
+    command: bin/venv-python -m pytest tests/test_validate.py -q -k "registry_isolation or not_executed or isolation_guard"
+    expected: "The isolation-guard test passes; it asserts a real check (e.g. validate_import_contracts) is never invoked during a neutralized --pre main() call."
+    fix_if: >-
+      No test collected -> the guard test was not added or its name does not match the selector; add it
+      and name it so it is discoverable. Test fails -> a real check is leaking through the fixture.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Run the new TestBudgetBreachRecFiling priority regression tests (defect 3).
+    command: bin/venv-python -m pytest tests/test_validate.py::TestBudgetBreachRecFiling -q
+    expected: "All TestBudgetBreachRecFiling tests pass, including the new assertions that priority is in {Critical, High, Medium, Low} for both helpers."
+    fix_if: >-
+      Regression test asserts priority in accepted set and fails -> a caller literal in _scaffolding.py
+      is still lowercase; capitalise it.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Prove the priority value the helpers pass survives the REAL ops.yaml accepted_values validator
+      (anti-vacuous: not just a hardcoded set in the test). Encoded as a pytest test that loads the
+      write-time validators from ops_data_portal and applies the priority column validator to the value
+      each helper passes.
+    command: bin/venv-python -m pytest tests/test_validate.py::TestBudgetBreachRecFiling -q -k "priority and validator"
+    expected: "The test builds the priority accepted_values validator via scripts.ops_data_portal._load_write_time_validators('ops_recommendations') and confirms it does NOT raise for the value each helper passes."
+    fix_if: >-
+      Validator raises ValueError('priority must be one of ...') -> the caller literal is not title-case;
+      fix the literal. Validator list empty -> ops.yaml path/parse changed; adjust the test to the current loader API.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm no lowercase priority literals remain in the two budget helpers and the fix is in place.
+    command: >-
+      grep -n '"priority":' scripts/checks/_scaffolding.py
+    expected: "Exactly two matches, both title-case: 'priority': 'Medium' (breach helper) and 'priority': 'Low' (bypass helper). No 'medium'/'low' remain."
+    fix_if: "A lowercase literal remains -> capitalise it."
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Run the entire tests/test_validate.py file and confirm no regressions (all pass).
+    command: bin/venv-python -m pytest tests/test_validate.py -q
+    expected: "All tests pass (previously-passing 368 + 13 now-fixed + newly-added tests). 0 failed."
+    fix_if: >-
+      A previously-passing test now fails -> the neutralization fixture over-reached (patched a check a
+      test needed to run for real, or leaked into a class that calls a check directly rather than via
+      main()). Narrow the fixture to the 7 --pre-main()-calling classes; confirm each test's explicit
+      per-check patch is entered inside (after) the fixture so it wins.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      After the PR merges with the Resolves trailer, sync the rec cache and confirm rec-2156 is closed.
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull && grep -n rec-2156 logs/.recommendations-log.jsonl
+      | grep -q closed || bin/venv-python -m scripts.ops_data_portal --update-rec rec-2156 --status
+      closed --resolution "Fixed lowercase priority in _scaffolding.py budget rec helpers"
+    expected: "rec-2156 shows status closed in the synced cache (or is closed via the fallback portal command)."
+    fix_if: "rec-autoclose did not fire -> run the fallback ops_data_portal --update-rec command shown."
+constraints:
+  - >-
+    Do NOT loosen the ops_data_portal accepted_values validator or normalise casing there. ops.yaml is
+    the field-semantic authority (Decision 65); the caller must conform. Fix is at the two _scaffolding.py callers.
+  - >-
+    Do NOT install import-linter/lint-imports or otherwise change the container/CI dependency set as
+    the fix. The fix is test hermeticity; import-linter is already in requirements.txt/requirements-fast.txt
+    so the real import-contracts gate runs in CI (CI-delegated per Decision 119).
+  - >-
+    Each affected test's explicit per-check patch (validate_sloc_limits, validate_subprocess_encoding,
+    validate_cc_limits/sloc order captures) MUST still take precedence over the neutralization fixture --
+    those "was this check called" assertions must keep passing. The fixture patches are entered before the
+    test body so the test's own patch (entered inside) wins.
+  - >-
+    Scope the neutralization fixture to the 7 --pre-main()-calling classes only (TestPreModeDiffAware,
+    TestPreModeChecks, TestBudgetAssertion, TestIgnoreBudgetFlag, TestIgnoreBudgetCIGuard,
+    TestSlocLimitsInPreMode, TestPreModePytestSelection). Do NOT make it module-wide autouse -- classes
+    that call check functions directly (e.g. TestValidateCiRcaTrigger) must be unaffected.
+  - "No pytest -k selectors in any rec acceptance command; no python -c one-liners in rec acceptance fields (tests/CLAUDE.md)."
+  - No rescue agents or workaround loops (Decision 55). The isolation-guard test is the RCA-first mitigation ensuring the fixture never masks a real registry regression.
+  - Only modify the two files in scope.
+context:
+  - >-
+    Root cause: the 13 tests call the real in-process validate.main() in --pre mode and mock only a
+    subset of pre_sequence() checks; every unmocked check runs for real. validate_import_contracts shells
+    out to lint-imports (import-linter), absent in this dev container, so it appends to `failed` and
+    main() exits 1, breaking `assert exit_code == 0`. import-linter IS in requirements.txt AND
+    requirements-fast.txt, so these tests PASS in CI and fail only in dev containers lacking it -- a
+    hermeticity defect, not a CI breakage.
+  - >-
+    Defect 2 (recursive banner printing + 6.1-min wall-clock inflation breaching the 300s fast-tier
+    budget) is a CONSEQUENCE of the same root cause: each of the 13 tests executes the full real registry
+    inside its own main() call, and Decision 104's colocated-test convention forces all of
+    tests/test_validate.py into the fast tier's explicit-changed-files pytest selection when the file is
+    touched. Neutralizing the registry in these tests removes both the banners and the inflation; the
+    isolation-guard test locks it in. No validate.py change is required.
+  - >-
+    Defect 3 (rec-2156): _file_budget_breach_rec passes priority='medium' and _file_budget_bypass_rec
+    passes priority='low' (lowercase) to file_rec, whose accepted_values validator (Critical/High/Medium/Low,
+    loaded from config/agent/data_quality/ops.yaml) raises ValueError. rec-2156's `file` field cites
+    scripts/validate.py and its acceptance greps validate.py -- BOTH stale: the code was extracted to
+    scripts/checks/_scaffolding.py per Decision 80. Re-point on close. Per Decision 84 (I-4) the failed
+    write raises loudly (no recs outbox); rec-2156's older 'strands recs in outbox' wording predates that.
+  - >-
+    rec-2470 corroborates the container-dep gap: it documents 'Import contracts (Decision 80)' as a known
+    pre-existing acceptable local failure on the full gate (and a separate litellm ModuleNotFoundError).
+    Not bundled (different file/symptom). rec-2466 (test_checks_registry.py mock sampling) not bundled.
+  - >-
+    Dispatch mechanism (Decision 104): validate._dispatch_check resolves each check via globals()[name](failed)
+    on the `validate` module, so patch('validate.<name>') intercepts. The fixture must patch on the
+    `validate` namespace, iterating registry.pre_sequence() check-kind steps.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS; CITE = Decision 104, Decision 84, Decision 65. RELATED = Decision 73, Decision 60, Decision 80, Decision 55, Decision 119, Decision 48, Decision 102, Decision 43, Decision 66. Decisions triaged: 79 of 79."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (via decision-scout gate, verdict NO_FLAGS, 79 of 79 triaged)
+  - All files in scope located and readable (tests/test_validate.py, scripts/checks/_scaffolding.py)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    In tests/test_validate.py, add a fixture that patches every check-kind step of
+    scripts.checks.registry.pre_sequence() to a no-op on the `validate` module namespace
+    (import registry is already available in the file). Apply it (autouse, class-scoped) to exactly
+    the 7 classes that call real main() in --pre mode: TestPreModeDiffAware, TestPreModeChecks,
+    TestBudgetAssertion, TestIgnoreBudgetFlag, TestIgnoreBudgetCIGuard, TestSlocLimitsInPreMode,
+    TestPreModePytestSelection. Ensure each test's own explicit per-check patch still takes precedence
+    (fixture patches entered first/outer; the test-body `with patch(...)` entered inner wins). The
+    existing redundant per-test patches (validate_iam_runner_policy, validate_prompt_files,
+    validate_cli_tools_in_prompts) may remain or be pruned -- keep the diff minimal and green.
+  - >-
+    Add an isolation-guard test (e.g. TestPreModeRegistryIsolation) asserting the real registry is not
+    executed inside a neutralized --pre main() call -- e.g. patch validate.validate_import_contracts with
+    a call-recording MagicMock and assert it was NOT called (0 calls) when main() runs under the fixture,
+    proving the fast-tier tests no longer depend on / execute the real registry. Name it so VP step 2's
+    selector (registry_isolation / isolation_guard / not_executed) collects it.
+  - >-
+    Add regression tests to TestBudgetBreachRecFiling: (a) assert _file_budget_breach_rec passes
+    priority in {Critical, High, Medium, Low} (mock file_rec, read call_args) and (b) same for
+    _file_budget_bypass_rec; plus an anti-vacuous test that builds the real priority accepted_values
+    validator via scripts.ops_data_portal._load_write_time_validators('ops_recommendations') and confirms
+    it does not raise for each helper's passed priority. Match VP step 4's -k "priority and validator" selector.
+  - >-
+    In scripts/checks/_scaffolding.py, change "priority": "medium" -> "Medium" in _file_budget_breach_rec
+    and "priority": "low" -> "Low" in _file_budget_bypass_rec. No other lines change.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. Local verification is via targeted
+    pytest (the full `validate --pre` import-contracts gate is CI-delegated). On any unrecoverable failure,
+    stop and RCA rather than adding a workaround (Decision 55).
+  - "Report: what was implemented, verification results, and rec-2156 closure status."
+work_areas: []
+rollback: >-
+  Revert the two commits; both files return to prior state. No data migration, no infra, no deploy --
+  test-only + two string-literal changes, so rollback is a clean git revert.
