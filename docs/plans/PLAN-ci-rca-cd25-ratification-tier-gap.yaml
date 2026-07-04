@@ -22,11 +22,12 @@ scope:
   - file: tests/test_implement_skill_decomposition_hints.py
     action: Modify
     purpose: >-
-      T-1.12 completed and its exemption discharged (bootstrap_completion_exempt now None),
-      so resolve_inherited_exemption(doc, "implement-skill-decomposition-hints") returns None.
+      T-1.12 completed and its exemption discharged (bootstrap_completion_exempt now False --
+      NOT None: T-1.12 still matches as the parent, it is merely non-exempt), so
+      resolve_inherited_exemption(doc, "implement-skill-decomposition-hints") returns False.
       Adjudicate TestLiveRoadmapInheritance against live state with conservative bias -- assert
-      the current live value (None), or re-point to a still-exempt parent if the inheritance
-      intent is better preserved that way. Do not mutate the roadmap to satisfy the test.
+      the current live value (False). Re-pointing to a still-exempt parent is the weaker option
+      here since T-1.12 still matches. Do not mutate the roadmap to satisfy the test.
   - file: tests/test_session_preflight_platform_roadmap.py
     action: Modify
     purpose: >-
@@ -35,7 +36,7 @@ scope:
       pinned id/CD (a re-pin would re-break main the moment the chosen CD ratifies or item
       completes -- the exact tier_misplaced fragility this plan cures): assert that at least
       one in_progress item carries a non-empty completion_blocked_on_cd whose entries are all
-      pending CDs, matching the sibling test_blocked_on_cd_non_empty invariant pattern in the
+      pending CDs, matching the sibling test_full_blocked_on_cd_carried invariant pattern in the
       same file. Rename the method to reflect the invariant (e.g.
       test_in_progress_surfaces_pending_gating_cd).
   - file: scripts/validate.py
@@ -180,15 +181,16 @@ context:
     confirms the missing set is exactly the 10 CD.25-gated items.
   - >-
     resolve_inherited_exemption returns the matched parent's bootstrap_completion_exempt;
-    T-1.12's is now None post-discharge, so the live call returns None. This is the one
-    semantic-judgment edit -- adjudicate against live state, do not force True.
+    T-1.12's is now False post-discharge (it still matches as parent, just non-exempt), so the
+    live call returns False. This is the one semantic-judgment edit -- assert the live value
+    (False), do not force True and do not assume None.
   - >-
     Branch is behind origin/main at planning time (origin/main completed T3.18 via PR #428
     after this branch's point; branch has no roadmap commit of its own). The commit-flow
     auto-rebase pulls that in; all four guard-test expected values are re-derived post-rebase
     (execution step). Exempt-set delta verified stable under this change (T3.18 not exempt).
   - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS; CITE = dec-118, Decision 55, Decision 73, Decision 80, Decision 104, Decision 72"
-  - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 2 round(s)"
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/ci-rca-recommendations-d3slhy)
   - docs/PROJECT_CONTEXT.md read
@@ -204,13 +206,13 @@ execution_steps:
   - >-
     tests/test_implement_skill_decomposition_hints.py: adjudicate
     test_live_roadmap_this_plan_inherits_from_t_1_12 against live state -- T-1.12 exemption is
-    now None; assert the live value (None) or re-point to a still-exempt parent, whichever
-    preserves the inheritance-rule intent without mutating the roadmap.
+    now False (T-1.12 still matches as parent, just non-exempt); assert the live value
+    (assert result is False) without mutating the roadmap.
   - >-
     tests/test_session_preflight_platform_roadmap.py: re-anchor
     test_t112_surfaces_pending_gating_cd on an INVARIANT (some in_progress item carries a
     non-empty completion_blocked_on_cd all of whose entries are pending CDs), matching the
-    sibling test_blocked_on_cd_non_empty pattern, and rename it to
+    sibling test_full_blocked_on_cd_carried pattern, and rename it to
     test_in_progress_surfaces_pending_gating_cd. Do NOT re-pin a concrete id/CD -- that would
     re-arm the tier_misplaced fragility this plan fixes. Verify the invariant against the live
     (post-rebase) roadmap projection before committing.
