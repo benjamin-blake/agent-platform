@@ -149,13 +149,13 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: materializer builds a runnable kernel check from a registry-row check_spec
-    command: bin/venv-python -m pytest tests/test_verification_graduation.py -k materialize -q
-    expected: "all selected tests pass; a grep_count/file_presence row materializes into a check whose run() matches the expected status"
+    command: bin/venv-python -m pytest tests/test_verification_graduation.py::TestMaterializeCheck -q
+    expected: "all tests pass; a grep_count/file_presence row materializes into a check whose run() matches the expected status"
     fix_if: "a materialization test fails => the check_spec-to-check mapping or the tree-root repointing is wrong."
   - step: 4
     phase: pre-deploy
     action: KERNEL differential proof (c2) -- tautological rejected, genuine admitted, via a real worktree on a synthetic repo
-    command: bin/venv-python -m pytest tests/test_verification_graduation.py -k "differential_kernel" -q
+    command: bin/venv-python -m pytest tests/test_verification_graduation.py::TestKernelDifferential -q
     expected: >-
       tests pass: a fixture check passing on BOTH the base and head commits is REJECTED (is_admitted
       False); a fixture check failing on the base commit and passing on head is ADMITTED; the revert is
@@ -166,7 +166,7 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: VERIFIER differential proof (c3) -- hermetic tautological rejected, genuine admitted, non-hermetic advisory-skipped
-    command: bin/venv-python -m pytest tests/test_verification_graduation.py -k "differential_verifier" -q
+    command: bin/venv-python -m pytest tests/test_verification_graduation.py::TestVerifierDifferential -q
     expected: >-
       tests pass: a synthetic hermetic new verifier that passes even with its covered change reverted is
       REJECTED; a hermetic verifier that fails on covered-revert is ADMITTED; a
@@ -175,7 +175,7 @@ verification_plan:
   - step: 6
     phase: pre-deploy
     action: validate_verification_registry differential branch (c2 wiring) is exercised via test_validate
-    command: bin/venv-python -m pytest tests/test_validate.py -k "registry_differential" -q
+    command: bin/venv-python -m pytest tests/test_validate.py::TestVerificationRegistryDifferential -q
     expected: >-
       tests pass: an added-in-diff fixture entry passing on origin/main fails the check with a message
       containing "not admitted"; a WARN/SKIP differential outcome is refused; no added entry => the
@@ -184,7 +184,7 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: validate_verifier_same_pr_guard c3 branch is exercised via test_validate
-    command: bin/venv-python -m pytest tests/test_validate.py -k "same_pr_guard_differential" -q
+    command: bin/venv-python -m pytest tests/test_validate.py::TestSamePrGuardDifferential -q
     expected: "tests pass: a tautological new hermetic verifier under exception (b) FAILS; a non-hermetic new verifier is advisory-skipped without adding to failed[]."
     fix_if: "the exception-(b) differential does not fire on covers-intersecting new verifiers, or a non-hermetic verifier blocks."
   - step: 8
@@ -215,7 +215,8 @@ constraints:
 context:
   - "Follow-on plan for tier_item T3.18 (created by the wave-1 roadmap plan). closes_criteria: T3.18:c1 (VF-05 interactive producer), T3.18:c2 (VF-06 kernel-entry differential), T3.18:c3 (VF-06 new-verifier differential). Acceptance criteria map 1:1 onto these three open criteria."
   - "Decision-scout verdict: FLAGS_FOUND (77 of 77 triaged). CITE list (verbatim): Decision 104 (validate.py check registry), Decision 86 (field semantics -> contracts), Decision 55 (RCA-first / fail-loud), Decision 48 (verification tier V1/V2/V3), Decision 102 (SLOC Waiver Ratchet -- SLOC budget on the new file), Decision 115 (ephemeral handoffs ride PR bodies; durable record to plan/roadmap). RELATED: CD.29 / CD.27 / CD.25 (roadmap candidate_decisions -- six-slot kernel + differential admission gate + producer flow; executor verify-state substrate; contract ratification ritual) -- verify their live text in docs/ROADMAP-PLATFORM.yaml."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round (folded in 2 non-blocking items: VP pytest node-id selectors, and the baseline simulated-revert out-of-scope note below)"
+  - "Out-of-scope, named for a follow-on (plan-critique strategic risk): scripts/checks/verification/validate_differential_gate_baseline.py:50-53 still runs is_admitted() with a SIMULATED revert_runner (hard-coded FAIL) -- the exact anti-pattern VF-06 names. This plan does NOT touch it: c2 is scoped to the 'PR adding a registry entry' path (made real here), and the baseline is a separate fast self-test of the gate mechanism on a fixed kernel invariant. De-simulating the baseline with the new real worktree runner is deferred to a follow-on T3.18 slice or successor item (per the implement skill's replacement/owner discipline); no rec filed (task directive). Do NOT read this as VF-06 being half-closed -- the production admission path (added registry entries + new verifiers) is real after this plan."
   - "Scout flag resolutions baked in: (104) modified scripts/checks/**/*.py route per-file coverage to tests/test_validate.py -- differential-branch tests land there, materializer/worktree tests in tests/test_verification_graduation.py; (55) worktree/revert errors raise, only a legitimately empty candidate set records 'none graduated'; (84/86/115) 'none graduated' is an ephemeral PR-body note, not a numbered Decision or warehouse write; (102) citation corrected -- dec-102 is the SLOC Waiver Ratchet (SLOC discipline on the new file), Decision 104 is the check registry, CD.25 is the contract_version/amendment_log ritual."
   - "Same-PR guard exception (b) hole (VF-06): validate_verifier_same_pr_guard.py:67-69 admits a brand-new verifier alongside its covered code with no execution check. This plan's differential execution IS the designed backstop for that hole -- c3 runs the fail-on-revert differential on exactly those exception-(b) admissions (hermetic verifiers); non-hermetic new verifiers remain admitted with a logged advisory."
   - "Materialization gap forcing the scope expansion (confirmed with the human, decision A): registry rows carry only check_id/primitive_slot/guard_target/guard_symbol/plan_slug/graduated_at/graduated_by -- none carry the kernel check's parameters, so a runnable check cannot be materialized from a row. Adding check_spec to the contract is a prerequisite for VF-06; the contract is already listed in T3.18 files_in_scope."
@@ -240,7 +241,7 @@ execution_steps:
   - "scripts/checks/verification/validate_verification_registry.py: after the existing schema checks, detect registry entries ADDED in the current diff (git diff --diff-filter, parse added entries), materialize each and run run_differential with the real worktree revert_runner; append a clear 'not admitted -- revert did not produce FAIL' failure on tautological/WARN/SKIP. Diff-gated no-op otherwise. Do not edit registry.py."
   - "scripts/checks/verification/validate_verifier_same_pr_guard.py: at the exception-(b) branch, when a brand-new verifier's covers intersect changed files, call run_verifier_differential; tautological => append a FAIL; NON_HERMETIC_BY_CONSTRUCTION => print an advisory SKIP and continue (no block). Do not edit registry.py."
   - ".claude/skills/implement/SKILL.md: add the graduation step to the Tier_item bookkeeping section, gated on the VP Compliance Gate all-PASS and placed before the commit flow -- enumerate kernel-expressible VP steps, run is_admitted live via the real worktree, write admitted rows to registry.yaml per the contract (incl. check_spec), else record an ephemeral 'none graduated' note in the PR body. State the fail-loud rule and that the record is ephemeral."
-  - "tests/test_verification_graduation.py (new) + tests/test_validate.py (modify): cover the materializer, the kernel differential proof (synthetic repo; tautological rejected, genuine admitted), the verifier differential proof (hermetic tautological rejected, genuine admitted, non-hermetic advisory skip), the two validate-check branches (diff-gated added-entry / exception-(b) differential), and the fail-loud error paths."
+  - "tests/test_verification_graduation.py (new): create test classes TestMaterializeCheck, TestKernelDifferential, TestVerifierDifferential (plus fail-loud-on-error cases) so the VP node-id selectors resolve. tests/test_validate.py (modify): add test classes TestVerificationRegistryDifferential and TestSamePrGuardDifferential. Cover the materializer, the kernel differential proof (synthetic repo; tautological rejected, genuine admitted), the verifier differential proof (hermetic tautological rejected, genuine admitted, non-hermetic advisory skip), the two validate-check branches (diff-gated added-entry / exception-(b) differential), and the fail-loud error paths. Use pytest node-ids (not -k selectors) per the PROJECT_CONTEXT pytest gotcha."
   - "Execute the Verification Plan -- run each step; loop until all pass; on an unrecoverable failure stop and RCA (Decision 55), do not weaken a check to go green."
   - "Report: what was implemented, per-step VP results (with the VP compliance table appended to the PR body), and the T3.18 c1/c2/c3 criterion flips staged by the bookkeeping walk."
 rollback: >-
