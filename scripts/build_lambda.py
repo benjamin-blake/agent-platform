@@ -10,7 +10,7 @@ Creates these zip artifacts:
   4. ducklake-{writer,reader,maintenance,catalog-dr}.zip -- T2.17/T2.18 DuckLake runtime functions (--ducklake-only)
   5. ducklake-{deps,extensions}-layer.zip   -- duckdb (pinned via config/lambda/ducklake/version.yaml)
                                                + baked extensions (--ducklake-only)
-  6. ducklake-pgclient-layer.zip            -- pg_dump 16 + libpq.so (--ducklake-only, T2.18 FP-B)
+  6. ducklake-pgclient-layer.zip            -- pg_dump + pg_restore 16 + libpq.so (--ducklake-only, T2.18 FP-B)
 
 Both app zips are built from src/lambdas/<name>/manifest.yaml rather than
 whole-src/whole-config copytrees (Decision 79 / CD.24).
@@ -511,18 +511,21 @@ def _try_s3_pgclient(bucket: str, filename: str, profile: str, region: str) -> b
 def build_pgclient_layer(
     temp_dir: Path, *, bucket: str | None = None, profile: str = "agent_platform", region: str = "eu-west-2"
 ) -> Path:
-    """Create ducklake-pgclient-layer.zip staging pg_dump 16 + libpq.so under /opt/bin + /opt/lib.
+    """Create ducklake-pgclient-layer.zip staging pg_dump + pg_restore 16 + libpq.so under /opt/bin + /opt/lib.
 
-    The Lambda runtime expects the binary at /opt/bin/pg_dump with LD_LIBRARY_PATH=/opt/lib
-    so libpq.so resolves at invocation.
+    The Lambda runtime expects the binaries at /opt/bin/{pg_dump,pg_restore} with
+    LD_LIBRARY_PATH=/opt/lib so libpq.so resolves at invocation.
 
-    Binary source: AL2023/x86_64 pg_dump 16 + libpq.so vendored to S3
-    (s3://<data-lake-bucket>/ducklake-pgclient/{pg_dump16,libpq.so.5}) by the operator.
+    Binary source: AL2023/x86_64 pg_dump + pg_restore 16 + libpq.so vendored to S3
+    (s3://<data-lake-bucket>/ducklake-pgclient/{pg_dump16,pg_restore16,libpq.so.5}) by the operator.
     Fetched here at build time; fails closed if the S3 objects are absent (a version mismatch
     at deploy time is better than one at runtime).
 
-    After staging, asserts `./opt/bin/pg_dump --version` output contains PG major version 16
-    to catch version drift before the layer is uploaded (fail-closed guard).
+    After staging, asserts `./opt/bin/pg_dump --version` and `./opt/bin/pg_restore --version`
+    output contains PG major version 16 to catch version drift before the layer is uploaded
+    (fail-closed guard). pg_restore is re-added solely for the Decision 88/107 DR
+    restore-drill path (action_restore_drill); the Decision 100 clone-rehearsal
+    (action_clone_catalog) stays on Neon native branching and does not use it.
     """
     opt_bin = temp_dir / "pgclient" / "bin"
     opt_lib = temp_dir / "pgclient" / "lib"
@@ -542,9 +545,9 @@ def build_pgclient_layer(
         if raw is None:
             print(
                 f"  ERROR: {bundle_name} not found in s3://{bucket}/{DUCKLAKE_PGCLIENT_S3_PREFIX}/. "
-                "Seed it first: a gzip tarball with bin/pg_dump + lib/<libpq.so.5 + its transitive "
-                "shared-library closure>, built from RHEL9/AL2023-ABI (glibc 2.34) RPMs. See the "
-                "catalog-DR runbook (Section 4) for the closure-build procedure.",
+                "Seed it first: a gzip tarball with bin/{pg_dump,pg_restore} + lib/<libpq.so.5 + its "
+                "transitive shared-library closure>, built from RHEL9/AL2023-ABI (glibc 2.34) RPMs. "
+                "See the catalog-DR runbook (Section 4) for the closure-build procedure.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -591,6 +594,35 @@ def build_pgclient_layer(
             )
             sys.exit(1)
         print(f"  OK pg_dump --version reports PG{PINNED_PG_MAJOR} ({n_files} bundled files)")
+
+        # Fail-closed pg_restore existence + version assert, symmetric to the pg_dump guard above.
+        # Re-added solely for the Decision 88/107 DR restore-drill path (action_restore_drill);
+        # the Decision 100 clone-rehearsal (action_clone_catalog) stays on Neon native branching.
+        pg_restore_bin = opt_bin / "pg_restore"
+        if not pg_restore_bin.exists():
+            print(f"  ERROR: {bundle_name} did not contain bin/pg_restore", file=sys.stderr)
+            sys.exit(1)
+
+        restore_version_result = subprocess.run(
+            [str(pg_restore_bin), "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=version_env,
+        )
+        if (
+            restore_version_result.returncode != 0
+            or f"pg_restore (PostgreSQL) {PINNED_PG_MAJOR}" not in restore_version_result.stdout
+        ):
+            actual = restore_version_result.stdout.strip() or restore_version_result.stderr.strip()
+            print(
+                f"ERROR: pg_restore version assertion failed. Expected PG{PINNED_PG_MAJOR}, got: {actual!r}. "
+                "Re-seed the S3 bundle with a PG16 build + complete lib closure.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"  OK pg_restore --version reports PG{PINNED_PG_MAJOR}")
 
     layer_root = temp_dir / "pgclient"
     zip_path = OUTPUT_DIR / "ducklake-pgclient-layer.zip"

@@ -905,28 +905,65 @@ class TestBuildLambdaContract:
         assert call_log == fake_layers
 
 
-class TestBuildPgclientLayerPgDumpOnlyBundle:
-    """build_pgclient_layer succeeds with a pg_dump-only bundle (no pg_restore required, Decision 100)."""
+def _make_pgclient_bundle(*, include_pg_restore: bool) -> bytes:
+    import io
+    import tarfile
 
-    def test_passes_with_pg_dump_only_bundle(self, tmp_path):
-        """pg_dump-only bundle (no bin/pg_restore) must not cause build_pgclient_layer to exit."""
-        import io
-        import tarfile
-
-        raw_tar = io.BytesIO()
-        with tarfile.open(fileobj=raw_tar, mode="w:gz") as tar:
-            content = b"#!/bin/sh\necho 'fake-binary'"
-            info = tarfile.TarInfo(name="bin/pg_dump")
+    raw_tar = io.BytesIO()
+    with tarfile.open(fileobj=raw_tar, mode="w:gz") as tar:
+        content = b"#!/bin/sh\necho 'fake-binary'"
+        names = ["bin/pg_dump"] + (["bin/pg_restore"] if include_pg_restore else [])
+        for name in names:
+            info = tarfile.TarInfo(name=name)
             info.size = len(content)
             tar.addfile(info, io.BytesIO(content))
-        bundle_bytes = raw_tar.getvalue()
+    return raw_tar.getvalue()
 
-        def fake_run(cmd, **kw):
-            return types.SimpleNamespace(returncode=0, stdout=f"pg_dump (PostgreSQL) {bl.PINNED_PG_MAJOR}.0\n", stderr="")
+
+def _fake_version_run(*, pg_restore_version: str = bl.PINNED_PG_MAJOR):
+    def fake_run(cmd, **kw):
+        binary = cmd[0]
+        if binary.endswith("pg_restore"):
+            return types.SimpleNamespace(returncode=0, stdout=f"pg_restore (PostgreSQL) {pg_restore_version}.0\n", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout=f"pg_dump (PostgreSQL) {bl.PINNED_PG_MAJOR}.0\n", stderr="")
+
+    return fake_run
+
+
+class TestBuildPgclientLayerPgRestoreGuard:
+    """build_pgclient_layer fails closed without a valid PG16 pg_restore (Decision 88/107 c1 gate)."""
+
+    def test_missing_pg_restore_exits(self, tmp_path):
+        """A bundle with pg_dump but no bin/pg_restore must exit before the layer ships."""
+        bundle_bytes = _make_pgclient_bundle(include_pg_restore=False)
 
         with (
             patch("scripts.build_lambda._try_s3_pgclient", return_value=bundle_bytes),
-            patch("scripts.build_lambda.subprocess.run", side_effect=fake_run),
+            patch("scripts.build_lambda.subprocess.run", side_effect=_fake_version_run()),
+            patch("scripts.build_lambda.OUTPUT_DIR", tmp_path),
+            pytest.raises(SystemExit),
+        ):
+            bl.build_pgclient_layer(tmp_path, bucket="my-bucket", profile="p", region="r")
+
+    def test_non_pg16_pg_restore_exits(self, tmp_path):
+        """A bundled pg_restore that reports a non-PG16 version must exit before the layer ships."""
+        bundle_bytes = _make_pgclient_bundle(include_pg_restore=True)
+
+        with (
+            patch("scripts.build_lambda._try_s3_pgclient", return_value=bundle_bytes),
+            patch("scripts.build_lambda.subprocess.run", side_effect=_fake_version_run(pg_restore_version="15")),
+            patch("scripts.build_lambda.OUTPUT_DIR", tmp_path),
+            pytest.raises(SystemExit),
+        ):
+            bl.build_pgclient_layer(tmp_path, bucket="my-bucket", profile="p", region="r")
+
+    def test_valid_pg16_bundle_succeeds(self, tmp_path):
+        """A bundle with a valid PG16 pg_dump + pg_restore builds the layer without exiting."""
+        bundle_bytes = _make_pgclient_bundle(include_pg_restore=True)
+
+        with (
+            patch("scripts.build_lambda._try_s3_pgclient", return_value=bundle_bytes),
+            patch("scripts.build_lambda.subprocess.run", side_effect=_fake_version_run()),
             patch("scripts.build_lambda.OUTPUT_DIR", tmp_path),
         ):
             result = bl.build_pgclient_layer(tmp_path, bucket="my-bucket", profile="p", region="r")
