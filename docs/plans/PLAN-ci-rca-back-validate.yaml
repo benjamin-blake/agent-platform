@@ -1,0 +1,198 @@
+schema_version: 1
+slug: "ci-rca-back-validate"
+intent: >-
+  Build the Phase-4 `back_validate` CLI subcommand mandated by
+  docs/INTENT-ci-rca-methodology.md Section 6 -- the deterministic pre-flip gate the
+  CI_RCA_STRICT_MODE warn->strict cutover (T1.13 c2) explicitly depends on. It re-validates
+  every warn-period source=ci_rca rec against the current strict-mode schema and emits a
+  conformance report so the strict flip is decided on evidence, closing a feedback-loop
+  quality gap in the self-improving system.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-back-validate.yaml
+phase: >-
+  Platform tier T1, item T1.13 (CI-RCA methodology contract -- deterministic depth). Follow-on
+  ENABLER for open criterion c2 (strict-mode flip prerequisite); closes no criterion this slice.
+scope:
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Add a `--back-validate` argparse action (flat action group, mirroring --sync /
+      --selftest-read) with `--since` (default 2026-06-15 Phase-1 landing) and `--refile-audit`
+      (default OFF -> report-only). Handler reads the warm recommendation cache directly
+      (Decision 88, no DuckLake reader construction), filters source=ci_rca recs with
+      created_at >= --since, re-runs _validate_ci_rca_context_v2() per rec to recompute
+      schema conformance, reads the already-stamped context_v2_json.warn_mode_reject markers
+      for network-dependent (bundle/S3/cross-check) reasons, and emits a deterministic per-rec
+      + aggregate conformance report. With --refile-audit, files each non-conformant rec via
+      the existing file_rec() portal path as source=ci_rca_warn_period_audit, priority=Low,
+      capped at K=20 recs/day, carrying the parent rec id + failing-checks list.
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      Register the new canonical_id `ci_rca_warn_period_audit` so validate_source() admits the
+      --refile-audit write path (resolves Decision 61 flag). Includes description +
+      signal_interpretation mirroring the sibling ci_rca_* entries.
+  - file: tests/test_ci_rca_back_validate.py
+    action: Create
+    purpose: >-
+      Unit-test the back_validate logic: a conformant rec yields zero deficiencies; a
+      structurally-deficient rec yields the listed failing checks; the --since boundary filters
+      correctly; the aggregate rate math is correct; the K=20/day cap is enforced; --refile-audit
+      OFF (default) performs no writes (file_rec mocked); validate_source('ci_rca_warn_period_audit')
+      does not raise.
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      Amend Section 6 (grandfathered doc; Decision 86 permits amending existing INTENT, forbids
+      new prose docs) to mark back_validate implemented and correct the stale
+      "PLAN-ci-rca-schema-enforcement includes a CLI subcommand back_validate" attribution to
+      "landed via PLAN-ci-rca-back-validate".
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `bin/venv-python -m scripts.ops_data_portal --back-validate --since 2026-06-15` exits 0 and
+    prints a conformance report over warn-period source=ci_rca recs: a per-rec line (rec-id,
+    conformant y/n, failing checks) and an aggregate block (total, non-conformant count, rate,
+    reason breakdown). The report surfaces the currently-known 6 schema_deficiency recs.
+  - >-
+    Re-validation is recomputed from each rec's context_v2_json via _validate_ci_rca_context_v2()
+    (not merely read from the pre-stamped warn_mode_reject marker), so a rec written before a
+    validation rule existed is still adjudicated against the current strict schema.
+  - >-
+    The handler constructs NO DuckLake reader -- it reads only the warm cache
+    logs/.recommendations-log.jsonl (Decision 88; zero new reader egress).
+  - >-
+    Default invocation (no --refile-audit) performs zero writes (report-only). With
+    --refile-audit, non-conformant recs are filed as source=ci_rca_warn_period_audit, priority=Low,
+    capped at 20/day, each carrying the parent rec id and failing-checks list.
+  - >-
+    validate_source('ci_rca_warn_period_audit') does not raise (source registered), and the new
+    registry entry parses under the existing source_registry.yaml schema / validate.py checks.
+  - >-
+    New unit tests in tests/test_ci_rca_back_validate.py all pass, and the full fast tier
+    (validate.py --pre) is green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Run the new unit test module and confirm all cases pass.
+    command: bin/venv-python -m pytest tests/test_ci_rca_back_validate.py -q
+    expected: All tests pass (conformance recompute, --since boundary, aggregate math, K-cap, dry-run-no-write, validate_source admits new source).
+    fix_if: A failing test indicates the handler logic, the --since filter, the cap, or the source registration is wrong.
+  - step: 2
+    phase: pre-deploy
+    action: Run back_validate in report-only mode against the real warm cache; confirm it produces a non-empty conformance report identifying the known schema_deficiency recs.
+    command: bin/venv-python -m scripts.ops_data_portal --back-validate --since 2026-06-15
+    expected: Exit 0; report lists per-rec conformance and an aggregate block; the 6 known schema_deficiency recs (e.g. rec-2513, rec-2517, rec-2528) appear as non-conformant with a schema reason.
+    fix_if: Empty report, wrong count, or a rec mislabelled conformant means the recompute/read path or --since filter is wrong.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the default (no --refile-audit) invocation writes nothing -- assert the recommendation cache line count is unchanged across a report-only run.
+    command: >-
+      bash -c 'b=$(wc -l < logs/.recommendations-log.jsonl); bin/venv-python -m scripts.ops_data_portal --back-validate --since 2026-06-15 >/dev/null; a=$(wc -l < logs/.recommendations-log.jsonl); test "$b" = "$a" && echo REPORT_ONLY_NO_WRITE'
+    expected: Prints REPORT_ONLY_NO_WRITE (cache unchanged; report-only default performed no writes).
+    fix_if: A changed line count means the default path is writing recs -- the dry-run default is not being honoured.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm validate_source admits the newly registered source.
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import validate_source; validate_source('ci_rca_warn_period_audit'); print('SOURCE_OK')"
+    expected: Prints SOURCE_OK with no exception.
+    fix_if: A ValueError means the source_registry.yaml entry is missing or malformed.
+  - step: 5
+    phase: pre-deploy
+    action: Run the full fast presubmit tier to confirm no regression (ruff, mypy, pytest selection, schema checks, INTENT amend passes the intent-doc-freeze guard).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Fast tier passes; the INTENT edit is accepted as a grandfathered amend (no new prose doc), and the source_registry.yaml edit validates.
+    fix_if: A failure identifies the offending check; fix on branch and re-run.
+constraints:
+  - >-
+    Decision 88 -- read the warm cache only; the handler MUST NOT construct a DuckLake reader
+    (zero new reader egress). Mirror session_preflight._compute_ci_rca_telemetry's warm-cache read.
+  - >-
+    Decision 84 -- all writes transit file_rec() so the writer allocates rec ids atomically (I-2);
+    NEVER re-stage or re-append parent-rec rows read from the cache (I-4 anti-resurrection). The
+    --refile-audit path files NEW audit recs only.
+  - >-
+    Decision 86 -- amend the grandfathered docs/INTENT-ci-rca-methodology.md in place; create no
+    new prose/INTENT doc (the intent-doc-freeze guard blocks it).
+  - >-
+    Decision 55 -- surface only. back_validate produces a report and (opt-in) files capped
+    audit recs; it NEVER auto-closes, auto-remediates, or flips the strict-mode flag. No rescue
+    agents or workaround loops.
+  - >-
+    Decision 103 -- conformance is recomputed at read time from context_v2_json; add NO new
+    SCD2 column to ops_recommendations.
+  - >-
+    Only modify the four files in scope. Out-of-scope issues become recommendations, not inline fixes.
+context:
+  - >-
+    Follow-on ENABLER for T1.13 c2 (strict-mode flip). closes_criteria is intentionally empty:
+    c2/c3/c5 remain open and cannot close by code this session -- c3 needs 7 days of warn-mode
+    reject rate < 5% (currently 22%, 6/27, all schema_deficiency), c2 needs this back-validation
+    PLUS a human Decision Record + terraform apply, c5 needs c2 live + a real rec roundtrip.
+    This plan builds the mandated pre-flip instrument; it does not perform the flip.
+  - >-
+    Freshness Gate: the /orient prompt said "5 open criteria" but only 3 (c2,c3,c5) are open --
+    the 6th follow-on (ci-rca-observability-dashboard) landed 2026-07-04 closing c1+c12. No
+    roadmap-bookkeeping edit needed (statuses already correct); documented here for traceability.
+  - >-
+    HARD BLOCK cleared at planning time: rec-2530 and rec-2533 (test_real_workflows_dir hard-coded
+    workflow-count failures) were verified resolved by merged main c0c2e6c (PR #447) -- the
+    TestEnumerateWorkflowNames suite passes on this branch -- and both were closed via the ops
+    portal. 0 open source=ci_rca recs remain.
+  - >-
+    Decision Flag 1 (Decision 61, WARN, RESOLVED): source=ci_rca_warn_period_audit is not in
+    source_registry.yaml; validate_source() would reject the --refile-audit write. Resolved by
+    adding the registry entry to scope (config/agent/data_quality/source_registry.yaml).
+  - >-
+    Decision Flag 2 (Decision 66, NOTE, RESOLVED-with-note): audit recs are deterministically
+    templated (parent-id + failing-checks list; no LLM-judgment field), so they fall outside
+    Decision 66's Precision Context Injection scope -- get_rec_write_guidance() is NOT called on
+    this path by design.
+  - >-
+    Reusable internals confirmed present: _validate_ci_rca_context_v2 (schema validator),
+    _stamp_warn_mode_reject, _run_ci_rca_cross_check, get_ci_rca_strict_mode, file_rec (all in
+    scripts/ops_data_portal.py). INTENT known-gap line 562 sets the audit-rec cap (priority=low,
+    K=20/day).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 88, Decision 84, Decision 86, Decision 55, Decision 103"
+  - "gates: decision-scout=FLAGS_FOUND (2 flags, both resolved in scope); plan-critique=<pending>"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-methodology-contract-mu4mqv)
+  - docs/PROJECT_CONTEXT.md read
+  - docs/INTENT-ci-rca-methodology.md Section 6 read (back_validate mandate)
+  - All four scope files located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirmed 0 open source=ci_rca recs (HARD BLOCK cleared)
+execution_steps:
+  - >-
+    scripts/ops_data_portal.py -- add the `--back-validate` action to the argparse action group
+    plus `--since` (default 2026-06-15) and `--refile-audit` (store_true, default False)
+    arguments; wire a handler (e.g. back_validate_ci_rca()) into main(). The handler reads
+    logs/.recommendations-log.jsonl directly, filters source=ci_rca recs by created_at >= --since,
+    parses context_v2_json, recomputes conformance via _validate_ci_rca_context_v2(), reads
+    warn_mode_reject markers for non-schema reasons, prints a per-rec + aggregate report.
+  - >-
+    scripts/ops_data_portal.py -- implement the --refile-audit branch: for each non-conformant
+    rec (up to K=20 filed today), call file_rec(source="ci_rca_warn_period_audit", priority="Low",
+    ...) with a deterministically templated title/context carrying the parent rec id and the
+    failing-checks list. Default (flag absent) is report-only, no writes.
+  - >-
+    config/agent/data_quality/source_registry.yaml -- add the ci_rca_warn_period_audit canonical_id
+    entry with description + signal_interpretation mirroring the sibling ci_rca_* entries.
+  - >-
+    tests/test_ci_rca_back_validate.py -- author the unit tests enumerated in the Scope purpose
+    (conformant/deficient recompute, --since boundary, aggregate math, K-cap, dry-run-no-write with
+    mocked file_rec, validate_source admits new source).
+  - >-
+    docs/INTENT-ci-rca-methodology.md -- amend Section 6 to mark back_validate implemented and
+    correct the stale attribution.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on any unrecoverable failure
+    stop and RCA (Decision 55). Do not patch around a failing check.
+  - "Report: what was implemented, the conformance report produced by step 2, and verification results."
+work_areas: []
+rollback: >-
+  Pure-additive except the INTENT/registry edits. Revert the branch commit(s) to remove the
+  --back-validate action, the source_registry entry, the test file, and the INTENT amend. No
+  data migration, no deploy, no strict-mode change -- nothing to unwind operationally.
