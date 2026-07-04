@@ -133,16 +133,37 @@ verification_plan:
     phase: pre-deploy
     hermetic: false
     action: >-
-      Run the full fast tier to confirm validate_vp_replay integrates end-to-end (it will replay
-      this plan's hermetic steps 1-2 and exclude-list steps 3-5) and the whole --pre gate stays
-      green within budget. Non-hermetic so replay never recurses into a full validate run.
+      Run the full fast tier to confirm validate_vp_replay integrates end-to-end and the whole --pre
+      gate stays green within budget. Non-hermetic so replay never recurses into a full validate run.
+      NOTE: the check is diff-gated -- if this plan file is already on main (the normal plan-then-
+      implement handoff, where /implement runs on a fresh branch off main), validate_vp_replay
+      correctly NO-OPS on an empty plan-diff and prints no per-step replay lines. That no-op is
+      acceptance criterion 5, not a failure. Step 6 provides the diff-independent dogfood proof.
     command: bin/venv-python -m scripts.validate --pre
     expected: >-
-      Exit 0; the "Interactive VP replay" section reports steps 1-2 replayed PASS and lists steps
-      3-5 as EXCLUDED (not-hermetic); the budget assertion passes.
+      Exit 0; the budget assertion passes. If this plan file is in the branch diff vs origin/main the
+      "Interactive VP replay" section reports steps 1-2 replayed PASS and lists the non-hermetic steps
+      EXCLUDED; if the plan is already on main the check reports a no-op (both are correct).
     fix_if: >-
       A red --pre means an integration issue (registration order, facade, budget, or a replayed
       step diverging). Diagnose from the printed per-step verdicts; do not weaken the check to pass.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Diff-independent dogfood: directly invoke validate_vp_replay against this plan file via the
+      changed_files injection seam (bypasses git diff-gating), so the replay of this plan's hermetic
+      pre-deploy steps (1-2) is exercised regardless of whether the plan is on main. Non-hermetic so
+      the outer replay excludes it (no recursion).
+    command: >-
+      bin/venv-python -c "from scripts.validate import validate_vp_replay; f=[];
+      validate_vp_replay(f, changed_files=['docs/plans/PLAN-audit-wave-6-vp-replay.yaml']);
+      assert not f, f; print('dogfood replay clean')"
+    expected: >-
+      Exit 0; stdout contains `dogfood replay clean` (this plan's hermetic steps 1-2 replay PASS).
+    fix_if: >-
+      A non-empty failed[] means a hermetic step (1 or 2) diverged on the tree -- the plan_document
+      validate or the wiring assertion is failing; fix the underlying wiring, not the VP step.
 constraints:
   - No network and no AWS calls -- the check must run in the creds-free pr-validate job (Decision 73).
   - >-
@@ -199,7 +220,7 @@ context:
     plan defers to it and does not touch tests/test_ci_rca_taxonomy.py.
   - "Decision-scout verdict + CITE list (verbatim decision ids)"
   - "decision-scout=FLAGS_FOUND; CITE: Decision 104, Decision 73, Decision 48, Decision 55, Decision 103"
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round"
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/audit-wave-6-vp-replay-wxdj7n)
   - docs/PROJECT_CONTEXT.md read
@@ -229,8 +250,10 @@ execution_steps:
     after _c("validate_verification_registry") (before coverage_report/budget_assertion). Add the
     facade re-export in scripts/validate.py alongside the other verification-domain imports.
   - >-
-    Update tests/test_checks_registry.py FROZEN_PRE_SEQUENCE: add ("check", "validate_vp_replay") at
-    the matching position; the no-duplicate-checks test must still pass.
+    Update tests/test_checks_registry.py FROZEN_PRE_SEQUENCE: insert ("check", "validate_vp_replay")
+    immediately after ("check", "validate_verification_registry") and before ("scaffold",
+    "coverage_report") -- matching the registry.pre_sequence() edit exactly; the no-duplicate-checks
+    test must still pass.
   - >-
     Add VP-replay tests to tests/test_validate.py exercising validate_vp_replay via the changed_files/
     root injection seam (no git): fixtures written to tmp_path proving (i) a hermetic pre-deploy step
