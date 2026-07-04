@@ -19,8 +19,17 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 - The personal account has no SCP restricting IAM users or external OIDC (Decisions 36/37 do not apply to this account). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
 
 ## Running terraform/personal/ on CC-web (no local machine; vars come from remote state)
-**This project runs ONLY on Claude Code on the web. There is no operator local machine.** The agent
-itself runs `terraform plan`/`apply` for `terraform/personal/` inside the CC-web container.
+**This project runs ONLY on Claude Code on the web. There is no operator local machine.**
+
+**Third-party-provider init is github.com-egress-blocked (Decision 119):** the CC-web outbound proxy
+scopes github.com to repo-scoped API calls, so a stock CC-web session CANNOT `terraform init`
+`terraform/personal` -- the `kislerdm/neon` provider's authentication-checksum fetch permanently 403s
+on github.com. `hashicorp/*` providers (releases.hashicorp.com) init fine. Because of this,
+`terraform validate`/`plan`/`apply` for `terraform/personal` are CI-mediated, not run locally by the
+agent: `validate` via the required `terraform-validate` job (Decision 83); `plan`/`apply` via the
+speculative-plan + apply-the-saved-plan pipeline described below (Decision 77 / Decision 92). See
+Decision 119 for the full rationale and reversal conditions (an S3-backed provider
+`filesystem_mirror` would restore local init/validate; tracked as a follow-up recommendation).
 
 `terraform/personal/terraform.personal.tfvars` is **gitignored** (`.gitignore`:
 `terraform/**/terraform.personal.tfvars`), so it is NOT in the fresh clone and there is no standalone

@@ -275,6 +275,15 @@ Classify deterministically. Highest tier wins.
 - **V2 (Unit):** Python source with no external integration. Must exercise real code paths.
 - **V3 (Integration):** External systems, Terraform, Lambdas. Must tag steps as `[pre-deploy]` or `[post-deploy]`.
 
+**Provider-init egress (terraform roots only):** a terraform root using a third-party
+(github.com-hosted) provider (e.g. `kislerdm/neon` in `terraform/personal`) cannot `terraform
+init`/`validate`/`plan` from a stock CC-web session -- the outbound proxy blocks the provider's
+github.com checksum fetch. Author local terraform VP steps as grep-only, plus `terraform fmt
+-check` ONLY when terraform is present (fmt needs no provider install); delegate `terraform
+validate`/`plan` to CI -- name the required `terraform-validate` check and the speculative-plan job
+as the authoritative verifiers, never a local `terraform validate`/`init`/`plan` invocation. See
+`terraform/CLAUDE.md` and Decision 119 for the constraint and CI-delegation contract.
+
 **VP Design Rationale:**
 When writing Verification Plan steps, ask: "If this feature had a subtle bug (wrong column name, missing permission, off-by-one filter), would this step catch it?" If no, the step is too shallow.
 

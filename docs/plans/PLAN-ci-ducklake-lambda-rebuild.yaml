@@ -93,7 +93,8 @@ acceptance_criteria:
   - >-
     terraform/personal/oidc.tf github_ci_plan inline policy grants s3:GetObject on
     ducklake-pgclient/* and ducklake-extensions/*, and s3:PutObject on lambda-packages/*
-    (grep + `terraform -chdir=terraform/personal validate` passes).
+    (grep locally; `terraform validate` is CI-delegated -- confirmed by the green required
+    terraform-validate check-run on this plan's own PR, per Decision 119).
   - >-
     `bin/venv-python -m scripts.validate --pre` passes on the branch.
   - >-
@@ -168,18 +169,21 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      oidc.tf github_ci_plan grants present and terraform config is valid.
+      oidc.tf github_ci_plan grants present (local grep). `terraform validate` for
+      terraform/personal is CI-delegated (Decision 119 -- CC-web cannot init this root: the
+      kislerdm/neon provider's checksum fetch 403s on github.com via the session proxy); the
+      authoritative validity check is the green required terraform-validate check-run on this
+      plan's own PR, confirmed at commit-flow time, not run locally.
     command: >-
       grep -Eq 'ducklake-pgclient|ducklake-extensions' terraform/personal/oidc.tf && grep -q
-      'lambda-packages' terraform/personal/oidc.tf && terraform -chdir=terraform/personal init
-      -backend=false -input=false >/dev/null && terraform -chdir=terraform/personal validate
+      'lambda-packages' terraform/personal/oidc.tf
     expected: >-
-      grep matches the new object-read/write ARNs in the github_ci_plan policy and `terraform
-      validate` reports success.
+      grep matches the new object-read/write ARNs in the github_ci_plan policy; terraform validity
+      is confirmed via the required terraform-validate CI check-run on this plan's PR (not a local command).
     fix_if: >-
       grep miss -> the GetObject (ducklake-pgclient/*, ducklake-extensions/*) or PutObject
-      (lambda-packages/*) statements were not added to the github_ci_plan inline policy. validate
-      error -> fix the HCL (jsonencode statement shape).
+      (lambda-packages/*) statements were not added to the github_ci_plan inline policy. If the
+      terraform-validate CI check-run is red, fix the HCL (jsonencode statement shape) and re-push.
   - step: 6
     phase: pre-deploy
     action: >-
