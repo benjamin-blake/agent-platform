@@ -40,8 +40,9 @@ scope:
       ducklake-extensions/* (fetch the vendored pg_dump/pg_restore bundle + pinned extensions at
       build time) and s3:PutObject on lambda-packages/* (upload the reviewed zips from the PR job).
       github_ci_apply already carries bucket-wide DataLakeObjectIO (GetObject+PutObject) so it needs
-      no change. This inline-policy widening is OUT-of-budget IAM (github_ci_plan is not in the
-      T2.25 in-budget set) and routes to the tf-gated-apply human-approval Environment.
+      no change. This inline-policy widening is out-of-budget for the pipeline apply identity
+      (github_ci_apply's PutRolePolicy covers only github-ci-branch + github-ci-pr) so it is applied
+      via agent_platform_admin -target in the ADMIN container, NOT the gated-apply pipeline (Decision 98).
   - file: tests/test_build_lambda.py
     action: Modify
     purpose: >-
@@ -52,19 +53,27 @@ bundled_recommendations:
   - rec-2512
 infrastructure_dependencies:
   - >-
-    terraform/personal/oidc.tf github_ci_plan inline-policy widening is OUT-of-budget IAM (T2.25 /
-    Decision 92 in-budget set is only github-ci-branch + github-ci-pr). The deterministic apply
-    guard exits 2 and routes this change to the tf-gated-apply GitHub Environment for human
-    approval (benjamin-blake). It does NOT ride sandbox auto-apply.
+    terraform/personal/oidc.tf github_ci_plan inline-policy widening MUST be applied via
+    agent_platform_admin (-target=aws_iam_role_policy.github_ci_plan) in the ADMIN container -- it
+    CANNOT ride the tf-gated-apply pipeline. The pipeline apply identity github_ci_apply has
+    iam:PutRolePolicy scoped to ONLY github-ci-branch + github-ci-pr (bootstrap github_ci_apply.tf
+    IAMRoleWriteBounded), and the permissions boundary DenyIAMEscalation blocks PutRolePolicy on
+    any other role -- so a gated-apply of this change fails closed with AccessDenied on github_ci_plan.
+    This is the exact failure Decision 98's problem statement records. Follow the same admin -target
+    procedure terraform/CLAUDE.md documents for github_ci_drift: present the plan to the human
+    (Decision 77), apply under agent_platform_admin, verify global convergence.
   - >-
-    github_ci_plan is an EXISTING role (inline-policy UPDATE, not a role create), so Decision 98's
-    admin-create clause does not apply. Confirm github_ci_plan's ARN is already covered by the
-    apply role's IAMRolesRead/IAMPlatformRolesRead refresh grant so the pipeline can refresh it
-    at plan time; if absent, that read grant must land first (bootstrap github_ci_apply.tf).
+    github_ci_plan's ARN IS already in github_ci_apply's IAMRolesRead refresh grant (bootstrap
+    github_ci_apply.tf), so the pipeline can READ/refresh the role at plan time -- but read access
+    is orthogonal to the WRITE budget above; the update-not-create distinction does NOT make the
+    write in-budget. If the intent were to let the pipeline self-apply future github_ci_plan policy
+    edits, that requires a bootstrap-root authority-budget amendment (add github_ci_plan to
+    IAMRoleWriteBounded) -- a T2.25-class admin-only bootstrap change, out of scope here.
   - >-
-    IAM precedes code deploy (terraform/CLAUDE.md): the oidc.tf gated-apply MUST land before the
-    build steps can succeed in the speculative-plan PR job (which assumes github_ci_plan). Until it
-    lands, the speculative-plan build step fails closed on S3 AccessDenied.
+    IAM precedes code deploy (terraform/CLAUDE.md): the agent_platform_admin -target apply of the
+    oidc.tf widening MUST land before the build steps can succeed in the speculative-plan PR job
+    (which assumes github_ci_plan). Until it lands, the speculative-plan build step fails closed on
+    S3 AccessDenied.
   - >-
     S3 prerequisite: the vendored bundle s3://agent-platform-data-lake/ducklake-pgclient/pgclient-bundle.tar.gz
     (bin/{pg_dump,pg_restore} PG16 + lib closure) and the pinned ducklake-extensions objects must
@@ -88,7 +97,7 @@ acceptance_criteria:
   - >-
     `bin/venv-python -m scripts.validate --pre` passes on the branch.
   - >-
-    POST-DEPLOY: after the gated-apply of oidc.tf and a pipeline run, the deployed
+    POST-DEPLOY: after the agent_platform_admin -target apply of oidc.tf and a pipeline run, the deployed
     ducklake_catalog_dr function's pgclient layer version contains /opt/bin/pg_restore, and the
     rec-2113 restore drill (`ducklake_neon_smoke_test --catalog-restore-drill`) no longer fails
     with FileNotFoundError /opt/bin/pg_restore.
@@ -182,8 +191,9 @@ verification_plan:
   - step: 7
     phase: post-deploy
     action: >-
-      Confirm the live github_ci_plan inline policy carries the new grants after the tf-gated-apply
-      of oidc.tf (IAM must land before the pipeline build can succeed).
+      Confirm the live github_ci_plan inline policy carries the new grants after the
+      agent_platform_admin -target apply of oidc.tf (ADMIN container; IAM must land before the
+      pipeline build can succeed). Uses the agent_platform profile for the read-back.
     command: >-
       aws iam get-role-policy --role-name agent-platform-github-ci-plan --policy-name
       agent-platform-github-ci-plan --profile agent_platform | python3 -c "import sys,json,urllib.parse;
@@ -193,7 +203,7 @@ verification_plan:
       'missing grant'; print('IAM_LIVE_OK')"
     expected: Prints IAM_LIVE_OK.
     fix_if: >-
-      Missing grant means the gated-apply has not landed (approve the tf-gated-apply job) or the
+      Missing grant means the agent_platform_admin -target apply has not landed (run it in the ADMIN container) or the
       oidc.tf edit did not include all three ARNs. Do NOT proceed to the layer-rebuild steps until
       IAM is live (IAM-precedes-deploy).
   - step: 8
@@ -259,12 +269,15 @@ constraints:
     re-upload must be idempotent vs the PR-job artifact so the applied layer content matches the
     reviewed filemd5. No re-plan is introduced on the push path.
   - >-
-    Decision 92 / T2.25: github_ci_plan is NOT in the in-budget IAM auto-apply set; the oidc.tf
-    widening is out-of-budget and MUST route to the tf-gated-apply human-approval Environment. Do
-    not expect or force sandbox auto-apply for the IAM change.
+    Decision 92 / T2.25 + Decision 98: the oidc.tf github_ci_plan widening is out-of-budget for the
+    pipeline apply identity (github_ci_apply's iam:PutRolePolicy covers only github-ci-branch +
+    github-ci-pr; DenyIAMEscalation blocks the rest). It MUST be applied via agent_platform_admin
+    -target in the ADMIN container -- NOT tf-gated-apply, NOT sandbox auto-apply.
   - >-
-    terraform/CLAUDE.md IAM-precedes-deploy: the gated-apply of oidc.tf must land before the
-    speculative-plan build step (which assumes github_ci_plan) can succeed.
+    terraform/CLAUDE.md IAM-precedes-deploy + branching topology: the agent_platform_admin -target
+    apply of oidc.tf (ADMIN container) must land before the speculative-plan build step (which
+    assumes github_ci_plan) can succeed. This one step uses the ADMIN container / agent_platform_admin
+    profile; all other work stays in the DEV container.
   - >-
     Decision 100 scoping: pg_restore is retained here for the DR restore-drill path (Decisions 107
     + 88 D3b), which is DISTINCT from the read-clone / clone-rehearsal path D100 moved to Neon
@@ -284,7 +297,7 @@ context:
     Decision 100 (pg_restore-in-layer -- resolved: DR path retained per 107+88, distinct from the
     D100 read-clone path) and Decision 77 (re-upload TOCTOU -- resolved: byte-reproducibility +
     idempotent apply-path upload).
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 REVISE round"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 REVISE rounds"
   - >-
     Residual risk (plan-critique frame challenge, accepted per operator's both-paths choice):
     byte-reproducibility (VP2) is proven only for an identical staged input tree, not across the
@@ -318,7 +331,8 @@ context:
   - >-
     IAM asymmetry: github_ci_apply has bucket-wide DataLakeObjectIO (GetObject+PutObject on
     data-lake/*) so it already reads the bundle + writes lambda-packages -- no change. github_ci_plan
-    is scoped to tfstate/* + tfplan/* only, so it must be widened (out-of-budget -> gated-apply).
+    is scoped to tfstate/* + tfplan/* only, so it must be widened via agent_platform_admin -target
+    apply in the ADMIN container (out-of-budget for the pipeline apply identity; Decision 98).
   - >-
     build_lambda.py hard-codes --profile on every aws call (upload_to_s3, _try_s3_pgclient,
     _try_s3_extension, validate_bucket_exists, update_lambda_functions). CI/OIDC runners have no
@@ -363,17 +377,21 @@ execution_steps:
     terraform/personal/oidc.tf -- widen the github_ci_plan inline policy with s3:GetObject on
     arn:.../ducklake-pgclient/* and arn:.../ducklake-extensions/* and s3:PutObject on
     arn:.../lambda-packages/* (use var.account_id / aws_s3_bucket.data_lake.arn interpolation; no
-    literal account id). Present the terraform plan; this routes to tf-gated-apply (guard exit 2) --
-    obtain human approval; IAM lands before the pipeline build can succeed.
+    literal account id). Apply via agent_platform_admin in the ADMIN container:
+    `terraform -chdir=terraform/personal apply -target=aws_iam_role_policy.github_ci_plan` --
+    present the plan to the human first (Decision 77), then apply, then verify global convergence
+    (untargeted plan exits 0). This is NOT a gated-apply pipeline change (github_ci_apply lacks
+    PutRolePolicy on github_ci_plan -- Decision 98). This admin apply MUST land before the
+    speculative-plan build step can succeed.
   - >-
     Execute Verification Plan -- run each pre-deploy step; loop until pass. Then, after the
-    tf-gated-apply of oidc.tf lands, run the post-deploy steps (IAM-live -> layer rebuilt with
+    agent_platform_admin -target apply of oidc.tf lands, run the post-deploy steps (IAM-live -> layer rebuilt with
     pg_restore -> restore drill -> rec closure). On an unrecoverable V3 failure, stop and RCA
     (Decision 55).
   - "Report: what was implemented, per-step verification results, and the deployed pgclient layer version."
 work_areas: []
 rollback: >-
   Workflow + build_lambda changes revert via a normal PR (no infra state). The oidc.tf
-  github_ci_plan widening reverts via a follow-up gated-apply removing the added statements; the
+  github_ci_plan widening reverts via a follow-up agent_platform_admin -target apply removing the added statements; the
   role is not destroyed. Republished layer versions are immutable and additive -- rollback is
   repointing the function to the prior layer version, not deleting versions.
