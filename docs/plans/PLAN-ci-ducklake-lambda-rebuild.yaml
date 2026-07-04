@@ -10,8 +10,11 @@ plan_type: IMPLEMENTATION
 verification_tier: V3
 plan_path: docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml
 phase: >-
-  Platform T2.18 FP-B (DuckLake catalog DR) / CD.35 sandbox auto-apply pipeline hardening.
-  Unblocks rec-2113 restore-drill gate (Decision 88 D3b hard gate; Decision 107 swap-back precondition).
+  CD.35 sandbox auto-apply pipeline hardening (rides the completed T2.20/T2.21/T2.22 waves).
+  Rec-driven fix (rec-2512); CONTRIBUTES TOWARD T2.18 FP-B by unblocking the rec-2113 restore-drill
+  gate (Decision 88 D3b hard gate; Decision 107 swap-back precondition). It does NOT itself close
+  any T2.18 exit criterion -- no closes_criteria is declared, and the acceptance criteria map onto
+  the CI-fix deliverable, not onto a T2.18 criterion.
 scope:
   - file: scripts/build_lambda.py
     action: Modify
@@ -65,8 +68,8 @@ infrastructure_dependencies:
   - >-
     S3 prerequisite: the vendored bundle s3://agent-platform-data-lake/ducklake-pgclient/pgclient-bundle.tar.gz
     (bin/{pg_dump,pg_restore} PG16 + lib closure) and the pinned ducklake-extensions objects must
-    already exist for the CI build to succeed (fail-closed). A VP pre-deploy step asserts presence;
-    seeding is out of scope for this plan.
+    already exist for the CI build to succeed (fail-closed). VP step 1 (pre-deploy) asserts the
+    bundle exists and carries bin/pg_restore + bin/pg_dump; seeding is out of scope for this plan.
 acceptance_criteria:
   - >-
     .github/workflows/terraform-apply-sandbox.yml invokes `scripts.build_lambda` with
@@ -95,27 +98,53 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Unit test -- deterministic zip output. Build a DuckLake layer zip twice from an identical
-      fixture tree and assert byte-identical output (equal md5), proving sorted iteration + pinned
-      ZipInfo timestamps/permissions. This is the load-bearing Decision-77 mitigation.
+      S3 prerequisite -- assert the vendored pgclient bundle exists AND carries bin/pg_restore
+      before the pipeline build path can succeed (fail-closed; otherwise the first pg_restore
+      signal is only post-deploy at VP8). Downloads the bundle and inspects the tar members.
     command: >-
-      bin/venv-python -m pytest tests/test_build_lambda.py -k "determinis or reproducib" -q
-    expected: Tests pass; two builds of the same tree yield equal md5.
+      bin/venv-python - <<'PY'
+      import boto3, tarfile, io
+      s = boto3.Session(profile_name="agent_platform", region_name="eu-west-2")
+      body = s.client("s3").get_object(Bucket="agent-platform-data-lake",
+          Key="ducklake-pgclient/pgclient-bundle.tar.gz")["Body"].read()
+      names = tarfile.open(fileobj=io.BytesIO(body), mode="r:gz").getnames()
+      assert any(n.endswith("bin/pg_restore") for n in names), f"bundle lacks bin/pg_restore: {names[:20]}"
+      assert any(n.endswith("bin/pg_dump") for n in names), f"bundle lacks bin/pg_dump: {names[:20]}"
+      print("S3_BUNDLE_OK")
+      PY
+    expected: Prints S3_BUNDLE_OK; the bundle contains bin/pg_dump and bin/pg_restore.
     fix_if: >-
-      Non-identical md5 means a builder still iterates rglob() unsorted or writes wall-clock mtimes;
-      sort the file list and set ZipInfo.date_time to a fixed epoch + explicit external_attr.
+      Missing bundle or missing pg_restore -> re-seed s3://agent-platform-data-lake/ducklake-pgclient/pgclient-bundle.tar.gz
+      per the catalog-DR runbook (Section 4) with a PG16 build + full lib closure. Seeding is a
+      prerequisite, not part of this plan's code changes.
   - step: 2
     phase: pre-deploy
     action: >-
-      Unit test -- profile-less env-creds path. Assert aws CLI argv omits `--profile` when the
-      resolved profile is empty (CI/OIDC) and includes it when non-empty (local).
+      Unit test -- deterministic zip output. Build a DuckLake layer zip twice from an identical
+      fixture tree and assert byte-identical output (equal md5), proving sorted iteration + pinned
+      ZipInfo timestamps/permissions. This is the load-bearing Decision-77 mitigation. Confirm the
+      test class exists first (avoids the silent -k no-match gotcha, tests/CLAUDE.md).
     command: >-
-      bin/venv-python -m pytest tests/test_build_lambda.py -k "profile" -q
-    expected: Tests pass; empty profile -> no `--profile` token in argv; non-empty -> present.
+      grep -q 'class TestDucklakeZipDeterminism' tests/test_build_lambda.py && bin/venv-python -m
+      pytest tests/test_build_lambda.py::TestDucklakeZipDeterminism -q
+    expected: grep matches; tests pass; two builds of the same tree yield equal md5.
+    fix_if: >-
+      Non-identical md5 means a builder still iterates rglob() unsorted or writes wall-clock mtimes;
+      sort the file list and set ZipInfo.date_time to a fixed epoch + explicit external_attr.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Unit test -- profile-less env-creds path. Assert aws CLI argv omits `--profile` when the
+      resolved profile is empty (CI/OIDC) and includes it when non-empty (local). Confirm the test
+      class exists first.
+    command: >-
+      grep -q 'class TestProfilelessArgv' tests/test_build_lambda.py && bin/venv-python -m
+      pytest tests/test_build_lambda.py::TestProfilelessArgv -q
+    expected: grep matches; tests pass; empty profile -> no `--profile` token in argv; non-empty -> present.
     fix_if: >-
       If `--profile ""` still appears in argv, the aws-invocation helper is not conditionally
-      dropping the flag; gate the two `--profile`, profile tokens on `if profile:`.
-  - step: 3
+      dropping the flag; gate the `--profile` token on `if profile:`.
+  - step: 4
     phase: pre-deploy
     action: >-
       rec-2512 literal acceptance -- the workflow builds ducklake packages before plan.
@@ -127,7 +156,7 @@ verification_plan:
       Missing match means the build step was not added to the workflow (or not to both jobs); add
       the `build_lambda --ducklake-only` step before the terraform plan step in speculative-plan
       and apply-sandbox.
-  - step: 4
+  - step: 5
     phase: pre-deploy
     action: >-
       oidc.tf github_ci_plan grants present and terraform config is valid.
@@ -142,7 +171,7 @@ verification_plan:
       grep miss -> the GetObject (ducklake-pgclient/*, ducklake-extensions/*) or PutObject
       (lambda-packages/*) statements were not added to the github_ci_plan inline policy. validate
       error -> fix the HCL (jsonencode statement shape).
-  - step: 5
+  - step: 6
     phase: pre-deploy
     action: >-
       Full fast presubmit -- authoritative pre-merge gate.
@@ -150,7 +179,7 @@ verification_plan:
       bin/venv-python -m scripts.validate --pre
     expected: Exit 0; all fast-tier checks pass (ruff, plan-schema, terraform fmt/validate, pytest subset).
     fix_if: Address the specific failing check; re-run until green.
-  - step: 6
+  - step: 7
     phase: post-deploy
     action: >-
       Confirm the live github_ci_plan inline policy carries the new grants after the tf-gated-apply
@@ -167,7 +196,7 @@ verification_plan:
       Missing grant means the gated-apply has not landed (approve the tf-gated-apply job) or the
       oidc.tf edit did not include all three ARNs. Do NOT proceed to the layer-rebuild steps until
       IAM is live (IAM-precedes-deploy).
-  - step: 7
+  - step: 8
     phase: post-deploy
     action: >-
       Confirm a rebuilt pgclient layer version reached deployment and carries /opt/bin/pg_restore
@@ -195,7 +224,7 @@ verification_plan:
       pg_restore absent -> the rebuild did not republish the layer (build step not wired into the
       applied path, or the S3 bundle lacks pg_restore). Re-seed the bundle / re-run the pipeline
       via workflow_dispatch and re-check.
-  - step: 8
+  - step: 9
     phase: post-deploy
     action: >-
       Exercise the rec-2113 restore drill end-to-end against the deployed function; it must no
@@ -207,9 +236,9 @@ verification_plan:
       only on genuine data assertions, not the missing binary).
     fix_if: >-
       Still FileNotFoundError -> the deployed layer version does not carry pg_restore (return to
-      step 7). Any other failure -> a real restore-drill defect; RCA and file a rec (Decision 55),
+      step 8). Any other failure -> a real restore-drill defect; RCA and file a rec (Decision 55),
       do not patch inline.
-  - step: 9
+  - step: 10
     phase: post-deploy
     action: >-
       Confirm rec-2512 closed after the Resolves trailer / portal update and the read cache refresh.
@@ -255,7 +284,16 @@ context:
     Decision 100 (pg_restore-in-layer -- resolved: DR path retained per 107+88, distinct from the
     D100 read-clone path) and Decision 77 (re-upload TOCTOU -- resolved: byte-reproducibility +
     idempotent apply-path upload).
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 REVISE round"
+  - >-
+    Residual risk (plan-critique frame challenge, accepted per operator's both-paths choice):
+    byte-reproducibility (VP2) is proven only for an identical staged input tree, not across the
+    pip-install boundary (ducklake-deps) or a changed S3 pgclient-bundle / CDN extension between
+    PR-time and merge-time. The frame-consistent alternative -- persist the PR-built zips to S3
+    keyed by PR head SHA and reuse them verbatim at apply (mirrors T2.21's saved-plan pattern,
+    removing the reproducibility requirement) -- is deferred; instead the push apply-the-saved-plan
+    path asserts the rebuilt zip is byte-identical to the PR-uploaded object (fail-closed) as the
+    load-bearing Decision-77 guard.
   - >-
     HARD-BLOCK DEFERRAL RATIONALE (Related-Work check): three unresolved ci-rca recs
     (rec-2504/2505/2506) were open at planning time, all citing stale post-CD.25 roadmap-guard
@@ -306,15 +344,21 @@ execution_steps:
     byte-reproducible: iterate files in sorted order and set an explicit fixed ZipInfo.date_time +
     external_attr (permissions) for every entry (functions, deps, extensions, pgclient).
   - >-
-    tests/test_build_lambda.py -- add: (a) argv test that empty profile omits `--profile` and a
-    non-empty profile includes it; (b) determinism test building the same fixture tree twice and
-    asserting byte-identical zip bytes / equal md5.
+    tests/test_build_lambda.py -- add two test classes matching the VP selectors: class
+    `TestProfilelessArgv` (empty profile omits `--profile`, non-empty includes it) and class
+    `TestDucklakeZipDeterminism` (build the same fixture tree twice, assert byte-identical zip
+    bytes / equal md5). Class names are load-bearing -- VP steps 2 and 3 grep for them.
   - >-
     .github/workflows/terraform-apply-sandbox.yml -- add a "Build DuckLake lambda packages" step
     (bin/venv-python -m scripts.build_lambda --ducklake-only, empty/env-creds profile) before the
     terraform plan step in the speculative-plan PR job (build + upload) AND in the apply-sandbox job
     (before both the workflow_dispatch fresh-plan step and the push apply-the-saved-plan; the
-    push-path upload is idempotent by reproducibility). Do NOT add a build step to gated-apply.
+    push-path upload is idempotent by reproducibility). Do NOT add a build step to gated-apply. On
+    the push apply-the-saved-plan path the rebuild step MUST assert the freshly built zip md5 is
+    byte-identical to the PR-uploaded S3 object (download existing object, compare md5, fail closed
+    on mismatch) so applied layer content cannot skew from the reviewed plan.bin's source_code_hash
+    (Decision 77 no-TOCTOU); a mismatch reds the run and files a ci-rca rec rather than silently
+    applying divergent bytes.
   - >-
     terraform/personal/oidc.tf -- widen the github_ci_plan inline policy with s3:GetObject on
     arn:.../ducklake-pgclient/* and arn:.../ducklake-extensions/* and s3:PutObject on
