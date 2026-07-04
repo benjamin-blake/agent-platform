@@ -128,6 +128,25 @@ verification_plan:
     command: bin/venv-python -m scripts.validate --pre
     expected: Passes (pytest --picked includes tests/test_sync_deps.py); no new ruff/mypy failures introduced.
     fix_if: A new failure attributable to this branch -- fix it; pre-existing unrelated failures (e.g. the ci-rca workflow-count test being fixed in PLAN-ci-rca-workflow-count-drift) are not in scope.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Closure obligation -- AFTER the squash-merge Resolves: trailer fires rec-autoclose.yml,
+      confirm each bundled rec is actually closed in the warehouse (guards against a silent
+      rec-autoclose failure leaving them open).
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull && bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      st={r['id']:r.get('status') for r in rows};
+      missing=[i for i in ('rec-2323','rec-2470','rec-2498') if st.get(i)!='closed'];
+      assert not missing, ('still open: '+str({i:st.get(i) for i in missing}));
+      print('RECS_CLOSED')"
+    expected: Prints RECS_CLOSED; rec-2323, rec-2470, rec-2498 all show status closed.
+    fix_if: >-
+      Any rec still open -- the Resolves: trailer did not fire rec-autoclose.yml; close each
+      manually via `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed
+      --resolution "resolved by cc-web-container-sync venv self-heal hook"` (Decision 70 fallback).
 constraints:
   - Only modify the five files listed in Scope.
   - No rescue agents or workaround loops (Decision 55). This IS the RCA-first forward-fix for rec-2323/2470/2498.
