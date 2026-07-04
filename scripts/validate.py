@@ -155,6 +155,7 @@ from scripts.checks.roadmap.validate_candidate_decision_ratification import (  #
 from scripts.checks.roadmap.validate_plan_documents import validate_plan_documents  # noqa: F401,E402
 from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap  # noqa: F401,E402
 from scripts.checks.roadmap.validate_product_roadmap import validate_product_roadmap  # noqa: F401,E402
+from scripts.checks.roadmap.validate_tier_floor import validate_tier_floor  # noqa: F401,E402
 from scripts.checks.sloc._shared import (  # noqa: E402
     _BRANCH_TYPES,  # noqa: F401
     _CC_LIMIT,  # noqa: F401
