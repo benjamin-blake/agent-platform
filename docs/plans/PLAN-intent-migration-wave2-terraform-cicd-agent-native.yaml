@@ -1,0 +1,330 @@
+schema_version: 1
+slug: "intent-migration-wave2-terraform-cicd-agent-native"
+intent: >-
+  Advance platform tier T5.5 (INTENT-doc extract-and-retire, Decision 86) by retiring WAVE-2's second
+  document docs/INTENT-terraform-cicd-agent-native.md. Its forward content is ALREADY fully extracted
+  into the live roadmap (Section-8 waves -> tier_items T2.20-T2.25 + T2.35; the doc's CD.NN placeholder
+  -> CD.35, ratified as Decision 92 / dec-092), so retirement is a clean delete-plus-pointer: repoint the
+  one live inbound reference, remove the file, flip the manifest entry, and record the progress -- creating
+  no new tier_item or candidate_decision. Keeps the roadmap the single machine-parseable source of forward
+  intent as the corpus retires.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-intent-migration-wave2-terraform-cicd-agent-native.yaml
+phase: >-
+  Platform tier T5.5 (INTENT-* document extraction and retirement); WAVE-2 (tier_item_deliverable ->
+  extract_to_roadmap) of docs/intent-migration/MANIFEST.yaml. Second WAVE-2 doc, following WAVE-1 complete
+  (bazel-feasibility, ops-pipeline-consolidation, ducklake-consolidation) and WAVE-2 first doc
+  (session-log-architecture) done -- 4 of 18 retired.
+scope:
+  - file: docs/INTENT-terraform-cicd-agent-native.md
+    action: Delete
+    purpose: >-
+      Retire the agent-native-Terraform-CI/CD design prose. Its entire forward content is already extracted
+      and ratified in canonical surfaces: Section-8 Waves 1-5 -> tier_items T2.20-T2.24 (all complete);
+      Wave X (convention sync + guard narrowing) -> T2.25 (not_started, exists); Wave 6 (staleness sensor)
+      -> T2.35; the doc's "CD.NN" placeholder -> CD.35, ratified as Decision 92 (dec-092, 2026-06-19). No
+      content is stranded. Prose deleted per the tier_item_deliverable / extract_to_roadmap archetype;
+      recoverable in git history.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Three edits, all pointer/bookkeeping (no tier_item or CD created). (a) Repoint the single live inbound
+      reference in CD.35's detail block (~line 1700): "Authored by docs/INTENT-terraform-cicd-agent-native.md
+      (architect + adversarial-risk zero-context review, converged over three rounds)" -- swap the
+      deleted-doc path for a git-history / Decision-86 pointer while PRESERVING the provenance sentence
+      (attribution + three-round-review provenance kept; only the dangling path replaced). (b) Remove the
+      `- docs/INTENT-terraform-cicd-agent-native.md` line from tier_item T5.5 files_in_scope (~line 7818).
+      (c) Append a T5.5 progress_note line (5 of 18 docs retired; WAVE-2 second doc). Do NOT touch T2.20-T2.25,
+      T2.35, or the CD.35 design-choice body -- only the one attribution path token and the two T5.5
+      bookkeeping edits.
+  - file: docs/intent-migration/MANIFEST.yaml
+    action: Modify
+    purpose: >-
+      Flip the terraform-cicd-agent-native documents[] entry disposition_state from pending to done. Change
+      ONLY that one field; leave content_blocks / drift_findings / primary_targets / related_decisions
+      intact as the disposition record. MANIFEST self-references (the documents[] entry + the WAVE-2 docs
+      list at line 204) are c4-exempt and are NOT swept.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - docs/INTENT-terraform-cicd-agent-native.md no longer exists on disk.
+  - >-
+    No new tier_item and no new candidate_decision are created by this plan: the deliverable's forward
+    content already has live carriers (T2.20-T2.24 complete, T2.25 not_started, T2.35 present; CD.35 ratified
+    as dec-092). A no-stranded-intent check confirms every Section-8 wave has a live tier_item carrier and
+    CD.35 carries state: ratified before the doc is deleted.
+  - >-
+    The CD.35 detail block in docs/ROADMAP-PLATFORM.yaml no longer contains the
+    docs/INTENT-terraform-cicd-agent-native.md path, and the provenance sentence (architect +
+    adversarial-risk zero-context review, converged over three rounds) is preserved with a git-history /
+    Decision-86 pointer in place of the deleted path.
+  - >-
+    tier_item T5.5 files_in_scope no longer lists docs/INTENT-terraform-cicd-agent-native.md, and a T5.5
+    progress_note line records 5 of 18 docs retired (WAVE-2 second doc).
+  - >-
+    The MANIFEST terraform-cicd-agent-native documents[] entry has disposition_state: done, and it is the
+    only entry flipped to done in this plan; every other documents[] entry is unchanged.
+  - >-
+    The validate.py intent-doc-freeze guard (validate_intent_doc_freeze) produces no failure naming
+    terraform-cicd-agent-native when run against the post-change tree.
+  - >-
+    A fresh repo-wide sweep for terraform-cicd-agent-native returns only historical / c4-exempt residual:
+    docs/plans/* plan artefacts, docs/audit-reports/* point-in-time records, and
+    docs/intent-migration/MANIFEST.yaml (c4-exempt self-references). No live canonical surface
+    (ROADMAP-PLATFORM.yaml tier_items/CDs, DECISIONS.md, PROJECT_CONTEXT.md, AGENTS.md, docs/contracts/*,
+    .claude/skills/*, scripts/, tests/, .github/) and no code/infra surface contains the doc path as a live
+    pointer.
+  - >-
+    Full `bin/venv-python -m scripts.validate` exits 0 (credential-gated checks may report SKIPPED in
+    degraded mode); the ROADMAP schema check passes and the MANIFEST schema check passes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      No-stranded-intent gate -- confirm every Section-8 wave has a live tier_item carrier AND the doc's
+      CD.NN placeholder is a ratified CD BEFORE deleting the prose (Decision 86: extract residual to live
+      surfaces first). This is a delete_pointer-class disposition: nothing forward may be lost on delete.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'));
+      ids={i['id'] for i in d['tier_items']};
+      assert {'T2.20','T2.21','T2.22','T2.23','T2.24','T2.25','T2.35'} <= ids, sorted(ids);
+      cds=[c for c in d.get('candidate_decisions',[]) if c['id']=='CD.35']; assert cds, 'CD.35 missing';
+      c=cds[0]; assert c.get('state')=='ratified' and c.get('ratified_as')=='dec-092', c;
+      print('CARRIERS_OK')"
+    expected: Prints CARRIERS_OK (all seven tier_items present; CD.35 ratified as dec-092).
+    fix_if: >-
+      If any wave tier_item is missing or CD.35 is not ratified, do NOT git rm -- forward intent would be
+      stranded. Re-verify the wave->tier mapping (T2.20=Wave1 ... T2.25=WaveX, T2.35=Wave6) and CD.35's
+      ratification before proceeding; this doc's extraction is a precondition, not part of this plan.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the INTENT doc is deleted from the working tree.
+    command: test ! -f docs/INTENT-terraform-cicd-agent-native.md && echo DELETED || echo PRESENT
+    expected: Prints DELETED.
+    fix_if: Prints PRESENT -- ensure `git rm docs/INTENT-terraform-cicd-agent-native.md` ran.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the MANIFEST terraform-cicd-agent-native entry is flipped to disposition_state done.
+    command: >-
+      grep -A20 '^  - id: terraform-cicd-agent-native$' docs/intent-migration/MANIFEST.yaml | grep -m1
+      'disposition_state:'
+    expected: "Prints a line whose value is `    disposition_state: done`."
+    fix_if: >-
+      Prints pending (or nothing) -- flip ONLY the terraform-cicd-agent-native entry's disposition_state to
+      done; do not touch other entries.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm the only-one-entry-flipped invariant: exactly the WAVE-1 (3) + session-log-architecture (1) +
+      terraform-cicd-agent-native (1) = 5 documents[] entries are at disposition_state: done, the rest pending.
+    command: >-
+      bin/venv-python -c "import yaml; m=yaml.safe_load(open('docs/intent-migration/MANIFEST.yaml'));
+      docs=m['documents']; done=[x['id'] for x in docs if x['disposition_state']=='done'];
+      assert set(done)=={'bazel-feasibility','ducklake-consolidation','ops-pipeline-consolidation',
+      'session-log-architecture','terraform-cicd-agent-native'}, sorted(done); print('DONE_SET_OK', len(done))"
+    expected: Prints DONE_SET_OK 5.
+    fix_if: >-
+      Wrong set/count -- a second entry was flipped or terraform-cicd-agent-native was missed. Flip ONLY the
+      terraform-cicd-agent-native entry; leave all others as they were.
+  - step: 5
+    phase: pre-deploy
+    action: Run the real intent-doc-freeze guard; confirm no terraform-cicd-agent-native false-positive.
+    command: >-
+      bin/venv-python -c "import scripts.validate as v; f=[]; v.validate_intent_doc_freeze(f);
+      print('PASS' if not any('terraform-cicd-agent-native' in x for x in f) else 'FAIL:'+str(f))"
+    expected: Prints PASS.
+    fix_if: >-
+      Prints FAIL -- the guard flags terraform-cicd-agent-native. Ensure BOTH the file is deleted AND the
+      manifest entry is done (the guard derives its allowed set from disposition_state != done, so the two
+      must land together in one commit).
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Inbound-reference sweep (Decision-86 X-finding clause) -- confirm no LIVE canonical surface still
+      dangles the deleted doc path. Records the sweep result explicitly rather than asserting singularity
+      (decision-scout NOTE).
+    command: >-
+      grep -rln 'terraform-cicd-agent-native' . --include=*.md --include=*.yaml --include=*.yml
+      --include=*.py --include=*.tf | grep -v '^\./docs/plans/' | grep -v '^\./docs/audit-reports/'
+      | grep -v '^\./docs/intent-migration/MANIFEST.yaml' | sort; echo "residual_exit=$?"
+    expected: >-
+      No lines printed before residual_exit (all remaining hits are under docs/plans/, docs/audit-reports/,
+      or the c4-exempt MANIFEST self-reference). A live canonical or code/infra surface appearing is a failure.
+    fix_if: >-
+      docs/ROADMAP-PLATFORM.yaml still appears -- the CD.35 attribution repoint (~line 1700) or the T5.5
+      files_in_scope removal (~line 7818) was missed; repoint/remove it. Any OTHER canonical or code surface
+      appears -- repoint it to a git-history / Decision-86 pointer (do not delete the host content). An
+      UNEXPECTED new path -- investigate before editing; it may post-date this plan's inventory.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm the CD.35 provenance sentence survived the repoint (attribution + three-round-review provenance
+      preserved; only the path token replaced).
+    command: >-
+      grep -n 'adversarial-risk' docs/ROADMAP-PLATFORM.yaml
+    expected: >-
+      At least the CD.35 provenance line still matches (the "architect + adversarial-risk zero-context
+      review" provenance is preserved); the deleted-doc path is no longer on that line (verified by step 6).
+    fix_if: >-
+      No match -- the provenance sentence was dropped instead of repointed. Restore the attribution +
+      three-round-review provenance, replacing only the docs/INTENT-terraform-cicd-agent-native.md path.
+  - step: 8
+    phase: pre-deploy
+    action: Confirm the synthetic intent-doc-freeze guard unit tests still pass (flip-independent).
+    command: bin/venv-python -m pytest tests/test_validate.py::TestIntentDocFreeze -q
+    expected: All TestIntentDocFreeze tests pass.
+    fix_if: >-
+      A failure -- inspect it; the tests are synthetic and should be flip-independent. Do NOT edit the tests
+      to mask a real regression (Decision 55).
+  - step: 9
+    phase: pre-deploy
+    action: Run the authoritative presubmit (CI-equivalent gate).
+    command: bin/venv-python -m scripts.validate
+    expected: >-
+      Exits 0; the "Intent doc freeze (Decision 86)" section reports no failures; the ROADMAP schema check
+      passes and the MANIFEST schema check passes (credential-gated DQ checks may report SKIPPED in degraded
+      mode).
+    fix_if: >-
+      Non-zero exit -- read the failing check. Likely causes: malformed YAML after the roadmap/manifest edit,
+      or an intent-doc-freeze failure (file-deleted and manifest-done not both landed). Fix the cited check at
+      source; do not add or remove checks to make it pass (Decision 55).
+constraints:
+  - >-
+    Scope is STRICTLY the three files listed (one delete + two modifies). Do NOT create any tier_item or
+    candidate_decision -- the deliverable is already fully extracted (T2.20-T2.25, T2.35, CD.35/dec-092).
+    Do NOT edit any OTHER INTENT doc, and do NOT edit T2.20-T2.25 / T2.35 / the CD.35 design-choice body
+    (only the one attribution path token in CD.35's detail is touched).
+  - >-
+    This is a delete-plus-pointer retirement, NOT a re-extraction. The doc's forward content already landed;
+    flag-and-drop applied parts (Decision 86 / manifest tier_item_deliverable rule). Both manifest
+    drift_findings are already reconciled on live main: (a) CD.NN was assigned CD.35 and ratified as
+    Decision 92; (b) the Section-2 stale apply-workflow comment was already swept (terraform-apply-sandbox.yml
+    now cites Decision 83 / CD.20). The Wave-X guard-narrowing / convention-sync residual is carried by T2.25
+    (status not_started) -- NOT this plan's obligation.
+  - >-
+    Preserve the CD.35 provenance sentence -- the repoint is a pointer swap, not a content rewrite. Only the
+    dangling docs/INTENT-terraform-cicd-agent-native.md path is replaced with a git-history / Decision-86
+    pointer; the "authored by ... architect + adversarial-risk zero-context review, converged over three
+    rounds" attribution stays.
+  - >-
+    All edits land in one branch commit so deletion + manifest flip + reference repoint are atomic (the
+    intent-doc-freeze guard requires file-deleted AND manifest-entry-done together; Decision 55: the guard
+    passes honestly, never transiently masked).
+  - >-
+    Do NOT edit tests/test_validate.py; its TestIntentDocFreeze fixtures are synthetic and flip-independent.
+  - >-
+    Do NOT edit logs/.recommendations-log.jsonl or logs/.decisions-index.jsonl. This plan files no recs and
+    closes none.
+  - No rescue agents or workaround loops (Decision 55). A failing guard or schema check is fixed at the
+    source, never masked.
+context:
+  - >-
+    Governing authority: Decision 86 (INTENT prose docs retired; extract-and-retire supersedes CD.14's
+    demote-and-keep). WAVE-1 complete (3 of 18 retired); WAVE-2 first doc (session-log-architecture) done
+    (4 of 18); this is WAVE-2's second doc (tier_item_deliverable -> extract_to_roadmap archetype). The
+    intent-doc-freeze guard's allowed set auto-derives from MANIFEST disposition_state != done, so flipping
+    the entry to done + deleting the file keeps the guard green with no hand-edit.
+  - >-
+    Extraction disposition (already-applied map -- flag-and-drop, nothing re-extracted): Section-8 Wave 1
+    (convergence substrate + apply-RCA + post-merge wake) -> T2.20 (complete); Wave 2 (speculative plan +
+    apply-saved-plan) -> T2.21 (complete); Wave 3 (gated CD apply via GitHub Environment) -> T2.22 (complete);
+    Wave 4 (privilege-tiering / bootstrap root) -> T2.23 (complete); Wave 5 (drift detection) -> T2.24
+    (complete); Wave X (convention sync + guard narrowing + confirm ratification) -> T2.25 (not_started,
+    exists); Wave 6 (staleness sensor, a post-doc addition) -> T2.35. The doc's "CD.NN" placeholder was
+    allocated as CD.35 and ratified as Decision 92 (dec-092, 2026-06-19). Every forward hook has a live
+    carrier; no residual UNBUILT CD or tier_item remains to author.
+  - >-
+    Inbound-reference inventory (plan-time sweep across *.md/*.yaml/*.yml/*.py/*.tf): LIVE to repoint --
+    docs/ROADMAP-PLATFORM.yaml only: the CD.35 detail "Authored by ..." line (~1700) and the T5.5
+    files_in_scope line (~7818). LEAVE (historical/exempt) -- docs/plans/PLAN-terraform-cicd-agent-native.md,
+    docs/plans/PLAN-terraform-cicd-convergence.yaml, docs/plans/PLAN-terraform-cicd-convergence-closeout.yaml,
+    docs/plans/PLAN-decision-taxonomy-hygiene.yaml (plan artefacts); docs/audit-reports/wave-1-outputs/C.yaml
+    (point-in-time audit record, analogous to the docs/plans/* the WAVE-1 plans left);
+    docs/intent-migration/MANIFEST.yaml (c4-exempt self-references: the documents[] entry + the WAVE-2 docs
+    list at line 204). Zero references in DECISIONS.md, .py, .tf, .github/ workflows, .claude/, tests/.
+  - >-
+    Known downstream item (NOT this plan's obligation): T5.5 exit criterion c4 (final-wave sweep) permits only
+    SESSION_LOG_ARCHIVE.md + MANIFEST.yaml as residual 'INTENT-' hits. The docs/audit-reports/* + docs/plans/*
+    point-in-time records contain doc-path mentions; when the FINAL wave closes c4, that criterion needs
+    audit-reports + plans added to its exempt/historical list (or the records swept). Same flag the WAVE-2
+    session-log plan raised; out of scope for this per-doc extraction.
+  - >-
+    closes_criteria intentionally omitted: T5.5's exit criteria c1-c5 are terminal item-wide aggregate gates
+    ("all 18 docs deleted"; "all documents[] entries done"; final repo-wide sweep clean) that only flip when
+    the FINAL wave completes -- a single WAVE-2 doc extraction closes none of them. Matches the WAVE-1 +
+    session-log-architecture precedent (neither carried a closes_criteria field and both validated + merged).
+    This plan advances the progress_note count (5 of 18) and the MANIFEST disposition_state; T5.5 criterion
+    flips are the final wave's job.
+  - >-
+    Preflight ci-rca HARD BLOCK cleared before this plan was scoped: rec-2530 + rec-2533
+    (test_real_workflows_dir workflow-count drift) verified resolved by main commit c0c2e6c4 (#447, replaced
+    the hard-coded count with an independent-oracle differential; TestEnumerateWorkflowNames green on the
+    branch) and closed via the ops portal. No deferral rationale needed.
+  - >-
+    Tier Item Freshness Gate (T5.5): (1) silent-completion -- NOT complete (13 INTENT docs remain on disk
+    after this plan; c1 open); legitimately in_progress. (2) stale-reference -- T5.5 files_in_scope lists the
+    doc being deleted; removing that line is the correct bookkeeping; no retired-substrate refs in T5.5.
+    (3) supersession -- none; T5.5 is the migration umbrella, CD.14 already superseded by Decision 86.
+    (4) gating-decision -- related_candidate_decisions [CD.14] (superseded); depends_on [T-1.1, T-1.5] both
+    complete; no pending gate blocks this slice.
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (1 NOTE, resolved in-plan;
+    80 of 80 decisions triaged). NOTE (Decision 86 inbound-reference-sweep clause: scout could not verify the
+    "single live reference" claim from its context) -> RESOLVED by VP step 6, which runs the repo-wide sweep
+    and records the result explicitly rather than asserting singularity; no approach change, so the gate was
+    NOT re-dispatched. CITE: Decision 86 (governing extract-and-retire), Decision 92 (CD.35 ratified as
+    dec-092 -- the deliverable's ratified carrier), Decision 55 (atomic landing / loud-failure). RELATED
+    (context, not governing): Decision 48 (V1 tier classification), Decision 84 (ratification-via-edit +
+    --backfill precedent CD.35 used; no backfill needed here -- delete-only), Decision 90/91 (workflow +
+    ratification precedent), Decision 67 (STRATEGIC-suspension -- plan is IMPLEMENTATION, compliant),
+    Decision 114 (10k-line roadmap ceiling -- net-neutral: remove one line, append one progress_note line),
+    Decision 101 (public-repo boundary -- platform CI/CD engineering is SAFE-to-publish; deletion exposes
+    nothing confidential). RELATED CD.14 (superseded by Decision 86).
+  - >-
+    Main divergence: main was 0-behind at session-start preflight (no files_in_scope overlap risk). Per the
+    commit-flow rebase rule, `git fetch origin main && git rebase origin/main` runs before push; if
+    docs/ROADMAP-PLATFORM.yaml moved on main, re-verify the CD.35 attribution line (~1700) and T5.5
+    files_in_scope line (~7818) offsets post-rebase before editing.
+  - >-
+    "gates: decision-scout=FLAGS_FOUND (1 NOTE resolved in-plan via VP step 6, no material human pivot -> no
+    re-dispatch); plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/intent-doc-extraction-retirement-d7d10l)
+  - docs/INTENT-terraform-cicd-agent-native.md read in full
+  - Decision 86 (governing), Decision 92 (CD.35 ratified as dec-092), Decision 55 (atomic/loud-failure) read/confirmed
+  - Section-8 wave -> tier_item mapping confirmed live (T2.20-T2.24 complete, T2.25 not_started, T2.35 present)
+  - CD.35 confirmed state ratified, ratified_as dec-092 (the doc's CD.NN placeholder allocated + ratified)
+  - Both manifest drift_findings confirmed already reconciled (CD.35/Decision 92; apply-workflow comment already swept)
+  - Inbound-reference inventory confirmed (LIVE -- CD.35 attribution ~1700, T5.5 files_in_scope ~7818; LEAVE -- docs/plans/*, docs/audit-reports/*, MANIFEST self-refs)
+  - All three scope files located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    In docs/ROADMAP-PLATFORM.yaml, repoint the CD.35 detail attribution line (~1700): replace the
+    docs/INTENT-terraform-cicd-agent-native.md path with a git-history / Decision-86 pointer (e.g. "Authored
+    by the agent-native Terraform CI/CD design review (architect + adversarial-risk zero-context review,
+    converged over three rounds; source design doc retired per Decision 86 / T5.5, recoverable in git
+    history)"). Preserve the attribution + three-round-review provenance; swap only the dangling path.
+  - >-
+    In docs/ROADMAP-PLATFORM.yaml, remove the `- docs/INTENT-terraform-cicd-agent-native.md` line from T5.5
+    files_in_scope (~7818) and append a T5.5 progress_note line (5 of 18 docs retired; WAVE-2 second doc;
+    terraform-cicd-agent-native already fully extracted -- Section-8 waves -> T2.20-T2.25 + T2.35, CD.NN ->
+    CD.35 / Decision 92 -- so delete-plus-pointer only).
+  - >-
+    In docs/intent-migration/MANIFEST.yaml, flip the terraform-cicd-agent-native documents[] entry's
+    disposition_state from pending to done. Change ONLY that one field.
+  - >-
+    Delete docs/INTENT-terraform-cicd-agent-native.md (`git rm docs/INTENT-terraform-cicd-agent-native.md`).
+  - >-
+    Execute the Verification Plan -- run each step in order; loop until all pass.
+  - >-
+    Report: the doc is deleted, the CD.35 attribution repointed (provenance preserved), T5.5 files_in_scope
+    trimmed + progress_note appended (5 of 18), the manifest entry is done, the intent-doc-freeze guard
+    passes, the inbound sweep returns only historical/exempt residual, the synthetic guard tests pass, and
+    the full presubmit is green.
+work_areas: []
+rollback: >-
+  All edits land in one branch commit. To roll back: `git revert` the single commit -- restores
+  docs/INTENT-terraform-cicd-agent-native.md, re-flips the MANIFEST entry to pending, and restores the
+  original doc-path reference in the CD.35 detail block and the T5.5 files_in_scope list.
