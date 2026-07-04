@@ -4006,7 +4006,8 @@ tier_items:
           All six follow-on IMPLEMENTATION plans landed: PLAN-ci-rca-schema-enforcement,
           PLAN-ci-rca-evidence-script, PLAN-ci-rca-prompt-rewrite, PLAN-ci-rca-evidence-dispute,
           PLAN-ci-rca-observability-dashboard, PLAN-sloc-promotion-to-pre
-        status: open
+        status: met
+        met_by: ci-rca-observability-dashboard
       - id: c2
         text: >-
           CI_RCA_STRICT_MODE flipped to strict via Decision Record after Phase 4 back-validation per
@@ -4165,16 +4166,20 @@ tier_items:
           continue-on-error and the agent runs even with NO bundle (fully unchecked, worse than c7's
           degraded path) -- force human-route + a gauge when bundle_sha is empty. (iii) Back-validation loop
           (Decision 57 loop-closure -- "proof that a fix reduced the failure mode that caused it"): when a
-          new ci_rca rec's failed_check + failure_category (keyed on the BUNDLE-DERIVED category, not the
-          agent-asserted one -- the prior closed rec may have carried the very misclassification c9 fixes)
-          matches a CLOSED prior rec whose preventive_action claimed prevention, FLAG it as a candidate
-          regression for cross-check, link the prior rec, and surface a "preventive_action did not hold"
-          signal. Softened from "deterministically stamp regression" (round-2 feasibility): the match is a
-          heuristic over free-text preventive_action, and these fields live inside the context_v2_json VARCHAR
-          -- the join needs a NEW ducklake_reader named-read verb with server-side json_extract predicates
-          (the closed reader boundary forbids ad-hoc SQL), so this is greenfield query work, not a filter on
-          existing columns. Landed via the observability follow-on plan (extends PLAN-ci-rca-observability-dashboard scope).
-        status: open
+          new OPEN ci_rca rec recurs on a file whose CLOSED prior ci_rca rec on that same file carried a
+          preventive_action, FLAG it as a candidate regression for cross-check and link the prior rec.
+          RE-GROUNDED (delivered reality, PLAN-ci-rca-observability-dashboard): the "join needs a NEW
+          ducklake_reader named-read verb with server-side json_extract predicates" clause is SUPERSEDED --
+          context_v2_json is already carried in the warm recommendation cache for every row (open + closed),
+          so the join is Python-side over the already-loaded cache (scripts/ci_rca_back_validation.py,
+          zero new reader egress, Decision 88, no new NAMED_READS verb, no Lambda redeploy). The match key
+          is DELIVERED as FILE-ONLY (rec.file) -- a materially WEAKER heuristic than this criterion's
+          original "failed_check + failure_category (bundle-derived)" spec, which is DEFERRED until a
+          failure_category field lands in context_v2_json (a c9-style enrichment not built here). File-only
+          matching over-pairs on high-churn files (e.g. scripts/validate.py); /plan MUST treat every flag as
+          a candidate, never a confirmed regression.
+        status: met
+        met_by: ci-rca-observability-dashboard
     related_intents: [ci-rca-methodology, autonomous-improvement-control-plane]
     related_candidate_decisions: []    # no candidate (CD.x) decisions; the hardening cites RATIFIED Decisions 72/55/57/66/60/73 -- see note (those are decision-scout CITE targets for the follow-on plans, not candidate-decision IDs)
     effort: L
@@ -4325,6 +4330,34 @@ tier_items:
       work) deferred to the observability follow-on plan. Also corrected the stale
       agent-platform-agent-logs bucket name in c5's text and in docs/INTENT-ci-rca-methodology.md to
       agent-platform-data-lake (the bucket the code already uses).
+      2026-07-04: shipped PLAN-ci-rca-observability-dashboard, the sixth and final T1.13 follow-on
+      plan, re-grounded from the stale Athena ops_ci_rca_telemetry table / ci_rca_health view
+      (Decision 84/81 DuckLake closed boundary) to warm-cache-derived preflight surfacing. c3
+      enabler: scripts/ops_data_portal.py stamps a warn_mode_reject marker (Tier-B portal-derived,
+      Decision 66; rides context_v2_json, no new column per Decision 103/84; schema_version stays
+      1) on every warn-mode branch that would have rejected in strict mode (schema-deficiency,
+      bundle-absent, S3-missing, cross-check checks 1-4) -- previously these paths only
+      logger.warning()'d with no persisted trace, so the warn-mode rejection rate was underivable.
+      c12(iii): new scripts/ci_rca_back_validation.py (find_preventive_regressions, mirrors
+      ci_rca_probe_health.py's structure) flags an OPEN ci_rca rec recurring on a file whose CLOSED
+      prior ci_rca rec on that file claimed a preventive_action -- FILE-ONLY match key (weaker than
+      this criterion's original failed_check+failure_category spec; disclosed, deferred until a
+      failure_category field lands in context_v2_json), surfacing-only (Decision 55), zero new
+      reader egress (Decision 88, no NAMED_READS verb, no Lambda redeploy -- context_v2_json was
+      already in the warm cache for every row). c1+c3: session_preflight.py adds "CI-RCA Telemetry
+      (last 7d)" (_compute_ci_rca_telemetry: recurrence-class distribution, warn-mode reject rate
+      with the 25%/5% threshold note, dispute-path traffic, bundle-upload backlog,
+      why_chain_terminus_override usage) and "CI-RCA Back-Validation" preflight sections plus
+      ci_rca_telemetry / ci_rca_back_validation report JSON keys, all computed from the warm cache.
+      docs/INTENT-ci-rca-methodology.md Section 7 amended (grandfathered doc, Decision 86) to
+      re-ground 7.1 (cache-derivable metrics vs Phase-4-deferred strict-mode rejection-by-reason
+      counts, T2.36), 7.2 (thresholds re-grounded; the mandated tuning follow-on routed to a filed
+      rec, not standing prose), and 7.3 (Athena view retired, no successor scoped). c1 -> met (all
+      six follow-on plans' substance landed, including PLAN-sloc-promotion-to-pre's work via c4).
+      c12 -> met (all three parts i/ii/iii now landed). c3 stays OPEN: the warn-mode reject-rate
+      gauge is built but the criterion requires 7 days of sub-5% data, which cannot accrue in one
+      session. c2 (strict-mode Decision Record flip) and c5 (live end-to-end SHA roundtrip) stay
+      OPEN, gated on the strict-mode cutover as before.
     note: |
       Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze (original methodology rollout,
       exit criteria c1-c6). Each follow-on plan is independently authorable and the methodology is rolled out

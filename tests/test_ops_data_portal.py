@@ -1593,7 +1593,7 @@ class TestCiRcaSchemaEnforcement:
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
-            rec_id = p.file_rec(dict(_CI_RCA_FIELDS), context_v2_json=_VALID_CONTEXT_V2)
+            rec_id = p.file_rec(dict(_CI_RCA_FIELDS), context_v2_json=dict(_VALID_CONTEXT_V2))
         assert rec_id == "rec-9001"
         entry = json.loads(recs_file.read_text(encoding="utf-8").splitlines()[0])
         assert "context_v2_json" in entry
@@ -1826,7 +1826,7 @@ class TestCiRcaSchemaEnforcement:
                 "This rec will be immediately closed via update_rec (self-cleaning, Decision 70)."
             ),
         }
-        rec_id = p.file_rec(live_fields, context_v2_json=_VALID_CONTEXT_V2)
+        rec_id = p.file_rec(live_fields, context_v2_json=dict(_VALID_CONTEXT_V2))
         assert rec_id.startswith("rec-"), f"Expected rec-NNN, got {rec_id!r}"
 
         # Read back via reader and assert context_v2_json was persisted.
@@ -2422,3 +2422,141 @@ class TestEvidenceS3Existence:
         ):
             p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
         assert any("CI_RCA_EVIDENCE_S3_FAIL_OPEN" in r.message for r in caplog.records)
+
+
+class TestWarnModeRejectMarker:
+    """c3 enabler: warn-mode would-reject stamp on source=ci_rca recs (T1.13 Section 7.2 gauge)."""
+
+    def _ctx_v2(self, **overrides):
+        dg = {
+            "earliest_viable_gate": "pre",
+            "actual_gate_that_caught_it": "CI",
+            "gap_explanation": "test gap explanation with enough chars for the field",
+        }
+        ctx = {
+            "schema_version": 2,
+            "proximate_cause": "x" * 100,
+            "why_chain": ["a " * 25, "b " * 25, "c " * 25 + "systemic scripts/validate.py:1"],
+            "detection_gap": dg,
+            "recurrence_class": "novel",
+            "corrective_action": "x" * 100,
+            "preventive_action": "x" * 100,
+        }
+        ctx.update(overrides)
+        return ctx
+
+    def test_schema_deficiency_warn_stamps_marker(self, tmp_path: Path) -> None:
+        """Warn mode accepts a schema-deficient write and stamps warn_mode_reject.reasons."""
+        import scripts.ops_data_portal as p
+
+        recs_file = tmp_path / "recs.jsonl"
+        deficient_ctx = {
+            **_VALID_CONTEXT_V2,
+            "why_chain": ["short", "also short", "still short"],
+            "rca_confidence": "undetermined",  # isolate the schema-deficiency stamp from bundle-absent
+        }
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-9101"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            rec_id = p.file_rec(dict(_CI_RCA_FIELDS), context_v2_json=deficient_ctx)
+        assert rec_id == "rec-9101"
+        entry = json.loads(recs_file.read_text(encoding="utf-8").splitlines()[0])
+        stored = json.loads(entry["context_v2_json"])
+        assert stored["warn_mode_reject"]["reasons"] == ["schema_deficiency"]
+        assert stored["warn_mode_reject"]["mode_at_write"] == "warn"
+
+    def test_schema_deficiency_strict_raises_no_rec(self, tmp_path: Path) -> None:
+        """Strict mode raises on a schema-deficient write -- no rec is created, no marker exists."""
+        import scripts.ops_data_portal as p
+
+        deficient_ctx = {**_VALID_CONTEXT_V2, "why_chain": ["short", "also short", "still short"]}
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            with pytest.raises(ValueError, match="CI_RCA_STRICT_MODE=strict"):
+                p.file_rec(dict(_CI_RCA_FIELDS), context_v2_json=deficient_ctx)
+        assert "warn_mode_reject" not in deficient_ctx
+
+    def test_bundle_absent_warn_stamps_marker(self) -> None:
+        """Warn mode accepts a bundle-absent write and stamps warn_mode_reject.reasons."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()  # no evidence_bundle_ref, no rca_confidence
+        p._run_ci_rca_cross_check(ctx)  # must not raise
+        assert ctx["warn_mode_reject"]["reasons"] == ["bundle_absent"]
+        assert ctx["warn_mode_reject"]["mode_at_write"] == "warn"
+
+    def test_bundle_absent_strict_raises_no_marker(self, tmp_path: Path) -> None:
+        """Strict mode raises on a bundle-absent write -- no marker is stamped."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            with pytest.raises(ValueError, match="CI_RCA_STRICT_MODE=strict"):
+                p._run_ci_rca_cross_check(ctx)
+        assert "warn_mode_reject" not in ctx
+
+    def test_s3_missing_warn_stamps_marker(self, tmp_path: Path) -> None:
+        """Warn mode accepts an S3-missing write and stamps warn_mode_reject.reasons."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {
+            "sha256": "a" * 64,
+            "s3_uri": "s3://agent-platform-data-lake/ci-rca-evidence/" + "a" * 64 + ".json",
+            "upload_status": "ok",
+        }
+        mock_client = MagicMock()
+        mock_client.head_object.side_effect = Exception("404 NoSuchKey")
+        with patch.object(p, "ROOT", tmp_path):
+            p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
+        assert ctx["warn_mode_reject"]["reasons"] == ["s3_missing"]
+
+    def test_cross_check_disagreement_warn_stamps_marker(self, tmp_path: Path) -> None:
+        """Warn mode accepts a check-2 cross-check disagreement and stamps warn_mode_reject.reasons."""
+        import hashlib as _hashlib
+        import json as _json
+
+        import scripts.ops_data_portal as p
+
+        bundle_data = {"earliest_viable_gate": "CI", "escape_mode": "tier_misplaced", "vacuous_pass": False}
+        payload = {k: v for k, v in bundle_data.items() if k != "sha256"}
+        sha = _hashlib.sha256(
+            _json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        ).hexdigest()
+        bundle_data["sha256"] = sha
+        pending_dir = tmp_path / "logs" / ".ci-rca-evidence-pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        (pending_dir / f"{sha}.json").write_bytes(
+            _json.dumps(bundle_data, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        )
+        ctx = self._ctx_v2(earliest_viable_gate="pre")
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+        with patch.object(p, "ROOT", tmp_path):
+            p._run_ci_rca_cross_check(ctx)  # must not raise
+        assert ctx["warn_mode_reject"]["reasons"] == ["cross_check_check_2"]
+
+    def test_conformant_warn_write_carries_no_marker(self) -> None:
+        """A fully-conformant warn-mode write carries NO warn_mode_reject marker (absent, not empty)."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()  # no evidence_bundle_ref, rca_confidence=undetermined routes cleanly
+        ctx["rca_confidence"] = "undetermined"
+        p._run_ci_rca_cross_check(ctx)  # must not raise
+        assert "warn_mode_reject" not in ctx
+
+    def test_marker_survives_ci_rca_context_round_trip(self) -> None:
+        """A stamped warn_mode_reject marker survives a CiRcaContext model parse round-trip."""
+        import scripts.ops_data_portal as p
+
+        ctx = dict(_VALID_CONTEXT_V2)
+        p._stamp_warn_mode_reject(ctx, ["schema_deficiency", "bundle_absent"])
+        parsed = p.CiRcaContext.model_validate(ctx)
+        assert parsed.warn_mode_reject == {
+            "reasons": ["schema_deficiency", "bundle_absent"],
+            "mode_at_write": "warn",
+        }
