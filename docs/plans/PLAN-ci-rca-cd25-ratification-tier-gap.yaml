@@ -1,0 +1,219 @@
+schema_version: 1
+slug: "ci-rca-cd25-ratification-tier-gap"
+intent: >-
+  Restore main to green by forward-fixing four live-roadmap guard tests left stale by the
+  CD.25 ratification (PR #423), and permanently close the presubmit tier gap so future
+  roadmap-YAML evolutions surface those guard tests in the fast --pre tier before merge.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-cd25-ratification-tier-gap.yaml
+phase: >-
+  Platform CI health / merge-gate integrity. Resolves the three duplicate source=ci_rca
+  critical recs (rec-2504, rec-2505, rec-2506) blocking /plan per the preflight HARD BLOCK.
+scope:
+  - file: tests/test_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Update TestCD25SchemaAmendments to post-ratification canonical state -- cd25.state
+      "pending" -> "ratified"; remove ONLY the 10 CD.25-gated items (T-1.11..T-1.19, T0.12.6)
+      from the bootstrap_completion_exempt expected set, preserving items gated by other
+      pending CDs (T0.12.5->CD.29, T0.12.7->CD.10); refresh the expected-set docstring to
+      cite dec-118 as the discharge authority.
+  - file: tests/test_implement_skill_decomposition_hints.py
+    action: Modify
+    purpose: >-
+      T-1.12 completed and its exemption discharged (bootstrap_completion_exempt now None),
+      so resolve_inherited_exemption(doc, "implement-skill-decomposition-hints") returns None.
+      Adjudicate TestLiveRoadmapInheritance against live state with conservative bias -- assert
+      the current live value (None), or re-point to a still-exempt parent if the inheritance
+      intent is better preserved that way. Do not mutate the roadmap to satisfy the test.
+  - file: tests/test_session_preflight_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Re-point TestCompletionBlockedOnCdProjection::test_t112_surfaces_pending_gating_cd off
+      now-complete T1.12 (absent from in_progress, CD.25 now ratified) to a genuinely
+      in_progress tier_item gated by a real pending CD, preserving the test's intent
+      (completion_blocked_on_cd surfaces a live pending gate).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      In the --pre fast-tier changed_tests selection (~line 360), when a roadmap YAML
+      (docs/ROADMAP-PLATFORM.yaml or docs/ROADMAP-PRODUCT.yaml) appears in the changed-files
+      set, dynamically discover and append the test files under tests/ that reference that
+      YAML path, so live-roadmap guard tests run in the fast presubmit tier. Keep validate.py
+      thin (Decision 104); stay within the 5-minute fast-tier budget (Decision 73).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add coverage for the new dynamic roadmap-YAML -> guard-test selection: simulate a diff
+      containing docs/ROADMAP-PLATFORM.yaml and assert the guard test files are pulled into
+      the selected set; assert a diff with no roadmap YAML does not pull them in.
+bundled_recommendations:
+  - rec-2504
+  - rec-2505
+  - rec-2506
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The four previously-failing selectors pass:
+    tests/test_platform_roadmap.py::TestCD25SchemaAmendments::test_live_platform_yaml_cd25_present,
+    ::test_live_platform_yaml_bootstrap_exemption_set,
+    tests/test_implement_skill_decomposition_hints.py::TestLiveRoadmapInheritance::test_live_roadmap_this_plan_inherits_from_t_1_12,
+    tests/test_session_preflight_platform_roadmap.py::TestCompletionBlockedOnCdProjection::test_t112_surfaces_pending_gating_cd.
+  - >-
+    The full test_platform_roadmap.py, test_implement_skill_decomposition_hints.py, and
+    test_session_preflight_platform_roadmap.py suites pass (no collateral breakage from the
+    fixture edits).
+  - >-
+    The exemption expected-set edit removes exactly {T-1.11, T-1.12, T-1.13, T-1.14, T-1.15,
+    T-1.16, T-1.17, T-1.18, T-1.19, T0.12.6} and leaves every other member (including T0.12.5
+    and T0.12.7) intact.
+  - >-
+    scripts/validate.py --pre, when the diff includes a roadmap YAML, selects the live-roadmap
+    guard test files into changed_tests; when the diff includes no roadmap YAML, it does not.
+  - >-
+    tests/test_validate.py contains a passing test that exercises both branches of the new
+    dynamic selection.
+  - >-
+    bin/venv-python -m scripts.validate --pre completes green and within the 5-minute fast-tier
+    budget on a diff that touches a roadmap YAML.
+  - >-
+    rec-2504, rec-2505, rec-2506 are closed (via the Resolves: trailer / rec-autoclose, or the
+    ops_data_portal --update-rec fallback).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: The four originally-failing tests now pass.
+    command: >-
+      bin/venv-python -m pytest
+      tests/test_platform_roadmap.py::TestCD25SchemaAmendments::test_live_platform_yaml_cd25_present
+      tests/test_platform_roadmap.py::TestCD25SchemaAmendments::test_live_platform_yaml_bootstrap_exemption_set
+      tests/test_implement_skill_decomposition_hints.py::TestLiveRoadmapInheritance::test_live_roadmap_this_plan_inherits_from_t_1_12
+      tests/test_session_preflight_platform_roadmap.py::TestCompletionBlockedOnCdProjection::test_t112_surfaces_pending_gating_cd -q
+    expected: "4 passed"
+    fix_if: "Any assertion still reflects pre-ratification state; re-derive the expected value from the live docs/ROADMAP-PLATFORM.yaml."
+  - step: 2
+    phase: pre-deploy
+    action: No collateral breakage in the three edited test modules.
+    command: >-
+      bin/venv-python -m pytest tests/test_platform_roadmap.py
+      tests/test_implement_skill_decomposition_hints.py
+      tests/test_session_preflight_platform_roadmap.py -q
+    expected: "All tests pass (0 failed)."
+    fix_if: "A sibling test in the same module regressed; reconcile the fixture edit with the other assertions."
+  - step: 3
+    phase: pre-deploy
+    action: The exemption expected-set edit removed exactly the 10 CD.25-gated items and nothing else.
+    command: >-
+      git diff -- tests/test_platform_roadmap.py | grep -E '^\-\s+"(T-1\.1[1-9]|T0\.12\.6)"' | wc -l
+    expected: "10 (exactly the ten removed entries; and no removal line for T0.12.5 or T0.12.7)"
+    fix_if: "A removal line exists for T0.12.5/T0.12.7 (still gated by other pending CDs) or the count != 10; correct the set delta."
+  - step: 4
+    phase: pre-deploy
+    action: Dynamic roadmap-YAML -> guard-test selection is exercised by a unit test.
+    command: >-
+      bin/venv-python -m pytest tests/test_validate.py -q -k "roadmap or pre_selection or guard"
+    expected: "The new selection test(s) pass; both branches (roadmap YAML present / absent) asserted."
+    fix_if: "Selection returns the guard tests when no roadmap YAML changed, or omits them when one did."
+  - step: 5
+    phase: pre-deploy
+    action: The fast tier runs green and within budget on a roadmap-touching diff.
+    command: >-
+      bin/venv-python -m scripts.validate --pre
+    expected: "Validation Summary (scope: pre): All checks passed; elapsed under the 5-minute budget."
+    fix_if: "Budget assertion reddens -- narrow the dynamic discovery to the guard tests actually referencing the changed YAML, or move a slow check to the full tier."
+  - step: 6
+    phase: pre-deploy
+    action: Confirm the recs close after merge (post-merge verification via read cache).
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; print({r['id']: r['status'] for r in rows if r['id'] in ('rec-2504','rec-2505','rec-2506')})"
+    expected: "{'rec-2504': 'closed', 'rec-2505': 'closed', 'rec-2506': 'closed'}"
+    fix_if: "Any rec still open -- run the ops_data_portal --update-rec fallback per AGENTS.md Resolves: trailer section."
+constraints:
+  - >-
+    Forward-fix only -- never auto-revert PR #423 and never mutate docs/ROADMAP-PLATFORM.yaml
+    to satisfy a test (Decision 55). The roadmap is the source of truth; the tests track it.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Do not add any check to .github/workflows/ci.yml -- validate.py is the single source of
+    truth (Decision 80); this plan changes fast-tier test SELECTION, not the check set.
+  - >-
+    Keep scripts/validate.py thin (Decision 104): the dynamic selection is a small helper in
+    the --pre block or an importable helper, not a new check subsystem.
+  - >-
+    Respect the 5-minute fast-tier budget (Decision 73) -- the existing budget assertion must
+    stay and must not be bypassed with --ignore-budget.
+  - >-
+    Rec closure goes through the Resolves: trailer / rec-autoclose or the ops_data_portal
+    portal (Decision 84) -- never edit logs/.recommendations-log.jsonl directly.
+  - >-
+    Every modified source file must retain/attain test coverage of new code (tests/CLAUDE.md
+    coverage policy) -- scripts/validate.py's new selection logic is covered by test_validate.py.
+context:
+  - >-
+    Root cause: PR #423 (c77c40a, ratify-cd25-complete-t1-12) flipped CD.25 pending->ratified,
+    completed T1.12/T-1.12, and discharged the CD.25-scoped bootstrap exemption in
+    docs/ROADMAP-PLATFORM.yaml, but did not co-update four live-roadmap guard tests that pin
+    the pre-ratification state. All four reproduce on current HEAD (level with main).
+  - >-
+    The three recs (rec-2504, rec-2505, rec-2506) are DUPLICATES -- the identical 4 failures
+    filed once per red post-merge run (CI runs 28705230560 / 28705862725 / 28705846398). One
+    fix closes all three.
+  - >-
+    escape_mode=tier_misplaced: the guard tests run only in the full post-merge Validate tier,
+    not the diff-aware fast --pre tier (which selects only changed tests/ files, and PR #423
+    changed only the roadmap YAML). Four subsequent PRs (#424-#427) merged green on top of red
+    main because the PR gate never runs these tests. Part 2 closes this gap.
+  - >-
+    dec-118 (Ratify CD.25, 2026-07-03) is the authority for every new canonical assertion.
+    Carve-out: the exemption discharge is CD.25-scoped only -- T0.12.5 stays CD.29-gated and
+    T0.12.7 stays CD.10-gated, so they remain in the exempt set. The failing-test evidence
+    confirms the missing set is exactly the 10 CD.25-gated items.
+  - >-
+    resolve_inherited_exemption returns the matched parent's bootstrap_completion_exempt;
+    T-1.12's is now None post-discharge, so the live call returns None. This is the one
+    semantic-judgment edit -- adjudicate against live state, do not force True.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS; CITE = dec-118, Decision 55, Decision 73, Decision 80, Decision 104, Decision 72"
+  - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-recommendations-d3slhy)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (dec-118, 55, 72, 73, 80, 104 relevant)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    tests/test_platform_roadmap.py: change cd25.state assertion "pending" -> "ratified" in
+    test_live_platform_yaml_cd25_present; in test_live_platform_yaml_bootstrap_exemption_set
+    remove exactly the 10 CD.25-gated entries (T-1.11..T-1.19, T0.12.6) from the expected set
+    and update the docstring to cite dec-118 for the discharge (keep T0.12.5/T0.12.7).
+  - >-
+    tests/test_implement_skill_decomposition_hints.py: adjudicate
+    test_live_roadmap_this_plan_inherits_from_t_1_12 against live state -- T-1.12 exemption is
+    now None; assert the live value (None) or re-point to a still-exempt parent, whichever
+    preserves the inheritance-rule intent without mutating the roadmap.
+  - >-
+    tests/test_session_preflight_platform_roadmap.py: re-point
+    test_t112_surfaces_pending_gating_cd off complete T1.12 to a genuinely in_progress
+    tier_item whose completion_blocked_on_cd names a real pending CD; verify the chosen item
+    against the live roadmap projection before pinning it.
+  - >-
+    scripts/validate.py: in the --pre changed_tests selection (~line 360), when a roadmap YAML
+    is present in `changed`, discover the tests/ files referencing that YAML path (dynamic --
+    no hardcoded list) and union them into changed_tests. Factor the discovery into a small
+    testable helper.
+  - >-
+    tests/test_validate.py: add a test that feeds a simulated changed-files list containing
+    docs/ROADMAP-PLATFORM.yaml and asserts the guard test files are selected; add the negative
+    case (no roadmap YAML -> guard tests not force-selected).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure
+    stop and RCA (Decision 55). Do not bypass the fast-tier budget.
+  - >-
+    Commit with feat(ci-rca-cd25-ratification-tier-gap): and include
+    "Resolves: rec-2504, rec-2505, rec-2506" in the squash-merge body.
+  - 'Report: what was implemented, verification results, and rec-closure confirmation.'
+work_areas: []
+rollback: >-
+  All changes are test/CI-selection edits with no runtime or infra surface. Revert the branch
+  commit to restore prior state; no data migration or deploy to unwind.
