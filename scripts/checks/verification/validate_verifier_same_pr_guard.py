@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 
 from scripts.checks import _common, registry
 
@@ -29,12 +30,49 @@ def _extract_verifier_covers(class_node: ast.ClassDef) -> list[str] | None:
     return None
 
 
+def _run_new_verifier_differential(verifier_rel: str, class_name: str, covered_in_diff: list[str], failed: list[str]) -> None:
+    """VF-06 c3: differential backstop for a brand-new verifier admitted under exception (b).
+
+    Runs the REAL fail-on-revert differential (git worktree, HEAD with covered_in_diff reverted
+    to origin/main content) for a HERMETIC new verifier; a NON_HERMETIC_BY_CONSTRUCTION new
+    verifier advisory-skips (does not block). Any materialize/worktree/revert error surfaces as
+    a check failure (Decision 55 fail-loud) -- never a silent pass.
+    """
+    root_str = str(_common.ROOT)
+    import sys as _sys  # noqa: PLC0415
+
+    injected = root_str not in _sys.path
+    if injected:
+        _sys.path.insert(0, root_str)
+    try:
+        from scripts import verification_graduation as _vg  # noqa: PLC0415
+    finally:
+        if injected and root_str in _sys.path:
+            _sys.path.remove(root_str)
+
+    try:
+        outcome = _vg.run_verifier_differential(verifier_rel, class_name, covered_in_diff, repo_root=_common.ROOT)
+    except _vg.GraduationError as exc:
+        failed.append(f"same-pr-guard differential: {verifier_rel} ({class_name}): error -- {exc}")
+        return
+
+    if outcome.skipped:
+        print(f"  ADVISORY SKIP: same-pr-guard differential for {verifier_rel} ({class_name}): {outcome.reason}")
+        return
+    if not outcome.admitted:
+        failed.append(f"same-pr-guard differential: {verifier_rel} ({class_name}): not admitted -- {outcome.reason}")
+    else:
+        print(f"  OK: same-pr-guard differential admitted {verifier_rel} ({class_name}): {outcome.reason}")
+
+
 @registry.register("validate_verifier_same_pr_guard", owner="platform")
 def validate_verifier_same_pr_guard(failed: list[str]) -> None:
     """Reject a PR that touches a verifier file AND any file it covers (--pre, T3.1).
 
     Exceptions (per CD.29):
-      (b) The verifier file is itself new in this diff (first commit cannot violate).
+      (b) The verifier file is itself new in this diff (first commit cannot violate). VF-06 c3:
+          when its covers intersect the diff, this is the designed backstop for that hole -- run
+          the real fail-on-revert differential instead of skipping unconditionally.
       (c) No covered file appears in the diff (the author is changing only the verifier,
           not any guarded target).
 
@@ -64,9 +102,6 @@ def validate_verifier_same_pr_guard(failed: list[str]) -> None:
         rel = str(py_file.relative_to(_common.ROOT))
         if rel not in changed_set:
             continue
-        if rel in new_files:
-            # Exception (b): verifier is brand-new this PR -- no guard violation possible.
-            continue
 
         try:
             source = py_file.read_text(encoding="utf-8")
@@ -78,14 +113,20 @@ def validate_verifier_same_pr_guard(failed: list[str]) -> None:
         if not classes:
             continue
 
+        is_new = rel in new_files
+
         for cls in classes:
             covers = _extract_verifier_covers(cls) or ["**"]
-            import fnmatch as _fnmatch  # noqa: PLC0415
-
-            covered_in_diff = [f for f in changed if f != rel and any(_fnmatch.fnmatch(f, g) for g in covers)]
+            covered_in_diff = [f for f in changed if f != rel and any(fnmatch.fnmatch(f, g) for g in covers)]
             if not covered_in_diff:
                 # Exception (c): no covered file in this diff.
                 continue
+
+            if is_new:
+                # Exception (b) + covers-intersects-diff: VF-06 c3 differential backstop.
+                _run_new_verifier_differential(rel, cls.name, covered_in_diff, failed)
+                continue
+
             violations.append(
                 f"same-pr-guard: {rel} (class {cls.name}) modified in same PR as covered file(s): "
                 + ", ".join(covered_in_diff[:3])

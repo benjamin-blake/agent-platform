@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts import verification_graduation
 from scripts.checks._scaffolding import (
     _excluded_heavy_import_names,
     _parse_requirement_dist_names,
@@ -4761,7 +4762,13 @@ class TestSamePrGuard:
         assert not failed
 
     def test_no_violation_when_verifier_newly_added(self, tmp_path: Path) -> None:
-        """Exception (b): a brand-new verifier file is exempt from the guard."""
+        """Exception (b): a brand-new verifier file is exempt from the guard.
+
+        Its covers ('**') intersects the diff, so this also exercises the VF-06 c3
+        differential dispatch path -- stubbed here to an admitted outcome since the
+        differential mechanism itself (real worktree) is covered by
+        TestSamePrGuardDifferential below.
+        """
         verifier_src = tmp_path / "scripts" / "verifiers"
         verifier_src.mkdir(parents=True)
         verifier_file = verifier_src / "new_verifier.py"
@@ -4777,6 +4784,12 @@ class TestSamePrGuard:
             patch(
                 "scripts.checks._common.run",
                 return_value=MagicMock(returncode=0, stdout=rel + "\n"),
+            ),
+            patch(
+                "scripts.verification_graduation.run_verifier_differential",
+                return_value=verification_graduation.VerifierDifferentialOutcome(
+                    admitted=True, skipped=False, reason="stubbed for AST-level guard test"
+                ),
             ),
         ):
             validate_verifier_same_pr_guard(failed)
@@ -4830,6 +4843,62 @@ class TestSamePrGuard:
         assert "Verifier same-PR guard" in failed
 
 
+class TestSamePrGuardHelpers:
+    """Edge-case coverage for _extract_verifier_covers and the guard's structural branches."""
+
+    def test_extract_verifier_covers_annotated_assignment(self) -> None:
+        import ast
+
+        from scripts.checks.verification.validate_verifier_same_pr_guard import _extract_verifier_covers
+
+        tree = ast.parse("class MyVerifier:\n    covers: list[str] = ['a.py', 'b.py']\n")
+        cls = tree.body[0]
+        assert _extract_verifier_covers(cls) == ["a.py", "b.py"]
+
+    def test_extract_verifier_covers_returns_none_when_absent(self) -> None:
+        import ast
+
+        from scripts.checks.verification.validate_verifier_same_pr_guard import _extract_verifier_covers
+
+        tree = ast.parse("class MyVerifier:\n    pass\n")
+        cls = tree.body[0]
+        assert _extract_verifier_covers(cls) is None
+
+    def test_verifiers_dir_missing_returns_early(self, tmp_path: Path) -> None:
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed
+
+    def test_verifier_file_with_syntax_error_is_skipped(self, tmp_path: Path) -> None:
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        (verifier_src / "broken.py").write_text("def broken(:\n", encoding="utf-8")
+        rel = "scripts/verifiers/broken.py"
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel]),
+            patch("scripts.checks._common.run", return_value=MagicMock(returncode=0, stdout="")),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed
+
+    def test_verifier_file_with_no_classes_is_skipped(self, tmp_path: Path) -> None:
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        (verifier_src / "no_classes.py").write_text("x = 1\n", encoding="utf-8")
+        rel = "scripts/verifiers/no_classes.py"
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel]),
+            patch("scripts.checks._common.run", return_value=MagicMock(returncode=0, stdout="")),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed
+
+
 # ---------------------------------------------------------------------------
 # verification_registry tests (T3.1)
 # ---------------------------------------------------------------------------
@@ -4846,6 +4915,33 @@ class TestVerificationRegistry:
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_verification_registry(failed)
         assert not failed
+
+    def test_fail_missing_entries_key(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text("other_key: 1\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert any("missing top-level 'entries' key" in f for f in failed), failed
+
+    def test_fail_entries_not_a_list(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text("entries: not-a-list\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert any("'entries' must be a list" in f for f in failed), failed
+
+    def test_schema_error_non_dict_entry(self, tmp_path: Path) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text("entries:\n  - just-a-string\n", encoding="utf-8")
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_verification_registry(failed)
+        assert "Verification registry" in failed
 
     def test_fail_missing_file(self, tmp_path: Path) -> None:
         failed: list[str] = []
@@ -4910,6 +5006,8 @@ class TestVerificationRegistry:
         assert "Verification registry" in failed
 
     def test_pass_valid_entry(self, tmp_path: Path) -> None:
+        """Schema-valid entry with no check_spec: treated as pre-existing (not added), so the
+        VF-06 c2 differential does not fire (no check_spec means it can't be materialized)."""
         reg = tmp_path / "config" / "agent" / "verification_registry"
         reg.mkdir(parents=True)
         (reg / "registry.yaml").write_text(
@@ -4924,9 +5022,263 @@ class TestVerificationRegistry:
             encoding="utf-8",
         )
         failed: list[str] = []
-        with patch("scripts.checks._common.ROOT", tmp_path):
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch(
+                "scripts.checks.verification.validate_verification_registry._added_entries",
+                return_value=[],
+            ),
+        ):
             validate_verification_registry(failed)
         assert not failed
+
+
+# ---------------------------------------------------------------------------
+# VF-06 c2/c3 differential-execution branch tests (T3.18, audit-remediation-wave-4)
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationRegistryDifferential:
+    """VP step 6: validate_verification_registry's added-entry differential branch (VF-06 c2).
+
+    The differential mechanism itself (real worktree revert) is covered by
+    tests/test_verification_graduation.py; here we drive the validate.py wiring with a stubbed
+    scripts.verification_graduation to verify the diff-gating, message shape, and fail-loud
+    error surfacing.
+    """
+
+    def _write_registry(self, tmp_path: Path, entries_yaml: str) -> None:
+        reg = tmp_path / "config" / "agent" / "verification_registry"
+        reg.mkdir(parents=True)
+        (reg / "registry.yaml").write_text(entries_yaml, encoding="utf-8")
+
+    def test_added_entry_admitted(self, tmp_path: Path) -> None:
+        self._write_registry(
+            tmp_path,
+            (
+                "entries:\n"
+                "  - check_id: new-check\n"
+                "    primitive_slot: grep_count\n"
+                "    guard_target: scripts/foo.py\n"
+                "    plan_slug: my-plan\n"
+                "    graduated_at: '2026-07-04'\n"
+                "    check_spec: {path: scripts/foo.py, pattern: 'x', operator: eq, count: 1}\n"
+            ),
+        )
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch(
+                "scripts.checks.verification.validate_verification_registry._added_entries",
+                return_value=[{"check_id": "new-check"}],
+            ),
+            patch(
+                "scripts.verification_graduation.run_differential",
+                return_value=verification_graduation.DifferentialOutcome(
+                    admitted=True, reason="admitted -- fails on origin/main, passes on HEAD"
+                ),
+            ),
+        ):
+            validate_verification_registry(failed)
+        assert not failed
+
+    def test_added_entry_not_admitted_tautological(self, tmp_path: Path) -> None:
+        self._write_registry(
+            tmp_path,
+            (
+                "entries:\n"
+                "  - check_id: taut\n"
+                "    primitive_slot: grep_count\n"
+                "    guard_target: x\n"
+                "    plan_slug: p\n"
+                "    graduated_at: '2026-07-04'\n"
+            ),
+        )
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch(
+                "scripts.checks.verification.validate_verification_registry._added_entries",
+                return_value=[{"check_id": "taut"}],
+            ),
+            patch(
+                "scripts.verification_graduation.run_differential",
+                return_value=verification_graduation.DifferentialOutcome(
+                    admitted=False, reason="not admitted -- revert did not produce FAIL (tautological)"
+                ),
+            ),
+        ):
+            validate_verification_registry(failed)
+        assert any("not admitted" in f for f in failed), failed
+
+    def test_no_added_entry_is_noop(self, tmp_path: Path) -> None:
+        self._write_registry(
+            tmp_path,
+            (
+                "entries:\n"
+                "  - check_id: x\n"
+                "    primitive_slot: grep_count\n"
+                "    guard_target: y\n"
+                "    plan_slug: p\n"
+                "    graduated_at: '2026-07-04'\n"
+            ),
+        )
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks.verification.validate_verification_registry._added_entries", return_value=[]),
+            patch("scripts.verification_graduation.run_differential") as mock_diff,
+        ):
+            validate_verification_registry(failed)
+        assert not failed
+        mock_diff.assert_not_called()
+
+    def test_graduation_error_surfaces_as_failure(self, tmp_path: Path) -> None:
+        self._write_registry(
+            tmp_path,
+            (
+                "entries:\n"
+                "  - check_id: bad\n"
+                "    primitive_slot: grep_count\n"
+                "    guard_target: y\n"
+                "    plan_slug: p\n"
+                "    graduated_at: '2026-07-04'\n"
+            ),
+        )
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch(
+                "scripts.checks.verification.validate_verification_registry._added_entries",
+                return_value=[{"check_id": "bad"}],
+            ),
+            patch(
+                "scripts.verification_graduation.run_differential",
+                side_effect=verification_graduation.GraduationError("worktree add failed"),
+            ),
+        ):
+            validate_verification_registry(failed)
+        assert any("error --" in f for f in failed), failed
+
+
+class TestEntriesAtRef:
+    """Direct unit tests for _entries_at_ref (VF-06 c2 baseline-fetch helper)."""
+
+    def test_returns_empty_on_nonzero_returncode(self) -> None:
+        from scripts.checks.verification.validate_verification_registry import _entries_at_ref
+
+        with patch("scripts.checks._common.run", return_value=MagicMock(returncode=1, stdout="")):
+            assert _entries_at_ref("origin/main") == []
+
+    def test_returns_empty_on_yaml_parse_error(self) -> None:
+        from scripts.checks.verification.validate_verification_registry import _entries_at_ref
+
+        with patch(
+            "scripts.checks._common.run",
+            return_value=MagicMock(returncode=0, stdout="entries: [\n  - broken: yaml: :"),
+        ):
+            assert _entries_at_ref("origin/main") == []
+
+    def test_returns_empty_on_non_dict_content(self) -> None:
+        from scripts.checks.verification.validate_verification_registry import _entries_at_ref
+
+        with patch("scripts.checks._common.run", return_value=MagicMock(returncode=0, stdout="just-a-string\n")):
+            assert _entries_at_ref("origin/main") == []
+
+    def test_returns_entries_list_on_valid_content(self) -> None:
+        from scripts.checks.verification.validate_verification_registry import _entries_at_ref
+
+        stdout = "entries:\n  - check_id: x\n    primitive_slot: grep_count\n"
+        with patch("scripts.checks._common.run", return_value=MagicMock(returncode=0, stdout=stdout)):
+            entries = _entries_at_ref("origin/main")
+        assert entries == [{"check_id": "x", "primitive_slot": "grep_count"}]
+
+
+class TestSamePrGuardDifferential:
+    """VP step 7: validate_verifier_same_pr_guard's exception-(b) differential branch (VF-06 c3).
+
+    The differential mechanism itself is covered by tests/test_verification_graduation.py; here
+    we drive the validate.py wiring with a stubbed scripts.verification_graduation.
+    """
+
+    def _setup_new_verifier(self, tmp_path: Path) -> str:
+        verifier_src = tmp_path / "scripts" / "verifiers"
+        verifier_src.mkdir(parents=True)
+        (verifier_src / "new_verifier.py").write_text(
+            "class MyVerifier:\n    covers = ['scripts/target.py']\n", encoding="utf-8"
+        )
+        target = tmp_path / "scripts" / "target.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# target\n", encoding="utf-8")
+        return "scripts/verifiers/new_verifier.py"
+
+    def test_exception_b_differential_admits(self, tmp_path: Path) -> None:
+        rel = self._setup_new_verifier(tmp_path)
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel, "scripts/target.py"]),
+            patch("scripts.checks._common.run", return_value=MagicMock(returncode=0, stdout=rel + "\n")),
+            patch(
+                "scripts.verification_graduation.run_verifier_differential",
+                return_value=verification_graduation.VerifierDifferentialOutcome(
+                    admitted=True, skipped=False, reason="admitted"
+                ),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed
+
+    def test_exception_b_tautological_fails(self, tmp_path: Path) -> None:
+        rel = self._setup_new_verifier(tmp_path)
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel, "scripts/target.py"]),
+            patch("scripts.checks._common.run", return_value=MagicMock(returncode=0, stdout=rel + "\n")),
+            patch(
+                "scripts.verification_graduation.run_verifier_differential",
+                return_value=verification_graduation.VerifierDifferentialOutcome(
+                    admitted=False,
+                    skipped=False,
+                    reason="not admitted -- verifier passes even with its covered change reverted",
+                ),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert any("not admitted" in f for f in failed), failed
+
+    def test_exception_b_non_hermetic_advisory_skip_does_not_block(self, tmp_path: Path) -> None:
+        rel = self._setup_new_verifier(tmp_path)
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel, "scripts/target.py"]),
+            patch("scripts.checks._common.run", return_value=MagicMock(returncode=0, stdout=rel + "\n")),
+            patch(
+                "scripts.verification_graduation.run_verifier_differential",
+                return_value=verification_graduation.VerifierDifferentialOutcome(
+                    admitted=False, skipped=True, reason="advisory SKIP -- NON_HERMETIC_BY_CONSTRUCTION new verifier"
+                ),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert not failed
+
+    def test_exception_b_error_surfaces(self, tmp_path: Path) -> None:
+        rel = self._setup_new_verifier(tmp_path)
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks._common.get_changed_files", return_value=[rel, "scripts/target.py"]),
+            patch("scripts.checks._common.run", return_value=MagicMock(returncode=0, stdout=rel + "\n")),
+            patch(
+                "scripts.verification_graduation.run_verifier_differential",
+                side_effect=verification_graduation.GraduationError("worktree add failed"),
+            ),
+        ):
+            validate_verifier_same_pr_guard(failed)
+        assert any("error --" in f for f in failed), failed
 
 
 # ---------------------------------------------------------------------------

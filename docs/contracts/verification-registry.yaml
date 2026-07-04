@@ -6,7 +6,7 @@
 contract:
   id: verification-registry
   class: A
-  contract_version: 1
+  contract_version: 2
   status: ratified
   ratified_at: "2026-06-29"
   ratified_via: "dec-102: PLAN-t3-1-verifier-harness merge to main (T3.1 CD.25 ritual)"
@@ -150,5 +150,44 @@ fields:
       Nullable for bootstrap rows authored before the gate was live; all post-T3.1 rows
       should carry a value. Chain-depth-1 $ref satisfies the CD.25 cross-system $ref
       requirement for Class A graduation.
-amendment_log: []
+  check_spec:
+    type: dict
+    iceberg_type: string
+    nullable: true
+    description: >-
+      Nested mapping of the kernel check's primitive parameters, keyed by the
+      primitive_slot's constructor fields -- e.g. {"path": "...", "pattern": "...",
+      "operator": "eq", "count": 1} for grep_count; {"command": [...], "expected": "...",
+      "use_regex": false} for command_output_matches; {"path": "...", "mode":
+      "exists"|"absent"} for file_presence; {"node_id": "tests/x.py::T::test_y"} for
+      test_selector; {"command": [...], "threshold": 1.0} for metric_under_threshold;
+      {"command": [...]} for command_exit_zero.
+    semantics: >-
+      MATERIALIZATION KEY (VF-06). Without this field a registry row records only the
+      check's provenance, not its runnable definition -- scripts.verification_graduation
+      cannot reconstruct a runnable check from the row, so the differential admission
+      gate cannot re-execute the check against a reverted tree. Field shape is
+      slot-dependent; validated structurally by the schema check (present + a mapping)
+      rather than per-slot at the contract layer -- per-slot required-key validation
+      happens in scripts.verification_graduation.materialize_check_in_tree at
+      materialization time (fail-loud, GraduationError, on a missing required key for
+      the row's slot).
+    populated_by: >-
+      The verification graduation producer (scripts.verification_graduation, invoked
+      from the implement skill's Tier_item bookkeeping walk) at graduation time, from
+      the concrete check object being graduated (e.g. GrepCountCheck(path=...,
+      pattern=..., operator=..., count=...)).
+    dq_intent:
+      not_null:
+        enforced: false
+amendment_log:
+  - date: "2026-07-04"
+    semantic_break: false
+    change_class: field_add
+    summary: >-
+      CD.25 amendment (audit-remediation-wave-4-xetn3o, VF-06): bumped contract_version
+      1 -> 2 and added the check_spec field so a graduated row is re-materializable by
+      scripts.verification_graduation. The differential admission gate can now
+      re-execute a graduated check against a real git-worktree revert instead of
+      trusting the row's provenance fields alone.
 previous_versions: []
