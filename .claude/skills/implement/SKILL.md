@@ -310,6 +310,63 @@ silent pass.
 5. **Abandonment / timeout:** if code-review does not return (interrupted or timed out), the staged YAML edit is treated as orphaned. On next session entry, the idempotency check detects the orphaned stage and reports it to the user for explicit accept/reject -- the implement skill does not auto-commit bookkeeping that lacks a verdict-attested verification pass.
 6. **Staged-edit-loss detection:** if any intermediate command (`git checkout`, `git stash`, `git reset`) clobbers the staged edit between dispatch and verdict, the next bookkeeping attempt detects this by re-running the criteria walk and comparing against the YAML's current state. Loss is observable, not silent.
 
+## Verification Graduation (VF-05, T3.18 -- fires on VP Compliance Gate all-PASS, before the commit flow)
+
+Fires in the same window as Tier_item bookkeeping (after the VP Compliance Gate shows all rows
+PASS, before the commit flow in Step 7) but is a distinct action: it tries to promote this
+session's own VP steps into standing regression guards, not roadmap bookkeeping.
+
+### Rationale
+A VP step proves a feature works once, this session. Left as a throwaway, the next unrelated
+change can silently regress it. Graduating a VP step into
+`config/agent/verification_registry/registry.yaml` makes it a standing, differentially-admitted
+check (`validate_verification_registry`, both --pre and full tiers) -- but only if it genuinely
+distinguishes pre-change from post-change; a tautological check that passes on both trees would
+be worse than no check (false confidence). The differential admission gate is the guard against
+that: real, never simulated (Decision 55).
+
+### Protocol
+1. **Enumerate candidates.** Walk this plan's `verification_plan` steps and identify any whose
+   `command` is expressible as one of the six canonical primitive slots in
+   `scripts.verification_checks.CANONICAL_SLOTS` (command_exit_zero, command_output_matches,
+   file_presence, grep_count, test_selector, metric_under_threshold). A step that requires
+   multiple commands, human judgement, or live infrastructure (V3 deploy/invoke) is not a
+   candidate -- skip it.
+2. **Build a registry row** for each candidate: `check_id` (stable slug), `primitive_slot`,
+   `check_spec` (the primitive's parameters -- see `docs/contracts/verification-registry.yaml`
+   for the per-slot shape), `guard_target` (the artefact it defends), `guard_symbol` (optional),
+   `plan_slug` (this plan's slug), `graduated_at` (today's ISO date), `graduated_by` (this
+   session's canonical_id per Decision 66, or omit if none applies).
+3. **Run the REAL differential admission gate** for each candidate row via
+   `scripts.verification_graduation.run_differential(row, repo_root=<repo root>)`: it materializes
+   the check, runs it live (must PASS), then checks it out in a real `git worktree` at
+   `origin/main` and runs it there (must FAIL). This is a genuine `git worktree add`/`remove` --
+   never a simulated revert.
+4. **Admitted rows** (`outcome.admitted`) get appended to
+   `config/agent/verification_registry/registry.yaml`'s `entries` list. **Rejected rows**
+   (tautological, or failing on HEAD/live) are dropped -- do not add them.
+5. **Errors are fail-loud (Decision 55).** A `scripts.verification_graduation.GraduationError`
+   (worktree add/remove failure, a materialization error, a missing check_spec key) STOPS this
+   step and surfaces to the human -- it never silently becomes "none graduated". Only a
+   legitimately empty candidate set (step 1 found nothing kernel-expressible) is a real "none
+   graduated" outcome.
+6. **Record the outcome ephemerally.** Whether rows were admitted or the candidate set was
+   legitimately empty, record an explicit note in the PR body (a `## Verification Graduation`
+   section: which check_ids were admitted, which candidates were rejected and why, or "no
+   kernel-expressible VP steps this session -- none graduated"). This record is ephemeral
+   PR-body evidence (Decision 115) -- NOT a numbered Decision, NOT a warehouse write. The durable
+   artefact is the registry.yaml diff itself, committed in the same commit as the plan's other
+   changes (Step 7's `git add -A` picks it up).
+
+### Constraints
+- Never invent a registry row for a VP step that doesn't genuinely distinguish pre/post-change
+  behaviour -- a step that would pass identically on origin/main is not a candidate, regardless
+  of whether it's kernel-expressible.
+- `scripts/verification_checks.py` (the kernel) is never edited by this step -- it stays the pure
+  six-slot vocabulary. All worktree/revert mechanics live in `scripts/verification_graduation.py`.
+- Do not graduate a check whose command depends on live infrastructure, credentials, or wall-clock
+  state (that's the domain of the V3 verifiers in `scripts/verifiers/`, not this kernel).
+
 ## CD Ratification Bookkeeping (Workflow Step 6 -- CONDITIONAL, fires when the plan has a ratification block)
 
 Fires only when the approved plan carries a ratification block (see the planning skill's
