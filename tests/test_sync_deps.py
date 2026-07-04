@@ -21,7 +21,11 @@ import pytest
 _SCRIPT_SRC = Path(__file__).resolve().parent.parent / "bin" / "sync-deps.sh"
 
 
-def _make_fake_repo(tmp_path: Path, requirements: str = "six==1.16.0\n", requirements_dev: str = "typing-extensions==4.12.2\n") -> Path:
+def _make_fake_repo(
+    tmp_path: Path,
+    requirements: str = "six==1.16.0\n",
+    requirements_dev: str = "typing-extensions==4.12.2\n",
+) -> Path:
     """Build a throwaway repo layout with a real copy of bin/sync-deps.sh."""
     repo = tmp_path / "repo"
     (repo / "bin").mkdir(parents=True)
