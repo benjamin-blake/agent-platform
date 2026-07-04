@@ -109,8 +109,7 @@ class PlanDocument(BaseModel):
             bad_phases = sorted({vp.phase for vp in self.verification_plan if vp.phase not in _V2_PHASE_ENUM})
             if bad_phases:
                 raise ValueError(
-                    f"schema_version 2 verification_plan[].phase must be one of "
-                    f"{sorted(_V2_PHASE_ENUM)}, got: {bad_phases}"
+                    f"schema_version 2 verification_plan[].phase must be one of {sorted(_V2_PHASE_ENUM)}, got: {bad_phases}"
                 )
         return self
 
