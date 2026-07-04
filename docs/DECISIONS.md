@@ -2,6 +2,52 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 118: Ratify CD.25 -- pre-codegen contract ratification ritual (scoped, necessary not sufficient) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-03
+**Warehouse ID:** dec-118 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+Ratifies CD.25, SCOPED to the realized ritual -- the pre-codegen contract ratification MECHANISM,
+not a claim that every contract application is finished. The ritual is defined (T-1.11 landed
+docs/INTENT-pre-codegen-contract-ratification.md, complete 2026-05-20) and ENFORCED in CI (T-1.12,
+complete 2026-06-18: the scripts/contracts.py loader + $ref resolver; the scripts/validate.py
+validate_contract_drift gate in BOTH the --pre and full tiers, covering CD.25 rejection categories
+1-8; the scripts/session_preflight.py v0-provisional re-ratification scan; and the
+decomposition-hints exemption-inheritance bookkeeping rule). The drift gate passes over 16 ritual
+contracts spanning Class A (data schemas), Class B (the three DuckLake Lambda verb contracts --
+docs/contracts/ducklake_writer.yaml / ducklake_reader.yaml / ducklake_maintenance.yaml, all at
+provisional_v0), and Class C (cross-system invariants) -- so the ritual is live and mandatory, not
+voluntary discipline. The CD.16 precondition ("Class B ratification unblocks on CD.16 ratification")
+is satisfied via Decision 79 (dec-079). Ratification transits the shared candidate-decision
+ratification lane (Decision 105) via the ops portal, superseding the dead "ratification happens once
+the T0.7b log-decision Lambda is deployed" premise (2026-06-09 audit F-001; Decision 91).
+
+Ratifying clears the COMPLETION gate CD.25 places on {T-1.11..T-1.19, T0.12.5, T0.12.6, T0.12.7,
+T1.12} and the decision_required_before "may start" gates on T0.13, T0.7a/b/c, T1.1, T1.3, T1.4,
+and the T3.x telemetry verifiers -- necessary, NOT sufficient: it does NOT close those items' own
+open code exit criteria, does NOT graduate the three provisional_v0 Class B contracts to ratified
+(that lands later per each contract's re_ratification_trigger via the ULF-02 ratification lane), and
+does NOT discharge exemptions for members still gated by another pending CD (T0.12.5 remains
+CD.29-gated; T0.12.7 remains CD.10-gated). The CD.25-scoped bootstrap_completion_exempt subset's
+termination event (roadmap agent_instructions scope (b): "Exemption ends at CD.25 ratification")
+fires now; the flags on members gated solely by CD.25 are stripped in the same edit as this
+ratification, per the Decisions 108-113 precedent and the flag-strip safety rule (strip only when
+ALL gating CDs are ratified).
+
+**Reversal conditions:** re-open as a candidate only if the pre-codegen contract ratification
+ritual ceases to be the canonical mechanism -- e.g. docs/contracts/{name}.yaml stops being the
+single canonical home for Class A/B/C field/verb/invariant semantics, or the validate_contract_drift
+CI gate is removed so contracts no longer bind their code consumers.
+
+**Related:** Decision 105 (the ratification lane executing this), Decision 86 (contracts are the
+canonical machine-parseable home for field/verb semantics -- the discipline this ritual enforces),
+Decision 79 / CD.16 (the satisfied Class B deploy-gating precondition), Decision 81 / CD.33 +
+Decision 91 (the writer/reader/maintenance closed-boundary split the Class B contracts re-grounded
+onto), Decision 84 (the portal ETL vehicle); T1.12 (the Class B contract wave whose completion this
+ratification unblocks).
+
 ## Decision 117: Executor self-modification boundary -- capabilities.yaml is the code-level SSOT (Supersedes Decision 44) (Decided)
 
 **Status:** Decided
