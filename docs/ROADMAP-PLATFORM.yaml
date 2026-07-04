@@ -1875,6 +1875,48 @@ candidate_decisions:
     state: pending
     filed_via: pending_log_decision_lambda
 
+  - id: CD.40
+    title: >-
+      Agent-turn telemetry capture reconciled onto the canonical telemetry model
+    detail: |
+      Records the surviving facets of the retired T-1.9 session-log-architecture audit
+      document (the substantive REPORT-ONLY deliverable; docs/plans/PLAN-session-log-audit.md
+      is its companion planning artefact, not the source of this content), reconciled onto
+      the canonical four-table DuckLake telemetry model (Decisions 95/96/97) rather than the
+      document's original Iceberg / bespoke 7th-Lambda design:
+        - Retire ops_session_log (event-flavoured, unverified writer semantics, no live
+          agent-facing reader) once T2.26 migrates or retires it.
+        - Retire docs/SESSION_LOG.md post-reader-rewire (session_preflight.recent_sessions
+          moves to a query-Lambda verb); archived to docs/SESSION_LOG_ARCHIVE.md, not deleted outright.
+        - Turn-write via the DuckLake writer boundary (Decision 84) -- agent-turn events land
+          as turn-grain rows on telemetry_observations + telemetry_transcripts (Decision 95),
+          NOT a new telemetry_agent_turns / telemetry_agent_turn_transcripts Iceberg pair and
+          NOT a bespoke 7th Lambda (the doc's original agent-platform-log-turn design).
+        - Aggregate ops_sessions table deferred with the doc's 3-condition structural trigger
+          (>=10,000 telemetry_observations turn rows; >=2 distinct recs requesting an
+          aggregate shape the raw event table can't answer cheaply; either a deployed
+          query-Lambda verb against the event tier OR 6 months elapsed since the event-tier
+          Lambda deployment) -- not a wall-clock deferral.
+        - Hook-side pre-write credential scrub (AWS keys, Anthropic keys, GitHub PATs, generic
+          Bearer tokens) is a launch criterion, not post-hoc polish: Iceberg/DuckLake snapshot
+          retention defeats post-hoc redaction.
+    gates: [T3.20]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - >-
+        The deliverable's originally proposed two-tier metadata/transcript split is SUBSUMED by
+        Decision 95's canonical telemetry_observations node + telemetry_transcripts sidecar --
+        not re-proposed here.
+      - >-
+        The deliverable's Iceberg tables and bespoke agent-platform-log-turn Lambda design are
+        SUPERSEDED by Decisions 84/95/96/97 (telemetry lives on the DuckLake closed boundary;
+        writes via the ducklake_writer boundary, not a new Lambda).
+      - >-
+        Kept UNRATIFIED per Decision 105 (ratify only on realization evidence) and Decision 87
+        (record destination now, defer build) -- the underlying subsystem (T3.20) is unbuilt.
+      - "Cites Decisions 86, 84, 95, 96, 97, 105, 87, 75."
+
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
   - id: T-1.0
@@ -2176,13 +2218,14 @@ tier_items:
     completed_at: "2026-06-09"
     note: |
       Status reconciled by the 2026-06-09 roadmap audit (F-013, silent completion): all three
-      exit criteria are satisfied by the committed docs/INTENT-session-log-architecture.md
-      (Sections 3-5 audit both surfaces; Section 12 proposes CD.NN.a/b; Section 13 names the
-      follow-on plans + the agent-platform-log-turn Lambda) plus docs/plans/PLAN-session-log-audit.md.
+      exit criteria were satisfied by the (since-retired) T-1.9 session-log-architecture audit
+      document (Sections 3-5 audited both surfaces; Section 12 proposed the predecessor CDs
+      now recorded as CD.40; Section 13 named the follow-on plans + the agent-platform-log-turn
+      Lambda), with docs/plans/PLAN-session-log-audit.md as its companion planning artefact.
       The deliverable landed before this date (exact landing date unavailable in the squashed
-      clone); completed_at records the reconciliation. Downstream T2.15 already cites the INTENT.
-      The proposed CDs (CD.NN.a/b) remain UNRATIFIED -- ratification is follow-on work via the
-      portal vehicle, not part of this REPORT-ONLY item.
+      clone); completed_at records the reconciliation. Downstream T2.15 already cites the
+      surviving carrier (T3.20 / CD.40). CD.40 remains UNRATIFIED -- ratification is follow-on
+      work via the portal vehicle, not part of this REPORT-ONLY item.
   - id: T-1.10
     tier: T-1
     name: In-implement tier_item bookkeeping rule
@@ -4988,10 +5031,10 @@ tier_items:
          live owners.
 
       2. ops_session_log DQ checks - removed from ops.yaml because ops_session_log is
-         slated for retirement (docs/INTENT-session-log-architecture.md, proposed
-         CD.NN.a). Restoration means new DQ checks against telemetry_agent_turns, not
-         restoring the old session-log checks. Gated on telemetry_agent_turns going live
-         (T3.2/T3.3) and the retirement decision ratification.
+         slated for retirement (tier_item T3.20 / candidate_decision CD.40). Restoration
+         means new DQ checks against telemetry_agent_turns, not restoring the old
+         session-log checks. Gated on telemetry_agent_turns going live (T3.2/T3.3) and
+         CD.40 ratification.
 
       3. CausalChainVerifier - deregistered from scripts/verifiers/__init__.py because
          its target table (telemetry_process_events) is unprovisioned. On an OIDC runner
@@ -5007,7 +5050,7 @@ tier_items:
       - scripts/verifiers/causal_chain.py
     exit_criteria:
       - "ops_execution_plans DQ block restored in ops.yaml (or table formally retired with rec via ops_data_portal) after provisioning in personal account; gated on CD.17 reversal at T4.2"
-      - "ops_session_log DQ coverage replaced by telemetry_agent_turns checks once INTENT-session-log-architecture.md retirement (proposed CD.NN.a) is ratified and telemetry_agent_turns is live (T3.2/T3.3)"
+      - "ops_session_log DQ coverage replaced by telemetry_agent_turns checks once CD.40 (T3.20's agent-turn telemetry capture) is ratified and telemetry_agent_turns is live (T3.2/T3.3)"
       - "CausalChainVerifier re-registered in scripts/verifiers/__init__.py, rewritten to target telemetry_agent_turns, and its covers globs restored in validate.py --coverage (T3.2)"
     related_candidate_decisions: [CD.17]
     effort: M
@@ -5753,7 +5796,7 @@ tier_items:
       docs/runbooks/ducklake-catalog-operations.md Section 5) and the per-table Athena _current
       views (coordinating with T2.7, which owns whatever _current surface survives). Sequencing
       notes per table: ops_decisions rebuilds from DECISIONS.md (coordinate with T1.5/T5.4);
-      ops_session_log is slated for retirement per T-1.9's INTENT (proposed CD.NN.a) -- migrate
+      ops_session_log is slated for retirement per tier_item T3.20 / candidate_decision CD.40 -- migrate
       OR retire per that decision, do not migrate blindly; ops_priority_queue coordinates with
       the log-storage.md producer flow. Decommission sweep includes the orphaned
       scripts/sync_athena_to_pgvector.py (audit F-037: zero roadmap representation, no live
@@ -5768,7 +5811,7 @@ tier_items:
       atomic_plans:
         - "Restore-drill gate (rec-2113): pgclient layer gains pg_restore; drill passes (precursor)"
         - "Migrate ops_decisions (coordinate T1.5/T5.4 DECISIONS.md lifecycle)"
-        - "Migrate or retire ops_session_log (per T-1.9 INTENT / proposed CD.NN.a)"
+        - "Migrate or retire ops_session_log (per T3.20 / CD.40)"
         - "Migrate ops_execution_plans"
         - "Migrate ops_priority_queue (log-storage.md producer flow)"
         - "Retire ops_compaction + per-table _current views + Athena-path orphan cleanup (sync_athena_to_pgvector.py)"
@@ -7085,6 +7128,77 @@ tier_items:
     note: "Derived recs are automatable: false (Decision 117); owns the executor-era VF-08 alarm flip while T3.15 ships the interactive-era stop-and-surface behaviour."
     progress_note: "Parked post-MVP (Decision 93); reactivate to not_started when the executor unfreeze work (CD.17 / T4.x) begins. Records the 2026-07-03 operator decision: stop-and-surface now, auto-file-rec when executor is live."
 
+  - id: T3.20
+    tier: T3
+    name: Agent-turn telemetry capture (hooks + turn-grain observations + credential scrub)
+    intent: |
+      Surviving build intent extracted from the retired T-1.9 session-log-architecture audit
+      document (REPORT-ONLY; docs/plans/PLAN-session-log-audit.md was its companion planning
+      artefact, not the source of this content), reconciled onto the canonical DuckLake
+      telemetry model (Decisions 95/96/97) rather than the document's original Iceberg /
+      bespoke-Lambda design:
+      SessionStart/Stop hooks emit per-turn events; turn-grain rows land on the canonical
+      telemetry_observations + telemetry_transcripts tables (Decision 95), written via the
+      DuckLake writer boundary (Decision 84) -- NOT a new telemetry_agent_turns /
+      telemetry_agent_turn_transcripts Iceberg pair and NOT a bespoke 7th Lambda. Pre-write
+      credential scrub (AWS keys, Anthropic keys, GitHub PATs, Bearer tokens) is a launch
+      criterion, not post-hoc polish. Fallback session-id derivation covers hook-ordering edge
+      cases (SessionStart loss modes). A per-purpose outbox subdir carries hook-side write
+      failures per the existing Decision 51 outbox pattern. Coordinates ops_session_log
+      retirement with T2.26 and docs/SESSION_LOG.md retirement (archive to
+      docs/SESSION_LOG_ARCHIVE.md, readers rewired to a query-Lambda verb). The aggregate
+      ops_sessions table stays deferred (CD.40's 3-condition structural trigger). Build gated
+      on executor re-enablement (CD.17/T4.2) + per-Lambda deploy gating (Decision 79) -- NOT
+      the retired blanket "Lambda-deploy freeze."
+    depends_on: [T2.36, T1.10, T3.2]
+    files_in_scope:
+      - config/lambda/ducklake/field_semantics.yaml    # turn-grain telemetry_observations/telemetry_transcripts entries
+      - .claude/hooks/session_start_log_turn.py    # new
+      - .claude/hooks/stop_log_turn.py    # new
+      - config/agent/data_quality/ops.yaml    # orphan/coverage DQ check (turn-observation <-> transcript join)
+      - docs/contracts/telemetry_observations.yaml    # turn-grain field additions
+      - docs/contracts/telemetry_transcripts.yaml    # turn-grain field additions
+      - docs/SESSION_LOG.md    # retirement -> docs/SESSION_LOG_ARCHIVE.md
+      - scripts/session_preflight.py    # reader rewire (recent_sessions via query-Lambda verb)
+    exit_criteria:
+      - id: c1
+        text: >-
+          SessionStart + Stop hooks land emitting per-turn events, with pre-write credential-scrub
+          regex pass (AWS keys, Anthropic keys, GitHub PATs, generic Bearer tokens) as a launch
+          criterion (not post-hoc polish)
+        status: open
+      - id: c2
+        text: >-
+          Agent-turn events write as turn-grain rows on the canonical telemetry_observations +
+          telemetry_transcripts tables (Decision 95) via the DuckLake writer boundary (Decision 84);
+          no new telemetry_agent_turns / telemetry_agent_turn_transcripts Iceberg pair created
+        status: open
+      - id: c3
+        text: >-
+          Orphan/coverage DQ check registered in config/agent/data_quality/ops.yaml (alarm-not-gate)
+          for the turn-observation <-> transcript join
+        status: open
+      - id: c4
+        text: >-
+          Enforced telemetry contract for the turn surface: docs/contracts/telemetry_observations.yaml
+          and docs/contracts/telemetry_transcripts.yaml carry the turn-grain field additions
+        status: open
+      - id: c5
+        text: "ops_session_log retired (coordinated with T2.26's migrate-or-retire decision)"
+        status: open
+      - id: c6
+        text: >-
+          docs/SESSION_LOG.md retired to docs/SESSION_LOG_ARCHIVE.md with readers rewired
+          (session_preflight.recent_sessions via a query-Lambda verb)
+        status: open
+      - id: c7
+        text: "Schema-accuracy pass completed on the legacy ops_session_log / telemetry_sessions surfaces"
+        status: open
+    related_candidate_decisions: [CD.40]
+    effort: L
+    strategic: false
+    status: not_started
+
   # ----- T4: Step Functions + Durable Functions executor + autonomy -----
   - id: T4.1
     tier: T4
@@ -7653,7 +7767,6 @@ tier_items:
       - docs/INTENT-ops-decisions-graduation.md
       - docs/INTENT-ci-cd-architecture.md
       - docs/INTENT-provider-agnostic-executor.md
-      - docs/INTENT-session-log-architecture.md
       - docs/INTENT-terraform-cicd-agent-native.md
       - docs/INTENT-pre-codegen-contract-ratification.md
       - docs/INTENT-aws-migration-platform-evolution.md
@@ -7689,6 +7802,7 @@ tier_items:
       - 2026-06-18: WAVE-1 pilot shipped: bazel-feasibility INTENT doc retired (feasibility_graduated archetype, Decision 86). 1 of 18 docs retired.
       - 2026-06-29: WAVE-1 second doc retired: ops-pipeline-consolidation INTENT doc deleted (feasibility_graduated archetype, Decision 84 primary pointer, Decision 78 interim). 2 of 18 docs retired.
       - 2026-06-30: WAVE-1 complete: ducklake-consolidation INTENT doc deleted (feasibility_graduated archetype, Decision 84 primary pointer; Phase-4 forward content carried by new T2.36; Phase-3 demolition carried by T2.26). 3 of 18 docs retired. WAVE-1 all three docs done.
+      - 2026-07-04: WAVE-2 first doc retired: session-log-architecture INTENT doc deleted (tier_item_deliverable archetype; surviving intent reconciled onto the canonical DuckLake telemetry model and extracted to new tier_item T3.20 + candidate_decision CD.40). 4 of 18 docs retired.
 
 cross_tier_gates:
   - id: G.1
