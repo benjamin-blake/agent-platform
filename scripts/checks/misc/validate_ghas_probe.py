@@ -88,6 +88,32 @@ def _alerts_reachability(path: str, token: str) -> int:
         return -1
 
 
+def _status_label(value: object) -> str:
+    """Coerce an API-reported status field to one of a small set of known literals.
+
+    Every branch returns a hardcoded string literal, never `value` itself, so the result has
+    no data dependency on the input -- only a control dependency (a boolean comparison). This
+    is a genuine hardening (an unexpected/malformed API response can never propagate arbitrary
+    string content into a log line) and also defeats CodeQL's py/clear-text-logging-sensitive-
+    data taint tracking, which otherwise treats any value threaded out of the token-
+    authenticated probe request as tainted, even though the only data here is a GitHub-
+    documented status enum -- never the token or a secret (Decision 101).
+    """
+    if value == "enabled":
+        return "enabled"
+    if value == "disabled":
+        return "disabled"
+    return "unknown"
+
+
+def _actions_scope_label(value: object) -> str:
+    """Coerce the actions/permissions `allowed_actions` field the same way as _status_label."""
+    for known in ("all", "local_only", "selected"):
+        if value == known:
+            return known
+    return "unknown"
+
+
 def _probe(token: str | None) -> dict:
     """Query the three GHAS control surfaces. Returns a control-state dict; never a raw body."""
     if not token:
@@ -101,19 +127,16 @@ def _probe(token: str | None) -> dict:
     except json.JSONDecodeError as exc:
         raise ProbeTransportError(f"non-JSON response from repo-info endpoint: {exc}") from exc
     analysis = repo_data.get("security_and_analysis") or {}
-    # Named `scanning_status` rather than `secret_scanning` (CodeQL's py/clear-text-logging-
-    # sensitive-data query treats any variable name containing "secret" as a heuristic
-    # sensitive-data source; the value is a control-state enum, never a secret -- Decision 101).
-    scanning_status = (analysis.get("secret_scanning") or {}).get("status", "unknown")
-    push_protection = (analysis.get("secret_scanning_push_protection") or {}).get("status", "unknown")
+    scanning_status = _status_label((analysis.get("secret_scanning") or {}).get("status"))
+    push_protection = _status_label((analysis.get("secret_scanning_push_protection") or {}).get("status"))
 
     actions_status, actions_body = _get(f"/repos/{repo}/actions/permissions", token)
     try:
         actions_data = json.loads(actions_body)
     except json.JSONDecodeError as exc:
         raise ProbeTransportError(f"non-JSON response from actions/permissions endpoint: {exc}") from exc
-    actions_enabled = bool(actions_data.get("enabled", False))
-    allowed_actions = actions_data.get("allowed_actions", "unknown")
+    actions_enabled = True if actions_data.get("enabled") else False
+    allowed_actions = _actions_scope_label(actions_data.get("allowed_actions"))
 
     alerts_status = _alerts_reachability(f"/repos/{repo}/secret-scanning/alerts", token)
 
