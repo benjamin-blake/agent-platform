@@ -19,25 +19,31 @@ scope:
   - file: scripts/checks/_scaffolding.py
     action: Modify
     purpose: >-
-      Add a "proxy-blocked -> visible skip" branch to _terraform_init_with_retry (line ~197): when a
-      terraform init failure matches the permanent CC-web proxy-403 signature (a "403 Forbidden"
-      returned from github.com while retrieving a third-party provider's authentication checksums /
-      signing key during install), print a visible SKIP that defers to the terraform-validate CI job
-      and return False WITHOUT appending to `failed` -- so the caller (run_terraform_creds_free, line
-      ~225) skips validate/fmt for that root without reddening the presubmit. Introduce a distinct
-      _PROXY_BLOCKED_INIT_SIGNATURES tuple (NOT folded into _TRANSIENT_INIT_SIGNATURES -- the 403 is
-      permanent, must never be retried). Genuine permanent errors (bad version pin, HCL error) still
-      append to `failed` and fail loudly (Decision 55); transient 5xx retry behavior is unchanged.
-      This generalizes the existing terraform-absent skip (line ~234) so the local skip covers BOTH
-      terraform-absent AND terraform-present-but-proxy-blocked.
+      Add a "proxy-blocked -> visible skip" branch to the terraform init path (_terraform_init_with_retry
+      line ~197 + run_terraform_creds_free line ~225). Detect the permanent CC-web proxy-403 via a
+      CO-OCCURRENCE predicate `_is_proxy_blocked_init(output)` -- it matches ONLY when all of ("403"
+      Forbidden) AND (github.com) AND (an authentication-checksum / "failed to retrieve" marker) appear
+      together, i.e. the third-party-provider signing/checksum fetch. A bare-substring tuple matched
+      with `any(...)` (like _TRANSIENT_INIT_SIGNATURES) is FORBIDDEN here: it would skip on ANY "403"
+      (e.g. an S3/backend 403) and mask a genuine failure (Decision 55). On a proxy-blocked init: print
+      a visible SKIP that defers `terraform validate` to the terraform-validate CI job, do NOT append to
+      `failed`, and -- since `terraform fmt -check` needs no provider install -- STILL run fmt-check for
+      that root (only validate is skipped). Genuine permanent errors (bad version pin, HCL error,
+      non-github 403) still append to `failed` and fail loudly; transient 5xx retry behavior is
+      unchanged; the 403 is NEVER added to _TRANSIENT_INIT_SIGNATURES (it is permanent). This
+      generalizes the existing terraform-absent skip (line ~234) so the local terraform gate degrades
+      gracefully for BOTH terraform-absent AND terraform-present-but-proxy-blocked sessions.
   - file: tests/test_validate.py
     action: Modify
     purpose: >-
-      Add unit tests for the new skip branch: (a) a proxy-403 init failure yields a visible skip and
-      leaves `failed` empty (no red); (b) a genuine non-transient provider error (e.g. bad pin) still
-      appends to `failed` after a single attempt (no silent masking); (c) the existing transient-retry
-      path is unaffected. Tests mock subprocess -- no live terraform calls. Follows the Decision 104
-      check-registry mapping (scripts/checks/** -> tests/test_validate.py).
+      Add unit tests to the existing TestRunTerraformChecks class (home of the terraform-init tests,
+      line ~569): (a) test_creds_free_init_skips_on_proxy_403 -- a github.com-403 auth-checksum init
+      failure yields a visible skip, leaves `failed` empty, and still runs fmt-check for that root;
+      (b) test_creds_free_init_still_fails_on_non_github_403 -- an init error containing "403" WITHOUT
+      the github.com/checksum co-occurrence (e.g. an S3 backend 403) still appends to `failed` (proves
+      the predicate is narrow, no masking -- Decision 55). The existing test_creds_free_init_fails_fast_on_bad_pin
+      and the transient-retry tests remain green. Tests mock subprocess -- no live terraform calls.
+      Follows the Decision 104 check-registry mapping (scripts/checks/** -> tests/test_validate.py).
   - file: terraform/CLAUDE.md
     action: Modify
     purpose: >-
@@ -79,15 +85,18 @@ bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
   - >-
-    scripts/checks/_scaffolding.py defines a distinct _PROXY_BLOCKED_INIT_SIGNATURES tuple (separate
-    from _TRANSIENT_INIT_SIGNATURES) and _terraform_init_with_retry emits a visible skip and does NOT
-    append to `failed` when an init failure matches the proxy-403 signature (verified by unit test).
+    scripts/checks/_scaffolding.py detects the proxy-403 via a co-occurrence predicate
+    `_is_proxy_blocked_init` (403 AND github.com AND an auth-checksum/retrieve marker -- NOT an
+    any()-over-tuple), and on a match emits a visible validate-skip, does NOT append to `failed`, and
+    STILL runs `terraform fmt -check` for that root (verified by unit test).
   - >-
-    A genuine non-transient provider error (bad version pin / HCL error) still appends to `failed`
-    after a single attempt -- the skip branch does not mask real failures (verified by unit test).
+    A non-github 403 (e.g. an S3 backend 403) and a genuine bad-pin/HCL error both still append to
+    `failed` after a single attempt -- the predicate is narrow and does not mask real failures
+    (verified by test_creds_free_init_still_fails_on_non_github_403 + the existing bad-pin test).
   - >-
-    tests/test_validate.py adds the proxy-403-skip and bad-pin-fails tests and they pass; the existing
-    transient-retry tests remain green.
+    tests/test_validate.py adds test_creds_free_init_skips_on_proxy_403 and
+    test_creds_free_init_still_fails_on_non_github_403 to TestRunTerraformChecks and they pass; the
+    existing transient-retry and bad-pin tests remain green.
   - >-
     terraform/CLAUDE.md no longer asserts the CC-web agent runs `terraform plan`/`apply` for
     terraform/personal locally; the section states the third-party-provider init constraint and the
@@ -112,44 +121,49 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Unit test -- proxy-403 init failure is a visible skip, not a red. Confirm the test names exist
-      first (avoids the silent pytest -k no-match gotcha), then run them.
+      Unit test -- proxy-403 init failure is a visible skip (not a red) and fmt-check still runs.
+      Confirm the test method exists first (avoids the silent no-match gotcha), then run the class by
+      ::ClassName (tests/CLAUDE.md: no `pytest -k` selectors in acceptance commands).
     command: >-
-      grep -q '_PROXY_BLOCKED_INIT_SIGNATURES' scripts/checks/_scaffolding.py && grep -Eq
-      'proxy_?403|proxy_blocked' tests/test_validate.py && bin/venv-python -m pytest tests/test_validate.py
-      -k 'proxy' -q
+      grep -q '_is_proxy_blocked_init' scripts/checks/_scaffolding.py && grep -q
+      'def test_creds_free_init_skips_on_proxy_403' tests/test_validate.py && bin/venv-python -m pytest
+      tests/test_validate.py::TestRunTerraformChecks -q
     expected: >-
-      grep matches the new signature tuple and the new tests; the proxy-403 tests pass (init failure
-      matching the github.com-403 signature leaves `failed` empty and prints a skip).
+      grep matches the co-occurrence predicate and the new test; TestRunTerraformChecks passes -- a
+      github.com-403 auth-checksum init failure leaves `failed` empty, prints a visible validate-skip,
+      and still runs fmt-check for that root.
     fix_if: >-
-      No match -> the skip branch/signature tuple was not added, or tests were not named with a
-      `proxy` selector. Test failure -> _terraform_init_with_retry still appends the proxy-403 label to
-      `failed`; move the proxy-blocked check ahead of the failed.append and return False without
-      appending.
+      No predicate match -> the co-occurrence detector was not added (do NOT use an any()-over-tuple).
+      Test failure -> the init path still appends the proxy-403 label to `failed`, or it skips fmt too;
+      route proxy-block to skip validate only (no append) and keep fmt-check running.
   - step: 2
     phase: pre-deploy
     action: >-
-      Unit test -- a genuine non-transient provider error still fails loudly (the skip branch must not
-      mask real errors, Decision 55).
+      Unit test -- narrowness / no-masking (Decision 55): a non-github 403 and a genuine bad-pin error
+      both still append to `failed`. Run the class by ::ClassName.
     command: >-
-      bin/venv-python -m pytest tests/test_validate.py -k 'bad_pin or non_transient or genuine' -q
+      grep -q 'def test_creds_free_init_still_fails_on_non_github_403' tests/test_validate.py &&
+      bin/venv-python -m pytest tests/test_validate.py::TestRunTerraformChecks -q
     expected: >-
-      Tests pass; a simulated bad-pin / HCL init error appends its label to `failed` after one attempt
-      (no retry, no skip).
+      The class passes; an init error containing "403" WITHOUT the github.com/checksum co-occurrence
+      (e.g. an S3 backend 403) appends to `failed`, and the existing bad-pin test still fails-fast --
+      proving the proxy-skip predicate does not mask real failures.
     fix_if: >-
-      If a genuine error is being skipped, the proxy-403 signature is too broad; narrow it to the
-      github.com-403 authentication-checksum shape and re-run.
+      If a non-github 403 is skipped, the predicate is too broad; require co-occurrence of 403 +
+      github.com + auth-checksum/retrieve marker (all(...) or a regex), not a bare "403" substring.
   - step: 3
     phase: pre-deploy
     action: >-
       terraform/CLAUDE.md re-grounded -- the false local-terraform claim is gone and the constraint +
-      CI-delegation posture is stated.
+      CI-delegation posture is stated. (Negative grep anchored on a single-line substring that exists
+      on the unedited file, so it fails before the edit and passes only after removal -- not a
+      vacuous line-wrap match.)
     command: >-
-      ! grep -q 'the agent itself runs .terraform plan./.apply. for .terraform/personal.' terraform/CLAUDE.md
+      ! grep -q 'itself runs .terraform plan./.apply. for .terraform/personal' terraform/CLAUDE.md
       && grep -Eiq 'third-party provider|kislerdm/neon|github.com|CI-delegated|terraform-validate' terraform/CLAUDE.md
     expected: >-
-      The inaccurate sentence is absent; the section names the third-party-provider init constraint and
-      the CI-delegated validate/plan posture.
+      The inaccurate sentence (line ~23) is absent; the section names the third-party-provider init
+      constraint and the CI-delegated validate/plan posture.
     fix_if: >-
       grep still finds the old claim -> the "Running terraform/personal on CC-web" section was not
       re-grounded; rewrite lines ~21-63 per the scope purpose and cite the new Decision.
@@ -227,10 +241,15 @@ verification_plan:
 constraints:
   - >-
     Decision 55 (RCA-first / loud failure): the proxy-blocked skip branch must NOT mask genuine
-    permanent provider errors (bad pin, HCL error) or transient registry 5xx. Only the specific
-    github.com-403 authentication-checksum signature skips; everything else keeps its current
-    fail/retry behavior. Follow-up work (provider mirror; PLAN-t2-24 re-ground) is filed as recs, not
-    inlined.
+    permanent provider errors (bad pin, HCL error, non-github 403) or transient registry 5xx. Detection
+    MUST be a co-occurrence predicate (403 AND github.com AND auth-checksum/retrieve marker), never a
+    bare "403" substring -- an any()-over-tuple is explicitly forbidden here. Everything outside that
+    exact shape keeps its current fail/retry behavior. Follow-up work (provider mirror; PLAN-t2-24
+    re-ground) is filed as recs, not inlined.
+  - >-
+    Code/doc consistency: on a proxy-blocked root the skip applies to `terraform validate` ONLY;
+    `terraform fmt -check` needs no provider install and still runs for that root, matching the SKILL
+    guidance and Decision text that fmt-check is a locally-runnable check when terraform is present.
   - >-
     Decision 73 (two-tier presubmit): local validate.py is advisory outside CI; PR CI is the
     authoritative gate. The skip is the correct expression of that model -- it defers to CI, it does
@@ -342,20 +361,26 @@ pre_implementation_checklist:
   - Re-check the next free Decision number in docs/DECISIONS.md at execution time (numbering race)
 execution_steps:
   - >-
-    scripts/checks/_scaffolding.py -- add _PROXY_BLOCKED_INIT_SIGNATURES (github.com-403 auth-checksum
-    shape, e.g. "403 Forbidden" + "github.com" seen together with an authentication-checksum/retrieve
-    marker) as a distinct tuple. In _terraform_init_with_retry, on a non-transient failure, check the
-    proxy-blocked signature FIRST: if matched, print a visible skip (mirroring the invoke_step/skip
-    format, referencing the terraform-validate CI job) and return False WITHOUT appending to `failed`;
-    otherwise keep the existing failed.append + return False. Do NOT add the 403 to
-    _TRANSIENT_INIT_SIGNATURES. Update the adjacent docstring/comment to document the three outcomes
-    (success / proxy-skip / genuine-fail) and the transient-retry path.
+    scripts/checks/_scaffolding.py -- add a helper `_is_proxy_blocked_init(output) -> bool` that
+    returns True ONLY on co-occurrence of a 403-Forbidden marker AND "github.com" AND an
+    auth-checksum/"failed to retrieve" marker (use `all(...)` over the required markers or a compiled
+    regex -- NOT an any()-over-tuple, which would skip on any 403 and mask non-github failures). Thread
+    a tri-state through the init path so run_terraform_creds_free can distinguish success / proxy-block
+    / genuine-fail: on success run validate + fmt (unchanged); on genuine permanent fail append to
+    `failed` and skip both (unchanged); on proxy-block print a visible skip (mirroring the
+    invoke_step/skip format, referencing the terraform-validate CI job), do NOT append to `failed`, skip
+    `terraform validate`, but STILL run `terraform fmt -check` for that root. Do NOT add the 403 to
+    _TRANSIENT_INIT_SIGNATURES. Update the adjacent docstring/comment to document the four outcomes
+    (success / proxy-skip-validate-run-fmt / genuine-fail / transient-retry). Existing callers/tests
+    that only exercise success and genuine-fail must keep passing unchanged.
   - >-
-    tests/test_validate.py -- add tests named with a `proxy` selector for the skip branch (proxy-403
-    -> skip, `failed` empty) and a `bad_pin`/`non_transient` test proving genuine errors still append
-    to `failed` after one attempt. Mock subprocess (Popen/run) per the test-isolation patterns; assert
-    on the visible-skip output and the `failed` list contents. Keep the existing transient-retry tests
-    green.
+    tests/test_validate.py -- in TestRunTerraformChecks add test_creds_free_init_skips_on_proxy_403
+    (a github.com-403 auth-checksum init failure -> visible skip, `failed` empty, fmt-check invoked for
+    that root) and test_creds_free_init_still_fails_on_non_github_403 (an S3/backend-style 403 lacking
+    the github.com/checksum context -> appended to `failed`). Mock subprocess (Popen/run) per the
+    test-isolation patterns; assert on the visible-skip output, the `failed` list contents, and (for
+    the proxy case) that the fmt-check step still ran. Keep the existing transient-retry and bad-pin
+    tests green.
   - >-
     terraform/CLAUDE.md -- rewrite the "Running terraform/personal/ on CC-web" section (lines ~21-63):
     remove the false "the agent itself runs terraform plan/apply locally" claim and the interactive
@@ -374,10 +399,12 @@ execution_steps:
     terraform/CLAUDE.md and the Decision; do not restate the rationale.
   - >-
     docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml -- edit ONLY VP step 5 and acceptance line ~96:
-    keep the grep assertion on the oidc.tf github_ci_plan grants as the local pre-deploy check; replace
-    the `terraform -chdir=terraform/personal init -backend=false && terraform validate` command with a
-    reference to the green required terraform-validate CI check-run on that plan's PR as the validate
-    evidence. Re-run scripts.plan_document on it to confirm it stays schema-valid.
+    keep the grep assertion on the oidc.tf github_ci_plan grants as the VP step's executable `command`
+    (the schema requires a non-empty command -- do NOT leave the step prose-only), and move the
+    `terraform validate` assertion into the step's `expected`/`action` as CI-delegated evidence (the
+    green required terraform-validate check-run on that plan's PR), dropping the local
+    `terraform -chdir=terraform/personal init -backend=false && terraform validate` invocation. Re-run
+    scripts.plan_document on it to confirm it stays schema-valid.
   - >-
     File the Decision and the two follow-up recs via the ops portal at execution time (behind the
     /implement execution-time confirmation gate): the Decision via
