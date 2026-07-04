@@ -5832,7 +5832,8 @@ tier_items:
         text: >-
           START GATE: rec-2113 pg_restore drill passes against production-shaped data before the first table
           migrates
-        status: open
+        status: met
+        met_by: t2-26-restore-drill-gate-orphan-dq
       - id: c2
         text: >-
           All remaining ops tables transit the closed boundary (or are retired per T-1.9); no backend flag
@@ -5889,6 +5890,17 @@ tier_items:
         never rebuilds -- so no local build ever reaches a deployed layer version (filed as
         rec-2512, Critical). rec-2113 stays open and c1 stays open pending that pipeline fix and a
         passing drill (Decision 55/103: no workaround, closure needs a passing-drill proof).
+      - 2026-07-04 (restore-drill live-invocation session, PlatformAdmin break-glass): the deploy-
+        pipeline gap (rec-2512) was resolved out-of-band -- terraform-apply-sandbox.yml was manually
+        dispatched (workflow_dispatch run 28705899533, apply-sandbox green / gated-apply skipped as
+        non-IAM-non-destructive / convergence green), rebuilding and re-attaching the pgclient layer
+        with PG16 pg_restore to ducklake_maintenance and ducklake_catalog_dr. VP step 7 live drill on
+        the ducklake_maintenance Function URL then PASSED: "CATALOG_RESTORE_DRILL OK maintenance
+        restore_drill read-your-write verified probe=drill-probe pg=16" (pg_dump -> pg_restore ->
+        probe-readback round-trip inside the Lambda). VP step 8 DQ verdict PASS for all three migrated
+        ops tables (no FAIL/HARD_GATE; tolerated empty-row WARN on ops_priority_queue). c1 -> met
+        (met_by: t2-26-restore-drill-gate-orphan-dq); rec-2113 closed on the passing-drill proof
+        (Decision 103 hard gate satisfied). Parent T2.26 stays in_progress -- c2/c3/c4/c7 remain open.
 
   - id: T2.27
     tier: T2
