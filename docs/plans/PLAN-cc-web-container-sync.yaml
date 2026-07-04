@@ -1,0 +1,218 @@
+schema_version: 1
+slug: "cc-web-container-sync"
+intent: >-
+  Keep CC-web dev and admin containers' snapshot-baked dependencies in sync with the repo's
+  declared requirements so agents stop hitting missing-dependency validation failures on stale
+  snapshots -- protecting the reliability of the primary development surface (Decision 109).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-cc-web-container-sync.yaml
+phase: >-
+  Platform tooling / CC-web dev-surface reliability. No dedicated tier_item (ad-hoc infra
+  self-heal, user-explicit). Extends the established SessionStart snapshot self-heal pattern
+  (session_start_ensure_github_mcp.sh, session_start_precommit.sh).
+scope:
+  - file: bin/sync-deps.sh
+    action: Create
+    purpose: >-
+      Single source of truth for dependency sync (mirrors bin/ensure-github-mcp-server.sh).
+      Fingerprints requirements.txt + requirements-dev.txt against .venv/.requirements-fingerprint;
+      reinstalls via uv (pip fallback) only on drift; when INSTALL_TERRAFORM=1 also heals terraform
+      binary drift vs config/terraform-version. Non-fatal; --check reports drift without installing.
+  - file: .claude/hooks/session_start_sync_deps.sh
+    action: Create
+    purpose: >-
+      Thin non-fatal SessionStart wrapper that invokes bin/sync-deps.sh every session, mirroring
+      .claude/hooks/session_start_ensure_github_mcp.sh.
+  - file: .claude/settings.json
+    action: Modify
+    purpose: >-
+      Register the new hook in the SessionStart array, ordered before session_start_precommit.sh
+      (which depends on .venv/bin/pre-commit from requirements-dev.txt).
+  - file: bin/setup-cloud-env.sh
+    action: Modify
+    purpose: >-
+      Delegate the requirements install (step 4) and terraform binary install (step 6) to
+      bin/sync-deps.sh so snapshot build and per-session self-heal share one code path, and the
+      build-time fingerprint is established (fresh snapshots boot in-sync). Update the
+      "Responsibility split" header comment to list the new hook. Provider-mirror step 6b unchanged.
+  - file: tests/test_sync_deps.py
+    action: Create
+    purpose: >-
+      V2 unit tests exercising fingerprint drift-detection (true/false), fingerprint write on sync,
+      terraform version-compare via a stub terraform on PATH, and a real end-to-end python
+      install+idempotency in a throwaway venv.
+bundled_recommendations:
+  - rec-2323
+  - rec-2470
+  - rec-2498
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A CC-web session whose snapshot venv is missing a declared dependency (e.g. litellm from
+    requirements-dev.txt) has it installed automatically by the SessionStart hook, with no manual
+    step -- verified live in this stale session where `import litellm` currently fails.
+  - >-
+    bin/sync-deps.sh is the single dependency-sync code path: it detects drift via a fingerprint of
+    requirements.txt + requirements-dev.txt, reinstalls only on drift, and is invoked by BOTH
+    bin/setup-cloud-env.sh and .claude/hooks/session_start_sync_deps.sh.
+  - >-
+    On the admin container (INSTALL_TERRAFORM=1) sync-deps.sh detects and heals terraform binary
+    drift against config/terraform-version; on the dev container (unset) the terraform block is a
+    no-op.
+  - >-
+    The hook and script are non-fatal: a failed sync (e.g. network) warns and does not abort the
+    session, and does not update the fingerprint (so it retries next session).
+  - >-
+    Root cause of rec-2323/rec-2470/rec-2498 resolved: after the hook runs in a stale session,
+    `import litellm` succeeds and tests/test_smoke_test_inference_credentials.py collects without
+    ModuleNotFoundError. Portal closure fires via the Resolves: trailer on merge.
+  - >-
+    The common in-sync path is a cheap no-op: a fingerprint match performs no reinstall and exits
+    fast (hash compare only).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Bash syntax check both new scripts.
+    command: bash -n bin/sync-deps.sh && bash -n .claude/hooks/session_start_sync_deps.sh && echo SYNTAX_OK
+    expected: Prints SYNTAX_OK with exit 0; no bash parse errors.
+    fix_if: A parse error prints a file:line -- fix the offending shell construct.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm settings.json is valid JSON and the hook is registered in SessionStart before precommit.
+    command: >-
+      bin/venv-python -c "import json; h=json.load(open('.claude/settings.json'))['hooks']['SessionStart'];
+      cmds=[c['command'] for g in h for c in g['hooks']];
+      i=[n for n,c in enumerate(cmds) if 'sync_deps' in c]; j=[n for n,c in enumerate(cmds) if 'precommit' in c];
+      assert i, 'sync_deps hook not registered'; assert not j or i[0] < j[0], 'sync_deps must precede precommit';
+      print('HOOK_REGISTERED_ORDERED')"
+    expected: Prints HOOK_REGISTERED_ORDERED.
+    fix_if: KeyError/AssertionError -- fix the SessionStart array entry or its ordering.
+  - step: 3
+    phase: pre-deploy
+    action: Run the unit tests (drift-detection true/false, fingerprint write, terraform stub version-compare, throwaway-venv real install idempotency).
+    command: bin/venv-python -m pytest tests/test_sync_deps.py -v
+    expected: All tests pass; the throwaway-venv test shows a second sync run is a no-op (idempotent).
+    fix_if: A failing assertion names the broken branch -- fix drift detection, fingerprint write, terraform compare, or install path.
+  - step: 4
+    phase: pre-deploy
+    action: --check mode reports drift in this stale session (no fingerprint present) without installing.
+    command: bin/sync-deps.sh --check; echo "exit=$?"
+    expected: Reports drift (missing fingerprint) and exit=1; no packages installed by --check.
+    fix_if: exit=0 in a session with no .venv/.requirements-fingerprint means drift detection is wrong; if it installed anything, --check is not read-only.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      End-to-end self-heal proof and bundled-rec root-cause fix -- run the real sync in this stale
+      session (litellm currently missing) and confirm the declared dep is installed.
+    command: bash bin/sync-deps.sh && bin/venv-python -c "import litellm; print('litellm', litellm.__version__)"
+    expected: sync-deps reports a drift reinstall; `import litellm` then succeeds and prints a version.
+    fix_if: >-
+      Import still fails -- the install command/flags are wrong (check uv --python target and pip
+      fallback) or PyPI is unreachable via the proxy (network, not logic).
+  - step: 6
+    phase: post-deploy
+    action: Confirm the bundled recs' failure mode is gone -- the previously-uncollectable test now collects.
+    command: bin/venv-python -m pytest tests/test_smoke_test_inference_credentials.py --collect-only -q
+    expected: Collection succeeds with no ModuleNotFoundError (resolves rec-2323/rec-2470/rec-2498 root cause).
+    fix_if: Still ModuleNotFoundError -- step 5 did not actually install requirements-dev.txt into the resolved .venv.
+  - step: 7
+    phase: post-deploy
+    action: Idempotency -- a second sync in the now-synced session is a no-op.
+    command: bin/sync-deps.sh --check; echo "exit=$?"
+    expected: Reports in-sync and exit=0 (fingerprint now matches after step 5).
+    fix_if: Still reports drift after a successful sync -- the fingerprint was not written or is computed inconsistently between write and check.
+  - step: 8
+    phase: post-deploy
+    action: Fast-tier gate still passes with the new test file picked up.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Passes (pytest --picked includes tests/test_sync_deps.py); no new ruff/mypy failures introduced.
+    fix_if: A new failure attributable to this branch -- fix it; pre-existing unrelated failures (e.g. the ci-rca workflow-count test being fixed in PLAN-ci-rca-workflow-count-drift) are not in scope.
+constraints:
+  - Only modify the five files listed in Scope.
+  - No rescue agents or workaround loops (Decision 55). This IS the RCA-first forward-fix for rec-2323/2470/2498.
+  - sync-deps.sh and the hook must be NON-FATAL on any failure (mirror session_start_ensure_github_mcp.sh); never abort a session; on failure do not update the fingerprint so the next session retries.
+  - Any Python invoked from sync-deps.sh must honor the bin/venv-python OS-aware .venv resolution (CD.2 / Decision 109); the fingerprint path .venv/.requirements-fingerprint must agree with .venv/bin/python (Linux CC-web).
+  - Fingerprint covers exactly requirements.txt + requirements-dev.txt (the set setup-cloud-env installs); NOT requirements-fast.txt (CI-only subset) or pyproject/setup.py (package not pip-installed here).
+  - Bash syntax only; no emojis; ASCII hyphens only (no em dashes).
+  - Preserve setup-cloud-env.sh's background AWS-CLI parallelism and idempotency; keep provider-mirror step 6b unchanged. If full delegation of steps 4/6 proves risky, the minimum acceptable change is to call bin/sync-deps.sh after the existing installs so the build-time fingerprint is written.
+  - Terraform coverage is binary-version self-heal only -- no terraform apply/plan/validate, no .tf changes.
+  - "CI is out of scope -- it installs requirements fresh each run and already has litellm (per human)."
+context:
+  - >-
+    Decision-scout verdict + CITE list: NO_FLAGS (80 of 80 triaged). CITE: Decision 48 (verification
+    tier classification), Decision 109 (CC-web dev surface; ratifies CD.2). RELATED: Decision 68
+    (retired EC2 warm-runner "hash-gate the venv against requirements.txt on every job pickup to
+    prevent stale-dependency false-greens" -- the exact mechanism this plan generalises to CC-web
+    sessions), Decision 55 (sanctioned deterministic recovery), Decision 60 (two-tier validation
+    dependency-health), Decision 99 (single machine-readable version SSOT pattern), Decision 120/119
+    (terraform admin-container-only), Decision 76 (.claude canonical interactive layer), Decision 27
+    (bash-primary convention; honor bin/venv-python for any Python call).
+  - "gates: decision-scout=NO_FLAGS; plan-critique=pending"
+  - >-
+    ci-rca HARD BLOCK deferred (human-confirmed 2026-07-04): the 5 open ci-rca recs
+    (rec-2524/2525/2526/2528/2529) are duplicate filings of ONE issue --
+    tests/test_ci_rca_taxonomy.py::test_real_workflows_dir asserts len==13 while .github/workflows/
+    has 14. An agent is currently implementing the merged plan
+    docs/plans/PLAN-ci-rca-workflow-count-drift.yaml (#445) that fixes it. This plan touches no
+    .github/workflows/ file and cannot affect that test (fails all three Related-Work conditions).
+    Main is 0 behind at planning time; no rebase needed.
+  - >-
+    Root-cause diagnosis: this planning session is itself a live instance of the bug -- `import
+    litellm` fails here though litellm is declared in requirements-dev.txt (added 2026-07-04). The
+    snapshot venv predates the declaration. The fix propagates declarations to stale snapshots; it
+    does NOT change dependency declarations.
+  - >-
+    Architecture: CC-web containers boot from a snapshot (setup-cloud-env.sh bakes .venv) but clone
+    the repo fresh each session, so requirements*.txt can be newer than the baked venv. SessionStart
+    hooks already self-heal specific snapshot drift (github-mcp binary, pre-commit git-hook wiring);
+    this adds the missing dependency self-healer.
+  - >-
+    Recommendation Relevance Gate -- rec-2323/2470/2498 all returned `unknown` (proceed); live
+    evidence (litellm unimportable here) confirms they are unresolved and root-caused by snapshot
+    staleness.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/cc-web-container-sync-bb2arz)
+  - docs/PROJECT_CONTEXT.md read
+  - Relevant decisions reviewed via decision-scout (48, 109, 68, 55, 60, 99, 120/119, 76, 27)
+  - All files in scope located and readable (existing hooks/setup-cloud-env.sh read as templates)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create bin/sync-deps.sh: idempotent, non-fatal SoT. Compute sha256 fingerprint of
+    requirements.txt + requirements-dev.txt; compare to .venv/.requirements-fingerprint. On mismatch
+    or missing fingerprint (or missing .venv -- create with python3.12 defensively), export
+    PATH="$HOME/.local/bin:$PATH" and reinstall both files via `uv pip install --python
+    .venv/bin/python` (fallback: `.venv/bin/python -m pip install`), then write the fingerprint.
+    When INSTALL_TERRAFORM=1, compare `terraform version` first line to v$(cat config/terraform-version)
+    and reinstall the binary (reuse setup-cloud-env step 6 logic) on drift. Support `--check` (report
+    drift status, exit 1 on drift / 0 in-sync, install nothing). On any install failure: warn, do NOT
+    write the fingerprint, exit 0 (non-fatal).
+  - >-
+    Create .claude/hooks/session_start_sync_deps.sh: thin wrapper that resolves REPO_ROOT, cd's in,
+    and runs `bash bin/sync-deps.sh` (non-fatal; mirror session_start_ensure_github_mcp.sh's
+    self-heal comment and error handling).
+  - >-
+    Modify .claude/settings.json: add {"type":"command","command":"bash
+    .claude/hooks/session_start_sync_deps.sh"} to the SessionStart hooks array, positioned before the
+    precommit entry (recommended: first, so the venv is correct before any venv-dependent hook).
+  - >-
+    Modify bin/setup-cloud-env.sh: replace the inline requirements install (step 4) and terraform
+    binary install (step 6) with a single `bash bin/sync-deps.sh` call that installs requirements
+    always + terraform when INSTALL_TERRAFORM=1 + writes the fingerprint; preserve the background
+    AWS-CLI parallelism (steps 3/5) and provider-mirror step 6b. Add the new hook to the
+    "Responsibility split" header comment. (Minimum fallback if delegation is risky: keep steps 4/6
+    and append a `bash bin/sync-deps.sh` call to establish the fingerprint.)
+  - >-
+    Create tests/test_sync_deps.py: fixtures for in-sync vs drifted fingerprint (assert --check exit
+    codes / drift decision); assert the fingerprint file is written after a sync; a stub `terraform`
+    on PATH emitting a mismatched version proves the terraform drift decision without a real install;
+    a throwaway-venv test that installs a minimal requirement, mutates it, re-syncs, and asserts the
+    second sync is a no-op (real install path + idempotency).
+  - Execute Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55).
+  - "Report: what was implemented, verification results, and confirmation litellm imports post-sync in this session."
+work_areas: []
+rollback: >-
+  Revert the branch commit and remove the SessionStart hook entry from .claude/settings.json. The
+  hook is additive and non-fatal, so removal fully restores prior behavior. .venv/.requirements-fingerprint
+  lives outside git and is harmless if left behind.
