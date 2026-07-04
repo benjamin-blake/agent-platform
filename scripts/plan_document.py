@@ -10,7 +10,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
+_SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2})
+_V2_PHASE_ENUM: frozenset[str] = frozenset({"pre-deploy", "post-deploy"})
 
 PlanType = Literal["IMPLEMENTATION", "STRATEGIC", "REPORT-ONLY"]
 VerificationTier = Literal["V1", "V2", "V3"]
@@ -35,6 +36,7 @@ class VerificationStep(BaseModel):
     command: str
     expected: str = Field(min_length=1)
     fix_if: str = Field(min_length=1)
+    hermetic: bool = False
 
     @field_validator("command")
     @classmethod
@@ -75,6 +77,7 @@ class PlanDocument(BaseModel):
     execution_steps: list[str] = Field(default_factory=list)
     work_areas: list[WorkArea] = Field(default_factory=list)
     rollback: str | None = None
+    tier_waiver: str | None = None
 
     @field_validator("schema_version")
     @classmethod
@@ -101,6 +104,13 @@ class PlanDocument(BaseModel):
 
         if self.plan_type == "IMPLEMENTATION" and not self.execution_steps:
             raise ValueError("IMPLEMENTATION plans require non-empty execution_steps")
+
+        if self.schema_version == 2:
+            bad_phases = sorted({vp.phase for vp in self.verification_plan if vp.phase not in _V2_PHASE_ENUM})
+            if bad_phases:
+                raise ValueError(
+                    f"schema_version 2 verification_plan[].phase must be one of {sorted(_V2_PHASE_ENUM)}, got: {bad_phases}"
+                )
         return self
 
 

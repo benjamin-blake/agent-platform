@@ -21,8 +21,19 @@ def _base() -> dict:
         return yaml.safe_load(fh)
 
 
+def _base_v2() -> dict:
+    with (FIXTURES / "valid_v2.yaml").open(encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
 def _mutate(**overrides) -> dict:
     d = copy.deepcopy(_base())
+    d.update(overrides)
+    return d
+
+
+def _mutate_v2(**overrides) -> dict:
+    d = copy.deepcopy(_base_v2())
     d.update(overrides)
     return d
 
@@ -203,3 +214,48 @@ class TestClosesCriteria:
         d = _mutate(closes_criteria=["T0.4:c1"], some_bad="x")
         with pytest.raises(ValidationError):
             PlanDocument.model_validate(d)
+
+
+class TestSchemaVersion2:
+    """T3.17 (VF-04/VF-13): schema_version-2 phase enum, hermetic default, tier_waiver."""
+
+    def test_v2_valid_document_validates(self) -> None:
+        doc = PlanDocument.model_validate(_base_v2())
+        assert doc.schema_version == 2
+        assert doc.verification_plan[0].phase == "pre-deploy"
+        assert doc.verification_plan[1].phase == "post-deploy"
+
+    def test_v2_phase_pre_merge_rejected(self) -> None:
+        d = _base_v2()
+        d["verification_plan"][0]["phase"] = "pre-merge"
+        with pytest.raises(ValidationError, match="schema_version 2 verification_plan"):
+            PlanDocument.model_validate(d)
+
+    def test_v1_free_text_phase_still_accepted(self) -> None:
+        d = _mutate()
+        d["verification_plan"][0]["phase"] = "pre-merge"
+        doc = PlanDocument.model_validate(d)
+        assert doc.verification_plan[0].phase == "pre-merge"
+
+    def test_hermetic_defaults_false(self) -> None:
+        d = _base_v2()
+        d["verification_plan"][1]["hermetic"] = False
+        doc = PlanDocument.model_validate(d)
+        assert doc.verification_plan[1].hermetic is False
+
+    def test_hermetic_true_accepted(self) -> None:
+        doc = PlanDocument.model_validate(_base_v2())
+        assert doc.verification_plan[0].hermetic is True
+
+    def test_tier_waiver_optional_defaults_none(self) -> None:
+        doc = PlanDocument.model_validate(_base_v2())
+        assert doc.tier_waiver is None
+
+    def test_tier_waiver_accepted_as_string(self) -> None:
+        d = _mutate_v2(tier_waiver="conscious V2: comment-only .tf change")
+        doc = PlanDocument.model_validate(d)
+        assert doc.tier_waiver == "conscious V2: comment-only .tf change"
+
+    def test_v2_unsupported_version_still_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="Unsupported schema_version"):
+            PlanDocument.model_validate(_mutate_v2(schema_version=3))
