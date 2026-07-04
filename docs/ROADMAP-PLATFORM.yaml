@@ -5848,10 +5848,12 @@ tier_items:
         status: open
       - id: c5
         text: scripts/sync_athena_to_pgvector.py deleted; rg returns no references
-        status: open
+        status: met
+        met_by: t2-26-restore-drill-gate-orphan-dq
       - id: c6
         text: DQ checks for migrated tables run against the DuckLake backend and pass
-        status: open
+        status: met
+        met_by: t2-26-restore-drill-gate-orphan-dq
       - id: c7
         text: >-
           Replacement closure verified per the implement skill's Replacement closure check: old paths dead or
@@ -5874,6 +5876,19 @@ tier_items:
       repoint, ops_compaction retirement + view drops (human-gated applies), DynamoDB counters destroy
       (after the reseed-rollback window closes). OpsWriter survives for telemetry until Phase 4
       (Decision 84 Phase 4 / tier_item T2.36).
+      - 2026-07-04 (PLAN-t2-26-restore-drill-gate-orphan-dq, PR #424): shipped c5 (deleted the
+        sync_athena_to_pgvector.py orphan, audit F-037; zero live references confirmed) and c6
+        (truth-patched config/agent/data_quality/ops.yaml -- removed retired dual-backend storage-
+        selector language, corrected the clause8 comment to record that ops_decisions/
+        ops_priority_queue already read via DuckLake with clause8 extension deferred to T1.6/
+        Decision 62; clause8_checks.tables unchanged). c1 (rec-2113 START GATE) did NOT close this
+        round: the fail-closed pg_restore guard landed in build_pgclient_layer and a rebuilt layer
+        with pg_restore was confirmed locally, but the live restore drill still failed post-deploy
+        (FileNotFoundError /opt/bin/pg_restore) because terraform/personal/ducklake_catalog_dr.tf's
+        source_code_hash reads a local, gitignored lambda-packages/ zip that terraform-apply-sandbox
+        never rebuilds -- so no local build ever reaches a deployed layer version (filed as
+        rec-2512, Critical). rec-2113 stays open and c1 stays open pending that pipeline fix and a
+        passing drill (Decision 55/103: no workaround, closure needs a passing-drill proof).
 
   - id: T2.27
     tier: T2
