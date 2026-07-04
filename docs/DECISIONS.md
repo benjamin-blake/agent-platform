@@ -2,6 +2,39 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 119: CC-web session-class constraint -- third-party terraform provider init is github.com-egress-blocked; validate/plan for such roots is CI-delegated (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-04
+**Warehouse ID:** dec-119 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+In CC-web the outbound proxy scopes github.com to repo-scoped API calls, so `terraform init` of any
+root using a third-party (github.com-hosted) provider (e.g. `kislerdm/neon` in `terraform/personal`)
+permanently 403s fetching the provider's authentication checksums; HashiCorp providers
+(releases.hashicorp.com) init fine. Therefore `terraform validate`/`plan` for third-party-provider
+roots is CI-delegated verification, authoritatively enforced by the required terraform-validate job
+(Decision 83) and the speculative-plan pipeline (Decision 77 / Decision 92). The local presubmit
+degrades gracefully: `run_terraform_creds_free` emits a visible skip both when terraform is absent
+AND when init hits the permanent proxy-403 (the prior green was incidental on terraform's absence,
+since terraform is not installed by default in CC-web). Plan authors write local terraform VP steps
+as grep-only (`terraform fmt -check` only when terraform is present); never a local terraform
+validate/init/plan for third-party-provider roots.
+
+**Reversal conditions:** if the CC-web session class later permits github.com provider-asset egress,
+or an S3-backed `provider_installation` `filesystem_mirror` is adopted (deferred follow-up
+recommendation), local init/validate becomes possible again and this delegation may relax.
+
+**Related:** Decision 73 (two-tier presubmit -- local validate.py is advisory outside CI; PR CI is
+authoritative), Decision 83 (the required terraform-validate CI job), Decision 92 / Decision 77 (the
+speculative-plan + apply-the-saved-plan pipeline), Decision 86 (rationale lives in a numbered
+Decision; terraform/CLAUDE.md and the planning SKILL carry enforcement/guidance only), Decision 104
+(validate.py check registry -- terraform gate logic stays in scripts/checks/_scaffolding.py), Decision
+55 (RCA-first / loud failure -- the proxy-skip predicate is a narrow co-occurrence check, never a
+bare "403" substring, so it cannot mask a genuine non-github failure).
+
+---
+
 ## Decision 118: Ratify CD.25 -- pre-codegen contract ratification ritual (scoped, necessary not sufficient) (Decided)
 
 **Status:** Decided

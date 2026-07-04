@@ -19,8 +19,17 @@ Some rules below restate root rules for proximity. Root `CLAUDE.md` is authorita
 - The personal account has no SCP restricting IAM users or external OIDC (Decisions 36/37 do not apply to this account). OIDC provider + CI roles are created in `terraform/personal/oidc.tf`.
 
 ## Running terraform/personal/ on CC-web (no local machine; vars come from remote state)
-**This project runs ONLY on Claude Code on the web. There is no operator local machine.** The agent
-itself runs `terraform plan`/`apply` for `terraform/personal/` inside the CC-web container.
+**This project runs ONLY on Claude Code on the web. There is no operator local machine.**
+
+**Third-party-provider init is github.com-egress-blocked (Decision 119):** the CC-web outbound proxy
+scopes github.com to repo-scoped API calls, so a stock CC-web session CANNOT `terraform init`
+`terraform/personal` -- the `kislerdm/neon` provider's authentication-checksum fetch permanently 403s
+on github.com. `hashicorp/*` providers (releases.hashicorp.com) init fine. Because of this,
+`terraform validate`/`plan`/`apply` for `terraform/personal` are CI-mediated, not run locally by the
+agent: `validate` via the required `terraform-validate` job (Decision 83); `plan`/`apply` via the
+speculative-plan + apply-the-saved-plan pipeline described below (Decision 77 / Decision 92). See
+Decision 119 for the full rationale and reversal conditions (an S3-backed provider
+`filesystem_mirror` would restore local init/validate; tracked as a follow-up recommendation).
 
 `terraform/personal/terraform.personal.tfvars` is **gitignored** (`.gitignore`:
 `terraform/**/terraform.personal.tfvars`), so it is NOT in the fresh clone and there is no standalone
@@ -58,9 +67,13 @@ pending window, and applies must serialise on shared tfstate regardless. Expecte
 gated frequency). If an approval is abandoned, reject it in the GitHub Actions UI to release the queue.
 
 **Interactive loop fallback:** if you want to apply any change by hand (e.g. during bootstrap or to
-reverse a manual admin change), the CC-web agent still supports the iterative loop: `terraform plan` ->
+reverse a manual admin change), the CC-web agent supports the iterative loop: `terraform plan` ->
 PRESENT -> human accepts -> agent runs `terraform apply`. Do not apply without presenting the plan and
-getting acceptance first (Decision 77).
+getting acceptance first (Decision 77). **This loop requires local `terraform init` to have succeeded**,
+so per Decision 119 above it is NOT available for `terraform/personal` on a stock CC-web session (the
+third-party provider's github.com checksum fetch 403s) -- for that root, use the CI-mediated
+speculative-plan + apply-the-saved-plan pipeline instead. The loop remains valid for roots using only
+`hashicorp/*` providers (`terraform/`, `terraform/github`, `terraform/bootstrap`), which init fine.
 
 **Apply posture (record-backed sandbox CD, CD.35 / T2.20 Wave 1):** sandbox CD auto-apply
 (`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching `terraform/personal/**` auto-applies

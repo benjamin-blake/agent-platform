@@ -829,6 +829,66 @@ class TestRunTerraformChecks:
         assert len(failed) == 1
         assert "Terraform init" in failed[0]
 
+    def test_creds_free_init_skips_on_proxy_403(self, capsys: pytest.CaptureFixture) -> None:
+        """A github.com-403 auth-checksum init failure is a visible skip, not a failure, and fmt still runs."""
+        calls: list[list] = []
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            result = MagicMock()
+            if "init" in cmd:
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = (
+                    "Error: Failed to install provider\n"
+                    "Error: retrieving checksums for provider: 403 Forbidden returned from github.com"
+                )
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform/personal",))
+
+        captured = capsys.readouterr()
+        assert "SKIP" in captured.out
+        assert failed == []
+        assert not any("validate" in cmd for cmd in calls)
+        assert any("fmt" in cmd for cmd in calls)
+
+    def test_creds_free_init_still_fails_on_non_github_403(self) -> None:
+        """A 403 lacking the github.com/checksum co-occurrence (e.g. an S3 backend 403) still fails."""
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            if "init" in cmd:
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = "Error: error configuring S3 Backend: 403 Forbidden: AccessDenied"
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform/personal",))
+
+        assert len(failed) == 1
+        assert "Terraform init" in failed[0]
+
     def test_transient_init_signatures_exact_set(self) -> None:
         """_TRANSIENT_INIT_SIGNATURES contains the expected tokens (parity with workflow retry loop)."""
         expected = frozenset(

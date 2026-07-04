@@ -45,6 +45,31 @@ _TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = (
 # Distinct from _TRANSIENT_INIT_SIGNATURES (terraform registry 5xx). Decision 73, Decision 92.
 _TRANSIENT_CLAUDE_SIGNATURES: tuple[str, ...] = ("500", "502", "503", "API Error: 5", "Internal server error", "overloaded")
 
+# CC-web outbound proxy scopes github.com to repo-scoped API calls, so `terraform init` of a
+# root using a third-party (github.com-hosted) provider permanently 403s fetching the
+# provider's authentication checksums. This is a PERMANENT condition, never added to
+# _TRANSIENT_INIT_SIGNATURES. Detection below requires co-occurrence of all three markers
+# (never a bare "403" substring) so a non-github 403 (e.g. an S3 backend 403) is never masked.
+_PROXY_BLOCK_FORBIDDEN_MARKERS: tuple[str, ...] = ("403", "Forbidden")
+_PROXY_BLOCK_HOST_MARKERS: tuple[str, ...] = ("github.com",)
+_PROXY_BLOCK_CHECKSUM_MARKERS: tuple[str, ...] = ("failed to retrieve", "checksum", "authentication")
+
+
+def _is_proxy_blocked_init(output: str) -> bool:
+    """True iff `output` is the CC-web permanent proxy-403 on a third-party provider fetch.
+
+    Requires co-occurrence of a 403/Forbidden marker AND a github.com marker AND an
+    auth-checksum/"failed to retrieve" marker. Never a bare "403" substring check -- an
+    any()-over-tuple here would skip on ANY 403 (e.g. an S3/backend 403) and mask a genuine
+    failure (Decision 55).
+    """
+    return (
+        any(m in output for m in _PROXY_BLOCK_FORBIDDEN_MARKERS)
+        and any(m in output for m in _PROXY_BLOCK_HOST_MARKERS)
+        and any(m in output for m in _PROXY_BLOCK_CHECKSUM_MARKERS)
+    )
+
+
 # Both terraform roots are standalone (own provider + required_providers). terraform/ is
 # retained per CD.21 but no longer applied; terraform/personal/ is the applied root.
 # terraform/github/ is the isolated GitHub-settings module (human-gated local apply only -- T2.12).
@@ -194,12 +219,18 @@ def _build_unit_test_cmd() -> list[str]:
     ]
 
 
-def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) -> bool:
+def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) -> str:
     """Run a terraform init command with bounded retry on transient registry 5xx.
 
-    Returns True if init succeeded (never appends to failed), False if permanently failed
-    (label is appended to failed). Matches invoke_step output format for the step header.
-    Transient signatures: _TRANSIENT_INIT_SIGNATURES (parity with the workflow retry loop).
+    Returns one of four outcomes:
+    - "success": init succeeded; caller runs validate + fmt (never appends to failed).
+    - "proxy_blocked": permanent CC-web proxy-403 on a third-party provider's checksum fetch
+      (_is_proxy_blocked_init); caller must skip validate (deferred to the terraform-validate
+      CI job) but STILL run fmt-check (never appends to failed -- this is not a failure).
+    - "failed": genuine permanent failure; label is appended to failed, caller skips both.
+    - transient 5xx (_TRANSIENT_INIT_SIGNATURES): retried up to max_attempts before falling
+      through to "failed"; parity with the workflow retry loop.
+    Matches invoke_step output format for the step header.
     """
     print(f"\n=== {label} ===")
     max_attempts = 3
@@ -207,8 +238,17 @@ def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) ->
         result = _common.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT)
         if result.returncode == 0:
             print(result.stdout, end="")
-            return True
+            return "success"
         combined = result.stdout + result.stderr
+        if _is_proxy_blocked_init(combined):
+            print(combined, end="")
+            print(
+                f"SKIP: {label} -- CC-web outbound proxy blocks the third-party provider's "
+                "github.com checksum fetch (permanent, not retried). `terraform validate` for "
+                "this root is deferred to the required terraform-validate CI job; `terraform "
+                "fmt -check` still runs locally (no provider install needed)."
+            )
+            return "proxy_blocked"
         is_transient = any(sig in combined for sig in _TRANSIENT_INIT_SIGNATURES)
         if is_transient and attempt < max_attempts:
             delay = 2**attempt
@@ -218,8 +258,8 @@ def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) ->
             continue
         print(combined, end="")
         failed.append(label)
-        return False
-    return False  # pragma: no cover -- unreachable: loop body always returns on the final attempt
+        return "failed"
+    return "failed"  # pragma: no cover -- unreachable: loop body always returns on the final attempt
 
 
 def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAFORM_ROOTS) -> None:
@@ -237,13 +277,15 @@ def run_terraform_creds_free(failed: list[str], roots: tuple[str, ...] = _TERRAF
         return
     for root in roots:
         chdir = f"-chdir={root}"
-        if not _terraform_init_with_retry(
+        outcome = _terraform_init_with_retry(
             f"Terraform init [{root}]",
             ["terraform", chdir, "init", "-backend=false", "-input=false", "-no-color"],
             failed,
-        ):
+        )
+        if outcome == "failed":
             continue
-        _common.invoke_step(f"Terraform validate [{root}]", ["terraform", chdir, "validate", "-no-color"], failed)
+        if outcome == "success":
+            _common.invoke_step(f"Terraform validate [{root}]", ["terraform", chdir, "validate", "-no-color"], failed)
         _common.invoke_step(f"Terraform fmt check [{root}]", ["terraform", chdir, "fmt", "-check", "-no-color"], failed)
 
 
