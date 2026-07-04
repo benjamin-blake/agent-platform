@@ -1,0 +1,251 @@
+schema_version: 2
+slug: "audit-wave-6-vp-replay"
+intent: >-
+  Add a registered fast-tier CI check (validate_vp_replay) that independently re-executes the
+  hermetic pre-deploy Verification-Plan steps of any PLAN-*.yaml in a PR's diff, so the per-change
+  VP verdict is produced by CI rather than self-reported by the implementing agent for the hermetic
+  subset -- closing audit VF-01 (the highest-leverage change) and hardening the exit-criteria ledger.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-audit-wave-6-vp-replay.yaml
+phase: >-
+  Platform tier_item T3.15 (Interactive VP independent re-execution + durable evidence persistence),
+  criterion c2. Audit remediation wave 6 of 6 from audits/verification-system-review-f80508b.yaml
+  (finding VF-01 item b). depends_on T3.17 (phase-enum + hermetic marker schema), merged as PR #443.
+scope:
+  - file: scripts/checks/verification/validate_vp_replay.py
+    action: Create
+    purpose: >-
+      New registered check. Diffs vs origin/main for added/modified docs/plans/PLAN-*.yaml, loads each
+      via scripts.plan_document.load(), re-executes steps where phase==pre-deploy AND hermetic==True,
+      compares outcome to expected (exit-code + opt-in backtick-substring matching rule), records
+      divergences in failed[], and lists non-hermetic/post-deploy steps as EXCLUDED-but-listed.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register validate_vp_replay in pre_sequence() at the tail (just before coverage_report /
+      budget_assertion) so it runs in the fast (--pre) PR-gate tier within the 5-min budget.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Facade re-export of validate_vp_replay so both getattr(validate, name) and
+      `from scripts.validate import validate_vp_replay` resolve (Decision 104 facade contract).
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Small VP-guidance addition: author pre-deploy steps hermetic where possible and mark them
+      hermetic: true so CI replays them; note the replay is the independent re-execution of the
+      per-change proof (closes the cooperative self-evaluation gap named in VF-01 / INTENT doc).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Unit tests for validate_vp_replay (colocated here per the Decision 104 coverage mapping,
+      scripts/checks/**/*.py -> tests/test_validate.py; full-tier enforces 100% line coverage of
+      the new module). Fixture plans prove red-on-divergence, excluded-but-listed, and no-op cases.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: Update the FROZEN_PRE_SEQUENCE oracle to include the new validate_vp_replay entry.
+bundled_recommendations: []
+closes_criteria:
+  - "T3.15:c2"
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    validate_vp_replay is registered (owner=platform), wired into registry.pre_sequence(),
+    re-exported via the scripts/validate.py facade, and the FROZEN_PRE_SEQUENCE oracle in
+    tests/test_checks_registry.py is updated to match (both facade resolution paths pass).
+  - >-
+    On a diff containing a docs/plans/PLAN-*.yaml, the check loads it and re-executes each step
+    where phase==pre-deploy AND hermetic==True, applying the documented matching rule: exit-code
+    semantics always (returncode must be 0; non-zero or timeout is a divergence) plus opt-in
+    backtick-delimited substring literals from the expected field required in captured output.
+  - >-
+    A hermetic pre-deploy step whose command fails on the tree (non-zero exit or timeout) appends
+    to failed[] with the step id and actual-vs-expected detail, reddening validate.
+  - >-
+    A hermetic pre-deploy step whose captured output is missing a backtick literal declared in its
+    expected field reddens validate with the step id and the missing literal.
+  - >-
+    Steps that are not (pre-deploy AND hermetic) are printed as EXCLUDED with an explicit reason
+    (post-deploy or not-hermetic) and never silently skipped; a diff with no PLAN-*.yaml is a no-op PASS.
+  - >-
+    The check performs no network and no AWS calls and is bounded by a per-step timeout plus an
+    aggregate wall-clock/step-count cap, so it is safe in the creds-free pr-validate job and cannot
+    blow the 5-minute fast-tier budget.
+  - >-
+    .claude/skills/planning/SKILL.md instructs authors to make pre-deploy steps hermetic where
+    possible and mark hermetic: true so CI replays them, noting the replay is the independent
+    re-execution of the per-change proof (VF-01 / docs/INTENT-verification-system.md).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Validate this plan document parses against the PlanDocument schema (schema_version 2, phase
+      enum, hermetic markers). Dogfoods the check: validate_vp_replay replays this hermetic step in
+      the PR and it must exit 0 with the schema-pass literal.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-audit-wave-6-vp-replay.yaml
+    expected: >-
+      Exit 0; stdout contains `validates against PlanDocument schema`.
+    fix_if: >-
+      Non-zero exit or the literal is absent means the plan YAML is malformed or the schema rejects
+      a v2 field -- fix the plan document.
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Assert validate_vp_replay resolves via the facade both ways and is present in pre_sequence().
+      Dogfoods the check (this hermetic step is replayed in the PR) and proves the Decision 104
+      registration/facade wiring.
+    command: >-
+      bin/venv-python -c "from scripts.validate import validate_vp_replay; from scripts.checks.registry
+      import pre_sequence; assert any(s.name=='validate_vp_replay' and s.kind=='check' for s in
+      pre_sequence()), 'not in pre_sequence'; print('vp_replay wired')"
+    expected: >-
+      Exit 0; stdout contains `vp_replay wired`.
+    fix_if: >-
+      ImportError means the facade re-export is missing; AssertionError means the pre_sequence()
+      registration is missing or misplaced.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Run the full unit-test suite for the new check (red-on-failing-command, red-on-divergent-
+      expected, excluded-but-listed, no-op-on-no-plan). Marked hermetic:false deliberately -- it is
+      excluded from replay (avoids a nested pytest inside the replay) and demonstrates the
+      EXCLUDED-but-listed path when validate_vp_replay dogfoods this plan.
+    command: bin/venv-python -m pytest tests/test_validate.py -k vp_replay -q -p no:cacheprovider
+    expected: >-
+      Exit 0; all vp_replay tests pass (stdout contains "passed").
+    fix_if: A failing test indicates the matching rule, exclusion listing, or diff-gating is wrong.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Run the frozen-sequence oracle test to confirm the registry.pre_sequence() edit and the
+      FROZEN_PRE_SEQUENCE baseline are consistent (and no duplicate check names).
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q -p no:cacheprovider
+    expected: Exit 0; the frozen-baseline equivalence tests pass.
+    fix_if: >-
+      A mismatch means pre_sequence() and FROZEN_PRE_SEQUENCE disagree -- reconcile both to include
+      validate_vp_replay at the same position.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Run the full fast tier to confirm validate_vp_replay integrates end-to-end (it will replay
+      this plan's hermetic steps 1-2 and exclude-list steps 3-5) and the whole --pre gate stays
+      green within budget. Non-hermetic so replay never recurses into a full validate run.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0; the "Interactive VP replay" section reports steps 1-2 replayed PASS and lists steps
+      3-5 as EXCLUDED (not-hermetic); the budget assertion passes.
+    fix_if: >-
+      A red --pre means an integration issue (registration order, facade, budget, or a replayed
+      step diverging). Diagnose from the printed per-step verdicts; do not weaken the check to pass.
+constraints:
+  - No network and no AWS calls -- the check must run in the creds-free pr-validate job (Decision 73).
+  - >-
+    Never mark a VP step hermetic if its command transitively invokes scripts/validate.py --pre or
+    the full check sequence -- validate_vp_replay would replay it and recurse. Hermetic steps must be
+    narrow, deterministic, creds-free commands (this plan's steps 1-2 are; steps 3-5 are hermetic:false).
+  - >-
+    Bound replay cost: a per-step timeout (default ~30s) AND an aggregate wall-clock/step-count cap
+    so a pathological command cannot blow the 5-minute fast-tier budget (Decision 73 budget flag).
+  - >-
+    Matching rule is exit-code-always plus opt-in backtick-substring; document it in the module
+    docstring and mirror it in the SKILL note. Do not auto-extract quoted (non-backtick) prose
+    literals (false-positive risk).
+  - Keep validate_vp_replay.py under 500 SLOC or register a budget (Decision 102/43).
+  - Only reference docs/INTENT-verification-system.md from the SKILL; add no prose to it (Decision 86).
+  - Do not file or bundle recommendations; do not write to the ops portal (Single Portal Invariant, Decision 84).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Target: tier_item T3.15 criterion c2 (docs/ROADMAP-PLATFORM.yaml) -- "A registered check
+    (validate_vp_replay) re-executes a PR plan's hermetic pre-deploy VP steps in pr-validate; a
+    hermetic pre-deploy step that fails on the PR tree cannot go green; non-hermetic steps are
+    declared and excluded (VF-01)". c1/c3/c4 already met (PLAN-audit-remediation-wave-2-cir8a4).
+  - >-
+    depends_on T3.17 (phase-enum + hermetic marker schema hardening), merged as PR #443 -- the
+    hermetic bool + schema_version-2 phase enum are landed in scripts/plan_document.py.
+  - >-
+    Aligns exactly with the audit's architecture_recommendation.interactive mechanism (2): a new
+    registered validate_vp_replay check executing hermetic pre-deploy steps, bounded by the existing
+    5-min fast-tier budget. VF-01 is summary.highest_leverage_change.
+  - >-
+    Design decision: this plan is authored schema_version 2 and dogfoods the check -- validate_vp_replay
+    replays its own hermetic pre-deploy steps (1-2) in this PR, a live acceptance signal, and lists
+    steps 3-5 as EXCLUDED (not-hermetic), demonstrating the excluded-but-listed path.
+  - >-
+    Decision 104 coverage mapping: scripts/checks/**/*.py maps to tests/test_validate.py (except
+    registry.py/_common.py). A dedicated tests/test_vp_replay.py was rejected because the full-tier
+    per-file coverage gate would attribute the new module to test_validate.py and find 0% coverage.
+    Tests are therefore colocated in tests/test_validate.py; full tier enforces 100% line coverage of
+    the new module, so tests must cover every branch (timeout and load-error paths included).
+  - >-
+    Directory decision: the check lives in scripts/checks/verification/ (task-explicit and its semantic
+    home alongside validate_verifier_hermeticity/validate_verification_harness). The T3.15 roadmap
+    files_in_scope hint says ci_guards/; that hint is non-binding and reconciles when T3.15 fully closes.
+  - >-
+    Citation correction (decision-scout): Decision 44 is superseded by Decision 117 (capabilities.yaml
+    boundary SSOT); no recs are filed/bundled so neither strictly governs. Decision 79 confirms
+    validate.py and planning SKILLs are NOT executor-machinery, so validate_vp_replay is not a boundary file.
+  - >-
+    HARD BLOCK deferral: preflight reports 3 open ci-rca recs (rec-2524/2525/2526), all the single
+    "test_real_workflows_dir hard-codes workflow count" issue in tests/test_ci_rca_taxonomy.py --
+    unrelated to this VP-replay work (different file, different failure category). Those recs are owned
+    by the dedicated plan docs/plans/PLAN-ci-rca-workflow-count-drift.yaml; this human-requested wave-6
+    plan defers to it and does not touch tests/test_ci_rca_taxonomy.py.
+  - "Decision-scout verdict + CITE list (verbatim decision ids)"
+  - "decision-scout=FLAGS_FOUND; CITE: Decision 104, Decision 73, Decision 48, Decision 55, Decision 103"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending>"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/audit-wave-6-vp-replay-wxdj7n)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (via decision-scout gate, 80 of 80 triaged)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirmed T3.17 (hermetic + phase-enum schema) is merged on main (#443)
+execution_steps:
+  - >-
+    Create scripts/checks/verification/validate_vp_replay.py: @registry.register("validate_vp_replay",
+    owner="platform"). Signature validate_vp_replay(failed, changed_files=None, root=None). Default
+    changed_files to _common.get_changed_files(), root to _common.ROOT. Filter changed_files to
+    docs/plans/PLAN-*.yaml. For each, load via scripts.plan_document.load(); on load error, skip with a
+    printed note (validate_plan_documents owns schema validity) -- do not double-report. Partition VP
+    steps into replay set (phase==pre-deploy AND hermetic) and EXCLUDED (everything else, with reason
+    post-deploy/not-hermetic). Print the EXCLUDED list explicitly.
+  - >-
+    Execute each replay step: subprocess.run(command, shell=True, cwd=root, capture_output=True,
+    text=True, errors="replace", timeout=PER_STEP_TIMEOUT). Matching rule (document in docstring):
+    (a) exit-code -- returncode must be 0 else divergence; (b) substring -- extract backtick-delimited
+    literals from step.expected via regex and require each in stdout+stderr else divergence;
+    TimeoutExpired is a divergence. Append divergences to failed[] as
+    "vp-replay {plan}:{step.step}: <actual> != <expected>". Enforce an aggregate cap (max cumulative
+    seconds and/or max replayed steps); when hit, append a budget-guard failure and stop.
+  - >-
+    Register in scripts/checks/registry.py pre_sequence(): insert _c("validate_vp_replay") immediately
+    after _c("validate_verification_registry") (before coverage_report/budget_assertion). Add the
+    facade re-export in scripts/validate.py alongside the other verification-domain imports.
+  - >-
+    Update tests/test_checks_registry.py FROZEN_PRE_SEQUENCE: add ("check", "validate_vp_replay") at
+    the matching position; the no-duplicate-checks test must still pass.
+  - >-
+    Add VP-replay tests to tests/test_validate.py exercising validate_vp_replay via the changed_files/
+    root injection seam (no git): fixtures written to tmp_path proving (i) a hermetic pre-deploy step
+    with a failing command reddens; (ii) a hermetic step whose expected backtick literal is absent
+    reddens; (iii) a non-hermetic and a post-deploy step are excluded-but-listed (assert on printed
+    output); (iv) a diff with no PLAN-*.yaml is a no-op PASS; (v) timeout path reddens; (vi) load-error
+    path is skipped-with-note. Cover every branch to satisfy the full-tier 100% line-coverage gate.
+  - >-
+    Add the hermetic-authoring guidance to .claude/skills/planning/SKILL.md (near the VP Design
+    Rationale / template): author pre-deploy steps hermetic where possible, mark hermetic: true so CI
+    replays them via validate_vp_replay (independent re-execution of the per-change proof; VF-01 /
+    INTENT-verification-system.md), and never mark a step hermetic if it invokes validate --pre.
+  - Execute Verification Plan -- run each step; loop until pass. This is V2 (no deploy); no RCA-gated V3 stop applies.
+  - "Report: what was implemented, verification results (per-step PASS + the dogfood replay output)."
+work_areas: []
+rollback: >-
+  Revert the branch commit. The check is additive and diff-gated (no-op when no PLAN-*.yaml is in the
+  diff), so removing it restores prior behaviour with no state to unwind.
