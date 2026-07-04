@@ -1,0 +1,239 @@
+schema_version: 1
+slug: "ci-rca-back-validate"
+intent: >-
+  Build the Phase-4 back-validation CLI subcommand mandated by
+  docs/INTENT-ci-rca-methodology.md Section 6 -- the deterministic pre-flip gate the
+  CI_RCA_STRICT_MODE warn->strict cutover (T1.13 c2) explicitly depends on. It re-validates
+  every warn-period source=ci_rca rec against the current strict-mode schema and emits a
+  conformance report so the strict flip is decided on evidence, closing a feedback-loop
+  quality gap in the self-improving system.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-back-validate.yaml
+phase: >-
+  Platform tier T1, item T1.13 (CI-RCA methodology contract -- deterministic depth). Follow-on
+  ENABLER for open criterion c2 (strict-mode flip prerequisite); closes no criterion this slice.
+scope:
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Add a `--back-validate` argparse action (flat action group, mirroring --sync /
+      --selftest-read) with `--since` (default 2026-06-15 Phase-1 landing), `--refile-audit`
+      (default OFF -> report-only), and `--json` (machine-readable buckets for the VP). Wire a
+      handler named back_validate_ci_rca() (distinct from the already-shipped
+      scripts/ci_rca_back_validation.py find_preventive_regressions sensor -- do NOT reuse or
+      collide with that name). The handler reads the warm recommendation cache directly
+      (logs/.recommendations-log.jsonl; Decision 88, no DuckLake reader construction), filters
+      source=ci_rca recs by the `created_timestamp` field (NOT created_at -- that key does not
+      exist) >= --since, and sorts each rec into ONE of three buckets that mirror what strict-mode
+      file_rec() actually does:
+      (a) legacy_no_schema -- context_v2_json is absent/empty. Strict-mode file_rec ACCEPTS these
+      (scripts/ops_data_portal.py lines 944-948 only logger.warning, no raise), so they are
+      CONFORMANT/excluded from the non-conformant set. NEVER validate an empty dict for these.
+      (b) non_conformant -- context_v2_json present AND _validate_ci_rca_context_v2() returns
+      deficiencies (strict-mode file_rec RAISES here, lines 920-923); recompute per rec so a rec
+      written before a rule existed is still adjudicated against the CURRENT schema. Non-schema
+      cross-check reasons (bundle/S3/disagreement) that need network are read from the
+      already-stamped context_v2_json.warn_mode_reject marker, not recomputed offline.
+      (c) conformant -- context_v2_json present AND passes.
+      Emits a deterministic per-rec + aggregate report (bucket counts, non-conformance rate over
+      the with-context subset). With --refile-audit, files each non_conformant rec via the existing
+      file_rec() portal path as source=ci_rca_warn_period_audit, priority=Low, capped at K=20
+      recs/day, carrying the parent rec id + failing-checks list.
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      Register the new canonical_id `ci_rca_warn_period_audit` so validate_source() admits the
+      --refile-audit write path (resolves Decision 61 flag). Includes description +
+      signal_interpretation mirroring the sibling ci_rca_* entries.
+  - file: tests/test_ci_rca_back_validate.py
+    action: Create
+    purpose: >-
+      Unit-test back_validate_ci_rca(): a with-context conformant rec lands in the conformant
+      bucket (zero deficiencies); a with-context deficient rec lands in non_conformant with the
+      listed failing checks; a rec with NO context_v2_json lands in legacy_no_schema and is NEVER
+      non_conformant (the load-bearing legacy rule); the non-schema warn_mode_reject read path
+      (a rec whose stamped marker carries a bundle/S3/cross_check reason) is surfaced in
+      non_conformant even when its schema recompute passes; the --since boundary (created_timestamp)
+      filters correctly; the aggregate rate math is over the with-context subset; the K=20/day cap
+      is enforced; --refile-audit OFF (default) performs no writes (file_rec mocked);
+      validate_source('ci_rca_warn_period_audit') does not raise.
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      Amend Section 6 (grandfathered doc; Decision 86 permits amending existing INTENT, forbids
+      new prose docs) to (i) mark back-validation implemented, (ii) correct the stale
+      "PLAN-ci-rca-schema-enforcement includes a CLI subcommand back_validate" attribution to
+      "landed via PLAN-ci-rca-back-validate", and (iii) reconcile the CLI signature -- Section 6
+      currently describes a positional `back_validate --source ci_rca --since <date>` whereas the
+      shipped surface is the flat `--back-validate --since <date>` action; update the doc to the
+      shipped signature so no doc/impl drift is reintroduced.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `bin/venv-python -m scripts.ops_data_portal --back-validate --since 2026-06-15` exits 0 and
+    prints a conformance report over warn-period source=ci_rca recs (filtered on created_timestamp):
+    per-rec lines plus an aggregate block with the three bucket counts (legacy_no_schema,
+    non_conformant, conformant) and the non-conformance rate over the with-context subset.
+  - >-
+    A source=ci_rca rec with NO context_v2_json is bucketed legacy_no_schema and is NEVER counted
+    non_conformant, because strict-mode file_rec() accepts it (lines 944-948). An empty dict is
+    NEVER validated for these recs.
+  - >-
+    non_conformant contains exactly the with-context recs that either fail _validate_ci_rca_context_v2()
+    (recomputed against the CURRENT schema, not read from the pre-stamped marker) OR carry a stamped
+    warn_mode_reject non-schema (bundle/S3/cross_check) reason. At planning time this is 9
+    non-conformant among 23 with-context recs, 44 legacy_no_schema, 67 total (snapshot; the VP
+    asserts the drift-proof invariant, not the literal integers).
+  - >-
+    The handler constructs NO DuckLake reader -- it reads only the warm cache
+    logs/.recommendations-log.jsonl (Decision 88; zero new reader egress).
+  - >-
+    Default invocation (no --refile-audit) performs zero writes (report-only). With
+    --refile-audit, non_conformant recs are filed as source=ci_rca_warn_period_audit, priority=Low,
+    capped at 20/day, each carrying the parent rec id and failing-checks list.
+  - >-
+    validate_source('ci_rca_warn_period_audit') does not raise (source registered), and the new
+    registry entry parses under the existing source_registry.yaml schema / validate.py checks.
+  - >-
+    New unit tests in tests/test_ci_rca_back_validate.py all pass (including the legacy-bucket and
+    non-schema-reason cases), and the full fast tier (validate.py --pre) is green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Run the new unit test module and confirm all cases pass, including the legacy-rec bucket rule and the non-schema warn_mode_reject read path.
+    command: bin/venv-python -m pytest tests/test_ci_rca_back_validate.py -q
+    expected: All tests pass (bucket routing, legacy rule, non-schema-reason surfacing, --since boundary, aggregate math, K-cap, dry-run-no-write, validate_source admits new source).
+    fix_if: A failing test indicates the bucket logic, legacy rule, --since filter, cap, or source registration is wrong.
+  - step: 2
+    phase: pre-deploy
+    action: Run back_validate in report-only JSON mode against the real warm cache and assert the drift-proof invariant -- NO legacy rec (context_v2_json absent) is ever in the non_conformant bucket, the legacy bucket is non-empty, and every non_conformant rec has context. This fails a naive "validate {} -> flag all 44 legacy recs" implementation.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --back-validate --since 2026-06-15 --json | bin/venv-python -c "import sys,json; d=json.load(sys.stdin); nc=d['non_conformant']; leg=d['legacy_no_schema']; assert len(leg)>0, 'legacy bucket empty'; assert all(r.get('has_context_v2') for r in nc), 'a legacy rec was wrongly flagged non_conformant'; assert all(not r.get('has_context_v2') for r in leg), 'a with-context rec leaked into legacy bucket'; print('INVARIANT_OK non_conformant=%d legacy=%d' % (len(nc), len(leg)))"
+    expected: Prints INVARIANT_OK with non_conformant far smaller than legacy (planning snapshot non_conformant=9 legacy=44); no assertion fires.
+    fix_if: An assertion fires -- the legacy rule is inverted (validating {} floods legacy recs into non_conformant) or the bucket routing is wrong.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the default (no --refile-audit) invocation writes nothing -- assert the recommendation cache line count is unchanged across a report-only run.
+    command: >-
+      bash -c 'b=$(wc -l < logs/.recommendations-log.jsonl); bin/venv-python -m scripts.ops_data_portal --back-validate --since 2026-06-15 >/dev/null; a=$(wc -l < logs/.recommendations-log.jsonl); test "$b" = "$a" && echo REPORT_ONLY_NO_WRITE'
+    expected: Prints REPORT_ONLY_NO_WRITE (cache unchanged; report-only default performed no writes).
+    fix_if: A changed line count means the default path is writing recs -- the dry-run default is not being honoured.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm validate_source admits the newly registered source.
+    command: bin/venv-python -c "from scripts.executor.rec_write_guidance import validate_source; validate_source('ci_rca_warn_period_audit'); print('SOURCE_OK')"
+    expected: Prints SOURCE_OK with no exception.
+    fix_if: A ValueError means the source_registry.yaml entry is missing or malformed.
+  - step: 5
+    phase: pre-deploy
+    action: Run the full fast presubmit tier to confirm no regression (ruff, mypy, pytest selection, schema checks, INTENT amend passes the intent-doc-freeze guard).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Fast tier passes; the INTENT edit is accepted as a grandfathered amend (no new prose doc), and the source_registry.yaml edit validates.
+    fix_if: A failure identifies the offending check; fix on branch and re-run.
+constraints:
+  - >-
+    Decision 88 -- read the warm cache only; the handler MUST NOT construct a DuckLake reader
+    (zero new reader egress). Mirror session_preflight._compute_ci_rca_telemetry's warm-cache read.
+  - >-
+    Decision 84 -- all writes transit file_rec() so the writer allocates rec ids atomically (I-2);
+    NEVER re-stage or re-append parent-rec rows read from the cache (I-4 anti-resurrection). The
+    --refile-audit path files NEW audit recs only.
+  - >-
+    Decision 86 -- amend the grandfathered docs/INTENT-ci-rca-methodology.md in place; create no
+    new prose/INTENT doc (the intent-doc-freeze guard blocks it).
+  - >-
+    Decision 55 -- surface only. back_validate produces a report and (opt-in) files capped
+    audit recs; it NEVER auto-closes, auto-remediates, or flips the strict-mode flag. No rescue
+    agents or workaround loops.
+  - >-
+    Decision 103 -- conformance is recomputed at read time from context_v2_json; add NO new
+    SCD2 column to ops_recommendations.
+  - >-
+    Legacy rule is load-bearing: a source=ci_rca rec with no context_v2_json is CONFORMANT
+    (strict-mode file_rec accepts it, lines 944-948). Do not validate an empty dict for these.
+  - >-
+    Only modify the four files in scope. Out-of-scope issues become recommendations, not inline fixes.
+context:
+  - >-
+    Follow-on ENABLER for T1.13 c2 (strict-mode flip). closes_criteria is intentionally empty:
+    c2/c3/c5 remain open and cannot close by code this session -- c3 needs 7 days of warn-mode
+    reject rate < 5% (currently 22%, 6/27, all schema_deficiency), c2 needs this back-validation
+    PLUS a human Decision Record + terraform apply, c5 needs c2 live + a real rec roundtrip.
+    This plan builds the mandated pre-flip instrument; it does not perform the flip.
+  - >-
+    Freshness Gate: the /orient prompt said "5 open criteria" but only 3 (c2,c3,c5) are open --
+    the 6th follow-on (ci-rca-observability-dashboard) landed 2026-07-04 closing c1+c12. No
+    roadmap-bookkeeping edit needed (statuses already correct); documented here for traceability.
+  - >-
+    HARD BLOCK cleared at planning time: rec-2530 and rec-2533 (test_real_workflows_dir hard-coded
+    workflow-count failures) were verified resolved by merged main c0c2e6c (PR #447) -- the
+    TestEnumerateWorkflowNames suite passes on this branch -- and both were closed via the ops
+    portal. 0 open source=ci_rca recs remain.
+  - >-
+    Decision Flag 1 (Decision 61, WARN, RESOLVED): source=ci_rca_warn_period_audit is not in
+    source_registry.yaml; validate_source() would reject the --refile-audit write. Resolved by
+    adding the registry entry to scope (config/agent/data_quality/source_registry.yaml).
+  - >-
+    Decision Flag 2 (Decision 66, NOTE, RESOLVED-with-note): audit recs are deterministically
+    templated (parent-id + failing-checks list; no LLM-judgment field), so they fall outside
+    Decision 66's Precision Context Injection scope -- get_rec_write_guidance() is NOT called on
+    this path by design.
+  - >-
+    Plan-critique round-1 REVISE resolved: (1) legacy-rec rule defined -- no-context_v2_json recs
+    are conformant/excluded (strict-mode file_rec lines 944-948 accept them), never validated as
+    {}; (2) field name corrected created_at -> created_timestamp; (3) VP step 2 asserts the
+    drift-proof "no legacy rec in non_conformant" invariant (planning snapshot 9 non-conf / 44
+    legacy / 23 with-context / 67 total); (4) test file covers the legacy bucket + non-schema
+    warn_mode_reject read path; (5) INTENT amend reconciles the CLI signature; (6) handler named
+    back_validate_ci_rca to avoid collision with the existing ci_rca_back_validation.py sensor.
+  - >-
+    Reusable internals confirmed present (line-verified): _validate_ci_rca_context_v2 @213
+    (schema validator), _stamp_warn_mode_reject @340, _run_ci_rca_cross_check @355,
+    get_ci_rca_strict_mode @109, file_rec @838 (strict-mode schema branch @915-948). INTENT
+    known-gap line 562 sets the audit-rec cap (priority=low, K=20/day).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 88, Decision 84, Decision 86, Decision 55, Decision 103"
+  - "gates: decision-scout=FLAGS_FOUND (2 flags, both resolved in scope); plan-critique=PROCEED (round 2, after round-1 REVISE addressed)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-methodology-contract-mu4mqv)
+  - docs/PROJECT_CONTEXT.md read
+  - docs/INTENT-ci-rca-methodology.md Section 6 read (back_validate mandate)
+  - All four scope files located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirmed 0 open source=ci_rca recs (HARD BLOCK cleared)
+  - Legacy-rec rule understood (no-context_v2_json = conformant, never validate {})
+execution_steps:
+  - >-
+    scripts/ops_data_portal.py -- add the `--back-validate` action to the argparse action group
+    plus `--since` (default 2026-06-15), `--refile-audit` (store_true, default False), and `--json`
+    arguments; wire the back_validate_ci_rca() handler into main(). The handler reads
+    logs/.recommendations-log.jsonl directly, filters source=ci_rca recs by created_timestamp >=
+    --since, and routes each into legacy_no_schema / non_conformant / conformant per the load-bearing
+    legacy rule (no context_v2_json => conformant, never validate {}). Recompute schema conformance
+    via _validate_ci_rca_context_v2(); read stamped warn_mode_reject markers for non-schema reasons.
+    Print a per-rec + aggregate report (text default, structured buckets under --json with a
+    has_context_v2 flag per rec).
+  - >-
+    scripts/ops_data_portal.py -- implement the --refile-audit branch: for each non_conformant
+    rec (up to K=20 filed today), call file_rec(source="ci_rca_warn_period_audit", priority="Low",
+    ...) with a deterministically templated title/context carrying the parent rec id and the
+    failing-checks list. Default (flag absent) is report-only, no writes.
+  - >-
+    config/agent/data_quality/source_registry.yaml -- add the ci_rca_warn_period_audit canonical_id
+    entry with description + signal_interpretation mirroring the sibling ci_rca_* entries.
+  - >-
+    tests/test_ci_rca_back_validate.py -- author the unit tests enumerated in the Scope purpose,
+    including the legacy-bucket rule and the non-schema warn_mode_reject read path.
+  - >-
+    docs/INTENT-ci-rca-methodology.md -- amend Section 6: mark back-validation implemented, correct
+    the stale attribution, and reconcile the CLI signature to the shipped --back-validate action.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on any unrecoverable failure
+    stop and RCA (Decision 55). Do not patch around a failing check.
+  - "Report: what was implemented, the conformance report produced by step 2, and verification results."
+work_areas: []
+rollback: >-
+  Pure-additive except the INTENT/registry edits. Revert the branch commit(s) to remove the
+  --back-validate action, the source_registry entry, the test file, and the INTENT amend. No
+  data migration, no deploy, no strict-mode change -- nothing to unwind operationally.
