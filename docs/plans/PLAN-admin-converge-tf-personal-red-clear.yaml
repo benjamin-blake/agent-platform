@@ -1,0 +1,369 @@
+schema_version: 1
+slug: "admin-converge-tf-personal-red-clear"
+intent: >-
+  From the ADMIN container (AWS profile agent_platform_admin / PlatformAdmin), honestly converge
+  the terraform/personal root and clear the latched-RED convergence record to green. The record
+  is red from a prior CI apply-sandbox failure (rec-2517, closed), but a re-plan now reveals a
+  REAL guard-BLOCK diff (1 IAM-policy update + 3 ducklake lambda-layer replacements) that neither
+  automated path can apply (dispatch-ack routes to a push-only gated-apply; a push refuses on
+  red -- deadlock). The escape is an admin out-of-band apply, which first requires restoring local
+  `terraform init` of the neon-provider root behind the Decision 119 proxy block -- i.e. standing
+  up rec-2514's S3 filesystem_mirror. This plan folds rec-2514 (mirror), rec-2515 (doc re-ground),
+  and the red-clear into one admin runbook.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-admin-converge-tf-personal-red-clear.yaml
+phase: >-
+  CI/CD + infra convergence recovery. Executes the Decision 119 reversal mechanism (filesystem_mirror)
+  as the enabling step for an admin-gated apply of terraform/personal, then the honest red-record
+  clear. Bundles rec-2514, rec-2515, rec-2512.
+scope:
+  - file: .github/workflows/terraform-provider-mirror-seed.yml
+    action: Create
+    purpose: >-
+      workflow_dispatch job on main on a GitHub-hosted runner (egress) that runs
+      `terraform -chdir=terraform/personal providers mirror -platform=linux_amd64 <dir>` (native
+      terraform subcommand, Decision 100 -- NOT a hand-rolled fetch), producing a filesystem_mirror-
+      layout tree that includes registry.terraform.io/kislerdm/neon 0.13.0 matching the h1: hashes in
+      terraform/personal/.terraform.lock.hcl, then `aws s3 sync` it to
+      s3://agent-platform-data-lake/tf-provider-mirror/. This is the ONLY egress-having actor that can
+      seed the mirror; every CC-web session (proxy-blocked, incl. ADMIN) consumes it read-only from S3.
+      IAM (circularity break -- see infrastructure_dependencies): the job assumes github_ci_apply
+      (trusts refs/heads/main; already egress-capable in CI). Its tf-provider-mirror/ PutObject grant
+      canNOT be added via terraform (that apply needs init, which needs the mirror, which needs this
+      seed -- a cycle), so it is provisioned OUT-OF-BAND by PlatformAdmin via raw `aws iam
+      put-role-policy` (the documented terraform/CLAUDE.md out-of-band-grant pattern), then codified in
+      oidc.tf as drift-reconciliation on the first mirror-enabled admin apply.
+  - file: config/terraform/cc-web.tfrc
+    action: Create
+    purpose: >-
+      Terraform CLI config (pointed at via TF_CLI_CONFIG_FILE) with a provider_installation block:
+      filesystem_mirror { path = <local mirror dir>; include = ["registry.terraform.io/kislerdm/*"] }
+      and direct { exclude = ["registry.terraform.io/kislerdm/*"] }. Neon resolves from the local
+      mirror (no github.com fetch); hashicorp/* still resolve direct from releases.hashicorp.com
+      (which inits fine). Use a placeholder for the local path resolved at setup time.
+  - file: bin/setup-cloud-env.sh
+    action: Modify
+    purpose: >-
+      After the existing terraform-install block (~line 179-196), add a proxy-block-aware step:
+      `aws s3 sync s3://agent-platform-data-lake/tf-provider-mirror/ "$HOME/.terraform-mirror/"` and,
+      ONLY on a successful sync that leaves a non-empty $HOME/.terraform-mirror/, export
+      TF_CLI_CONFIG_FILE pointing at config/terraform/cc-web.tfrc (mirror path substituted). CRITICAL
+      (plan-critique #3): gate the EXPORT on the sync, not just the sync itself -- if the mirror is
+      empty/unsynced but the tfrc is still exported, `direct` excludes neon AND the mirror lacks it, so
+      init fails with a more confusing "provider not found in mirror and excluded from direct" than the
+      known github 403. On sync failure: warn, do NOT export, do NOT fail the session (the mirror is an
+      enabler, never a hard session dependency; the pre-mirror 403 posture remains the fallback).
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      rec-2515: re-ground the "Interactive loop fallback" and "Running terraform/personal on CC-web"
+      sections to the post-Decision-119 posture. Replace "local init is NOT available for
+      terraform/personal on a stock CC-web session" with the mirror-enabled path (init works once the
+      S3 filesystem_mirror is synced and TF_CLI_CONFIG_FILE is set); keep the tfvars-from-remote-state
+      recovery but note it is now reachable locally via the mirror. Do NOT weaken the never-paste-
+      secrets rule or the present-before-apply (Decision 77) rule.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append a new Decision (next free number) recording adoption of the S3 filesystem_mirror as the
+      realized Decision 119 reversal mechanism (Decision 86: rationale -> a numbered Decision, not a
+      prose doc), and stating that local terraform validate/plan for terraform/personal is now
+      possible in a proxy-blocked container, relaxing (not removing) the CI-delegation. Reference the
+      new decision id from the CLAUDE.md edit. Sync via ops_data_portal --backfill-decisions-md
+      post-merge (Decision 84).
+bundled_recommendations:
+  - rec-2514
+  - rec-2515
+  - rec-2512
+infrastructure_dependencies:
+  - >-
+    S3 prefix s3://agent-platform-data-lake/tf-provider-mirror/ (new). Seed-workflow write IAM: a
+    `tf-provider-mirror/*` PutObject Sid on github_ci_apply. CIRCULARITY (plan-critique #2): this grant
+    cannot be added via terraform (the apply that adds it needs local init -> the mirror -> this seed),
+    so PlatformAdmin adds it OUT-OF-BAND first, via raw `aws iam put-role-policy` on
+    agent-platform-github-ci-apply (no terraform, no init required) -- the same out-of-band-grant
+    pattern terraform/CLAUDE.md already documents for platform_breakglass grants. It is codified into
+    oidc.tf (drift-reconciled) on the first mirror-enabled admin apply. Session READ of the prefix is
+    covered by the existing DataLakeObjectIO bucket-wide read grant on the runtime roles.
+  - >-
+    The admin apply itself: aws_iam_role_policy.github_ci_plan UPDATE is out-of-budget IAM (guard
+    BLOCK) -> requires agent_platform_admin (PlatformAdmin) out-of-band apply, NOT the CD pipeline.
+    Present the plan to the human before apply (Decision 77 + Decision 94 escape hatch).
+  - >-
+    The honest-green (VP step 8) is LOAD-BEARING on ducklake build reproducibility: the admin-applied
+    layer bytes must equal what the CI dispatch-ack re-plan rebuilds. Admin therefore applies the exact
+    CI-built zips fetched from s3://.../lambda-packages/ (VP step 5). Risk: build_lambda's DUCKLAKE_DEPS
+    are only partially pinned (psycopg2-binary>=..., python-ulid>=..., typing_extensions>=...), so a CI
+    rebuild can pip-drift; the apply-sandbox push path already asserts rebuild==S3 byte-identity
+    (lines 291-306), which is the standing determinism guarantee this plan relies on.
+acceptance_criteria:
+  - >-
+    From a proxy-blocked container with the mirror synced and TF_CLI_CONFIG_FILE set,
+    `terraform -chdir=terraform/personal init -backend-config=backend-sandbox.hcl` succeeds for the
+    kislerdm/neon provider with no github.com 403 (rec-2514 acceptance anchor).
+  - >-
+    The seed workflow produces an S3 mirror whose neon package verifies against the h1: hashes in
+    terraform/personal/.terraform.lock.hcl (init does NOT report a checksum/lock mismatch).
+  - >-
+    terraform/CLAUDE.md no longer states local init of terraform/personal is impossible on CC-web;
+    it documents the mirror-enabled init path and retains present-before-apply + never-paste-secrets
+    (rec-2515).
+  - >-
+    Before the irreversible apply, the ducklake layer zips terraform will hash (local lambda-packages/*)
+    are byte-identical (md5) to the CI-built s3://.../lambda-packages/* objects -- so the admin-applied
+    layer content equals what the CI dispatch-ack re-plan reproduces (the honest-green precondition;
+    plan-critique #1). A mismatch STOPS before apply.
+  - >-
+    The pending guard-BLOCK plan (aws_iam_role_policy.github_ci_plan update + 3 aws_lambda_layer_version
+    replacements) is applied via agent_platform_admin after being PRESENTED to the human, and a
+    subsequent `terraform plan -detailed-exitcode` returns 0 (converged).
+  - >-
+    The convergence record s3://agent-platform-data-lake/convergence/personal/sandbox.json reads
+    status=green, written by a genuine converged apply path (a workflow_dispatch acknowledge-and-retry
+    whose re-plan is now empty), NOT by a manual force-write.
+  - "rec-2512 is closed (its convergence -- the 3 layer replacements -- is realized), and rec-2514 / rec-2515 are closed via the Resolves: trailer."
+  - >-
+    A NEW rec is filed (source=manual, priority appropriate) for the workflow deadlock: a red
+    convergence record whose pending plan is guard-BLOCK cannot be cleared by dispatch-ack (gated-apply
+    is push-only) nor by push (precondition refuses on red).
+verification_plan:
+  - step: 1
+    phase: pre-apply
+    action: Confirm admin identity and branch base in the ADMIN container.
+    command: "AWS_PROFILE=agent_platform_admin aws sts get-caller-identity --query Arn --output text && git rev-parse --abbrev-ref HEAD"
+    expected: "Arn contains 'PlatformAdmin'; on the plan's feature branch (or main with the merged plan)."
+    fix_if: "If Arn shows PlatformDev, the admin profile is not active -- export AWS_PROFILE=agent_platform_admin; if absent, this is the wrong container."
+  - step: 2
+    phase: seed
+    action: >-
+      Run the seed workflow (GitHub-hosted egress runner) to populate the S3 mirror, then confirm the
+      neon provider package is present in S3.
+    command: "aws s3 ls s3://agent-platform-data-lake/tf-provider-mirror/registry.terraform.io/kislerdm/neon/0.13.0/ --recursive"
+    expected: "Lists the linux_amd64 package/index for neon 0.13.0."
+    fix_if: "Empty -> the seed workflow failed or `terraform providers mirror` did not include the platform; re-run naming the platform (-platform=linux_amd64)."
+  - step: 3
+    phase: pre-apply
+    action: Sync the mirror locally, set the CLI config, and init terraform/personal (the rec-2514 acceptance).
+    command: |-
+      aws s3 sync s3://agent-platform-data-lake/tf-provider-mirror/ "$HOME/.terraform-mirror/" && \
+      export TF_CLI_CONFIG_FILE="$PWD/config/terraform/cc-web.tfrc" && \
+      terraform -chdir=terraform/personal init -backend-config=backend-sandbox.hcl 2>&1 | tail -5
+    expected: "Terraform has been successfully initialized; NO 'Forbidden'/'403'/'failed to retrieve ... github.com' for kislerdm/neon."
+    fix_if: "A neon 403 means TF_CLI_CONFIG_FILE/include is wrong (direct still used for neon); a checksum error means the mirrored package does not match the lock h1: hashes -- re-seed with the pinned version."
+  - step: 4
+    phase: pre-apply
+    action: >-
+      Recover the four no-default tfvars from remote state / Secrets Manager and produce a fresh plan
+      WITHOUT printing secret values. Present the plan diff to the human (Decision 77). Investigate the
+      aws_iam_role_policy.github_ci_plan diff specifically (expected change vs unexplained drift).
+    command: "terraform -chdir=terraform/personal plan -var-file=terraform.personal.tfvars -out=plan.bin 2>&1 | tail -30"
+    expected: >-
+      Plan shows exactly the 4 known guard-BLOCK changes (github_ci_plan policy update + 3 layer
+      replacements) and nothing unexpected; account_id / ExternalIds are NOT echoed to chat.
+    fix_if: >-
+      Extra/unexpected resources -> STOP and reconcile before apply. If the github_ci_plan diff is
+      unexplained drift, STOP and surface to the human rather than applying blindly (Decision 55).
+  - step: 5
+    phase: pre-apply
+    action: >-
+      Honest-green precondition (plan-critique #1): make terraform hash the SAME bytes the CI
+      dispatch-ack will rebuild. Fetch the CI-built ducklake zips from S3 into local lambda-packages/
+      (terraform's filemd5 source), then assert byte-identity. Where the admin container CAN run the
+      build (build deps installable, no egress gap), ALSO run the CI-identical invocation and md5-compare
+      to catch build non-determinism before applying.
+    command: |-
+      mkdir -p lambda-packages; NAMES="ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"; \
+      for n in $NAMES; do aws s3 cp "s3://agent-platform-data-lake/lambda-packages/$n" "lambda-packages/$n" --region eu-west-2 || { echo "MISSING S3 $n"; exit 1; }; done; \
+      bin/venv-python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake 2>/dev/null && \
+      for n in $NAMES; do a=$(md5sum "lambda-packages/$n"|cut -d' ' -f1); aws s3 cp "s3://agent-platform-data-lake/lambda-packages/$n" "/tmp/s3-$n" --region eu-west-2 >/dev/null; b=$(md5sum "/tmp/s3-$n"|cut -d' ' -f1); [ "$a" = "$b" ] || { echo "NONDETERMINISTIC $n a=$a b=$b"; exit 1; }; done; echo ZIP_IDENTITY_OK
+    expected: "Prints ZIP_IDENTITY_OK -- local build reproduces the S3 (CI-built) bytes exactly."
+    fix_if: >-
+      "MISSING S3 <n>" -> the PR/apply job never uploaded it; run the seed/build workflow first. A
+      "NONDETERMINISTIC" mismatch means build_lambda's partial DUCKLAKE_DEPS pins pip-drifted -> do NOT
+      apply; the empty-re-plan green would never fire. Fully pin DUCKLAKE_DEPS (file a rec) and re-seed
+      first. If the admin container cannot run build_lambda at all (egress/build-dep gap), skip the local
+      rebuild and apply the fetched S3 bytes, relying on the push-path idempotency assert as the standing
+      determinism guarantee -- and expect VP step 8 to confirm.
+  - step: 6
+    phase: apply
+    action: >-
+      On explicit human approval only, apply the saved plan via agent_platform_admin (IAM change lands
+      before any lambda-layer replace -- IAM-precedence rule). Then re-plan to confirm convergence.
+    command: "terraform -chdir=terraform/personal apply plan.bin && terraform -chdir=terraform/personal plan -detailed-exitcode -var-file=terraform.personal.tfvars; echo exit=$?"
+    expected: "apply completes; the follow-up plan prints 'No changes' and exit=0 (converged)."
+    fix_if: "exit=2 -> residual diff (e.g. a refresh-time AccessDenied read the admin role lacks); add the scoped grant and re-apply with -refresh=false, then a full plan converges (see terraform/CLAUDE.md admin-apply notes)."
+  - step: 7
+    phase: post-apply
+    action: >-
+      Decision 79 per-Lambda check: the 3 replaced layers are consumed by the ducklake functions
+      (ducklake_lambdas.tf:242/280 -- `layers = [...arn]`), which terraform repoints to the new layer
+      versions in the same apply. Smoke-test each active consuming function to confirm the rebuilt
+      layers load (no ImportError / missing native lib at runtime).
+    command: "bin/venv-python -m scripts.lambda_manifest --list-patterns >/dev/null 2>&1; for fn in $(aws lambda list-functions --query 'Functions[?contains(FunctionName,`ducklake`)].FunctionName' --output text); do echo \"== $fn ==\"; aws lambda invoke --function-name \"$fn\" --payload '{\"smoke\":true}' /tmp/out-$fn.json >/dev/null 2>&1 && python3 -c \"import json;d=json.load(open('/tmp/out-$fn.json'));print('ok' if 'errorMessage' not in d else d['errorMessage'])\"; done"
+    expected: "Each active ducklake function returns without an ImportError / layer-load error (a domain-level rejection of the smoke payload is fine -- the layer loaded)."
+    fix_if: "A layer-load/ImportError means the rebuilt layer is incompatible; do NOT proceed to green -- the apply regressed the runtime. RCA the build (Decision 55) before clearing red."
+  - step: 8
+    phase: post-apply
+    action: >-
+      Clear the red HONESTLY: trigger the terraform-apply-sandbox workflow_dispatch acknowledge-and-retry
+      on the red commit. The re-plan is now empty -> guard PASS -> apply step runs clean -> the always-run
+      record write sets green. Verify the record.
+    command: "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"status\"])'"
+    expected: "Prints 'green'. (Also depends on the run's Subagent-plan-review step returning PROCEED on the empty plan and a valid CLAUDE_CODE_OAUTH_TOKEN in CI -- a REVISE/absent-token verdict there also blocks green.)"
+    fix_if: >-
+      Still red -> inspect the dispatched run's guard step. If it STILL routes (re-plan non-empty), the
+      admin-applied layer bytes did NOT match the CI rebuild -- this is CI build NON-DETERMINISM, not an
+      admin apply error, so re-applying in the admin container will NOT help (it reproduces the admin
+      hash). Fix build determinism (pin DUCKLAKE_DEPS), re-seed, and re-dispatch. If it routes on the IAM
+      resource, the admin apply did not actually land the github_ci_plan update -- re-apply that. NEVER
+      force-write green (anti-masking, Decision 55/84).
+  - step: 9
+    phase: closeout
+    action: >-
+      Close rec-2512 (convergence realized) and, via the squash-merge Resolves: trailer, rec-2514 +
+      rec-2515. File a NEW rec for the dispatch-ack-vs-guard-BLOCK deadlock.
+    command: "bin/venv-python -m scripts.sync_ops pull && grep -E '\"rec-2512\"|\"rec-2514\"|\"rec-2515\"' logs/.recommendations-log.jsonl | grep -c '\"status\": ?\"closed\"'"
+    expected: "3 (all three closed once rec-autoclose.yml processes the Resolves trailer / update_rec fallback)."
+    fix_if: "Fewer than 3 -> run the ops_data_portal --update-rec fallback for the missing id(s)."
+constraints:
+  - >-
+    Decision 77 (hard rule, terraform/CLAUDE.md): PRESENT the terraform plan to the human and get
+    explicit acceptance BEFORE any `terraform apply`. This plan does NOT pre-authorize the apply.
+  - >-
+    Never paste account_id, IAM ExternalIds, or any secret value into chat, a PR, or a committed file
+    (the never-commit pre-commit hook shape-blocks them; the tfvars file stays gitignored).
+  - >-
+    Honest convergence only (Decision 55 / Decision 84): the record goes green ONLY via a genuine
+    converged apply path. Do NOT `aws s3 cp` a hand-authored green record -- the convergence anchor's
+    whole purpose is defeated by a force-write, and the writer set is {github_ci_apply, github_ci_drift}.
+  - >-
+    Use terraform's native `providers mirror` subcommand and a native provider_installation block
+    (Decision 100 managed-service-native) -- NOT a hand-rolled provider download/verify script.
+  - >-
+    IAM-precedence (terraform/CLAUDE.md): the aws_iam_role_policy.github_ci_plan update must apply
+    before any Lambda-layer change. Prefer letting a single `terraform apply` order it; if targeting,
+    apply the IAM resource first.
+  - >-
+    Only the admin out-of-band apply may touch out-of-budget IAM (guard BLOCK); the CD pipeline
+    (github_ci_apply, in-budget) cannot and must not be coerced into it.
+  - >-
+    Authorization framing (Decision 94 escape hatch, do NOT elide): normally out-of-budget IAM routes
+    to the tf-gated-apply GitHub Environment whose required-reviewer IS the Decision 92 authorization
+    control. Here that path is structurally unreachable (gated-apply is push-only; the red precondition
+    refuses a push), so -- exactly as Decision 94 did for a trust change the gated CD path could not
+    apply -- the apply is done via agent_platform_admin local apply, and the Decision 77 present-before-
+    apply human gate SUBSTITUTES for the tf-gated-apply reviewer as the authorization control. This is a
+    sanctioned escape hatch, not a bypass of the Decision 92 boundary.
+  - "Python 3.12, type hints, ruff line length 127, ASCII hyphens, no emojis; invoke Python via bin/venv-python; Bash (never PowerShell)."
+context:
+  - >-
+    Root cause chain: rec-2512 (open) identified that terraform-apply-sandbox never rebuilt the ducklake
+    lambda packages, so the layer source_code_hash stayed null. PR #432 (commit 01c13704) added the
+    rebuild but omitted `--bucket` on the build_lambda call (rec-2517), so apply-sandbox FAILED and wrote
+    the convergence record red at 2026-07-04T16:08. PR #437 (commit 2b44f1a6) fixed --bucket and closed
+    rec-2517, but only touched the workflow YAML (not terraform/personal/**), so no apply re-ran on that push.
+  - >-
+    A workflow_dispatch acknowledge-and-retry (run 28713106976) was then executed: the precondition
+    ACCEPTED the ack (refused=false), the build now succeeded, and the fresh plan revealed a REAL
+    guard-BLOCK diff -- aws_iam_role_policy.github_ci_plan UPDATE (out-of-budget IAM) plus delete+create
+    on aws_lambda_layer_version.ducklake_deps / ducklake_extensions / ducklake_pgclient (the expected
+    payoff of rec-2512's rebuild: real hashes now differ from state). guard routed=true, apply skipped,
+    record NOT overwritten (routed path). So the red is CORRECT -- terraform/personal is genuinely
+    un-converged; it is not a stale false-alarm.
+  - >-
+    Deadlock: a guard-BLOCK plan is applied only by the gated-apply job, which is push-only
+    (if: routed && push, line 860). On workflow_dispatch it is skipped. A plain push is refused by the
+    convergence precondition while the record is red. Hence neither automated path can clear a
+    guard-BLOCK red -- the admin out-of-band apply is the escape (and after it converges the infra, an
+    empty-plan dispatch-ack writes green). Filed separately as a new rec (workflow gap).
+  - >-
+    Decision 119 (2026-07-04): the CC-web proxy 403s the github.com neon-provider checksum fetch, so
+    `terraform init` of terraform/personal fails in ANY CC-web container. The admin container is
+    assumed same-session-class (proxy-blocked) per the human's direction, so the admin agent cannot init
+    terraform/personal until the mirror (rec-2514) is in place -- which is why this plan seeds it first.
+  - >-
+    Decision 119 explicitly names an S3-backed provider_installation filesystem_mirror as its reversal
+    condition; rec-2514 is that mechanism, deferred from PLAN-terraform-provider-install-retry.yaml:155.
+  - >-
+    The seed must run in an egress context: `terraform providers mirror` needs github.com to fetch the
+    neon package once; only a GitHub-hosted CI runner (or an egress admin box) has that. The session-side
+    consumer only pulls from S3. This is why the seed is a workflow, not a session step.
+  - >-
+    tfvars recovery: the four no-default vars (account_id, owner_email, platform_dev_external_id,
+    platform_admin_external_id) live in the remote state (s3://.../tfstate/personal/sandbox/) and in the
+    agent-platform-terraform-personal-tfvars Secrets Manager secret; recover from there, never from a
+    committed file (terraform/CLAUDE.md).
+  - >-
+    Decision 84: convergence record writer set is {github_ci_apply, github_ci_drift}; ops writes go
+    through the portal (file_rec/update_rec). Decision 86: rationale for the mirror adoption belongs in a
+    numbered Decision, not a new prose doc. AGENTS.md: STRATEGIC plans suspended -> this is a single
+    IMPLEMENTATION plan even though it exceeds the old 5-file/8-step heuristic (heuristic suspended).
+  - >-
+    Decision-scout verdict: FLAGS_FOUND (2 soft, no hard block). FLAG 1 (Decision 94 escape-hatch
+    framing for the admin apply substituting for the tf-gated-apply reviewer) -- resolved in constraints.
+    FLAG 2 (Decision 79 per-Lambda gating for the 3 layer replacements) -- resolved via VP step 7
+    (smoke-test active ducklake consumers). CITE = Decision 119, 98, 94, 92, 77, 84, 55, 83, 73, 79,
+    100, 35, 104.
+  - >-
+    plan-critique verdict: REVISE (round 1) -> resolved. #1 build-reproducibility: VP step 5 (fetch
+    CI-built zips + byte-identity assert) + load-bearing note + acceptance criterion + corrected step-6
+    fix_if. #2 seed-IAM circularity: out-of-band raw put-role-policy on github_ci_apply, codify later.
+    #3 setup-cloud-env.sh: gate the TF_CLI_CONFIG_FILE export on a successful non-empty sync. Minor
+    (Subagent-review PROCEED + CLAUDE_CODE_OAUTH_TOKEN dependency): noted in VP step 8.
+  - "gates: decision-scout=FLAGS_FOUND (resolved); plan-critique=PROCEED (after 1 REVISE round, resolved)"
+pre_implementation_checklist:
+  - Running in the ADMIN container with AWS_PROFILE=agent_platform_admin (PlatformAdmin) active
+  - Branch confirmed not main
+  - docs/PROJECT_CONTEXT.md and terraform/CLAUDE.md read
+  - The pending guard-BLOCK plan understood (4 changes) and the deadlock rationale understood
+  - Human available to review + approve the terraform plan before apply (Decision 77)
+execution_steps:
+  - >-
+    (Out-of-band, breaks the circularity -- plan-critique #2) PlatformAdmin adds a `tf-provider-mirror/*`
+    PutObject Sid to agent-platform-github-ci-apply via raw `aws iam put-role-policy` (NOT terraform --
+    no init required). This is the standing out-of-band-grant pattern (terraform/CLAUDE.md). Codify the
+    Sid into oidc.tf later, drift-reconciled on the first mirror-enabled admin apply.
+  - >-
+    Create .github/workflows/terraform-provider-mirror-seed.yml: workflow_dispatch on main. On a
+    GitHub-hosted runner: setup-terraform (config/terraform-version = 1.10.5), init terraform/personal
+    (egress works), run `terraform -chdir=terraform/personal providers mirror -platform=linux_amd64
+    /tmp/tf-mirror`, then `aws s3 sync /tmp/tf-mirror s3://agent-platform-data-lake/tf-provider-mirror/`.
+    Assumes github_ci_apply (trusts refs/heads/main; now grant-provisioned above). Provider bytes are
+    public -- nothing to redact.
+  - >-
+    Create config/terraform/cc-web.tfrc with a provider_installation block: filesystem_mirror for
+    registry.terraform.io/kislerdm/* (path substituted at setup) + direct excluding the same. Keep
+    hashicorp/* on direct.
+  - >-
+    Modify bin/setup-cloud-env.sh: after terraform install, `aws s3 sync
+    s3://agent-platform-data-lake/tf-provider-mirror/ "$HOME/.terraform-mirror/"` (warn-not-fail if
+    absent) and export TF_CLI_CONFIG_FILE with the mirror path substituted into cc-web.tfrc.
+  - >-
+    Run the seed workflow; verify the S3 mirror (VP step 2). Sync locally, init terraform/personal,
+    confirm no neon 403 (VP step 3 = rec-2514 acceptance).
+  - >-
+    Modify terraform/CLAUDE.md (rec-2515) and append the new Decision to docs/DECISIONS.md (mirror
+    adoption / Decision 119 relaxation); cross-reference the decision id.
+  - >-
+    Fetch the CI-built ducklake zips from s3://.../lambda-packages/ into local lambda-packages/ and
+    assert byte-identity (VP step 5 -- the honest-green precondition). STOP on a nondeterminism mismatch.
+  - >-
+    Recover tfvars from remote state / Secrets Manager (no secret echo). `terraform plan -out=plan.bin`;
+    PRESENT to the human; investigate the github_ci_plan IAM diff (VP step 4).
+  - >-
+    On explicit approval, `terraform apply plan.bin` via agent_platform_admin; confirm convergence with
+    `plan -detailed-exitcode` == 0 (VP step 6).
+  - >-
+    Trigger the terraform-apply-sandbox workflow_dispatch acknowledge_red_commit=01c13704... ; the empty
+    re-plan writes the record green; verify green (VP step 8). Do NOT force-write.
+  - >-
+    Close rec-2512; Resolves: rec-2514, rec-2515 in the squash-merge; file the new deadlock rec (VP step 9).
+  - 'Report: what was implemented, the plan diff presented, the apply result, and the final record status.'
+work_areas: []
+rollback: >-
+  The mirror/config/workflow additions are inert if unused (revert the three files; delete the S3
+  prefix optionally). The terraform APPLY is real infra change and is NOT trivially reversible: the 3
+  lambda-layer replacements create new layer versions (old versions are removed) and the github_ci_plan
+  policy is updated -- reverting means a compensating `terraform apply` of the prior code, human-gated
+  the same way. This is why the apply is present-before-apply gated (Decision 77) and admin-only.
