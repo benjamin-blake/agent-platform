@@ -91,9 +91,9 @@ infrastructure_dependencies:
     BLOCK) -> requires agent_platform_admin (PlatformAdmin) out-of-band apply, NOT the CD pipeline.
     Present the plan to the human before apply (Decision 77 + Decision 94 escape hatch).
   - >-
-    The honest-green (VP step 6) is LOAD-BEARING on ducklake build reproducibility: the admin-applied
+    The honest-green (VP step 8) is LOAD-BEARING on ducklake build reproducibility: the admin-applied
     layer bytes must equal what the CI dispatch-ack re-plan rebuilds. Admin therefore applies the exact
-    CI-built zips fetched from s3://.../lambda-packages/ (VP step 4b). Risk: build_lambda's DUCKLAKE_DEPS
+    CI-built zips fetched from s3://.../lambda-packages/ (VP step 5). Risk: build_lambda's DUCKLAKE_DEPS
     are only partially pinned (psycopg2-binary>=..., python-ulid>=..., typing_extensions>=...), so a CI
     rebuild can pip-drift; the apply-sandbox push path already asserts rebuild==S3 byte-identity
     (lines 291-306), which is the standing determinism guarantee this plan relies on.
@@ -164,7 +164,7 @@ verification_plan:
     fix_if: >-
       Extra/unexpected resources -> STOP and reconcile before apply. If the github_ci_plan diff is
       unexplained drift, STOP and surface to the human rather than applying blindly (Decision 55).
-  - step: 4b
+  - step: 5
     phase: pre-apply
     action: >-
       Honest-green precondition (plan-critique #1): make terraform hash the SAME bytes the CI
@@ -184,8 +184,8 @@ verification_plan:
       apply; the empty-re-plan green would never fire. Fully pin DUCKLAKE_DEPS (file a rec) and re-seed
       first. If the admin container cannot run build_lambda at all (egress/build-dep gap), skip the local
       rebuild and apply the fetched S3 bytes, relying on the push-path idempotency assert as the standing
-      determinism guarantee -- and expect VP step 6 to confirm.
-  - step: 5
+      determinism guarantee -- and expect VP step 8 to confirm.
+  - step: 6
     phase: apply
     action: >-
       On explicit human approval only, apply the saved plan via agent_platform_admin (IAM change lands
@@ -193,7 +193,7 @@ verification_plan:
     command: "terraform -chdir=terraform/personal apply plan.bin && terraform -chdir=terraform/personal plan -detailed-exitcode -var-file=terraform.personal.tfvars; echo exit=$?"
     expected: "apply completes; the follow-up plan prints 'No changes' and exit=0 (converged)."
     fix_if: "exit=2 -> residual diff (e.g. a refresh-time AccessDenied read the admin role lacks); add the scoped grant and re-apply with -refresh=false, then a full plan converges (see terraform/CLAUDE.md admin-apply notes)."
-  - step: 5b
+  - step: 7
     phase: post-apply
     action: >-
       Decision 79 per-Lambda check: the 3 replaced layers are consumed by the ducklake functions
@@ -203,7 +203,7 @@ verification_plan:
     command: "bin/venv-python -m scripts.lambda_manifest --list-patterns >/dev/null 2>&1; for fn in $(aws lambda list-functions --query 'Functions[?contains(FunctionName,`ducklake`)].FunctionName' --output text); do echo \"== $fn ==\"; aws lambda invoke --function-name \"$fn\" --payload '{\"smoke\":true}' /tmp/out-$fn.json >/dev/null 2>&1 && python3 -c \"import json;d=json.load(open('/tmp/out-$fn.json'));print('ok' if 'errorMessage' not in d else d['errorMessage'])\"; done"
     expected: "Each active ducklake function returns without an ImportError / layer-load error (a domain-level rejection of the smoke payload is fine -- the layer loaded)."
     fix_if: "A layer-load/ImportError means the rebuilt layer is incompatible; do NOT proceed to green -- the apply regressed the runtime. RCA the build (Decision 55) before clearing red."
-  - step: 6
+  - step: 8
     phase: post-apply
     action: >-
       Clear the red HONESTLY: trigger the terraform-apply-sandbox workflow_dispatch acknowledge-and-retry
@@ -218,7 +218,7 @@ verification_plan:
       hash). Fix build determinism (pin DUCKLAKE_DEPS), re-seed, and re-dispatch. If it routes on the IAM
       resource, the admin apply did not actually land the github_ci_plan update -- re-apply that. NEVER
       force-write green (anti-masking, Decision 55/84).
-  - step: 7
+  - step: 9
     phase: closeout
     action: >-
       Close rec-2512 (convergence realized) and, via the squash-merge Resolves: trailer, rec-2514 +
@@ -302,15 +302,15 @@ context:
   - >-
     Decision-scout verdict: FLAGS_FOUND (2 soft, no hard block). FLAG 1 (Decision 94 escape-hatch
     framing for the admin apply substituting for the tf-gated-apply reviewer) -- resolved in constraints.
-    FLAG 2 (Decision 79 per-Lambda gating for the 3 layer replacements) -- resolved via VP step 5b
+    FLAG 2 (Decision 79 per-Lambda gating for the 3 layer replacements) -- resolved via VP step 7
     (smoke-test active ducklake consumers). CITE = Decision 119, 98, 94, 92, 77, 84, 55, 83, 73, 79,
     100, 35, 104.
   - >-
-    plan-critique verdict: REVISE (round 1) -> resolved. #1 build-reproducibility: VP step 4b (fetch
+    plan-critique verdict: REVISE (round 1) -> resolved. #1 build-reproducibility: VP step 5 (fetch
     CI-built zips + byte-identity assert) + load-bearing note + acceptance criterion + corrected step-6
     fix_if. #2 seed-IAM circularity: out-of-band raw put-role-policy on github_ci_apply, codify later.
     #3 setup-cloud-env.sh: gate the TF_CLI_CONFIG_FILE export on a successful non-empty sync. Minor
-    (Subagent-review PROCEED + CLAUDE_CODE_OAUTH_TOKEN dependency): noted in VP step 6.
+    (Subagent-review PROCEED + CLAUDE_CODE_OAUTH_TOKEN dependency): noted in VP step 8.
   - "gates: decision-scout=FLAGS_FOUND (resolved); plan-critique=PROCEED (after 1 REVISE round, resolved)"
 pre_implementation_checklist:
   - Running in the ADMIN container with AWS_PROFILE=agent_platform_admin (PlatformAdmin) active
@@ -347,18 +347,18 @@ execution_steps:
     adoption / Decision 119 relaxation); cross-reference the decision id.
   - >-
     Fetch the CI-built ducklake zips from s3://.../lambda-packages/ into local lambda-packages/ and
-    assert byte-identity (VP step 4b -- the honest-green precondition). STOP on a nondeterminism mismatch.
+    assert byte-identity (VP step 5 -- the honest-green precondition). STOP on a nondeterminism mismatch.
   - >-
     Recover tfvars from remote state / Secrets Manager (no secret echo). `terraform plan -out=plan.bin`;
     PRESENT to the human; investigate the github_ci_plan IAM diff (VP step 4).
   - >-
     On explicit approval, `terraform apply plan.bin` via agent_platform_admin; confirm convergence with
-    `plan -detailed-exitcode` == 0 (VP step 5).
+    `plan -detailed-exitcode` == 0 (VP step 6).
   - >-
     Trigger the terraform-apply-sandbox workflow_dispatch acknowledge_red_commit=01c13704... ; the empty
-    re-plan writes the record green; verify green (VP step 6). Do NOT force-write.
+    re-plan writes the record green; verify green (VP step 8). Do NOT force-write.
   - >-
-    Close rec-2512; Resolves: rec-2514, rec-2515 in the squash-merge; file the new deadlock rec (VP step 7).
+    Close rec-2512; Resolves: rec-2514, rec-2515 in the squash-merge; file the new deadlock rec (VP step 9).
   - 'Report: what was implemented, the plan diff presented, the apply result, and the final record status.'
 work_areas: []
 rollback: >-
