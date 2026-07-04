@@ -50,9 +50,11 @@ scope:
       check path -> scripts/checks/roadmap/validate_tier_floor.py; (b) re-ground c2's text so it
       matches the buildable deterministic rule (any .tf => V3 conservatively, since only scope
       paths -- not a content diff -- are available at check time; comment-only .tf exempt via the
-      explicit tier_waiver field, which c2 already names as the conscious-acceptance path). Status
-      flips (c1/c2/c3 -> met) are performed by /implement's bookkeeping walk on a verified VP pass,
-      not here.
+      explicit tier_waiver field, which c2 already names as the conscious-acceptance path) AND
+      retire c2's 'compute_affected_artifacts' phrasing, since the check deliberately uses a
+      code-only handlers+includes-excludes walk rather than that helper -- so c2's text matches the
+      shipped code. Status flips (c1/c2/c3 -> met) are performed by /implement's bookkeeping walk on
+      a verified VP pass, not here.
   - file: tests/test_plan_document.py
     action: Modify
     purpose: >-
@@ -120,36 +122,43 @@ verification_plan:
     phase: pre-deploy
     action: >-
       VF-13 negative: a schema_version-2 plan with phase 'pre-merge' is rejected by
-      validate_plan_documents (which calls the PlanDocument schema). Uses a fixtures dir seam so no
-      docs/plans/ file is touched.
+      validate_plan_documents (which calls the PlanDocument schema). Builds a tempdir holding a
+      correctly PLAN-{slug}.yaml-named copy of valid_v2 with the phase mutated (the check globs
+      PLAN-*.yaml), so no docs/plans/ file is touched.
     command: >-
-      bin/venv-python -c "from scripts.validate import validate_plan_documents; import pathlib;
-      f=[]; validate_plan_documents(f, plans_dir=pathlib.Path('tests/fixtures/plan_documents/_badphase_v2'));
-      print('FAILED_LIST', f); assert f, 'v2 plan with phase pre-merge should fail validation'"
+      bin/venv-python -c "from scripts.validate import validate_plan_documents; import pathlib,yaml,tempfile,os,shutil;
+      d=tempfile.mkdtemp(); p=yaml.safe_load(open('tests/fixtures/plan_documents/valid_v2.yaml'));
+      p['verification_plan'][0]['phase']='pre-merge';
+      open(os.path.join(d,'PLAN-'+p['slug']+'.yaml'),'w').write(yaml.safe_dump(p));
+      f=[]; validate_plan_documents(f, plans_dir=pathlib.Path(d)); print('FAILED_LIST', f);
+      shutil.rmtree(d); assert f, 'v2 plan with phase pre-merge should fail validation'"
     expected: >-
-      validate_plan_documents appends a failure for the v2 bad-phase fixture (closed enum
-      violation). The authoritative positive+negative assertions live in the pytest cases (step 5);
-      this is a direct-invocation smoke of the wired check. (The _badphase_v2 dir is created by the
-      pytest setup or is a committed one-file fixtures subdir.)
+      validate_plan_documents appends a failure for the mutated v2 plan (closed enum violation).
+      The authoritative positive+negative assertions live in the pytest cases (step 5); this is a
+      direct-invocation smoke of the wired check via the PLAN-*.yaml glob.
     fix_if: >-
       failed list empty -- the phase enum is not enforced for schema_version 2, or the plans_dir
-      seam does not reach the fixture.
+      seam / PLAN-*.yaml glob does not reach the tempdir copy.
   - step: 2
     phase: pre-deploy
     action: >-
       VF-04 tier-floor fixture fails: the tier_floor_violation_v2 fixture (active-manifest Lambda
       code file in scope, verification_tier V2) is flagged below floor by validate_tier_floor.
+      Copies the source fixture into a tempdir under its PLAN-{slug}.yaml name (the check globs
+      PLAN-*.yaml) so it is discovered in isolation.
     command: >-
-      bin/venv-python -c "from scripts.validate import validate_tier_floor; import pathlib;
-      f=[]; validate_tier_floor(f, plans_dir=pathlib.Path('tests/fixtures/plan_documents'));
-      print('FAILED_LIST', f); assert f, 'expected tier-floor violation to be reported'"
+      bin/venv-python -c "from scripts.validate import validate_tier_floor; import pathlib,yaml,tempfile,os,shutil;
+      d=tempfile.mkdtemp(); p=yaml.safe_load(open('tests/fixtures/plan_documents/tier_floor_violation_v2.yaml'));
+      open(os.path.join(d,'PLAN-'+p['slug']+'.yaml'),'w').write(yaml.safe_dump(p));
+      f=[]; validate_tier_floor(f, plans_dir=pathlib.Path(d)); print('FAILED_LIST', f);
+      shutil.rmtree(d); assert f, 'expected tier-floor violation to be reported'"
     expected: >-
-      validate_tier_floor appends a failure for tier_floor_violation_v2.yaml (declared V2, floor
-      V3 via the active-manifest Lambda code file). Non-empty failed list. (Uses the check's
-      plans_dir test seam mirroring validate_plan_documents.)
+      validate_tier_floor appends a failure for the copied plan (declared V2, floor V3 via the
+      active-manifest Lambda code file). Non-empty failed list. (Uses the check's plans_dir test
+      seam + PLAN-*.yaml glob, mirroring validate_plan_documents.)
     fix_if: >-
       failed list empty -- the floor did not fire on an active-manifest Lambda code file, or the
-      plans_dir seam is missing so the check cannot be pointed at the fixture dir.
+      plans_dir seam / PLAN-*.yaml glob is missing so the check cannot discover the fixture.
   - step: 3
     phase: pre-deploy
     action: >-
@@ -412,9 +421,12 @@ execution_steps:
     re-word c2 to the conservative-.tf-with-tier_waiver rule. Do NOT flip criterion statuses (that
     is /implement's bookkeeping walk on a verified VP pass).
   - >-
-    tests/fixtures/plan_documents/: create valid_v2.yaml (clean schema_version-2 plan),
+    tests/fixtures/plan_documents/: create valid_v2.yaml (clean schema_version-2 plan) and
     tier_floor_violation_v2.yaml (v2, active-manifest Lambda code file in scope, verification_tier
-    V2), and a _badphase_v2/ one-file subdir (v2 plan with phase 'pre-merge') for the step-1 seam.
+    V2). These are flat SOURCE fixtures loaded directly (test_plan_document) or copied into a
+    tempdir under a PLAN-{slug}.yaml name by the glob-based check tests/VP smokes -- so they are not
+    themselves discovered by validate_plan_documents'/validate_tier_floor's PLAN-*.yaml glob and do
+    not cross-contaminate. No _badphase subdir is needed (the bad-phase case is a tempdir copy).
   - >-
     tests/test_plan_document.py: add cases for v2 phase enum rejection, v1 free-text acceptance,
     hermetic default, and tier_waiver optional field.
