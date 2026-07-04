@@ -53,7 +53,7 @@
 #
 # GITHUB MCP (full toolset incl. Actions) -- GITHUB_MCP_PAT
 # The repo-root .mcp.json defines a `github-full` GitHub MCP server (stdio; the
-# github-mcp-server binary installed by step 7 below). It reads a GitHub PAT at
+# github-mcp-server binary installed by step 6 below). It reads a GitHub PAT at
 # runtime from ~/.config/gh-mcp/token. Supply that token via the PRIVATE "Setup
 # script" field -- NOT the env-var field: a PAT is a credential and the env-var
 # field is visible to anyone using the environment. Add this next to the ~/.aws
@@ -76,16 +76,19 @@
 #   setup-cloud-env.sh -- snapshot-cached installs (venv, deps, AWS CLI, optional Terraform, github-mcp-server, pre-commit hook envs).
 #   .claude/hooks/session_start_aws.sh -- verifies the static-key assume-role chain (every session).
 #   .claude/hooks/session_start_ensure_github_mcp.sh -- self-heals github-mcp-server on stale snapshots (every session).
+#   .claude/hooks/session_start_sync_deps.sh -- self-heals requirements.txt/requirements-dev.txt (and terraform binary) drift on stale snapshots (every session).
 #   .claude/hooks/session_start_precommit.sh -- re-wires the pre-commit .git hook (every session; .git/hooks does not survive a fresh clone).
 #
 # What it does:
 #   1. Creates .venv with python3.12.
 #   2. Installs uv (fast pip replacement); falls back to pip if install fails.
-#   3. Installs runtime + dev requirements via uv (or pip).
-#   4. Installs AWS CLI v2.
-#   Steps 3 and 4 are parallelised: AWS CLI download runs in the background
-#   while requirements install runs in the foreground.
-#   5. (opt-in) Installs Terraform when INSTALL_TERRAFORM=1.
+#   3. Installs AWS CLI v2.
+#   4. Installs runtime + dev requirements, and (opt-in, INSTALL_TERRAFORM=1)
+#      Terraform, via bin/sync-deps.sh -- also establishes the build-time
+#      fingerprint so a freshly-built snapshot boots in-sync (no session-1
+#      drift-install penalty). Steps 3 and 4 are parallelised: AWS CLI download
+#      runs in the background while step 4 runs in the foreground.
+#   5. Waits for the background AWS CLI install (step 3) to finish.
 #   6. Installs the github-mcp-server binary (for the .mcp.json `github-full`
 #      MCP server -- full GitHub toolset incl. Actions: workflow runs / job logs).
 #   7. Pre-builds the pre-commit hook environments into ~/.cache/pre-commit so
@@ -94,7 +97,7 @@
 # What it does NOT do:
 #   - Materialise ~/.aws/{credentials,config} or ~/.config/gh-mcp/token (done by
 #     the private "Setup script" field block above; this script only consumes them).
-#   - Install gh CLI (GitHub access is via MCP -- see github-mcp-server, step 7 -- not gh).
+#   - Install gh CLI (GitHub access is via MCP -- see github-mcp-server, step 6 -- not gh).
 #   - Install terraform unless INSTALL_TERRAFORM=1 (set only in the admin env).
 
 set -euo pipefail
@@ -148,24 +151,16 @@ else
     log "AWS CLI already present: $(aws --version 2>&1)"
 fi
 
-# 4. Requirements (foreground, parallel with step 3) --------------------------
+# 4. Requirements + terraform binary (foreground, parallel with step 3) ------
+# Delegated to bin/sync-deps.sh -- the single dependency-sync code path shared
+# with .claude/hooks/session_start_sync_deps.sh (every-session self-heal for a
+# snapshot venv that predates a requirements*.txt change). This call also
+# writes the fingerprint, so a freshly-built snapshot boots in-sync (no
+# session-1 drift-install penalty). Installs requirements always; installs the
+# terraform binary too when INSTALL_TERRAFORM=1 (admin container only).
 t0=$SECONDS
-if command -v uv >/dev/null 2>&1; then
-    log "Installing requirements.txt via uv"
-    uv pip install --python .venv/bin/python -q -r requirements.txt
-    if [ -f requirements-dev.txt ]; then
-        log "Installing requirements-dev.txt via uv"
-        uv pip install --python .venv/bin/python -q -r requirements-dev.txt
-    fi
-else
-    log "uv unavailable -- falling back to pip"
-    .venv/bin/python -m pip install --quiet --upgrade pip
-    .venv/bin/python -m pip install --quiet -r requirements.txt
-    if [ -f requirements-dev.txt ]; then
-        .venv/bin/python -m pip install --quiet -r requirements-dev.txt
-    fi
-fi
-log "requirements: $((SECONDS - t0))s"
+bash "$REPO_ROOT/bin/sync-deps.sh"
+log "sync-deps: $((SECONDS - t0))s"
 
 # 5. Wait for background AWS CLI install --------------------------------------
 if [ -n "$aws_install_pid" ]; then
@@ -174,33 +169,9 @@ if [ -n "$aws_install_pid" ]; then
     log "aws-cli-install: $((SECONDS - t0))s"
 fi
 
-# 6. Terraform (opt-in via INSTALL_TERRAFORM=1) -------------------------------
-# Only the infrastructure (PlatformAdmin) cloud environment needs Terraform.
-# Version is single-sourced from config/terraform-version (also read by the
-# terraform-validate CI job in .github/workflows/ci.yml) so local
-# `terraform fmt -check` / `validate` match CI exactly.
-if [ "${INSTALL_TERRAFORM:-0}" = "1" ]; then
-    TERRAFORM_VERSION="$(cat "$REPO_ROOT/config/terraform-version")"
-    if command -v terraform >/dev/null 2>&1 && terraform version | head -1 | grep -q "v${TERRAFORM_VERSION}"; then
-        log "Terraform ${TERRAFORM_VERSION} already present"
-    else
-        log "Installing Terraform ${TERRAFORM_VERSION}"
-        t0=$SECONDS
-        (
-            tmpdir="$(mktemp -d)"
-            trap 'rm -rf "$tmpdir"' EXIT
-            curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o "$tmpdir/terraform.zip"
-            unzip -q "$tmpdir/terraform.zip" -d "$tmpdir"
-            mkdir -p "$HOME/.local/bin"
-            install -m 0755 "$tmpdir/terraform" "$HOME/.local/bin/terraform"
-        ) && log "terraform: $((SECONDS - t0))s ($(terraform version | head -1))" \
-          || log "WARNING: Terraform install failed (non-fatal); install manually if needed."
-    fi
-else
-    log "Terraform install skipped (set INSTALL_TERRAFORM=1 in the admin env to enable)"
-fi
-
-# 6b. Terraform provider filesystem_mirror sync (rec-2514, Decision 119 reversal mechanism) --------
+# 5b. Terraform provider filesystem_mirror sync (rec-2514, Decision 119 reversal mechanism) -------
+# Terraform binary install (opt-in via INSTALL_TERRAFORM=1) is delegated to
+# bin/sync-deps.sh at step 4 above -- this step only syncs the provider mirror.
 # Only meaningful when terraform is installed (INSTALL_TERRAFORM=1, admin container). Syncs the
 # S3-seeded mirror -- populated out-of-band by the ONLY egress-having actor,
 # .github/workflows/terraform-provider-mirror-seed.yml -- so a proxy-blocked CC-web session can
@@ -236,7 +207,7 @@ else
     log "Terraform provider mirror sync skipped (INSTALL_TERRAFORM != 1)"
 fi
 
-# 7. github-mcp-server (for the .mcp.json `github-full` MCP server) ------------
+# 6. github-mcp-server (for the .mcp.json `github-full` MCP server) ------------
 # Idempotent install delegated to bin/ensure-github-mcp-server.sh -- the single
 # source of truth for the version pin + install logic. That script is also run
 # every session by .claude/hooks/session_start_ensure_github_mcp.sh, so a
@@ -249,7 +220,7 @@ else
     log "WARNING: github-mcp-server install failed (non-fatal); the github-full MCP server stays offline until installed."
 fi
 
-# 8. pre-commit hook environments (snapshot-cached) ---------------------------
+# 7. pre-commit hook environments (snapshot-cached) ---------------------------
 # pre-commit itself is installed via requirements-dev.txt (step 4). This pre-builds
 # the hook repos (pre-commit-hooks, ruff-pre-commit, detect-secrets) into
 # ~/.cache/pre-commit now -- while setup-time network is available -- so they are
