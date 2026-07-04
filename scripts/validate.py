@@ -192,6 +192,32 @@ from scripts.checks.verification.validate_verifier_same_pr_guard import (  # noq
 
 _FAST_TIER_BUDGET_SECONDS = 300
 
+_ROADMAP_YAML_PATHS = {"docs/ROADMAP-PLATFORM.yaml", "docs/ROADMAP-PRODUCT.yaml"}
+_ROADMAP_YAML_BASENAMES = {"ROADMAP-PLATFORM.yaml", "ROADMAP-PRODUCT.yaml"}
+
+
+def select_roadmap_guard_tests(changed_files: list[str], repo_root: _Path = ROOT) -> list[str]:
+    """Discover tests/**/*.py files that reference a roadmap YAML, so live-roadmap guard
+    tests (which pin state read directly off docs/ROADMAP-PLATFORM.yaml or
+    docs/ROADMAP-PRODUCT.yaml) run in the fast --pre tier whenever a roadmap YAML changes.
+    Returns [] when no roadmap YAML is present in changed_files -- never force-selects
+    the guard tests otherwise. Matches on the YAML basename (not the full docs/-prefixed
+    path) since guard tests typically build the path via Path(__file__).parent.parent /
+    "docs" / "ROADMAP-PLATFORM.yaml" rather than embedding the literal repo-relative string."""
+    if not any(f in _ROADMAP_YAML_PATHS for f in changed_files):
+        return []
+    guard_tests: list[str] = []
+    for path in sorted((repo_root / "tests").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if any(basename in text for basename in _ROADMAP_YAML_BASENAMES):
+            guard_tests.append(path.relative_to(repo_root).as_posix())
+    return guard_tests
+
 
 def _dispatch_check(name: str, failed: list[str]) -> None:
     """Resolve a registered check by name via this module's own namespace and call it.
@@ -358,6 +384,14 @@ def main() -> None:
         import re as _re
 
         changed_tests = [f for f in changed if _re.match(r"tests/.*test_[^/]+\.py$", f)]
+        # tier_misplaced fix (ci-rca-cd25-ratification-tier-gap): when a roadmap YAML
+        # changed, union in the tests/ files that reference it (dynamic discovery -- no
+        # hardcoded list) so the live-roadmap guard tests run in the fast --pre tier
+        # instead of only the full post-merge tier.
+        roadmap_guard_tests = select_roadmap_guard_tests(changed)
+        for f in roadmap_guard_tests:
+            if f not in changed_tests:
+                changed_tests.append(f)
 
         def _scaffold_lint() -> None:
             run_lint_checks(failed, files=changed)

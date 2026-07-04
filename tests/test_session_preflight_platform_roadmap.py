@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.platform_roadmap import compute_state_dict
+from scripts.platform_roadmap import compute_state_dict, load
 from scripts.session_preflight import _slim_roadmap_state
 
 _LIVE_YAML = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
@@ -213,21 +213,26 @@ class TestCompletionBlockedOnCdProjection:
                 f"{entry['id']}: completion_blocked_on_cd must be a list"
             )
 
-    def test_t112_surfaces_pending_gating_cd(self) -> None:
-        """close-audit-ulf-02 (2026-07-03): T-1.20 completed once CD.1 AND CD.13 both
-        ratified (Decisions 108/110), so it no longer surfaces a completion gate and is
-        absent from in_progress. Re-point this test to a still-in_progress item gated by
-        a real pending CD -- T1.12 is in_progress and gated by pending CD.10/CD.11/CD.25 --
-        preserving the test's intent (completion_blocked_on_cd surfaces a real pending
-        gate) against live post-ratification state."""
+    def test_in_progress_surfaces_pending_gating_cd(self) -> None:
+        """dec-118 (Ratify CD.25, 2026-07-03) completed T1.12 (now absent from
+        in_progress) and discharged the CD.25-scoped exemption -- re-pinning this test
+        to any concrete item/CD would re-arm the exact tier_misplaced fragility this
+        plan fixes (the pin breaks again the moment that CD ratifies or item
+        completes). Anchor on the INVARIANT instead, matching the sibling
+        test_full_blocked_on_cd_carried pattern: at least one in_progress item carries
+        a non-empty completion_blocked_on_cd whose entries are all still-pending CDs."""
         state = self._full_state()
         full = _slim_roadmap_state(state, full=True)
-        t120 = next((i for i in full.get("in_progress", []) if i["id"] == "T-1.20"), None)
-        assert t120 is None, "T-1.20 expected complete (absent from in_progress) post-ratification"
-        t112 = next((i for i in full.get("in_progress", []) if i["id"] == "T1.12"), None)
-        assert t112 is not None, "T1.12 expected in in_progress"
-        assert "CD.25" in t112["completion_blocked_on_cd"], (
-            f"CD.25 expected in T1.12 completion_blocked_on_cd, got {t112['completion_blocked_on_cd']}"
+        cd_by_id = {cd.id: cd for cd in load(_LIVE_YAML).candidate_decisions}
+        matches = [
+            entry
+            for entry in full.get("in_progress", [])
+            if entry.get("completion_blocked_on_cd")
+            and all(cd_by_id[cd_id].state == "pending" for cd_id in entry["completion_blocked_on_cd"])
+        ]
+        assert matches, (
+            "expected at least one in_progress item with a non-empty "
+            "completion_blocked_on_cd whose entries are all pending CDs"
         )
 
     def test_slim_projection_omits_in_progress(self) -> None:

@@ -249,13 +249,17 @@ class TestResolveInheritedExemption:
 class TestLiveRoadmapInheritance:
     def test_live_roadmap_this_plan_inherits_from_t_1_12(self) -> None:
         """The live ROADMAP-PLATFORM.yaml must resolve PLAN-implement-skill-
-        decomposition-hints to bootstrap_completion_exempt=True via parent T-1.12."""
+        decomposition-hints to bootstrap_completion_exempt=False via parent T-1.12.
+
+        dec-118 (Ratify CD.25) discharged T-1.12's CD.25-scoped exemption --
+        T-1.12 still matches as the parent (its decomposition_hints.atomic_plans
+        still names this plan), it is merely non-exempt now."""
         doc = load(ROADMAP_PATH)
         result = resolve_inherited_exemption(doc, "implement-skill-decomposition-hints")
-        assert result is True, (
-            f"Expected inherited True from T-1.12, got {result!r}. "
+        assert result is False, (
+            f"Expected inherited False from T-1.12 (post dec-118 discharge), got {result!r}. "
             "Check that T-1.12's decomposition_hints.atomic_plans still names "
-            "PLAN-implement-skill-decomposition-hints."
+            "PLAN-implement-skill-decomposition-hints and its bootstrap_completion_exempt is False."
         )
         # Also verify the matched parent is T-1.12 specifically
         matched_parent_id: str | None = None

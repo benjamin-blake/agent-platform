@@ -516,17 +516,7 @@ class TestCD25SchemaAmendments:
             "T0.9",
             "T0.12",
             "T0.13",
-            "T-1.11",
-            "T-1.12",
-            "T-1.13",
-            "T-1.14",
-            "T-1.15",
-            "T-1.16",
-            "T-1.17",
-            "T-1.18",
-            "T-1.19",
             "T0.12.5",
-            "T0.12.6",
             "T0.12.7",
             # Migration-realized items (platform-roadmap-reconciliation 2026-05-31):
             # same circular ratification bind as the items above -- T0.7b not yet built.
@@ -543,6 +533,10 @@ class TestCD25SchemaAmendments:
             "T2.5",
             "T2.17",
         }
+        # dec-118 (Ratify CD.25, 2026-07-03) discharged the CD.25-scoped exemption for
+        # the 10 items gated solely by CD.25 (T-1.11..T-1.19, T0.12.6); they are no
+        # longer bootstrap_completion_exempt. T0.12.5 (CD.29) and T0.12.7 (CD.10) remain
+        # exempt -- gated by other still-pending CDs.
         actual = {item.id for item in doc.tier_items if item.bootstrap_completion_exempt}
         assert actual == expected, f"missing={expected - actual} extra={actual - expected}"
 
@@ -552,7 +546,7 @@ class TestCD25SchemaAmendments:
         doc = load(roadmap)
         cd25 = next((c for c in doc.candidate_decisions if c.id == "CD.25"), None)
         assert cd25 is not None, "CD.25 missing from candidate_decisions[]"
-        assert cd25.state == "pending"
+        assert cd25.state == "ratified"
         assert cd25.bootstrap_allowance is True
         assert isinstance(cd25.decision_required_before, list)
         assert len(cd25.decision_required_before) >= 1
