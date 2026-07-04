@@ -1,0 +1,335 @@
+schema_version: 1
+slug: "ci-ducklake-lambda-rebuild"
+intent: >-
+  Fix rec-2512: the terraform-apply-sandbox CI pipeline never rebuilds the DuckLake
+  lambda-packages zips before `terraform plan`, so filemd5() silently resolves to null and
+  rebuilt layers (notably the pg_restore-carrying pgclient layer) never reach a deployed
+  version. Repairing the rebuild-then-publish path unblocks the rec-2113 DR restore drill and
+  restores the "rebuild republishes automatically" contract the platform depends on.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-ducklake-lambda-rebuild.yaml
+phase: >-
+  Platform T2.18 FP-B (DuckLake catalog DR) / CD.35 sandbox auto-apply pipeline hardening.
+  Unblocks rec-2113 restore-drill gate (Decision 88 D3b hard gate; Decision 107 swap-back precondition).
+scope:
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      Add a profile-less / env-credentials invocation path (omit `--profile` from every aws CLI
+      call when the resolved profile is empty) so `--ducklake-only` runs under GitHub-hosted OIDC
+      runners that have no named AWS profile; make the seven DuckLake zip builders byte-reproducible
+      (sorted file iteration order, pinned ZipInfo date_time and permissions) so filemd5 is stable
+      across builds and the apply-path re-upload is idempotent vs the PR-job artifact (Decision 77).
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Run `bin/venv-python -m scripts.build_lambda --ducklake-only` (build + S3 upload) BEFORE
+      `terraform plan` in the speculative-plan PR job (so the reviewed plan.bin captures a real
+      filemd5 AND the referenced S3 content is uploaded) and in the apply-sandbox job
+      (workflow_dispatch fresh-plan path and push apply-the-saved-plan path; the push-path upload
+      is idempotent-by-reproducibility). No build step is needed in gated-apply (it applies the
+      already-reviewed plan.bin against S3 content the speculative-plan job uploaded).
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Widen the github_ci_plan inline policy: add s3:GetObject on ducklake-pgclient/* and
+      ducklake-extensions/* (fetch the vendored pg_dump/pg_restore bundle + pinned extensions at
+      build time) and s3:PutObject on lambda-packages/* (upload the reviewed zips from the PR job).
+      github_ci_apply already carries bucket-wide DataLakeObjectIO (GetObject+PutObject) so it needs
+      no change. This inline-policy widening is OUT-of-budget IAM (github_ci_plan is not in the
+      T2.25 in-budget set) and routes to the tf-gated-apply human-approval Environment.
+  - file: tests/test_build_lambda.py
+    action: Modify
+    purpose: >-
+      Add tests asserting (a) aws CLI argv omits `--profile` when the profile is empty and includes
+      it when non-empty; (b) the DuckLake zip builders are byte-reproducible -- building the same
+      input tree twice yields byte-identical zip output (equal md5).
+bundled_recommendations:
+  - rec-2512
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf github_ci_plan inline-policy widening is OUT-of-budget IAM (T2.25 /
+    Decision 92 in-budget set is only github-ci-branch + github-ci-pr). The deterministic apply
+    guard exits 2 and routes this change to the tf-gated-apply GitHub Environment for human
+    approval (benjamin-blake). It does NOT ride sandbox auto-apply.
+  - >-
+    github_ci_plan is an EXISTING role (inline-policy UPDATE, not a role create), so Decision 98's
+    admin-create clause does not apply. Confirm github_ci_plan's ARN is already covered by the
+    apply role's IAMRolesRead/IAMPlatformRolesRead refresh grant so the pipeline can refresh it
+    at plan time; if absent, that read grant must land first (bootstrap github_ci_apply.tf).
+  - >-
+    IAM precedes code deploy (terraform/CLAUDE.md): the oidc.tf gated-apply MUST land before the
+    build steps can succeed in the speculative-plan PR job (which assumes github_ci_plan). Until it
+    lands, the speculative-plan build step fails closed on S3 AccessDenied.
+  - >-
+    S3 prerequisite: the vendored bundle s3://agent-platform-data-lake/ducklake-pgclient/pgclient-bundle.tar.gz
+    (bin/{pg_dump,pg_restore} PG16 + lib closure) and the pinned ducklake-extensions objects must
+    already exist for the CI build to succeed (fail-closed). A VP pre-deploy step asserts presence;
+    seeding is out of scope for this plan.
+acceptance_criteria:
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml invokes `scripts.build_lambda` with
+    `--ducklake-only` before `terraform plan` in both the speculative-plan and apply-sandbox jobs
+    (rec-2512 literal acceptance: grep matches both `scripts.build_lambda` and `ducklake-only`).
+  - >-
+    scripts/build_lambda.py omits `--profile` from aws CLI invocations when the resolved profile is
+    empty, and includes it when non-empty (verified by unit test exercising the argv).
+  - >-
+    The seven DuckLake zip builders produce byte-identical output across two builds of the same
+    input tree (equal md5), verified by unit test.
+  - >-
+    terraform/personal/oidc.tf github_ci_plan inline policy grants s3:GetObject on
+    ducklake-pgclient/* and ducklake-extensions/*, and s3:PutObject on lambda-packages/*
+    (grep + `terraform -chdir=terraform/personal validate` passes).
+  - >-
+    `bin/venv-python -m scripts.validate --pre` passes on the branch.
+  - >-
+    POST-DEPLOY: after the gated-apply of oidc.tf and a pipeline run, the deployed
+    ducklake_catalog_dr function's pgclient layer version contains /opt/bin/pg_restore, and the
+    rec-2113 restore drill (`ducklake_neon_smoke_test --catalog-restore-drill`) no longer fails
+    with FileNotFoundError /opt/bin/pg_restore.
+  - >-
+    rec-2512 is closed via the Resolves: trailer (or ops portal update) after merge.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Unit test -- deterministic zip output. Build a DuckLake layer zip twice from an identical
+      fixture tree and assert byte-identical output (equal md5), proving sorted iteration + pinned
+      ZipInfo timestamps/permissions. This is the load-bearing Decision-77 mitigation.
+    command: >-
+      bin/venv-python -m pytest tests/test_build_lambda.py -k "determinis or reproducib" -q
+    expected: Tests pass; two builds of the same tree yield equal md5.
+    fix_if: >-
+      Non-identical md5 means a builder still iterates rglob() unsorted or writes wall-clock mtimes;
+      sort the file list and set ZipInfo.date_time to a fixed epoch + explicit external_attr.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Unit test -- profile-less env-creds path. Assert aws CLI argv omits `--profile` when the
+      resolved profile is empty (CI/OIDC) and includes it when non-empty (local).
+    command: >-
+      bin/venv-python -m pytest tests/test_build_lambda.py -k "profile" -q
+    expected: Tests pass; empty profile -> no `--profile` token in argv; non-empty -> present.
+    fix_if: >-
+      If `--profile ""` still appears in argv, the aws-invocation helper is not conditionally
+      dropping the flag; gate the two `--profile`, profile tokens on `if profile:`.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      rec-2512 literal acceptance -- the workflow builds ducklake packages before plan.
+    command: >-
+      grep -q 'scripts.build_lambda' .github/workflows/terraform-apply-sandbox.yml && grep -q
+      'ducklake-only' .github/workflows/terraform-apply-sandbox.yml && echo ACCEPTANCE_OK
+    expected: Prints ACCEPTANCE_OK.
+    fix_if: >-
+      Missing match means the build step was not added to the workflow (or not to both jobs); add
+      the `build_lambda --ducklake-only` step before the terraform plan step in speculative-plan
+      and apply-sandbox.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      oidc.tf github_ci_plan grants present and terraform config is valid.
+    command: >-
+      grep -Eq 'ducklake-pgclient|ducklake-extensions' terraform/personal/oidc.tf && grep -q
+      'lambda-packages' terraform/personal/oidc.tf && terraform -chdir=terraform/personal init
+      -backend=false -input=false >/dev/null && terraform -chdir=terraform/personal validate
+    expected: >-
+      grep matches the new object-read/write ARNs in the github_ci_plan policy and `terraform
+      validate` reports success.
+    fix_if: >-
+      grep miss -> the GetObject (ducklake-pgclient/*, ducklake-extensions/*) or PutObject
+      (lambda-packages/*) statements were not added to the github_ci_plan inline policy. validate
+      error -> fix the HCL (jsonencode statement shape).
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Full fast presubmit -- authoritative pre-merge gate.
+    command: >-
+      bin/venv-python -m scripts.validate --pre
+    expected: Exit 0; all fast-tier checks pass (ruff, plan-schema, terraform fmt/validate, pytest subset).
+    fix_if: Address the specific failing check; re-run until green.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Confirm the live github_ci_plan inline policy carries the new grants after the tf-gated-apply
+      of oidc.tf (IAM must land before the pipeline build can succeed).
+    command: >-
+      aws iam get-role-policy --role-name agent-platform-github-ci-plan --policy-name
+      agent-platform-github-ci-plan --profile agent_platform | python3 -c "import sys,json,urllib.parse;
+      d=json.load(sys.stdin); pol=json.loads(urllib.parse.unquote(d['PolicyDocument']));
+      res=' '.join(str(s.get('Resource')) for s in pol['Statement']);
+      assert 'ducklake-pgclient' in res and 'ducklake-extensions' in res and 'lambda-packages' in res,
+      'missing grant'; print('IAM_LIVE_OK')"
+    expected: Prints IAM_LIVE_OK.
+    fix_if: >-
+      Missing grant means the gated-apply has not landed (approve the tf-gated-apply job) or the
+      oidc.tf edit did not include all three ARNs. Do NOT proceed to the layer-rebuild steps until
+      IAM is live (IAM-precedes-deploy).
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Confirm a rebuilt pgclient layer version reached deployment and carries /opt/bin/pg_restore
+      (the rec-2113 blocker). Resolve the function's attached pgclient layer, download that exact
+      published layer version zip, and assert bin/pg_restore is present.
+    command: >-
+      bin/venv-python - <<'PY'
+      import boto3, zipfile, io, urllib.request, os
+      s = boto3.Session(profile_name="agent_platform", region_name="eu-west-2")
+      lam = s.client("lambda")
+      fn = lam.get_function(FunctionName="agent-platform-ducklake-catalog-dr")
+      layers = [l["Arn"] for l in fn["Configuration"].get("Layers", []) if "ducklake-pgclient" in l["Arn"]]
+      assert layers, "no pgclient layer attached"
+      arn = layers[0]
+      name, ver = arn.split(":layer:")[1].rsplit(":", 1)
+      lv = lam.get_layer_version(LayerName=name, VersionNumber=int(ver))
+      url = lv["Content"]["Location"]
+      data = urllib.request.urlopen(url, timeout=120).read()
+      names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+      assert any(n.endswith("bin/pg_restore") for n in names), f"pg_restore absent from {arn}: {names[:20]}"
+      print("PG_RESTORE_DEPLOYED_OK", arn)
+      PY
+    expected: Prints PG_RESTORE_DEPLOYED_OK with the layer ARN; the attached layer version contains bin/pg_restore.
+    fix_if: >-
+      pg_restore absent -> the rebuild did not republish the layer (build step not wired into the
+      applied path, or the S3 bundle lacks pg_restore). Re-seed the bundle / re-run the pipeline
+      via workflow_dispatch and re-check.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Exercise the rec-2113 restore drill end-to-end against the deployed function; it must no
+      longer fail on the missing pg_restore binary.
+    command: >-
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --catalog-restore-drill
+    expected: >-
+      Restore drill completes without FileNotFoundError /opt/bin/pg_restore (drill passes or fails
+      only on genuine data assertions, not the missing binary).
+    fix_if: >-
+      Still FileNotFoundError -> the deployed layer version does not carry pg_restore (return to
+      step 7). Any other failure -> a real restore-drill defect; RCA and file a rec (Decision 55),
+      do not patch inline.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Confirm rec-2512 closed after the Resolves trailer / portal update and the read cache refresh.
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull >/dev/null && bin/venv-python -c "import json,pathlib;
+      r=next(x for x in (json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()) if
+      x.get('id')=='rec-2512'); print(r.get('status')); assert r.get('status')=='closed'"
+    expected: Prints `closed`.
+    fix_if: >-
+      Not closed -> the Resolves: rec-2512 trailer was omitted from the squash-merge; close via
+      `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2512 --status closed
+      --resolution "CI now rebuilds DuckLake lambda-packages before plan"`.
+constraints:
+  - >-
+    Decision 77 (no-TOCTOU apply-the-saved-plan): the push path applies the SAME plan.bin the guard
+    inspected. Byte-reproducible zips (VP step 1) are the load-bearing mitigation -- the apply-path
+    re-upload must be idempotent vs the PR-job artifact so the applied layer content matches the
+    reviewed filemd5. No re-plan is introduced on the push path.
+  - >-
+    Decision 92 / T2.25: github_ci_plan is NOT in the in-budget IAM auto-apply set; the oidc.tf
+    widening is out-of-budget and MUST route to the tf-gated-apply human-approval Environment. Do
+    not expect or force sandbox auto-apply for the IAM change.
+  - >-
+    terraform/CLAUDE.md IAM-precedes-deploy: the gated-apply of oidc.tf must land before the
+    speculative-plan build step (which assumes github_ci_plan) can succeed.
+  - >-
+    Decision 100 scoping: pg_restore is retained here for the DR restore-drill path (Decisions 107
+    + 88 D3b), which is DISTINCT from the read-clone / clone-rehearsal path D100 moved to Neon
+    native branching. This plan does not reintroduce the forbidden client-tooling substitution.
+  - >-
+    Public-repo boundary (Decision 101): never emit account IDs, ARNs with account numbers, or
+    ExternalIds into committed files, PR bodies, or chat. oidc.tf uses var.account_id interpolation.
+  - No rescue agents or workaround loops (Decision 55); on unrecoverable V3 failure, stop and RCA.
+  - >-
+    Scope discipline: only DuckLake artifact builders get the determinism + profile-less treatment
+    required by CI; prod builders (data-pipeline, ops-compaction) are out of scope.
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE, no BLOCK;
+    triaged 78 of 78). CITE: Decision 77, Decision 79, Decision 88, Decision 92 (T2.25),
+    Decision 107. RELATED: Decision 98, Decision 84, Decision 94, Decision 82. NOTE flags:
+    Decision 100 (pg_restore-in-layer -- resolved: DR path retained per 107+88, distinct from the
+    D100 read-clone path) and Decision 77 (re-upload TOCTOU -- resolved: byte-reproducibility +
+    idempotent apply-path upload).
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    HARD-BLOCK DEFERRAL RATIONALE (Related-Work check): three unresolved ci-rca recs
+    (rec-2504/2505/2506) were open at planning time, all citing stale post-CD.25 roadmap-guard
+    tests in tests/test_platform_roadmap.py / test_implement_skill_decomposition_hints.py /
+    test_session_preflight_platform_roadmap.py (a forward_fix_recursion_alert at threshold=3 on
+    test_platform_roadmap.py). rec-2512 satisfies NONE of the three Related-Work conditions
+    (different files: build_lambda.py / terraform-apply-sandbox.yml / oidc.tf; different Decision
+    Records: CD.34/88/107 vs CD.25/T1.12; different failure category: V3 deploy-pipeline gap vs
+    pytest fixture regression). The operator explicitly directed proceeding with rec-2512 anyway;
+    the ci-rca recs remain to be addressed in a separate session. This deferral is logged per the
+    planning skill's Related-Work check escape hatch.
+  - >-
+    Root cause (rec-2512): lambda-packages/ is gitignored, so in the CI checkout
+    try(filemd5('lambda-packages/*.zip'), null) yields null; terraform never detects DuckLake
+    layer/function content changes. Live evidence: attached pgclient layer is version 2
+    (2026-06-07, no pg_restore); even published v3 (2026-06-26) ships only .so libs, no bin/. The
+    rec-2113 restore drill fails with FileNotFoundError /opt/bin/pg_restore as a direct result.
+  - >-
+    filemd5 surface (all seven DuckLake artifacts): ducklake_catalog_dr.tf (pgclient layer +
+    catalog-dr fn), ducklake_lambdas.tf (deps layer, extensions layer, writer fn, reader fn),
+    ducklake_maintenance.tf (maintenance fn). `build_lambda --ducklake-only` builds all seven.
+  - >-
+    IAM asymmetry: github_ci_apply has bucket-wide DataLakeObjectIO (GetObject+PutObject on
+    data-lake/*) so it already reads the bundle + writes lambda-packages -- no change. github_ci_plan
+    is scoped to tfstate/* + tfplan/* only, so it must be widened (out-of-budget -> gated-apply).
+  - >-
+    build_lambda.py hard-codes --profile on every aws call (upload_to_s3, _try_s3_pgclient,
+    _try_s3_extension, validate_bucket_exists, update_lambda_functions). CI/OIDC runners have no
+    named profile; the workflow blanks TF_VAR_aws_profile and uses OIDC env creds. The profile-less
+    path threads an "omit --profile when empty" through all of these call sites.
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok); no scope-file
+    divergence. Main was RED at planning time (the deferred ci-rca test failures), unrelated to
+    this plan's scope.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/plan-rec-2512-jww1b6)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant sections read (via decision-scout gate)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - S3 bundle prerequisite (ducklake-pgclient/pgclient-bundle.tar.gz) confirmed present before pipeline steps
+execution_steps:
+  - >-
+    scripts/build_lambda.py -- add a small helper that appends `--profile <name>` to aws argv only
+    when the resolved profile is non-empty, and route upload_to_s3, _try_s3_pgclient,
+    _try_s3_extension, validate_bucket_exists, and update_lambda_functions through it. Allow
+    `--profile ""` (empty) to select env-credential mode. Make the seven DuckLake zip builders
+    byte-reproducible: iterate files in sorted order and set an explicit fixed ZipInfo.date_time +
+    external_attr (permissions) for every entry (functions, deps, extensions, pgclient).
+  - >-
+    tests/test_build_lambda.py -- add: (a) argv test that empty profile omits `--profile` and a
+    non-empty profile includes it; (b) determinism test building the same fixture tree twice and
+    asserting byte-identical zip bytes / equal md5.
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml -- add a "Build DuckLake lambda packages" step
+    (bin/venv-python -m scripts.build_lambda --ducklake-only, empty/env-creds profile) before the
+    terraform plan step in the speculative-plan PR job (build + upload) AND in the apply-sandbox job
+    (before both the workflow_dispatch fresh-plan step and the push apply-the-saved-plan; the
+    push-path upload is idempotent by reproducibility). Do NOT add a build step to gated-apply.
+  - >-
+    terraform/personal/oidc.tf -- widen the github_ci_plan inline policy with s3:GetObject on
+    arn:.../ducklake-pgclient/* and arn:.../ducklake-extensions/* and s3:PutObject on
+    arn:.../lambda-packages/* (use var.account_id / aws_s3_bucket.data_lake.arn interpolation; no
+    literal account id). Present the terraform plan; this routes to tf-gated-apply (guard exit 2) --
+    obtain human approval; IAM lands before the pipeline build can succeed.
+  - >-
+    Execute Verification Plan -- run each pre-deploy step; loop until pass. Then, after the
+    tf-gated-apply of oidc.tf lands, run the post-deploy steps (IAM-live -> layer rebuilt with
+    pg_restore -> restore drill -> rec closure). On an unrecoverable V3 failure, stop and RCA
+    (Decision 55).
+  - "Report: what was implemented, per-step verification results, and the deployed pgclient layer version."
+work_areas: []
+rollback: >-
+  Workflow + build_lambda changes revert via a normal PR (no infra state). The oidc.tf
+  github_ci_plan widening reverts via a follow-up gated-apply removing the added statements; the
+  role is not destroyed. Republished layer versions are immutable and additive -- rollback is
+  repointing the function to the prior layer version, not deleting versions.
