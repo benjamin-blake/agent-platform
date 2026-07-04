@@ -5428,7 +5428,7 @@ class TestValidateGhasProbe:
             failed: list[str] = []
             validate_ghas_probe(failed)
         assert failed != []
-        assert "secret_scanning=disabled" in failed[0]
+        assert "scanning_status=disabled" in failed[0]
 
     def test_check_skips_when_token_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GHAS_PROBE_TOKEN", raising=False)
