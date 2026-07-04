@@ -266,6 +266,49 @@ jobs:
           done
           set -e
 
+      - name: Build DuckLake lambda packages (rebuild before plan/apply, rec-2512)
+        id: build_ducklake
+        # rec-2512: lambda-packages/ is gitignored, so filemd5() in the terraform config silently
+        # resolves to null on a CI checkout and terraform never detects layer/function content
+        # changes. Rebuild the seven DuckLake artifacts here, before plan/apply, using the
+        # profile-less env-credential path (this GitHub-hosted OIDC runner has no named AWS
+        # profile). On push (apply-the-saved-plan path, Decision 77 no-TOCTOU): the plan.bin about
+        # to be applied was reviewed against the PR job's uploaded S3 objects, so assert the
+        # freshly rebuilt zips are byte-identical to those objects BEFORE re-uploading -- a
+        # mismatch means the applied layer content would skew from the reviewed plan and must fail
+        # closed rather than silently apply divergent bytes. workflow_dispatch (fresh plan) skips
+        # the assert since there is no prior speculative-plan artifact to compare against.
+        if: success()
+        env:
+          BUCKET: agent-platform-data-lake
+        run: |
+          set -euo pipefail
+          # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
+          # import-time deps directly, mirroring ci.yml's "Install validate.py import-time deps".
+          pip install pyyaml pydantic
+          python -m scripts.build_lambda --ducklake-only --skip-upload --profile ""
+          NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "Push path: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded S3 objects."
+            for name in $NAMES; do
+              local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
+              if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
+                echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing S3 object found (PR job did not upload it); failing closed (Decision 77 no-TOCTOU)." >&2
+                exit 1
+              fi
+              remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
+              if [ "$local_md5" != "$remote_md5" ]; then
+                echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: local=${local_md5} remote=${remote_md5}; applied layer content would skew from the reviewed plan.bin. Failing closed (Decision 77 no-TOCTOU)." >&2
+                exit 1
+              fi
+            done
+            echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded artifacts."
+          fi
+          echo "Uploading DuckLake zips to s3://${BUCKET}/lambda-packages/..."
+          for name in $NAMES; do
+            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
+          done
+
       - name: Fetch saved plan from S3 (push -- apply-the-saved-plan path, T2.21)
         id: fetch_plan
         # CD.35 Wave 2: on push to main, apply the SAME plan.bin reviewed on the PR (no re-plan).
@@ -594,6 +637,24 @@ jobs:
             exit "$rc"
           done
           set -e
+
+      - name: Build DuckLake lambda packages (build + upload before plan, rec-2512)
+        id: build_ducklake
+        # rec-2512: rebuild + upload the seven DuckLake artifacts BEFORE the speculative plan so the
+        # reviewed plan.bin captures a real filemd5 (lambda-packages/ is gitignored -- without this,
+        # filemd5() resolves to null and terraform never detects layer/function content changes) AND
+        # the referenced S3 content actually exists for the apply-sandbox job to re-verify at merge
+        # time. Profile-less env-credential path (this GitHub-hosted OIDC runner has no named AWS
+        # profile) under the github_ci_plan role (widened by terraform/personal/oidc.tf to grant
+        # s3:GetObject on the pgclient/extensions vendored bundles and s3:PutObject on
+        # lambda-packages/*).
+        if: success() && steps.oidc_plan.outcome == 'success'
+        run: |
+          set -euo pipefail
+          # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
+          # import-time deps directly, mirroring ci.yml's "Install validate.py import-time deps".
+          pip install pyyaml pydantic
+          python -m scripts.build_lambda --ducklake-only --profile "" --bucket agent-platform-data-lake
 
       - name: Terraform speculative plan (-lock=false, read-only preview)
         id: spec_plan

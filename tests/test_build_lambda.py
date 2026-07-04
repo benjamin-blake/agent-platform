@@ -1,6 +1,7 @@
 """Tests for build_lambda module."""
 
 import gzip
+import hashlib
 import types
 from unittest.mock import MagicMock, patch
 
@@ -968,3 +969,141 @@ class TestBuildPgclientLayerPgRestoreGuard:
         ):
             result = bl.build_pgclient_layer(tmp_path, bucket="my-bucket", profile="p", region="r")
         assert result.name == "ducklake-pgclient-layer.zip"
+
+
+class TestProfilelessArgv:
+    """aws CLI argv omits `--profile` when the resolved profile is empty (GitHub-hosted OIDC
+    runners resolve creds from the environment and have no named profile) and includes it when
+    non-empty (local/agent_platform dev). Unblocks `--ducklake-only` under CI (rec-2512)."""
+
+    def test_aws_profile_args_empty(self):
+        assert bl._aws_profile_args("") == []
+
+    def test_aws_profile_args_non_empty(self):
+        assert bl._aws_profile_args("agent_platform") == ["--profile", "agent_platform"]
+
+    def test_upload_to_s3_omits_profile_when_empty(self, tmp_path):
+        zip_path = tmp_path / "x.zip"
+        zip_path.write_bytes(b"z")
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            bl.upload_to_s3(zip_path, "bucket", "", "eu-west-2")
+        argv = mock_run.call_args[0][0]
+        assert "--profile" not in argv
+
+    def test_upload_to_s3_includes_profile_when_set(self, tmp_path):
+        zip_path = tmp_path / "x.zip"
+        zip_path.write_bytes(b"z")
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            bl.upload_to_s3(zip_path, "bucket", "agent_platform", "eu-west-2")
+        argv = mock_run.call_args[0][0]
+        assert "--profile" in argv
+        assert "agent_platform" in argv
+
+    def test_validate_bucket_exists_omits_profile_when_empty(self):
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            bl.validate_bucket_exists("bucket", "", "eu-west-2")
+        argv = mock_run.call_args[0][0]
+        assert "--profile" not in argv
+
+    def test_update_lambda_functions_omits_profile_when_empty(self):
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.return_value = types.SimpleNamespace(returncode=0, stderr="")
+            bl.update_lambda_functions("bucket", "", "eu-west-2", only_ducklake=True)
+        assert mock_run.call_args_list
+        for call in mock_run.call_args_list:
+            assert "--profile" not in call[0][0]
+
+    def test_update_lambda_functions_includes_profile_when_set(self):
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.return_value = types.SimpleNamespace(returncode=0, stderr="")
+            bl.update_lambda_functions("bucket", "agent_platform", "eu-west-2", only_ducklake=True)
+        assert mock_run.call_args_list
+        for call in mock_run.call_args_list:
+            assert "--profile" in call[0][0]
+            assert "agent_platform" in call[0][0]
+
+    def test_try_s3_pgclient_omits_profile_when_empty(self):
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.return_value = types.SimpleNamespace(returncode=1, stdout="", stderr="")
+            bl._try_s3_pgclient("bucket", "pgclient-bundle.tar.gz", "", "eu-west-2")
+        argv = mock_run.call_args[0][0]
+        assert "--profile" not in argv
+
+    def test_try_s3_extension_omits_profile_when_empty(self):
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.return_value = types.SimpleNamespace(returncode=1, stdout="", stderr="")
+            bl._try_s3_extension("bucket", "ducklake", "", "eu-west-2")
+        argv = mock_run.call_args[0][0]
+        assert "--profile" not in argv
+
+
+class TestDucklakeZipDeterminism:
+    """The seven DuckLake zip builders produce byte-identical output across two builds of the
+    same input tree (Decision 77 no-TOCTOU mitigation: the push apply-path re-upload must be
+    idempotent vs. the reviewed PR-job artifact's filemd5)."""
+
+    def test_staged_dir_byte_identical_across_two_builds(self, tmp_path):
+        """_zip_staged_dir backs the four DuckLake function zips (writer/reader/maintenance/catalog-dr)."""
+        stage1 = tmp_path / "stage1"
+        stage2 = tmp_path / "stage2"
+        for stage in (stage1, stage2):
+            (stage / "sub").mkdir(parents=True)
+            (stage / "a.py").write_text("a=1", encoding="utf-8")
+            (stage / "sub" / "b.py").write_text("b=2", encoding="utf-8")
+
+        zip1 = bl._zip_staged_dir(stage1, tmp_path / "one.zip")
+        zip2 = bl._zip_staged_dir(stage2, tmp_path / "two.zip")
+
+        assert hashlib.md5(zip1.read_bytes()).hexdigest() == hashlib.md5(zip2.read_bytes()).hexdigest()
+
+    def test_deps_layer_byte_identical_across_two_builds(self, tmp_path):
+        from pathlib import Path
+
+        def fake_run(cmd, **kw):
+            target = Path(cmd[cmd.index("--target") + 1])
+            (target / "foo.py").write_text("x=1", encoding="utf-8")
+            (target / "bar").mkdir()
+            (target / "bar" / "baz.py").write_text("y=2", encoding="utf-8")
+            return types.SimpleNamespace(returncode=0)
+
+        out_dir_1 = tmp_path / "out1"
+        out_dir_1.mkdir()
+        out_dir_2 = tmp_path / "out2"
+        out_dir_2.mkdir()
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            with patch("scripts.build_lambda.OUTPUT_DIR", out_dir_1):
+                zip1 = bl.build_ducklake_deps_layer(tmp_path / "build1")
+            with patch("scripts.build_lambda.OUTPUT_DIR", out_dir_2):
+                zip2 = bl.build_ducklake_deps_layer(tmp_path / "build2")
+
+        assert hashlib.md5(zip1.read_bytes()).hexdigest() == hashlib.md5(zip2.read_bytes()).hexdigest()
+
+    def test_extensions_layer_byte_identical_across_two_builds(self, tmp_path):
+        out_dir_1 = tmp_path / "out1"
+        out_dir_1.mkdir()
+        out_dir_2 = tmp_path / "out2"
+        out_dir_2.mkdir()
+        with patch("scripts.build_lambda._fetch_extension_bytes", return_value=b"EXTDATA"):
+            with patch("scripts.build_lambda.OUTPUT_DIR", out_dir_1):
+                zip1 = bl.build_ducklake_extensions_layer(tmp_path / "build1", bucket="b", profile="p", region="r")
+            with patch("scripts.build_lambda.OUTPUT_DIR", out_dir_2):
+                zip2 = bl.build_ducklake_extensions_layer(tmp_path / "build2", bucket="b", profile="p", region="r")
+        assert hashlib.md5(zip1.read_bytes()).hexdigest() == hashlib.md5(zip2.read_bytes()).hexdigest()
+
+    def test_pgclient_layer_byte_identical_across_two_builds(self, tmp_path):
+        bundle_bytes = _make_pgclient_bundle(include_pg_restore=True)
+        out_dir_1 = tmp_path / "out1"
+        out_dir_1.mkdir()
+        out_dir_2 = tmp_path / "out2"
+        out_dir_2.mkdir()
+        with (
+            patch("scripts.build_lambda._try_s3_pgclient", return_value=bundle_bytes),
+            patch("scripts.build_lambda.subprocess.run", side_effect=_fake_version_run()),
+        ):
+            with patch("scripts.build_lambda.OUTPUT_DIR", out_dir_1):
+                zip1 = bl.build_pgclient_layer(tmp_path / "build1", bucket="my-bucket", profile="p", region="r")
+            with patch("scripts.build_lambda.OUTPUT_DIR", out_dir_2):
+                zip2 = bl.build_pgclient_layer(tmp_path / "build2", bucket="my-bucket", profile="p", region="r")
+        assert hashlib.md5(zip1.read_bytes()).hexdigest() == hashlib.md5(zip2.read_bytes()).hexdigest()

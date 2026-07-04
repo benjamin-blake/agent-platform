@@ -220,16 +220,34 @@ def _get_lambda_file_patterns() -> list[str]:
 LAMBDA_FILE_PATTERNS: list[str] = _get_lambda_file_patterns()
 
 
+# Fixed ZipInfo timestamp (DOS epoch floor) so byte-reproducible zips don't leak build-time
+# wall-clock mtimes into the archive (Decision 77 no-TOCTOU: the applied zip must be byte-identical
+# to the reviewed PR-job artifact).
+_FIXED_ZIP_DATETIME = (1980, 1, 1, 0, 0, 0)
+
+
+def _deterministic_zipinfo(arcname: str, *, executable: bool = False) -> zipfile.ZipInfo:
+    """Build a ZipInfo with a pinned timestamp + explicit permission bits (no filesystem mtime leak)."""
+    info = zipfile.ZipInfo(arcname, date_time=_FIXED_ZIP_DATETIME)
+    info.external_attr = (0o755 if executable else 0o644) << 16
+    return info
+
+
 def _zip_staged_dir(stage_dir: Path, zip_path: Path) -> Path:
-    """Write all files in stage_dir into zip_path (ZIP_DEFLATED)."""
+    """Write all files in stage_dir into zip_path (ZIP_DEFLATED), byte-reproducibly.
+
+    Sorted iteration + pinned ZipInfo timestamp/permissions make the output byte-identical across
+    builds of the same input tree (Decision 77). Shared by the four DuckLake function zips and the
+    two DuckLake layer builders that don't need pgclient's per-entry executable-bit logic.
+    """
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in stage_dir.rglob("*"):
+        for f in sorted(stage_dir.rglob("*")):
             if f.is_file():
-                arcname = str(f.relative_to(stage_dir))
-                info = zipfile.ZipInfo(arcname)
-                info.external_attr = 0o644 << 16
-                zf.writestr(info, f.read_bytes())
+                zf.writestr(_deterministic_zipinfo(str(f.relative_to(stage_dir))), f.read_bytes())
     return zip_path
+
+
+_zip_layer_dir_deterministic = _zip_staged_dir
 
 
 def build_app_package(temp_dir: Path) -> Path:
@@ -420,11 +438,7 @@ def build_ducklake_deps_layer(temp_dir: Path) -> Path:
 
     zip_path = OUTPUT_DIR / "ducklake-deps-layer.zip"
     layer_dir = temp_dir / "ducklake-deps"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in layer_dir.rglob("*"):
-            if f.is_file():
-                zf.write(f, f.relative_to(layer_dir))
-    return zip_path
+    return _zip_layer_dir_deterministic(layer_dir, zip_path)
 
 
 def _fetch_extension_bytes(stem: str, *, bucket: str | None, profile: str, region: str) -> bytes:
@@ -453,7 +467,7 @@ def _try_s3_extension(bucket: str, stem: str, profile: str, region: str) -> byte
     with _tf.TemporaryDirectory() as td:
         dest = Path(td) / f"{stem}.duckdb_extension"
         result = subprocess.run(
-            ["aws", "s3", "cp", f"s3://{bucket}/{key}", str(dest), "--region", region, "--profile", profile],
+            ["aws", "s3", "cp", f"s3://{bucket}/{key}", str(dest), "--region", region, *_aws_profile_args(profile)],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -482,11 +496,7 @@ def build_ducklake_extensions_layer(
 
     zip_path = OUTPUT_DIR / "ducklake-extensions-layer.zip"
     layer_dir = temp_dir / "ducklake-ext"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in layer_dir.rglob("*"):
-            if f.is_file():
-                zf.write(f, f.relative_to(layer_dir))
-    return zip_path
+    return _zip_layer_dir_deterministic(layer_dir, zip_path)
 
 
 def _try_s3_pgclient(bucket: str, filename: str, profile: str, region: str) -> bytes | None:
@@ -497,7 +507,7 @@ def _try_s3_pgclient(bucket: str, filename: str, profile: str, region: str) -> b
     with _tf.TemporaryDirectory() as td:
         dest = Path(td) / filename
         result = subprocess.run(
-            ["aws", "s3", "cp", f"s3://{bucket}/{key}", str(dest), "--region", region, "--profile", profile],
+            ["aws", "s3", "cp", f"s3://{bucket}/{key}", str(dest), "--region", region, *_aws_profile_args(profile)],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -627,21 +637,16 @@ def build_pgclient_layer(
     layer_root = temp_dir / "pgclient"
     zip_path = OUTPUT_DIR / "ducklake-pgclient-layer.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in layer_root.rglob("*"):
+        for f in sorted(layer_root.rglob("*")):
             if f.is_file() or f.is_symlink():
                 arcname = str(f.relative_to(layer_root))
                 if f.is_symlink():
-                    info = zipfile.ZipInfo(arcname)
+                    info = zipfile.ZipInfo(arcname, date_time=_FIXED_ZIP_DATETIME)
                     info.create_system = 3  # Unix
                     info.external_attr = 0o120755 << 16  # symlink type
                     zf.writestr(info, str(f.resolve().name))
                 else:
-                    info = zipfile.ZipInfo(arcname)
-                    if "bin/" in arcname:
-                        info.external_attr = 0o755 << 16
-                    else:
-                        info.external_attr = 0o644 << 16
-                    zf.writestr(info, f.read_bytes())
+                    zf.writestr(_deterministic_zipinfo(arcname, executable="bin/" in arcname), f.read_bytes())
     return zip_path
 
 
@@ -708,8 +713,7 @@ def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str) -> None
             f"s3://{bucket}/{s3_key}",
             "--region",
             region,
-            "--profile",
-            profile,
+            *_aws_profile_args(profile),
         ],
         check=True,
     )
@@ -756,8 +760,7 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
                 s3_key,
                 "--region",
                 region,
-                "--profile",
-                profile,
+                *_aws_profile_args(profile),
             ],
             capture_output=True,
             text=True,
@@ -813,8 +816,7 @@ def validate_bucket_exists(bucket: str, profile: str, region: str) -> bool:
             bucket,
             "--region",
             region,
-            "--profile",
-            profile,
+            *_aws_profile_args(profile),
         ],
         capture_output=True,
         text=True,
@@ -862,6 +864,16 @@ def _run_prod_build(args: argparse.Namespace) -> None:
         else:
             print("[3/4] Skipping S3 upload (--skip-upload)")
         print("[4/4] Build complete.")
+
+
+def _aws_profile_args(profile: str) -> list[str]:
+    """Return the `--profile <name>` argv tokens, or [] when profile is empty.
+
+    GitHub-hosted OIDC runners resolve AWS credentials from the environment (no named profile);
+    passing `--profile ""` to the aws CLI is an error, so an empty profile must omit the flag
+    entirely rather than pass it empty.
+    """
+    return ["--profile", profile] if profile else []
 
 
 def _resolve_ducklake_profile(profile: str) -> str:
