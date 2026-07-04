@@ -23,13 +23,14 @@ scope:
       closed enum (pre-deploy | post-deploy) enforced ONLY when schema_version == 2; add optional
       VerificationStep.hermetic (bool, default false) and optional plan-level tier_waiver
       (str | None). schema_version 1 plans stay grandfathered (free-text phase, no waiver needed).
-  - file: scripts/checks/misc/validate_tier_floor.py
+  - file: scripts/checks/roadmap/validate_tier_floor.py
     action: Create
     purpose: >-
-      New registered check (VF-04). For each schema_version-2 PLAN-*.yaml, compute the V-tier
-      floor from the plan's declared scope (active-manifest Lambda code file => V3; .tf in scope
-      => V3 conservative; Python source => >=V2) and fail a plan declaring below its floor unless
-      it carries tier_waiver. schema_version-1 plans are skipped (grandfathered).
+      New registered check (VF-04), colocated with validate_plan_documents in roadmap/ for domain
+      cohesion. For each schema_version-2 PLAN-*.yaml, compute the V-tier floor from the plan's
+      declared scope (active-manifest Lambda code file => V3; any .tf in scope => V3; Python source
+      => >=V2) and fail a plan declaring below its floor unless it carries tier_waiver.
+      schema_version-1 plans are skipped (grandfathered).
   - file: scripts/checks/registry.py
     action: Modify
     purpose: >-
@@ -38,8 +39,20 @@ scope:
   - file: scripts/validate.py
     action: Modify
     purpose: >-
-      One-line facade re-export import of validate_tier_floor so getattr(validate, name) and
-      `from scripts.validate import validate_tier_floor` both resolve (Decision 104 facade).
+      One-line facade re-export import of validate_tier_floor (from the roadmap check module) so
+      getattr(validate, name) and `from scripts.validate import validate_tier_floor` both resolve
+      (Decision 104 facade).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap-bookkeeping re-grounding of T3.17: (a) fix the stale files_in_scope path
+      scripts/checks/contracts/validate_plan_documents.py -> scripts/checks/roadmap/... and the new
+      check path -> scripts/checks/roadmap/validate_tier_floor.py; (b) re-ground c2's text so it
+      matches the buildable deterministic rule (any .tf => V3 conservatively, since only scope
+      paths -- not a content diff -- are available at check time; comment-only .tf exempt via the
+      explicit tier_waiver field, which c2 already names as the conscious-acceptance path). Status
+      flips (c1/c2/c3 -> met) are performed by /implement's bookkeeping walk on a verified VP pass,
+      not here.
   - file: tests/test_plan_document.py
     action: Modify
     purpose: >-
@@ -50,7 +63,10 @@ scope:
     purpose: >-
       Colocate validate_tier_floor check tests here (Decision 104 coverage mapping routes
       scripts/checks/**/*.py to tests/test_validate.py): v2 Lambda-code-in-scope + V2 fails;
-      tier_waiver rescues it; v1 plan below floor passes (grandfathered); .tf in scope => V3.
+      tier_waiver rescues it; v1 plan below floor passes (grandfathered); .tf-in-scope => V3;
+      Python-only scope => V2 floor; docs-only scope => V1 floor (exercises every floor branch for
+      100% coverage of the new module). Add the _validate.validate_tier_floor alias mirroring the
+      existing alias pattern.
   - file: tests/test_checks_registry.py
     action: Modify
     purpose: >-
@@ -75,6 +91,11 @@ acceptance_criteria:
     verification_tier: V2 fails validate --pre (validate_tier_floor); adding a tier_waiver to the
     same plan makes it pass (VF-04, T3.17:c1/c2).
   - >-
+    The floor honours every 12m input class: an active-manifest Lambda code file => V3, any .tf in
+    scope => V3 (conservative; comment-only exempt only via tier_waiver), and any Python source =>
+    >=V2; a docs/config-only scope floors to V1. Every branch is exercised by a test (VF-04,
+    T3.17:c2).
+  - >-
     A schema_version-2 plan with a verification_plan step phase 'pre-merge' fails
     validate_plan_documents; a schema_version-1 plan with the same free-text phase still validates
     (grandfathered) (VF-13, T3.17:c3).
@@ -89,29 +110,30 @@ acceptance_criteria:
     getattr(validate, 'validate_tier_floor'); the frozen-sequence oracles in
     tests/test_checks_registry.py match after the insertion.
   - >-
+    T3.17's files_in_scope paths are re-grounded (contracts/ -> roadmap/) and c2's text matches
+    the shipped deterministic rule; the roadmap still validates (validate_platform_roadmap green).
+  - >-
     Full validate green modulo the pre-existing 'Import contracts (Decision 80)' carve-out
     (unrelated to this change; documented pre-existing failure on the f80508b base).
 verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      VF-13 positive+negative: a schema_version-2 plan with phase 'pre-merge' is rejected by the
-      PlanDocument schema, while a schema_version-1 plan with free-text phase is accepted.
+      VF-13 negative: a schema_version-2 plan with phase 'pre-merge' is rejected by
+      validate_plan_documents (which calls the PlanDocument schema). Uses a fixtures dir seam so no
+      docs/plans/ file is touched.
     command: >-
-      bin/venv-python -c "import yaml; from pydantic import ValidationError;
-      from scripts.plan_document import PlanDocument;
-      b=yaml.safe_load(open('tests/fixtures/plan_documents/valid_v2.yaml'));
-      b['verification_plan'][0]['phase']='pre-merge';
-      raised=False;
-      exec('try:\n PlanDocument.model_validate(b)\nexcept ValidationError:\n raised=True');
-      assert raised, 'v2 plan with phase pre-merge should be rejected'; print('OK: v2 enum enforced')"
+      bin/venv-python -c "from scripts.validate import validate_plan_documents; import pathlib;
+      f=[]; validate_plan_documents(f, plans_dir=pathlib.Path('tests/fixtures/plan_documents/_badphase_v2'));
+      print('FAILED_LIST', f); assert f, 'v2 plan with phase pre-merge should fail validation'"
     expected: >-
-      Prints 'OK: v2 enum enforced' -- a ValidationError is raised for the v2 fixture mutated to
-      phase 'pre-merge' (closed enum violation). The unmutated v1 fixtures still load (asserted by
-      the authoritative pytest cases in step 5).
+      validate_plan_documents appends a failure for the v2 bad-phase fixture (closed enum
+      violation). The authoritative positive+negative assertions live in the pytest cases (step 5);
+      this is a direct-invocation smoke of the wired check. (The _badphase_v2 dir is created by the
+      pytest setup or is a committed one-file fixtures subdir.)
     fix_if: >-
-      No error raised for a v2 plan with phase 'pre-merge' (enum not enforced), or a v1 plan is
-      wrongly rejected (grandfathering broken).
+      failed list empty -- the phase enum is not enforced for schema_version 2, or the plans_dir
+      seam does not reach the fixture.
   - step: 2
     phase: pre-deploy
     action: >-
@@ -126,13 +148,13 @@ verification_plan:
       V3 via the active-manifest Lambda code file). Non-empty failed list. (Uses the check's
       plans_dir test seam mirroring validate_plan_documents.)
     fix_if: >-
-      failed list is empty -- the floor did not fire on an active-manifest Lambda code file, or
-      the plans_dir seam is missing so the check cannot be pointed at the fixture dir.
+      failed list empty -- the floor did not fire on an active-manifest Lambda code file, or the
+      plans_dir seam is missing so the check cannot be pointed at the fixture dir.
   - step: 3
     phase: pre-deploy
     action: >-
-      VF-04 tier_waiver rescue: the same violating fixture, with a tier_waiver field added,
-      passes validate_tier_floor.
+      VF-04 tier_waiver rescue: the same violating fixture, with a tier_waiver field added, passes
+      validate_tier_floor.
     command: >-
       bin/venv-python -c "from scripts.validate import validate_tier_floor; import pathlib,yaml,tempfile,os,shutil;
       d=tempfile.mkdtemp(); src='tests/fixtures/plan_documents/tier_floor_violation_v2.yaml';
@@ -164,19 +186,36 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Run the full unit suite for the three modified/created source modules and their mapped test
-      files, exercising real code paths (schema validators, floor computation, registry sequence).
+      Run the full unit suite for the modified/created source modules and their mapped test files,
+      exercising real code paths (schema validators, EVERY floor branch: Lambda-code=>V3,
+      .tf=>V3, .py=>V2, docs-only=>V1, and the tier_waiver rescue; registry sequence).
     command: >-
       bin/venv-python -m pytest tests/test_plan_document.py tests/test_validate.py
       tests/test_checks_registry.py -q
     expected: >-
       All tests pass, including the new schema_version-2 enum/hermetic/tier_waiver cases, the
-      colocated validate_tier_floor cases in test_validate.py, and the updated frozen-sequence
-      oracle assertions in test_checks_registry.py.
+      colocated validate_tier_floor cases in test_validate.py covering every floor branch, and the
+      updated frozen-sequence oracle assertions in test_checks_registry.py.
     fix_if: >-
       Any test fails; a frozen-sequence assertion mismatch means the FROZEN_*_SEQUENCE oracle was
       not updated to match the new registry insertion point.
   - step: 6
+    phase: pre-deploy
+    action: >-
+      100% coverage of the new module: run the coverage gate for scripts/checks/roadmap/validate_tier_floor.py
+      and confirm no unhit lines (every floor branch reached).
+    command: >-
+      bin/venv-python -m scripts.validate_test_coverage scripts/checks/roadmap/validate_tier_floor.py
+      || bin/venv-python -m pytest tests/test_validate.py -q --cov=scripts/checks/roadmap/validate_tier_floor
+      --cov-report=term-missing
+    expected: >-
+      The new module reports 100% line coverage (or the repo's coverage checker passes for it):
+      the Lambda-code, .tf, .py, docs-only, and tier_waiver branches are all exercised. If the
+      first command's module path differs, the pytest --cov fallback shows zero missing lines.
+    fix_if: >-
+      Missing lines reported -- add the test case for the unhit branch (commonly the else=>V1 or
+      the .py=>V2 arm).
+  - step: 7
     phase: pre-deploy
     action: >-
       Registry wiring + facade parity: validate_tier_floor is registered, appears exactly once in
@@ -194,7 +233,20 @@ verification_plan:
     fix_if: >-
       AssertionError -- missing @register decorator, wrong sequence position, duplicate insertion,
       or missing facade import line in scripts/validate.py.
-  - step: 7
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Roadmap re-grounding holds: validate_platform_roadmap passes after the T3.17 path/text edits.
+    command: >-
+      bin/venv-python -c "from scripts.validate import validate_platform_roadmap; f=[];
+      validate_platform_roadmap(f); print('FAILED_LIST', f); assert not f, f"
+    expected: >-
+      Empty failed list: the re-grounded T3.17 files_in_scope paths and c2 text keep the platform
+      roadmap schema-valid (closes_criteria referential integrity intact).
+    fix_if: >-
+      A roadmap validation failure -- a malformed edit to T3.17; revert the text change and redo
+      minimally.
+  - step: 9
     phase: pre-deploy
     action: >-
       Fast-tier gate: run validate --pre and confirm green modulo the documented pre-existing
@@ -219,12 +271,23 @@ constraints:
     validate_tier_floor must expose a plans_dir override parameter (test seam), mirroring
     validate_plan_documents, so fixtures can be validated without touching docs/plans/.
   - >-
-    The tier floor keys on Lambda CODE files only (manifest handlers + includes, respecting
-    excludes) -- bundled assets/config (e.g. docs/ROADMAP-PLATFORM.yaml, config.yaml) must NOT
-    force V3, or nearly every plan would be over-floored.
+    The tier floor keys on Lambda CODE files only. It does NOT call compute_affected_artifacts
+    verbatim (that helper unions handlers+includes+assets+config, so bundled assets like
+    docs/ROADMAP-PLATFORM.yaml would over-flag nearly every plan). Instead it walks each active
+    manifest's handlers + includes minus excludes via lambda_manifest.load_all() / _is_excluded
+    and matches only code files.
   - >-
-    Keep scripts/checks/misc/validate_tier_floor.py under the 500-SLOC cap (Decision 43 / Decision
-    102) and add no SLOC to scripts/validate.py beyond the one facade import line (Decision 104).
+    The .tf floor arm is deliberately conservative (any .tf in scope => V3), stricter than
+    plan-critique 12m / Decision 48 which exempt comment-only .tf. Justification: only scope paths
+    (no content diff) are available at check time, so comment-only is undetectable deterministically.
+    The comment-only exemption is provided via tier_waiver -- exactly c2's 'conscious-acceptance
+    deviation honoured only via an explicit plan field' clause -- and the human 12m critique judges
+    the waiver. This conservative start is explicitly sanctioned by the task instruction
+    ('comment-only detection may start conservative').
+  - >-
+    Keep scripts/checks/roadmap/validate_tier_floor.py under the 500-SLOC cap (Decision 43 /
+    Decision 102) and add no SLOC to scripts/validate.py beyond the one facade import line
+    (Decision 104).
   - >-
     Do NOT add a check to ci.yml without adding it to validate.py first -- registry.py + the
     facade import ARE the single source of truth (Decision 104).
@@ -234,17 +297,18 @@ context:
   - >-
     Decision-scout verdict FLAGS_FOUND. CITE list (verbatim decision ids): Decision 48, Decision
     79, Decision 104, Decision 85, Decision 93, Decision 86, Decision 117, Decision 55.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending> after 0 round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)"
   - >-
-    Decision 48 (DECISIONS.md:2409-2414) acknowledged the V-tier classifier as future work
-    ('documentation-enforced only. No automated detection currently exists. A future rec should
-    add a deterministic tier classifier to validate.py') but the rec was never filed -- VF-04
-    closes exactly this acknowledged-but-unowned gap. The floor's V1/V2/V3 semantics and
+    Decision 48 (DECISIONS.md:2409-2414/2550-2591) acknowledged the V-tier classifier as future
+    work ('documentation-enforced only. No automated detection currently exists. A future rec
+    should add a deterministic tier classifier to validate.py') but the rec was never filed --
+    VF-04 closes exactly this acknowledged-but-unowned gap. The floor's V1/V2/V3 semantics and
     highest-tier-wins rule align with Decision 48's classification rules.
   - >-
-    Decision 79: Lambda tier follows the manifest graph. The floor's Lambda arm derives from
-    compute_affected_artifacts / the manifest handlers+includes set, excluding assets/config --
-    not a hand-curated path list.
+    Decision 79: Lambda tier follows the manifest graph. The floor's Lambda arm derives from the
+    active manifests' handlers+includes (minus excludes) via lambda_manifest.load_all(), NOT from
+    compute_affected_artifacts (which unions assets/config and would over-flag). Only code files
+    force V3; bundled assets (docs/ROADMAP-PLATFORM.yaml, config.yaml) do not.
   - >-
     Decision 104: owner-tagged ordered check registry. Adding a check requires a module under
     scripts/checks/<domain>/ with @register, a one-line facade re-export in scripts/validate.py,
@@ -252,14 +316,16 @@ context:
     oracle in tests/test_checks_registry.py. Coverage mapping (scripts/test_coverage_checker.py:57)
     routes scripts/checks/**/*.py test coverage to tests/test_validate.py -- so the tier-floor
     check's tests are colocated there, NOT in a standalone test_validate_tier_floor.py (scout WARN,
-    resolved).
+    resolved). The check is placed in roadmap/ (not misc/) for cohesion with validate_plan_documents.
   - >-
     Decision 85 ratified CD.22 (PlanDocument schema, extra='forbid', dual-tier enforcement) as the
     canonical PLAN-*.yaml contract. The schema_version-2 bump deliberately evolves this ratified
     contract while preserving extra='forbid' and both-tier enforcement.
   - >-
     Decision 93 fail-loud lifecycle precedent: enforce the closed phase enum via a Pydantic
-    model_validator that raises at load, consistent with platform_roadmap.py style.
+    model_validator (mode='after', which can see self.schema_version) that raises at load,
+    consistent with platform_roadmap.py style. A VerificationStep field_validator cannot see the
+    parent schema_version, so the enum check must live on the PlanDocument model_validator.
   - >-
     Decision 86: tier_waiver is a machine-readable field (not prose), squarely aligned; no docs/
     artifact is created, so the intent-doc-freeze guard is not implicated. The finding routes to
@@ -269,11 +335,25 @@ context:
     scope files are executor-boundary files (Decision 79 affirms validate.py/lambda_manifest.py
     are not executor machinery), so the boundary is not crossed.
   - >-
-    Decision 48 [NOTE, conscious-acceptance]: the floor's 'any .tf in scope => V3' is broader than
-    Decision 48's 'resource-affecting .tf' -- a comment-only .tf edit would be floored to V3. Kept
-    as a deliberate conservative start (only the plan's file paths are available at check time, no
-    content diff); a genuinely comment-only .tf plan escapes via tier_waiver. Refining to
-    content-aware detection is deferred.
+    .tf arm reconciliation (plan-critique finding 1, operator-sanctioned): the floor is
+    deliberately stricter than 12m/Decision 48 on .tf -- any .tf in scope => V3, because
+    comment-only vs resource-affecting is undetectable from scope paths (no content diff) at check
+    time. A comment-only .tf plan declares below floor + carries tier_waiver, which c2's own
+    'conscious-acceptance deviation honoured only via an explicit plan field' clause already
+    provides for; the human 12m critique then judges the waiver. Because 12m and this floor could
+    otherwise render contradictory verdicts on a comment-only-.tf plan, T3.17 c2's roadmap text is
+    re-grounded (Scope row) to describe the conservative-with-waiver rule instead of a plain
+    'resource-affecting' trigger. Operator sanction: the task instruction 'comment-only detection
+    may start conservative'.
+  - >-
+    Adoption-gap deferral (plan-critique finding 2, tracked here since 'no recommendations' is a
+    task constraint): VF-04/VF-13 enforcement is INERT on real plans until a producer emits
+    schema_version: 2. Nothing in this plan's scope flips the emitter (the planning skill's PLAN
+    template and /plan Step 8 still emit schema_version: 1). This plan delivers and TESTS the
+    capability via fixtures (T3.17 criteria are capability-phrased: 'a plan with X fails validate
+    --pre'), which is genuinely closeable. The emitter-flip (planning skill template ->
+    schema_version 2) is the tracked follow-on and is the dependency T3.15 (VP replay) already
+    carries on T3.17; do not silently drop it.
   - >-
     Empirical grounding (probed at planning time): under a naive 'compute_affected_artifacts
     non-empty => V3' rule, 48 of 133 existing plans fall below floor -- almost entirely because
@@ -284,9 +364,10 @@ context:
   - >-
     Freshness/stale-reference: T3.17.files_in_scope lists
     scripts/checks/contracts/validate_plan_documents.py, but the file actually lives at
-    scripts/checks/roadmap/validate_plan_documents.py. The plan re-grounds to the real location;
-    validate_plan_documents.py itself needs NO change (it already calls the pydantic schema, so
-    the VF-13 phase enum is enforced through it automatically for v2 plans).
+    scripts/checks/roadmap/validate_plan_documents.py; and it named the new check under misc/.
+    Both are re-grounded to roadmap/ in the docs/ROADMAP-PLATFORM.yaml Scope row.
+    validate_plan_documents.py itself needs NO change (it already calls the pydantic schema, so the
+    VF-13 phase enum is enforced through it automatically for v2 plans).
   - >-
     Wave sequencing: PLAN-audit-remediation-wave-3 (VF-02/03) already shipped and merged
     2026-07-03 (operator-confirmed); no live conflict on the scripts/checks sequencing surface.
@@ -299,40 +380,48 @@ pre_implementation_checklist:
   - Branch confirmed not on main (claude/audit-remediation-wave-5-jk5t0y)
   - docs/PROJECT_CONTEXT.md read
   - Decision-scout gate run (FLAGS_FOUND); flags folded into the plan
+  - Plan-critique gate run (REVISE round 1); all four findings addressed (see context)
   - All files in scope located and readable (validate_plan_documents.py path re-grounded to roadmap/)
   - Acceptance criteria understood and verifiable
   - Option A (schema_version-2 gating) confirmed by operator at the confirmation gate
 execution_steps:
   - >-
     scripts/plan_document.py: add 2 to _SUPPORTED_VERSIONS; add optional VerificationStep.hermetic
-    (bool=False) and optional plan-level tier_waiver (str|None); add a model_validator that, when
-    schema_version == 2, rejects any VerificationStep.phase not in {'pre-deploy','post-deploy'}.
-    Keep the phase field type accepting str so v1 free-text still loads; enforce the enum only in
-    the v2 branch of the validator.
+    (bool=False) and optional plan-level tier_waiver (str|None); add/extend the PlanDocument
+    model_validator(mode='after') so that when schema_version == 2 it rejects any
+    VerificationStep.phase not in {'pre-deploy','post-deploy'}. Keep the phase field type accepting
+    str so v1 free-text still loads; enforce the enum only in the v2 branch of the validator.
   - >-
-    scripts/checks/misc/validate_tier_floor.py: new module. @register('validate_tier_floor',
+    scripts/checks/roadmap/validate_tier_floor.py: new module. @register('validate_tier_floor',
     owner='platform'). Signature validate_tier_floor(failed, plans_dir=None) mirroring
     validate_plan_documents. For each PLAN-*.yaml with schema_version == 2, load it, compute the
-    floor from scope (active-manifest Lambda code file via manifest handlers+includes minus
-    excludes => V3; any .tf => V3; any .py => >=V2; else V1), and if declared tier rank < floor
-    rank and no tier_waiver, append a failure. Skip schema_version-1 plans entirely.
+    floor from scope: build the active manifests' code-file set from load_all() handlers+includes
+    minus excludes (NOT compute_affected_artifacts) -- a scope file matching it => V3; any .tf =>
+    V3; any .py => >=V2; else V1. If declared tier rank < floor rank and no tier_waiver, append a
+    failure. Skip schema_version-1 plans entirely.
   - >-
     scripts/checks/registry.py: insert _c('validate_tier_floor') immediately after
     _c('validate_plan_documents') in BOTH pre_sequence() and full_sequence().
   - >-
     scripts/validate.py: add the facade re-export import
-    'from scripts.checks.misc.validate_tier_floor import validate_tier_floor  # noqa: F401,E402'
-    in the misc-checks import block.
+    'from scripts.checks.roadmap.validate_tier_floor import validate_tier_floor  # noqa: F401,E402'
+    in the roadmap-checks import block.
   - >-
-    tests/fixtures/plan_documents/: create valid_v2.yaml (clean schema_version-2 plan) and
+    docs/ROADMAP-PLATFORM.yaml: re-ground T3.17 files_in_scope (contracts/ -> roadmap/ for
+    validate_plan_documents; new check -> scripts/checks/roadmap/validate_tier_floor.py) and
+    re-word c2 to the conservative-.tf-with-tier_waiver rule. Do NOT flip criterion statuses (that
+    is /implement's bookkeeping walk on a verified VP pass).
+  - >-
+    tests/fixtures/plan_documents/: create valid_v2.yaml (clean schema_version-2 plan),
     tier_floor_violation_v2.yaml (v2, active-manifest Lambda code file in scope, verification_tier
-    V2).
+    V2), and a _badphase_v2/ one-file subdir (v2 plan with phase 'pre-merge') for the step-1 seam.
   - >-
     tests/test_plan_document.py: add cases for v2 phase enum rejection, v1 free-text acceptance,
     hermetic default, and tier_waiver optional field.
   - >-
-    tests/test_validate.py: add validate_tier_floor cases (fixture fails; tier_waiver rescues;
-    v1-below-floor passes; .tf => V3) using the plans_dir seam.
+    tests/test_validate.py: add validate_tier_floor cases exercising EVERY floor branch (Lambda
+    code => V3; .tf => V3; .py => V2; docs-only => V1; tier_waiver rescue; v1-below-floor skipped)
+    using the plans_dir seam, plus the _validate.validate_tier_floor alias.
   - >-
     tests/test_checks_registry.py: update FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE to include
     ('check','validate_tier_floor') after ('check','validate_plan_documents').
@@ -343,5 +432,6 @@ execution_steps:
   - "Report: what was implemented, verification results, and the closes_criteria bookkeeping walk."
 work_areas: []
 rollback: >-
-  Revert the branch commits. All changes are additive schema/check code plus new v2 test fixtures;
-  no existing plan, data surface, or infrastructure is mutated, so revert is clean.
+  Revert the branch commits. All source/schema/check changes are additive and the roadmap edit is
+  text-only (paths + one criterion wording); no existing plan, data surface, or infrastructure is
+  mutated, so revert is clean.
