@@ -428,14 +428,20 @@ aws cloudwatch describe-alarms \
   --profile agent_platform
 ```
 
-### T2.19 restore-drill carry item
+### T2.19 restore-drill carry item -- resolved (rec-2113)
 
 The T2.16b restore drill (`restore_drill` / `_restore_dump` in `ducklake_neon_smoke_test.py`)
-restores a PLAIN-SQL dump via `psql`. The FP-B scheduled DR uses `--format=custom` which requires
-`pg_restore`. The T2.19 restore-drill gate ("catalog rebuilt from the daily S3 pg_dump passes
-read-your-write before cutover") MUST update the restore mechanism to `pg_restore`. This is a
-T2.19 exit criterion; it is not a blocker for FP-B (FP-B produces dumps; production restore
-drills are T2.19 scope).
+restores a PLAIN-SQL dump via `psql` and is unaffected by this change. The FP-B scheduled DR uses
+`--format=custom` which requires `pg_restore`. The T2.19 restore-drill gate ("catalog rebuilt from
+the daily S3 pg_dump passes read-your-write before cutover") required updating that separate
+restore mechanism to `pg_restore`.
+
+Resolved by rec-2113 (T2.26 c1): the pgclient Lambda layer now ships a fail-closed, PG16-asserted
+`pg_restore` binary (`build_pgclient_layer` in `scripts/build_lambda.py`), enabling the
+`--catalog-restore-drill` custom-format `pg_dump` -> `pg_restore` -> read-your-write round-trip.
+Closure is confirmed by the plan's post-deploy Verification Plan step invoking
+`ducklake_neon_smoke_test --catalog-restore-drill` against the deployed layer; see the PR/rec-2113
+record for the passing run.
 
 ## Section 5 -- ops_compaction decommission runbook (T2.19-gated)
 
