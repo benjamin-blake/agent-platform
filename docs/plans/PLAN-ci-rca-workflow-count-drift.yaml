@@ -1,0 +1,157 @@
+schema_version: 1
+slug: "ci-rca-workflow-count-drift"
+intent: >-
+  Permanently fix the recurring post-merge CI failure where test_real_workflows_dir
+  hard-codes the workflow count, so main-validate stops breaking on every new
+  .github/workflows file -- keeping the CI merge gate trustworthy.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-workflow-count-drift.yaml
+phase: >-
+  Platform reliability / CI merge-gate integrity. No tier_item (ci_rca forward-fix,
+  soft-warn exception category). Resolves ci-rca recs rec-2526 / rec-2524 / rec-2525.
+scope:
+  - file: tests/test_ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      Replace the drift-prone hard-coded assertion (assert len(names) == 13) in
+      TestEnumerateWorkflowNames.test_real_workflows_dir with a count-agnostic
+      differential assertion that derives the expected workflow-name set from the
+      real .github/workflows/*.yml files via an oracle distinct from the SUT parser.
+bundled_recommendations:
+  - rec-2526
+  - rec-2524
+  - rec-2525
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    tests/test_ci_rca_taxonomy.py::TestEnumerateWorkflowNames::test_real_workflows_dir
+    passes against the real 14-file .github/workflows directory.
+  - >-
+    The test body contains no hard-coded integer count of workflows -- adding or
+    removing a workflow file requires no edit to the test.
+  - >-
+    The assertion still fails if enumerate_workflow_names() misses a named workflow,
+    returns a spurious/duplicate name, or drops a name it should extract (differential
+    protection preserved via an independent oracle).
+  - The full tests/test_ci_rca_taxonomy.py suite passes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the pre-fix assertion is the live failure -- the real workflow dir now
+      holds 14 named workflows while the test asserts 13.
+    command: >-
+      bin/venv-python -c "from scripts.ci_rca_taxonomy import enumerate_workflow_names as e; print(len(e()))"
+    expected: "Prints 14 (was asserted as 13 -- confirms drift)."
+    fix_if: >-
+      If it prints 13, the extra workflow was reverted upstream; re-confirm the failure
+      still reproduces before editing the test.
+  - step: 2
+    phase: pre-deploy
+    action: Run the specific previously-failing test node against the real directory.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py::TestEnumerateWorkflowNames::test_real_workflows_dir -x
+    expected: "1 passed -- the count-agnostic assertion matches the real 14-file dir."
+    fix_if: >-
+      Assertion mismatch means the independent oracle and the SUT disagree on the name
+      set; reconcile the oracle's top-level name: scan with the SUT's yaml.safe_load
+      extraction (both must key off the top-level 'name' field only).
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Prove drift-immunity: no hard-coded workflow count remains in the test body.
+    command: >-
+      ! grep -nE 'len\(names\) == [0-9]+' tests/test_ci_rca_taxonomy.py
+    expected: >-
+      No match (grep exits 1, the leading ! makes the step exit 0) -- confirms the
+      magic-number assertion is gone.
+    fix_if: >-
+      A match means a hard-coded count survived; replace it with the derived-from-disk
+      expected set.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Exercise the drift-immunity behaviourally -- the new added-workflow subtest must
+      show the assertion tracks a filesystem change with no test edit.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py::TestEnumerateWorkflowNames -x
+    expected: "All TestEnumerateWorkflowNames tests pass, including the add/remove drift subtest."
+    fix_if: >-
+      The drift subtest fails -- the oracle is not re-reading the directory it is pointed
+      at; ensure both SUT and oracle take the same workflows_dir argument.
+  - step: 5
+    phase: pre-deploy
+    action: Run the full taxonomy test file to confirm no regression elsewhere.
+    command: bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py
+    expected: "All tests pass (green)."
+    fix_if: "Any failure -- diagnose and fix before pushing; do not weaken assertions to pass."
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm the three bundled recs are the ones this fix closes (they will be closed
+      via the Resolves: trailer at merge, or the ops_data_portal fallback).
+    command: >-
+      grep -c '"id": "rec-252[456]"' logs/.recommendations-log.jsonl
+    expected: "3 -- rec-2524, rec-2525, rec-2526 all present in the cache."
+    fix_if: >-
+      Fewer than 3 -- run bin/venv-python -m scripts.sync_ops pull to refresh the cache,
+      then re-confirm the rec ids before relying on the Resolves: trailer.
+constraints:
+  - Only tests/test_ci_rca_taxonomy.py may be modified (scope discipline).
+  - >-
+    Root-cause fix only -- do NOT bump the constant 13 -> 14. Bumping is the workaround
+    Decision 55 forbids; it re-arms the identical failure on the next workflow addition.
+  - >-
+    Do not modify scripts/ci_rca_taxonomy.py. The enumerate_workflow_names docstring's
+    inaccurate "sorted" claim is an out-of-scope latent bug -- file it as its own rec,
+    do not fix inline (CLAUDE.md out-of-scope rule).
+  - >-
+    The independent oracle must use a DIFFERENT parse mechanism than the SUT (top-level
+    name: line scan, not yaml.safe_load of the whole file) so the differential retains
+    bug-catching power and is not circular.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Fixes the failure filed as rec-2526 (root cause, risk=high) and its duplicate
+    filings rec-2524 / rec-2525, all from post-merge Validate-full-tier runs on
+    2026-07-04. Root cause: PR #439 (commit a27f725) added
+    .github/workflows/terraform-provider-mirror-seed.yml (14th workflow) without bumping
+    the hard-coded 13 at tests/test_ci_rca_taxonomy.py:135.
+  - >-
+    Escaped presubmit because the full pytest suite runs only in the post-merge Validate
+    full tier, not the fast --pre presubmit (rec-2525/2526 note escape_mode=tier_misplaced).
+  - >-
+    enumerate_workflow_names(scripts/ci_rca_taxonomy.py:159) globs .github/workflows/*.yml,
+    yaml.safe_load each, and appends the top-level 'name' value. It does not dedupe and
+    (despite the docstring) does not sort -- the test must assert on a set to be robust.
+  - >-
+    Branch claude/ci-rca-workflow-count-drift was 0 commits behind origin/main at planning
+    time (no divergence; no scope-file overlap).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS; CITE: Decision 55. RELATED: Decision 73, Decision 72, Decision 48."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (via decision-scout gate)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Modify tests/test_ci_rca_taxonomy.py::TestEnumerateWorkflowNames.test_real_workflows_dir --
+    remove 'assert len(names) == 13'; build an independent expected-name oracle that scans
+    the real .github/workflows/*.yml files for their top-level 'name:' value (regex/line scan,
+    NOT yaml.safe_load) and assert set(enumerate_workflow_names()) == that expected set. Keep
+    the 'assert "CI" in names' anchor.
+  - >-
+    Add a drift-immunity subtest under TestEnumerateWorkflowNames that writes N workflow .yml
+    files into a tmp_path, then adds/removes one, asserting enumerate_workflow_names(tmp_path)
+    tracks the change with no hard-coded count -- proving additions no longer break the test.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
+    and RCA (Decision 55). Do not weaken assertions to force a pass.
+  - 'Report: what was implemented, verification results, and the three recs resolved.'
+work_areas: []
+rollback: >-
+  Revert the single-file change to tests/test_ci_rca_taxonomy.py. Low risk -- test-only,
+  no source or infrastructure change.
