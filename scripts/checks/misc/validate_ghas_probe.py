@@ -46,15 +46,17 @@ def _repo() -> str:
     return os.environ.get("GITHUB_REPOSITORY", _DEFAULT_REPO)
 
 
+def _headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
 def _get(path: str, token: str) -> tuple[int, bytes]:
-    request = Request(
-        f"{_API_BASE}{path}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
+    """GET path, raising ProbeAuthError (401/403) or ProbeTransportError on any other failure."""
+    request = Request(f"{_API_BASE}{path}", headers=_headers(token))
     try:
         with urlopen(request, timeout=15) as response:
             return response.status, response.read()
@@ -66,6 +68,26 @@ def _get(path: str, token: str) -> tuple[int, bytes]:
         raise ProbeTransportError(str(exc.reason)) from exc
 
 
+def _alerts_reachability(path: str, token: str) -> int:
+    """Best-effort reachability probe for the alerts endpoint -- informational only.
+
+    GitHub documents a 404 here when secret scanning is disabled for the repo (exactly the
+    control-disabled case this module exists to catch), and a 403 for a token missing the
+    alerts scope. Neither is a reason to abort the overall probe -- the disabled/enabled
+    signal for secret_scanning and push_protection already comes from the repo-info endpoint.
+    Returns the raw HTTP status, or -1 on a transport-level failure (no HTTP status at all).
+    """
+    request = Request(f"{_API_BASE}{path}", headers=_headers(token))
+    try:
+        with urlopen(request, timeout=15) as response:
+            response.read()
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except urllib.error.URLError:
+        return -1
+
+
 def _probe(token: str | None) -> dict:
     """Query the three GHAS control surfaces. Returns a control-state dict; never a raw body."""
     if not token:
@@ -74,17 +96,23 @@ def _probe(token: str | None) -> dict:
     repo = _repo()
 
     repo_status, repo_body = _get(f"/repos/{repo}", token)
-    repo_data = json.loads(repo_body)
+    try:
+        repo_data = json.loads(repo_body)
+    except json.JSONDecodeError as exc:
+        raise ProbeTransportError(f"non-JSON response from repo-info endpoint: {exc}") from exc
     analysis = repo_data.get("security_and_analysis") or {}
     secret_scanning = (analysis.get("secret_scanning") or {}).get("status", "unknown")
     push_protection = (analysis.get("secret_scanning_push_protection") or {}).get("status", "unknown")
 
     actions_status, actions_body = _get(f"/repos/{repo}/actions/permissions", token)
-    actions_data = json.loads(actions_body)
+    try:
+        actions_data = json.loads(actions_body)
+    except json.JSONDecodeError as exc:
+        raise ProbeTransportError(f"non-JSON response from actions/permissions endpoint: {exc}") from exc
     actions_enabled = bool(actions_data.get("enabled", False))
     allowed_actions = actions_data.get("allowed_actions", "unknown")
 
-    alerts_status, _alerts_body = _get(f"/repos/{repo}/secret-scanning/alerts", token)
+    alerts_status = _alerts_reachability(f"/repos/{repo}/secret-scanning/alerts", token)
 
     return {
         "secret_scanning": secret_scanning,

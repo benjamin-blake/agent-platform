@@ -5381,6 +5381,10 @@ class TestValidateGhasProbe:
             if url.endswith("/actions/permissions"):
                 return self._FakeResponse(200, self._actions_body(enabled=actions_enabled))
             if url.endswith("/secret-scanning/alerts"):
+                if secret_scanning != "enabled":  # pragma: allowlist secret -- control-state enum, not a secret
+                    # Real GitHub behavior: this endpoint 404s when secret scanning is disabled
+                    # for the repo -- exactly the case this probe exists to catch.
+                    raise urllib.error.HTTPError(url=url, code=404, msg="Not Found", hdrs=None, fp=None)  # type: ignore[arg-type]
                 return self._FakeResponse(200, b"[]")
             return self._FakeResponse(200, self._repo_body(secret_scanning, push_protection))
 
@@ -5409,6 +5413,22 @@ class TestValidateGhasProbe:
             validate_ghas_probe(failed)
         assert failed != []
         assert "disabled" in failed[0]
+
+    def test_check_reports_disabled_control_despite_alerts_endpoint_404(self) -> None:
+        """Regression: a 404 from the alerts endpoint (GitHub's real behavior when secret
+        scanning is disabled) must not be swallowed as a generic transport error that discards
+        the already-fetched disabled-control state and reads as a clean SKIP."""
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch(
+                "scripts.checks.misc.validate_ghas_probe.urlopen",
+                side_effect=self._make_urlopen(secret_scanning="disabled"),
+            ),
+        ):
+            failed: list[str] = []
+            validate_ghas_probe(failed)
+        assert failed != []
+        assert "secret_scanning=disabled" in failed[0]
 
     def test_check_skips_when_token_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GHAS_PROBE_TOKEN", raising=False)
@@ -5466,6 +5486,18 @@ class TestValidateGhasProbe:
             patch(
                 "scripts.checks.misc.validate_ghas_probe.urlopen",
                 side_effect=self._make_urlopen(actions_enabled=False),
+            ),
+        ):
+            assert _ghas_run_cli() != 0
+
+    def test_runner_nonzero_on_disabled_secret_scanning_despite_alerts_404(self) -> None:
+        """Regression: same alerts-endpoint-404 scenario as the CHECK, exercised via the
+        loud-fail runner."""
+        with (
+            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
+            patch(
+                "scripts.checks.misc.validate_ghas_probe.urlopen",
+                side_effect=self._make_urlopen(secret_scanning="disabled"),
             ),
         ):
             assert _ghas_run_cli() != 0
