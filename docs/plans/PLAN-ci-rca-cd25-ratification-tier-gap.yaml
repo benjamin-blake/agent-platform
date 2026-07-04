@@ -30,10 +30,14 @@ scope:
   - file: tests/test_session_preflight_platform_roadmap.py
     action: Modify
     purpose: >-
-      Re-point TestCompletionBlockedOnCdProjection::test_t112_surfaces_pending_gating_cd off
-      now-complete T1.12 (absent from in_progress, CD.25 now ratified) to a genuinely
-      in_progress tier_item gated by a real pending CD, preserving the test's intent
-      (completion_blocked_on_cd surfaces a live pending gate).
+      test_t112_surfaces_pending_gating_cd pins now-complete T1.12 (absent from in_progress,
+      CD.25 now ratified) -- doubly stale. Re-anchor it on an INVARIANT rather than a new
+      pinned id/CD (a re-pin would re-break main the moment the chosen CD ratifies or item
+      completes -- the exact tier_misplaced fragility this plan cures): assert that at least
+      one in_progress item carries a non-empty completion_blocked_on_cd whose entries are all
+      pending CDs, matching the sibling test_blocked_on_cd_non_empty invariant pattern in the
+      same file. Rename the method to reflect the invariant (e.g.
+      test_in_progress_surfaces_pending_gating_cd).
   - file: scripts/validate.py
     action: Modify
     purpose: >-
@@ -55,11 +59,12 @@ bundled_recommendations:
 infrastructure_dependencies: []
 acceptance_criteria:
   - >-
-    The four previously-failing selectors pass:
+    The originally-failing behaviour now passes (class-level, stable across the method rename):
     tests/test_platform_roadmap.py::TestCD25SchemaAmendments::test_live_platform_yaml_cd25_present,
     ::test_live_platform_yaml_bootstrap_exemption_set,
-    tests/test_implement_skill_decomposition_hints.py::TestLiveRoadmapInheritance::test_live_roadmap_this_plan_inherits_from_t_1_12,
-    tests/test_session_preflight_platform_roadmap.py::TestCompletionBlockedOnCdProjection::test_t112_surfaces_pending_gating_cd.
+    tests/test_implement_skill_decomposition_hints.py::TestLiveRoadmapInheritance, and
+    tests/test_session_preflight_platform_roadmap.py::TestCompletionBlockedOnCdProjection
+    (incl. the renamed invariant test_in_progress_surfaces_pending_gating_cd).
   - >-
     The full test_platform_roadmap.py, test_implement_skill_decomposition_hints.py, and
     test_session_preflight_platform_roadmap.py suites pass (no collateral breakage from the
@@ -69,29 +74,29 @@ acceptance_criteria:
     T-1.16, T-1.17, T-1.18, T-1.19, T0.12.6} and leaves every other member (including T0.12.5
     and T0.12.7) intact.
   - >-
-    scripts/validate.py --pre, when the diff includes a roadmap YAML, selects the live-roadmap
-    guard test files into changed_tests; when the diff includes no roadmap YAML, it does not.
-  - >-
-    tests/test_validate.py contains a passing test that exercises both branches of the new
-    dynamic selection.
+    The dynamic-selection helper, given a changed-files list including a roadmap YAML, returns
+    the live-roadmap guard test files (tests/**/*.py only, excluding __pycache__/.pyc); given a
+    list with no roadmap YAML, it does not force-select them. Proven by the
+    tests/test_validate.py::TestPreRoadmapGuardSelection class (authoritative end-to-end proof).
   - >-
     bin/venv-python -m scripts.validate --pre completes green and within the 5-minute fast-tier
-    budget on a diff that touches a roadmap YAML.
+    budget on the actual branch diff (regression check; the roadmap->guard-test path itself is
+    proven by the unit test above, since the branch diff touches no roadmap YAML).
   - >-
     rec-2504, rec-2505, rec-2506 are closed (via the Resolves: trailer / rec-autoclose, or the
     ops_data_portal --update-rec fallback).
 verification_plan:
   - step: 1
     phase: pre-deploy
-    action: The four originally-failing tests now pass.
+    action: The originally-failing tests now pass (class-level selection -- stable across the method rename).
     command: >-
       bin/venv-python -m pytest
       tests/test_platform_roadmap.py::TestCD25SchemaAmendments::test_live_platform_yaml_cd25_present
       tests/test_platform_roadmap.py::TestCD25SchemaAmendments::test_live_platform_yaml_bootstrap_exemption_set
-      tests/test_implement_skill_decomposition_hints.py::TestLiveRoadmapInheritance::test_live_roadmap_this_plan_inherits_from_t_1_12
-      tests/test_session_preflight_platform_roadmap.py::TestCompletionBlockedOnCdProjection::test_t112_surfaces_pending_gating_cd -q
-    expected: "4 passed"
-    fix_if: "Any assertion still reflects pre-ratification state; re-derive the expected value from the live docs/ROADMAP-PLATFORM.yaml."
+      tests/test_implement_skill_decomposition_hints.py::TestLiveRoadmapInheritance
+      tests/test_session_preflight_platform_roadmap.py::TestCompletionBlockedOnCdProjection -q
+    expected: "All selected tests pass (the two CD25 assertions, the inheritance class, and the completion-blocked-on-cd projection class incl. the renamed invariant test)."
+    fix_if: "Any assertion still reflects pre-ratification state; re-derive the expected value from the post-rebase live docs/ROADMAP-PLATFORM.yaml."
   - step: 2
     phase: pre-deploy
     action: No collateral breakage in the three edited test modules.
@@ -110,18 +115,22 @@ verification_plan:
     fix_if: "A removal line exists for T0.12.5/T0.12.7 (still gated by other pending CDs) or the count != 10; correct the set delta."
   - step: 4
     phase: pre-deploy
-    action: Dynamic roadmap-YAML -> guard-test selection is exercised by a unit test.
+    action: >-
+      Dynamic roadmap-YAML -> guard-test selection is exercised end-to-end by the unit test
+      (authoritative proof of the selection path -- both branches, and .pyc exclusion).
     command: >-
-      bin/venv-python -m pytest tests/test_validate.py -q -k "roadmap or pre_selection or guard"
-    expected: "The new selection test(s) pass; both branches (roadmap YAML present / absent) asserted."
-    fix_if: "Selection returns the guard tests when no roadmap YAML changed, or omits them when one did."
+      bin/venv-python -m pytest tests/test_validate.py::TestPreRoadmapGuardSelection -q
+    expected: "The selection test class passes: roadmap-YAML-in-diff selects the guard tests (tests/**/*.py only, no .pyc); no-roadmap-YAML diff does not force-select them."
+    fix_if: "Selection returns the guard tests when no roadmap YAML changed, omits them when one did, or returns .pyc paths."
   - step: 5
     phase: pre-deploy
-    action: The fast tier runs green and within budget on a roadmap-touching diff.
+    action: >-
+      The fast tier is green and within budget on the actual branch diff (regression check --
+      the branch diff touches no roadmap YAML, so the roadmap->guard path is proven by VP4, not here).
     command: >-
       bin/venv-python -m scripts.validate --pre
     expected: "Validation Summary (scope: pre): All checks passed; elapsed under the 5-minute budget."
-    fix_if: "Budget assertion reddens -- narrow the dynamic discovery to the guard tests actually referencing the changed YAML, or move a slow check to the full tier."
+    fix_if: "Budget assertion reddens or a check fails -- narrow the dynamic discovery to the guard tests actually referencing the changed YAML, or move a slow check to the full tier."
   - step: 6
     phase: pre-deploy
     action: Confirm the recs close after merge (post-merge verification via read cache).
@@ -173,6 +182,11 @@ context:
     resolve_inherited_exemption returns the matched parent's bootstrap_completion_exempt;
     T-1.12's is now None post-discharge, so the live call returns None. This is the one
     semantic-judgment edit -- adjudicate against live state, do not force True.
+  - >-
+    Branch is behind origin/main at planning time (origin/main completed T3.18 via PR #428
+    after this branch's point; branch has no roadmap commit of its own). The commit-flow
+    auto-rebase pulls that in; all four guard-test expected values are re-derived post-rebase
+    (execution step). Exempt-set delta verified stable under this change (T3.18 not exempt).
   - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS; CITE = dec-118, Decision 55, Decision 73, Decision 80, Decision 104, Decision 72"
   - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
 pre_implementation_checklist:
@@ -193,19 +207,33 @@ execution_steps:
     now None; assert the live value (None) or re-point to a still-exempt parent, whichever
     preserves the inheritance-rule intent without mutating the roadmap.
   - >-
-    tests/test_session_preflight_platform_roadmap.py: re-point
-    test_t112_surfaces_pending_gating_cd off complete T1.12 to a genuinely in_progress
-    tier_item whose completion_blocked_on_cd names a real pending CD; verify the chosen item
-    against the live roadmap projection before pinning it.
+    tests/test_session_preflight_platform_roadmap.py: re-anchor
+    test_t112_surfaces_pending_gating_cd on an INVARIANT (some in_progress item carries a
+    non-empty completion_blocked_on_cd all of whose entries are pending CDs), matching the
+    sibling test_blocked_on_cd_non_empty pattern, and rename it to
+    test_in_progress_surfaces_pending_gating_cd. Do NOT re-pin a concrete id/CD -- that would
+    re-arm the tier_misplaced fragility this plan fixes. Verify the invariant against the live
+    (post-rebase) roadmap projection before committing.
   - >-
     scripts/validate.py: in the --pre changed_tests selection (~line 360), when a roadmap YAML
     is present in `changed`, discover the tests/ files referencing that YAML path (dynamic --
     no hardcoded list) and union them into changed_tests. Factor the discovery into a small
-    testable helper.
+    importable helper. Constrain the glob to tests/**/*.py and EXCLUDE __pycache__ (a bare
+    grep -rl returns .pyc paths that break pytest collection). Note the helper self-selects
+    tests/test_validate.py (its new test embeds the YAML string) -- that is acceptable.
   - >-
-    tests/test_validate.py: add a test that feeds a simulated changed-files list containing
-    docs/ROADMAP-PLATFORM.yaml and asserts the guard test files are selected; add the negative
-    case (no roadmap YAML -> guard tests not force-selected).
+    tests/test_validate.py: add a test CLASS (stable name, e.g. TestPreRoadmapGuardSelection)
+    that feeds a simulated changed-files list containing docs/ROADMAP-PLATFORM.yaml and asserts
+    the guard test files are selected AND that only tests/**/*.py (no .pyc) are returned; add
+    the negative case (no roadmap YAML -> guard tests not force-selected). This unit test is
+    the AUTHORITATIVE end-to-end proof of the roadmap-YAML -> guard-test selection path (VP5
+    only checks fast-tier green + budget on the branch diff, which touches no roadmap YAML).
+  - >-
+    Rebase onto origin/main FIRST (the branch is behind -- origin/main has T3.18=complete via
+    PR #428), then re-derive all four expected values from the post-rebase live
+    docs/ROADMAP-PLATFORM.yaml before pinning them. The exempt-set delta is stable under this
+    change (T3.18 is not exempt); confirm the inheritance value and the in_progress invariant
+    still hold post-rebase.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure
     stop and RCA (Decision 55). Do not bypass the fast-tier budget.
