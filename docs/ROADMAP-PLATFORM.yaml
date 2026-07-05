@@ -6287,7 +6287,9 @@ tier_items:
     depends_on: [T2.21]
     files_in_scope:
       - terraform/personal/oidc.tf
-      - scripts/validate.py
+      - scripts/checks/iam_tf/validate_invoke_implies_resolve.py
+      - scripts/checks/registry.py
+      - tests/test_checks_registry.py
     exit_criteria:
       - id: c1
         text: >-
@@ -6298,10 +6300,12 @@ tier_items:
         status: open
       - id: c2
         text: >-
-          scripts/validate.py contains a credential-free invariant: every role granted
-          lambda:InvokeFunction on the ducklake reader/writer ALSO has ssm:Get* on
-          parameter/agent-platform/* (invoke-implies-resolve); check runs over rendered policy JSON and
-          fails CI if violated
+          scripts/checks/iam_tf/validate_invoke_implies_resolve.py contains a credential-free invariant:
+          every role granted lambda:InvokeFunction on the ducklake reader/writer ALSO has ssm:Get* on
+          parameter/agent-platform/* (invoke-implies-resolve); check text-parses oidc.tf and resolves
+          source_policy_documents composition directly (a credential-free HCL text-parse, per Decision
+          119's no-local-terraform-render constraint -- not rendered policy JSON), registered in
+          registry.py and facade-re-exported in validate.py, and fails CI if violated
         status: open
     related_decisions: [35, 77, 84, 92]
     effort: M

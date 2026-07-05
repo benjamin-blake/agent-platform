@@ -104,6 +104,9 @@ from scripts.checks.hygiene.validate_sys_executable import validate_sys_executab
 from scripts.checks.iam_tf.validate_authority_budget import validate_authority_budget  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_environment_taxonomy import validate_environment_taxonomy  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_iam_runner_policy import validate_iam_runner_policy  # noqa: F401,E402
+from scripts.checks.iam_tf.validate_invoke_implies_resolve import (  # noqa: F401,E402
+    validate_invoke_implies_resolve,
+)
 from scripts.checks.iam_tf.validate_terraform_try import _is_inside_try, validate_terraform_try  # noqa: F401,E402
 from scripts.checks.lambda_pkg.validate_lambda_bundle_completeness import (  # noqa: F401,E402
     validate_lambda_bundle_completeness,
