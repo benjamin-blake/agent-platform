@@ -1146,6 +1146,35 @@ class TestValidateInvariants:
         # Error message must mention the @file gotcha
         # (validated by test passing -- the function adds to failed list)
 
+    def test_passes_on_instruction_before_at_file(self, tmp_path: Path) -> None:
+        """Does not flag a '-p' call list that carries an instruction before @file."""
+        scripts_dir = tmp_path / "scripts" / "executor"
+        scripts_dir.mkdir(parents=True)
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+
+        # A script that uses -p with an inline instruction preceding @file
+        (tmp_path / "scripts" / "good_script.py").write_text(
+            'cmd.extend(["-p", "review this", f"@{some_file}"])\n',
+            encoding="utf-8",
+        )
+        (scripts_dir / "postflight.py").write_text(
+            "def cleanup_after_merge(b):\n    subprocess.run(['git', 'checkout'])\n    return True\n",
+            encoding="utf-8",
+        )
+        (tests_dir / "test_execute_recommendation.py").write_text(
+            "class TestCleanupAfterMerge:\n"
+            "    def test_x(self):\n"
+            "        r = [MagicMock(returncode=0), MagicMock(returncode=0), MagicMock(returncode=0)]\n",
+            encoding="utf-8",
+        )
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_invariants(failed)
+
+        assert failed == []
+
     def test_fails_on_mock_count_mismatch(self, tmp_path: Path) -> None:
         """Fails when cleanup_after_merge has many subprocess calls but few test mocks."""
         scripts_dir = tmp_path / "scripts" / "executor"
