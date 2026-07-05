@@ -1,0 +1,219 @@
+schema_version: 1
+slug: "t117-cli-json-output-retire"
+intent: >-
+  Retire the deprecated cli-json-output.md contract (a dead GitHub Copilot CLI JSON schema
+  whose parser and wrapper are deleted) and close tier_item T-1.17 by explicit exemption,
+  correcting the false roadmap/INTENT premise that llm_utils.py parses CLI JSON output --
+  keeping the pre-codegen contract ledger honest to live architecture (CD.25 / dec-118).
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-t117-cli-json-output-retire.yaml
+phase: >-
+  Platform tier T-1 / T-1.17 (pre-codegen contract ratification wave, CD.25 ratified as dec-118)
+scope:
+  - file: docs/contracts/cli-json-output.md
+    action: Delete
+    purpose: >-
+      Retire dead-path residue. The contract documents the GitHub Copilot CLI JSON-output
+      schema; its parser parse_jsonl_output exists nowhere, its home scripts/copilot_wrapper.py
+      was deleted (commit 6a2f7c0, "retire Copilot-SDK residue"), and the cited replacement
+      scripts/bedrock_client.py does not exist. Gemini is the sole valid provider.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Close T-1.17 by exemption (flip status, add completed_at + note citing the retirement
+      Decision, preserve id and bootstrap_completion_exempt: true); re-ground its intent and
+      exit_criteria so they no longer assert the false "llm_utils.py parser reads the YAML"
+      premise. Roadmap bookkeeping -- reconciles data with reality, implements nothing further.
+  - file: docs/INTENT-pre-codegen-contract-ratification.md
+    action: Modify
+    purpose: >-
+      Correct the factual premise (line ~203 and the T-1.17 conversion notes) that
+      "scripts/llm_utils.py parses CLI JSON output" -- it never did; only the process-safety
+      helpers were relocated there, and the parser stayed in copilot_wrapper.py which was later
+      deleted. Mark the T-1.17 conversion note superseded-by-retirement. Grandfathered doc
+      (disposition_state: pending) -- a modify, not a new doc, so the intent-doc-freeze guard is satisfied.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append a new numbered Decision recording the retirement rationale + reversal conditions and
+      excepting T-1.17 from CD.25/dec-118's .md->.yaml conversion wave. Filed via the ops portal
+      backfill, not a direct edit to the read cache.
+bundled_recommendations:
+  - rec-146
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/contracts/cli-json-output.md is deleted and no live code/config reference to it or to
+    parse_jsonl_output remains (historical PLAN-*.yaml/.md, audit-reports, SESSION_LOG, CHANGELOG,
+    the INTENT conversion notes, and the recommendations/roadmap ledgers are permitted).
+  - >-
+    T-1.17 in ROADMAP-PLATFORM.yaml is closed by exemption: status flipped off not_started with a
+    note citing the retirement Decision; id and bootstrap_completion_exempt: true preserved; intent
+    and exit_criteria no longer contain the "llm_utils.py parser reads the YAML" premise.
+  - >-
+    docs/INTENT-pre-codegen-contract-ratification.md no longer asserts that llm_utils.py parses CLI
+    JSON output; the corrected text states the parser was deleted (copilot_wrapper.py retired) and
+    llm_utils.py never parsed JSON.
+  - >-
+    A new numbered Decision records the retirement rationale and reversal conditions, notes the
+    CD.25/dec-118 wave exception, and is present in DECISIONS.md and reflected in ops_decisions via
+    the portal backfill.
+  - >-
+    rec-146 is closed as stale_target (its target file is deleted) with the deletion recorded as the
+    closure proof, via the ops portal.
+  - >-
+    bin/venv-python -m scripts.validate --pre passes (contract-drift gate, intent-doc-freeze,
+    roadmap schema, and the bootstrap-exempt-set assertion all green with the file deleted).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Deletion + dead-consumer sweep: the contract file is gone, its parser symbol appears in no
+      Python source, and no script/config/src file references the contract slug.
+    command: >-
+      bash -c 'test ! -f docs/contracts/cli-json-output.md && ! grep -rIn "parse_jsonl_output"
+      --include="*.py" . && test -z "$(grep -rln cli-json-output scripts/ config/ src/ 2>/dev/null)"
+      && echo SWEEP_OK'
+    expected: "Prints SWEEP_OK (exit 0); file absent, parser symbol absent, no live consumer references."
+    fix_if: >-
+      Non-zero exit or a printed path means a live consumer still references the contract or parser
+      -- do NOT delete; investigate the reference first (it may be a genuinely live path, invalidating retirement).
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Roadmap closeout + premise strike: T-1.17 is no longer not_started, keeps its exempt flag, and
+      its intent no longer carries the false llm_utils.py-parser premise.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'));
+      t=[i for i in d['tier_items'] if i['id']=='T-1.17'][0]; assert t['status']!='not_started',
+      t['status']; assert t.get('bootstrap_completion_exempt') is True; assert 'llm_utils.py parser'
+      not in t.get('intent',''); print('T-1.17', t['status'])"
+    expected: "Prints 'T-1.17 <closeout-status>'; exempt flag intact; premise struck."
+    fix_if: "AssertionError -- status not flipped, exempt flag dropped, or the parser premise still present in intent."
+  - step: 3
+    phase: pre-deploy
+    action: "INTENT premise corrected: the false phrasing is gone and a correction marker is present."
+    command: >-
+      bash -c '! grep -q "parses CLI JSON output" docs/INTENT-pre-codegen-contract-ratification.md
+      && ! grep -q "llm_utils.py parser reads the YAML" docs/INTENT-pre-codegen-contract-ratification.md
+      && grep -qiE "parser was deleted|never parsed JSON|retired" docs/INTENT-pre-codegen-contract-ratification.md
+      && echo INTENT_OK'
+    expected: >-
+      Prints INTENT_OK; BOTH premise copies are struck -- the line-~203 "parses CLI JSON output" claim and
+      the embedded T-1.17 replica's "llm_utils.py parser reads the YAML" (~lines 1005-1030) -- and a
+      retirement/correction marker is present.
+    fix_if: >-
+      Either phrase still matches (the embedded replica at ~1005-1030 is easy to miss -- the plan-critique
+      gate flagged it), or no correction marker was added.
+  - step: 4
+    phase: pre-deploy
+    action: "Retirement Decision recorded in DECISIONS.md and reflected in ops_decisions via the portal backfill."
+    command: >-
+      bash -c 'grep -qiE "^## Decision [0-9]+:.*(cli-json-output|retire)" docs/DECISIONS.md &&
+      bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md >/dev/null 2>&1 && echo DECISION_OK'
+    expected: "Prints DECISION_OK; the new Decision header exists and the backfill ETL succeeds."
+    fix_if: >-
+      No matching Decision header, or the portal backfill fails -- re-check the decision number against the
+      current max ## Decision NNN header (numbering race) and portal connectivity (agent_platform profile).
+  - step: 5
+    phase: pre-deploy
+    action: "rec-146 closed (target file deleted); verify against the freshly synced read cache."
+    command: >-
+      bash -c 'bin/venv-python -m scripts.sync_ops pull >/dev/null 2>&1;
+      bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in
+      pathlib.Path(\"logs/.recommendations-log.jsonl\").read_text().splitlines() if l.strip()];
+      r=[x for x in rows if x[\"id\"]==\"rec-146\"][0]; assert r[\"status\"]==\"closed\", r[\"status\"];
+      print(\"rec-146\", r[\"status\"])"'
+    expected: "Prints 'rec-146 closed'."
+    fix_if: "Status still open -- the portal --update-rec close did not land; re-run it and re-sync."
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Authoritative full presubmit: exercises the CD.25 contract-drift gate (confirms deletion left
+      no dangling ritual reference), intent-doc-freeze, roadmap schema, and the bootstrap-exempt-set assertion.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0; all presubmit checks pass with the contract deleted and the roadmap/INTENT edits in place."
+    fix_if: >-
+      Any check fails -- read the failing check name; a contract-drift failure means cli-json-output was a
+      tracked ritual contract (unexpected for a DEPRECATED prose doc) and needs drift-set bookkeeping before deletion.
+constraints:
+  - "IMPLEMENTATION plan; the roadmap status flip is bookkeeping that reconciles data with reality, not new scope."
+  - >-
+    All operational-data writes transit the ops portal only: the retirement Decision via
+    ops_data_portal --backfill-decisions-md, and the rec-146 close via ops_data_portal --update-rec.
+    Never Edit/Write logs/.decisions-index.jsonl or logs/.recommendations-log.jsonl directly (Decision 84 Single-Portal Invariant).
+  - >-
+    Re-check the current max '## Decision NNN:' header in DECISIONS.md at execution time before filing --
+    a concurrent PR may claim the drafted number (numbering-race; current max observed = 120).
+  - >-
+    Close rec-146 deterministically as stale_target (target file physically absent) with the deletion
+    recorded as proof -- not a bare semantic 'superseded' assertion (Decision 103).
+  - >-
+    Before deletion, confirm docs/contracts/cli-json-output.md is a non-ritual doc (no top-level
+    contract:/class: block) so the CD.25 drift gate (dec-118) has no dangling reference.
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "Public repo boundary: introduce no AWS account IDs, ARNs, secrets, or internal hostnames (AGENTS.md)."
+context:
+  - >-
+    Finding: parse_jsonl_output exists nowhere in the tree; scripts/copilot_wrapper.py was deleted in
+    commit 6a2f7c0 ("retire Copilot-SDK residue"); scripts/bedrock_client.py (the .md's cited replacement)
+    does not exist; model_registry._VALID_PROVIDERS = frozenset(["gemini"]) (bedrock retired per CD.28).
+  - >-
+    The live CLI-JSON parser is scripts/llm_client.py:_gemini_call, which parses the Gemini CLI
+    --output-format stream-json schema (events init/message/result) -- a DIFFERENT vendor schema from the
+    dead Copilot one documented by cli-json-output.md, currently undocumented by any contract and out of this plan's scope.
+  - >-
+    Disposition chosen by human: retire (not convert), and correct the roadmap/INTENT premise in this plan.
+    This satisfies T-1.17's exit-criterion branch "documents an explicit exemption" and the INTENT doc's
+    Known Gap #7 ("keep as markdown / retire, unenforced" is a valid outcome).
+  - >-
+    Roadmap deviation: T-1.17's original exit criterion "Step 10 multi-perspective critique converges" was
+    REPORT-ONLY-specific. The disposition is retire (IMPLEMENTATION), so Step 10 does not apply; the retirement
+    is verified by the Step 9 plan-critique gate plus the stale-reference VP sweep. The closeout re-grounds
+    that criterion as part of the roadmap bookkeeping.
+  - >-
+    Decisions this plan must reference (decision-scout CITE list, verbatim): Decision 86 (retire prose
+    contract; rationale -> numbered Decision; editing a grandfathered INTENT doc is a permitted modify),
+    Decision 84 (DECISIONS.md canonical + portal backfill; Single-Portal Invariant), dec-118 (the ratified
+    home of CD.25 -- "necessary NOT sufficient", so a per-item exemption closeout is sanctioned), Decision 103
+    (rec-relevance close semantics). RELATED: Decision 116 (retires the copilot_wrapper.py boundary --
+    corroborates the dead path). Provenance: Decision 52/49/40 (Decision 52 lives in DECISIONS_ARCHIVE.md,
+    cited as archived context, not a live governing decision).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE, 0 BLOCK); CITE = Decision 86, Decision 84, dec-118, Decision 103."
+  - "gates: decision-scout=FLAGS_FOUND (2 NOTE, resolved in-plan); plan-critique=PROCEED after 1 round"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted (full triage performed by the decision-scout gate)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "docs/contracts/cli-json-output.md confirmed non-ritual (no top-level contract:/class: block) before deletion"
+  - "Current max '## Decision NNN:' number re-checked in DECISIONS.md before filing the retirement Decision"
+execution_steps:
+  - "Confirm docs/contracts/cli-json-output.md has no top-level contract:/class: block (non-ritual), then delete it."
+  - >-
+    In docs/ROADMAP-PLATFORM.yaml, close T-1.17: flip status to complete (exemption branch) with
+    completed_at and a note citing the retirement Decision; re-ground intent to strike the
+    "llm_utils.py parser reads the YAML" premise and record the retirement one-liner; re-ground
+    exit_criteria to the exemption outcome. Preserve id and bootstrap_completion_exempt: true.
+  - >-
+    In docs/INTENT-pre-codegen-contract-ratification.md, correct the premise at line ~203 and the
+    T-1.17 conversion notes (~220 and ~1005-1030): state the parser was deleted (copilot_wrapper.py
+    retired, commit 6a2f7c0) and llm_utils.py never parsed JSON; mark the T-1.17 conversion note superseded-by-retirement.
+  - >-
+    Re-check the current max Decision number, then append '## Decision NNN:' to docs/DECISIONS.md
+    recording the retirement disposition, rationale, reversal conditions, and CD.25/dec-118 wave
+    exception; run bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md.
+  - >-
+    Close rec-146 via the portal as stale_target with the deletion as proof:
+    bin/venv-python -m scripts.ops_data_portal --update-rec rec-146 --status closed --resolution
+    "target contract docs/contracts/cli-json-output.md retired (T-1.17 exemption); doc-improvement rec moot";
+    then bin/venv-python -m scripts.sync_ops pull to refresh the read cache.
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: what was retired, the roadmap/INTENT corrections, the new Decision number, rec-146 closure, and verification results."
+work_areas: []
+rollback: >-
+  Reversible: restore docs/contracts/cli-json-output.md from git history, revert the ROADMAP/INTENT
+  edits, and supersede the retirement Decision if a CLI-JSON boundary is reintroduced. The reversal
+  conditions are recorded in the retirement Decision itself.
