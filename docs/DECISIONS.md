@@ -25,9 +25,13 @@ the contract outright rather than converting it to YAML under T-1.17's original 
 T-1.17 (`docs/ROADMAP-PLATFORM.yaml`) is closed by explicit exemption -- the Known Gap #7 branch in
 `docs/INTENT-pre-codegen-contract-ratification.md` ("keep as markdown / retire, unenforced" is a
 valid outcome) -- rather than by landing the YAML conversion + `llm_utils.py` wiring its original
-exit criteria described. `bootstrap_completion_exempt: true` is set on T-1.17 to mark this
-exemption-based closeout (distinct from, and unrelated to, the now-already-ratified CD.25-pending
-flavor of that flag -- CD.25 ratified via Decision 118 on 2026-07-03). `docs/INTENT-pre-codegen-
+exit criteria described. No `bootstrap_completion_exempt` flag is set on T-1.17: it was gated
+solely by CD.25, and dec-118 (Decision 118, 2026-07-03) already stripped that flag for the whole
+CD.25-solely-gated subset when CD.25 ratified (`docs/ROADMAP-PLATFORM.yaml` lines ~116-124); this
+closeout completes after CD.25's ratification, not ahead of it, so the exemption flag does not
+apply here -- the flag's absence is deliberate and consistent with the existing
+`test_live_platform_yaml_bootstrap_exemption_set` regression test, not an oversight.
+`docs/INTENT-pre-codegen-
 contract-ratification.md`'s conversion-table row and embedded T-1.17 replica are corrected in the
 same session to strike the false `llm_utils.py` premise and mark the original conversion proposal
 superseded-by-retirement. rec-146 (doc-improvement rec targeting the now-deleted file) is closed via
