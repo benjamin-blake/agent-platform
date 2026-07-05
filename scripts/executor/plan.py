@@ -55,7 +55,7 @@ def get_plan_timeout_secs() -> int:
 
 def _validate_model_hierarchy() -> None:
     """No-op stub retained for backwards compatibility.  Model validation now
-    delegated to model_registry which loads from config/agent/copilot/model_routing.yaml.
+    delegated to model_registry which loads from docs/contracts/inference-provider.yaml.
     """
     pass
 
@@ -68,7 +68,7 @@ def get_planning_model(effort: str) -> str | None:
 
     Delegates to ``model_registry.resolve_model()`` which applies:
     - COPILOT_MODEL_PLANNING env var override (highest priority)
-    - Effort-band lookup from config/agent/copilot/model_routing.yaml
+    - Effort-band lookup from docs/contracts/inference-provider.yaml
     Returns ``None`` for Gemini auto mode (CLI picks the model).
     """
     from scripts.executor.model_routing import get_planning_model as _get_planning_model

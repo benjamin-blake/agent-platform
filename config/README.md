@@ -332,17 +332,15 @@ env:
 
 ---
 
-### `copilot_model_routing.yaml`
+### `inference-provider.yaml` `model_routing:` block
 
-**Purpose:** Provider-aware model routing configuration for the executor pipeline (rec-379, Decision 53).
+**Purpose:** Provider-aware model routing configuration for the executor pipeline (rec-379, Decision 53), absorbed into the `model_routing:` key of `docs/contracts/inference-provider.yaml` (T-1.14, Decision 86).
 **Active provider:** Gemini CLI (personal Google Pro plan, 1,500 req/day).
-**Dormant provider:** Bedrock (reactivate via `LLM_PROVIDER=bedrock` if/when AWS quota throttling is resolved).
 
 **Used by:** `scripts/model_registry.py` -- `resolve_model()`, `escalate_model()`, `resolve_provider()`.
 
 **Structure:**
 - `providers.gemini` -- model tier names to Gemini 3 model IDs (pro/flash/auto)
-- `providers.bedrock` -- dormant DeepSeek/Opus model IDs
 - `executor.roles` -- per-role effort-band to model-tier mappings
 - `executor.roles.implementation.file_pattern_floors` -- file patterns that force pro tier
 - `executor.escalation` -- tier escalation ladder (flash -> auto -> pro -> null/human)

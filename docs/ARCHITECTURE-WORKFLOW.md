@@ -417,7 +417,7 @@ scripts/llm_client.py  ← provider-agnostic interface
 ```
 
 `scripts/model_registry.py` resolves model IDs and providers:
-- Reads `config/agent/copilot/model_routing.yaml` for tier → model mappings
+- Reads `docs/contracts/inference-provider.yaml` for tier → model mappings
 - Defaults to `"gemini"` provider when no `LLM_PROVIDER` env var is set
 - Supports model escalation: `escalate_model("planning", "flash")` → `"gemini-3-pro-preview"`
 - Lambda handlers route by the `provider` field in `.github/agents/schedule.yaml`, not by `LLM_PROVIDER`

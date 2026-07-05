@@ -19,7 +19,7 @@ If any of these are missing from a plan that touches handlers here, the plan is 
 - `agent-platform-data-lake` is the agent log bucket for cron workflows. Don't write to other buckets unless the plan explicitly says so.
 
 ## Model ID format reminder
-Model IDs differ by provider -- e.g., legacy Copilot SDK IDs (`claude-haiku-4.5`, `claude-sonnet-4.6`) vs. GitHub Models IDs (e.g., `gpt-5-mini`). Do not interchange — see `docs/contracts/inference-provider.md` and Decision 116 (supersedes Decision 49).
+Model IDs differ by provider -- e.g., legacy Copilot SDK IDs (`claude-haiku-4.5`, `claude-sonnet-4.6`) vs. GitHub Models IDs (e.g., `gpt-5-mini`). Do not interchange — see `docs/contracts/inference-provider.yaml` and Decision 116 (supersedes Decision 49).
 
 ## awswrangler 3.x gotchas
 - `temp_s3_dir` was renamed `temp_path`. Verify `awswrangler.__version__` before calling, or pin in `requirements.txt`.

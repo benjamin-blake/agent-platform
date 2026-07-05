@@ -19,7 +19,7 @@ Evaluate against the hard-fail rules in your instructions. Read the actual targe
 ## Hard-Fail Rules
 Steps that call external tools (Copilot CLI, gh CLI, AWS SDK, Lambda invocation, subprocess) without citing a boundary contract in `docs/contracts/` or doc reference are NEEDS_REVISION.
 
-Steps that modify Lambda-packaged files (`src/data/handlers/`, `.github/agents/schedule.yaml`, `.github/prompts/scheduled/`, `config/`, `scripts/_LAMBDA_SCRIPTS`) without a `build_lambda.py --deploy` step in the plan are NEEDS_REVISION. Reference: Decision 47, docs/contracts/inference-provider.md.
+Steps that modify Lambda-packaged files (`src/data/handlers/`, `.github/agents/schedule.yaml`, `.github/prompts/scheduled/`, `config/`, `scripts/_LAMBDA_SCRIPTS`) without a `build_lambda.py --deploy` step in the plan are NEEDS_REVISION. Reference: Decision 47, docs/contracts/inference-provider.yaml.
 
 Plans classified as V3 (integration verification) that use structural acceptance commands (grep, test -f, file-existence checks) instead of behavioural acceptance commands (invoke the deployed system and verify output) are NEEDS_REVISION. V3 plans must include: (a) a deploy step, (b) an invoke step that triggers the real system, (c) a verify step that checks the output. Structural acceptance for V3 features hides integration bugs that only surface on first live invocation. Reference: Decision 48.
 
