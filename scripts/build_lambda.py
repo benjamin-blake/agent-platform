@@ -733,7 +733,7 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
 
     Ref: AWS CLI ``lambda update-function-code`` requires
     --function-name, --s3-bucket, --s3-key; optional --region and
-    --profile.  Ref: ``docs/contracts/inference-provider.md`` for
+    --profile.  Ref: ``docs/contracts/inference-provider.yaml`` for
     the inference-client packaging requirements.
     """
     if only_ducklake:

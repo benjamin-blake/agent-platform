@@ -1,7 +1,8 @@
 """Provider-aware model resolver for executor LLM calls.
 
-Reads routing configuration from ``config/agent/copilot/model_routing.yaml``.
-Falls back to safe defaults (Gemini auto mode) if the config file is missing.
+Reads routing configuration from the ``model_routing:`` block of
+``docs/contracts/inference-provider.yaml``. Falls back to safe defaults (Gemini auto mode) if
+the config file is missing.
 
 Usage
 -----
@@ -20,7 +21,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path("config/agent/copilot/model_routing.yaml")
+_CONFIG_PATH = Path("docs/contracts/inference-provider.yaml")
 _CONFIG: dict | None = None
 
 _VALID_PROVIDERS = frozenset(["gemini"])  # bedrock retired per CD.28
@@ -34,10 +35,10 @@ _ENV_OVERRIDE_MAP: dict[str, str] = {
 
 
 def _load_config() -> dict:
-    """Load and cache the routing config YAML.
+    """Load and cache the ``model_routing:`` sub-dict of the inference-provider contract.
 
-    Returns an empty dict with a warning if the file is missing or unparseable.
-    Never raises -- import safety is a hard requirement.
+    Returns an empty dict with a warning if the file is missing, unparseable, or lacks a
+    ``model_routing`` key. Never raises -- import safety is a hard requirement.
     """
     global _CONFIG
     if _CONFIG is not None:
@@ -55,7 +56,8 @@ def _load_config() -> dict:
         import yaml
 
         with open(_CONFIG_PATH, encoding="utf-8") as fh:
-            _CONFIG = yaml.safe_load(fh) or {}
+            doc = yaml.safe_load(fh) or {}
+        _CONFIG = doc.get("model_routing", {})
     except Exception:  # noqa: BLE001
         logger.warning(
             "model_registry: failed to load or parse %s -- using empty defaults",
@@ -99,7 +101,8 @@ def resolve_model(role: str, effort: str, file_path: str = "") -> str | None:
        ``COPILOT_MODEL_REVIEW``).
     2. File-pattern floor: if ``file_path`` matches a sensitive pattern, escalate to ``pro`` tier
        (implementation role only).
-    3. Effort-band lookup from ``config/agent/copilot/model_routing.yaml``.
+    3. Effort-band lookup from the ``model_routing:`` block of
+       ``docs/contracts/inference-provider.yaml``.
     4. Returns ``None`` (Gemini auto mode -- CLI picks pro or flash based on task complexity).
 
     When ``LLM_PROVIDER`` is not ``"gemini"``, only the env-var override is applied; all other

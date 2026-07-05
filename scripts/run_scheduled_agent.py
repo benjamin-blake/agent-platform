@@ -281,7 +281,7 @@ def _smoke_test(agent_name: str) -> int:
 
     Delivery contracts:
       - docs/GETTING_STARTED.md: dispatcher invoke shape and runner entrypoint
-      - docs/contracts/inference-provider.md: post-deploy verification
+      - docs/contracts/inference-provider.yaml: post-deploy verification
       - scripts/build_lambda.py: supported deploy mechanism
 
     Returns 0 on success, non-zero on any failure.

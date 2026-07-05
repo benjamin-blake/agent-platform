@@ -30,12 +30,6 @@ _MINIMAL_CONFIG = {
                 "auto": None,
             }
         },
-        "bedrock": {
-            "models": {
-                "mid": "deepseek.v3.2",
-                "opus": "claude-opus-4.6",
-            }
-        },
     },
     "executor": {
         "default_provider": "gemini",
@@ -320,9 +314,6 @@ class TestGetModelTier:
     def test_gemini_flash_returns_flash(self, mock_config: None) -> None:
         assert get_model_tier("gemini-3-flash-preview") == "flash"
 
-    def test_bedrock_deepseek_returns_mid(self, mock_config: None) -> None:
-        assert get_model_tier("deepseek.v3.2") == "mid"
-
     def test_unknown_model_returns_unknown(self, mock_config: None) -> None:
         assert get_model_tier("some-unknown-model-v999") == "unknown"
 
@@ -394,3 +385,48 @@ class TestGetFloorTier:
             {"pattern": "scripts/executor/plan.py", "min_tier": "pro"},
         ]
         assert _get_floor_tier("scripts/executor/plan.py", patterns) == "flash"
+
+
+# ---------------------------------------------------------------------------
+# Real inference-provider.yaml -- unmocked, exercises the actual repo file
+# ---------------------------------------------------------------------------
+
+
+class TestRealInferenceProviderYaml:
+    """Reads the real docs/contracts/inference-provider.yaml (no mocking) and confirms
+    model_registry resolves identically off it to the pre-conversion model_routing.yaml."""
+
+    @pytest.fixture(autouse=True)
+    def _real_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("LLM_PROVIDER", raising=False)
+        monkeypatch.delenv("COPILOT_MODEL_PLANNING", raising=False)
+        monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
+        monkeypatch.delenv("COPILOT_MODEL_REVIEW", raising=False)
+
+    def test_contract_header_fields(self) -> None:
+        import yaml
+
+        with open("docs/contracts/inference-provider.yaml", encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh)
+        assert doc["contract_version"] == 1
+        assert doc["status"] == "ratified"
+        assert "config/agent/copilot/model_routing.yaml" in doc["projects_to"]
+
+    def test_no_bedrock_provider(self) -> None:
+        import yaml
+
+        with open("docs/contracts/inference-provider.yaml", encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh)
+        assert "bedrock" not in doc["model_routing"]["providers"]
+
+    def test_resolve_model_planning_xs(self) -> None:
+        assert resolve_model("planning", "XS") == "gemini-3-flash-preview"
+
+    def test_resolve_model_implementation_floor(self) -> None:
+        assert resolve_model("implementation", "XS", "scripts/executor/plan.py") == "gemini-3-pro-preview"
+
+    def test_escalate_model_auto_to_pro(self) -> None:
+        assert escalate_model("planning", "auto") == "gemini-3-pro-preview"
+
+    def test_get_model_tier_pro(self) -> None:
+        assert get_model_tier("gemini-3-pro-preview") == "pro"

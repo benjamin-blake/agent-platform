@@ -1,0 +1,256 @@
+# Non-ritual inference-provider registry. NOT a Class A/B/C ritual contract (no contract: block
+# with a class: field). The CD.25 drift gate skips files that lack a contract: mapping with a
+# class: field.
+#
+# Purpose: machine-readable inference-provider contract -- provider tier model, model naming
+# conventions, provider field schema, and auth requirements for all inference calls. Converts
+# the retired prose inference-provider contract (v7.0, June 2026) per the agent-first
+# contract-conversion wave (T-1.13..T-1.19, Decision 86).
+version: 1
+contract_version: 1
+status: ratified
+ratified_at: "2026-07-05"
+ratified_via: "PLAN-inference-provider-yaml-conversion (T-1.14)"
+last_verified: "2026-07-05"
+decisions_cited:
+  - Decision-118
+  - Decision-86
+  - Decision-116
+  - CD.28
+  - CD.25
+note: >-
+  Converted from inference-provider.md v7.0. Decision reference: CD.28 (docs/ROADMAP-PLATFORM.yaml
+  candidate_decisions) defines the tier model and retires Bedrock from the architecture. Decision 53
+  (docs/DECISIONS_ARCHIVE.md) governs the operative executor transport (Gemini CLI). Decision 49
+  governs the scheduled-agent provider until PLAN-resolve-scheduled-agent-provider lands. Applies to
+  all executor and Lambda-executed agent code (scripts/, src/data/handlers/).
+
+projects_to:
+  config/agent/copilot/model_routing.yaml:
+    status: absorbed_and_deleted
+    note: >-
+      model_routing.yaml's providers.gemini + executor.{default_provider,roles,effort_bands,
+      file_pattern_floors,escalation} block is reproduced verbatim (minus the CD.28-retired
+      bedrock provider) under this file's model_routing: key. model_registry.py reads it from
+      here; no separate file remains.
+
+tier_model:  # CD.28 committed architecture
+  tiers:
+    - tier: 1
+      name: primary
+      provider: DeepSeek-direct
+      transport: LiteLLM
+      state: "Committed; lands with T4.2's PLAN-llm-client-litellm-transport"
+    - tier: 2
+      name: warm_fetched_escape_hatch
+      provider: Anthropic-direct
+      transport: LiteLLM
+      state: "Committed; credential validated at every harness cold start"
+    - tier: 3
+      name: openrouter
+      provider: OpenRouter
+      transport: LiteLLM
+      state: Deferred
+  note: >-
+    LiteLLM is the only Layer-1 inference protocol surface under CD.28. Direct provider-SDK
+    imports are forbidden in the executor and in scripts/llm_client.py.
+
+operative_state:  # until T4.2 lands
+  executor_pipeline:
+    provider: gemini-cli
+    entrypoint: "scripts/llm_client._gemini_call"
+    models: "Gemini 3 models via local CLI headless mode"
+    decision: Decision-53
+  scheduled_agents:
+    status: disabled
+    since: "2026-05"
+    ref: "AGENTS.md runbook"
+    note: >-
+      schedule.yaml entries still declare provider: copilot-sdk (T4.3-owned; not migrated by
+      this contract). Per Decision 116 (supersedes Decision 49), routine/non-agentic agents
+      migrate to LiteLLM Tier 1 (DeepSeek) and judgment/agentic agents migrate to claude -p;
+      realization is owned by CD.28's PLAN-resolve-scheduled-agent-provider follow-on.
+
+retired_providers:
+  - id: bedrock
+    reason: "RETIRED per CD.28"
+    note: >-
+      scripts/bedrock_client.py and all dispatch branches were deleted by the T1.15 sweep
+      (this contract's v7.0 prose revision). No rollback path in code; reintroduction requires
+      a new decision.
+  - id: copilot-sdk
+    reason: "RETIRED from the active provider set per Decision 116 (supersedes Decision 49)"
+    note: >-
+      scripts/copilot_sdk_client.py and the handler dispatch branch are deleted; an agent
+      declaring this provider raises RetiredProviderError and is recorded as a failed
+      invocation (no silent misroute).
+  - id: gemini_byok
+    label: "gemini (BYOK via Copilot SDK)"
+    reason: "RETIRED alongside copilot-sdk per Decision 116"
+    note: "Same RetiredProviderError handling."
+
+provider_defaults:  # contract = code; MUST stay in sync with it
+  executor_path:
+    entrypoint: "scripts.llm_client.llm_call -> scripts.model_registry.resolve_provider"
+    default: gemini
+    valid_providers: [gemini]  # bedrock retired per CD.28
+    fallback_behavior: >-
+      resolve_provider() reads LLM_PROVIDER and falls back to "gemini" for any unrecognised
+      value (including the retired bedrock). llm_call raises LLMResponseError if a non-gemini
+      provider somehow resolves (defense-in-depth until T4.2's LiteLLM transport).
+  scheduled_agent_path:
+    entrypoint: "src/data/handlers/scheduled_agent_handler.py"
+    absent_field_default: github-models
+    note: >-
+      All current .github/agents/schedule.yaml entries declare provider: copilot-sdk
+      explicitly; the absent-field default exists for legacy/local use and MUST NOT be relied
+      on for new entries.
+
+provider_field_schema:
+  required_field: provider
+  declared_in: ".github/agents/schedule.yaml"
+  example:
+    name: doc-freshness
+    cron: "0 6 * * 1"
+    model: claude-haiku-4.5
+    provider: copilot-sdk
+    prompt_path: ".github/prompts/scheduled/doc-freshness.prompt.md"
+  valid_values:
+    - value: copilot-sdk
+      client: "RETIRED -- raises RetiredProviderError"
+      where_valid: >-
+        Not valid anywhere; Decision 116 (supersedes Decision 49). Existing schedule.yaml
+        entries fail loudly until PLAN-resolve-scheduled-agent-provider migrates them.
+    - value: gemini
+      client: "RETIRED -- raises RetiredProviderError"
+      where_valid: "Not valid anywhere; retired alongside copilot-sdk per Decision 116."
+    - value: github-models
+      client: "scripts/github_models_client.chat_completion()"
+      where_valid: "Local only -- MUST NOT be used in Lambda; the absent-field default."
+    - value: litellm
+      client: "T4.2 transport (not yet built)"
+      where_valid: "Future-state per CD.28; do not declare until PLAN-resolve-scheduled-agent-provider lands."
+  invalid_value_note: >-
+    provider: bedrock is INVALID. The dispatch branch was removed; an agent declaring it falls
+    through to the github-models default branch (PAT fetch + live GitHub Models call), which
+    then fails loudly at the API layer on the unrecognized Bedrock-style model id.
+
+model_id_formats:
+  gemini_cli:  # operative -- executor pipeline, Decision 53
+    format: "Google Gemini 3 model names passed to the CLI via --model flag (or omitted for Auto mode)"
+    use_cases:
+      - case: auto
+        model_id: null
+        notes: "CLI selects pro or flash based on task complexity (default -- CLI picks)"
+      - case: high_complexity
+        model_id: gemini-3-pro-preview
+        notes: "Strong reasoning"
+      - case: fast_simple
+        model_id: gemini-3-flash-preview
+        notes: "Low latency"
+    auth: "Google OAuth via browser flow (run `gemini` once locally)"
+    cli: "Headless mode: prompt on stdin with -p \"\", --output-format stream-json"
+    exit_codes:
+      - {code: 0, meaning: success}
+      - {code: 1, meaning: general_error}
+      - {code: 42, meaning: bad_input}
+      - {code: 53, meaning: turn_limit_exceeded, retryable: true}
+    version_requirement: "Preview (0.40.0+) required for Gemini 3 models. Install: npm install -g @google/gemini-cli@preview"
+    routing: "docs/contracts/inference-provider.yaml (model_routing:) -> scripts/model_registry.py -> scripts/llm_client._gemini_call()"
+    cost: "Free tier (personal Google Pro plan). The gemini transport reports cost_usd=0.0."
+  litellm_tier_models:  # committed -- lands at T4.2
+    tier_1:
+      models: ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"]
+      notes: >-
+        Aliases remap to deepseek-v4-flash post-2026-07-24 per upstream deprecation;
+        native context caching is hash-based and automatic.
+    tier_2:
+      models: ["Anthropic-direct Claude models via LiteLLM"]
+      notes: >-
+        Funded by the Max x5 programmatic-pool credit; boot validation includes a usage-API
+        pool check (CD.28 discipline point).
+  copilot_sdk:  # legacy -- disabled scheduled agents
+    format: "{provider}-{family}-{version} (e.g., claude-haiku-4.5, claude-sonnet-4.6)"
+    note: "Differs from GitHub Models IDs (gpt-5-mini, openai/gpt-4.1) -- do not interchange. See Decision 49."
+  github_models:  # local use only
+    note: "GitHub Models uses different naming: gpt-5-mini, openai/gpt-4.1, claude-opus-4-5. Not valid for any other provider."
+
+iam_requirements:
+  summary: >-
+    No inference-provider IAM grants are required: the operative executor transport (Gemini
+    CLI) and the committed CD.28 tiers (DeepSeek-direct, Anthropic-direct via LiteLLM)
+    authenticate with API keys (Secrets Manager / local credential files), not AWS IAM.
+  retired_grant: >-
+    The former BedrockInference Lambda-execution-role statement (bedrock:InvokeModel,
+    bedrock:InvokeModelWithResponseStream) is RETIRED: the live personal-account PlatformDev
+    policy is permission-closed (no Bedrock grant; see terraform/CLAUDE.md reconciliation
+    note), and the retired work-root grant text was removed by the T1.15 sweep.
+  secrets_manager:
+    - name: agent-platform-github-pat
+      note: "OAuth gho_ token, NOT a classic PAT"
+    - name: "Gemini API key secret"
+  ref: "src/data/handlers/CLAUDE.md gotchas"
+
+plan_compliance_checklist:
+  - "No provider: bedrock anywhere; no scripts.bedrock_client imports (git grep -l -E \"bedrock_client|_bedrock_call|_invoke_bedrock\" -- scripts/ src/ returns nothing)"
+  - "New schedule.yaml entries are not added while scheduled agents are disabled; provider migration is owned by PLAN-resolve-scheduled-agent-provider"
+  - "Executor call sites go through llm_call() -- no direct provider-SDK imports (CD.28 discipline point)"
+  - "Stated provider defaults in this contract match scripts/model_registry.py and scheduled_agent_handler.py (provider_defaults section)"
+  - "Lambda-packaged changes follow CD.16/Decision 79 per-Lambda build + deploy + smoke-test gating (dispatcher smoke deferred until T4.3)"
+
+model_routing:  # machine-consumed by scripts/model_registry.py; verbatim from the retired
+                # standalone routing config minus the CD.28-retired bedrock provider block
+  providers:
+    gemini:
+      cli_command: "gemini"
+      headless_flags: ["-p", "--output-format", "json"]
+      default_model: null  # null = Auto mode (recommended -- CLI picks pro/flash based on task)
+      models:
+        pro: "gemini-3-pro-preview"
+        flash: "gemini-3-flash-preview"
+        auto: null  # CLI auto-selects
+  executor:
+    default_provider: "gemini"
+    roles:
+      planning:
+        effort_bands:
+          XS: { model_tier: "flash" }
+          S: { model_tier: "flash" }
+          M: { model_tier: "auto" }
+          L: { model_tier: "pro" }
+          XL: { model_tier: "pro" }
+      implementation:
+        effort_bands:
+          XS: { model_tier: "flash" }
+          S: { model_tier: "flash" }
+          M: { model_tier: "auto" }
+          L: { model_tier: "pro" }
+          XL: { model_tier: "pro" }
+        file_pattern_floors:
+          - pattern: "scripts/executor/"
+            min_tier: "pro"
+          - pattern: "scripts/validate.py"
+            min_tier: "pro"
+          - pattern: "config/prompts/"
+            min_tier: "pro"
+          - pattern: ".github/prompts/"
+            min_tier: "pro"
+          - pattern: ".github/instructions/"
+            min_tier: "pro"
+          - pattern: ".github/agents/"
+            min_tier: "pro"
+      review:
+        effort_bands:
+          XS: { model_tier: "flash" }
+          S: { model_tier: "flash" }
+          M: { model_tier: "auto" }
+          L: { model_tier: "pro" }
+          XL: { model_tier: "pro" }
+    escalation:
+      flash_to: "auto"
+      auto_to: "pro"
+      pro_to: null  # top of hierarchy -- human intervention required
+  interactive:
+    note: >
+      Interactive sessions use VS Code Copilot Chat models (Opus, Sonnet).
+      Not controlled by this config.

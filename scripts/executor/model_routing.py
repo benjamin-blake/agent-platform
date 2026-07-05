@@ -21,7 +21,7 @@ def get_planning_model(effort: str) -> str | None:
 
     Delegates to ``model_registry.resolve_model()`` which applies:
     - COPILOT_MODEL_PLANNING env var override (highest priority)
-    - Effort-band lookup from config/agent/copilot/model_routing.yaml
+    - Effort-band lookup from docs/contracts/inference-provider.yaml
     Returns ``None`` for Gemini auto mode (CLI picks the model).
     """
     return model_registry.resolve_model("planning", effort)
@@ -65,7 +65,7 @@ def get_implementation_model(effort: str, file: str = "", action: str = "") -> s
     Delegates to ``model_registry.resolve_model()`` which applies:
     - COPILOT_MODEL_EXECUTION env var override (highest priority)
     - File-pattern floors (executor paths, config/prompts, .github/ files -> pro tier)
-    - Effort-band lookup from config/agent/copilot/model_routing.yaml
+    - Effort-band lookup from docs/contracts/inference-provider.yaml
     Returns ``None`` for Gemini auto mode.
     """
     return model_registry.resolve_model("implementation", effort, file_path=file)

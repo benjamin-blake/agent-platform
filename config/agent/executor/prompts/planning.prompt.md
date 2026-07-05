@@ -64,10 +64,10 @@ must receive VERDICT: NEEDS_REVISION during critique.
 When the recommendation targets a Lambda-packaged file (under `src/data/handlers/`, `.github/agents/schedule.yaml`, `.github/prompts/scheduled/`, `config/`, or listed in `_LAMBDA_SCRIPTS` in `scripts/build_lambda.py`):
 
 1. The plan MUST include a step that runs `python -m scripts.build_lambda --deploy` AFTER all code changes are complete
-2. If the recommendation changes model IDs, the plan MUST include validation against `docs/contracts/inference-provider.md`
+2. If the recommendation changes model IDs, the plan MUST include validation against `docs/contracts/inference-provider.yaml`
 3. If the recommendation depends on IAM changes (e.g., Bedrock permissions), note in the step description that `terraform apply` must precede deployment
 
-This rule prevents Lambda code changes from being merged without deployment verification. Reference: Decision 47, docs/contracts/inference-provider.md.
+This rule prevents Lambda code changes from being merged without deployment verification. Reference: Decision 47, docs/contracts/inference-provider.yaml.
 
 ## Verification Tier Classification -- CRITICAL
 
