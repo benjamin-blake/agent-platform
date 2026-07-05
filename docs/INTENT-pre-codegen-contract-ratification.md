@@ -200,7 +200,7 @@ The directory already contains eight `.md` files, not two. **Round-2 user correc
 | `ops-data-store.md` | High-level boundary contract for Iceberg ops table schemas, partitioning, write patterns | Partial: the Iceberg DDL in `terraform/iceberg_tables.tf` implements the schemas but drifts from this doc | **Superseded by Class A YAMLs.** Per-table schema sections move into the new `ops_recommendations.yaml`, `ops_decisions.yaml`, etc. `ops-data-store.md` is retired entirely (its non-schema bits about S3 bucket / workgroup / Decision history move into a Class C-ish `storage-substrate.yaml` or into the per-table YAMLs' `governance:` blocks). Lands as part of T0.12.5. |
 | `log-storage.md` | Three JSONL log-storage patterns (cloud-produced, locally-produced, hybrid) with concrete file paths and consumers | Partial: `scripts/s3_log_store.py` implements one of the three patterns | **Convert to YAML.** Patterns become structured `pattern: {producer, transport, consumer, paths}`. `s3_log_store.py` reads the YAML to know which pattern applies to which log file. Ratification predecessor in T-1.15. |
 | `build-lambda.md` | Lambda build/package/deploy workflow steps | Partial: `scripts/build_lambda.py` implements the workflow but the doc is a parallel description | **Convert to YAML** (with appropriate caveats). Build steps as structured YAML; `build_lambda.py` either reads them or has a CI check that asserts equivalence. Ratification predecessor in T-1.16 (lower priority -- the build script and doc are tightly correlated today; drift risk is lower than for ops contracts). |
-| `cli-json-output.md` | CLI JSON-output schema (Copilot/Gemini interop) | Partial: `scripts/llm_utils.py` parses CLI JSON output but the doc describes the schema separately | **Convert to YAML.** Schema as structured per-field YAML; `llm_utils.py` reads it OR a CI check asserts the parser handles every field the schema defines. Ratification predecessor in T-1.17. |
+| `cli-json-output.md` | CLI JSON-output schema (Copilot CLI interop) | **None.** Correction (T-1.17 retirement, Decision 121): `scripts/llm_utils.py` never parsed CLI JSON output -- only process-safety helpers were relocated there. The parser (`copilot_wrapper.parse_jsonl_output`) stayed in `scripts/copilot_wrapper.py`, which was later deleted (commit 6a2f7c0, "retire Copilot-SDK residue"). | **RETIRED, not converted.** The doc and its dead parser were removed outright; T-1.17 closed by exemption rather than YAML conversion. See Decision 121. |
 | `copilot-cli.md` | Copilot CLI invocation interface (args, `@filepath` semantics, `-p` quoting rules) | Partial: `scripts/copilot_wrapper.py` and the executor implement the invocation pattern; doc is a separate description | **Convert to YAML.** Invocation contract as structured YAML; the wrapper consumes it directly. Critical because the `@file` vs user-message distinction (CLAUDE.md "Copilot CLI gotcha") is exactly the kind of subtle semantic drift the ritual is built to catch. Ratification predecessor in T-1.18. |
 | `delegate-cli.md` | Agent-delegation CLI invocation interface | Partial: invoked by various agent skills; no single canonical consumer | **Convert to YAML.** Same shape as copilot-cli.md. Ratification predecessor in T-1.19. |
 
@@ -217,7 +217,7 @@ docs/contracts/
   inference-provider.yaml              # CONVERTED from .md (T-1.14)
   log-storage.yaml                     # CONVERTED from .md (T-1.15)
   build-lambda.yaml                    # CONVERTED from .md (T-1.16)
-  cli-json-output.yaml                 # CONVERTED from .md (T-1.17)
+  # cli-json-output.md RETIRED, not converted (T-1.17, Decision 121) -- dead Copilot-CLI parser
   copilot-cli.yaml                     # CONVERTED from .md (T-1.18)
   delegate-cli.yaml                    # CONVERTED from .md (T-1.19)
   # ops-data-store.md retired -- content split into per-table YAMLs below + storage-substrate.yaml
@@ -1004,13 +1004,21 @@ The follow-on IMPLEMENTATION plan applies these as a YAML diff against `docs/ROA
 
 - id: T-1.17
   tier: T-1
+  # SUPERSEDED-BY-RETIREMENT (Decision 121, 2026-07-05): this conversion proposal was never
+  # realized. cli-json-output.md's parser (copilot_wrapper.parse_jsonl_output) and its home
+  # (scripts/copilot_wrapper.py) are both deleted; scripts/llm_utils.py never parsed CLI JSON
+  # output. T-1.17 closed by exemption (retire, not convert) per Known Gap #7's "keep as
+  # markdown / retire, unenforced" branch -- the text below is the ORIGINAL proposal, retained
+  # as historical record, not a description of what happened.
   name: Convert cli-json-output.md to .yaml + wire llm_utils.py to read it
   intent: |
+    [ORIGINAL PROPOSAL, never realized -- retired instead, Decision 121]
     REPORT-ONLY + small IMPLEMENTATION. CLI JSON-output schema (171 lines)
-    becomes structured per-field YAML. llm_utils.py parser reads the YAML OR
-    a CI check asserts coverage. Round-3 H4: re-graded S -> M; the schema
-    crosses an external vendor boundary, requires reconciling the parser
-    against every field the schema defines, and the cli-json-output.md
+    becomes structured per-field YAML, with its parsing wired into llm_utils.py
+    (which never parsed CLI JSON output in reality -- see the superseded-by-
+    retirement note above) OR a CI check asserts coverage. Round-3 H4: re-graded
+    S -> M; the schema crosses an external vendor boundary, requires reconciling
+    the parser against every field the schema defines, and the cli-json-output.md
     "external boundary we don't control" caveat (Known Gaps #7) means the
     plan also revisits the conversion's maintenance cost.
   depends_on: [T-1.12]

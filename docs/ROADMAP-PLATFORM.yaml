@@ -2520,26 +2520,37 @@ tier_items:
     tier: T-1
     name: Convert cli-json-output.md to .yaml + wire llm_utils.py to read it
     intent: |
-      REPORT-ONLY + small IMPLEMENTATION. CLI JSON-output schema (171 lines)
-      becomes structured per-field YAML. llm_utils.py parser reads the YAML OR
-      a CI check asserts coverage. Effort M per INTENT round-3 H4: the schema
-      crosses an external vendor boundary and requires reconciling the parser
-      against every field the schema defines, plus revisits Known Gap #7
-      (vendor boundary maintenance cost).
+      RETIRED (not converted). cli-json-output.md documented the GitHub Copilot CLI
+      JSON-output schema; its parser (scripts/copilot_wrapper.parse_jsonl_output)
+      exists nowhere in the tree, its home scripts/copilot_wrapper.py was deleted
+      (commit 6a2f7c0, "retire Copilot-SDK residue"), and the .md's cited replacement
+      scripts/bedrock_client.py never existed (bedrock retired per CD.28; Gemini is
+      the sole valid provider -- model_registry._VALID_PROVIDERS = frozenset(["gemini"])).
+      scripts/llm_utils.py never parsed CLI JSON output -- only process-safety helpers
+      were relocated there; the parser stayed in copilot_wrapper.py until its deletion.
+      The live CLI-JSON parser today is scripts/llm_client.py:_gemini_call (a different
+      vendor schema, out of this item's scope). Disposition chosen by human: retire
+      per Known Gap #7's "keep as markdown / retire, unenforced" outcome.
     depends_on: [T-1.12]
     files_in_scope:
-      - docs/contracts/cli-json-output.yaml
-      - docs/contracts/cli-json-output.md
-      - scripts/llm_utils.py
+      - scripts/llm_client.py
     exit_criteria:
-      - "cli-json-output.yaml exists at contract_version: 1, status: ratified"
-      - "llm_utils.py reads or asserts equivalence to YAML; .md deleted"
-      - "Plan addresses Known Gap #7 (vendor boundary maintenance cost) and either commits to the conversion or documents an explicit exemption"
-      - "Step 10 multi-perspective critique converges"
+      - "docs/contracts/cli-json-output.md deleted; no live code/config reference to it or to parse_jsonl_output remains"
+      - "Explicit exemption documented (Known Gap #7 'retire, unenforced' branch) rather than a YAML conversion"
+      - "Retirement Decision recorded in DECISIONS.md and ops_decisions"
     related_candidate_decisions: [CD.25]
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-07-05"
+    note: >-
+      Closed by exemption (Decision 121, 2026-07-05): retired rather than converted --
+      parser and home (scripts/copilot_wrapper.py) are both deleted, and the .md's cited
+      replacement scripts/bedrock_client.py never existed. No bootstrap_completion_exempt
+      flag is set here: T-1.17 was gated solely by CD.25, and dec-118 (Decision 118,
+      2026-07-03) already stripped that flag for the whole CD.25-solely-gated subset
+      (line ~120 above) when CD.25 ratified -- this closeout completes after ratification,
+      not ahead of it, so the flag does not apply.
 
   - id: T-1.18
     tier: T-1
