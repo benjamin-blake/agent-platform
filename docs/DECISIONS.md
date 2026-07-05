@@ -2,6 +2,64 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 121: Retire docs/contracts/cli-json-output.md rather than convert it -- T-1.17 exempted from the CD.25 conversion wave (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-05
+**Warehouse ID:** dec-121 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Decision:**
+`docs/contracts/cli-json-output.md` documented the GitHub Copilot CLI `--output-format=json`
+schema. Its parser, `scripts/copilot_wrapper.parse_jsonl_output`, exists nowhere in the tree; its
+home, `scripts/copilot_wrapper.py`, was deleted in commit 6a2f7c0 ("retire Copilot-SDK residue");
+and the doc's own cited replacement, `scripts/bedrock_client.py`, never existed (bedrock retired
+per CD.28 -- `model_registry._VALID_PROVIDERS = frozenset(["gemini"])`, Gemini is the sole valid
+provider). The doc also carried a false premise, corrected in the same session: it claimed
+`scripts/llm_utils.py` parses CLI JSON output, but `llm_utils.py` never did -- only process-safety
+helpers were relocated there; the parser stayed in `copilot_wrapper.py` until its deletion.
+
+Per Decision 86 (rationale for retiring a prose contract belongs in a numbered Decision, not a new
+prose doc) and dec-118 / Decision 118 ("necessary NOT sufficient" -- CD.25 ratifying the pre-codegen
+contract ritual mechanism does not itself close every per-item exit criterion), this Decision retires
+the contract outright rather than converting it to YAML under T-1.17's original exit criteria.
+T-1.17 (`docs/ROADMAP-PLATFORM.yaml`) is closed by explicit exemption -- the Known Gap #7 branch in
+`docs/INTENT-pre-codegen-contract-ratification.md` ("keep as markdown / retire, unenforced" is a
+valid outcome) -- rather than by landing the YAML conversion + `llm_utils.py` wiring its original
+exit criteria described. No `bootstrap_completion_exempt` flag is set on T-1.17: it was gated
+solely by CD.25, and dec-118 (Decision 118, 2026-07-03) already stripped that flag for the whole
+CD.25-solely-gated subset when CD.25 ratified (`docs/ROADMAP-PLATFORM.yaml` lines ~116-124); this
+closeout completes after CD.25's ratification, not ahead of it, so the exemption flag does not
+apply here -- the flag's absence is deliberate and consistent with the existing
+`test_live_platform_yaml_bootstrap_exemption_set` regression test, not an oversight.
+`docs/INTENT-pre-codegen-
+contract-ratification.md`'s conversion-table row and embedded T-1.17 replica are corrected in the
+same session to strike the false `llm_utils.py` premise and mark the original conversion proposal
+superseded-by-retirement. rec-146 (doc-improvement rec targeting the now-deleted file) is closed via
+the ops portal as `stale_target`, with the deletion recorded as closure proof (Decision 103 --
+recommendation relevance is a governed lifecycle state; a physically-absent target file is
+deterministic `stale_target`, not a bare semantic assertion).
+
+The live CLI-JSON parser today is `scripts/llm_client.py:_gemini_call`, which parses the Gemini CLI
+`--output-format stream-json` schema (`init`/`message`/`result` events) -- a different vendor schema
+from the retired Copilot one, currently undocumented by any contract and out of this Decision's
+scope.
+
+**Reversal conditions:** revisit only if a CLI-JSON boundary matching the retired Copilot schema is
+reintroduced (e.g. a future Copilot CLI integration). In that event, restore
+`docs/contracts/cli-json-output.md` from git history (or author a fresh contract against the live
+schema at that time) and supersede this Decision.
+
+**Related:** Decision 86 (retire prose contract; rationale lives in a numbered Decision), Decision 84
+(DECISIONS.md canonical + portal backfill; Single-Portal Invariant), dec-118 / Decision 118 (ratifies
+CD.25 -- "necessary NOT sufficient", sanctioning this per-item exemption closeout), Decision 103
+(recommendation relevance governed lifecycle -- `stale_target` closure semantics for rec-146).
+Related: Decision 116 / Decision 117 (the ULF-05 Copilot-SDK retirement session that deleted
+`scripts/copilot_wrapper.py` and corroborates the dead path this Decision retires the doc for).
+Provenance (archived context, not a live governing decision): Decision 52 (`docs/DECISIONS_ARCHIVE.md`
+-- the original Bedrock/Copilot architecture this contract predates).
+
+---
+
 ## Decision 120: Adopt the S3-backed provider filesystem_mirror as the realized Decision 119 reversal mechanism (Decided)
 
 **Status:** Decided
