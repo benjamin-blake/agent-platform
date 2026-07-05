@@ -40,7 +40,14 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from scripts.aws_profile import resolve_aws_profile
 from scripts.executor.acceptance_lint import lint_acceptance_command
-from scripts.executor.jsonl_store import _VALID_STATUSES, DECISIONS_JSONL, RECS_JSONL, Decision, Recommendation
+from scripts.executor.jsonl_store import (
+    _VALID_STATUSES,
+    DECISIONS_JSONL,
+    RECS_JSONL,
+    Decision,
+    Recommendation,
+    load_all_recommendations,
+)
 from scripts.executor.rec_write_guidance import validate_source
 
 logger = logging.getLogger(__name__)
@@ -88,6 +95,11 @@ _WRITER_RETRY_BACKOFF_S = (2.0, 5.0)
 
 
 _CI_RCA_VALID_MODES = frozenset({"warn", "strict"})
+# Phase-1 landing date for source=ci_rca context_v2_json (INTENT Section 6); the back-validation
+# default floor so the report covers only the warn-mode window, not pre-schema history.
+_CI_RCA_BACK_VALIDATE_DEFAULT_SINCE = "2026-06-15"
+# INTENT known-gap (line 562): --refile-audit files at most this many audit recs per invocation.
+_CI_RCA_BACK_VALIDATE_DAILY_CAP = 20
 _WHY_CHAIN_SYSTEMIC_KEYWORDS = frozenset(
     {
         "gate",
@@ -490,6 +502,155 @@ def _run_ci_rca_cross_check(
     logger.warning("[CI_RCA_STRICT_MODE=warn] cross-check issues (rec filed anyway): %s", combined)
     tags = [f"cross_check_check_{m.group(1)}" for m in (_CROSS_CHECK_TAG_RE.search(i) for i in issues) if m]
     _stamp_warn_mode_reject(context_v2_json, tags or ["cross_check_disagreement"])
+
+
+def back_validate_ci_rca(
+    cache_rows: Optional[list[dict]] = None,
+    since: str = _CI_RCA_BACK_VALIDATE_DEFAULT_SINCE,
+    refile_audit: bool = False,
+    cap: int = _CI_RCA_BACK_VALIDATE_DAILY_CAP,
+    profile: Optional[str] = None,
+) -> dict:
+    """Re-validate warn-period source=ci_rca recs against the current strict-mode schema (T1.13 c2 enabler).
+
+    Reads the warm recommendation cache directly (logs/.recommendations-log.jsonl; Decision 88 --
+    the handler constructs NO DuckLake reader). Every source=ci_rca rec with created_timestamp >=
+    `since` is sorted into exactly one bucket, mirroring what strict-mode file_rec() actually does:
+
+      legacy_no_schema -- context_v2_json is absent/empty. Strict-mode file_rec() ACCEPTS these
+        (lines 944-948 only log a warning, never raise), so they are CONFORMANT and excluded from
+        the non-conformant set. An empty dict is never validated for these recs (the load-bearing
+        legacy rule).
+      non_conformant -- context_v2_json present AND either (a) _validate_ci_rca_context_v2(),
+        recomputed against the CURRENT schema (not the schema live when the rec was filed), returns
+        deficiencies, or (b) the rec's stamped context_v2_json.warn_mode_reject marker carries a
+        non-schema reason (bundle/S3/cross-check disagreement) -- read from the marker rather than
+        recomputed, since those checks need network/bundle access this offline pass does not have.
+      conformant -- context_v2_json present and passes both checks.
+
+    With refile_audit=True, each non_conformant rec (capped at `cap` per invocation, INTENT's
+    K=20/day known-gap) is filed via file_rec(source="ci_rca_warn_period_audit", priority="Low"),
+    carrying the parent rec id and its failing-checks list. Default is report-only: zero writes.
+
+    Args:
+        cache_rows: Injected warm-cache rows (test seam). Defaults to loading
+            logs/.recommendations-log.jsonl via load_all_recommendations() when None.
+        since: ISO date/timestamp floor on created_timestamp (inclusive).
+        refile_audit: When True, files audit recs for non_conformant entries (capped at `cap`).
+        cap: Max audit recs filed in this invocation.
+        profile: Optional AWS profile override, passed through to file_rec.
+
+    Returns:
+        dict with keys: since, legacy_no_schema / non_conformant / conformant (lists of
+        {id, has_context_v2[, failing_checks]}), aggregate (bucket counts + with_context_total +
+        total + non_conformance_rate over the with-context subset), filed (list of newly-filed
+        audit rec ids; empty unless refile_audit=True), audit_cap_reached (bool).
+    """
+    if cache_rows is None:
+        cache_rows = list(load_all_recommendations().values())
+
+    legacy_no_schema: list[dict] = []
+    non_conformant: list[dict] = []
+    conformant: list[dict] = []
+
+    for row in cache_rows:
+        if row.get("source") != "ci_rca":
+            continue
+        created = row.get("created_timestamp") or ""
+        if created < since:
+            continue
+        rec_id = row.get("id", "")
+        ctx_raw = row.get("context_v2_json") or ""
+        if not ctx_raw:
+            legacy_no_schema.append({"id": rec_id, "has_context_v2": False})
+            continue
+        if isinstance(ctx_raw, str):
+            try:
+                ctx = json.loads(ctx_raw)
+            except json.JSONDecodeError:
+                ctx = {}
+        else:
+            ctx = ctx_raw
+        if not isinstance(ctx, dict):
+            ctx = {}
+        deficiencies = _validate_ci_rca_context_v2(ctx)
+        warn_marker = ctx.get("warn_mode_reject") or {}
+        non_schema_reasons = [r for r in warn_marker.get("reasons", []) if r != "schema_deficiency"]
+        if deficiencies or non_schema_reasons:
+            non_conformant.append({"id": rec_id, "has_context_v2": True, "failing_checks": deficiencies + non_schema_reasons})
+        else:
+            conformant.append({"id": rec_id, "has_context_v2": True})
+
+    with_context_total = len(non_conformant) + len(conformant)
+    non_conformance_rate = (len(non_conformant) / with_context_total) if with_context_total else 0.0
+
+    result: dict = {
+        "since": since,
+        "legacy_no_schema": legacy_no_schema,
+        "non_conformant": non_conformant,
+        "conformant": conformant,
+        "aggregate": {
+            "legacy_no_schema_count": len(legacy_no_schema),
+            "non_conformant_count": len(non_conformant),
+            "conformant_count": len(conformant),
+            "with_context_total": with_context_total,
+            "total": len(legacy_no_schema) + with_context_total,
+            "non_conformance_rate": non_conformance_rate,
+        },
+        "filed": [],
+        "audit_cap_reached": False,
+        "audit_cap": cap,
+    }
+
+    if refile_audit:
+        to_file = non_conformant[:cap]
+        result["audit_cap_reached"] = len(non_conformant) > cap
+        for entry in to_file:
+            failing = "; ".join(entry["failing_checks"]) or "unspecified"
+            fields = {
+                "title": f"CI-RCA warn-period audit: {entry['id']} non-conformant under strict-mode schema",
+                "file": "scripts/ops_data_portal.py",
+                "context": (
+                    f"back_validate_ci_rca flagged parent {entry['id']} as non-conformant against the "
+                    f"current CI_RCA_STRICT_MODE schema. Failing checks: {failing}."
+                ),
+                "acceptance": f"grep -q '{entry['id']}' logs/.recommendations-log.jsonl",
+                "effort": "XS",
+                "priority": "Low",
+                "source": "ci_rca_warn_period_audit",
+                "risk": "low",
+            }
+            filed_id = file_rec(fields, profile=profile)
+            result["filed"].append(filed_id)
+
+    return result
+
+
+def _print_ci_rca_back_validation_report(result: dict) -> None:
+    """Print the back_validate_ci_rca() report in the default (non-JSON) text format."""
+    print(f"CI-RCA back-validation report (since={result['since']})")
+    print()
+    for bucket, label in (
+        ("legacy_no_schema", "LEGACY_NO_SCHEMA"),
+        ("non_conformant", "NON_CONFORMANT"),
+        ("conformant", "CONFORMANT"),
+    ):
+        for entry in result[bucket]:
+            detail = f" failing_checks={entry['failing_checks']}" if "failing_checks" in entry else ""
+            print(f"  [{label}] {entry['id']}{detail}")
+    agg = result["aggregate"]
+    print()
+    print("--- Aggregate ---")
+    print(f"  legacy_no_schema: {agg['legacy_no_schema_count']}")
+    print(f"  non_conformant:   {agg['non_conformant_count']}")
+    print(f"  conformant:       {agg['conformant_count']}")
+    print(f"  with_context_total: {agg['with_context_total']}")
+    print(f"  total: {agg['total']}")
+    print(f"  non-conformance rate (over with-context subset): {agg['non_conformance_rate']:.1%}")
+    if result["filed"]:
+        print(f"  filed audit recs ({len(result['filed'])}): {', '.join(result['filed'])}")
+    if result["audit_cap_reached"]:
+        print(f"  audit cap reached: only the first {result['audit_cap']} non-conformant recs were filed")
 
 
 def _resolve_writer_url(profile: Optional[str] = None) -> str:
@@ -1594,6 +1755,32 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Write+read a throwaway test- rec via the active backend (cutover sign-off, VP15)",
     )
+    action.add_argument(
+        "--back-validate",
+        action="store_true",
+        help="Re-validate warn-period source=ci_rca recs against the current strict-mode schema (T1.13 c2 enabler)",
+    )
+
+    # --back-validate fields
+    bv = parser.add_argument_group("--back-validate fields")
+    bv.add_argument(
+        "--since",
+        default=_CI_RCA_BACK_VALIDATE_DEFAULT_SINCE,
+        help="ISO date/timestamp floor on created_timestamp (inclusive); default is the Phase-1 landing date",
+    )
+    bv.add_argument(
+        "--refile-audit",
+        action="store_true",
+        default=False,
+        help="File non_conformant recs as source=ci_rca_warn_period_audit (capped per invocation); default is report-only",
+    )
+    bv.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        default=False,
+        help="Print the back-validation report as machine-readable JSON instead of text",
+    )
 
     # file-rec fields
     rec = parser.add_argument_group("--file-rec fields")
@@ -1780,6 +1967,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         print(json.dumps(result, indent=2))
+        return 0
+
+    if args.back_validate:
+        result = back_validate_ci_rca(since=args.since, refile_audit=args.refile_audit, profile=args.profile)
+        if args.json_output:
+            print(json.dumps(result))
+        else:
+            _print_ci_rca_back_validation_report(result)
         return 0
 
     return 0
