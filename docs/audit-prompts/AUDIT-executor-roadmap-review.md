@@ -218,8 +218,9 @@ verdict is the strongest option).
         duplicate-callback rejection, and verdict-to-head-SHA (TOCTOU) binding at merge.
     12. Offline evaluation / regression harness for the agent PERSONAS THEMSELVES (does a change
         to a persona prompt regress plan or implementation quality?).
-  The maturity computation (section 15) reads this `external_checklist` field as its SOLE source
-  for the frontier tier.
+  The maturity computation (section 15) reads this `external_checklist` field as the SOLE source
+  for the CHECKLIST INPUT to the frontier tier; section 15 additionally gates `frontier` on zero
+  open critical and zero open high findings on the surface.
 - Q3 -- SAFETY & CONTAINMENT SEQUENCING. Verdict enum: `sound | partial | unsound`. The four
   containment items T4.8 (semantic locks/leases), T4.9 (verdict handshake + SHA binding), T4.10
   (persona contracts: allowed/forbidden tools, max_llm_calls, max_revisions), and T4.11 (loop-
@@ -240,6 +241,9 @@ verdict is the strongest option).
   eligibility gate before a rec is executed autonomously, beyond freshness (T3.8)? (d) Is there a
   per-rec cost cap / cost-runaway alarm before the loop runs unattended? Add every further
   question a requester who wants a frontier autonomous executor would wish had been asked.
+  Additional seed (e): Does the roadmap own the TRANSITION from the built single-process executor
+  (`scripts/execute_recommendation.py`, frozen) to the Step Functions substrate -- concept
+  carry-forward, cutover, any dual-run window -- or is that migration seam unowned by any T4 item?
 
 ## 8. RUBRIC
 
@@ -387,7 +391,8 @@ is deliberately mixed: some are expected to resolve to `rejected_candidates`.
 - C1. T4.8 (semantic locks/leases), T4.9 (verdict handshake + SHA binding), T4.10 (persona
   contracts), and T4.11 (loop-budget caps) are all `deferred_post_mvp`, while the MVP boundary
   (Decision 93) is "the loop closes end-to-end with no human in the critical path." Hypothesis:
-  one or more of these controls is required to close the loop SAFELY at MVP.
+  one or more of these controls is required to close the loop SAFELY at MVP -- versus each being
+  correctly placed after MVP because the loop is safe at concurrency=1 without it.
 - C2. T4.2's exit criterion requires `file_pr -> PR opens and validates green`, while the
   verdict-callback/correlation protocol that governs the merge decision (T4.9 / CD.38) is
   `deferred_post_mvp`. Hypothesis: T4.2's exit depends on a deferred protocol (sequencing
@@ -398,11 +403,13 @@ is deliberately mixed: some are expected to resolve to `rejected_candidates`.
   not see, versus a benign forward-reference.
 - C4. Concurrency is fixed at 1 (T4.1) and raised only by the A-gates (T4.4, XL), while the
   concurrency-safety mechanism (T4.8 semantic locks) is deferred. Hypothesis: single-concurrency
-  is the effective MVP steady-state throughput and a frontier economics gap.
+  is the effective MVP steady-state throughput and a frontier economics gap -- versus an
+  acceptable, deliberate MVP simplification the A-gates (T4.4) lift on measured evidence.
 - C5. No T4 tier_item appears to own an offline evaluation / regression harness for the agent
   personas themselves (does changing `plan_agent.prompt.md` regress plan quality?); T3.7
   meta-validates `validate.py`, not persona output quality. Hypothesis: persona-eval is an absent
-  capability.
+  capability -- versus adequately covered by the interactive VP / graduation machinery (T3.x) plus
+  the human-reviewed rec that authors any persona-prompt change.
 - C6. RCA-first (Decision 55) routes every LLM-judgment failure to a filed rec + human review;
   combined with concurrency=1 and no-LLM-retry, hypothesis: a human is structurally reintroduced
   such that "no human in the critical path" (NS-A) is not achievable in practice -- versus the RCA
@@ -412,14 +419,20 @@ is deliberately mixed: some are expected to resolve to `rejected_candidates`.
   for a frontier bet.
 - C8. Per-turn cost telemetry and any per-rec cost cap / runaway alarm depend on T3.20
   (`not_started`, deep dependency chain) and are not named in a T4 exit criterion. Hypothesis:
-  cost-runaway observability is missing before the loop runs unattended.
+  cost-runaway observability is missing before the loop runs unattended -- versus covered by
+  T4.2's per-turn telemetry exit criterion together with the concurrency=1 and budget-cap (T4.11)
+  ceilings.
 - C9. The autonomy gates A0-A5 land in T4.4 (depends_on T4.2), while the loop first runs at T4.2.
-  Hypothesis: there is no governed autonomy story in the T4.2->T4.4 window.
+  Hypothesis: there is no governed autonomy story in the T4.2->T4.4 window -- versus the T4.1
+  concurrency=1 ceiling plus RCA-first stop being a sufficient interim governor until the A-gates
+  land.
 - C10. The MVP loop names "deploy -> observe." Hypothesis: no T4 item owns the autonomous
-  deploy-and-observe tail; it leans on the CD.35/CD.16 apply path and that seam is unspecified.
+  deploy-and-observe tail; it leans on the CD.35/CD.16 apply path and that seam is unspecified --
+  versus the existing apply path being a deliberate, sufficient reuse that needs no new T4 item.
 - C11. Rec freshness/relevance is gated (T3.8, complete) and reconciled (T3.9). Hypothesis: a
   rec-quality / well-formedness eligibility gate BEFORE autonomous execution (is this rec safe to
-  auto-run?) is absent, distinct from freshness.
+  auto-run?) is absent, distinct from freshness -- versus covered by the existing rec-schema
+  validation plus the plan/critique personas catching ill-formed work downstream.
 - C12. The entire executor is single-region (eu-west-2). Hypothesis: single-region is a frontier
   resilience gap -- versus a deliberate cost/complexity tradeoff consistent with the North Star.
 
@@ -431,7 +444,9 @@ static. One bounded empirical sample is permitted and useful:
 - Sample <= 15 OPEN recommendations whose title or context matches the executor
   (`executor|persona|step function|durable|autonom|T4\.|plan_agent`) from
   `logs/.recommendations-log.jsonl` -- do NOT exceed 15; order by each rec's `date` field
-  (YYYY-MM-DD) descending and take the newest 15 matches. Use them ONLY to
+  (YYYY-MM-DD) descending and take the newest 15 matches. Each line in that file is a JSON object
+  with at least `status` (one of open|closed|failed|declined|superseded), `date` (YYYY-MM-DD),
+  `title`, and `context`; filter to `status == "open"` before matching. Use them ONLY to
   test the KG.2 hypothesis (is a real executor-rec backlog unmapped to T4 items, and does any rec
   in it name a capability absent from the T4 tier_items?). Tag any finding this produces
   `evidence_kind: observed`; an observed gap (a real filed rec naming a missing capability)
@@ -536,6 +551,17 @@ INVARIANTS (state and honour these):
   file:line), and state why the control would FAIL if the defect were real.
 - CONFIRMED requires the behaviour traced to a specific tier_item/CD/decision line or an observed
   sampled rec; anything less is HYPOTHESIS.
+- FIELD GLOSSES: In `evidence` (findings and rubric_ratings), `file:line|item-id` means supply
+  EITHER a `file:line` anchor OR a roadmap/decision item-id (e.g. `T4.9`, `CD.38`, `Decision 93`)
+  -- whichever grounds the point; you need not supply both. `findings[].depends_on` lists OTHER
+  FINDING ids whose fix must precede this one; `sequencing.blocked_behind` lists finding OR
+  roadmap item-ids that must land before this fix can be queued (the two differ: depends_on is
+  finding-internal ordering, blocked_behind may point at unbuilt roadmap items). `change_type`
+  values: `add` (create a missing capability/item), `rescope` (change an existing item's
+  scope/boundary), `enforce` (add a check/gate for an already-stated rule), `unify` (merge
+  duplicated or overlapping surfaces), `persist` (move ephemeral state into a durable store),
+  `clarify` (resolve ambiguous/underspecified wording), `resequence` (change ordering / dependency
+  / gate placement without changing scope).
 
 The companion `.md` (<=1500 words): lede (what was audited and the headline verdict on the two
 driving questions), the five question verdicts with one paragraph each, a short table of the
@@ -590,8 +616,10 @@ is a design-maturity rating, not a built-state rating.
 1. Derive the base ONCE (section 5 step 1): `git fetch origin main` then
    `git rev-parse --short origin/main` -> `<sha>`. This base IS the audited tree; use `<sha>` in
    both filenames, the branch name, and `meta.audited_commit`.
-2. `git switch -c audit/executor-roadmap-review-<sha> origin/main`. This clean two-file branch off
-   the audited base is a deliberate, documented exception to the AGENTS.md `claude/*`
+2. `git switch -c audit/executor-roadmap-review-<sha> origin/main`. If section 5's git-fetch
+   degraded path set `<sha>` from `HEAD` (fetch failed), branch off `HEAD` instead of `origin/main`
+   so the branch base matches the sha embedded in `<sha>`. This clean two-file branch off the
+   audited base is a deliberate, documented exception to the AGENTS.md `claude/*`
    session-branch rule (the CI signal-green comment wake fires only on `claude/*` PRs and is
    irrelevant here -- you end your turn without merging; the human disposes).
 3. Repo-wide `validate.py` is advisory outside CI in this repo: a clean YAML parse of the two
