@@ -36,12 +36,12 @@ Every generated prompt contains these sections, in this order. `M` = mandatory, 
 | # | Section | M/C | Purpose |
 |---|---|---|---|
 | 1 | TASK | M | One paragraph: target system, surfaces, question stubs (Q1..Qn), deliverable paths, write boundary ("the ONLY files you write are ..."), disposal clause ("you draft; the human disposes"). |
-| 2 | CANDIDATE OBSERVATIONS vs VERDICTS | M | The epistemic contract, placed before anything it governs: the prompt hands FACTS and CANDIDATE hypotheses, never verdicts. Per-candidate adjudication enum: CONFIRMED-defect (traced to file:line or sampled artifact) / not-a-defect (-> rejected_candidates, naming the compensating control) / planned (-> sufficiency assessment on the owning roadmap item). Include verbatim: "ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT" and "a run that merely confirms the candidates below has failed". |
+| 2 | CANDIDATE OBSERVATIONS vs VERDICTS | M | The epistemic contract, placed before anything it governs: the prompt hands FACTS and CANDIDATE hypotheses, never verdicts. Per-candidate adjudication enum, with its mapping to the output contract pinned: CONFIRMED-defect -> findings, classification novel; planned whose owning item's remedy is insufficient or unbuilt -> findings, classification planned-insufficient / planned-unbuilt; planned and fully covered by the owning item -> rejected_candidates; not-a-defect -> rejected_candidates (naming the compensating control). Include verbatim: "ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT" and "a run that merely confirms the candidates below has failed". |
 | 3 | READ FIRST / disambiguation traps | C | Every term that names two things, every plausible-but-wrong audit target discovered at recon. State what is in scope, what is context-only, and the misread each trap invites. Trigger: recon found at least one. |
 | 4 | SCOPE | M | Surfaces enumerated with their state (built vs designed-unbuilt); shared vocabulary and tier/term definitions; out-of-scope areas named in one line each; the trust-nothing clause: "obtain every file/line/size by reading the file -- trust no number quoted here; re-derive from the repo and record any non-resolving anchor in meta.stale_anchors". |
-| 5 | SETUP | M | Exact permitted setup commands plus a degraded path for each anticipated failure: never abort -- set a named meta flag, downgrade affected confidences, proceed. Always present: DEDUP DISCIPLINE (13) is mandatory and depends on generated caches. Pin the degraded-dedup hatch verbatim, adapted: "IF cache-gen fails (creds/egress down): do NOT abort -- set meta.degraded_dedup=true, mark every roadmap_crossref confidence=HYPOTHESIS and dedup_hit_count=null, proceed." |
+| 5 | SETUP | M | Exact permitted setup commands plus a degraded path for each anticipated failure: never abort -- set a named meta flag, downgrade affected confidences, proceed. Always present: DEDUP DISCIPLINE (13) is mandatory and depends on generated caches. In this repo the canonical executor cache-gen command to pin is `bin/venv-python -m scripts.session_preflight --roadmap-detail full` (populates `logs/.preflight-report.json` + `logs/.recommendations-log.jsonl`). Pin the degraded-dedup hatch verbatim, adapted: "IF cache-gen fails (creds/egress down): do NOT abort -- set meta.degraded_dedup=true, mark every roadmap_crossref confidence=HYPOTHESIS and dedup_hit_count=null, proceed." |
 | 6 | NORTH STAR | M | The ideal-state bar as named principles the rubric references. Mark judgment-bearing principles explicitly non-absolutist ("this is a bar you judge each surface against"), so the executor argues rather than pattern-matches. |
-| 7 | THE QUESTIONS | M | Full text of Q1..Qn, each first-class with its own answer slot in the output. The final question is always "questions the requester did not think to ask", seeded with compose-time candidates the executor must answer AND extend. |
+| 7 | THE QUESTIONS | M | Full text of Q1..Qn, each first-class with its own answer slot in the output. The composer pins each question's verdict enum at compose time and presents it at the scope gate; default when nothing better fits: sufficient / partial / insufficient. If a question rates the design against industry practice, it must embed an EXTERNAL CHECKLIST -- named external practices the composer enumerates at compose time (e.g. presubmit/postsubmit split, hermetic builds, mutation testing) -- assessed property-by-property in that question's answer; the maturity top tier references this checklist as its single source. The final question is always "questions the requester did not think to ask", seeded with compose-time candidates the executor must answer AND extend. |
 | 8 | RUBRIC | M | Dimensions VD1..VDn rated per surface. Pinned enum: strong / adequate / weak / absent / n/a. Derive dimensions at compose time from the North Star principles crossed with the question set: every question is served by at least one dimension, every dimension is referenced by at least one question or deep-dive. State that n/a is correct and costless where a dimension does not structurally apply -- never manufacture a rating or finding to fill a cell. |
 | 9 | DEEP-DIVES | C | DD-A.. blocks, each feeding named questions, for threads needing more than a rubric cell. Trigger: any question requires end-to-end tracing. |
 | 10 | GROUNDING MAP | M | file:line anchors + neutrally stated observed facts + governing decisions/contracts. Open with the cognition-allocation statement ("this map spends your cognition on judgment, not grep") and the verify-before-relying rule. Facts carry no adjectives that imply a verdict. |
@@ -105,9 +105,10 @@ Dossier contents:
 7. **Empirical-pass seeds** -- which artifact classes exist to sample, and sane bounds.
 8. **Open questions for the human** -- anything recon could not settle, for the scope gate.
 
-Breadth-first recon may fan out `Explore` subagents, but every anchor and fact a subagent returns
-must be re-verified by the composing agent before it enters the dossier -- subagent returns are
-leads, not evidence.
+Breadth-first recon may fan out `Explore` subagents (this harness's read-only search agent type;
+substitute any read-only search subagent if unavailable), but every anchor and fact a subagent
+returns must be re-verified by the composing agent before it enters the dossier -- subagent
+returns are leads, not evidence.
 
 ## Output Contract Skeleton
 
@@ -147,8 +148,9 @@ audit:
        severity_rationale, confidence: CONFIRMED|HYPOTHESIS,
        roadmap_crossref: {classification: novel|planned-insufficient|planned-unbuilt,
                           item_ids: [], dedup_search_terms: [], dedup_hit_count: 0, note: ""},
-       effort: XS|S|M|L, depends_on: [ids],
-       sequencing: {safe_to_queue_now, blocked_behind, note}}
+       effort: XS|S|M|L, depends_on: [finding ids],
+       sequencing: {safe_to_queue_now: true|false, blocked_behind: [finding or roadmap ids],
+                    note: ""}}
   rejected_candidates:
     - {candidate, why_dismissed, compensating_control, control_property_match,
        decision_or_item_id}
@@ -182,9 +184,13 @@ Maturity boilerplate: compute LAST, per surface, evaluated top-down with first m
 Default scale -- the generated prompt may rename levels or adjust thresholds for the topic, but
 must pin exact numeric thresholds; never leave the scale as an example:
 
-- frontier = 0 open critical or high findings AND every property of the external checklist
-  assessed under the frontier-question (Q1-equivalent) rated met or partial-with-argued-control.
-- strong = 0 critical AND <= 1 high. solid = <= 1 critical. nascent = otherwise.
+- frontier = 0 open critical or high findings AND every property of the EXTERNAL CHECKLIST (the
+  named-industry-practices list the composer embeds in the industry-rating question per anatomy
+  row 7) rated met or partial-with-argued-control. If the prompt has no such question, the top
+  tier gates on finding counts alone.
+- strong = 0 critical AND <= 1 high. solid = <= 1 critical. nascent = otherwise. (The
+  high-count asymmetry below strong is deliberate in the default -- criticals dominate;
+  tighten it if the topic warrants.)
 
 Add the explicit note that the top rating remains reachable if the executor argued a
 property-matched compensating control -- the prompt's framing must not foreclose it.
@@ -268,12 +274,16 @@ that errors or omits the `Verdict:` line has NOT completed -- re-dispatch it; ne
 an incomplete gate. Convergence rule: after 3 REVISE rounds, escalate to the human with the
 unresolved findings and options (accept-with-deferral / re-scope / abandon).
 
+Unanimous-PROCEED quality check: PROCEED is PROCEED -- the gate passes -- but before accepting a
+round-1 unanimous pass, the composer reads each scorecard; any verifier that returned zero
+findings AND a scorecard under ~10 lines was dispatched too generically -- re-dispatch that
+verifier ONCE with a sharpened perspective. One re-dispatch maximum; its verdict is final.
+
 **Gate anti-patterns.** Single verifier (misses orthogonal defects by definition). Telling a
 verifier what to find (confirmation bias). Reusing a verifier's context across rounds (it now
 shares your context; it is no longer cold). Letting V1 read the repo (repo access lets it resolve
 ambiguity the executor would pay to resolve -- V1's blindness IS the test). Accepting a unanimous
-round-1 PROCEED without reading the findings (shallow scorecards mean the dispatches were too
-generic -- sharpen and re-run).
+round-1 PROCEED without the quality check above.
 
 ## Composer Anti-Patterns
 

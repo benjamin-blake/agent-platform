@@ -17,9 +17,11 @@ Skill tool. For canonical git-ops (branching, rebase, PR/CI/merge flow), see AGE
 
 ## Step 1: Preflight
 
-*This workflow runs on Claude Opus 1M (opus[1m]). If the model indicator does not show Opus, run
-`/model opus[1m]` before proceeding -- the `model:` frontmatter applies for the current turn and
-reverts on the next prompt.*
+*This workflow runs on Claude Opus 1M (opus[1m]). If the model indicator does not show Opus,
+tell the human to run `/model opus[1m]` (a user-typed harness command; agents cannot switch
+models) and stop until they do -- the `model:` frontmatter applies for the current turn and
+reverts on the next prompt. If the human directs you to proceed on another model, note it in
+the Step 5 presentation.*
 
 ```bash
 bin/venv-python -m scripts.session_preflight
@@ -63,13 +65,11 @@ here is ambiguity the expensive model never pays for. Do not proceed on guesses.
 Invoke the `audit-prompt` skill via the Skill tool. Read `docs/PROJECT_CONTEXT.md` in full first
 -- the generated prompt's NORTH STAR section and the deliberate-constraints do-not-flag list
 draw on it. Then assemble the **Recon Dossier** per the skill's Recon Dossier section: surface inventory, neutrally-phrased observed facts with verified
-anchors, candidate list, vocabulary, disambiguation traps, dedup pointers (targeted `rg`
-projections over `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`,
-`logs/.recommendations-log.jsonl` -- no full-file reads), empirical-pass seeds, and open
-questions.
+anchors, candidate list, vocabulary, disambiguation traps, dedup pointers (targeted projections
+per the skill's Recon Dossier item 6 -- no full-file reads of the large sources),
+empirical-pass seeds, and open questions.
 
-This is the cost-shifting step: recon depth here is example-grade -- read every in-scope surface
-yourself. `Explore` subagents may widen the sweep, but re-verify every returned anchor before it
+This is the cost-shifting step: read every in-scope surface yourself. `Explore` subagents may widen the sweep, but re-verify every returned anchor before it
 enters the dossier. Every fact destined for the prompt's GROUNDING MAP must have been read from
 disk in this session.
 
@@ -81,7 +81,8 @@ Present to the human, compactly:
 - The question set (Q1..Qn, one line each) and rubric dimensions (VD1..VDn, one line each)
 - The candidate-observation list (neutral phrasing)
 - Disambiguation traps and the deliberate-constraints do-not-flag list
-- Guardrails and the executor's commit/PR endpoint
+- Guardrails and the executor's terminal state (branch name, PR title, end-turn rule, per the
+  skill's Commit/PR Mechanics)
 - Open questions from recon
 
 Then ask: *"Does this scope look right? Say **'write the prompt'** when ready, or tell me what to
