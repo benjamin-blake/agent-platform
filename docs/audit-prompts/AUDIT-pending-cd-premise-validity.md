@@ -137,6 +137,11 @@ Run these read-only commands first. NEVER abort on failure -- take the named deg
    tree; use it in the deliverable filenames, the branch name, and `meta.audited_commit`. If
    fetch fails (egress down): use `git rev-parse --short HEAD`, set
    `meta.contract_notes` to record that the base is local HEAD, proceed.
+   - Your ANALYSIS must read the tree at that recorded sha. Run `git rev-parse --short HEAD`; if it
+     does not equal `meta.audited_commit`, either `git switch --detach <sha>` before you read
+     (P1), or record the divergence in `meta.contract_notes` and read only files confirmed
+     identical between HEAD and the base (Section 16's branch is created off the same base, so the
+     PR diff stays clean either way).
 2. `bin/venv-python -m scripts.session_preflight --roadmap-detail full` -- populates
    `logs/.preflight-report.json` and refreshes `logs/.recommendations-log.jsonl`, the dedup
    caches Section 13 depends on. This regenerates gitignored local caches; that is expected and
@@ -183,7 +188,9 @@ given per question.
   Verdict enum per CD (the `pending_cd_disposition` block, Section 14):
   `pending-superseded-unmarked` | `pending-realized-unevidenced` | `pending-genuinely-open` |
   `ratified-sound` | `ratified-stale-prose` | `ratified-shape-defect` | `superseded-correct` |
-  `other`. For each, give the evidence anchor, a one-line rationale, and a recommended
+  `other`. Use `other` ONLY when no named class fits; when you do, the CD's `rationale` MUST name
+  the premise state you observed in one clause. For each, give the evidence anchor, a one-line
+  rationale, and a recommended
   disposition (what a human should do: flip state, add realization_evidence, strip stale prose,
   leave as-is, decide). The question-level verdict summarizes: is the pending set safe to load as
   binding today? Enum: `sufficient | partial | insufficient`.
@@ -213,11 +220,16 @@ given per question.
   is genuinely realized-yet-unratified, or because realized ones exist but no producer pass has
   marked them? (Cross-check against your Q1 `pending-realized-unevidenced` classifications --
   those ARE realized-but-unflagged CDs, if any.) Note that a ratification wave AFTER the lane went
-  live (the ratified CDs now point at `dec-106`..`dec-118`; re-derive by reading their
-  `ratified_as` fields, and note Decision 105 landed 2026-07-02) moved realized CDs OUT of
+  live (several ratified CDs now carry `ratified_as` in the `dec-106`..`dec-118` range -- re-derive
+  the exact set by reading their `ratified_as` fields, and note Decision 105 landed 2026-07-02)
+  moved realized CDs OUT of
   pending; weigh whether "empty" means "healthy/drained" (realized CDs already ratified, nothing
   left to surface) or "producer never runs" (realized CDs remain in pending, unflagged). Attribute
-  the root cause: `mechanism | process | ownership | not-a-defect`.
+  the root cause: `mechanism | process | ownership | not-a-defect`. This attribution is recorded in
+  `question_answers`, NOT a fileable finding: you MAY name `mechanism` or `ownership` as the root
+  cause even though Section 13 bars filing either the mechanism or "no owner exists" AS a finding.
+  A finding only follows if you identify a novel, un-owned defect in the PROCESS (e.g. no trigger
+  ever invokes the producer) that survives dedup.
 - **Q5 -- Questions the requester did not think to ask.** Answer AND extend. Seeds you must
   address, then add your own: (a) Do the 16 ratified CDs' `ratified_as`/`filed_via` cross-refs
   all resolve to real `## Decision NNN` headers, or is any ratified shape referentially broken?
@@ -229,6 +241,10 @@ given per question.
   boundary here -- a ratified CD's live premise is owned by the Decision it filed as (T7). State
   in one line whether your walk nonetheless surfaced any ratified CD whose premise looks
   substantively false, as a pointer for the DECISIONS.md-side audit -- do not file it as a finding.
+  (e) Does any `gates` / `related_candidate_decisions` reference on a CD, or any static roadmap
+  reference, point at a CD that is now `ratified` or `superseded` (a reference that should have
+  been released)? Note that `completion_blocked_on_cd` is computed live and keys on
+  `state == "pending"`, so it self-releases; the concern is any STATIC reference that does not.
 
 ## 8. RUBRIC
 
@@ -271,8 +287,8 @@ deep-dive.
   evidence would make the call -- then give your Q3 verdict. Do not decide for the human.
 - **DD-C -- The empty-feed root cause (feeds Q4, NS-C).** Read both feed functions and the
   `realization_evidence` field definition and its contract. Establish, at HEAD: the count feeding
-  each function; whether the post-2026-07-02 ratification wave (ratified CDs now carrying
-  `ratified_as: dec-106`..`dec-118`) drained realized CDs out of pending; and whether any pending
+  each function; whether the post-2026-07-02 ratification wave (several ratified CDs now carry
+  `ratified_as` in the `dec-106`..`dec-118` range) drained realized CDs out of pending; and whether any pending
   CD you classified realized-but-unevidenced in Q1 SHOULD be feeding the lane but is not.
   Attribute the root cause per Q4 enum.
 
@@ -416,7 +432,8 @@ audit:
     - {surface: candidate_decisions_set|marking_convention|ratification_feed,
        maturity: frontier|strong|solid|nascent, strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
-    - {surface, dimension: VD1..VD5, rating: strong|adequate|weak|absent|n/a,
+    - {surface: candidate_decisions_set|marking_convention|ratification_feed,
+       dimension: VD1..VD5, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|CD.NN", note: ""}
   findings:
     - {id: PCD-01, surface: candidate_decisions_set|marking_convention|ratification_feed|shared,
@@ -449,6 +466,11 @@ Invariants (state and obey):
   `total_findings`. `top_improvements` and `highest_leverage_change` MUST be finding ids.
 - `pending_cd_disposition` has exactly one entry per CD (re-derive the count); it is a
   classification ledger, not a findings list -- a CD classified `ratified-sound` needs no finding.
+- Note two distinct fields both named `classification`: `pending_cd_disposition[].classification`
+  (the premise-state enum: `pending-superseded-unmarked` ... `other`) and
+  `findings[].roadmap_crossref.classification` (the dedup enum: `novel|planned-insufficient|planned-unbuilt`).
+  They are different vocabularies at different field paths -- do not use one enum's values in the
+  other field.
 - `control_property_match` is REQUIRED whenever a compensating control is the dismissal reason:
   name the property the control exercises, cite where it operates, and state why it would FAIL if
   the defect were real.
@@ -476,8 +498,12 @@ property-match a stale-premise defect -- re-reading stale text propagates the st
 not catch it.
 
 Maturity -- compute LAST, per surface, top-down, first match wins (evaluate the four predicates in
-this order; the first that holds is the rating). Count only OPEN findings on that surface. Pin
-these thresholds (they are mutually exclusive under first-match-wins -- do not re-interpret):
+this order; the first that holds is the rating). Count every OPEN finding on that surface,
+regardless of `confidence` (an unresolved HYPOTHESIS is itself a gap, so it counts). A finding
+tagged `surface: shared` counts toward the tally of EACH surface its evidence materially
+implicates (name those surfaces in the finding's note); a finding tagged to a single surface
+counts only there. Pin these thresholds (they are mutually exclusive under first-match-wins -- do
+not re-interpret):
 
 - **frontier** = 0 critical AND 0 high.
 - **strong** = 0 critical AND exactly 1 high.
