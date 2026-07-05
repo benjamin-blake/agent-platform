@@ -111,11 +111,11 @@ T1.7, T1.9, T1.10, T1.13, T2.7, T2.15, T2.18, T2.19, T2.25, T2.26, T2.29, T2.30,
 T2.31, T2.32, T2.36, T3.2, T3.3, T3.4, T3.5, T3.7, T3.9, T3.10, T3.14, T3.17,
 T3.20, T4.1, T4.2, T4.3, T4.4, T4.5, T4.6, T4.7, T5.1, T5.2, T5.4, T5.5.
 
-"Active" is `status` in {`not_started`, `in_progress`} exactly. The other
-statuses are the closed set {`complete`, `deferred_post_mvp`, `reserved`}. IF an
-item carries any status outside this closed set of five, treat it as
-context (not active), do not assign it a disposition, and record it in
-`meta.contract_notes`.
+"Active" is `status` in {`not_started`, `in_progress`} exactly. The full status
+vocabulary is a closed set of five: the two active statuses plus {`complete`,
+`deferred_post_mvp`, `reserved`}. IF an item carries any status outside those
+five, treat it as context (not active), do not assign it a disposition, and
+record it in `meta.contract_notes`.
 
 Context, NOT triaged (do not assign dispositions):
 - `complete` items (72 at authoring time) -- evidence for `mark_complete`
@@ -157,9 +157,15 @@ longer resolves in `meta.stale_anchors`.
 
 ## 5. SETUP
 
+FIRST establish the audited tree, so your triage matches `meta.audited_commit`:
+`git fetch origin main`, then ensure your working tree is at `origin/main` before
+you project anything (Section 16 step 1 derives the sha; step 2 creates the
+branch off `origin/main`). If your checkout differs from `origin/main`, switch to
+it now -- projecting from a divergent tree would triage the wrong roadmap.
+
 Read, in order: this prompt fully; `CLAUDE.md` and `AGENTS.md` at repo root;
-`docs/PROJECT_CONTEXT.md` (section "Platform End-State" is the target-state
-summary). Then load the roadmap by id-keyed projection, NOT by line anchors (the
+`docs/PROJECT_CONTEXT.md` (the "Platform End-State" heading is the target-state
+summary; if that heading is absent at HEAD, skip it and proceed). Then load the roadmap by id-keyed projection, NOT by line anchors (the
 file is ~650KB YAML; line anchors rot). Canonical projection:
 
 ```
@@ -185,7 +191,7 @@ breach the Section 1 "no warehouse write" boundary. Never hand-edit either file.
 
 Degraded paths -- never abort, set a flag and proceed:
 - IF `session_preflight` fails on creds/egress: set `meta.degraded_dedup=true`,
-  mark every finding's `dedup_hit_count=null` and confidence no higher than
+  mark every finding's `dedup.hit_count=null` and confidence no higher than
   HYPOTHESIS for any claim that depended on a warehouse read, and proceed using
   the on-disk `logs/.recommendations-log.jsonl` if present (note in
   `meta.contract_notes` that it may be stale).
@@ -236,6 +242,14 @@ Each question gets its own first-class answer slot in `question_answers`
   complete +14d AND T3.2 latest_run PASS AND T3.3 complete +7d)? Verdict enum:
   `reachable` / `reachable_with_resequencing` / `blocked_by_freeze`. The answer
   MUST include the ordered id sequence and name every freeze-gated item on it.
+  Sourcing note for the freeze gates: `T3.2.latest_run.verdict` is a RUNTIME
+  field, NOT stored in the static roadmap YAML (the roadmap's own
+  `agent_instructions` resolve runtime fields to "deferred"/unknown). Do not hunt
+  for it; treat it as not-yet-PASS unless you can cite positive evidence (a green
+  causal-chain verifier run). The reversal ALSO requires T4.2 complete +14d and
+  T3.3 complete +7d -- both `not_started` at authoring time -- so the freeze holds
+  structurally on the earliest-unmet gate regardless of T3.2's run state; reason
+  from that earliest-unmet gate and say which it is.
   Reconciliation with NS-DEFER: `mvp_sequence` is a critical-path DIAGNOSTIC
   trace (which items block loop closure and in what order), NOT a committed MVP
   scope surface. Producing it does not enumerate the residual MVP set and does
@@ -405,8 +419,10 @@ the search on the finding:
   a sufficiency-assessment ("the roadmap already plans this defer/removal via
   X"), not a fresh discovery -- classify accordingly.
 - `logs/.recommendations-log.jsonl` (the read cache): grep for the item id and
-  key terms. Record `dedup_search_terms` and `dedup_hit_count` on every finding.
-  A finding with no recorded negative search is a HYPOTHESIS, not CONFIRMED.
+  key terms. Record the terms and count in the finding's `dedup.search_terms` and
+  `dedup.hit_count` fields (Section 14 schema), and any prior owner in
+  `dedup.prior_owner`. A finding with no recorded negative search is a
+  HYPOTHESIS, not CONFIRMED.
 
 Deliberate constraints -- DO NOT flag these as defects:
 - Decision 93's boundary definition and defer-by-exception rule (ratified;
@@ -459,6 +475,7 @@ audit:
        title, evidence: "<item-id|file:line>", evidence_kind: static|observed,
        current_state, recommended_state, rationale,
        redundancy_class: done|obsolete|n/a,   # done->mark_complete, obsolete->remove, else n/a
+       remove_mechanism: tombstone|delete|n/a, # required when disposition==remove (Section 2 rule); else n/a
        leverage: "<how this speeds development>",
        severity: critical|high|medium|low, severity_rationale,
        confidence: CONFIRMED|HYPOTHESIS,
@@ -492,6 +509,12 @@ Invariants, stated verbatim:
   `highest_leverage_change` and every `top_changes` entry MUST be a finding id;
   IF `findings` is empty (a valid outcome), set `highest_leverage_change: null`
   and `top_changes: []`.
+- TELEMETRY CROSS-CHECK: every disposition with `telemetry_relevant: true` must
+  either appear as a `link` in `telemetry_chain_assessment` (Section 9 / DD-A) or
+  carry a one-line note in its disposition `rationale` saying why it is
+  telemetry-relevant but not part of the capture->storage->analysis chain. This
+  is the reader for the `telemetry_relevant` flag; a true flag with neither is a
+  contract gap.
 - CONFIRMED requires the disposition traced to the roadmap file plus (for
   `mark_complete`) a read satisfying artifact; anything less is HYPOTHESIS.
 - `dependency_check` is REQUIRED and non-empty for every `defer_post_mvp`
@@ -523,14 +546,17 @@ the candidate were real. A control that cannot catch the break does not justify
 dismissal.
 
 Per-tier MATURITY -- compute LAST, per tier, top-down, first match wins, and
-record each tier's result in the `per_tier_maturity` block (Section 14). Pin
-these thresholds:
-- `lean` = 0 active items in this tier warrant `remove` AND 0 warrant
-  `mark_complete` (nothing redundant is masquerading as active) AND VD2 is
-  `strong`.
-- `mostly-lean` = <= 1 redundant finding (remove or complete) in the tier.
-- `noisy` = 2-3 redundant findings. `overgrown` = 4+ redundant findings, OR a
-  DAG-stranding deferral tension unresolved in the tier.
+record each tier's result in the `per_tier_maturity` block (Section 14).
+"Redundant finding" = a `mark_complete` or `remove` disposition on an item in
+this tier. Evaluate the thresholds in THIS order (first match wins):
+- `overgrown` = 4+ redundant findings in the tier, OR an unresolved
+  DAG-stranding deferral tension in the tier (a recommended deferral whose active
+  dependents are not handled, per Q2). This override is checked FIRST so it fires
+  even when the redundant-count is low.
+- `lean` = 0 `remove` AND 0 `mark_complete` findings in the tier (nothing
+  redundant is masquerading as active) AND VD2 is `strong`.
+- `mostly-lean` = <= 1 redundant finding in the tier.
+- `noisy` = 2-3 redundant findings in the tier.
 
 ## 16. COMMIT / PR MECHANICS
 
