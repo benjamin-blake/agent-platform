@@ -283,12 +283,20 @@ context:
     infrastructure_dependencies and this Context.
   - "gates: decision-scout=FLAGS_FOUND (resolved) after 1 round; plan-critique=<pending>"
   - >-
-    Rebase state (updated post-critique 2026-07-05): branch is 4 commits behind / 1 ahead of origin/main.
-    origin/main and the branch both touch docs/ROADMAP-PLATFORM.yaml but in DIFFERENT sections (main:
-    T3.15 status flip to complete; branch: T2.34 files_in_scope re-grounding) -- likely a clean rebase.
-    The T2.34 entry itself is UNCHANGED between the two refs, so c1/c2 targeting stays valid. A commit-flow
-    rebase (`git fetch origin main && git rebase origin/main`) is MANDATORY before push per the git-ops
-    procedure; STOP on conflict. Post-rebase, re-verify T2.34 has not moved on main before implementing.
+    Rebase state (updated post-critique round 2, 2026-07-05): branch is 4 commits behind / 1 ahead of
+    origin/main and carries ONLY this plan doc, so the mechanical rebase (`git fetch origin main && git
+    rebase origin/main`; MANDATORY before push per git-ops, STOP on conflict) is clean. But the overlap is
+    NOT limited to ROADMAP: origin/main landed a new check `validate_vp_replay` across FOUR of this plan's
+    six scope files -- scripts/checks/registry.py, scripts/validate.py, tests/test_checks_registry.py, and
+    tests/test_validate.py -- i.e. the SAME check-registration edit class this plan performs. Consequence:
+    the FROZEN_PRE_SEQUENCE / FROZEN_FULL_SEQUENCE tuples and registry sequences quoted at planning time
+    are already STALE (they omit validate_vp_replay). Action at implement time: after the commit-flow
+    rebase, RE-READ those four files fresh and insert validate_invoke_implies_resolve relative to the
+    POST-rebase contents (do not rely on the planning-time snapshot). VP step 7 (`pytest
+    tests/test_checks_registry.py`) is the backstop -- it fails loudly if either check is missing or
+    misordered in the frozen tuples. ROADMAP overlap is a separate, different-section edit (main: T3.15
+    flip; branch: T2.34 re-grounding); the T2.34 entry itself is unchanged between refs, so c1/c2 targeting
+    stays valid -- re-confirm post-rebase.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/ci-role-iam-drift-6btkui)
   - docs/PROJECT_CONTEXT.md read
@@ -336,7 +344,10 @@ execution_steps:
     source_policy_documents composition is followed (SSM in a sourced doc satisfies the invariant).
   - >-
     Re-ground docs/ROADMAP-PLATFORM.yaml T2.34 files_in_scope: replace scripts/validate.py with
-    scripts/checks/iam_tf/validate_invoke_implies_resolve.py and scripts/checks/registry.py.
+    scripts/checks/iam_tf/validate_invoke_implies_resolve.py, scripts/checks/registry.py, AND
+    tests/test_checks_registry.py. Additionally annotate c2's exit_criteria so its "rendered policy JSON"
+    wording reflects the realized method -- a credential-free HCL text-parse (forced by Decision 119's
+    no-local-terraform-render constraint), so the criterion text and the implementation agree.
   - >-
     Execute the Verification Plan -- run each step; loop until pass. terraform validate/plan is
     CI-delegated: on push, confirm terraform-validate green and review the speculative-plan diff on the
