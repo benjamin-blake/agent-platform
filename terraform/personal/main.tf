@@ -478,7 +478,7 @@ resource "null_resource" "drop_ops_decisions_view" {
     # --profile is omitted entirely when var.aws_profile is empty (CI sets TF_VAR_aws_profile=""
     # so the OIDC credential env vars take effect) -- passing --profile with no value is an AWS
     # CLI ParamValidation error, which on_failure=continue would otherwise mask as a silent no-op.
-    command     = <<-EOT
+    command    = <<-EOT
       set -euo pipefail
       QID="$(aws athena start-query-execution \
         --query-string "DROP VIEW IF EXISTS ${aws_glue_catalog_database.ops.name}.ops_decisions_current" \
@@ -502,7 +502,7 @@ resource "null_resource" "drop_ops_decisions_view" {
         echo "DROP VIEW ops_decisions_current ended with status: $STATUS (may already be absent)" >&2
       fi
     EOT
-    on_failure  = continue
+    on_failure = continue
   }
 
   depends_on = [null_resource.create_ops_views]
@@ -534,7 +534,7 @@ resource "null_resource" "drop_ops_priority_queue_view" {
     # --profile is omitted entirely when var.aws_profile is empty (CI sets TF_VAR_aws_profile=""
     # so the OIDC credential env vars take effect) -- passing --profile with no value is an AWS
     # CLI ParamValidation error, which on_failure=continue would otherwise mask as a silent no-op.
-    command     = <<-EOT
+    command    = <<-EOT
       set -euo pipefail
       QID="$(aws athena start-query-execution \
         --query-string "DROP VIEW IF EXISTS ${aws_glue_catalog_database.ops.name}.ops_priority_queue_current" \
@@ -558,7 +558,7 @@ resource "null_resource" "drop_ops_priority_queue_view" {
         echo "DROP VIEW ops_priority_queue_current ended with status: $STATUS (may already be absent)" >&2
       fi
     EOT
-    on_failure  = continue
+    on_failure = continue
   }
 
   depends_on = [null_resource.create_ops_views]
