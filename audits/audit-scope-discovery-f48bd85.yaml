@@ -1,0 +1,698 @@
+audit:
+  meta:
+    audited_commit: f48bd85
+    base_branch: main
+    model: "Claude (Anthropic), Claude Code session"
+    methodology_version: 1
+    scope_categories: [CAT-A, CAT-B, CAT-C, CAT-D]
+    degraded_dedup: false
+    contract_notes: >-
+      Deliverables branched as audit/audit-scope-discovery-f48bd85 per Section 16's documented
+      exception to the session-branch rule. Section 10.2 listed AUDIT-executor-roadmap-review and
+      AUDIT-platform-roadmap-mvp-triage as in-flight; at HEAD their outputs are merged
+      (audits/executor-roadmap-review-7d57a0d.*, audits/platform-roadmap-mvp-triage-7d57a0d.*,
+      PRs #472/#473) and were treated as completed audits for dedup. Empirical caps respected:
+      15 decision entries read in full (24, 26, 35, 37, 40, 48, 55, 67, 68, 70, 71, 75, 84, 93,
+      116); all 23 pending CDs covered at title/detail level; the read-realization_evidence-in-full
+      cap was moot because zero pending CDs carry the field (see stale_anchors). Repo-wide
+      validate --pre not run (advisory outside CI); the deliverable YAML was parse-validated.
+      An additional dedup surface not named in the prompt was used: docs/audit-reports/
+      (PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml and wave-1-outputs/A1..F.yaml, the code-surface
+      audits grounding ROADMAP-PRODUCT.yaml current_state).
+    stale_anchors:
+      - >-
+        TRAP-5 / DD-A imply pending CDs carry realization_evidence: at HEAD the field exists only
+        on 9 ratified CDs (CD.1, CD.2, CD.6, CD.13, CD.20, CD.21, CD.25, CD.26, CD.34); zero
+        pending CDs carry it, so PlatformRoadmapState.ratifiable_cds()
+        (scripts/platform_roadmap.py:794) and realized_but_pending_cds() (:802) both return
+        empty at HEAD.
+      - >-
+        Section 10.2 in-flight status of the two staged audit prompts is stale: both audits are
+        completed and merged at HEAD (treated as completed for dedup).
+      - "Section 10.3 says ~12 INTENT-*.md docs; 13 exist at HEAD."
+  question_answers:
+    - q: Q1
+      verdict: low-yield
+      basis: [CAND-05]
+      prose: >-
+        Area candidates mostly failed NS-A or NS-C. The trading-product src/ subsystems (live,
+        meta_learner, execution, lab) are already characterized to file:line precision by the
+        wave-1 code-surface audit (docs/audit-reports/wave-1-outputs/E.yaml) whose findings are
+        embedded in ROADMAP-PRODUCT.yaml current_state ("trading plane is mostly scaffold or
+        absent"), and product work is deliberately dormant, so a code audit there changes nothing
+        now (rejected; its real leverage relocates to CAND-03). The workflow layer, verification
+        system, and T4 executor design are recently covered. The one surviving area candidate is
+        the rec-producer surface (CAND-05): 685 open recommendations, 400 from code-review,
+        growth of +266 (June) and +102 (July 1-5) against 472 closed lifetime, with every
+        autonomous consumer frozen or disabled. Stable areas (terraform/, config/, tests/)
+        surfaced no specific trigger and were not laundered into findings.
+    - q: Q2
+      verdict: moderate-yield
+      basis: [CAND-02, CAND-06]
+      prose: >-
+        The roadmap's transition MECHANICS are well-owned (Decision 105 ratification lane,
+        unclosed-loops ULF-02, mvp-triage RMAP next-actions), but the PREMISE layer of the
+        pending-CD set is not: CD.7 and CD.11 carry "[Amendment ... superseded]" detail text yet
+        remain state: pending and therefore binding under the roadmap's own rule
+        (docs/ROADMAP-PLATFORM.yaml:169-171); CD.10's six-Lambda enumeration was demoted to
+        "illustrative, not canonical" by amendment without a state change; CD.18's
+        decide-before-T1.5 choice rests on a 2026-05-18 git stash whose host substrate is
+        scheduled for teardown and whose existence is unverifiable from the repo (CAND-02).
+        Separately CD.4's "AGENTS.md is the portability hedge" premise predates the accumulated
+        CC-web-specific machinery, and KG.9 acknowledges the deprecation contingency with no
+        remediation surface (CAND-06). Open questions OQ.3/OQ.5/OQ.6/OQ.14 were adjudicated
+        low-leverage; KG.13 and KG.14 are trigger-gated or dormant (see rejected_candidates).
+    - q: Q3
+      verdict: moderate-yield
+      basis: [CAND-01]
+      prose: >-
+        The 15-entry counterfactual sample found 4 Decided entries whose grounding premise is
+        demonstrably dead with NO supersession annotation (Decision 26: every named artifact --
+        2-chat model, Gemini critique, .github/prompts -- retired, and its "pending review"
+        status never resolved since April; Decision 35: implementation anchors deleted at T-1.13
+        and its no-auto-apply premise inverted by Decision 77, while AGENTS.md still cites it;
+        Decisions 37 and 40: substrates -- GitHub Models API dispatch, Copilot SDK + Bedrock BYOK
+        -- retired by Decision 116 and CD.28, with Decision 40's trigger conditions unmonitored
+        and moot). Three sampled peers (24, 68, 71) DID receive migration annotations, proving
+        the practice exists but is ad hoc. Metadata drift compounds it: Decisions 77-85 carry
+        retired 4-digit Warehouse IDs in-file, and Decision 75's "dec-081" line now collides
+        with the canonical dec-081 = Decision 81 keying that Decision 105 established on the CD
+        side only. One consolidated finding (CAND-01) carries all of this; the yield is moderate
+        because the payoff is contained to citation integrity and planning inputs, though the
+        27% observed hit rate in the sample is high.
+    - q: Q4
+      verdict: high-yield
+      basis: [CAND-03, CAND-04]
+      prose: >-
+        DD-B first: a framelock detector DOES exist for new plans -- plan-critique Phase 2b
+        "Frame Challenge (MANDATORY)" (.claude/skills/plan-critique/SKILL.md:69) implements
+        Decision 75's mitigation -- so the "missing institutional control" quoted in CO-2 is
+        stale for plan-time. The surviving gap is standing choices that never re-enter /plan:
+        nothing re-examines them when conditions shift. Two such choices cleared TRAP-3 with a
+        named frame and out-of-frame alternative. CAND-03: the platform-first sequencing
+        directive (product dormant until the autonomous loop closes) appears in DECISIONS.md
+        only as a given inside Decision 93 (line 1311) -- no Decision ever ratified it or
+        examined interleaving -- while its conditions moved (executor frozen since May, zero
+        telemetry captured, product plane scaffold-frozen, MVP months out per today's triage).
+        CAND-04: decision knowledge is locked to a single growing prose markdown file (271KB,
+        more than double the figure workflow-review already flagged stale) in a repo whose own
+        north star says prose is a side effect; Decision 86 routed every OTHER prose class to
+        structured surfaces and Decision 84 deepened the lock by making the file the ETL source,
+        yet the format itself was never examined against the agent-first principle.
+    - q: Q5
+      verdict: slate-produced
+      basis: [CAND-03, CAND-02, CAND-01, CAND-04, CAND-05, CAND-06]
+      prose: >-
+        Ranking follows Section 15 mechanically: review_priority, then observed over static,
+        then smaller audit first, then id. CAND-03 is the sole critical -- if the platform-first
+        premise is wrong, essentially all currently-active work is mis-allocated right now, and
+        no owned surface can ever surface that (every existing audit operates inside the frame).
+        Among the highs, CAND-02 (observed, S) outranks CAND-01 (observed, M) on cost: 23
+        binding pending CDs are a small, closed set feeding the now-live ratification lane.
+        CAND-01 is the same premise-integrity discipline applied to the 81-header live decision
+        file. CAND-04 (static, M) follows: it is real but partially owned by T0.7b/T1.5's
+        warehouse-native write path. Top-3 scopes are sketched in each finding's
+        what_a_deep_audit_would_examine.
+    - q: Q6
+      answers:
+        - question: >-
+            Seed a: Is the open-rec ratio (685 open, 400 code-review) itself a signal that a
+            finding-producing surface is mis-calibrated -- and is that a candidate?
+          answer: >-
+            Yes, and it is CAND-05 -- scoped to the PRODUCER side, which is the un-owned angle.
+            The consumer/mapping side is owned (KG.2 backlog-to-tier mapping, Decision 103/CD.36
+            relevance lifecycle, T3.8), and mvp-triage already sampled the backlog for missing
+            T4 capabilities (none found). What no surface owns: whether code-review's filing
+            threshold and dedup-at-write produce a queue anyone can ever consume. 585 of 685 are
+            non_automatable -- the future executor could touch at most 100 -- and the open set
+            grew ~3.7x faster than lifetime closure rate in June. A backlog that only grows is a
+            write-only log wearing a queue's clothing.
+        - question: >-
+            Seed b: Is there a maturity gap between the platform surface and the trading-product
+            src/, and does it warrant an area candidate?
+          answer: >-
+            The gap is real (platform: 5 completed audits, 132 tier_items; product: status draft,
+            L2 "absent (entirely)", RATModel.predict raises NotImplementedError) but an AREA
+            audit is the wrong instrument: the wave-1 code-surface audit already characterized
+            the product code to file:line precision and nothing has changed since (rejected,
+            recently-covered). The gap's leverage lives one level up, in WHY the product plane is
+            allowed to stay frozen -- that is CAND-03, a sequencing-premise audit, not a code
+            audit.
+        - question: >-
+            Seed c: Which single CAT-C/CAT-D candidate, if wrong, would invalidate the most
+            currently-active work?
+          answer: >-
+            CAND-03, unambiguously. Every active tier item is being built inside the
+            platform-first frame; if interleaved product iteration dominates strict sequencing,
+            the marginal value of a significant share of in-flight platform work drops (or at
+            least re-orders), and the telemetry chain would fill with real trading data instead
+            of waiting for synthetic loop traffic. It is both rank 1 and
+            highest_leverage_candidate. Note the audit can "fail" productively: ratifying
+            platform-first as a conscious Decision with reversal conditions is also a win --
+            currently it is not even written down as a decision.
+        - question: >-
+            Seed d: Which SUBSET of the slate should run, in what order, to maximize
+            decision-value per unit cost -- and do sequencing dependencies exist?
+          answer: >-
+            Run three: CAND-03 first (M; its verdict can rescope everything below it), then
+            CAND-02 (S; feeds the just-built ratification lane real input and can unblock T1.5
+            via the CD.18 disposition), then CAND-01 (M). CAND-04 should wait for CAND-01
+            (depends_on: the premise sweep determines how much of the file's content deserves to
+            survive into any format migration, sharpening scope) and arguably for T0.7b's fate.
+            CAND-05 and CAND-06 are S-size and can ride along or defer one cycle; CAND-06's
+            urgency rises if CC-web pricing/roadmap signals move. Do not run all six in one wave
+            -- CAND-03's outcome is upstream of the others' priorities.
+        - question: >-
+            Extension (self-posed): Do audit deliverables themselves have a closure loop, or is
+            audits/ accumulating undispositioned verdicts?
+          answer: >-
+            Partially closed, no standing control. Positive signal: unclosed-loops ULF-05 was
+            dispositioned into Decision 116, and verification-review f80508b produced the
+            Decision 84 mis-cite amendment. But three audits landed in the last 48 hours
+            (executor-review, mvp-triage, this one) with dispositions pending, and nothing
+            tracks undispositioned audit findings the way ci-rca recs are tracked. Below the bar
+            today (too recent to call a gap -- the human-disposes contract is 2 days old at this
+            volume), but it is the first thing the NEXT scope-discovery run should check.
+  category_assessment:
+    - category: CAT-A
+      maturity: well-tended
+      audit_density: >-
+        One sharply-triggered producer-calibration candidate; every other area either recently
+        covered (workflows, verification, T4 design, product src/ via wave-1) or trigger-free.
+      top_candidates: [CAND-05]
+    - category: CAT-B
+      maturity: tended
+      audit_density: >-
+        Mechanics owned, premises not: one high (pending-CD premise validity) and one medium
+        (CD.4/KG.9 lock-in premise); OQ/KG residue otherwise low-leverage or trigger-gated.
+      top_candidates: [CAND-02, CAND-06]
+    - category: CAT-C
+      maturity: tended
+      audit_density: >-
+        One consolidated high finding with a dense observed base: 4 of 15 sampled entries failed
+        the premise counterfactual unannotated; metadata (Warehouse ID) drift compounds.
+      top_candidates: [CAND-01]
+    - category: CAT-D
+      maturity: thin
+      audit_density: >-
+        Two framelocks cleared TRAP-3 (named frame + out-of-frame alternative), one of them the
+        slate's only critical; plan-time detection exists (plan-critique Phase 2b) but standing
+        choices have no re-examination trigger.
+      top_candidates: [CAND-03, CAND-04]
+  rubric_ratings:
+    - {category: CAT-A, dimension: VD1, rating: weak,
+       evidence: CAND-05,
+       note: "Only the producer-calibration candidate carried a concrete traced trigger; other area candidates were hygiene and were rejected."}
+    - {category: CAT-A, dimension: VD2, rating: weak,
+       evidence: "docs/ROADMAP-PRODUCT.yaml:20",
+       note: "With product dormant and platform surfaces freshly audited, area audits change little a human acts on."}
+    - {category: CAT-A, dimension: VD3, rating: adequate,
+       evidence: "KG.2",
+       note: "The rec backlog moved from ~250 (KG.2 snapshot) to 685; other areas show little drift."}
+    - {category: CAT-A, dimension: VD4, rating: weak,
+       evidence: "audits/ + docs/audit-reports/wave-1-outputs/E.yaml",
+       note: "Five completed audits plus the wave-1 code-surface audits own most area territory."}
+    - {category: CAT-A, dimension: VD5, rating: adequate,
+       evidence: CAND-05,
+       note: "The surviving candidate scopes to one producer surface plus aggregate stats; S-size."}
+    - {category: CAT-B, dimension: VD1, rating: strong,
+       evidence: CAND-02,
+       note: "Item-id-anchored triggers: CD.7/CD.11 supersession markers, CD.10 amendment, CD.18 stash text, CD.4/KG.9."}
+    - {category: CAT-B, dimension: VD2, rating: adequate,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:169-171",
+       note: "Pending CDs are binding on every session, so stale premises steer live work; but many pending CDs are genuinely fine."}
+    - {category: CAT-B, dimension: VD3, rating: strong,
+       evidence: "CD.7",
+       note: "Most pending CDs were authored 2026-05-18 and predate the DuckLake/CD.27/CD.28/Decision-95-97 waves that amended several of them."}
+    - {category: CAT-B, dimension: VD4, rating: adequate,
+       evidence: "Decision 105 + ULF-02",
+       note: "Transition mechanics fully owned; the premise-validity angle (CO-7 boundary) is the surviving gap."}
+    - {category: CAT-B, dimension: VD5, rating: strong,
+       evidence: CAND-02,
+       note: "23 pending CDs is a small closed set; one S-size session delivers a verdict per entry."}
+    - {category: CAT-C, dimension: VD1, rating: strong,
+       evidence: CAND-01,
+       note: "Observed counterfactual failures at named entries (Decisions 26, 35, 37, 40) plus traced Warehouse-ID drift."}
+    - {category: CAT-C, dimension: VD2, rating: adequate,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1358",
+       note: "Payoff is citation/planning-input integrity; the Decision 62 revisit-under-T1.6 precedent shows dead premises do occasionally steer live work."}
+    - {category: CAT-C, dimension: VD3, rating: strong,
+       evidence: "docs/DECISIONS.md:3134",
+       note: "4 of 15 sampled entries (27%) had demonstrably-shifted premises with no annotation; the May-June substrate waves moved the ground under the pre-CD era."}
+    - {category: CAT-C, dimension: VD4, rating: adequate,
+       evidence: "rec-2057",
+       note: "Point-fix annotation recs own individual instances; the systematic sweep and a supersession-annotation control are unowned."}
+    - {category: CAT-C, dimension: VD5, rating: strong,
+       evidence: "docs/DECISIONS.md",
+       note: "81 enumerable headers in one file plus a 19-entry archive; bounded M-size."}
+    - {category: CAT-D, dimension: VD1, rating: adequate,
+       evidence: CAND-03,
+       note: "Framelock triggers are necessarily interpretive; two candidates cleared TRAP-3 with named frames and alternatives, others failed and were rejected."}
+    - {category: CAT-D, dimension: VD2, rating: strong,
+       evidence: CAND-03,
+       note: "The sequencing frame governs the entire work allocation; the format frame governs every planning session's context cost."}
+    - {category: CAT-D, dimension: VD3, rating: strong,
+       evidence: "audits/platform-roadmap-mvp-triage-7d57a0d.md",
+       note: "Conditions under both frames moved: executor frozen ~2 months, zero telemetry captured, DECISIONS.md more than doubled past its documented size figure."}
+    - {category: CAT-D, dimension: VD4, rating: strong,
+       evidence: ".claude/skills/plan-critique/SKILL.md:69",
+       note: "Plan-time frame-challenge exists but fires only on new plans; no control re-examines standing choices, and no prior audit covers them."}
+    - {category: CAT-D, dimension: VD5, rating: adequate,
+       evidence: CAND-03,
+       note: "Both candidates are scopeable to one session, but judgment-heavy and must be tightly fenced off the immunized top-line decisions."}
+  audit_slate:
+    - {rank: 1, finding: CAND-03, category: CAT-D,
+       one_line_scope: "Examine the never-ratified platform-first sequencing frame against an interleaved minimal-product-loop alternative",
+       review_priority: critical}
+    - {rank: 2, finding: CAND-02, category: CAT-B,
+       one_line_scope: "Premise-validity pass over all 23 binding pending CDs: superseded-unmarked text, decayed inputs, empty ratification-lane feed",
+       review_priority: high}
+    - {rank: 3, finding: CAND-01, category: CAT-C,
+       one_line_scope: "Premise-integrity sweep of the 81 live DECISIONS.md entries plus a supersession-annotation control",
+       review_priority: high}
+    - {rank: 4, finding: CAND-04, category: CAT-D,
+       one_line_scope: "Examine the prose-monolith decision-authoring frame against structured/warehouse-native alternatives",
+       review_priority: high}
+    - {rank: 5, finding: CAND-05, category: CAT-A,
+       one_line_scope: "Calibration of the code-review rec producer against actual consumption capacity",
+       review_priority: medium}
+    - {rank: 6, finding: CAND-06, category: CAT-B,
+       one_line_scope: "Re-test CD.4's portability-hedge premise against the accumulated CC-web-specific machinery; disposition KG.9",
+       review_priority: medium}
+  findings:
+    - id: CAND-01
+      category: CAT-C
+      target: "docs/DECISIONS.md live decision set (observed seeds: Decisions 26, 35, 37, 40; metadata: Decisions 75, 77-85 Warehouse ID lines)"
+      title: "Premise-integrity sweep: dead-premise Decided entries remain citable with no supersession-annotation control"
+      trigger: >-
+        Counterfactual sample of 15 entries: 4 rest on demonstrably-dead premises with no
+        annotation -- Decision 26 (docs/DECISIONS.md:3134) is "Agent-decided -- pending review"
+        since April with every named artifact retired (2-chat model, Gemini critique,
+        .github/prompts deleted at T-1.13); Decision 35 (:3102) has deleted implementation
+        anchors and a no-auto-apply premise inverted by Decision 77 yet is still cited by
+        AGENTS.md; Decisions 37 (:3057) and 40 (:2878) name substrates retired by Decision 116
+        and CD.28, with Decision 40's trigger conditions unmonitored and moot. Peers 24/68/71
+        DID get migration annotations -- the practice is ad hoc, not controlled. Compounding:
+        Decisions 77-85 carry retired 4-digit Warehouse IDs in-file (dec-1083..dec-1091), and
+        Decision 75's "dec-081" (:2038) collides with the canonical dec-081 = Decision 81 keying
+        after Decision 105 reconciled the CD side only.
+      trigger_anchor: "docs/DECISIONS.md:3134"
+      trigger_kind: observed
+      why_now: >-
+        Decision 105 (2026-07-02) fixed exactly this drift class on the roadmap side and stopped
+        at the file boundary; Decisions 116/117 (2026-07-03) show correct supersession-by-header
+        happening only when a new decision happens to collide with an old one. Meanwhile
+        decision-scout feeds these entries to every planning session as binding context, and the
+        roadmap already carries one live example of a dead premise steering work (Decision 62's
+        premise revisit under T1.6, docs/ROADMAP-PLATFORM.yaml:1358). Secondary category: CAT-A
+        (the file is also an area with metadata drift).
+      what_a_deep_audit_would_examine: >-
+        Enumerate all 81 live headers plus the 19 archived; apply the premise counterfactual to
+        each; classify {premise-live, dead-but-annotated, dead-unannotated, archive-eligible};
+        verify every in-file Warehouse ID against the canonical dec-NNN-by-number keying;
+        adjudicate the "pending review" statuses (Decision 26/27) that never resolved; propose a
+        supersession-annotation invariant (a superseding Decision MUST annotate its victims --
+        mechanically checkable in the validate.py referential-guard family) and explicit archive
+        criteria.
+      payoff: >-
+        Stops plans citing dead premises as binding; shrinks decision-scout's live surface;
+        produces the formal supersession entries and archive moves the file needs; hardens the
+        DECISIONS.md-to-warehouse ETL keyspace.
+      review_priority: high
+      priority_rationale: >-
+        Real observed trigger with a 27% sample hit rate; changes planning inputs and
+        governance hygiene but not mid-flight build work, so high rather than critical.
+      confidence: CONFIRMED
+      dedup:
+        classification: partially-owned
+        owning_ids: [rec-1964, rec-2057, rec-2058, rec-2059, rec-2278, rec-917, rec-918, dec-105]
+        search_terms: ["DECISIONS.md in open recs", "decision premise / archive in ROADMAP-PLATFORM.yaml", "Warehouse ID lines in DECISIONS.md"]
+        hit_count: 15
+        note: >-
+          Open recs own individual stale-reference point fixes (annotate Decision 36/37 refs,
+          fix Decision 65/66 paths, duplicate-72 renumber, Decision 89 Warehouse ID line) and
+          Decision 105 reconciled CD-side pointers. Surviving un-examined sub-area: the
+          systematic premise adjudication of the whole live set and the missing
+          supersession-annotation control -- no open item owns either.
+      audit_size_estimate: M
+      depends_on: []
+    - id: CAND-02
+      category: CAT-B
+      target: "docs/ROADMAP-PLATFORM.yaml candidate_decisions, state: pending (23 entries; seeds CD.7, CD.10, CD.11, CD.18)"
+      title: "Pending-CD premise validity: binding-while-stale entries and an unpopulated ratification-lane feed"
+      trigger: >-
+        CD.7 and CD.11 detail text opens "[Amendment 2026-05-27 -- fully/narrowly superseded by
+        CD.28/CD.27]" yet both remain state: pending -- and the roadmap's own rule
+        (docs/ROADMAP-PLATFORM.yaml:169-171) makes every pending CD binding on every agent
+        session, while CD.14 proves a superseded state exists. CD.10's six-Lambda enumeration
+        was demoted to "illustrative, not canonical" by a 2026-06-09 amendment with no state
+        change. CD.18 requires a decision before T1.5 that hinges on reviving a git stash parked
+        2026-05-18 on a substrate now scheduled for teardown (CD.2/T5.1) -- the stash's
+        existence is unverifiable from the repo, and mvp-triage calls this ratification
+        "zero-cost" without testing that premise. Meta-signal: zero of 23 pending CDs carry
+        realization_evidence, so the Decision-105 lane's discovery surface (ratifiable_cds(),
+        scripts/platform_roadmap.py:794) is structurally empty.
+      trigger_anchor: "CD.7"
+      trigger_kind: observed
+      why_now: >-
+        The ratification lane went live 2026-07-02 (Decision 105) and today's mvp-triage names
+        CD.18 and CD.28 ratification as explicit next actions -- the pending set is about to be
+        consumed as decision input, in the state it is in. Three different treatments of
+        superseded pending CDs coexist (amendment-marker, state flip, nothing), which is a
+        data-integrity signal on a binding surface. Secondary category: CAT-C (these are
+        premises awaiting decision).
+      what_a_deep_audit_would_examine: >-
+        Walk all 23 pending CDs; classify each as (i) realized-but-unevidenced, (ii)
+        superseded-but-unmarked, or (iii) genuinely-open; adjudicate every entry's premises
+        against the post-May decision waves (84, 91, 95-97, 103, 105, 116/117); verify the
+        CD.18 stash question empirically; recommend per-CD state transitions and a rule that an
+        amendment recording supersession MUST flip state in the same edit; specify who populates
+        realization_evidence so ratifiable_cds() stops returning empty by construction.
+      payoff: >-
+        Corrects the binding instruction set agents load every session; gives the new
+        ratification lane real input; can unblock T1.5 (CD.18 disposition) and retire two
+        zombie-binding CDs (CD.7, CD.11).
+      review_priority: high
+      priority_rationale: >-
+        Binding-surface staleness with observed anchors and an imminent consumer (the lane);
+        S-size, high decision-value per unit cost.
+      confidence: CONFIRMED
+      dedup:
+        classification: partially-owned
+        owning_ids: ["unclosed-loops ULF-02", dec-105, rec-2287, "mvp-triage RMAP (CD.18/CD.28 next-actions)"]
+        search_terms: ["candidate decision / CD.7 / CD.10 / CD.11 in open recs", "ratifiable_cds in scripts/", "realization_evidence in ROADMAP-PLATFORM.yaml"]
+        hit_count: 4
+        note: >-
+          Ratification-lane mechanics and realized-work loop-closure are owned (Decision 105,
+          ULF-02); rec-2287 owns one ratified-CD text fix; mvp-triage owns two specific
+          ratification next-actions. Surviving un-examined sub-area: premise validity of the
+          pending set itself -- exactly the boundary CO-7 records as left open by
+          unclosed-loops.
+      audit_size_estimate: S
+      depends_on: []
+    - id: CAND-03
+      category: CAT-D
+      target: "The platform-first sequencing directive (platform roadmap active, ROADMAP-PRODUCT.yaml dormant until the autonomous loop closes)"
+      title: "Framelock: strict platform-before-product sequencing was never decided and no owned surface can question it"
+      trigger: >-
+        The phrase "platform-first directive" occurs in DECISIONS.md exactly twice, both inside
+        Decision 93 (docs/DECISIONS.md:1311, :1315) treating it as a given -- no Decision
+        ratifies the sequencing or records examined alternatives. ROADMAP-PRODUCT.yaml is
+        status: draft (docs/ROADMAP-PRODUCT.yaml:20) with current_state "trading plane is mostly
+        scaffold or absent" (:347) -- L2 absent entirely, RATModel.predict raising
+        NotImplementedError -- unchanged since the wave-1 code-surface audit. Meanwhile today's
+        mvp-triage records zero telemetry captured and the executor frozen since May, i.e. the
+        platform bet's payoff horizon extended while the product plane stayed frozen.
+      trigger_anchor: "docs/DECISIONS.md:1311"
+      trigger_kind: observed
+      why_now: >-
+        The two audits merged today establish the platform MVP is reachable only with
+        resequencing and remains months out; every additional month of strict sequencing
+        silently re-makes an opportunity-cost bet that was never explicitly made once. Per
+        Decision 75's own taxonomy this is the "frame lock at the originating artefact" pattern:
+        the pivot-era frame ("close the autonomous loop, then trade") assigned all capacity to
+        platform work, and every subsequent choice -- including which audits get run --
+        operates inside it. The named frame: platform and product work are strictly sequenced
+        phases competing for one agent's capacity. The out-of-frame alternative: interleave a
+        minimal manual/paper product loop (an L1+L3 slice under human ops) that generates real
+        trading telemetry and validates the alpha premise while the platform matures. Secondary
+        category: CAT-C (an unratified premise).
+      what_a_deep_audit_would_examine: >-
+        Reconstruct the pivot-era rationale (PIVOT TRANSCRIPT references in
+        ROADMAP-PRODUCT.yaml) and whether interleaving/timeboxing alternatives were ever
+        weighed; cost a minimal product iteration under manual operations (paper trading, no
+        executor dependency); quantify what it feeds back to the platform (real telemetry for
+        the T2.36/T3.x chain, TCA data, alpha validation vs the risk the alpha premise is
+        untested until the platform is done); define the reversal condition under which strict
+        sequencing stops paying; if the frame survives, draft the ratifying Decision with
+        reversal conditions so the choice becomes conscious (Decision 75's stated bar).
+      payoff: >-
+        The largest single lever on the board: could redirect quarterly allocation toward an
+        interleaved product loop, or -- equally valuable -- convert an inherited frame into a
+        ratified, reversal-conditioned Decision. Either outcome changes what gets built next
+        quarter or the confidence with which it is built.
+      review_priority: critical
+      priority_rationale: >-
+        Meets the critical definition verbatim: if this premise is wrong, currently-active work
+        is being mis-directed right now, across every tier. Tightly fenced: it does NOT re-open
+        the immunized top-lines (DuckLake, taxonomy, public repo) or the trigger-gated executor
+        freeze -- it examines the allocation frame above them.
+      confidence: CONFIRMED
+      dedup:
+        classification: partially-owned
+        owning_ids: ["audits/platform-roadmap-mvp-triage-7d57a0d.yaml (adjacent, in-frame)"]
+        search_terms: ["platform-first in docs/ + audits/ + open recs", "product sequencing in audits/ and audit-prompts/"]
+        hit_count: 5
+        note: >-
+          All hits are citations of the directive as an operating premise inside audits scoped
+          to platform items (mvp-triage x4, executor-review x1); zero open recs mention it. No
+          surface examines the frame itself -- the surviving sub-area is the entire sequencing
+          premise. ROADMAP-PRODUCT.yaml was mined only via TRAP-2's narrow exception: the traced
+          tension is the platform side's directive, grounded at DECISIONS.md:1311.
+      audit_size_estimate: M
+      depends_on: []
+    - id: CAND-04
+      category: CAT-D
+      target: "docs/DECISIONS.md as authoring format: single prose-markdown monolith, numbering authority, and warehouse ETL source"
+      title: "Framelock: decision knowledge locked to a growing prose file in a repo whose north star says prose is a side effect"
+      trigger: >-
+        DECISIONS.md is 271KB / 3,348 lines / 81 live entries at HEAD -- more than double the
+        "25k-token" figure workflow-review found stale in six places (WF-14). Its size directly
+        drives WF-05 (plan-critique's mandatory context ~1.09MB, "the gate cannot actually
+        comply") and the existence of decision-scout plus its truncation-risk finding (WF-18).
+        NS.4 says "Narrative prose is a side effect, not an output"; Decision 86 routed every
+        other standing prose class to structured surfaces -- and named Decisions as a
+        DESTINATION, exempting the format itself from examination; Decision 84 then deepened
+        the lock by making the file the ops_decisions ETL source. The structured alternative
+        already half-exists: DecisionPayload (src/schemas/) and the portal's file_decision
+        verb, with T0.7b's log-decision Lambda roadmapped as the future ratification vehicle.
+      trigger_anchor: "docs/DECISIONS.md:1"
+      trigger_kind: static
+      why_now: >-
+        Per Decision 75's third bias -- "tool acquired after design committed; tool never
+        retrofitted" -- the warehouse-native decision substrate (DuckLake, DecisionPayload,
+        file_decision, T0.7b) accumulated AFTER the prose-file format was set, and no trigger
+        ever asked whether the new capability changes the right shape of the file. The named
+        frame: a decision IS a prose markdown section appended to one canonical file. The
+        out-of-frame alternative: structured per-decision records (warehouse- or YAML-native)
+        with prose rationale as a payload field and DECISIONS.md demoted to a generated
+        projection.
+      what_a_deep_audit_would_examine: >-
+        Enumerate the file's consumption paths (decision-scout, plan-critique required-context,
+        backfill-decisions-md ETL, validate.py referential guards, human review) and which
+        genuinely require a monolithic prose file; whether numbering authority and human
+        sign-off survive a structured format; migration shape and cost given T0.7b/T1.5 already
+        own the WRITE path; the interaction with Decision 114's size-governance precedent
+        (which raised the roadmap's ceiling consciously -- the same conscious choice has never
+        been made for DECISIONS.md).
+      payoff: >-
+        Could change T1.5's decomposition, retire decision-scout, and cut a six-figure-token
+        recurring context cost from every planning session -- or consciously ratify the prose
+        file with a size-governance rule. Also de-risks the ETL keyspace drift CAND-01
+        documents.
+      review_priority: high
+      priority_rationale: >-
+        Real structural trigger with measured symptoms in a completed audit, but partially
+        owned on the write path and cheaper after CAND-01 prunes the content; not mid-flight
+        work, so high not critical.
+      confidence: CONFIRMED
+      dedup:
+        classification: partially-owned
+        owning_ids: ["WF-05", "WF-14", "WF-18", "T0.7b", "T1.5"]
+        search_terms: ["DECISIONS.md in audits/workflow-review yaml", "decision format migration in ROADMAP-PLATFORM.yaml", "DecisionPayload in src/schemas"]
+        hit_count: 20
+        note: >-
+          workflow-review owns the SYMPTOM mitigations (context budget, stale size figures,
+          scout truncation) and T0.7b/T1.5 own warehouse-native decision WRITES. Surviving
+          un-examined sub-area: the canonical-format question itself -- even after T0.7b,
+          Decision 84 keeps DECISIONS.md as the source the warehouse rebuilds FROM.
+      audit_size_estimate: M
+      depends_on: [CAND-01]
+    - id: CAND-05
+      category: CAT-A
+      target: ".claude/skills/code-review + the rec-filing write path (producer side of ops_recommendations)"
+      title: "Finding-producer calibration: code-review files recommendations ~4x faster than anything retires them"
+      trigger: >-
+        At HEAD the read cache shows 685 open recs vs 472 closed lifetime; 400 of the open set
+        are source=code-review; 585 of 685 are non_automatable (preflight), so the future
+        executor could consume at most ~100; 25 sit at priority=Critical. Growth is
+        accelerating: +266 opened-and-still-open in June, +102 in the first five days of July --
+        while the sole autonomous consumer is frozen (Decision 67/CD.17) and rec-curator is
+        disabled and mispointed (Decision 84 caveat). KG.2 recorded the backlog unmapped to
+        tiers at ~250; it has since nearly tripled.
+      trigger_anchor: "KG.2"
+      trigger_kind: observed
+      why_now: >-
+        Every /implement session runs code-review and files more recs into a queue with no
+        consumer; mvp-triage's empirical sample already showed most sampled recs matched its
+        probe only incidentally. If the producer is mis-calibrated, the backlog the T4 executor
+        will one day inherit is noise-dominated, and the "self-improving" loop's input signal
+        degrades silently -- a write-only log wearing a queue's clothing.
+      what_a_deep_audit_would_examine: >-
+        Sample code-review-sourced recs for actionability, duplication, and staleness; measure
+        close/decline rates by source and priority; test whether Critical=25 behaves as a pager
+        or as inflation; evaluate the code-review skill's filing threshold and
+        get_rec_write_guidance dedup-at-write against an explicit consumption-capacity budget;
+        recommend producer-side policy (threshold, aggregation, or auto-expiry via the
+        Decision 103 relevance lifecycle).
+      payoff: >-
+        Changes the code-review skill's filing policy and determines whether the executor
+        inherits a trustworthy queue; complements (does not duplicate) KG.2's mapping and
+        T3.8's relevance machinery, which are consumer-side.
+      review_priority: medium
+      priority_rationale: >-
+        Real observed trigger, but the payoff is contained while the executor is frozen; rises
+        to high the moment unfreeze approaches.
+      confidence: CONFIRMED
+      dedup:
+        classification: partially-owned
+        owning_ids: ["KG.2", "CD.36", "T3.8"]
+        search_terms: ["producer/calibration/rec velocity in audits/ + ROADMAP-PLATFORM.yaml (0 hits)", "backlog in open recs (0 hits)", "KG.2 snapshot figure"]
+        hit_count: 3
+        note: >-
+          KG.2 (backlog-to-tier mapping), Decision 103/CD.36 and T3.8 (relevance lifecycle) own
+          the consumer/mapping side. Surviving un-examined sub-area: producer-side calibration
+          -- no item, rec, or audit examines the rate and quality at which findings are
+          MANUFACTURED.
+      audit_size_estimate: S
+      depends_on: []
+    - id: CAND-06
+      category: CAT-B
+      target: "CD.4 (vendor lock-in acceptable; AGENTS.md is portability hedge) + KG.9 (CC-web deprecation contingency)"
+      title: "CC-web lock-in premise: the portability hedge predates the accumulated harness-specific machinery"
+      trigger: >-
+        CD.4 (authored 2026-05-18, still pending-binding) rests on "AGENTS.md is symlinked or
+        duplicated ... so other agent harnesses pick up the same instructions." Since then the
+        workflow accreted CC-web-specific, load-bearing machinery the hedge does not cover:
+        the CI signal-green comment-wake protocol (exists solely because the harness delivers
+        no CI-success webhook and forbids sleep), the send_later backstop, session-start hooks,
+        and a permission model documented in AGENTS.md as unfixable in committed config (PRs
+        #354 and #357 tried and failed). KG.9 acknowledges the deprecation contingency and CO-3
+        records it has no remediation surface.
+      trigger_anchor: "CD.4"
+      trigger_kind: static
+      why_now: >-
+        The single-developer, single-dev-surface topology (Decision 109/CD.2 ratified CC-web as
+        THE surface) makes harness deprecation or a pricing/capability shift a
+        platform-survival event, and the gap between "instructions are portable" and "the
+        interaction machinery is portable" has widened every month since the premise was
+        written. This is a premise-decay check on a pending CD (primary CAT-B); secondary
+        category CAT-D (the lock-in-acceptable frame was set before the machinery existed).
+      what_a_deep_audit_would_examine: >-
+        Inventory harness-coupled surfaces (hooks, wake protocols, permission workarounds,
+        ephemeral-container assumptions, Max-plan OAuth dependencies); estimate a
+        forced-migration cost to the nearest alternatives (Claude Code CLI/desktop,
+        Actions-native headless); adjudicate whether CD.4's acceptance still holds as written
+        or needs a contingency exit-criterion; produce the KG.9 disposition (accept-with-eyes-
+        open, cheap standing hedge, or remediation item).
+      payoff: >-
+        Converts an unpriced survival risk into a priced, consciously re-accepted one; likely
+        output is a small ratifying decision plus at most one cheap standing hedge, not new
+        infrastructure.
+      review_priority: medium
+      priority_rationale: >-
+        Real premise decay on a binding pending CD, but no live signal that CC-web is moving;
+        contained payoff until one appears.
+      confidence: CONFIRMED
+      dedup:
+        classification: partially-owned
+        owning_ids: ["KG.9", "CD.4"]
+        search_terms: ["KG.9 in ROADMAP-PLATFORM.yaml", "cc-web in audits/", "portability/harness in open recs"]
+        hit_count: 3
+        note: >-
+          The only hits are the target items' own definitions (KG.9, CD.4) plus incidental
+          CC-web mentions in two audits -- acknowledgment without ownership. Surviving
+          un-examined sub-area: the entire premise re-test and KG.9 disposition; no open item
+          owns remediation.
+      audit_size_estimate: S
+      depends_on: []
+  rejected_candidates:
+    - candidate: "Deep code audit of trading-product src/ (live, meta_learner, execution, lab) -- CO-5 / Q6 seed b"
+      classification: recently-covered
+      why_dismissed: >-
+        The wave-1 code-surface audit already characterized these subsystems to file:line
+        precision and its findings are embedded verbatim in ROADMAP-PRODUCT.yaml current_state;
+        the code is deliberately dormant under the platform-first directive, so re-examining it
+        changes nothing until product work activates. The real leverage is the directive itself
+        (CAND-03).
+      covering_audit_or_item: "docs/audit-reports/wave-1-outputs/E.yaml + ROADMAP-PRODUCT.yaml current_state"
+    - candidate: "Ratify the realized-but-pending CDs / close governance-lag loops (DD-A sub-state i as its own audit)"
+      classification: owned
+      why_dismissed: >-
+        The ratification lane exists (Decision 105), unclosed-loops ULF-02 is the keystone
+        finding driving it, and mvp-triage names CD.18/CD.28 as explicit next actions;
+        auditing the mechanics again adds nothing. Only the premise-validity angle survives,
+        and it is CAND-02.
+      covering_audit_or_item: "Decision 105 + audits/unclosed-loops-44ef5c6.yaml ULF-02"
+    - candidate: "T4 autonomous-executor design (substrate, closed-loop capabilities)"
+      classification: recently-covered
+      why_dismissed: "Deliberate constraint list; the audit merged at HEAD with 9 findings including one critical."
+      covering_audit_or_item: "audits/executor-roadmap-review-7d57a0d.yaml"
+    - candidate: "Active-tier MVP scope-triage / disposition"
+      classification: recently-covered
+      why_dismissed: "Deliberate constraint list; merged at HEAD, all 48 active items triaged."
+      covering_audit_or_item: "audits/platform-roadmap-mvp-triage-7d57a0d.yaml"
+    - candidate: "Verification system (interactive + aws-executor)"
+      classification: recently-covered
+      why_dismissed: >-
+        Deliberate constraint list. This also absorbs the Decision 48 staleness observation from
+        the empirical sample (V3 trigger list names retired paths): VF-04/VF-13/VF-14 already
+        own the tier-floor enforcement gap and vocabulary drift, so no separate CAT-C finding
+        was filed for Decision 48.
+      covering_audit_or_item: "audits/verification-system-review-f80508b.yaml (VF-04)"
+    - candidate: "Workflow / skill / command layer DRY, layering, context budget"
+      classification: recently-covered
+      why_dismissed: "Deliberate constraint list; 20 findings at d107b4a."
+      covering_audit_or_item: "audits/workflow-review-d107b4a.yaml"
+    - candidate: "Open questions OQ.3 (VPN-in-container), OQ.5 (generated tf commit policy), OQ.6 (drift-detector tuning), OQ.14 (catalog multi-tenancy)"
+      classification: low-leverage
+      why_dismissed: >-
+        Each is a real open item but none carries accumulated tension a DEEP audit would
+        resolve: OQ.3/OQ.5 are small operational choices decidable inline when their need
+        concretizes; OQ.6 is parameter tuning; OQ.14 activates only with a second product.
+        Examination would not change a decision anyone must make now.
+      covering_audit_or_item: ""
+    - candidate: "KG.13 Test Impact Analysis deferred"
+      classification: owned
+      why_dismissed: "Explicitly double-trigger-gated (T4.4 concurrency>1 precondition + Decision 80 measured budget-breach trigger wired in scripts/import_governance.py); unclosed-loops already dismissed it on the same grounds."
+      covering_audit_or_item: "audits/unclosed-loops-44ef5c6.yaml rejected list + T3.11"
+    - candidate: "KG.14 / CD.32 multi-product enforcement substrate unbuilt"
+      classification: low-leverage
+      why_dismissed: "CD.32 is explicitly exploratory and the second product does not exist; nothing active depends on the substrate, so a deep audit's best-case output changes no near-term decision."
+      covering_audit_or_item: ""
+    - candidate: "Executor freeze itself (Decision 67 / CD.17)"
+      classification: owned
+      why_dismissed: "Deliberate constraint list: reversal is explicitly trigger-gated (grammar-expressed in CD.17) and mvp-triage just verified the gate's earliest-unmet condition; not a framelock by definition."
+      covering_audit_or_item: "CD.17 + audits/platform-roadmap-mvp-triage-7d57a0d.md Q1"
+    - candidate: "Missing framelock detector as a standalone audit target (DD-B alternate framing)"
+      classification: low-leverage
+      why_dismissed: >-
+        The detector is not absent: plan-critique Phase 2b (Frame Challenge, MANDATORY) exists
+        at .claude/skills/plan-critique/SKILL.md:69 and implements Decision 75's mitigation for
+        new plans. The residual gap -- standing choices never re-enter /plan -- is real but is
+        best exercised, not audited: CAND-03 and CAND-04 ARE that exercise, and this
+        scope-discovery lane is the recurring control. A separate audit of the detector would
+        deliver nothing beyond what those findings already carry.
+      covering_audit_or_item: ".claude/skills/plan-critique/SKILL.md:69 (Phase 2b)"
+    - candidate: "ROADMAP-PLATFORM.yaml single-file size / split policy as a framelock"
+      classification: no-specific-trigger
+      why_dismissed: >-
+        Decision 114 examined exactly this consciously (raised the ceiling to 10,000 lines,
+        added a deterministic guard, superseded KG.11's trigger) -- a decided choice with an
+        enforcement mechanism is not an unexamined frame, and the new ceiling is not breached.
+      covering_audit_or_item: "Decision 114"
+    - candidate: "Top-line DuckLake backend / two-axis taxonomy / public-repo boundary"
+      classification: owned
+      why_dismissed: "Immunized per the deliberate-constraints list: recently ratified plus actively building. No grounded stale sub-premise surfaced during tracing that would clear the narrow exception."
+      covering_audit_or_item: "Decision 84 / Decision 77 / Decision 101"
+  summary:
+    total_findings: 6
+    by_category: {CAT-A: 1, CAT-B: 2, CAT-C: 1, CAT-D: 2}
+    by_classification: {unowned: 0, partially-owned: 6}
+    top_audit: CAND-03
+    top_three: [CAND-03, CAND-02, CAND-01]
+    highest_leverage_candidate: CAND-03
+    maturity_CAT-A: well-tended
+    maturity_CAT-B: tended
+    maturity_CAT-C: tended
+    maturity_CAT-D: thin
