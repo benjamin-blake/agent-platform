@@ -159,9 +159,10 @@ Degraded paths -- never abort; set the named flag, downgrade affected confidence
 - IF an anchor in this prompt does not resolve (line moved, id renamed): re-derive it from the
   repo yourself; record the mismatch in `meta.stale_anchors`; do not treat the prompt's number as
   ground truth.
-- IF `git rev-parse origin/main` and your working tree differ (the tree drifted after this prompt
-  was drafted): audit the tree you have, set `meta.audited_commit` to the actual working-tree
-  base, and note any cited file where `origin/main` has since diverged in `meta.contract_notes`.
+- IF `git fetch origin main` fails (offline / egress down): do NOT abort -- branch from your local
+  `main` (or current HEAD) instead. Section 16 defines `<sha>` as the short sha of the commit you
+  actually branch from, so this substitution keeps `<sha>` well-defined; record the substitution in
+  `meta.contract_notes`.
 
 Repo-wide `validate.py` is advisory outside CI here: a clean YAML parse of your two deliverables
 is the real pre-push gate. An unrelated `validate --pre` failure is recorded in
@@ -224,6 +225,9 @@ finding ids it rests on.
   - Seed c: Which single CAT-C or CAT-D candidate, if its premise turned out to be wrong, would
     invalidate the most currently-active work -- and is that the highest-leverage audit on the
     slate?
+  - Seed d: Given that each audit has a cost, which SUBSET of the slate should actually run, and in
+    what order, to maximise decision-value per unit cost -- and does any candidate's audit sharpen
+    another's scope (a sequencing dependency, captured in `depends_on`)?
 
 ## 8. RUBRIC
 
@@ -270,7 +274,8 @@ trace feeding the named questions. Findings may still arise outside them.
   which currently-active choices are candidate framelocks that no control would catch? Produce
   CAT-D candidates only where you can name the unexamined frame and the out-of-frame alternative
   (TRAP-3). The candidate may be either a specific framelocked choice OR the missing-detector
-  itself -- adjudicate both framings.
+  itself -- adjudicate both framings. If no framelock-detecting control is found in those
+  locations, treat the detector as absent for this audit's purposes and say so.
 
 ## 10. GROUNDING MAP
 
@@ -440,11 +445,13 @@ audit:
   rubric_ratings:
     - {category: CAT-A, dimension: VD1..VD5, rating: strong|adequate|weak|absent|n/a,
        evidence: "finding-id|file:line|item-id", note: ""}
-    # one row per (category x dimension) you choose to rate; n/a rows allowed and costless
+    # one row for EACH of the 20 (category x dimension) pairs; use rating n/a (costless) where a
+    # dimension does not structurally apply, but every pair gets a row
   audit_slate:                      # THE ranked deliverable Q5 points to; cross-category total order
     - {rank: 1, finding: CAND-01, category: CAT-x, one_line_scope: "",
        review_priority: critical|high|medium|low}
-    # rank is a strict 1..N total order over EVERY finding; ties broken by observed>static then leverage
+    # rank is a strict 1..N total order over EVERY finding, ordered by review_priority, then VD2
+    # leverage, then observed above static at equal leverage (Section 15)
   findings:
     - {id: CAND-01, category: CAT-A|CAT-B|CAT-C|CAT-D,
        target: "<the specific thing to audit: a path, an item-id, a Decision N, a CD.N>",
@@ -469,6 +476,25 @@ audit:
             maturity_CAT-A: <value>, maturity_CAT-B: <value>,
             maturity_CAT-C: <value>, maturity_CAT-D: <value>}
 ```
+
+Field definitions (fields whose assignment rule is not obvious from the name):
+
+- `audit_size_estimate` -- the expected size of the RESULTING deep audit (NOT of this meta-audit):
+  XS = a single-question check; S = one surface, few questions; M = a multi-surface or
+  multi-question design review (a typical `/audit`); L = a broad review spanning many surfaces.
+  Estimate it from the scope in `what_a_deep_audit_would_examine`.
+- `category_assessment[].audit_density` -- a one-line free-text characterization of how much
+  audit-worthy material the category yielded after adjudication (e.g. "two sharply-triggered
+  premise candidates; the rest owned or generic").
+- `depends_on` -- informational only (e.g. "auditing X first would sharpen Y's scope"); it does
+  NOT override the `review_priority`-driven `audit_slate` ordering.
+
+Companion report (`.md`) structure -- <= 1500 words, prose only (the YAML is the system of
+record), in this order: (1) a 2-3 sentence lede naming the top audit and the headline; (2) "The
+slate" -- the ranked `audit_slate` as a list or table (rank, category, target, one-line scope,
+priority); (3) "Highest-leverage audit" -- one paragraph on `highest_leverage_candidate` and why;
+(4) "What we are NOT recommending" -- 2-4 sentences on the most notable `rejected_candidates` and
+why (dedup transparency); (5) "Category health" -- one line per category with its maturity.
 
 Invariants (state them as satisfied in `meta.contract_notes` if you deviate, with the reason):
 
@@ -505,29 +531,39 @@ Maturity -- compute LAST, per category, top-down, first match wins. This measure
 EXISTING governance already tends each category's audit space (higher = less need for new audits
 here):
 
-- well-tended = 0 findings in this category clear the `critical` or `high` bar (existing audits /
-  roadmap already cover it).
-- tended = 0 critical AND <= 1 high finding in this category.
-- thin = exactly 1 critical, OR 2-3 high.
-- neglected = otherwise (multiple critical, or a critical plus several high) -- this category is
-  materially under-examined.
+- well-tended = 0 critical AND 0 high findings in this category (existing audits / roadmap already
+  cover it).
+- tended = 0 critical AND exactly 1 high.
+- thin = exactly 1 critical AND <= 1 high, OR 0 critical AND 2-3 high.
+- neglected = otherwise (>= 2 critical, OR 1 critical AND >= 2 high, OR 0 critical AND >= 4 high)
+  -- this category is materially under-examined.
+
+These tiers are mutually exclusive under first-match-wins; evaluate top-down and stop at the first
+match.
 
 ## 16. COMMIT / PR MECHANICS
 
-1. Derive the base ONCE: `git fetch origin main` then `git rev-parse --short origin/main`. This sha
-   IS the audited tree; use it in `meta.audited_commit`, both deliverable filenames, and the branch
-   name.
+1. Derive the base ONCE: `git fetch origin main` then `git rev-parse --short origin/main`. Call
+   this `<sha>`. You branch FROM this commit (step 2), so it IS the audited tree; use `<sha>` --
+   one value everywhere -- in `meta.audited_commit`, both deliverable filenames, and the branch
+   name. IF `git fetch origin main` fails (offline): branch from your local `main` or current HEAD
+   instead and set `<sha>` to `git rev-parse --short HEAD` of that base, recording the substitution
+   in `meta.contract_notes`. In all cases `<sha>` is the short sha of the commit you actually
+   branch from.
 2. `git switch -c audit/audit-scope-discovery-<sha> origin/main` so the PR diff is exactly your two
    deliverable files. (This is a deliberate, documented exception to the AGENTS.md `claude/*`
    session-branch rule: the audit session needs a clean two-file diff off the audited base. The
-   CI signal-green-comment wake fires only on `claude/*` PRs and is irrelevant here -- you end your
+   never_on_main hook blocks writes only on `main`; an `audit/*` branch is writable. The CI
+   signal-green-comment wake fires only on `claude/*` PRs and is irrelevant here -- you end your
    turn without merging; the human disposes of the PR.)
 3. Validate: a clean YAML parse of `audits/audit-scope-discovery-<sha>.yaml` is the real pre-push
    gate (e.g. `bin/venv-python -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))"
    audits/audit-scope-discovery-<sha>.yaml`). Repo-wide `validate --pre` is advisory outside CI;
    an unrelated failure goes in `meta.contract_notes`, never fixed.
-4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, `--no-gpg-sign` if signing
-   is unavailable. `git push -u origin HEAD`.
+4. Confirm `git status --porcelain` shows ONLY the two deliverable files before committing
+   (regenerated local caches must be gitignored; if any non-deliverable path appears, do not stage
+   it). Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, `--no-gpg-sign` if
+   signing is unavailable. `git push -u origin HEAD`.
 5. Open the PR via `mcp__github__create_pull_request` (base=main, ready for review, title
    `audit: audit-target discovery -- ranked slate of what to review next (CAT-A..D)`, body = the
    `summary` block in a yaml fence + a 2-3 sentence lede). Then END THE TURN -- do not poll, do not
