@@ -2543,29 +2543,43 @@ tier_items:
 
   - id: T-1.18
     tier: T-1
-    name: Convert copilot-cli.md to .yaml + wire copilot_wrapper.py to read it
+    name: Retire dead Copilot CLI boundary contract (residue cleanup)
     intent: |
-      REPORT-ONLY + small IMPLEMENTATION. Copilot CLI invocation contract
-      (args, @filepath semantics, -p quoting rules) becomes structured YAML.
-      copilot_wrapper.py consumes the YAML directly. Critical because the
-      @file vs user-message distinction is exactly the subtle semantic drift
-      this ritual is built to catch. Effort M per INTENT round-3 H4: the
-      wrapper has multiple call sites that each encode an aspect of the
-      invocation contract; conversion requires auditing each.
+      Re-grounded per Decision 91 precedent: the original convert+wire scope is
+      impossible. Its sole consumer script was deleted in PR #407 (retire
+      Copilot-SDK residue); Decision 116 retired the copilot-sdk provider;
+      audit finding F-C04 classifies docs/contracts/copilot-cli.md
+      dead_but_provisioned with no live inference consumer. This item now
+      retires the dead contract, re-grounds the CLI-agnostic '-p @file' guard
+      in scripts/checks/misc/validate_invariants.py, and clears the dangling
+      pointer in docs/contracts/delegate-cli.md.
     depends_on: [T-1.12]
     files_in_scope:
-      - docs/contracts/copilot-cli.yaml
       - docs/contracts/copilot-cli.md
-      - scripts/copilot_wrapper.py
+      - scripts/checks/misc/validate_invariants.py
+      - docs/contracts/delegate-cli.md
     exit_criteria:
-      - "copilot-cli.yaml exists at contract_version: 1, status: ratified"
-      - "copilot_wrapper.py consumes the YAML; .md deleted"
-      - "All copilot_wrapper.py call sites audited against the YAML invocation contract"
-      - "Step 10 multi-perspective critique converges"
+      - id: c1
+        text: "docs/contracts/copilot-cli.md deleted (dead Copilot CLI contract; no live consumer per audit F-C04; wrapper removed in #407)"
+        status: met
+        met_by: t118-copilot-cli-retirement
+      - id: c2
+        text: "validate_invariants.py @file guard re-grounded CLI-agnostic and still flags '-p @file' without an instruction; no reference to copilot-cli.md or .github/copilot-instructions.md remains"
+        status: met
+        met_by: t118-copilot-cli-retirement
+      - id: c3
+        text: "docs/contracts/delegate-cli.md dangling reference to copilot-cli.md cleared; no live consumer/contract file (validate_invariants.py, delegate-cli.md) references the deleted contract"
+        status: met
+        met_by: t118-copilot-cli-retirement
+      - id: c4
+        text: "bin/venv-python -m scripts.validate --pre passes"
+        status: met
+        met_by: t118-copilot-cli-retirement
     related_candidate_decisions: [CD.25]
     effort: M
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-07-05"
 
   - id: T-1.19
     tier: T-1

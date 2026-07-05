@@ -58,4 +58,3 @@ https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-r
 ## Related Files
 - `scripts/delegate_runner.py` -- wrapper that calls `/delegate` and captures telemetry
 - `logs/.delegate-telemetry.jsonl` -- per-PR audit trail written by `capture_delegate_telemetry()`
-- `docs/contracts/copilot-cli.md` -- parent contract for Copilot CLI input semantics
