@@ -451,6 +451,19 @@ decisions, priority_queue) never touch it -- their reads AND writes transit the 
 boundary, and `sync_ops.drain` quarantines their outbox dirs. Do NOT disable or remove it before
 the T2.26 disposition of the remaining tables (the rec-2113 restore drill gates the demolition).
 
+**Migrated-table Athena `_current` views (T2.26 c4, 2026-07-05):** `ops_recommendations_current`
+(T2.19), `ops_decisions_current`, and `ops_priority_queue_current` are all now DROPPED (explicit
+one-shot `null_resource` DROP VIEW in `terraform/personal/main.tf`) -- the three migrated tables'
+Athena read surface is fully retired. This does not change the gate below: `ops_compaction`
+itself still runs for the not-yet-migrated tables and telemetry staging.
+
+**Retirement gate is now two-part, not one (re-grounded 2026-07-05, T2.26 c3):** full
+`ops_compaction` retirement additionally requires **telemetry retirement** (tier_item T2.36 /
+Decision 84 Phase 4) -- `ops_compaction_handler` compacts telemetry staging in the same run
+(`TABLE_NAMES` parses both `dt=` ops keys and `trade_date=` telemetry keys), so the ops-side
+disposition below is necessary but not sufficient. The `ops_session_log` / `ops_execution_plans`
+half is itself gated on tier_item T3.20 (retire-or-migrate) plus the unratified CD.40.
+
 The deprecation marker in `src/data/handlers/ops_compaction_handler.py` and the `notes` line in
 `src/lambdas/ops-compaction/manifest.yaml` are informational only -- no behavioural change.
 
@@ -461,7 +474,7 @@ the DuckLake writer is the proven live write path:
 
 ```yaml
 decommission_steps:
-  gate: T2.26 disposition of ops_session_log/ops_execution_plans complete + rec-2113 restore drill passed (Decision 84)
+  gate: T2.26 disposition of ops_session_log/ops_execution_plans complete + rec-2113 restore drill passed (Decision 84) + telemetry retirement (T2.36 / Phase 4)
   steps:
     - id: 1
       action: Disable the S3 trigger on agent-platform-ops-compaction

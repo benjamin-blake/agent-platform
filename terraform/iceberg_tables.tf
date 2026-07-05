@@ -1020,41 +1020,13 @@ ${each.value}
 
 # Operational current-state views (Decision 50)
 # ROW_NUMBER() deduplication -- INSERT-only tables, views expose latest snapshot per entity
+# T2.19/T2.26 (c4): all three migrated-table entries (ops_recommendations_current,
+# ops_decisions_current, ops_priority_queue_current) are scrubbed here for artefact honesty --
+# this root is a CD.21-retained legacy root that is NOT applied (no live view is affected).
+# The live personal module's equivalent local (terraform/personal/main.tf) is the one that
+# actually gates DDL; see its null_resource.drop_ops_* one-shots for the explicit DROPs.
 locals {
-  create_ops_view_queries = {
-    ops_recommendations_current = <<-EOT
-      CREATE OR REPLACE VIEW ${aws_glue_catalog_database.trading_db.name}.ops_recommendations_current AS
-      SELECT *
-      FROM (
-        SELECT *,
-          ROW_NUMBER() OVER (PARTITION BY id ORDER BY last_updated_timestamp DESC) AS row_num
-        FROM ${aws_glue_catalog_database.trading_db.name}.ops_recommendations
-      )
-      WHERE row_num = 1
-    EOT
-
-    ops_decisions_current = <<-EOT
-      CREATE OR REPLACE VIEW ${aws_glue_catalog_database.trading_db.name}.ops_decisions_current AS
-      SELECT *
-      FROM (
-        SELECT *,
-          ROW_NUMBER() OVER (PARTITION BY id ORDER BY last_updated_timestamp DESC) AS row_num
-        FROM ${aws_glue_catalog_database.trading_db.name}.ops_decisions
-      )
-      WHERE row_num = 1
-    EOT
-
-    ops_priority_queue_current = <<-EOT
-      CREATE OR REPLACE VIEW ${aws_glue_catalog_database.trading_db.name}.ops_priority_queue_current AS
-      SELECT * FROM ${aws_glue_catalog_database.trading_db.name}.ops_priority_queue
-      WHERE queue_run_id = (
-        SELECT queue_run_id
-        FROM ${aws_glue_catalog_database.trading_db.name}.ops_priority_queue
-        ORDER BY last_updated_timestamp DESC
-        LIMIT 1
-      )
-    EOT
-  }
+  create_ops_view_queries = {}
 }
 
 resource "null_resource" "create_ops_views" {
