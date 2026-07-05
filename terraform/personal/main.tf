@@ -285,33 +285,13 @@ locals {
     EOT
   }
 
-  # T2.19 / T2.7 (scoped partial): ops_recommendations_current is DROPPED (Decision 81 cl.7).
-  # All recs reads transit the DuckLake reader closed boundary; no compliant consumer reads this
-  # view post-cutover. ops_decisions_current and ops_priority_queue_current are RETAINED until
-  # their tables migrate. See null_resource.drop_ops_recommendations_view below for the explicit DROP.
-  create_ops_view_queries = {
-    ops_decisions_current = <<-EOT
-      CREATE OR REPLACE VIEW ${aws_glue_catalog_database.ops.name}.ops_decisions_current AS
-      SELECT *
-      FROM (
-        SELECT *,
-          ROW_NUMBER() OVER (PARTITION BY id ORDER BY last_updated_timestamp DESC) AS row_num
-        FROM ${aws_glue_catalog_database.ops.name}.ops_decisions
-      )
-      WHERE row_num = 1
-    EOT
-
-    ops_priority_queue_current = <<-EOT
-      CREATE OR REPLACE VIEW ${aws_glue_catalog_database.ops.name}.ops_priority_queue_current AS
-      SELECT * FROM ${aws_glue_catalog_database.ops.name}.ops_priority_queue
-      WHERE queue_run_id = (
-        SELECT queue_run_id
-        FROM ${aws_glue_catalog_database.ops.name}.ops_priority_queue
-        ORDER BY last_updated_timestamp DESC
-        LIMIT 1
-      )
-    EOT
-  }
+  # T2.19 / T2.26 (c4): all three migrated-table _current views (ops_recommendations_current,
+  # ops_decisions_current, ops_priority_queue_current) are DROPPED (Decision 81 cl.7; Decision 84).
+  # All recs/decisions/queue reads transit the DuckLake reader closed boundary; no compliant
+  # consumer reads these views post-cutover. See null_resource.drop_ops_recommendations_view,
+  # null_resource.drop_ops_decisions_view, and null_resource.drop_ops_priority_queue_view below
+  # for the explicit DROPs.
+  create_ops_view_queries = {}
 }
 
 resource "null_resource" "create_ops_tables" {
@@ -464,6 +444,106 @@ resource "null_resource" "drop_ops_recommendations_view" {
       done
       if [ "$STATUS" != "SUCCEEDED" ]; then
         echo "DROP VIEW ops_recommendations_current ended with status: $STATUS (may already be absent)" >&2
+      fi
+    EOT
+    on_failure  = continue
+  }
+
+  depends_on = [null_resource.create_ops_views]
+}
+
+# ---------------------------------------------------------------------------
+# T2.26 (c4): explicitly DROP ops_decisions_current (Decision 84 cutover).
+#
+# Why a one-shot resource: removing the ops_decisions_current key from the for_each map above
+# destroys the null_resource in state but issues NO DDL -- the live Glue view persists. An
+# explicit DROP VIEW is required. This resource runs ONCE (trigger tied to a constant) so
+# re-apply does not re-issue DDL after the view is already absent.
+#
+# APPLY POSTURE: null_resource delete is a destroy event. The terraform_apply_guard.py
+# fail-closes on any destroy/IAM/trust change (Decision 77). This apply routes to
+# tf-gated-apply Environment approval.
+# ---------------------------------------------------------------------------
+resource "null_resource" "drop_ops_decisions_view" {
+  triggers = {
+    # Constant trigger so this runs exactly once and is stable on re-apply.
+    dropped_at = "2026-07-04-T2.26"
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      QID="$(aws athena start-query-execution \
+        --query-string "DROP VIEW IF EXISTS ${aws_glue_catalog_database.ops.name}.ops_decisions_current" \
+        --query-execution-context Database=${aws_glue_catalog_database.ops.name} \
+        --work-group ${aws_athena_workgroup.production.name} \
+        --region ${var.aws_region} \
+        --profile ${var.aws_profile} \
+        --query 'QueryExecutionId' \
+        --output text)"
+      STATUS=RUNNING
+      while [ "$STATUS" = "RUNNING" ] || [ "$STATUS" = "QUEUED" ]; do
+        sleep 2
+        STATUS="$(aws athena get-query-execution \
+          --query-execution-id "$QID" \
+          --region ${var.aws_region} \
+          --profile ${var.aws_profile} \
+          --query 'QueryExecution.Status.State' \
+          --output text)"
+      done
+      if [ "$STATUS" != "SUCCEEDED" ]; then
+        echo "DROP VIEW ops_decisions_current ended with status: $STATUS (may already be absent)" >&2
+      fi
+    EOT
+    on_failure  = continue
+  }
+
+  depends_on = [null_resource.create_ops_views]
+}
+
+# ---------------------------------------------------------------------------
+# T2.26 (c4): explicitly DROP ops_priority_queue_current (Decision 84 cutover).
+#
+# Why a one-shot resource: removing the ops_priority_queue_current key from the for_each map
+# above destroys the null_resource in state but issues NO DDL -- the live Glue view persists. An
+# explicit DROP VIEW is required. This resource runs ONCE (trigger tied to a constant) so
+# re-apply does not re-issue DDL after the view is already absent.
+#
+# APPLY POSTURE: null_resource delete is a destroy event. The terraform_apply_guard.py
+# fail-closes on any destroy/IAM/trust change (Decision 77). This apply routes to
+# tf-gated-apply Environment approval.
+# ---------------------------------------------------------------------------
+resource "null_resource" "drop_ops_priority_queue_view" {
+  triggers = {
+    # Constant trigger so this runs exactly once and is stable on re-apply.
+    dropped_at = "2026-07-04-T2.26"
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      QID="$(aws athena start-query-execution \
+        --query-string "DROP VIEW IF EXISTS ${aws_glue_catalog_database.ops.name}.ops_priority_queue_current" \
+        --query-execution-context Database=${aws_glue_catalog_database.ops.name} \
+        --work-group ${aws_athena_workgroup.production.name} \
+        --region ${var.aws_region} \
+        --profile ${var.aws_profile} \
+        --query 'QueryExecutionId' \
+        --output text)"
+      STATUS=RUNNING
+      while [ "$STATUS" = "RUNNING" ] || [ "$STATUS" = "QUEUED" ]; do
+        sleep 2
+        STATUS="$(aws athena get-query-execution \
+          --query-execution-id "$QID" \
+          --region ${var.aws_region} \
+          --profile ${var.aws_profile} \
+          --query 'QueryExecution.Status.State' \
+          --output text)"
+      done
+      if [ "$STATUS" != "SUCCEEDED" ]; then
+        echo "DROP VIEW ops_priority_queue_current ended with status: $STATUS (may already be absent)" >&2
       fi
     EOT
     on_failure  = continue

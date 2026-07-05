@@ -5842,7 +5842,12 @@ tier_items:
       - id: c3
         text: >-
           ops_compaction retired (function + schedule removed; manifest status flipped; runbook Section 5
-          executed); no Iceberg ops write path survives outside the designed rollback
+          executed); no Iceberg ops write path survives outside the designed rollback. Re-grounded
+          2026-07-05 (PLAN-t2-26-drop-migrated-athena-views): BLOCKED on two named blockers, not just
+          c2 -- ops_compaction_handler also compacts telemetry staging (TABLE_NAMES parses both dt=
+          ops keys and trade_date= telemetry keys), so full retirement requires telemetry retirement
+          (T2.36 / Phase 4) in addition to c2; and c2's remaining ops_session_log half is itself gated
+          on T3.20 (retire-or-migrate) + the unratified CD.40.
         status: open
       - id: c4
         text: Per-table Athena _current views for migrated tables removed (T2.7 owns any survivor)
@@ -5901,6 +5906,13 @@ tier_items:
         ops tables (no FAIL/HARD_GATE; tolerated empty-row WARN on ops_priority_queue). c1 -> met
         (met_by: t2-26-restore-drill-gate-orphan-dq); rec-2113 closed on the passing-drill proof
         (Decision 103 hard gate satisfied). Parent T2.26 stays in_progress -- c2/c3/c4/c7 remain open.
+      - 2026-07-05 (PLAN-t2-26-drop-migrated-athena-views): shipped c4 -- dropped the two remaining
+        migrated-table Athena _current views (ops_decisions_current, ops_priority_queue_current) via
+        explicit one-shot null_resource DROP VIEW IF EXISTS in terraform/personal/main.tf (mirroring
+        the T2.19 ops_recommendations_current drop), and scrubbed the same three migrated-table view
+        entries from the unapplied legacy terraform/iceberg_tables.tf root for artefact honesty
+        (create_telemetry_view_queries untouched). Also re-grounded c3's text (see above) to name its
+        real blockers. Parent T2.26 stays in_progress -- c2/c3/c7 remain open.
 
   - id: T2.27
     tier: T2
