@@ -22,6 +22,15 @@ scope:
   - file: scripts/checks/registry.py
     action: Modify
     purpose: Register validate_test_count_coupling in pre_sequence() and full_sequence() (both tiers).
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Insert ("check", "validate_test_count_coupling") into the FROZEN_PRE_SEQUENCE and
+      FROZEN_FULL_SEQUENCE baselines at the position matching registry.py (immediately after
+      ("check", "validate_subprocess_encoding") in each). These frozen tuples are a deliberate
+      tripwire that asserts registry.pre_sequence()/full_sequence() match exactly; the registry
+      change breaks them unless co-updated. NOT a count-coupling anti-pattern -- an intentional
+      change-detector, so it is updated in lockstep, not derived away.
   - file: scripts/validate.py
     action: Modify
     purpose: Add the facade re-export import so getattr-resolution and mock patching find the check.
@@ -37,7 +46,10 @@ scope:
       Fix the two brittle == 35 assertions via non-tautological derivation: independent raw-text
       parse cross-check + no-duplicate invariant (loader), and registered_values == canonical_ids
       from load_source_registry() wiring contract (guidance). Rename the two methods to drop the
-      magic number; add `import re` at module scope.
+      magic number; add `import re` at module scope. THIRD edit: add a `# count-coupling-ok:` waiver
+      to the `assert len(entries) == 1` at line 43 (test_custom_registry_path) -- its `entries` is
+      tainted by the curated load_source_registry() call but the count is a controlled 1-entry tmp
+      fixture, not a growing collection.
   - file: tests/test_ops_writer.py
     action: Modify
     purpose: >-
@@ -71,8 +83,9 @@ acceptance_criteria:
   - >-
     The guard detects all three brittle shapes of the incident -- direct reference
     (`len(TABLE_NAMES) == N`), aliased local (`entries = load_source_registry(); len(entries) == N`),
-    and string-subscript key (`len(g["source"]["registered_values"]) == N`) -- while passing a derived
-    assertion, a `# count-coupling-ok:` waived assertion, and a non-curated count (`len(rows) == 3`).
+    and string-subscript key (`len(g["source"]["registered_values"]) == N`), in both `len(X) == N` and
+    Yoda `N == len(X)` comparison orders -- while passing a derived assertion, a `# count-coupling-ok:`
+    waived assertion, and a non-curated count (`len(rows) == 3`).
   - >-
     The guard reports zero unwaived violations when run against the real tests/ tree (all four brittle
     instances fixed by derivation; the one controlled-fixture site at test_rec_write_guidance.py:43 carries
@@ -84,10 +97,10 @@ acceptance_criteria:
 verification_plan:
   - step: 1
     phase: pre-deploy
-    action: The immediate CI break is fixed -- the three modified test files pass end to end.
-    command: bin/venv-python -m pytest tests/test_rec_write_guidance.py tests/test_ops_writer.py tests/test_telemetry_schemas.py -q
-    expected: All selected tests pass; 0 failed. The previously failing == 35 assertions are gone.
-    fix_if: Any assertion still fails -- a derivation was written incorrectly or a rename left a stale reference.
+    action: The immediate CI break is fixed and the registry change is baseline-consistent -- the modified test files pass end to end (incl. the frozen-baseline tripwire that the registry insert must co-update).
+    command: bin/venv-python -m pytest tests/test_rec_write_guidance.py tests/test_ops_writer.py tests/test_telemetry_schemas.py tests/test_checks_registry.py -q
+    expected: All selected tests pass; 0 failed. The previously failing == 35 assertions are gone and the FROZEN_PRE/FULL_SEQUENCE baselines match the updated registry.
+    fix_if: A derivation is wrong / a rename left a stale reference, OR the frozen baselines were not updated to include validate_test_count_coupling at the position matching registry.py.
     hermetic: false
   - step: 2
     phase: pre-deploy
@@ -131,7 +144,7 @@ verification_plan:
     fix_if: A rec is still open -- the Resolves trailer was malformed; close via ops_data_portal --update-rec.
     hermetic: false
 constraints:
-  - Only the 8 files in Scope may be modified (AGENTS.md scope discipline).
+  - Only the 9 files in Scope may be modified (AGENTS.md scope discipline).
   - >-
     Fix by non-tautological derivation, never by bumping the literal 35->36 / 11->12 / 7->8
     (Decision 55: forward-fix, not a workaround that re-arms the same trap).
@@ -191,14 +204,14 @@ context:
     Decision-scout flag resolved: Decision 104 coverage-mapping NOTE -- scripts/checks/**/*.py maps to
     tests/test_validate.py for coverage attribution, so the guard's tests land in tests/test_validate.py
     (not a separate file). Decision 102/43 SLOC/CC note -- new module is small, trivially within budget.
-  - "gates: decision-scout=FLAGS_FOUND (flag resolved by locating guard tests in test_validate.py); plan-critique=PROCEED after 2 REVISE rounds -- R1: detection blind spot (aliased/subscript), tautological ops_writer composition + wrong constant, VP step 6 masked failure; R2: taint over-capture false-positive at test_rec_write_guidance.py:43 resolved via waiver + both-comparison-orders + tainted-fixture test case"
+  - "gates: decision-scout=FLAGS_FOUND (flag resolved by locating guard tests in test_validate.py); plan-critique=3 REVISE rounds then final verification -- R1: detection blind spot (aliased/subscript), tautological ops_writer composition + wrong constant, VP step 6 masked failure; R2: taint over-capture false-positive at test_rec_write_guidance.py:43 (waiver) + both-comparison-orders; R3: registry insert breaks out-of-scope FROZEN_PRE/FULL_SEQUENCE baselines in test_checks_registry.py (added as 9th scope file + VP coverage) + Yoda-order test case. Convergence-cap exceeded by one round with human approval; plan was converging on discrete bugs, not contested design"
   - >-
     Branch is on origin/main (0 behind, 0 ahead at planning time); no Main Divergence Assessment overlap.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/ci-rca-recommendations-hi4ave)
   - docs/PROJECT_CONTEXT.md read
   - Decision-scout gate run (FLAGS_FOUND, flag resolved)
-  - All 8 files in scope located and readable
+  - All 9 files in scope located and readable
   - Acceptance criteria understood and verifiable
   - Confirmed TABLE_NAMES = _OPS_TABLE_NAMES + TELEMETRY_TABLE_NAMES composition and the SoT for each derivation
 execution_steps:
@@ -224,6 +237,13 @@ execution_steps:
     Register the check: add _c("validate_test_count_coupling") to both pre_sequence() and full_sequence()
     in scripts/checks/registry.py (place near the other hygiene checks, e.g. after
     validate_subprocess_encoding).
+  - >-
+    Update tests/test_checks_registry.py: insert ("check", "validate_test_count_coupling") into
+    FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE immediately after the
+    ("check", "validate_subprocess_encoding") tuple in each, so the frozen-baseline equivalence
+    tests (test_pre_sequence_matches_frozen_baseline / test_full_sequence_matches_frozen_baseline)
+    stay green after the registry insert. The position MUST match where step 2 inserted the check in
+    registry.py.
   - >-
     Add the facade re-export in scripts/validate.py:
     `from scripts.checks.hygiene.validate_test_count_coupling import validate_test_count_coupling  # noqa: F401,E402`
@@ -254,7 +274,8 @@ execution_steps:
     Fix tests/test_telemetry_schemas.py:428: replace `assert len(TELEMETRY_TABLE_NAMES) == 7` with a
     uniqueness invariant and a membership floor of the required telemetry table names (cross-checking the
     constant against its schema/config SoT where available); the sibling all-prefixed test already covers the
-    prefix invariant.
+    prefix invariant. Also refresh the now-stale "exactly 7 entries" wording in the surrounding comment and
+    the test method docstring so no orphaned magic number remains.
   - >-
     Add the prohibition rule to tests/CLAUDE.md under a new subsection: never assert an exact len(...) == N
     against a production collection that grows by addition; use derivation / floor / uniqueness / wiring
@@ -269,12 +290,14 @@ execution_steps:
     (6) a non-curated exact-count `assert len(rows) == 3` is NOT flagged; (7) a curated-source-tainted
     local with a small fixed fixture count (`e = load_source_registry(p); assert len(e) == 1`) IS flagged
     when unwaived but NOT flagged once the waiver comment is present (the test_rec_write_guidance.py:43
-    class); and (8) the check name appears in both registry sequences.
+    class); (8) a Yoda-order `assert N == len(TABLE_NAMES)` is flagged (exercises the reversed-comparison
+    branch so validate_test_coverage's 100%-per-file gate is satisfied); and (9) the check name appears in
+    both registry sequences.
   - >-
     Execute the Verification Plan -- run each step; loop until pass. On any failure, fix on-branch and re-run;
     do not paper over (Decision 55).
   - "Report: what was implemented, verification results, and rec-closure confirmation."
 work_areas: []
 rollback: >-
-  Revert the 8-file diff. The guard is additive; removing its registry entries and facade import
+  Revert the 9-file diff. The guard is additive; removing its registry entries and facade import
   disables it with no state to unwind. The four test fixes are self-contained.
