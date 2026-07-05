@@ -151,7 +151,8 @@ DEGRADED PATHS (never abort; set the flag, downgrade, proceed):
 - IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, mark
   every finding's `roadmap_crossref` with `dedup_hit_count: null` and confidence `HYPOTHESIS`
   for the dedup dimension, and proceed using whatever static grep over `docs/` you can run.
-- IF `git fetch` fails: use the local `origin/main` ref; note it in `meta.contract_notes`.
+- IF `git fetch` fails: use the local `origin/main` ref, still name the deliverables and branch
+  with that short sha, and note the degraded fetch in `meta.contract_notes`.
 - IF an anchor in this prompt does not resolve: record it in `meta.stale_anchors` and continue
   from the repository truth, never from the prompt's claim.
 
@@ -194,7 +195,9 @@ Answer each as a first-class entry in `question_answers[]`. Pin the verdict enum
       (a demonstrable dead premise dominates; use `indeterminate` only when you cannot establish
       liveness either way).
   (b) an independent boolean `archive_eligible` -- true iff the entry no longer governs anything
-      live (fully resolved/subsumed AND cited by nothing as a live constraint). This is ORTHOGONAL
+      live (fully resolved/subsumed AND cited by nothing as a live constraint; test for the
+      second half: a repo-wide ripgrep for the entry's number and its `dec-NNN` returns only its
+      own entry plus already-superseded/archived mentions). This is ORTHOGONAL
       to premise class: a `premise-live` entry can be archive-eligible, and a `dead-but-annotated`
       one may not be. Q1 only SETS this flag; the archive RECOMMENDATIONS are owned by Q4.
   Report the full classified enumeration in the report (a compact table:
@@ -205,8 +208,9 @@ Answer each as a first-class entry in `question_answers[]`. Pin the verdict enum
   guard family) a real gap, given the ad-hoc practice observed on some entries? If you judge it a
   gap, your finding MUST specify the invariant concretely: its rule, where it would live
   (`scripts/checks/...`), its inputs, and a machine-checkable `acceptance` command -- but you
-  write NO code; the specification is the deliverable. Verdict enum: `sufficient | partial |
-  insufficient`.
+  write NO code; the specification is the deliverable. The `acceptance` command may reference the
+  proposed (not-yet-built) check by its path and is NOT required to pass at HEAD; it demonstrates
+  the invariant is mechanically checkable. Verdict enum: `sufficient | partial | insufficient`.
 - Q3 -- WAREHOUSE-ID KEYSPACE. Derive the canonical number-keying rule (it is: `dec-NNN` where
   `NNN` is the entry's OWN decision number zero-padded to 3 digits -- e.g. Decision 81 -> `dec-081`;
   confirm this from the recent entries' Warehouse ID line text and Decision 105, and do NOT derive
@@ -237,13 +241,22 @@ Answer each as a first-class entry in `question_answers[]`. Pin the verdict enum
   - `supersession-bidirectionality`: both superseder->victim and victim->superseder directions are
     discoverable.
   A `partial` requires you to name, in the evidence, a property-matched compensating control (one
-  that exercises the property and would fail if the gap were real).
+  that exercises the property and would fail if the gap were real). Roll the properties up into
+  this question's `verdict`: `sufficient` = every property `met`; `partial` = at least one
+  `partial` and none `missed`; `insufficient` = any property `missed`.
 - Q6 -- QUESTIONS THE REQUESTER DID NOT THINK TO ASK. Answer AND extend these seeds:
   - Does the DECISIONS.md -> `ops_decisions` backfill silently tolerate a duplicate or colliding
     `dec-NNN` (last-writer-wins), so a keyspace defect is invisible downstream? Trace the ETL
-    entry point named on the Warehouse ID lines.
+    entry point named on the Warehouse ID lines (`ops_data_portal --backfill-decisions-md`). If
+    the tolerance is not statically determinable from the code, say so and mark this sub-answer
+    HYPOTHESIS -- do not guess.
+  - The reverse keyspace direction: does `ops_decisions` (or its backfill logic) admit rows with
+    NO live-or-archived `## Decision NNN:` entry (orphan rows)? Answer if statically determinable
+    from the ETL code; otherwise mark HYPOTHESIS.
   - Are there live entries whose premise is not dead but whose CONCLUSION was quietly reversed by
-    a later Decision without either entry annotating the other (a "silent overturn")?
+    a later Decision without either entry annotating the other (a "silent overturn")? You are NOT
+    required to run an exhaustive pairwise (N^2) comparison -- surface the silent overturns you
+    encounter during the P2 premise sweep, and note if a fuller pass would need more budget.
   - Does any live entry cite, as a live constraint, another entry that is itself archived or
     superseded (a stale transitive citation)?
   Add any further question a thorough reviewer would raise, with its answer.
@@ -363,7 +376,9 @@ The live-set enumeration IS the audit; do it in full.
   findings outrank `static` ones in `top_improvements` ordering.
 - CONFIRMED-ABSENT: an artifact, path, or identifier counts as "confirmed absent" only when a
   repo-wide search (ripgrep/glob across the tree at HEAD) for it returns nothing -- not merely
-  because this prompt did not name it, and not from a single expected location.
+  because this prompt did not name it, and not from a single expected location. Run this
+  repo-wide search only for an artifact you are about to declare absent as the BASIS of a finding
+  or a `dead` classification -- not for every premise.
 - ANTI-VACUITY: for any entry you classify `premise-live`, be able to name the still-true premise;
   for any `dead-unannotated`, name both the dead substrate/rule AND the searched-for-but-absent
   annotation.
