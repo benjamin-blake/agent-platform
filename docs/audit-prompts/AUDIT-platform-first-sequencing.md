@@ -148,6 +148,11 @@ do NOT abort. Set `meta.degraded_dedup=true`, mark every `roadmap_crossref` conf
 in-repo files named in Section 13 (those are on-disk and need no credentials). The audit's core
 judgment does not depend on warehouse reads.
 
+**Degraded path (remote unreachable):** if `git fetch origin main` fails, fall back to the local
+checkout: use `git rev-parse --short HEAD` for the `<sha>` in filenames / branch /
+`meta.audited_commit`, and record `meta.contract_notes: "remote unreachable; base=local HEAD"`.
+Do not abort.
+
 ## 6. NORTH STAR
 
 The bar you judge each surface against. These are judgment-bearing principles, not mechanical
@@ -182,11 +187,17 @@ and prose. Every question is first-class.
 - **Q2 -- Alternative feasibility & cost.** Is the interleaved minimal manual/paper product loop
   (L1+L3 under human ops, no executor) feasible given today's scaffold state, and what would it
   cost to stand up and to run? Ground the feasibility in the actual current_state of the product
-  code. Verdict enum: `feasible-low-cost | feasible-high-cost | infeasible`.
+  code. **Pin the cost in these units:** the sole operator's one-time setup effort and recurring
+  attention (hours/week), plus calendar time -- NOT agent/executor compute capacity. Verdict
+  enum: `feasible-low-cost | feasible-high-cost | infeasible`.
 - **Q3 -- Feedback value vs delay risk.** Net, does interleaving the minimal loop now generate
   more value (real trading telemetry feeding the T2.36/T3.x chain; TCA/cost data; alpha-premise
-  validation) than it costs in platform delay? Verdict enum:
-  `interleave-favored | sequencing-favored | too-close-to-call`.
+  validation) than it costs in platform delay? **Frame the scarce resource correctly:** this is a
+  sole-developer system and the executor is frozen (not consuming agent capacity), so the binding
+  constraint on both planes is the *operator's own attention*. "Platform delay" therefore means
+  operator attention diverted from platform work plus calendar slip -- not lost compute. Weigh the
+  telemetry/alpha-validation payoff against that attention cost and against CAND-E's compounding
+  argument. Verdict enum: `interleave-favored | sequencing-favored | too-close-to-call`.
 - **Q4 -- Reversal condition.** Is there any observable condition under which strict sequencing
   should stop, and is such a condition recorded anywhere today? Verdict enum:
   `defined | undefined-should-exist | not-needed`.
@@ -196,15 +207,16 @@ and prose. Every question is first-class.
   (Section 14). All four options are first-class; `insufficient_evidence` is a legitimate,
   non-cowardly verdict if the evidence genuinely does not discriminate.
 - **Q6 -- Questions the requester did not think to ask.** Use the
-  `question_answers` final-entry shape (`answers: [{question, answer, basis}]`). Seeds you MUST
-  answer and then EXTEND with your own:
-  - What is the actual marginal platform-delay cost of a human-run paper loop, given the executor
-    is already frozen (so the agent is not currently consuming capacity on executor work)?
+  `question_answers` final-entry shape (`answers: [{question, answer, basis}]`). Answer all three
+  seeds below, then ADD at least two of your own (cap ~5 additional -- precision over volume):
+  - What is the marginal cost of a human-run paper loop measured in the *operator's attention*
+    (the binding resource), and how does that compare to the operator attention strict sequencing
+    frees or consumes? Argue both directions; do not presume the loop is near-free.
   - Does "zero telemetry captured" (rec-2173) mean the platform's own recursive-improvement loop
     is *also* currently starved -- i.e., is the platform bet itself iterating blind while it
     waits for synthetic loop traffic?
   - Is there a third option beyond interleave-vs-sequence (e.g., a time-boxed sequencing with a
-    hard review date) that dominates both?
+    hard review date, which is exactly `ratify_with_reversal_conditions`) that dominates both?
 
 ## 8. RUBRIC
 
@@ -221,11 +233,19 @@ surface; rate it `n/a` on the other unless you have a substantive reason to rate
 - **VD4 Alternative-costed** (S2 `product-loop-feasibility`): is the interleaved loop's
   feasibility and cost actually assessed anywhere, or only asserted? Serves Q2.
 - **VD5 Feedback-value vs delay-risk weighed** (S2): is the telemetry / alpha-validation payoff
-  weighed against the platform-delay cost? Serves Q3.
+  weighed against the platform-delay cost, where delay cost is correctly framed as the sole
+  operator's diverted attention (not compute)? Serves Q3.
 
 ## 9. CANDIDATE OBSERVATIONS (adjudicate each; do not assume)
 
-Each is a hypothesis. Trace it; it may confirm, split, or be rejected.
+Each is a hypothesis. Trace it; it may confirm, split, or be rejected. **These candidates are NOT
+balanced by construction:** CAND-A..D probe for *gaps* in the current frame; CAND-E probes the
+*affirmative case* for it. Do NOT read the 4:1 count as a directional signal -- it reflects that
+the request arrived phrased as a gap, not that the frame is likely wrong. You MUST build a
+standalone affirmative trace for strict sequencing (its compounding platform benefit AND the
+alternative's costs) with the SAME rigor you apply to the gap hypotheses, and weigh both before
+Q5. Give the status quo an argued defense; do not let the richly-specified alternative win by
+elaboration alone.
 
 - **CAND-A (provenance):** the sequencing is an unratified inherited premise, possibly a
   frame-lock per Decision 75 -- never recorded as a conscious decision with examined
@@ -242,6 +262,16 @@ Each is a hypothesis. Trace it; it may confirm, split, or be rejected.
   ground feasibility in the product current_state (some surfaces are absent, not merely
   scaffolded -- an L1+L3 paper loop may need more than the trigger implies); search for any prior
   costing.
+- **CAND-E (the frame is the correct call):** strict sequencing is sound because the platform's
+  recursive-improvement machinery compounds -- finishing it first multiplies the productivity of
+  all later product work -- while an interleaved human-run loop imposes real, recurring cost on
+  the **sole operator's attention** (the actual binding resource; see Q3), fragments focus, and
+  risks half-finishing both planes. Under this hypothesis the right output is
+  `ratify_as_is` or `ratify_with_reversal_conditions`, not a resequence. *Counter-check:* is the
+  compounding benefit actually load-bearing on the near-term critical path, or is the platform
+  already far enough along that the marginal compounding is small? Is the operator demonstrably
+  attention-constrained, or is the frozen executor freeing capacity that a paper loop could use
+  at low marginal cost? Trace both directions; do not assume CAND-E is true any more than A..D.
 
 ## 10. GROUNDING MAP
 
@@ -275,10 +305,12 @@ time; **re-verify each before relying on it** (trust-nothing clause) and record 
   broker, no order_id, no submission.
 - `src/main.py:129`,`:139` -- live mode wires `mock_signal_generator` and
   `mock_market_data_source`.
-- `docs/AUDIT-PROMPT-product-roadmap-yaml.md` Section 11 -- the embedded pivot transcript (Parts
-  A/C/E/G document data architecture, the four-layer model, identifiability/execution/funnel,
-  hedging/environments). "Concurrent paper trading alongside live" appears as a design element
-  (~`:288`). `docs/ROADMAP-PRODUCT.yaml:113` records Parts B/D/F as "user questions only".
+- `docs/AUDIT-PROMPT-product-roadmap-yaml.md` Section 11 -- the embedded pivot transcript ("## 11.
+  PIVOT TRANSCRIPT", begins ~`:3139`; Parts A/C/E/G document data architecture, the four-layer
+  model, identifiability/execution/funnel, hedging/environments). "Concurrent paper trading
+  alongside live" appears as a design element both in the summary body (~`:288`, Section 3.3) and
+  within the transcript itself (~`:3670`). `docs/ROADMAP-PRODUCT.yaml:113` records Parts B/D/F as
+  "user questions only". (Re-derive all these line pointers; the file is large and anchors rot.)
 
 **The state of the bet (from the adjacent, in-frame audits -- context, not to be re-derived):**
 - `audits/platform-roadmap-mvp-triage-7d57a0d.md` and `.yaml` -- MVP reachability
@@ -350,7 +382,8 @@ The audit examines the *allocation frame above* these. Reopening any of them is 
 ## 14. OUTPUT
 
 Write both deliverables. The YAML is the system of record; the `.md` is a <= ~1500-word executive
-report (the two verdicts up front, then costs, then the disposition and its rationale).
+report leading with the two headline verdicts -- **Q1 provenance** and **Q5 disposition** -- then
+the Q2/Q3 costs and value, then the disposition's mechanism and rationale.
 
 ```yaml
 audit:
@@ -398,7 +431,11 @@ audit:
 len(findings) = novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered
 or not-a-gap candidates live in `rejected_candidates[]`, NOT findings. `rubric_ratings`,
 `question_answers`, and `sequencing_verdict` are systems-of-record referenced FROM findings,
-never re-counted. `top_improvements` and `highest_leverage_change` MUST be finding ids.
+never re-counted. `top_improvements` and `highest_leverage_change` MUST be finding ids -- EXCEPT
+the zero-findings case: if `findings[]` is empty, set `top_improvements: []` and
+`highest_leverage_change: null` (a valid, honest result -- the disposition still lives in
+`sequencing_verdict.frame`). A finding that surfaces from a Q6-discovered gap with no matching
+rubric cell may set `dimension: n/a`.
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates, and state why it would FAIL if
@@ -423,7 +460,9 @@ An unratified-but-sound frame is typically NOT critical -- the defect is the *ab
 conscious record*, whose natural remedy is `ratify_with_reversal_conditions`, not a resequence.
 Let the evidence, not the word "unratified", set severity.
 
-**Maturity** -- compute LAST, per surface, top-down, first match wins. Pin these thresholds:
+**Maturity** -- compute LAST, per surface. Evaluate the ladder **in the order listed below,
+top-down; the FIRST predicate that matches wins** (so a surface with 0 critical / 0 high is
+`frontier`, not `strong`, because `frontier` is tested first). Pin these thresholds:
 - `frontier` = 0 open critical AND 0 open high findings on that surface.
 - `strong` = 0 critical AND <= 1 high.
 - `solid` = <= 1 critical.
@@ -447,7 +486,8 @@ framing must not foreclose it.
    `meta.contract_notes`, never fixed (write boundary).
 4. Commit with `git -c user.name=Claude -c user.email=noreply@anthropic.com commit --no-gpg-sign`
    (signing may be unavailable; that is expected). `git push -u origin HEAD`.
-5. Open the PR via `mcp__github__create_pull_request` (base=`main`, ready for review, title
+5. Open the PR via `mcp__github__create_pull_request` (derive `owner`/`repo` from
+   `git remote get-url origin`; base=`main`, ready for review, title
    `audit: platform-first sequencing frame (sequencing-frame, product-loop-feasibility)`, body =
    the `summary` block in a YAML fence plus a 2-3 sentence lede). Then **END THE TURN** -- do not
    poll, do not merge, do not subscribe.
