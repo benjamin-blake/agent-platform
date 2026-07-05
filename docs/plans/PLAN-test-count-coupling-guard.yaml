@@ -69,8 +69,10 @@ acceptance_criteria:
     validate_test_count_coupling is registered in BOTH registry.pre_sequence() and
     registry.full_sequence() and is resolvable as an attribute of scripts.validate.
   - >-
-    The guard detects a synthetic `assert len(TABLE_NAMES) == N` brittle assertion, passes a
-    derived assertion, and passes an assertion carrying a `# count-coupling-ok:` waiver.
+    The guard detects all three brittle shapes of the incident -- direct reference
+    (`len(TABLE_NAMES) == N`), aliased local (`entries = load_source_registry(); len(entries) == N`),
+    and string-subscript key (`len(g["source"]["registered_values"]) == N`) -- while passing a derived
+    assertion, a `# count-coupling-ok:` waived assertion, and a non-curated count (`len(rows) == 3`).
   - >-
     The guard reports zero violations when run against the real tests/ tree (all four current
     instances are fixed).
@@ -114,10 +116,10 @@ verification_plan:
     hermetic: true
   - step: 6
     phase: pre-deploy
-    action: The new module is lint-clean and within the SLOC/CC budget (Decision 102/43).
-    command: ruff check scripts/checks/hygiene/validate_test_count_coupling.py && bin/venv-python -m scripts.checks.sloc.cc_limits 2>/dev/null || ruff check scripts/checks/hygiene/validate_test_count_coupling.py
-    expected: ruff reports no errors on the new module; module stays under 500 SLOC / CC 20.
-    fix_if: ruff or the SLOC/CC gate flags the module -- simplify or split; do not add a waiver without cause.
+    action: The new module is lint-clean and within the SLOC budget (Decision 102/43; CC/SLOC gates also run registry-driven in the full tier).
+    command: ruff check scripts/checks/hygiene/validate_test_count_coupling.py && bin/venv-python -c 'import pathlib; n=len(pathlib.Path("scripts/checks/hygiene/validate_test_count_coupling.py").read_text(encoding="utf-8").splitlines()); assert n < 500, n; print(f"{n} raw lines (<500)")'
+    expected: ruff reports no errors; raw line count is under 500 (an upper bound on SLOC, so SLOC < 500 holds).
+    fix_if: ruff flags the module or line count >= 500 -- simplify or split; do not add a SLOC waiver without cause.
     hermetic: true
   - step: 7
     phase: post-deploy
@@ -150,6 +152,11 @@ constraints:
   - >-
     Guard scans tests/ only; the curated growth-prone collection set is defined inline in the
     guard module (collocate semantics with enforcement, AGENTS.md).
+  - >-
+    Detection-completeness (non-negotiable): the guard MUST catch the actual incident shapes, not just
+    direct references. It must flag aliased locals (name assigned from a curated source) and string
+    subscript keys (["registered_values"]), or the guard fails to prevent the exact defect it exists for.
+    The synthetic tests in tests/test_validate.py assert all three shapes are caught.
 context:
   - >-
     Root cause of all 5 recs -- one defect filed 5 times. config/agent/data_quality/source_registry.yaml
@@ -178,7 +185,7 @@ context:
     Decision-scout flag resolved: Decision 104 coverage-mapping NOTE -- scripts/checks/**/*.py maps to
     tests/test_validate.py for coverage attribution, so the guard's tests land in tests/test_validate.py
     (not a separate file). Decision 102/43 SLOC/CC note -- new module is small, trivially within budget.
-  - "gates: decision-scout=FLAGS_FOUND (flag resolved by locating guard tests in test_validate.py); plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND (flag resolved by locating guard tests in test_validate.py); plan-critique=PROCEED after 1 REVISE round (Risk 1 detection-blind-spot for aliased/subscript forms, Risk 2 tautological ops_writer composition + wrong constant name, Risk 3 VP step 6 masked-failure -- all addressed)"
   - >-
     Branch is on origin/main (0 behind, 0 ahead at planning time); no Main Divergence Assessment overlap.
 pre_implementation_checklist:
@@ -191,11 +198,18 @@ pre_implementation_checklist:
 execution_steps:
   - >-
     Create scripts/checks/hygiene/validate_test_count_coupling.py. Define an inline curated set of
-    growth-prone collection identifiers (e.g. {"load_source_registry", "registered_values",
-    "TABLE_NAMES", "TELEMETRY_TABLE_NAMES"}). Implement _find_violations(paths) that AST-parses each
-    test file, finds ast.Assert whose test is an ast.Compare of len(<expr>) Eq <int Constant>, extracts
-    the Name/Attribute identifiers referenced inside <expr>, and records a violation when any matches the
-    curated set AND the assert's source line(s) carry no `# count-coupling-ok:` marker. Wrap it in
+    growth-prone collection tokens: {"load_source_registry", "registered_values", "TABLE_NAMES",
+    "TELEMETRY_TABLE_NAMES", "_OPS_TABLE_NAMES", "_TELEMETRY_TABLE_NAMES"}. Implement
+    _find_violations(paths) that AST-parses each test file and, PER FunctionDef scope (plus module
+    scope), first builds a tainted-locals set: any local Name assigned from an RHS that references a
+    curated token is tainted (this is what makes `entries = load_source_registry(); assert len(entries)
+    == 35` detectable -- the plan-critique blind spot). Then find every ast.Assert whose test is an
+    ast.Compare of len(<expr>) Eq <int Constant>, and classify <expr> as curated-linked when ANY of:
+    (a) it references a curated Name/Attribute identifier; (b) it contains an ast.Call whose func name
+    is curated (e.g. load_source_registry()); (c) it contains an ast.Subscript whose slice is a string
+    Constant equal to a curated token (e.g. ["registered_values"]); (d) it is (or contains) a Name that
+    is tainted in the enclosing scope. Record a violation when curated-linked AND the assert's source
+    line(s) carry no `# count-coupling-ok:` marker. Wrap it in
     validate_test_count_coupling(failed: list[str]) -> None decorated with
     @registry.register("validate_test_count_coupling", owner="platform") that globs tests/**/*.py and
     appends a descriptive failure on any violation. Use scripts.checks._common for ROOT.
@@ -214,10 +228,16 @@ execution_steps:
     test_registered_values_has_35_entries and replace `== 35` with
     registered_values == [e["canonical_id"] for e in load_source_registry()].
   - >-
-    Fix tests/test_ops_writer.py:1173: replace `assert len(TABLE_NAMES) == 11` with
-    `assert len(TABLE_NAMES) == len(_OPS_TABLE_NAMES) + len(TELEMETRY_TABLE_NAMES)` and
-    `assert len(TABLE_NAMES) == len(set(TABLE_NAMES))`; import the two component constants if not already
-    in scope. Keep the adjacent sorted()/exclusion assertions.
+    Fix tests/test_ops_writer.py:1173: replace `assert len(TABLE_NAMES) == 11` with a uniqueness
+    invariant `assert len(TABLE_NAMES) == len(set(TABLE_NAMES))` PLUS a membership floor asserting the
+    known-required tables are a subset of TABLE_NAMES (e.g. the ops and telemetry tables the compact
+    path must cover). Do NOT use the composition identity len(A+B)==len(A)+len(B): TABLE_NAMES is
+    defined as _OPS_TABLE_NAMES + _TELEMETRY_TABLE_NAMES (ops_writer.py:84), so that comparison is a
+    list-length tautology that can never fail (violates the plan's own anti-tautology constraint). Note
+    the telemetry constant is imported into ops_writer as the underscore alias _TELEMETRY_TABLE_NAMES
+    (ops_writer.py:55/67) -- reference that alias or import from scripts.telemetry_schemas, not a bare
+    TELEMETRY_TABLE_NAMES. Keep the adjacent sorted(compact_calls)==sorted(TABLE_NAMES) and
+    "ops_recommendations" not in TABLE_NAMES assertions.
   - >-
     Fix tests/test_telemetry_schemas.py:428: replace `assert len(TELEMETRY_TABLE_NAMES) == 7` with a
     uniqueness invariant and a membership floor of the required telemetry table names (cross-checking the
@@ -228,9 +248,14 @@ execution_steps:
     against a production collection that grows by addition; use derivation / floor / uniqueness / wiring
     contract, or a justified `# count-coupling-ok: <reason>` waiver for deliberate tripwires.
   - >-
-    Add TestValidateTestCountCoupling to tests/test_validate.py with temp-file fixtures covering: a brittle
-    assertion against a curated symbol is flagged; a derived assertion is not flagged; a waived assertion is
-    not flagged; and the check name is present in both registry sequences.
+    Add TestValidateTestCountCoupling to tests/test_validate.py with temp-file fixtures covering ALL of:
+    (1) a direct-reference brittle assertion `assert len(TABLE_NAMES) == N` is flagged; (2) the aliased
+    incident shape `entries = load_source_registry(); assert len(entries) == N` is flagged (guards the
+    plan-critique blind spot); (3) the string-subscript shape
+    `assert len(g["source"]["registered_values"]) == N` is flagged; (4) a derived assertion (RHS not an
+    int literal) is NOT flagged; (5) an assertion carrying a `# count-coupling-ok:` waiver is NOT flagged;
+    (6) a non-curated exact-count `assert len(rows) == 3` is NOT flagged; and (7) the check name appears
+    in both registry sequences.
   - >-
     Execute the Verification Plan -- run each step; loop until pass. On any failure, fix on-branch and re-run;
     do not paper over (Decision 55).
