@@ -1,0 +1,361 @@
+schema_version: 1
+slug: "ci-role-iam-drift"
+intent: >-
+  Prevent recurrence of the CI-role IAM permission-drift class (rec-2363 and predecessors
+  rec-2223/2251/2276) with two structural guards: DRY-compose the shared CI-role refresh-read
+  surface from single aws_iam_policy_document sources so peer roles cannot silently drift, and a
+  credential-free validate.py invariant coupling ducklake-invoke to SSM-resolve. Hardens the
+  platform's IAM supply chain so autonomous CI never fails on a hand-authored permission gap.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-role-iam-drift.yaml
+phase: >-
+  Platform tier T2 (item T2.34, depends_on T2.21 speculative-plan -- landed). Closes T2.34:c1
+  (DRY policy composition) and T2.34:c2 (invoke-implies-resolve invariant).
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Convert the four CI-role inline policies (github_ci_branch, github_ci_pr, github_ci_plan,
+      github_ci_drift) from jsonencode(...) to data "aws_iam_policy_document" sources. Add
+      data.aws_iam_policy_document.ci_ssm_refresh_read (SSMParameterRead + SSMDescribeParameters,
+      sourced by all four roles) and data.aws_iam_policy_document.ci_full_refresh_read (the
+      20-statement refresh-read surface plan+drift currently hand-clone verbatim, with
+      source_policy_documents=[ci_ssm_refresh_read.json]; sourced by plan+drift). Each role policy
+      = source_policy_documents + role-specific statements. github_ci_pr GAINS read-only
+      ssm:Get*/Describe*/List* on parameter/agent-platform/* (universal invariant). IAM read Sids
+      stay enumerated with literal ARNs (Decision 35/98); trust/assume_role_policy blocks untouched.
+  - file: scripts/checks/iam_tf/validate_invoke_implies_resolve.py
+    action: Create
+    purpose: >-
+      New credential-free check module (Decision 104 thin-CLI architecture). Text-parses oidc.tf,
+      resolves source_policy_documents composition transitively, and fails CI if any CI role
+      granting lambda:InvokeFunction on the ducklake reader/writer does not also carry ssm:Get* on
+      parameter/agent-platform/*. Registered via @registry.register("validate_invoke_implies_resolve").
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Insert validate_invoke_implies_resolve into pre_sequence() and full_sequence() adjacent to the
+      other iam_tf checks (validate_iam_runner_policy, validate_authority_budget).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the facade re-export `from scripts.checks.iam_tf.validate_invoke_implies_resolve import
+      validate_invoke_implies_resolve` so `patch("validate.validate_invoke_implies_resolve")` and
+      `from scripts.validate import validate_invoke_implies_resolve` both resolve (dispatch path).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add unit tests for validate_invoke_implies_resolve (Decision 104 mapping: scripts/checks/**/*.py
+      tests live in tests/test_validate.py). Cover: PASS on the composed oidc.tf; FAIL on a fixture
+      where an invoking role's composition omits SSM; vacuous PASS for a non-invoking role;
+      composition resolution across source_policy_documents.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Update the frozen-baseline tuples FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE to include the new
+      ("check", "validate_invoke_implies_resolve") entry at the position matching registry.py (adjacent
+      to the iam_tf checks). map_source_to_test routes registry.py changes to this file and --pre runs
+      diff-aware pytest on it, so the frozen-equality assertions (test_pre_sequence_matches_frozen_baseline
+      / test_full_sequence_matches_frozen_baseline) and the all_checks()/facade-completeness assertions
+      break unless updated in lockstep with the registry insert.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground T2.34 files_in_scope (Freshness Gate stale-reference): replace the bare
+      scripts/validate.py entry with the real Decision 104 surface --
+      scripts/checks/iam_tf/validate_invoke_implies_resolve.py, scripts/checks/registry.py, and
+      tests/test_checks_registry.py (the frozen-baseline test the registry insert forces). Also annotate
+      c2's exit_criteria that the invariant is realized as a credential-free HCL text-parse (house-style,
+      forced by Decision 119's no-local-terraform-render constraint) rather than the literal "rendered
+      policy JSON" wording, so criterion text and realization agree. Roadmap-DATA reconciliation only; no
+      criterion status flip here (flips happen in /implement's bookkeeping walk on a verified VP pass).
+bundled_recommendations: []
+closes_criteria:
+  - "T2.34:c1"
+  - "T2.34:c2"
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf is IAM-sensitive. The four-role inline-policy change spans in-budget
+    roles (github_ci_branch, github_ci_pr carry the boundary) AND out-of-budget roles
+    (github_ci_plan, github_ci_drift are not in the IAMRoleWriteBounded target set), so the
+    deterministic guard (scripts/terraform_apply_guard.py) fail-closes and routes the WHOLE apply to
+    the human-gated tf-gated-apply GitHub Environment -- NOT sandbox auto-apply (Decision 92 pt 5 /
+    Decision 77). No trust-block change (assume_role_policy untouched).
+  - >-
+    terraform validate/plan is CI-delegated: terraform/personal uses the third-party kislerdm/neon
+    provider whose github.com checksum fetch is egress-blocked from a stock CC-web session (Decision
+    119). Local terraform steps are grep-only + `terraform fmt -check` ONLY when the terraform binary
+    is present. The required terraform-validate CI job and the speculative-plan job (PR comment +
+    predicted guard verdict) are the authoritative infra verifiers.
+  - >-
+    Data sources (data "aws_iam_policy_document") are not IAM resources and do not themselves trip the
+    guard; the guard classifies the resulting aws_iam_role_policy UPDATEs. Expected plan: in-place
+    UPDATE to all four aws_iam_role_policy resources (rendered-JSON statement order changes -- IAM is
+    order-insensitive) with the ONLY net grant addition being github_ci_pr's SSM read; zero removed
+    grants; no NEW allow on branch/plan/drift.
+acceptance_criteria:
+  - >-
+    (c1) In terraform/personal/oidc.tf, SSMParameterRead + SSMDescribeParameters exist in exactly one
+    place -- data.aws_iam_policy_document.ci_ssm_refresh_read -- and every role carrying SSM composes
+    it via source_policy_documents (no role re-declares those statements inline).
+  - >-
+    (c1) The 20-statement refresh-read surface shared by github_ci_plan and github_ci_drift is
+    composed from data.aws_iam_policy_document.ci_full_refresh_read via source_policy_documents in
+    both roles; neither role re-declares those statements inline (clone-drift structurally impossible).
+  - >-
+    (c1) IAMCIRolesRead and IAMPlatformRolesRead remain enumerated with literal role ARNs (no service
+    or path wildcard on iam: read actions) -- Decision 35/98 enumerate-IAM-reads preserved.
+  - >-
+    (c2) scripts/checks/iam_tf/validate_invoke_implies_resolve.py exists, is registered in both
+    registry.pre_sequence() and registry.full_sequence(), is facade-re-exported in scripts/validate.py,
+    and resolves source_policy_documents composition credential-free (no boto3/AWS call, no terraform
+    invocation).
+  - >-
+    (c2) The check FAILS (appends to `failed`) when a CI role grants lambda:InvokeFunction on the
+    ducklake reader/writer but its resolved composition lacks ssm:Get* on parameter/agent-platform/*,
+    and PASSES on the composed oidc.tf (all invoking roles -- branch, pr, drift -- resolve SSM).
+  - >-
+    `bin/venv-python -m scripts.validate --pre` and the targeted pytest for the new check both pass on
+    the branch; `terraform fmt -check` passes for terraform/personal (or SKIPs cleanly if terraform is
+    absent). --pre passing REQUIRES the tests/test_checks_registry.py frozen baselines be updated in
+    lockstep with the registry insert (map_source_to_test routes registry.py changes there and --pre runs
+    it diff-aware); `bin/venv-python -m pytest tests/test_checks_registry.py -q` passes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm SSM statements are DRY -- SSMParameterRead appears exactly once as a Sid in oidc.tf
+      (inside ci_ssm_refresh_read), not re-declared per role.
+    command: >-
+      cd /home/user/agent-platform && test "$(grep -c 'Sid *= *"SSMParameterRead"' terraform/personal/oidc.tf)" = "1"
+      && echo DRY-OK
+    expected: "Prints DRY-OK (exactly one SSMParameterRead Sid -- the shared source)."
+    fix_if: >-
+      Count > 1 means a role still re-declares SSM inline instead of composing ci_ssm_refresh_read;
+      convert it to source_policy_documents. Count 0 means the shared doc is misnamed/missing.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the shared refresh-read surface is composed, not cloned -- AthenaRead (a representative
+      member of the 20-statement surface) appears exactly once as a Sid (inside ci_full_refresh_read).
+    command: >-
+      cd /home/user/agent-platform && test "$(grep -c 'Sid *= *"AthenaRead"' terraform/personal/oidc.tf)" = "1"
+      && grep -q 'source_policy_documents' terraform/personal/oidc.tf && echo COMPOSED-OK
+    expected: "Prints COMPOSED-OK (one AthenaRead Sid; source_policy_documents present)."
+    fix_if: >-
+      Count > 1 means plan and drift still hand-clone the surface; move it into ci_full_refresh_read and
+      source it from both. Missing source_policy_documents means composition was not wired.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm Decision 35/98 preserved -- the iam: read actions are enumerated, with the CI-role ARNs
+      still listed literally (no wildcard collapse of IAMCIRolesRead).
+    command: >-
+      cd /home/user/agent-platform && grep -q 'agent-platform-github-ci-drift' terraform/personal/oidc.tf
+      && ! grep -Eq '"iam:(Get|List)\*"' terraform/personal/oidc.tf && echo ENUM-OK
+    expected: "Prints ENUM-OK (literal drift ARN present; no iam:Get*/iam:List* wildcard)."
+    fix_if: >-
+      If the drift ARN is gone or an iam: read wildcard appears, the extraction wildcarded IAM reads --
+      revert to enumerated literal ARNs per Decision 35/98.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Exercise the new c2 check against a synthetic VIOLATION (a role that invokes ducklake but whose
+      composition omits SSM) and assert it is reported as failed -- proves the guard catches real drift,
+      not just structure.
+    command: >-
+      cd /home/user/agent-platform && bin/venv-python -m pytest tests/test_validate.py
+      -k invoke_implies_resolve -q
+    expected: "All invoke_implies_resolve tests pass, including the negative (violation -> failed non-empty) case."
+    fix_if: >-
+      Negative case not caught -> the composition resolver or the InvokeFunction/ssm predicate is wrong.
+      PASS case failing -> composition of source_policy_documents is not being followed transitively.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run the c2 check against the REAL composed oidc.tf via the module entry (credential-free) and
+      assert a clean pass with no failures appended.
+    command: >-
+      cd /home/user/agent-platform && bin/venv-python -c "from scripts.checks.iam_tf.validate_invoke_implies_resolve import validate_invoke_implies_resolve as v; f=[]; v(f); print('FAILURES:', f); assert not f, f"
+    expected: "Prints FAILURES: [] and exits 0 (all invoking CI roles resolve SSM)."
+    fix_if: >-
+      Non-empty failures against the real file mean github_ci_pr (or another role) still lacks SSM in its
+      resolved composition -- wire ci_ssm_refresh_read into that role's source_policy_documents.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm the check is wired into both tiers and the facade re-export resolves (dispatch path
+      integrity), and terraform formatting is clean.
+    command: >-
+      cd /home/user/agent-platform && bin/venv-python -c "from scripts.checks import registry; names=[s.name for s in registry.pre_sequence()+registry.full_sequence()]; assert names.count('validate_invoke_implies_resolve')>=2, names; from scripts.validate import validate_invoke_implies_resolve; print('WIRED-OK')"
+      && { command -v terraform >/dev/null && terraform -chdir=terraform/personal fmt -check || echo 'fmt SKIPPED (no terraform binary)'; }
+    expected: "Prints WIRED-OK; terraform fmt -check passes or SKIPs cleanly."
+    fix_if: >-
+      Check absent from a sequence -> add it to registry.py. Import error -> add the facade re-export in
+      scripts/validate.py. fmt failure -> run `terraform fmt terraform/personal`.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Prove the frozen registry baselines were updated in lockstep with the registry insert -- run the
+      test_checks_registry.py frozen-equality + facade-completeness assertions (map_source_to_test routes
+      registry.py changes here and --pre runs it diff-aware).
+    command: >-
+      cd /home/user/agent-platform && bin/venv-python -m pytest tests/test_checks_registry.py -q
+    expected: "All frozen-baseline and facade-completeness tests pass (new check present in both sequences)."
+    fix_if: >-
+      test_pre_sequence_matches_frozen_baseline / test_full_sequence_matches_frozen_baseline fail -> the
+      FROZEN_PRE_SEQUENCE / FROZEN_FULL_SEQUENCE tuples were not updated to include
+      ("check", "validate_invoke_implies_resolve") at the registry.py position; update them. Facade or
+      all_checks assertion fails -> add the facade re-export in scripts/validate.py.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      CI-delegated infra verification (Decision 119): the required terraform-validate job is green and
+      the speculative-plan PR comment shows the predicted diff = in-place UPDATE of the four
+      aws_iam_role_policy resources with github_ci_pr's SSM read as the ONLY net grant addition and no
+      removed grants. Guard predicted verdict routes to gated-apply (Decision 92 pt 5).
+    command: >-
+      echo "Review on the PR: terraform-validate check == success; speculative-plan comment diff shows only the 4 role-policy UPDATEs + pr SSM add, no removals; predicted guard verdict = gated (tf-gated-apply)."
+    expected: >-
+      terraform-validate green; diff matches (no grant removed on any role; only pr gains SSM); apply
+      routes to the tf-gated-apply Environment reviewer.
+    fix_if: >-
+      terraform-validate red -> read the job log and fix the HCL. Diff shows a removed grant or a new
+      allow on branch/plan/drift -> a statement was dropped or mis-scoped in the extraction; reconcile
+      against the pre-change policy. If routed to sandbox auto-apply unexpectedly, re-check the guard
+      classification note in Context.
+constraints:
+  - >-
+    Only modify the seven files in Scope. Do NOT touch assume_role_policy / trust blocks, the bootstrap
+    apply role (terraform/bootstrap/github_ci_apply.tf), or platform_roles.tf -- the invariant is scoped
+    to the CI roles in oidc.tf (the apply role does not invoke ducklake; PlatformDev already carries a
+    narrower correct SSM grant).
+  - >-
+    Decision 35/98: IAM read statements stay ENUMERATED with literal role ARNs. The DRY refactor
+    composes/relocates statements only -- it must NEVER collapse iam: read actions or ARN lists into a
+    wildcard.
+  - >-
+    Decision 104: the check is a module under scripts/checks/iam_tf/ registered in registry.py with a
+    facade re-export in validate.py; its tests live in tests/test_validate.py (not a per-check test
+    file) per map_source_to_test.
+  - >-
+    Decision 119: no local `terraform validate`/`plan`/`init` for terraform/personal (kislerdm/neon
+    egress block). Local terraform verification is grep + `fmt -check` (fmt only when terraform is
+    present); validate/plan are CI-delegated to terraform-validate + speculative-plan.
+  - >-
+    Decision 55: the c2 check fails LOUD on a genuine invariant breach with a narrow, well-scoped
+    predicate -- never a silent bare-substring skip. No rescue agents or workaround loops.
+  - >-
+    Credential-free: the check must not import boto3, call AWS, or invoke terraform -- pure file parsing
+    so it runs in the fast --pre tier and in CI without creds.
+  - >-
+    Statement Sids across the composition must stay unique (branch/pr/plan/drift role-specific Sids must
+    not collide with the shared-document Sids), or aws_iam_policy_document will silently override by Sid.
+context:
+  - >-
+    rec-2363 (branch role missing SSM) and predecessors rec-2223/2251/2276 (github_ci_apply iterative
+    SSM/read discovery) are the drift instances this item makes structurally impossible. The runtime
+    coupling is real: src/common/iceberg_reader.py and scripts/ops_data_portal.py resolve the ducklake
+    Function URL via SSM /agent-platform/ducklake/* (resolution order #2, the fallback when the
+    DUCKLAKE_*_URL env is unset). A role that invokes without SSM loses that fallback.
+  - >-
+    Current ducklake-invoking CI roles in oidc.tf: github_ci_branch (reader+writer, has SSM),
+    github_ci_drift (writer, has SSM), github_ci_pr (reader+writer, NO SSM -- the sole current
+    violator, same class as rec-2363), github_ci_plan (does not invoke). The plan adds SSM to
+    github_ci_pr via the shared fragment, making c2's invariant hold universally with no exceptions.
+  - >-
+    INTENTIONAL EXPANSION (Decision 92 NOTE): github_ci_pr gains read-only ssm:Get*/Describe*/List* on
+    parameter/agent-platform/*. This is a permission expansion on a role that runs on pull_request
+    events -- accepted deliberately (read-only, path-scoped, mirrors the other invoking roles' fallback;
+    a security-review touchpoint recorded here per the scout's NOTE).
+  - >-
+    Verified 2026-07-05: the 20-statement refresh-read surface is byte-identical between github_ci_plan
+    and github_ci_drift today, so ci_full_refresh_read extraction is a zero-semantic-delta reconciliation.
+    plan-only Sids (TfplanWrite, DucklakeBuildInputsRead, DucklakeLambdaPackagesWrite) and drift-only
+    Sids (TfstateNativeLockFile, ConvergenceRecordWrite, DuckLakeWriterInvoke) stay role-specific;
+    TfstateRead is common to both and may go in ci_full_refresh_read or stay role-specific (both source
+    it) -- implementer's call, verify no diff either way.
+  - >-
+    Decision-scout verdict FLAGS_FOUND (80 of 80 triaged). CITE (verbatim decision ids): 98, 92, 77,
+    119, 35. RELATED: 84, 55, 100/75. Flag 1 (Decision 104 test path) resolved -> tests in
+    tests/test_validate.py. Flag 2 (Decision 92 apply route + pr SSM expansion) resolved -> recorded in
+    infrastructure_dependencies and this Context.
+  - "gates: decision-scout=FLAGS_FOUND (resolved) after 1 round; plan-critique=PROCEED after 3 rounds"
+  - >-
+    Rebase state (updated post-critique round 2, 2026-07-05): branch is 4 commits behind / 1 ahead of
+    origin/main and carries ONLY this plan doc, so the mechanical rebase (`git fetch origin main && git
+    rebase origin/main`; MANDATORY before push per git-ops, STOP on conflict) is clean. But the overlap is
+    NOT limited to ROADMAP: origin/main landed a new check `validate_vp_replay` across FOUR of this plan's
+    six scope files -- scripts/checks/registry.py, scripts/validate.py, tests/test_checks_registry.py, and
+    tests/test_validate.py -- i.e. the SAME check-registration edit class this plan performs. Consequence:
+    the FROZEN_PRE_SEQUENCE / FROZEN_FULL_SEQUENCE tuples and registry sequences quoted at planning time
+    are already STALE (they omit validate_vp_replay). Action at implement time: after the commit-flow
+    rebase, RE-READ those four files fresh and insert validate_invoke_implies_resolve relative to the
+    POST-rebase contents (do not rely on the planning-time snapshot). VP step 7 (`pytest
+    tests/test_checks_registry.py`) is the backstop -- it fails loudly if either check is missing or
+    misordered in the frozen tuples. ROADMAP overlap is a separate, different-section edit (main: T3.15
+    flip; branch: T2.34 re-grounding); the T2.34 entry itself is unchanged between refs, so c1/c2 targeting
+    stays valid -- re-confirm post-rebase.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-role-iam-drift-6btkui)
+  - docs/PROJECT_CONTEXT.md read
+  - Relevant decisions read via decision-scout (98, 92, 77, 119, 35, 84, 55, 104)
+  - All six files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "Confirmed: terraform validate/plan is CI-delegated (Decision 119); local tf steps are grep + fmt -check only"
+execution_steps:
+  - >-
+    In terraform/personal/oidc.tf, add data.aws_iam_policy_document.ci_ssm_refresh_read (the two SSM
+    statements: SSMParameterRead ssm:Get*/Describe*/List* on parameter/agent-platform/*, and
+    SSMDescribeParameters ssm:DescribeParameters on "*").
+  - >-
+    Add data.aws_iam_policy_document.ci_full_refresh_read containing the 20-statement shared refresh-read
+    surface (DataLakeBucketRead, AthenaRead, GlueRead, DynamoDBRead, IAMCIRolesRead, IAMPlatformRolesRead,
+    OIDCProviderRead, LambdaRead, EventBridgeRead, SNSRead, SNSSubscriptionRead, CloudWatchAlarmsRead,
+    CloudWatchLogsRead, SecretsManager* reads) with source_policy_documents=[ci_ssm_refresh_read.json].
+    Copy each statement's actions/resources verbatim from the current plan/drift policies; keep IAM reads
+    enumerated with literal ARNs.
+  - >-
+    Convert github_ci_plan and github_ci_drift to data "aws_iam_policy_document" sources with
+    source_policy_documents=[ci_full_refresh_read.json] plus their role-specific statements; set each
+    aws_iam_role_policy.policy = data.aws_iam_policy_document.<role>.json.
+  - >-
+    Convert github_ci_branch and github_ci_pr to data "aws_iam_policy_document" sources with
+    source_policy_documents=[ci_ssm_refresh_read.json] plus their role-specific statements. github_ci_pr
+    thereby GAINS the shared SSM read (the universal-invariant change).
+  - >-
+    Create scripts/checks/iam_tf/validate_invoke_implies_resolve.py: parse oidc.tf text, build the
+    aws_iam_policy_document name->statements map and the aws_iam_role_policy role->root-document map,
+    resolve source_policy_documents transitively, and for each role assert (invokes ducklake
+    reader/writer via lambda:InvokeFunction) => (carries ssm:Get* on parameter/agent-platform/*). Append
+    a descriptive message to `failed` on breach; print PASS otherwise. Decorate with
+    @registry.register("validate_invoke_implies_resolve", owner="platform").
+  - >-
+    Register validate_invoke_implies_resolve in registry.pre_sequence() and registry.full_sequence()
+    next to the other iam_tf checks; add the facade re-export line to scripts/validate.py.
+  - >-
+    Update tests/test_checks_registry.py: insert ("check", "validate_invoke_implies_resolve") into
+    FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE at the exact position matching the registry.py insert
+    (adjacent to the iam_tf checks), so the frozen-equality and facade-completeness assertions pass.
+  - >-
+    Add tests to tests/test_validate.py: PASS on the real composed oidc.tf; FAIL on an inline fixture
+    where an invoking role's composition omits SSM; vacuous PASS for a non-invoking role; a test proving
+    source_policy_documents composition is followed (SSM in a sourced doc satisfies the invariant).
+  - >-
+    Re-ground docs/ROADMAP-PLATFORM.yaml T2.34 files_in_scope: replace scripts/validate.py with
+    scripts/checks/iam_tf/validate_invoke_implies_resolve.py, scripts/checks/registry.py, AND
+    tests/test_checks_registry.py. Additionally annotate c2's exit_criteria so its "rendered policy JSON"
+    wording reflects the realized method -- a credential-free HCL text-parse (forced by Decision 119's
+    no-local-terraform-render constraint), so the criterion text and the implementation agree.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. terraform validate/plan is
+    CI-delegated: on push, confirm terraform-validate green and review the speculative-plan diff on the
+    PR (VP step 7). On unrecoverable V3 failure, stop and RCA (Decision 55) -- do not inline-patch.
+  - "Report: what was implemented (c1 composition + c2 check), local VP results, and the CI/speculative-plan outcome."
+work_areas: []
+rollback: >-
+  Pre-merge: revert the branch commits -- no infra applied yet (apply is gated post-merge). Post-apply
+  (gated-apply landed): the change is semantically equivalent to the prior policies except github_ci_pr's
+  added SSM read; to fully revert, re-apply the prior oidc.tf via the same gated-apply path. The c2 check,
+  registry entry, and facade re-export are pure code and revert with a normal git revert.
