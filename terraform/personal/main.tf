@@ -467,11 +467,17 @@ resource "null_resource" "drop_ops_recommendations_view" {
 resource "null_resource" "drop_ops_decisions_view" {
   triggers = {
     # Constant trigger so this runs exactly once and is stable on re-apply.
-    dropped_at = "2026-07-04-T2.26"
+    # Bumped 2026-07-05: the initial gated apply's local-exec failed (--profile with an empty
+    # value under CI's TF_VAR_aws_profile="" override -- see the %{if} guard below); this value
+    # forces one corrected re-run.
+    dropped_at = "2026-07-05-T2.26-retry"
   }
 
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
+    # --profile is omitted entirely when var.aws_profile is empty (CI sets TF_VAR_aws_profile=""
+    # so the OIDC credential env vars take effect) -- passing --profile with no value is an AWS
+    # CLI ParamValidation error, which on_failure=continue would otherwise mask as a silent no-op.
     command     = <<-EOT
       set -euo pipefail
       QID="$(aws athena start-query-execution \
@@ -479,8 +485,8 @@ resource "null_resource" "drop_ops_decisions_view" {
         --query-execution-context Database=${aws_glue_catalog_database.ops.name} \
         --work-group ${aws_athena_workgroup.production.name} \
         --region ${var.aws_region} \
-        --profile ${var.aws_profile} \
-        --query 'QueryExecutionId' \
+        %{if var.aws_profile != ""}--profile ${var.aws_profile} \
+        %{endif}--query 'QueryExecutionId' \
         --output text)"
       STATUS=RUNNING
       while [ "$STATUS" = "RUNNING" ] || [ "$STATUS" = "QUEUED" ]; do
@@ -488,8 +494,8 @@ resource "null_resource" "drop_ops_decisions_view" {
         STATUS="$(aws athena get-query-execution \
           --query-execution-id "$QID" \
           --region ${var.aws_region} \
-          --profile ${var.aws_profile} \
-          --query 'QueryExecution.Status.State' \
+          %{if var.aws_profile != ""}--profile ${var.aws_profile} \
+          %{endif}--query 'QueryExecution.Status.State' \
           --output text)"
       done
       if [ "$STATUS" != "SUCCEEDED" ]; then
@@ -517,11 +523,17 @@ resource "null_resource" "drop_ops_decisions_view" {
 resource "null_resource" "drop_ops_priority_queue_view" {
   triggers = {
     # Constant trigger so this runs exactly once and is stable on re-apply.
-    dropped_at = "2026-07-04-T2.26"
+    # Bumped 2026-07-05: the initial gated apply's local-exec failed (--profile with an empty
+    # value under CI's TF_VAR_aws_profile="" override -- see the %{if} guard below); this value
+    # forces one corrected re-run.
+    dropped_at = "2026-07-05-T2.26-retry"
   }
 
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
+    # --profile is omitted entirely when var.aws_profile is empty (CI sets TF_VAR_aws_profile=""
+    # so the OIDC credential env vars take effect) -- passing --profile with no value is an AWS
+    # CLI ParamValidation error, which on_failure=continue would otherwise mask as a silent no-op.
     command     = <<-EOT
       set -euo pipefail
       QID="$(aws athena start-query-execution \
@@ -529,8 +541,8 @@ resource "null_resource" "drop_ops_priority_queue_view" {
         --query-execution-context Database=${aws_glue_catalog_database.ops.name} \
         --work-group ${aws_athena_workgroup.production.name} \
         --region ${var.aws_region} \
-        --profile ${var.aws_profile} \
-        --query 'QueryExecutionId' \
+        %{if var.aws_profile != ""}--profile ${var.aws_profile} \
+        %{endif}--query 'QueryExecutionId' \
         --output text)"
       STATUS=RUNNING
       while [ "$STATUS" = "RUNNING" ] || [ "$STATUS" = "QUEUED" ]; do
@@ -538,8 +550,8 @@ resource "null_resource" "drop_ops_priority_queue_view" {
         STATUS="$(aws athena get-query-execution \
           --query-execution-id "$QID" \
           --region ${var.aws_region} \
-          --profile ${var.aws_profile} \
-          --query 'QueryExecution.Status.State' \
+          %{if var.aws_profile != ""}--profile ${var.aws_profile} \
+          %{endif}--query 'QueryExecution.Status.State' \
           --output text)"
       done
       if [ "$STATUS" != "SUCCEEDED" ]; then
