@@ -71,6 +71,12 @@ Per-candidate adjudication -- map each to exactly one outcome:
 - Generic hygiene with no specific trigger, or a target whose examination would not change any
   decision -> `rejected_candidates[]`, `classification: no-specific-trigger` or `low-leverage`.
 
+Category assignment: each finding carries exactly ONE `category`. When a trigger spans categories
+(e.g. a pending-CD premise is both a CAT-B roadmap construct and a CAT-C decision premise, or a
+stale premise is also a CAT-D framelock), assign the finding to the category of its PRIMARY trigger
+and name the secondary category in `why_now`. A single trigger yields a single finding -- DD-A and
+DD-B feed more than one question by design, but that does not license two findings for one trigger.
+
 You are expected to reject candidates -- a candidate dismissed with a named covering audit or a
 "no specific trigger" verdict is a successful adjudication, not a failure. Equally, you are
 expected to surface candidates NOT in Section 10.1: the seed list is a floor on your attention,
@@ -197,7 +203,9 @@ trigger inside an over-broad target is a finding once you narrow it.
 Answer each in `question_answers[]` (Section 14). Q1-Q4 each carry the pinned verdict enum
 `high-yield | moderate-yield | low-yield | already-covered` -- a portfolio judgment of how much
 audit-worthy material that category surfaced after adjudication. Each answer's `basis` lists the
-finding ids it rests on.
+finding ids it rests on. If a category yields zero findings after adjudication, say so explicitly
+in that question's `prose` and cite the `rejected_candidates` that explain why (dedup
+transparency); an empty `basis` is valid and expected in that case.
 
 - Q1 (CAT-A). Which repository areas carry specific, accumulated tension that a deep audit would
   resolve -- and which are stable enough that auditing them would waste the expensive model?
@@ -438,7 +446,7 @@ audit:
     - {q: Q3, verdict: ..., basis: [...], prose: ""}
     - {q: Q4, verdict: ..., basis: [...], prose: ""}
     - {q: Q5, verdict: slate-produced, basis: [<all slate finding ids>], prose: ""}   # points to audit_slate
-    - {q: Q6, answers: [{question: "", answer: "", basis: [<finding ids>]}]}          # seeds a-c + your own
+    - {q: Q6, answers: [{question: "", answer: "", basis: [<finding ids>]}]}          # seeds a-d + your own
   category_assessment:
     - {category: CAT-A, maturity: <derived, Section 15>, audit_density: "", top_candidates: [<finding ids>]}
     # one entry per category CAT-A..CAT-D
@@ -450,8 +458,9 @@ audit:
   audit_slate:                      # THE ranked deliverable Q5 points to; cross-category total order
     - {rank: 1, finding: CAND-01, category: CAT-x, one_line_scope: "",
        review_priority: critical|high|medium|low}
-    # rank is a strict 1..N total order over EVERY finding, ordered by review_priority, then VD2
-    # leverage, then observed above static at equal leverage (Section 15)
+    # rank is a strict 1..N total order over EVERY finding, ordered by review_priority, then
+    # trigger_kind (observed above static), then audit_size_estimate (smaller/cheaper first), then
+    # finding id ascending as the final deterministic breaker (Section 15); VD2 is NOT a sort key
   findings:
     - {id: CAND-01, category: CAT-A|CAT-B|CAT-C|CAT-D,
        target: "<the specific thing to audit: a path, an item-id, a Decision N, a CD.N>",
@@ -463,7 +472,7 @@ audit:
        payoff: "<what decision/direction a deep audit could change>",
        review_priority: critical|high|medium|low, priority_rationale: "",
        confidence: CONFIRMED|HYPOTHESIS,
-       dedup: {classification: unowned|partially-owned|recently-covered|owned,
+       dedup: {classification: unowned|partially-owned,
                owning_ids: [], search_terms: [], hit_count: 0, note: ""},
        audit_size_estimate: XS|S|M|L, depends_on: [<finding ids>]}
   rejected_candidates:
@@ -504,7 +513,8 @@ Invariants (state them as satisfied in `meta.contract_notes` if you deviate, wit
   `question_answers` are systems-of-record that REFERENCE finding ids, never re-counted.
   `audit_slate` must contain exactly one row per finding (a strict 1..N total order);
   `top_audit`, `top_three`, and `highest_leverage_candidate` MUST be finding ids.
-- CONFIRMED requires the trigger traced to a resolving `file:line` or an observed sampled artifact;
+- CONFIRMED requires the trigger traced to a resolving `file:line`, a resolving item-id (a `CD.N`,
+  `Decision N`, `OQ.N`, `KG.N`, or tier id that exists as cited), or an observed sampled artifact;
   anything less is HYPOTHESIS. A finding with no recorded dedup negative-search is HYPOTHESIS.
 - Every `dedup.classification: partially-owned` finding MUST name the surviving un-examined
   sub-area in `dedup.note`; every `recently-covered` / `owned` rejection MUST name the covering
@@ -522,10 +532,13 @@ inherited from this prompt's framing:
 - medium = a real trigger worth an audit, but the payoff is contained or speculative.
 - low = a clarity/consistency target; worth noting, low urgency.
 
-Rank driver: `audit_slate` orders findings by `review_priority` first, then by VD2 leverage, then
-`observed` above `static` at equal leverage. The `highest_leverage_candidate` in the summary is the
-finding whose deep audit would change the MOST currently-active work (Q6 seed c), which need not be
-rank 1 if rank 1 is critical-but-narrow.
+Rank driver: `audit_slate` orders findings by `review_priority` first; ties broken by
+`trigger_kind` (`observed` above `static`), then `audit_size_estimate` (smaller/cheaper first --
+higher decision-value per unit cost), then `finding id` ascending as the final deterministic
+breaker. This chain uses ONLY per-finding recorded attributes, so the 1..N order is reproducible;
+VD2 leverage is a per-CATEGORY portfolio rating (Section 8) and is NOT a slate sort key. The
+`highest_leverage_candidate` in the summary is the finding whose deep audit would change the MOST
+currently-active work (Q6 seed c), which need not be rank 1 if rank 1 is critical-but-narrow.
 
 Maturity -- compute LAST, per category, top-down, first match wins. This measures how well the
 EXISTING governance already tends each category's audit space (higher = less need for new audits
@@ -543,15 +556,17 @@ match.
 
 ## 16. COMMIT / PR MECHANICS
 
-1. Derive the base ONCE: `git fetch origin main` then `git rev-parse --short origin/main`. Call
-   this `<sha>`. You branch FROM this commit (step 2), so it IS the audited tree; use `<sha>` --
-   one value everywhere -- in `meta.audited_commit`, both deliverable filenames, and the branch
-   name. IF `git fetch origin main` fails (offline): branch from your local `main` or current HEAD
-   instead and set `<sha>` to `git rev-parse --short HEAD` of that base, recording the substitution
-   in `meta.contract_notes`. In all cases `<sha>` is the short sha of the commit you actually
-   branch from.
-2. `git switch -c audit/audit-scope-discovery-<sha> origin/main` so the PR diff is exactly your two
-   deliverable files. (This is a deliberate, documented exception to the AGENTS.md `claude/*`
+1. Derive the base ONCE (you already computed it in Section 5 setup: `git fetch origin main` then
+   `git rev-parse --short origin/main`). Call this `<sha>` and reuse the SAME value verbatim
+   everywhere -- `meta.audited_commit`, both deliverable filenames, and the branch name; do NOT
+   re-run `rev-parse` at commit time (the ref may have advanced; the audited tree is the commit you
+   read). IF `git fetch origin main` failed (offline): use your local `main` or current HEAD as the
+   base and set `<sha>` to `git rev-parse --short HEAD` of it, recording the substitution in
+   `meta.contract_notes`. In all cases `<sha>` is the short sha of the commit you actually branch
+   from.
+2. `git switch -c audit/audit-scope-discovery-<sha> <sha>` -- branch from the exact pinned commit,
+   NOT the moving `origin/main` ref -- so the PR diff is exactly your two deliverable files. (This
+   is a deliberate, documented exception to the AGENTS.md `claude/*`
    session-branch rule: the audit session needs a clean two-file diff off the audited base. The
    never_on_main hook blocks writes only on `main`; an `audit/*` branch is writable. The CI
    signal-green-comment wake fires only on `claude/*` PRs and is irrelevant here -- you end your
