@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -11,12 +12,19 @@ import yaml
 class TestLoadSourceRegistry:
     """Tests for load_source_registry()."""
 
-    def test_returns_35_entries(self) -> None:
-        """load_source_registry() returns 35 canonical entries (includes cost_reconciliation)."""
-        from scripts.executor.rec_write_guidance import load_source_registry
+    def test_entry_count_matches_independent_raw_text_scan(self) -> None:
+        """load_source_registry()'s entry count matches an independent raw-text scan of
+        source_registry.yaml (regex, not yaml.safe_load -- catches a loader bug that a
+        second yaml.safe_load() cross-check could not), and canonical_ids have no dupes."""
+        from scripts.executor.rec_write_guidance import _DEFAULT_REGISTRY, load_source_registry
 
         entries = load_source_registry()
-        assert len(entries) == 35
+        raw_text = _DEFAULT_REGISTRY.read_text(encoding="utf-8")
+        raw_count = len(re.findall(r"^\s*-\s*canonical_id:\s*\S+", raw_text, re.MULTILINE))
+        assert len(entries) == raw_count
+
+        canonical_ids = [e["canonical_id"] for e in entries]
+        assert len(canonical_ids) == len(set(canonical_ids))
 
     def test_entries_have_required_keys(self) -> None:
         """Every entry has canonical_id, description, signal_interpretation, added_date."""
@@ -40,7 +48,7 @@ class TestLoadSourceRegistry:
         rec_write_guidance._load_registry_cached.cache_clear()
         try:
             entries = rec_write_guidance.load_source_registry(registry)
-            assert len(entries) == 1
+            assert len(entries) == 1  # count-coupling-ok: controlled 1-entry tmp-path fixture, not a growing collection
             assert entries[0]["canonical_id"] == "test-agent"
         finally:
             rec_write_guidance._load_registry_cached.cache_clear()
@@ -108,12 +116,13 @@ class TestGetRecWriteGuidance:
         assert isinstance(registered, list)
         assert "planning" in registered
 
-    def test_registered_values_has_35_entries(self) -> None:
-        """'registered_values' list has 35 registry entries (includes cost_reconciliation)."""
-        from scripts.executor.rec_write_guidance import get_rec_write_guidance
+    def test_registered_values_matches_source_registry_canonical_ids(self) -> None:
+        """'registered_values' is exactly the canonical_ids from load_source_registry() --
+        a wiring-contract cross-check, not a hardcoded count, so it tracks registry growth."""
+        from scripts.executor.rec_write_guidance import get_rec_write_guidance, load_source_registry
 
         guidance = get_rec_write_guidance()
-        assert len(guidance["source"]["registered_values"]) == 35
+        assert guidance["source"]["registered_values"] == [e["canonical_id"] for e in load_source_registry()]
 
     def test_other_columns_have_description_and_semantics(self) -> None:
         """Non-source columns also carry description and semantics."""

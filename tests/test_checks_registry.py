@@ -55,6 +55,7 @@ FROZEN_PRE_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("check", "validate_cc_limits"),
     ("check", "validate_sloc_limits"),
     ("check", "validate_subprocess_encoding"),
+    ("check", "validate_test_count_coupling"),
     ("check", "validate_intent_doc_freeze"),
     ("check", "validate_contract_drift"),
     ("check", "validate_field_semantics_drift"),
@@ -77,6 +78,7 @@ FROZEN_FULL_SEQUENCE: tuple[tuple[str, str], ...] = (
     # run_python_checks()
     ("scaffold", "lint"),
     ("check", "validate_subprocess_encoding"),
+    ("check", "validate_test_count_coupling"),
     ("check", "validate_sys_executable"),
     ("check", "validate_cli_tools_in_prompts"),
     ("check", "validate_imports"),

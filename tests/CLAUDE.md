@@ -19,6 +19,27 @@ When `scripts/executor/postflight.py` adds a new `subprocess.run` call inside an
 - After **removing** a test class: run `ruff check --fix` to catch unused imports (F401).
 - After **adding** a test class: verify all modules used in `side_effect=` or assertions are imported at module scope.
 
+## Test-count coupling (hardcoded exact-count assertions)
+- Never assert an exact `len(X) == N` (or Yoda `N == len(X)`) against a production collection
+  that grows by addition (e.g. a registry loaded from YAML, a table-name list). The collection
+  grows, the literal doesn't, and the assertion breaks CI on the next addition -- often on a
+  PR that never touched the test file, so the `--pre` diff-aware tier never selects it and the
+  break only surfaces post-merge (see rec-2572..2576).
+- Instead: derive independently (cross-check against a raw-text scan or a different SoT),
+  assert a growth-safe invariant (uniqueness via `len(X) == len(set(X))`, a membership floor
+  of required entries), or assert a wiring contract (`derived_list == [transform(e) for e in
+  source()]`).
+- Never derive a count by re-parsing the exact same structured source the code path already
+  uses (tautological), and never cross-check `len(A + B) == len(A) + len(B)` when the composite
+  is literally the concatenation of its parts -- that's an always-true list identity, not an
+  independent check.
+- For a deliberately-sized fixture that is genuinely controlled (not a growing production
+  collection) but incidentally touches a curated collection, add a
+  `# count-coupling-ok: <reason>` waiver comment on the assert's line rather than deriving.
+- Enforced by `scripts/checks/hygiene/validate_test_count_coupling.py` (both `--pre` and full
+  presubmit tiers, Decision 104) -- scans `tests/**/*.py` for the pattern, including aliased
+  locals tainted by a curated loader call and string-subscript keys into a curated field.
+
 ## Acceptance command rules (when filing recommendations from tests)
 - No `pytest -k` selectors in acceptance commands — LLM-generated test names are unpredictable and rename between runs. Use `grep` to verify the test exists, then run via `pytest tests/test_file.py::ClassName`.
 - Acceptance commands must not contain `python -c` one-liners (shell-quoting fragility).

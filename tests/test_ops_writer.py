@@ -1154,7 +1154,7 @@ class TestOpsWriterEmit:
 
 
 class TestOpsWriterCompactAllIncludesTelemetry:
-    """compact_all() covers all 11 tables (4 ops + 7 telemetry; ops_recommendations excluded post-T2.19)."""
+    """compact_all() covers all ops + telemetry tables (ops_recommendations excluded post-T2.19)."""
 
     def test_compact_all_includes_telemetry_tables(self):
         from scripts.ops_writer import TABLE_NAMES
@@ -1170,7 +1170,21 @@ class TestOpsWriterCompactAllIncludesTelemetry:
             result = writer.compact_all()
 
         assert sorted(compact_calls) == sorted(TABLE_NAMES)
-        assert len(TABLE_NAMES) == 11  # 4 ops (excl. recs) + 7 telemetry -- T2.19 cutover
+        assert len(TABLE_NAMES) == len(set(TABLE_NAMES))  # no duplicate table names
+        required_tables = {
+            "ops_execution_plans",
+            "ops_session_log",
+            "ops_decisions",
+            "ops_priority_queue",
+            "telemetry_sessions",
+            "telemetry_phases",
+            "telemetry_steps",
+            "telemetry_process_events",
+            "telemetry_model_calls",
+            "telemetry_transcripts",
+            "telemetry_agent_invocations",
+        }
+        assert required_tables.issubset(TABLE_NAMES)  # membership floor -- grows by addition only
         assert "ops_recommendations" not in TABLE_NAMES  # recs excluded (Decision 81 cl.7)
         assert "telemetry_sessions" in compact_calls
         assert "telemetry_agent_invocations" in compact_calls
