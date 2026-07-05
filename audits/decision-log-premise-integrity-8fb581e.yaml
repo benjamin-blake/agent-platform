@@ -1,0 +1,653 @@
+audit:
+  meta:
+    audited_commit: 8fb581e
+    base_branch: main
+    model: claude-fable-5
+    methodology_version: 1
+    scope_surfaces: [docs/DECISIONS.md]
+    degraded_dedup: false
+    contract_notes: >-
+      Cache generation succeeded (session_preflight full; 692 open recs in logs/.recommendations-log.jsonl).
+      Discovery not named by the prompt: docs/DECISIONS_ARCHIVE.md contains three additional numbered
+      entries -- Decisions 52 (:1481), 53 (:1453), 54 (:1432) -- as h3 ('### Decision NN:') headers nested
+      after the archive's Decision 26 section. They are visible to the ETL parser (scripts/decisions_md.py:22,
+      '#{2,3}') but INVISIBLE to the R1 ratification guard (validate_candidate_decision_ratification.py:22,
+      h2-only '^## Decision'). Counted as archive keyspace peers; see DPI-07. rec-1964 (renumber duplicate
+      Decision 72 entries) appears already satisfied at HEAD: exactly one '## Decision 72:' header exists.
+    stale_anchors:
+      - "Prompt anchor 'Decision 68 @ :2499' -- header is at docs/DECISIONS.md:2475; :2499 is its migration-update blockquote."
+      - "Prompt anchor 'Decision 26 @ docs/DECISIONS.md:3134' resolves; archive peer at DECISIONS_ARCHIVE.md:1404 resolves; both confirmed."
+      - "Prompt structural figure '~18 archived ## Decision headers' matches the 18 h2 headers but omits the 3 h3 entries (52/53/54); recorded in contract_notes."
+      - ".claude/skills/decision-scout/SKILL.md Phase-1 quotes live-header count 'currently 67'; re-derived count at HEAD is 81 (observed fact only; out of scope as a finding)."
+  question_answers:
+    - q: Q1
+      verdict: localized-drift
+      basis: [DPI-02, DPI-05]
+      prose: >-
+        Full sweep of all 81 live '## Decision NNN:' headers (none inside code fences; verified).
+        64 premise-live, 6 dead-but-annotated, 11 dead-unannotated, 0 indeterminate. Every
+        dead-unannotated entry sits in the pre-Decision-77 band (Decisions 23-74); every entry from
+        Decision 75 onward is either premise-live or carries an explicit annotation (inline
+        [CORRECTED/RESTATED by ...], migration-update blockquote, or status-line supersession marker).
+        The drift is therefore localized to the early band, not systemic across the corpus -- but the
+        CAUSE (no mechanical invariant) is systemic and is Q2's verdict. Raised-stakes members of the
+        dead-unannotated set: Decision 40's moot trigger conditions are still cited as live by
+        ROADMAP-PRODUCT.md:755; Decision 58 is still cited as canonical by a live tier-item intent
+        (ROADMAP-PLATFORM.yaml:7819); Decision 44 is cited as the boundary authority by live enforcement
+        code (config/agent/executor/capabilities.yaml:1) despite supersession by Decision 117; Decision
+        35's unconditional "no auto-apply" is inverted for sandbox by Decision 77 with no victim marker.
+      premise_class_counts: {premise-live: 64, dead-but-annotated: 6, dead-unannotated: 11, indeterminate: 0}
+      archive_eligible_count: 8
+    - q: Q2
+      verdict: insufficient
+      basis: [DPI-01]
+      prose: >-
+        The absence of a mechanical supersession-annotation invariant is a real gap. The practice is
+        demonstrably ad hoc: ~11 victims carry an annotation in one of three shapes (Decision 42 status
+        line; Decisions 24/60/62/68/71 blockquotes; Decisions 67/89/92 and the Decision-70-mis-cite trio
+        inline amendments) while 11 victims of equally-real supersessions carry none -- grep-verified
+        zero mention of the superseder in the bodies of Decisions 35, 37, 40, 43, 44, 49, 58, 80.
+        No check in scripts/checks/** or scripts/validate.py mentions supersession (repo-wide search,
+        confirmed absent); validate_candidate_decision_ratification.py validates only CD->header pointers.
+        The invariant is specified concretely in DPI-01; the point-fix recs (rec-2057/2058/2059,
+        rec-917/918) annotate single instances and cannot catch the next one.
+    - q: Q3
+      verdict: cosmetic-drift
+      basis: [DPI-03, DPI-06]
+      prose: >-
+        Canonical rule re-derived from the dec-086..dec-121 Warehouse ID line text and Decision 105
+        (:554, reconciliation :581-583): dec-NNN = the entry's own decision number zero-padded to 3
+        digits. 43 in-file lines exist: 35 conform (dec-086..dec-121, contiguous except the absent
+        dec-089); 7 carry retired 4-digit writer-era ids (D77:1938=dec-1083, D78:1911=dec-1085,
+        D79:1881=dec-1086, D80:1853=dec-1088, D81:1756=dec-1089, D83:1665=dec-1090, D85:1615=dec-1091);
+        1 collides (D75:2038 claims dec-081, the canonical id of Decision 81, whose own line reads
+        dec-1089). 38 entries carry no line, including modern-band D82, D84 (the decision that defines
+        the keying!), and D89 (owned by rec-2278). The backfill ETL is PROVABLY IMMUNE: it keys on the
+        header number (scripts/decisions_md.py:90 int(m.group(1)); ops_data_portal.py:1366
+        dec-{n:03d}) and never parses the Warehouse ID line -- hence cosmetic-drift, not
+        keyspace-hazard. The residual hazard is agent-mediated: update_decision() (ops_data_portal.py:
+        1407) accepts a caller-supplied string id, so an agent trusting D75's line and calling
+        update_decision("dec-081") would pass the referential check against Decision 81's real row and
+        silently corrupt it. The file also contradicts the canonical rule Decision 105 itself
+        established, in the same file.
+    - q: Q4
+      verdict: insufficient
+      basis: [DPI-04, DPI-05]
+      prose: >-
+        Non-(Decided) header statuses at HEAD: D26 "(Agent-decided -- pending review)" (perpetual since
+        March 2026, ~3 months unresolved); D27 "(Agent-decided -- approved)" (nonstandard vocabulary);
+        D40 "(Decided, Deferred)" (trigger conditions moot: Copilot SDK retired by D49->D116, Bedrock
+        retired by CD.28, and the drafted superseding decision in INTENT-provider-agnostic-executor.md:3
+        was never filed); D67 "(Amended - Partially Active)" (legitimate, well-maintained); D49/D55
+        headers carry only "(Supersedes Decision NN)" with no status; D70 has no header suffix at all.
+        The stated archival policy (docs/PROJECT_CONTEXT.md:18: "DECISIONS.md keeps only open decisions
+        (resolved decisions archived to DECISIONS_ARCHIVE.md)", crediting strategic_review) has NO
+        enforcer: session_preflight.py:1746-1786 computes an advisory open_decisions_count and a
+        strategic_review_due flag; no validate.py check exists. Practice contradicts the policy: the H1
+        (docs/DECISIONS.md:1) reads "# Open Decisions" over 74 "(Decided)" entries. Recommended
+        dispositions (human disposes) are enumerated in DPI-04.
+    - q: Q5
+      verdict: insufficient
+      basis: [DPI-01, DPI-03, DPI-05]
+      prose: >-
+        Two properties missed, three partial; roll-up is insufficient. Details per property below.
+        The record's strengths against conventions are real: entries are retained not mutated,
+        superseders name their targets in headers, and the modern band's annotation discipline
+        (amend-in-place with dated inline markers) exceeds typical ADR practice.
+      external_checklist:
+        - property: status-lifecycle
+          rating: partial
+          evidence: >-
+            74/81 headers carry (Decided); 7 stray statuses including one perpetual "pending review"
+            (D26, :3134). Property-matched compensating control: session_preflight.py:1746-1753 counts
+            non-Decided/Resolved/Closed headers every session and surfaces the count -- it exercises
+            exactly this property and its output (open_decisions_count > 0 indefinitely) is currently
+            failing-visibly; it is advisory, not gating, which is why the rating is partial not met.
+        - property: immutability-with-supersession-links
+          rating: partial
+          evidence: >-
+            Immutability holds everywhere observed: superseded entries are retained (D42 body preserved
+            per D90; archive retains full text). Links are ad hoc: 11 victims carry a forward link, 11
+            carry none (Q2). Compensating control: the archive convention "(Superseded by Decision NN)"
+            in headers (DECISIONS_ARCHIVE.md:7,30,64,94,148,187) exercises the link property for
+            archived victims and would fail (no pointer) if the convention lapsed -- but it covers only
+            entries that were moved.
+        - property: stable-unique-identifiers
+          rating: missed
+          evidence: >-
+            Decision number 26 is claimed by two divergent entries (live :3134, "Agent-decided --
+            pending review", 2-chat model detail; archive :1404, "(Decided)", condensed) -- the
+            identifier does not resolve to exactly one record, and the ETL silently drops the archive
+            version (decisions_md.py:91-92 first-wins). Compounded by the display-layer dec-081
+            double-claim (DPI-03). No control exercises number uniqueness (the parser's first-wins
+            dedup MASKS the defect rather than failing on it -- it is not a property-matched control).
+        - property: single-writer-numbering-authority
+          rating: partial
+          evidence: >-
+            Numbering authority is DECISIONS.md human assignment (Decision 84 I-2). Parallel-branch
+            collisions have occurred and the merge-time renumbering practice caught them: D77 carries
+            "renumbered from 76" (:1938), D85 carries a **Renumbering note:** (:1616), and the
+            duplicate-72 and duplicate-69 instances were renumbered (rec-1964's target no longer
+            reproduces; D89 is the renumbered 69). That practice is the property-matched control -- it
+            exercises collision resolution and demonstrably fired -- but it is human-memory, and one
+            collision (26) escaped it.
+        - property: supersession-bidirectionality
+          rating: missed
+          evidence: >-
+            Superseder->victim is reliably discoverable (headers: D116/D117 name targets; D105/D114
+            in-title). Victim->superseder is absent on 11 of ~22 traced supersession edges (grep-zero
+            superseder mentions in D35/D37/D40/D43/D44/D49/D58/D80 bodies, plus D23/D26/D38/D74). No
+            compensating control exercises the reverse direction.
+    - q: Q6
+      answers:
+        - question: >-
+            Does the DECISIONS.md -> ops_decisions backfill silently tolerate a duplicate or colliding
+            dec-NNN, so a keyspace defect is invisible downstream?
+          answer: >-
+            CONFIRMED (statically determinable), with a nuance: tolerance is FIRST-parsed-wins, not
+            last-writer-wins. scripts/decisions_md.py:91-92 ('if decision_id in seen: continue')
+            silently drops any later entry bearing an already-seen number, with no log line; the live
+            file is parsed before the archive (:17-20), so live-26 wins and archive-26 never reaches
+            the warehouse. backfill_decisions_from_md (ops_data_portal.py:1442-1476) then upserts each
+            surviving number (write_ops on dec-{n:03d}), so downstream state is always self-consistent
+            and the collision leaves no trace. A keyspace defect in the md file is therefore invisible
+            in ops_decisions. DPI-06 specifies the detection control.
+          basis: [DPI-05, DPI-06]
+        - question: >-
+            Does ops_decisions (or its backfill logic) admit rows with no live-or-archived
+            '## Decision NNN:' entry (orphan rows)?
+          answer: >-
+            CONFIRMED for the mechanism: the backfill is upsert-only -- there is no delete or
+            full-table reconciliation against the parsed set (backfill_decisions_from_md writes and
+            _sync_table pulls the cache; nothing removes warehouse rows absent from the parse). A
+            renumbered or deleted header permanently strands its old row. Whether orphans EXIST today
+            (e.g. the retired dec-1083..dec-1091 writer-era rows Decision 105 calls retired) is not
+            statically determinable from the repo -- the warehouse cache is gitignored -- so the
+            existence sub-answer is HYPOTHESIS; the admission mechanism is CONFIRMED.
+          basis: [DPI-06]
+        - question: >-
+            Are there live entries whose premise is not dead but whose CONCLUSION was quietly reversed
+            or amended by a later Decision without either entry annotating the other (silent overturns)?
+          answer: >-
+            Three encountered during the P2 sweep (no exhaustive pairwise pass was run; a fuller pass
+            would need more budget): (1) Decision 43's SLOC-waiver row -- "waiver comment => exempt
+            from the 500-SLOC cap" -- is INVERTED by Decision 102 ("no longer authorises unbounded SLOC
+            growth"); D43's body (:2777-2812) never mentions 102. Counted in the Q1 dead-unannotated
+            set. (2) Decision 78 clause 3 names RDS PostgreSQL as the catalog backend, superseded by
+            Neon (CD.34/Decision 107); clause 9 carries an inline note for its own amendment but clause
+            3 carries none -- a reader of D78 alone gets the wrong catalog backend. (3) Decision 80
+            point 3 (validate.py decomposition direction) is partially superseded by Decision 104
+            (header says so); D80's body (:1849-1873) never mentions 104. Only (1) reaches the
+            dead-unannotated bar; (2) and (3) are clause-level and their core premises stand.
+          basis: [DPI-02]
+        - question: >-
+            Does any live entry cite, as a live constraint, another entry that is itself archived or
+            superseded (stale transitive citation)?
+          answer: >-
+            Inside DECISIONS.md itself the modern practice is good -- e.g. D121:58 cites archived
+            Decision 52 explicitly labeled "archived context, not a live governing decision", and D61's
+            references to D50/D51 carry "(superseded by Decision 78)" inline. The stale transitive
+            citations found are on GOVERNING SURFACES OUTSIDE the file: ROADMAP-PLATFORM.yaml:7819
+            (tier-item intent: "Per Decision 58, .agents/ is the canonical interactive workflow layer"
+            -- superseded by Decision 76) and ROADMAP-PRODUCT.md:755 ("Implementation is triggered by
+            conditions defined in Decision 40" -- conditions moot). Also observed: live code comments
+            cite "Decision 37" for the Neon DSN Secrets-Manager runtime-fetch
+            (src/common/ducklake_runtime.py:200, src/lambdas/ducklake_catalog_dr/handler.py:4) --
+            Decision 37 governs GitHub-Models scheduled agents and only establishes the
+            PAT-in-Secrets-Manager precedent; whether these are deliberate precedent-cites or mis-cites
+            is not decidable from text: HYPOTHESIS, flagged for the human.
+          basis: [DPI-02]
+        - question: >-
+            (Extension) Are the three victim-annotation shapes machine-discoverable, so the DPI-01
+            invariant is actually checkable?
+          answer: >-
+            Yes. All observed shapes contain the superseder's decision number inside the victim's block:
+            header/status-line suffix "(Superseded by Decision NN)" (D42:2874, archive headers),
+            blockquote "> **... migration update/amendment:**" naming the superseding Decision/CD
+            (D68:2499, D71:2231, D62:2652), and inline bracketed amendments "[CORRECTED/RESTATED by
+            Decision NN ...]" (D92:1363, D67:2518, D84/D87/D103 mis-cite trio). A checker that asserts
+            "victim block contains the superseder's number" is therefore sufficient for all existing
+            practice -- no new markup needs inventing (DPI-01 spec).
+          basis: [DPI-01]
+        - question: >-
+            (Extension) Is the archive file structurally guarded, given it is the R1 guard's referential
+            peer and the ETL's second input?
+          answer: >-
+            No. Decisions 52/53/54 sit as h3 headers nested after the archive's Decision 26 section
+            (DECISIONS_ARCHIVE.md:1432/1453/1481) -- inside the region the archive's own layout implies
+            belongs to Decision 26. Two consumers parse the same file with different grammars: the ETL
+            sees h2+h3 (decisions_md.py:22), the R1 guard sees h2 only
+            (validate_candidate_decision_ratification.py:22). Today no ratified CD points at dec-052/053/054
+            so the divergence is latent; a future CD ratifying against one of them would false-FAIL R1
+            while the warehouse row exists. DPI-07.
+          basis: [DPI-07]
+  per_surface_assessment:
+    - surface: docs/DECISIONS.md
+      maturity: solid
+      strengths: >-
+        The modern band (Decision 75 onward, and especially 86+) is a genuinely strong decision record:
+        stable number-keyed identity synced to the warehouse, superseders that name their targets in
+        headers, dated inline amendment markers on corrected clauses (D92/D67/D95-restatement), a
+        working merge-time renumbering practice with written provenance (D77, D85), and an ETL that is
+        immune to display-metadata drift because it keys on header numbers. Immutability is respected
+        throughout -- nothing observed was silently mutated or dropped from git.
+      top_gaps: [DPI-01, DPI-02, DPI-03, DPI-04, DPI-05]
+  rubric_ratings:
+    - surface: docs/DECISIONS.md
+      dimension: VD1
+      rating: adequate
+      evidence: "docs/DECISIONS.md (81 headers; 64 live + 6 annotated = 86% live-or-annotated)"
+      note: "All 11 dead-unannotated entries are pre-Decision-77; the modern band is clean."
+    - surface: docs/DECISIONS.md
+      dimension: VD2
+      rating: weak
+      evidence: "docs/DECISIONS.md:2334 (D58), :2658 (D49), :2737 (D44), :2878 (D40) -- zero superseder mentions"
+      note: "11 of ~22 supersession edges lack a victim-side pointer; no control exists (confirmed absent in scripts/checks/**)."
+    - surface: docs/DECISIONS.md
+      dimension: VD3
+      rating: adequate
+      evidence: "scripts/decisions_md.py:90; docs/DECISIONS.md:2038 vs :1752"
+      note: "ETL number-keying is deterministic and collision-free; drift is confined to the display-layer Warehouse ID lines plus the duplicate number 26."
+    - surface: docs/DECISIONS.md
+      dimension: VD4
+      rating: weak
+      evidence: "docs/PROJECT_CONTEXT.md:18; docs/DECISIONS.md:1; scripts/session_preflight.py:1746"
+      note: "Stated archival policy unenforced and contradicted by practice; one perpetual pending-review status; 8 archive-eligible entries in the live set."
+    - surface: docs/DECISIONS.md
+      dimension: VD5
+      rating: weak
+      evidence: "Q5 external_checklist (2 missed, 3 partial)"
+      note: "stable-unique-identifiers and supersession-bidirectionality missed; the other three properties partial with named controls."
+  findings:
+    - id: DPI-01
+      surface: docs/DECISIONS.md
+      question: Q2
+      dimension: VD2
+      title: "No mechanical supersession-annotation invariant: a superseding Decision is not required to leave a forward pointer on its victim"
+      evidence: "scripts/checks/roadmap/validate_candidate_decision_ratification.py:22 (only header-parsing check; validates CD pointers only); repo-wide 'supersess' search over scripts/checks/** and scripts/validate.py returns nothing (confirmed absent)"
+      evidence_kind: observed
+      current_behavior: >-
+        Victim annotation is human-memory. It fired 11 times (D24/D42/D60/D62/D67/D68/D71/D89/D92 +
+        mis-cite amendments) and missed 11 times (D23/D26/D35/D37/D38/D40/D43-SLOC/D44/D49/D58/D74,
+        plus D80 point 3 clause-level). New supersessions (D116/D117, 2026-07-03) shipped with
+        annotated headers on the SUPERSEDER but nothing on victims D49/D44 -- the miss pattern is
+        current, not just historical.
+      ideal_behavior: >-
+        NS-B: every entry that declares "Supersedes Decision NN" / "amends Decision NN" (header or
+        body) is mechanically paired with a marker on the victim containing the superseder's number;
+        CI fails otherwise.
+      gap: "The invariant exists as practice on half the edges and as code nowhere."
+      compensating_controls_considered: >-
+        rec-2057/2058/2059 and rec-917/918 (open point-fix annotation recs) -- not property-matched:
+        each annotates named instances and cannot catch the next supersession; the treadmill's
+        existence (5+ standing recs) is itself evidence the control is manual. The R1 guard is
+        property-mismatched (validates CD->header existence, not victim pointers).
+      change_type: enforce
+      proposed_change: >-
+        SPECIFICATION (no code written by this audit). New check
+        scripts/checks/decisions/validate_supersession_annotations.py, registered owner="platform" in
+        the full tier (registry.py per Decision 104). Rule: (1) parse both decision files; build edges
+        superseder->victim from header titles and body phrases matching
+        r"(?:Supersedes|supersedes|amends|Amends|partially supersedes)\s+Decision\s+(\d+)" inside live
+        '## Decision' blocks; (2) for each edge, locate the victim block (live or archive); FAIL unless
+        the victim block contains the superseder's number in any annotation form (the plain string
+        "Decision {N}" suffices -- all three observed shapes satisfy this, per Q6 extension answer), or
+        the victim's own header carries "(Superseded by Decision {N})"; (3) allowlist file
+        (config/decision_supersession_waivers.yaml) for edges the human rules non-binding (e.g.
+        clause-level amends where the victim's core stands), so the gate starts green after the DPI-02
+        backfill without forcing annotations the human rejects. Inputs: docs/DECISIONS.md,
+        docs/DECISIONS_ARCHIVE.md, the waiver file. The check also FAILs on duplicate '## Decision N:'
+        numbers within the live file (co-owns DPI-06's live-file half).
+      acceptance: "bin/venv-python -m scripts.validate 2>&1 | grep -q 'supersession-annotation' && bin/venv-python -c \"from scripts.checks.decisions.validate_supersession_annotations import validate_supersession_annotations\""
+      severity: high
+      severity_rationale: >-
+        Absence of a control that would prevent recurrence, where the ad-hoc practice plus open
+        point-fix recs are an insufficient compensating control (they annotate one instance each; the
+        2026-07-03 D116/D117 supersessions still shipped without victim markers). Not critical: the
+        full-file consumer (decision-scout) usually sees the superseder alongside the victim, so a
+        materially-wrong trusted decision requires an additional reading failure.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["supersess", "annotat.*decision", "stale decision", "DECISIONS.md invariant", "scripts/checks supersess"]
+        dedup_hit_count: 0
+        note: "No rec or tier_item proposes a mechanical invariant; rec-2057/2058/2059/917/918 are instance annotations (cited as treadmill evidence, not owners)."
+      effort: S
+      depends_on: [DPI-02]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Check lands green only after DPI-02's annotation backfill (or with those edges waivered); spec is self-contained either way."}
+    - id: DPI-02
+      surface: docs/DECISIONS.md
+      question: Q1
+      dimension: VD1
+      title: "11 live entries carry dead or inverted premises with no victim-side annotation (systematic sweep result)"
+      evidence: "docs/DECISIONS.md:3319 (D23), :3134 (D26), :3102 (D35), :3057 (D37), :3019 (D38), :2878 (D40), :2777 (D43 SLOC row), :2737 (D44), :2658 (D49), :2334 (D58), :2089 (D74) -- each grep-verified to contain zero mention of its superseder/amender"
+      evidence_kind: observed
+      current_behavior: >-
+        Enumerated dead-unannotated set with the killing event per entry: D23 (agent/{slug} branching +
+        PLAN-*.md handoff, amended by D76/D85); D26 (2-chat model over .github/prompts artifacts deleted
+        at T-1.13; architecture superseded via D42->D90; also DPI-05); D35 (unconditional "no auto-apply"
+        scoped/inverted for sandbox by D77 cl.3; cited live by AGENTS.md:138 and terraform/CLAUDE.md:315,
+        both co-citing D77); D37 (GitHub-Models-API dispatch superseded by D116 routing; dispatcher
+        disabled per D116); D38 (copilot-instructions.md and 10-step implement.prompt.md deleted; only
+        the ghost-file guard survives, scripts/checks/contracts/validate_no_underscore_instructions.py);
+        D40 (Copilot SDK + Bedrock BYOK -- both retired, D49->D116 and CD.28; drafted supersession in
+        docs/INTENT-provider-agnostic-executor.md:3 never filed; ROADMAP-PRODUCT.md:755 still cites its
+        trigger conditions as live); D43 SLOC row (inverted by D102); D44 (superseded by D117, which
+        even says mechanism unchanged -- yet live code cites D44 as the authority,
+        config/agent/executor/capabilities.yaml:1); D49 (superseded by D116; substrate
+        copilot_sdk_client.py deleted); D58 (.agents canonical -- superseded by D76;
+        ROADMAP-PLATFORM.yaml:7819 still cites it as ground truth); D74 (self-hosted-runner npm/user_data
+        premise dead per CD.21; uniquely among its retired-runner peers 24/60/62/68/71 it received NO
+        migration-update blockquote; its workflow_dispatch half survives in .github/workflows/ci-rca.yml:14).
+      ideal_behavior: "NS-A: every live entry's premise is live, or the entry visibly says what killed it and points forward."
+      gap: "A decision-scout or human reader of any of these 11 entries in isolation is told a rule or substrate that HEAD has inverted or deleted."
+      compensating_controls_considered: >-
+        In-file co-presence of superseders (the consumer loads the whole file) -- partial mitigation,
+        property-matched only when the superseder names the victim prominently (true for D35<-D77,
+        D49<-D116, D44<-D117; absent for D38/D26/D74). AGENTS.md co-citation contextualizes D35.
+        Judged insufficient for the set as a whole: three of the victims are cited AS LIVE by governing
+        surfaces outside the file.
+      change_type: annotate
+      proposed_change: >-
+        One editing session: add the repo's existing annotation shapes to all 11 victims (blockquote or
+        status-suffix, each naming the superseding Decision/CD and date), using the D68/D71 blockquote
+        template for substrate retirements (D74, D38) and the D42 status-suffix for full supersessions
+        (D49, D58, D44, D23). For D40 additionally: either file the drafted superseding decision (per
+        INTENT-provider-agnostic-executor.md:3) or annotate "(triggers moot; supersession pending)" --
+        and fix the two out-of-file stale citations (ROADMAP-PLATFORM.yaml:7819, ROADMAP-PRODUCT.md:755)
+        in the same change. For D43, annotate the SLOC row "(amended by Decision 102 -- waiver no longer
+        exempts SLOC)".
+      acceptance: "for n in 23 26 35 37 38 40 44 49 58 74; do awk \"/^## Decision $n:/,/^## Decision [0-9]+:|^---$/\" docs/DECISIONS.md | grep -qE 'Superseded by|superseded by|amended by|migration update|moot' || echo MISSING-$n; done | wc -l | grep -qx 0"
+      severity: high
+      severity_rationale: >-
+        Dead-unmarked premises on currently-binding entries that steer planning inputs: D40's moot
+        triggers are cited as the activation condition of a product-roadmap track; D58 is cited as
+        canonical by a live tier-item intent; D44 is cited by live enforcement code as the boundary
+        authority. Not critical: no traced case where the wrong premise alone would produce an
+        irreversible wrong action (the apply-path readers of D35 all co-cite D77).
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [rec-2057, rec-2058, rec-2059, rec-917, rec-918]
+        dedup_search_terms: ["Annotate stale Decision", "stale path references", "Decision 44 citation", "Decision 65", "Decision 66"]
+        dedup_hit_count: 6
+        note: >-
+          Open point-fixes cover fragments: rec-2057 (D36/D37 no-IAM-users refs), rec-2058/2059
+          (archived 50/51/56/69 cross-refs + contract-doc sweeps), rec-917/918 (D66/D65 stale paths),
+          plus an open rec for the T3.15 stale D44 citation. None covers the 11-victim sweep; several
+          overlap it and should be bundled/closed by this change.
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Keystone for DPI-01 (gate starts green) and DPI-04 (annotate before archiving)."}
+    - id: DPI-03
+      surface: docs/DECISIONS.md
+      question: Q3
+      dimension: VD3
+      title: "Warehouse ID lines contradict the Decision-105 canonical keying: 7 retired 4-digit ids, one collision (D75 claims dec-081), 3 modern-band lines missing"
+      evidence: "docs/DECISIONS.md:2038 (D75 'dec-081'), :1615/:1665/:1756/:1853/:1881/:1911/:1938 (4-digit residue on D85/D83/D81/D80/D79/D78/D77), :581-583 (D105 declares those ids retired: CD.33->dec-081 owned by D81), :1634 (D84 -- defines the keying, has no line), :1684 (D82 -- no line)"
+      evidence_kind: observed
+      current_behavior: >-
+        The in-file display metadata was never reconciled when Decision 105 reconciled the CD side.
+        dec-081 is double-claimed: D75's line says dec-081 while the canonical owner (Decision 81, per
+        number-keying and D105's own CD.33->dec-081 sentence) displays dec-1089. The dec-1084/1087 gaps
+        confirm the 4-digit values are the retired writer-allocated sequence, not any number scheme.
+      ideal_behavior: "NS-C: every displayed identifier resolves under the one canonical rule; the file that states the rule does not itself violate it."
+      gap: >-
+        The backfill ETL is immune (keys on header numbers -- scripts/decisions_md.py:90,
+        ops_data_portal.py:1366), so this is display drift, NOT an ETL hazard. But
+        update_decision(ops_data_portal.py:1407) takes a caller-supplied string id: an agent trusting
+        D75's line and calling update_decision("dec-081") passes the referential existence check against
+        Decision 81's REAL row and silently overwrites it -- a traced single-misstep corruption path.
+        The 4-digit ids would instead hit absent (or orphaned, see Q6.2) rows.
+      compensating_controls_considered: >-
+        Decision 84 I-2 instructs callers to supply the DECISIONS.md NUMBER (not the line value) --
+        property-matched for file_decision (which only accepts an integer and re-derives dec-{n:03d},
+        ops_data_portal.py:1358-1366) but NOT for update_decision, which trusts any dec-\\d+ string.
+      change_type: unify
+      proposed_change: >-
+        Rewrite the 8 non-conforming lines to the canonical dec-NNN (keep provenance in parentheses,
+        e.g. "dec-081 (canonical; warehouse row dec-1089 was the retired writer-era id, see Decision
+        105)" -- mirroring the note style D77's line already uses), and add canonical lines to D82 and
+        D84 (D89's missing line is rec-2278, co-land it). Optionally extend the DPI-01 check with a
+        Warehouse-ID-line conformance assertion (line value == dec-{header:03d}) so the drift cannot
+        recur.
+      acceptance: "test -z \"$(grep -n 'Warehouse ID' docs/DECISIONS.md | grep -vE 'dec-[0-9]{3}( |$|\\()' )\" && ! grep -q 'dec-1[0-9]{3}' docs/DECISIONS.md"
+      severity: medium
+      severity_rationale: >-
+        Keyspace/metadata drift with a clear fix and no automated-consumer impact; the update_decision
+        misstep path is real but requires an agent to ignore Decision 84 I-2's caller contract.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [rec-2278]
+        dedup_search_terms: ["Warehouse ID", "dec-1089", "dec-081", "renumber", "ETL-key visual consistency"]
+        dedup_hit_count: 1
+        note: "rec-2278 (open) adds only D89's missing line 'for ETL-key visual consistency' -- a slice of this finding; nothing owns the residue rewrite or the collision."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Bundle rec-2278 into the same edit."}
+    - id: DPI-04
+      surface: docs/DECISIONS.md
+      question: Q4
+      dimension: VD4
+      title: "Archival policy is stated, unenforced, and contradicted by practice; live set carries 8 archive-eligible entries and unresolvable statuses"
+      evidence: "docs/PROJECT_CONTEXT.md:18 (policy + strategic_review credit); scripts/session_preflight.py:1746-1786 (advisory count only, no gate); docs/DECISIONS.md:1 ('# Open Decisions' over 74 Decided entries)"
+      evidence_kind: observed
+      current_behavior: >-
+        PROJECT_CONTEXT.md asserts "DECISIONS.md keeps only open decisions (resolved decisions archived
+        to DECISIONS_ARCHIVE.md)" and credits strategic_review as enforcer. The named enforcer computes
+        an advisory open_decisions_count and a strategic_review_due flag in preflight; no validate.py
+        check exists (confirmed absent). Practice diverged deliberately: since Decision 84 the file is
+        the canonical ETL source, and 74 Decided entries live in it under an H1 that still says "Open
+        Decisions". Statuses: D26 pending-review perpetual; D40 Deferred with moot triggers; D49/D55/D70
+        header-status gaps; D27 nonstandard "approved".
+      ideal_behavior: >-
+        NS-D: the policy text, the H1, and the archival practice agree; every status is from a closed,
+        resolvable set; the live set contains only entries that still govern.
+      gap: "Policy says one thing, the enforcer is advisory, and the surface does another -- so archive-eligibility decays by inattention."
+      compensating_controls_considered: >-
+        session_preflight open_decisions_count (advisory; exercises status but not archival);
+        parse_decisions_md covers BOTH files, so archiving is ETL-safe -- no data-loss control needed.
+      change_type: archive
+      proposed_change: >-
+        RECOMMENDATIONS ONLY (the human disposes). (a) Move to DECISIONS_ARCHIVE.md with
+        "(Superseded by Decision NN)" headers: D23 (by 76/85), D24 (by 77 + personal-account model),
+        D42 (by 90), D49 (by 116), D68 (by 112/CD.21), D71 (by 73/CD.21), D89 (by 83), and D26 after
+        DPI-05 resolves its duplicate. (b) Resolve statuses: D26 -- human review verdict (approve ->
+        "(Decided, superseded by Decision 90 lineage)" then archive, or reject -> archive as declined);
+        D40 -- file the drafted supersession or restate triggers; normalize D49/D55/D70 headers to carry
+        an explicit status. (c) Reconcile the policy text: EITHER rewrite PROJECT_CONTEXT.md:18 to the
+        Decision-84-era reality ("DECISIONS.md is the canonical corpus; fully-superseded entries move
+        to the archive") and retitle the H1, OR enforce the stated policy -- the audit recommends the
+        former, since Decision 84 made the file the warehouse source of truth. (d) If (c)-former, add
+        the archive-eligibility rule to the DPI-01 check family as advisory output, not a gate.
+      acceptance: "grep -q '^# ' docs/DECISIONS.md && ! grep -qx '# Open Decisions' docs/DECISIONS.md"
+      severity: medium
+      severity_rationale: "Lifecycle-hygiene gap with a clear fix; no live-work impact traced -- the oversized live set costs consumer tokens and attention, not correctness."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["archive", "DECISIONS_ARCHIVE", "open decisions", "strategic_review", "decision hygiene"]
+        dedup_hit_count: 0
+        note: "No rec or tier_item owns archival enforcement or the policy-text reconciliation."
+      effort: M
+      depends_on: [DPI-02, DPI-05]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [DPI-02], note: "Annotate victims before moving them; D26's move needs DPI-05's dedup verdict first."}
+    - id: DPI-05
+      surface: docs/DECISIONS.md
+      question: Q1
+      dimension: VD3
+      title: "Decision number 26 is claimed by two divergent entries (live pending-review vs archived Decided); the ETL silently drops the archive version"
+      evidence: "docs/DECISIONS.md:3134 ('Workflow Cost Optimisation via 2-Chat Model and Automation (Agent-decided -- pending review)') vs docs/DECISIONS_ARCHIVE.md:1404 ('Workflow Cost Optimisation (Decided)'); scripts/decisions_md.py:91-92 (silent first-wins)"
+      evidence_kind: observed
+      current_behavior: >-
+        Two entries, different titles, different statuses, overlapping-but-divergent content (the
+        archive copy is a condensed Decided version; the live copy the full agent-decided version still
+        "pending review" since March 2026). The parser keeps the live one and silently discards the
+        archive one, so ops_decisions row dec-026 asserts a pending status while a Decided record of
+        the same number exists on disk. The archive copy also has Decisions 52/53/54 nested under its
+        section as h3 headers (see DPI-07).
+      ideal_behavior: "NS-C: one number, one entry, one status; a resolved duplicate is renumbered or merged with written provenance (the D77/D85 renumbering-note precedent)."
+      gap: "The identifier 26 does not resolve deterministically; whichever copy a reader (or the guard) lands on gives a different status for the 'same' decision."
+      compensating_controls_considered: >-
+        The merge-time renumbering practice (D77/D85 notes; the 69->89 and duplicate-72 renumber recs)
+        exercises exactly this property and caught its other instances -- it missed this one, so it
+        does not dismiss the finding; cited as the remediation template.
+      change_type: rescope
+      proposed_change: >-
+        RECOMMENDATION (human disposes): adjudicate which copy is authoritative. Likely disposition:
+        the live copy's content was long since absorbed/superseded (D42->D90 lineage; its artifacts
+        deleted at T-1.13), so merge the two into ONE archived entry -- keep number 26 in the archive
+        with status resolved (Decided or Superseded), carry a renumbering-note-style provenance line,
+        and delete the live duplicate. Whatever the verdict, re-run
+        ops_data_portal --backfill-decisions-md so dec-026 reflects it.
+      acceptance: "test \"$( { grep -c '^## Decision 26:' docs/DECISIONS.md; grep -c '^###\\? Decision 26:' docs/DECISIONS_ARCHIVE.md; } | paste -sd+ | bc )\" = 1"
+      severity: medium
+      severity_rationale: >-
+        A genuine identifier collision on the governance surface, but the colliding entry governs
+        nothing live (its architecture is two supersessions stale), so no planning session would act on
+        the wrong copy; the silent ETL drop is contained to one historical row.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["duplicate Decision", "Renumber duplicate", "Decision 26"]
+        dedup_hit_count: 2
+        note: "rec-1964 (duplicate 72) and the duplicate-69 renumber rec own OTHER instances -- treadmill evidence; no rec owns 26. rec-1964's target no longer reproduces at HEAD (one D72 header) -- flag it for closure review."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "DPI-04's D26 archive move waits on this verdict."}
+    - id: DPI-06
+      surface: docs/DECISIONS.md
+      question: Q6
+      dimension: VD3
+      title: "The ETL parser silently tolerates duplicate decision numbers (first-parsed-wins, no log), making keyspace defects invisible downstream"
+      evidence: "scripts/decisions_md.py:91-92 ('if decision_id in seen: continue' -- no warning); scripts/ops_data_portal.py:1442-1476 (upsert-only backfill, no delete/reconcile of rows absent from the parse)"
+      evidence_kind: observed
+      current_behavior: >-
+        A duplicate '## Decision N:' anywhere in the two files is resolved by silent first-wins; the
+        warehouse never sees the loser and no operator signal exists. Separately, the backfill never
+        deletes: a renumbered/deleted header permanently strands its old dec-NNN row (orphan-admission
+        mechanism confirmed; current orphan existence is a warehouse fact, not statically determinable).
+      ideal_behavior: "NS-E: a machine-checkable structure fails loudly on duplicate numbers instead of masking them; the ETL's tolerance decisions are explicit."
+      gap: "The exact defect class that produced DPI-05 (and the historical duplicate 69/72/76/84 collisions) is undetectable by any gate; it surfaces only when a human reads both copies."
+      compensating_controls_considered: >-
+        The parser's dedup is NOT a property-matched control -- it masks the defect rather than failing
+        on it. The R1 guard parses headers but only to resolve CD pointers; duplicates do not fail it.
+      change_type: enforce
+      proposed_change: >-
+        SPECIFICATION: (a) duplicate-number detection -- FAIL on a number appearing twice within the
+        live file, WARN (allowlistable) on a live/archive pair, since a legitimate archive move must
+        not trip it mid-PR; cheapest home is the DPI-01 check (same parse); alternatively a logged
+        warning in parse_decisions_md itself so every backfill surfaces collisions. (b) Record (do not
+        build now) the orphan-row posture: an optional --reconcile mode for backfill_decisions_from_md
+        that reports warehouse ids absent from the parse (report-only; deletion stays behind Decision
+        70/103-style human confirmation).
+      acceptance: "bin/venv-python -c \"import scripts.decisions_md\" && grep -q 'duplicate' scripts/checks/decisions/validate_supersession_annotations.py"
+      severity: medium
+      severity_rationale: "Control absence for a recurring defect class (4 historical instances), but each instance to date was low-blast and three were caught by the human renumbering practice."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["duplicate", "decisions_md", "backfill-decisions-md", "orphan"]
+        dedup_hit_count: 0
+        note: "No rec or item owns parser/guard duplicate detection or backfill reconciliation."
+      effort: XS
+      depends_on: [DPI-01]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Co-lands naturally with DPI-01's check."}
+    - id: DPI-07
+      surface: docs/DECISIONS.md
+      question: Q6
+      dimension: VD3
+      title: "Archived Decisions 52/53/54 are h3 headers nested under archive Decision 26 -- visible to the ETL, invisible to the R1 ratification guard"
+      evidence: "docs/DECISIONS_ARCHIVE.md:1432/:1453/:1481 ('### Decision 5N:'); scripts/decisions_md.py:22 (matches #{2,3}); scripts/checks/roadmap/validate_candidate_decision_ratification.py:22 (matches '^## Decision' only)"
+      evidence_kind: observed
+      current_behavior: >-
+        Two consumers of the same referential surface use different header grammars, so the decision
+        population differs by 3 entries depending on which code asks. Live entries cite Decision 52
+        (docs/DECISIONS.md:58, :261) -- the citation resolves for a human and for the ETL but not for
+        the guard's notion of the keyspace.
+      ideal_behavior: "NS-C/NS-E: one header grammar; every numbered entry is a top-level '## Decision NNN:' the guard and the ETL agree on."
+      gap: "Latent false-FAIL: a future CD ratified against dec-052/053/054 would fail R1 while the warehouse row exists. Zero CDs point there today."
+      compensating_controls_considered: "None exercises grammar agreement; the ETL's wider regex is what MASKS the nesting."
+      change_type: clarify
+      proposed_change: >-
+        Promote the three archive entries to '## Decision NN:' top-level headers (placing them after
+        the Decision 26 section, matching the archive's h2 convention), or -- if the h3 nesting is
+        deliberate provenance -- widen the guard regex to #{2,3} in lockstep with decisions_md.py and
+        record the shared grammar in one place both import.
+      acceptance: "test \"$(grep -c '^### Decision' docs/DECISIONS_ARCHIVE.md)\" = 0"
+      severity: low
+      severity_rationale: "Wording/structure defect; latent-only (no CD points at 52/53/54), one-line fix."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["### Decision", "Decision 52", "archive header"]
+        dedup_hit_count: 0
+        note: "No rec or item mentions the h3 nesting."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+  rejected_candidates:
+    - candidate: "In-file Warehouse ID drift (4-digit residue / dec-081 collision) corrupts the DECISIONS.md -> ops_decisions backfill ETL"
+      why_dismissed: >-
+        The corruption claim is false as stated: the backfill never reads the Warehouse ID line. It
+        keys every row on the header number (scripts/decisions_md.py:90) and file_decision re-derives
+        dec-{n:03d} from an integer (ops_data_portal.py:1358-1366), so the displayed ids cannot reach
+        the ETL. The drift survives only as a medium display-layer finding (DPI-03) via the
+        agent-mediated update_decision path.
+      compensating_control: "Header-number keying in parse_decisions_md + file_decision's integer-only contract (Decision 84 I-2)."
+      control_property_match: >-
+        Exercises the same identifier-resolution property: if the ETL keyed on the in-file lines, the
+        backfill would demonstrably write D75's content to dec-081 and D81's to dec-1089 -- it provably
+        does not, because the line value is never parsed.
+      decision_or_item_id: "Decision 84 I-2"
+    - candidate: "Decisions 24, 60, 62, 68, 71, 89 carry dead premises (retired EC2-runner/SSO substrate, reversed branch-protection premise) and should be findings"
+      why_dismissed: >-
+        All six carry explicit victim-side annotations naming what killed the premise and pointing
+        forward: migration-update blockquotes (D24:3249, D60:2414, D62:2652, D68:2499, D71:2231), a
+        premise-revisit amendment (D62, 2026-06-16), and D89's blockquote + three inline supersession
+        notes (:2465-2471). NS-A is explicitly satisfied for annotated dead premises; they are counted
+        dead-but-annotated in Q1 and several are recommended for archive in DPI-04, which is hygiene,
+        not a premise defect.
+      compensating_control: "The victim-annotation practice itself, on these entries."
+      control_property_match: >-
+        Exercises exactly the NS-A property: a reader of any of these entries is told, in-entry, that
+        the premise is dead and where the live rule is; if the annotation were absent the same reading
+        test would fail (as it does for the DPI-02 set).
+      decision_or_item_id: "Decision 83 / CD.21 (the annotating events)"
+    - candidate: "Duplicate '## Decision 72:' entries in the live file (rec-1964)"
+      why_dismissed: >-
+        Does not reproduce at HEAD: exactly one '## Decision 72:' header exists (docs/DECISIONS.md:2188;
+        grep -c = 1). The historical duplicate was evidently resolved by renumbering. Owned by rec-1964
+        (open), which should be reviewed for closure rather than re-filed; the systemic detection gap
+        is DPI-06, which cites this instance as evidence.
+      compensating_control: "The merge-time renumbering practice (D77/D85 renumbering-note precedent)."
+      control_property_match: "Exercises number uniqueness at merge time and demonstrably fired for this instance -- the header count is 1 at HEAD."
+      decision_or_item_id: "rec-1964"
+    - candidate: "decision-scout's stale live-header count ('currently 67' vs 81) misleads the consumer"
+      why_dismissed: >-
+        Out of scope by Section 4: decision-scout's size/count concerns are excluded; the stale figure
+        is recorded as an observed why-now fact in the report and in meta.stale_anchors, not a finding.
+        (Its Phase-1 instruction to re-derive the count via rg -c also self-heals the staleness at
+        run time.)
+      compensating_control: "The skill's own run-time re-derivation instruction (SKILL.md Phase 1 step 1)."
+      control_property_match: "Exercises the same count-freshness property: the executing agent recomputes M at run time, so a stale literal cannot change triage coverage -- the checklist asserts N equals the recomputed M, not the literal."
+      decision_or_item_id: "Section 4 out-of-scope clause"
+    - candidate: "CD-side filed_via/ratified_as pointers need re-reconciliation"
+      why_dismissed: "Deliberate constraint (Section 13): Decision 105 already reconciled the CD side; TRAP-2 places it out of scope. Nothing observed contradicts D105's reconciliation."
+      compensating_control: "validate_candidate_decision_ratification (R1/R2/R3) gates the CD-side shape in CI."
+      control_property_match: "Exercises the CD->header pointer property directly and fails on a dangling or mismatched pointer (R1 dec-number-vs-header check)."
+      decision_or_item_id: "Decision 105"
+  summary:
+    total_findings: 7
+    novel_count: 5
+    planned_insufficient_count: 2
+    planned_unbuilt_count: 0
+    top_improvements: [DPI-01, DPI-02, DPI-03, DPI-05, DPI-04]
+    highest_leverage_change: DPI-01
+    maturity_decisions_md: solid
