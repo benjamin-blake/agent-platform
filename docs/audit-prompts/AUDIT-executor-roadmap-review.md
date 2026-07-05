@@ -529,7 +529,7 @@ audit:
        external_checklist: [{property: "", rating: met|partial|missed, evidence: ""}]}  # 12 rows
     - {q: Q3, verdict: sound|partial|unsound, basis: [<finding ids>], prose: ""}
     - {q: Q4, verdict: sound|partial|unsound, basis: [<finding ids>], prose: ""}
-    - {q: Q5, answers: [{question: "", answer: "", basis: [<finding ids>]}]}  # seeds a-d + extensions
+    - {q: Q5, answers: [{question: "", answer: "", basis: [<finding ids>]}]}  # seeds a-g + extensions
   per_surface_assessment:
     - {surface: <one of scope_surfaces>, maturity: <derived>, strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
