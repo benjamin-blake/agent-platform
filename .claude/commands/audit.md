@@ -20,8 +20,10 @@ Skill tool. For canonical git-ops (branching, rebase, PR/CI/merge flow), see AGE
 *This workflow runs on Claude Opus 1M (opus[1m]). If the model indicator does not show Opus,
 tell the human to run `/model opus[1m]` (a user-typed harness command; agents cannot switch
 models) and stop until they do -- the `model:` frontmatter applies for the current turn and
-reverts on the next prompt. If the human directs you to proceed on another model, note it in
-the Step 5 presentation.*
+reverts on the next prompt. Because later turns revert, re-check the indicator at the start of
+each turn: the recon, drafting, and gate steps (4-7) must run on Opus; the post-gate mechanical
+steps (8-9) may run on whatever the session reverted to. If the human directs you to proceed on
+another model, note it in the Step 5 presentation and the Step 9 message.*
 
 ```bash
 bin/venv-python -m scripts.session_preflight
@@ -46,9 +48,7 @@ bin/venv-python -m scripts.session_preflight --open-session --workflow audit
 git branch --show-current
 ```
 
-If the result is `main`, STOP. Work on the harness-assigned `claude/...` session branch. Derive
-`{slug}` from the audit topic (short, kebab-case, e.g. `verification-system-review`), independent
-of the branch name.
+If the result is `main`, STOP. Work on the harness-assigned `claude/...` session branch.
 
 ## Step 3: Clarify the Request
 
@@ -59,6 +59,11 @@ decision block), BOUNDARIES (what the audit
 must not touch or opine on), and the executor's WRITE BOUNDARY (default: exactly two deliverable
 files under `audits/`). If any of these are vague, ask 2-5 questions now -- ambiguity resolved
 here is ambiguity the expensive model never pays for. Do not proceed on guesses.
+
+Once the topic is settled, derive `{slug}` from it (short, kebab-case, e.g.
+`verification-system-review`), independent of the branch name. If a later rescope changes the
+topic materially, rename the slug before Step 6 -- nothing durable carries it until the first
+commit.
 
 ## Step 4: Deep Recon
 
@@ -74,6 +79,11 @@ enters the dossier. Every fact destined for the prompt's GROUNDING MAP must have
 disk in this session.
 
 ## Step 5: Scope Confirmation Gate
+
+Draft now, before the gate, the prompt elements the presentation depends on: the TASK paragraph,
+the North Star principles (which seed the rubric derivation per the skill's anatomy row 8), the
+question set with each question's pinned verdict enum, and the rubric dimensions. Step 6 embeds
+these into the full prompt; the gate reviews them first.
 
 Present to the human, compactly:
 
@@ -101,6 +111,8 @@ committing -- the gate will check them cold, but cheap fixes belong here.
 git add docs/audit-prompts/AUDIT-{slug}.md
 git commit -m "audit({slug}): draft audit prompt"
 ```
+
+(The `audit({slug}):` prefix is registered in AGENTS.md's commit-message conventions table.)
 
 ## Step 7: Zero-Context Prompt Verification Gate (MANDATORY)
 
@@ -132,7 +144,8 @@ the event-driven flow from AGENTS.md `## Git-ops procedure`:
 
 ## Step 9: Confirm and Hand Off
 
-Emit exactly:
+Emit the following, filling the bracketed fields and appending any material caveats (an
+off-model run, findings accepted-with-deferral at the gate):
 
 ```
 Audit prompt complete and merged to main at docs/audit-prompts/AUDIT-{slug}.md.

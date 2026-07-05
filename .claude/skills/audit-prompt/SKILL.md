@@ -35,7 +35,7 @@ Every generated prompt contains these sections, in this order. `M` = mandatory, 
 
 | # | Section | M/C | Purpose |
 |---|---|---|---|
-| 1 | TASK | M | One paragraph: target system, surfaces, question stubs (Q1..Qn), deliverable paths, write boundary ("the ONLY files you write are ..."), disposal clause ("you draft; the human disposes"). |
+| 1 | TASK | M | One paragraph: target system, surfaces, question stubs (Q1..Qn), deliverable paths, write boundary, disposal clause ("you draft; the human disposes"). The write boundary is scoped to the repository tree: "the ONLY files you create or modify in the tree are the two deliverables"; regenerating gitignored local caches per SETUP is expected and does not breach it (never commit them). |
 | 2 | CANDIDATE OBSERVATIONS vs VERDICTS | M | The epistemic contract, placed before anything it governs: the prompt hands FACTS and CANDIDATE hypotheses, never verdicts. Per-candidate adjudication enum, with its mapping to the output contract pinned: CONFIRMED-defect -> findings, classification novel; planned whose owning item's remedy is insufficient or unbuilt -> findings, classification planned-insufficient / planned-unbuilt; planned and fully covered by the owning item -> rejected_candidates; not-a-defect -> rejected_candidates (naming the compensating control). Include verbatim: "ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT" and "a run that merely confirms the candidates below has failed". |
 | 3 | READ FIRST / disambiguation traps | C | Every term that names two things, every plausible-but-wrong audit target discovered at recon. State what is in scope, what is context-only, and the misread each trap invites. Trigger: recon found at least one. |
 | 4 | SCOPE | M | Surfaces enumerated with their state (built vs designed-unbuilt); shared vocabulary and tier/term definitions; out-of-scope areas named in one line each; the trust-nothing clause: "obtain every file/line/size by reading the file -- trust no number quoted here; re-derive from the repo and record any non-resolving anchor in meta.stale_anchors". |
@@ -127,7 +127,13 @@ audit:
          degraded_dedup: false, contract_notes: "", stale_anchors: []}
   question_answers:
     - {q: Q1, verdict: <pinned per-question enum>, basis: [<finding ids>], prose: ""}
-    # one entry per question; the questions-not-asked entry uses answers: [{question, answer}]
+    # one entry per question. Two pinned shape variants:
+    # - the industry-rating question (if present) ADDS
+    #   external_checklist: [{property, rating: met|partial|missed, evidence}]
+    #   (partial requires an argued property-matched compensating control in evidence);
+    #   this field is the SOLE source the maturity top tier reads.
+    # - the final questions-not-asked entry uses INSTEAD of the verdict shape:
+    #   {q: Qn, answers: [{question, answer, basis: [<finding ids>]}]}
   per_surface_assessment:
     - {surface: <name>, maturity: <derived>, strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
@@ -184,10 +190,10 @@ Maturity boilerplate: compute LAST, per surface, evaluated top-down with first m
 Default scale -- the generated prompt may rename levels or adjust thresholds for the topic, but
 must pin exact numeric thresholds; never leave the scale as an example:
 
-- frontier = 0 open critical or high findings AND every property of the EXTERNAL CHECKLIST (the
-  named-industry-practices list the composer embeds in the industry-rating question per anatomy
-  row 7) rated met or partial-with-argued-control. If the prompt has no such question, the top
-  tier gates on finding counts alone.
+- frontier = 0 open critical or high findings AND every property in the industry-rating
+  question's `external_checklist` field (see the skeleton's question_answers variants) rated
+  met or partial -- never missed. If the prompt has no such question, the top tier gates on
+  finding counts alone.
 - strong = 0 critical AND <= 1 high. solid = <= 1 critical. nascent = otherwise. (The
   high-count asymmetry below strong is deliberate in the default -- criticals dominate;
   tighten it if the topic warrants.)
@@ -275,9 +281,10 @@ an incomplete gate. Convergence rule: after 3 REVISE rounds, escalate to the hum
 unresolved findings and options (accept-with-deferral / re-scope / abandon).
 
 Unanimous-PROCEED quality check: PROCEED is PROCEED -- the gate passes -- but before accepting a
-round-1 unanimous pass, the composer reads each scorecard; any verifier that returned zero
-findings AND a scorecard under ~10 lines was dispatched too generically -- re-dispatch that
-verifier ONCE with a sharpened perspective. One re-dispatch maximum; its verdict is final.
+round-1 unanimous pass, the composer reads each verifier's output; any verifier that returned
+zero findings AND fewer than ~10 lines of substantive output (findings list or scorecard) was
+dispatched too generically -- re-dispatch that verifier ONCE with a sharpened perspective. One
+re-dispatch maximum; its verdict is final.
 
 **Gate anti-patterns.** Single verifier (misses orthogonal defects by definition). Telling a
 verifier what to find (confirmation bias). Reusing a verifier's context across rounds (it now
