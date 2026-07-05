@@ -1,0 +1,751 @@
+audit:
+  meta:
+    audited_commit: d140093
+    base_branch: main
+    model: "Claude (Anthropic) -- exact model identifier withheld from committed artifacts per harness policy; recorded in the session transcript"
+    methodology_version: 1
+    scope_surfaces: [docs/DECISIONS.md]
+    degraded_dedup: false
+    contract_notes: >-
+      Cache generation succeeded (session_preflight full; 684 open recs in logs/.recommendations-log.jsonl).
+      parse_decisions_md over both files yields 101 rows (81 live h2 + 21 archive h2/h3 - 1 duplicate
+      number 26 dropped first-wins, consistent with DPI-05/06). Clone was shallow (50 commits); deepened
+      500 to derive the growth series -- the 2026-06-05 figure comes from commit 33125098. Discovery not
+      named by the prompt: scripts/list_customizations.py --with-decisions is a SECOND DECISIONS.md parser
+      (own heading grammar with auto-numbering for unnumbered headers, own status/date heuristics,
+      :143-186) that regenerates logs/.decisions-index.jsonl FROM THE PROSE FILE (:224-230) rather than
+      from the warehouse reader, via Path.write_text -- a call shape none of the Decision 104 guard's
+      three regexes (validate_decisions_local_writes.py:29-33, all keyed on open('w'/'a') idioms) matches.
+      No callers found in scripts//.claude//.github//config/ -- dormant, but a latent cache-rebuild path
+      that bypasses both the warehouse and the guard; cited as DAF-03 evidence, surfaced here for the
+      human since the guard is a context surface this audit may not file against. The meta.model field
+      deviates from the prompt's "self-reported model name" instruction because the operating harness
+      forbids committing the model identifier to the repository; this note records the deviation.
+    stale_anchors:
+      - "Prompt anchor 'parse_decisions_md (~line 84)' -- the def is at scripts/decisions_md.py:76; the heading regex sits at :22-25 and the int keying at :90 as stated."
+      - "All other grounding-map anchors resolved exactly at d140093: sizes 271,398 B / 3,348 lines / 81 live headers; archive 93,598 B / 18 h2 headers; NS.4 at ROADMAP-PLATFORM.yaml:251-253; Decisions 84/86/114 at DECISIONS.md:1634/:1582/:303; portal functions at ops_data_portal.py:1338/:1407/:1442/:1729; implement.md:50; _ROADMAP_MAX_LINES at validate_platform_roadmap.py:13."
+  question_answers:
+    - q: Q1
+      verdict: mixed
+      basis: [DAF-02, DAF-03]
+      prose: >-
+        Twelve consumption paths enumerated; none REQUIRES a monolithic prose file, but two require
+        properties the prose file currently supplies. (1) decision-scout (every /plan, blocking):
+        full-file read into a fresh subagent, ~271 KB (~65-70k tokens), mandated without offset/limit
+        (SKILL.md:28) because prose offers no machine-addressable index -- the only safe projection of
+        a prose monolith is the whole file. The token cost is MOSTLY intrinsic (triage needs every
+        active decision's semantics in some container), but the container adds dead weight: superseded/
+        reversed entries the scout loads then demotes, 43 Warehouse-ID boilerplate lines, no server-side
+        status filter -- and, decisively, the growth trajectory is ungoverned (DAF-02). (2) plan-critique
+        (SKILL.md:26) and implement.md:50: targeted rg "^## Decision N:" reads -- cheap since WF-04/05
+        landed, but each hand-rolls the header grammar (DAF-03). (3) The ETL chain (parse_decisions_md ->
+        backfill_decisions_from_md, auto-run by rec-autoclose.yml:25-30 on merges touching the file)
+        exists ONLY because the container is prose -- pure container artifact, and lossy (Q2). (4)
+        Numbering authority: human reads the newest-at-top header, increments; collision history and the
+        merge-time renumber control are CAND-01's (Q5 single-writer-numbering, partial). Format-agnostic;
+        a writer-allocated scheme (as recs already have, Decision 84 I-2) serves it better. (5) Human
+        browse/sign-off: genuinely served by prose + PR diff; NS.4 tolerates prose as a side effect.
+        (6) R1 ratification guard (validate_candidate_decision_ratification.py:22-28): header-greps BOTH
+        files as its referential target explicitly because it must stay hermetic in CI -- "the
+        ops_decisions cache is gitignored and CI PR roles lack reader access" (DECISIONS.md:579-580).
+        This is a real requirement for an IN-REPO, git-tracked surface -- satisfied equally by a
+        structured in-repo file, NOT satisfied by a warehouse-only store. (7) Minor: session_preflight
+        :1750-1753 (open-status count), sync_recommendations counter seeding, scheduled-agent prompts,
+        dormant list_customizations. Verdict mixed: structured records would serve every machine path as
+        well or better; human browse and hermetic CI referential need a git-tracked human-readable
+        surface, which "structured" can also supply (front-matter or generated projection); the prose
+        monolith is nowhere the uniquely-required shape.
+    - q: Q2
+      verdict: lossy-or-inverted
+      basis: [DAF-01]
+      prose: >-
+        (a) FIDELITY -- lossy, observed on all 8 sampled entries (9%-75% of raw block bytes reach
+        captured fields). The parser extracts 7 concepts (title, status, problem via Problem/Trigger,
+        decision_text via the EXACT marker "**Decision:**", context via Rationale/Key details/Context,
+        decided_date, related ints); the corpus uses ~120 distinct bold markers. Dropped entirely:
+        **Reversal conditions:** (all 15 carriers, Decisions 106-121 -- the modern band's governing
+        revisit triggers), **Consequences:** (6), **Decision status:** (11, the April band -- costing
+        those entries their dates), all 3 trailing [Amendment] blocks, all 7 blockquote migration
+        updates/amendments, and ~90 singleton sections (Tier Definitions, Classification Rules,
+        boundary tables, escape hatches...). Worst observed: dec-084's decision_text is EMPTY -- the
+        four DuckLake invariants never reach the table because the marker reads "**Decision (four
+        invariants):**"; dec-067 captures 194 chars of a 2,172-byte block with decided_date =
+        "remove when reversal condition is met" (the Status-suffix fallback regex harvesting the clause
+        status line) and empty problem/decision/context/related -- for the decision that currently
+        blocks all STRATEGIC plans. Relationship edges are also wrong both ways: "Decisions 69/78"
+        (plural form, D87/D84) is invisible to the singular regex, while amendment prose leaks integers
+        into related_decisions (dec-084 carries 70 three times). The backfill reports every such row as
+        "written" -- no fidelity signal exists. Keyspace mechanics (first-wins duplicates, orphan
+        admission) are DPI-06's and are cited, not re-filed. (b) DIRECTION -- sound and bounded. The
+        upstream-prose-source arrangement is a ratified premise (Decision 84: "ops_decisions is
+        recreatable from DECISIONS.md"), is explicitly sanctioned as the legitimate ETL-from-
+        non-warehouse-source pattern (validate_warehouse_write_sources.py:18), and Decision 87 cl.3
+        generalized the same pattern to plans with the property test that justifies it: human-authored,
+        low-frequency, diff-reviewed content is correctly git-authoritative until a machine produces it
+        at frequency. The verdict is driven by (a): the ratified recreatability premise is only true at
+        the parser's 9-75% observed fidelity.
+    - q: Q3
+      verdict: preserved-but-ungoverned
+      basis: [DAF-02, DAF-04]
+      prose: >-
+        (a) All three governance properties survive a structured or warehouse-native authoring format
+        at modest mechanism cost. Numbering: writer-side atomic allocation already exists for recs
+        (Decision 84 I-2) and T1.5 Phase 6 plans the int-column deprecation; alternatively human
+        assignment survives unchanged in a structured in-repo file. Sign-off: the approval surface is
+        the PR diff (Decision 87 cl.2 names diff-review as the property favouring git) -- a YAML or
+        front-matter diff reviews as well as a prose diff. Browse: preserved either by prose-rationale
+        payload fields or by a generated projection (the CD.23 pattern); NOT preserved by a
+        warehouse-only store, which would also break the R1 guard's hermetic in-repo referential
+        target (DECISIONS.md:579-580) -- the concrete cost a flip must budget. (b) Growth is factually
+        ungoverned: no ceiling, no deterministic guard (grep of scripts/ finds no DECISIONS size/line
+        constant; the only such guard is the roadmap's _ROADMAP_MAX_LINES=10_000,
+        validate_platform_roadmap.py:13), and no conscious "no ceiling needed" ruling anywhere in
+        Decisions 84/86/104/105/114 or the roadmap. Measured growth: 130,797 B / 42 headers
+        (2026-06-05) -> 271,398 B / 81 headers (2026-07-05) -- the file doubled in 30 days while its
+        heaviest consumer reads it whole every /plan and the roadmapped relief valve (T5.4 delete) sits
+        behind T1.5, which is STRATEGIC and frozen under CD.17 with no ETA. The Decision 114 precedent
+        (ratified ceiling + code guard + reversal conditions) is exactly the conscious act missing
+        here; its absence is the gap, not merely a hypothetical breach. Archival policy exists but is
+        unenforced and contradicted by practice -- owned by DPI-04, cited as the missing relief valve.
+    - q: Q4
+      verdict: ratify-prose-with-size-governance
+      basis: [DAF-01, DAF-02, DAF-03, DAF-04]
+      prose: >-
+        See format_disposition. One-line form: keep prose-monolith authoring for the interim -- the
+        repo's own ratified logic (Decision 87 cl.2-3) says git-authoritative, diff-reviewed prose is
+        correct while decisions are human-authored at low frequency, and a pre-T1.5 container flip
+        would pay L-effort to duplicate work T1.5 Phase 2/3a owns -- but ratify that choice consciously
+        with Decision-114-parity size governance, an authoring contract, and ETL parity fixes (S
+        aggregate), and correct the roadmapped end-state (parity criterion on T1.5; T5.4
+        delete -> generated projection per CD.23) via the two planned-insufficient findings.
+    - q: Q5
+      answers:
+        - question: >-
+            (Seed i) Does deleting DECISIONS.md at T5.4, rather than generating a prose projection
+            from ops_decisions, lose a governance surface CD.23 implies should be preserved?
+          answer: >-
+            Yes -- three surfaces die with the file and T5.4's exit criteria ("grep returns no
+            production references"; "Files deleted") name no replacement. (1) Human browse/sign-off:
+            CD.23 (ROADMAP-PLATFORM.yaml:822-841) resolves the agent-first/human-portal tension
+            precisely by demoting human surfaces to curated PROJECTIONS of canonical state -- deleting
+            the only human decision-browse surface is the un-CD.23 move; generating DECISIONS.md (or a
+            successor) from ops_decisions is the pattern-conforming end-state. (2) The R1 ratification
+            guard's referential target is the two files' headers, deliberately hermetic because CI PR
+            roles lack warehouse reader access (DECISIONS.md:579-580) -- post-delete, ratified-CD
+            referential integrity has no in-repo target unless a projection or index replaces it. (3)
+            The decision-scout Lambda-migration contract (SKILL.md:18-20) presumes a tool query
+            replaces the Read -- serving rows whose observed fidelity is DAF-01's 9-75%. DAF-04.
+          basis: [DAF-04, DAF-01]
+        - question: >-
+            (Seed ii) Is "one file" vs "prose" a false binding -- could the file become
+            generated-from-structured-source and stay one file?
+          answer: >-
+            Yes, they are separable, and the repo has already demonstrated each half independently.
+            Decision 114's one-file argument ("one coherent load beats N files an agent must
+            reassemble") was made for a STRUCTURED file whose consumers can cheaply project slices
+            (plan-critique and orient do yaml.safe_load projections); a prose monolith gives one
+            coherent load but NO cheap projection -- the scout's mandatory whole-file read is the
+            direct consequence. Conversely a single structured store (one YAML, or one generated
+            markdown with per-entry front-matter) preserves single-load coherence AND machine
+            addressability. The binding constraints that actually matter are: single load, git-tracked
+            (hermetic CI + diff sign-off), human-readable rationale. All three are satisfiable by
+            generated-from-structured; none uniquely requires authored prose.
+          basis: [DAF-03, DAF-04]
+        - question: >-
+            (Seed iii) Is there a lower-cost interim move that captures most of the benefit without
+            the full T1.5 migration?
+          answer: >-
+            Yes -- three moves, S aggregate, all safe now: (1) a Decision-114-parity size ruling +
+            deterministic registry check (DAF-02, XS code); (2) an authoring contract pinning the
+            canonical marker set forward (front-matter optional, not required) plus a single shared
+            parser module, retiring the four divergent grammars (DAF-03, S); (3) ETL parity: extract
+            reversal_conditions and amendment blocks (or persist the raw block as a payload field),
+            fix the decorated-marker/plural-cite/date-fallback bugs, and add a backfill fidelity
+            tripwire so a live entry parsing to empty decision_text fails loudly (DAF-01, S). Together
+            these capture the machine-consumption benefit of "flip to structured" at roughly a tenth
+            of the migration cost, and they are all work T1.5 would inherit rather than redo.
+          basis: [DAF-01, DAF-02, DAF-03]
+        - question: >-
+            (Extension) Where is the authoring template for a decision entry specified -- what makes
+            an entry well-formed?
+          answer: >-
+            Nowhere. No contract, skill, or check defines which sections a decision entry must carry;
+            the shape is imitation of the previous entry (the Warehouse-ID boilerplate that newer
+            entries copy verbatim is the visible imitation trail). The measurable consequence is a
+            ~120-distinct-marker vocabulary across 81 entries and an ETL that hard-codes one
+            historical snapshot of the folklore (7 concepts) -- the two halves drift independently.
+            docs/contracts/candidate-decision-ratification.yaml specifies the ratified-CD shape but
+            not the Decision entry itself; docs/contracts/ops_decisions.yaml specifies the TABLE, and
+            its semantics text already overstates what arrives (it calls decided_date the /orient
+            recency key; no /orient path reads it). DAF-03's authoring contract is the missing artifact.
+          basis: [DAF-03]
+        - question: >-
+            (Extension) Does DECISIONS_ARCHIVE.md ride every format decision, and is it accounted for?
+          answer: >-
+            It must and it mostly is not. The archive is ETL input #2 (parse order live-then-archive,
+            first-wins), the R1 guard's referential peer, 93,598 B / 18 h2 + 3 h3 entries, and T5.4
+            deletes it too. Any size ceiling, authoring contract, parser change, or projection
+            end-state must name it explicitly or the two files' grammars drift further (DPI-07's
+            h3-nesting divergence is the existing instance). The findings here each name it in
+            proposed_change; the archive needs no separate finding.
+          basis: [DAF-02, DAF-03, DAF-04]
+        - question: >-
+            (Extension) Is the backfill's write cadence itself a format cost?
+          answer: >-
+            A minor one, recorded not filed: backfill_decisions_from_md upserts EVERY parsed entry per
+            run (~101 file_decision calls), each refreshing last_updated_timestamp -- because prose
+            offers no per-entry change detection, every merge touching the file rewrites the whole
+            corpus into SCD2 history and decisions_max_updated always reads ~the last merge time. A
+            structured source (or a per-entry content hash) would make the sync differential. Cost is
+            warehouse-side rows and a blunted freshness signal; harmless today, worth folding into
+            DAF-01's parser work if touched.
+          basis: [DAF-01]
+  per_surface_assessment:
+    - surface: docs/DECISIONS.md
+      maturity: solid
+      strengths: >-
+        The format genuinely serves its human half: reverse-chronological single-file browse, PR-diff
+        sign-off (Decision 87 cl.2's own property test for git authority), a hermetic in-repo
+        referential target the CI guard depends on, and -- per CAND-01 -- a modern band whose
+        annotation/renumbering discipline exceeds typical ADR practice. Rich prose bodies DO survive
+        the ETL when the canonical markers are used (Decision 104's full multi-clause body lands
+        intact in decision_text), and the numbering authority + auto-backfill on merge
+        (rec-autoclose.yml) keep file and table continuously synced with zero manual steps. The
+        weaknesses are concentrated, not diffuse: an unpinned grammar, a lossy parser, and ungoverned
+        growth -- all fixable inside the format at S effort.
+      top_gaps: [DAF-01, DAF-02, DAF-03, DAF-04]
+  rubric_ratings:
+    - surface: docs/DECISIONS.md
+      dimension: VD1
+      rating: weak
+      evidence: "marker census: ~120 distinct '**X:**' markers over 81 entries (grep -oE '^\\*\\*[^*]+:\\*\\*' | sort -u); docs/DECISIONS.md:1644 vs scripts/decisions_md.py:109"
+      note: >-
+        A decision record is structured metadata (number, status, dates, supersedes-edges, revisit
+        triggers) wrapped around prose rationale. The container encodes ALL structure as unenforced
+        bold-marker folklore -- so loosely that the file's own ETL cannot recover the Decision body of
+        the decision that defines the warehouse (dec-084 decision_text empty). The prose-rationale
+        half fits well; the structured half is regex archaeology.
+    - surface: docs/DECISIONS.md
+      dimension: VD2
+      rating: adequate
+      evidence: ".claude/skills/decision-scout/SKILL.md:28 (mandatory whole-file read, ~271KB per /plan); .claude/commands/implement.md:50 and plan-critique SKILL.md:26 (targeted rg reads)"
+      note: >-
+        Post WF-04/05 the only whole-file consumer is the scout subagent, whose cost is mostly
+        intrinsic to triaging every active decision; container overhead (dead entries, boilerplate,
+        no status pre-filter) is a modest fraction. Rated adequate TODAY; the rating decays on VD5's
+        trajectory, and stale cost figures in consumer docs are WF-14's, not re-filed.
+    - surface: docs/DECISIONS.md
+      dimension: VD3
+      rating: weak
+      evidence: "observed sample D121/D114/D87/D84/D77/D67/D48/D26: captured-field fraction 9%-75%; scripts/decisions_md.py:28-73 (extractors); ops_data_portal.py:88 (7-column whitelist), :1442-1476 (silent 'written')"
+      note: >-
+        Direction sound-and-bounded (ratified premise, sanctioned pattern, Decision 87 property
+        logic); fidelity observed-lossy with garbage values (dec-067 decided_date) and no failure
+        signal. Weak on the fidelity half; the direction half alone would rate strong.
+    - surface: docs/DECISIONS.md
+      dimension: VD4
+      rating: adequate
+      evidence: "Decision 87 cl.2 (docs/DECISIONS.md:1557); R1 guard hermetic target (docs/DECISIONS.md:579-580; validate_candidate_decision_ratification.py:22-28); CAND-01 Q5 single-writer-numbering (partial)"
+      note: >-
+        Numbering, sign-off, and browse all genuinely function under the current format (collision
+        history is CAND-01's, with a working human control). All three survive a structured format at
+        modest cost. The roadmapped END-STATE (T5.4 delete) is what breaks browse + the hermetic CI
+        target -- DAF-04 -- but that is the plan's defect, not the live format's.
+    - surface: docs/DECISIONS.md
+      dimension: VD5
+      rating: absent
+      evidence: "scripts/checks/roadmap/validate_platform_roadmap.py:13 (the precedent guard, roadmap-only); grep of scripts/ for a DECISIONS size/line constant: zero hits; growth 130,797B/42 headers (33125098, 2026-06-05) -> 271,398B/81 (d140093, 2026-07-05)"
+      note: >-
+        No ceiling, no guard, no conscious no-ceiling ruling, while the file doubled in 30 days, the
+        Decision 114 precedent sits 300 lines from the file's top, and the roadmapped delete is
+        frozen-STRATEGIC with no ETA. Absent is the literal rating, not a rhetorical one.
+  format_disposition:
+    "docs/DECISIONS.md":
+      verdict: ratify-prose-with-size-governance
+      mechanism: >-
+        One ratifying Decision (Decision-114 parity for this file) that: (a) RETAINS prose-monolith
+        authoring for the interim on Decision 87 cl.2-3's own property test -- decisions are
+        human-authored, low-frequency, diff-reviewed, so git-authoritative prose remains correct until
+        T1.5's authority flip; (b) sets a size ceiling with a deterministic registry check
+        (validate_decisions_size, full tier; ceiling sized to the binding consumer -- the
+        decision-scout subagent window -- e.g. ~500KB combined live+archive or ~150 live headers, with
+        DPI-04's archival dispositions as the relief valve and reversal conditions mirroring Decision
+        114's); (c) adopts the DAF-03 authoring contract (canonical marker set, forward-enforced;
+        single shared parser); (d) lands DAF-01's ETL parity + fidelity tripwire so the table stops
+        silently gutting entries; (e) records the end-state corrections as roadmap edits -- T1.5 gains
+        a content-parity exit criterion, T5.4 is rescoped from delete to
+        generate-DECISIONS.md-as-projection (CD.23 pattern) or must name replacement browse/sign-off/
+        CI-referential surfaces.
+      what_changes: >-
+        New check module + ceiling constant (registry-registered, Decision 104 pattern); a
+        docs/contracts entry (or ops_decisions.yaml extension) pinning the entry grammar;
+        scripts/decisions_md.py + src/schemas/decision.py + ops.yaml gain reversal_conditions and
+        amendments (or a raw_block field) plus the marker/plural-cite/date-fallback fixes; backfill
+        gains a loud fidelity tripwire; two roadmap item edits (T1.5, T5.4); one numbered ratifying
+        Decision. Nothing changes for authors beyond marker discipline on NEW entries; no consumer
+        migrates.
+      cost: >-
+        S aggregate (XS guard + S parser/schema/contract + XS roadmap edits + the ratification
+        session). Compare: flip-authoring-to-structured-ahead-of-T1.5 was assessed at L-XL (81-entry
+        conversion, every "^## Decision" grammar consumer, R1 guard, scout, citation surfaces) and
+        duplicates T1.5 Phase 2/3a work while CD.17 freezes the capacity that would do it.
+      rationale: >-
+        The repo's own precedents already answer each half of the frame. Decision 114: a growing
+        canonical file gets a CONSCIOUS ceiling + code guard -- never applied here (VD5 absent).
+        Decision 87: git-authoritative, diff-reviewed authoring is correct while humans author at low
+        frequency -- the same property test that keeps plans git-side keeps decisions prose-side today.
+        CD.23: human surfaces are projections of canonical state -- which convicts T5.4's delete, not
+        the file's existence. The observed defects (lossy ETL, folklore grammar, ungoverned growth)
+        are all S-effort fixable INSIDE the format, and fixing them is prerequisite work for T1.5
+        regardless of container. Leave-as-roadmapped fails because the roadmap neither governs the
+        interim (frozen T1.5, no guard) nor specifies a sound end-state (no parity criterion,
+        delete-not-project); flip-now fails the cost/authority test; ratify-with-governance is the
+        remaining disposition and matches every precedent cited.
+      confidence: CONFIRMED
+  findings:
+    - id: DAF-01
+      surface: docs/DECISIONS.md
+      question: Q2
+      dimension: VD3
+      title: "The prose->ops_decisions projection silently drops or mangles governing content: 8/8 sampled entries lose >=1 governing element (9%-75% capture), with empty decision_text on Decision 84 and a garbage date on Decision 67, and the backfill reports every such row as written"
+      evidence: >-
+        scripts/decisions_md.py:28-73 (exact-marker extractors; Status-suffix date fallback at :70-73),
+        :108-114 (7-concept field map); src/schemas/decision.py:25 (extra="ignore"), :27-42 (no
+        reversal_conditions/amendment field); scripts/ops_data_portal.py:88 (7-column whitelist),
+        :1442-1476 (per-row try/except, summary counts only). Observed (parser run at d140093, sample
+        D121/D114/D87/D84/D77/D67/D48/D26): dec-084 decision_text EMPTY (marker "**Decision (four
+        invariants):**", docs/DECISIONS.md:1644) and its 2026-07-03 amendment (:1654-1657) absent while
+        leaking "70" into related_decisions three times; dec-067 captures 194/2172 bytes with
+        decided_date="remove when reversal condition is met" (:2513) and empty
+        problem/decision_text/context/related; all 15 **Reversal conditions:** carriers (Decisions
+        106-121, e.g. :47, :324) dropped; dec-048 loses its Tier Definitions/Classification Rules and
+        its date; "Decisions 69/78" plural cites (:1574) invisible to the singular regex.
+      evidence_kind: observed
+      current_behavior: >-
+        parse_decisions_md extracts 7 concepts keyed on exact bold markers; the corpus uses ~120
+        distinct markers. Everything outside the 7 -- reversal conditions (15 entries), trailing/inline
+        amendments (3 + 7 blockquotes), consequences (6), clause-level statuses, ~90 singleton
+        sections -- is dropped without a log line. Field bugs compound the class loss: a decorated
+        Decision marker yields an empty decision_text; the date fallback harvests non-date Status
+        suffixes; plural citation forms drop graph edges while amendment prose adds spurious/duplicate
+        ones. backfill_decisions_from_md counts each such row as "written"; DecisionPayload's DQ
+        markers are enforced=false, so nothing rejects a garbage date or an empty body. The rows sit
+        in ops_decisions NOW (the backfill runs on every merge touching the file via rec-autoclose.yml)
+        -- only the absence of content consumers (the sole read verbs are decision_by_id for the portal
+        merge and decisions_max_updated for freshness) keeps the blast radius at zero.
+      ideal_behavior: >-
+        Every governing element of a decision block survives the projection or its loss fails loudly:
+        parser + schema + table carry reversal_conditions and amendments (or a raw_block full-text
+        field as the parity backstop); the marker/plural/date bugs are fixed; the backfill emits a
+        fidelity report and FAILS (or files a rec) when a live entry parses to an empty decision_text
+        or a non-ISO date; T1.5 may not flip any consumer to the table before a content-parity exit
+        criterion holds.
+      gap: >-
+        The ratified premise "ops_decisions is recreatable from DECISIONS.md" (Decision 84) is true
+        only at the parser's observed 9-75% fidelity, and the roadmapped migration (T1.5 Phase 3a
+        readers-port, 3b markdown delete; T5.4) contains no criterion that would surface the loss
+        before consumers start trusting the table -- the scout's Lambda-migration contract
+        (SKILL.md:18-20) explicitly plans that flip with "output contract unchanged".
+      compensating_controls_considered: >-
+        (1) All content consumers currently read the file, not the table -- property-matched TODAY
+        (the lost content still reaches every reader) but it expires at exactly the T1.5 flip the
+        roadmap plans, and the flip's own spec is what lacks the parity gate. (2) DQ contract
+        (docs/contracts/ops_decisions.yaml) documents decided_date as ISO -- not property-matched:
+        schema markers are enforced=false (src/schemas/decision.py:2-5) and the observed garbage date
+        is in-table now. (3) T1.5 Phase 2 "semantic definition" MIGHT specify parity -- unwritten,
+        STRATEGIC, frozen (CD.18 must ratify first); cannot be credited. Judged insufficient in
+        aggregate: the only real control is temporary and its expiry is the planned path.
+      change_type: enforce
+      proposed_change: >-
+        SPECIFICATION (no code by this audit). (a) decisions_md.py: extract **Reversal conditions:**
+        (and the singular D67 variant) to reversal_conditions; capture trailing/embedded [Amendment
+        ...] and blockquote annotation lines to amendments; tolerate decorated Decision markers
+        (r"\*\*Decision\b[^:]*:\*\*"); accept "Decisions 69/78"-style plural cites in
+        _extract_related_decisions and dedupe the result; restrict the date fallback to ISO-shaped
+        values. (b) src/schemas/decision.py + config/agent/data_quality ops.yaml + the writer contract:
+        add reversal_conditions (str|None) and amendments (str|None) -- or, cheaper and
+        forward-compatible, raw_block (str) carrying the full section text as the parity backstop.
+        (c) backfill_decisions_from_md: emit per-run fidelity counters (empty decision_text on a live
+        h2 entry; non-ISO decided_date) and fail loudly on regressions. (d) Roadmap edit: T1.5 gains
+        exit criterion "a consumer-visible parity check confirms every live-entry governing section is
+        recoverable from ops_decisions before any reader is repointed". Cover DECISIONS_ARCHIVE.md in
+        (a)-(c) explicitly.
+      acceptance: >-
+        bin/venv-python -c "from scripts.decisions_md import parse_decisions_md; rows={r['decision_id']:r
+        for r in parse_decisions_md()}; assert rows[84]['decision_text']; assert
+        rows[114].get('reversal_conditions'); assert rows[67]['decided_date'] in ('', None) or
+        rows[67]['decided_date'][:4].isdigit()" && bin/venv-python -m scripts.ops_data_portal
+        --backfill-decisions-md 2>&1 | grep -qi fidelity
+      severity: high
+      severity_rationale: >-
+        High, not critical: the format currently produces wrong-and-silently-accepted warehouse rows
+        for load-bearing decisions (the STRATEGIC-freeze decision and the warehouse-invariants
+        decision itself), and the compensating control (consumers read the file) is scheduled to be
+        removed by the very roadmap items that lack a parity gate -- "materially reduces fitness AND
+        controls judged insufficient". Not critical because no consumer trusts the table today, so no
+        wrong-but-trusted governance outcome is reachable at HEAD without the future flip.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T1.5, T5.4, T0.7b]
+        dedup_search_terms: ["parse_decisions", "decisions_md", "decision_text", "reversal condition", "fidelity", "backfill-decisions-md"]
+        dedup_hit_count: 0
+        note: >-
+          T1.5/T5.4 own the migration whose Phase 2 semantic definition is the natural home for the
+          fix, but neither carries any parity/fidelity criterion and T1.5 is frozen; no open rec
+          touches parser fidelity (recs-log grep: only closed rec-463, different doc). DPI-06 owns the
+          adjacent KEYSPACE mechanics (duplicate first-wins, orphan admission) -- cited, not re-filed.
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Pre-T1.5 work T1.5 inherits; co-lands naturally with DAF-03's shared-parser consolidation."}
+    - id: DAF-02
+      surface: docs/DECISIONS.md
+      question: Q3
+      dimension: VD5
+      title: "Unbounded growth is unruled: no ceiling, no deterministic guard, and no conscious no-ceiling ruling, while the file doubled in 30 days and its heaviest consumer reads it whole every /plan"
+      evidence: >-
+        Growth (git, deepened clone): 130,797 B / 42 live headers at 33125098 (2026-06-05) ->
+        229,638 B at d107b4a (2026-07-02) -> 271,398 B / 81 headers at d140093 (2026-07-05). Guard
+        absence: grep of scripts/ for any DECISIONS size/line/ceiling constant returns zero; the only
+        such guard in the repo is _ROADMAP_MAX_LINES=10_000
+        (scripts/checks/roadmap/validate_platform_roadmap.py:13, Decision 114, roadmap-only).
+        Consumer: .claude/skills/decision-scout/SKILL.md:28 mandates the whole-file read without
+        offset/limit every /plan. Relief valve frozen: T5.4 depends_on T1.5; T1.5 strategic: true,
+        status: not_started, gated on CD.18 (docs/ROADMAP-PLATFORM.yaml:3668-3712, :7846-7860) under
+        the CD.17 STRATEGIC freeze.
+      evidence_kind: observed
+      current_behavior: >-
+        The file grows monotonically (append-per-decision plus in-place amendments; the June wave
+        added 39 entries / +140,601 B in 30 days) with no mechanism that notices: no validate check,
+        no ratified ceiling, no ruled exemption, and an archival policy that is stated but unenforced
+        and contradicted by practice (DPI-04). Decision 114 established the repo's pattern for exactly
+        this situation -- conscious ceiling + deterministic code guard + reversal conditions -- for
+        ROADMAP-PLATFORM.yaml, a file whose consumers can PROJECT slices; the prose file whose main
+        consumer cannot project (whole-file read by design) got nothing.
+      ideal_behavior: >-
+        A ratified ruling exists either way: a ceiling (bytes or live-header count, sized against the
+        binding constraint -- the scout subagent's window and triage headroom -- with archival
+        compaction as the relief valve and Decision-114-style reversal conditions), enforced by a
+        registry check in the full tier; OR a recorded conscious "no ceiling needed because X" whose X
+        is live. Growth is then a governed property, not an ambient drift.
+      gap: >-
+        The absence of any conscious ruling is itself the gap (the question Decision 114 answered for
+        the roadmap was never asked here), and it is load-bearing: at the observed doubling rate the
+        scout's read reaches ~135k tokens within a month and exceeds a 200k window within two, i.e.
+        the mandatory /plan gate degrades into exactly the silent-under-read failure WF-05 documented
+        for plan-critique -- while the roadmapped shrink event (T5.4 delete) has no ETA behind the
+        frozen T1.5.
+      compensating_controls_considered: >-
+        (1) T5.4's eventual delete -- not property-matched for the interim: frozen-STRATEGIC upstream,
+        no ETA, and per DAF-04 the delete itself is mis-specified. (2) DPI-04's archival
+        recommendations -- the right relief valve, but advisory findings, unenforced policy, and at
+        best ~8 entries (~tens of KB) against a +140 KB/month rate. (3) The scout's own truncation
+        tripwire (triage-count echo, WF-18 fix at SKILL.md:93,107) -- property-ADJACENT only: it
+        detects an incomplete read after the fact; it does not govern the size that causes it. (4)
+        June's growth spike may be a one-off ratification wave (Decisions 106-121) -- possible, but
+        betting governance on deceleration is the un-ruled state this finding names. Insufficient in
+        aggregate.
+      change_type: add
+      proposed_change: >-
+        SPECIFICATION: a numbered Decision (Decision-114 parity) ratifying the ceiling + guard for
+        docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md combined: new
+        scripts/checks/decisions/validate_decisions_size.py (registry, owner=platform, full tier) with
+        module-level constants (suggested: 500,000 bytes combined or 150 live h2 headers -- sized so
+        the scout read + triage fits a 200k window with ~2x headroom; the human picks the number at
+        ratification), failing with a message that names the relief valves (archive per DPI-04's
+        dispositions; compact superseded bodies to pointer stubs). Reversal conditions mirror Decision
+        114's (breach + prohibitive /plan load cost). If instead the human consciously rules
+        no-ceiling, record THAT decision with its premise (e.g. "T1.5 unfreezes by <date>") so the
+        exemption is falsifiable.
+      acceptance: >-
+        bin/venv-python -m scripts.validate 2>&1 | grep -q 'decisions size' && grep -rn
+        '_DECISIONS_MAX' scripts/checks/decisions/validate_decisions_size.py
+      severity: high
+      severity_rationale: >-
+        High: an absent control class (the repo's own precedent defines it) over a measured 2x/month
+        growth rate whose first casualty is the mandatory pre-plan gate -- the same
+        instructed-vs-feasible divergence WF-05 rated high when it had already happened to
+        plan-critique. Compensating controls are frozen, advisory, or after-the-fact. Not critical:
+        the failure is prospective (scout still fits its window at HEAD with the tripwire live), and
+        the growth rate may decelerate post-ratification-wave.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["DECISIONS.md size", "DECISIONS.md ceiling", "decisions line", "DECISIONS split", "validate_decisions_size"]
+        dedup_hit_count: 0
+        note: >-
+          Roadmap grep for a DECISIONS size guard: zero. Recs-log size-terms hits are rec-235/rec-427
+          (unrelated). Decision 114 is the precedent, not an owner (TRAP-2); DPI-04 owns the archival
+          relief valve and is cited as such, not re-filed.
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Guard can land with the ceiling above current size; DPI-04's archival dispositions are the natural co-landing relief valve."}
+    - id: DAF-03
+      surface: docs/DECISIONS.md
+      question: Q1
+      dimension: VD1
+      title: "No authoring grammar exists: entry shape is imitation folklore (~120 distinct section markers over 81 entries), so four independent hand-rolled parsers with divergent grammars consume the same file"
+      evidence: >-
+        Marker census at d140093: grep -oE '^\*\*[^*]+:\*\*' docs/DECISIONS.md | sort -u yields ~120
+        distinct markers (79 plain **Decision:**, plus Decision (four invariants)/Decision status
+        (x11)/Reversal condition(s)/90+ singletons). The four grammars: (1) scripts/decisions_md.py:22
+        (h2+h3 '#{2,3}', 7 exact-marker fields, first-wins); (2)
+        scripts/checks/roadmap/validate_candidate_decision_ratification.py:22 (h2-only '^## Decision
+        (\d+):', both files); (3) scripts/session_preflight.py:1750-1753 (h2-only live file,
+        header-paren status heuristic); (4) scripts/list_customizations.py:143-186 (h2 with OPTIONAL
+        number, auto-numbers unnumbered headings, own status/date regexes) whose --with-decisions mode
+        (:224-230) rebuilds logs/.decisions-index.jsonl FROM THE PROSE via write_text -- a divergent
+        cache schema (id/title/status/date/keywords vs the sync_ops full-row pull) on a write path the
+        Decision 104 guard's open()-shaped patterns (validate_decisions_local_writes.py:29-33) do not
+        match. No contract, skill, or check specifies which sections an entry must carry.
+      evidence_kind: observed
+      current_behavior: >-
+        Authors imitate the previous entry (the copied Warehouse-ID boilerplate is the visible trail);
+        each machine consumer independently invents a regex grammar for whatever slice it needs; the
+        grammars demonstrably diverge -- the ETL sees archive h3 entries the R1 guard cannot (DPI-07's
+        instance), the ETL cannot see the Decision-84 body its own numbering authority defines
+        (DAF-01), and the dormant fourth parser would regenerate the decisions cache with a schema
+        nothing else reads. Skills hand-roll the same header grammar again in rg form
+        (implement.md:50; plan-critique SKILL.md:26).
+      ideal_behavior: >-
+        One written grammar: an authoring contract naming the canonical marker set (required: Status,
+        Date, Decision; optional-with-fixed-spelling: Problem, Rationale, Reversal conditions,
+        Related, amendment forms) and ONE shared parser module every structural consumer imports --
+        the R1 guard, preflight count, ETL, and any index generator disagree with each other only if
+        they stop importing it. New-entry conformance enforced forward by a registry check
+        (grandfather the historical band); list_customizations' dormant cache path retired or
+        repointed at the warehouse pull.
+      gap: >-
+        The format's structure lives in four codebases' regexes instead of one contract, so every
+        format evolution (a new section like Reversal conditions in the 106+ band) silently forks:
+        humans adopt it, no parser does, and each consumer's notion of "a decision" drifts
+        independently -- the mechanism behind both DAF-01's field loss and DPI-07's population
+        divergence.
+      compensating_controls_considered: >-
+        (1) Imitation-of-previous-entry keeps the CANONICAL markers fairly stable in the modern band
+        (Status/Date/Decision/Related appear in nearly all 86+ entries) -- partial, unenforced, and it
+        is exactly how the unparsed Reversal-conditions convention spread. (2) The R1 guard fails CI
+        on dangling ratified-CD pointers -- property-matched only for header EXISTENCE, not for entry
+        shape or cross-parser agreement. (3) validate_decisions_local_writes guards the cache file --
+        wrong property (write provenance, not grammar) and its patterns miss the write_text shape.
+        None exercises grammar agreement; insufficient.
+      change_type: unify
+      proposed_change: >-
+        SPECIFICATION: (a) author docs/contracts/decision-entry.yaml (or extend ops_decisions.yaml's
+        existing 19 DECISIONS.md references) defining header form, required/optional markers with
+        exact spellings, amendment/blockquote annotation forms, and the archive's h2 convention; (b)
+        consolidate the four grammars onto scripts/decisions_md.py as the single importable parser
+        (R1 guard + preflight replace their private regexes with it; DPI-07's h2/h3 divergence gets
+        decided once, in one place); (c) add a forward conformance check (new/modified entries in the
+        git diff must use the canonical markers -- same diff-scoped pattern as T-1.23's roadmap
+        criteria assertions); (d) retire list_customizations --with-decisions or repoint it at the
+        sync_ops pull. Explicitly cover DECISIONS_ARCHIVE.md.
+      acceptance: >-
+        test -f docs/contracts/decision-entry.yaml && ! grep -n 'Decision (\\\\d' scripts/checks/roadmap/validate_candidate_decision_ratification.py
+        && grep -q 'decisions_md' scripts/checks/roadmap/validate_candidate_decision_ratification.py
+      severity: medium
+      severity_rationale: >-
+        Medium: inconsistency-with-a-clear-fix. The divergence's worst current consequences are
+        already carried by DAF-01 (field loss) and DPI-07 (population split); this finding owns the
+        shared root -- absent grammar -- whose fix is mechanical consolidation. Not high: humans absorb
+        the ambiguity today and no wrong governance outcome traces to the grammar fork alone.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["authoring contract", "decision template", "front-matter", "decision-entry", "shared parser", "list_customizations"]
+        dedup_hit_count: 0
+        note: >-
+          Recs-log front-matter/template hits are rec-441 (prompt-file frontmatter, unrelated). DPI-07
+          owns the single archive-h3 instance and is cited as the existing divergence example; nothing
+          owns the grammar contract or parser consolidation.
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Co-land with DAF-01 (same parser file); the contract text is also where DAF-02's ceiling constants get documented for authors."}
+    - id: DAF-04
+      surface: docs/DECISIONS.md
+      question: Q5
+      dimension: VD4
+      title: "The roadmapped end-state deletes the governance surface instead of demoting it to a projection: T5.4 removes human browse/sign-off and the R1 guard's hermetic CI referential target with no named replacement, contra CD.23"
+      evidence: >-
+        docs/ROADMAP-PLATFORM.yaml:7846-7860 (T5.4: "delete docs/DECISIONS.md and
+        docs/DECISIONS_ARCHIVE.md"; exit criteria only "grep -r 'DECISIONS.md' returns no production
+        references" + "Files deleted"); :822-841 (CD.23: "the human portal is a CURATED PROJECTION of
+        the agent-first canonical content, not a parallel source-of-truth"); docs/DECISIONS.md:578-580
+        (Decision 105: the R1 guard's referential target is the two files' headers, deliberately
+        hermetic because "the ops_decisions cache is gitignored and CI PR roles lack reader access");
+        .claude/skills/decision-scout/SKILL.md:18-20 (the consumer flip presumes a tool query with
+        "output contract unchanged").
+      evidence_kind: static
+      current_behavior: >-
+        T5.4 as written ends the story at deletion. Post-delete, with ops_decisions canonical: (1)
+        no human browse surface for the decision corpus exists anywhere (CD.23's portal principle says
+        one should, as a projection); (2) the PR-diff sign-off surface for decision authoring is gone
+        -- authoring becomes portal writes whose review vehicle is unspecified; (3)
+        validate_candidate_decision_ratification's hermetic in-repo referential target vanishes -- CI
+        PR roles cannot reach the warehouse, so ratified-CD referential integrity either loses its
+        gate or the guard must be rewritten against an artifact T5.4 does not define. The grep-based
+        exit criterion would FORCE rewriting every production reference including the guard, but says
+        nothing about what replaces the checked property.
+      ideal_behavior: >-
+        The end-state conforms to CD.23: when authority flips (T1.5 Phase 3), DECISIONS.md is not
+        deleted but DEMOTED -- regenerated from ops_decisions as a read-only projection (one file,
+        same browse shape, header-compatible so the R1 guard and citation greps keep a hermetic
+        target), with a generation check in CI asserting projection freshness; or, if deletion is
+        retained, T5.4's exit criteria explicitly name the replacement browse surface, the new
+        decision-authoring sign-off vehicle, and the new hermetic referential target for
+        ratified-CD validation.
+      gap: >-
+        "Delete the file" was specified when the file was only an authoring surface; since then the
+        repo ratified CD.23 (projection principle), Decision 105 (the guard's hermeticity rationale),
+        and the public-portal commitments -- none of which T5.4's two-line exit criteria acknowledge.
+        The cheapest moment to correct an end-state is while its prerequisite (T1.5) is still frozen.
+      compensating_controls_considered: >-
+        (1) T1.5 Phase 2 "semantic definition" might redesign the end-state -- unwritten, frozen, and
+        T5.4's text is what a future planner will read as the decided intent. (2) CD.18's
+        decision-required-before-T1.5 gate forces ONE ratification decision (sibling-branch fate) --
+        adjacent, but its scope is the stashed Phase-2 branch, not the browse/guard/sign-off
+        replacement. (3) The R1 guard's failure would be LOUD at implementation time (grep exit
+        criterion forces the rewrite) -- true for the guard, silent for browse and sign-off. Partial
+        at best; none exercises the CD.23 conformance property.
+      change_type: rescope
+      proposed_change: >-
+        RECOMMENDATION (roadmap edit, human disposes): rewrite T5.4's intent from "delete" to
+        "demote to generated projection per CD.23" (generator: ops_decisions -> DECISIONS.md,
+        header-format-compatible; CI freshness check), or retain deletion but add exit criteria
+        naming (a) the replacement human browse surface, (b) the decision-authoring sign-off vehicle
+        post-flip, and (c) the hermetic in-repo referential artifact the R1 guard validates against.
+        Mirror the choice in T1.5's Phase 3b wording ("markdown delete" -> "markdown demote/delete
+        per T5.4"). XS now; re-deriving it inside a thawed T1.5 later costs a planning cycle plus the
+        risk the two-line version executes as written.
+      acceptance: >-
+        bin/venv-python -c "import yaml; t=[i for i in
+        yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))['tier_items'] if i['id']=='T5.4'][0];
+        s=str(t); assert ('projection' in s) or ('browse' in s and 'referential' in s)"
+      severity: medium
+      severity_rationale: >-
+        Medium: a mis-specified far-future end-state with an XS fix available now. Not high: T1.5's
+        freeze means no one can execute the flawed spec imminently, and the guard half would fail
+        loudly if attempted; the silent halves (browse, sign-off) are real but distant. Not low: this
+        is a governance-surface loss baked into ratified roadmap text, not wording.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T5.4, T1.5]
+        dedup_search_terms: ["T5.4", "DECISIONS.md retirement", "projection", "CD.23", "browse surface"]
+        dedup_hit_count: 2
+        note: >-
+          T5.4 and T1.5 Phase 3b own the deletion; both hit on the dedup grep and neither addresses
+          projection/browse/guard replacement -- classic owned-but-insufficient. CD.23 is the
+          conflicting ratified principle, cited as the bar, not an owner.
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Pure roadmap-text edit; deliberately lands BEFORE CD.18/T1.5 thaw so the planner inherits the corrected end-state."}
+  rejected_candidates:
+    - candidate: "Flip decision authoring to a structured container (YAML / per-entry front-matter) now, ahead of T1.5"
+      why_dismissed: >-
+        Fails the repo's own ratified property test and the cost test. Decision 87 cl.2 keeps
+        human-authored, low-frequency, diff-reviewed artifacts git-authoritative in their authored
+        form until a machine produces them at frequency -- decisions today are exactly that (81
+        entries in ~3 months, all human-ratified via PR). The flip costs L-XL (81-entry conversion;
+        every '^## Decision' consumer: R1 guard, preflight, scout, implement/plan-critique rg
+        grammars, citation surfaces; archive handling) and duplicates T1.5 Phase 2/3a work while
+        CD.17 freezes the capacity that would execute it. Every measured machine-side deficiency is
+        addressable at S inside the prose format (DAF-01/02/03), which is also prerequisite work any
+        later flip inherits.
+      compensating_control: "Decision 87 cl.2-3 (docs/DECISIONS.md:1557-1558) -- the ratified git-vs-warehouse timing logic, applied to the identical ETL pattern it explicitly names for DECISIONS.md."
+      control_property_match: >-
+        Exercises the same authority-timing property the candidate would change: if prose/git
+        authoring were wrong for human-authored low-frequency decisions NOW, Decision 87's
+        plans-clause (ratified 2026-06-14 on that exact property test, naming the DECISIONS.md ETL as
+        its sanctioned precedent) would be wrong the same way -- and it would fail visibly at its own
+        T4.x flip condition. Nothing observed distinguishes decisions from plans on the authoring
+        axis except ETL fidelity, which DAF-01 owns without a container flip.
+      decision_or_item_id: "Decision 87"
+    - candidate: "DECISIONS.md being UPSTREAM of the warehouse inverts the warehouse-as-source-of-truth invariant and should be closed"
+      why_dismissed: >-
+        The direction is a deliberate, ratified, bounded carve-out, not drift: Decision 84 names the
+        premise ("ops_decisions is recreatable from DECISIONS.md"), Decision 84 I-2 makes the
+        human-assigned numbering an explicit sanctioned exception, the warehouse-write-sources guard
+        documents "canonical ETL from a non-warehouse source of truth (DECISIONS.md -> ops_decisions)"
+        as legitimate path #2 (validate_warehouse_write_sources.py:18), and Decision 87 cl.3
+        generalizes the pattern with its justifying property test. The resurrection anti-pattern the
+        invariant exists to prevent (stale CACHE re-staged as writes) cannot occur on this path: the
+        file is the declared source, the cache guard (Decision 104) covers the cache, and the ETL is
+        a keyed idempotent upsert. What IS defective is the projection's fidelity -- filed as DAF-01,
+        not as a direction inversion.
+      compensating_control: "validate_warehouse_write_sources (scripts/checks/ops_governance/validate_warehouse_write_sources.py) + validate_decisions_local_writes (Decision 104) -- the pair that polices which write paths exist."
+      control_property_match: >-
+        Exercises the exact no-second-source property an inversion would break: a new unsanctioned
+        writer to ops_decisions or a cache-sourced write would appear as a non-whitelisted write path
+        and fail the guards; the sanctioned MD->table ETL is enumerated by name. If the direction were
+        an uncontrolled inversion, these checks are where it would (and would have to) surface.
+      decision_or_item_id: "Decision 84 / Decision 87 cl.3"
+    - candidate: "The monolith should be split into per-decision files (or per-band files) to cut consumer cost"
+      why_dismissed: >-
+        Directly contra the ratified one-file principle: Decision 114 assessed and REJECTED a
+        per-tier split for the roadmap because it "trades one coherent load for N files an agent must
+        reassemble", citing Decision 110 and the AGENTS.md Agent-First section -- and the scout, the
+        one whole-file consumer, is exactly the reassembly victim a split would create (81 file reads
+        per /plan). The measured problems are within-file addressability (DAF-03), projection
+        fidelity (DAF-01) and growth (DAF-02) -- none is file-count-shaped. The one caveat is honest:
+        Decision 114's argument was made for a structured file; this audit transfers only its
+        one-LOAD half, not its projectability half (Q5 seed ii).
+      compensating_control: "Decision 114 (docs/DECISIONS.md:303) + Decision 110 (:416) -- the ratified one-file/one-load principle pair."
+      control_property_match: >-
+        Exercises the same load-coherence property a split would degrade: the scout's single Read is
+        the property in action; a split demonstrably multiplies reads and adds a manifest to
+        reassemble -- the exact failure Decision 114 rejected, observed in this repo's own consumers.
+      decision_or_item_id: "Decision 114 / Decision 110"
+    - candidate: "decision-scout / plan-critique context-cost symptoms and stale size figures are format defects to file here"
+      why_dismissed: >-
+        Owned by the workflow-review audit and partially fixed since: WF-04's implement full read is
+        fixed at implement.md:50 (targeted rg, verified at d140093); WF-05's plan-critique Phase-1
+        overload is fixed at SKILL.md:26 (targeted extraction + conflict sweep, verified); WF-18's
+        truncation tripwire landed in decision-scout SKILL.md:93,:107 (triage-count echo, verified);
+        WF-14 owns the stale-figure class -- the scout's 'currently 67' (:28, live count 81) and
+        '>200KB'/'~230KB' strings are that class's residue, self-healing at run time via the
+        instructed rg count. Cited throughout as cost evidence; nothing re-filed.
+      compensating_control: "audits/workflow-review-d107b4a.yaml WF-04/05/14/18 + the landed fixes at implement.md:50, plan-critique SKILL.md:26, decision-scout SKILL.md:93."
+      control_property_match: >-
+        Exercises the same consumer-cost property: the WF fixes measurably removed the two forced
+        full-file reads (verified in the live files at the audited commit) and added the read-
+        completeness echo -- if those symptoms were unowned, the instructed text would still mandate
+        full reads, and it does not.
+      decision_or_item_id: "workflow-review WF-04/WF-05/WF-14/WF-18"
+    - candidate: "ETL keyspace tolerance (first-wins duplicate numbers, orphan-row admission) and Warehouse-ID display drift are format defects"
+      why_dismissed: >-
+        Owned by CAND-01: DPI-06 specifies duplicate-number detection + the backfill reconcile
+        posture; DPI-05 owns the live duplicate (number 26); DPI-03 owns the Warehouse-ID line drift
+        and its update_decision misstep path; DPI-07 owns the archive h3 grammar instance. This audit
+        cites all four as evidence (DAF-01 field-level loss is disjoint from keyspace mechanics;
+        DAF-03 cites DPI-07 as the existing divergence example) and re-files none.
+      compensating_control: "audits/decision-log-premise-integrity-8fb581e.yaml findings DPI-03/05/06/07 (open, specified, with acceptance commands)."
+      control_property_match: >-
+        Exercises the same keyspace/display properties: DPI-06's specified check fails on duplicate
+        numbers and reports orphans -- precisely the defect class this candidate names; re-filing
+        would duplicate an owned, specified fix.
+      decision_or_item_id: "CAND-01 (DPI-03/DPI-05/DPI-06/DPI-07)"
+    - candidate: "Numbering authority via read-the-top-and-increment is collision-prone and needs a reservation mechanism"
+      why_dismissed: >-
+        The collision history (77-renumbered-from-76, 85's renumbering note, duplicate 69/72, the
+        escaped 26) and its control (merge-time renumbering practice, human-memory) are CAND-01's Q5
+        single-writer-numbering-authority finding (rated partial) and DPI-05. The format-level
+        end-state fix -- writer-allocated ids -- is already the ratified direction (Decision 84 I-2
+        allocates rec ids in-transaction; T1.5 Phase 6 deprecates the human int column), i.e.
+        planned, not novel. Interim risk is acceptable per CAND-01's own severity call.
+      compensating_control: "Merge-time renumbering practice (Decision 77/85 precedent notes) + R1 guard number-vs-header referential check."
+      control_property_match: >-
+        Exercises collision resolution at the merge boundary and demonstrably fired on 3 of 4
+        historical instances (CAND-01's evidence); the escaped instance (26) is owned by DPI-05 with
+        a specified disposition.
+      decision_or_item_id: "CAND-01 Q5 / DPI-05 / Decision 84 I-2 / T1.5 Phase 6"
+  summary:
+    total_findings: 4
+    novel_count: 2
+    planned_insufficient_count: 2
+    planned_unbuilt_count: 0
+    top_improvements: [DAF-01, DAF-02, DAF-03, DAF-04]
+    highest_leverage_change: DAF-01
+    maturity_decisions_md: solid
