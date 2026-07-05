@@ -127,9 +127,13 @@ verification_plan:
       Stale-reference sweep (closure obligation): no LIVE surface references the deleted paths
       (historical records under docs/plans, docs/audit-reports, DECISIONS_ARCHIVE, SESSION_LOG*,
       CHANGELOG, intent-migration, and DECISIONS.md are excluded by design).
-    command: "grep -rn 'inference-provider.md\\|config/agent/copilot/model_routing.yaml\\|copilot_model_routing' --include=*.py --include=*.md --include=*.yaml . | grep -v '.venv/' | grep -v '.git/' | grep -v '/logs/' | grep -v 'docs/plans/' | grep -v 'docs/audit-reports/' | grep -v 'DECISIONS_ARCHIVE' | grep -v 'SESSION_LOG' | grep -v 'CHANGELOG' | grep -v 'intent-migration' | grep -v 'docs/DECISIONS.md' | grep -v 'docs/AUDIT-PROMPT' || echo clean"
+    command: "grep -rn 'inference-provider\\.md\\|config/agent/copilot/model_routing\\.yaml\\|copilot_model_routing' --include=*.py --include=*.md --include=*.yaml . | grep -v '.venv/' | grep -v '.git/' | grep -v '/logs/' | grep -v 'docs/plans/' | grep -v 'docs/audit-reports/' | grep -v 'DECISIONS_ARCHIVE' | grep -v 'SESSION_LOG' | grep -v 'CHANGELOG' | grep -v 'intent-migration' | grep -v 'docs/DECISIONS.md' | grep -v 'docs/AUDIT-PROMPT' | grep -v 'docs/INTENT-' | grep -v 'docs/ROADMAP-PLATFORM.yaml' || echo clean"
     expected: "prints 'clean' (no dangling live references)"
-    fix_if: "A live surface still points at a deleted path -- update it (path-only) in this session."
+    fix_if: >-
+      A live surface still points at a deleted path -- update it (path-only) in this session. The
+      exclusions cover immutable/descriptive mentions: frozen docs/INTENT-*.md (intent-doc-freeze
+      guard) and docs/ROADMAP-PLATFORM.yaml (T-1.14's own name/files_in_scope legitimately name the
+      old files as task description). VP step 6 separately proves the T-1.14 roadmap edit landed.
   - step: 5
     phase: pre-deploy
     action: Dependent consumers of the resolver are unbroken (llm_client, executor routing/plan).
@@ -138,10 +142,15 @@ verification_plan:
     fix_if: "A consumer test fails -- the _load_config return shape or a resolution changed; restore equivalence."
   - step: 6
     phase: pre-deploy
-    action: T-1.14 exit criterion 4 is re-grounded (old Step-10 wording removed from the roadmap).
-    command: "! grep -q 'Step 10 multi-perspective critique converges' docs/ROADMAP-PLATFORM.yaml && echo regrounded"
-    expected: "prints 'regrounded'"
-    fix_if: "The old c4 string is still present -- apply the roadmap-bookkeeping edit to T-1.14."
+    action: >-
+      T-1.14 exit criterion 4 is re-grounded (only T-1.14's occurrence of the Step-10 wording is
+      removed; the phrase legitimately recurs in ~11 other REPORT-ONLY tier_items and must stay).
+    command: "test $(grep -c 'Step 10 multi-perspective critique converges' docs/ROADMAP-PLATFORM.yaml) -eq 11 && echo regrounded"
+    expected: "prints 'regrounded' (count drops from the 12 baseline to 11 -- exactly T-1.14's criterion removed)"
+    fix_if: >-
+      Count still 12 means T-1.14 was not edited; count below 11 means another item's criterion was
+      wrongly removed -- only T-1.14's exit criterion 4 may change. Confirm the edit is scoped to the
+      T-1.14 tier_item block.
   - step: 7
     phase: pre-deploy
     action: Fast presubmit tier is green (authoritative on PR CI).
@@ -168,13 +177,14 @@ constraints:
 context:
   - "Deps T-1.12 (complete) + T1.15 (complete) satisfied; T1.15 already refreshed the .md to CD.28-aligned v7.0, so the conversion consumes CD.28-aligned content."
   - "Agent-first contract-conversion wave T-1.13..T-1.19 (PROJECT_CONTEXT.md section 8; Decision 86 routes prose->contracts and forbids new standing prose-architecture docs)."
-  - "model_registry.py is executor-only, NOT Lambda-packaged (compute_affected_artifacts({...})=={}); llm_client imports it lazily and the Lambda scheduled-agent path never calls it. Any Lambda edge degrades safely via the _load_config missing-file fallback (docs/contracts/ is not bundled). Hence V2, no Lambda build/deploy/smoke steps."
+  - "model_registry.py is executor-only, NOT Lambda-packaged (compute_affected_artifacts==({}); build_lambda.py also =={}); llm_client imports it lazily and the Lambda scheduled-agent path never calls it. Any Lambda edge degrades safely via the _load_config missing-file fallback (docs/contracts/ is not bundled). Hence V2, no Lambda build/deploy/smoke steps."
+  - "Lambda Deployment Assessment (scripts/run_scheduled_agent.py): this file DOES package into two status:active artifacts (data-pipeline, ops-compaction) per compute_affected_artifacts, BUT the in-scope edit is a docstring-only path swap (line 284, zero behavioral change) and the scheduled-agent Lambda path is disabled (AGENTS.md runbook). No build/deploy/smoke step is warranted (Decision 48/79 verification-tier refinement); the updated docstring ships with the next functional deploy of those artifacts."
   - "Decision 53 (Gemini CLI transport) is in DECISIONS_ARCHIVE.md, not live DECISIONS.md -- do not cite as governing; the contract prose already references it."
   - "T-1.14 exit_criteria are plain strings (no crit-ids), so closes_criteria is omitted; /implement's bookkeeping walk flips item/criterion status on a verified VP pass."
-  - "Branch at parity with origin/main at planning time (0 behind, 0 ahead) -- no Main Divergence overlap."
+  - "Main Divergence: branch is 11 behind / 1 ahead of origin/main at plan-critique time (preflight's 0/0 was stale). origin/main divergence is confined to T2.26 and T3.15 -- it does NOT overlap this plan's scope (T-1.14, model_registry). Pre-push rebase (git fetch origin main && git rebase origin/main) runs at commit-flow time per the Git-ops procedure; no re-scoping needed."
   - "Closure obligation: surface-retiring plan (Delete rows + model_routing.yaml -> inference-provider.yaml migration); VP step 4 is the mandatory stale-reference sweep."
   - "Decision-scout verdict: FLAGS_FOUND (2 NOTE, no BLOCK; 80 of 80 decisions triaged). CITE list (verbatim): Decision 118 (ratifies CD.25), Decision 86, Decision 116. Both NOTE flags (Decision 118 non-ritual self-assert; Decision 44/117 executor boundary) accepted as-is."
-  - "gates: decision-scout=FLAGS_FOUND (both NOTE flags accepted); plan-critique=PENDING"
+  - "gates: decision-scout=FLAGS_FOUND (both NOTE flags accepted); plan-critique=REVISE round 1 (VP steps 4+6 fixed, Lambda-assessment + divergence notes added), re-critique pending"
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/inference-provider-yaml-conversion-rvfd04)
   - docs/PROJECT_CONTEXT.md read
