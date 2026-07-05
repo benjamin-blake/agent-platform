@@ -39,10 +39,10 @@ Every generated prompt contains these sections, in this order. `M` = mandatory, 
 | 2 | CANDIDATE OBSERVATIONS vs VERDICTS | M | The epistemic contract, placed before anything it governs: the prompt hands FACTS and CANDIDATE hypotheses, never verdicts. Per-candidate adjudication enum: CONFIRMED-defect (traced to file:line or sampled artifact) / not-a-defect (-> rejected_candidates, naming the compensating control) / planned (-> sufficiency assessment on the owning roadmap item). Include verbatim: "ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT" and "a run that merely confirms the candidates below has failed". |
 | 3 | READ FIRST / disambiguation traps | C | Every term that names two things, every plausible-but-wrong audit target discovered at recon. State what is in scope, what is context-only, and the misread each trap invites. Trigger: recon found at least one. |
 | 4 | SCOPE | M | Surfaces enumerated with their state (built vs designed-unbuilt); shared vocabulary and tier/term definitions; out-of-scope areas named in one line each; the trust-nothing clause: "obtain every file/line/size by reading the file -- trust no number quoted here; re-derive from the repo and record any non-resolving anchor in meta.stale_anchors". |
-| 5 | SETUP | C | Exact permitted setup commands (cache generation etc.) plus a degraded path for each anticipated failure: never abort -- set a named meta flag, downgrade affected confidences, proceed. Trigger: the audit needs generated caches or credentials. |
+| 5 | SETUP | M | Exact permitted setup commands plus a degraded path for each anticipated failure: never abort -- set a named meta flag, downgrade affected confidences, proceed. Always present: DEDUP DISCIPLINE (13) is mandatory and depends on generated caches. Pin the degraded-dedup hatch verbatim, adapted: "IF cache-gen fails (creds/egress down): do NOT abort -- set meta.degraded_dedup=true, mark every roadmap_crossref confidence=HYPOTHESIS and dedup_hit_count=null, proceed." |
 | 6 | NORTH STAR | M | The ideal-state bar as named principles the rubric references. Mark judgment-bearing principles explicitly non-absolutist ("this is a bar you judge each surface against"), so the executor argues rather than pattern-matches. |
 | 7 | THE QUESTIONS | M | Full text of Q1..Qn, each first-class with its own answer slot in the output. The final question is always "questions the requester did not think to ask", seeded with compose-time candidates the executor must answer AND extend. |
-| 8 | RUBRIC | M | Dimensions VD1..VDn rated per surface. Pinned enum: strong / adequate / weak / absent / n-a. State that n/a is correct and costless where a dimension does not structurally apply -- never manufacture a rating or finding to fill a cell. |
+| 8 | RUBRIC | M | Dimensions VD1..VDn rated per surface. Pinned enum: strong / adequate / weak / absent / n/a. Derive dimensions at compose time from the North Star principles crossed with the question set: every question is served by at least one dimension, every dimension is referenced by at least one question or deep-dive. State that n/a is correct and costless where a dimension does not structurally apply -- never manufacture a rating or finding to fill a cell. |
 | 9 | DEEP-DIVES | C | DD-A.. blocks, each feeding named questions, for threads needing more than a rubric cell. Trigger: any question requires end-to-end tracing. |
 | 10 | GROUNDING MAP | M | file:line anchors + neutrally stated observed facts + governing decisions/contracts. Open with the cognition-allocation statement ("this map spends your cognition on judgment, not grep") and the verify-before-relying rule. Facts carry no adjectives that imply a verdict. |
 | 11 | EMPIRICAL PASS | C | Hard sampling bounds ("<= N recent X -- do NOT exceed"), the counterfactual test applied per sample, evidence_kind tagging (static / observed), and the rule that observed findings outrank static ones at equal severity. Trigger: sampled artifacts exist. |
@@ -98,9 +98,10 @@ Dossier contents:
 5. **Disambiguation traps** -- discovered two-things-one-name hazards and plausible wrong targets.
 6. **Dedup pointers** -- roadmap items / decisions / open recommendations that already own nearby
    territory, plus the deliberate-constraints do-not-flag list (with decision ids). Extract these
-   with targeted `rg` projections over `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`, and
-   `logs/.recommendations-log.jsonl` -- do not Read the large files in full (mirror the
-   plan-critique skill's Phase 1 projections).
+   with targeted projections, never full-file reads of the large sources: a `bin/venv-python -c`
+   `yaml.safe_load` projection over `docs/ROADMAP-PLATFORM.yaml` (`candidate_decisions[]` +
+   `tier_items[]`), `rg` over `^## Decision` headers in `docs/DECISIONS.md`, and `rg` over
+   `logs/.recommendations-log.jsonl`.
 7. **Empirical-pass seeds** -- which artifact classes exist to sample, and sane bounds.
 8. **Open questions for the human** -- anything recon could not settle, for the scope gate.
 
@@ -110,15 +111,17 @@ leads, not evidence.
 
 ## Output Contract Skeleton
 
-Every generated prompt pins this contract, instantiated for the topic (rename `VF` to a
-topic-appropriate finding prefix; add/remove optional blocks; pin every enum inline). Deliverable
-paths: `audits/{topic-slug}-{base-short-sha}.yaml` (repo-root `audits/`) plus a companion report
-`audits/{topic-slug}-{base-short-sha}.md` -- prose, <= ~1500 words, the executive layer a human
-reads first.
+Every generated prompt pins this contract, instantiated for the topic (rename the finding-id
+prefix to a topic-appropriate one; add/remove optional blocks; pin every enum inline).
+Deliverable paths: `audits/{slug}-{base-short-sha}.yaml` (repo-root `audits/`) plus a companion
+report `audits/{slug}-{base-short-sha}.md` -- prose, <= ~1500 words, the executive layer a human
+reads first. `{slug}` is everywhere the same value: the audit topic slug from the
+`AUDIT-{slug}.md` filename.
 
 ```
 audit:
-  meta: {audited_commit: <origin/main short sha>, base_branch: main, model,
+  meta: {audited_commit: <origin/main short sha>, base_branch: main,
+         model: <executor model's self-reported name, free text>,
          methodology_version: 1, scope_surfaces: [<surfaces>],
          degraded_dedup: false, contract_notes: "", stale_anchors: []}
   question_answers:
@@ -129,7 +132,9 @@ audit:
   rubric_ratings:
     - {surface, dimension: VD1..VDn, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
-  # OPTIONAL: only when a decisive-recommendation question exists
+  # OPTIONAL: present iff a question demands a per-surface actionable verdict from a
+  # pinned option set (e.g. script|agent|hybrid). Name the block after that question's
+  # subject and pin the verdict enum; that question's prose entry points here.
   <decision_block_name>:
     <surface>: {verdict: <pinned enum>, mechanism: "", what_changes: "", cost: "",
                 rationale: "", confidence: CONFIRMED|HYPOTHESIS}
@@ -173,10 +178,16 @@ Severity boilerplate (adapt the defect classes to the topic; keep the structure)
   executor judged insufficient.
 - medium = redundancy/ambiguity/inconsistency with a clear fix. low = clarity/wording.
 
-Maturity boilerplate: compute LAST, per surface, evaluated top-down with first match winning
-(e.g. frontier -> strong -> solid -> nascent), each level defined by open-finding counts plus any
-checklist criterion, with an explicit note that the top rating remains reachable if the executor
-argued a property-matched compensating control -- the prompt's framing must not foreclose it.
+Maturity boilerplate: compute LAST, per surface, evaluated top-down with first match winning.
+Default scale -- the generated prompt may rename levels or adjust thresholds for the topic, but
+must pin exact numeric thresholds; never leave the scale as an example:
+
+- frontier = 0 open critical or high findings AND every property of the external checklist
+  assessed under the frontier-question (Q1-equivalent) rated met or partial-with-argued-control.
+- strong = 0 critical AND <= 1 high. solid = <= 1 critical. nascent = otherwise.
+
+Add the explicit note that the top rating remains reachable if the executor argued a
+property-matched compensating control -- the prompt's framing must not foreclose it.
 
 ## Commit / PR Mechanics Boilerplate (for the generated prompt)
 
@@ -185,15 +196,19 @@ The generated prompt instructs the executor, concretely:
 1. Derive the base ONCE: `git fetch origin main` then `git rev-parse --short origin/main`; this
    base IS the audited tree; use the sha in the deliverable filenames, branch name, and
    `meta.audited_commit`.
-2. `git switch -c audit/{topic-slug}-<sha> origin/main` so the PR diff is only the two
-   deliverable files.
+2. `git switch -c audit/{slug}-<sha> origin/main` so the PR diff is only the two deliverable
+   files. This is a deliberate, documented exception to the AGENTS.md `claude/*` session-branch
+   rule: the executor session needs a clean two-file diff off the audited base. The CI
+   signal-green comment wake fires only on `claude/*` PRs -- irrelevant here, because the
+   executor ends its turn without merging; the human disposes of the PR.
 3. Note that repo-wide validation is advisory outside CI in this repo: a clean YAML parse of the
    two deliverables is the real pre-push gate; an unrelated `validate --pre` failure is recorded
    in `meta.contract_notes`, never fixed (write boundary).
 4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, `--no-gpg-sign` if signing
    is unavailable. `git push -u origin HEAD`.
 5. Open the PR via `mcp__github__create_pull_request` (base=main, ready for review, title
-   `audit: {topic} ({surfaces})`, body = the summary block in a yaml fence + a 2-3 sentence
+   `audit: <audit topic in plain words> (<scope surfaces>)`, body = the summary block in a
+   yaml fence + a 2-3 sentence
    lede). Then END THE TURN -- do not poll, do not merge, do not subscribe.
 
 ## Zero-Context Verification Gate (MANDATORY)
@@ -218,13 +233,17 @@ exact quoted prompt text, each tagged blocking|degrading|cosmetic; Verdict PROCE
 (REVISE iff any blocking, or 3+ degrading).
 
 **V2 -- Fact auditor (grounding).** Full repo read access. Task: "Independently verify every
-factual claim in this prompt against the repository at origin/main: every file path exists; every
+factual claim in this prompt against the repository at the current branch HEAD (the tree the
+prompt was drafted from; note in your output any cited file where origin/main has since
+diverged): every file path exists; every
 file:line anchor resolves to what the prompt says is there; every quoted identifier (decision,
 roadmap item, contract, schema field, enum) exists as cited; every command in the setup and
 mechanics sections is runnable as written (run the read-only ones; static-check the rest). A
 single wrong fact poisons an expensive session -- treat any mismatch as a finding." Output:
 numbered mismatches with prompt-text vs repo-truth, each tagged wrong|stale|unverifiable;
-Verdict PROCEED|REVISE (REVISE iff any wrong or stale).
+Verdict PROCEED|REVISE (REVISE iff ANY finding: wrong and stale claims are corrected;
+unverifiable claims are re-anchored or stripped by the composer before the next round -- a
+grounding claim the fact auditor cannot verify does not ship).
 
 **V3 -- Frame and best-practice challenger.** Full repo read access; also reads this skill's
 BP1-BP14 table (pass the checklist text inline in the dispatch so the verifier does not need the

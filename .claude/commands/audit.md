@@ -18,18 +18,21 @@ Skill tool. For canonical git-ops (branching, rebase, PR/CI/merge flow), see AGE
 ## Step 1: Preflight
 
 *This workflow runs on Claude Opus 1M (opus[1m]). If the model indicator does not show Opus, run
-`/model opus[1m]` before proceeding.*
+`/model opus[1m]` before proceeding -- the `model:` frontmatter applies for the current turn and
+reverts on the next prompt.*
 
 ```bash
 bin/venv-python -m scripts.session_preflight
 ```
 
-Read `logs/.preflight-report.json` for the constraint surface; the recommendations cache it
-refreshes feeds Step 4's dedup pointers. If preflight fails on creds/egress, proceed anyway --
-recon degrades (dedup pointers become best-effort and the generated prompt's SETUP section must
-carry the degraded-dedup escape hatch regardless).
+Read `logs/.preflight-report.json` (branch, creds, and cache freshness feed recon; the
+recommendations cache preflight refreshes feeds Step 4's dedup pointers). If preflight fails on
+creds/egress, proceed anyway -- recon degrades to best-effort dedup pointers, and the generated
+prompt's mandatory SETUP section carries the pinned degraded-dedup escape hatch either way (see
+the skill's anatomy row 5).
 
-Then open a telemetry session and save the UUID for Step 9:
+Then open a telemetry session (the state file `logs/.telemetry-active-session.json` carries the
+session id; Step 9's close reads it):
 
 ```bash
 bin/venv-python -m scripts.session_preflight --open-session --workflow audit
@@ -48,15 +51,18 @@ of the branch name.
 ## Step 3: Clarify the Request
 
 Decompose the request into: audit TARGET (which system/design), SURFACES (built vs
-designed-unbuilt), the DECISIVE QUESTIONS the human wants answered, BOUNDARIES (what the audit
+designed-unbuilt), the QUESTIONS the human wants answered (flag any that demand a per-surface
+actionable verdict from a pinned option set -- those become the output contract's optional
+decision block), BOUNDARIES (what the audit
 must not touch or opine on), and the executor's WRITE BOUNDARY (default: exactly two deliverable
 files under `audits/`). If any of these are vague, ask 2-5 questions now -- ambiguity resolved
 here is ambiguity the expensive model never pays for. Do not proceed on guesses.
 
 ## Step 4: Deep Recon
 
-Invoke the `audit-prompt` skill via the Skill tool and assemble the **Recon Dossier** per its
-Recon Dossier section: surface inventory, neutrally-phrased observed facts with verified
+Invoke the `audit-prompt` skill via the Skill tool. Read `docs/PROJECT_CONTEXT.md` in full first
+-- the generated prompt's NORTH STAR section and the deliberate-constraints do-not-flag list
+draw on it. Then assemble the **Recon Dossier** per the skill's Recon Dossier section: surface inventory, neutrally-phrased observed facts with verified
 anchors, candidate list, vocabulary, disambiguation traps, dedup pointers (targeted `rg`
 projections over `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`,
 `logs/.recommendations-log.jsonl` -- no full-file reads), empirical-pass seeds, and open
