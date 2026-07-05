@@ -1,0 +1,665 @@
+audit:
+  meta:
+    audited_commit: f4dec93
+    base_branch: main
+    model: "Claude Fable 5 (claude-fable-5)"
+    methodology_version: 1
+    scope_surfaces: [candidate_decisions_set, marking_convention, ratification_feed]
+    degraded_dedup: false
+    contract_notes: >-
+      origin/main fetch succeeded; audited tree = f4dec93 = local HEAD (no divergence, no detach
+      needed). session_preflight succeeded (creds ok; dedup caches fresh; 684 open recs).
+      Roadmap parses cleanly; counts re-derived this session: 40 CDs = 23 pending + 16 ratified +
+      1 superseded. Q3 id re-derivation: exactly one CD contains both "2026-05-18" and "stash"
+      and it IS CD.18 -- no id discrepancy. The referential guard was executed live in-session
+      and PASSED (98 Decision headers indexed). Both feed functions were executed live and
+      returned empty lists. The git stash named by CD.18 is absent from this clone and its named
+      branch does not exist on origin (git branch -a) -- recorded as an explicitly unverifiable
+      premise, not as evidence of non-existence (a stash is a machine-local ref).
+    stale_anchors: []
+  question_answers:
+    - q: Q1
+      verdict: partial
+      basis: [PCD-01, PCD-02, PCD-03]
+      prose: >-
+        The pending set is safe to load as binding today in the narrow sense that no pending CD
+        would cause a wrong TRUSTED action right now, but 8 of the 23 pending entries are not
+        genuinely open decisions: CD.7 is fully superseded in prose while state stays pending
+        (its amendment sits at the top of detail and its gates were emptied, so it self-corrects
+        on read -- inert, not misdirecting); CD.19 is overtaken by events (its decision window
+        "BEFORE T2.2 begins" passed when T2.2 completed 2026-05-29, and the recorded de facto
+        timestamp policy diverges from the CD's recommended option); and six CDs (CD.4, CD.5,
+        CD.8, CD.9, CD.28, CD.39) are realized -- in four cases with the realization or its
+        proxy-ratification recorded elsewhere in the same file -- yet carry no
+        realization_evidence, so they present as open decisions and are invisible to the
+        ratification lane. The ratified sixteen are referentially sound (guard PASS observed);
+        three carry stale pre-ratification prose (two already owned by open recs). The single
+        superseded entry (CD.14) is the correct-transition exemplar (flipped when ratified
+        Decision 86 superseded it).
+    - q: Q2
+      verdict: partial
+      basis: [PCD-03, PCD-04, PCD-05]
+      prose: >-
+        Three treatments of a changed premise coexist: formal state flip (CD.14, executed when
+        the superseder was a RATIFIED Decision), prose-amendment-with-gates-emptied-and-state-
+        retained (CD.7, whose superseder CD.28 is itself still pending), and clause-level
+        amendment without state change (CD.11 narrow supersession, recorded in BOTH prose and
+        the structured narrowly_supersedes field; CD.10 self-demotion of its six-Lambda
+        enumeration). Read against the evidence, the coexistence is more principled than it
+        first appears: full supersession by a decision-final authority flips state; supersession
+        by a still-pending candidate is held in prose until the superseder ratifies; partial
+        supersession must NOT flip state (surviving clauses bind, T4). The defect is not the
+        taxonomy but its enforcement: the convention lives entirely in author discipline (NS-D),
+        the load-time guard validates only the ratified SHAPE (R1-R3), nothing validates the
+        state value itself against the enum, and -- the sharpest edge -- nothing fires the held
+        CD.7 flip when CD.28 ratifies. The convention should require that an amendment recording
+        FULL supersession by a now-ratified authority flip state in the same edit, and a
+        load-time guard should enforce exactly that conjunction (pending + "fully superseded by
+        X" + X ratified = fail). Requiring the flip at amendment time regardless of the
+        superseder's own state would be WRONG per the CD.14/CD.7 asymmetry above.
+    - q: Q3
+      verdict: unsound-favor-void
+      basis: []
+      prose: >-
+        Target re-derived: CD.18 (the only CD containing "2026-05-18" and "stash"); it requires
+        a decision before T1.5 goes in_progress and T1.5 is not_started, so the decision window
+        is still open. Empirical pass: the stash is absent from this clone (machine-local ref,
+        as expected) and the branch agent/ops-decisions-phase-2-semantic-definition does not
+        exist on origin -- so the stash exists, if at all, only on the 2026-05-18 host machine.
+        That host is the pre-CC-web Windows dev surface whose exit CD.2 decided and whose
+        decommission T5.1 schedules (not_started, gated on T0-T4 stable >=14d -- teardown is
+        scheduled but not imminent). The mvp-triage audit's characterization ("ratifying CD.18
+        early is a zero-cost unblock", platform-roadmap-mvp-triage-7d57a0d.yaml:45) is unsound
+        as stated: it prices the ratification ACT and assumes away the decision CONTENT. Option
+        (a) revive rests on an empirically unverifiable premise (a 7-week-old machine-local
+        stash nobody has confirmed) and is only cheap if that check is done at the host; option
+        (b) void is genuinely near-zero-cost and is favored by the evidence: the surface the
+        stash targeted has been superseded twice over (CD.10 dismantles ops_data_portal as agent
+        surface; Decision 84 moved recs/decisions writes to the DuckLake writer boundary), and
+        scripts/executor/rec_write_guidance.py now exists in tree independently evolved, so the
+        stashed WIP would land on a surface that has moved beneath it. Safer option: (b) void,
+        decided explicitly at ratification. The single piece of evidence that would settle it:
+        run `git stash list` (and `git stash show -p` if present) on the 2026-05-18 host before
+        T5.1 executes -- minutes of human effort, worth doing opportunistically, not worth
+        blocking on. The human decides; this audit only ranks the branches.
+    - q: Q4
+      verdict: process
+      basis: [PCD-01]
+      prose: >-
+        Re-derived at f4dec93: pending CDs with truthy realization_evidence = 0; pending CDs
+        with a '[Realized' prose marker = 0 (both feed functions executed live, both empty;
+        the nine truthy realization_evidence values all sit on RATIFIED CDs as retained lane
+        input). "Empty" is NOT "healthy/drained": the 2026-07-02/03 Decision-105 wave
+        (dec-106..dec-113, dec-118 -- re-derived from ratified_as fields) drained exactly the
+        CDs that carried prose markers or drafted evidence at lane creation, but the Q1 walk
+        finds six pending CDs realized today (CD.39 fully built AND enforced by
+        validate_platform_roadmap.py; CD.9 with substance ratified by proxy via Decisions
+        78/81 per T2.4's note; CD.5 with "ratifies post-hoc" recorded on T0.10; CD.4; CD.28
+        with its retirement work observably executed and gating an in_progress item; CD.8 with
+        its engine decision live), none carrying evidence. Root cause is PROCESS, not
+        mechanism (functions correct, guard green, lane demonstrated end-to-end by the first
+        batch) and not ownership (the producer is named: "whoever notices" -- audit, /orient,
+        planning). The producing step is never triggered: /orient is read-only AND explicitly
+        forbidden from surfacing plausibly-realized CDs without the field
+        (.claude/skills/orient/SKILL.md:92), /plan sessions are item-scoped, audits are
+        ad-hoc, and T-1.1 (which built the lane and ran the first batch) is complete and by
+        its own text does not reopen. Meanwhile the scope-(c) exemption ledger
+        (ROADMAP-PLATFORM.yaml:125-145) already records, machine-readably, which pending CDs
+        owe post-hoc ratification -- and no pass converts that ledger into
+        realization_evidence. Two surfaces hold the same fact with no linkage.
+    - q: Q5
+      answers:
+        - question: "(a) Do the 16 ratified CDs' ratified_as/filed_via cross-refs all resolve to real '## Decision NNN' headers?"
+          answer: >-
+            Yes -- observed, twice over: every one of the 15 distinct dec-NNN targets (dec-078,
+            079, 081, 085, 092, 103, 106-113, 118; CD.16 and CD.24 legitimately share dec-079)
+            has a '## Decision NNN:' header in docs/DECISIONS.md (none needed the archive), and
+            the R1/R2/R3 guard executed live in-session PASSES with 98 headers indexed. No
+            ratified-shape referential break exists at f4dec93.
+          basis: []
+        - question: "(b) Does any CD classified superseded-unmarked gate a live tier item -- a stale premise actively wedging real work?"
+          answer: >-
+            No. The only superseded-unmarked CD (CD.7) has an emptied gates list and wedges
+            nothing. The nearest real case is CD.19 (classified other/overtaken): it still
+            gates T1.6's completion, but T1.6 is not_started, so the wedge is prospective --
+            its stale framing would misdirect the T1.6 planning session rather than block live
+            execution today (PCD-02). The pending CDs that DO gate live work now (CD.28 on
+            in_progress T0.4; CD.29/CD.30 on T3.7/T3.10/T3.17) carry current premises.
+          basis: [PCD-02]
+        - question: "(c) Does the roadmap's self-contained-document invariant interact with any CD whose premise now lives only in a DECISIONS.md entry?"
+          answer: >-
+            Largely no -- the discipline of inlining amendments into CD detail is good (CD.34
+            inlines the Decision 88 DR-cadence amendment; CD.28 inlines the Decision 116
+            reconciliation; CD.14 summarizes Decision 86's supersession inline). One soft spot:
+            CD.9's decided-by-proxy status (its partitioning substance ratified via Decisions
+            78/81) is recorded in T2.4's note (ROADMAP-PLATFORM.yaml:4675) and in DECISIONS.md,
+            but NOT in CD.9's own entry -- an agent reading only candidate_decisions[] sees a
+            fully open decision. Same file, wrong locus; the disposition for CD.9 (write
+            evidence, ratify) should carry that fact into the CD entry.
+          basis: [PCD-01]
+        - question: "(d) Did the walk surface any ratified CD whose premise looks substantively false (pointer for the DECISIONS.md-side audit; conscious out-of-scope)?"
+          answer: >-
+            No ratified CD carries a substantively false live premise; the one genuinely false
+            framing found (CD.34's "nothing consumes the catalog yet / blast radius is zero")
+            is already self-bracketed in the CD as contradicted-and-retained-for-history, which
+            is exemplary treatment. Cosmetic pre-ratification tense survives on CD.31/CD.33/
+            CD.35 (PCD-05, rec-2287, rec-2048). Nothing to hand the DECISIONS.md-side audit
+            beyond CD.34's own note that rec-2063's WONTFIX framing needs re-review against the
+            live catalog -- which that CD already records.
+          basis: [PCD-05]
+        - question: "(e) Does any static reference point at a CD that is now ratified or superseded and should have been released?"
+          answer: >-
+            No unreleased static reference found. completion_blocked_on_cd is computed live and
+            keys on state == "pending" (verified in code), so gates self-released when the wave
+            ratified. The one static reference to superseded CD.14 (T5.5's
+            related_candidate_decisions) carries an explicit release note ("CD.14 superseded by
+            Decision 86; this item now executes the extract-and-retire model"). related-CD
+            references to ratified CDs are alias-by-design (roadmap:409-410). The
+            bootstrap_completion_exempt flags were actively swept when CD.25/CD.1/CD.2/CD.20/
+            CD.21/CD.26 ratified (discharge records at roadmap:116-145, with a strip-only-when-
+            ALL-gating-CDs-ratified safety rule); remaining flags are correct because their
+            gating CDs are still pending. Minor note-level inaccuracy only: T2.1's scope-(c)
+            note says "gating CD.6/CD.17 ratify post-hoc" -- CD.17 does not ratify post-hoc, it
+            ratifies at its reversal trigger; harmless (T2.1 complete, flag correctly retained).
+          basis: []
+        - question: "(own) Is the filed_via placeholder on pending CDs still accurate?"
+          answer: >-
+            Nine pending CDs carry filed_via: pending_log_decision_lambda -- guard-compliant
+            (R2 permits the literal) but the literal's NAME encodes a retired premise: the
+            log-decision Lambda (T0.7b) was never deployed, Decision 91 retired the stub, and
+            the ops portal is the shipped vehicle (T0.7b's own entry records the write verb as
+            already realized on the ducklake_writer boundary). Function is unaffected;
+            vocabulary is stale. Cosmetic; fold into the next ratification-lane touch rather
+            than filing separately.
+          basis: []
+        - question: "(own) Is the pending set structurally one population?"
+          answer: >-
+            No -- it is bimodal, and the lane only addresses one mode. Roughly 9 of 23 pending
+            CDs are forward-intent decisions gating unbuilt T3/T4 substrate (CD.27, CD.29,
+            CD.30, CD.32, CD.37-CD.40 correctly pending per Decision 105's
+            ratify-only-on-realization-evidence rule; CD.40 says so explicitly), while the
+            audit-identified realized set is ratification DEBT. A pending count that mixes the
+            two overstates open decision load. The PCD-01 producer pass would make the split
+            visible for free (evidence-carrying vs forward-intent).
+          basis: [PCD-01]
+  pending_cd_disposition:
+    - {cd: CD.1, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:411", rationale: "dec-108 resolves; realization evidence retained; roadmap is canonical in daily use.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.2, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:423", rationale: "dec-109 resolves; CC-web surface operational since 2026-05-30; VM-until-T5.1 clause still true.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.3, state: pending, classification: pending-genuinely-open, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:436", rationale: "Compute-node premise consistent with AGENTS.md; gates only deferred_post_mvp T2.6 -- inert until product formula work resumes.",
+       recommended_disposition: "Leave as-is; revisit when T2.6 reactivates.", confidence: CONFIRMED}
+    - {cd: CD.4, state: pending, classification: pending-realized-unevidenced, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:441 + T0.9 complete (roadmap:3164)", rationale: "Gated work complete; the hedge is live (CLAUDE.md loads AGENTS.md); lock-in acceptance is operating reality.",
+       recommended_disposition: "Write realization_evidence; ratify via the Decision 105 lane.", confidence: CONFIRMED}
+    - {cd: CD.5, state: pending, classification: pending-realized-unevidenced, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:446 + T0.10 note (roadmap:3200)", rationale: "T0.10 complete; roadmap itself records 'CD.5 ratifies post-hoc via the portal vehicle' -- evidence never written.",
+       recommended_disposition: "Write realization_evidence; ratify via lane (discharges T0.10's scope-(c) flag).", confidence: CONFIRMED}
+    - {cd: CD.6, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:451", rationale: "dec-106 resolves; rebuild-not-migrate executed 2026-05-28.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.7, state: pending, classification: pending-superseded-unmarked, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:469,484", rationale: "Detail opens '[Amendment 2026-05-27 -- fully superseded by CD.28]'; gates emptied; state still pending -- a deliberate holding pattern while superseder CD.28 is itself pending, with no trigger to collapse it.",
+       recommended_disposition: "Flip to state: superseded in the SAME edit that ratifies CD.28 (wire via PCD-03's guard); until then leave -- do not flip on the strength of a pending superseder.", confidence: CONFIRMED}
+    - {cd: CD.8, state: pending, classification: pending-realized-unevidenced, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:486 + T2.5 complete", rationale: "Engine decision is live (DuckDB/DuckLake reader serves ops reads; T2.5 scope-(c) note names CD.8); T1.2 still gated -- ratification would be necessary-not-sufficient, per CD.2/CD.6 precedent.",
+       recommended_disposition: "Write realization_evidence scoped to the realized engine choice; ratify via lane.", confidence: CONFIRMED}
+    - {cd: CD.9, state: pending, classification: pending-realized-unevidenced, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:495 + T2.4 note (roadmap:4675)", rationale: "T2.4 complete and its note records CD.9's substance as ratified by proxy (Decisions 78/81); the CD entry itself does not say so (Q5c locus gap).",
+       recommended_disposition: "Write realization_evidence citing dec-078/dec-081; ratify via lane; carry the proxy-ratification fact into the CD entry.", confidence: CONFIRMED}
+    - {cd: CD.10, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:508,521", rationale: "Six-Lambda enumeration self-demoted ('illustrative, not canonical', 2026-06-09) and superseded by ratified CD.33; surviving content (two-principal model, extensible verb surface, portal dismantling) still open and gating T0.7x/T1.1-T1.3.",
+       recommended_disposition: "Leave pending; at ratification fold the demotion into a rescoped detail. T0.7a/b 'likely silent-completion' notes suggest realization is near.", confidence: CONFIRMED}
+    - {cd: CD.11, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:534-556", rationale: "Narrowly superseded (Fargate clause only) by CD.27 -- recorded in prose AND the structured narrowly_supersedes field; surviving dispatcher-supersession clause load-bearing for T4.1/T4.2. Correct treatment per T4; must NOT flip state.",
+       recommended_disposition: "Leave as-is; ratify alongside CD.27 at T4 build-out.", confidence: CONFIRMED}
+    - {cd: CD.12, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:587", rationale: "Half realized (Annotated-Pydantic SoT + DDL generator live via T0.12/T0.13); the runner-as-alarm half (T1.6) unbuilt -- the CD's defining semantic is not yet fully in force.",
+       recommended_disposition: "Leave pending until T1.6; consider realization_evidence scoped to the realized half if partial ratification is wanted.", confidence: CONFIRMED}
+    - {cd: CD.13, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:607", rationale: "dec-110 resolves; exemplar claim scoped honestly ('broader vision ongoing under T5.5').",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.14, state: superseded, classification: superseded-correct, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:620-632", rationale: "The formal exemplar: detail names superseder (ratified Decision 86, 2026-06-12), state flipped, null ratified_as/filed_via, R3-exempt, downstream reference (T5.5) annotated-released.",
+       recommended_disposition: "Leave as-is; treat as the template PCD-03's guard encodes.", confidence: CONFIRMED}
+    - {cd: CD.15, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:633", rationale: "Typed-verb read path live (NAMED_READS), but the Athena-escape-hatch clause transitioned to open OQ.7 and T2.7/T0.7c/T1.2 remain -- decision content partially open.",
+       recommended_disposition: "Leave pending; rescope at ratification to the DuckLake-era read contract.", confidence: CONFIRMED}
+    - {cd: CD.16, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:559", rationale: "dec-079 resolves (shared with CD.24 -- one Decision, two CDs, guard-legal); per-Lambda gating is live operating rule (AGENTS.md).",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.17, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:647-694", rationale: "Reversal trigger structurally unmet (T4.2 not_started); actively maintained (amendments through 2026-07-03); the operating-mode constraint every session loads.",
+       recommended_disposition: "Leave as-is -- correctly pending until trigger fires.", confidence: CONFIRMED}
+    - {cd: CD.18, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:695-709", rationale: "Decision window still open (T1.5 not_started); revive-branch premise empirically unverifiable from this clone (stash machine-local; branch absent on origin) and decaying (target surface superseded; rec_write_guidance.py independently exists).",
+       recommended_disposition: "Ratify with option (b) void unless a stash check on the 2026-05-18 host (before T5.1) rescues content -- see Q3.", confidence: CONFIRMED}
+    - {cd: CD.19, state: pending, classification: other, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:710-729 + T2.2 note (roadmap:4618)", rationale: "Premise state: overtaken by events -- the 'decision required BEFORE T2.2' window closed when T2.2 completed (2026-05-29) under de facto policy 'original ids and timestamps preserved' (option-(a)-shaped, diverging from the CD's recommended (c)); residual live content is only the T1.6 freshness-check semantics.",
+       recommended_disposition: "Human decides: rescope CD.19 to the T1.6 residue recording the de facto import outcome, or supersede it with a T1.6-scoped CD (PCD-02).", confidence: CONFIRMED}
+    - {cd: CD.20, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:730", rationale: "dec-111 resolves; public flip + curated-portal invariant in force; outstanding portal work honestly scoped in evidence.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.21, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:762", rationale: "dec-112 resolves; GH-hosted + OIDC CI is live reality (AGENTS.md runbook).",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.22, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:801", rationale: "dec-085 resolves; PLAN-*.yaml is the operating format.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.23, state: pending, classification: pending-genuinely-open, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:822", rationale: "Projection-not-parallel-source principle undecided formally; gates only deferred T2.11b -- inert.",
+       recommended_disposition: "Leave as-is; ratify when portal work resumes.", confidence: CONFIRMED}
+    - {cd: CD.24, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:843", rationale: "dec-079 resolves; manifests are live operating rule (lambda_manifest tooling in AGENTS.md).",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.25, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:896-983", rationale: "dec-118 resolves; drift gate live over 16 contracts; exemption-termination event fired and was swept with a strip-safety rule (roadmap:116-124).",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.26, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:985", rationale: "dec-113 resolves; Pattern B chain verified every session start.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.27, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1011", rationale: "Executor substrate unbuilt (T4.x not_started); substrate-existence claims were verified at authoring; correctly pending under the evidence rule.",
+       recommended_disposition: "Leave as-is until T4 work begins.", confidence: CONFIRMED}
+    - {cd: CD.28, state: pending, classification: pending-realized-unevidenced, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1085; copilot_sdk_client.py + bedrock_client.py deleted; RetiredProviderError live in scheduled_agent_handler.py", rationale: "The pivot is decided-in-practice and substantially executed (Bedrock/copilot dispatch deleted 2026-07-03, Decision 116 aligned, cost-reconciliation built); pending state now wedges in_progress T0.4's completion.",
+       recommended_disposition: "Write realization_evidence; ratify via lane (scheduling already queued by the mvp-triage audit -- not re-filed here).", confidence: CONFIRMED}
+    - {cd: CD.29, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1296; stale dp at :1361", rationale: "3 of 4 gated items complete (kernel/hermeticity/typed-acceptance live) but the defining hard-gate-by-default semantic is not yet in force and T3.7 is unbuilt; discipline-point gate-status prose is stale (claims T3.1/T0.12.5 open -- both complete).",
+       recommended_disposition: "Leave pending; refresh the stale gate-status discipline point (PCD-05 class).", confidence: CONFIRMED}
+    - {cd: CD.30, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1364", rationale: "Ratchet unbuilt (T3.7 not_started); lockstep-consumer propagation correctly deferred to ratification.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.31, state: ratified, classification: ratified-stale-prose, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1400; dp6 at :1491", rationale: "dec-078 resolves and premise sound; detail carries the not-enacted disclaimer twice (owned: rec-2048) and dp6's 'Until CD.31 is ratified... JSONL-staging continues' reads as live conditional.",
+       recommended_disposition: "Sweep pending-tense prose when actioning rec-2048.", confidence: CONFIRMED}
+    - {cd: CD.32, state: pending, classification: pending-genuinely-open, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1494", rationale: "OD-1..OD-4 unresolved; gates empty but the no-enforcement-work-until-OD-1/OD-2 discipline point binds as a brake; enforcement_mechanism absence owned by rec-2060.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.33, state: ratified, classification: ratified-stale-prose, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1560-1561,1619", rationale: "dec-081 resolves and premise sound; detail + dp3 retain 'this CD does NOT edit DECISIONS.md while pending' pending-tense framing post-ratification -- the unowned instance of the rec-2287/rec-2048 pattern.",
+       recommended_disposition: "Sweep pending-tense prose (PCD-05).", confidence: CONFIRMED}
+    - {cd: CD.34, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1627-1685", rationale: "dec-107 resolves; the falsified 'blast radius zero' framing is explicitly bracketed as contradicted-retained-for-history -- exemplary self-marking; Decision 88 amendment inlined.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.35, state: ratified, classification: ratified-stale-prose, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1687-1704", rationale: "dec-092 resolves and premise sound; stale pre-ratification language in detail owned by open rec-2287.",
+       recommended_disposition: "Action rec-2287; do not re-file.", confidence: CONFIRMED}
+    - {cd: CD.36, state: ratified, classification: ratified-sound, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1768", rationale: "dec-103 resolves; forward-intent framing explicit and still accurate under the freeze.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.37, state: pending, classification: pending-genuinely-open, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1805", rationale: "Self-declared inert under the freeze and the T4.1 concurrency=1 ceiling; gates deferred T4.8 only.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.38, state: pending, classification: pending-genuinely-open, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1827", rationale: "Self-declared inert under the freeze; gates deferred T4.9 only.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+    - {cd: CD.39, state: pending, classification: pending-realized-unevidenced, gates_live_item: false,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1853; validate_platform_roadmap.py:35-116; T-1.20 progress_note", rationale: "The flagship realized-unevidenced case: the exit-criteria ledger it decides is fully built, validate.py-ENFORCED (met_by/closes_criteria checks), and in daily bookkeeping use -- yet the CD presents as an open decision and is invisible to the lane.",
+       recommended_disposition: "Write realization_evidence; ratify via lane.", confidence: CONFIRMED}
+    - {cd: CD.40, state: pending, classification: pending-genuinely-open, gates_live_item: true,
+       evidence: "docs/ROADMAP-PLATFORM.yaml:1879-1919", rationale: "Explicitly 'Kept UNRATIFIED per Decision 105 (ratify only on realization evidence) -- the underlying subsystem (T3.20) is unbuilt' -- the self-documenting correct-pending exemplar; crossref extension owned by rec-2511.",
+       recommended_disposition: "Leave as-is.", confidence: CONFIRMED}
+  per_surface_assessment:
+    - surface: candidate_decisions_set
+      maturity: frontier
+      strengths: >-
+        Referential integrity is guard-enforced and observed clean; supersessions and
+        amendments are inlined with dates and clause-level precision (CD.11's dual
+        prose+structured recording, CD.34's self-bracketed falsified framing, CD.14's clean
+        transition); the exemption ledger that tracks completion-ahead-of-ratification is
+        actively maintained with a strip-safety rule; no CD misdirects a live trusted action
+        at HEAD.
+      top_gaps: [PCD-01, PCD-02, PCD-05]
+    - surface: marking_convention
+      maturity: frontier
+      strengths: >-
+        The three observed treatments (formal flip / prose-hold pending superseder
+        ratification / clause-level amendment without flip) are internally principled and were
+        each executed deliberately; the ratified SHAPE is enforced at load time in both CI
+        tiers; the one formal supersession (CD.14) is textbook.
+      top_gaps: [PCD-03, PCD-04]
+    - surface: ratification_feed
+      maturity: frontier
+      strengths: >-
+        Both feed functions are correct, disjoint by construction, consumed by /orient with
+        epistemically careful rules (prose is not corroboration; read-only surface never
+        unilaterally judges realization), and the lane they feed was demonstrated end-to-end
+        by the 2026-07-02/03 wave that drained the then-flagged set.
+      top_gaps: [PCD-01]
+  rubric_ratings:
+    - {surface: candidate_decisions_set, dimension: VD1, rating: adequate,
+       evidence: "CD.19 (roadmap:710) | CD.7 (roadmap:469)",
+       note: "Most premises current and actively amended; two decayed (CD.7 held-in-prose, CD.19 overtaken) plus stale gate-status prose on CD.29 -- none critical."}
+    - {surface: candidate_decisions_set, dimension: VD2, rating: adequate,
+       evidence: "CD.14 vs CD.7 | roadmap:620,469",
+       note: "Retired premises reliably reach prose with dates; they reach the state field only when the superseder is decision-final (CD.14) -- the CD.7 hold has no collapse trigger (PCD-03)."}
+    - {surface: candidate_decisions_set, dimension: VD5, rating: adequate,
+       evidence: "CD.28 (roadmap:1085) | CD.18 (roadmap:695) | CD.19 (roadmap:710)",
+       note: "CD.28's premise is sound and current; CD.18 is honest about its unverifiable premise; CD.19 is the one unsafe-as-written decision input."}
+    - {surface: candidate_decisions_set, dimension: VD3, rating: n/a,
+       evidence: "-", note: "Enforcement is the marking-convention surface's dimension; rated there."}
+    - {surface: candidate_decisions_set, dimension: VD4, rating: n/a,
+       evidence: "-", note: "Feed liveness is the ratification_feed surface's dimension."}
+    - {surface: marking_convention, dimension: VD2, rating: adequate,
+       evidence: "roadmap:116-145 exemption discharge records",
+       note: "Where a termination event fired (CD.25/CD.1/CD.2/CD.20/CD.21/CD.26 ratifications), the machine flags were swept in the same edit under an explicit safety rule -- discipline demonstrably worked on the exemption axis."}
+    - {surface: marking_convention, dimension: VD3, rating: weak,
+       evidence: "scripts/checks/roadmap/validate_candidate_decision_ratification.py:75-105; scripts/platform_roadmap.py:381",
+       note: "Load-time enforcement covers the ratified shape only: state is an unvalidated free string the guard's branch structure silently skips (PCD-04), and no guard couples supersession prose to state or fires the held flip at superseder ratification (PCD-03). Ratified-shape referential integrity itself: strong and observed."}
+    - {surface: marking_convention, dimension: VD1, rating: n/a,
+       evidence: "-", note: "Premise currency is rated on the CD set."}
+    - {surface: marking_convention, dimension: VD4, rating: n/a,
+       evidence: "-", note: "Not a discovery surface."}
+    - {surface: marking_convention, dimension: VD5, rating: n/a,
+       evidence: "-", note: "Decision-input soundness is rated on the CD set."}
+    - {surface: ratification_feed, dimension: VD4, rating: weak,
+       evidence: "ratifiable_cds()==[] and realized_but_pending_cds()==[] observed at f4dec93 while 6 pending CDs are realized",
+       note: "Functions correct and consumed, but the producing step has no recurring trigger and the recurring surface (/orient) is read-only and barred from surfacing plausibly-realized CDs -- empty-by-construction against a non-empty realized set (NS-C, PCD-01)."}
+    - {surface: ratification_feed, dimension: VD1, rating: n/a, evidence: "-", note: "Not premise-bearing."}
+    - {surface: ratification_feed, dimension: VD2, rating: n/a, evidence: "-", note: "Not a marking surface."}
+    - {surface: ratification_feed, dimension: VD3, rating: n/a, evidence: "-", note: "Guard rated under marking_convention."}
+    - {surface: ratification_feed, dimension: VD5, rating: n/a, evidence: "-", note: "Not decision content."}
+  findings:
+    - id: PCD-01
+      surface: shared
+      question: Q4
+      dimension: VD4
+      title: "Realized-but-unevidenced pending CDs are structurally invisible to the ratification lane: the producer step has no recurring trigger and the machine-recorded post-hoc-ratification debt never flows into realization_evidence"
+      evidence: "scripts/platform_roadmap.py:794-817 (both feeds empty, observed); roadmap:125-145 (scope-(c) ledger names the owing CDs); roadmap:3200 (T0.10: 'CD.5 ratifies post-hoc'); roadmap:4675 (T2.4: CD.9 substance ratified via dec-078/081); validate_platform_roadmap.py:35-116 (CD.39's mechanism enforced); .claude/skills/orient/SKILL.md:92 (orient barred from surfacing unevidenced realization); T-1.1 complete (roadmap:1987, 'later CDs ratify in subsequent sessions')"
+      evidence_kind: observed
+      current_behavior: >-
+        Six pending CDs are realized (CD.39 fully built and CI-enforced; CD.9
+        proxy-ratified via Decisions 78/81; CD.5 and CD.4 with gated work complete; CD.28
+        substantially executed and wedging in_progress T0.4; CD.8's engine choice live), and
+        the roadmap already records this fact machine-readably in the scope-(c) exemption
+        ledger and item notes -- yet zero pending CDs carry realization_evidence, so both
+        discovery feeds return empty and /orient reports nothing to ratify. The one
+        population pass ever run (the 2026-07-02/03 Decision-105 wave) keyed on prose
+        markers and drafted evidence, so unmarked realized CDs were missed and will stay
+        missed: /orient is read-only and explicitly forbidden from surfacing them, /plan is
+        item-scoped, audits are ad-hoc, and T-1.1 (the item that built the lane) is complete
+        and does not reopen.
+      ideal_behavior: >-
+        NS-C: a discovery feed with a named producer receives input whenever there is
+        genuinely something to surface. When a CD's gated work completes (or a scope-(c)
+        exemption is taken), the fact that the CD now owes ratification reaches the field the
+        lane reads, within a bounded number of sessions.
+      gap: "The produce step ('whoever notices') is never triggered on a cadence, and the two machine surfaces holding the same fact -- exemption flags awaiting 'ends when its gating CD ratifies' and the realization_evidence field -- have no linkage."
+      compensating_controls_considered: >-
+        (1) The mvp-triage audit queued CD.18/CD.28 ratification as explicit next actions --
+        property-matches for those two CDs only; it is a one-shot list, not a recurring pass,
+        and misses CD.4/5/9/39. (2) Ad-hoc audits (this one) exercise the same discovery
+        property but are not recurring -- they would not catch the next accumulation. (3) The
+        lane's first batch demonstrated drain capability -- but drained only the marked set.
+        None property-matches the recurring-trigger gap, so severity stands at medium rather
+        than being dismissed.
+      change_type: enforce
+      proposed_change: >-
+        Add a deterministic realization-candidate pass to session_preflight/platform_roadmap
+        (not to /orient's judgment): derive, from data already in the roadmap, the set of
+        pending CDs where (all non-deferred gated items are complete) OR (a scope-(c) note
+        names the CD as owing post-hoc ratification), and surface it in the preflight dict as
+        e.g. realization_candidates[] -- distinct from ratifiable_cds() (which stays
+        deliberate-corroboration-only, preserving the Decision 55 epistemic split). /orient
+        lists it as "candidate for evidence-writing in a /plan session"; the human-confirmed
+        /plan session writes realization_evidence, keeping /orient read-only.
+      acceptance: "With the pass live at f4dec93-equivalent state, the derived list contains CD.4, CD.5, CD.9, CD.39 (at minimum); after their evidence is written, ratifiable_cds() is non-empty and the scope-(c) discharge events can fire."
+      severity: medium
+      severity_rationale: "Matches the Section-15 medium class (feed empty with a cheap producer trigger): the harm is ratification latency and a pending count that overstates open decisions, not live misdirection -- no agent takes a wrong trusted action because a realized CD still binds; it binds correctly, just staler than reality."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["realization_evidence", "ratifiable", "ratification lane", "post-hoc ratif", "CD.39", "CD.9"]
+        dedup_hit_count: 3
+        note: "Hits: rec-2468 (documents truthy-vs-None semantics -- docs, not trigger), rec-2506/rec-2504 (closed, post-ratification test staleness). T-1.1 complete and self-scoped to the first batch. No rec or item owns a recurring producer trigger."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Pure additive read-side derivation + skill text; no contract change."}
+    - id: PCD-02
+      surface: candidate_decisions_set
+      question: Q1
+      dimension: VD1
+      title: "CD.19 binds on a premise overtaken by events: its decision window closed when T2.2 completed under a de facto policy diverging from the CD's recommendation, and the CD was never rescoped"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:710-729 (CD.19) vs :4618 (T2.2 note: 'CD.19 timestamp preservation policy applied: original ids and timestamps preserved'); T2.2 status complete (2026-05-29)"
+      evidence_kind: observed
+      current_behavior: >-
+        CD.19 instructs (bindingly, per roadmap:170) that a timestamp-preservation decision is
+        required BEFORE T2.2 begins, recommends option (c) (preserve created_timestamp, set
+        last_updated=import_time, tag source='import-bootstrap', schema change in T0.12/T1.6),
+        and gates T1.6 completion. T2.2 completed 2026-05-29 out-of-order under scope-(c)
+        exemption with the recorded outcome "original ids and timestamps preserved" -- option
+        (a)-shaped, the branch the CD itself predicted would cause a false-positive freshness
+        flood -- and no ratification, rescope, or amendment followed. The CD still reads as a
+        live pre-T2.2 decision.
+      ideal_behavior: "NS-A: a binding CD whose decision moment has passed records the de facto outcome and either ratifies (documenting the divergence) or is rescoped to its surviving live content -- here, how T1.6's freshness checks must treat imported rows given timestamps were preserved verbatim."
+      gap: "The binding text points agents at a decision that can no longer be taken, while the actually-live residual question (T1.6 freshness semantics for import-era rows) is present only by implication."
+      compensating_controls_considered: >-
+        T2.2's note records the de facto outcome in the same file -- partial property match
+        only: it corrects a reader who cross-references the gated item, but the CD is the
+        binding surface and its own text is uncorrected; a T1.6 planning session loading CDs
+        as binding instructions gets the stale framing first. The false-positive-freshness
+        downside of the de facto choice is currently latent (T1.6 unbuilt, rec-curator
+        disabled), which caps severity at medium but does not dismiss.
+      change_type: rescope
+      proposed_change: >-
+        Human disposition at the next /plan touching T1.6 or the ops-table freshness domain:
+        amend CD.19 with a dated clause recording (i) the window passed, (ii) the de facto
+        import policy (verbatim preservation), (iii) the rescoped live question (T1.6
+        freshness-check treatment of import-era rows, and whether the source-tag schema
+        change is still wanted); then ratify or supersede accordingly. This audit drafts
+        nothing into the roadmap.
+      acceptance: "CD.19's detail no longer instructs a pre-T2.2 decision; T1.6's plan cites the rescoped clause; the divergence between recommended (c) and applied (a) is explicitly owned."
+      severity: medium
+      severity_rationale: "Not critical: T1.6 is not_started, so no agent is currently acting on the stale instruction, and the in-file T2.2 note bounds the misdirection. Not merely low: this is the one pending CD whose text would actively misdirect the next session that loads it as binding input for real gated work."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["CD.19", "timestamp preservation", "import-bootstrap"]
+        dedup_hit_count: 1
+        note: "Single CD.19 hit (rec-2395) is an unrelated terraform test fix. No owner for the overtaken premise."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Decision content is the human's; the edit is one dated amendment clause."}
+    - id: PCD-03
+      surface: marking_convention
+      question: Q2
+      dimension: VD3
+      title: "No mechanism collapses the CD.7 holding pattern: when CD.28 ratifies, nothing flips the fully-superseded-in-prose CD.7 to state: superseded, and no load-time guard detects the pending+fully-superseded-by-ratified-CD conjunction"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:469,484 (CD.7 amendment + emptied gates); docs/contracts/candidate-decision-ratification.yaml:102-121 (lane_steps flip only the ratifying CD); scripts/checks/roadmap/ (no prose/state coherence check registered)"
+      evidence_kind: static
+      current_behavior: >-
+        CD.7 records full supersession by CD.28 in prose (dated amendment, gates emptied,
+        "retained for historical traceability only") while state stays pending -- defensible
+        today because the superseder is itself pending and the formal exemplar (CD.14) flipped
+        only when its superseder was a RATIFIED Decision. But the hold has no collapse
+        trigger: the lane's /implement steps flip only the CD being ratified, and no guard
+        examines detail prose, so when CD.28 ratifies, CD.7's flip depends on someone
+        remembering -- exactly the author-discipline dependence NS-D names as drift by design.
+      ideal_behavior: "NS-B/NS-D: a full-supersession recorded in prose reaches the state field the moment its superseding authority becomes decision-final, mechanically -- either by the ratifying edit (lane step) or by a load-time guard that fails the stale conjunction."
+      gap: "The transition rule exists as an implicit precedent (CD.14) but is neither written in the contract nor enforced; the system's one live holding pattern will silently outlive its justification."
+      compensating_controls_considered: >-
+        CD.7's amendment-at-top-of-detail plus emptied gates property-match the MISDIRECTION
+        risk (an agent loading CD.7 reads the retirement first, and the counterfactual
+        deletion changes no behavior) -- which is why this is not a premise-currency defect
+        on CD.7 itself. They do NOT property-match the transition risk: prose cannot flip a
+        field, so if the defect were real (CD.28 ratified, CD.7 still pending) the amendment
+        would do nothing to surface it. Control dismisses the misdirection candidate, not
+        this finding.
+      change_type: enforce
+      proposed_change: >-
+        Two small pieces: (1) extend the lane contract's /implement step with "when the
+        ratifying CD fully supersedes another CD (per a 'fully superseded by CD.NN' amendment
+        or supersedes_decisions entry naming a CD), flip that CD to state: superseded in the
+        same edit"; (2) add a companion check beside validate_candidate_decision_ratification
+        that fails when a state: pending CD's detail matches a fully-superseded-by-CD.NN
+        amendment AND CD.NN is state: ratified. Narrow supersession (CD.11) and self-demotion
+        (CD.10) are explicitly out of the guard's trigger -- surviving clauses bind (T4).
+      acceptance: "Fixture test: pending CD + 'fully superseded by CD.X' + CD.X ratified => guard fails; CD.7 flips in the same PR that ratifies CD.28; CD.11/CD.10 produce no violation."
+      severity: medium
+      severity_rationale: "Systemic (author-discipline-only convention on a binding surface) but with exactly one live instance whose misdirection is neutralized by its own text; discipline has not yet demonstrably failed (the CD.14 flip was executed correctly), so the high bar ('discipline failed on >=1 CD') is not met."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["CD.7", "prose supersession", "superseded-unmarked", "marking convention"]
+        dedup_hit_count: 0
+        note: "Zero hits on all four terms; the check registry contains no prose/state coherence guard; ULF-02 owned the lane mechanism, not this transition rule."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Guard is latent (fires only at CD.28 ratification) -- landing it BEFORE that ratification is precisely the point."}
+    - id: PCD-04
+      surface: marking_convention
+      question: Q2
+      dimension: VD3
+      title: "CandidateDecision.state is an unvalidated free string and the guard's branch structure silently skips unknown values -- a typo'd state would unbind a CD from every state-keyed surface with zero errors"
+      evidence: "scripts/platform_roadmap.py:381 (state: str = \"pending\", no Literal, in an otherwise extra=\"forbid\" model); scripts/checks/roadmap/validate_candidate_decision_ratification.py:75-105 (if superseded: continue / if pending: ...continue / if ratified: ... -- no else)"
+      evidence_kind: static
+      current_behavior: >-
+        Every consumer keys on exact string equality with "pending"/"ratified"/"superseded":
+        the binding-set derivation, gate computation (blocked_on_cd, completion_blocked_on_cd),
+        both feeds, and the guard. A CD whose state were "Pending", "retired", or any other
+        string would validate at load (str field), fall through every guard branch, vanish
+        from the pending set (silently releasing its completion gates and its binding), and
+        never appear ratifiable. All 40 current values are valid (observed clean) -- the hole
+        is latent.
+      ideal_behavior: "NS-D: the enum the whole system keys on is enforced where the data loads -- state: Literal[\"pending\", \"ratified\", \"superseded\"] fails loudly on anything else, mirroring the model's existing extra=\"forbid\" strictness and the OpenQuestion/KnownGap models' Literal status fields in the same file."
+      gap: "The single most load-bearing field on the audit surface is the one field the Pydantic model does not constrain, and the guard's control flow assumes the enum rather than checking it."
+      compensating_controls_considered: >-
+        The sibling models (OpenQuestion, KnownGap) use Literal status fields, showing the
+        pattern is established -- but that is precedent, not protection for this field. Careful
+        machine-mediated edits reduce typo likelihood but would not CATCH one (the failure is
+        silent by construction), so no property-matched control exists.
+      change_type: enforce
+      proposed_change: "Change CandidateDecision.state to Literal[\"pending\", \"ratified\", \"superseded\"] (or add an else-branch FAIL in the guard for unknown states; the Literal is the collocated fix). One-line change plus a red-fixture test."
+      acceptance: "Loading a roadmap fixture with state: Retired fails validation loudly (model ValidationError or guard FAIL), in both --pre and full tiers."
+      severity: medium
+      severity_rationale: "Latent (no instance) but the failure mode is the audit's core risk class -- a CD silently dropping out of the binding set -- and the fix is one line; a clear-fix integrity inconsistency, not a wording issue."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["CandidateDecision", "state enum", "Literal"]
+        dedup_hit_count: 2
+        note: "CandidateDecision hits are rec-2060 (CD.32 enforcement_mechanism field) and rec-2467 (_dec_number regex bounds) -- adjacent guard hardening, neither covers state validation."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Could ride along with rec-2467's guard-hardening plan."}
+    - id: PCD-05
+      surface: candidate_decisions_set
+      question: Q5
+      dimension: VD1
+      title: "CD prose currency has no maintenance trigger: pending-tense language recurs on ratified CDs (third unowned instance: CD.33) and gate-status notes rot on pending CDs (CD.29), because neither the ratification flip nor gated-item completion requires a prose sweep"
+      evidence: "docs/ROADMAP-PLATFORM.yaml:1560-1561,1619 (CD.33 'does NOT edit DECISIONS.md while pending' post-ratification); :1361 (CD.29 dp claims 'Remaining gates T3.1/T3.7/T0.12.5 open' -- T3.1 and T0.12.5 are complete); docs/contracts/candidate-decision-ratification.yaml:115-121 (flip step has no prose-sweep requirement)"
+      evidence_kind: static
+      current_behavior: >-
+        The lane's /implement flip step changes the three shape fields and nothing else;
+        completion bookkeeping on gated items updates item ledgers but not CD discipline
+        points. Result: a recurring class -- CD.35 (owned: rec-2287), CD.31 (owned: rec-2048),
+        CD.33 (unowned), and on the pending side CD.29's stale gate-status note -- where CD
+        text asserts a pending-era condition that is no longer true.
+      ideal_behavior: "NS-A applied to prose: the same edit that changes a CD's state (or completes its gated item) re-reads the CD's detail/discipline_points for now-false tense and either updates or date-brackets it, the way CD.34 brackets its falsified framing."
+      gap: "Instances get per-CD recs after audits notice them; the generator (no sweep step in the flip or in T-1.22-style truth maintenance for CDs) is unowned, so the class regrows."
+      compensating_controls_considered: >-
+        Ambient AGENTS.md states the DuckLake-sole-backend reality loudly, which
+        property-matches the worst concrete misreading (CD.31/CD.33's 'JSONL-staging
+        continues' implication) -- an agent acting on the stale prose would be corrected by
+        the layer it always loads. That control caps severity at low; it does not cover
+        CD.29-style gate-status rot, hence still a finding.
+      change_type: enforce
+      proposed_change: >-
+        Add one sentence to the lane contract's /implement flip step: "re-read the CD's
+        detail and discipline_points; update or date-bracket any clause phrased for the
+        pending window (CD.34's bracketing is the pattern)." Optionally extend the T-1.22
+        truth-maintenance rule to refresh CD gate-status notes when a gated item completes.
+        Sweep the CD.33 instance (and CD.29's note) when actioning rec-2287/rec-2048 rather
+        than filing new per-CD recs.
+      acceptance: "Lane contract carries the sweep sentence; the next ratification PR shows a tense sweep in its diff; CD.33/CD.29 instances cleaned in the rec-2287/rec-2048 batch."
+      severity: low
+      severity_rationale: "Each instance is bracketed by correct context elsewhere in the same file and contradicted by ambient AGENTS.md where it matters; clarity debt, not decision misdirection."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [rec-2287, rec-2048]
+        dedup_search_terms: ["pre-ratification", "CD.31", "CD.35", "stale prose"]
+        dedup_hit_count: 4
+        note: "rec-2287 (CD.35) and rec-2048 (CD.31) own instances; closed rec-2504/rec-2506 fixed test-side staleness. Instance recs are insufficient for the class: nothing prevents the next ratification from minting a new instance."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Bundle with rec-2287/rec-2048 execution."}
+  rejected_candidates:
+    - candidate: "The ratification-lane feed being empty means the discovery mechanism is broken or was never built"
+      why_dismissed: "Mechanism is built, correct, and demonstrated: both functions verified in code and executed live; the guard passes; the 2026-07-02/03 first batch ratified nine CDs through the lane end-to-end. Emptiness is a producer-side process state (PCD-01), not a mechanism defect."
+      compensating_control: "Decision 105 lane + T-1.1 (complete) + close-audit-ulf-02 second signal"
+      control_property_match: "The lane demonstrably transported realized CDs to ratified state when fed (dec-106..dec-118 wave) -- the exact property a broken mechanism would fail; had the mechanism been broken, the wave could not have drained the marked set."
+      decision_or_item_id: "Decision 105 / T-1.1 / ULF-02"
+    - candidate: "CD.7 should be flipped to state: superseded immediately (premise misdirection risk)"
+      why_dismissed: "Flipping now would key a machine-final supersession on a still-pending superseder (CD.28), contradicting the CD.14 exemplar where the flip followed a RATIFIED authority. Misdirection risk is neutralized: the amendment is the first thing in detail, gates are emptied, and deleting CD.7 today would change no agent behavior (counterfactual inert). The real residue -- no trigger at CD.28 ratification -- is filed as PCD-03."
+      compensating_control: "Amendment-at-top-of-detail + emptied gates list (roadmap:469,484)"
+      control_property_match: "The defect would be an agent obeying retired Bedrock-primary content; the control operates at the exact read path (the binding rule makes agents read detail, whose first clause retires the content and redirects to CD.28), so if the misdirection were real the control would be what fails -- and it demonstrably does not, since the content an agent extracts from CD.7 IS the supersession."
+      decision_or_item_id: "CD.28 (superseder, pending); PCD-03 carries the residue"
+    - candidate: "Stale pre-ratification language on CD.35 (re-file)"
+      why_dismissed: "Owned by open rec-2287; Section-13 do-not-flag honored. The class-level generator is filed as PCD-05 citing it."
+      compensating_control: "rec-2287 (open)"
+      control_property_match: "The rec's remedy edits exactly the stale text the candidate names; if the defect persisted post-rec the rec would have failed its own acceptance."
+      decision_or_item_id: "rec-2287"
+    - candidate: "CD.31 not-enacted disclaimer duplication / stale conditional prose (re-file)"
+      why_dismissed: "Owned by open rec-2048 (detail-block disclaimer duplication); the dp6 conditional falls in the same sweep. Counted as an owned instance under PCD-05, not re-filed."
+      compensating_control: "rec-2048 (open) + ambient AGENTS.md DuckLake-sole-backend statements"
+      control_property_match: "AGENTS.md's warehouse invariant directly contradicts the misreading the stale prose could induce (JSONL staging still live) in the layer every session loads ambiently -- the belief the defect would create is corrected by the control at read time."
+      decision_or_item_id: "rec-2048"
+    - candidate: "realization_evidence truthy-vs-None semantics undocumented for consumers"
+      why_dismissed: "Owned by open rec-2468; Section-13 do-not-flag honored."
+      compensating_control: "rec-2468 (open)"
+      control_property_match: "The rec's scope is the exact documentation gap named."
+      decision_or_item_id: "rec-2468"
+    - candidate: "Ratification guard _dec_number regex robustness"
+      why_dismissed: "Owned by open rec-2467; Section-13 do-not-flag honored. PCD-04 (state enum) is adjacent but a distinct field/failure mode, verified non-overlapping by reading the rec title."
+      compensating_control: "rec-2467 (open)"
+      control_property_match: "The rec targets the same guard file and the regex property specifically."
+      decision_or_item_id: "rec-2467"
+    - candidate: "CD.40 related_candidate_decisions crossref extension"
+      why_dismissed: "Owned by open rec-2511; Section-13 do-not-flag honored."
+      compensating_control: "rec-2511 (open)"
+      control_property_match: "The rec names the exact crossref (T2.15 -> CD.40)."
+      decision_or_item_id: "rec-2511"
+    - candidate: "Ratify CD.18 and CD.28 now (scheduling)"
+      why_dismissed: "Owned by the platform-roadmap-mvp-triage audit as explicit next actions; this audit assesses only premise soundness (Q3 for CD.18: unsound-favor-void; CD.28: realized-unevidenced, ledger row). Not re-filed."
+      compensating_control: "platform-roadmap-mvp-triage-7d57a0d findings (next-action list)"
+      control_property_match: "The triage audit's next-action list is the scheduling surface for exactly these two ratifications; if scheduling were still unowned, that list would not name them -- it does (yaml:45 and adjacent)."
+      decision_or_item_id: "platform-roadmap-mvp-triage-7d57a0d"
+    - candidate: "No owner exists for producing realization_evidence"
+      why_dismissed: "T5 trap honored: the producer IS named ('whoever notices: audit, /orient session, planning' -- contract surfacing_signal). The defect that survives is the trigger/actionability gap (PCD-01), noting /orient is structurally incapable (read-only) despite being named."
+      compensating_control: "docs/contracts/candidate-decision-ratification.yaml:44-53 producer definition"
+      control_property_match: "Ownership-existence is the property the candidate asserts broken; the contract line demonstrably names owners, so the candidate fails on its own terms -- what it cannot do is trigger them, which is PCD-01's territory, not an ownership defect."
+      decision_or_item_id: "candidate-decision-ratification.yaml (Decision 105)"
+    - candidate: "Pending CDs being binding at all is unsafe"
+      why_dismissed: "Deliberate design (roadmap:169-171), Section-13 do-not-flag. The audit assessed specific bindings' premises instead (Q1)."
+      compensating_control: "The binding rule itself plus the ratification lane as the pressure valve"
+      control_property_match: "n/a -- dismissed as deliberate design, not via a control."
+      decision_or_item_id: "roadmap agent_instructions (Decision 105 note)"
+    - candidate: "bootstrap_completion_exempt flags outlived their termination events (CD.25/CD.1 ratified)"
+      why_dismissed: "Investigated and found actively maintained: the CD.25 termination event fired 2026-07-03 and flags were stripped in the same edit for solely-CD.25-gated members; retained flags (T0.12.5, T0.12.7, T0.3, scope-(c) members) are each justified by a still-pending gating CD under the explicit strip-only-when-ALL-gating-CDs-ratified safety rule."
+      compensating_control: "Discharge records + flag-strip safety rule (roadmap:116-145)"
+      control_property_match: "The defect would be a flag surviving its termination event; the discharge records show the sweep ran ON the termination event and enumerate exactly which flags were stripped vs retained and why -- the control is the sweep itself, which would be absent if the defect were real."
+      decision_or_item_id: "dec-118 discharge record (roadmap:116-124) / close-audit-ulf-02 (roadmap:136-145)"
+    - candidate: "filed_via: pending_log_decision_lambda placeholder is stale vocabulary (9 pending CDs)"
+      why_dismissed: "Guard-compliant by R2 (contract explicitly permits the literal); function unaffected -- the placeholder never routes anything, and the live vehicle note (roadmap:146-149) is adjacent in the same file. Cosmetic vocabulary drift recorded in Q5; below finding threshold (Section 17: precision over volume)."
+      compensating_control: "R2 rule + agent_instructions ratification-vehicle note"
+      control_property_match: "The defect would be an agent routing a ratification to a nonexistent Lambda; the vehicle note operates at the exact moment an agent looks up how to ratify and names the portal path, so the wrong-routing belief cannot survive the lookup."
+      decision_or_item_id: "candidate-decision-ratification.yaml R2 / roadmap:146-149"
+  summary:
+    total_findings: 5
+    novel_count: 4
+    planned_insufficient_count: 1
+    planned_unbuilt_count: 0
+    top_improvements: [PCD-01, PCD-02, PCD-03, PCD-04, PCD-05]
+    highest_leverage_change: PCD-01
+    maturity_candidate_decisions_set: frontier
+    maturity_marking_convention: frontier
+    maturity_ratification_feed: frontier
