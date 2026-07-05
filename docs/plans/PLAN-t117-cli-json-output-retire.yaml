@@ -96,10 +96,16 @@ verification_plan:
     action: "INTENT premise corrected: the false phrasing is gone and a correction marker is present."
     command: >-
       bash -c '! grep -q "parses CLI JSON output" docs/INTENT-pre-codegen-contract-ratification.md
+      && ! grep -q "llm_utils.py parser reads the YAML" docs/INTENT-pre-codegen-contract-ratification.md
       && grep -qiE "parser was deleted|never parsed JSON|retired" docs/INTENT-pre-codegen-contract-ratification.md
       && echo INTENT_OK'
-    expected: "Prints INTENT_OK; the 'parses CLI JSON output' claim is removed and a retirement/correction note is present."
-    fix_if: "The old phrase still matches, or no correction marker was added."
+    expected: >-
+      Prints INTENT_OK; BOTH premise copies are struck -- the line-~203 "parses CLI JSON output" claim and
+      the embedded T-1.17 replica's "llm_utils.py parser reads the YAML" (~lines 1005-1030) -- and a
+      retirement/correction marker is present.
+    fix_if: >-
+      Either phrase still matches (the embedded replica at ~1005-1030 is easy to miss -- the plan-critique
+      gate flagged it), or no correction marker was added.
   - step: 4
     phase: pre-deploy
     action: "Retirement Decision recorded in DECISIONS.md and reflected in ops_decisions via the portal backfill."
@@ -175,7 +181,7 @@ context:
     corroborates the dead path). Provenance: Decision 52/49/40 (Decision 52 lives in DECISIONS_ARCHIVE.md,
     cited as archived context, not a live governing decision).
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE, 0 BLOCK); CITE = Decision 86, Decision 84, dec-118, Decision 103."
-  - "gates: decision-scout=FLAGS_FOUND (2 NOTE, resolved in-plan); plan-critique=pending"
+  - "gates: decision-scout=FLAGS_FOUND (2 NOTE, resolved in-plan); plan-critique=PROCEED after 1 round"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
