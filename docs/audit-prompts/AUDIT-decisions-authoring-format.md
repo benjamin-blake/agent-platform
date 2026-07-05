@@ -48,7 +48,7 @@ where a candidate sits in this list or how emphatically it is phrased.
 
 ## READ FIRST -- disambiguation traps
 
-This file lives in a dense naming neighbourhood. Four traps have misdirected readers before; do
+This file lives in a dense naming neighbourhood. Five traps have misdirected readers before; do
 not step in them.
 
 1. **Four artifacts, one name-family.** Keep them distinct:
@@ -135,7 +135,8 @@ Run these once, at the start, from the repo root. They are read-only or cache-re
    ```
    This populates `logs/.preflight-report.json` and `logs/.recommendations-log.jsonl`.
    **IF this fails (creds/egress down): do NOT abort.** Set `meta.degraded_dedup = true`, mark every
-   `roadmap_crossref` confidence `HYPOTHESIS` and `dedup_hit_count: null`, and proceed. The
+   finding `confidence: HYPOTHESIS` and every `roadmap_crossref.dedup_hit_count: null`, and proceed.
+   (Confidence is a top-level finding field; `roadmap_crossref` carries only `dedup_hit_count`.) The
    recommendations log may still be present as a stale cache; if so, use it and note the staleness in
    `meta.contract_notes`.
 3. Size/shape probes you will re-derive (do not trust the numbers here; these are the commands):
@@ -255,7 +256,9 @@ not structurally apply -- never manufacture a rating or a finding to fill a cell
 - **VD5 -- Growth governance.** Is unbounded growth consciously governed (ceiling/guard, or a
   reasoned exemption), per the Decision 114 precedent? Serves Q3, Q4.
 
-Every question is served by >=1 dimension; every dimension is referenced by >=1 question.
+Every analytical question (Q1-Q4) is served by >=1 dimension; every dimension is referenced by >=1
+question. Q5 (questions-not-asked) is meta and dimension-agnostic -- a finding tagged `question: Q5`
+sets `dimension` to the closest-fitting VD (or the VD its underlying gap most implicates).
 
 ---
 
@@ -284,13 +287,19 @@ propose editing Decision 114 or the roadmap guard -- this is analysis feeding yo
 
 Sample **at most 8** decision entries -- do NOT exceed. Choose for structural variety: include at
 least two with `Reversal conditions`, at least one with a trailing bracketed amendment, and a
-spread across the pre-77 and post-85 bands. For each sampled entry apply this counterfactual and
+spread across the pre-77, the 77-85, and the post-85 bands (Decision 84, the named amendment
+example, sits in the 77-85 middle). For each sampled entry apply this counterfactual and
 tag `evidence_kind: observed`:
 
 > Run `parse_decisions_md` (or trace its regexes) over the entry and compare the resulting
 > `DecisionPayload` fields against the raw block. Which governing elements survive, and which are
 > dropped? Would a consumer reading only `ops_decisions` recover the decision's full governing
 > content?
+
+Then apply the CONVERSE probe on the same sample: what does the prose form capture that a structured
+store would flatten or lose (narrative nuance, human-authored trailing amendments, browse cohesion
+across related decisions)? Record BOTH directions so the Q2/Q3 verdicts weigh loss against gain, not
+loss alone -- a format finding that only counts what prose drops has not done the weighing.
 
 An observed fidelity gap (an element demonstrably dropped for a real sampled entry) outranks a
 static/theoretical one at equal severity. Record the sampled decision numbers in the finding
@@ -397,7 +406,9 @@ verbatim.
 novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered or
 not-a-defect candidates live in `rejected_candidates[]`, NOT `findings[]`. `rubric_ratings`,
 `question_answers`, and `format_disposition` are systems-of-record referenced FROM findings, never
-re-counted. `top_improvements` and `highest_leverage_change` MUST be finding ids.
+re-counted. `top_improvements` and `highest_leverage_change` MUST be finding ids -- EXCEPT when
+`findings[]` is empty (a valid, honest result): then set `top_improvements: []` and
+`highest_leverage_change: null`.
 
 **CONFIRMED vs HYPOTHESIS.** `CONFIRMED` requires the behaviour traced to a file:line or an observed
 sampled entry. Anything less is `HYPOTHESIS`.
