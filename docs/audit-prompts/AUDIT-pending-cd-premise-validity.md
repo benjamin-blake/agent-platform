@@ -147,7 +147,8 @@ Run these read-only commands first. NEVER abort on failure -- take the named deg
    caches Section 13 depends on. This regenerates gitignored local caches; that is expected and
    is not a write-boundary breach (never commit them).
    - IF this fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup = true`, mark
-     every `roadmap_crossref` confidence HYPOTHESIS and every `dedup_hit_count` null, and proceed
+     every dedup-dependent finding's `confidence` HYPOTHESIS (the finding-level field) and every
+     `roadmap_crossref.dedup_hit_count` null, and proceed
      using direct `rg` over `logs/.recommendations-log.jsonl` if it exists, or skipping the
      rec-dedup pass entirely (recording that in `contract_notes`).
 3. Confirm you can parse the roadmap:
@@ -463,7 +464,12 @@ Invariants (state and obey):
   novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered candidates live
   in `rejected_candidates[]`, NOT findings. `pending_cd_disposition`, `rubric_ratings`, and
   `question_answers` are systems-of-record referenced FROM findings, never re-counted into
-  `total_findings`. `top_improvements` and `highest_leverage_change` MUST be finding ids.
+  `total_findings`. `top_improvements` and `highest_leverage_change` MUST be finding ids -- EXCEPT
+  when `findings[]` is empty (a valid result), in which case `top_improvements: []` and
+  `highest_leverage_change: null`.
+- A surface's maturity is recorded twice -- `per_surface_assessment[].maturity` and the matching
+  `summary.maturity_<surface>` -- and the two MUST agree. The Section 15 top-down recompute over
+  that surface's open findings is authoritative; set both fields to its result.
 - `pending_cd_disposition` has exactly one entry per CD (re-derive the count); it is a
   classification ledger, not a findings list -- a CD classified `ratified-sound` needs no finding.
 - Note two distinct fields both named `classification`: `pending_cd_disposition[].classification`
