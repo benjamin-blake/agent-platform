@@ -120,8 +120,10 @@ structured `CiRcaContext` blob carried on a `ci_rca` rec.
 
 DEGRADED PATHS (never abort; set a flag, downgrade confidence, proceed):
 - IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, mark every
-  `roadmap_crossref` confidence `HYPOTHESIS` and every `dedup_hit_count` null, and mark every gauge
-  you would have read from `logs/.preflight-report.json` as `unverified` in the relevant finding.
+  `roadmap_crossref` confidence `HYPOTHESIS` and every `dedup_hit_count` null. For any finding that
+  would have relied on a live gauge from `logs/.preflight-report.json`, set that finding's
+  `confidence: HYPOTHESIS` and write `gauge unverified (degraded)` into its `severity_rationale` --
+  there is no separate `unverified` field; `confidence: HYPOTHESIS` plus the note is its home.
   Proceed with static analysis of the code surfaces (which need no creds).
 - IF an anchor in Section 10 does not resolve: record it in `meta.stale_anchors` and re-derive the
   fact from the file; do not treat the prompt's line number as ground truth.
@@ -187,7 +189,11 @@ question is given. Cite finding ids as basis.
   gating of the loop; (d) shift-left gate placement (earliest-viable-gate computation); (e)
   flake/quarantine management for recurring failures; (f) deterministic-over-LLM adjudication of
   disputable facts. For each: `met | partial | missed` with one evidence anchor. `partial` REQUIRES
-  an argued property-matched compensating control in the evidence string.
+  an argued property-matched compensating control in the evidence string (which may run longer than a
+  bare `file:line` when rating `partial` -- append the control argument after the anchor). Q5's
+  overall rollup verdict enum is `strong | adequate | weak`, computed from the per-property ratings
+  (predominantly `met` -> strong; a mix with no `missed` on a load-bearing property -> adequate; any
+  `missed` on a load-bearing property -> weak).
 - **Q6 -- Questions the requester did not think to ask.** Seeds (answer AND extend with your own):
   (i) does the 20-minute workflow timeout + `--max-turns 30` bound the agent enough that it cannot
   itself run away the way a naive RCA prompt would? (ii) is there a failure mode where the agent
@@ -195,7 +201,10 @@ question is given. Cite finding ids as basis.
   a `/plan` architecture decision before anyone notices? (iii) what happens to the ~44% would-reject
   recs when strict flips -- is there a migration/backfill path, or do those CI failures become
   unfilable? (iv) is the abstention path (`rca_confidence=undetermined`) a silent depth-bypass at
-  scale?
+  scale? (v) the diagnosis agent reads the untrusted failed-CI log (`/tmp/ci-rca-failed.log`) as
+  input -- is that a prompt-injection surface by which a crafted failing run could steer the agent's
+  `file_rec` / `context_v2_json` output, and what compensates (the head-repo==base-repo +
+  default-branch job gate, the restricted `--allowedTools` set)? Assess against VD6.
 
 ---
 
@@ -256,6 +265,15 @@ rejected_candidate, or a reframe.
   "mandatory human review" via preflight. Hypothesis: in the current warn deployment, a bundle-absent
   or abstaining rec is accepted with only a log/marker -- assess whether "mandatory human review"
   is actually mandatory (blocking) or merely surfaced.
+- **C8 (POSITIVE CONTROL -- framed to test your skepticism, not to be confirmed).** C1-C7 all lean
+  toward "something is insufficient"; C8 deliberately does not. The multi-failure filing path is
+  "sequential, not transactional" (INTENT Section 3.3 / Section 4 check 9): N failed checks in one
+  run produce N separate recs via N `file_rec` calls with no cross-rec atomicity, so a partial batch
+  (first rec files, second fails) is possible. This LOOKS like a correctness hole. Hypothesis to
+  adjudicate BOTH ways: is it a real defect, or a deliberate, adequately-compensated design (the
+  contract addresses partial state; `/plan` reviews it; a per-run atomic transaction may be
+  unwarranted)? A well-run audit may well resolve C8 to `rejected_candidates` with a property-matched
+  control -- do NOT force it into `findings` to keep the candidate set "productive".
 
 ---
 
@@ -342,7 +360,7 @@ anchors.
   disputed_field 3-value ~1932).
 
 **S4 -- observability + governance**
-- `scripts/session_preflight.py`: `_derive_ci_rca_open` (~437), `_derive_ci_rca_undetermined_open`
+- `scripts/session_preflight.py`: `_derive_ci_rca_open` (~435), `_derive_ci_rca_undetermined_open`
   (~466) -> `print_ci_rca_undetermined_recs` ("CI-RCA Mandatory Human Review" ~497),
   `_compute_ci_rca_abstention` (~513), `_compute_ci_rca_telemetry` (~575, warn-mode-reject-rate +
   thresholds ~571), `_derive_forward_fix_recursion` (~740, files with >=3 ci_rca recs).
@@ -378,8 +396,9 @@ re-run these.
 # 1. Recurrence concentration: ci_rca recs per file (top offenders)
 bin/venv-python -c "import json,collections; c=collections.Counter(json.loads(l).get('file','?') for l in open('logs/.recommendations-log.jsonl') if json.loads(l).get('source')=='ci_rca'); print(c.most_common(8))"
 
-# 2. Status split of the single most-recurring file's recs (open vs closed = is the loop closing?)
-bin/venv-python -c "import json,collections; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl')]; f='tests/test_rec_write_guidance.py'; c=collections.Counter(r.get('status') for r in rows if r.get('source')=='ci_rca' and r.get('file')==f); print(f, dict(c))"
+# 2. Status split of the TOP-recurring file's recs (open vs closed = is the loop closing?).
+#    Derives the file from the same corpus as command 1 -- do NOT hardcode a filename.
+bin/venv-python -c "import json,collections; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl')]; ci=[r for r in rows if r.get('source')=='ci_rca']; f=collections.Counter(r.get('file','?') for r in ci).most_common(1)[0][0]; c=collections.Counter(r.get('status') for r in ci if r.get('file')==f); print(f, dict(c))"
 
 # 3. Live telemetry gauges (already computed by preflight)
 bin/venv-python -c "import json; d=json.load(open('logs/.preflight-report.json')); print({k:d[k] for k in d if 'ci_rca' in k.lower()})"
@@ -400,7 +419,8 @@ most-recent `ci_rca` recs if you need individual context beyond the aggregates a
   handed to you).
 - **P2 Trace** DD-A and DD-B end to end.
 - **P3 Empirical** pass (Section 11), bounded.
-- **P4 Adjudicate** each candidate C1-C7 to a finding / rejected_candidate / reframe.
+- **P4 Adjudicate** each candidate C1-C8 to a finding / rejected_candidate / reframe (C8 is a
+  positive control -- expect it may land in `rejected_candidates`).
 - **P5 Rate** the rubric (Section 7) per surface.
 - **P6 Dedup** every prospective finding (Section 13) before it enters `findings[]`.
 - **P7 Synthesise**: answer Q1-Q6, fill the decision block, compute maturity LAST (Section 15).
@@ -506,7 +526,9 @@ COUNTING INVARIANT: `findings[]` is the SOLE enumerated list. `total_findings = 
 novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered candidates live in
 `rejected_candidates`, NOT findings. `rubric_ratings` / `question_answers` / `strict_flip_readiness`
 are systems-of-record referenced FROM findings, never re-counted. `top_improvements` and
-`highest_leverage_change` MUST be finding ids.
+`highest_leverage_change` MUST be finding ids -- EXCEPT when `total_findings == 0`, in which case
+`top_improvements` is `[]` and `highest_leverage_change` is null (a zero-finding audit is a valid
+result per Section 17; do not invent a finding to populate these).
 
 ---
 
@@ -529,8 +551,11 @@ preflight" only compensates for recurrence if it actually BLOCKS or DEDUPS the w
 alone does not property-match a write-time-prevention claim.)
 
 Maturity per surface, computed LAST, top-down, FIRST MATCH WINS. Pinned thresholds:
-- **frontier** = 0 open critical AND 0 open high findings on that surface AND every Q5
-  `external_checklist` property rated `met` or `partial` (never `missed`).
+- **frontier** = 0 open critical AND 0 open high findings on that surface AND, for every Q5
+  `external_checklist` property that CONCERNS this surface, a rating of `met` or `partial` (never
+  `missed`). The Q5 checklist is subsystem-wide; apply each property only to the surface(s) it
+  concerns -- a property that does not concern a surface does not gate that surface's frontier
+  rating. `maturity_overall`'s frontier gate reads the FULL checklist (no `missed` anywhere).
 - **strong** = 0 critical AND <= 1 high.
 - **solid** = <= 1 critical.
 - **nascent** = otherwise.
@@ -572,7 +597,7 @@ open a PR against anything but your two files, or run the `validate` autofixers.
 gitignored caches (Section 4) is permitted and is not a tree edit; never commit them.
 
 Honesty clauses: fewer than ~6 surviving findings is a VALID result -- state it, do not pad. A run
-that merely confirms C1-C7 has failed; overturning a candidate with evidence is a high-value result.
+that merely confirms C1-C8 has failed; overturning a candidate with evidence is a high-value result.
 Precision over volume. Every claim CONFIRMED or HYPOTHESIS. Challenge the framing -- including this
 prompt's reframe (built-and-warn vs planned): if the evidence says the "planned surface is narrow"
 premise is wrong, say so in `meta.dossier_fact_check` and reframe. You draft; the human disposes.
