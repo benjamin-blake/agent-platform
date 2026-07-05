@@ -28,9 +28,9 @@ does not breach this boundary (never commit them).
 
 ## 2. CANDIDATE OBSERVATIONS vs VERDICTS
 
-This prompt hands you FACTS and CANDIDATE hypotheses. It hands you NO verdicts. Every candidate
-in section 10 is a neutrally-phrased hypothesis you must trace to the repository and adjudicate --
-never a defect you may assume. ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT. A run
+This prompt hands you FACTS and CANDIDATE hypotheses. It hands you NO verdicts. Every candidate in
+the section 10.1 CANDIDATE OBSERVATIONS list is a neutrally-phrased hypothesis you must trace to
+the repository and adjudicate -- never a defect you may assume. ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT. A run
 that merely confirms the candidates below has failed.
 
 Per-candidate adjudication -- map each to exactly one outcome:
@@ -134,8 +134,9 @@ OUT OF SCOPE (one line each):
 
 ## 5. SETUP
 
-Run these read-only setup commands. If any fails, DO NOT abort -- take the named degraded path,
-set the named meta flag, downgrade affected confidences, and proceed.
+Run these read-only setup commands. If any fails, DO NOT abort -- take the named degraded path and
+set the named meta flag exactly as the relevant step below specifies, then proceed. Never
+improvise or abort.
 
 1. `git fetch origin main && git rev-parse --short origin/main` -> this short sha is `<sha>`: use
    it in both deliverable filenames, the branch name, and `meta.audited_commit`. If `git fetch`
@@ -144,9 +145,10 @@ set the named meta flag, downgrade affected confidences, and proceed.
 2. Cache generation for DEDUP DISCIPLINE (section 13):
    `bin/venv-python -m scripts.session_preflight --roadmap-detail full`
    (populates `logs/.preflight-report.json` and refreshes `logs/.recommendations-log.jsonl`).
-   IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, mark
-   every `roadmap_crossref` confidence `HYPOTHESIS` and every `dedup_hit_count` null, and proceed
-   using the on-disk `logs/.recommendations-log.jsonl` as-is (it is a committed read cache).
+   IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, and on
+   EVERY finding set the finding-level `confidence: HYPOTHESIS` and
+   `roadmap_crossref.dedup_hit_count: null`, then proceed using the on-disk
+   `logs/.recommendations-log.jsonl` as-is (it is a committed read cache).
 3. All roadmap/decision reads are plain file reads and need no credentials; they never justify
    aborting.
 
@@ -375,6 +377,52 @@ Context-only anchors (do NOT audit; confirm existence if a candidate turns on th
 - `config/agent/executor/capabilities.yaml` -- `boundary_patterns` + `maturity_ceiling: 1.0`, the
   self-modification boundary SSOT (Decision 117).
 
+### 10.1 CANDIDATE OBSERVATIONS (the "candidate list"; adjudicate EACH per section 2)
+
+Each is a neutrally-phrased hypothesis drawn from the facts above, NOT a verdict. Adjudicate every
+one to a finding or a `rejected_candidate` (section 2). This list is a FLOOR on your attention, not
+a ceiling -- surface defects not listed here, and do not assume any listed item is real. The list
+is deliberately mixed: some are expected to resolve to `rejected_candidates`.
+
+- C1. T4.8 (semantic locks/leases), T4.9 (verdict handshake + SHA binding), T4.10 (persona
+  contracts), and T4.11 (loop-budget caps) are all `deferred_post_mvp`, while the MVP boundary
+  (Decision 93) is "the loop closes end-to-end with no human in the critical path." Hypothesis:
+  one or more of these controls is required to close the loop SAFELY at MVP.
+- C2. T4.2's exit criterion requires `file_pr -> PR opens and validates green`, while the
+  verdict-callback/correlation protocol that governs the merge decision (T4.9 / CD.38) is
+  `deferred_post_mvp`. Hypothesis: T4.2's exit depends on a deferred protocol (sequencing
+  inversion), versus a benign smoke-vs-production distinction.
+- C3. T4.10 states "T4.2 persona implementations MUST conform to these [persona] contracts," yet
+  T4.10 is deferred and T4.2 is live (`depends_on: [T4.1, T3.4, T1.6]` -- no edge to T4.10).
+  Hypothesis: a prose-level live-depends-on-deferred coupling the Decision 93 model_validator does
+  not see, versus a benign forward-reference.
+- C4. Concurrency is fixed at 1 (T4.1) and raised only by the A-gates (T4.4, XL), while the
+  concurrency-safety mechanism (T4.8 semantic locks) is deferred. Hypothesis: single-concurrency
+  is the effective MVP steady-state throughput and a frontier economics gap.
+- C5. No T4 tier_item appears to own an offline evaluation / regression harness for the agent
+  personas themselves (does changing `plan_agent.prompt.md` regress plan quality?); T3.7
+  meta-validates `validate.py`, not persona output quality. Hypothesis: persona-eval is an absent
+  capability.
+- C6. RCA-first (Decision 55) routes every LLM-judgment failure to a filed rec + human review;
+  combined with concurrency=1 and no-LLM-retry, hypothesis: a human is structurally reintroduced
+  such that "no human in the critical path" (NS-A) is not achievable in practice -- versus the RCA
+  path being the exception path, not the critical path.
+- C7. Lambda Durable Functions is noted ~5 months in GA at CD.27, hedged by an INTENT-level
+  DynamoDB-self-checkpoint fallback. Hypothesis: substrate-maturity risk is inadequately hedged
+  for a frontier bet.
+- C8. Per-turn cost telemetry and any per-rec cost cap / runaway alarm depend on T3.20
+  (`not_started`, deep dependency chain) and are not named in a T4 exit criterion. Hypothesis:
+  cost-runaway observability is missing before the loop runs unattended.
+- C9. The autonomy gates A0-A5 land in T4.4 (depends_on T4.2), while the loop first runs at T4.2.
+  Hypothesis: there is no governed autonomy story in the T4.2->T4.4 window.
+- C10. The MVP loop names "deploy -> observe." Hypothesis: no T4 item owns the autonomous
+  deploy-and-observe tail; it leans on the CD.35/CD.16 apply path and that seam is unspecified.
+- C11. Rec freshness/relevance is gated (T3.8, complete) and reconciled (T3.9). Hypothesis: a
+  rec-quality / well-formedness eligibility gate BEFORE autonomous execution (is this rec safe to
+  auto-run?) is absent, distinct from freshness.
+- C12. The entire executor is single-region (eu-west-2). Hypothesis: single-region is a frontier
+  resilience gap -- versus a deliberate cost/complexity tradeoff consistent with the North Star.
+
 ## 11. EMPIRICAL PASS
 
 This is a design/roadmap audit; the primary evidence is the roadmap and decision text, which is
@@ -382,7 +430,8 @@ static. One bounded empirical sample is permitted and useful:
 
 - Sample <= 15 OPEN recommendations whose title or context matches the executor
   (`executor|persona|step function|durable|autonom|T4\.|plan_agent`) from
-  `logs/.recommendations-log.jsonl` -- do NOT exceed 15, newest-relevant first. Use them ONLY to
+  `logs/.recommendations-log.jsonl` -- do NOT exceed 15; order by each rec's `date` field
+  (YYYY-MM-DD) descending and take the newest 15 matches. Use them ONLY to
   test the KG.2 hypothesis (is a real executor-rec backlog unmapped to T4 items, and does any rec
   in it name a capability absent from the T4 tier_items?). Tag any finding this produces
   `evidence_kind: observed`; an observed gap (a real filed rec naming a missing capability)
@@ -399,8 +448,8 @@ static. One bounded empirical sample is permitted and useful:
 - P3 EMPIRICAL: the single bounded rec sample (section 11), only to test KG.2.
 - P4 RATE: fill `rubric_ratings[]` per surface x dimension.
 - P5 DEDUP: section 13, before any finding is written.
-- P6 ADJUDICATE: each candidate (section 10 list) + each surfaced defect -> finding or
-  rejected_candidate.
+- P6 ADJUDICATE: each candidate (the section 10.1 list, C1..C12) + each surfaced defect -> finding
+  or rejected_candidate.
 - P7 SYNTHESISE: question_answers, per_surface_assessment, summary; compute maturity LAST
   (section 15).
 
@@ -508,12 +557,29 @@ exercises the SAME property AND would FAIL if the defect were real. Example: "co
 property-matches "no semantic locks yet" ONLY while concurrency is genuinely 1; it does NOT
 property-match any risk that survives at concurrency 1.
 
-MATURITY -- compute LAST, per surface, top-down, first match wins. Pin these thresholds:
-- `frontier` = 0 open critical AND 0 open high findings on that surface AND every row of Q2's
-  `external_checklist` relevant to that surface is rated met or partial (never missed).
+MATURITY -- compute LAST, per surface, top-down, first match wins. The `per_surface_assessment.maturity`
+and every `summary.maturity_<surface>` field take this enum: `frontier | strong | solid | nascent`
+(distinct from the rubric enum). Pin these thresholds:
+- `frontier` = 0 open critical AND 0 open high findings on that surface AND every Q2
+  `external_checklist` row RELEVANT to that surface (mapping below) is rated met or partial
+  (never missed).
 - `strong` = 0 critical AND <= 1 high on that surface.
 - `solid` = <= 1 critical on that surface.
 - `nascent` = otherwise.
+
+Checklist-row-to-surface relevance (pinned; a row may be relevant to more than one surface; the
+`shared` surface is relevant to ALL 12 rows; if you judge a row ambiguous for a surface, COUNT it
+as relevant -- the conservative direction):
+- `orchestration`: rows 1 (durable orchestration), 5 (sandboxing/IAM), 9 (RCA-on-failure),
+  11 (idempotency/TOCTOU).
+- `personas`: rows 1 (checkpoint-replay), 2 (planner/critic/actor), 5 (per-persona tool scoping),
+  8 (per-turn observability), 10 (provider-agnostic transport), 12 (persona eval harness).
+- `verification`: rows 4 (independent oracle), 11 (idempotency/TOCTOU/SHA binding).
+- `autonomy-governance`: rows 3 (bounded autonomy), 6 (progressive autonomy + rollback),
+  7 (semantic-lock concurrency).
+- `plan-entities`: rows 8 (observability of plan/revision state); otherwise mostly `n/a`-by-mapping
+  -- a row not listed for a surface does not gate that surface's frontier rating.
+- `scheduled-agents`: rows 8 (observability), 9 (RCA-on-failure), 10 (provider-agnostic transport).
 The top rating remains reachable where you argued a property-matched compensating control -- the
 framing here must not foreclose it. A surface that is deliberately unbuilt-but-well-designed can
 still rate `frontier` on design terms; state in `per_surface_assessment.strengths` that the rating
