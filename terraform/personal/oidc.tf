@@ -202,8 +202,8 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
 
   statement {
     # Lambda refresh-time reads. Literal ARNs (no Terraform dependency edges).
-    sid    = "LambdaRead"
-    effect = "Allow"
+    sid     = "LambdaRead"
+    effect  = "Allow"
     actions = ["lambda:Get*", "lambda:List*"]
     resources = [
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient",
@@ -221,8 +221,8 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
 
   statement {
     # EventBridge refresh-time reads. Literal ARNs.
-    sid    = "EventBridgeRead"
-    effect = "Allow"
+    sid     = "EventBridgeRead"
+    effect  = "Allow"
     actions = ["events:Describe*", "events:List*"]
     resources = [
       "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
@@ -295,8 +295,8 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
     # speculative-plan / drift jobs can DescribeSecret these during the provider refresh walk.
     # Mirrors github_ci_apply's SecretsManagerInferenceCredentialsRead (inference-creds-ci-recovery);
     # read-only -- the apply role owns the secret lifecycle.
-    sid    = "SecretsManagerInferenceCredentialsRead"
-    effect = "Allow"
+    sid     = "SecretsManagerInferenceCredentialsRead"
+    effect  = "Allow"
     actions = ["secretsmanager:Describe*", "secretsmanager:Get*"]
     resources = [
       "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-deepseek-api-key-*",
@@ -308,8 +308,8 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
     # Broker credential envelopes (Alpaca paper + live) -- plan-time refresh-read so the
     # speculative-plan / drift jobs can DescribeSecret these during the provider refresh walk for
     # secrets_manager_brokers.tf (T2.14). Read-only; values are out-of-band (Decision 37).
-    sid    = "SecretsManagerBrokerCredentialsRead"
-    effect = "Allow"
+    sid     = "SecretsManagerBrokerCredentialsRead"
+    effect  = "Allow"
     actions = ["secretsmanager:Describe*", "secretsmanager:Get*"]
     resources = [
       "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-broker-*",
@@ -442,8 +442,8 @@ data "aws_iam_policy_document" "github_ci_branch" {
   statement {
     # SchemaIntegrityVerifier / IcebergCompactionVerifier call these during OPTIMIZE and VACUUM.
     # Three ARNs required: catalog, database, table.
-    sid    = "GlueTableMutations"
-    effect = "Allow"
+    sid     = "GlueTableMutations"
+    effect  = "Allow"
     actions = ["glue:CreateTable", "glue:UpdateTable", "glue:DeleteTable"]
     resources = [
       "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
@@ -460,8 +460,8 @@ data "aws_iam_policy_document" "github_ci_branch" {
     # lambda:GetFunctionUrlConfig lets the runner RESOLVE the reader/writer URL via the AWS API
     # when neither DUCKLAKE_*_URL env nor a terraform-init'd checkout is present (the CI case) --
     # iceberg_reader / ops_data_portal fall back to get_function_url_config (post-cutover DQ).
-    sid    = "DuckLakeInvokeCI"
-    effect = "Allow"
+    sid     = "DuckLakeInvokeCI"
+    effect  = "Allow"
     actions = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
     resources = [
       aws_lambda_function.ducklake_writer.arn,
@@ -605,8 +605,8 @@ data "aws_iam_policy_document" "github_ci_pr" {
     # read-only (no rec writes) but scoped to writer ARNs for consistency / future-compat.
     # lambda:GetFunctionUrlConfig lets the runner resolve the URL via the AWS API (no env / no
     # terraform-init'd checkout) -- mirrors the branch role's DuckLakeInvokeCI grant.
-    sid    = "DuckLakeInvokeCI"
-    effect = "Allow"
+    sid     = "DuckLakeInvokeCI"
+    effect  = "Allow"
     actions = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
     resources = [
       aws_lambda_function.ducklake_writer.arn,
@@ -698,8 +698,8 @@ data "aws_iam_policy_document" "github_ci_plan" {
     # build time (`scripts.build_lambda --ducklake-only`, run before `terraform plan` so
     # filemd5() sees real content instead of resolving to null on lambda-packages/, which is
     # gitignored). Read-only -- these are operator-seeded vendored artefacts, never written by CI.
-    sid    = "DucklakeBuildInputsRead"
-    effect = "Allow"
+    sid     = "DucklakeBuildInputsRead"
+    effect  = "Allow"
     actions = ["s3:GetObject"]
     resources = [
       "${aws_s3_bucket.data_lake.arn}/ducklake-pgclient/*",
@@ -787,8 +787,8 @@ data "aws_iam_policy_document" "github_ci_drift" {
     # Scoped to the EXACT lock object key -- NO write on the state object terraform.tfstate
     # itself. A lock held by an in-flight apply -> plan fails to acquire -> "Error acquiring
     # the state lock" -> skip-this-cycle (exit 0, no alarm).
-    sid    = "TfstateNativeLockFile"
-    effect = "Allow"
+    sid     = "TfstateNativeLockFile"
+    effect  = "Allow"
     actions = ["s3:PutObject", "s3:DeleteObject"]
     resources = [
       "${aws_s3_bucket.data_lake.arn}/tfstate/personal/sandbox/terraform.tfstate.tflock"
@@ -815,8 +815,8 @@ data "aws_iam_policy_document" "github_ci_drift" {
     # authorizer actually checks; InvokeFunctionUrl retained for AWS-doc alignment.
     # GetFunctionUrlConfig lets the runner resolve the URL via the AWS API when
     # DUCKLAKE_WRITER_URL env is not set (the CI case) -- mirrors the branch role pattern.
-    sid    = "DuckLakeWriterInvoke"
-    effect = "Allow"
+    sid     = "DuckLakeWriterInvoke"
+    effect  = "Allow"
     actions = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
     resources = [
       aws_lambda_function.ducklake_writer.arn,
