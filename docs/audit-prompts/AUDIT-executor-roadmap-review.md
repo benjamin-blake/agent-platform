@@ -145,10 +145,13 @@ improvise or abort.
 2. Cache generation for DEDUP DISCIPLINE (section 13):
    `bin/venv-python -m scripts.session_preflight --roadmap-detail full`
    (populates `logs/.preflight-report.json` and refreshes `logs/.recommendations-log.jsonl`).
-   IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, and on
-   EVERY finding set the finding-level `confidence: HYPOTHESIS` and
-   `roadmap_crossref.dedup_hit_count: null`, then proceed using the on-disk
-   `logs/.recommendations-log.jsonl` as-is (it is a committed read cache).
+   IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true` and
+   proceed using the on-disk `logs/.recommendations-log.jsonl` as-is (it is a committed read cache
+   and stays fully readable; only its freshness is uncertain). The `docs/ROADMAP-PLATFORM.yaml`
+   and `docs/DECISIONS.md` dedup greps (section 13) need NO credentials and remain fully available
+   -- still run them. Downgrade to `confidence: HYPOTHESIS` and `roadmap_crossref.dedup_hit_count:
+   null` ONLY those findings whose novelty verdict actually turned on the recs-cache search; a
+   finding fully deduped against the roadmap/decisions stays CONFIRMED.
 3. All roadmap/decision reads are plain file reads and need no credentials; they never justify
    aborting.
 
@@ -190,8 +193,14 @@ verdict is the strongest option).
   capability is: owned-and-sufficiently-specified, owned-but-under-specified, owned-but-mis-
   sequenced, or absent (no item/CD/KG owns it). `partial` = at least one under-specified or
   mis-sequenced transition; `insufficient` = at least one absent capability on the critical path.
-- Q2 -- FRONTIER / INDUSTRY-LEADING. Verdict enum: `frontier | competitive | lagging`. Assess the
-  design property-by-property against this EXTERNAL CHECKLIST, recording each in the answer's
+- Q2 -- FRONTIER / INDUSTRY-LEADING. Verdict enum: `frontier | competitive | lagging` (this is the
+  DESIGN-WIDE verdict; do not confuse it with the per-surface maturity value also named `frontier`
+  in section 15, which is computed separately per surface). Pinned aggregation over the 12
+  checklist rows: `frontier` = 0 rows `missed` (all met or partial); `competitive` = at most 3
+  rows `missed` AND none of the safety-critical rows 4 (independent verification), 5 (sandboxing /
+  self-mod boundary), or 11 (idempotency / TOCTOU) is `missed`; `lagging` = otherwise (4+ rows
+  missed, or any of rows 4/5/11 missed). Assess the design property-by-property against this
+  EXTERNAL CHECKLIST, recording each in the answer's
   `external_checklist` field as `{property, rating: met|partial|missed, evidence}`. `partial`
   requires you to name an argued, property-matched compensating control in `evidence`. The
   checklist (assess every row):
@@ -244,6 +253,14 @@ verdict is the strongest option).
   Additional seed (e): Does the roadmap own the TRANSITION from the built single-process executor
   (`scripts/execute_recommendation.py`, frozen) to the Step Functions substrate -- concept
   carry-forward, cutover, any dual-run window -- or is that migration seam unowned by any T4 item?
+  Seed (f): Does any item address the ADVERSARIAL-INPUT / prompt-injection threat model of a loop
+  that reads repo/rec content and then edits and merges its own repository -- a poisoned or
+  malformed rec, or hostile file content read during implement, steering plan -> implement ->
+  merge? (Distinct from C11's well-formedness/eligibility gate, which is about correctness, not
+  hostility.) Seed (g): When "observe" DETECTS a post-deploy regression, and Decision 55 forbids
+  auto-revert (forward-fix only), what closes the regression-RECOVERY seam -- i.e. how does the
+  loop recover from a bad merged change without a human, versus that recovery being an accepted
+  human-in-the-exception-path event rather than a critical-path one?
 
 ## 8. RUBRIC
 
@@ -443,10 +460,12 @@ static. One bounded empirical sample is permitted and useful:
 
 - Sample <= 15 OPEN recommendations whose title or context matches the executor
   (`executor|persona|step function|durable|autonom|T4\.|plan_agent`) from
-  `logs/.recommendations-log.jsonl` -- do NOT exceed 15; order by each rec's `date` field
-  (YYYY-MM-DD) descending and take the newest 15 matches. Each line in that file is a JSON object
-  with at least `status` (one of open|closed|failed|declined|superseded), `date` (YYYY-MM-DD),
-  `title`, and `context`; filter to `status == "open"` before matching. Use them ONLY to
+  `logs/.recommendations-log.jsonl` -- do NOT exceed 15. Each line in that file is a JSON object
+  with at least `status` (one of open|closed|failed|declined|superseded), `created_timestamp`
+  (full ISO-8601, e.g. `2026-06-08T14:59:35.935000+00:00`), `title`, and `context` (there is NO
+  bare `date` field). Filter to `status == "open"`, match title/context against the regex, then
+  order by `created_timestamp` descending (break ties by `id` descending) and take the newest 15
+  matches. Use them ONLY to
   test the KG.2 hypothesis (is a real executor-rec backlog unmapped to T4 items, and does any rec
   in it name a capability absent from the T4 tier_items?). Tag any finding this produces
   `evidence_kind: observed`; an observed gap (a real filed rec naming a missing capability)
@@ -545,7 +564,16 @@ INVARIANTS (state and honour these):
   novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered candidates live
   in `rejected_candidates`, NOT findings. `rubric_ratings` / `question_answers` /
   `external_checklist` are systems-of-record referenced FROM findings, never re-counted.
-  `top_improvements` and `highest_leverage_change` MUST be finding ids.
+  `top_improvements` and `highest_leverage_change` MUST be finding ids -- EXCEPT when `findings[]`
+  is empty (a valid outcome): then set `top_improvements: []` and `highest_leverage_change: null`.
+- FINDING IDS: use the prefix `EXR-` with a zero-padded two-digit ordinal (`EXR-01`, `EXR-02`, ...)
+  in filing order.
+- EMPTY `basis`: a `question_answers` entry's `basis` may be empty ONLY when its verdict is the
+  strongest enum value for that question -- Q1 `complete`, Q2 `frontier`, Q3 `sound`, Q4 `sound`;
+  any weaker verdict MUST cite at least one finding id.
+- A finding's `question` and `dimension` fields each take the SINGLE value the finding most
+  primarily serves (its home question / home dimension); cross-service is expected and is captured
+  by `question_answers.basis` and `rubric_ratings`, not by multi-valuing these fields.
 - `control_property_match` is REQUIRED whenever a compensating control is the reason for
   dismissal: name the property the control exercises, cite where it operates (item-id or
   file:line), and state why the control would FAIL if the defect were real.
@@ -633,6 +661,11 @@ is a design-maturity rating, not a built-state rating.
    `audit: autonomous executor roadmap review (T4 design)`, body = the `summary` block in a
    ```yaml fence + a 2-3 sentence lede naming the two driving verdicts). Then END THE TURN -- do
    not poll, do not subscribe, do not merge.
+6. DEGRADED PATH for this section: if `git push` or `create_pull_request` fails (egress or
+   permissions), do NOT abort, force, or retry destructively. Ensure both deliverables are
+   committed locally, record the failure plus the intended PR title and body in
+   `meta.contract_notes`, and END THE TURN reporting that the deliverables are committed on branch
+   `audit/executor-roadmap-review-<sha>` and the PR could not be opened. The human disposes.
 
 ## 17. GUARDRAILS
 
