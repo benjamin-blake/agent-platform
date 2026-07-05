@@ -74,10 +74,12 @@ acceptance_criteria:
     and string-subscript key (`len(g["source"]["registered_values"]) == N`) -- while passing a derived
     assertion, a `# count-coupling-ok:` waived assertion, and a non-curated count (`len(rows) == 3`).
   - >-
-    The guard reports zero violations when run against the real tests/ tree (all four current
-    instances are fixed).
+    The guard reports zero unwaived violations when run against the real tests/ tree (all four brittle
+    instances fixed by derivation; the one controlled-fixture site at test_rec_write_guidance.py:43 carries
+    a justified `# count-coupling-ok:` waiver).
   - >-
-    No hardcoded exact-count assertion against a curated growth-prone collection remains in tests/.
+    No unwaived hardcoded exact-count assertion against a curated growth-prone collection remains in tests/;
+    the sole legitimate controlled-fixture exception is waived, not bumped.
   - "All 5 bundled recs (rec-2572..2576) close on merge via the Resolves: trailer."
 verification_plan:
   - step: 1
@@ -112,7 +114,7 @@ verification_plan:
     action: Real-tree end-to-end -- the guard passes clean on the actual repo (proves all 4 instances fixed).
     command: bin/venv-python -c 'from scripts.checks.hygiene.validate_test_count_coupling import validate_test_count_coupling as g; f=[]; g(f); assert not f, f; print("clean on real tree")'
     expected: Prints "clean on real tree"; the failed list is empty.
-    fix_if: A violation is reported -- an instance was missed, or a fixed derivation still matches the int-literal pattern against a curated symbol.
+    fix_if: An unwaived violation is reported -- an instance was missed, a fixed derivation still matches the int-literal pattern against a curated symbol, or a legitimate controlled-fixture site (e.g. test_rec_write_guidance.py:43) needs a `# count-coupling-ok:` waiver.
     hermetic: true
   - step: 6
     phase: pre-deploy
@@ -176,7 +178,11 @@ context:
     sites plus 2 latent ones -- tests/test_ops_writer.py:1173 (TABLE_NAMES==11) and
     tests/test_telemetry_schemas.py:428 (TELEMETRY_TABLE_NAMES==7). The other 335 are spec-fixed constants
     (UUID=36, SHA256=64, ULID=26, hash=12) or controlled fixtures -- a curated guard avoids ~335 false positives
-    that a threshold ban would produce.
+    that a threshold ban would produce. One further curated-LINKED but legitimate site exists that grep could
+    not see (it is reached through an alias): tests/test_rec_write_guidance.py:43
+    (`entries = load_source_registry(tmp); assert len(entries) == 1`) is a controlled 1-entry fixture, not a
+    growing collection -- it is handled by a `# count-coupling-ok:` waiver, NOT a derivation, so the guard runs
+    clean on the real tree. That makes 4 brittle instances fixed by derivation + 1 fixture site waived.
   - >-
     Related-Work condition satisfied (ci-rca HARD BLOCK): same source_file for the 2 source_registry recs;
     same failure category (pytest regression) for all 5.
@@ -185,7 +191,7 @@ context:
     Decision-scout flag resolved: Decision 104 coverage-mapping NOTE -- scripts/checks/**/*.py maps to
     tests/test_validate.py for coverage attribution, so the guard's tests land in tests/test_validate.py
     (not a separate file). Decision 102/43 SLOC/CC note -- new module is small, trivially within budget.
-  - "gates: decision-scout=FLAGS_FOUND (flag resolved by locating guard tests in test_validate.py); plan-critique=PROCEED after 1 REVISE round (Risk 1 detection-blind-spot for aliased/subscript forms, Risk 2 tautological ops_writer composition + wrong constant name, Risk 3 VP step 6 masked-failure -- all addressed)"
+  - "gates: decision-scout=FLAGS_FOUND (flag resolved by locating guard tests in test_validate.py); plan-critique=PROCEED after 2 REVISE rounds -- R1: detection blind spot (aliased/subscript), tautological ops_writer composition + wrong constant, VP step 6 masked failure; R2: taint over-capture false-positive at test_rec_write_guidance.py:43 resolved via waiver + both-comparison-orders + tainted-fixture test case"
   - >-
     Branch is on origin/main (0 behind, 0 ahead at planning time); no Main Divergence Assessment overlap.
 pre_implementation_checklist:
@@ -204,7 +210,8 @@ execution_steps:
     scope), first builds a tainted-locals set: any local Name assigned from an RHS that references a
     curated token is tainted (this is what makes `entries = load_source_registry(); assert len(entries)
     == 35` detectable -- the plan-critique blind spot). Then find every ast.Assert whose test is an
-    ast.Compare of len(<expr>) Eq <int Constant>, and classify <expr> as curated-linked when ANY of:
+    ast.Compare of len(<expr>) Eq <int Constant> in EITHER order (`len(X) == N` or the Yoda form
+    `N == len(X)`), and classify <expr> as curated-linked when ANY of:
     (a) it references a curated Name/Attribute identifier; (b) it contains an ast.Call whose func name
     is curated (e.g. load_source_registry()); (c) it contains an ast.Subscript whose slice is a string
     Constant equal to a curated token (e.g. ["registered_values"]); (d) it is (or contains) a Name that
@@ -226,7 +233,12 @@ execution_steps:
     to a number-free name and replace `== 35` with an independent raw-text canonical_id count cross-check
     against load_source_registry() output plus a no-duplicate-canonical_ids invariant; rename
     test_registered_values_has_35_entries and replace `== 35` with
-    registered_values == [e["canonical_id"] for e in load_source_registry()].
+    registered_values == [e["canonical_id"] for e in load_source_registry()]. ALSO add a
+    `# count-coupling-ok: controlled 1-entry tmp-path fixture, not a growing collection` waiver to the
+    `assert len(entries) == 1` in test_custom_registry_path (line 43): its `entries` is tainted by the
+    curated load_source_registry() call at line 42, but the count is a deliberately-sized 1-entry
+    tmp_path fixture, so the guard's taint over-approximation must be silenced there with the designed
+    waiver (this is the intended escape hatch, and it dogfoods the waiver on a real legitimate site).
   - >-
     Fix tests/test_ops_writer.py:1173: replace `assert len(TABLE_NAMES) == 11` with a uniqueness
     invariant `assert len(TABLE_NAMES) == len(set(TABLE_NAMES))` PLUS a membership floor asserting the
@@ -254,8 +266,10 @@ execution_steps:
     plan-critique blind spot); (3) the string-subscript shape
     `assert len(g["source"]["registered_values"]) == N` is flagged; (4) a derived assertion (RHS not an
     int literal) is NOT flagged; (5) an assertion carrying a `# count-coupling-ok:` waiver is NOT flagged;
-    (6) a non-curated exact-count `assert len(rows) == 3` is NOT flagged; and (7) the check name appears
-    in both registry sequences.
+    (6) a non-curated exact-count `assert len(rows) == 3` is NOT flagged; (7) a curated-source-tainted
+    local with a small fixed fixture count (`e = load_source_registry(p); assert len(e) == 1`) IS flagged
+    when unwaived but NOT flagged once the waiver comment is present (the test_rec_write_guidance.py:43
+    class); and (8) the check name appears in both registry sequences.
   - >-
     Execute the Verification Plan -- run each step; loop until pass. On any failure, fix on-branch and re-run;
     do not paper over (Decision 55).
