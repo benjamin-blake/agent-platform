@@ -121,8 +121,8 @@ structured `CiRcaContext` blob carried on a `ci_rca` rec.
 
 DEGRADED PATHS (never abort; set a flag, downgrade confidence, proceed):
 - IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, mark every
-  `roadmap_crossref` confidence `HYPOTHESIS` and every `dedup_hit_count` null. For any finding that
-  would have relied on a live gauge from `logs/.preflight-report.json`, set that finding's
+  finding's `confidence` `HYPOTHESIS` and every `roadmap_crossref.dedup_hit_count` null. For any
+  finding that would have relied on a live gauge from `logs/.preflight-report.json`, set that finding's
   `confidence: HYPOTHESIS` and write `gauge unverified (degraded)` into its `severity_rationale` --
   there is no separate `unverified` field; `confidence: HYPOTHESIS` plus the note is its home.
   Proceed with static analysis of the code surfaces (which need no creds).
@@ -204,7 +204,13 @@ question is given. Cite finding ids as basis.
   scale? (v) the diagnosis agent reads the untrusted failed-CI log (`/tmp/ci-rca-failed.log`) as
   input -- is that a prompt-injection surface by which a crafted failing run could steer the agent's
   `file_rec` / `context_v2_json` output, and what compensates (the head-repo==base-repo +
-  default-branch job gate, the restricted `--allowedTools` set)? Assess against VD6.
+  default-branch job gate, the restricted `--allowedTools` set)? Assess against VD6. (vi)
+  `.github/workflows/ci-rca.yml` has NO top-level `concurrency:` block (grounding map). Can two
+  failing workflows -- or a retried run -- dispatch concurrent `ci-rca` runs that double-file recs on
+  the same root cause? Is ANY of the observed duplicate-storm (Section 11) a cross-run DISPATCH race
+  rather than only a recurrence-class/dedup gap? What compensates (the per-category commit-status
+  "Dedup guard" step in the workflow, the `workflow_dispatch force_rca` bypass), and does it
+  property-match a cross-run double-file?
 
 ---
 
@@ -497,7 +503,7 @@ audit:
     - {q: Q4, verdict: <coherent|drifting|incoherent>, basis: [], prose: ""}
     - {q: Q5, verdict: <strong|adequate|weak>, basis: [], prose: "",
        external_checklist: [{property: <a..f>, rating: met|partial|missed, evidence: "file:line|gauge"}]}
-    - {q: Q6, answers: [{question: "", answer: "", basis: []}]}   # answer seeds i-v AND extend
+    - {q: Q6, answers: [{question: "", answer: "", basis: []}]}   # answer seeds i-vi AND extend
   strict_flip_readiness:        # the decision block (Q1 prose points here)
     spine: {verdict: <keep_warn|flip_strict_now|flip_strict_after_fix|redesign>,
             mechanism: "", what_changes: "", cost: "", rationale: "",
