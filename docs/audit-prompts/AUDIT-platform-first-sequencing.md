@@ -142,11 +142,11 @@ The preflight populates `logs/.preflight-report.json` and `logs/.recommendations
 (read-only caches; regenerating them is expected and does NOT breach the write boundary -- never
 commit them).
 
-**Degraded path (creds / egress down):** if `session_preflight` fails on credentials or network,
-do NOT abort. Set `meta.degraded_dedup=true`, mark every `roadmap_crossref` confidence as
-`HYPOTHESIS` and every `dedup_hit_count` as `null`, and proceed using direct `grep`/`rg` over the
-in-repo files named in Section 13 (those are on-disk and need no credentials). The audit's core
-judgment does not depend on warehouse reads.
+**Degraded path (preflight fails for ANY reason -- creds, egress, an unrecognized flag, a bug):**
+do NOT abort. Set `meta.degraded_dedup=true`, mark every finding's `roadmap_crossref.confidence`
+as `HYPOTHESIS` and every `dedup_hit_count` as `null`, and proceed using direct `grep`/`rg` over
+the in-repo files named in Section 13 (those are on-disk and need no credentials or preflight).
+The audit's core judgment does not depend on warehouse reads or on the preflight succeeding.
 
 **Degraded path (remote unreachable):** if `git fetch origin main` fails, fall back to the local
 checkout: use `git rev-parse --short HEAD` for the `<sha>`, and in Section 16 branch off local
@@ -356,10 +356,11 @@ reading a single named anchor without a sampling pass. When in doubt, tag `stati
   this artifact RATIFY the sequencing (records it as a decision with alternatives), or merely
   ASSUME it (cites it as an operating given)?* Tabulate ratify-vs-assume counts; this is the
   primary evidence for Q1 / VD1.
-- **Pivot-timing read (cap: Section 11 of one file only).** Read
-  `docs/AUDIT-PROMPT-product-roadmap-yaml.md` Section 11 and determine whether platform-vs-product
-  *timing/sequencing* is discussed anywhere in it (as opposed to product architecture). Record
-  the answer explicitly -- it gates trap 5 and CAND-A.
+- **Pivot-timing read (cap: Section 11 of `docs/AUDIT-PROMPT-product-roadmap-yaml.md`, plus the
+  two grounding-map anchors already cited there -- ~`:288` and ~`:3670`; do NOT read further into
+  that file).** Determine whether platform-vs-product *timing/sequencing* is discussed anywhere in
+  that material (as opposed to product architecture). Record the answer explicitly -- it gates
+  trap 5 and CAND-A.
 
 ## 12. METHOD
 
@@ -438,7 +439,8 @@ audit:
        proposed_change: "", acceptance: "", severity: critical|high|medium|low,
        severity_rationale, confidence: CONFIRMED|HYPOTHESIS,
        roadmap_crossref: {classification: novel|planned-insufficient|planned-unbuilt,
-                          item_ids: [], dedup_search_terms: [], dedup_hit_count: 0, note: ""},
+                          item_ids: [], dedup_search_terms: [], dedup_hit_count: 0,
+                          confidence: CONFIRMED|HYPOTHESIS, note: ""},
        effort: XS|S|M|L, depends_on: [],
        sequencing: {safe_to_queue_now: true|false, blocked_behind: [], note: ""}}
   rejected_candidates:
@@ -481,9 +483,10 @@ An unratified-but-sound frame is typically NOT critical -- the defect is the *ab
 conscious record*, whose natural remedy is `ratify_with_reversal_conditions`, not a resequence.
 Let the evidence, not the word "unratified", set severity.
 
-**Maturity** -- compute LAST, per surface. Evaluate the ladder **in the order listed below,
-top-down; the FIRST predicate that matches wins** (so a surface with 0 critical / 0 high is
-`frontier`, not `strong`, because `frontier` is tested first). Pin these thresholds:
+**Maturity** -- compute LAST, per surface. A `shared`-surface finding counts toward BOTH
+surfaces' critical/high tallies. Evaluate the ladder **in the order listed below, top-down; the
+FIRST predicate that matches wins** (so a surface with 0 critical / 0 high is `frontier`, not
+`strong`, because `frontier` is tested first). Pin these thresholds:
 - `frontier` = 0 open critical AND 0 open high findings on that surface.
 - `strong` = 0 critical AND <= 1 high.
 - `solid` = <= 1 critical.
