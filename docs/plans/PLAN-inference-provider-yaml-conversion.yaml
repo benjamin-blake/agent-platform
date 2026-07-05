@@ -61,7 +61,13 @@ scope:
     purpose: Update directory-instruction path reference inference-provider.md -> .yaml (path only).
   - file: config/README.md
     action: Modify
-    purpose: Update the config-reference section that documents the deleted model_routing.yaml.
+    purpose: >-
+      Rewrite the `### copilot_model_routing.yaml` section (NOT a path-only edit): retitle to the
+      inference-provider.yaml `model_routing:` block, repoint "Used by" to the same, drop the
+      CD.28-retired dormant-bedrock lines ("Dormant provider: Bedrock", "reactivate via
+      LLM_PROVIDER=bedrock", the `providers.bedrock` structure bullet), and keep the gemini/roles/
+      escalation structure bullets. This section documents a file being deleted, so a genuine
+      rewrite is required -- a heading swap alone would leave stale, CD.28-contradicting prose.
   - file: docs/PROJECT_CONTEXT.md
     action: Modify
     purpose: >-
@@ -157,6 +163,14 @@ verification_plan:
     command: "bin/venv-python -m scripts.validate --pre"
     expected: "exits 0"
     fix_if: "Address the specific failing check; do not add a CI check without adding it to validate.py first."
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      config/README.md's rewritten section no longer describes a reactivatable bedrock provider
+      (VP step 4's path-token grep cannot catch residual CD.28-contradicting prose).
+    command: "! grep -Eiq 'LLM_PROVIDER=bedrock|providers\\.bedrock|Dormant provider' config/README.md && echo clean"
+    expected: "prints 'clean'"
+    fix_if: "The section still carries retired-bedrock prose -- finish the config/README.md section rewrite."
 constraints:
   - Only modify files listed in scope. Out-of-scope staleness (e.g. PROJECT_CONTEXT.md line ~309 'LLM_PROVIDER=bedrock' switch note, Decision 49 mentions) becomes a recommendation via the ops portal, never an inline fix.
   - >-
@@ -170,7 +184,7 @@ constraints:
   - >-
     Executor self-modification boundary (Decision 44/117): executor-boundary files are touched via the
     compliant /plan->/implement route only; any bundled recs stay automatable:false. No executor consumption.
-  - "Reference sweep is path-only: change inference-provider.md -> .yaml and the model_routing.yaml path; do not rewrite surrounding decision references or prose."
+  - "Reference sweep is path-only for the comment/docstring/pointer files (run_scheduled_agent.py, build_lambda.py, executor/model_routing.py, executor/plan.py, planning/critique prompts, src/data/handlers/CLAUDE.md, PROJECT_CONTEXT.md, ARCHITECTURE-WORKFLOW.md, plan-critique/SKILL.md): change inference-provider.md -> .yaml and the model_routing.yaml path only; do not rewrite surrounding decision references or prose. EXCEPTION: config/README.md's `### copilot_model_routing.yaml` section requires a genuine rewrite (see its scope purpose) because the heading IS the deleted filename and the body describes retired-bedrock structure; the prose-preservation rule does not apply there."
   - Historical records (docs/plans/*, docs/audit-reports/*, DECISIONS_ARCHIVE.md, SESSION_LOG*, CHANGELOG, intent-migration, DECISIONS.md) are immutable -- do not edit.
   - ASCII only, no emojis, ruff line length 127; invoke Python via bin/venv-python.
   - No rescue agents or workaround loops (Decision 55).
@@ -181,10 +195,10 @@ context:
   - "Lambda Deployment Assessment (scripts/run_scheduled_agent.py): this file DOES package into two status:active artifacts (data-pipeline, ops-compaction) per compute_affected_artifacts, BUT the in-scope edit is a docstring-only path swap (line 284, zero behavioral change) and the scheduled-agent Lambda path is disabled (AGENTS.md runbook). No build/deploy/smoke step is warranted (Decision 48/79 verification-tier refinement); the updated docstring ships with the next functional deploy of those artifacts."
   - "Decision 53 (Gemini CLI transport) is in DECISIONS_ARCHIVE.md, not live DECISIONS.md -- do not cite as governing; the contract prose already references it."
   - "T-1.14 exit_criteria are plain strings (no crit-ids), so closes_criteria is omitted; /implement's bookkeeping walk flips item/criterion status on a verified VP pass."
-  - "Main Divergence: branch is 11 behind / 1 ahead of origin/main at plan-critique time (preflight's 0/0 was stale). origin/main divergence is confined to T2.26 and T3.15 -- it does NOT overlap this plan's scope (T-1.14, model_registry). Pre-push rebase (git fetch origin main && git rebase origin/main) runs at commit-flow time per the Git-ops procedure; no re-scoping needed."
+  - "Main Divergence: branch is 11 behind / 2 ahead of origin/main (preflight's 0/0 was stale). origin/main DOES edit docs/ROADMAP-PLATFORM.yaml (a scope file) but OUTSIDE the T-1.14 block, and the Step-10 phrase count is 12 on both HEAD and origin/main -- so there is no T-1.14 / model_registry overlap, the commit-flow rebase merges ROADMAP-PLATFORM.yaml cleanly, and VP step 6's 12->11 counts are unaffected. Pre-push rebase (git fetch origin main && git rebase origin/main) runs at commit-flow time per the Git-ops procedure; no re-scoping needed."
   - "Closure obligation: surface-retiring plan (Delete rows + model_routing.yaml -> inference-provider.yaml migration); VP step 4 is the mandatory stale-reference sweep."
   - "Decision-scout verdict: FLAGS_FOUND (2 NOTE, no BLOCK; 80 of 80 decisions triaged). CITE list (verbatim): Decision 118 (ratifies CD.25), Decision 86, Decision 116. Both NOTE flags (Decision 118 non-ritual self-assert; Decision 44/117 executor boundary) accepted as-is."
-  - "gates: decision-scout=FLAGS_FOUND (both NOTE flags accepted); plan-critique=REVISE round 1 (VP steps 4+6 fixed, Lambda-assessment + divergence notes added), re-critique pending"
+  - "gates: decision-scout=FLAGS_FOUND (both NOTE flags accepted); plan-critique=REVISE round 1 (VP steps 4+6, Lambda + divergence) -> REVISE round 2 (config/README.md section rewrite carved out + VP step 8 added + divergence corrected to 11/2), re-critique pending"
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/inference-provider-yaml-conversion-rvfd04)
   - docs/PROJECT_CONTEXT.md read
@@ -217,9 +231,14 @@ execution_steps:
     Live-reference sweep (path-only edits): scripts/run_scheduled_agent.py, scripts/build_lambda.py,
     scripts/executor/model_routing.py, scripts/executor/plan.py, config/agent/executor/prompts/
     planning.prompt.md, config/agent/executor/prompts/critique.prompt.md, src/data/handlers/CLAUDE.md,
-    config/README.md, docs/PROJECT_CONTEXT.md (File Router row + Lambda gotcha), docs/ARCHITECTURE-WORKFLOW.md,
+    docs/PROJECT_CONTEXT.md (File Router row + Lambda gotcha), docs/ARCHITECTURE-WORKFLOW.md,
     .claude/skills/plan-critique/SKILL.md. Change inference-provider.md -> .yaml and the deleted
     model_routing.yaml path -> docs/contracts/inference-provider.yaml only.
+  - >-
+    Rewrite the config/README.md `### copilot_model_routing.yaml` section (NOT path-only): retitle to
+    the inference-provider.yaml `model_routing:` block, repoint "Used by", and delete the CD.28-retired
+    dormant-bedrock lines and the `providers.bedrock` structure bullet. Retain the gemini/roles/floors/
+    escalation structure bullets and the interactive-sessions note.
   - >-
     Re-ground docs/ROADMAP-PLATFORM.yaml T-1.14 exit criterion 4: replace "Step 10 multi-perspective
     critique converges" with a criterion satisfied by the plan-critique gate + /implement code-review
