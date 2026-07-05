@@ -38,9 +38,12 @@ scope:
   - file: tests/test_validate.py
     action: Modify
     purpose: >-
-      Add unit coverage exercising the re-grounded validate_invariants guard against a
-      known-bad "-p @file" sample, satisfying the V2 pytest-coverage mandate (Decision 48).
-      No test currently covers Check 1.
+      TestValidateInvariants already covers Check 1's positive "-p @file" case
+      (test_fails_on_at_file_without_instruction) and asserts only on the failed-list, not the
+      message text -- so the re-ground of the error string does not break it. Extend that class
+      with a negative case asserting an instruction-before-@file call list
+      (e.g. ["-p", "review this", f"@{path}"]) is NOT flagged, locking in the CLI-agnostic guard
+      behavior (Decision 48 / V2). Do not add a duplicate positive test.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -64,8 +67,9 @@ acceptance_criteria:
     "-p @file" argument list that lacks an inline instruction string.
   - "docs/contracts/delegate-cli.md contains no reference to copilot-cli.md."
   - >-
-    A pytest in tests/test_validate.py exercises the re-grounded guard (positive: flags
-    "-p @file"; negative: passes on an instruction+@file call) and passes.
+    tests/test_validate.py::TestValidateInvariants exercises the re-grounded guard (existing
+    positive case flags "-p @file"; added negative case passes on an instruction-before-@file
+    call) and the class passes.
   - >-
     T-1.18 in docs/ROADMAP-PLATFORM.yaml is re-grounded (intent + four exit_criteria +
     files_in_scope describe the retirement cleanup; no mention of converting to YAML or wiring
@@ -95,10 +99,10 @@ verification_plan:
     fix_if: "Prints MISSED -- the re-ground neutered the guard; the regex/scan was broken."
   - step: 4
     phase: pre-deploy
-    action: Run the new guard unit test.
-    command: "bin/venv-python -m pytest tests/test_validate.py -k invariant -q"
-    expected: "The new test(s) pass; exit code 0."
-    fix_if: "Test fails or collects nothing -- coverage missing or guard behavior wrong."
+    action: Run the guard unit tests (existing positive case + added negative case). Class-path selector, not -k (tests/CLAUDE.md gotcha).
+    command: "bin/venv-python -m pytest tests/test_validate.py::TestValidateInvariants -q"
+    expected: "All TestValidateInvariants tests pass, including the new negative case; exit code 0."
+    fix_if: "Test fails -- the re-ground broke guard behavior or the negative case is miswired."
   - step: 5
     phase: pre-deploy
     action: Confirm T-1.18 is re-grounded in the roadmap (no stale convert/wire language).
@@ -118,6 +122,10 @@ constraints:
   - "Keep exactly four exit_criteria on T-1.18 so their auto-assigned ids remain c1-c4 (schema _normalize_exit_criteria positional id assignment); changing the count breaks the closes_criteria refs."
   - "Do not convert copilot-cli.md to YAML and do not recreate copilot_wrapper.py -- both are impossible/superseded and out of scope."
   - "Do not edit docs/INTENT-pre-codegen-contract-ratification.md -- it is grandfathered and retiring (see Context deferral note)."
+  - >-
+    No Lambda build/deploy/smoke-test for the docs/ROADMAP-PLATFORM.yaml edit: it is a read-only
+    doc ASSET of the data-pipeline Lambda, not code (see Lambda Deployment Assessment in Context).
+    Commit the roadmap change under the roadmap(...) bookkeeping convention, no redeploy.
 context:
   - >-
     T-1.18's original scope is superseded: scripts/copilot_wrapper.py (683 lines) plus
@@ -145,9 +153,19 @@ context:
     integrity (no doc link-integrity check exists in the check registry; verified). The
     references are left pending the INTENT doc's own retirement rather than churned piecemeal.
     Step 6's full validate.py --pre confirms nothing breaks.
-  - "Verification tier V2 (Decision 48): modifies a Python check module; VP exercises the real guard and adds pytest coverage."
+  - >-
+    LAMBDA DEPLOYMENT ASSESSMENT: compute_affected_artifacts(['docs/ROADMAP-PLATFORM.yaml'])
+    returns {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']} -- the roadmap is bundled as an
+    ASSET (not code) of the status:active data-pipeline Lambda. No build/deploy/smoke-test is
+    warranted: the roadmap is a read-only document whose only runtime consumers are the
+    scheduled agents, which are DISABLED (SCHEDULED_AGENTS_ENABLED=false; EventBridge rule
+    disabled per AGENTS.md runbook); a T-1.18 metadata re-ground has zero effect on Lambda code
+    behavior; and the repo treats roadmap edits as non-deploy bookkeeping (roadmap(...) commit
+    convention). Deploying would be dead ceremony. The other four scope files are not
+    Lambda-packaged (checks module, contracts docs, test file).
+  - "Verification tier V2 (Decision 48): modifies a Python check module; VP exercises the real guard and extends existing pytest coverage."
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 116, Decision 117, Decision 118, Decision 91, Decision 86, Decision 48, Decision 104, Decision 67."
-  - "gates: decision-scout=FLAGS_FOUND (1 NOTE, resolved via Context deferral); plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND (1 NOTE, resolved via Context deferral); plan-critique=REVISE->PROCEED after 1 round (Lambda-asset assessment + test-scope premise corrected)"
 pre_implementation_checklist:
   - "Branch confirmed not on main"
   - "docs/PROJECT_CONTEXT.md read"
@@ -173,9 +191,10 @@ execution_steps:
     references). Keep the registration name validate_invariants and the regex behavior intact.
   - "Modify docs/contracts/delegate-cli.md: remove/re-ground the line ~61 pointer to copilot-cli.md."
   - >-
-    Modify tests/test_validate.py: add a test that calls validate_invariants against a scripts
-    tree (or monkeypatched sample) containing a '-p @file' construction and asserts it is
-    flagged, plus a negative case (instruction present) that is not flagged.
+    Modify tests/test_validate.py: extend the existing TestValidateInvariants class (do NOT
+    duplicate its positive '-p @file' case) with a negative-case test asserting an
+    instruction-before-@file call list (e.g. ["-p", "review this", f"@{path}"]) is NOT flagged,
+    confirming the re-grounded guard still requires @file immediately after -p.
   - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
   - "Bookkeeping walk: on a verified VP pass, flip T-1.18 c1-c4 to met and T-1.18 status to complete."
   - "Report: what was implemented, verification results."
