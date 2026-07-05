@@ -59,7 +59,11 @@ Every active item receives exactly one disposition. The pinned enum:
   by shipped work; recommend flipping status to `complete`. Requires the
   anti-vacuity proof in Section 11.
 - `remove` -- the item is obsolete or superseded and no longer describes wanted
-  work; recommend deletion (or `reserved` tombstoning). Name what supersedes it.
+  work; name what supersedes it. Pick the mechanism by this rule: recommend
+  `reserved` TOMBSTONING when the item id is referenced elsewhere (another item's
+  `depends_on`, a gate, a CD, a decision -- id must survive for traceability);
+  recommend outright DELETION only when no such reference exists. State which and
+  why in the finding.
 - `rescope` -- the item is partially valid but mis-framed, over-broad, or
   should be split/merged; state the new shape.
 
@@ -107,6 +111,12 @@ T1.7, T1.9, T1.10, T1.13, T2.7, T2.15, T2.18, T2.19, T2.25, T2.26, T2.29, T2.30,
 T2.31, T2.32, T2.36, T3.2, T3.3, T3.4, T3.5, T3.7, T3.9, T3.10, T3.14, T3.17,
 T3.20, T4.1, T4.2, T4.3, T4.4, T4.5, T4.6, T4.7, T5.1, T5.2, T5.4, T5.5.
 
+"Active" is `status` in {`not_started`, `in_progress`} exactly. The other
+statuses are the closed set {`complete`, `deferred_post_mvp`, `reserved`}. IF an
+item carries any status outside this closed set of five, treat it as
+context (not active), do not assign it a disposition, and record it in
+`meta.contract_notes`.
+
 Context, NOT triaged (do not assign dispositions):
 - `complete` items (72 at authoring time) -- evidence for `mark_complete`
   adjacency and supersession, nothing more.
@@ -123,10 +133,16 @@ Shared vocabulary:
   Lambdas), T1 (verb surface expansion + DQ), T2 (DuckLake migration + Terraform
   CI/CD), T3 (verifier harness + telemetry analysis), T4 (autonomous executor),
   T5 (legacy teardown). Rubric (Section 8) rates per tier.
-- `exit_criteria` is a list of `{id, text, status}` objects; `status` per
-  criterion is typically `open` or `met`. A `mark_complete` disposition requires
-  ALL criteria provably met (Section 11), NOT merely all `status: met` in the
-  YAML -- the YAML status may lag reality in either direction.
+- `exit_criteria` is a MIXED representation -- do not assume one shape. For most
+  active items (38 of 48 at authoring time) it is a plain list of bare STRINGS
+  (no per-criterion status). For a minority (10 at authoring time: T0.4, T1.13,
+  T2.18, T2.19, T2.26, T2.36, T3.17, T3.20, T4.3, T5.5 -- re-derive) it is a list
+  of `{id, text, status}` objects where `status` is `open` / `met` / `rehomed`.
+  Your parser must handle BOTH shapes per item (check element type). Because the
+  bare-string form has no status and the dict-form status may lag reality, a
+  `mark_complete` disposition NEVER rests on a YAML `status` field -- it rests on
+  the artifact proof of Section 11. Treat any per-criterion `status` as a lead,
+  never as the evidence.
 - `depends_on` entries are EITHER specific ids (e.g. T2.18) OR tier-name
   shortcuts (e.g. "T2" = all items in tier T2 complete).
 
@@ -163,7 +179,9 @@ bin/venv-python -m scripts.session_preflight --roadmap-detail full
 ```
 
 This populates `logs/.preflight-report.json` and refreshes
-`logs/.recommendations-log.jsonl` (a read cache; never write it).
+`logs/.recommendations-log.jsonl` (a local read cache). This refresh is a READ
+of the warehouse into a local cache -- it is not a warehouse write and does not
+breach the Section 1 "no warehouse write" boundary. Never hand-edit either file.
 
 Degraded paths -- never abort, set a flag and proceed:
 - IF `session_preflight` fails on creds/egress: set `meta.degraded_dedup=true`,
@@ -218,6 +236,11 @@ Each question gets its own first-class answer slot in `question_answers`
   complete +14d AND T3.2 latest_run PASS AND T3.3 complete +7d)? Verdict enum:
   `reachable` / `reachable_with_resequencing` / `blocked_by_freeze`. The answer
   MUST include the ordered id sequence and name every freeze-gated item on it.
+  Reconciliation with NS-DEFER: `mvp_sequence` is a critical-path DIAGNOSTIC
+  trace (which items block loop closure and in what order), NOT a committed MVP
+  scope surface. Producing it does not enumerate the residual MVP set and does
+  not breach Decision 93's "never enumerate the MVP set" rule -- the deferral set
+  and the redundancy set remain the only committed enumerations.
 - **Q2 -- Deferral set.** Which active items should be `defer_post_mvp`?
   HARD CONSTRAINT you must enforce: Decision 93 forbids any live item
   (`not_started`/`in_progress`) from `depends_on` a `deferred_post_mvp` item
@@ -329,8 +352,10 @@ TODAY. Prove it, do not infer it:
   If any criterion cannot be shown to pass against a named artifact, the
   disposition is NOT `mark_complete` -- downgrade to `rescope` (partial) or
   `keep_active_mvp`, and say which criteria remain open.
-- Do NOT rely on the YAML `exit_criteria[].status` alone; it can lag reality in
-  either direction. The YAML status is a lead, the artifact is the evidence.
+- Do NOT rely on any YAML `exit_criteria` status; most active items have
+  bare-string criteria with no status at all (Section 4), and where a status
+  exists it can lag reality in either direction. The YAML is a lead, the artifact
+  is the evidence.
 - `evidence_kind: observed` requires you to have read the satisfying artifact
   this session; otherwise `static` and confidence HYPOTHESIS.
 
@@ -421,6 +446,9 @@ audit:
   rubric_ratings:
     - {surface: <tier>, dimension: VD1|VD2|VD3|VD4,
        rating: strong|adequate|weak|absent|n/a, evidence: "<item-id|file:line>", note: ""}
+  per_tier_maturity:                 # Section 15 output slot; one entry per tier
+    - {surface: <tier>, maturity: lean|mostly-lean|noisy|overgrown,
+       redundant_finding_count: <int>, note: ""}
   telemetry_chain_assessment:        # DD-A output, feeds Q4
     - {link: <item-id>, role: capture|storage|verification|analysis|infra,
        state: built|in_progress|not_started, next_link_can_consume: true|false, note: ""}
@@ -440,21 +468,30 @@ audit:
   rejected_candidates:
     - {candidate, why_dismissed, disposition_would_have_been, evidence_or_decision_id}
   summary: {active_item_count, keep_active_mvp_count, defer_count, complete_count,
-            remove_count, rescope_count, total_findings,
-            highest_leverage_change: <finding id>, top_changes: [<finding ids>],
+            remove_count, rescope_count, deferred_context_remove_count,
+            total_findings, highest_leverage_change: <finding id|null>,
+            top_changes: [<finding ids>],
             mvp_reachability: <Q1 verdict>, telemetry_verdict: <Q4 verdict>}
 ```
 
 Invariants, stated verbatim:
 - COUNTING INVARIANT: `dispositions` has EXACTLY one entry per active item;
-  `len(dispositions) == meta.active_item_count`. `findings[]` is the enumerated
-  actionable list: exactly the dispositions whose verdict != `keep_active_mvp`;
-  `total_findings == defer_count + complete_count + remove_count + rescope_count`
-  (plus any `deferred-context` remove finding per Section 4). `keep_active_mvp`
-  items appear in `dispositions` only, never in `findings`. `rubric_ratings`,
-  `question_answers`, and `telemetry_chain_assessment` are systems-of-record
-  referenced FROM findings, never re-counted. `highest_leverage_change` and every
-  `top_changes` entry MUST be a finding id.
+  `len(dispositions) == meta.active_item_count`. The disposition counts partition
+  the active set: `keep_active_mvp_count + defer_count + complete_count +
+  remove_count + rescope_count == active_item_count`, where each `*_count` (other
+  than keep) is the number of active-item dispositions with that verdict.
+  `remove_count` counts ACTIVE-set removes ONLY. `deferred_context_remove_count`
+  counts the separate Section-4-exception removes on already-deferred items
+  (0 if none), which have NO `dispositions` entry. `findings[]` is exactly the
+  active non-keep dispositions PLUS any deferred-context removes, so
+  `total_findings == defer_count + complete_count + remove_count + rescope_count
+  + deferred_context_remove_count`. `keep_active_mvp` items appear in
+  `dispositions` only, never in `findings`. `rubric_ratings`,
+  `per_tier_maturity`, `question_answers`, and `telemetry_chain_assessment` are
+  systems-of-record referenced FROM findings, never re-counted.
+  `highest_leverage_change` and every `top_changes` entry MUST be a finding id;
+  IF `findings` is empty (a valid outcome), set `highest_leverage_change: null`
+  and `top_changes: []`.
 - CONFIRMED requires the disposition traced to the roadmap file plus (for
   `mark_complete`) a read satisfying artifact; anything less is HYPOTHESIS.
 - `dependency_check` is REQUIRED and non-empty for every `defer_post_mvp`
@@ -485,7 +522,8 @@ that already handles it AND state why that control would fail to cover the gap i
 the candidate were real. A control that cannot catch the break does not justify
 dismissal.
 
-Per-tier MATURITY -- compute LAST, per tier, top-down, first match wins. Pin
+Per-tier MATURITY -- compute LAST, per tier, top-down, first match wins, and
+record each tier's result in the `per_tier_maturity` block (Section 14). Pin
 these thresholds:
 - `lean` = 0 active items in this tier warrant `remove` AND 0 warrant
   `mark_complete` (nothing redundant is masquerading as active) AND VD2 is
@@ -501,11 +539,22 @@ these thresholds:
    the two deliverable filenames, the branch name, and `meta.audited_commit`.
 2. `git switch -c audit/platform-roadmap-mvp-triage-<sha> origin/main`. This is a
    deliberate, documented exception to the AGENTS.md `claude/*` session-branch
-   rule: the audit session needs a clean two-file diff off the audited base.
-3. Write the two files under `audits/`. A clean `yaml.safe_load` of the YAML
-   deliverable is your real pre-push gate. Repo-wide `validate.py` is advisory
-   outside CI here; if it fails for a reason unrelated to your two files, record
-   that in `meta.contract_notes` and do NOT fix it (write boundary).
+   rule: the audit session needs a clean two-file diff off the audited base. The
+   `never_on_main` hook blocks edits/commits only while the current branch IS
+   `main`; you are on an `audit/...` branch, so it permits your work. IF any hook
+   nonetheless blocks the switch/commit, do not force past it -- record the block
+   in `meta.contract_notes` and stop before pushing.
+3. Write the two files under `audits/` (an existing, git-tracked directory whose
+   prior contents follow this same `.yaml` + `.md` companion convention -- these
+   audit deliverables are query outputs a human reads and are an established
+   EXEMPT surface, distinct from the AGENTS.md agent-first ban on standing
+   human-readable companion docs, which governs repo architecture docs, not audit
+   reports). If a file with the same `<sha>` name already exists, overwrite it
+   (output is deterministic per audited commit). A clean `yaml.safe_load` of the
+   YAML deliverable is your real pre-push gate. Repo-wide `validate.py` is
+   advisory outside CI here; if it fails for a reason unrelated to your two
+   files, record that in `meta.contract_notes` and do NOT fix it (write
+   boundary).
 4. Commit with `git -c user.name=Claude -c user.email=noreply@anthropic.com
    commit --no-gpg-sign -m "audit: platform roadmap MVP-triage report"`.
    `git push -u origin HEAD`.
