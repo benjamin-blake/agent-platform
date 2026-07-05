@@ -1,0 +1,251 @@
+schema_version: 1
+slug: "inference-provider-yaml-conversion"
+intent: >-
+  Convert the prose inference-provider contract to a ratified machine-parseable YAML and wire
+  its code consumer to read it, advancing the agent-first contract-conversion wave (T-1.13..T-1.19,
+  Decision 86) that makes the platform substrate self-describing.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-inference-provider-yaml-conversion.yaml
+phase: >-
+  Platform tier_item T-1.14 (Convert inference-provider.md to .yaml + wire model_registry.py to
+  read it). Deps T-1.12 + T1.15 complete. Part of the T-1.13..T-1.19 contract-conversion wave.
+scope:
+  - file: docs/contracts/inference-provider.yaml
+    action: Create
+    purpose: >-
+      New ratified non-ritual YAML contract (build-lambda.yaml / T-1.16 precedent: no top-level
+      contract:/class: block, so the CD.25 drift gate skips it). Carries contract_version:1,
+      status:ratified, projects_to, the structured contract content converted from the .md, and a
+      machine-consumed model_routing: block reproducing model_routing.yaml verbatim minus bedrock.
+  - file: docs/contracts/inference-provider.md
+    action: Delete
+    purpose: Prose contract retired; content converted to the YAML (Decision 86 prose->contract routing).
+  - file: config/agent/copilot/model_routing.yaml
+    action: Delete
+    purpose: >-
+      Absorbed into inference-provider.yaml's model_routing: block (single source of truth, no
+      two-file drift surface). model_registry.py is its only code consumer.
+  - file: scripts/model_registry.py
+    action: Modify
+    purpose: >-
+      Point _CONFIG_PATH at docs/contracts/inference-provider.yaml; _load_config returns the
+      model_routing sub-dict so the resolver internals and _load_config-patching tests are unchanged.
+      Update docstring path references. Preserve public API + import safety (never raise on missing file).
+  - file: tests/test_model_registry.py
+    action: Modify
+    purpose: >-
+      Drop the bedrock fixture entries and test_bedrock_deepseek_returns_mid; add an unmocked
+      real-file test class (contract fields, projects_to, no bedrock in providers, resolution
+      equivalence). Maintain 100% coverage of modified source.
+  - file: scripts/run_scheduled_agent.py
+    action: Modify
+    purpose: Update comment path reference inference-provider.md -> .yaml.
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: Update docstring path reference inference-provider.md -> .yaml.
+  - file: scripts/executor/model_routing.py
+    action: Modify
+    purpose: Update docstring path reference config/agent/copilot/model_routing.yaml -> inference-provider.yaml.
+  - file: scripts/executor/plan.py
+    action: Modify
+    purpose: Update docstring path reference config/agent/copilot/model_routing.yaml -> inference-provider.yaml.
+  - file: config/agent/executor/prompts/planning.prompt.md
+    action: Modify
+    purpose: Update model-ID-validation path reference inference-provider.md -> .yaml (path only).
+  - file: config/agent/executor/prompts/critique.prompt.md
+    action: Modify
+    purpose: Update reference inference-provider.md -> .yaml (path only).
+  - file: src/data/handlers/CLAUDE.md
+    action: Modify
+    purpose: Update directory-instruction path reference inference-provider.md -> .yaml (path only).
+  - file: config/README.md
+    action: Modify
+    purpose: >-
+      Rewrite the `### copilot_model_routing.yaml` section (NOT a path-only edit): retitle to the
+      inference-provider.yaml `model_routing:` block, repoint "Used by" to the same, drop the
+      CD.28-retired dormant-bedrock lines ("Dormant provider: Bedrock", "reactivate via
+      LLM_PROVIDER=bedrock", the `providers.bedrock` structure bullet), and keep the gemini/roles/
+      escalation structure bullets. This section documents a file being deleted, so a genuine
+      rewrite is required -- a heading swap alone would leave stale, CD.28-contradicting prose.
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Update File Router row (model_routing.yaml -> inference-provider.yaml) and the Lambda-pipeline
+      gotcha's inference-provider.md -> .yaml reference (path only).
+  - file: docs/ARCHITECTURE-WORKFLOW.md
+    action: Modify
+    purpose: Update the "reads config/agent/copilot/model_routing.yaml" pointer -> inference-provider.yaml.
+  - file: .claude/skills/plan-critique/SKILL.md
+    action: Modify
+    purpose: Update the Lambda-completeness model-ID-validation reference inference-provider.md -> .yaml (path only).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap bookkeeping: re-ground T-1.14 exit criterion 4 ("Step 10 multi-perspective critique
+      converges") -- Step 10 runs only for REPORT-ONLY plans; this is IMPLEMENTATION, so the YAML
+      design is reviewed via the plan-critique gate + /implement code-review.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/contracts/inference-provider.yaml exists with contract_version:1 and status:ratified, a
+    projects_to entry documenting model_routing.yaml absorption, and a model_routing: block whose
+    providers contain no bedrock key.
+  - >-
+    scripts/model_registry.py reads docs/contracts/inference-provider.yaml (not model_routing.yaml);
+    resolve_model / escalate_model / get_model_tier return values identical to the pre-conversion config.
+  - docs/contracts/inference-provider.md and config/agent/copilot/model_routing.yaml are deleted.
+  - No live (non-historical) surface references either deleted path.
+  - Full model_registry + dependent-consumer test suites pass; bedrock fixture/test removed.
+  - docs/ROADMAP-PLATFORM.yaml T-1.14 exit criterion 4 is re-grounded off the REPORT-ONLY-only Step 10 gate.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Structure + equivalence: the new YAML has the required contract fields and the REAL
+      model_registry (unmocked) resolves identically off it, via the new real-file test class.
+    command: "bin/venv-python -m pytest tests/test_model_registry.py -q"
+    expected: >-
+      All tests pass, including the new unmocked real-file class asserting contract_version==1,
+      status=='ratified', projects_to present, no bedrock provider, and resolve_model('planning','XS')
+      =='gemini-3-flash-preview', resolve_model('implementation','XS','scripts/executor/plan.py')
+      =='gemini-3-pro-preview', escalate_model('planning','auto')=='gemini-3-pro-preview',
+      get_model_tier('gemini-3-pro-preview')=='pro'.
+    fix_if: >-
+      Failure means the YAML shape/model_routing block is wrong or the path is not wired -- inspect
+      the sub-dict returned by _load_config against the old model_routing.yaml keys.
+  - step: 2
+    phase: pre-deploy
+    action: model_registry reads the new path and no longer references the deleted config.
+    command: "grep -q 'docs/contracts/inference-provider.yaml' scripts/model_registry.py && ! grep -q 'model_routing.yaml' scripts/model_registry.py && echo wired"
+    expected: "prints 'wired'"
+    fix_if: "_CONFIG_PATH still points at model_routing.yaml or a stale docstring path remains."
+  - step: 3
+    phase: pre-deploy
+    action: Both source files are deleted.
+    command: "test ! -f docs/contracts/inference-provider.md && test ! -f config/agent/copilot/model_routing.yaml && echo deleted"
+    expected: "prints 'deleted'"
+    fix_if: "A source file still exists -- complete the Delete action."
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Stale-reference sweep (closure obligation): no LIVE surface references the deleted paths
+      (historical records under docs/plans, docs/audit-reports, DECISIONS_ARCHIVE, SESSION_LOG*,
+      CHANGELOG, intent-migration, and DECISIONS.md are excluded by design).
+    command: "grep -rn 'inference-provider\\.md\\|config/agent/copilot/model_routing\\.yaml\\|copilot_model_routing' --include=*.py --include=*.md --include=*.yaml . | grep -v '.venv/' | grep -v '.git/' | grep -v '/logs/' | grep -v 'docs/plans/' | grep -v 'docs/audit-reports/' | grep -v 'DECISIONS_ARCHIVE' | grep -v 'SESSION_LOG' | grep -v 'CHANGELOG' | grep -v 'intent-migration' | grep -v 'docs/DECISIONS.md' | grep -v 'docs/AUDIT-PROMPT' | grep -v 'docs/INTENT-' | grep -v 'docs/ROADMAP-PLATFORM.yaml' || echo clean"
+    expected: "prints 'clean' (no dangling live references)"
+    fix_if: >-
+      A live surface still points at a deleted path -- update it (path-only) in this session. The
+      exclusions cover immutable/descriptive mentions: frozen docs/INTENT-*.md (intent-doc-freeze
+      guard) and docs/ROADMAP-PLATFORM.yaml (T-1.14's own name/files_in_scope legitimately name the
+      old files as task description). VP step 6 separately proves the T-1.14 roadmap edit landed.
+  - step: 5
+    phase: pre-deploy
+    action: Dependent consumers of the resolver are unbroken (llm_client, executor routing/plan).
+    command: "bin/venv-python -m pytest tests/test_llm_client.py tests/test_executor_model_routing.py tests/test_executor_plan.py -q"
+    expected: "all pass -- the resolver contract is preserved for every consumer."
+    fix_if: "A consumer test fails -- the _load_config return shape or a resolution changed; restore equivalence."
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      T-1.14 exit criterion 4 is re-grounded (only T-1.14's occurrence of the Step-10 wording is
+      removed; the phrase legitimately recurs in ~11 other REPORT-ONLY tier_items and must stay).
+    command: "test $(grep -c 'Step 10 multi-perspective critique converges' docs/ROADMAP-PLATFORM.yaml) -eq 11 && echo regrounded"
+    expected: "prints 'regrounded' (count drops from the 12 baseline to 11 -- exactly T-1.14's criterion removed)"
+    fix_if: >-
+      Count still 12 means T-1.14 was not edited; count below 11 means another item's criterion was
+      wrongly removed -- only T-1.14's exit criterion 4 may change. Confirm the edit is scoped to the
+      T-1.14 tier_item block.
+  - step: 7
+    phase: pre-deploy
+    action: Fast presubmit tier is green (authoritative on PR CI).
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "exits 0"
+    fix_if: "Address the specific failing check; do not add a CI check without adding it to validate.py first."
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      config/README.md's rewritten section no longer describes a reactivatable bedrock provider
+      (VP step 4's path-token grep cannot catch residual CD.28-contradicting prose).
+    command: "! grep -Eiq 'LLM_PROVIDER=bedrock|providers\\.bedrock|Dormant provider' config/README.md && echo clean"
+    expected: "prints 'clean'"
+    fix_if: "The section still carries retired-bedrock prose -- finish the config/README.md section rewrite."
+constraints:
+  - Only modify files listed in scope. Out-of-scope staleness (e.g. PROJECT_CONTEXT.md line ~309 'LLM_PROVIDER=bedrock' switch note, Decision 49 mentions) becomes a recommendation via the ops portal, never an inline fix.
+  - >-
+    The new YAML is NON-ritual: no top-level contract:/class: block (else the CD.25 ContractDocument
+    schema + validate_contract_drift engage). status:ratified is self-asserted per the build-lambda.yaml
+    precedent, not gate-enforced (Decision 118 NOTE flag, accepted).
+  - >-
+    Preserve model_registry's public API (resolve_provider/resolve_model/escalate_model/get_model_tier/
+    _load_config) and its exact resolution outputs -- this is a substrate move, not a behaviour change.
+  - "Import safety (Critical): _load_config must never raise; a missing/unparseable file returns {} with a warning."
+  - >-
+    Executor self-modification boundary (Decision 44/117): executor-boundary files are touched via the
+    compliant /plan->/implement route only; any bundled recs stay automatable:false. No executor consumption.
+  - "Reference sweep is path-only for the comment/docstring/pointer files (run_scheduled_agent.py, build_lambda.py, executor/model_routing.py, executor/plan.py, planning/critique prompts, src/data/handlers/CLAUDE.md, PROJECT_CONTEXT.md, ARCHITECTURE-WORKFLOW.md, plan-critique/SKILL.md): change inference-provider.md -> .yaml and the model_routing.yaml path only; do not rewrite surrounding decision references or prose. EXCEPTION: config/README.md's `### copilot_model_routing.yaml` section requires a genuine rewrite (see its scope purpose) because the heading IS the deleted filename and the body describes retired-bedrock structure; the prose-preservation rule does not apply there."
+  - Historical records (docs/plans/*, docs/audit-reports/*, DECISIONS_ARCHIVE.md, SESSION_LOG*, CHANGELOG, intent-migration, DECISIONS.md) are immutable -- do not edit.
+  - ASCII only, no emojis, ruff line length 127; invoke Python via bin/venv-python.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - "Deps T-1.12 (complete) + T1.15 (complete) satisfied; T1.15 already refreshed the .md to CD.28-aligned v7.0, so the conversion consumes CD.28-aligned content."
+  - "Agent-first contract-conversion wave T-1.13..T-1.19 (PROJECT_CONTEXT.md section 8; Decision 86 routes prose->contracts and forbids new standing prose-architecture docs)."
+  - "model_registry.py is executor-only, NOT Lambda-packaged (compute_affected_artifacts==({}); build_lambda.py also =={}); llm_client imports it lazily and the Lambda scheduled-agent path never calls it. Any Lambda edge degrades safely via the _load_config missing-file fallback (docs/contracts/ is not bundled). Hence V2, no Lambda build/deploy/smoke steps."
+  - "Lambda Deployment Assessment (scripts/run_scheduled_agent.py): this file DOES package into two status:active artifacts (data-pipeline, ops-compaction) per compute_affected_artifacts, BUT the in-scope edit is a docstring-only path swap (line 284, zero behavioral change) and the scheduled-agent Lambda path is disabled (AGENTS.md runbook). No build/deploy/smoke step is warranted (Decision 48/79 verification-tier refinement); the updated docstring ships with the next functional deploy of those artifacts."
+  - "Decision 53 (Gemini CLI transport) is in DECISIONS_ARCHIVE.md, not live DECISIONS.md -- do not cite as governing; the contract prose already references it."
+  - "T-1.14 exit_criteria are plain strings (no crit-ids), so closes_criteria is omitted; /implement's bookkeeping walk flips item/criterion status on a verified VP pass."
+  - "Main Divergence: branch is ~12 behind / ~3 ahead of origin/main and drifting with churn (preflight's 0/0 was stale). origin/main DOES edit docs/ROADMAP-PLATFORM.yaml (a scope file) but OUTSIDE the T-1.14 block (its edits land far from the T-1.14 tier_item), and the Step-10 phrase count is 12 on both HEAD and origin/main -- so there is no T-1.14 / model_registry overlap, the commit-flow rebase merges ROADMAP-PLATFORM.yaml cleanly, and VP step 6's 12->11 baseline holds. Pre-push rebase (git fetch origin main && git rebase origin/main) runs at commit-flow time per the Git-ops procedure; no re-scoping needed."
+  - "Closure obligation: surface-retiring plan (Delete rows + model_routing.yaml -> inference-provider.yaml migration); VP step 4 is the mandatory stale-reference sweep."
+  - "Decision-scout verdict: FLAGS_FOUND (2 NOTE, no BLOCK; 80 of 80 decisions triaged). CITE list (verbatim): Decision 118 (ratifies CD.25), Decision 86, Decision 116. Both NOTE flags (Decision 118 non-ritual self-assert; Decision 44/117 executor boundary) accepted as-is."
+  - "gates: decision-scout=FLAGS_FOUND (both NOTE flags accepted); plan-critique=PROCEED after 3 rounds (round 1 REVISE: VP steps 4+6 + Lambda/divergence notes; round 2 REVISE: config/README.md section rewrite carve-out + VP step 8; round 3 PROCEED)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/inference-provider-yaml-conversion-rvfd04)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via decision-scout (80 of 80)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create docs/contracts/inference-provider.yaml -- non-ritual header (version, contract_version:1,
+    status:ratified, ratified_at, ratified_via, decisions_cited:[Decision-118, Decision-86, Decision-116,
+    CD.28, CD.25], projects_to documenting model_routing.yaml as absorbed-and-deleted); structured
+    contract sections converted from the .md (CD.28 tier model, operative state, retired providers,
+    provider defaults, provider field schema, model ID formats, IAM requirements, plan-compliance
+    checklist); and a machine-consumed model_routing: block reproducing model_routing.yaml's
+    {providers.gemini, executor.default_provider/roles/effort_bands/file_pattern_floors/escalation}
+    VERBATIM, minus the CD.28-retired bedrock provider block. Keep the quoted provider defaults in sync
+    with scripts/model_registry.py.
+  - >-
+    Rewire scripts/model_registry.py -- set _CONFIG_PATH = Path("docs/contracts/inference-provider.yaml");
+    make _load_config load the doc and return doc.get("model_routing", {}) so downstream code sees the
+    same {providers, executor} shape; update the module docstring path references. Preserve the public
+    API and import safety (missing/unparseable -> {} with a warning, never raise).
+  - >-
+    Update tests/test_model_registry.py -- remove the bedrock fixture entries and
+    test_bedrock_deepseek_returns_mid; add TestRealInferenceProviderYaml that (unmocked, real file)
+    asserts the contract fields + projects_to + absence of a bedrock provider and verifies resolution
+    equivalence. Keep 100% coverage of the modified source.
+  - Delete docs/contracts/inference-provider.md and config/agent/copilot/model_routing.yaml.
+  - >-
+    Live-reference sweep (path-only edits): scripts/run_scheduled_agent.py, scripts/build_lambda.py,
+    scripts/executor/model_routing.py, scripts/executor/plan.py, config/agent/executor/prompts/
+    planning.prompt.md, config/agent/executor/prompts/critique.prompt.md, src/data/handlers/CLAUDE.md,
+    docs/PROJECT_CONTEXT.md (File Router row + Lambda gotcha), docs/ARCHITECTURE-WORKFLOW.md,
+    .claude/skills/plan-critique/SKILL.md. Change inference-provider.md -> .yaml and the deleted
+    model_routing.yaml path -> docs/contracts/inference-provider.yaml only.
+  - >-
+    Rewrite the config/README.md `### copilot_model_routing.yaml` section (NOT path-only): retitle to
+    the inference-provider.yaml `model_routing:` block, repoint "Used by", and delete the CD.28-retired
+    dormant-bedrock lines and the `providers.bedrock` structure bullet. Retain the gemini/roles/floors/
+    escalation structure bullets and the interactive-sessions note.
+  - >-
+    Re-ground docs/ROADMAP-PLATFORM.yaml T-1.14 exit criterion 4: replace "Step 10 multi-perspective
+    critique converges" with a criterion satisfied by the plan-critique gate + /implement code-review
+    (IMPLEMENTATION plan-type; Step 10 is REPORT-ONLY-only).
+  - Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55), do not inline-patch.
+  - "Report: files changed, verification results, and any out-of-scope staleness filed as recommendations."
+rollback: >-
+  Revert the single feature commit (git revert / branch reset before merge): this restores
+  inference-provider.md and model_routing.yaml and the old _CONFIG_PATH together. Because
+  _load_config degrades safely on a missing file, any intermediate state is non-crashing.
