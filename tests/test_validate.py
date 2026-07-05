@@ -20,6 +20,7 @@ from scripts.checks._scaffolding import (
     _parse_requirement_dist_names,
     partition_changed_tests_by_collectability,
 )
+from scripts.checks.hygiene.validate_test_count_coupling import _find_violations
 from scripts.checks.misc.validate_ghas_probe import _run_cli as _ghas_run_cli
 
 _SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "validate.py"
@@ -954,6 +955,111 @@ class TestValidateSubprocessEncoding:
             failed: list[str] = []
             self.validate_subprocess_encoding(failed)
         assert "Subprocess encoding lint" in failed
+
+
+class TestValidateTestCountCoupling:
+    """Tests for validate_test_count_coupling() (Decision 104 test-count-coupling guard).
+
+    Exercises the pure _find_violations(paths) core directly on synthetic temp files --
+    the incident's three brittle shapes (direct reference, aliased local, string-subscript
+    key), both comparison orders, the waiver escape hatch, and both-tiers registration.
+    """
+
+    def _write(self, tmp_path: Path, name: str, body: str) -> Path:
+        path = tmp_path / name
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_direct_reference_is_flagged(self, tmp_path: Path) -> None:
+        """assert len(TABLE_NAMES) == N -- direct reference to a curated collection."""
+        path = self._write(tmp_path, "test_a.py", "def test_x():\n    assert len(TABLE_NAMES) == 11\n")
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _find_violations([path])
+        assert len(violations) == 1
+
+    def test_aliased_local_is_flagged(self, tmp_path: Path) -> None:
+        """entries = load_source_registry(); assert len(entries) == N -- the incident's blind spot."""
+        path = self._write(
+            tmp_path,
+            "test_b.py",
+            "def test_x():\n    entries = load_source_registry()\n    assert len(entries) == 35\n",
+        )
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _find_violations([path])
+        assert len(violations) == 1
+
+    def test_string_subscript_key_is_flagged(self, tmp_path: Path) -> None:
+        """assert len(g["source"]["registered_values"]) == N -- string-subscript key shape."""
+        path = self._write(
+            tmp_path,
+            "test_c.py",
+            'def test_x():\n    assert len(g["source"]["registered_values"]) == 35\n',
+        )
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _find_violations([path])
+        assert len(violations) == 1
+
+    def test_derived_assertion_not_flagged(self, tmp_path: Path) -> None:
+        """RHS not an int literal -- a genuine derivation, not a hardcoded count."""
+        path = self._write(
+            tmp_path,
+            "test_d.py",
+            "def test_x():\n    entries = load_source_registry()\n    assert len(entries) == len(raw_ids)\n",
+        )
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _find_violations([path])
+        assert violations == []
+
+    def test_waived_assertion_not_flagged(self, tmp_path: Path) -> None:
+        """A `# count-coupling-ok:` comment on the assert's line silences the guard."""
+        path = self._write(
+            tmp_path,
+            "test_e.py",
+            "def test_x():\n    assert len(TABLE_NAMES) == 11  # count-coupling-ok: deliberate tripwire\n",
+        )
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _find_violations([path])
+        assert violations == []
+
+    def test_non_curated_count_not_flagged(self, tmp_path: Path) -> None:
+        """A hardcoded exact-count assertion against a non-curated collection is not the anti-pattern."""
+        path = self._write(tmp_path, "test_f.py", "def test_x():\n    assert len(rows) == 3\n")
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _find_violations([path])
+        assert violations == []
+
+    def test_tainted_controlled_fixture_flagged_then_waived(self, tmp_path: Path) -> None:
+        """The test_rec_write_guidance.py:43 class: a curated-tainted local with a small,
+        deliberately-sized fixture count IS flagged unwaived, but NOT once waived."""
+        unwaived = self._write(
+            tmp_path,
+            "test_g.py",
+            "def test_x():\n    e = load_source_registry(p)\n    assert len(e) == 1\n",
+        )
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            assert len(_find_violations([unwaived])) == 1
+
+        waived = self._write(
+            tmp_path,
+            "test_h.py",
+            "def test_x():\n    e = load_source_registry(p)\n    assert len(e) == 1  # count-coupling-ok: fixture\n",
+        )
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            assert _find_violations([waived]) == []
+
+    def test_yoda_order_is_flagged(self, tmp_path: Path) -> None:
+        """assert N == len(TABLE_NAMES) -- reversed comparison order, same anti-pattern."""
+        path = self._write(tmp_path, "test_i.py", "def test_x():\n    assert 11 == len(TABLE_NAMES)\n")
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _find_violations([path])
+        assert len(violations) == 1
+
+    def test_registered_in_both_tiers(self) -> None:
+        """validate_test_count_coupling appears in both pre_sequence() and full_sequence()."""
+        from scripts.checks import registry
+
+        names = [s.name for s in registry.pre_sequence() + registry.full_sequence()]
+        assert names.count("validate_test_count_coupling") >= 2
 
 
 class TestValidateSysExecutable:
@@ -3084,6 +3190,107 @@ class TestFastTierCollectability:
         assert runnable == []
         assert deferred == [("tests/test_iceberg_reader.py", "pyarrow")]
 
+    def test_runtime_lazy_import_of_excluded_dep_defers(self) -> None:
+        """A file that collects fine (heavy dep imported lazily at function scope, not module
+        scope -- the rec-2572..2576 test_ops_writer.py shape) but fails at real-run time with a
+        genuinely-absent excluded dep still defers, via the runtime probe."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = (
+                    "FAILED tests/test_ops_writer.py::TestCompact::test_compact_x - "
+                    "ModuleNotFoundError: No module named 'pandas'\n"
+                )
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
+
+        assert runnable == []
+        assert deferred == [("tests/test_ops_writer.py", "pandas")]
+
+    def test_runtime_failure_with_no_module_error_stays_runnable(self) -> None:
+        """A file that collects fine and fails at runtime with no 'No module named' signature at
+        all is a genuine failure -- must NOT defer (fail-closed)."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = "" if "--collect-only" not in cmd else ""
+            result.stderr = ""
+            result.returncode = 0 if "--collect-only" in cmd else 1
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_something.py"])
+
+        assert runnable == ["tests/test_something.py"]
+        assert deferred == []
+
+    def test_runtime_knockon_failures_still_defer_whole_file(self) -> None:
+        """When one failing test names the missing excluded dep and OTHER failures in the same
+        isolated run look unrelated (e.g. state-pollution knock-on effects from the first
+        failure), the whole file still defers -- ANY match is sufficient, not ALL, because once
+        a required dependency is known absent, the other failures in that same run aren't
+        independently meaningful."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = (
+                    "FAILED tests/test_ops_writer.py::A::test_a - assert 0 == 1\n"
+                    "FAILED tests/test_ops_writer.py::B::test_b - "
+                    "ModuleNotFoundError: No module named 'pandas'\n"
+                    "FAILED tests/test_ops_writer.py::C::test_c - TypeError: 'NoneType' object is not subscriptable\n"
+                )
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
+
+        assert runnable == []
+        assert deferred == [("tests/test_ops_writer.py", "pandas")]
+
+    def test_runtime_lazy_import_of_present_dep_not_deferred(self) -> None:
+        """A runtime ModuleNotFoundError naming an excluded dep that IS actually importable
+        (find_spec not None) is a genuine failure, not a fast-tier absence -- must not defer."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = "FAILED tests/test_ops_writer.py::A::test_a - ModuleNotFoundError: No module named 'pandas'\n"
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=MagicMock()),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
+
+        assert runnable == ["tests/test_ops_writer.py"]
+        assert deferred == []
+
 
 class TestRunPytestDiff:
     """Orchestration behaviours of run_pytest_diff() -- the consumer moved out of validate.py (rec-2485)."""
@@ -3116,6 +3323,10 @@ class TestRunPytestDiff:
         assert failed == []
 
     def test_runs_pytest_on_exactly_runnable_subset_in_mixed_case(self) -> None:
+        """tests/test_iceberg_reader.py defers at --collect-only (never gets a real run at all);
+        tests/test_validate.py collects fine, so it gets a real run twice -- once as the
+        classification probe (_runtime_heavy_dep_defer_reason) and once as the final gate run --
+        but tests/test_iceberg_reader.py is excluded from both."""
         captured_cmds: list[list[str]] = []
 
         def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
@@ -3141,9 +3352,9 @@ class TestRunPytestDiff:
             run_pytest_diff(["tests/test_iceberg_reader.py", "tests/test_validate.py"], failed)
 
         real_run_cmds = [c for c in captured_cmds if "--collect-only" not in c]
-        assert len(real_run_cmds) == 1, f"expected exactly one real pytest run, got: {real_run_cmds}"
-        assert "tests/test_validate.py" in real_run_cmds[0]
-        assert "tests/test_iceberg_reader.py" not in real_run_cmds[0]
+        assert len(real_run_cmds) == 2, f"expected exactly two real pytest runs (probe + gate), got: {real_run_cmds}"
+        assert all("tests/test_validate.py" in c for c in real_run_cmds)
+        assert all("tests/test_iceberg_reader.py" not in c for c in real_run_cmds)
         assert failed == []
 
 

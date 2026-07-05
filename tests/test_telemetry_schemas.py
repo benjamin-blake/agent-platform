@@ -417,15 +417,31 @@ class TestValidateRecordUnknownTable:
 
 
 # ---------------------------------------------------------------------------
-# Test 8: TELEMETRY_TABLE_NAMES has exactly 7 entries
+# Test 8: TELEMETRY_TABLE_NAMES is duplicate-free and covers the required tables
 # ---------------------------------------------------------------------------
 
 
 class TestTelemetryTableNames:
-    def test_table_names_count(self):
+    def test_table_names_are_unique(self):
         from scripts.telemetry_schemas import TELEMETRY_TABLE_NAMES  # noqa: PLC0415
 
-        assert len(TELEMETRY_TABLE_NAMES) == 7
+        assert len(TELEMETRY_TABLE_NAMES) == len(set(TELEMETRY_TABLE_NAMES))
+
+    def test_table_names_include_required_floor(self):
+        """Membership floor: the required telemetry tables are present. Grows by
+        addition -- unlike a hardcoded count, does not break when a table is added."""
+        from scripts.telemetry_schemas import TELEMETRY_TABLE_NAMES  # noqa: PLC0415
+
+        required = {
+            "telemetry_sessions",
+            "telemetry_phases",
+            "telemetry_steps",
+            "telemetry_process_events",
+            "telemetry_model_calls",
+            "telemetry_transcripts",
+            "telemetry_agent_invocations",
+        }
+        assert required.issubset(TELEMETRY_TABLE_NAMES)
 
     def test_table_names_are_all_telemetry_prefixed(self):
         from scripts.telemetry_schemas import TELEMETRY_TABLE_NAMES  # noqa: PLC0415

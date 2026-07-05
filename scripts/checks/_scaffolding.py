@@ -472,15 +472,58 @@ def _excluded_heavy_import_names() -> set[str]:
     return {_dist_to_import_name(dist) for dist in full - fast}
 
 
-def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
-    """Partition changed test files into (runnable, deferred) via a `--collect-only` probe.
+def _excluded_and_absent(missing: str | None, excluded: set[str]) -> str | None:
+    """Return `missing`'s top-level module name if it's a deliberately-excluded, genuinely-absent
+    heavy dependency (both conditions checked); otherwise None."""
+    if not missing:
+        return None
+    top_level = missing.split(".")[0]
+    if top_level in excluded and importlib.util.find_spec(top_level) is None:
+        return top_level
+    return None
 
-    A file defers ONLY when its collection error's root-cause ModuleNotFoundError names a
-    deliberately-excluded heavy dependency (in requirements.txt, not requirements-fast.txt)
-    that is genuinely absent (`importlib.util.find_spec` is None). Every other shape -- a real
-    test failure, a non-heavy collection error, or a collection error with no "No module named"
-    line at all -- routes to `runnable`, so the subsequent real pytest run reproduces and
-    reddens the genuine failure with full diagnostics (fail-closed).
+
+def _runtime_heavy_dep_defer_reason(test_file: str, excluded: set[str]) -> str | None:
+    """Run a single collectible test file for real, in isolation; return the excluded heavy-dep
+    name if ANY failure in it traces to a genuinely-absent heavy dependency.
+
+    Catches the shape `--collect-only` cannot see: a dependency imported lazily inside a test or
+    the production code it exercises (function scope, not module scope), which only raises
+    ModuleNotFoundError when the specific test actually runs. Isolated (one file, one process)
+    so a mid-run ModuleNotFoundError in one test cannot leave shared fixture/mock state that
+    manifests as unrelated-looking failures in later tests within the same file -- deferring
+    the whole file on ANY such hit (not requiring every failure to match) is what makes that
+    safe: once the file is known to need a missing dependency, downstream failures in the same
+    isolated run aren't independently meaningful.
+    """
+    result = _common.run(
+        [_common.PYTHON, "-m", "pytest", test_file, "-m", "not integration", "-q"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=_common.ROOT,
+    )
+    if result.returncode == 0:
+        return None
+    combined = (result.stdout or "") + (result.stderr or "")
+    for match in _NO_MODULE_NAMED_RE.findall(combined):
+        found = _excluded_and_absent(match, excluded)
+        if found:
+            return found
+    return None
+
+
+def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """Partition changed test files into (runnable, deferred) (Decision 104 / rec-2485).
+
+    A file defers when EITHER: its `--collect-only` root-cause ModuleNotFoundError names a
+    deliberately-excluded heavy dependency (in requirements.txt, not requirements-fast.txt) that
+    is genuinely absent (`importlib.util.find_spec` is None); OR -- for a file that collects fine
+    -- an isolated real run of it fails with that same signature, catching a heavy dependency
+    imported lazily at runtime rather than at module scope (see `_runtime_heavy_dep_defer_reason`).
+    Every other shape -- a real test failure, a non-heavy collection/runtime error, or an error
+    with no "No module named" line at all -- routes to `runnable`, so the subsequent real pytest
+    run reproduces and reddens the genuine failure with full diagnostics (fail-closed).
     """
     excluded = _excluded_heavy_import_names()
     runnable: list[str] = []
@@ -493,16 +536,20 @@ def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple
             encoding="utf-8",
             cwd=_common.ROOT,
         )
-        if result.returncode == 0:
+        if result.returncode != 0:
+            combined = (result.stdout or "") + (result.stderr or "")
+            matches = _NO_MODULE_NAMED_RE.findall(combined)
+            missing = _excluded_and_absent(matches[-1], excluded) if matches else None
+            if missing:
+                deferred.append((test_file, missing))
+            else:
+                runnable.append(test_file)
+            continue
+        runtime_missing = _runtime_heavy_dep_defer_reason(test_file, excluded)
+        if runtime_missing:
+            deferred.append((test_file, runtime_missing))
+        else:
             runnable.append(test_file)
-            continue
-        combined = (result.stdout or "") + (result.stderr or "")
-        matches = _NO_MODULE_NAMED_RE.findall(combined)
-        missing = matches[-1].split(".")[0] if matches else None
-        if missing and missing in excluded and importlib.util.find_spec(missing) is None:
-            deferred.append((test_file, missing))
-            continue
-        runnable.append(test_file)
     return runnable, deferred
 
 
@@ -520,7 +567,7 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
     for test_file, missing_dep in deferred:
         print(
             f"\n=== DEFERRED TO FULL TIER (main-validate) ===\n"
-            f"{test_file}: cannot collect under the fast tier -- dependency '{missing_dep}' is "
+            f"{test_file}: cannot run under the fast tier -- dependency '{missing_dep}' is "
             "deliberately excluded from requirements-fast.txt. main-validate (full tier) runs "
             "this file post-merge; a genuine failure there files a source=ci_rca critical rec."
         )

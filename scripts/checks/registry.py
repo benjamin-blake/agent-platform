@@ -94,6 +94,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_cc_limits"),
         _c("validate_sloc_limits"),
         _c("validate_subprocess_encoding"),
+        _c("validate_test_count_coupling"),
         _c("validate_intent_doc_freeze"),
         _c("validate_contract_drift"),
         _c("validate_field_semantics_drift"),
@@ -128,6 +129,7 @@ def full_sequence() -> list[Step]:
         # run_python_checks()
         _s("lint"),
         _c("validate_subprocess_encoding"),
+        _c("validate_test_count_coupling"),
         _c("validate_sys_executable"),
         _c("validate_cli_tools_in_prompts"),
         _c("validate_imports"),
