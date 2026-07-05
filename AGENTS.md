@@ -100,6 +100,7 @@ Decision 90 four-tier workflow (end-goal: /orient -> /plan -> /implement -> /dev
 - `/plan` — clarifies intent, runs preflight, produces `docs/plans/PLAN-{slug}.yaml`. Assumes a specific item has been chosen (run `/orient` first). Invokes the `planning` skill.
 - `/implement` — executes an IMPLEMENTATION plan or scopes a STRATEGIC plan into recommendations. Invokes the `implement` and `code-review` skills.
 - `/develop-executor` — supervisor for executor (Lambda) development.
+- `/audit` — composes a self-contained audit prompt (`docs/audit-prompts/AUDIT-{slug}.md`) for a high-capability model to execute in a fresh session; deep recon + zero-context subagent verification happen in the composing session so the expensive model pays only for judgment. Performs no audit itself. Invokes the `audit-prompt` skill.
 
 When a slash command instructs you to "apply" or "invoke" a skill, use the `Skill` tool — do **not** manually `Read` `SKILL.md` files. The Skill tool loads them on demand.
 
@@ -154,6 +155,7 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 | `plan({slug}):` | Plan document commit / approved plan |
 | `roadmap({ids}):` | Roadmap bookkeeping edits |
 | `scope({slug}):` | STRATEGIC plan scoping (currently suspended, Decision 67) |
+| `audit({slug}):` | Audit-prompt artifact commits (/audit workflow) |
 
 ### Commit signing (CC-web: unsigned is expected)
 - CC-web commits land unsigned (`git log --format=%G?` -> `N`). Signing is not available in this
