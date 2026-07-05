@@ -53,9 +53,12 @@ scope:
   - file: tests/test_ops_writer.py
     action: Modify
     purpose: >-
-      Replace `assert len(TABLE_NAMES) == 11` with a composition cross-check
-      (== len(_OPS_TABLE_NAMES) + len(TELEMETRY_TABLE_NAMES)) plus a uniqueness invariant. The
-      adjacent sorted(compact_calls)==sorted(TABLE_NAMES) and exclusion invariants are retained.
+      Replace `assert len(TABLE_NAMES) == 11` with a uniqueness invariant
+      (len(TABLE_NAMES) == len(set(TABLE_NAMES))) plus a membership floor of the required ops/telemetry
+      tables. Do NOT use a composition cross-check (== len(_OPS_TABLE_NAMES) + len(_TELEMETRY_TABLE_NAMES)):
+      since TABLE_NAMES is literally _OPS_TABLE_NAMES + _TELEMETRY_TABLE_NAMES (ops_writer.py:84) that is a
+      list-length tautology that can never fail (see execution step 6). The adjacent
+      sorted(compact_calls)==sorted(TABLE_NAMES) and "ops_recommendations" not in TABLE_NAMES invariants are retained.
   - file: tests/test_telemetry_schemas.py
     action: Modify
     purpose: >-
@@ -150,9 +153,11 @@ constraints:
     (Decision 55: forward-fix, not a workaround that re-arms the same trap).
   - >-
     Never derive a count by re-parsing the SAME structured source the code path uses (that is
-    tautological -- it cannot catch a loader bug). Cross-check against an INDEPENDENT view
-    (raw-text scan vs yaml.safe_load; composite vs its parts; constant vs config SoT) or use a
-    growth-safe invariant (uniqueness, membership floor, wiring contract).
+    tautological -- it cannot catch a loader bug). This includes `len(a + b) == len(a) + len(b)` where
+    the composite is literally the concatenation of its parts (e.g. TABLE_NAMES = _OPS_TABLE_NAMES +
+    _TELEMETRY_TABLE_NAMES): that is an always-true list identity, not an independent cross-check.
+    Cross-check against a genuinely INDEPENDENT view (raw-text scan vs yaml.safe_load; code constant vs
+    config-file SoT) or use a growth-safe invariant (uniqueness, membership floor, wiring contract).
   - >-
     The new check must follow the Decision 104 pattern: one concern per file under
     scripts/checks/<domain>/, @registry.register(...), tier membership declared ONLY in
@@ -204,7 +209,7 @@ context:
     Decision-scout flag resolved: Decision 104 coverage-mapping NOTE -- scripts/checks/**/*.py maps to
     tests/test_validate.py for coverage attribution, so the guard's tests land in tests/test_validate.py
     (not a separate file). Decision 102/43 SLOC/CC note -- new module is small, trivially within budget.
-  - "gates: decision-scout=FLAGS_FOUND (flag resolved by locating guard tests in test_validate.py); plan-critique=3 REVISE rounds then final verification -- R1: detection blind spot (aliased/subscript), tautological ops_writer composition + wrong constant, VP step 6 masked failure; R2: taint over-capture false-positive at test_rec_write_guidance.py:43 (waiver) + both-comparison-orders; R3: registry insert breaks out-of-scope FROZEN_PRE/FULL_SEQUENCE baselines in test_checks_registry.py (added as 9th scope file + VP coverage) + Yoda-order test case. Convergence-cap exceeded by one round with human approval; plan was converging on discrete bugs, not contested design"
+  - "gates: decision-scout=FLAGS_FOUND (flag resolved by locating guard tests in test_validate.py); plan-critique=3 REVISE rounds then final verification -- R1: detection blind spot (aliased/subscript), tautological ops_writer composition + wrong constant, VP step 6 masked failure; R2: taint over-capture false-positive at test_rec_write_guidance.py:43 (waiver) + both-comparison-orders; R3: registry insert breaks out-of-scope FROZEN_PRE/FULL_SEQUENCE baselines in test_checks_registry.py (added as 9th scope file + VP coverage) + Yoda-order test case. R4 (final verification): all R1-R3 findings verified resolved + no registry-snapshot collateral (ALL_CHECK_NAMES/facade/owner are dynamically derived), sole residual was a scope-row/execution-step contradiction on the ops_writer method (scope row still named the banned composition) -- reconciled to uniqueness + membership floor. Convergence-cap exceeded (design was sound throughout; each round found a discrete implementation-spec bug, not contested design)"
   - >-
     Branch is on origin/main (0 behind, 0 ahead at planning time); no Main Divergence Assessment overlap.
 pre_implementation_checklist:
