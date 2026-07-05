@@ -90,7 +90,8 @@ not grep -- but verify before relying.
   `tests/test_ops_data_portal.py` (ci_rca test classes).
 - **S4 -- observability + governance** (BUILT gauges; the strict-flip + telemetry Phase 4 are
   DESIGNED-UNBUILT): `scripts/session_preflight.py` ci_rca gauges; `docs/ROADMAP-PLATFORM.yaml`
-  T1.13 (remaining exit criterion c2, and c12 sub-criteria), T3.4; `docs/INTENT-ci-rca-methodology.md`.
+  T1.13 (remaining exit criterion c2 -- strict-flip, gated on Phase-4 back-validation AND c7
+  probe-abstention fail-loud -- and the c12 sub-criteria), T3.4; `docs/INTENT-ci-rca-methodology.md`.
 
 Out of scope (one line each): the executor-RCA path (Decision 55); the DuckLake reader/writer
 internals (treat the portal boundary as a black box); Decision 43 the SLOC policy itself (only its
@@ -191,9 +192,8 @@ question is given. Cite finding ids as basis.
   disputable facts. For each: `met | partial | missed` with one evidence anchor. `partial` REQUIRES
   an argued property-matched compensating control in the evidence string (which may run longer than a
   bare `file:line` when rating `partial` -- append the control argument after the anchor). Q5's
-  overall rollup verdict enum is `strong | adequate | weak`, computed from the per-property ratings
-  (predominantly `met` -> strong; a mix with no `missed` on a load-bearing property -> adequate; any
-  `missed` on a load-bearing property -> weak).
+  overall rollup verdict enum is `strong | adequate | weak`: predominantly `met` -> strong; a mix
+  with no `missed` -> adequate; any `missed` -> weak.
 - **Q6 -- Questions the requester did not think to ask.** Seeds (answer AND extend with your own):
   (i) does the 20-minute workflow timeout + `--max-turns 30` bound the agent enough that it cannot
   itself run away the way a naive RCA prompt would? (ii) is there a failure mode where the agent
@@ -234,9 +234,11 @@ Each is stated neutrally. Trace before you convict; a candidate may resolve to a
 rejected_candidate, or a reframe.
 
 - **C1.** `config/feature_flags.yaml` sets `CI_RCA_STRICT_MODE: warn`; the live
-  `ci_rca_telemetry.warn_mode_reject_rate` is ~0.44 with a "may need tuning" note at the 0.25
-  threshold. Hypothesis to test: the enforcement spine's central guarantee is coded but not in force,
-  and the reject rate blocks its own activation gate.
+  `ci_rca_telemetry.warn_mode_reject_rate` is ~0.44 with a "may need tuning" note at the 0.25 alert
+  threshold; the Phase-4 strict-flip promotion gate is a SEPARATE, tighter bar (<=0.05 -- re-derive
+  both from `scripts/session_preflight.py`). Hypothesis to test: the enforcement spine's central
+  guarantee is coded but not in force, and the ~0.44 rate sits ~9x above its own <=0.05 activation
+  gate.
 - **C2.** `file_rec` (`scripts/ops_data_portal.py`) has a source-file gate and a schema/cross-check
   path for `source=ci_rca`, but no observed WRITE-TIME dedup against existing open recs on the same
   file/root-cause. `scripts/session_preflight.py` `_derive_forward_fix_recursion` surfaces files with
@@ -272,8 +274,9 @@ rejected_candidate, or a reframe.
   (first rec files, second fails) is possible. This LOOKS like a correctness hole. Hypothesis to
   adjudicate BOTH ways: is it a real defect, or a deliberate, adequately-compensated design (the
   contract addresses partial state; `/plan` reviews it; a per-run atomic transaction may be
-  unwarranted)? A well-run audit may well resolve C8 to `rejected_candidates` with a property-matched
-  control -- do NOT force it into `findings` to keep the candidate set "productive".
+  unwarranted)? Adjudicate C8 on its evidence like any other candidate -- do NOT force it into
+  `findings` to keep the candidate set "productive", and do NOT wave it into `rejected_candidates` to
+  satisfy the "positive control" label. Let the trace decide.
 
 ---
 
@@ -366,7 +369,8 @@ anchors.
   thresholds ~571), `_derive_forward_fix_recursion` (~740, files with >=3 ci_rca recs).
   `scripts/executor/rec_write_guidance.py` (~110) returns the CiRcaContext schema for `--guidance`.
 - `docs/ROADMAP-PLATFORM.yaml` T1.13: c1 `met` (all six follow-on plans + more landed); c2 =
-  strict-flip after Phase-4 back-validation AND probe-abstention fail-loud (c12(i)); c12(ii)
+  strict-flip after Phase-4 back-validation AND c7 probe-abstention fail-loud (c12(i) is the
+  abstention-rate gauge); c12(ii)
   bundle-absent fail-loud (implemented), c12(iii) preventive-action back-validation (implemented,
   file-only). T3.4 = STRATEGIC control-plane loop closure, `not_started`, depends on T1.13.
 - `docs/INTENT-ci-rca-methodology.md` (~582 lines): the contract; Sections 1/3/7 `[STALE]`
@@ -377,7 +381,8 @@ anchors.
 **Governing decisions** (grep the header, do NOT full-read DECISIONS.md): Decision 55 (RCA-first,
 forward-fix never workaround), 60 (two-tier validation), 66 (Precision Context Injection), 72
 (RCA-as-Plan-Source, no autonomous fix, consumed by `/plan`), 73 (two-tier diff-aware CI,
-forward-fix), 84/81 (DuckLake retarget), 88 (local canonical bundle, zero-egress gauges).
+forward-fix), 84/81 (DuckLake retarget), 88 (Neon catalog egress budget; the ci_rca gauges cite it
+for zero-egress warm-cache reads).
 
 **Live gauges to RE-DERIVE from `logs/.preflight-report.json`** (do not trust these prompt values;
 read the JSON): `ci_rca_telemetry.warn_mode_reject_rate`, `.recurrence_class_distribution`,
@@ -420,7 +425,8 @@ most-recent `ci_rca` recs if you need individual context beyond the aggregates a
 - **P2 Trace** DD-A and DD-B end to end.
 - **P3 Empirical** pass (Section 11), bounded.
 - **P4 Adjudicate** each candidate C1-C8 to a finding / rejected_candidate / reframe (C8 is a
-  positive control -- expect it may land in `rejected_candidates`).
+  positive control -- adjudicate it genuinely both ways on the evidence; do not assume its
+  disposition).
 - **P5 Rate** the rubric (Section 7) per surface.
 - **P6 Dedup** every prospective finding (Section 13) before it enters `findings[]`.
 - **P7 Synthesise**: answer Q1-Q6, fill the decision block, compute maturity LAST (Section 15).
@@ -491,7 +497,7 @@ audit:
     - {q: Q4, verdict: <coherent|drifting|incoherent>, basis: [], prose: ""}
     - {q: Q5, verdict: <strong|adequate|weak>, basis: [], prose: "",
        external_checklist: [{property: <a..f>, rating: met|partial|missed, evidence: "file:line|gauge"}]}
-    - {q: Q6, answers: [{question: "", answer: "", basis: []}]}   # answer seeds i-iv AND extend
+    - {q: Q6, answers: [{question: "", answer: "", basis: []}]}   # answer seeds i-v AND extend
   strict_flip_readiness:        # the decision block (Q1 prose points here)
     spine: {verdict: <keep_warn|flip_strict_now|flip_strict_after_fix|redesign>,
             mechanism: "", what_changes: "", cost: "", rationale: "",
@@ -551,17 +557,19 @@ preflight" only compensates for recurrence if it actually BLOCKS or DEDUPS the w
 alone does not property-match a write-time-prevention claim.)
 
 Maturity per surface, computed LAST, top-down, FIRST MATCH WINS. Pinned thresholds:
-- **frontier** = 0 open critical AND 0 open high findings on that surface AND, for every Q5
-  `external_checklist` property that CONCERNS this surface, a rating of `met` or `partial` (never
-  `missed`). The Q5 checklist is subsystem-wide; apply each property only to the surface(s) it
-  concerns -- a property that does not concern a surface does not gate that surface's frontier
-  rating. `maturity_overall`'s frontier gate reads the FULL checklist (no `missed` anywhere).
+- **frontier** = 0 open critical AND 0 open high findings on that surface. (Per-surface frontier
+  gates on finding counts ONLY; the subsystem-wide Q5 `external_checklist` does NOT gate any
+  individual surface -- it gates `maturity_overall` only, below.)
 - **strong** = 0 critical AND <= 1 high.
 - **solid** = <= 1 critical.
 - **nascent** = otherwise.
 The top rating remains reachable if you argued a property-matched compensating control -- the framing
 does not foreclose it. `maturity_overall` is computed from the finding set as a whole (need NOT equal
-the min or mode of the per-surface values); defend it in the `.md` companion.
+the min or mode of the per-surface values), applying the SAME thresholds to all findings across all
+surfaces, with ONE addition: `maturity_overall` reaches `frontier` only if 0 critical AND 0 high
+across ALL surfaces AND every Q5 `external_checklist` property is rated `met` or `partial` (never
+`missed`); otherwise it takes the strong/solid/nascent threshold that matches the full finding set.
+Defend `maturity_overall` in the `.md` companion.
 
 confidence: CONFIRMED requires a trace to file:line, a rec-id, a live gauge value, or a named source.
 Anything less is HYPOTHESIS.
@@ -572,7 +580,9 @@ Anything less is HYPOTHESIS.
 
 1. Derive the base ONCE: `git fetch origin main` then `git rev-parse --short origin/main`. This sha
    IS the audited tree; use it in both deliverable filenames, the branch name, and
-   `meta.audited_commit`.
+   `meta.audited_commit`. IF `git fetch` fails (network/egress down): do NOT abort -- fall back to
+   the already-local `origin/main` ref (`git rev-parse --short origin/main` still resolves it), note
+   `base fetch failed; used local origin/main ref` in `meta.contract_notes`, and proceed.
 2. `git switch -c audit/ci-rca-system-<sha> origin/main` (a clean two-file diff off the audited base;
    this is a deliberate, documented exception to the `claude/*` session-branch rule -- the audit
    session needs the diff to be only its two deliverables).
