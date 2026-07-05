@@ -3190,6 +3190,107 @@ class TestFastTierCollectability:
         assert runnable == []
         assert deferred == [("tests/test_iceberg_reader.py", "pyarrow")]
 
+    def test_runtime_lazy_import_of_excluded_dep_defers(self) -> None:
+        """A file that collects fine (heavy dep imported lazily at function scope, not module
+        scope -- the rec-2572..2576 test_ops_writer.py shape) but fails at real-run time with a
+        genuinely-absent excluded dep still defers, via the runtime probe."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = (
+                    "FAILED tests/test_ops_writer.py::TestCompact::test_compact_x - "
+                    "ModuleNotFoundError: No module named 'pandas'\n"
+                )
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
+
+        assert runnable == []
+        assert deferred == [("tests/test_ops_writer.py", "pandas")]
+
+    def test_runtime_failure_with_no_module_error_stays_runnable(self) -> None:
+        """A file that collects fine and fails at runtime with no 'No module named' signature at
+        all is a genuine failure -- must NOT defer (fail-closed)."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = "" if "--collect-only" not in cmd else ""
+            result.stderr = ""
+            result.returncode = 0 if "--collect-only" in cmd else 1
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_something.py"])
+
+        assert runnable == ["tests/test_something.py"]
+        assert deferred == []
+
+    def test_runtime_knockon_failures_still_defer_whole_file(self) -> None:
+        """When one failing test names the missing excluded dep and OTHER failures in the same
+        isolated run look unrelated (e.g. state-pollution knock-on effects from the first
+        failure), the whole file still defers -- ANY match is sufficient, not ALL, because once
+        a required dependency is known absent, the other failures in that same run aren't
+        independently meaningful."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = (
+                    "FAILED tests/test_ops_writer.py::A::test_a - assert 0 == 1\n"
+                    "FAILED tests/test_ops_writer.py::B::test_b - "
+                    "ModuleNotFoundError: No module named 'pandas'\n"
+                    "FAILED tests/test_ops_writer.py::C::test_c - TypeError: 'NoneType' object is not subscriptable\n"
+                )
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
+
+        assert runnable == []
+        assert deferred == [("tests/test_ops_writer.py", "pandas")]
+
+    def test_runtime_lazy_import_of_present_dep_not_deferred(self) -> None:
+        """A runtime ModuleNotFoundError naming an excluded dep that IS actually importable
+        (find_spec not None) is a genuine failure, not a fast-tier absence -- must not defer."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = "FAILED tests/test_ops_writer.py::A::test_a - ModuleNotFoundError: No module named 'pandas'\n"
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=MagicMock()),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
+
+        assert runnable == ["tests/test_ops_writer.py"]
+        assert deferred == []
+
 
 class TestRunPytestDiff:
     """Orchestration behaviours of run_pytest_diff() -- the consumer moved out of validate.py (rec-2485)."""
@@ -3222,6 +3323,10 @@ class TestRunPytestDiff:
         assert failed == []
 
     def test_runs_pytest_on_exactly_runnable_subset_in_mixed_case(self) -> None:
+        """tests/test_iceberg_reader.py defers at --collect-only (never gets a real run at all);
+        tests/test_validate.py collects fine, so it gets a real run twice -- once as the
+        classification probe (_runtime_heavy_dep_defer_reason) and once as the final gate run --
+        but tests/test_iceberg_reader.py is excluded from both."""
         captured_cmds: list[list[str]] = []
 
         def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
@@ -3247,9 +3352,9 @@ class TestRunPytestDiff:
             run_pytest_diff(["tests/test_iceberg_reader.py", "tests/test_validate.py"], failed)
 
         real_run_cmds = [c for c in captured_cmds if "--collect-only" not in c]
-        assert len(real_run_cmds) == 1, f"expected exactly one real pytest run, got: {real_run_cmds}"
-        assert "tests/test_validate.py" in real_run_cmds[0]
-        assert "tests/test_iceberg_reader.py" not in real_run_cmds[0]
+        assert len(real_run_cmds) == 2, f"expected exactly two real pytest runs (probe + gate), got: {real_run_cmds}"
+        assert all("tests/test_validate.py" in c for c in real_run_cmds)
+        assert all("tests/test_iceberg_reader.py" not in c for c in real_run_cmds)
         assert failed == []
 
 
