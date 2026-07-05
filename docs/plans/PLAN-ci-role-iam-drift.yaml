@@ -50,14 +50,26 @@ scope:
       tests live in tests/test_validate.py). Cover: PASS on the composed oidc.tf; FAIL on a fixture
       where an invoking role's composition omits SSM; vacuous PASS for a non-invoking role;
       composition resolution across source_policy_documents.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Update the frozen-baseline tuples FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE to include the new
+      ("check", "validate_invoke_implies_resolve") entry at the position matching registry.py (adjacent
+      to the iam_tf checks). map_source_to_test routes registry.py changes to this file and --pre runs
+      diff-aware pytest on it, so the frozen-equality assertions (test_pre_sequence_matches_frozen_baseline
+      / test_full_sequence_matches_frozen_baseline) and the all_checks()/facade-completeness assertions
+      break unless updated in lockstep with the registry insert.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
       Re-ground T2.34 files_in_scope (Freshness Gate stale-reference): replace the bare
-      scripts/validate.py entry with the real check-module path
-      scripts/checks/iam_tf/validate_invoke_implies_resolve.py (+ registry.py), reflecting the
-      Decision 104 thin-CLI architecture. Roadmap-DATA reconciliation only; no criterion status flip
-      here (flips happen in /implement's bookkeeping walk on a verified VP pass).
+      scripts/validate.py entry with the real Decision 104 surface --
+      scripts/checks/iam_tf/validate_invoke_implies_resolve.py, scripts/checks/registry.py, and
+      tests/test_checks_registry.py (the frozen-baseline test the registry insert forces). Also annotate
+      c2's exit_criteria that the invariant is realized as a credential-free HCL text-parse (house-style,
+      forced by Decision 119's no-local-terraform-render constraint) rather than the literal "rendered
+      policy JSON" wording, so criterion text and realization agree. Roadmap-DATA reconciliation only; no
+      criterion status flip here (flips happen in /implement's bookkeeping walk on a verified VP pass).
 bundled_recommendations: []
 closes_criteria:
   - "T2.34:c1"
@@ -106,7 +118,9 @@ acceptance_criteria:
   - >-
     `bin/venv-python -m scripts.validate --pre` and the targeted pytest for the new check both pass on
     the branch; `terraform fmt -check` passes for terraform/personal (or SKIPs cleanly if terraform is
-    absent).
+    absent). --pre passing REQUIRES the tests/test_checks_registry.py frozen baselines be updated in
+    lockstep with the registry insert (map_source_to_test routes registry.py changes there and --pre runs
+    it diff-aware); `bin/venv-python -m pytest tests/test_checks_registry.py -q` passes.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -181,6 +195,20 @@ verification_plan:
       Check absent from a sequence -> add it to registry.py. Import error -> add the facade re-export in
       scripts/validate.py. fmt failure -> run `terraform fmt terraform/personal`.
   - step: 7
+    phase: pre-deploy
+    action: >-
+      Prove the frozen registry baselines were updated in lockstep with the registry insert -- run the
+      test_checks_registry.py frozen-equality + facade-completeness assertions (map_source_to_test routes
+      registry.py changes here and --pre runs it diff-aware).
+    command: >-
+      cd /home/user/agent-platform && bin/venv-python -m pytest tests/test_checks_registry.py -q
+    expected: "All frozen-baseline and facade-completeness tests pass (new check present in both sequences)."
+    fix_if: >-
+      test_pre_sequence_matches_frozen_baseline / test_full_sequence_matches_frozen_baseline fail -> the
+      FROZEN_PRE_SEQUENCE / FROZEN_FULL_SEQUENCE tuples were not updated to include
+      ("check", "validate_invoke_implies_resolve") at the registry.py position; update them. Facade or
+      all_checks assertion fails -> add the facade re-export in scripts/validate.py.
+  - step: 8
     phase: post-deploy
     action: >-
       CI-delegated infra verification (Decision 119): the required terraform-validate job is green and
@@ -255,8 +283,12 @@ context:
     infrastructure_dependencies and this Context.
   - "gates: decision-scout=FLAGS_FOUND (resolved) after 1 round; plan-critique=<pending>"
   - >-
-    Branch was 0 commits behind origin/main at planning time (preflight main=0 behind, 0 ahead); no
-    Scope-file overlap with main divergence. No rebase needed.
+    Rebase state (updated post-critique 2026-07-05): branch is 4 commits behind / 1 ahead of origin/main.
+    origin/main and the branch both touch docs/ROADMAP-PLATFORM.yaml but in DIFFERENT sections (main:
+    T3.15 status flip to complete; branch: T2.34 files_in_scope re-grounding) -- likely a clean rebase.
+    The T2.34 entry itself is UNCHANGED between the two refs, so c1/c2 targeting stays valid. A commit-flow
+    rebase (`git fetch origin main && git rebase origin/main`) is MANDATORY before push per the git-ops
+    procedure; STOP on conflict. Post-rebase, re-verify T2.34 has not moved on main before implementing.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/ci-role-iam-drift-6btkui)
   - docs/PROJECT_CONTEXT.md read
@@ -294,6 +326,10 @@ execution_steps:
   - >-
     Register validate_invoke_implies_resolve in registry.pre_sequence() and registry.full_sequence()
     next to the other iam_tf checks; add the facade re-export line to scripts/validate.py.
+  - >-
+    Update tests/test_checks_registry.py: insert ("check", "validate_invoke_implies_resolve") into
+    FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE at the exact position matching the registry.py insert
+    (adjacent to the iam_tf checks), so the frozen-equality and facade-completeness assertions pass.
   - >-
     Add tests to tests/test_validate.py: PASS on the real composed oidc.tf; FAIL on an inline fixture
     where an invoking role's composition omits SSM; vacuous PASS for a non-invoking role; a test proving
