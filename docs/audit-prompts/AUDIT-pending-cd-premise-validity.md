@@ -193,10 +193,14 @@ given per question.
   convention REQUIRE that an amendment recording supersession flip `state` in the same edit, and
   should a load-time guard enforce it? Enum: `sufficient | partial | insufficient` (of the
   current convention).
-- **Q3 -- CD.18 decision soundness.** Re-read the CD promoted from KG.6 that requires a decision
-  before a specific tier item and hinges on a git stash parked 2026-05-18. Attempt to verify the
-  stash empirically: `git stash list`, and search for the named branch
-  (`git branch -a | rg ops-decisions-phase-2` or similar). If the stash is not present in this
+- **Q3 -- CD.18 decision soundness.** The target is the CD promoted from KG.6 that requires a
+  decision before a specific tier item and hinges on a git stash parked 2026-05-18; the composing
+  session identified it as CD.18. Re-derive: locate the CD whose detail contains both "2026-05-18"
+  and "stash" -- if that is not CD.18, the stash-bearing CD is the true target and you record the
+  id discrepancy in `meta.contract_notes`; the pinned "CD.18" label does not override your
+  re-derivation. Attempt to verify the stash empirically: `git stash list`, and search for the
+  named branch (`git branch -a | rg 'ops-decisions-phase-2-semantic-definition'`). If the stash is
+  not present in this
   clone (a stash is a machine-local ref, not committed), record that as an explicit unverifiable
   premise -- do NOT assume it exists or does not. Given the stash's host substrate is scheduled
   for teardown (re-derive which CD / tier item schedules it), and given a separate audit called
@@ -208,16 +212,23 @@ given per question.
   (feeds `realized_but_pending_cds()`)? If both are zero, is the feed empty because no pending CD
   is genuinely realized-yet-unratified, or because realized ones exist but no producer pass has
   marked them? (Cross-check against your Q1 `pending-realized-unevidenced` classifications --
-  those ARE realized-but-unflagged CDs, if any.) Note that a recent ratification wave moved
-  realized CDs OUT of pending; weigh whether "empty" means "healthy/drained" or "producer never
-  runs". Attribute the root cause: `mechanism | process | ownership | not-a-defect`.
+  those ARE realized-but-unflagged CDs, if any.) Note that a ratification wave AFTER the lane went
+  live (the ratified CDs now point at `dec-106`..`dec-118`; re-derive by reading their
+  `ratified_as` fields, and note Decision 105 landed 2026-07-02) moved realized CDs OUT of
+  pending; weigh whether "empty" means "healthy/drained" (realized CDs already ratified, nothing
+  left to surface) or "producer never runs" (realized CDs remain in pending, unflagged). Attribute
+  the root cause: `mechanism | process | ownership | not-a-defect`.
 - **Q5 -- Questions the requester did not think to ask.** Answer AND extend. Seeds you must
   address, then add your own: (a) Do the 16 ratified CDs' `ratified_as`/`filed_via` cross-refs
   all resolve to real `## Decision NNN` headers, or is any ratified shape referentially broken?
   (b) Is there any CD that gates a live tier item via `completion_blocked_on_cd` whose premise
   you classified as superseded-unmarked -- i.e. a stale premise actively wedging real work? (c)
   Does the roadmap's self-contained-document invariant interact with any CD whose premise now
-  lives only in a DECISIONS.md entry?
+  lives only in a DECISIONS.md entry? (d) Note explicitly: the substantive premise decay of a
+  *ratified* CD (as opposed to cosmetic `ratified-stale-prose`) is a conscious out-of-scope
+  boundary here -- a ratified CD's live premise is owned by the Decision it filed as (T7). State
+  in one line whether your walk nonetheless surfaced any ratified CD whose premise looks
+  substantively false, as a pointer for the DECISIONS.md-side audit -- do not file it as a finding.
 
 ## 8. RUBRIC
 
@@ -242,9 +253,13 @@ deep-dive.
 ## 9. DEEP-DIVES
 
 - **DD-A -- The 40-CD premise walk (feeds Q1, Q2, Q5b).** For each CD read `detail` in full.
-  Classify per Q1 enum. Adjudicate each premise against the post-May decision waves -- re-derive
-  which Decisions supersede/amend CD content by reading the cited Decisions (e.g. the LLM-substrate
-  wave, the executor-substrate wave, the ops-consolidation wave, the ratification-lane wave). For
+  Classify per Q1 enum. Adjudicate each premise against the post-May decision waves. These are
+  named here with representative anchors you re-derive and extend -- do not treat the list as
+  closed: (a) LLM-substrate wave -- CD.28 supersedes CD.7; (b) executor-substrate wave -- CD.27
+  narrowly supersedes CD.11's Fargate clause; (c) ops-consolidation wave -- Decision 84 (Single
+  Portal / DuckLake consolidation) and its downstream; (d) ratification-lane wave -- Decision 105
+  (2026-07-02). Read each cited Decision/CD to confirm what it actually supersedes before relying
+  on it, and surface any additional superseding Decision your walk finds. For
   a pending CD whose `detail` announces supersession by another CD, verify the superseding CD
   exists and check whether the supersession is full or partial (T4). Record, per CD, whether any
   live tier item gates on it (`completion_blocked_on_cd` referencing it) -- that is what makes a
@@ -256,9 +271,10 @@ deep-dive.
   evidence would make the call -- then give your Q3 verdict. Do not decide for the human.
 - **DD-C -- The empty-feed root cause (feeds Q4, NS-C).** Read both feed functions and the
   `realization_evidence` field definition and its contract. Establish, at HEAD: the count feeding
-  each function; whether a recent ratification wave drained realized CDs out of pending; and
-  whether any pending CD you classified realized-but-unevidenced in Q1 SHOULD be feeding the lane
-  but is not. Attribute the root cause per Q4 enum.
+  each function; whether the post-2026-07-02 ratification wave (ratified CDs now carrying
+  `ratified_as: dec-106`..`dec-118`) drained realized CDs out of pending; and whether any pending
+  CD you classified realized-but-unevidenced in Q1 SHOULD be feeding the lane but is not.
+  Attribute the root cause per Q4 enum.
 
 ## 10. GROUNDING MAP
 
@@ -364,20 +380,24 @@ Deliberate constraints -- DO NOT FLAG (each with its owner):
 
 ## 14. OUTPUT
 
-Write exactly two files. Re-derive `<sha>` (Section 5). `<slug>` = `pending-cd-premise-validity`
-everywhere.
+Write exactly two files (create the `audits/` directory first if it does not already exist).
+Re-derive `<sha>` (Section 5). `<slug>` = `pending-cd-premise-validity` everywhere.
 
 - `audits/pending-cd-premise-validity-<sha>.yaml` -- the structured audit (schema below).
-- `audits/pending-cd-premise-validity-<sha>.md` -- a companion report, prose, <= ~1500 words: the
-  executive layer a human reads first (headline verdict per question, the load-bearing findings,
-  the CD.18 call, and the per-CD disposition table rendered readably).
+- `audits/pending-cd-premise-validity-<sha>.md` -- a companion report: the executive layer a human
+  reads first (headline verdict per question, the load-bearing findings, the CD.18 call). The
+  <= ~1500-word cap applies to the NARRATIVE PROSE only; you MAY append the per-CD disposition as
+  a compact table (one terse row per CD -- id, classification, one-clause disposition) that does
+  NOT count against the prose budget. The authoritative per-CD ledger is the YAML
+  `pending_cd_disposition`; the table is a readable rendering of it.
 
 YAML schema (pin every enum inline as shown; fill, do not restructure):
 
 ```
 audit:
   meta: {audited_commit: <origin/main short sha>, base_branch: main,
-         model: <your self-reported name>, methodology_version: 1,
+         model: <your self-reported model name, free text -- e.g. "Claude Opus 4.x">,
+         methodology_version: 1,
          scope_surfaces: [candidate_decisions_set, marking_convention, ratification_feed],
          degraded_dedup: false, contract_notes: "", stale_anchors: []}
   question_answers:
@@ -394,7 +414,7 @@ audit:
        recommended_disposition: "", confidence: CONFIRMED|HYPOTHESIS}
   per_surface_assessment:
     - {surface: candidate_decisions_set|marking_convention|ratification_feed,
-       maturity: <derived>, strengths: "", top_gaps: [<finding ids>]}
+       maturity: frontier|strong|solid|nascent, strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
     - {surface, dimension: VD1..VD5, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|CD.NN", note: ""}
@@ -414,8 +434,10 @@ audit:
     - {candidate, why_dismissed, compensating_control, control_property_match, decision_or_item_id}
   summary: {total_findings, novel_count, planned_insufficient_count, planned_unbuilt_count,
             top_improvements: [ids], highest_leverage_change: <id>,
-            maturity_candidate_decisions_set: <value>, maturity_marking_convention: <value>,
-            maturity_ratification_feed: <value>}
+            # each maturity_* value is one of: frontier|strong|solid|nascent (Section 15)
+            maturity_candidate_decisions_set: frontier|strong|solid|nascent,
+            maturity_marking_convention: frontier|strong|solid|nascent,
+            maturity_ratification_feed: frontier|strong|solid|nascent}
 ```
 
 Invariants (state and obey):
@@ -453,12 +475,18 @@ lowers severity nor justifies dismissal. Example: "agents re-read the CD each se
 property-match a stale-premise defect -- re-reading stale text propagates the staleness, it does
 not catch it.
 
-Maturity -- compute LAST, per surface, top-down, first match wins. Pin these thresholds:
+Maturity -- compute LAST, per surface, top-down, first match wins (evaluate the four predicates in
+this order; the first that holds is the rating). Count only OPEN findings on that surface. Pin
+these thresholds (they are mutually exclusive under first-match-wins -- do not re-interpret):
 
-- **frontier** = 0 open critical AND 0 open high findings on that surface.
-- **strong** = 0 critical AND <= 1 high.
-- **solid** = <= 1 critical.
-- **nascent** = otherwise.
+- **frontier** = 0 critical AND 0 high.
+- **strong** = 0 critical AND exactly 1 high.
+- **solid** = at most 1 critical AND at most 2 high.
+- **nascent** = otherwise (>= 2 critical, OR >= 3 high).
+
+Worked examples to remove doubt: 0 critical / 2 high -> `solid` (fails frontier and strong, meets
+solid's <=1 critical and <=2 high). 1 critical / 0 high -> `solid`. 0 critical / 3 high ->
+`nascent`. 2 critical / 0 high -> `nascent`.
 
 The top rating remains reachable if you argued a property-matched compensating control that
 dismisses what would otherwise be a critical/high -- the framing here must not foreclose it.
@@ -469,7 +497,10 @@ dismisses what would otherwise be a critical/high -- the framing here must not f
    branch, and `meta.audited_commit`.
 2. `git switch -c audit/pending-cd-premise-validity-<sha> origin/main` so the PR diff is only your
    two deliverables. This is a deliberate, documented exception to the `claude/*` session-branch
-   rule: the audit session needs a clean two-file diff off the audited base.
+   rule: the audit session needs a clean two-file diff off the audited base. IF Section 5 step 1's
+   `git fetch origin main` failed and you fell back to local HEAD, branch off `HEAD` instead of
+   `origin/main` (`git switch -c audit/pending-cd-premise-validity-<sha> HEAD`) -- the branch base
+   MUST equal the sha you recorded in `meta.audited_commit`, never a ref that disagrees with it.
 3. Repo-wide validation is advisory outside CI; a clean YAML parse of both deliverables is the
    real pre-push gate. If an unrelated `validate --pre` failure appears, record it in
    `meta.contract_notes` -- never fix it (write boundary).
