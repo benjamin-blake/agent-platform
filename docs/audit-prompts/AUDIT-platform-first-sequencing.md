@@ -149,9 +149,17 @@ in-repo files named in Section 13 (those are on-disk and need no credentials). T
 judgment does not depend on warehouse reads.
 
 **Degraded path (remote unreachable):** if `git fetch origin main` fails, fall back to the local
-checkout: use `git rev-parse --short HEAD` for the `<sha>` in filenames / branch /
-`meta.audited_commit`, and record `meta.contract_notes: "remote unreachable; base=local HEAD"`.
-Do not abort.
+checkout: use `git rev-parse --short HEAD` for the `<sha>`, and in Section 16 branch off local
+`HEAD` instead of `origin/main` (`git switch -c audit/platform-first-sequencing-<sha> HEAD`).
+Still write, commit, and (if the push/PR path is reachable) push and open the PR. If push or
+`create_pull_request` is ALSO unreachable, stop after the local commit and record
+`meta.contract_notes: "remote unreachable; base=local HEAD; PR not opened -- push and open
+manually"`. Do not abort and do not skip writing the deliverables.
+
+**Confidence-downgrade scope:** `degraded_dedup` downgrades ONLY the `roadmap_crossref`
+confidence and `dedup_hit_count`. A finding's own `confidence` and `sequencing_verdict.frame`'s
+`confidence` follow their normal rule (Section 14): `CONFIRMED` iff traced to a file:line or a
+sampled artifact -- which grep over on-disk files still supports even with warehouse reads down.
 
 ## 6. NORTH STAR
 
@@ -222,8 +230,10 @@ and prose. Every question is first-class.
 
 Rate each dimension per surface in `rubric_ratings[]`. Enum: `strong | adequate | weak | absent |
 n/a`. `n/a` is correct and costless where a dimension does not structurally apply to a surface --
-never manufacture a rating or a finding to fill a cell. Each dimension below names its primary
-surface; rate it `n/a` on the other unless you have a substantive reason to rate it.
+never manufacture a rating or a finding to fill a cell. **Row cardinality:** emit exactly one row
+per dimension on its primary surface (5 rows minimum, VD1..VD5); add a second row for a dimension
+on the other surface ONLY when you have a substantive reason to rate it there (so 5-10 rows
+total). Each dimension below names its primary surface.
 
 - **VD1 Decision provenance** (S1 `sequencing-frame`): is the sequencing recorded as a conscious
   choice with alternatives? Serves Q1.
@@ -292,9 +302,12 @@ time; **re-verify each before relying on it** (trust-nothing clause) and record 
   roadmap is named the "sibling product axis" (`:319`). No sequencing rationale is stated.
 
 **The dormant product plane:**
-- `docs/ROADMAP-PRODUCT.yaml:20` -- `status: draft`; `:21` `filed_via: pending_log_decision_lambda`;
-  `:11-15` note validation is deferred to a not-yet-authored `scripts/product_roadmap.py`, so
-  `validate.py` does not exercise the file.
+- `docs/ROADMAP-PRODUCT.yaml:20` -- `status: draft`; `:21` `filed_via: pending_log_decision_lambda`.
+  (Note: the file's own header comment at `:11-15` says validation is "deferred ... not
+  Pydantic-validated", but that comment is stale -- `scripts/product_roadmap.py` DOES exist and
+  `scripts/checks/roadmap/validate_product_roadmap.py` Pydantic-validates this file in
+  `validate.py`'s `--pre` tier (`validate.py:200`, `_ROADMAP_YAML_PATHS`). The product roadmap is
+  dormant by `status`, not by lack of validation. Re-verify this on disk.)
 - `docs/ROADMAP-PRODUCT.yaml:347-393` -- `current_state`: "Data plane is production-grade; trading
   plane is mostly scaffold or absent." `layer_rollup` (`:388-393`): L1 scaffold, **L2 absent
   (entirely)**, L3 latency-penalty sizer (no broker; no order lifecycle), L4 agent_telemetry
@@ -330,9 +343,14 @@ Decision 101 (public repo), Decision 77 (environment taxonomy), Decision 93 (def
 ## 11. EMPIRICAL PASS
 
 Two bounded sampling operations. Observed findings outrank static ones at equal severity; tag
-each finding `evidence_kind: static | observed`.
+each finding `evidence_kind: static | observed`. **Boundary:** `observed` = the finding is
+grounded in one of the sampling passes below (the citation census tabulation, or the pivot-timing
+read) -- i.e. it rests on a body of sampled artifacts you examined. `static` = grounded in
+reading a single named anchor without a sampling pass. When in doubt, tag `static`.
 
-- **Citation census (cap: ALL hits, expected < ~12 -- do NOT synthesize beyond what you find).**
+- **Citation census (cap: ALL hits, expect on the order of several dozen -- ~39 across docs/ +
+  audits/ at compose time, 0 in the recs log; most are in-frame citations in the adjacent audits
+  and audit-prompt files. Take ALL hits; do NOT synthesize beyond what you find).**
   `rg -n "platform-first|platform first|platform-before-product"` across `docs/` and `audits/`
   and `logs/.recommendations-log.jsonl`. For **each** hit apply the counterfactual test: *does
   this artifact RATIFY the sequencing (records it as a decision with alternatives), or merely
@@ -375,7 +393,10 @@ them as gaps):**
 - Environment taxonomy / sandbox auto-apply -- Decision 77.
 - defer-by-exception + no-enumerated-MVP -- Decision 93.
 - The product architecture / four-layer model / MVP-v1 -- pivot transcript (settled).
-- Product roadmap unvalidated (`product_roadmap.py` not yet built) -- known and tracked.
+- Product roadmap dormancy (`status: draft`) -- by design under the frame; do not flag the draft
+  status itself as a defect (the audit examines WHETHER the frame is right, not the dormancy's
+  mechanics). Note the roadmap IS Pydantic-validated (`product_roadmap.py`); it is dormant, not
+  unvalidated.
 
 The audit examines the *allocation frame above* these. Reopening any of them is out of scope.
 
@@ -410,7 +431,7 @@ audit:
        evidence: "file:line|item-id", note: ""}
   findings:
     - {id: SEQ-01, surface: sequencing-frame|product-loop-feasibility|shared,
-       question: Q1..Q6, dimension: VD1..VD5, title,
+       question: Q1..Q6, dimension: VD1..VD5|n/a, title,
        evidence: "file:line|item-id", evidence_kind: static|observed,
        current_behavior, ideal_behavior, gap, compensating_controls_considered: "",
        change_type: add|rescope|enforce|unify|persist|clarify|ratify|retune_gate,
