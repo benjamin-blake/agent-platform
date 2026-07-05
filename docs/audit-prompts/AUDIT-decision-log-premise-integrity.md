@@ -126,7 +126,8 @@ OUT OF SCOPE (one line each; do not opine):
   a separate audit owns it.
 - The premise validity of `candidate_decisions[]` (pending CDs) in ROADMAP-PLATFORM.yaml.
 - The platform-first sequencing directive.
-- decision-scout's existence, size cost, or truncation risk.
+- decision-scout's existence, size cost, or truncation risk (its stale live-header count MAY be
+  noted as an observed fact in the report's why-now context, but is never a finding).
 
 TRUST-NOTHING: obtain every file/line/count/id by reading the repository at HEAD. Trust no
 number, anchor, or mapping quoted in this prompt. Re-derive each; record any anchor that does not
@@ -184,11 +185,21 @@ you argue each entry against -- not patterns to match mechanically.
 
 Answer each as a first-class entry in `question_answers[]`. Pin the verdict enum shown.
 
-- Q1 -- PREMISE INTEGRITY. Enumerate EVERY live entry in `docs/DECISIONS.md`. Apply the Section
-  11 counterfactual to each. Classify each into exactly one of:
-  `premise-live | dead-but-annotated | dead-unannotated | archive-eligible | indeterminate`.
-  Report the full classified enumeration in the report (a compact table) and the counts in the
-  YAML answer's prose. Verdict enum: `sound | localized-drift | systemic-drift`.
+- Q1 -- PREMISE INTEGRITY. Enumerate EVERY live entry in `docs/DECISIONS.md` (a live entry = a
+  top-level `## Decision NNN:` header at column 0 -- NOT a `## Decision` string inside a code
+  fence or blockquote). For each entry emit TWO orthogonal fields:
+  (a) a PREMISE CLASS -- exactly one of `premise-live | dead-but-annotated | dead-unannotated |
+      indeterminate`, decided by the Section 11 counterfactual. Precedence when more than one
+      seems to fit: `dead-unannotated` > `dead-but-annotated` > `indeterminate` > `premise-live`
+      (a demonstrable dead premise dominates; use `indeterminate` only when you cannot establish
+      liveness either way).
+  (b) an independent boolean `archive_eligible` -- true iff the entry no longer governs anything
+      live (fully resolved/subsumed AND cited by nothing as a live constraint). This is ORTHOGONAL
+      to premise class: a `premise-live` entry can be archive-eligible, and a `dead-but-annotated`
+      one may not be. Q1 only SETS this flag; the archive RECOMMENDATIONS are owned by Q4.
+  Report the full classified enumeration in the report (a compact table:
+  number | premise-class | archive_eligible) and the counts in the YAML. Verdict enum:
+  `sound | localized-drift | systemic-drift`.
 - Q2 -- SUPERSESSION-ANNOTATION CONTROL. Is the absence of a mechanical invariant (a superseding
   Decision MUST leave a forward pointer on its victim, checkable in the validate.py referential-
   guard family) a real gap, given the ad-hoc practice observed on some entries? If you judge it a
@@ -196,7 +207,10 @@ Answer each as a first-class entry in `question_answers[]`. Pin the verdict enum
   (`scripts/checks/...`), its inputs, and a machine-checkable `acceptance` command -- but you
   write NO code; the specification is the deliverable. Verdict enum: `sufficient | partial |
   insufficient`.
-- Q3 -- WAREHOUSE-ID KEYSPACE. Derive the canonical number-keying rule. Verify EVERY in-file
+- Q3 -- WAREHOUSE-ID KEYSPACE. Derive the canonical number-keying rule (it is: `dec-NNN` where
+  `NNN` is the entry's OWN decision number zero-padded to 3 digits -- e.g. Decision 81 -> `dec-081`;
+  confirm this from the recent entries' Warehouse ID line text and Decision 105, and do NOT derive
+  it from the CD-side `filed_via` values, which are out of scope per TRAP-2). Verify EVERY in-file
   `**Warehouse ID:** dec-NNN` line against it. Identify collisions (one id claimed by two
   entries), retired-scheme residue (ids not matching the number rule), and missing lines on
   entries that should carry one. Judge whether this hazards the DECISIONS.md -> `ops_decisions`
@@ -205,7 +219,10 @@ Answer each as a first-class entry in `question_answers[]`. Pin the verdict enum
   unresolved lifecycle marker (e.g. "pending review", "Deferred", "Partially Active"). Assess
   archive-eligibility against the repository's stated archival policy (find where it is stated and
   whether an enforcer exists). RECOMMEND specific archive moves and status resolutions (the human
-  disposes; you move nothing). Verdict enum: `sufficient | partial | insufficient`.
+  disposes; you move nothing). DEGRADED PATH: if you find the policy stated but no enforcer (or
+  find neither), that absence is itself a candidate Q4 finding -- assess archive-eligibility
+  against the general principle in Q1(b) and proceed. Verdict enum:
+  `sufficient | partial | insufficient`.
 - Q5 -- CONVENTION CONFORMANCE (EXTERNAL CHECKLIST). Rate `docs/DECISIONS.md` against established
   decision-record conventions. Assess EACH property met | partial | missed, property-by-property,
   in this question's `external_checklist`. This field is the SOLE source the maturity top tier
@@ -252,7 +269,7 @@ never manufacture a rating.
 
 ## 9. DEEP-DIVES
 
-- DD-A (feeds Q1) -- The four seed entries in CO-1..CO-3 (Decisions 26, 35, 37, 40). For each,
+- DD-A (feeds Q1) -- The four candidate seed entries in Section 10 (Decisions 26, 35, 37, 40). For each,
   trace: (i) the named premise; (ii) whether the named substrate/artifact/rule exists or was
   retired at HEAD, and by which Decision/commit; (iii) whether the entry carries any annotation;
   (iv) whether any LIVE surface (AGENTS.md, a skill, a contract) still cites the entry as binding,
@@ -307,8 +324,8 @@ Keyspace anchors:
   Decision 81 @ `:1752`.
 - 4-digit in-file lines observed on Decisions 77 (dec-1083), 78 (dec-1085), 79 (dec-1086), 80
   (dec-1088), 81 (dec-1089), 83 (dec-1090), 85 (dec-1091). Re-derive the full set.
-- Decision 85 @ `:1615` carries a `**Renumbering note:**` about a parallel-authoring collision
-  (originally "Decision 84", renumbered at merge).
+- Decision 85 (header @ `:1611`) carries a `**Renumbering note:**` (~`:1616`) about a parallel-
+  authoring collision (originally "Decision 84", renumbered at merge).
 
 Governing surfaces:
 - `.claude/skills/decision-scout/SKILL.md` -- required-context `docs/DECISIONS.md`; loads the
@@ -344,6 +361,9 @@ The live-set enumeration IS the audit; do it in full.
 - EVIDENCE_KIND: tag each finding `observed` (traced to a specific entry/line or a retired
   artifact you confirmed absent) or `static` (structural/derived). At equal severity, `observed`
   findings outrank `static` ones in `top_improvements` ordering.
+- CONFIRMED-ABSENT: an artifact, path, or identifier counts as "confirmed absent" only when a
+  repo-wide search (ripgrep/glob across the tree at HEAD) for it returns nothing -- not merely
+  because this prompt did not name it, and not from a single expected location.
 - ANTI-VACUITY: for any entry you classify `premise-live`, be able to name the still-true premise;
   for any `dead-unannotated`, name both the dead substrate/rule AND the searched-for-but-absent
   annotation.
@@ -400,7 +420,8 @@ DELIBERATE CONSTRAINTS -- DO NOT FLAG (each with its owner):
 
 ## 14. OUTPUT
 
-Write exactly two files (`<sha>` = the Section 5 base short sha):
+Write exactly two files (`<sha>` = the Section 5 base short sha; create the `audits/` directory
+if it does not exist):
 - `audits/decision-log-premise-integrity-<sha>.yaml` -- the findings contract below.
 - `audits/decision-log-premise-integrity-<sha>.md` -- a companion report, <= ~1500 words, the
   executive layer a human reads first: verdict per question, the Q1 classified-enumeration table,
@@ -411,7 +432,13 @@ COUNTING INVARIANT: `findings[]` is the SOLE enumerated list. `total_findings = 
 novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered or not-a-defect
 candidates live in `rejected_candidates[]`, NOT findings. `rubric_ratings`, `question_answers`,
 and the Q1 enumeration table are systems-of-record referenced FROM findings, never re-counted.
-`top_improvements` and `highest_leverage_change` MUST be finding ids.
+`top_improvements` MUST be finding ids (use `[]` if there are zero findings);
+`highest_leverage_change` is a finding id, or `null` if there are zero findings.
+
+FIELD GUIDANCE: `effort` = your estimate of implementing the `proposed_change` (XS <1h, S
+<half-day, M ~1-2 days, L multi-day). `depends_on` / `sequencing.blocked_behind` = other finding
+ids (or roadmap item ids) this change must follow; use `[]` and `safe_to_queue_now: true` if it
+stands alone. `meta.model` free-text = your self-reported model name.
 
 CONFIRMED requires the behavior traced to file:line or a confirmed-absent artifact; anything less
 is HYPOTHESIS. `control_property_match` is REQUIRED on any `rejected_candidates` entry dismissed
@@ -426,8 +453,8 @@ audit:
          degraded_dedup: false, contract_notes: "", stale_anchors: []}
   question_answers:
     - {q: Q1, verdict: sound|localized-drift|systemic-drift, basis: [<finding ids>],
-       prose: "", classification_counts: {premise-live: 0, dead-but-annotated: 0,
-         dead-unannotated: 0, archive-eligible: 0, indeterminate: 0}}
+       prose: "", premise_class_counts: {premise-live: 0, dead-but-annotated: 0,
+         dead-unannotated: 0, indeterminate: 0}, archive_eligible_count: 0}
     - {q: Q2, verdict: sufficient|partial|insufficient, basis: [<finding ids>], prose: ""}
     - {q: Q3, verdict: coherent|cosmetic-drift|keyspace-hazard, basis: [<finding ids>], prose: ""}
     - {q: Q4, verdict: sufficient|partial|insufficient, basis: [<finding ids>], prose: ""}
@@ -440,7 +467,8 @@ audit:
          - {property: supersession-bidirectionality, rating: met|partial|missed, evidence: ""}}
     - {q: Q6, answers: [{question: "", answer: "", basis: [<finding ids>]}]}
   per_surface_assessment:
-    - {surface: docs/DECISIONS.md, maturity: <derived last>, strengths: "", top_gaps: [<finding ids>]}
+    - {surface: docs/DECISIONS.md, maturity: <frontier|strong|solid|nascent, Section 15>,
+       strengths: "", top_gaps: [<finding ids>]}
   rubric_ratings:
     - {surface: docs/DECISIONS.md, dimension: VD1, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
@@ -462,7 +490,8 @@ audit:
        control_property_match: "", decision_or_item_id: ""}
   summary: {total_findings: 0, novel_count: 0, planned_insufficient_count: 0,
             planned_unbuilt_count: 0, top_improvements: [<finding ids>],
-            highest_leverage_change: <finding id>, maturity_decisions_md: <value>}
+            highest_leverage_change: <finding id or null>,
+            maturity_decisions_md: <frontier|strong|solid|nascent>}
 ```
 
 ---
@@ -489,7 +518,7 @@ instance.
 
 MATURITY (compute LAST, one surface, top-down, first match wins; thresholds are pinned, not
 examples):
-- frontier = 0 open critical AND 0 open high findings AND every property in Q5's
+- frontier = 0 critical AND 0 high findings in this audit AND every property in Q5's
   `external_checklist` rated `met` or `partial` (never `missed`).
 - strong = 0 critical AND <= 1 high.
 - solid = <= 1 critical.
@@ -507,8 +536,10 @@ framing here does not foreclose it.
    This clean two-file branch off the audited base is a deliberate, documented exception to the
    usual session-branch rule -- the PR diff must be exactly the two deliverables.
 3. Repo-wide validation is advisory outside CI here: a clean YAML parse of both deliverables is
-   the real pre-push gate. If an unrelated `validate --pre` check fails, record it in
-   `meta.contract_notes` and do NOT fix it (write boundary).
+   the real pre-push gate -- e.g.
+   `bin/venv-python -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" audits/decision-log-premise-integrity-<sha>.yaml`.
+   If an unrelated `validate --pre` check fails, record it in `meta.contract_notes` and do NOT fix
+   it (write boundary).
 4. Commit with identity `user.name=Claude`, `user.email=noreply@anthropic.com`, `--no-gpg-sign`
    if signing is unavailable. Then `git push -u origin HEAD`.
 5. Open the PR via `mcp__github__create_pull_request` (base=main, ready for review):
