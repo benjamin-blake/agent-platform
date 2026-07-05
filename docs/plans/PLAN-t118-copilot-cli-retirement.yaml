@@ -1,0 +1,210 @@
+schema_version: 1
+slug: "t118-copilot-cli-retirement"
+intent: >-
+  Retire the orphaned GitHub Copilot CLI boundary-contract residue and re-ground
+  platform item T-1.18, whose original scope (convert copilot-cli.md to YAML + wire
+  copilot_wrapper.py to read it) is superseded now that the wrapper is deleted and the
+  Copilot CLI has no live consumer. Contract-hygiene work in the T-1 pre-codegen wave.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-t118-copilot-cli-retirement.yaml
+phase: >-
+  Platform T-1 (pre-codegen contract ratification wave, CD.25 / Decision 118). Re-grounds
+  tier_item T-1.18 from an impossible YAML-conversion+wiring task into a residue-retirement
+  cleanup.
+scope:
+  - file: docs/contracts/copilot-cli.md
+    action: Delete
+    purpose: >-
+      Dead Copilot CLI boundary contract. Its consumer scripts/copilot_wrapper.py was deleted
+      in PR #407 (retire Copilot-SDK residue); the copilot-sdk provider was retired by
+      Decision 116; audit finding F-C04 classifies it dead_but_provisioned with no live
+      inference consumer. It carries no top-level contract:/class: key, so it is not in the
+      validate_contract_drift ritual set and deleting it cannot trip the drift gate.
+  - file: scripts/checks/misc/validate_invariants.py
+    action: Modify
+    purpose: >-
+      Re-ground Check 1 (the "-p @file" without-instruction guard) to be CLI-agnostic. The
+      failure mode still applies to claude -p, so keep the guard, but generalize its docstring
+      and error message and remove the now-dead references to docs/contracts/copilot-cli.md and
+      .github/copilot-instructions.md (both deleted). Edit stays inside the registered check
+      module; does NOT touch validate.py (Decision 104).
+  - file: docs/contracts/delegate-cli.md
+    action: Modify
+    purpose: >-
+      Clear the line ~61 dangling "parent contract for Copilot CLI input semantics --
+      docs/contracts/copilot-cli.md" pointer so the deletion leaves no broken reference in a
+      live contract file.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      TestValidateInvariants already covers Check 1's positive "-p @file" case
+      (test_fails_on_at_file_without_instruction) and asserts only on the failed-list, not the
+      message text -- so the re-ground of the error string does not break it. Extend that class
+      with a negative case asserting an instruction-before-@file call list
+      (e.g. ["-p", "review this", f"@{path}"]) is NOT flagged, locking in the CLI-agnostic guard
+      behavior (Decision 48 / V2). Do not add a duplicate positive test.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap-bookkeeping re-ground of T-1.18: rewrite intent, the four exit_criteria (keeping
+      exactly four bare-string criteria so their auto-assigned ids stay c1-c4), and
+      files_in_scope to reflect this retirement cleanup instead of the impossible
+      convert+wire scope. /implement flips c1-c4 to met on a verified VP pass (Decision 91
+      re-ground precedent).
+bundled_recommendations: []
+infrastructure_dependencies: []
+closes_criteria:
+  - "T-1.18:c1"
+  - "T-1.18:c2"
+  - "T-1.18:c3"
+  - "T-1.18:c4"
+acceptance_criteria:
+  - "docs/contracts/copilot-cli.md no longer exists."
+  - >-
+    scripts/checks/misc/validate_invariants.py contains no reference to copilot-cli.md or
+    .github/copilot-instructions.md, and its @file guard is registered and still flags a
+    "-p @file" argument list that lacks an inline instruction string.
+  - "docs/contracts/delegate-cli.md contains no reference to copilot-cli.md."
+  - >-
+    tests/test_validate.py::TestValidateInvariants exercises the re-grounded guard (existing
+    positive case flags "-p @file"; added negative case passes on an instruction-before-@file
+    call) and the class passes.
+  - >-
+    T-1.18 in docs/ROADMAP-PLATFORM.yaml is re-grounded (intent + four exit_criteria +
+    files_in_scope describe the retirement cleanup; no mention of converting to YAML or wiring
+    copilot_wrapper.py remains) and the roadmap validates.
+  - "bin/venv-python -m scripts.validate --pre passes."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the dead contract is deleted.
+    command: "test ! -f docs/contracts/copilot-cli.md && echo DELETED"
+    expected: "Prints DELETED (file absent)."
+    fix_if: "File still present -- deletion not applied."
+  - step: 2
+    phase: pre-deploy
+    action: Confirm no live consumer file references the deleted contract or the deleted instructions file.
+    command: "! grep -rnE 'copilot-cli\\.md|copilot-instructions\\.md' scripts/checks/misc/validate_invariants.py docs/contracts/delegate-cli.md && echo CLEAN"
+    expected: "Prints CLEAN (no matches in either live file)."
+    fix_if: "A match remains -- a dangling reference was not cleared."
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Behavioral probe -- prove the re-grounded guard still catches "-p @file" misuse. Drop a
+      temporary script containing the bad pattern into scripts/, run the guard directly, assert
+      it is flagged, then remove the probe.
+    command: "tmp=scripts/_vp_probe_t118.py; printf 'bad = [\"-p\", \"@spec.txt\"]\\n' > $tmp; bin/venv-python -c \"from scripts.checks.misc.validate_invariants import validate_invariants as v; f=[]; v(f); print('CAUGHT' if any('_vp_probe_t118' in e for e in f) else 'MISSED')\"; rm -f $tmp"
+    expected: "Prints CAUGHT (the guard flagged the probe)."
+    fix_if: "Prints MISSED -- the re-ground neutered the guard; the regex/scan was broken."
+  - step: 4
+    phase: pre-deploy
+    action: Run the guard unit tests (existing positive case + added negative case). Class-path selector, not -k (tests/CLAUDE.md gotcha).
+    command: "bin/venv-python -m pytest tests/test_validate.py::TestValidateInvariants -q"
+    expected: "All TestValidateInvariants tests pass, including the new negative case; exit code 0."
+    fix_if: "Test fails -- the re-ground broke guard behavior or the negative case is miswired."
+  - step: 5
+    phase: pre-deploy
+    action: Confirm T-1.18 is re-grounded in the roadmap (no stale convert/wire language).
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); it=[i for i in d['tier_items'] if i['id']=='T-1.18'][0]; blob=(it['intent']+' '+' '.join(c if isinstance(c,str) else c.get('text','') for c in it['exit_criteria'])).lower(); assert 'copilot_wrapper' not in blob and 'copilot-cli.yaml' not in blob, 'stale convert/wire language remains'; assert len(it['exit_criteria'])==4, 'criterion count changed -- c1-c4 ids would shift'; print('REGROUNDED')\""
+    expected: "Prints REGROUNDED (no wrapper/YAML-conversion language; still exactly 4 criteria)."
+    fix_if: "AssertionError -- re-ground incomplete or criterion count changed."
+  - step: 6
+    phase: pre-deploy
+    action: Full fast-tier gate -- roadmap, plan schema, closes_criteria referential integrity, and the re-grounded check all validate.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit code 0; no failures."
+    fix_if: "Any check fails -- read the named check and fix within scope."
+constraints:
+  - "Only the five scope files may be modified."
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "Do not add or move the guard logic into scripts/validate.py -- it stays in the registered check module (Decision 104)."
+  - "Keep exactly four exit_criteria on T-1.18 so their auto-assigned ids remain c1-c4 (schema _normalize_exit_criteria positional id assignment); changing the count breaks the closes_criteria refs."
+  - "Do not convert copilot-cli.md to YAML and do not recreate copilot_wrapper.py -- both are impossible/superseded and out of scope."
+  - "Do not edit docs/INTENT-pre-codegen-contract-ratification.md -- it is grandfathered and retiring (see Context deferral note)."
+  - >-
+    No Lambda build/deploy/smoke-test for the docs/ROADMAP-PLATFORM.yaml edit: it is a read-only
+    doc ASSET of the data-pipeline Lambda, not code (see Lambda Deployment Assessment in Context).
+    Commit the roadmap change under the roadmap(...) bookkeeping convention, no redeploy.
+context:
+  - >-
+    T-1.18's original scope is superseded: scripts/copilot_wrapper.py (683 lines) plus
+    copilot_sdk_client.py and the Copilot-SDK toolchain were deleted in PR #407 (commit
+    6a2f7c0, "retire Copilot-SDK residue", ULF-05 audit). No script invokes the Copilot CLI.
+  - >-
+    Decision 116 retired the copilot-sdk provider; the surviving github-models provider
+    (scripts/github_models_client.py) is a REST API client unrelated to the Copilot CLI
+    -p/@file contract. Decision 117 dropped the copilot_wrapper.py executor-boundary rows in
+    the same audit. Decision 118 ratified CD.25 and cleared the completion gate on T-1.18.
+  - >-
+    Decision 91 is the sanctioned re-ground precedent: stale tier_items whose original
+    artifacts were deleted had files_in_scope/exit_criteria re-grounded to shipped reality.
+    This plan follows that mechanism.
+  - >-
+    Decision 86: contracts are the canonical machine-parseable home and deleting a dead .md
+    boundary contract aligns with it. copilot-cli.md carries no contract:/class: key, so it is
+    not loaded by scripts/contracts.py and is outside the validate_contract_drift ritual set
+    (verified) -- deletion cannot trip the drift gate.
+  - >-
+    DEFERRAL (decision-scout NOTE flag, Decision 86): deleting copilot-cli.md leaves historical
+    references in docs/INTENT-pre-codegen-contract-ratification.md (lines ~204/221/773/1034/
+    1046-1050) and one conditional inventory reference in docs/ROADMAP-PLATFORM.yaml:1189 (the
+    CD.28 "PLAN-retire-copilot-sdk" follow-on-inventory line: "...docs/contracts/copilot-cli.md
+    if applicable"). Both are historical/conditional planning prose, not live consumer pointers,
+    and no CI check enforces their link integrity (no doc link-integrity check exists in the
+    check registry; verified). The INTENT-doc references retire wholesale with that grandfathered
+    doc (T5.5); the CD.28:1189 line is candidate-decision inventory outside T-1.18's re-ground
+    scope. Both are left in place rather than churned piecemeal; c3 above is therefore scoped to
+    the two live consumer/contract files (validate_invariants.py, delegate-cli.md), which VP
+    step 2 verifies. Step 6's full validate.py --pre confirms nothing breaks.
+  - >-
+    LAMBDA DEPLOYMENT ASSESSMENT: compute_affected_artifacts(['docs/ROADMAP-PLATFORM.yaml'])
+    returns {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']} -- the roadmap is bundled as an
+    ASSET (not code) of the status:active data-pipeline Lambda. No build/deploy/smoke-test is
+    warranted: the roadmap is a read-only document whose only runtime consumers are the
+    scheduled agents, which are DISABLED (SCHEDULED_AGENTS_ENABLED=false; EventBridge rule
+    disabled per AGENTS.md runbook); a T-1.18 metadata re-ground has zero effect on Lambda code
+    behavior; and the repo treats roadmap edits as non-deploy bookkeeping (roadmap(...) commit
+    convention). Deploying would be dead ceremony. The other four scope files are not
+    Lambda-packaged (checks module, contracts docs, test file).
+  - "Verification tier V2 (Decision 48): modifies a Python check module; VP exercises the real guard and extends existing pytest coverage."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 116, Decision 117, Decision 118, Decision 91, Decision 86, Decision 48, Decision 104, Decision 67."
+  - "gates: decision-scout=FLAGS_FOUND (1 NOTE, resolved via Context deferral); plan-critique=REVISE(x2)->PROCEED (r1: Lambda-asset assessment + test-scope; r2: c3 scoped to live consumer files + ROADMAP:1189 deferral)"
+pre_implementation_checklist:
+  - "Branch confirmed not on main"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "DECISIONS.md read (via decision-scout gate)"
+  - "All files in scope located and readable"
+  - "Acceptance criteria understood and verifiable"
+execution_steps:
+  - >-
+    Re-ground T-1.18 in docs/ROADMAP-PLATFORM.yaml FIRST: rewrite intent to describe the
+    retirement cleanup; replace the four exit_criteria (keep exactly four bare strings so ids
+    stay c1-c4) with -- c1: "docs/contracts/copilot-cli.md deleted (dead Copilot CLI contract;
+    no live consumer per audit F-C04; wrapper removed in #407)"; c2: "validate_invariants.py
+    @file guard re-grounded CLI-agnostic and still flags '-p @file' without an instruction; no
+    reference to copilot-cli.md or .github/copilot-instructions.md remains"; c3:
+    "docs/contracts/delegate-cli.md dangling reference to copilot-cli.md cleared; no live
+    consumer/contract file (validate_invariants.py, delegate-cli.md) references the deleted
+    contract"; c4: "bin/venv-python -m scripts.validate --pre passes".
+    Set files_in_scope to the files this cleanup touches.
+  - "Delete docs/contracts/copilot-cli.md."
+  - >-
+    Modify scripts/checks/misc/validate_invariants.py: generalize Check 1's docstring and the
+    error-message string so they describe the agentic-CLI "-p @file" gotcha without naming
+    Copilot or the deleted docs (drop the copilot-cli.md and copilot-instructions.md
+    references). Keep the registration name validate_invariants and the regex behavior intact.
+  - "Modify docs/contracts/delegate-cli.md: remove/re-ground the line ~61 pointer to copilot-cli.md."
+  - >-
+    Modify tests/test_validate.py: extend the existing TestValidateInvariants class (do NOT
+    duplicate its positive '-p @file' case) with a negative-case test asserting an
+    instruction-before-@file call list (e.g. ["-p", "review this", f"@{path}"]) is NOT flagged,
+    confirming the re-grounded guard still requires @file immediately after -p.
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Bookkeeping walk: on a verified VP pass, flip T-1.18 c1-c4 to met and T-1.18 status to complete."
+  - "Report: what was implemented, verification results."
+work_areas: []
+rollback: >-
+  git revert the squash-merge commit; restores docs/contracts/copilot-cli.md, the original
+  validate_invariants.py guard text, the delegate-cli.md pointer, and the prior T-1.18 roadmap
+  entry. No infrastructure or data-store state is touched.
