@@ -1,0 +1,863 @@
+audit:
+  meta:
+    audited_commit: 7d57a0d
+    base_branch: main
+    model: "Claude (Anthropic frontier model; exact model id withheld from repo artefacts per session policy)"
+    methodology_version: 1
+    scope_surfaces: [orchestration, personas, verification, autonomy-governance, plan-entities, scheduled-agents, shared]
+    degraded_dedup: false
+    contract_notes: ""
+    stale_anchors: []    # every section-10 anchor resolved within +/-6 lines of its stated position at 7d57a0d
+
+  question_answers:
+    - q: Q1
+      verdict: partial
+      basis: [EXR-01, EXR-04, EXR-06, EXR-07]
+      prose: >-
+        Walking the loop (rec -> plan -> critique -> implement -> review -> verify -> merge ->
+        deploy -> observe -> next): plan/critique/implement/review are owned and well-specified
+        (T4.1 state machine + T4.2 personas + T4.5-T4.7 plan entities); verify is owned and
+        strongly specified by CD.38/T4.9. No transition is ABSENT -- every leg has an owning
+        item/CD -- so the verdict is partial, not insufficient. But two transitions are
+        mis-sequenced and two are under-specified. Mis-sequenced: the MERGE transition's only
+        owner (T4.9: callback protocol, PRE_PASS-permits-merge, SHA binding) is deferred_post_mvp
+        while Decision 93 places merge inside the MVP critical path, and the CD.27/T4.1 state
+        machine ends at file_pr -> emit_telemetry with no merge/deploy/observe states (EXR-01).
+        Under-specified: the loop HEAD -- pick_rec's eligibility predicate is not bound to the
+        relevance verdict (T3.8), automatable/risk fields, or the Decision 117 self-modification
+        boundary by any T4.1 exit criterion (EXR-04); and the deploy TAIL leans on the ratified
+        CD.35/Decision 92 apply path through a seam that is contradictorily documented (CD.27's
+        in-executor "terraform apply" escape-hatch example vs the ratified GH-Actions apply
+        authority) and has an observed human-required deadlock mode (rec-2523) (EXR-07).
+    - q: Q2
+      verdict: competitive
+      basis: [EXR-08, EXR-01, EXR-02, EXR-04]
+      prose: >-
+        1 row missed (row 12, persona eval harness), none of rows 4/5/11 missed -> competitive by
+        the pinned aggregation. The design's verification leg (row 4) and orchestration substrate
+        (row 1) are genuinely frontier-grade; the misses/partials cluster where governance items
+        (T4.9/T4.10/T4.11) were parked post-MVP while the capabilities they govern go live at MVP.
+        A design-level strength worth naming: the plan-entity RBAC (critic cannot author plan
+        bodies, planner cannot flip status) is a separation-of-duties pattern most industrial
+        agent systems lack.
+      external_checklist:
+        - {property: "1. Durable workflow orchestration with checkpoint-replay", rating: met,
+           evidence: "CD.27 three-layer substrate; Step Functions Standard 1-yr executions; T4.2 exit c1 forces checkpoint-replay verification (forced timeout resumes from last completed tool call)"}
+        - {property: "2. Planner / critic / actor separation with independent critic", rating: met,
+           evidence: "T4.2 personas: plan_critic is a fresh-context Durable Function run in Parallel with decision_scout; critique_gate is a deterministic (non-LLM) aggregator; code_reviewer is a distinct persona; T4.5 RBAC verbs make the separation structural (insert_plan vs set_plan_status)"}
+        - {property: "3. Bounded autonomy: hard caps on revisions/rounds/attempts/total LLM calls", rating: partial,
+           evidence: "T4.11 specifies every named cap, enforced by Step Functions state not prompt discipline -- but it is deferred_post_mvp (EXR-02). Interim controls property-match the retry axis (deterministic-only retries, Decision 55) and the fleet axis (concurrency=1) but NOT the revision-cycle axis: critique_gate may route back to plan_agent unboundedly at MVP"}
+        - {property: "4. Verification the actor cannot control or self-certify", rating: met,
+           evidence: "CD.38: GitHub Actions sole verifier, AWS never runs validate.py in-cloud; TAP two-tier merge/promote split; VF-12 differential verify runs in GH Actions; CD.17 VF-11 amendment blocks unattended merges on structural-only oracles; no persona marks its own work green"}
+        - {property: "5. Least-privilege sandboxing: per-persona tool lists, scoped IAM, self-mod boundary", rating: partial,
+           evidence: "T4.1 per-Lambda IAM execution roles (CD.10 two-principal model); T4.2 per-persona MCP tool allow-lists; Decision 117 capabilities.yaml boundary SSOT exists. But contract-level enforcement (forbidden_tools, 'no persona may merge/close/apply') is deferred T4.10, and no T4 criterion binds the new substrate to the boundary SSOT (EXR-04)"}
+        - {property: "6. Progressive autonomy with human-ratified gates AND automatic rollback", rating: met,
+           evidence: "T4.4: A0-A5 each with entry/exit AND rollback criterion; threshold breach auto-flips gate to An-1 + files source='autonomy_rollback' rec; forward AND rollback formal changes human-ratified; T3.4 requires A0-A3 documented and live BEFORE T4.2 completes (it is a T4.2 dependency)"}
+        - {property: "7. Concurrency control via semantic locks (not file overlap alone)", rating: met,
+           evidence: "CD.37/T4.8: deterministic semantic lock derivation (files, contracts, tables, manifests, verbs, tf roots, decisions) + lease protocol in the governed ops plane; correctly sequenced -- inert until T4.4 raises concurrency above 1, so the deferral is property-matched to concurrency=1"}
+        - {property: "8. Full-fidelity per-turn observability", rating: met,
+           evidence: "T4.2 exit c3: rec_id, step_id, turn_index, model_id, tokens_in/out, cached_tokens_read/written, est_cost_usd, latency_ms per turn via agent_sdk; T4.1 CloudWatch p50/p99 + execution success/failure alarms filing recs"}
+        - {property: "9. RCA-on-failure with permanent forward-fix", rating: met,
+           evidence: "Decision 55 preserved verbatim in CD.27; retries deterministic-only, LLM-judgment failure -> rec/RCA, never retry-on-bad-output; T4.1/T4.9 route every verdict-wait timeout to ci-rca, never silent re-wait"}
+        - {property: "10. Provider-agnostic inference transport + model-tier routing", rating: met,
+           evidence: "CD.28/T4.2: LiteLLM sole transport; Tier 1 DeepSeek-direct, Tier 2 Anthropic-direct, per-persona model-tier mapping via the inference-provider contract; residuals owned (KG.3 intent re-read; KG.7 cold Tier 3)"}
+        - {property: "11. Idempotency / exactly-once under retries; verdict-to-head-SHA binding", rating: partial,
+           evidence: "T4.9 specifies task-token correlation ids, duplicate/stale-callback rejection, callback auth, and merge-only-when-callback-SHA==PR-head -- but is deferred_post_mvp (EXR-01). Interim property-matched control: the live main-protection ruleset (Decision 83) requires green checks on the current head SHA, and file_pr is specified idempotent (T4.1)"}
+        - {property: "12. Offline evaluation / regression harness for the personas themselves", rating: missed,
+           evidence: "No tier_item or CD owns pre-deploy persona-quality regression (does a plan_agent prompt change regress plan quality?). T3.7 meta-validates validate.py, not persona output. Existing controls are reactive, not offline: CD.27 14-day stability baselines and T4.4 rollback detect regression only in production; the prompt-quality scheduled agent (T4.3) is advisory review, not a regression harness (EXR-08)"}
+    - q: Q3
+      verdict: unsound
+      basis: [EXR-02, EXR-01, EXR-03]
+      prose: >-
+        Per-item: T4.8 (locks) -- correctly deferred; concurrency=1 property-matches it exactly and
+        CD.37 states the inertness condition. T4.9 (handshake/SHA binding) -- mis-sequenced: merge
+        is inside the Decision 93 MVP critical path, so the protocol governing merge cannot sit
+        post-MVP; partially compensated by the live GitHub main-protection ruleset, hence a high
+        (not critical) finding (EXR-01). T4.10 (persona contracts) -- mis-sequenced by its own
+        text: "T4.2 persona implementations MUST conform to these contracts" and "author before /
+        with T4.2", while parked post-MVP; T4.2's informal per-persona allow-lists partially
+        compensate (EXR-03). T4.11 (loop budgets) -- MVP-critical with NO interim substitute for
+        the revision-cycle axis: deterministic-only retry bounds transport failures and
+        concurrency=1 bounds the fleet, but nothing bounds plan->critique->revise cycling or total
+        LLM calls per rec at the point the loop first runs unattended, and the platform's own
+        history (rec-449 critique-cycling deadlock, cited in Decision 55) proves the failure mode
+        is real (EXR-02). One MVP-critical containment control deferred with no interim substitute
+        pins the verdict at unsound. The fix is cheap: re-sequence T4.9's minimal
+        callback+SHA-binding slice and T4.11 (with T4.10's contract slice or a re-pointed dep)
+        ahead of the MVP boundary; no design work is missing, only placement.
+    - q: Q4
+      verdict: sound
+      basis: [EXR-07]
+      prose: >-
+        The CD.27 bet is well-hedged risk-by-risk. Step Functions Standard: ratified precedent
+        (Decision 39), 1-yr executions fit the per-rec lifecycle. Lambda Durable Functions (~5
+        months GA): explicitly hedged -- DynamoDB self-checkpoint fallback with a 12-month
+        re-evaluation trigger re-checked at each T4.2 atomic-plan filing, a checkpoint-replay exit
+        criterion, and a health-signal alarm; that the fallback is INTENT-level is acceptable for
+        a designed-unbuilt system because the re-eval trigger fires before build. 256 KB state
+        limit: S3-pointer pattern is the standard remedy and is a stated discipline point. ECS Run
+        Task escape hatch: sound, except its "terraform apply" example contradicts the ratified
+        apply authority (EXR-07, documentation-level). LiteLLM sole transport: a single-library
+        dependency but two live providers; the both-providers-down stall is a known, owned gap
+        (KG.7.2). Single region: a deliberate cost/complexity tradeoff consistent with the
+        sandbox-first posture (Decision 77); an outage stalls the loop, it does not corrupt state.
+        No unhedged frontier-fragility found.
+    - q: Q5
+      answers:
+        - question: "(a) What governs autonomy between T4.2 (loop first runs) and T4.4 (A-gates land)?"
+          answer: >-
+            The window is governed, not bare: T3.4 -- a hard T4.2 dependency -- requires "Autonomy
+            maturity gates A0-A3 documented and live" before T4.2 can complete, and the T4.1
+            concurrency=1 ceiling, the still-active CD.17 freeze during the 14-day grace window,
+            and the VF-11 merge-authority discipline (structural-only oracles route to human) all
+            bound the window. Residual: A-gate ownership is split across T3.4 (A0-A3) and T4.4
+            (A0-A5 + rollback contract), and the rollback contract arrives only with T4.4 (EXR-06).
+          basis: [EXR-06]
+        - question: "(b) Does any T4 item own the deploy -> observe tail, and is the CD.35/CD.16 seam specified?"
+          answer: >-
+            No T4 item owns the tail; the lean on existing paths is mostly deliberate and mostly
+            sufficient -- terraform deploys ride the ratified, live CD.35/Decision 92 apply
+            pipeline; Lambda deploys ride CD.16 per-Lambda plan steps executed by implement_agent
+            (sandbox model, Decision 77); observe is owned by T3.2 (causal chain), T3.3 (anomaly
+            analysis -> recs), and T4.1 alarms. But the seam itself is unspecified and its
+            documentation is contradictory (CD.27's in-executor terraform-apply example vs CD.38's
+            sole-runner rule and Decision 92), and rec-2523 (observed) shows the apply path has a
+            guard-BLOCK red-record deadlock requiring an out-of-band admin apply -- a
+            human-required recovery mode on the loop's deploy leg that no T4 item addresses.
+          basis: [EXR-07]
+        - question: "(c) Is there a rec-quality / eligibility gate before autonomous execution, beyond freshness?"
+          answer: >-
+            The parts exist -- T3.8 relevance verdicts (complete; its intent says evaluated before
+            a rec is "(post-freeze) executed"), portal Tier-B structural validation at write time,
+            writer-derived automatable/risk fields, and the Decision 117 boundary SSOT -- but no
+            T4.1 exit criterion composes them into pick_rec's admission predicate. As written,
+            pick_rec is "poll priority queue, return rec_id"; nothing in T4 binds it to relevance,
+            automatable, risk ceiling, or the self-modification boundary (EXR-04).
+          basis: [EXR-04]
+        - question: "(d) Is there a per-rec cost cap / cost-runaway alarm before the loop runs unattended?"
+          answer: >-
+            Alarms yes, caps no. Detection is well-covered: T4.2 c3 per-turn est_cost_usd, T4.1
+            CloudWatch alarms filing recs, the CD.27 stability definition's cost-per-rec <= 1.5x
+            baseline signal, and the monthly Anthropic-pool utilisation monitor. Enforcement (a
+            hard per-rec budget that STOPS the execution) exists only in deferred T4.11 -- an
+            alarm that files a rec does not bound the spend of the execution that triggered it
+            (EXR-02).
+          basis: [EXR-02]
+        - question: "(e) Does the roadmap own the transition from the frozen single-process executor to the Step Functions substrate?"
+          answer: >-
+            Partially. Concept carry-forward is owned piecemeal (T4.2 reuses
+            config/agent/executor/prompts/; T4.1's emit_telemetry is the named replacement for the
+            frozen local telemetry write sites; T3.10 flips verification consumption), and T-1.22's
+            replacement-closure check is a discipline-level backstop at completion time. But no
+            item owns the cutover decision itself -- the disposition of scripts/execute_recommendation.py
+            and scripts/executor/* (retire, harvest, or dual-run) -- and T3.10 (live) invests
+            enforcement work in the frozen executor's code while the substrate that replaces it is
+            being designed (EXR-09).
+          basis: [EXR-09]
+        - question: "(f) Does any item own the adversarial-input / prompt-injection threat model?"
+          answer: >-
+            No. Dedup searches over the roadmap, DECISIONS.md, and the rec cache find no owner for
+            hostile-content handling in persona context. The ingress surface is narrower than a
+            public-facing agent's -- rec writes are IAM-authenticated, merges are
+            branch-protected -- but real: rec context can embed content lifted from CI logs
+            (ci-rca), repo/diff content includes externally-authored dependency changes, and both
+            plan_agent and code_reviewer are LLM personas equally steerable by injected text.
+            Independent CI (NS-C) verifies correctness, not intent, so it does not property-match
+            this threat (EXR-05).
+          basis: [EXR-05]
+        - question: "(g) When observe detects a post-deploy regression and auto-revert is forbidden, what closes the recovery seam?"
+          answer: >-
+            Forward-fix IS the loop, and the design closes it without a structural human: T3.3 /
+            T4.1 alarms file the regression rec, the queue feeds it to the next iteration, and
+            T4.4's automatic autonomy-rollback (gate flips to An-1 + rec filed) bounds systemic
+            regression while the fix lands. Executor-machinery regressions route to the human
+            EXCEPTION path by design (automatable=false, Decision 117) -- consistent with NS-A,
+            which excludes the exception path. The seam's practical closure depends on EXR-04
+            (the regression rec must actually be eligible for pick_rec) but is otherwise sound.
+          basis: [EXR-04]
+        - question: "(h, extension) Who holds the GitHub-side credential that files and merges PRs, and how is it scoped per persona?"
+          answer: >-
+            Unnamed. T4.1's IAM exit criteria cover the AWS side only; file_pr "via gh" implies a
+            PAT or GitHub App credential whose scopes, storage, rotation, and persona-level
+            isolation (why would plan_agent's environment ever hold it?) appear in no T4 exit
+            criterion. The Decision 83 ruleset constrains what the credential can do to main, but
+            credential scoping itself is a gap the T4.1/T4.9 atomic plans should name. Not filed
+            as a separate finding (it is an implementation-plan-level specification within
+            EXR-01's re-sequencing remit).
+          basis: [EXR-01]
+        - question: "(i, extension) Is there a single named operator kill-switch for the loop?"
+          answer: >-
+            Mechanically yes (disable the EventBridge trigger; set state-machine concurrency to 0),
+            but no exit criterion names a stop control, its authority, or its test. Frontier
+            systems treat the kill-switch as a tested artefact, not an implied capability. Cheap
+            to add to T4.1's observability/alarm criteria at atomic-plan time.
+          basis: []
+        - question: "(j, extension) What happens to in-flight (up to 1-year) executions when personas, prompts, or the state-machine definition redeploy mid-rec?"
+          answer: >-
+            Unowned. Step Functions pins an execution to its definition version at start, but
+            Durable Function persona code/prompts redeploying mid-checkpoint-replay is a version-
+            skew mode no item names. At concurrency=1 with per-rec executions the blast radius is
+            one rec, and RCA-first catches the failure -- acceptable at MVP, worth a line in the
+            T4.2 atomic plans.
+          basis: []
+
+  per_surface_assessment:
+    - surface: orchestration
+      maturity: strong
+      strengths: >-
+        Design-maturity rating (nothing is built). Clean three-layer decomposition with the state
+        machine as the containment plane; per-Lambda IAM; every verdict-wait state carries
+        heartbeat/timeout routing to ci-rca; escape hatch and S3-pointer discipline pre-empt the
+        two classic Step Functions failure modes.
+      top_gaps: [EXR-04, EXR-07]
+    - surface: personas
+      maturity: strong
+      strengths: >-
+        Design-maturity rating. Checkpoint-replay with a verified-by-forced-timeout exit
+        criterion; per-persona prompts, model tiers, and tool allow-lists; per-turn telemetry to
+        the cached-token grain; hedged substrate bet.
+      top_gaps: [EXR-03, EXR-08]
+    - surface: verification
+      maturity: strong
+      strengths: >-
+        Design-maturity rating. The strongest design on paper: sole-external-oracle rule
+        (CD.38), TAP two-tier merge/promote, SHA-bound merge with stale/duplicate-callback
+        rejection, differential verify in CI, VF-11 merge-authority discipline. The gap is
+        placement, not design (EXR-01).
+      top_gaps: [EXR-01]
+    - surface: autonomy-governance
+      maturity: solid
+      strengths: >-
+        Design-maturity rating. A0-A5 gates with per-gate rollback criteria and automatic
+        rollback-rec filing; human-ratified transitions; semantic-lock model correctly keyed to
+        the concurrency raise.
+      top_gaps: [EXR-02, EXR-06]
+    - surface: plan-entities
+      maturity: frontier
+      strengths: >-
+        Design-maturity rating, not a built-state rating. The most complete surface: SCD2 plan
+        entities with verb-RBAC separation of duties (critic cannot author, planner cannot
+        approve), machine-actionable revision directives, authority-flip explicitly timed to the
+        autonomous producer's existence (Decision 87), and a staleness story (base_commit_sha +
+        divergence check) gating decoupling before it can hurt.
+      top_gaps: []
+    - surface: scheduled-agents
+      maturity: frontier
+      strengths: >-
+        Design-maturity rating, not a built-state rating; thinnest surface but no confirmed
+        defects. Reuses the persona substrate; substrate choice deliberately left to the atomic
+        plan with a documented-rationale exit criterion; provider routing reconciled by Decision
+        116; the rec-curator producer-repoint caveat is documented where it will be read.
+      top_gaps: []
+    - surface: shared
+      maturity: strong
+      strengths: >-
+        Design-maturity rating. Decision 93's no-live-dep validator, the CD.17 structural
+        reversal trigger, and RCA-first give the cross-cutting skeleton real enforcement teeth;
+        gaps are the two novel absences (threat model, cutover ownership).
+      top_gaps: [EXR-05, EXR-09]
+
+  rubric_ratings:
+    - {surface: orchestration, dimension: VD1, rating: adequate, evidence: "T4.1", note: "Owns rec->PR fully; head predicate under-specified (EXR-04); no merge/deploy states (tail owned by T4.9/CD.35)"}
+    - {surface: orchestration, dimension: VD2, rating: weak, evidence: "T4.1", note: "Eligibility/boundary predicate unbound at pick_rec (EXR-04); budgets live in deferred T4.11"}
+    - {surface: orchestration, dimension: VD3, rating: adequate, evidence: "T4.1", note: "Dispatch-and-wait only, timeout->ci-rca; SHA binding deferred to T4.9"}
+    - {surface: orchestration, dimension: VD4, rating: strong, evidence: "CD.27", note: "Layered substrate, 1-yr Standard Workflows, ECS escape hatch, S3-pointer discipline"}
+    - {surface: orchestration, dimension: VD5, rating: adequate, evidence: "T4.1", note: "p50/p99 + success/failure alarms filing recs; no cost enforcement (EXR-02 adjacent)"}
+    - {surface: orchestration, dimension: VD6, rating: adequate, evidence: "T4.1", note: "depends_on [T2.1,T3.2] sound; concurrency raise keyed to A2+; CD.27-vs-CD.35 apply seam (EXR-07)"}
+    - {surface: orchestration, dimension: VD7, rating: adequate, evidence: "CD.27", note: "Rows 1/9 met, 5/11 partial for this surface"}
+    - {surface: orchestration, dimension: VD8, rating: adequate, evidence: "T4.1", note: "Per-Lambda manifests (CD.24), two-principal IAM (CD.10)"}
+    - {surface: personas, dimension: VD1, rating: strong, evidence: "T4.2", note: "Five personas + e2e smoke covering plan->critique->implement->review->PR"}
+    - {surface: personas, dimension: VD2, rating: adequate, evidence: "T4.2", note: "Tool allow-lists + RCA-first; contract enforcement deferred (EXR-03), budgets deferred (EXR-02)"}
+    - {surface: personas, dimension: VD3, rating: strong, evidence: "T4.2", note: "No persona self-certifies; verdict authority is external CI; critique_gate aggregator is deterministic"}
+    - {surface: personas, dimension: VD4, rating: strong, evidence: "CD.27", note: "Checkpoint-replay + DynamoDB fallback hedge + maturity health signal"}
+    - {surface: personas, dimension: VD5, rating: strong, evidence: "T4.2", note: "Exit c3 per-turn telemetry to cached-token + est-cost grain"}
+    - {surface: personas, dimension: VD6, rating: adequate, evidence: "T4.2", note: "Deep but reasoned dep chain (T3.4, T1.6); T4.10 prose inversion (EXR-03)"}
+    - {surface: personas, dimension: VD7, rating: adequate, evidence: "T4.2", note: "Row 12 missed (EXR-08); rows 1/2/8/10 met"}
+    - {surface: personas, dimension: VD8, rating: adequate, evidence: "T4.10", note: "Contract registry designed but deferred; prompt/model-tier/tool mapping per persona in T4.2"}
+    - {surface: verification, dimension: VD1, rating: weak, evidence: "T4.9", note: "Owns the merge transition but is parked post-MVP -- its loop slice is unavailable at MVP (EXR-01)"}
+    - {surface: verification, dimension: VD2, rating: adequate, evidence: "T4.9", note: "Heartbeat/timeout on every verdict-wait; repeated SHA mismatch -> ci-rca"}
+    - {surface: verification, dimension: VD3, rating: strong, evidence: "CD.38", note: "Sole external oracle, SHA-bound merge, dup/stale rejection, callback auth, VF-12 differential verify"}
+    - {surface: verification, dimension: VD4, rating: adequate, evidence: "T4.9", note: "Callback Lambda + task tokens without exposing raw tokens"}
+    - {surface: verification, dimension: VD5, rating: adequate, evidence: "T4.9", note: "Correlation ids incl. head SHA recorded in execution state"}
+    - {surface: verification, dimension: VD6, rating: weak, evidence: "T4.9", note: "deferred_post_mvp while T4.2's exit criterion and the Decision 93 merge leg depend on its protocol (EXR-01)"}
+    - {surface: verification, dimension: VD7, rating: strong, evidence: "CD.38", note: "Google-TAP-style two-tier flow; forecloses any AWS verifier runner"}
+    - {surface: verification, dimension: VD8, rating: adequate, evidence: "T4.9", note: "Contract owns the three-alphabet verdict mapping (VF-14 note)"}
+    - {surface: autonomy-governance, dimension: VD1, rating: adequate, evidence: "T4.4", note: "Owns escalation; first-live governance split with T3.4 (EXR-06)"}
+    - {surface: autonomy-governance, dimension: VD2, rating: weak, evidence: "T4.11", note: "Budget layer fully designed but deferred with no revision-cycle substitute (EXR-02); locks correctly inert"}
+    - {surface: autonomy-governance, dimension: VD3, rating: n/a, evidence: "T4.4", note: "Verification integrity is not this surface's slice"}
+    - {surface: autonomy-governance, dimension: VD4, rating: n/a, evidence: "T4.4", note: "No substrate of its own"}
+    - {surface: autonomy-governance, dimension: VD5, rating: adequate, evidence: "T4.4", note: "Gate metrics named (pass rates, exception rates); current gate exposed in preflight"}
+    - {surface: autonomy-governance, dimension: VD6, rating: weak, evidence: "T4.11", note: "T4.11 depends_on deferred T4.10 (pull-forward needs both or a re-point); A-gate split ownership (EXR-06)"}
+    - {surface: autonomy-governance, dimension: VD7, rating: adequate, evidence: "T4.4", note: "Rollback-keyed progressive autonomy is frontier-aligned; row 3 partial drags"}
+    - {surface: autonomy-governance, dimension: VD8, rating: strong, evidence: "T4.4", note: "Gate state in preflight/roadmap; transitions ratified via log-decision; rollback recs source-tagged"}
+    - {surface: plan-entities, dimension: VD1, rating: strong, evidence: "T4.6", note: "Closed plan->critique->revision loop with fixture-rec exit criterion"}
+    - {surface: plan-entities, dimension: VD2, rating: strong, evidence: "T4.5", note: "Verb-RBAC separation of duties: insert_plan hardcodes status=pending; critic cannot author bodies"}
+    - {surface: plan-entities, dimension: VD3, rating: strong, evidence: "T4.5", note: "plan_agent structurally cannot approve its own plan"}
+    - {surface: plan-entities, dimension: VD4, rating: strong, evidence: "T4.5", note: "SCD2 on DuckLake; sanctioned ETL projection until the flip (Decision 87)"}
+    - {surface: plan-entities, dimension: VD5, rating: adequate, evidence: "Decision 87", note: "Deliberation routed to telemetry, imperative to ops_plan_revisions -- not duplicated"}
+    - {surface: plan-entities, dimension: VD6, rating: strong, evidence: "T4.7", note: "Authority-flip timed to producer existence; staleness gate precedes decoupling (Decision 87 cl.6)"}
+    - {surface: plan-entities, dimension: VD7, rating: strong, evidence: "T4.5", note: "Plan-entity RBAC exceeds common industrial practice"}
+    - {surface: plan-entities, dimension: VD8, rating: strong, evidence: "T4.5", note: "Writer-allocated ids, named verbs, contract-versioned schema (Decision 86 form)"}
+    - {surface: scheduled-agents, dimension: VD1, rating: adequate, evidence: "T4.3", note: "Six agents re-homed; substrate choice deliberately open with documented-rationale criterion c4"}
+    - {surface: scheduled-agents, dimension: VD2, rating: adequate, evidence: "T4.3", note: "Findings via log-rec only; rec-curator producer-repoint caveat documented (AGENTS.md runbook / Decision 84)"}
+    - {surface: scheduled-agents, dimension: VD3, rating: n/a, evidence: "T4.3", note: "Agents file recs; they merge nothing"}
+    - {surface: scheduled-agents, dimension: VD4, rating: adequate, evidence: "T4.3", note: "Either candidate substrate is durable/scheduled; choice at plan time"}
+    - {surface: scheduled-agents, dimension: VD5, rating: adequate, evidence: "T4.3", note: "Per-invocation telemetry criterion c3"}
+    - {surface: scheduled-agents, dimension: VD6, rating: adequate, evidence: "T4.3", note: "depends_on [T4.1, T0.7a, T0.8]; c5 deletion/repoint scoped and rehomed from T5.3"}
+    - {surface: scheduled-agents, dimension: VD7, rating: adequate, evidence: "Decision 116", note: "Agentic/non-agentic provider split is argued; claude -p leg is deliberately vendor-specific"}
+    - {surface: scheduled-agents, dimension: VD8, rating: adequate, evidence: "T4.3", note: "schedule.yaml enabled-flags reconciled to deployed reality (Decision 116)"}
+    - {surface: shared, dimension: VD1, rating: adequate, evidence: "Decision 93", note: "Loop closes on paper except tail sequencing (EXR-01)"}
+    - {surface: shared, dimension: VD2, rating: adequate, evidence: "Decision 117", note: "Boundary SSOT + RCA-first strong; threat model absent (EXR-05)"}
+    - {surface: shared, dimension: VD3, rating: adequate, evidence: "CD.38", note: "Sole-runner rule is cross-cutting and unambiguous"}
+    - {surface: shared, dimension: VD4, rating: adequate, evidence: "CD.27", note: "Single region + cold Tier 3 are deliberate, owned residuals (Decision 77, KG.7)"}
+    - {surface: shared, dimension: VD5, rating: adequate, evidence: "T4.2", note: "Telemetry grain strong; enforcement-side cost control deferred (EXR-02)"}
+    - {surface: shared, dimension: VD6, rating: adequate, evidence: "Decision 93", note: "no-live-dep validator enforced at load; prose-level couplings escape it (EXR-03)"}
+    - {surface: shared, dimension: VD7, rating: adequate, evidence: "CD.27", note: "1 of 12 checklist rows missed (row 12)"}
+    - {surface: shared, dimension: VD8, rating: strong, evidence: "Decision 86", note: "YAML-first roadmap, contracts collocated with enforcement, preflight state -- agent-first governance is this platform's differentiator"}
+
+  findings:
+    - id: EXR-01
+      surface: verification
+      question: Q1
+      dimension: VD6
+      title: "Merge leg of the MVP loop is owned only by deferred T4.9; the CD.27/T4.1 state machine ends at file_pr"
+      evidence: "T4.9 (status deferred_post_mvp); T4.1 state-machine shape (pick_rec..file_pr->emit_telemetry, no merge/deploy/observe state); T4.2 exit criterion 'file_pr -> PR opens and validates green'; Decision 93 boundary (merge/deploy/observe inside the critical path)"
+      evidence_kind: static
+      current_behavior: >-
+        Decision 93 defines MVP as the loop closing through merge -> deploy -> observe with no
+        human in the critical path. The only item specifying how the executor learns a CI verdict
+        and when merge is permitted (callback protocol, correlation ids, PRE_PASS-permits-merge,
+        verdict-to-head-SHA binding, stale/duplicate rejection) is T4.9, parked deferred_post_mvp.
+        The T4.1/CD.27 state machine's last states are file_pr -> emit_telemetry; grep of the T4
+        block finds merge mechanics only inside T4.8/T4.9/T4.10. T4.2's own exit criterion ("PR
+        opens and validates green") already presupposes a verdict-consumption mechanism that no
+        live item specifies.
+      ideal_behavior: >-
+        Every capability inside the Decision 93 critical path is owned by an item sequenced at or
+        before the MVP boundary. The minimal verdict-callback + merge-authority + SHA-binding
+        slice of T4.9 is live before (or with) T4.2; the richer contract work (verdict-alphabet
+        unification, full test matrix) may stay post-MVP.
+      gap: "The loop cannot close at MVP as sequenced: merge mechanics are post-MVP while merge is MVP-definitional; T4.2's exit criterion depends on a deferred protocol (candidate C2 confirmed as a sequencing inversion, not a benign smoke distinction -- the smoke itself needs the callback)."
+      compensating_controls_considered: >-
+        Live main-protection ruleset (Decision 83): required checks evaluated on the current head
+        SHA natively prevent merging red or stale heads -- property-matches the UNSOUND-merge risk
+        (which is why this is high, not critical) but not the loop-closure gap: GitHub refusing a
+        bad merge does not give the executor a way to perform a good one. T4.1's
+        heartbeat/timeout criteria cover wait-state hygiene, not the callback/merge protocol.
+      change_type: resequence
+      proposed_change: >-
+        Split T4.9: pull a minimal 'executor verdict-callback + merge authority' slice (callback
+        auth, correlation ids incl. head SHA, PRE_PASS-permits-merge with SHA equality check,
+        duplicate/stale rejection) to a live item sequenced before the MVP boundary
+        (depends_on: [T4.1, T2.20]); keep the full contract hardening post-MVP. Alternatively
+        re-status T4.9 itself to not_started and add it to T4.2's depends_on. Add explicit merge
+        and deploy-dispatch states to the T4.1 state-machine shape.
+      acceptance: "docs/ROADMAP-PLATFORM.yaml: the item owning verdict-callback+merge is status not_started (not deferred_post_mvp) and reachable from T4.2/T4.1 depends_on; the T4.1 state-machine shape includes a merge state; validate.py roadmap checks pass"
+      severity: high
+      severity_rationale: >-
+        A capability the closed loop materially needs (merge) is unavailable at the boundary that
+        requires it, and the compensating control (GitHub ruleset) prevents only bad merges, not
+        the absence of merge capability. Not critical: no unsound irreversible action can occur --
+        the failure mode is the loop NOT closing (or the protocol being improvised unowned at
+        T4.2 build time), not merging unverified work.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-unbuilt
+        item_ids: [T4.9, CD.38, T4.2, T4.1]
+        dedup_search_terms: ["merge", "callback", "verdict", "PRE_PASS", "head SHA", "handshake"]
+        dedup_hit_count: 8
+        note: "All merge-mechanics hits in the T4 block fall inside deferred items (T4.9, T4.10) or CD.38 (gates T4.9). Territory owned; the deferral placement is the defect."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Pure roadmap re-sequencing edit; the build it re-sequences stays blocked behind T4.1/T2.20 as today"}
+    - id: EXR-02
+      surface: autonomy-governance
+      question: Q3
+      dimension: VD2
+      title: "Loop budgets (T4.11) deferred post-MVP: first unattended run has no enforced revision or LLM-call caps"
+      evidence: "T4.11 (status deferred_post_mvp; intent: 'recursive self-improvement systems fail when they can revise indefinitely'); CD.27 boundary diagram (critique_gate routes back to plan_agent on block); Decision 55 (rec-449 critique-cycling precedent); Decision 93 (MVP = unattended)"
+      evidence_kind: static
+      current_behavior: >-
+        T4.11 specifies exactly the right budget layer (caps on plan revisions, implement
+        revisions, review rounds, verification attempts, total LLM calls per rec, enforced by
+        Step Functions state, exhausted budgets -> RCA) -- and parks it post-MVP. At the MVP
+        boundary the loop runs unattended with: deterministic-only transport retries (bounds
+        retry, not revision), concurrency=1 (bounds fleet, not per-rec spend), and cost ALARMS
+        (T4.1 alarms, CD.27 stability signal, monthly pool monitor) that detect and file recs but
+        stop nothing. The plan->critique->revise cycle (critique_gate routing back to plan_agent)
+        has no enforced bound anywhere live, and the platform's own history (rec-449, cited in
+        Decision 55) shows critique cycling is a real observed failure mode.
+      ideal_behavior: >-
+        NS-B: at the moment merge-capable autonomy first runs unattended, revision counts and
+        total LLM calls per rec are bounded by state-machine-enforced counters whose exhaustion
+        routes to RCA -- exactly T4.11's design, live at MVP.
+      gap: "An MVP-critical containment control is deferred with no property-matched interim substitute for the revision-cycle and per-rec-spend axes (candidates C1-T4.11 and C8-cap confirmed)."
+      compensating_controls_considered: >-
+        Concurrency=1: bounds parallel blast radius, not per-rec runaway -- fails the property
+        match. Deterministic-only retry (Decision 55/CD.27): bounds transport retries; critique
+        re-routing is not a retry, so it fails the property match. Cost alarms + 14-day stability
+        cost signal: detection, not enforcement -- an alarm files a rec into the very queue the
+        runaway loop is consuming. Step Functions' 25k-event history hard limit would eventually
+        kill a cycling execution, but it is incidental, unstated in the roadmap, and orders of
+        magnitude above a sane budget.
+      change_type: resequence
+      proposed_change: >-
+        Reactivate T4.11 (status not_started) sequenced before the MVP boundary. Its depends_on
+        [T4.1, T4.10] needs T4.10's contract slice pulled with it (see EXR-03) or the edge
+        re-pointed to T4.1 plus a minimal per-persona max_llm_calls/max_revisions config owned by
+        T4.2. Add a T4.2 exit criterion asserting budget counters are live in the smoke run.
+      acceptance: "docs/ROADMAP-PLATFORM.yaml: T4.11 status not_started with a resolvable dep chain containing no deferred_post_mvp item; T4.2 (or T4.11) exit criterion names enforced budget counters in the e2e smoke; platform_roadmap.py model_validator passes"
+      severity: critical
+      severity_rationale: >-
+        Matches the pinned critical class verbatim: a self-improving loop could run unbounded (no
+        enforced budget) at the point it is first live and unattended. Detection-only controls do
+        not lower it: none exercises the bounding property.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-unbuilt
+        item_ids: [T4.11, T4.10, CD.27]
+        dedup_search_terms: ["budget", "max_llm_calls", "max_revisions", "loop-budget", "cost cap", "runaway"]
+        dedup_hit_count: 9
+        note: "All budget-enforcement hits fall inside deferred T4.11/T4.10; alarm/monitor hits (T4.1, KG.7, cost_reconciliation) are detection-property only. Territory owned; placement is the defect."
+      effort: S
+      depends_on: [EXR-03]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Roadmap edit now; the T4.11 build itself remains behind T4.1. EXR-03's contract-slice decision determines the dep re-point."}
+    - id: EXR-03
+      surface: personas
+      question: Q3
+      dimension: VD6
+      title: "T4.10 prose binds live T4.2 ('MUST conform', 'author before / with T4.2') while parked post-MVP -- a coupling the Decision 93 validator cannot see"
+      evidence: "T4.10 intent ('T4.2's persona implementations MUST conform to these contracts') + progress_note ('author before / with T4.2 persona implementation') vs status deferred_post_mvp; scripts/platform_roadmap.py:532-541 (validator checks depends_on edges only); T4.2 depends_on [T4.1, T3.4, T1.6] (no T4.10 edge)"
+      evidence_kind: static
+      current_behavior: >-
+        T4.10 (persona contract registry) is deferred_post_mvp, yet its own text asserts T4.2
+        implementations MUST conform to its contracts and its progress_note instructs authoring
+        it before or with T4.2 -- a live-work obligation. Because the Decision 93 no-live-dep
+        invariant is enforced only over depends_on edges (platform_roadmap.py model_validator,
+        lines 532-541), and T4.2 carries no T4.10 edge, this contradiction passes validation.
+        Candidate C3 confirmed: a prose-level live-depends-on-deferred inversion, not a benign
+        forward-reference -- a forward-reference does not say "author before".
+      ideal_behavior: >-
+        Status, dependency edges, and prose agree: either the contract-authoring slice of T4.10
+        is a live pre/with-T4.2 item (and T4.2 carries the edge), or T4.10's MUST/before language
+        is rewritten to bind at reactivation time.
+      gap: "The roadmap's own consistency mechanism cannot adjudicate whether persona contracts exist when personas are built; whichever way T4.2's atomic plans read it, one authoritative text is wrong."
+      compensating_controls_considered: >-
+        T4.2's intent independently specifies per-persona prompts, model tiers, and tool
+        allow-lists -- an informal subset of the contract content that property-matches the
+        tool-scoping axis but not the schema/budget/failure-vocabulary axes, and it is
+        convention, not validated structure.
+      change_type: resequence
+      proposed_change: >-
+        Split T4.10: a live 'persona contract authoring' item (the eight YAML contracts +
+        validate.py rejection rules) sequenced with T4.2 and added to T4.2's depends_on; keep the
+        rca/bookkeeping persona additions and registry hardening post-MVP. Alternatively rewrite
+        T4.10's MUST/'author before' clauses to reactivation-time semantics and record that T4.2
+        v1 personas are contract-less by decision.
+      acceptance: "docs/ROADMAP-PLATFORM.yaml: no deferred_post_mvp item's intent/progress_note imposes a pre-MVP authoring obligation on a live item (grep 'MUST conform'/'author before' within deferred items resolves consistently with status), or the contract slice is live and edge-linked from T4.2"
+      severity: medium
+      severity_rationale: "Sequencing inconsistency with a clear fix; no unsound action follows directly, but it silently decides whether MVP personas ship governed or ungoverned."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-unbuilt
+        item_ids: [T4.10, T4.2]
+        dedup_search_terms: ["MUST conform", "persona contract", "author before", "no live item may depend"]
+        dedup_hit_count: 3
+        note: "Coupling is stated on T4.10 itself; no other item or decision resolves the inversion."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Roadmap text/status edit only"}
+    - id: EXR-04
+      surface: orchestration
+      question: Q1
+      dimension: VD2
+      title: "pick_rec admission predicate unspecified: nothing binds rec selection to relevance, automatable/risk, or the self-modification boundary"
+      evidence: "T4.1 (pick_rec: 'poll priority queue, return rec_id + branch_slug'; no eligibility exit criterion); T3.8 intent ('evaluated before a rec is planned or (post-freeze) executed'); Decision 117 (capabilities.yaml boundary SSOT enforced today in the FROZEN executor's select_next_batch)"
+      evidence_kind: static
+      current_behavior: >-
+        Every ingredient of a safe-to-auto-run predicate exists: T3.8 relevance verdicts
+        (complete), portal Tier-B structural validation and writer-derived automatable/risk
+        fields (Decision 66), acceptance feasibility lint, and the Decision 117 boundary SSOT
+        (config/agent/executor/capabilities.yaml). None is bound to the new substrate: T4.1's
+        pick_rec spec and exit criteria say only 'poll priority queue'. The boundary enforcement
+        point named by Decision 117 (select_next_batch) lives in the frozen executor and carries
+        forward to pick_rec by no stated requirement. Candidate C11 confirmed as
+        planned-insufficient: the gate exists, its executor-side consumption point does not.
+      ideal_behavior: >-
+        A T4.1 exit criterion pins pick_rec's admission predicate: relevance verdict == relevant
+        (T3.8), automatable == true, risk within the current autonomy gate's ceiling, semantic
+        verdicts honoured (close_proposed never executed), and boundary-pattern targets refused
+        with a typed skip event.
+      gap: "As specified, the first unattended pick could legally select a stale, human-only, or self-modification-boundary rec; the safeguard would be whatever the atomic plan improvises."
+      compensating_controls_considered: >-
+        Priority-queue curation (rec-curator) is disabled and its producer path is
+        known-broken-until-repoint (Decision 84 caveat) -- absent control. T3.8's planning/implement
+        skill gates property-match the HUMAN flow only; the executor does not read skills. The
+        plan_critic/decision_scout personas catch ill-formed work downstream but after LLM spend
+        and without boundary authority -- partial, wrong-layer match.
+      change_type: enforce
+      proposed_change: >-
+        Add a T4.1 exit criterion (and a line in the pick_rec state-machine shape) specifying the
+        admission predicate over relevance verdict, automatable, risk-vs-gate ceiling, and
+        Decision 117 boundary_patterns, with refused picks emitting a typed telemetry event and
+        (for boundary hits) a rec re-route to the human path.
+      acceptance: "docs/ROADMAP-PLATFORM.yaml T4.1 exit_criteria include a pick_rec admission predicate naming T3.8 relevance, automatable/risk, and Decision 117 boundary_patterns; validate.py roadmap checks pass"
+      severity: high
+      severity_rationale: >-
+        The loop head decides what the autonomous system is ALLOWED to touch; leaving it
+        unspecified in a merge-capable loop means the self-mod boundary and risk tiering depend
+        on unwritten implementation choices. Compensating controls are absent or wrong-surface.
+        Not critical: the boundary SSOT and portal-derived fields exist -- the defect is unbound
+        consumption, not a missing control.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T4.1, T3.8, T4.4]
+        dedup_search_terms: ["pick_rec", "eligib", "relevance", "automatable", "select_next_batch", "boundary"]
+        dedup_hit_count: 5
+        note: "T3.8 owns relevance; Decision 117 owns the boundary; T4.4 owns gate ceilings. No owner composes them at the executor's selection point -- owned territory, insufficient remedy."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Roadmap criterion edit now; implementation rides the T4.1 atomic plans"}
+    - id: EXR-05
+      surface: shared
+      question: Q5
+      dimension: VD2
+      title: "No adversarial-input / prompt-injection threat model for a loop that reads rec and repo content and merges its own repository"
+      evidence: "Negative dedup: grep 'prompt.injection|adversarial|untrusted|hostile' over docs/ROADMAP-PLATFORM.yaml + docs/DECISIONS.md returns only unrelated hits (adversarial plan-critique reviews); no tier_item/CD/KG owns hostile-content handling"
+      evidence_kind: static
+      current_behavior: >-
+        Persona context windows will carry: rec title/context (IAM-authenticated writers, but
+        ci-rca and scheduled agents quote CI logs and repo content into recs), file contents read
+        during plan/implement (including externally-authored dependency diffs), and CI failure
+        output. Nothing in T4, the CDs, or the decisions register names injection-resistant
+        prompting, content provenance tagging, or a rule that quoted/untrusted spans cannot
+        escalate a persona's actions. code_reviewer -- the last LLM check before file_pr -- is
+        equally steerable by the same injected content, and independent CI (NS-C) verifies
+        correctness, not intent.
+      ideal_behavior: >-
+        A named threat-model artefact (contract or tier_item) enumerating untrusted-content
+        ingress paths into persona context, with at least: provenance-tagged quoting in rec
+        fields populated from logs, persona-prompt hardening requirements, and a rule that
+        boundary/authority-relevant instructions are never taken from quoted content.
+      gap: "Seed (f) answered in the negative: the threat model is absent, distinct from C11's correctness-shaped eligibility gate."
+      compensating_controls_considered: >-
+        IAM-authenticated write surfaces + branch protection shrink ingress (an outsider cannot
+        file a rec or merge) -- a real but different-property control: it bounds WHO writes, not
+        what quoted third-party content rides inside legitimate writes. T4.10 forbidden_tools
+        (deferred) would bound blast radius per persona but not steering within allowed tools.
+      change_type: add
+      proposed_change: >-
+        Add a tier_item (T4.4-era, before autonomy gates raise authority) owning the executor
+        threat model: ingress inventory, provenance tagging for log-derived rec content, persona
+        prompt-hardening exit criteria, and an injection red-team fixture in the T4.2 smoke set.
+      acceptance: "docs/ROADMAP-PLATFORM.yaml contains an item (or a CD gating one) whose exit criteria name untrusted-content ingress inventory + persona hardening; grep 'injection' over the roadmap returns an owning item"
+      severity: medium
+      severity_rationale: >-
+        Consequence class is high (steered merge) but the ingress surface is narrow today --
+        authenticated writers, no persona web access, branch-protected merges -- and the loop
+        starts at concurrency=1 under A0-A3 gates. Medium reflects likelihood-adjusted risk at
+        MVP with a note that it must land before autonomy gates admit broader inputs.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["prompt injection", "adversarial", "untrusted", "hostile", "threat model", "sanitiz"]
+        dedup_hit_count: 0
+        note: "Recorded negative search across roadmap, decisions, and the rec cache (open recs)."
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Authoring the threat-model item needs nothing unbuilt; fixtures land with T4.2 plans"}
+    - id: EXR-06
+      surface: autonomy-governance
+      question: Q3
+      dimension: VD6
+      title: "A-gate ownership split: T3.4 requires A0-A3 'documented and live' pre-T4.2; T4.4 owns A0-A5 + rollback post-T4.2"
+      evidence: "T3.4 exit criterion 'Autonomy maturity gates A0-A3 documented and live' (depends_on chain feeding T4.2); T4.4 (A0-A5, per-gate rollback criteria, depends_on [T4.2, T3.4])"
+      evidence_kind: static
+      current_behavior: >-
+        Two live items own overlapping slices of the same governance surface with no boundary
+        statement: T3.4 (an XL control-plane item T4.2 depends on) must deliver A0-A3 documented
+        and live BEFORE the loop first runs; T4.4 then delivers A0-A5 where "each gate" gains
+        entry/exit AND rollback criteria plus rollback automation. Unstated: whether T3.4's A0-A3
+        carry rollback criteria from birth (T4.4's own rationale calls forward-only autonomy
+        unsafe, MED-9), which item's definition governs the T4.2->T4.4 window, and what
+        "A0-A3 live" means operationally before T4.4's preflight gate exposure lands.
+      ideal_behavior: >-
+        One item owns gate DEFINITION semantics (including rollback-from-birth); the other owns
+        extension/automation -- stated on both items. If forward-only A-gates are unsafe (T4.4's
+        cited MED-9), T3.4's A0-A3 must include rollback criteria at first-live.
+      gap: "The first live loop's governance regime is ambiguous between two owners, and rollback contracts may arrive one XL item later than the gates they govern."
+      compensating_controls_considered: >-
+        Concurrency=1 + the still-active CD.17 freeze during T4.2's 14-day grace window mean the
+        earliest window is de facto supervised -- a genuine partial match that lowers severity,
+        but it expires exactly when CD.17 fires, which is when the definition ambiguity starts to
+        matter.
+      change_type: unify
+      proposed_change: >-
+        Add a boundary note to both items: T3.4 delivers gate definitions A0-A3 WITH per-gate
+        rollback criteria (satisfying MED-9 at first-live); T4.4 extends to A4-A5 and lands the
+        rollback AUTOMATION and preflight exposure. Cross-reference rather than duplicate.
+      acceptance: "docs/ROADMAP-PLATFORM.yaml: T3.4 and T4.4 each state the A-gate ownership boundary; T3.4's criterion requires rollback criteria for A0-A3; no overlapping unqualified ownership remains"
+      severity: medium
+      severity_rationale: "Sequencing/ownership ambiguity with a clear fix; the supervised early window keeps it out of high."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T3.4, T4.4]
+        dedup_search_terms: ["A0-A3", "A0-A5", "autonomy gates", "rollback criterion"]
+        dedup_hit_count: 4
+        note: "Both owners found; the split itself is what no text adjudicates."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Roadmap wording edit"}
+    - id: EXR-07
+      surface: orchestration
+      question: Q5
+      dimension: VD1
+      title: "Deploy-leg seam: CD.27's in-executor 'terraform apply' escape-hatch example contradicts the ratified apply authority, and the apply path has an observed human-required deadlock"
+      evidence: "CD.27 detail ('Long-running deterministic steps ... e.g. ... terraform apply against the personal account' via ECS runTask.sync) + T4.1 ESCAPE state; vs Decision 92 / CD.38 discipline ('GitHub Actions ... merge truth'; CD.35 gated-apply Environment, server-side convergence record); rec-2523 (open, observed 2026-07-04)"
+      evidence_kind: observed
+      current_behavior: >-
+        Two authoritative texts disagree about where terraform apply may run: pending CD.27 (and
+        T4.1's ESCAPE example) name it an in-executor ECS escape-hatch task; ratified Decision 92
+        (CD.35) makes GitHub Actions the apply substrate behind the convergence record and the
+        tf-gated-apply Environment, and CD.38 generalises GH-Actions authority to rec execution.
+        An executor-side apply would bypass the convergence record -- the "sole hard block".
+        Meanwhile the apply path the loop's deploy leg actually leans on has an OBSERVED deadlock
+        (rec-2523): a guard-BLOCK red convergence record is clearable by neither automated path
+        and required an out-of-band admin apply -- a human-required recovery mode on the deploy
+        leg, unowned by any T4 item.
+      ideal_behavior: >-
+        CD.27's escape-hatch examples exclude terraform apply (deferring to CD.35/CD.38
+        authority); the executor's deploy leg is stated explicitly as dispatch-to-GitHub-Actions
+        + wait, like verification; the guard-BLOCK red deadlock has an automated-or-designed-
+        exception path recorded where the executor design will consume it.
+      gap: "Seed (b): the deploy seam is contradictorily documented across a pending CD and a ratified decision, and its observed failure mode currently reintroduces a human below the loop's tail."
+      compensating_controls_considered: >-
+        The contradiction is currently harmless because nothing is built (freeze) -- but T4.1
+        atomic plans will read CD.27 as authoritative for the state machine. rec-2523 is open and
+        names remediation options, and the deadlock arises only on guard-BLOCK (out-of-budget
+        IAM/trust/destroy) changes -- the class that is deliberately human-gated (Decision 92
+        authority boundary), so routine loop iterations rarely hit it; but a red record blocks
+        ALL subsequent applies, so one gated change wedges the whole deploy leg.
+      change_type: clarify
+      proposed_change: >-
+        Amend CD.27's escape-hatch example list to drop 'terraform apply' (cross-referencing
+        Decision 92/CD.38 authority) and mirror the amendment in T4.1's ESCAPE line; add one
+        deploy-leg sentence to T4.1 or CD.38 stating merged-change application is dispatched to
+        the CD.35 pipeline and waited on like verification; note rec-2523's deadlock as a named
+        precondition for the unattended deploy leg.
+      acceptance: "grep 'terraform apply' on CD.27/T4.1 no longer names it as an in-executor ECS task; a deploy-dispatch sentence exists in T4.1 or CD.38; rec-2523 (or successor) is cross-referenced from the owning text"
+      severity: medium
+      severity_rationale: "Documentation-level contradiction plus an observed availability (not integrity) failure on the tail; integrity is protected by the convergence record itself."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [CD.27, CD.38, CD.35, T4.1]
+        dedup_search_terms: ["terraform apply", "runTask.sync", "convergence record", "gated apply", "rec-2523"]
+        dedup_hit_count: 6
+        note: "Territory owned by CD.27/CD.35/CD.38 + open rec-2523; the cross-text inconsistency is the defect. Observed evidence from the section-11 sample."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Text amendment; rec-2523's own fix proceeds independently on its rec"}
+    - id: EXR-08
+      surface: personas
+      question: Q2
+      dimension: VD7
+      title: "No offline persona-eval / regression harness: persona prompt changes have no pre-deploy quality check"
+      evidence: "Negative dedup over roadmap + decisions ('persona eval', 'eval harness', 'regression harness', 'offline eval': 0 owning hits); T3.7 scope (meta-validates validate.py, not persona output); CD.27 stability signals + T4.4 rollback (production-reactive only)"
+      evidence_kind: static
+      current_behavior: >-
+        A change to plan_agent.prompt.md (or a model-tier remap, e.g. the scheduled
+        deepseek-v4-flash migration noted in T4.2) reaches production with no offline check that
+        plan or implementation quality did not regress. Detection is entirely reactive:
+        CD.27's 14-day stability baselines, T4.4 rollback metrics, and the advisory
+        prompt-quality scheduled agent (T4.3). Checklist row 12 is the only missed row and this
+        finding is its carrier.
+      ideal_behavior: >-
+        A fixture-rec eval set (golden recs with graded plan/diff outcomes) runnable offline
+        against a candidate persona prompt/model config, wired as an advisory (alarm-not-gate,
+        CD.12 posture) check on changes under config/agent/executor/prompts/ and the model-tier
+        registry.
+      gap: "Persona quality regressions are discoverable only in production, on real recs, at real cost -- after merge."
+      compensating_controls_considered: >-
+        Human review of persona-prompt changes (boundary files are automatable=false, so changes
+        ride /plan -> /implement with code review) is a real control for egregious errors but
+        does not property-match REGRESSION detection -- humans cannot eyeball a prompt diff's
+        effect on plan quality. T4.2's e2e smoke exercises one fixture path (functional, not
+        quality-graded). T4.4 rollback matches the detection property but post-deploy.
+      change_type: add
+      proposed_change: >-
+        Add a T4-era tier_item (natural deps: T4.2, T3.20-or-T4.2-telemetry) owning a persona
+        eval harness: golden-rec fixture set, graded rubric, offline runner, advisory CI check on
+        persona prompt/model-registry diffs; feed graded outcomes back from T4.4 gate metrics.
+      acceptance: "docs/ROADMAP-PLATFORM.yaml contains an item whose exit criteria name an offline persona-eval fixture set + advisory check on config/agent/executor/prompts/ changes"
+      severity: medium
+      severity_rationale: "Materially needed for frontier posture (sole missed checklist row) but reactive controls + human-reviewed prompt changes keep MVP risk bounded; quality/economics exposure, not safety."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["persona eval", "eval harness", "regression harness", "offline eval", "prompt quality", "golden"]
+        dedup_hit_count: 0
+        note: "prompt-quality scheduled agent (T4.3) is advisory review of prompt text, not an outcome-graded regression harness; recorded as non-matching."
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [T4.2], note: "Item can be authored now; the harness needs personas to exist to evaluate"}
+    - id: EXR-09
+      surface: shared
+      question: Q5
+      dimension: VD6
+      title: "Frozen-executor cutover unowned: no item owns the disposition of scripts/execute_recommendation.py while live item T3.10 still invests in it"
+      evidence: "Negative dedup ('cutover', 'dual run', 'execute_recommendation' over the roadmap: no owning tier_item for the CLI-executor retirement); T3.10 files_in_scope (scripts/executor/jsonl_store.py, step_runner.py -- frozen-executor code, live item); T-1.22 (generic replacement-closure discipline)"
+      evidence_kind: static
+      current_behavior: >-
+        The substrate pivot (CD.27) replaces the frozen single-process executor, and concept
+        carry-forward is owned piecemeal (T4.2 reuses the prompts dir; T4.1's emit_telemetry is
+        the named telemetry-write replacement; T3.10 flips verification consumption). But no item
+        owns the cutover itself: when T4.2 lands, what retires, what is harvested, whether any
+        dual-run window exists, and who closes out ~130 KB of scripts/execute_recommendation.py +
+        scripts/executor/*. Meanwhile T3.10 (live, not_started) plans enforcement work INSIDE the
+        frozen executor's files -- effort that is dead-on-arrival if the substrate replaces those
+        files before T3.10 runs, an ordering no depends_on edge constrains.
+      ideal_behavior: >-
+        A named owner (a T5-era decommission item, or an explicit clause on T4.2) for the
+        frozen-executor disposition -- retire/harvest list, predecessor closeout per T-1.22's
+        replacement-closure check -- and a sequencing note on T3.10 stating whether it targets
+        the frozen code (bridge value) or re-homes onto the persona substrate.
+      gap: "Seed (e): the migration seam is unowned; the roadmap can currently spend live effort (T3.10) on code another item's completion obsoletes, and MVP completion has no predecessor-closeout obligation for the old executor."
+      compensating_controls_considered: >-
+        T-1.22's implement-skill replacement-closure check fires at item-completion time and
+        property-matches the CLOSEOUT half (it would force the question when T4.2 flips
+        complete) -- which is why this is medium, not high; it does not match the
+        live-investment-in-doomed-code half (T3.10 ordering).
+      change_type: clarify
+      proposed_change: >-
+        Add a frozen-executor disposition clause (T4.2 exit criterion or a T5.x item):
+        harvest/retire inventory for scripts/execute_recommendation.py + scripts/executor/*,
+        explicit no-dual-run statement, predecessor closeout per T-1.22. Annotate T3.10 with its
+        substrate assumption and an ordering note relative to T4.2.
+      acceptance: "docs/ROADMAP-PLATFORM.yaml names an owner for the frozen-executor disposition; T3.10 carries a substrate/ordering note; grep 'execute_recommendation' in the roadmap resolves to an owning clause"
+      severity: medium
+      severity_rationale: "No safety exposure (the code is frozen); the cost is dead work and an unclosed replacement -- exactly the F-003/F-018 failure class T-1.22 was created for, one tier earlier."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["cutover", "dual run", "execute_recommendation", "retire executor", "decommission"]
+        dedup_hit_count: 0
+        note: "T-1.22 provides the generic discipline, not the ownership; T3.10 hits are the investment, not the disposition. Recorded negative search for an owning item."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Roadmap clause edit now; the harvest itself waits on T4.2"}
+
+  rejected_candidates:
+    - candidate: "C1 (T4.8 slice): semantic locks/leases required for safe MVP loop closure"
+      why_dismissed: >-
+        Locks prevent conflicting PARALLEL rec executions; at the MVP boundary the state machine
+        is pinned to concurrency=1 (T4.1 exit criterion) and CD.37 states the locks are inert
+        until T4.4 raises concurrency. The deferral trigger and the hazard trigger are the same
+        event, so the sequencing is self-consistent.
+      compensating_control: "T4.1 'Concurrency cap = 1 ... raise as autonomy gates A2+ pass per T4.4'"
+      control_property_match: >-
+        Exercises the same property (mutual exclusion of in-flight recs) by admitting at most one
+        in-flight rec; operates at T4.1 exit criterion 5. It would FAIL if the defect were real --
+        i.e. if parallel execution were possible at MVP -- but parallelism is structurally
+        impossible until the same item (T4.4) that CD.37 names as the lock-activation trigger.
+        Human-interactive parallel merges are reconciled by T3.9 post-merge reconciliation +
+        rebase-before-push, the same regime human PRs use.
+      decision_or_item_id: "T4.1 / CD.37 / T4.4"
+    - candidate: "C4: concurrency=1 as effective MVP throughput is a frontier economics gap"
+      why_dismissed: >-
+        Deliberate, listed on the do-not-flag list, and instrumented for its own reversal: T4.4
+        A-gates raise concurrency on measured evidence, and KG.13 pre-plans the TIA/caching
+        scalability work keyed to exactly that raise ('becomes load-bearing when T4.4 raises
+        concurrency above 1').
+      compensating_control: "Decision 55 RCA-first rationale + T4.4 gate schedule + KG.13"
+      control_property_match: "Same property (throughput vs failure-attribution tradeoff): serial execution makes every failure attributable during the trust-building phase; the control fails (and is designed to be lifted) exactly when throughput matters -- at A2+."
+      decision_or_item_id: "T4.1 / Decision 55 / KG.13"
+    - candidate: "C6: RCA-first + concurrency=1 + no-LLM-retry structurally reintroduces a human, defeating NS-A"
+      why_dismissed: >-
+        Category error between critical path and exception path. Decision 93's boundary is 'no
+        human in the critical path of ONE iteration'; RCA routes FAILED iterations to a human --
+        the exception path NS-A explicitly permits. CD.27's stability definition even counts a
+        stop-clean-with-rec-filed as 'recovered'. A healthy iteration touches no human at any
+        transition; a fleet where most iterations failed would violate the CD.17 stability
+        preconditions and block unfreeze anyway, which is the designed behaviour.
+      compensating_control: "Decision 93 boundary definition + CD.27 T4.2 stability operational definition"
+      control_property_match: "Same property (human placement): the MVP gate itself measures zero-unrecovered-failure iterations over 14 days -- it would fail if humans were structurally required per iteration."
+      decision_or_item_id: "Decision 93 / CD.27 / Decision 55"
+    - candidate: "C7: Lambda Durable Functions (~5 months GA) maturity risk inadequately hedged"
+      why_dismissed: >-
+        The risk is named, monitored, and reversibly hedged at three layers: a designated
+        fallback (self-checkpointed Lambda + DynamoDB) with a 12-month API-regression trigger
+        re-evaluated at EACH T4.2 atomic-plan filing; a T4.2 exit criterion that forces
+        checkpoint-replay verification by induced timeout; and a checkpoint-replay-rate health
+        signal with an alarm threshold. Region availability (eu-west-2) was verified on a stated
+        date. INTENT-level fallback is proportionate for a designed-unbuilt system because the
+        re-eval fires before any build commits.
+      compensating_control: "CD.27 discipline point 6 (maturity monitoring + DynamoDB fallback) + T4.2 exit c1"
+      control_property_match: "Same property (substrate API stability): the control is a designed exit ramp evaluated before each increment of exposure; it would fail only if regression appeared after the 12-month window with the fallback unexercised -- at which point checkpoint-replay-rate alarms still fire."
+      decision_or_item_id: "CD.27 / T4.2"
+    - candidate: "C8 (telemetry half): per-turn cost telemetry depends on T3.20's deep chain and is missing before unattended runs"
+      why_dismissed: >-
+        Mis-attributed dependency. T3.20 is the INTERACTIVE-session turn-telemetry item
+        (SessionStart/Stop hooks); the executor's per-turn telemetry is owned directly by T4.2
+        exit criterion c3 (tokens in/out, cached read/write, est_cost_usd, latency_ms, model_id
+        per turn via the agent_sdk shim, T0.8) -- on the loop's own critical path, not behind
+        T3.20. The cost-CAP half of C8 is real and is carried by EXR-02.
+      compensating_control: "T4.2 exit criterion c3 (per-turn telemetry via agent_sdk)"
+      control_property_match: "Same property (per-turn cost observability), operating at the persona turn boundary itself; it would fail if T4.2 could complete without telemetry -- it cannot, c3 is an exit criterion."
+      decision_or_item_id: "T4.2 / T0.8"
+    - candidate: "C9: no governed autonomy story in the T4.2->T4.4 window"
+      why_dismissed: >-
+        The window is governed by construction: T3.4 -- which T4.2 depends_on -- requires
+        'Autonomy maturity gates A0-A3 documented and live', so gates exist BEFORE the loop first
+        runs; the T4.1 concurrency=1 ceiling and the CD.17 freeze (active through T4.2's 14-day
+        grace window, i.e. the entire earliest window) bound authority meanwhile, and the VF-11
+        amendment blocks unattended merges on structural-only oracles even after unfreeze. The
+        residual ambiguity (which item's gate semantics govern, rollback-at-birth) is real and is
+        filed narrowly as EXR-06 rather than as the absent-governance hypothesis.
+      compensating_control: "T3.4 exit criterion (A0-A3 live) as a T4.2 dependency + CD.17 grace window + T4.1 concurrency=1"
+      control_property_match: "Same property (bounded authority between first-run and full gate machinery): the dependency edge makes an ungated T4.2 completion structurally impossible; it would fail if T4.2 could complete with T3.4 open -- depends_on forbids that."
+      decision_or_item_id: "T3.4 / CD.17 / T4.1"
+    - candidate: "C10 (ownership half): no T4 item owns the deploy-and-observe tail; the CD.35/CD.16 lean is an unspecified hole"
+      why_dismissed: >-
+        The LEAN itself is deliberate, ratified reuse, not an unowned hole: terraform application
+        rides the live Decision 92/CD.35 pipeline (convergence record, gated Environment, apply
+        failures wired to ci-rca); Lambda deploys ride CD.16 per-Lambda plan steps executed
+        in-loop under the Decision 77 sandbox model; observation is owned by T3.2 (causal chain),
+        T3.3 (anomaly->rec), and T4.1's alarm criteria. Building a T4-owned apply path would
+        CONTRADICT CD.38's sole-runner generalisation. The genuinely defective residue -- the
+        contradictory CD.27 escape-hatch example and the observed rec-2523 deadlock on the leaned-on
+        path -- is filed narrowly as EXR-07.
+      compensating_control: "Decision 92 (Wave 1 shipped, behaviourally proven) + CD.16 per-Lambda gating + T3.2/T3.3"
+      control_property_match: "Same property (merged change applied and next state observed): the apply pipeline is production-proven with server-side convergence refusal; it would fail if it did not exist or were unratified -- it is both live and ratified."
+      decision_or_item_id: "Decision 92 / CD.35 / CD.16 / T3.3"
+    - candidate: "C12: single-region (eu-west-2) executor is a frontier resilience gap"
+      why_dismissed: >-
+        Deliberate cost/complexity posture consistent with the platform's sandbox-first,
+        near-zero-cost operating decisions; a region outage stalls the loop (recs queue durably;
+        Step Functions Standard executions and the warehouse survive) rather than corrupting
+        state, and the human fallback surface (CC-web) is region-independent. Catalog-layer DR is
+        separately owned (OQ.9, Decision 88 dump cadence). Multi-region autonomy for a
+        sole-developer sandbox platform would be engineering theatre.
+      compensating_control: "Decision 77 (single-account sandbox posture) + durable queue/warehouse + OQ.9/Decision 88 DR"
+      control_property_match: "Adjacent property, honestly stated: nothing makes the executor regionally redundant; the controls convert a region outage from a data-loss event into a bounded availability event, which is the property that matters at this risk appetite. Recorded as an argued, deliberate exception (NS-F allows these)."
+      decision_or_item_id: "Decision 77 / OQ.9 / Decision 88"
+
+  summary:
+    total_findings: 9
+    novel_count: 3
+    planned_insufficient_count: 3
+    planned_unbuilt_count: 3
+    top_improvements: [EXR-01, EXR-02, EXR-04]
+    highest_leverage_change: EXR-01
+    maturity_orchestration: strong
+    maturity_personas: strong
+    maturity_verification: strong
+    maturity_autonomy_governance: solid
+    maturity_plan_entities: frontier
+    maturity_scheduled_agents: frontier
+    maturity_shared: strong
