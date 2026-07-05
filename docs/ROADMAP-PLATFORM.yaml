@@ -5851,7 +5851,8 @@ tier_items:
         status: open
       - id: c4
         text: Per-table Athena _current views for migrated tables removed (T2.7 owns any survivor)
-        status: open
+        status: met
+        met_by: t2-26-drop-migrated-athena-views
       - id: c5
         text: scripts/sync_athena_to_pgvector.py deleted; rg returns no references
         status: met
@@ -5913,6 +5914,18 @@ tier_items:
         entries from the unapplied legacy terraform/iceberg_tables.tf root for artefact honesty
         (create_telemetry_view_queries untouched). Also re-grounded c3's text (see above) to name its
         real blockers. Parent T2.26 stays in_progress -- c2/c3/c7 remain open.
+      - 2026-07-05 (PLAN-t2-26-drop-migrated-athena-views, PR #457 + #458): c4 verified and closed.
+        The first gated apply (PR #457) reported success but the two DROP VIEW local-exec
+        provisioners actually failed silently: --profile ${var.aws_profile} rendered as "--profile "
+        with no value under CI's TF_VAR_aws_profile="" override, an AWS CLI ParamValidation error
+        masked by on_failure=continue. Post-deploy VP (Athena information_schema.views query) caught
+        it -- both views were still live. Fixed in PR #458 (wrapped --profile in a
+        %{if var.aws_profile != ""}...%{endif} template guard, bumped the trigger to force a
+        corrected re-run; filed rec-2547 for the identical pre-existing pattern in
+        create_ops_tables/create_ops_views/drop_ops_recommendations_view, out of this plan's scope).
+        Re-verified post-apply: 0 rows for both views in information_schema.views; convergence
+        record green (commit a92d2cb). c4 -> met (met_by: t2-26-drop-migrated-athena-views). Parent
+        T2.26 stays in_progress -- c2/c3/c7 remain open.
 
   - id: T2.27
     tier: T2
