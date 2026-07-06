@@ -1,0 +1,341 @@
+schema_version: 1
+slug: "fast-tier-budget-overrun"
+intent: >-
+  Restore the fast tier (scripts.validate --pre / the required pr-validate CI check) to fit its
+  ratified 300s budget by removing redundant test re-execution, so the sole pre-merge merge gate
+  (Decision 83/89) stops deterministically failing every PR and the recursive self-improvement
+  loop is unblocked.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-fast-tier-budget-overrun.yaml
+phase: >-
+  Platform CI/CD governance -- two-tier diff-aware presubmit (Decision 60/73). Budget-contract
+  hotfix (soft-warn category: hotfix; names no tier_item). Preserves the 300s contract via
+  Decision 80's do-less optimise-first path rather than raising the budget.
+scope:
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      (1) Make the diff-aware pytest phase single-execution in the common case: reduce
+      partition_changed_tests_by_collectability to the cheap --collect-only partition (module-scope
+      heavy-dep defers only), and move the runtime (lazy-import) heavy-dep detection into
+      run_pytest_diff as a REACTIVE fallback -- run the combined pytest once, and only if it fails
+      AND an excluded heavy dep is genuinely absent AND its ModuleNotFoundError appears in the
+      output, fall back to the retained per-file _runtime_heavy_dep_defer_reason classification and
+      re-run the survivors. Preserves rec-2485/Decision 104 fail-closed semantics.
+      (2) _file_budget_breach_rec / _file_budget_bypass_rec: skip the portal file_rec write when
+      CI=="true" (the pr-validate CI job has no AWS creds and no ulid) and emit the diagnostic to the
+      log instead; accept and surface a real dominant_phase.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Thread real per-phase timing through the --pre step-dispatch loop (registry.pre_sequence())
+      so _scaffold_budget_assertion computes the dominant phase and passes it to
+      _file_budget_breach_rec (currently None at validate.py:429) and names it in the console error.
+      No check is added/removed and pre_sequence()/full_sequence() are unchanged, so ci.yml needs no
+      mirror edit (validate.py stays the single source of truth).
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Update the mechanism's tests for single-execution + reactive defer (the double-run assertion
+      at test_validate.py:3355 becomes a single-run assertion; the runtime-probe defer tests re-home
+      onto run_pytest_diff); add coverage for the dominant_phase wiring and the CI-guard on rec
+      filing; extend the time.monotonic side_effect mocks in TestBudgetAssertion/TestIgnoreBudgetFlag
+      to cover the added per-phase timing calls (mock-exhaustion discipline, tests/CLAUDE.md).
+bundled_recommendations:
+  - rec-2527
+  - rec-2538
+  - rec-2539
+  - rec-2540
+  - rec-2541
+  - rec-2542
+  - rec-2543
+  - rec-2544
+  - rec-2555
+  - rec-2556
+  - rec-2560
+  - rec-2562
+  - rec-2567
+  - rec-2569
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Common case single execution: when every changed test file collects and passes and all
+    fast-tier-excluded heavy deps are importable, run_pytest_diff issues EXACTLY ONE non-collect-only
+    pytest invocation over the runnable set (no proactive per-file isolated probe) -- proven by a
+    unit test counting real pytest runs.
+  - >-
+    Fail-closed preserved (Decision 104/rec-2485/Decision 55): a changed file that lazily imports a
+    genuinely-absent excluded heavy dep still DEFERS to the full tier without reddening; a genuine
+    test failure still reddens (failed non-empty); a real collection error still routes to runnable
+    and reddens.
+  - >-
+    Self-diagnosing breach: on a simulated budget breach the console error and the _file_budget_breach_rec
+    context name the actual dominant phase (e.g. "pytest_diff"), not "unknown"/None.
+  - >-
+    CI-guard: with CI=="true", _file_budget_breach_rec and _file_budget_bypass_rec do NOT call the
+    portal file_rec (no ModuleNotFoundError, no swallowed traceback) and print the diagnostic to the
+    log; with CI unset they DO call file_rec.
+  - >-
+    Budget contract preserved: _FAST_TIER_BUDGET_SECONDS remains 300 (test_budget_constant_is_300
+    passes); no check moved between tiers; .github/workflows/ci.yml unchanged.
+  - >-
+    bin/venv-python -m scripts.validate --pre passes on this branch's diff and completes well within
+    the 300s budget.
+  - >-
+    The 14 duplicative auto-filed budget_breach/budget_bypass recs (rec-2527, rec-2538..2544,
+    rec-2555, rec-2556, rec-2560, rec-2562, rec-2567, rec-2569) are closed as resolved by this
+    root-cause fix.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Single-execution common case -- run_pytest_diff issues exactly one non-collect-only pytest run
+      when all files collect+pass and all excluded heavy deps are present.
+    command: >-
+      bin/venv-python -m pytest tests/test_validate.py::TestRunPytestDiffSingleExecution -q
+    expected: >-
+      Passes: the test asserts exactly one real (non --collect-only) pytest invocation over the
+      runnable subset, replacing the prior probe+gate double-run assertion.
+    fix_if: >-
+      Two real runs still occur (the proactive _runtime_heavy_dep_defer_reason probe was not removed
+      from the common path), or zero runs (runnable wrongly empty).
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Fail-closed preserved -- module-scope collect-only defers, reactive lazy-import defers, genuine
+      failures redden, real collection errors route to runnable.
+    command: >-
+      bin/venv-python -m pytest tests/test_validate.py::TestFastTierCollectability
+      tests/test_validate.py::TestRunPytestDiffReactiveDefer -q
+    expected: >-
+      All pass: a lazy-absent-heavy-dep file defers (failed stays empty); a genuine test failure sets
+      failed; a real collection/syntax error routes to runnable and reddens (Decision 55 fail-closed).
+    fix_if: >-
+      A genuine failure is silently deferred (false defer), or a heavy-dep-absent lazy import reddens
+      the gate instead of deferring, or the reactive re-run mis-attributes the culprit file.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: Dominant-phase wiring -- breach console error and breach-rec context name the real phase.
+    command: >-
+      bin/venv-python -m pytest tests/test_validate.py::TestBudgetAssertion
+      tests/test_validate.py::TestBudgetBreachRecFiling -q
+    expected: >-
+      All pass: a simulated breach threads a non-None dominant_phase into _file_budget_breach_rec and
+      the console error string; test_budget_constant_is_300 still passes.
+    fix_if: >-
+      dominant_phase is still None/"unknown", or the per-phase timing mock (time.monotonic side_effect)
+      raises StopIteration because the added timing calls were not accounted for.
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: CI-guard -- rec-filing helpers skip the portal write when CI=true and emit the diagnostic.
+    command: >-
+      bin/venv-python -m pytest tests/test_validate.py::TestBudgetRecFilingCiGuard -q
+    expected: >-
+      Passes: with CI=true neither helper calls scripts.ops_data_portal.file_rec (no import of ulid,
+      no ModuleNotFoundError) and each prints the diagnostic; with CI unset each calls file_rec.
+    fix_if: >-
+      file_rec is still invoked under CI=true (ModuleNotFoundError re-appears / swallowed), or the
+      local path no longer files the rec.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Static wiring proof -- the CI-guard exists in both helpers and the budget assertion passes a
+      real dominant phase (not the literal None).
+    command: >-
+      grep -nE "os\.environ\.get\(.CI.\)|getenv\(.CI." scripts/checks/_scaffolding.py && grep -n
+      "dominant" scripts/validate.py
+    expected: >-
+      Both greps return matches: _scaffolding.py branches on CI in the rec-filing helpers, and
+      validate.py's budget assertion resolves and passes a dominant phase.
+    fix_if: >-
+      Either grep is empty -- the CI-guard or the dominant-phase threading was not wired, so the fix
+      is inert in real CI.
+    # Not replay-hermetic: asserts POST-implementation state; validate_vp_replay re-executes
+    # hermetic pre-deploy steps on the plan-only PR tree, where these greps fail by design.
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: End-to-end fast tier green and within budget on this branch's own diff.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exits 0 (all gates green, single-execution pytest-diff) and completes well under 300s -- no
+      budget breach on the plan's own PR.
+    fix_if: >-
+      Any gate fails, or the pytest-diff phase regresses (double execution / broken defer), or the
+      run itself breaches budget.
+    hermetic: false
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Rec closure -- after this plan merges to main, the 14 auto-filed budget_breach/bypass recs are
+      closed (via the squash-merge Resolves: trailer / rec-autoclose, or the ops portal).
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull && grep -E
+      '"id": "rec-(2527|2538|2539|2540|2541|2542|2543|2544|2555|2556|2560|2562|2567|2569)"'
+      logs/.recommendations-log.jsonl | grep '"status": "open"' | wc -l
+    expected: >-
+      Prints 0 -- none of the 14 bundled recs (both budget_breach AND budget_bypass sources) remains
+      open after sync. (wc -l exits 0 on zero matches, unlike grep -c.)
+    fix_if: >-
+      Recs remain open -- the Resolves: trailer omitted an ID or a rec was not eligible; close the
+      remainder via bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed.
+constraints:
+  - >-
+    validate.py is the SINGLE SOURCE OF TRUTH: this fix changes the INTERNAL behaviour of the
+    diff-aware pytest phase only. No registry check is added/removed and pre_sequence()/full_sequence()
+    are unchanged, so .github/workflows/ci.yml requires NO mirror edit (AGENTS.md).
+  - >-
+    Preserve rec-2485 / Decision 104 fail-closed semantics: heavy-dep-requiring tests still defer to
+    the full (post-merge) tier; EVERY other collection error or test failure stays hard-red. Never
+    silent-skip a genuine failure (Decision 55). No rescue agents / workaround loops.
+  - >-
+    Do NOT raise _FAST_TIER_BUDGET_SECONDS (option (c) rejected -- the budget is a Decision 60/73
+    design contract). Keep it at 300. Optimise the dominant check instead (option (a)).
+  - >-
+    File NO new recs -- remediation rides this plan (task constraint). Only close the existing
+    duplicative budget_breach/bypass recs, via the portal / Resolves: trailer with this fix as the
+    recorded proof (Decision 103 / Single-Portal Invariant), never a bare status flip.
+  - >-
+    Decision 84 I-4 watch-point (decision-scout NOTE): the CI-guard on file_rec must be a LOUD,
+    non-buffering log diagnostic -- never a silent `if CI: return` (that recreates the exact
+    swallow anti-pattern this plan fixes) and never an offline outbox/replay queue.
+  - >-
+    Decision 43/102 (SLOC/CC): keep scripts/validate.py thin (Decision 104 target); the restructured
+    run_pytest_diff / partition_changed_tests_by_collectability add branch nodes (reactive detect +
+    fallback re-run) -- extract helpers to stay under the CC<=20 gate and prefer
+    `validate --update-sloc-budgets` over adding a SLOC waiver.
+  - Only modify the three files in Scope; out-of-scope issues become follow-on plans, not inline fixes.
+context:
+  - >-
+    DIAGNOSIS (measured this session): empty-diff --pre check baseline = 9s (all ~26 registry checks
+    negligible). The budget is consumed almost entirely by the diff-aware pytest phase, which
+    executes each changed test file TWICE -- once in a proactive per-file isolated heavy-dep-defer
+    probe (_runtime_heavy_dep_defer_reason, capture_output=True, hidden from the CI log) inside
+    partition_changed_tests_by_collectability, then again in the visible combined gate run
+    (run_pytest_diff). On this branch's roadmap-fan-in scenario the isolated partition pass alone =
+    298.5s locally with deferred=0 (it re-runs everything to detect nothing). PR #488's CI: visible
+    combined run 169s, total --pre 360s = 6.0 min breach.
+  - >-
+    COMPOUNDING FACTOR (not fixed here, documented): a PR touching a ROADMAP-*.yaml unions in every
+    roadmap-referencing test file via select_roadmap_guard_tests (validate.py:397, the
+    ci-rca-cd25-ratification-tier-gap fix), inflating the changed-test set (PR #488: 174 -> 744
+    tests). That fan-in is intentional (run roadmap-state guard tests pre-merge). Single-execution
+    makes even the fanned-in set run ONCE; tightening the fan-in is a separate future lever if margin
+    proves insufficient.
+  - >-
+    PROJECTION / MARGIN (empirical): single-execution removes the redundant pass, so --pre pytest cost
+    == one combined run instead of ~2x. All 14 observed breaches (5.1-6.5 min, double-execution totals)
+    halve to ~2.5-3.25 min -- every one under 300s. PR #488: ~169s single run -> ~185s total (~115s
+    margin). This plan's OWN PR (changes test_validate.py, no roadmap fan-in): test_validate.py single
+    run ~52s -> --pre ~80s. Local 12-file roadmap-fan-in worst case (1145 tests incl. slow guard
+    files): 559s double -> 260s single. Residual worst-case (a roadmap PR that fans in the slow guard
+    set) is not in the observed breach population; if the now-wired dominant_phase diagnostic shows it
+    recur, the follow-on levers are tightening select_roadmap_guard_tests over-selection and/or
+    pytest-xdist -- deliberately out of scope here to keep the fix minimal and contract-preserving.
+  - >-
+    ULID ANOMALY (task item 3) root cause: the pr-validate CI job (ci.yml) installs requirements-fast.txt
+    (no python-ulid; it is in the _DIST_TO_IMPORT_ALIASES heavy-dep-excluded set) and configures NO
+    AWS credentials, so _file_budget_breach_rec's portal file_rec -> ducklake_runtime
+    mint_write_identity "from ulid import ULID" (ducklake_runtime.py:166) raises ModuleNotFoundError,
+    swallowed by the helper's bare except. The ONLY --pre ulid touch is this rec filing (no
+    scripts/checks/** check imports the portal at module scope -- verified). Fix = CI-guard the write;
+    adding ulid to requirements-fast would NOT help (the portal write still cannot complete without
+    creds). The breach exit(1) -- not ulid -- fails the build; the ulid error only lost the diagnostic.
+  - >-
+    Decision 80 makes a measured _FAST_TIER_BUDGET_SECONDS breach recurrence a NAMED trigger to
+    revisit a build orchestrator. This plan is the prescribed do-less / optimise-first response; if
+    single-execution proves insufficient, the orchestrator-evaluation trigger has fired.
+  - >-
+    Main not diverged at planning time (0 behind / 0 ahead); Main Divergence Assessment not
+    triggered. Lambda assessment: compute_affected_artifacts(scope) == {} -- none of validate.py /
+    _scaffolding.py / test_validate.py is Lambda-packaged; V2 (unit) is correct, no deploy step.
+  - >-
+    TEST-MAINTENANCE NOTE: TestBudgetAssertion / TestIgnoreBudgetFlag patch time.monotonic with fixed
+    2-element side_effect lists ([0.0, 400.0] etc.). The added per-phase timing calls change the
+    monotonic call count -- switch those mocks to a growth-safe generator/sequence (mock-exhaustion
+    discipline, tests/CLAUDE.md; cf. postflight rec-117/rec-325) that still PINS the terminal elapsed
+    value deterministically (the breach/no-breach comparison against 300s must not depend on how many
+    intermediate timing calls occur).
+  - >-
+    CRITIQUE REFINEMENTS (plan-critique round 1, folded in): (1) VP step 7's closure check greps the
+    14 specific bundled rec IDs across BOTH sources (budget_breach and budget_bypass), not the
+    category count. (2) _file_budget_bypass_rec's CI-guard is DEFENSIVE-ONLY -- unreachable in the
+    integrated CI flow because validate.py:334 already hard-rejects --ignore-budget when CI=true
+    before the helper can run; TestBudgetRecFilingCiGuard exercises the helper directly, and the
+    guard is belt-and-suspenders, not load-bearing.
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND (Decisions triaged: 81 of 81; one Decision 84 I-4
+    NOTE -- CI-guard on file_rec -- judged non-violating and resolved by the loud-log constraint above).
+    CITE = Decision 60, Decision 73, Decision 104, Decision 80, Decision 55, Decision 83.
+    RELATED = Decision 103, Decision 48, Decision 79, Decision 43, Decision 102, Decision 75.
+  - "gates: decision-scout=FLAGS_FOUND (1 NOTE resolved) after 1 round; plan-critique=PROCEED after 1 round (2 non-blocking refinements folded in)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/fast-tier-budget-overrun-f7njpp)
+  - docs/PROJECT_CONTEXT.md read
+  - Root-cause diagnosis reviewed (double execution + roadmap-guard fan-in; measured numbers above)
+  - All three scope files located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/checks/_scaffolding.py -- partition_changed_tests_by_collectability: keep the
+    --collect-only classification (module-scope missing-dep defers, real-collection-error ->
+    runnable) and REMOVE the proactive _runtime_heavy_dep_defer_reason call from the common path.
+    Retain _runtime_heavy_dep_defer_reason as a helper for the reactive fallback.
+  - >-
+    scripts/checks/_scaffolding.py -- run_pytest_diff: after the collect-only partition, run the
+    combined `pytest *runnable -m "not integration" -v` ONCE. On rc==0 return (single execution). On
+    rc!=0, compute excluded_absent = {excluded heavy deps with find_spec None}; if excluded_absent is
+    non-empty AND a "No module named '<dep>'" for one of them appears in the output, fall back to
+    per-file classification via _runtime_heavy_dep_defer_reason over the runnable set, print the
+    DEFERRED warnings, and re-run the survivors once (redden only on a survivor failure). If there is
+    no excluded-heavy-dep signature, append "Tests (pytest)" to failed immediately (fail-closed).
+    Preserve the existing all-deferred no-redden branch and the empty-changed_tests no-op.
+  - >-
+    scripts/checks/_scaffolding.py -- _file_budget_breach_rec(elapsed, diff_manifest, dominant_phase):
+    when os.environ.get("CI") == "true", SKIP the portal file_rec and print the FULL diagnostic
+    (elapsed, branch, dominant_phase, manifest) LOUDLY to stderr; otherwise file as today. This must
+    be a no-op-plus-loud-log, NOT a silent `if CI: return` and NOT an offline outbox -- add a code
+    comment stating exactly that (Decision 84 I-4 no-outbox is respected because nothing is buffered;
+    Decision 55 no-silent-skip is respected because the diagnostic is emitted, unlike today's
+    swallowed ModuleNotFoundError). Use the passed dominant_phase in the context string (stop
+    emitting 'unknown' when a real phase is supplied). Apply the same CI-guard to
+    _file_budget_bypass_rec.
+  - >-
+    scripts/validate.py -- in the `for step in registry.pre_sequence()` loop, measure each step's
+    wall-clock (time.monotonic before/after) and accumulate into a phase_times dict keyed by
+    step.name; _scaffold_budget_assertion selects max(phase_times) as the dominant phase and passes it
+    to _file_budget_breach_rec (replacing the literal None at line 429) and includes it in the console
+    error. Keep _t0 and the 300s comparison unchanged.
+  - >-
+    tests/test_validate.py -- update TestFastTierCollectability: the runtime-probe defer tests
+    (test_runtime_lazy_import_of_excluded_dep_defers, test_runtime_failure_with_no_module_error_stays_runnable,
+    test_runtime_knockon_failures_still_defer_whole_file, test_runtime_lazy_import_of_present_dep_not_deferred)
+    move to a new TestRunPytestDiffReactiveDefer class exercising the reactive path; keep the
+    collect-only partition tests. Replace test_runs_pytest_on_exactly_runnable_subset_in_mixed_case
+    with a TestRunPytestDiffSingleExecution asserting exactly one real run in the common case.
+  - >-
+    tests/test_validate.py -- add TestBudgetRecFilingCiGuard (CI=true -> no file_rec, prints
+    diagnostic; CI unset -> file_rec called) and extend TestBudgetBreachRecFiling for the threaded
+    dominant_phase. Update TestBudgetAssertion / TestIgnoreBudgetFlag time.monotonic mocks to a
+    growth-safe generator so the added per-phase timing calls do not exhaust the side_effect, while
+    still pinning the terminal elapsed value deterministically so the 300s comparison stays exact.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop
+    and RCA (Decision 55). Confirm bin/venv-python -m scripts.validate --pre is green and well under
+    budget on this branch.
+  - >-
+    On merge, include `Resolves: rec-2527, rec-2538, rec-2539, rec-2540, rec-2541, rec-2542,
+    rec-2543, rec-2544, rec-2555, rec-2556, rec-2560, rec-2562, rec-2567, rec-2569` in the squash
+    commit body (rec-autoclose); verify closure post-merge (VP step 7). Re-verify each is still open
+    at implement time before bundling.
+  - 'Report: what was implemented, the measured --pre wall-clock before/after, and rec closures.'
+work_areas: []
+rollback: >-
+  Internal-only change to the diff-aware pytest phase and the breach-rec filing; revert the branch
+  commit to restore the prior double-execution behaviour. No data/schema/infra consequence; the
+  budget constant and tier membership are unchanged.
