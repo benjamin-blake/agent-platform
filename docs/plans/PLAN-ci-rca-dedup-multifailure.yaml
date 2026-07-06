@@ -26,28 +26,41 @@ scope:
   - file: scripts/ops_data_portal.py
     action: Modify
     purpose: >-
-      CIRCA-03(c) write-time backstop + Tier-B storage. In file_rec() for source=ci_rca, before the
-      writer insert, match the incoming fingerprint against OPEN source=ci_rca recs (via the reader,
-      single-key structural filter row_filter="source = 'ci_rca'" -- the parsed {column,value} form
-      used at :1613, NOT SQL-interpolated; then Python-filter status=open and fingerprint) and RETURN
-      the existing id instead of inserting on a match (race backstop). Narrow fail-open: only on
-      reader-unreachable / Neon scale-to-zero, logged loudly; all other reader errors raise
-      (Decision 55). Store fingerprint, failure_category, and the occurrence counter/last_seen INSIDE
-      context_v2_json as portal-derived (never agent-authored) fields on CiRcaContext, mirroring the
-      warn_mode_reject Tier-B pattern -- NO new ops_recommendations column (Decision 103 / 84 I-2).
-      A dedup-bypass env (set by the workflow when force_rca=true) skips the guard (Decision 74).
+      CIRCA-03(b)+(c). Add a SHARED read-only helper find_open_ci_rca_rec_by_fingerprint(fingerprint,
+      profile) -> Optional[str] that queries OPEN source=ci_rca recs via make_reader().current_state(
+      "ops_recommendations", row_filter="source = 'ci_rca'") (the parsed {column,value} structural form
+      used at :1613, NOT SQL-interpolated), Python-filters status=open, and returns the matching rec id
+      by fingerprint (parsed from each rec's context_v2_json) or None. It fails open NARROWLY (returns
+      None + loud log) only on reader-unreachable / Neon scale-to-zero; all other reader errors raise
+      (Decision 55). Expose it as a read-only CLI verb (e.g. --find-open-ci-rca-rec --fingerprint <hex>,
+      prints the rec id or nothing) so the workflow's pre-agent step (CIRCA-03(b)) uses the SAME in-
+      process reader path -- no local-cache scan (CLAUDE.md: a read cache is never a dedup source). The
+      write-time backstop (CIRCA-03(c)) in file_rec() source=ci_rca calls the same helper before the
+      writer insert and RETURNS the existing id instead of inserting on a match (the backstop returns
+      the id but does NOT bump the occurrence counter -- only the workflow update_rec path bumps).
+      Store fingerprint, failure_category, and the occurrence counter/last_seen INSIDE context_v2_json
+      as portal-derived (never agent-authored) fields on CiRcaContext, mirroring the warn_mode_reject
+      Tier-B pattern -- NO new ops_recommendations column (Decision 103 / 84 I-2). A dedup-bypass env
+      (set by the workflow when force_rca=true) skips the write-time guard (Decision 74).
   - file: .github/workflows/ci-rca.yml
     action: Modify
     purpose: >-
       CIRCA-03(b) pre-agent skip + concurrency; CIRCA-07 mark gating + prompt-string alignment. Add a
-      pre-agent dedup step that, per enumerated category, reads the fingerprint from the emitted
-      bundle and queries OPEN source=ci_rca recs via the reader; on a live fingerprint match, SKIP
-      dispatching the (Opus) agent and bump the matched rec's occurrence counter/last_seen via
-      update_rec, UNLESS force_rca. Add a top-level concurrency: block keyed on head_sha+workflow with
-      cancel-in-progress:false (never cancels -- preserves the terraform-apply-sandbox convergence
-      backstop, Decision 92/94). Gate mark_rca per-category on the rec id actually parsed for that
-      category (only mark filed categories). Change the agent-prompt string "Local path:" to
-      "Local bundle path:" to match ci-rca.md's extraction instruction.
+      NEW pre-agent dedup step (id=fp_dedup) that runs AFTER the existing per-category commit-status
+      "Dedup guard" (which is RETAINED -- it covers same-commit reruns and the terraform-apply-sandbox
+      red-record anchor, which the cross-commit fingerprint layer does not). For each enumerated
+      category it reads the bundle fingerprint and calls the portal read-only verb
+      (bin/venv-python -m scripts.ops_data_portal --find-open-ci-rca-rec --fingerprint <hex>); on a
+      live match it emits deduped=true and bumps the matched rec's occurrence counter/last_seen via
+      update_rec, UNLESS force_rca. The reader is reachable from the CI branch role (oidc.tf:456-460);
+      if the verb fails open (reader unreachable), fp_dedup emits deduped=false so the agent still runs
+      (never hard-fail the workflow). Compose the two layers in the "Run ci-rca agent" if: -- run the
+      agent only when NEITHER layer deduped: steps.dedup.outputs.already_filed != 'true' &&
+      steps.fp_dedup.outputs.deduped != 'true'. Add a top-level concurrency: block keyed on
+      head_sha+workflow with cancel-in-progress:false (never cancels -- preserves the
+      terraform-apply-sandbox convergence backstop, Decision 92/94). Gate mark_rca per-category on the
+      rec id actually parsed for that category (only mark filed categories). Change the agent-prompt
+      string "Local path:" to "Local bundle path:" to match ci-rca.md's extraction instruction.
   - file: .claude/agents/scheduled/ci-rca.md
     action: Modify
     purpose: >-
@@ -110,6 +123,10 @@ acceptance_criteria:
     rec, produce exactly ONE writer insert -- the second returns the existing rec id and inserts
     nothing (unit test with mocked reader); the force-bypass env files anyway.
   - >-
+    CIRCA-03: the shared helper find_open_ci_rca_rec_by_fingerprint() returns the matching open rec id
+    on a fingerprint hit and None on a miss; the read-only CLI verb prints that id; a reader-unreachable
+    error returns None with a loud log (fail-open) while a non-connectivity error raises (unit test).
+  - >-
     CIRCA-03: a reader-unreachable / scale-to-zero error in the write-time guard fails OPEN (rec is
     filed) with a loud log line, while a non-connectivity reader error raises (Decision 55).
   - >-
@@ -139,7 +156,7 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: Fingerprint determinism/distinctness under classifier anchoring.
-    command: "bin/venv-python -m pytest tests/test_ci_rca_evidence.py -k fingerprint -q"
+    command: "bin/venv-python -m pytest tests/test_ci_rca_evidence.py -q"
     expected: >-
       Tests pass: identical (workflow_slug, failed_check, failure_category) with differing
       run_id/timestamp/head_sha yield the same fingerprint; a differing failed_check or
@@ -150,16 +167,20 @@ verification_plan:
       on the classifier fields only; move volatile tokens out of the primary key.
   - step: 2
     phase: pre-deploy
-    action: Write-time dedup backstop, force-bypass, and narrow fail-open in file_rec.
-    command: "bin/venv-python -m pytest tests/test_ops_data_portal.py -k 'ci_rca and (dedup or fingerprint or recurrence)' -q"
+    action: >-
+      Both CIRCA-03 read paths -- the shared pre-agent helper AND the write-time backstop -- plus
+      force-bypass, narrow fail-open, and Tier-B storage, in one file-scoped run.
+    command: "bin/venv-python -m pytest tests/test_ops_data_portal.py -q"
     expected: >-
-      Second same-fingerprint file_rec returns the existing id with no writer insert; force-bypass
-      inserts; reader-unreachable fails open (inserts + loud log); unexpected reader error raises;
-      fingerprint/failure_category/occurrence stored in context_v2_json, not a new column.
+      find_open_ci_rca_rec_by_fingerprint() returns the matching open id on a hit and None on a miss;
+      the write-time guard's second same-fingerprint file_rec returns the existing id with NO writer
+      insert (and does not bump the counter); force-bypass inserts; reader-unreachable fails open
+      (returns None / inserts, loud log) while an unexpected reader error raises;
+      fingerprint/failure_category/occurrence live in context_v2_json, not a new column.
     fix_if: >-
-      A duplicate insert occurs (guard not reached / wrong match key), or a reader outage blocks
-      filing (fail-open too narrow), or a broad except swallows a real error (fail-open too wide),
-      or a new ops_recommendations column appears (Decision 103 violation).
+      The helper misses a live match or the guard double-inserts (wrong match key / guard not reached);
+      a reader outage blocks filing (fail-open too narrow) or a broad except swallows a real error
+      (fail-open too wide); or a new ops_recommendations column appears (Decision 103 violation).
   - step: 3
     phase: pre-deploy
     action: "Multi-rec FILED: marker parsing returns all filings."
@@ -250,6 +271,11 @@ constraints:
     concurrency is cancel-in-progress:false and the fingerprint (workflow_slug+failed_check+
     failure_category) distinguishes distinct convergence failures -- only same-fingerprint-against-open
     collapses.
+  - >-
+    RETAIN the existing per-category commit-status "Dedup guard" step (ci-rca.yml:220-252) and its
+    mark_rca counterpart -- the new fingerprint layer is ADDITIVE (cross-commit root-cause grouping),
+    and the commit-status layer still covers same-commit reruns and the terraform-apply-sandbox
+    red-record anchor. Compose both in the agent if: (run only when neither deduped).
   - "Do not add a check to .github/workflows/ci.yml without adding it to scripts/validate.py first (Decision 104)."
   - "Do not flip any T1.13 exit-criterion status during implementation for criteria this plan does not close (Status-Trusted-Never-Inferred)."
 context:
@@ -276,7 +302,7 @@ context:
     match key as weaker than failed_check+failure_category and "deferred until a failure_category field
     lands in context_v2_json" -- the failure_category field this plan adds unblocks that future upgrade.
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 84, Decision 88, Decision 72, Decision 73, Decision 55, Decision 66, Decision 74, Decision 92, Decision 94, Decision 86. WARN (Decision 103): occurrence counter must live in context_v2_json, not a new column -- incorporated. NOTE (Decision 88): new read/write sites acknowledged -- incorporated. NOTE (Decision 92/94): fingerprint distinguishes distinct convergence failures -- incorporated."
-  - "gates: decision-scout=FLAGS_FOUND (all incorporate-and-cite, no BLOCK) after 2 round(s); plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND (all incorporate-and-cite, no BLOCK) after 2 round(s); plan-critique=PROCEED after 1 REVISE round (pre-agent read mechanism specified as a shared portal helper + CLI verb; pre-deploy skip coverage folded into VP step 2; commit-status dedup layer retained and composed)"
   - >-
     Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok); no Scope
     overlap risk. No .tf in scope -> no infrastructure/speculative-plan pipeline. config/agent/ not
@@ -299,16 +325,21 @@ execution_steps:
   - >-
     scripts/ops_data_portal.py: add fingerprint, failure_category, and occurrence-counter/last_seen as
     portal-derived optional fields on CiRcaContext (never agent-authored; stamped from the loaded
-    bundle, mirroring warn_mode_reject). In file_rec() source=ci_rca, before the writer insert, query
-    open ci_rca recs via make_reader().current_state("ops_recommendations", row_filter="source =
-    'ci_rca'") (single-key structural form), match the fingerprint in Python, and return the existing
-    id on a hit (skip insert). Narrow fail-open with a loud log on reader-unreachable; raise otherwise.
-    Honor a dedup-bypass env for force_rca.
+    bundle, mirroring warn_mode_reject). Add the shared helper find_open_ci_rca_rec_by_fingerprint(
+    fingerprint, profile) -> Optional[str] using make_reader().current_state("ops_recommendations",
+    row_filter="source = 'ci_rca'") (single-key structural form) + Python status=open + fingerprint
+    match; narrow fail-open (return None + loud log on reader-unreachable; raise otherwise). Expose it
+    as a read-only CLI verb (--find-open-ci-rca-rec --fingerprint <hex>). In file_rec() source=ci_rca,
+    before the writer insert, call the helper and return the existing id on a hit (skip insert; do not
+    bump the counter). Honor a dedup-bypass env for force_rca.
   - >-
     .github/workflows/ci-rca.yml: add a top-level concurrency: block (group by head_sha+workflow,
-    cancel-in-progress:false). Add a pre-agent dedup step: for each enumerated category read the
-    bundle fingerprint and query open ci_rca recs via the reader; on a live match, set an output that
-    skips the Run ci-rca agent step and bump the matched rec via update_rec (unless force_rca). Gate
+    cancel-in-progress:false). Add a pre-agent dedup step (id=fp_dedup) AFTER the retained
+    commit-status "Dedup guard": for each enumerated category read the bundle fingerprint, call
+    --find-open-ci-rca-rec; on a live match emit deduped=true and bump the matched rec via update_rec
+    (unless force_rca); on fail-open (verb reports reader unreachable) emit deduped=false so the agent
+    still runs. Change the "Run ci-rca agent" if: to run only when NEITHER layer deduped
+    (steps.dedup.outputs.already_filed != 'true' && steps.fp_dedup.outputs.deduped != 'true'). Gate
     mark_rca per-category on the rec id parsed for that category. Rename the prompt string
     "Local path:" to "Local bundle path:".
   - >-
