@@ -1,0 +1,255 @@
+schema_version: 1
+slug: "circa-05-audit-finding"
+intent: >-
+  Fix CI-RCA audit finding CIRCA-05: compute_earliest_viable_gate is always invoked with an
+  unmeasured current_pre_runtime=0.0, biasing every presubmit-only check toward a "promote to
+  --pre" recommendation and embedding a fabricated "--pre runtime: 0.0s" in the rationale.
+  Make the headroom decision use a measured runtime (from a maintained env stamp) or emit an
+  explicit undetermined-headroom marker, so the deterministic side the cross-check trusts stops
+  entering a wrong-but-trusted value at exactly the point bundle-wins probes.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-circa-05-audit-finding.yaml
+phase: >-
+  Platform hardening -- CI-RCA depth-enforcement correctness (audit ci-rca-system-a49db8f,
+  finding CIRCA-05, novel; adjacent to INTENT-ci-rca-methodology tier-placement heuristic).
+scope:
+  - file: scripts/ci_rca_tier_map.py
+    action: Modify
+    purpose: >-
+      Change compute_earliest_viable_gate's current_pre_runtime parameter default from 0.0 to
+      float | None = None. When None (unmeasured), the headroom branch declines promotion
+      (stays presubmit) and emits an explicit "undetermined-headroom" marker instead of a
+      fabricated "0.0s"; when a real value is supplied, headroom = budget - measured and the
+      pre-vs-presubmit decision uses the real number (including a headroom<=0 budget-exhausted
+      guard).
+  - file: scripts/ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      Add best-effort _resolve_current_pre_runtime() reading the maintained env stamp
+      CI_RCA_PRE_RUNTIME_SECONDS (float > 0 else None, never raises); pass the resolved value
+      into compute_earliest_viable_gate in _assemble_core; add a nullable pre_runtime_seconds
+      field to both the assembled bundle and the taxonomy-fallback bundle for structured
+      observability.
+  - file: tests/test_ci_rca_tier_map.py
+    action: Modify
+    purpose: >-
+      Cover the new None-default branch (undetermined-headroom marker + presubmit, no fake
+      0.0s), the measured branch (real headroom in rationale), and the headroom<=0 guard.
+  - file: tests/test_ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      Cover env unset (rationale contains "undetermined-headroom", not "0.0s"; pre_runtime_seconds
+      is null), env set to a valid float (non-zero measured value flows into the rationale and
+      pre_runtime_seconds), and invalid env (falls back to the None path).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    compute_earliest_viable_gate's current_pre_runtime parameter defaults to None (not 0.0);
+    when None and the check is presubmit-only with a measured median, the returned gate is
+    "presubmit" and the rationale contains the literal token "undetermined-headroom" and does
+    NOT contain "0.0s".
+  - >-
+    When a positive current_pre_runtime is supplied, headroom = 300 - current_pre_runtime is used:
+    a presubmit-only check whose median fits the real headroom returns "pre" with the measured
+    runtime embedded in the rationale, and one that exceeds the real headroom returns "presubmit".
+    A current_pre_runtime >= 300 (headroom <= 0) returns "presubmit" and never recommends "pre".
+  - >-
+    A bundle generated for a presubmit-only check with CI_RCA_PRE_RUNTIME_SECONDS set to a
+    positive float embeds that non-zero measured --pre runtime in earliest_viable_gate_rationale
+    and in the pre_runtime_seconds field; with the env var unset the rationale carries the
+    explicit "undetermined-headroom" marker and pre_runtime_seconds is null.
+  - >-
+    _resolve_current_pre_runtime returns None for unset, empty, non-numeric, zero, and negative
+    values, and the float for a valid positive value; it never raises.
+  - >-
+    Both modified source files retain 100% coverage of new/changed lines under their existing
+    test files (tests/CLAUDE.md coverage policy).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the parameter default is None and the fabricated 0.0s path is gone from the source.
+    command: >-
+      bin/venv-python -c "import inspect, scripts.ci_rca_tier_map as m;
+      s=inspect.signature(m.compute_earliest_viable_gate);
+      assert s.parameters['current_pre_runtime'].default is None, s.parameters['current_pre_runtime'].default;
+      g,r=m.compute_earliest_viable_gate('validate_x', {'validate_x':['presubmit']}, 'median=50ms', 0.05);
+      assert g=='presubmit', g; assert 'undetermined-headroom' in r, r; assert '0.0s' not in r, r; print('OK', r)"
+    expected: >-
+      Prints "OK" followed by a rationale containing "undetermined-headroom" and no "0.0s". Default
+      is None.
+    fix_if: >-
+      AssertionError on the default means the signature was not changed; "0.0s" present or
+      "undetermined-headroom" absent means the None branch still fabricates a measurement.
+    hermetic: true
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm a supplied measured runtime drives real headroom: fits -> pre with the number
+      embedded; exceeds / budget-exhausted -> presubmit.
+    command: >-
+      bin/venv-python -c "import scripts.ci_rca_tier_map as m; tm={'validate_x':['presubmit']};
+      g1,r1=m.compute_earliest_viable_gate('validate_x', tm, 'median=50ms', 0.05, current_pre_runtime=120.0);
+      assert g1=='pre', g1; assert '120.0s' in r1, r1;
+      g2,_=m.compute_earliest_viable_gate('validate_x', tm, 'median=400000ms', 400.0, current_pre_runtime=120.0);
+      assert g2=='presubmit', g2;
+      g3,_=m.compute_earliest_viable_gate('validate_x', tm, 'median=50ms', 0.05, current_pre_runtime=305.0);
+      assert g3=='presubmit', g3; print('OK')"
+    expected: Prints "OK" -- fit->pre with "120.0s" in rationale, exceed->presubmit, headroom<=0->presubmit.
+    fix_if: >-
+      g1 != pre means the measured-fit path regressed; missing "120.0s" means the real number is
+      not embedded; g3 != presubmit means the headroom<=0 budget-exhausted guard is missing.
+    hermetic: true
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm _resolve_current_pre_runtime honors the env stamp and is total (never raises) across
+      unset/empty/non-numeric/zero/negative/valid.
+    command: >-
+      bin/venv-python -c "import os, importlib, scripts.ci_rca_evidence as e;
+      f=e._resolve_current_pre_runtime;
+      os.environ.pop('CI_RCA_PRE_RUNTIME_SECONDS', None); assert f() is None;
+      for bad in ('', ' ', 'abc', '0', '-3', 'nan'):
+       os.environ['CI_RCA_PRE_RUNTIME_SECONDS']=bad; assert f() is None, bad;
+      os.environ['CI_RCA_PRE_RUNTIME_SECONDS']='42.5'; assert f()==42.5, f();
+      os.environ.pop('CI_RCA_PRE_RUNTIME_SECONDS', None); print('OK')"
+    expected: Prints "OK" -- None for unset/empty/non-numeric/zero/negative/nan, 42.5 for the valid value.
+    fix_if: >-
+      Any assertion fails or an exception propagates -> the resolver is not total or mis-parses the
+      stamp.
+    hermetic: true
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      End-to-end bundle generation: env-set embeds a non-zero measured runtime in the rationale and
+      pre_runtime_seconds; env-unset carries the undetermined-headroom marker and null field. Uses a
+      synthetic presubmit-only validate.py so the check is a promotion candidate.
+    command: bin/venv-python -m pytest tests/test_ci_rca_evidence.py -k "pre_runtime or headroom or CIRCA05" -q
+    expected: All selected tests pass, exercising both env-set (measured) and env-unset (marker) bundle paths.
+    fix_if: >-
+      A failing assertion on rationale content or pre_runtime_seconds means the evidence wiring does
+      not thread the resolved stamp through to the bundle.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: Run the full unit suites for both modified modules to confirm no regression.
+    command: bin/venv-python -m pytest tests/test_ci_rca_tier_map.py tests/test_ci_rca_evidence.py -q
+    expected: All tests pass.
+    fix_if: A pre-existing test fails -> the signature/behavior change broke an untouched contract; reconcile.
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: Confirm 100% coverage of the two modified source files (tests/CLAUDE.md coverage policy).
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_tier_map.py tests/test_ci_rca_evidence.py
+      --cov=scripts.ci_rca_tier_map --cov=scripts.ci_rca_evidence --cov-report=term-missing -q
+    expected: Both modules report 100% (no "Missing" lines for the new/changed code).
+    fix_if: Missing lines listed -> add targeted tests for the uncovered branch.
+    hermetic: false
+constraints:
+  - Only the four files in scope may be modified. Do NOT touch scripts/validate.py, .github/workflows/ci-rca.yml, or ci_rca taxonomy/portal files -- those are out of scope and handled by sibling ci-rca audit plans.
+  - Preserve backward compatibility for the four-positional-arg call and the existing keyword callers in tests (current_pre_runtime passed explicitly as a float still works; only the default changes to None).
+  - Do NOT run a live `validate --pre` for measurement -- it is heavy (up to the 300s budget inside the 20-min CI-RCA window), files budget bypass/breach recs as a side effect, and measures an unrepresentative post-merge diff. The maintained env stamp CI_RCA_PRE_RUNTIME_SECONDS is the chosen runtime source.
+  - No rescue agents or workaround loops (Decision 55). On an unrecoverable VP failure, stop and RCA.
+  - No emojis; ASCII hyphens only; ruff line length 127; type hints required (float | None).
+context:
+  - >-
+    Root cause: scripts/ci_rca_tier_map.py:244 hardcodes current_pre_runtime=0.0 and
+    scripts/ci_rca_evidence.py:173 omits the argument, so headroom is always 300 - 0.0 = 300 and
+    the rationale (line 276) embeds "--pre runtime: 0.0s" as if measured. Every presubmit-only
+    check with median <=300s is recommended for --pre promotion.
+  - >-
+    Decision 60 -- two-tier local validation (--pre edit-loop with the 5-minute
+    _FAST_TIER_BUDGET_SECONDS=300 budget + presubmit default); the headroom math derives from this
+    budget and the fix corrects how the headroom term is computed.
+  - >-
+    Decision 73 -- Two-Tier Diff-Aware CI with Forward-Fix amended Decision 60 to make the 5-min
+    fast-tier budget a runtime-enforced assertion; the promote-to-pre recommendation is advisory
+    downstream of that enforced budget.
+  - >-
+    Decision 72 -- ci-rca recs are filed source=ci_rca and consumed via /plan (human-reviewed);
+    this bounds blast radius today and is why declining promotion when headroom is undetermined
+    (rather than a hard gate) is the correct conservative default.
+  - >-
+    Decision 55 -- deterministic-over-LLM, loud-honest posture: stop fabricating a 0.0s
+    measurement, emit an explicit "undetermined-headroom" marker, and decline promotion when the
+    input is unknown.
+  - >-
+    Decision 104 -- validate.py check registry is the tier-membership SoT
+    (build_tier_membership / _build_tier_membership_from_registry); this bundle only RECOMMENDS a
+    gate, and the fix correctly does not touch validate.py or the registry.
+  - >-
+    Decision 86 (RELATED, agent-first structured-over-prose): the plan adds a structured nullable
+    pre_runtime_seconds bundle field alongside the rationale text so the measured runtime is
+    machine-readable, not only regex-parseable from the rationale string. Decision 86 governs
+    standing docs/ prose-architecture, not in-code rationale, so no contradiction.
+  - >-
+    Production note: .github/workflows/ci-rca.yml is out of scope, so CI_RCA_PRE_RUNTIME_SECONDS
+    will not be set in production today -- bundles will emit the honest "undetermined-headroom"
+    marker and decline promotion (strictly safer than today's false-confident promotions). Wiring
+    a real measurement into ci-rca.yml is a clean follow-up, out of scope here.
+  - >-
+    Bundle-wins enforcement (CIRCA-01) is not yet live, so the enforced-mirroring harm is latent;
+    this fix removes the biased value before enforcement lands.
+  - >-
+    Neither scope source file is Lambda-packaged (compute_affected_artifacts returns {}), so V2 (no
+    build/deploy/smoke-test) applies.
+  - >-
+    Branch was 0 commits behind origin/main at planning time; no scope-file overlap with main.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS; CITE = Decision 60, Decision 73, Decision 72, Decision 55, Decision 104; RELATED = Decision 86, Decision 88."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/circa-05-audit-finding-7er449)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via decision-scout (81 of 81)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/ci_rca_tier_map.py -- change compute_earliest_viable_gate signature to
+    `current_pre_runtime: float | None = None`. In the headroom branch (check is presubmit-only,
+    median_seconds is not None): if current_pre_runtime is None, return
+    ("presubmit", rationale) where the rationale states median runtime and the explicit token
+    "undetermined-headroom (current --pre runtime not measured; set CI_RCA_PRE_RUNTIME_SECONDS to
+    enable promotion analysis). Staying presubmit -- cannot justify --pre promotion without measured
+    headroom." and NEVER contains "0.0s". If current_pre_runtime is not None: compute
+    `headroom = _FAST_TIER_BUDGET_SECONDS - current_pre_runtime`; if headroom <= 0 return
+    ("presubmit", "... --pre runtime {current_pre_runtime:.1f}s exhausts the {budget}s budget
+    (headroom {headroom:.1f}s). Stay presubmit."); else keep the existing median<=headroom -> pre
+    (with the real current_pre_runtime embedded) vs exceeds -> presubmit logic. Leave the
+    external-dep, already-in-pre, AST-None, not-in-tier, and probe-abstention branches unchanged.
+  - >-
+    scripts/ci_rca_evidence.py -- add module-level `_resolve_current_pre_runtime() -> float | None`
+    that reads os.environ.get("CI_RCA_PRE_RUNTIME_SECONDS"), strips it, and returns float(val) only
+    when it parses to a finite value > 0 (reject empty, non-numeric, nan/inf, zero, negative);
+    return None on anything else and never raise. In _assemble_core, call it once
+    (`pre_runtime = _resolve_current_pre_runtime()`), pass `current_pre_runtime=pre_runtime` into
+    compute_earliest_viable_gate, and add `"pre_runtime_seconds": pre_runtime` to the assembled
+    bundle dict. Add `"pre_runtime_seconds": None` to the taxonomy-fallback bundle dict in
+    generate_bundles for schema consistency. sha256 is computed after the field is added (no code
+    change needed there since _sha256_of hashes the whole dict minus sha256).
+  - >-
+    tests/test_ci_rca_tier_map.py -- add TestComputeEarliestViableGate cases: (a) None default ->
+    presubmit + "undetermined-headroom" in rationale + no "0.0s"; (b) measured fit
+    (current_pre_runtime=120.0, median small) -> pre with "120.0s" in rationale; (c) measured exceed
+    -> presubmit; (d) headroom<=0 (current_pre_runtime=305.0) -> presubmit and no "pre". Keep the
+    existing explicit-float cases green.
+  - >-
+    tests/test_ci_rca_evidence.py -- add cases using a synthetic presubmit-only validate.py (or the
+    existing build_tier_membership/probe_runtime patch pattern) so the failed check is a promotion
+    candidate: (a) env unset -> bundle rationale contains "undetermined-headroom", not "0.0s", and
+    pre_runtime_seconds is None; (b) env set to "150" -> rationale embeds the measured 150.0s and
+    pre_runtime_seconds == 150.0; (c) invalid env -> None path. Also a direct unit test of
+    _resolve_current_pre_runtime across unset/empty/non-numeric/zero/negative/valid. Use test names
+    containing "pre_runtime"/"headroom"/"CIRCA05" so VP step 4's -k selector matches. Follow
+    tests/CLAUDE.md -- restore env in teardown, single consolidated import block.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and
+    RCA (Decision 55).
+  - "Report: what was implemented, verification results (including coverage), and the production undetermined-headroom default note."
+work_areas: []
+rollback: >-
+  Revert the two source-file diffs; the parameter default returns to 0.0 and the bundle drops the
+  pre_runtime_seconds field. No data migration, no infra, no deployed artifact -- pure code revert.
