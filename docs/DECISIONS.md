@@ -2,6 +2,44 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 122: Ratify CD.28 -- executor LLM inference = DeepSeek-direct via LiteLLM (Tier 1), Anthropic-direct (Tier 2); Bedrock retired (as amended by Decision 116) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-06
+**Warehouse ID:** dec-122 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CD.28 was operationally realized (DeepSeek + Anthropic keys live in Secrets Manager --
+T0.4 c1-c3 met, LiteLLM smoke tests 200 on 2026-06-21; Bedrock code paths retired; inference-provider.yaml
+v1 reflects the CD.28 tier model) but remained `state: pending`, gating completion of T0.4 and T4.1-T4.4.
+
+**Decision:** Ratifies CD.28 AS AMENDED BY Decision 116. Executor LLM inference steady state --
+Tier 1 = DeepSeek-direct via LiteLLM (deepseek/deepseek-chat, deepseek/deepseek-reasoner; remapping to
+deepseek-v4-flash post-2026-07-24); Tier 2 = Anthropic-direct via LiteLLM (warm-fetched escape hatch,
+Max x5 programmatic pool); Tier 3 = OpenRouter (deferred). Bedrock retired from the architecture as an
+LLM substrate. Scheduled-agent provider routing is governed by Decision 116's split (routine/non-agentic
+-> LiteLLM Tier 1; judgment/agentic -> claude -p), NOT CD.28's original blanket scheduled-agent clause.
+
+Layer reconciliation (Decision 121): the tier model governs the EXECUTOR LiteLLM inference transport
+(scripts/llm_client.py, repointed by T4.2). The current model_registry._VALID_PROVIDERS = {"gemini"} /
+llm_client._gemini_call is the INTERIM executor transport pending T4.2's LiteLLM cutover, which OWNS its
+removal (T4.2 files_in_scope scripts/llm_client.py "rewrite to LiteLLM transport; remove Bedrock +
+Gemini-CLI paths"; T4.2 exit criterion "LiteLLM is the only LLM transport"). Decision 121's "Gemini is
+the sole valid provider" describes that interim state, not a permanent commitment -- no contradiction.
+
+**Reversal conditions:** revert/re-evaluate if (a) DeepSeek direct API pricing changes >5x in either
+direction, or (b) the Anthropic Max x5 programmatic pool is sustained >70% utilization over 30 days
+(file a rec to provision an org-billed Anthropic API key as overflow). Mirrors
+`cost_projection.reevaluation_triggers`.
+
+**Related:** Decision 116 (scheduled-agent provider split; amends CD.28's scheduled-agent clause),
+Decision 49 (superseded by 116; Copilot SDK retirement), Decision 121 (model_registry interim Gemini
+state; layer reconciliation), Decision 47 (lock-in lesson; Anthropic-direct preserves the warm-fetched
+escape hatch), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision
+ratification lane). Supersedes: CD.7 (LLM-on-Bedrock primary), Decision 40 (Copilot SDK + Bedrock
+planning).
+
+---
+
 ## Decision 121: Retire docs/contracts/cli-json-output.md rather than convert it -- T-1.17 exempted from the CD.25 conversion wave (Decided)
 
 **Status:** Decided
