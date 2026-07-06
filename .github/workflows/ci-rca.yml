@@ -336,13 +336,23 @@ jobs:
             --allowedTools "Read,Bash(grep:*),Bash(cat:*),Bash(git log:*),Bash(bin/venv-python -m scripts.ops_data_portal:*)" || true
           cat /tmp/ci-rca-output.json
           # Deterministic filing check: the marker/dedup must reflect a real filing, not the
-          # || true-masked exit above. The parser exits 1 when no FILED: rec-NNN marker is
-          # present, so a run that only mentions a rec id is never marked as RCA'd
-          # (fail-open toward re-diagnosis, per Decision 74).
-          REC_ID=$(bin/venv-python -m scripts.ci_rca_filing /tmp/ci-rca-output.json || true)
-          if [ -z "$REC_ID" ]; then
+          # || true-masked exit above. CIRCA-07: gate on --all (ALL FILED: markers) rather than
+          # the legacy single-marker helper -- the single-marker helper is last-marker-wins, so
+          # a multi-failure run where the LAST diagnosed bundle emits "FILED: none" while an
+          # EARLIER bundle genuinely filed would otherwise report zero filings and skip mark_rca
+          # entirely for a rec that was actually filed. --all is empty only when truly nothing
+          # was filed (fail-open toward re-diagnosis, per Decision 74).
+          FILED_PAIRS=$(bin/venv-python -m scripts.ci_rca_filing --all /tmp/ci-rca-output.json || true)
+          if [ -z "$FILED_PAIRS" ]; then
             echo "::error::ci-rca agent filed no recommendation (no FILED: marker in output)"
             exit 1
+          fi
+          # rec_id output feeds the PR-comment step, which reports a single rec id -- prefer the
+          # legacy last-marker helper's value, falling back to the last --all pair when the final
+          # marker was "none" but an earlier bundle filed (the case this fix addresses).
+          REC_ID=$(bin/venv-python -m scripts.ci_rca_filing /tmp/ci-rca-output.json || true)
+          if [ -z "$REC_ID" ]; then
+            REC_ID=$(echo "$FILED_PAIRS" | tail -1 | cut -d, -f1)
           fi
           echo "rec_id=${REC_ID}" >> "$GITHUB_OUTPUT"
 
