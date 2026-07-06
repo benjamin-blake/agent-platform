@@ -1,0 +1,133 @@
+schema_version: 1
+slug: "roadmap-mvp-triage-restructure"
+intent: >-
+  Action the rescope findings of the platform-roadmap MVP-triage audit
+  (audits/platform-roadmap-mvp-triage-7d57a0d.yaml: RMAP-06, RMAP-07, RMAP-08..RMAP-13, plus
+  question_answers Q1) as roadmap-bookkeeping edits to docs/ROADMAP-PLATFORM.yaml. Reconciles the
+  roadmap's active surface with delivered reality (the Decision 91 named-verb surface, the T2.19/T2.26
+  DuckLake migrations) and corrects three sequencing defects on the telemetry / executor critical path,
+  moving the platform closer to a closed self-improvement loop (North Star) by removing eligibility noise
+  and un-blurring what actually gates the loop.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-roadmap-mvp-triage-restructure.yaml
+phase: >-
+  Platform MVP-triage close-out (final wave). Follows PR #504 (RMAP-01..05 closeouts) and PR #505
+  (RMAP-14..28 deferrals); actions the audit's rescope + Q1-sequencing residual. Touches tier_items
+  across T0/T1/T2/T3/T4 and candidate_decision CD.18. No product-roadmap edge.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      All four edit groups: (1) verb-surface consolidation (T0.7a/b/c, T1.1, T1.2, T1.3 rewritten;
+      new closeout item T1.16 created); (2) T2.7 tombstoned to reserved with its residual folded into
+      T2.26 (c4 pointer inverted); (3) T4.3 rewritten to the producer-write-repoint MVP slice, new
+      deferred_post_mvp item T4.12 created for the five agents + schedule deletion + all provider routing,
+      T5.3 c1/c2 met_by re-pointed, CD.28 inventory + T4.3 intent updated in lockstep per Decision 116;
+      (4) T3.2 gains depends_on T2.36, and CD.18 flipped state: ratified per the drafted ratification block.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add the new numbered Decision ratifying CD.18 option (a) -- revive the stashed
+      agent/ops-decisions-phase-2 WIP into T1.5's decomposition (DECISIONS.md is the decision-numbering
+      authority; ops_decisions rebuilds from it via the portal backfill). Conditional on the CD.18
+      ratification block; executed at /implement time behind its confirmation gate, not during planning.
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "T0.7a and T0.7b no longer carry any import_mode exit criterion; each item's note records the import_mode obsolescence (sole consumer T2.2 complete)."
+  - "A new tier_item T1.16 (tier T1) exists owning the five verified verb-surface residuals: list-family pagination decision (implement-or-drop-with-rationale), describe per-verb parameter schema, update_ops status-DAG typed-422 check, history-version named read, per-verb unit-test coverage confirmation; plus an explicit telemetry-read-verbs criterion marked sequenced-after-T2.36 (owner: T3.3 decomposition)."
+  - "T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3 each have exit_criteria rewritten to the delivered named-verb surface, remain status: not_started, and carry a note stating they flip complete WITH T1.16 (Wave-4 closeout plan)."
+  - "T2.7 is status: reserved (id preserved) with a supersession note pointing to T2.26; T2.7's _current-view residual for the two still-Iceberg tables appears as an exit criterion on T2.26; T2.26 c4's 'T2.7 owns any survivor' pointer is inverted to name T2.26 as the owner."
+  - "T4.3 is rewritten to the MVP producer-write-repoint slice with depends_on re-pointed to [T2.26, T0.7a, T0.8] (no longer [T4.1, ...]); its note records the queue-fed pick_rec decision (producer = critical-path) and the queue-population open item for T4.1/T4.3 decomposition."
+  - "A new tier_item T4.12 exists created directly as status: deferred_post_mvp, owning the other five scheduled agents' re-enable + all six agents' Decision-116 provider routing + the c5 .github/prompts/scheduled + schedule.yaml deletion, and carrying the operator-intent note (DeepSeek-API vs claude -p OAuth parallel comparison)."
+  - "T5.3 exit criteria c1 and c2 have met_by re-pointed from T4.3 to T4.12; the CD.28 PLAN-resolve-scheduled-agent-provider inventory entry and the T4.3 intent line are updated in lockstep to reflect provider routing now homed at T4.12."
+  - "T3.2 depends_on includes T2.36 (in addition to its existing deps)."
+  - "CD.18 is flipped state: ratified with ratified_as: dec-NNN and filed_via: ops_decisions:dec-NNN (same NNN both fields), and a corresponding numbered Decision recording CD.18 option (a) with a reversal condition exists in docs/DECISIONS.md and in ops_decisions (via the portal backfill)."
+  - "yaml.safe_load parses docs/ROADMAP-PLATFORM.yaml clean; the platform_roadmap loader validates (schema + model_validator, incl. the Decision 93 no-live-dep-on-deferred rule); validate.py --pre is green."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "YAML parses cleanly after all edits."
+    command: "bin/venv-python -c \"import yaml; yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\" && echo PARSE_OK"
+    expected: "Prints PARSE_OK with no traceback."
+    fix_if: "A YAMLError or indentation error indicates a malformed edit block; re-inspect the changed item."
+  - step: 2
+    phase: pre-deploy
+    action: "Loader validates the full document, incl. schema + all model_validator invariants (cycle check, gate resolution, no-live-dep-on-deferred)."
+    command: "bin/venv-python -m scripts.platform_roadmap"
+    expected: "Prints 'PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema.'"
+    fix_if: "A ValueError naming 'no live item may depend on a parked item' means T4.12 has a live (not_started/in_progress) dependent -- check nothing was mistakenly pointed at T4.12; a gate-resolution error means a gate ref (e.g. CD.15->T2.7) failed -- confirm the reserved id was preserved."
+  - step: 3
+    phase: pre-deploy
+    action: "T4.12 has no live dependents (explicit no-live-dep assertion for the newly-deferred item)."
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); items=d['tier_items']; live={'not_started','in_progress'}; bad=[i['id'] for i in items if i.get('status') in live and 'T4.12' in (i.get('depends_on') or [])]; print('LIVE_DEPENDENTS_ON_T4.12:', bad); assert not bad\""
+    expected: "Prints LIVE_DEPENDENTS_ON_T4.12: [] and does not assert."
+    fix_if: "A non-empty list means a live item depends on the parked T4.12; that dependency must instead point at the active T4.3 (which keeps its id) or be removed."
+  - step: 4
+    phase: pre-deploy
+    action: "Six verb-surface items still exist, are status not_started, and carry no import_mode criterion on T0.7a/T0.7b; T1.16 and T4.12 exist; T2.7 is reserved."
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); m={i['id']:i for i in d['tier_items']}; assert m['T1.16']['tier']=='T1'; assert m['T4.12']['status']=='deferred_post_mvp'; assert m['T2.7']['status']=='reserved'; import json; joined=lambda i: json.dumps(m[i]); assert 'import_mode' not in joined('T0.7a'); assert 'import_mode' not in joined('T0.7b'); assert 'T2.36' in (m['T3.2'].get('depends_on') or []); print('STRUCTURE_OK')\""
+    expected: "Prints STRUCTURE_OK."
+    fix_if: "AssertionError names the failed invariant -- fix that specific item (missing new item, un-flipped status, leftover import_mode text, or missing T3.2 edge)."
+  - step: 5
+    phase: pre-deploy
+    action: "CD.18 ratification shape is canonical (Decision 105) when the ratification block is executed."
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); cd={c['id']:c for c in d['candidate_decisions']}['CD.18']; assert cd['state']=='ratified'; ra=cd['ratified_as']; fv=cd['filed_via']; assert ra.startswith('dec-') and fv=='ops_decisions:'+ra, (ra,fv); print('CD18_RATIFICATION_OK', ra)\""
+    expected: "Prints CD18_RATIFICATION_OK dec-NNN with matching ratified_as / filed_via."
+    fix_if: "Mismatch between ratified_as and filed_via, or a non-dec-NNN id -- align both fields to the same dec-NNN allocated in DECISIONS.md. (Skip/adapt only if CD.18 ratification is deferred, which is NOT the chosen path.)"
+  - step: 6
+    phase: pre-deploy
+    action: "Full fast-tier presubmit gate is green (authoritative pre-merge gate when run by PR CI)."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0; all checks pass including validate_platform_roadmap and the candidate-decision-ratification referential guard."
+    fix_if: "A validate_candidate_decision_ratification failure means the DECISIONS.md Decision header / dec-NNN / roadmap flip are inconsistent -- reconcile per Decision 105. Any roadmap-schema failure re-runs step 2 for the specific error."
+constraints:
+  - "Roadmap-bookkeeping ONLY: docs/ROADMAP-PLATFORM.yaml is the sole roadmap edit; docs/DECISIONS.md is touched solely to record the CD.18 ratification Decision. No source code, contracts, skills, or PROJECT_CONTEXT.md edits. Do NOT file any recommendations (explicit task constraint)."
+  - "Status-Trusted-Never-Inferred: this plan does NOT flip any tier_item to complete. The six verb-surface items stay not_started and flip only when the T1.16 Wave-4 closeout plan verifies them. Criterion/status flips are /implement bookkeeping on a verified VP pass, never inferred here."
+  - "No rescue agents or workaround loops (Decision 55). A failed validate --pre is diagnosed and the edit corrected, never bypassed."
+  - "CD.18 ratification executes at /implement time behind the execution-time human confirmation gate (Decision 105 / planning skill Step 5b): the ops_data_portal write and the roadmap state flip are NOT performed during planning. Re-check the max '## Decision NNN' header in DECISIONS.md at execution time (numbering race) and use the next free number in BOTH the header and the roadmap ratified_as/filed_via fields."
+  - "Preserve tombstoned ids: T2.7 stays status: reserved (never deleted) because CD.15's gate list and T2.26 coordination prose reference it; gates on reserved items are inert (T1.4 precedent)."
+  - "No-live-dep-on-deferred (Decision 93): T4.3 must keep its id and stay active so its CD.16/CD.27/CD.28 gate refs and the completed-T5.3 depends_on edge remain valid; the new T4.12 must have zero live dependents."
+context:
+  - "Source of truth: audits/platform-roadmap-mvp-triage-7d57a0d.yaml -- findings RMAP-06, RMAP-07, RMAP-08..RMAP-13, and question_answers Q1. RMAP-01..05 landed in PR #504; RMAP-14..28 in PR #505; this plan finishes the audit."
+  - "Human decisions recorded 2026-07-06: (1) pick_rec feed = QUEUE-FED -> the T4.3 producer-write-repoint is critical-path; (2) Decision-116 split = ALL provider routing (incl. rec-curator) homed at deferred T4.12, so T4.3's MVP scope is strictly the producer WRITE-PATH repoint; (3) CD.18 = RATIFY option (a), revive the stashed agent/ops-decisions-phase-2 WIP into T1.5's decomposition."
+  - "Coupling surfaced (not resolved) in T4.3's note: queue-fed makes the producer critical-path, but decision (2) defers the producer AGENT (rec-curator re-enable) to T4.12. T4.3 delivers only the write-path plumbing; what populates ops_priority_queue for the first queue-fed iteration is an explicit 'decide-at-T4.1/T4.3-decomposition, don't discover' open item -- consistent with the audit's Q5 extension."
+  - "Operator forward-intent (Decision 86 routing -> owning tier_item): persisted as a T4.12 note line -- evaluate DeepSeek-API vs claude -p OAuth in PARALLEL for comparison before committing final per-agent routing. This is a hint for the future PLAN-resolve-scheduled-agent-provider author, NOT a routing Decision and NOT an amendment to Decision 116 (which would require its own ratification + bake-off evidence)."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (82 of 82 triaged). CITE: Decision 91, Decision 84, Decision 93, Decision 86, Decision 105, Decision 122, Decision 116. RELATED: Decision 90, Decision 67, Decision 114."
+  - "Decision-116 WARN resolution: the human's 'all routing -> T4.12' cleanly relocates Decision 116's scheduled-agent provider-routing block (routine agents -> LiteLLM/DeepSeek; judgment agents incl. rec-curator -> claude -p) to T4.12 in one piece; nothing is stranded. The plan updates the CD.28 PLAN-resolve-scheduled-agent-provider inventory entry + the T4.3 intent line in lockstep so Decision 116's ownership pointer stays coherent."
+  - "Decision-122 note: CD.28 was ratified 2026-07-06 as Decision 122 (as amended by Decision 116); the audit's 'CD.28 pending' premise is stale. This plan introduces no 'CD.28 pending' language and treats the CD.16/CD.27/CD.28 gate refs to T4.3 as satisfied gate targets."
+  - "gates: decision-scout=FLAGS_FOUND (resolved via human per-flag adjudication, no re-dispatch needed -- the Decision-116 pivot improves alignment); plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/roadmap-mvp-triage-restructure-vf53ip)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "audits/platform-roadmap-mvp-triage-7d57a0d.yaml findings RMAP-06/07/08..13 + Q1 read."
+  - "docs/ROADMAP-PLATFORM.yaml target items located: T0.7a (L3049), T0.7b (L3082), T0.7c (L3114), T1.1 (L3561), T1.2 (L3594), T1.3 (L3619), T2.7 (L4825), T2.26 (L5907), T3.2 (L6649), T4.3 (L7550), T5.3 (L7921), CD.18 (L695), CD.28 inventory (L1231)."
+  - "New ids confirmed free: T1.16 (highest T1 is T1.15), T4.12 (highest T4 is T4.11)."
+  - "Acceptance criteria understood and verifiable via the V1 verification plan."
+execution_steps:
+  - "GROUP 1 -- Verb-surface consolidation (RMAP-06/08/09/10/11/12). 1a: In T0.7a, delete the import_mode exit_criterion ('import_mode=true with admin principal ... returns 403') and delete the import_mode sentence from the round-2-MED-7 clause in intent; append to the note: 'import_mode criterion dropped 2026-07-06 (RMAP-06/08): obsolete-by-consumer -- its sole stated consumer T2.2 import is complete and shipped WITHOUT it. Residual per-verb unit-test coverage confirmation moved to the consolidated closeout item T1.16.' 1b: In T0.7b, delete the import_mode exit_criterion and the import_mode intent sentence; append the same obsolescence note (cite RMAP-08)."
+  - "1c: Rewrite exit_criteria of T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3 to the DELIVERED named-verb surface only (the criteria that already hold), removing the residual/unmet clauses (which move to T1.16). Keep each item status: not_started. Append to each item's note: 'Flips complete WITH the consolidated verb-surface closeout item T1.16 when the Wave-4 closeout plan lands (RMAP-06 family).' Specifically: T0.7c drop the pagination criterion; T1.1 drop the status-DAG-422 and version-read criteria; T1.3 drop the describe criterion; T1.2 drop/relocate the telemetry-verb criterion (see 1e)."
+  - "1d: Create new tier_item T1.16 (place it immediately after T1.15). Shape: id T1.16; tier T1; name 'Verb-surface closeout (consolidated residuals of T0.7a/b/c + T1.1/T1.2/T1.3)'; intent explaining it owns the verified residuals of the Decision 91 named-verb surface and that the six source items flip complete together when it lands; depends_on [] (or the minimal set among T0.7c/T1.1/T1.3 whose residuals it closes -- all active, no cycle); files_in_scope src/common/ducklake_scd2_schema.py, src/lambdas/ducklake_reader/handler.py, src/lambdas/ducklake_writer/handler.py, scripts/ops_data_portal.py; effort M; strategic false; status not_started."
+  - "1d-criteria: T1.16 exit_criteria (typed id/text/status:open): c1 pagination decision for list-family NAMED_READS -- implement a row-limit parameter OR drop with recorded rationale; c2 describe capability returns per-verb parameter schema (model_json_schema or equivalent) for any named read/write verb; c3 update_ops enforces the status-transition DAG with a typed 422 on illegal transitions; c4 a history-version named read returns a prior SCD2 version of a rec (audit-trail read); c5 per-verb unit-test coverage confirmed for all NAMED_READS verbs and all VERB_REGISTRY write verbs; c6 on this item's completion, flip T0.7a/T0.7b/T0.7c/T1.1/T1.2/T1.3 to complete (the joint-closeout bookkeeping)."
+  - "1e (RMAP-11, T1.2 telemetry verbs): add T1.16 exit_criterion c7: 'Telemetry read verbs (the analysis QUERY surface) added to NAMED_READS -- SEQUENCED AFTER T2.36 (telemetry tables cannot exist on DuckLake until T2.36 lands); natural owner is the T3.3 decomposition, which defines what analysis reads.' In T1.2's note, record that the non-telemetry verb expansion is delivered (folded into T1.16) and the telemetry-verb residual is re-homed to T1.16 c7 sequenced-after-T2.36, so T1.2 no longer looks blocked on an unbuilt substrate."
+  - "GROUP 2 -- T2.7 merge (RMAP-13). 2a: Change T2.7 to status: reserved; set name to 'RESERVED -- residual absorbed into T2.26 (2026-07-06, RMAP-13)'; replace intent with a supersession note: two of four criteria already satisfied by shipped work (recs off Athena per T2.19; migrated-table _current views dropped per T2.26 c4); the live residual (retire the _current views of the two still-Iceberg tables) is folded into T2.26; id preserved because CD.15's gate list and T2.26 prose reference it (gates on reserved items are inert, T1.4 precedent). Keep depends_on/exit_criteria minimal or emptied per the T1.4 reserved template; add rename_history."
+  - "2b: In T2.26, add an exit_criterion (typed, status: open) capturing the folded residual: 'Retire the Athena _current views of the two still-Iceberg ops tables (the survivor surface previously owned by T2.7, absorbed 2026-07-06 per RMAP-13).' 2c: Invert T2.26 c4's pointer: change its text from 'Per-table Athena _current views for migrated tables removed (T2.7 owns any survivor)' to '... removed; T2.26 owns any surviving _current view of the still-Iceberg tables (T2.7 residual absorbed here, RMAP-13)'. Keep c4 status: met / met_by unchanged. Update the T2.26 intent line that reads 'coordinating with T2.7, which owns whatever _current surface survives' to state T2.26 now owns it (T2.7 reserved)."
+  - "GROUP 3 -- T4.3 split (RMAP-07) + human decisions. 3a: Rewrite T4.3 to the MVP producer-write-repoint slice. name -> 'Priority-queue producer repoint onto the DuckLake boundary (MVP producer slice)'; intent -> restore REC PRODUCTION by repointing the rec-curator / priority-queue producer WRITE PATH (scripts/s3_log_store.py producer flow) off the retired OpsWriter/Iceberg staging onto the closed DuckLake writer boundary (Decision 84 caveat: repoint the producer before re-enabling), so queue writes land where the DuckLake readers serve; explicitly NOTE that the scheduled-agent re-enable + all Decision-116 provider routing are OUT of scope here and owned by T4.12. depends_on -> [T2.26, T0.7a, T0.8] (re-pointed off T4.1). files_in_scope -> scripts/s3_log_store.py, scripts/ops_data_portal.py, src/lambdas/ducklake_writer/. effort S; status not_started. exit_criteria (typed): c1 priority-queue producer flow writes via the closed ducklake_writer boundary (no OpsWriter/Iceberg staging write survives on the producer path); c2 a produced rec is visible via the priority_queue_current named read; c3 DQ/replacement-closure check confirms the old staging producer path is dead."
+  - "3b (human decision records in T4.3 note): 'pick_rec feed = QUEUE-FED (operator decision 2026-07-06): the executor picks from ops_priority_queue, so this producer repoint is CRITICAL-PATH -- the loop cannot pick from an empty queue. Provider-routing split (operator decision 2026-07-06): ALL scheduled-agent re-enable + Decision-116 provider routing (incl. rec-curator) are deferred to T4.12; this item is strictly the producer WRITE-PATH repoint. OPEN COUPLING for T4.1/T4.3 decomposition: with the producer AGENT (rec-curator re-enable) deferred to T4.12, name what populates ops_priority_queue for the first queue-fed iteration (e.g. an inline curator invocation or a minimal producer) -- decide at decomposition, do not discover (audit Q5 extension).'"
+  - "3c: Create new tier_item T4.12 (place after T4.11) created DIRECTLY as status: deferred_post_mvp. id T4.12; tier T4; name 'Scheduled-agent loop re-enable (five agents) + provider routing + legacy prompt-surface deletion'; intent -> re-enable doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality (rec-curator's producer WRITE-PATH is T4.3; its re-enable/routing lands here with the rest), realize Decision-116 provider routing for all six agents (routine -> LiteLLM/DeepSeek Tier-1; judgment incl. rec-curator -> claude -p Max OAuth), and delete .github/prompts/scheduled/ + .github/agents/schedule.yaml with runtime-consumer repoint (the former T4.3 c5). depends_on [T4.1, T4.3, T0.7a, T0.8] (all active -> permitted dormant edges from a deferred item). effort M; strategic false; status deferred_post_mvp."
+  - "3c-criteria: T4.12 exit_criteria (typed, status: open) mirror the former T4.3 c1..c5 minus the producer-write-repoint now in T4.3: cA all five remaining scheduled agents run on schedule; cB findings file recs via the log-rec verb; cC telemetry emitted per invocation; cD substrate choice (Step Functions scheduled execution vs GitHub-hosted Actions schedule) documented with rationale; cE Decision-116 provider routing realized for all six agents (schedule.yaml provider fields + enabled flipped); cF delete .github/prompts/scheduled/ + .github/agents/schedule.yaml and repoint all runtime consumers (scripts/run_scheduled_agent.py, src/data/handlers/scheduled_agent_handler.py, src/data/handlers/findings_processor_handler.py, scripts/validate.py check_source_registry, src/lambdas/data-pipeline/manifest.yaml) -- rehomed from T4.3 c5 / T5.3 c1-c2."
+  - "3c-note (T4.12): add progress_note 'Created deferred_post_mvp 2026-07-06 (RMAP-07 split of T4.3; Decision 93). Operator forward-intent for the routing realization (Decision 86 routing to owning item): evaluate DeepSeek-API vs claude -p OAuth in PARALLEL for direct comparison before committing final per-agent routing -- a hint for the future PLAN-resolve-scheduled-agent-provider author, NOT a routing Decision and NOT an amendment to Decision 116. No live item depends on T4.12 (no-live-dep rule holds).'"
+  - "3d (lockstep, Decision 116): re-point T5.3 exit_criteria c1 and c2 met_by from 'T4.3' to 'T4.12' (the deletion scope now lives in T4.12 cF); leave their status: rehomed. Update T5.3 progress_note to state the .github/prompts/scheduled + schedule.yaml deletion moved from T4.3 to T4.12 in the RMAP-07 split. In CD.28's detail, update the 'PLAN-resolve-scheduled-agent-provider' inventory entry and the reconciliation note so its ownership reads T4.12 (not T4.3); update the '(T4.3-owned)' / 'T4.3-owned' phrases naming provider-routing ownership to T4.12. Update the T4.3 intent line in the CD.28 reconciliation prose to reflect T4.3 = producer-write-repoint only."
+  - "3d-audit-F-009 note: leave the CD.16 dispatcher-smoke-test 'deferred until T4.3' clauses AS-IS unless they specifically gate the FIVE-agent re-enable; if a clause's intent is 'until the scheduled-agent loop is re-enabled', add a parenthetical '(re-enable now owned by T4.12)'. Do not silently retarget gate semantics -- only annotate. Flag any ambiguous CD.16 clause in the /implement report rather than guessing."
+  - "GROUP 4 -- Q1 sequencing. 4a: In T3.2, add T2.36 to depends_on -> [T3.1, T0.12.6, T2.36]; append to intent/note that the storage edge was added 2026-07-06 (Q1) because the PRODUCE->...->ASSERT verifier's PERSIST/QUERY assertions need the DuckLake telemetry tables (T2.36) to exist. Confirm no cycle (T2.36 depends_on [T2.19]; no path back to T3.2)."
+  - "4b -- CD.18 ratification block (DRAFT authored here; EXECUTED at /implement behind the confirmation gate, Decision 105 / planning skill Step 5b). Drafted Decision text: Title 'Ratify CD.18: revive the stashed agent/ops-decisions-phase-2 WIP into T1.5's Phase-2 decomposition'. Body: CD.18 (promoted from KG.6) required a decision before T1.5 begins on the fate of the stashed agent/ops-decisions-phase-2-semantic-definition WIP (scripts/ops_data_portal.py, scripts/executor/rec_write_guidance.py, tests/test_ops_data_portal_decisions.py). Decision: option (a) -- revive the stashed work and land it inside T1.5's strategic decomposition; its semantic-definition content directly serves Phase-2 semantics and preserves prior planning effort. REVERSAL CONDITION: if, during T1.5 decomposition, the revived WIP proves unfittable to the current Lambda-handler / named-verb architecture (CD.10 dismantled ops_data_portal as the agent surface), void it and re-derive Phase-2 semantics fresh per CD.18 option (b); record the reversal as an amendment to this Decision. Gates T1.5."
+  - "4b-execution: at /implement time -- (i) re-check the max '## Decision NNN' header in docs/DECISIONS.md and allocate the next free number NNN; (ii) add the drafted Decision under '## Decision NNN: ...' in docs/DECISIONS.md; (iii) run 'bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md' to rebuild ops_decisions from DECISIONS.md (portal requires the agent_platform assume-role profile); (iv) in docs/ROADMAP-PLATFORM.yaml flip CD.18: state: ratified, ratified_as: dec-NNN, filed_via: ops_decisions:dec-NNN (same NNN both fields, canonical Decision-105 shape). This is the ONLY step that writes outside the two scope files, and it goes through the ops portal, not a direct ops_decisions edit."
+  - "FINAL: run the Verification Plan steps 1-6 in order; loop until each passes; on any failure diagnose and correct the specific edit (never bypass validate). Report: the exact tier_items changed, the new T1.16/T4.12 ids, the CD.18 dec-NNN allocated, and the validate --pre result."
+rollback: >-
+  Single-file roadmap edit plus one DECISIONS.md Decision. To roll back: git revert the roadmap commit
+  (restores T0.7a/b/c, T1.1/2/3, T2.7, T2.26, T3.2, T4.3, T5.3, CD.18 to prior text and removes T1.16/T4.12).
+  If CD.18 was already backfilled to ops_decisions, the revert of the DECISIONS.md Decision + a re-run of
+  --backfill-decisions-md restores the prior decisions projection; the CD.18 roadmap flip reverts with the
+  roadmap file. No infra, no Lambda, no data migration -- reversible by git alone.
