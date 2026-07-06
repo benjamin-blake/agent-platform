@@ -2159,6 +2159,302 @@ class TestCiRcaCrossCheckSpine:
         with patch.object(p, "ROOT", tmp_path):
             p._run_ci_rca_cross_check(ctx)  # must not raise
 
+    def test_emit_dir_reachable_when_absent_from_pending_dir(self, tmp_path, monkeypatch):
+        """CIRCA-01: a bundle present ONLY in CI_RCA_BUNDLE_EMIT_DIR (absent from the pending
+        dir) is still reachable -- a deliberate earliest_viable_gate mismatch stamps
+        cross_check_check_2 in warn mode and raises ValueError in strict mode.
+        """
+        import hashlib as _hashlib
+        import json as _json
+
+        import scripts.ops_data_portal as p
+
+        emit_dir = tmp_path / "emit"
+        emit_dir.mkdir(parents=True, exist_ok=True)
+        bundle_data = {"earliest_viable_gate": "CI", "escape_mode": "tier_misplaced", "vacuous_pass": False}
+        payload = {k: v for k, v in bundle_data.items() if k != "sha256"}
+        sha = _hashlib.sha256(
+            _json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        ).hexdigest()
+        bundle_data["sha256"] = sha
+        (emit_dir / f"{sha}.json").write_bytes(
+            _json.dumps(bundle_data, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        )
+        # Confirm the pending dir genuinely has no bundle -- this is the CI layout under test.
+        pending_dir = tmp_path / "logs" / ".ci-rca-evidence-pending"
+        assert not (pending_dir / f"{sha}.json").exists()
+
+        monkeypatch.setenv("CI_RCA_BUNDLE_EMIT_DIR", str(emit_dir))
+        ctx = self._ctx_v2(earliest_viable_gate="pre")  # deliberately disagrees with bundle's "CI"
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+
+        with patch.object(p, "ROOT", tmp_path):
+            p._run_ci_rca_cross_check(ctx)  # warn mode: must not raise
+        assert ctx["warn_mode_reject"]["reasons"] == ["cross_check_check_2"]
+
+        ctx2 = self._ctx_v2(earliest_viable_gate="pre")
+        ctx2["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with (
+            patch.object(p, "ROOT", tmp_path),
+            patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
+        ):
+            with pytest.raises(ValueError, match="check-2"):
+                p._run_ci_rca_cross_check(ctx2)
+
+
+class TestCiRcaStrictLegacyReject:
+    """CIRCA-02: strict mode rejects a source=ci_rca write with context_v2_json=None."""
+
+    def test_strict_mode_rejects_legacy_no_context(self, tmp_path: Path) -> None:
+        import scripts.ops_data_portal as p
+
+        flags_file = tmp_path / "feature_flags.yaml"
+        flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
+        with patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file):
+            with pytest.raises(ValueError, match="CI_RCA_STRICT_MODE=strict"):
+                p.file_rec(dict(_CI_RCA_FIELDS))
+
+    def test_warn_mode_still_files_legacy_with_deprecation_warning(self, tmp_path: Path, caplog) -> None:
+        """Warn mode keeps accepting the legacy no-context_v2_json path (rollout window)."""
+        import scripts.ops_data_portal as p
+
+        recs_file = tmp_path / "recs.jsonl"
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-9201"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
+        ):
+            rec_id = p.file_rec(dict(_CI_RCA_FIELDS))
+        assert rec_id == "rec-9201"
+        assert any("legacy free-text" in r.message for r in caplog.records)
+
+
+class TestEvidenceBundleRefConditional:
+    """CIRCA-06: _EvidenceBundleRef.s3_uri is required iff upload_status=='ok'."""
+
+    def test_upload_failed_permits_empty_s3_uri(self) -> None:
+        import scripts.ops_data_portal as p
+
+        ref = p._EvidenceBundleRef(sha256="a" * 64, s3_uri="", upload_status="upload_failed")
+        assert ref.s3_uri == ""
+
+    def test_ok_with_empty_s3_uri_fails(self) -> None:
+        import scripts.ops_data_portal as p
+
+        with pytest.raises(ValidationError):
+            p._EvidenceBundleRef(sha256="a" * 64, s3_uri="", upload_status="ok")
+
+    def test_ok_with_non_s3_uri_fails(self) -> None:
+        import scripts.ops_data_portal as p
+
+        with pytest.raises(ValidationError):
+            p._EvidenceBundleRef(sha256="a" * 64, s3_uri="https://example.com/x", upload_status="ok")
+
+    def test_ok_with_valid_s3_uri_passes(self) -> None:
+        import scripts.ops_data_portal as p
+
+        ref = p._EvidenceBundleRef(sha256="a" * 64, s3_uri="s3://bucket/key.json", upload_status="ok")
+        assert ref.upload_status == "ok"
+
+
+class TestTerminusOverrideTyped:
+    """CIRCA-08: why_chain_terminus_override is a typed sub-model (reason: str, 80-400 chars)."""
+
+    def _ctx_v2(self, **overrides):
+        dg = {
+            "earliest_viable_gate": "pre",
+            "actual_gate_that_caught_it": "CI",
+            "gap_explanation": (
+                "test gap explanation with enough chars for the field to satisfy the minimum length "
+                "floor, citing scripts/validate.py:1 for reference."
+            ),
+        }
+        ctx = {
+            "schema_version": 2,
+            "proximate_cause": "x" * 100,
+            "why_chain": ["a " * 25, "b " * 25, "no systemic keyword or citation here at all really"],
+            "detection_gap": dg,
+            "recurrence_class": "novel",
+            "corrective_action": "x" * 100,
+            "preventive_action": "x" * 100,
+        }
+        ctx.update(overrides)
+        return ctx
+
+    def test_bad_dict_shape_fails(self) -> None:
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2(why_chain_terminus_override={"x": 1})
+        with pytest.raises(ValidationError):
+            p.CiRcaContext.model_validate(ctx)
+
+    def test_reason_too_short_fails(self) -> None:
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2(why_chain_terminus_override={"reason": "x" * 79})
+        with pytest.raises(ValidationError):
+            p.CiRcaContext.model_validate(ctx)
+
+    def test_reason_too_long_fails(self) -> None:
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2(why_chain_terminus_override={"reason": "x" * 401})
+        with pytest.raises(ValidationError):
+            p.CiRcaContext.model_validate(ctx)
+
+    def test_conformant_reason_validates_and_bypasses_terminus(self) -> None:
+        """A conformant terminus override validates even though the why_chain final entry
+        deliberately lacks a systemic keyword and a file:line citation (the terminus floor)."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2(why_chain_terminus_override={"reason": "x" * 80})
+        parsed = p.CiRcaContext.model_validate(ctx)
+        assert parsed.why_chain_terminus_override is not None
+        assert parsed.why_chain_terminus_override.reason == "x" * 80
+
+    def test_no_override_still_enforces_terminus_floor(self) -> None:
+        """Sanity: without an override, the deliberately-noncompliant final entry still fails."""
+        import scripts.ops_data_portal as p
+
+        ctx = self._ctx_v2()
+        with pytest.raises(ValidationError):
+            p.CiRcaContext.model_validate(ctx)
+
+
+class TestWarnModePerRuleStamping:
+    """CIRCA-04 (portal half): per-rule schema deficiency stamping."""
+
+    def test_why_chain_too_long_stamps_specific_tag(self, tmp_path: Path) -> None:
+        import scripts.ops_data_portal as p
+
+        deficient_ctx = {
+            **_VALID_CONTEXT_V2,
+            "why_chain": [
+                "a " * 25,
+                "b " * 25,
+                "c " * 130 + "systemic scripts/validate.py:1",  # > 250 chars, schema_version=1
+            ],
+            "rca_confidence": "undetermined",  # isolate from bundle-absent
+        }
+        recs_file = tmp_path / "recs.jsonl"
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-9301"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            rec_id = p.file_rec(dict(_CI_RCA_FIELDS), context_v2_json=deficient_ctx)
+        assert rec_id == "rec-9301"
+        entry = json.loads(recs_file.read_text(encoding="utf-8").splitlines()[0])
+        stored = json.loads(entry["context_v2_json"])
+        assert stored["warn_mode_reject"]["reasons"] == ["schema_why_chain_too_long"]
+
+    def test_unmapped_deficiency_falls_back_to_bare_tag(self) -> None:
+        import scripts.ops_data_portal as p
+
+        assert p._classify_schema_deficiency("recurrence_class must be one of [...]") == "schema_deficiency"
+
+
+class TestWhyChainCeilingVersioned:
+    """CIRCA-04 ceiling: why_chain per-entry length ceiling is version-gated (v1=250, v2=400)."""
+
+    def _ctx_v2(self, why_chain_last_entry: str, schema_version: int):
+        dg = {
+            "earliest_viable_gate": "pre",
+            "actual_gate_that_caught_it": "CI",
+            "gap_explanation": (
+                "test gap explanation with enough chars for the field to satisfy the minimum length "
+                "floor, citing scripts/validate.py:1 for reference."
+            ),
+        }
+        return {
+            "schema_version": schema_version,
+            "proximate_cause": "x" * 100,
+            "why_chain": ["a " * 25, "b " * 25, why_chain_last_entry],
+            "detection_gap": dg,
+            "recurrence_class": "novel",
+            "corrective_action": "x" * 100,
+            "preventive_action": "x" * 100,
+        }
+
+    @staticmethod
+    def _entry_of_length(total_len: int) -> str:
+        """Build a why_chain final entry of EXACTLY total_len chars, preserving the trailing
+        systemic keyword + file:line citation the terminus check requires."""
+        suffix = "this is a systemic gap at scripts/validate.py:1"
+        filler_len = total_len - len(suffix) - 1  # -1 for the joining space
+        assert filler_len > 0
+        filler = ("c" * filler_len)[:filler_len]
+        entry = f"{filler} {suffix}"
+        assert len(entry) == total_len, len(entry)
+        return entry
+
+    def test_v2_accepts_300_char_entry(self) -> None:
+        import scripts.ops_data_portal as p
+
+        entry = self._entry_of_length(300)
+        ctx = self._ctx_v2(entry, schema_version=2)
+        parsed = p.CiRcaContext.model_validate(ctx)
+        assert parsed.schema_version == 2
+
+    def test_v1_rejects_same_300_char_entry(self) -> None:
+        import scripts.ops_data_portal as p
+
+        entry = self._entry_of_length(300)
+        ctx = self._ctx_v2(entry, schema_version=1)
+        with pytest.raises(ValidationError, match="max 250"):
+            p.CiRcaContext.model_validate(ctx)
+
+    def test_v1_default_250_ceiling_unaffected_for_historical_rows(self) -> None:
+        """A 250-char entry (the pre-existing ceiling) still validates at schema_version=1 --
+        no historical row is newly rejected by the version-gated loosening."""
+        import scripts.ops_data_portal as p
+
+        entry = self._entry_of_length(250)  # exactly the pre-existing ceiling
+        ctx = self._ctx_v2(entry, schema_version=1)
+        parsed = p.CiRcaContext.model_validate(ctx)
+        assert parsed.schema_version == 1
+
+
+class TestDetectionGapUnknownGate:
+    """CIRCA-09 (enum half): 'unknown' is accepted by _DetectionGap.actual_gate_that_caught_it."""
+
+    def test_unknown_validates(self) -> None:
+        import scripts.ops_data_portal as p
+
+        gap = p._DetectionGap(
+            earliest_viable_gate="pre",
+            actual_gate_that_caught_it="unknown",
+            gap_explanation=(
+                "not_a_gate workflow -- terraform-apply-sandbox has no CI-gate concept to report, so the "
+                "bundle emits null and the agent mirrors 'unknown' at scripts/validate.py:1."
+            ),
+        )
+        assert gap.actual_gate_that_caught_it == "unknown"
+
+    def test_still_rejects_out_of_enum_value(self) -> None:
+        import scripts.ops_data_portal as p
+
+        with pytest.raises(ValidationError):
+            p._DetectionGap(
+                earliest_viable_gate="pre",
+                actual_gate_that_caught_it="not_a_real_gate",
+                gap_explanation=(
+                    "explanation with enough chars and a citation at scripts/validate.py:1 to satisfy "
+                    "the 120-character minimum length floor for this field."
+                ),
+            )
+
+    def test_guidance_documents_unknown_and_mirror_instruction(self) -> None:
+        from scripts.executor.rec_write_guidance import get_rec_write_guidance
+
+        guidance = get_rec_write_guidance(source="ci_rca")
+        detection_gap_doc = guidance["context_v2_json"]["schema_fields"]["detection_gap"]
+        assert "unknown" in detection_gap_doc
+        assert "mirror" in detection_gap_doc.lower()
+
 
 class TestProposeOrCloseRec:
     """Tests for propose_or_close_rec (T3.8 / CD.36 close_proposed lifecycle support)."""
@@ -2464,7 +2760,9 @@ class TestWarnModeRejectMarker:
         assert rec_id == "rec-9101"
         entry = json.loads(recs_file.read_text(encoding="utf-8").splitlines()[0])
         stored = json.loads(entry["context_v2_json"])
-        assert stored["warn_mode_reject"]["reasons"] == ["schema_deficiency"]
+        # CIRCA-04: per-rule stamping -- a too-short why_chain entry stamps the specific
+        # schema_why_chain_too_short tag, not the bare "schema_deficiency" bucket.
+        assert stored["warn_mode_reject"]["reasons"] == ["schema_why_chain_too_short"]
         assert stored["warn_mode_reject"]["mode_at_write"] == "warn"
 
     def test_schema_deficiency_strict_raises_no_rec(self, tmp_path: Path) -> None:
