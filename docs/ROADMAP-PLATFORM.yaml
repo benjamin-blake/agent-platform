@@ -1281,8 +1281,9 @@ candidate_decisions:
           Rationale: Ambient-context docs that describe the architecture as Bedrock-primary mislead any
           agent that loads them.
     gates: [T0.4, T4.1, T4.2, T4.3, T4.4]
-    state: pending
-    filed_via: pending_log_decision_lambda
+    state: ratified
+    ratified_as: dec-122
+    filed_via: ops_decisions:dec-122
     supersedes_decisions: [40, "CD.7"]
     discipline_points:
       - LiteLLM is the only Layer-1 inference protocol surface. Direct provider-SDK imports are forbidden in the executor and in scripts/llm_client.py.
@@ -2461,12 +2462,12 @@ tier_items:
     related_candidate_decisions: [CD.25]
     effort: M
     strategic: false
-    status: in_progress
+    status: complete
+    completed_at: "2026-07-06"
     progress_note: >-
-      2026-07-05: PLAN-inference-provider-yaml-conversion implemented and locally verified --
-      criteria 1, 3, 4 met (YAML ratified with projects_to; old files deleted; plan-critique +
-      /implement code-review both PROCEED). Criterion 2's "CI green" sub-clause is pending PR
-      merge; flips to complete once PR CI confirms green.
+      2026-07-06 (RMAP-02): PR #469 (53796b4) merged to main behind required pr-validate,
+      satisfying the last "CI green" sub-clause; inference-provider.yaml v1/ratified, .md
+      + model_routing.yaml deleted, model_registry.py reads the YAML.
 
   - id: T-1.15
     tier: T-1
@@ -2961,10 +2962,12 @@ tier_items:
     related_candidate_decisions: [CD.6, CD.28]
     effort: XS
     strategic: false
-    status: in_progress
+    status: complete
+    completed_at: "2026-07-06"
     progress_note: |
       - 2026-06-21: Deployed to sandbox (PR #201 + tag-fix #204, CI recovery #206) and verified end-to-end: exit criteria 1-3 PASS -- DeepSeek (deepseek/deepseek-chat) and Anthropic (anthropic/claude-haiku-4-5) LiteLLM smoke-tests return 200, key fetched as PlatformDev via the InferenceCredentialsRead grant (GetSecretValue scoped to both secret ARNs). Sandbox CD green.
       - 2026-06-28: Criteria closeout (PLAN-deepseek-anthropic-api-keys): c1/c2/c3 flipped to status=met (met_by=deepseek-anthropic-api-keys); c4 rehomed to T2.9 (deferred_post_mvp per human decision). All active criteria met; item remains in_progress -- completion gated solely on CD.28 ratification. Note: VP step 3 (explicit iam:GetRolePolicy check) skipped -- PlatformDev lacks self-inspect IAM permission (AccessDenied); c3 accepted as met via VP steps 1-2 live grant exercise per the plan's documented fallback.
+      - 2026-07-06 (RMAP-04): CD.28 ratified as Decision 122 (as amended by Decision 116); c1-c3 met, c4 rehomed to T2.9. Completion was gated solely on this ratification (a decision act).
     user_action_required: true
   - id: T0.5
     tier: T0
@@ -3699,7 +3702,11 @@ tier_items:
       - tests/test_validate_decisions.py
       - tests/test_execute_recommendation.py
     exit_criteria:
-      - "docs/DECISIONS.md retired (Phase 3b)"
+      - >-
+        docs/DECISIONS.md retired (Phase 3b): docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md deleted,
+        and `grep -r 'DECISIONS.md' scripts/ src/ docs/ terraform/` returns no production references
+        (grep-no-production-references + file-deletion mechanic folded from T5.4, tombstoned 2026-07-06
+        per audit RMAP-05; T1.5 c1 is the single owner of DECISIONS.md retirement)
       - "ops_decisions DQ checks all green (Phase 5)"
       - "decision_id int column deprecated (Phase 6)"
       - "grep -rE 'from scripts.ops_data_portal import|import scripts.ops_data_portal' scripts/ src/ returns zero in production code outside src/lambdas/ (Lambda handlers retain internal imports)"
@@ -5885,7 +5892,13 @@ tier_items:
     related_candidate_decisions: [CD.35]
     effort: M    # raised from S 2026-06-10: budget-classification work added per CD.35 points 6-9
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-07-06"
+    progress_note: >-
+      2026-07-06 (RMAP-01): all five criteria pass against read artifacts -- environment-taxonomy.md
+      Guard subsection is SOLE SoT, terraform_apply_guard.py classifies in-budget vs out-of-budget
+      against authority_budget.json, prompt_compliance --all clean; Decision 92 point 5 records
+      "IMPLEMENTED by T2.25 / 2026-06-29". Status simply never flipped.
 
   - id: T2.26
     tier: T2
@@ -7241,7 +7254,12 @@ tier_items:
     related_intents: [verification-system]
     effort: S
     strategic: false
-    status: not_started
+    status: complete
+    completed_at: "2026-07-06"
+    progress_note: >-
+      2026-07-06 (RMAP-03): validate_tier_floor wired into validate.py and _V2_PHASE_ENUM rejection
+      in plan_document.py both landed by audit-remediation-wave-5; all three criteria already
+      status=met.
     note: "Carrier for VF-04 (Decision 48:2414 acknowledged-but-unowned) + VF-13 (audit f80508b). Prerequisite for T3.15 (VP replay needs the hardened phase enum). Derived recs are automatable: false (Decision 44)."
 
   - id: T3.18
@@ -7918,19 +7936,23 @@ tier_items:
         intent to the receiving tier_item). T5.3 complete; T4.3 not_started, inherits deletion scope.
   - id: T5.4
     tier: T5
-    name: Markdown DECISIONS.md retirement
-    intent: Per INTENT-ops-decisions-graduation Phase 3b. After T1.5 lands and ops_decisions is the source of truth, delete docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md.
-    depends_on: [T1.5]
-    files_in_scope:
-      - docs/DECISIONS.md    # deleted
-      - docs/DECISIONS_ARCHIVE.md    # deleted
-    exit_criteria:
-      - "grep -r 'DECISIONS.md' returns no production references"
-      - "Files deleted"
+    name: "RESERVED -- superseded by T1.5 c1 (DECISIONS.md retirement, Phase 3b)"
+    intent: >-
+      T5.4 duplicated T1.5's first exit criterion (docs/DECISIONS.md retirement, Phase 3b). Its
+      grep-no-production-references + file-deletion mechanic is folded into T1.5 c1, the single owner.
+      Id preserved because roadmap prose at T1.5 files_in_scope and T2.26 coordination notes reference
+      it; no depends_on/gate/CD reference existed to migrate.
+    depends_on: []
+    files_in_scope: []
+    exit_criteria: []
+    rename_history:
+      from: Markdown DECISIONS.md retirement (original tier_item; standalone grep+delete mechanic)
+      to: "RESERVED -- superseded by T1.5 c1, mechanic owned by T1.5 c1"
+      reason: 2026-07-06 audit RMAP-05 (audits/platform-roadmap-mvp-triage-7d57a0d.yaml) — T5.4 duplicated T1.5's first exit criterion; its grep-no-production-references + file-deletion mechanic folded into T1.5 c1, the single owner.
     related_intents: [ops-decisions-graduation]
     effort: XS
     strategic: false
-    status: not_started
+    status: reserved
   - id: T5.5
     tier: T5
     name: INTENT-* document extraction and retirement
