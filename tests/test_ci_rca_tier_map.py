@@ -208,3 +208,31 @@ class TestComputeEarliestViableGate:
     def test_version_constant(self):
         assert isinstance(AST_WALKER_VERSION, int)
         assert AST_WALKER_VERSION >= 1
+
+    def test_none_default_undetermined_headroom(self):
+        """CIRCA-05: default (unmeasured) current_pre_runtime declines promotion, no fabricated 0.0s."""
+        tm = {"validate_x": ["presubmit"]}
+        gate, rationale = compute_earliest_viable_gate("validate_x", tm, "median=50ms", 0.05)
+        assert gate == "presubmit"
+        assert "undetermined-headroom" in rationale
+        assert "0.0s" not in rationale
+
+    def test_measured_fit_recommends_pre_with_real_runtime(self):
+        """CIRCA-05: measured runtime that fits headroom recommends pre with the real number embedded."""
+        tm = {"validate_x": ["presubmit"]}
+        gate, rationale = compute_earliest_viable_gate("validate_x", tm, "median=50ms", 0.05, current_pre_runtime=120.0)
+        assert gate == "pre"
+        assert "120.0s" in rationale
+
+    def test_measured_exceeds_headroom_stays_presubmit(self):
+        """CIRCA-05: measured runtime that exceeds headroom stays presubmit."""
+        tm = {"validate_x": ["presubmit"]}
+        gate, _ = compute_earliest_viable_gate("validate_x", tm, "median=400000ms", 400.0, current_pre_runtime=120.0)
+        assert gate == "presubmit"
+
+    def test_headroom_exhausted_stays_presubmit(self):
+        """CIRCA-05: current_pre_runtime >= budget (headroom <= 0) never recommends pre."""
+        tm = {"validate_x": ["presubmit"]}
+        gate, rationale = compute_earliest_viable_gate("validate_x", tm, "median=50ms", 0.05, current_pre_runtime=305.0)
+        assert gate == "presubmit"
+        assert "pre" != gate
