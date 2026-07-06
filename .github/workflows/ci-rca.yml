@@ -23,6 +23,13 @@ on:
         type: boolean
         default: false
 
+# CIRCA-03(b): never cancel-in-progress -- a queued run for the SAME head_sha+workflow waits
+# instead of superseding an in-flight run, preserving the terraform-apply-sandbox convergence
+# backstop (Decision 92/94: every distinct convergence failure must still get its own run).
+concurrency:
+  group: ci-rca-${{ github.event.workflow_run.head_sha || github.event.inputs.run_id }}-${{ github.event.workflow_run.name || 'dispatch' }}
+  cancel-in-progress: false
+
 # Only run when CI failed -- skip success and cancellation.
 # Loop guard: this workflow is NOT listed in the workflows: filter above,
 # so a ci-rca failure cannot trigger another ci-rca run.
@@ -251,13 +258,53 @@ jobs:
 
           echo "already_filed=${ALREADY_FILED}" >> "$GITHUB_OUTPUT"
 
+      - name: Fingerprint dedup guard (cross-commit root-cause grouping)
+        id: fp_dedup
+        # CIRCA-03(b): additive to the commit-status "Dedup guard" above (RETAINED -- it covers
+        # same-commit reruns and the terraform-apply-sandbox red-record anchor, which this
+        # cross-commit layer does not). Only runs the reader lookup when the commit-status
+        # layer did not already skip the agent.
+        if: steps.dedup.outputs.already_filed != 'true'
+        run: |
+          DEDUPED="false"
+          if [ "${{ github.event.inputs.force_rca }}" = "true" ]; then
+            echo "force_rca=true; bypassing fingerprint dedup."
+          elif ls /tmp/ci-rca-bundles/*.json > /dev/null 2>&1; then
+            DEDUPED="true"
+            for f in /tmp/ci-rca-bundles/*.json; do
+              FP=$(.venv/bin/python -c "import json,pathlib; print(json.loads(pathlib.Path('$f').read_text(encoding='utf-8')).get('fingerprint',''))" 2>/dev/null || echo "")
+              if [ -z "$FP" ]; then
+                DEDUPED="false"
+                echo "Bundle $f has no fingerprint; running agent."
+                break
+              fi
+              REC_ID=$(bin/venv-python -m scripts.ops_data_portal --find-open-ci-rca-rec --fingerprint "$FP" 2>/dev/null || echo "")
+              if [ -z "$REC_ID" ]; then
+                DEDUPED="false"
+                echo "Fingerprint ${FP} has no open match; running agent."
+                break
+              fi
+              echo "Fingerprint ${FP} matches open ${REC_ID}; bumping occurrence."
+              bin/venv-python -m scripts.ops_data_portal --bump-ci-rca-occurrence "$REC_ID" || true
+            done
+            if [ "$DEDUPED" = "true" ]; then
+              echo "Fingerprint dedup: all bundle(s) matched an open rec; skipping agent."
+            fi
+          fi
+          echo "deduped=${DEDUPED}" >> "$GITHUB_OUTPUT"
+
       - name: Run ci-rca agent
         id: rca_agent
-        if: steps.dedup.outputs.already_filed != 'true'
+        if: steps.dedup.outputs.already_filed != 'true' && steps.fp_dedup.outputs.deduped != 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           CI_RCA_BUNDLE_EMIT_DIR: /tmp/ci-rca-bundles
+          # CIRCA-03(c) / Decision 74: force_rca must bypass BOTH the pre-agent fp_dedup skip
+          # (already reads github.event.inputs.force_rca directly) AND the write-time backstop
+          # inside file_rec(), which the agent invokes as a Bash tool call within this step --
+          # env vars set here propagate to that child process.
+          CI_RCA_FORCE_RCA: ${{ github.event.inputs.force_rca }}
         run: |
           RUN_ID="${{ steps.meta.outputs.run_id }}"
           BUNDLE_SHA="${{ steps.evidence.outputs.bundle_sha }}"
@@ -270,7 +317,7 @@ jobs:
             # Reference the emit-dir so multi-failure runs expose all N bundles to the agent.
             # For a single-failure run BUNDLE_SHA is the only SHA; for N>1 the agent enumerates
             # /tmp/ci-rca-bundles/*.json to find each bundle's sha256 and failure_category.
-            EVIDENCE_CONTEXT=" Evidence bundle(s) are at /tmp/ci-rca-bundles/ -- enumerate *.json for multi-failure runs (one JSON per failed check). Primary bundle SHA: ${BUNDLE_SHA}. Primary S3 URI: ${BUNDLE_S3_URI}. Pending path: ${BUNDLE_PATH}. Local path: ${BUNDLE_LOCAL}."
+            EVIDENCE_CONTEXT=" Evidence bundle(s) are at /tmp/ci-rca-bundles/ -- enumerate *.json for multi-failure runs (one JSON per failed check). Primary bundle SHA: ${BUNDLE_SHA}. Primary S3 URI: ${BUNDLE_S3_URI}. Pending path: ${BUNDLE_PATH}. Local bundle path: ${BUNDLE_LOCAL}."
           fi
           # c12(ii): when no evidence bundle was generated at all, force the agent onto the
           # mandatory human-review route instead of letting it file a confidently-wrong rec with
@@ -289,13 +336,23 @@ jobs:
             --allowedTools "Read,Bash(grep:*),Bash(cat:*),Bash(git log:*),Bash(bin/venv-python -m scripts.ops_data_portal:*)" || true
           cat /tmp/ci-rca-output.json
           # Deterministic filing check: the marker/dedup must reflect a real filing, not the
-          # || true-masked exit above. The parser exits 1 when no FILED: rec-NNN marker is
-          # present, so a run that only mentions a rec id is never marked as RCA'd
-          # (fail-open toward re-diagnosis, per Decision 74).
-          REC_ID=$(bin/venv-python -m scripts.ci_rca_filing /tmp/ci-rca-output.json || true)
-          if [ -z "$REC_ID" ]; then
+          # || true-masked exit above. CIRCA-07: gate on --all (ALL FILED: markers) rather than
+          # the legacy single-marker helper -- the single-marker helper is last-marker-wins, so
+          # a multi-failure run where the LAST diagnosed bundle emits "FILED: none" while an
+          # EARLIER bundle genuinely filed would otherwise report zero filings and skip mark_rca
+          # entirely for a rec that was actually filed. --all is empty only when truly nothing
+          # was filed (fail-open toward re-diagnosis, per Decision 74).
+          FILED_PAIRS=$(bin/venv-python -m scripts.ci_rca_filing --all /tmp/ci-rca-output.json || true)
+          if [ -z "$FILED_PAIRS" ]; then
             echo "::error::ci-rca agent filed no recommendation (no FILED: marker in output)"
             exit 1
+          fi
+          # rec_id output feeds the PR-comment step, which reports a single rec id -- prefer the
+          # legacy last-marker helper's value, falling back to the last --all pair when the final
+          # marker was "none" but an earlier bundle filed (the case this fix addresses).
+          REC_ID=$(bin/venv-python -m scripts.ci_rca_filing /tmp/ci-rca-output.json || true)
+          if [ -z "$REC_ID" ]; then
+            REC_ID=$(echo "$FILED_PAIRS" | tail -1 | cut -d, -f1)
           fi
           echo "rec_id=${REC_ID}" >> "$GITHUB_OUTPUT"
 
@@ -305,25 +362,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Mark per-category (ci-rca/<workflow-slug>/<category>) so a real regression co-occurring
-          # with a SLOC failure produces two un-collapsed status contexts. CD.35 5.5d: for
-          # terraform-apply-sandbox the anchor is the red record's commit; for other workflows
-          # anchor IS head_sha.
+          # CIRCA-07: gate per-category on the rec id ACTUALLY parsed for that category (via
+          # ci_rca_filing --all), not on the full evidence-step category enumeration -- a 1-of-2
+          # filing marks exactly one category's status context, never both. Anchor: CD.35 5.5d
+          # anchors terraform-apply-sandbox on the red record's commit; other workflows use head_sha.
           ANCHOR_SHA="${{ steps.meta.outputs.anchor_sha }}"
           WORKFLOW_SLUG="${{ steps.meta.outputs.workflow_slug }}"
-          CATEGORIES="${{ steps.evidence.outputs.categories }}"
-          if [ -z "$CATEGORIES" ]; then
-            CATEGORIES="unknown"
-          fi
           if [ -n "$ANCHOR_SHA" ]; then
-            IFS=',' read -ra CAT_ARRAY <<< "$CATEGORIES"
-            for CAT in "${CAT_ARRAY[@]}"; do
+            bin/venv-python -m scripts.ci_rca_filing --all /tmp/ci-rca-output.json | while IFS=',' read -r REC_ID CAT; do
+              [ -z "$REC_ID" ] && continue
+              [ -z "$CAT" ] && CAT="unknown"
               CONTEXT="ci-rca/${WORKFLOW_SLUG}/${CAT}"
               gh api "repos/${{ github.repository }}/statuses/${ANCHOR_SHA}" \
                 --method POST \
                 --field state=success \
                 --field context="${CONTEXT}" \
-                --field description="ci-rca filed a recommendation for this failure"
+                --field description="ci-rca filed ${REC_ID} for this failure"
             done
           fi
 

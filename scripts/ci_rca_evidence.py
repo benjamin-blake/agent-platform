@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,38 @@ def _resolve_bucket() -> str:
 
 def _canonical_json(obj: dict[str, Any]) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+
+
+def _compute_fingerprint(workflow_slug: str, failed_check: str, failure_category: str) -> str:
+    """Classifier-anchored grouping key (CIRCA-03(a)) -- deliberately SEPARATE from the bundle's
+    canonical sha256 (an integrity hash over the whole bundle). This key groups failures by
+    root cause across runs: it is invariant to run_id/timestamp/head_sha and distinct across
+    differing failed_check or failure_category.
+    """
+    payload = "\0".join((workflow_slug, failed_check, failure_category))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _slugify_workflow(workflow_name: str) -> str:
+    """Mirror ci-rca.yml's WORKFLOW_SLUG shell derivation so the fingerprint's workflow
+    component matches the same slug the workflow computes independently for status contexts."""
+    slug = workflow_name.lower().replace(" ", "_").replace("/", "-")
+    return re.sub(r"[^a-z0-9_-]", "", slug)
+
+
+def _normalize_first_error_signature(log_text: str, failed_check: str) -> str:
+    """Tie-breaker signature (CIRCA-03(a)) -- NOT the grouping key. Picks the first log line
+    mentioning failed_check (else the first non-blank line) and normalizes volatile digit
+    tokens (line numbers, durations, run ids) so it is stable across reruns of the same failure.
+    """
+    lines = [ln.strip() for ln in log_text.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    match = next((ln for ln in lines if failed_check and failed_check in ln), None)
+    line = match or lines[0]
+    normalized = re.sub(r"\s+", " ", line)
+    normalized = re.sub(r"\d+", "#", normalized)
+    return normalized[:300]
 
 
 def _sha256_of(obj: dict[str, Any]) -> str:
@@ -114,6 +147,7 @@ def _assemble_core(
     vacuous_pass: "bool | str" = "undetermined",
     merge_gate_test_coverage: str = "undetermined",
     coverage_regression: "bool | str" = "undetermined",
+    first_error_signature: str = "",
 ) -> dict[str, Any]:
     from scripts.ci_rca_taxonomy import load_taxonomy, resolve_workflow_tier
     from scripts.ci_rca_tier_map import (
@@ -149,6 +183,11 @@ def _assemble_core(
     if tier_membership is not None:
         check_tiers = tier_membership.get(failed_check)
 
+    # CIRCA-03(a): grouping fingerprint, anchored on the deterministic classifier fields only --
+    # invariant to run_id/timestamp/head_sha, distinct across differing failed_check/failure_category.
+    # Deliberately separate from the bundle's canonical sha256 (a whole-bundle integrity hash).
+    fingerprint = _compute_fingerprint(_slugify_workflow(workflow_name), failed_check, failure_category)
+
     bundle: dict[str, Any] = {
         "schema_version": 3,
         "workflow_run_id": workflow_run_id,
@@ -156,6 +195,8 @@ def _assemble_core(
         "workflow_to_tier_resolution": wf_tier,
         "failed_check": failed_check,
         "failure_category": failure_category,
+        "fingerprint": fingerprint,
+        "first_error_signature": first_error_signature,
         "classification_source": classification_source,
         "tier_membership": check_tiers,
         "earliest_viable_gate": earliest_gate,
@@ -222,6 +263,8 @@ def generate_bundles(
             "workflow_to_tier_resolution": "unknown",
             "failed_check": "unknown",
             "failure_category": "unknown",
+            "fingerprint": _compute_fingerprint(_slugify_workflow(workflow_name), "unknown", "unknown"),
+            "first_error_signature": _normalize_first_error_signature(log_text, "unknown"),
             "classification_source": "taxonomy_fallback",
             "taxonomy_error": str(exc),
             "tier_membership": None,
@@ -257,6 +300,7 @@ def generate_bundles(
             vacuous_pass=vacuous_pass_val,
             merge_gate_test_coverage=coverage,
             coverage_regression=coverage_reg,
+            first_error_signature=_normalize_first_error_signature(log_text, check),
         )
         core["sha256"] = _sha256_of(core)
         bundles.append(core)
@@ -307,6 +351,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.print_bundle:
             print(json.dumps({**bundle, **result}, indent=2, sort_keys=True))
         print(f"BUNDLE_SHA={sha}")
+        print(f"FINGERPRINT={bundle.get('fingerprint', '')}")
         print(f"BUNDLE_S3_URI={result['s3_uri']}")
         print(f"BUNDLE_PATH={result['pending_path']}")
         if result["upload_status"] == "upload_failed":

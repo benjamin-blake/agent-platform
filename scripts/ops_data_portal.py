@@ -212,6 +212,15 @@ class CiRcaContext(BaseModel):
     # CiRcaContext has no extra="forbid" but undeclared fields are dropped by the
     # pydantic default (extra='ignore').
     warn_mode_reject: Optional[dict] = None
+    # CIRCA-03: dedup metadata, portal-derived from the verified evidence bundle (never
+    # agent-authored) by _run_ci_rca_cross_check() -- mirrors the warn_mode_reject Tier-B
+    # pattern. fingerprint is the classifier-anchored grouping key; occurrence_count/last_seen
+    # track recurrences of the SAME open rec (bumped by the workflow's fp_dedup update_rec call,
+    # never by the write-time backstop in file_rec()).
+    fingerprint: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    failure_category: Optional[str] = None
+    occurrence_count: Optional[int] = Field(default=None, ge=1)
+    last_seen: Optional[str] = None
 
     @field_validator("why_chain")
     @classmethod
@@ -413,6 +422,68 @@ def _stamp_warn_mode_reject(context_v2_json: dict, reasons: list[str]) -> None:
             marker["reasons"].append(reason)
 
 
+# CIRCA-03(b)/(c): markers that classify a DuckLakeReader failure as a genuine connectivity
+# outage (Neon scale-to-zero exhausting retries, or the Function URL itself unresolvable) --
+# see src.common.iceberg_reader.DuckLakeReader._reader_url/_invoke, the only raise sites this
+# helper's try/except can observe. Any OTHER exception (bad row_filter, unexpected shape, a
+# non-connectivity RuntimeError) is NOT reader-unreachable and must propagate (Decision 55).
+_READER_UNREACHABLE_MARKERS = (
+    "cannot reach the DuckLake reader",
+    "ducklake_reader",
+)
+
+
+def _is_reader_unreachable_error(exc: Exception) -> bool:
+    """Narrow fail-open classifier for the CI-RCA fingerprint dedup reader call (CIRCA-03)."""
+    if not isinstance(exc, RuntimeError):
+        return False
+    msg = str(exc)
+    return any(marker in msg for marker in _READER_UNREACHABLE_MARKERS)
+
+
+def find_open_ci_rca_rec_by_fingerprint(fingerprint: str, profile: Optional[str] = None) -> Optional[str]:
+    """Return the id of an OPEN source=ci_rca rec whose context_v2_json.fingerprint matches, or None.
+
+    Reads transit the closed DuckLake reader via a single-key STRUCTURAL row_filter
+    (source = 'ci_rca') -- Decision 84 I-3, no caller SQL. The status=open filter and the
+    fingerprint match are applied in-process on the returned rows (no json_extract named verb).
+
+    Fails OPEN (returns None + a loud log) ONLY when the reader itself is unreachable
+    (connectivity failure / Neon scale-to-zero exhausting retries, per
+    _is_reader_unreachable_error). Any other exception raises (Decision 55) -- this is the
+    SAME in-process reader path used by both the workflow's pre-agent skip (CIRCA-03(b)) and
+    the write-time backstop (CIRCA-03(c)); a read cache is never a dedup source (CLAUDE.md).
+    """
+    from src.common.iceberg_reader import make_reader  # noqa: PLC0415
+
+    try:
+        rows = make_reader(profile=profile).current_state("ops_recommendations", row_filter="source = 'ci_rca'") or []
+    except Exception as exc:  # noqa: BLE001
+        if _is_reader_unreachable_error(exc):
+            logger.warning(
+                "[CI_RCA_DEDUP] DuckLake reader unreachable while searching for fingerprint=%s; "
+                "failing open (dedup skipped, filing proceeds): %s",
+                fingerprint,
+                exc,
+            )
+            return None
+        raise
+
+    for row in rows:
+        if row.get("status") != "open":
+            continue
+        ctx_raw = row.get("context_v2_json")
+        if not ctx_raw:
+            continue
+        try:
+            ctx = json.loads(ctx_raw) if isinstance(ctx_raw, str) else ctx_raw
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(ctx, dict) and ctx.get("fingerprint") == fingerprint:
+            return row.get("id")
+    return None
+
+
 def _run_ci_rca_cross_check(
     context_v2_json: dict,
     s3_client_factory: Optional[Callable[[], Any]] = None,
@@ -486,6 +557,15 @@ def _run_ci_rca_cross_check(
 
     if bundle is None:
         return  # bundle not found locally -- skip cross-check (Decision 88)
+
+    # CIRCA-03: stamp portal-derived dedup metadata from the VERIFIED bundle (never
+    # agent-authored) -- mirrors the warn_mode_reject Tier-B pattern. This is the sole place
+    # fingerprint/failure_category enter context_v2_json; file_rec()'s write-time backstop
+    # reads them from here, anchored to the same bundle whose SHA-256 was just verified above.
+    if bundle.get("fingerprint"):
+        context_v2_json["fingerprint"] = bundle["fingerprint"]
+    if bundle.get("failure_category"):
+        context_v2_json["failure_category"] = bundle["failure_category"]
 
     detection_gap = context_v2_json.get("detection_gap") or {}
     agent_evg = detection_gap.get("earliest_viable_gate")
@@ -1175,6 +1255,25 @@ def file_rec(
     if fields.get("source") == "ci_rca" and context_v2_json is not None and not _migration_mode:
         _run_ci_rca_cross_check(context_v2_json)
 
+        # CIRCA-03(c): write-time dedup backstop -- the cross-run race guard. Runs AFTER the
+        # cross-check spine so context_v2_json.fingerprint (stamped from the verified bundle
+        # above) is available. A hit means this fingerprint's root cause already has an OPEN
+        # rec, so this call returns the existing id instead of inserting a duplicate; it does
+        # NOT bump occurrence_count/last_seen -- only the workflow's fp_dedup update_rec path
+        # bumps those (this backstop stays side-effect-free beyond skipping the insert).
+        # force_rca (CI dedup-bypass env, Decision 74) skips this guard entirely.
+        if os.environ.get("CI_RCA_FORCE_RCA", "").strip().lower() not in ("1", "true"):
+            fingerprint = context_v2_json.get("fingerprint")
+            if fingerprint:
+                existing_id = find_open_ci_rca_rec_by_fingerprint(fingerprint, profile=profile)
+                if existing_id:
+                    logger.info(
+                        "[CI_RCA_DEDUP] fingerprint=%s matches open %s; skipping insert (write-time backstop).",
+                        fingerprint,
+                        existing_id,
+                    )
+                    return existing_id
+
     _derive_computed_fields(fields)
 
     if not _migration_mode:
@@ -1313,6 +1412,30 @@ def _sanitize_athena_record(record: dict) -> dict:
         if value == "":
             result[key] = None
     return result
+
+
+def bump_ci_rca_occurrence(rec_id: str, profile: Optional[str] = None) -> int:
+    """Increment occurrence_count / stamp last_seen on an existing source=ci_rca rec's
+    context_v2_json (CIRCA-03(b)).
+
+    Called ONLY by the workflow's fp_dedup step after a live fingerprint match -- the
+    write-time backstop (file_rec) returns the existing id on a hit WITHOUT bumping, per plan.
+
+    Returns the new occurrence_count (starts at 2 -- the original filing was occurrence 1).
+    """
+    existing = _fetch_rec_from_reader(rec_id, profile=profile)
+    if existing is None:
+        raise RuntimeError(f"bump_ci_rca_occurrence: {rec_id} does not exist in the current projection.")
+    ctx_raw = existing.get("context_v2_json") or "{}"
+    try:
+        ctx = json.loads(ctx_raw) if isinstance(ctx_raw, str) else dict(ctx_raw or {})
+    except (json.JSONDecodeError, TypeError):
+        ctx = {}
+    new_count = int(ctx.get("occurrence_count") or 1) + 1
+    ctx["occurrence_count"] = new_count
+    ctx["last_seen"] = datetime.now(timezone.utc).isoformat()
+    update_rec(rec_id, {"context_v2_json": json.dumps(ctx)}, profile=profile)
+    return new_count
 
 
 def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> bool:
@@ -1823,6 +1946,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Re-validate warn-period source=ci_rca recs against the current strict-mode schema (T1.13 c2 enabler)",
     )
+    action.add_argument(
+        "--find-open-ci-rca-rec",
+        action="store_true",
+        help="Read-only: print the id of an OPEN source=ci_rca rec matching --fingerprint, or nothing (CIRCA-03(b))",
+    )
+    action.add_argument(
+        "--bump-ci-rca-occurrence",
+        metavar="REC_ID",
+        help="Bump occurrence_count/last_seen on an existing source=ci_rca rec's context_v2_json (CIRCA-03(b))",
+    )
+
+    # --find-open-ci-rca-rec fields
+    fp_group = parser.add_argument_group("--find-open-ci-rca-rec fields")
+    fp_group.add_argument("--fingerprint", help="sha256 hex fingerprint to match against open source=ci_rca recs")
 
     # --back-validate fields
     bv = parser.add_argument_group("--back-validate fields")
@@ -1926,6 +2063,24 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(rec_id)
             return 0
         except (ValidationError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+
+    if args.find_open_ci_rca_rec:
+        if not args.fingerprint:
+            print("ERROR: --find-open-ci-rca-rec requires --fingerprint", file=sys.stderr)
+            return 1
+        rec_id = find_open_ci_rca_rec_by_fingerprint(args.fingerprint, profile=args.profile)
+        if rec_id:
+            print(rec_id)
+        return 0
+
+    if args.bump_ci_rca_occurrence:
+        try:
+            new_count = bump_ci_rca_occurrence(args.bump_ci_rca_occurrence, profile=args.profile)
+            print(f"Bumped {args.bump_ci_rca_occurrence} occurrence_count={new_count}")
+            return 0
+        except (ValidationError, ValueError, RuntimeError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
 
