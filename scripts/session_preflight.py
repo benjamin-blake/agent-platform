@@ -464,7 +464,7 @@ def _derive_ci_rca_dispute_open(rows: list[dict]) -> list[dict]:
 
 
 def _derive_ci_rca_undetermined_open(cache_rows: list[dict]) -> list[dict]:
-    """Return open source=ci_rca recs with rca_confidence=undetermined from warm cache rows."""
+    """Return ALL open source=ci_rca recs, rca_confidence=undetermined (untruncated; CIRCA-10 moved the cap to print time)."""
     import json as _json  # noqa: PLC0415
 
     results = []
@@ -482,31 +482,33 @@ def _derive_ci_rca_undetermined_open(cache_rows: list[dict]) -> list[dict]:
             continue
         if ctx.get("rca_confidence") == "undetermined":
             results.append(row)
-    return results[:5]
+    return results
 
 
 def _fetch_ci_rca_undetermined_recs(cache_rows: object = _READER_SENTINEL) -> list[dict]:
-    """Return up to 5 open ci_rca recs with rca_confidence=undetermined -- from warm cache only."""
+    """Return all open ci_rca recs with rca_confidence=undetermined -- from warm cache only."""
     if cache_rows is not _READER_SENTINEL:
         return [] if cache_rows is None else _derive_ci_rca_undetermined_open(cache_rows)  # type: ignore[arg-type]
     return []
 
 
 def print_ci_rca_undetermined_recs(recs: list[dict]) -> None:
-    """Print mandatory human review section for rca_confidence=undetermined recs."""
-    print("\n--- CI-RCA Mandatory Human Review (rca_confidence=undetermined) ---")
+    """Print advisory abstention-review section (CIRCA-10): displays <=5, notes overflow past 5."""
+    print("\n--- CI-RCA Abstention Review (advisory; rca_confidence=undetermined) ---")
     if not recs:
         print("  (none)")
         print()
         return
-    print("  [MANDATORY HUMAN REVIEW] Evidence bundle abstained on these recs.")
-    print("  Review the proximate cause manually -- the deterministic probe could not classify.")
-    for rec in recs:
+    print("  Evidence bundle abstained on these recs -- review the proximate cause manually.")
+    print("  Advisory only: open ci_rca recs already hard-block /plan via Decision 73 L5.")
+    for rec in recs[:5]:
         rec_id = rec.get("id", "unknown")
         title = rec.get("title", "")
         priority = rec.get("priority", "")
         created = rec.get("created_timestamp", "")
         print(f"  {rec_id} [{priority}] {created}: {title}")
+    if len(recs) > 5:
+        print(f"  ... showing 5 of {len(recs)} open undetermined recs")
     print()
 
 
@@ -2186,7 +2188,8 @@ def main(roadmap_detail: str = "slim") -> int:
         "ci_rca_unresolved_recs": correlation.get("unresolved") or [],
         "ci_rca_likely_resolved_recs": correlation.get("likely_resolved") or [],
         "ci_rca_dispute_recs": ci_rca_dispute_recs,
-        "ci_rca_undetermined_recs": ci_rca_undetermined_recs,
+        "ci_rca_undetermined_recs": ci_rca_undetermined_recs[:5],
+        "ci_rca_undetermined_total": len(ci_rca_undetermined_recs),
         "ci_rca_abstention_gauge": ci_rca_abstention_gauge,
         "ci_rca_probe_health_escalation": ci_rca_probe_health_escalation,
         "ci_rca_telemetry": ci_rca_telemetry,

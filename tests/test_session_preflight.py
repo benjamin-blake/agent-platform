@@ -3124,9 +3124,10 @@ class TestFetchCiRcaUndeterminedRecs:
         assert result == []
 
     def test_capped_at_five(self):
+        """CIRCA-10: the cap moved to print time -- derive returns the full untruncated list."""
         rows = [self._make_row(f"rec-{i}") for i in range(10)]
         result = _preflight._derive_ci_rca_undetermined_open(rows)
-        assert len(result) == 5
+        assert len(result) == 10
 
     def test_fetch_passes_cache_rows(self):
         rows = [self._make_row("rec-99")]
@@ -3148,7 +3149,21 @@ class TestFetchCiRcaUndeterminedRecs:
         _preflight.print_ci_rca_undetermined_recs(recs)
         out = capsys.readouterr().out
         assert "rec-1" in out
-        assert "MANDATORY HUMAN REVIEW" in out
+        assert "CI-RCA Abstention Review" in out
+
+    def test_print_ci_rca_undetermined_recs_overflow(self, capsys):
+        recs = [self._make_row(f"rec-{i}") for i in range(7)]
+        _preflight.print_ci_rca_undetermined_recs(recs)
+        out = capsys.readouterr().out
+        assert "showing 5 of 7" in out
+
+    def test_print_ci_rca_undetermined_recs_advisory_wording(self, capsys):
+        recs = [self._make_row("rec-1")]
+        _preflight.print_ci_rca_undetermined_recs(recs)
+        out = capsys.readouterr().out
+        assert "Mandatory" not in out
+        assert "CI-RCA Abstention Review" in out
+        assert "Decision 73 L5" in out
 
 
 class TestCiRcaTelemetrySection:
