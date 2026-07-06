@@ -5,6 +5,7 @@ and the _load_coverage_checker / _load_prompt_compliance helpers.
 """
 
 import importlib.util
+import itertools
 import json
 import sys
 import urllib.error
@@ -3190,107 +3191,6 @@ class TestFastTierCollectability:
         assert runnable == []
         assert deferred == [("tests/test_iceberg_reader.py", "pyarrow")]
 
-    def test_runtime_lazy_import_of_excluded_dep_defers(self) -> None:
-        """A file that collects fine (heavy dep imported lazily at function scope, not module
-        scope -- the rec-2572..2576 test_ops_writer.py shape) but fails at real-run time with a
-        genuinely-absent excluded dep still defers, via the runtime probe."""
-
-        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            result = MagicMock()
-            result.stderr = ""
-            if "--collect-only" in cmd:
-                result.returncode = 0
-                result.stdout = ""
-            else:
-                result.returncode = 1
-                result.stdout = (
-                    "FAILED tests/test_ops_writer.py::TestCompact::test_compact_x - "
-                    "ModuleNotFoundError: No module named 'pandas'\n"
-                )
-            return result
-
-        with (
-            patch("scripts.checks._common.run", side_effect=mock_run),
-            patch("importlib.util.find_spec", return_value=None),
-        ):
-            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
-
-        assert runnable == []
-        assert deferred == [("tests/test_ops_writer.py", "pandas")]
-
-    def test_runtime_failure_with_no_module_error_stays_runnable(self) -> None:
-        """A file that collects fine and fails at runtime with no 'No module named' signature at
-        all is a genuine failure -- must NOT defer (fail-closed)."""
-
-        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            result = MagicMock()
-            result.stdout = "" if "--collect-only" not in cmd else ""
-            result.stderr = ""
-            result.returncode = 0 if "--collect-only" in cmd else 1
-            return result
-
-        with patch("scripts.checks._common.run", side_effect=mock_run):
-            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_something.py"])
-
-        assert runnable == ["tests/test_something.py"]
-        assert deferred == []
-
-    def test_runtime_knockon_failures_still_defer_whole_file(self) -> None:
-        """When one failing test names the missing excluded dep and OTHER failures in the same
-        isolated run look unrelated (e.g. state-pollution knock-on effects from the first
-        failure), the whole file still defers -- ANY match is sufficient, not ALL, because once
-        a required dependency is known absent, the other failures in that same run aren't
-        independently meaningful."""
-
-        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            result = MagicMock()
-            result.stderr = ""
-            if "--collect-only" in cmd:
-                result.returncode = 0
-                result.stdout = ""
-            else:
-                result.returncode = 1
-                result.stdout = (
-                    "FAILED tests/test_ops_writer.py::A::test_a - assert 0 == 1\n"
-                    "FAILED tests/test_ops_writer.py::B::test_b - "
-                    "ModuleNotFoundError: No module named 'pandas'\n"
-                    "FAILED tests/test_ops_writer.py::C::test_c - TypeError: 'NoneType' object is not subscriptable\n"
-                )
-            return result
-
-        with (
-            patch("scripts.checks._common.run", side_effect=mock_run),
-            patch("importlib.util.find_spec", return_value=None),
-        ):
-            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
-
-        assert runnable == []
-        assert deferred == [("tests/test_ops_writer.py", "pandas")]
-
-    def test_runtime_lazy_import_of_present_dep_not_deferred(self) -> None:
-        """A runtime ModuleNotFoundError naming an excluded dep that IS actually importable
-        (find_spec not None) is a genuine failure, not a fast-tier absence -- must not defer."""
-
-        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            result = MagicMock()
-            result.stderr = ""
-            if "--collect-only" in cmd:
-                result.returncode = 0
-                result.stdout = ""
-            else:
-                result.returncode = 1
-                result.stdout = "FAILED tests/test_ops_writer.py::A::test_a - ModuleNotFoundError: No module named 'pandas'\n"
-            return result
-
-        with (
-            patch("scripts.checks._common.run", side_effect=mock_run),
-            patch("importlib.util.find_spec", return_value=MagicMock()),
-        ):
-            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_writer.py"])
-
-        assert runnable == ["tests/test_ops_writer.py"]
-        assert deferred == []
-
 
 class TestRunPytestDiff:
     """Orchestration behaviours of run_pytest_diff() -- the consumer moved out of validate.py (rec-2485)."""
@@ -3322,11 +3222,15 @@ class TestRunPytestDiff:
         assert "pyarrow" in captured.out
         assert failed == []
 
-    def test_runs_pytest_on_exactly_runnable_subset_in_mixed_case(self) -> None:
+
+class TestRunPytestDiffSingleExecution:
+    """Common-case single execution (acceptance criterion 1): when every changed test file
+    collects and passes, run_pytest_diff issues EXACTLY ONE non-collect-only pytest invocation
+    over the runnable set -- no proactive per-file isolated probe."""
+
+    def test_runs_pytest_exactly_once_in_mixed_case(self) -> None:
         """tests/test_iceberg_reader.py defers at --collect-only (never gets a real run at all);
-        tests/test_validate.py collects fine, so it gets a real run twice -- once as the
-        classification probe (_runtime_heavy_dep_defer_reason) and once as the final gate run --
-        but tests/test_iceberg_reader.py is excluded from both."""
+        tests/test_validate.py collects fine and passes, so it gets exactly one real run."""
         captured_cmds: list[list[str]] = []
 
         def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
@@ -3352,10 +3256,217 @@ class TestRunPytestDiff:
             run_pytest_diff(["tests/test_iceberg_reader.py", "tests/test_validate.py"], failed)
 
         real_run_cmds = [c for c in captured_cmds if "--collect-only" not in c]
-        assert len(real_run_cmds) == 2, f"expected exactly two real pytest runs (probe + gate), got: {real_run_cmds}"
-        assert all("tests/test_validate.py" in c for c in real_run_cmds)
-        assert all("tests/test_iceberg_reader.py" not in c for c in real_run_cmds)
+        assert len(real_run_cmds) == 1, f"expected exactly one real pytest run, got: {real_run_cmds}"
+        assert "tests/test_validate.py" in real_run_cmds[0]
+        assert "tests/test_iceberg_reader.py" not in real_run_cmds[0]
         assert failed == []
+
+    def test_runs_pytest_exactly_once_when_all_runnable_pass(self) -> None:
+        captured_cmds: list[list[str]] = []
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            captured_cmds.append(list(cmd))
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            result.returncode = 0
+            return result
+
+        failed: list[str] = []
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            run_pytest_diff(["tests/test_a.py", "tests/test_b.py"], failed)
+
+        real_run_cmds = [c for c in captured_cmds if "--collect-only" not in c]
+        assert len(real_run_cmds) == 1, f"expected exactly one real pytest run, got: {real_run_cmds}"
+        assert "tests/test_a.py" in real_run_cmds[0]
+        assert "tests/test_b.py" in real_run_cmds[0]
+        assert failed == []
+
+
+class TestRunPytestDiffReactiveDefer:
+    """Reactive lazy-import heavy-dep defer (acceptance criterion 2): a genuinely-absent
+    excluded heavy dependency imported lazily (function scope, invisible to --collect-only) is
+    caught only AFTER the combined run fails, via a per-file isolated re-classification pass
+    (rec-2572..2576 test_ops_writer.py shape). Every other failure shape reddens immediately."""
+
+    def test_runtime_lazy_import_of_excluded_dep_defers(self) -> None:
+        """A file that collects fine but fails at real-run time with a genuinely-absent excluded
+        dep defers, via the reactive per-file probe -- and does not redden the gate."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = (
+                    "FAILED tests/test_ops_writer.py::TestCompact::test_compact_x - "
+                    "ModuleNotFoundError: No module named 'pandas'\n"
+                )
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_ops_writer.py"], failed)
+
+        assert failed == []
+
+    def test_runtime_failure_with_no_module_error_reddens_immediately(self) -> None:
+        """A file that collects fine and fails at runtime with no 'No module named' signature at
+        all is a genuine failure -- must redden immediately (fail-closed), with no reactive re-run."""
+        real_run_calls = {"n": 0}
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+            else:
+                real_run_calls["n"] += 1
+                result.returncode = 1
+            return result
+
+        failed: list[str] = []
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            run_pytest_diff(["tests/test_something.py"], failed)
+
+        assert failed == ["Tests (pytest)"]
+        assert real_run_calls["n"] == 1, "no reactive re-run should occur when there is no heavy-dep signature"
+
+    def test_runtime_knockon_failures_still_defer_whole_file(self) -> None:
+        """When one failing test names the missing excluded dep and OTHER failures in the same
+        combined run look unrelated (e.g. state-pollution knock-on effects from the first
+        failure), the whole file still defers -- ANY match is sufficient, not ALL, because once
+        a required dependency is known absent, the other failures in that same run aren't
+        independently meaningful."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = (
+                    "FAILED tests/test_ops_writer.py::A::test_a - assert 0 == 1\n"
+                    "FAILED tests/test_ops_writer.py::B::test_b - "
+                    "ModuleNotFoundError: No module named 'pandas'\n"
+                    "FAILED tests/test_ops_writer.py::C::test_c - TypeError: 'NoneType' object is not subscriptable\n"
+                )
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_ops_writer.py"], failed)
+
+        assert failed == []
+
+    def test_runtime_lazy_import_of_present_dep_not_deferred(self) -> None:
+        """A runtime ModuleNotFoundError naming an excluded dep that IS actually importable
+        (find_spec not None) is a genuine failure, not a fast-tier absence -- must redden, not defer."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                result.returncode = 1
+                result.stdout = "FAILED tests/test_ops_writer.py::A::test_a - ModuleNotFoundError: No module named 'pandas'\n"
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=MagicMock()),
+        ):
+            run_pytest_diff(["tests/test_ops_writer.py"], failed)
+
+        assert failed == ["Tests (pytest)"]
+
+    def test_reactive_rerun_reddens_on_survivor_failure(self) -> None:
+        """Two changed files: one's combined-run failure resolves (via the isolated probe) to a
+        genuine failure (survivor), the other to a heavy-dep defer. The survivor is re-run alone;
+        a real failure there still reddens the gate."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            elif "-q" in cmd:
+                # isolated per-file probe (_runtime_heavy_dep_defer_reason)
+                if "tests/test_a.py" in cmd:
+                    result.returncode = 1
+                    result.stdout = "FAILED tests/test_a.py::test_x - assert 0 == 1\n"
+                else:
+                    result.returncode = 1
+                    result.stdout = "FAILED tests/test_b.py::test_y - ModuleNotFoundError: No module named 'pandas'\n"
+            elif "tests/test_b.py" in cmd:
+                # combined gate run: both files present, mixed failure signature
+                result.returncode = 1
+                result.stdout = (
+                    "FAILED tests/test_a.py::test_x - assert 0 == 1\n"
+                    "FAILED tests/test_b.py::test_y - ModuleNotFoundError: No module named 'pandas'\n"
+                )
+            else:
+                # reactive re-run of the survivor alone: genuine failure persists
+                result.returncode = 1
+                result.stdout = "FAILED tests/test_a.py::test_x - assert 0 == 1\n"
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_a.py", "tests/test_b.py"], failed)
+
+        assert failed == ["Tests (pytest)"]
+
+    def test_isolated_probe_passing_makes_file_a_survivor(self) -> None:
+        """A file whose combined-run failure carries a heavy-dep signature (triggering the
+        reactive fallback) but whose ISOLATED single-file run actually passes (e.g. the failure
+        was a cross-file interaction, not a real heavy-dep absence) is treated as a survivor, not
+        deferred -- covers _runtime_heavy_dep_defer_reason's rc==0 -> None branch via the reactive
+        path specifically (as opposed to the collect-only-only tests in TestFastTierCollectability)."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            elif "-q" in cmd:
+                # isolated probe: passes cleanly in isolation
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                # combined run and final survivor re-run both fail identically
+                result.returncode = 1
+                result.stdout = "FAILED tests/test_ops_writer.py::A::test_a - ModuleNotFoundError: No module named 'pandas'\n"
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_ops_writer.py"], failed)
+
+        assert failed == ["Tests (pytest)"]
 
 
 @pytest.fixture
@@ -3403,7 +3514,7 @@ class TestPreModeDiffAware:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3430,7 +3541,7 @@ class TestPreModeDiffAware:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3456,7 +3567,7 @@ class TestPreModeDiffAware:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3482,7 +3593,7 @@ class TestPreModeDiffAware:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3512,7 +3623,7 @@ class TestPreModeDiffAware:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3547,7 +3658,7 @@ class TestPreModePytestSelection:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3576,7 +3687,7 @@ class TestPreModePytestSelection:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3600,7 +3711,7 @@ class TestPreModePytestSelection:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3626,7 +3737,7 @@ class TestBudgetAssertion:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate._file_budget_breach_rec"),
-            patch("time.monotonic", side_effect=[0.0, 400.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3647,7 +3758,7 @@ class TestBudgetAssertion:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate._file_budget_breach_rec"),
-            patch("time.monotonic", side_effect=[0.0, 400.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
             pytest.raises(SystemExit),
         ):
             _validate.main()
@@ -3666,7 +3777,7 @@ class TestBudgetAssertion:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 60.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -3675,6 +3786,72 @@ class TestBudgetAssertion:
 
     def test_budget_constant_is_300(self) -> None:
         assert _FAST_TIER_BUDGET_SECONDS == 300
+
+    def test_breach_rec_receives_a_real_dominant_phase(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The dominant phase threaded to _file_budget_breach_rec must correctly identify WHICH
+        step actually dominated the elapsed wall-clock -- not merely be non-None. Makes
+        pytest_diff artificially slow (a real, attributable jump in the mocked clock) relative to
+        every other near-zero step, so the assertion is on correctness of attribution, not just
+        truthiness."""
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        clock = {"t": 0.0}
+
+        def fake_monotonic() -> float:
+            return clock["t"]
+
+        def slow_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
+            clock["t"] += 1000.0  # dwarfs every other (near-zero) step's duration
+
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("validate._file_budget_breach_rec") as mock_breach,
+            patch("validate.run_pytest_diff", side_effect=slow_pytest_diff),
+            patch("time.monotonic", side_effect=fake_monotonic),
+            pytest.raises(SystemExit),
+        ):
+            _validate.main()
+
+        dominant_phase_arg = mock_breach.call_args[0][2]
+        assert dominant_phase_arg == "pytest_diff"
+
+    def test_breach_console_error_names_dominant_phase(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Same correctness bar as above, applied to the printed console diagnostic."""
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("CI", raising=False)
+
+        clock = {"t": 0.0}
+
+        def fake_monotonic() -> float:
+            return clock["t"]
+
+        def slow_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
+            clock["t"] += 1000.0
+
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("validate._file_budget_breach_rec"),
+            patch("validate.run_pytest_diff", side_effect=slow_pytest_diff),
+            patch("time.monotonic", side_effect=fake_monotonic),
+            pytest.raises(SystemExit),
+        ):
+            _validate.main()
+
+        captured = capsys.readouterr()
+        assert "Dominant phase: pytest_diff" in captured.out
 
 
 @pytest.mark.usefixtures("_neutralized_pre_registry")
@@ -3692,7 +3869,7 @@ class TestIgnoreBudgetFlag:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 60.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -3712,7 +3889,7 @@ class TestIgnoreBudgetFlag:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 60.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit),
         ):
@@ -3732,7 +3909,7 @@ class TestIgnoreBudgetFlag:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 60.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             patch("validate._file_budget_bypass_rec") as mock_bypass,
             pytest.raises(SystemExit),
         ):
@@ -3753,7 +3930,7 @@ class TestIgnoreBudgetFlag:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 400.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
             patch("validate._file_budget_bypass_rec"),
             patch("validate._file_budget_breach_rec") as mock_breach,
             pytest.raises(SystemExit) as exc_info,
@@ -3802,7 +3979,7 @@ class TestIgnoreBudgetCIGuard:
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
-            patch("time.monotonic", side_effect=[0.0, 60.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(60.0))),
             patch("validate._file_budget_bypass_rec"),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -3812,7 +3989,17 @@ class TestIgnoreBudgetCIGuard:
 
 
 class TestBudgetBreachRecFiling:
-    """Tests for _file_budget_breach_rec and _file_budget_bypass_rec helpers."""
+    """Tests for _file_budget_breach_rec and _file_budget_bypass_rec helpers.
+
+    These exercise the LOCAL (non-CI) path -- CI-guard behaviour is covered separately by
+    TestBudgetRecFilingCiGuard below. Every test here runs with CI unset regardless of the
+    ambient environment (this file itself runs under CI="true" in the pr-validate/main-validate
+    CI jobs), so the local-path assertions stay deterministic.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_ci(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CI", raising=False)
 
     def test_breach_rec_calls_file_rec_with_budget_breach_source(self) -> None:
         mock_portal = MagicMock()
@@ -3961,6 +4148,91 @@ class TestBudgetBreachRecFiling:
         assert priority_validators, "no priority validators loaded from ops.yaml"
         for validator in priority_validators:
             validator(priority, "priority")  # must not raise
+
+
+class TestBudgetRecFilingCiGuard:
+    """CI-guard on the budget rec-filing helpers (Decision 84 I-4 / ULID anomaly root cause).
+
+    The pr-validate CI job installs requirements-fast.txt (no python-ulid) and configures no AWS
+    credentials, so a real portal file_rec() write there raises a swallowed ModuleNotFoundError
+    from ducklake_runtime's mint_write_identity. With CI=="true" neither helper may even attempt
+    the portal import -- it must print a loud diagnostic instead (never a silent skip, never a
+    buffered outbox entry).
+    """
+
+    def test_breach_rec_skips_file_rec_under_ci(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CI", "true")
+        mock_portal = MagicMock()
+
+        with (
+            patch("scripts.checks._common.run") as mock_run,
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_breach_rec(400.0, ["scripts/validate.py"], "pytest_diff")
+
+        mock_portal.file_rec.assert_not_called()
+        mock_run.assert_not_called()
+
+    def test_breach_rec_prints_diagnostic_under_ci(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        monkeypatch.setenv("CI", "true")
+
+        _file_budget_breach_rec(400.0, ["scripts/validate.py"], "pytest_diff")
+
+        captured = capsys.readouterr()
+        assert "pytest_diff" in captured.err
+        assert "400.0" not in captured.err  # sanity: elapsed is rendered as minutes, not raw seconds
+        assert "6.7" in captured.err or "6." in captured.err
+
+    def test_breach_rec_calls_file_rec_when_ci_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        mock_portal = MagicMock()
+        git_result = MagicMock(returncode=0, stdout="agent/test\n")
+
+        with (
+            patch("scripts.checks._common.run", return_value=git_result),
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_breach_rec(400.0, ["scripts/validate.py"], "pytest_diff")
+
+        mock_portal.file_rec.assert_called_once()
+
+    def test_bypass_rec_skips_file_rec_under_ci(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CI", "true")
+        mock_portal = MagicMock()
+
+        with (
+            patch("scripts.checks._common.run") as mock_run,
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_bypass_rec(60.0, ["scripts/validate.py"], "disk issue")
+
+        mock_portal.file_rec.assert_not_called()
+        mock_run.assert_not_called()
+
+    def test_bypass_rec_prints_diagnostic_under_ci(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        monkeypatch.setenv("CI", "true")
+
+        _file_budget_bypass_rec(60.0, ["scripts/validate.py"], "disk issue")
+
+        captured = capsys.readouterr()
+        assert "disk issue" in captured.err
+
+    def test_bypass_rec_calls_file_rec_when_ci_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        mock_portal = MagicMock()
+        git_result = MagicMock(returncode=0, stdout="agent/test\n")
+
+        with (
+            patch("scripts.checks._common.run", return_value=git_result),
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_bypass_rec(60.0, ["scripts/validate.py"], "disk issue")
+
+        mock_portal.file_rec.assert_called_once()
 
 
 class TestValidateCiRcaTrigger:
@@ -4295,7 +4567,7 @@ class TestSlocLimitsInPreMode:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_sloc_limits", side_effect=capture_sloc),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -4325,7 +4597,7 @@ class TestSlocLimitsInPreMode:
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_cc_limits", side_effect=capture_cc),
             patch("validate.validate_sloc_limits", side_effect=capture_sloc),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit),
         ):
             _validate.main()
@@ -5139,7 +5411,7 @@ class TestPreModeChecks:
             patch("validate.validate_prompt_files"),
             patch("validate.validate_cli_tools_in_prompts"),
             patch("validate.validate_subprocess_encoding", side_effect=capture_encoding),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()
@@ -5169,7 +5441,7 @@ class TestPreModeRegistryIsolation:
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
             patch("scripts.checks._common.run", side_effect=_pre_mock_run),
-            patch("time.monotonic", side_effect=[0.0, 1.0]),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(1.0))),
             pytest.raises(SystemExit) as exc_info,
         ):
             _validate.main()

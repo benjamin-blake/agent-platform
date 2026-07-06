@@ -420,15 +420,19 @@ def main() -> None:
         def _scaffold_coverage_report() -> None:
             run_coverage_check(changed)
 
+        phase_times: dict[str, float] = {}
+
         def _scaffold_budget_assertion() -> None:
             elapsed = time.monotonic() - _t0
+            dominant_phase = max(phase_times, key=phase_times.get) if phase_times else None
             if args.ignore_budget:
                 _file_budget_bypass_rec(elapsed, diff_manifest, args.ignore_budget_reason)
                 print(f"\nBudget assertion skipped (--ignore-budget). Elapsed: {elapsed / 60:.1f} min.")
             elif elapsed > _FAST_TIER_BUDGET_SECONDS:
-                _file_budget_breach_rec(elapsed, diff_manifest, None)
+                _file_budget_breach_rec(elapsed, diff_manifest, dominant_phase)
                 print(
-                    f"\nERROR: Fast tier exceeded budget (5 min). Elapsed: {elapsed / 60:.1f} min.\n"
+                    f"\nERROR: Fast tier exceeded budget (5 min). Elapsed: {elapsed / 60:.1f} min. "
+                    f"Dominant phase: {dominant_phase or 'unknown'}.\n"
                     "This tier has grown beyond its design contract. Either:\n"
                     "  1. Move the slow check to the full tier, or\n"
                     "  2. Optimise the check, or\n"
@@ -446,10 +450,12 @@ def main() -> None:
         }
 
         for step in registry.pre_sequence():
+            step_t0 = time.monotonic()
             if step.kind == "check":
                 _dispatch_check(step.name, failed)
             else:
                 scaffold_fns[step.name]()
+            phase_times[step.name] = time.monotonic() - step_t0
 
         print("\n=== Validation Summary (scope: pre) ===")
         if not failed:
