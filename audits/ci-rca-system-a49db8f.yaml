@@ -1,0 +1,791 @@
+audit:
+  meta:
+    audited_commit: a49db8f
+    base_branch: main
+    model: claude-fable-5
+    methodology_version: 1
+    scope_surfaces: [S1, S2, S3, S4]
+    degraded_dedup: false
+    contract_notes: >-
+      Cache-gen succeeded (no degraded paths). The ops portal service was never invoked
+      (write boundary): the warn-reject decomposition was computed by in-process pydantic
+      validation (_validate_ci_rca_context_v2) over the read cache, zero writes, and the
+      --back-validate CLI was traced in code but not executed. Pre-push gate = clean YAML
+      parse of the two deliverables; repo-wide validate --pre not run (advisory outside CI).
+    stale_anchors: []
+    dossier_fact_check:
+      - claim: "C3: the ci_rca cluster on the top-recurring file continues AFTER the preventive guard (PR #478) landed"
+        prompt_value: "recurrence continues after test-count-coupling-guard landed"
+        your_value: >-
+          Contradicted by timing: PR #478 merged 2026-07-05T20:42Z (commit 403c037); the newest
+          ci_rca rec on tests/test_rec_write_guidance.py is rec-2585 at 2026-07-05T19:30Z. All 24
+          recs on that file predate the guard; zero post-guard recurrence observed as of 2026-07-06.
+      - claim: "C6: override and dispute paths are typed and rate-limited"
+        prompt_value: "typed and rate-limited but self-attested"
+        your_value: >-
+          The terminus override is neither typed nor rate-limited: CiRcaContext.why_chain_terminus_override
+          is Optional[dict] with no field validation (ops_data_portal.py:179) and no portal rate limit
+          exists anywhere, though INTENT Section 4 check 6 specifies min-80-char reason, a sibling
+          auditable rec, and a >2-unresolved-in-7d reject rule. The dispute path is typed
+          (CiRcaEvidenceDispute, ops_data_portal.py:236) but its throttle is deferred (rec-2415).
+  question_answers:
+    - q: Q1
+      verdict: not_in_force
+      basis: [CIRCA-01, CIRCA-02, CIRCA-04]
+      prose: >-
+        Nothing that constitutes the advertised depth/anti-rescue guarantee rejects anything today.
+        Warn mode accepts 21/48 in-window writes it is designed to reject (rate 0.4375, re-derived,
+        9x the 0.05 promotion gate), and the only unconditionally-hard gates that actually execute at
+        the production call site are peripheral (source-file non-empty, dispute-payload shape,
+        flag-value sanity). Worse, flipping the flag would NOT bring the core guarantee into force:
+        bundle-wins checks 1-4 and SHA-256 verification are structurally unreachable at the CI call
+        site (CIRCA-01), and any writer omitting context_v2_json bypasses the entire spine even in
+        strict (CIRCA-02). Warn is not a stable-equilibrium trap, though: the reject rate decomposes
+        into 10x why_chain length overruns + 8x terminus-keyword misses + 1x missing citation --
+        mechanical calibration failures fixable by prompt hard-limits and/or a ceiling retune, not
+        evidence of unreachable depth. The flip is reachable after the named fixes; see
+        strict_flip_readiness.
+    - q: Q2
+      verdict: partial
+      basis: [CIRCA-03, CIRCA-07]
+      prose: >-
+        The loop demonstrably CAN close: the test-count-coupling storm ended the day the guard
+        landed (zero recurrence after 403c037), which is positive evidence the preventive_action
+        pathway works case-by-case. But closure is entirely post-hoc: file_rec has no write-time
+        dedup or recurrence guard for source=ci_rca; the workflow dedup anchors per-commit and
+        per-workflow-slug, so a persistent red main files one Critical rec per subsequent push
+        (observed: 14 duplicates in ~6 hours on one root cause, all still open at audit time,
+        each hard-blocking /plan per Decision 73 L5). Back-validation is candidate-flag-only
+        (file-only match key, disclosed), and nothing auto-closes duplicates when the fix lands
+        (preflight's likely-resolved correlation surfaces but does not close).
+    - q: Q3
+      verdict: weak
+      basis: [CIRCA-01, CIRCA-05]
+      prose: >-
+        The division of labour is well-designed on paper -- disputable facts (tier membership,
+        EVG, escape_mode, vacuous_pass) are computed deterministically and the agent is told to
+        mirror. But the enforcement layer that makes the division binding never executes in
+        production (CIRCA-01), so the division is instruction-level only: it holds because the
+        agent obeys its prompt, which is exactly the trust model the spine was built to remove.
+        Additionally, the deterministic side is not as trustworthy as the contract assumes:
+        compute_earliest_viable_gate always runs with current_pre_runtime=0.0, biasing EVG toward
+        "pre" (CIRCA-05), and bundle-wins as designed would then FORCE the agent to mirror the
+        biased value -- DD-B's wrong-but-trusted entry point is real, and the dispute path is the
+        only correction. The structural floor (why_chain shape + terminus keyword + citation) is a
+        signal the contract honestly labels as such; the observed rejects show the agent is not
+        gaming it so much as tripping over it.
+    - q: Q4
+      verdict: drifting
+      basis: [CIRCA-09, CIRCA-08, CIRCA-02]
+      prose: >-
+        The [STALE] annotation discipline for the Athena->DuckLake retarget is good and does not
+        mislead. The drift that DOES mislead is un-annotated: INTENT Section 4 presents an
+        enforcement list as "hard rejections unless labelled degraded path" while check 1 (missing
+        context_v2_json = hard reject) is false in code even for strict mode, check 4 (actual_gate
+        comparison) is not implemented at all, check 5's presence/relevance requirements are
+        unenforced beyond the annotated existence-lookup deferral, and check 6's override rate
+        limit does not exist. No mechanism (test, validator, review gate) ties Section 4's claims
+        to ops_data_portal.py; the contract-test surface pins individual behaviours but nothing
+        pins the contract text. Extraction to docs/contracts/ci-rca.yaml (MANIFEST Wave 3) is the
+        owned remedy for form, not for these specific overstatements.
+    - q: Q5
+      verdict: weak
+      basis: [CIRCA-01, CIRCA-03]
+      prose: >-
+        Predominantly partial with one missed property (flake/quarantine), which pins the rollup
+        to weak per the enum rule. The standout genuine strength is shift-left (d): the
+        earliest-viable-gate computation exists, runs, and has already driven a real promotion
+        (validate_sloc_limits to --pre, c4 met). The recurring weakness across (a)/(c)/(f) is the
+        same root: the enforcement/e-budget mechanisms exist as code+thresholds but are inert or
+        consequence-free in the deployed configuration.
+      external_checklist:
+        - property: a
+          rating: partial
+          evidence: >-
+            ops_data_portal.py:477 (check-4 author-discipline rejection) + c11 gate_is_postmerge_canary
+            encoding; but check-4 is unreachable in production (CIRCA-01). Compensating control:
+            .claude/agents/scheduled/ci-rca.md Step 4 explicitly forbids author-discipline attribution
+            when vacuous_pass=true -- operates at generation time, property-matches the blameless
+            requirement, but fails if the agent ignores instructions (no enforced backstop).
+        - property: b
+          rating: partial
+          evidence: >-
+            CiRcaContext why_chain floor (ops_data_portal.py:178,197-222): 3-7 entries, 40-250 chars,
+            terminus keyword+citation enforced-in-warn. Causal antecedence admitted unenforceable
+            (INTENT Section 5) and routed to /plan-critique, which is a real mandatory gate between
+            planning and implementation -- the routing exists, but reviews the plan, not the rec.
+        - property: c
+          rating: partial
+          evidence: >-
+            session_preflight.py:571-572 (0.25 alert / 0.05 promotion thresholds) +
+            ci_rca_probe_health.py:21 (0.3 abstention threshold with idempotent auto-escalation rec).
+            SLO-shaped, but breaching the alert threshold (0.4375 observed) carries no consequence
+            beyond a gauge note, and strict-rejection telemetry is deferred (T2.36, disclosed).
+        - property: d
+          rating: met
+          evidence: "ci_rca_tier_map.py:239 compute_earliest_viable_gate + T1.13 c4 met (validate_sloc_limits promoted to --pre)"
+        - property: e
+          rating: missed
+          evidence: >-
+            No flake detection, quarantine, or reproduction probe anywhere in S1-S4; roadmap T1.13
+            progress note lists "flake-reproduction probe (reproduced=true|false)" as a candidate
+            NOT promoted to a criterion. probe_runtime dispersion handling governs the probe itself,
+            not test flakiness.
+        - property: f
+          rating: partial
+          evidence: >-
+            Bundle computes disputable facts (ci_rca_evidence.py:180, SHA-256 anchored) and the agent
+            is instructed to mirror (ci-rca.md Step 4); but the adjudication layer (checks 1-4,
+            ops_data_portal.py:441-494) never executes at the production call site (CIRCA-01), so
+            deterministic-over-LLM holds by instruction, not adjudication.
+    - q: Q6
+      answers:
+        - question: "(i) Does the 20-min timeout + --max-turns 30 bound the agent against runaway?"
+          answer: >-
+            Yes, adequately. timeout-minutes: 20 (ci-rca.yml:36), --max-turns 30 with a restricted
+            --allowedTools set (ci-rca.yml:288: Read + grep/cat/git-log + the portal module only),
+            no Edit/Write/push tools, and the workflow_run filter excludes CI RCA itself (loop
+            guard, ci-rca.yml:28). The claude_p_retry.sh wrapper is the only retry layer. No finding.
+          basis: []
+        - question: "(ii) Can a warn-accepted/strict-would-reject thin rec shape a /plan decision before anyone notices?"
+          answer: >-
+            Yes -- 21 such recs exist in-window and are visually indistinguishable in preflight's
+            "CI RCA Recs (open)" list (the warn_mode_reject marker is buried in context_v2_json and
+            not surfaced per-rec). Mitigation: the observed reject reasons are length/keyword
+            mechanical failures, not fabricated causality, so the misleading-content risk of the
+            CURRENT corpus is low; /plan-critique gates any resulting plan. Residual: preflight
+            could badge marked recs cheaply (fold into CIRCA-04's remedy).
+          basis: [CIRCA-04]
+        - question: "(iii) What happens to the ~44% would-reject recs when strict flips -- migration path or unfilable?"
+          answer: >-
+            Existing warn-period recs stay readable (back_validate_ci_rca buckets them; --refile-audit
+            files capped ci_rca_warn_period_audit recs -- a real migration surface, report-only by
+            default, unscheduled). FUTURE writes of the same shape become rejects, and the workflow
+            then fails loudly at the FILED: check -- the CI failure goes un-filed (fail-open toward
+            re-diagnosis on the next push, but a persistent composition defect means persistent
+            filing outage). One genuinely unfilable class exists: upload_failed bundles produce
+            s3_uri="" which fails the ^s3:// pattern, so in strict an S3 outage makes
+            evidence-carrying recs unfilable unless the agent drops the ref and claims undetermined
+            (CIRCA-06) -- the exact stuck-rec failure mode the flag rollout was designed to avoid.
+          basis: [CIRCA-06, CIRCA-04]
+        - question: "(iv) Is the abstention path a silent depth-bypass at scale?"
+          answer: >-
+            Not currently. Re-derived abstention: 1/62 over 14d (1.6%), zero open undetermined recs.
+            The path is structurally soft (accept + advisory preflight surfacing capped at 5, nothing
+            blocks consumption -- CIRCA-10) but the volume is negligible and the probe-health
+            escalator (threshold 0.3, min sample 5, idempotent rec filing) property-matches the
+            AT-SCALE version of this risk. Watch item, not a live bypass.
+          basis: [CIRCA-10]
+        - question: "(v) Is the untrusted failed-CI log a prompt-injection surface, and what compensates?"
+          answer: >-
+            It is an injection surface with bounded blast radius. Privilege escalation is well
+            compensated: workflow_run is gated to head_repo==base_repo AND head_branch==default_branch
+            (ci-rca.yml:34), so a fork PR cannot reach the write-capable context; --allowedTools
+            confines the agent to read-only bash + the portal CLI; no Edit/Write/push. The
+            uncompensated residual is content integrity: a crafted log (e.g. a test that prints
+            "collected 0 items" or validator names) can steer classify_failures' substring/regex
+            fallbacks and the agent's narrative into a misleading rec -- but that rec lands in a
+            human-reviewed /plan queue, which is the designed control (Decision 72). Property match
+            holds: the control (human consumption) catches misleading content, which is the only
+            asset the attacker can reach. No finding; note that priority 3 substring scan
+            (ci_rca_taxonomy.py:89) is the weakest link if jobs JSON is unavailable.
+          basis: []
+        - question: "(vi) No concurrency block -- can concurrent/retried runs double-file, and is the observed storm a dispatch race?"
+          answer: >-
+            The race window is real (dedup reads commit statuses BEFORE the agent runs; success is
+            marked only AFTER filing, ci-rca.yml:220-252 vs 301-327, and two workflows completing
+            near-simultaneously can both pass the check), but the observed storm is NOT primarily a
+            race: the 14 duplicates span 13:37-19:30 UTC across distinct anchor commits -- per-commit
+            anchoring on a persistently red main is the dominant mechanism, with per-workflow-slug
+            context separation (CI vs Main Canary file independently on the same commit) second.
+            The force_rca bypass is manual-only (workflow_dispatch input) and not implicated.
+            All three mechanisms fold into CIRCA-03; a concurrency: block is a one-line partial fix
+            that does not address the dominant per-commit mechanism.
+          basis: [CIRCA-03]
+        - question: "(vii, extension) Does the FILED: marker contract survive multi-rec runs?"
+          answer: >-
+            No. ci_rca_filing.py:44 returns only the LAST marker, and the agent contract asks for
+            exactly one terminal FILED: line -- so a multi-failure run that DID file N recs records
+            and PR-comments only one rec id, and mark_rca then marks ALL categories success off that
+            single signal. Visibility of N-1 filings is lost to the workflow layer. Folded into
+            CIRCA-07's remedy.
+          basis: [CIRCA-07]
+        - question: "(viii, extension) Does Critical-priority-always + Decision 73 L5 hard-block turn duplicate storms into planning denial-of-service?"
+          answer: >-
+            Partially. Every ci_rca rec files at priority Critical and an open ci-rca rec hard-blocks
+            /plan from scoping unrelated work (Decision 73 L5). 14 open duplicate Criticals therefore
+            multiply triage load exactly when main is red. Preflight's likely-resolved correlation
+            (ci_rca_unresolved=2 vs 14 open) is a real mitigant that keeps the block honest, but
+            closure still requires manual action per duplicate. Amplifies CIRCA-03's severity; no
+            separate finding.
+          basis: [CIRCA-03]
+  strict_flip_readiness:
+    spine:
+      verdict: flip_strict_after_fix
+      mechanism: >-
+        c2 as written (Decision Record + terraform after Phase-4 back-validation and c3 <5%) gates on
+        the warn-mode reject rate, which gates on mechanical composition quality -- currently 0.4375,
+        decomposed as 10x why_chain entry-length overruns (250-char ceiling), 8x terminus-keyword
+        misses, 1x missing citation.
+      what_changes: >-
+        (1) Wire the local bundle into the portal call site (set CI_RCA_BUNDLE_LOCAL_PATH from the
+        emit-dir, or point the pending-dir search at it) so checks 1-4 + SHA verify actually run --
+        without this the flip activates only schema shape checks (CIRCA-01). (2) Close the legacy
+        no-context_v2 acceptance for strict mode (CIRCA-02). (3) Permit s3_uri="" iff
+        upload_status=upload_failed so S3 outages do not make filings impossible under strict
+        (CIRCA-06). (4) Calibrate: add hard character-count guidance to ci-rca.md (or raise the
+        250-char per-entry ceiling via schema_version bump) and re-measure -- the reject-rate floor
+        is prompt-calibration, not depth failure. Then run --back-validate, author the Decision
+        Record, flip.
+      cost: >-
+        (1)+(3) are XS-S code changes; (2) is S plus a one-time decision on grandfathering (back-
+        validation's legacy_no_schema bucket already models it); (4) is prompt text + one 7d
+        observation window. Total: one focused plan, low risk; no new infrastructure.
+      rationale: >-
+        keep_warn is wrong because warn mode demonstrably does not converge on its own (rate sat at
+        ~9x the gate with zero owning mechanism). flip_strict_now is wrong because it would reject
+        ~44% of real filings for mechanical reasons AND deliver less than advertised (dead
+        cross-check, open legacy bypass, upload-failure stuck-recs). redesign is unwarranted: every
+        defect found is a wiring/calibration gap in an architecture that is otherwise sound and
+        already demonstrated one closed loop (sloc promotion; guard-ended storm).
+      confidence: CONFIRMED
+  per_surface_assessment:
+    - surface: S1
+      maturity: strong
+      strengths: >-
+        Fork-PR privilege gate + default-branch gate correct and load-bearing; deterministic FILED:
+        marker with fail-loud on absence; log-availability retry; bundle_absent computed and injected
+        into the agent prompt; loop guard against self-trigger; evidence step ordered before dedup.
+      top_gaps: [CIRCA-03, CIRCA-07]
+    - surface: S2
+      maturity: frontier
+      strengths: >-
+        Canonical-JSON SHA-256 anchoring; registry-sourced tier membership for the live validate.py
+        (Decision 104) with AST walker retained for snapshots; tri-state abstention that fails loud
+        into "undetermined" rather than guessing; N-bundle-per-failed-check enumeration; taxonomy
+        coverage guard in --pre.
+      top_gaps: [CIRCA-05]
+    - surface: S3
+      maturity: solid
+      strengths: >-
+        The warn_mode_reject marker design (portal-derived, accumulating, rides context_v2_json) is
+        what made this audit's telemetry re-derivable at all; SHA-256 mismatch always-raise;
+        dispute carve-out is typed and mode-independent; bundle-absent forced onto the undetermined
+        route.
+      top_gaps: [CIRCA-01, CIRCA-02, CIRCA-06, CIRCA-08]
+    - surface: S4
+      maturity: strong
+      strengths: >-
+        Live gauges genuinely measure warn-mode behaviour (reject rate, recurrence distribution,
+        abstention, back-validation pairings) at zero reader egress; probe-health escalation is
+        idempotent file/update/close; honest disclosure of deferred strict-mode telemetry and the
+        weak file-only match key.
+      top_gaps: [CIRCA-04, CIRCA-09, CIRCA-10]
+  rubric_ratings:
+    - {surface: S1, dimension: VD1, rating: adequate, evidence: "ci-rca.yml:34,294-298", note: "Trigger gates + FILED fail-loud run in deployed config; no concurrency block"}
+    - {surface: S1, dimension: VD2, rating: n/a, evidence: "", note: "S1 wires evidence; does not compute it"}
+    - {surface: S1, dimension: VD3, rating: weak, evidence: "ci-rca.yml:121,238,317-327", note: "Per-commit + per-slug dedup anchor; mark-all-categories after one filing (CIRCA-03/07)"}
+    - {surface: S1, dimension: VD4, rating: weak, evidence: ".claude/agents/scheduled/ci-rca.md:141-142 vs INTENT S4 check 9", note: "Prompt mandates primary-cause-only; contract mandates one rec per failed check (CIRCA-07)"}
+    - {surface: S1, dimension: VD5, rating: adequate, evidence: "ci_rca_filing.py:21; preflight ci_rca_liveness_alert", note: "Deterministic filing signal + liveness alert; last-marker-wins loses N-1 ids"}
+    - {surface: S1, dimension: VD6, rating: adequate, evidence: "ci-rca.yml:34,288", note: "Fork gate + restricted allowedTools; injection residual bounded to rec content (Q6-v)"}
+    - {surface: S2, dimension: VD1, rating: n/a, evidence: "", note: "S2 computes; enforcement lives in S3"}
+    - {surface: S2, dimension: VD2, rating: adequate, evidence: "ci_rca_evidence.py:59-65; ci_rca_tier_map.py:239-284", note: "Canonical JSON + SHA-256 + tri-state abstention; EVG headroom input bias (CIRCA-05)"}
+    - {surface: S2, dimension: VD3, rating: adequate, evidence: "ci_rca_back_validation.py:76", note: "Candidate-flag back-validation; file-only key disclosed as weaker (INTENT 7.2)"}
+    - {surface: S2, dimension: VD4, rating: adequate, evidence: "bundle schema_version 3 == INTENT 3.3", note: "Bundle fields match contract; taxonomy guard enforces workflow coverage"}
+    - {surface: S2, dimension: VD5, rating: adequate, evidence: "ci_rca_tier_map.py:231 runtime_confidence", note: "Probe dispersion, walker/taxonomy versions embedded in every bundle"}
+    - {surface: S2, dimension: VD6, rating: adequate, evidence: "ci_rca_taxonomy.py:52-104", note: "jobs-JSON preferred over log substrings; log-derived fallbacks steerable by crafted output (Q6-v note)"}
+    - {surface: S3, dimension: VD1, rating: weak, evidence: "ops_data_portal.py:438-439,1105-1109; config/feature_flags.yaml", note: "Warn accepts everything; checks 1-4 unreachable at prod call site; legacy path open in strict"}
+    - {surface: S3, dimension: VD2, rating: adequate, evidence: "ops_data_portal.py:292-303", note: "SHA verify correct and always-raise where it runs -- which production paths never reach"}
+    - {surface: S3, dimension: VD3, rating: weak, evidence: "ops_data_portal.py:999-1160 (no dedup path)", note: "No write-time dedup/recurrence guard for source=ci_rca (CIRCA-03)"}
+    - {surface: S3, dimension: VD4, rating: weak, evidence: "ops_data_portal.py:168-222 vs INTENT S4 checks 1,4,5,6", note: "Four contract-claimed enforcements absent or weaker in code (CIRCA-02/08/09)"}
+    - {surface: S3, dimension: VD5, rating: adequate, evidence: "ops_data_portal.py:352-364", note: "Marker enables c3 metric; reason tags coarse (no per-rule detail persisted; back-validate recomputes offline)"}
+    - {surface: S3, dimension: VD6, rating: weak, evidence: "ops_data_portal.py:179,209-210,1105", note: "Any non-empty override dict disables terminus floor; context_v2 omission bypasses spine; confidence self-attested"}
+    - {surface: S4, dimension: VD1, rating: adequate, evidence: "T1.13 c2 text; INTENT Section 6", note: "Flip governance (Decision Record + terraform) exists and warn status honestly disclosed"}
+    - {surface: S4, dimension: VD2, rating: n/a, evidence: "", note: "No evidence computation on this surface"}
+    - {surface: S4, dimension: VD3, rating: adequate, evidence: "ci_rca_back_validation gauge; correlate_ci_rca_with_main likely-resolved", note: "Surfacing-only by design (Decision 55); no auto-close linking"}
+    - {surface: S4, dimension: VD4, rating: weak, evidence: "INTENT Section 4 vs code (CIRCA-09)", note: "[STALE] discipline good; enforcement-claims drift un-annotated; no contract-text coherence mechanism"}
+    - {surface: S4, dimension: VD5, rating: adequate, evidence: "gauge ci_rca_telemetry.warn_mode_reject_rate=0.4375; ci_rca_abstention_gauge 1/62", note: "Gauges measure the warn-mode guarantee directly; strict-rejection blind spot deferred+disclosed (T2.36)"}
+    - {surface: S4, dimension: VD6, rating: adequate, evidence: "why_chain_terminus_override_count=0; dispute_count=0 gauges", note: "Bypass-path usage observable; no alert threshold on either counter yet"}
+  findings:
+    - id: CIRCA-01
+      surface: S3
+      question: Q3
+      dimension: VD1
+      title: "Bundle-wins cross-check (checks 1-4) and SHA-256 verification are structurally unreachable at the production call site"
+      evidence: "ops_data_portal.py:273-284,438-439; ci-rca.yml:189 (emit-dir /tmp/ci-rca-bundles); ci_rca_evidence.py:97-99 (pending written only on upload failure); zero cross_check_check_N / s3_missing stamps in the 125-rec corpus"
+      evidence_kind: static
+      current_behavior: >-
+        _load_and_verify_bundle searches only CI_RCA_BUNDLE_LOCAL_PATH (set nowhere in the repo --
+        single grep hit is its own read site) and logs/.ci-rca-evidence-pending/<sha>.json (written
+        only when S3 upload FAILS). In CI the bundle is emitted to /tmp/ci-rca-bundles and uploads
+        succeed (bundle_upload_backlog=0), so the local load returns None and the function returns
+        at ops_data_portal.py:439, silently skipping checks 1-4 and the SHA-256 verify -- in warn
+        AND strict. Tests pass by seeding the pending dir (test_ops_data_portal.py:2006-2026), i.e.
+        seeding exactly what production never has; test_bundle_not_found_skips_cross_check pins the
+        skip as intended behaviour.
+      ideal_behavior: >-
+        At the CI call site the portal loads the bundle the workflow just generated, verifies its
+        SHA-256, and adjudicates checks 1-4 -- the roadmap already describes this as delivered and
+        load-bearing (T1.13 c10 "Cross-check spine built"; c8/c11 "load-bearing via the spine").
+      gap: >-
+        The enforcement the contract and roadmap present as the system's central mechanism executes
+        only in unit tests and on the S3-outage path. The strict flip would not activate it. The
+        c2/c5 decision calculus and /plan's trust in bundle-anchored recs rest on a spine that is
+        not running. The zero-disagreement telemetry is consistent with agent obedience, not
+        enforcement -- the dispositive evidence is the code path, corroborated by zero cross-check
+        stamps across the corpus.
+      compensating_controls_considered: >-
+        (a) Agent prompt mirroring instruction (ci-rca.md Step 4) -- generation-time, property-matches
+        honest agents only; fails exactly against the lazy/adversarial agent the spine exists for.
+        (b) S3 head_object existence check -- verifies the object exists, not that the rec's claims
+        match its content; wrong property. (c) c5 exit criterion held open pending an end-to-end
+        roundtrip -- awareness of unproven roundtrip, but it does not identify or own this defect.
+        None property-match; no severity reduction.
+      change_type: enforce
+      proposed_change: >-
+        Wire the emit-dir into the portal lookup: export CI_RCA_BUNDLE_LOCAL_PATH in the rca_agent
+        step (per-bundle), or add /tmp/ci-rca-bundles (parameterised emit-dir) to the candidate
+        list, or have the workflow copy emitted bundles into logs/.ci-rca-evidence-pending before
+        the agent runs. Add an integration test that exercises file_rec from a simulated CI layout
+        (bundle in emit-dir, absent from pending) and asserts checks 1-4 fire.
+      acceptance: >-
+        A rec filed from the CI layout with detection_gap.earliest_viable_gate deliberately
+        contradicting the bundle is stamped cross_check_check_2 in warn mode (raises in strict);
+        production corpus begins showing cross-check stamps or verified-clean passes.
+      severity: critical
+      severity_rationale: >-
+        Meets the critical class directly: an enforcement the contract claims to provide is not in
+        force in a way that materially misleads consumers -- the roadmap marks c8/c10/c11 met and
+        load-bearing on this spine, and the strict-flip decision assumes flipping activates it.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["ci_rca ROADMAP grep", "ci.?rca|strict.?mode DECISIONS grep", "rec titles ci_rca/strict/dedup grep", "CI_RCA_BUNDLE_LOCAL_PATH repo grep"]
+        dedup_hit_count: 0
+        note: "c5 (open) is adjacent (end-to-end roundtrip unproven) but does not own the call-site wiring defect; no rec title covers it."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Prerequisite for any honest c2 flip; do first."}
+    - id: CIRCA-02
+      surface: S3
+      question: Q1
+      dimension: VD1
+      title: "Strict mode is voidable by omitting context_v2_json -- legacy free-text path accepted in both modes, contradicting INTENT Section 4 check 1"
+      evidence: "ops_data_portal.py:1105-1109 (log-only elif); ops_data_portal.py:524 docstring ('strict-mode file_rec() ACCEPTS these'); INTENT Section 4 check 1 ('Missing the context_v2_json argument while source=ci_rca is a hard reject'); corpus: 78/125 recs carry no context_v2_json"
+      evidence_kind: static
+      current_behavior: >-
+        file_rec(source=ci_rca) with context_v2_json=None logs a deprecation warning and files the
+        rec regardless of CI_RCA_STRICT_MODE. The entire spine (schema validation, bundle-absent
+        fail-loud, S3 check, cross-check) is gated on context_v2_json is not None
+        (ops_data_portal.py:1076,1112). back_validate_ci_rca canonises this as "the load-bearing
+        legacy rule" and buckets such recs conformant-by-definition.
+      ideal_behavior: >-
+        Post-flip (and per the contract's own check 1), a source=ci_rca write without context_v2_json
+        is rejected -- otherwise the cheapest bypass of every depth check is to not pass the argument.
+      gap: >-
+        The guarantee the flip is supposed to bring into force has a one-flag-omission bypass. Today's
+        agent always passes the argument (recent window: ~47/48 with context), so current harm is
+        low; the defect is that strict mode's advertised meaning and its actual meaning diverge.
+      compensating_controls_considered: >-
+        The agent prompt mandates --context-v2-json (generation-time; fails against lazy/adversarial
+        callers). The source-file gate still applies but checks an unrelated property. Neither
+        property-matches a spine bypass.
+      change_type: enforce
+      proposed_change: >-
+        In strict mode, reject source=ci_rca writes with context_v2_json=None (keep warn-mode
+        acceptance for the rollout window). Grandfather historical rows via the existing
+        legacy_no_schema bucket -- no data migration needed.
+      acceptance: "With CI_RCA_STRICT_MODE=strict, file_rec(source='ci_rca', context_v2_json=None) raises ValueError; warn mode still accepts with the deprecation warning."
+      severity: high
+      severity_rationale: >-
+        Caps the post-flip guarantee (VD1/VD6) with no sufficient compensating control, but does not
+        mislead today's consumers because warn mode is disclosed and the current agent conforms --
+        below the wrong-but-trusted-signal bar for critical.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["ci_rca ROADMAP grep", "strict.?mode DECISIONS grep", "rec titles strict grep"]
+        dedup_hit_count: 0
+        note: "INTENT claims the opposite behaviour; no roadmap item owns closing the legacy path."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Land before or with the c2 flip; meaningless after warn is retired otherwise."}
+    - id: CIRCA-03
+      surface: S1
+      question: Q2
+      dimension: VD3
+      title: "Recurrence is neither prevented nor deduplicated at write time -- red-main storms file one Critical rec per push and require manual closure"
+      evidence: "observed: 24 ci_rca recs on tests/test_rec_write_guidance.py (14 open/10 closed), 14 filed 2026-07-05 13:37-19:30 UTC on one root cause; ci-rca.yml:121 (anchor=head_sha per commit), :238 (context includes workflow_slug); ops_data_portal.py:999-1160 (no dedup path); no top-level concurrency block"
+      evidence_kind: observed
+      current_behavior: >-
+        The only dedup is the workflow's per-commit, per-workflow-slug, per-category commit-status
+        guard. A persistent failure on main gets a fresh anchor with every subsequent push, so the
+        same root cause re-files indefinitely (observed 14x in ~6h); CI and Main Canary failing on
+        the same commit file independently by design of the context key; a narrow cross-run race
+        also exists because success is marked only after the agent files. Each duplicate is
+        priority=Critical and hard-blocks /plan (Decision 73 L5). file_rec has no recurrence check
+        against open recs on the same file/category; back-validation and forward-fix-recursion
+        gauges surface duplicates post-hoc but close nothing.
+      ideal_behavior: >-
+        A recurring known failure collapses into one open rec (or one rec plus a recurrence counter),
+        the way the terraform-apply-sandbox path already anchors refusals-while-red to the red
+        record's commit (ci-rca.yml:116-132) -- proof the codebase already owns this pattern for one
+        workflow class.
+      gap: >-
+        Loop-closure cost scales linearly with time-to-fix: the longer main stays red, the more
+        Critical duplicates accumulate, each amplifying the L5 planning block and burying the two
+        genuinely-unresolved recs (preflight: ci_rca_unresolved=2 of 14 open).
+      compensating_controls_considered: >-
+        (a) Preflight likely-resolved correlation -- surfaces, does not close or prevent; fails the
+        write-time-prevention property match. (b) Decision 73 L5 hard-block -- forces attention but
+        multiplies harm during storms rather than reducing filings. (c) The convergence-record
+        anchoring for terraform-apply-sandbox -- property-matches exactly, but is wired for one
+        workflow only.
+      change_type: add
+      proposed_change: >-
+        Generalise the red-record anchoring: dedup key = (workflow_slug, category, first-red commit
+        or open-rec identity) rather than per-push head_sha -- e.g. before dispatching the agent,
+        query open source=ci_rca recs for same category+file (the warm cache or a reader verb) and
+        skip/update instead of filing; and add a top-level concurrency group as the cheap race fix.
+      acceptance: >-
+        Two consecutive failing pushes on main with the same failed_check+category yield exactly one
+        open ci_rca rec (second run updates or skips, observable in the run log), with force_rca
+        retaining the bypass.
+      severity: high
+      severity_rationale: >-
+        Materially caps loop-closure (NS3) with observed harm (14 open Criticals from one cause,
+        planning hard-block amplification); compensating controls surface but neither prevent nor
+        close -- insufficient by the property-match rule.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["recurrence ROADMAP grep", "rec titles dedup/count grep", "T1.13 progress-note candidates"]
+        dedup_hit_count: 1
+        note: "T1.13's unpromoted candidate list targets the INVERSE defect (dedup suppressing a second distinct RCA on one SHA); write-time recurrence collapse is unowned. The convergence-refusal anchoring (CD.35 5.5d) owns it for terraform-apply-sandbox only."
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Independent of the flip; biggest queue-hygiene payoff per effort."}
+    - id: CIRCA-04
+      surface: S4
+      question: Q1
+      dimension: VD5
+      title: "The c2 promotion gate sits 9x over its bar with no owning mechanism to converge -- and the reject-rate metric cannot say why without offline recomputation"
+      evidence: "gauge ci_rca_telemetry.warn_mode_reject_rate=0.4375 (21/48, 7d) vs promotion threshold 0.05 (session_preflight.py:572); offline decomposition: 10x why_chain entry >250 chars, 8x terminus keyword missing, 1x citation missing; ops_data_portal.py:352-364 (marker stores coarse tags only)"
+      evidence_kind: observed
+      current_behavior: >-
+        The reject rate has sat far above both thresholds with only a "may need tuning" gauge note.
+        No roadmap item, rec, or scheduled process owns driving it down: the agent prompt has not
+        been recalibrated against the observed failure modes, back-validate is report-only and
+        unscheduled, and the persisted marker records "schema_deficiency" without which rule failed,
+        so the gauge cannot be decomposed without re-running validation offline.
+      ideal_behavior: >-
+        The load-bearing c3 metric decomposes by rule at read time, and a named owner (tuning rec /
+        plan) converges composition quality toward the gate -- the INTENT already mandates a
+        threshold-tuning follow-on rec as the vehicle.
+      gap: >-
+        Decomposition shows the rate is mechanical calibration (length ceilings, keyword phrasing),
+        i.e. cheaply fixable -- but structurally nothing notices or acts, so warn persists by default
+        and the flip recedes. This is the actual reachability risk behind Q1, not depth failure.
+      compensating_controls_considered: >-
+        back_validate_ci_rca recomputes per-rec failing checks offline (real, used by this audit) --
+        property-matches the decomposition need but only when a human runs it; does not own
+        convergence.
+      change_type: retune_gate
+      proposed_change: >-
+        (1) Stamp the deficiency rule names (not just "schema_deficiency") into warn_mode_reject.reasons.
+        (2) Add explicit hard limits to ci-rca.md Step 4 (per-entry <=250 chars; terminus must contain
+        a listed keyword verbatim) and/or raise the per-entry ceiling to ~400 via schema_version bump --
+        the 40-250 band was set pre-observation and the agent's natural verbosity exceeds it.
+        (3) File the INTENT-mandated tuning rec citing the decomposition, and re-measure over one 7d window.
+      acceptance: "ci_rca_telemetry.warn_mode_reject_rate <= 0.05 over a 7-day window with >= 10 ci_rca filings, with per-rule reasons visible in the marker."
+      severity: high
+      severity_rationale: >-
+        The contract's central guarantee stays out of force indefinitely by default (NS2/NS5);
+        controls surface the number but nothing converges it -- insufficient.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T1.13-c2, T1.13-c3]
+        dedup_search_terms: ["strict_mode ROADMAP grep", "rec titles strict/tuning grep"]
+        dedup_hit_count: 2
+        note: "c2/c3 own the gate itself; the missing piece is any mechanism that moves the metric toward the gate. INTENT 7.2 mandates a tuning rec 'after a full week of Phase-4 data' -- circular, since Phase 4 never arrives while the rate is high."
+      effort: S
+      depends_on: [CIRCA-01, CIRCA-02, CIRCA-06]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Calibration can start now; the flip itself waits on 01/02/06."}
+    - id: CIRCA-05
+      surface: S2
+      question: Q3
+      dimension: VD2
+      title: "earliest_viable_gate is computed with current_pre_runtime=0.0, biasing recommendations toward 'pre' -- and bundle-wins would force the agent to mirror the biased value"
+      evidence: "ci_rca_evidence.py:139 (compute_earliest_viable_gate called without current_pre_runtime); ci_rca_tier_map.py:244,270 (default 0.0, headroom = 300 - 0); INTENT Section 3.2 step 4 (headroom = budget minus current measured --pre runtime)"
+      evidence_kind: static
+      current_behavior: >-
+        Every presubmit-only check whose median probe runtime is <=300s is recommended for --pre
+        promotion, regardless of how much of the 300s budget --pre already consumes. The rationale
+        string embeds "--pre runtime: 0.0s", presenting the unmeasured input as a measured fact.
+        Under the designed cross-check, an agent that (correctly) judged the budget exhausted would
+        be rejected by check-2 and could only escalate via a dispute rec.
+      ideal_behavior: "The headroom term uses a measured --pre runtime (a timed --pre invocation, or a maintained gauge), per the contract's own decision tree."
+      gap: >-
+        Wrong-but-trusted values enter the deterministic side at exactly the point DD-B probes; the
+        design gives the agent no authority to correct them. Consequence today is inflated
+        promotion recommendations consumed by /plan (human-reviewed); consequence post-CIRCA-01-fix
+        is enforced mirroring of a biased value.
+      compensating_controls_considered: >-
+        /plan human review of promotion recommendations (property-matches the consumption harm today);
+        the dispute path (property-matches post-enforcement disagreement, but adds friction for a
+        defect that is the bundle's, not the agent's). Sufficient to hold severity at medium, not to dismiss.
+      change_type: rescope
+      proposed_change: >-
+        Measure current --pre runtime (time a validate --pre run during evidence generation, or read
+        a maintained runtime stamp) and pass it to compute_earliest_viable_gate; when unmeasured,
+        emit "undetermined-headroom" in the rationale instead of implying 0.0 was measured.
+      acceptance: "A bundle for a presubmit-only check embeds a non-zero measured --pre runtime (or an explicit unmeasured marker) in earliest_viable_gate_rationale, and the pre/presubmit decision uses it."
+      severity: medium
+      severity_rationale: "Real gap, clear fix, bounded blast radius (recommendations are /plan-reviewed; enforcement currently inert)."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["ci_rca ROADMAP grep", "rec titles ci_rca grep", "INTENT known-gaps read"]
+        dedup_hit_count: 1
+        note: "INTENT's PLAN-tier-placement-budget-monitor known-gap covers runtime drift over time -- adjacent, but the always-zero headroom input is a distinct implementation defect."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+    - id: CIRCA-06
+      surface: S3
+      question: Q6
+      dimension: VD1
+      title: "The upload-failed degraded path is schema-unreachable: s3_uri='' fails the ^s3:// pattern, so strict mode makes evidence-carrying recs unfilable during S3 outages"
+      evidence: "ops_data_portal.py:147 (_EvidenceBundleRef.s3_uri pattern ^s3://); ci_rca_evidence.py:95,103 (upload failure returns s3_uri=''); ci-rca.md:101 ('s3_uri from bundle or empty'); INTENT Section 4 check 7 degraded path"
+      evidence_kind: static
+      current_behavior: >-
+        On upload failure the generator emits s3_uri="" and the agent is instructed it may pass
+        empty. CiRcaContext then fails validation (pattern), stamping schema_deficiency in warn and
+        raising in strict. The agent's only strict-mode escape is to omit evidence_bundle_ref
+        entirely and claim rca_confidence=undetermined -- discarding the evidence reference exactly
+        when the local pending file exists (the ONLY path where cross-check checks 1-4 can run,
+        compounding CIRCA-01).
+      ideal_behavior: "upload_status=upload_failed permits an empty s3_uri (the INTENT's own degraded path), keeping the sha256 reference intact so the local bundle remains verifiable."
+      gap: "The stuck-rec failure mode the warn->strict flag rollout was explicitly designed to prevent re-enters via a schema regex; zero occurrences observed (backlog=0) but it activates precisely under infrastructure degradation."
+      compensating_controls_considered: "The bundle-absent+undetermined route keeps filing possible (property-matches 'never unfilable') at the cost of severing the evidence link -- partial match, so medium rather than low."
+      change_type: retune_gate
+      proposed_change: "Model-validate _EvidenceBundleRef conditionally: require ^s3:// iff upload_status=='ok'; allow empty s3_uri when upload_status=='upload_failed'."
+      acceptance: "In strict mode, a context_v2 with evidence_bundle_ref={sha256:<valid>, s3_uri:'', upload_status:'upload_failed'} validates and takes the degraded path (no raise, no schema_deficiency stamp)."
+      severity: medium
+      severity_rationale: "Latent (0 observed), clear one-line fix, but fires under exactly the degraded conditions the design promises to tolerate."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["ci_rca ROADMAP grep", "rec titles ci_rca/strict grep"]
+        dedup_hit_count: 0
+        note: ""
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Must land before the c2 flip."}
+    - id: CIRCA-07
+      surface: S1
+      question: Q6
+      dimension: VD3
+      title: "Agent prompt contradicts the multi-failure contract (primary-cause-only vs one-rec-per-check) and mark_rca marks ALL categories RCA'd after a single filing"
+      evidence: ".claude/agents/scheduled/ci-rca.md:141-142 ('If multiple checks failed, diagnose and file for the primary cause only') vs INTENT Section 4 check 9 and Section 3.3; ci-rca.yml:272 (prompt says enumerate all bundles), :313-327 (marks every category success off one FILED signal); ci_rca_filing.py:44 (last marker wins)"
+      evidence_kind: static
+      current_behavior: >-
+        Three surfaces disagree: the contract mandates N recs for N failed checks; the workflow
+        prompt tells the agent to enumerate all bundles; the agent instruction file says file the
+        primary cause only -- and the same file also says "one rec per failed check" two sentences
+        earlier. Whatever the agent does, mark_rca then posts success statuses for EVERY category
+        the evidence step enumerated, keyed off a single FILED: marker, so unfiled co-occurring
+        failures are recorded as RCA'd and dedup-suppressed for that anchor.
+      ideal_behavior: "One rec per failed check (the contract), with per-category marking gated on per-category filing evidence (N FILED markers or a parsed id-per-category map)."
+      gap: >-
+        A real regression co-occurring with (say) a SLOC failure silently loses its RCA for that
+        commit -- the exact conflation-masking c11(ii) was built to prevent. Bounded: the next
+        failing push re-triggers with a fresh anchor, but on a persistently multi-failing main the
+        secondary cause never files until the primary is fixed.
+      compensating_controls_considered: >-
+        Per-category status contexts (c11 dedup-key fix) property-match only if filings are
+        per-category -- they are marked unconditionally, so the control's premise is defeated by
+        this defect. Fresh-anchor-per-push bounds the loss window (partial match; holds severity at medium).
+      change_type: unify
+      proposed_change: >-
+        Fix ci-rca.md Step 5 to mandate one rec per bundle (deleting the primary-cause-only
+        sentence, honouring the prompt-rewrite plan's own contract), extend the FILED marker
+        grammar to one line per rec (parser already scans all markers), and mark only categories
+        whose rec id was parsed. Also align the prompt's 'Local path:' string with the agent doc's
+        'Local bundle path:' extraction instruction while editing.
+      acceptance: "A simulated 2-failure run yields 2 recs, 2 FILED lines, and exactly the 2 matching category statuses; a 1-of-2 filing marks only 1 category."
+      severity: medium
+      severity_rationale: "Silent RCA-coverage loss but self-healing across pushes; contract test surface exists (tests/test_ci_rca_prompt_contract.py) to pin the fix."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["ci_rca ROADMAP grep", "INTENT residual multi-failure forward-progress"]
+        dedup_hit_count: 1
+        note: "INTENT's residual 'expected_sibling_count' item owns partial-batch VISIBILITY (planned-unbuilt); the prompt/contract contradiction and unconditional marking are novel."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+    - id: CIRCA-08
+      surface: S3
+      question: Q4
+      dimension: VD6
+      title: "Terminus override is an unvalidated dict that disables the depth floor -- the contract's typed shape, sibling rec, and rate limit are all unbuilt"
+      evidence: "ops_data_portal.py:179 (why_chain_terminus_override: Optional[dict]), :209-210 (any truthy dict short-circuits the terminus validator); INTENT Section 1 override spec + Section 4 check 6 rate limit; gauge why_chain_terminus_override_count=0"
+      evidence_kind: static
+      current_behavior: >-
+        {"anything": 1} as why_chain_terminus_override causes _validate_terminus to return before
+        checking the systemic keyword and citation. No min-80-char reason, no auditable sibling
+        rec (source=ci_rca_terminus_override is specified but has no enforcement or registry
+        wiring in the portal), no >2-unresolved-in-7d reject. The only backpressure is a usage
+        counter with no alert threshold.
+      ideal_behavior: "Per the contract: typed override object (reason >=80 chars), a filed sibling override rec, and the portal rejecting new overrides past the unresolved-sibling rate limit."
+      gap: "The floor the whole anti-rescue schema hangs on is one unvalidated key away from off. Zero observed usage keeps this hypothetical today; post-flip it is the cheapest legitimate-looking bypass (CIRCA-02's omission bypass is cruder and more visible)."
+      compensating_controls_considered: "The usage gauge property-matches at-scale abuse detection (a spike is visible in preflight) but not single-rec bypass; /plan review sees the rec but not the absent override discipline. Holds severity at medium given zero usage and gauge visibility."
+      change_type: enforce
+      proposed_change: "Type the override as a Pydantic sub-model (reason: 80-400 chars required); defer the sibling-rec + rate-limit machinery if desired, but then annotate INTENT Section 4 check 6 as partially-deferred instead of claiming it."
+      acceptance: "context_v2 with why_chain_terminus_override={'x':1} fails validation (missing/short reason); a conformant override still bypasses the terminus checks."
+      severity: medium
+      severity_rationale: "VD6 weakness with a clear fix; zero observed usage and gauge visibility bound the blast radius today."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-unbuilt
+        item_ids: [INTENT-S4-check-6]
+        dedup_search_terms: ["strict_mode/back_valid ROADMAP grep", "rec titles strict grep", "ci_rca_terminus_override repo grep"]
+        dedup_hit_count: 1
+        note: "Owned by the contract text itself (check 6 specifies the remedy); nothing in the roadmap schedules building it, and the contract asserts it as already enforced -- see CIRCA-09."
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Typing fix is XS; full rate-limit machinery can ride the c2-flip plan."}
+    - id: CIRCA-09
+      surface: S4
+      question: Q4
+      dimension: VD4
+      title: "INTENT Section 4 enforcement claims overstate the implementation beyond the [STALE]-annotated zones, and no coherence mechanism ties contract text to code"
+      evidence: "INTENT Section 4 checks 1/4/5/6 vs ops_data_portal.py: check 1 (hard reject on missing context_v2) false at :1105-1109; check 4 (actual_gate bundle comparison) absent from :441-494; check 5 required_when presence + relevance intersection unenforced (prior_art_citation Optional[str] shape-only, :182); check 6 rate limit absent; also _DetectionGap requires actual_gate in {pre,presubmit,CI} while the bundle emits None for not_a_gate workflows (terraform-apply-sandbox), forcing the agent to fabricate a value"
+      evidence_kind: static
+      current_behavior: >-
+        The [STALE] discipline covers the storage-backend retarget well, but the enforcement-claims
+        list -- the part of the contract a reader relies on to know what is guaranteed -- asserts
+        four behaviours the portal does not implement, with no inline deferral annotation for three
+        of them (check 5's existence-lookup deferral IS annotated; its presence/relevance clauses
+        are not). Nothing (test, validator, review gate) checks Section 4 against file_rec.
+      ideal_behavior: "Every Section 4 claim is either implemented, or carries an inline DEFERRED/UNBUILT annotation naming the owning plan -- the same discipline already applied to the Athena staleness -- until the Wave-3 extraction to docs/contracts/ci-rca.yaml supersedes the prose."
+      gap: "A reader auditing 'what does strict mode actually reject' from the contract gets four wrong answers; this audit's candidate set itself inherited one (C6 'rate-limited'). NS4 names exactly this defect class."
+      compensating_controls_considered: "The intent-migration MANIFEST (extract_to_contract, Wave 3) owns the doc's future form but has no timeline and does not correct present claims; per-behaviour unit tests pin code, not prose. Neither property-matches reader reliance on Section 4 today."
+      change_type: clarify
+      proposed_change: "Annotate checks 1/4/5/6 with their true status (UNBUILT/DEFERRED + owner) in one editing pass; land the actual_gate=None enum reconciliation (add 'unknown' to _DetectionGap or map not_a_gate workflows explicitly) with whichever plan touches the schema next."
+      acceptance: "grep of INTENT Section 4 shows an explicit status annotation on every check whose enforcement file_rec does not perform; no un-annotated claim of a rejection the code does not raise."
+      severity: medium
+      severity_rationale: "Misleads contract readers (including audit tooling) but not runtime consumers; cheap fix; the doc is already migration-tracked."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["ci_rca ROADMAP grep", "intent-migration MANIFEST", "rec titles ci_rca grep"]
+        dedup_hit_count: 1
+        note: "Wave-3 extraction owns the doc's format, not these specific false claims; the Athena staleness (known, annotated) is excluded per the do-not-flag list."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+    - id: CIRCA-10
+      surface: S4
+      question: Q1
+      dimension: VD5
+      title: "'Mandatory human review' for abstention-path recs is advisory surfacing (preflight print, capped at 5), not an enforced gate"
+      evidence: "session_preflight.py:485 ([:5] cap), :495-510 (print-only section); T1.13 c7 text ('mandatory human review must be an enforced marker, not advisory prose'); gauge: 0 open undetermined recs, abstention 1/62"
+      evidence_kind: static
+      current_behavior: >-
+        rca_confidence=undetermined recs get a typed marker (enforced, per c7) and a preflight
+        section, but nothing blocks /plan from consuming such a rec unreviewed, and the section
+        truncates at 5 entries with no overflow count.
+      ideal_behavior: "Consumption-side enforcement: /plan's preflight treats open undetermined recs the way it treats other hard blocks (Decision 73 L5 pattern), or at minimum the section shows total count when truncated."
+      gap: "The word 'mandatory' is doing advisory work. Empirically negligible today (0 open, 1.6% abstention) and the probe-health escalator property-matches the at-scale failure, so this is the residual single-rec case."
+      compensating_controls_considered: "ci_rca_probe_health.escalate (threshold 0.3, min 5) auto-files on sustained abstention -- property-matches systemic bypass, not individual-rec consumption; ci_rca recs already hard-block /plan generically (Decision 73), which partially covers attention."
+      change_type: clarify
+      proposed_change: "Add total-count overflow to the section and either wire undetermined recs into the existing /plan hard-block surface or rename the section from 'Mandatory' to advisory language -- make the word match the mechanism, whichever direction."
+      acceptance: "Either preflight blocks (or explicitly flags as blocking) open undetermined recs, or the section no longer claims MANDATORY; truncation shows 'showing 5 of N'."
+      severity: low
+      severity_rationale: "Wording/mechanism mismatch with negligible current volume and a property-matched at-scale sensor."
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T1.13-c7]
+        dedup_search_terms: ["ci_rca ROADMAP grep", "c7 criterion text"]
+        dedup_hit_count: 1
+        note: "c7 is marked met; the delivered surface satisfies 'enforced marker' but not the criterion's own 'not advisory prose' clause at consumption time."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+  rejected_candidates:
+    - candidate: "C3 -- ci_rca cluster on the top-recurring file continues after the preventive guard (PR #478) landed; preventive_action did not hold or guard does not cover"
+      why_dismissed: >-
+        Overturned on timing: PR #478 (commit 403c037) merged 2026-07-05T20:42Z; the newest ci_rca
+        rec on tests/test_rec_write_guidance.py is rec-2585 at 19:30Z the same day. All 24 recs
+        predate the guard; zero recurrence in the ~19h since. The storm occurred while the fix was
+        in flight -- evidence the loop CLOSED for this class, not that the guard failed. The 14
+        still-open duplicates are closure lag + missing write-time dedup (CIRCA-03), not regression.
+      compensating_control: "The back-validation flags that suggested recurrence are file-only-match CANDIDATES by explicit design (INTENT 7.2), and all 14 pairings predate the guard."
+      control_property_match: "find_preventive_regressions windows on the OPEN rec's created_timestamp; it cannot distinguish pre-fix from post-fix recurrence -- exactly why its output is labelled candidate-only, which held here."
+      decision_or_item_id: "T1.13 c12(iii)"
+    - candidate: "C5 -- /plan-critique does not actually run on ci_rca recs before they shape a plan (residual causal-antecedence routing is not real)"
+      why_dismissed: >-
+        The routing is real at the consumption point the contract names: Decision 72 makes /plan the
+        sole consumer of ci_rca recs, and plan-critique is a mandatory gate between planning and
+        implementation, so no rec-shaped plan reaches execution un-critiqued. The residual (a thin
+        rec influencing /orient ranking or preflight triage pre-critique) is real but is triage
+        noise, not architecture-shaping -- addressed via CIRCA-04's marker-badging remedy rather
+        than a routing finding.
+      compensating_control: "plan-critique skill as mandatory pre-implementation gate; Decision 72 no-autonomous-fix (a rec can never act without passing /plan)."
+      control_property_match: "The contract hands off CAUSAL-ANTECEDENCE review of consumed recs; the control reviews every consumption artefact (the plan) before execution -- same property, correct choke point. It would fail only if implementation bypassed /plan, which Decision 72 forbids structurally."
+      decision_or_item_id: "Decision 72; INTENT Section 5"
+    - candidate: "C8 (positive control) -- sequential, non-transactional multi-failure filing is a correctness hole"
+      why_dismissed: >-
+        Adjudicated both ways as instructed. The atomicity property itself is a deliberate,
+        documented, adequately-compensated design: INTENT 3.3 names the partial state, /plan reviews
+        it, the next failing push re-triggers with a fresh anchor, and a per-run transaction would
+        buy little (each rec is independently valid). However the trace surfaced a REAL adjacent
+        defect the candidate's framing missed: the agent prompt contradicts the N-rec contract and
+        the workflow marks all categories RCA'd off one filing -- filed as CIRCA-07. C8-as-stated:
+        rejected; C8's neighbourhood: productive.
+      compensating_control: "INTENT 3.3 partial-state documentation + /plan human review + fresh-anchor re-trigger on next push."
+      control_property_match: "The harm of a partial batch is an unfiled failure lingering; re-trigger and human review both target that lingering state directly. They do NOT cover the marking defect, which is why CIRCA-07 is a finding and not part of this rejection."
+      decision_or_item_id: "INTENT Section 3.3 / Section 4 check 9"
+    - candidate: "C1-as-stated -- 'the flag defaults to warn' as a defect per se"
+      why_dismissed: "Warn-default and the phased rollout are deliberate (INTENT Section 6) and on the prompt's own do-not-flag list. The adjudicable substance -- reachability of the flip and the absence of a convergence mechanism -- is filed as CIRCA-04; the in-force question is answered at Q1."
+      compensating_control: "Phased warn->strict rollout with Decision-Record-gated promotion and circuit-breaker demotion (INTENT Section 6)."
+      control_property_match: "The rollout design property-matches the stuck-rec risk it was built for; it does not property-match convergence, hence CIRCA-04 survives separately."
+      decision_or_item_id: "INTENT Section 6; T1.13 c2"
+    - candidate: "Q6-i -- runaway-agent risk from the RCA prompt"
+      why_dismissed: "Bounded: 20-minute job timeout, --max-turns 30, restricted --allowedTools (read-only bash + portal), no write tools, self-trigger excluded from the workflow_run filter."
+      compensating_control: "ci-rca.yml:36 timeout + :288 allowedTools + :28 loop guard"
+      control_property_match: "Each control directly caps the resource (time, turns, tool surface, recursion) that a runaway would consume."
+      decision_or_item_id: "T1.13 c6"
+    - candidate: "Q6-v -- prompt injection via the failed-CI log escalating agent privileges"
+      why_dismissed: >-
+        Privilege escalation is compensated (same-repo + default-branch job gate excludes fork PRs
+        from the write-capable context; allowedTools excludes Edit/Write/push). The uncompensated
+        residual -- crafted log content steering rec content -- terminates in a human-reviewed /plan
+        queue, the asset's designed control. Content-integrity residual accepted by architecture;
+        noted that the taxonomy's log-substring fallback is the most steerable component.
+      compensating_control: "ci-rca.yml:34 privilege gate; :288 tool restriction; Decision 72 human consumption"
+      control_property_match: "The gate removes the attacker's reach to credentials/write context; human review catches the only remaining deliverable (misleading rec content). Would fail only for an unreviewed consumer, which does not exist (executor frozen, Decision 67)."
+      decision_or_item_id: "Decision 72; Decision 67"
+  summary:
+    total_findings: 10
+    novel_count: 7
+    planned_insufficient_count: 2
+    planned_unbuilt_count: 1
+    top_improvements: [CIRCA-01, CIRCA-03, CIRCA-02, CIRCA-04, CIRCA-06]
+    highest_leverage_change: CIRCA-01
+    maturity_S1: strong
+    maturity_S2: frontier
+    maturity_S3: solid
+    maturity_S4: strong
+    maturity_overall: solid
