@@ -16,6 +16,7 @@ import scripts.ci_rca_taxonomy as taxonomy_mod  # noqa: E402
 from scripts.ci_rca_evidence import (  # noqa: E402
     _canonical_json,
     _resolve_bucket,
+    _resolve_current_pre_runtime,
     _sha256_of,
     _write_pending,
     generate_bundles,
@@ -721,3 +722,83 @@ class TestLiveS3Roundtrip:
             assert downloaded == body
         finally:
             s3.delete_object(Bucket=bucket, Key=key)
+
+
+class TestPreRuntimeStamp:
+    """CIRCA-05: CI_RCA_PRE_RUNTIME_SECONDS env stamp resolution and bundle wiring."""
+
+    def test_resolve_env_unset(self, monkeypatch):
+        monkeypatch.delenv("CI_RCA_PRE_RUNTIME_SECONDS", raising=False)
+        assert _resolve_current_pre_runtime() is None
+
+    def test_resolve_env_empty(self, monkeypatch):
+        monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "")
+        assert _resolve_current_pre_runtime() is None
+
+    def test_resolve_env_non_numeric(self, monkeypatch):
+        monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "abc")
+        assert _resolve_current_pre_runtime() is None
+
+    def test_resolve_env_zero(self, monkeypatch):
+        monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "0")
+        assert _resolve_current_pre_runtime() is None
+
+    def test_resolve_env_negative(self, monkeypatch):
+        monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "-5")
+        assert _resolve_current_pre_runtime() is None
+
+    def test_resolve_env_valid(self, monkeypatch):
+        monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "42.5")
+        assert _resolve_current_pre_runtime() == 42.5
+
+    def test_bundle_env_unset_undetermined_marker(self, monkeypatch, log_file, taxonomy_file):
+        monkeypatch.delenv("CI_RCA_PRE_RUNTIME_SECONDS", raising=False)
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch(
+                "scripts.ci_rca_tier_map.build_tier_membership",
+                return_value={"validate_sloc_limits": ["presubmit"]},
+            ):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        b = bundles[0]
+        assert "undetermined-headroom" in b["earliest_viable_gate_rationale"]
+        assert "0.0s" not in b["earliest_viable_gate_rationale"]
+        assert b["pre_runtime_seconds"] is None
+
+    def test_bundle_env_set_embeds_measured_runtime(self, monkeypatch, log_file, taxonomy_file):
+        monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "150")
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch(
+                "scripts.ci_rca_tier_map.build_tier_membership",
+                return_value={"validate_sloc_limits": ["presubmit"]},
+            ):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        b = bundles[0]
+        assert "150.0s" in b["earliest_viable_gate_rationale"]
+        assert b["pre_runtime_seconds"] == 150.0
+
+    def test_bundle_env_invalid_falls_back_to_none(self, monkeypatch, log_file, taxonomy_file):
+        monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "not-a-number")
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch(
+                "scripts.ci_rca_tier_map.build_tier_membership",
+                return_value={"validate_sloc_limits": ["presubmit"]},
+            ):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        b = bundles[0]
+        assert "undetermined-headroom" in b["earliest_viable_gate_rationale"]
+        assert b["pre_runtime_seconds"] is None

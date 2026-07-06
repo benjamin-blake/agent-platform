@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -136,6 +137,20 @@ def upload_and_persist(bundle: dict[str, Any], bucket: str) -> dict[str, str]:
         return {"upload_status": "upload_failed", "s3_uri": "", "pending_path": str(pending)}
 
 
+def _resolve_current_pre_runtime() -> float | None:
+    """Read the maintained env stamp CI_RCA_PRE_RUNTIME_SECONDS; total, never raises."""
+    raw = os.environ.get("CI_RCA_PRE_RUNTIME_SECONDS")
+    if raw is None:
+        return None
+    try:
+        val = float(raw.strip())
+    except (ValueError, AttributeError):
+        return None
+    if not math.isfinite(val) or val <= 0:
+        return None
+    return val
+
+
 def _assemble_core(
     workflow_run_id: int,
     workflow_name: str,
@@ -170,7 +185,10 @@ def _assemble_core(
         ast_walker_error = "AST parse failure -- see logs"
 
     runtime_confidence, median_sec = probe_runtime(failed_check, validate_path)
-    earliest_gate, evg_rationale = compute_earliest_viable_gate(failed_check, tier_membership, runtime_confidence, median_sec)
+    pre_runtime = _resolve_current_pre_runtime()
+    earliest_gate, evg_rationale = compute_earliest_viable_gate(
+        failed_check, tier_membership, runtime_confidence, median_sec, current_pre_runtime=pre_runtime
+    )
 
     escape_mode = compute_escape_mode(
         vacuous_pass=vacuous_pass,
@@ -201,6 +219,7 @@ def _assemble_core(
         "tier_membership": check_tiers,
         "earliest_viable_gate": earliest_gate,
         "earliest_viable_gate_rationale": evg_rationale,
+        "pre_runtime_seconds": pre_runtime,
         "runtime_confidence": runtime_confidence,
         "actual_gate_that_caught_it": actual_gate,
         "gate_is_postmerge_canary": gate_is_postmerge_canary,
@@ -270,6 +289,7 @@ def generate_bundles(
             "tier_membership": None,
             "earliest_viable_gate": "undetermined",
             "earliest_viable_gate_rationale": "Taxonomy unavailable",
+            "pre_runtime_seconds": None,
             "runtime_confidence": None,
             "actual_gate_that_caught_it": None,
             "gate_is_postmerge_canary": False,

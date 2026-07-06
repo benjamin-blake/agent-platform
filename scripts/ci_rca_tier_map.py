@@ -241,7 +241,7 @@ def compute_earliest_viable_gate(
     tier_membership: dict[str, list[str]] | None,
     runtime_confidence: str | None,
     median_seconds: float | None,
-    current_pre_runtime: float = 0.0,
+    current_pre_runtime: float | None = None,
 ) -> tuple[str, str]:
     """Compute earliest_viable_gate. Returns (gate_or_None, rationale_str).
 
@@ -267,7 +267,27 @@ def compute_earliest_viable_gate(
             return ("undetermined", f"Runtime probe inconclusive: {runtime_confidence}.")
         return ("undetermined", "Runtime probe result unavailable.")
 
+    if current_pre_runtime is None:
+        return (
+            "presubmit",
+            (
+                f"{check_name} in presubmit only. Runtime: median {median_seconds * 1000:.0f}ms. "
+                "undetermined-headroom (current --pre runtime not measured; set CI_RCA_PRE_RUNTIME_SECONDS "
+                "to enable promotion analysis). Staying presubmit -- cannot justify --pre promotion "
+                "without measured headroom."
+            ),
+        )
+
     headroom = _FAST_TIER_BUDGET_SECONDS - current_pre_runtime
+    if headroom <= 0:
+        return (
+            "presubmit",
+            (
+                f"{check_name} in presubmit only. --pre runtime {current_pre_runtime:.1f}s exhausts the "
+                f"{_FAST_TIER_BUDGET_SECONDS}s budget (headroom {headroom:.1f}s). Stay presubmit."
+            ),
+        )
+
     if median_seconds <= headroom:
         return (
             "pre",
