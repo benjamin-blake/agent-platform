@@ -4470,6 +4470,28 @@ tier_items:
       _DetectionGap.actual_gate_that_caught_it + guidance documents the mirror-bundle-null
       instruction). c2/c3/c5 remain OPEN (unchanged by this plan, gated on the strict-mode
       cutover as before).
+      2026-07-06: PLAN-ci-rca-dedup-multifailure -- post-audit hardening from
+      audits/ci-rca-system-a49db8f.yaml (CIRCA-03 high, CIRCA-07 medium, CIRCA-04 prompt half).
+      CIRCA-03: scripts/ci_rca_evidence.py now emits a classifier-anchored grouping fingerprint
+      (sha256 of workflow_slug+failed_check+failure_category, invariant to run_id/timestamp/
+      head_sha) plus a normalized first-error-signature tie-breaker; ops_data_portal.py gained
+      find_open_ci_rca_rec_by_fingerprint() (shared reader helper + read-only CLI verb) and a
+      write-time file_rec() backstop that returns an existing open rec's id instead of
+      duplicate-inserting on a fingerprint match (force_rca bypasses both); ci-rca.yml gained a
+      top-level concurrency block (cancel-in-progress:false) and a pre-agent fp_dedup step,
+      composed with the existing commit-status Dedup guard (retained unchanged) so the agent
+      only runs when NEITHER layer deduped. CIRCA-07: ci_rca_filing.extract_filed_recs() returns
+      ALL (rec_id, category) pairs from multi-marker transcripts (previously only the last
+      marker survived, losing N-1 filings on a multi-failure run); ci-rca.md now mandates one
+      rec per bundle (removed the "primary cause only" collapse) and mark_rca gates per-category
+      on the rec id actually parsed for that category. CIRCA-04 (prompt half): ci-rca.md Step 4
+      now states the 40-400 why_chain ceiling (schema_version=2, raised from the stale 40-250)
+      and lists all 11 systemic keywords verbatim plus the file:line terminus requirement.
+      Candidate (evidence-gated, NOT built here): a cheap-model (Haiku) semantic-dedup judge,
+      invoked ONLY on a fingerprint match and biased to escalate-on-doubt, is a future option if
+      telemetry surfaces a non-trivial fingerprint false-collapse rate -- no LLM is in the dedup
+      decision path today (fingerprint + open-rec match is fully deterministic). No exit-criterion
+      status changed (Status-Trusted-Never-Inferred); c2/c3/c5 remain OPEN as before.
     note: |
       Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze (original methodology rollout,
       exit criteria c1-c6). Each follow-on plan is independently authorable and the methodology is rolled out

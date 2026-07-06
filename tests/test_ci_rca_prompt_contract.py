@@ -49,6 +49,53 @@ class TestRequiredTokensPresent:
         assert "autonomous fix" in agent_text.lower() or "autonomous" in agent_text.lower()
 
 
+_SYSTEMIC_KEYWORDS = (
+    "gate",
+    "tier",
+    "policy",
+    "contract",
+    "gap",
+    "missing",
+    "absent",
+    "placement",
+    "scope",
+    "invariant",
+    "enforcement",
+)
+
+
+class TestCirca07MultiFilingAndPromptStringAlignment:
+    def test_primary_cause_only_sentence_absent(self, agent_text: str) -> None:
+        """CIRCA-07: the primary-cause-only collapse instruction is gone."""
+        assert "primary cause only" not in agent_text.lower()
+
+    def test_one_rec_per_bundle_language_present(self, agent_text: str) -> None:
+        assert "one rec per bundle" in agent_text.lower()
+
+    def test_filed_per_rec_category_grammar_present(self, agent_text: str) -> None:
+        """Step 6 documents the one-line-per-rec FILED: <rec_id> <failure_category> grammar."""
+        assert "FILED: <rec_id> <failure_category>" in agent_text
+
+    def test_extracts_local_bundle_path(self, agent_text: str) -> None:
+        """Matches the workflow's renamed prompt string 'Local bundle path:' (CIRCA-03(b))."""
+        assert "Local bundle path:" in agent_text
+
+
+class TestCirca04WhyChainCeilingAndKeywords:
+    def test_40_400_ceiling_present(self, agent_text: str) -> None:
+        assert "40-400" in agent_text
+
+    def test_stale_40_250_ceiling_absent(self, agent_text: str) -> None:
+        assert "40-250" not in agent_text
+
+    def test_all_systemic_keywords_listed_verbatim(self, agent_text: str) -> None:
+        for kw in _SYSTEMIC_KEYWORDS:
+            assert f"`{kw}`" in agent_text, f"systemic keyword {kw!r} not listed verbatim"
+
+    def test_file_line_citation_requirement_present(self, agent_text: str) -> None:
+        assert "file:line citation" in agent_text.lower()
+
+
 class TestStaleFormsAbsent:
     def test_no_positional_file_rec(self, agent_text: str) -> None:
         """Stale positional 'ops_data_portal file_rec' form is absent."""

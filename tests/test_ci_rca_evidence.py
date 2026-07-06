@@ -550,6 +550,136 @@ class TestMultiFailureEnumeration:
         assert len(bundles) == 1
 
 
+class TestFingerprint:
+    """CIRCA-03(a): grouping fingerprint determinism/distinctness (VP step 1)."""
+
+    def test_fingerprint_present_and_hex64(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file, workflow_name="CI", workflow_run_id=1, taxonomy_path=taxonomy_file
+                )
+        fp = bundles[0]["fingerprint"]
+        assert isinstance(fp, str)
+        assert len(fp) == 64
+        int(fp, 16)  # must be valid hex
+
+    def test_fingerprint_invariant_to_run_id_timestamp_head_sha(self, log_file, taxonomy_file):
+        """Identical (workflow, failed_check, failure_category) with differing run_id yields the same fingerprint."""
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles_a = generate_bundles(
+                    log_file=log_file, workflow_name="CI", workflow_run_id=111, taxonomy_path=taxonomy_file
+                )
+                bundles_b = generate_bundles(
+                    log_file=log_file, workflow_name="CI", workflow_run_id=999999, taxonomy_path=taxonomy_file
+                )
+        assert bundles_a[0]["fingerprint"] == bundles_b[0]["fingerprint"]
+        # workflow_run_id (a run-only field) still differs -- proves the perturbation was real.
+        assert bundles_a[0]["workflow_run_id"] != bundles_b[0]["workflow_run_id"]
+
+    def test_fingerprint_distinct_across_failed_check(self):
+        import scripts.ci_rca_evidence as ev_mod
+
+        fp1 = ev_mod._compute_fingerprint("ci", "check_a", "sloc_violation")
+        fp2 = ev_mod._compute_fingerprint("ci", "check_b", "sloc_violation")
+        assert fp1 != fp2
+
+    def test_fingerprint_distinct_across_failure_category(self):
+        import scripts.ci_rca_evidence as ev_mod
+
+        fp1 = ev_mod._compute_fingerprint("ci", "check_a", "sloc_violation")
+        fp2 = ev_mod._compute_fingerprint("ci", "check_a", "iam_policy_gap")
+        assert fp1 != fp2
+
+    def test_fingerprint_deterministic_same_inputs(self):
+        import scripts.ci_rca_evidence as ev_mod
+
+        assert ev_mod._compute_fingerprint("ci", "check_a", "sloc_violation") == ev_mod._compute_fingerprint(
+            "ci", "check_a", "sloc_violation"
+        )
+
+    def test_taxonomy_error_bundle_has_fingerprint(self, tmp_path, log_file):
+        bundles = generate_bundles(
+            log_file=log_file, workflow_name="CI", workflow_run_id=99, taxonomy_path=tmp_path / "nonexistent.yaml"
+        )
+        assert "fingerprint" in bundles[0]
+        assert len(bundles[0]["fingerprint"]) == 64
+
+    def test_multi_failure_distinct_fingerprints(self, tmp_path):
+        multi_taxonomy = {
+            "schema_version": 1,
+            "taxonomy_version": 1,
+            "function_to_category": {
+                "validate_sloc_limits": "sloc_violation",
+                "validate_iam_runner_policy": "iam_policy_gap",
+            },
+            "log_pattern_to_category": [],
+            "workflow_to_tier": {"CI": "CI"},
+        }
+        taxonomy_path = tmp_path / "multi.yaml"
+        taxonomy_path.write_text(yaml.dump(multi_taxonomy))
+        log_path = tmp_path / "multi.log"
+        log_path.write_text(
+            "validate_sloc_limits FAILED -- scripts/foo.py is 631 SLOC\n"
+            "validate_iam_runner_policy FAILED -- missing iam:PutRolePolicy\n"
+        )
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_path, workflow_name="CI", workflow_run_id=42, taxonomy_path=taxonomy_path
+                )
+        fingerprints = [b["fingerprint"] for b in bundles]
+        assert len(set(fingerprints)) == 2
+
+    def test_slugify_workflow(self):
+        import scripts.ci_rca_evidence as ev_mod
+
+        assert ev_mod._slugify_workflow("CI") == "ci"
+        assert ev_mod._slugify_workflow("Main Canary") == "main_canary"
+        assert ev_mod._slugify_workflow("terraform-apply-sandbox") == "terraform-apply-sandbox"
+
+    def test_first_error_signature_present(self, log_file, taxonomy_file):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file, workflow_name="CI", workflow_run_id=1, taxonomy_path=taxonomy_file
+                )
+        assert "first_error_signature" in bundles[0]
+        assert isinstance(bundles[0]["first_error_signature"], str)
+
+    def test_first_error_signature_normalizes_digits(self):
+        import scripts.ci_rca_evidence as ev_mod
+
+        sig = ev_mod._normalize_first_error_signature(
+            "validate_sloc_limits FAILED -- foo.py is 631 SLOC\n", "validate_sloc_limits"
+        )
+        assert "631" not in sig
+        assert "#" in sig
+
+    def test_main_prints_fingerprint(self, log_file, taxonomy_file, capsys):
+        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+                with patch("scripts.ci_rca_evidence._upload_to_s3"):
+                    with patch("scripts.ci_rca_evidence._resolve_bucket", return_value="test-bucket"):
+                        main(
+                            [
+                                "--log-file",
+                                str(log_file),
+                                "--workflow-name",
+                                "CI",
+                                "--workflow-run-id",
+                                "1",
+                                "--taxonomy-path",
+                                str(taxonomy_file),
+                            ]
+                        )
+        out = capsys.readouterr().out
+        assert "FINGERPRINT=" in out
+        fp_line = next(ln for ln in out.splitlines() if ln.startswith("FINGERPRINT="))
+        assert len(fp_line.split("=", 1)[1]) == 64
+
+
 @pytest.mark.skipif(not os.environ.get("RUN_LIVE_S3"), reason="RUN_LIVE_S3 not set")
 @pytest.mark.integration
 class TestLiveS3Roundtrip:

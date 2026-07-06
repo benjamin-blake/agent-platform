@@ -80,7 +80,7 @@ to CiRcaContext. All of the following fields are required:
   "schema_version": 2,
   "proximate_cause": "<100-600 chars: the observable fact the failing check reported>",
   "why_chain": [
-    "<3-7 entries, each 40-250 chars, iterative 'but why?' descent>",
+    "<3-7 entries, each 40-400 chars, iterative 'but why?' descent>",
     "<...>",
     "<final entry MUST contain a systemic keyword AND a file:line citation>"
   ],
@@ -95,6 +95,13 @@ to CiRcaContext. All of the following fields are required:
   "preventive_action": "<100-800 chars: systemic change that prevents recurrence>"
 }
 ```
+
+Each `why_chain` entry must be **40-400 characters** (schema_version=2 ceiling). The final
+entry MUST contain, verbatim, at least one of these 11 systemic keywords: `gate`, `tier`,
+`policy`, `contract`, `gap`, `missing`, `absent`, `placement`, `scope`, `invariant`,
+`enforcement` -- AND a file:line citation (e.g. `scripts/validate.py:284`). A terminus that
+only restates the symptom (no systemic keyword, no citation) is rejected; use
+`why_chain_terminus_override` only when a file:line terminus genuinely cannot be derived.
 
 Optional fields:
 - `prior_art_citation`: cite a rec-NNNN or Decision NNN if this is a known pattern
@@ -138,30 +145,35 @@ Requirements for each field:
 - **--context-v2-json**: The JSON object composed in Step 4, single-quoted to avoid shell
   expansion. If `json.loads` fails, the portal exits non-zero and files nothing.
 
-One rec per failed check (one evidence bundle = one filing). If multiple checks failed,
-diagnose and file for the primary cause only.
+One rec per failed check (one evidence bundle = one filing). When multiple checks failed
+(multiple bundles in `/tmp/ci-rca-bundles/`), diagnose and file ONE rec per bundle -- never
+collapse multiple bundles into a single filing. Repeat Steps 2-5 for each bundle.
 
 ### Step 6: Report
 
 Print a brief summary of:
 - Run ID diagnosed
-- Root cause classification (from evidence bundle or derived)
-- The rec ID that was filed (from the portal output)
+- Root cause classification per bundle (from evidence bundle or derived)
+- The rec ID filed for each bundle (from the portal output)
 
-As the **final line** of your output, emit exactly one of:
+As the **final lines** of your output, emit ONE marker per rec filed (one bundle = one
+line, each carrying that bundle's `failure_category` token):
 
 ```
-FILED: <rec_id>
+FILED: <rec_id> <failure_category>
 ```
 
-or, if no recommendation was filed:
+If a bundle produced no filing, emit its line as:
 
 ```
 FILED: none
 ```
 
-This marker is the sole authoritative filing signal parsed by the workflow.
-Downstream tooling (`scripts/ci_rca_filing.py`) reads only this marker --
+For a single-failure run, emit exactly one `FILED:` line. For a multi-failure run, emit one
+`FILED:` line per bundle, in the order the bundles were diagnosed.
+
+These markers are the sole authoritative filing signal parsed by the workflow.
+Downstream tooling (`scripts/ci_rca_filing.py`) reads only these markers --
 a bare mention of a rec id elsewhere in the output does NOT count as filed.
 
 ## Hard Rules

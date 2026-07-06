@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.ci_rca_filing import extract_filed_rec_id
+from scripts.ci_rca_filing import extract_filed_rec_id, extract_filed_recs
 
 
 def _write(tmp_path: Path, content: str) -> Path:
@@ -101,6 +101,60 @@ class TestExtractFiledRecId:
         assert extract_filed_rec_id(str(path)) == "rec-222"
 
 
+class TestExtractFiledRecIdWithCategoryMarker:
+    """CIRCA-07: extract_filed_rec_id() still returns just the rec id when the marker
+    carries a trailing category token."""
+
+    def test_single_marker_with_category(self, tmp_path: Path) -> None:
+        content = "FILED: rec-123 sloc_violation\n"
+        assert extract_filed_rec_id(_write(tmp_path, content)) == "rec-123"
+
+    def test_last_of_multiple_category_markers(self, tmp_path: Path) -> None:
+        content = "FILED: rec-100 sloc_violation\nFILED: rec-200 iam_policy_gap\n"
+        assert extract_filed_rec_id(_write(tmp_path, content)) == "rec-200"
+
+
+class TestExtractFiledRecs:
+    """CIRCA-07: extract_filed_recs() returns ALL (rec_id, category) pairs (N-1 filings no longer lost)."""
+
+    def test_multi_marker_returns_all_pairs(self, tmp_path: Path) -> None:
+        content = "FILED: rec-100 sloc_violation\nFILED: rec-200 iam_policy_gap\n"
+        assert extract_filed_recs(_write(tmp_path, content)) == [
+            ("rec-100", "sloc_violation"),
+            ("rec-200", "iam_policy_gap"),
+        ]
+
+    def test_single_marker_with_category_still_parses(self, tmp_path: Path) -> None:
+        content = "FILED: rec-42 dependency_gap\n"
+        assert extract_filed_recs(_write(tmp_path, content)) == [("rec-42", "dependency_gap")]
+
+    def test_single_marker_without_category_backward_compat(self, tmp_path: Path) -> None:
+        content = "FILED: rec-42\n"
+        assert extract_filed_recs(_write(tmp_path, content)) == [("rec-42", "")]
+
+    def test_filed_none_returns_empty_list(self, tmp_path: Path) -> None:
+        content = "Could not file.\nFILED: none\n"
+        assert extract_filed_recs(_write(tmp_path, content)) == []
+
+    def test_filed_none_does_not_suppress_earlier_real_marker(self, tmp_path: Path) -> None:
+        """Unlike extract_filed_rec_id (last-wins), extract_filed_recs collects ALL real filings --
+        a trailing FILED: none is simply skipped, not authoritative over earlier markers."""
+        content = "FILED: rec-1 cat_a\nFILED: none\n"
+        assert extract_filed_recs(_write(tmp_path, content)) == [("rec-1", "cat_a")]
+
+    def test_missing_file_returns_empty_list(self, tmp_path: Path) -> None:
+        assert extract_filed_recs(tmp_path / "nonexistent.json") == []
+
+    def test_no_marker_returns_empty_list(self, tmp_path: Path) -> None:
+        content = "Agent mentioned rec-100 but did not file."
+        assert extract_filed_recs(_write(tmp_path, content)) == []
+
+    def test_json_envelope_result_field_searched(self, tmp_path: Path) -> None:
+        result_text = "FILED: rec-1 cat_a\nFILED: rec-2 cat_b\n"
+        envelope = json.dumps({"result": result_text})
+        assert extract_filed_recs(_write(tmp_path, envelope)) == [("rec-1", "cat_a"), ("rec-2", "cat_b")]
+
+
 class TestCLI:
     def _run(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -142,3 +196,24 @@ class TestCLI:
         result = self._run(str(f))
         assert result.returncode == 0
         assert result.stdout == "rec-77\n"
+
+    def test_cli_all_mode_prints_one_line_per_rec(self, tmp_path: Path) -> None:
+        f = tmp_path / "out.json"
+        f.write_text("FILED: rec-100 sloc_violation\nFILED: rec-200 iam_policy_gap\n", encoding="utf-8")
+        result = self._run("--all", str(f))
+        assert result.returncode == 0
+        assert result.stdout == "rec-100,sloc_violation\nrec-200,iam_policy_gap\n"
+
+    def test_cli_all_mode_no_markers_exits_0_empty(self, tmp_path: Path) -> None:
+        f = tmp_path / "out.json"
+        f.write_text("FILED: none\n", encoding="utf-8")
+        result = self._run("--all", str(f))
+        assert result.returncode == 0
+        assert result.stdout == ""
+
+    def test_cli_all_mode_legacy_marker_prints_empty_category(self, tmp_path: Path) -> None:
+        f = tmp_path / "out.json"
+        f.write_text("FILED: rec-55\n", encoding="utf-8")
+        result = self._run("--all", str(f))
+        assert result.returncode == 0
+        assert result.stdout == "rec-55,\n"
