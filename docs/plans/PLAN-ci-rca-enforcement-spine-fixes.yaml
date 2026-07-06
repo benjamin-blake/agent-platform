@@ -1,0 +1,396 @@
+schema_version: 1
+slug: "ci-rca-enforcement-spine-fixes"
+intent: >-
+  Make the CI-RCA enforcement spine actually load-bearing at the production (CI) call site and
+  close the audited schema/wiring gaps, so the warn->strict flip advertises a depth guarantee the
+  portal genuinely enforces (audit audits/ci-rca-system-a49db8f.yaml, findings CIRCA-01/02/06/08 +
+  the portal-side halves of CIRCA-04/09).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-enforcement-spine-fixes.yaml
+phase: >-
+  Platform tier_item T1.13 (CI-RCA enforcement spine). Closes T1.13:c10 (cross-check spine
+  load-bearing at the production call site) on a verified reachability VP.
+scope:
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      CIRCA-01: add an env-parameterised, sha-keyed emit-dir candidate (CI_RCA_BUNDLE_EMIT_DIR) to
+      _load_and_verify_bundle so the CI-emitted bundle is reachable at the file_rec call site.
+      CIRCA-02: reject source=ci_rca writes with context_v2_json=None in strict mode (warn keeps
+      accepting). CIRCA-06: make _EvidenceBundleRef require ^s3:// iff upload_status=='ok' and
+      permit empty s3_uri when upload_status=='upload_failed'. CIRCA-08: type
+      why_chain_terminus_override as a Pydantic sub-model (reason: str, 80-400 chars, required).
+      CIRCA-04 (portal half): stamp per-rule schema deficiency tags into warn_mode_reject.reasons
+      instead of the bare "schema_deficiency", update back_validate_ci_rca's marker-reason filter to
+      exclude all schema_-prefixed tags, and version-gate the why_chain per-entry ceiling (v1=250,
+      v2=400). CIRCA-09 (enum half): add 'unknown' to _DetectionGap.actual_gate_that_caught_it.
+      Update back_validate_ci_rca's docstring where it claims strict-mode file_rec accepts legacy
+      no-context_v2 recs (now false for new writes; historical rows stay grandfathered).
+  - file: scripts/executor/rec_write_guidance.py
+    action: Modify
+    purpose: >-
+      Precision Context Injection (Decision 66) lockstep with the schema: document 'unknown' as a
+      valid actual_gate_that_caught_it and instruct the agent to mirror a bundle-null value as
+      'unknown' (CIRCA-09); state the why_chain_terminus_override reason as required 80-400 chars
+      (CIRCA-08); state the why_chain per-entry ceiling as 40-400 for schema_version 2 (CIRCA-04).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      CIRCA-01: export CI_RCA_BUNDLE_EMIT_DIR=/tmp/ci-rca-bundles in the rca_agent step env block so
+      the portal subprocess the agent invokes can find the sha-keyed bundles the evidence step emits.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Add tests: CIRCA-01 integration-shaped (bundle in emit-dir, absent from pending dir; deliberate
+      earliest_viable_gate mismatch stamps cross_check_check_2 in warn / raises in strict); CIRCA-02
+      strict-reject vs warn-accept of context_v2_json=None; CIRCA-06 conditional s3_uri validation;
+      CIRCA-08 typed terminus override (bad dict fails, conformant reason bypasses terminus);
+      CIRCA-04 per-rule stamping + version-gated ceiling; CIRCA-09 'unknown' enum accepted.
+  - file: tests/test_rec_write_guidance.py
+    action: Modify
+    purpose: >-
+      Update/extend assertions for the guidance text changes (actual_gate 'unknown' + mirror-null
+      instruction, terminus reason 80-400, why_chain 40-400 for v2).
+  - file: tests/test_ci_rca_back_validate.py
+    action: Modify
+    purpose: >-
+      Cover the marker-reason filter change: a stamped schema_-prefixed tag must be excluded from
+      non_schema_reasons (recomputed fresh), so a schema-only deficiency is not double-counted; a
+      genuine non-schema reason (bundle/S3/cross-check) still surfaces. Also refresh the stale
+      parenthetical in the test docstring (~line 83) that claims strict-mode file_rec accepts a
+      no-context_v2_json rec -- true only for grandfathered historical rows post-CIRCA-02, not new writes.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap bookkeeping (human-confirmed): re-ground T1.13:c10 met->open (the audit CONFIRMED the
+      cross-check spine was not load-bearing at the production call site) and add a T1.13
+      progress_note recording the CIRCA-01 finding and this plan. c8/c11 stay met (their evidence
+      computation is genuine; only c10's binding was inert).
+bundled_recommendations: []
+closes_criteria:
+  - "T1.13:c10"
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    CIRCA-01: a source=ci_rca file_rec from a simulated CI layout (bundle present only in the
+    CI_RCA_BUNDLE_EMIT_DIR emit-dir, absent from logs/.ci-rca-evidence-pending/) whose
+    detection_gap.earliest_viable_gate deliberately disagrees with the bundle stamps
+    cross_check_check_2 into warn_mode_reject.reasons in warn mode and raises ValueError in strict.
+  - >-
+    CIRCA-02: with CI_RCA_STRICT_MODE=strict, file_rec(source='ci_rca', context_v2_json=None) raises
+    ValueError; with warn mode it files and logs the legacy free-text deprecation warning.
+  - >-
+    CIRCA-06: in strict mode, a context_v2 whose evidence_bundle_ref is
+    {sha256:<valid>, s3_uri:'', upload_status:'upload_failed'} validates (degraded path, no raise,
+    no schema_deficiency stamp); {sha256:<valid>, s3_uri:'', upload_status:'ok'} fails validation.
+  - >-
+    CIRCA-08: a context_v2 with why_chain_terminus_override={'x':1} (or a reason under 80 / over 400
+    chars) fails validation; a conformant override {'reason': <80-400 char str>} validates and
+    bypasses the terminus systemic-keyword/citation checks.
+  - >-
+    CIRCA-04 stamping: a warn-mode schema deficiency stamps a specific rule tag (e.g.
+    schema_why_chain_too_long) into warn_mode_reject.reasons rather than the bare "schema_deficiency",
+    and back_validate_ci_rca does not surface that schema_-prefixed marker tag as a non_schema_reason.
+  - >-
+    CIRCA-04 ceiling: a schema_version=2 context with a 300-char why_chain entry validates, while a
+    schema_version=1 context with the same 300-char entry fails (>250); no historical row is newly
+    rejected by the loosening.
+  - >-
+    CIRCA-09: a detection_gap with actual_gate_that_caught_it='unknown' validates, and
+    get_rec_write_guidance(source='ci_rca') documents 'unknown' with the mirror-bundle-null instruction.
+  - >-
+    Workflow: .github/workflows/ci-rca.yml's rca_agent step env block exports
+    CI_RCA_BUNDLE_EMIT_DIR set to /tmp/ci-rca-bundles.
+  - >-
+    Roadmap: docs/ROADMAP-PLATFORM.yaml shows T1.13:c10 status open and a T1.13 progress_note
+    recording the CIRCA-01 call-site reachability finding and this plan.
+  - >-
+    No regressions: bin/venv-python -m scripts.validate --pre passes, and the three touched test
+    files pass in full.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      CIRCA-01 reachability + bundle-wins: run the cross-check spine test class covering the CI
+      layout (bundle only in the emit-dir, absent from the pending dir) with a deliberate
+      earliest_viable_gate mismatch, asserting the warn stamp and the strict raise.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaCrossCheckSpine -q
+    expected: >-
+      All tests pass, including the new emit-dir reachability case that stamps cross_check_check_2
+      in warn and raises ValueError in strict from the emit-dir-only layout.
+    fix_if: >-
+      Bundle still loads only from the pending dir (emit-dir candidate not wired), or the env var
+      name/path mismatches the workflow export, so the cross-check silently skips (returns at the
+      bundle-None branch) and no stamp/raise occurs.
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      CIRCA-01 wiring proof (static): confirm the portal adds the CI_RCA_BUNDLE_EMIT_DIR sha-keyed
+      candidate and the workflow exports it in the rca_agent step.
+    command: >-
+      grep -n "CI_RCA_BUNDLE_EMIT_DIR" scripts/ops_data_portal.py && grep -n
+      "CI_RCA_BUNDLE_EMIT_DIR: /tmp/ci-rca-bundles" .github/workflows/ci-rca.yml
+    expected: >-
+      Both greps return a match: the portal reads CI_RCA_BUNDLE_EMIT_DIR and builds a
+      "<emit-dir>/<sha>.json" candidate, and the rca_agent env block exports it to /tmp/ci-rca-bundles.
+    fix_if: >-
+      Either grep is empty -- the portal never consults the emit-dir, or the workflow never exports
+      it, so the fix is inert in real CI even if unit tests seed the dir directly.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      CIRCA-02: strict mode rejects a source=ci_rca write with context_v2_json=None; warn mode still
+      files it with the deprecation warning.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaStrictLegacyReject -q
+    expected: >-
+      Strict-mode case raises ValueError; warn-mode case returns a rec id and emits the "legacy
+      free-text" warning (the existing legacy test stays green).
+    fix_if: >-
+      The strict branch still only logs (no raise), or the change also rejects in warn mode (breaking
+      the rollout window and the existing legacy-path test).
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      CIRCA-06: _EvidenceBundleRef conditional s3_uri -- upload_failed permits empty s3_uri
+      (degraded), ok requires ^s3://.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestEvidenceBundleRefConditional -q
+    expected: >-
+      {s3_uri:'', upload_status:'upload_failed'} validates; {s3_uri:'', upload_status:'ok'} and a
+      non-s3 uri under 'ok' fail validation.
+    fix_if: >-
+      The unconditional ^s3:// Field pattern still rejects the upload_failed degraded path (S3 outage
+      makes evidence-carrying recs unfilable in strict), or the 'ok' path no longer requires ^s3://.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      CIRCA-08: typed why_chain_terminus_override -- a bad dict / out-of-range reason fails; a
+      conformant reason bypasses the terminus checks.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestTerminusOverrideTyped -q
+    expected: >-
+      {'x':1}, a 79-char reason, and a 401-char reason each fail validation; an 80-400 char reason
+      validates and disables the terminus systemic-keyword/citation floor.
+    fix_if: >-
+      Any truthy dict still short-circuits _validate_terminus (the depth floor is one unvalidated key
+      from off), or a conformant override no longer bypasses the terminus checks.
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      CIRCA-04 (portal half): per-rule deficiency stamping + version-gated why_chain ceiling.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestWarnModePerRuleStamping
+      tests/test_ops_data_portal.py::TestWhyChainCeilingVersioned -q
+    expected: >-
+      A warn-mode schema deficiency stamps a specific schema_<rule> tag (not bare "schema_deficiency");
+      a schema_version=2 context with a 300-char why_chain entry validates while schema_version=1 with
+      the same entry fails (>250).
+    fix_if: >-
+      Only the coarse "schema_deficiency" tag is stamped (c3 not decomposable at read time), or the
+      ceiling is not version-aware (v1 loosened, or v2 still capped at 250).
+    hermetic: false
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      CIRCA-09 (enum half): 'unknown' accepted by _DetectionGap and surfaced in the write guidance.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestDetectionGapUnknownGate
+      tests/test_rec_write_guidance.py -q
+    expected: >-
+      A detection_gap with actual_gate_that_caught_it='unknown' validates; the guidance for
+      source=ci_rca documents 'unknown' and the mirror-bundle-null instruction, and the guidance
+      tests pass.
+    fix_if: >-
+      'unknown' is rejected by the enum (agent must fabricate pre/presubmit/CI for not_a_gate
+      workflows), or the guidance still lists only pre|presubmit|CI.
+    hermetic: false
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      CIRCA-04 back-validation coupling: the schema_-prefixed marker tags are excluded from the
+      offline back-validation's non_schema_reasons so schema-only deficiencies are not double-counted.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_back_validate.py -q
+    expected: >-
+      All back-validation tests pass, including the new case asserting a stamped schema_<rule> tag is
+      not surfaced as a non_schema_reason while a genuine bundle/S3/cross-check reason still is.
+    fix_if: >-
+      The filter still keys on the literal "schema_deficiency" only, so per-rule schema tags leak into
+      non_schema_reasons and inflate the non-conformance list.
+    hermetic: false
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Roadmap bookkeeping landed: T1.13:c10 is open and carries a progress_note about the CIRCA-01
+      call-site reachability finding.
+    command: >-
+      bin/venv-python -c "import yaml;
+      d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'));
+      import json;
+      w=lambda o:(o if isinstance(o,dict) and o.get('id')=='T1.13' else next((r for v in (o.values() if isinstance(o,dict) else o if isinstance(o,list) else []) for r in [w(v)] if r),None));
+      it=w(d);
+      c10=next(c for c in it['exit_criteria'] if c['id']=='c10');
+      assert c10['status']=='open', c10['status'];
+      assert 'CIRCA-01' in it.get('progress_note','');
+      print('ok')"
+    expected: Prints "ok" -- c10 status is open and the progress_note references CIRCA-01.
+    fix_if: c10 is still met, or the progress_note does not record the call-site reachability finding.
+  - step: 10
+    phase: pre-deploy
+    action: Full presubmit fast tier -- no lint/schema/coverage/compliance regressions across the diff.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: validate --pre exits 0 (all gates green, including the diff-aware test selection and coverage).
+    fix_if: >-
+      Any gate fails -- e.g. new code lacks coverage, a plan-schema/hygiene check trips, or a touched
+      test regresses.
+    hermetic: false
+constraints:
+  - >-
+    Do NOT file recs -- all CIRCA-01/02/04/06/08/09 remediation rides this plan (task constraint).
+    Sibling findings (CIRCA-03/05/07/10 and the CIRCA-04 agent-prompt half, CIRCA-09 doc/S2 halves)
+    are separate follow-on plans.
+  - No rescue agents or workaround loops (Decision 55); loud-fail on real errors, never silent-skip.
+  - >-
+    All source=ci_rca schema/reject changes stay on the scripts/ops_data_portal.py write chokepoint
+    (Decision 84 single-portal invariant). No read-cache-as-write-source; no direct logs/ writes.
+  - >-
+    Preserve warn-mode acceptance for the rollout window -- only strict mode gains the new CIRCA-02
+    rejection; CIRCA-06 only widens what validates. Do not retire warn behaviour here (c2 is separate).
+  - >-
+    Keep back_validate_ci_rca's legacy_no_schema grandfathering for historical rows -- the CIRCA-02
+    strict reject applies to NEW writes only; do not retro-reject pre-schema recs.
+  - >-
+    The why_chain ceiling change is loosening-only and version-gated (v1=250, v2=400); no historical
+    row may be newly rejected by the recomputed current schema.
+  - Only modify files listed in Scope; out-of-scope issues become follow-on plan work, not inline fixes.
+context:
+  - >-
+    Audit source: audits/ci-rca-system-a49db8f.yaml (merged at a49db8f). This plan implements
+    CIRCA-01 (critical), CIRCA-02 (high), CIRCA-06 (medium), CIRCA-08 (medium), and the portal-side
+    halves of CIRCA-04 (per-rule stamping + ceiling) and CIRCA-09 (enum).
+  - >-
+    HARD BLOCK cleared before commitment: preflight ci_rca_unresolved rec-2571/rec-2570 (+ likely-
+    resolved rec-2583/2584/2585) were the test-count-coupling storm on tests/test_rec_write_guidance.py.
+    The audit's own rejected-candidate C3 establishes all predate PR #478's count-coupling guard with
+    zero post-guard recurrence (closure-lag, not live regression), and the operator closed them prior
+    to plan commitment. Unrelated to this scope.
+  - >-
+    Decision 86/65 NOTE (decision-scout) resolved: the source=ci_rca context_v2 sub-schema
+    (why_chain / terminus_override / actual_gate) has no ops.yaml or docs/contracts home --
+    context_v2_json is a column-level opaque JSON blob (docs/contracts/ops_recommendations.yaml:505,
+    "schema unvalidated ... deferred to context-v2 graduation"). Sole authority is the CiRcaContext
+    Pydantic model (ops_data_portal.py) + get_rec_write_guidance() (Decision 66). Editing both in
+    lockstep is the drift-free path; no contract file needs syncing.
+  - >-
+    CIRCA-01 design choice: uses the audit's alternative-2 (env-parameterised, sha-keyed emit-dir
+    candidate) rather than the "preferred" single-path CI_RCA_BUNDLE_LOCAL_PATH, because a single
+    file path cannot cover multi-failure runs where the evidence step emits N bundles (N shas) to
+    /tmp/ci-rca-bundles/<sha>.json. The existing CI_RCA_BUNDLE_LOCAL_PATH candidate is retained.
+  - >-
+    CIRCA-04 ceiling decision: bump the why_chain per-entry ceiling 250->400 in THIS plan,
+    version-gated (v1=250, v2=400). The immediate-next plan (CIRCA-03/07 + CIRCA-04 agent-prompt half)
+    adds the prompt hard-limits and a fresh 7d measurement window and explicitly conforms to this
+    ceiling; per-rule stamping shipped here keeps the residual terminus/citation rejects decomposable.
+  - >-
+    Deferrals (Decision 86 routing): CIRCA-08 sibling-rec + rate-limit machinery -> hygiene/next plan;
+    CIRCA-09 bundle-emit None->'unknown' (scripts/ci_rca_evidence.py, S2 surface) + INTENT Section 4
+    enforcement-claim annotation -> hygiene plan. These are recorded here so the hygiene plan annotates
+    them; this plan makes only the portal enum reachable.
+  - >-
+    T1.13 c10 re-grounded met->open (audit CIRCA-01 CONFIRMED-critical the cross-check spine was not
+    load-bearing at the production call site). closes_criteria T1.13:c10 -> /implement re-closes on the
+    verified reachability VP (VP steps 1-2), which is the recorded closure proof (Decision 103). c8/c11
+    stay met -- their evidence computation is genuine; only c10's binding into the spine was inert.
+  - >-
+    main not diverged at planning time (0 behind / 0 ahead); Main Divergence Assessment not triggered.
+    Lambda assessment: compute_affected_artifacts(scope) == {'data-pipeline':
+    ['docs/ROADMAP-PLATFORM.yaml']} because the roadmap is a bundled read-only ASSET of the active
+    data-pipeline artifact (src/lambdas/data-pipeline/manifest.yaml:42) -- NOT because any Lambda
+    handler code changed (ops_data_portal.py / rec_write_guidance.py are not Lambda-packaged). No
+    build/deploy/smoke-test is warranted: the affected file is a non-executable doc asset (a
+    status-flip + progress_note), the scheduled agents that read it are disabled, and
+    validate_lambda_deploy_gating is advisory-only (Decision 104, never fails the build) so
+    validate --pre stays green. V2 (unit) is the correct tier; do NOT add a data-pipeline deploy step.
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND (Decisions triaged: 81 of 81; one Decision 86/65
+    NOTE, resolved above). CITE = Decision 72, Decision 55, Decision 84, Decision 66, Decision 86.
+    RELATED = Decision 73, Decision 61, Decision 103.
+  - "gates: decision-scout=FLAGS_FOUND (1 NOTE resolved) after 1 round; plan-critique=PROCEED after 2 round(s) (round 1 REVISE: corrected Lambda-asset assessment + folded in the back-validate test-docstring refresh)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-enforcement-spine-fixes-7yjn6k)
+  - docs/PROJECT_CONTEXT.md read
+  - Audit audits/ci-rca-system-a49db8f.yaml findings CIRCA-01/02/04/06/08/09 read
+  - All seven scope files located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/ops_data_portal.py -- CIRCA-01: in _load_and_verify_bundle, append an emit-dir candidate
+    Path(os.environ['CI_RCA_BUNDLE_EMIT_DIR'])/f"{sha256}.json" (when the env var is set) to the
+    existing pending-dir + CI_RCA_BUNDLE_LOCAL_PATH candidate list; keep sha-keyed lookup so N-bundle
+    runs resolve each rec's own bundle.
+  - >-
+    scripts/ops_data_portal.py -- CIRCA-02: in the source=ci_rca branch where context_v2_json is None
+    (currently the log-only elif), raise ValueError in strict mode; keep the warn-mode deprecation log
+    and acceptance. Update the elif so the strict path fails loudly.
+  - >-
+    scripts/ops_data_portal.py -- CIRCA-06: replace _EvidenceBundleRef.s3_uri's unconditional
+    ^s3:// Field pattern with a model_validator: require ^s3:// iff upload_status=='ok'; allow empty
+    s3_uri when upload_status=='upload_failed' (constrain upload_status to the known {ok,upload_failed}).
+  - >-
+    scripts/ops_data_portal.py -- CIRCA-08: add a _WhyChainTerminusOverride sub-model
+    (reason: str = Field(min_length=80, max_length=400)) and retype
+    CiRcaContext.why_chain_terminus_override to Optional[_WhyChainTerminusOverride]; _validate_terminus
+    still returns early when a (now-validated) override is present.
+  - >-
+    scripts/ops_data_portal.py -- CIRCA-04 stamping: at the schema-deficiency stamp site, map each
+    pydantic deficiency message to a stable schema_<rule> tag (e.g. schema_why_chain_too_long,
+    schema_terminus_missing_keyword, schema_missing_citation, schema_why_chain_too_short), falling back
+    to schema_deficiency for unmapped; stamp those tags. Update back_validate_ci_rca's non_schema_reasons
+    filter to exclude any reason starting with "schema". Refresh the docstring's stale "strict-mode
+    file_rec ACCEPTS these" claim.
+  - >-
+    scripts/ops_data_portal.py -- CIRCA-04 ceiling: move the why_chain per-entry length check into a
+    schema_version-aware model_validator (max 250 for schema_version < 2, max 400 for schema_version 2);
+    keep the min-40 floor.
+  - >-
+    scripts/ops_data_portal.py -- CIRCA-09: add 'unknown' to the
+    _DetectionGap.actual_gate_that_caught_it pattern (^(pre|presubmit|CI|unknown)$).
+  - >-
+    scripts/executor/rec_write_guidance.py -- update the ci_rca guidance: actual_gate_that_caught_it
+    lists pre|presubmit|CI|unknown with "mirror the bundle value; write 'unknown' when the bundle
+    emits null (not_a_gate workflows such as terraform-apply-sandbox)"; why_chain_terminus_override
+    reason is required 80-400 chars; why_chain per-entry is 40-400 chars at schema_version 2.
+  - >-
+    .github/workflows/ci-rca.yml -- add CI_RCA_BUNDLE_EMIT_DIR: /tmp/ci-rca-bundles to the rca_agent
+    step env block (alongside CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN).
+  - >-
+    tests/test_ops_data_portal.py -- add the six test classes named in the VP (CIRCA-01 emit-dir
+    reachability added to TestCiRcaCrossCheckSpine; TestCiRcaStrictLegacyReject;
+    TestEvidenceBundleRefConditional; TestTerminusOverrideTyped; TestWarnModePerRuleStamping;
+    TestWhyChainCeilingVersioned; TestDetectionGapUnknownGate). Patch p.ROOT / _FEATURE_FLAGS_YAML and
+    set CI_RCA_BUNDLE_EMIT_DIR via monkeypatch/os.environ as the existing spine tests do.
+  - >-
+    tests/test_rec_write_guidance.py and tests/test_ci_rca_back_validate.py -- update/extend assertions
+    for the guidance-text changes and the schema_-prefixed marker filter; refresh the stale docstring
+    parenthetical in test_ci_rca_back_validate.py (~line 83) alongside the back_validate_ci_rca docstring.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml -- flip T1.13:c10 status met->open and append a dated T1.13 progress_note
+    recording that the c10 cross-check spine was built but NOT load-bearing at the production call site
+    until this plan (audit CIRCA-01), wired via CI_RCA_BUNDLE_EMIT_DIR + an emit-dir integration test.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop
+    and RCA (Decision 55). On a verified pass, /implement's bookkeeping walk closes T1.13:c10.
+  - "Report: what was implemented, verification results, and the c10 closure."
+work_areas: []
+rollback: >-
+  All changes are additive schema/wiring edits on a feature branch; revert the branch commit to
+  restore prior behaviour. The strict-mode CIRCA-02 reject and the version-gated ceiling only affect
+  new source=ci_rca writes (CI_RCA_STRICT_MODE is warn in the deployed config), so a revert has no
+  data-migration consequence.

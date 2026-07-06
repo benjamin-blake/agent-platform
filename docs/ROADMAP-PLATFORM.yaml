@@ -4197,8 +4197,12 @@ tier_items:
           the mechanism that would have deterministically caught rec-2423/rec-2424 even if the probe had
           succeeded (decoupling gate-escape detection from the probe-abstention trigger of c7, which do not
           coincide). Landed with the merged H1+H3 plan as the spine wiring that makes c8/c9 load-bearing.
-        status: met
-        met_by: ci-rca-abstention-and-gate-escape
+          [RE-GROUNDED 2026-07-06, audit CIRCA-01 CONFIRMED critical]: the spine was built but NOT
+          load-bearing at the production call site (the portal never found the CI-emitted bundle, so
+          checks 1-4 + SHA-256 verify silently skipped for every real filing). Flipped met->open;
+          re-closes on PLAN-ci-rca-enforcement-spine-fixes's verified reachability VP (emit-dir wiring +
+          integration test). See progress_note 2026-07-06.
+        status: open
       - id: c11
         text: >-
           Merge-gate coverage facts + canary-by-design encoding. DESIGN CONTEXT (operator-confirmed
@@ -4432,6 +4436,21 @@ tier_items:
       gauge is built but the criterion requires 7 days of sub-5% data, which cannot accrue in one
       session. c2 (strict-mode Decision Record flip) and c5 (live end-to-end SHA roundtrip) stay
       OPEN, gated on the strict-mode cutover as before.
+      2026-07-06: PLAN-ci-rca-enforcement-spine-fixes -- audit audits/ci-rca-system-a49db8f.yaml
+      (CIRCA-01, CONFIRMED critical) found the c10 cross-check spine was BUILT but NOT load-bearing at
+      the production call site: _load_and_verify_bundle searched only logs/.ci-rca-evidence-pending/
+      (written ONLY on S3 upload FAILURE) and an unset CI_RCA_BUNDLE_LOCAL_PATH, while ci-rca.yml emits
+      bundles to /tmp/ci-rca-bundles/ on the success path -- so cross-check checks 1-4 + the SHA-256
+      verify silently skipped in warn AND strict for every real filing (zero cross-check stamps across
+      the 125-rec corpus). c8/c11 (bundle evidence computation) were genuinely met, but c10's binding
+      into the spine was inert. This plan wires an env-parameterised, sha-keyed emit-dir
+      (CI_RCA_BUNDLE_EMIT_DIR=/tmp/ci-rca-bundles) into the portal candidate list and adds an emit-dir
+      integration test proving checks 1-4 fire from the CI layout; it also lands CIRCA-02 (strict
+      rejects context_v2_json=None), CIRCA-06 (conditional s3_uri degraded path), CIRCA-08 (typed
+      terminus override), CIRCA-04 portal half (per-rule deficiency stamping + version-gated why_chain
+      ceiling, v2=400), and CIRCA-09 enum half ('unknown' actual_gate). c10 re-grounded met->open here
+      (data reconciliation with the audit's reality); /implement re-closes it on the verified
+      reachability VP (Decision 103 closure-proof). c8/c11 stay met.
     note: |
       Decomposed into six atomic IMPLEMENTATION plans per Decision 67 freeze (original methodology rollout,
       exit criteria c1-c6). Each follow-on plan is independently authorable and the methodology is rolled out
