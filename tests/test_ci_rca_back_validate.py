@@ -80,8 +80,11 @@ class TestBackValidateBucketRouting:
         assert entry["failing_checks"]  # non-empty list of pydantic error messages
 
     def test_no_context_v2_json_is_legacy_never_non_conformant(self) -> None:
-        """Load-bearing legacy rule: strict-mode file_rec() accepts a rec with no context_v2_json
-        (lines 944-948 only warn, never raise). An empty dict is never validated for these recs.
+        """Load-bearing legacy rule: a historical rec with no context_v2_json, filed before
+        CIRCA-02 landed, stays grandfathered/conformant here. Strict-mode file_rec() now REJECTS
+        a NEW source=ci_rca write with no context_v2_json (CIRCA-02) -- this bucket covers only
+        pre-CIRCA-02 rows; back_validate_ci_rca never retro-rejects them. An empty dict is never
+        validated for these recs.
         """
         rows = [_rec("rec-3", "2026-06-20T00:00:00+00:00", context_v2=None)]
         result = back_validate_ci_rca(cache_rows=rows, since="2026-06-15")
@@ -120,6 +123,24 @@ class TestBackValidateBucketRouting:
         assert len(result["non_conformant"]) == 1
         # failing_checks comes from the recompute (pydantic errors), not the stamped tag.
         assert "schema_deficiency" not in result["non_conformant"][0]["failing_checks"]
+
+    def test_per_rule_schema_tag_excluded_but_genuine_reason_still_surfaces(self) -> None:
+        """CIRCA-04: a stamped per-rule schema_<rule> tag (not just the bare "schema_deficiency")
+        is excluded from non_schema_reasons, so it is never double-counted alongside the
+        recompute -- while a genuine non-schema reason (bundle/S3/cross-check) still surfaces.
+        """
+        deficient = dict(_VALID_CONTEXT_V2)
+        deficient["recurrence_class"] = "not-a-valid-value"
+        deficient["warn_mode_reject"] = {
+            "reasons": ["schema_why_chain_too_long", "bundle_absent"],
+            "mode_at_write": "warn",
+        }
+        rows = [_rec("rec-5b", "2026-06-20T00:00:00+00:00", deficient)]
+        result = back_validate_ci_rca(cache_rows=rows, since="2026-06-15")
+        assert len(result["non_conformant"]) == 1
+        failing = result["non_conformant"][0]["failing_checks"]
+        assert "schema_why_chain_too_long" not in failing
+        assert "bundle_absent" in failing
 
     def test_ignores_non_ci_rca_sources(self) -> None:
         rows = [

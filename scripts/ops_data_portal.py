@@ -144,13 +144,32 @@ def get_ci_rca_strict_mode() -> str:
 
 class _EvidenceBundleRef(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    s3_uri: str = Field(pattern=r"^s3://")
-    upload_status: str
+    s3_uri: str = ""
+    upload_status: str = Field(pattern=r"^(ok|upload_failed)$")
+
+    @model_validator(mode="after")
+    def _validate_s3_uri_conditional(self) -> "_EvidenceBundleRef":
+        # CIRCA-06: an S3 outage (upload_status='upload_failed') must not make evidence-carrying
+        # recs unfilable in strict mode -- s3_uri is permitted empty on the degraded path. When
+        # upload_status='ok' the object was actually uploaded, so s3_uri must look like a real URI.
+        if self.upload_status == "ok" and not re.match(r"^s3://", self.s3_uri):
+            raise ValueError("s3_uri must match ^s3:// when upload_status='ok'")
+        return self
+
+
+class _WhyChainTerminusOverride(BaseModel):
+    """CIRCA-08: typed why_chain_terminus_override -- a bare truthy dict must not bypass the
+    terminus systemic-keyword/citation floor for free; the override itself must justify why."""
+
+    reason: str = Field(min_length=80, max_length=400)
 
 
 class _DetectionGap(BaseModel):
     earliest_viable_gate: str = Field(pattern=r"^(pre|presubmit|CI|undetermined)$")
-    actual_gate_that_caught_it: str = Field(pattern=r"^(pre|presubmit|CI)$")
+    # CIRCA-09: 'unknown' covers not_a_gate workflows (e.g. terraform-apply-sandbox) where the
+    # evidence bundle emits a null actual-gate; the agent mirrors that as 'unknown' rather than
+    # fabricating pre/presubmit/CI.
+    actual_gate_that_caught_it: str = Field(pattern=r"^(pre|presubmit|CI|unknown)$")
     gap_explanation: str = Field(min_length=120, max_length=600)
     escape_mode: Optional[str] = Field(
         default=None,
@@ -176,7 +195,7 @@ class CiRcaContext(BaseModel):
     schema_version: int = Field(default=1, ge=1, le=2)
     proximate_cause: str = Field(min_length=100, max_length=600)
     why_chain: list[str] = Field(min_length=3, max_length=7)
-    why_chain_terminus_override: Optional[dict] = None
+    why_chain_terminus_override: Optional[_WhyChainTerminusOverride] = None
     detection_gap: _DetectionGap
     recurrence_class: str = Field(pattern=r"^(novel|instance_of_known_pattern|regression)$")
     prior_art_citation: Optional[str] = None  # shape-only; existence check deferred (Phase 2)
@@ -196,12 +215,18 @@ class CiRcaContext(BaseModel):
 
     @field_validator("why_chain")
     @classmethod
-    def _validate_why_chain_entries(cls, v: list[str]) -> list[str]:
+    def _validate_why_chain_entries(cls, v: list[str], info: Any) -> list[str]:
+        # CIRCA-04 ceiling: loosening-only and version-gated -- schema_version < 2 keeps the
+        # original 250-char ceiling (no historical row is newly rejected); schema_version 2
+        # raises the ceiling to 400. schema_version validates before why_chain (declaration
+        # order), so info.data already carries it; default to 1 if somehow absent.
+        schema_version = info.data.get("schema_version", 1)
+        ceiling = 400 if schema_version == 2 else 250
         for i, entry in enumerate(v):
             if len(entry) < 40:
                 raise ValueError(f"why_chain[{i}] is too short ({len(entry)} chars; min 40)")
-            if len(entry) > 250:
-                raise ValueError(f"why_chain[{i}] is too long ({len(entry)} chars; max 250)")
+            if len(entry) > ceiling:
+                raise ValueError(f"why_chain[{i}] is too long ({len(entry)} chars; max {ceiling})")
         return v
 
     @model_validator(mode="after")
@@ -274,6 +299,12 @@ def _load_and_verify_bundle(evidence_bundle_ref: dict) -> dict | None:
     candidates = [
         ROOT / "logs" / ".ci-rca-evidence-pending" / f"{sha256}.json",
     ]
+    # CIRCA-01: env-parameterised, sha-keyed emit-dir candidate. A single BUNDLE_LOCAL_PATH
+    # cannot cover multi-failure CI runs where the evidence step emits N bundles (N shas) to
+    # CI_RCA_BUNDLE_EMIT_DIR/<sha>.json -- this candidate resolves each rec's own bundle by sha.
+    emit_dir = os.environ.get("CI_RCA_BUNDLE_EMIT_DIR", "").strip()
+    if emit_dir:
+        candidates.insert(0, Path(emit_dir) / f"{sha256}.json")
     # Also try any BUNDLE_LOCAL path if set in env
     env_path = os.environ.get("CI_RCA_BUNDLE_LOCAL_PATH", "").strip()
     if env_path:
@@ -347,6 +378,24 @@ def _check_bundle_s3_existence(
 
 
 _CROSS_CHECK_TAG_RE = re.compile(r"check-(\d+)")
+
+# CIRCA-04: substring -> stable schema_<rule> tag, checked in order (first match wins) against
+# each pydantic deficiency message so a warn-mode schema reject is decomposable at read time
+# instead of collapsing into the bare "schema_deficiency" bucket.
+_SCHEMA_DEFICIENCY_RULES: tuple[tuple[str, str], ...] = (
+    ("is too long", "schema_why_chain_too_long"),
+    ("is too short", "schema_why_chain_too_short"),
+    ("lacks a systemic keyword", "schema_terminus_missing_keyword"),
+    ("lacks a file:line citation", "schema_missing_citation"),
+)
+
+
+def _classify_schema_deficiency(msg: str) -> str:
+    """Map one pydantic deficiency message to a stable schema_<rule> tag (fallback: schema_deficiency)."""
+    for substring, tag in _SCHEMA_DEFICIENCY_RULES:
+        if substring in msg:
+            return tag
+    return "schema_deficiency"
 
 
 def _stamp_warn_mode_reject(context_v2_json: dict, reasons: list[str]) -> None:
@@ -517,10 +566,12 @@ def back_validate_ci_rca(
     the handler constructs NO DuckLake reader). Every source=ci_rca rec with created_timestamp >=
     `since` is sorted into exactly one bucket, mirroring what strict-mode file_rec() actually does:
 
-      legacy_no_schema -- context_v2_json is absent/empty. Strict-mode file_rec() ACCEPTS these
-        (lines 944-948 only log a warning, never raise), so they are CONFORMANT and excluded from
-        the non-conformant set. An empty dict is never validated for these recs (the load-bearing
-        legacy rule).
+      legacy_no_schema -- context_v2_json is absent/empty. Historical rows filed before CIRCA-02
+        (strict mode now raises ValueError for a NEW source=ci_rca write with no context_v2_json)
+        are grandfathered: they were accepted when written and stay CONFORMANT here, excluded from
+        the non-conformant set. This bucket only covers pre-CIRCA-02 rows -- a strict-mode file_rec
+        call today cannot produce a new legacy_no_schema row. An empty dict is never validated for
+        these recs (the load-bearing legacy rule).
       non_conformant -- context_v2_json present AND either (a) _validate_ci_rca_context_v2(),
         recomputed against the CURRENT schema (not the schema live when the rec was filed), returns
         deficiencies, or (b) the rec's stamped context_v2_json.warn_mode_reject marker carries a
@@ -575,7 +626,10 @@ def back_validate_ci_rca(
             ctx = {}
         deficiencies = _validate_ci_rca_context_v2(ctx)
         warn_marker = ctx.get("warn_mode_reject") or {}
-        non_schema_reasons = [r for r in warn_marker.get("reasons", []) if r != "schema_deficiency"]
+        # CIRCA-04: exclude ALL schema_-prefixed marker tags (not just the bare "schema_deficiency"),
+        # since the per-rule stamp site now stamps stable schema_<rule> tags (e.g.
+        # schema_why_chain_too_long) that must not double-count as a non_schema_reason.
+        non_schema_reasons = [r for r in warn_marker.get("reasons", []) if not r.startswith("schema")]
         if deficiencies or non_schema_reasons:
             non_conformant.append({"id": rec_id, "has_context_v2": True, "failing_checks": deficiencies + non_schema_reasons})
         else:
@@ -1086,7 +1140,7 @@ def file_rec(
                     "[CI_RCA_STRICT_MODE=warn] context_v2_json deficiencies (rec filed anyway): %s",
                     "; ".join(deficiencies),
                 )
-                _stamp_warn_mode_reject(context_v2_json, ["schema_deficiency"])
+                _stamp_warn_mode_reject(context_v2_json, [_classify_schema_deficiency(d) for d in deficiencies])
             # Build a >=80-char human summary for the legacy context column from the structured schema.
             parts = []
             if context_v2_json.get("proximate_cause"):
@@ -1103,6 +1157,15 @@ def file_rec(
             elif len(fields["context"].strip()) < 80:
                 fields["context"] = summary
         elif not _migration_mode:
+            # CIRCA-02: strict mode rejects a legacy no-context_v2_json write for a NEW rec;
+            # warn mode keeps accepting it (rollout window) with the deprecation log. Historical
+            # rows filed before this schema landed are grandfathered by back_validate_ci_rca and
+            # are never retro-rejected -- this check only fires for writes made through file_rec now.
+            if get_ci_rca_strict_mode() == "strict":
+                raise ValueError(
+                    "[CI_RCA_STRICT_MODE=strict] source='ci_rca' requires context_v2_json; legacy "
+                    "free-text-only ci_rca recs are no longer accepted in strict mode."
+                )
             logger.warning(
                 "[PORTAL] source=ci_rca rec filed with legacy free-text context (no context_v2_json). "
                 "Migrate to context_v2_json per PLAN-ci-rca-schema-enforcement."

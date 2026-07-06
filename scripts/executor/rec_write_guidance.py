@@ -128,17 +128,26 @@ def get_rec_write_guidance(
                     "Example: 'validate_sloc_limits() raised: scripts/foo.py is 810 SLOC, exceeds 500 limit'."
                 ),
                 "why_chain": (
-                    "list[str], 3-7 entries, each 40-250 chars. Iterative 'but why?' descent "
-                    "from proximate_cause to a systemic gap. Final entry MUST contain a systemic "
-                    "keyword AND a file:line citation."
+                    "list[str], 3-7 entries. Iterative 'but why?' descent from proximate_cause to a "
+                    "systemic gap. Final entry MUST contain a systemic keyword AND a file:line citation. "
+                    "Per-entry length ceiling is version-gated: 40-250 chars at schema_version 1, "
+                    "40-400 chars at schema_version 2 (loosening-only; no historical row is affected)."
                 ),
-                "why_chain_terminus_override": "optional dict with 'reason' (str, >=80 chars). Skips terminus checks.",
+                "why_chain_terminus_override": (
+                    "optional object: {reason: str, 80-400 chars}. A conformant reason bypasses the "
+                    "terminus systemic-keyword/citation checks; a missing reason or one outside 80-400 "
+                    "chars fails validation (the depth floor is never disabled by a bare truthy value)."
+                ),
                 "detection_gap": (
                     "object: {earliest_viable_gate: pre|presubmit|CI|undetermined, "
-                    "actual_gate_that_caught_it: pre|presubmit|CI, "
+                    "actual_gate_that_caught_it: pre|presubmit|CI|unknown, "
                     "gap_explanation: str 120-600 chars with file:line citation, "
                     "escape_mode: check_ran_vacuously|tier_misplaced"
-                    "|no_premerge_gate_by_design|undetermined (optional)}."
+                    "|no_premerge_gate_by_design|undetermined (optional)}. "
+                    "actual_gate_that_caught_it: mirror the evidence bundle's value; write 'unknown' "
+                    "when the bundle emits null for this field (not_a_gate workflows such as "
+                    "terraform-apply-sandbox have no CI-gate concept to report). Do not fabricate "
+                    "pre/presubmit/CI when the bundle gives no gate."
                 ),
                 "recurrence_class": "str enum: novel | instance_of_known_pattern | regression.",
                 "prior_art_citation": "optional str. Shape-validated only (existence check deferred to Phase 2).",
