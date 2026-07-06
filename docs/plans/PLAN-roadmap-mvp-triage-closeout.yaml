@@ -1,0 +1,283 @@
+schema_version: 1
+slug: roadmap-mvp-triage-closeout
+intent: >-
+  Action the mark_complete and remove findings (RMAP-01..RMAP-05) of the platform-roadmap
+  MVP-triage audit so the eligibility surface reflects reality: three shipped-but-unflipped
+  items close, one candidate decision (CD.28) is ratified to unblock its gated item, and one
+  obsolete duplicate is tombstoned with its retirement mechanic consolidated onto a single
+  owner. Keeps the roadmap the trustworthy input the /orient -> /plan loop reads.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-roadmap-mvp-triage-closeout.yaml
+phase: >-
+  Platform roadmap bookkeeping -- MVP-triage audit closeout across T-1.14, T2.25, T3.17,
+  T0.4/CD.28, T5.4/T1.5. Source of truth: audits/platform-roadmap-mvp-triage-7d57a0d.yaml
+  (findings RMAP-01..RMAP-05).
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Flip T-1.14/T2.25/T3.17 to complete (+completed_at +evidence progress_note); ratify CD.28
+      (state ratified, ratified_as/filed_via dec-122) and flip T0.4 to complete; tombstone T5.4
+      (status reserved) and fold its grep-no-production-references + file-deletion mechanic into
+      T1.5's first exit criterion.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Author the new Decision (drafted as Decision 122) that ratifies CD.28 as amended by
+      Decision 116, including the Gemini-interim reconciliation clause and reversal conditions.
+      Conditional on the CD.28 ratification confirmed by the human this session.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    T-1.14, T2.25, and T3.17 each show status: complete, completed_at: "2026-07-06", and a
+    progress_note citing the audit evidence anchor (RMAP-02: PR #469 / 53796b4 merged; RMAP-01:
+    Decision 92 point 5 + environment-taxonomy.md Guard subsection + terraform_apply_guard.py
+    budget classification + prompt_compliance --all clean; RMAP-03: validate_tier_floor +
+    _V2_PHASE_ENUM, criteria already status=met).
+  - >-
+    docs/DECISIONS.md carries a new "## Decision 122: Ratify CD.28 ..." header (or the next free
+    number if 122 is taken at execution time) that ratifies CD.28 as amended by Decision 116,
+    scopes the DeepSeek/Anthropic tier model to the executor LiteLLM transport, contains the
+    Gemini-interim reconciliation clause (model_registry / _gemini_call is interim, owned for
+    removal by T4.2), and states explicit reversal conditions.
+  - >-
+    Roadmap CD.28 shows the canonical ratified shape (state: ratified, ratified_as: dec-122,
+    filed_via: ops_decisions:dec-122 -- same NNN in both), and T0.4 shows status: complete +
+    completed_at: "2026-07-06". The Decision-122 header and the CD.28 flip land in the SAME commit
+    (R1/R2/R3 atomicity, Decision 105).
+  - >-
+    T5.4 shows status: reserved with emptied exit_criteria/depends_on/files_in_scope, a rewritten
+    name and supersession intent pointing at T1.5 c1, and a rename_history block; its id is
+    preserved (roadmap prose references it). T1.5 exit_criteria[0] absorbs T5.4's
+    grep-no-production-references + DECISIONS.md/DECISIONS_ARCHIVE.md deletion mechanic, so
+    DECISIONS.md Phase 3b retirement has exactly one owner.
+  - >-
+    No recommendations are filed by this plan (bundled_recommendations empty; no file_rec call).
+    Only the six named tier_items, CD.28, and Decision 122 are touched; no other roadmap item
+    changes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: docs/ROADMAP-PLATFORM.yaml parses as valid YAML after all edits.
+    command: bin/venv-python -c "import yaml; yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); print('safe_load OK')"
+    expected: Prints "safe_load OK" with no exception.
+    fix_if: A YAMLError indicates a malformed edit (bad indentation, unquoted colon in a progress_note); re-open the edited block and fix.
+    hermetic: true
+  - step: 2
+    phase: pre-deploy
+    action: The pydantic loader + all model_validators (id uniqueness, depends_on resolution, deferred-dep rule, criteria integrity) accept the edited roadmap.
+    command: bin/venv-python -c "from scripts.platform_roadmap import load; load('docs/ROADMAP-PLATFORM.yaml'); print('loader OK')"
+    expected: Prints "loader OK"; no ValidationError.
+    fix_if: A ValidationError names the offending item/field (e.g. a reserved item still carrying a live dependent, or a bad CD ref); correct that field.
+    hermetic: true
+  - step: 3
+    phase: pre-deploy
+    action: The three mark_complete items carry the complete status + completed_at + a progress_note.
+    command: >-
+      bin/venv-python -c "from scripts.platform_roadmap import load; d=load('docs/ROADMAP-PLATFORM.yaml');
+      m={i.id:i for i in d.tier_items};
+      assert all(m[x].status=='complete' and m[x].completed_at=='2026-07-06' and m[x].progress_note for x in ['T-1.14','T2.25','T3.17']);
+      print('3 complete OK')"
+    expected: Prints "3 complete OK".
+    fix_if: AssertionError -> one of the three is missing status/completed_at/progress_note; add the missing field.
+    hermetic: true
+  - step: 4
+    phase: pre-deploy
+    action: CD.28 shows the canonical ratified shape and T0.4 is complete.
+    command: >-
+      bin/venv-python -c "from scripts.platform_roadmap import load; d=load('docs/ROADMAP-PLATFORM.yaml');
+      cd={c.id:c for c in d.candidate_decisions}['CD.28']; m={i.id:i for i in d.tier_items};
+      assert cd.state=='ratified' and cd.ratified_as=='dec-122' and cd.filed_via=='ops_decisions:dec-122';
+      assert m['T0.4'].status=='complete' and m['T0.4'].completed_at=='2026-07-06';
+      print('CD.28+T0.4 OK')"
+    expected: Prints "CD.28+T0.4 OK".
+    fix_if: >-
+      AssertionError -> the CD.28 shape or T0.4 flip is wrong. If the Decision number shifted from 122
+      at execution time (a concurrent PR claimed it), update dec-122 consistently in ratified_as,
+      filed_via, and this command.
+    hermetic: true
+  - step: 5
+    phase: pre-deploy
+    action: docs/DECISIONS.md carries the Decision-122 ratification header (R1 referential guard target).
+    command: 'grep -qE "^## Decision 122: Ratify CD\.28" docs/DECISIONS.md && echo "dec-122 header OK"'
+    expected: Prints "dec-122 header OK".
+    fix_if: >-
+      Header missing -> validate_candidate_decision_ratification R1 will red on the dangling
+      ratified_as: dec-122. Author the Decision. If the number shifted, match it here and in the CD.28 flip.
+    hermetic: true
+  - step: 6
+    phase: pre-deploy
+    action: T5.4 is tombstoned and T1.5 c1 has absorbed the retirement mechanic (single owner).
+    command: >-
+      bin/venv-python -c "from scripts.platform_roadmap import load; d=load('docs/ROADMAP-PLATFORM.yaml');
+      m={i.id:i for i in d.tier_items};
+      assert m['T5.4'].status=='reserved' and not m['T5.4'].exit_criteria;
+      c1=m['T1.5'].exit_criteria[0].text.lower();
+      assert 'no production references' in c1 and 'phase 3b' in c1;
+      print('T5.4+T1.5 OK')"
+    expected: Prints "T5.4+T1.5 OK".
+    fix_if: AssertionError -> T5.4 not reserved/criteria not emptied, or T1.5 c1 did not absorb the grep-no-production-references mechanic; correct the edit.
+    hermetic: true
+  - step: 7
+    phase: pre-deploy
+    action: Full fast-tier presubmit passes, including validate_platform_roadmap criteria integrity and the validate_candidate_decision_ratification R1/R2/R3 guard.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exits 0; all checks PASS (no criteria-integrity or ratification-guard failures).
+    fix_if: >-
+      A named check fails -> read its message. A ratification-guard failure means the roadmap flip and
+      the DECISIONS.md header disagree or one is missing (fix atomicity); a criteria-integrity failure
+      means a touched item regressed to bare-string criteria (these edits do not touch `- id:` lines, so
+      this should not fire -- if it does, structure the flagged item's criteria).
+    hermetic: false
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      OPTIONAL T0.4 completion re-verification -- re-run the LiteLLM smoke test for both tiers.
+      Credential/network-gated; a documented SKIP is acceptable (T0.4 completion is gated on the
+      CD.28 ratification decision act, already smoke-verified 200 on 2026-06-21 per its progress_note).
+    command: bin/venv-python -m scripts.smoke_test_inference_credentials --provider deepseek && bin/venv-python -m scripts.smoke_test_inference_credentials --provider anthropic
+    expected: Both providers return an HTTP 200 LiteLLM completion, OR a clean credential/network-unavailable SKIP in the CC-web session.
+    fix_if: >-
+      A non-200/non-skip failure (e.g. 401/403 key error) is a real regression in the provisioned
+      credentials -- stop and investigate before flipping T0.4; do NOT paper over it.
+    hermetic: false
+constraints:
+  - >-
+    Roadmap-edit + one Decision only. Modify ONLY docs/ROADMAP-PLATFORM.yaml and docs/DECISIONS.md.
+    Touch only the six named tier_items (T-1.14, T2.25, T3.17, T0.4, T5.4, T1.5), CD.28, and the new
+    Decision 122. No other roadmap item, decision, or file changes.
+  - >-
+    File NO recommendations. All remediation in this audit series lands via implementation plans, not
+    recs (per the task and Decision 55: no rescue agents or workaround loops).
+  - >-
+    IMPLEMENTATION type only -- STRATEGIC plan filing is frozen (Decision 67 / CD.17). This is
+    bookkeeping + a ratification draft, not strategic decomposition.
+  - >-
+    Decision 105 atomicity: the DECISIONS.md "## Decision 122:" header and the roadmap CD.28
+    ratified-shape flip (state/ratified_as/filed_via) MUST land in the SAME commit/PR. Never merge the
+    roadmap flip ahead of the Decision header -- validate_candidate_decision_ratification R1 would red
+    on a dangling dec-122 pointer.
+  - >-
+    Decision 84 numbering + sync: DECISIONS.md sequential numbering is authoritative (max live = 121 at
+    draft time -> 122). RE-CHECK the current max `## Decision NNN:` header at execution time; if 122 is
+    taken, shift to the next free number and keep ratified_as == filed_via NNN == the DECISIONS.md
+    header number. After merge, sync via `bin/venv-python -m scripts.ops_data_portal
+    --backfill-decisions-md` (Single Portal Invariant).
+  - >-
+    Preserve exit_criteria form: keep bare-string criteria bare where they already are (T-1.14, T2.25,
+    T1.5) -- matches the complete-item precedent (T-1.2/T-1.3) and avoids inventing met_by slugs. Do NOT
+    convert to structured criteria; the touched-item structured-criteria CI check keys on `- id:` diff
+    lines, which these status/note edits do not modify.
+  - "Stay under the roadmap 10,000-line ceiling (Decision 114) -- ample headroom; progress_notes are short."
+context:
+  - "Audit source of truth: audits/platform-roadmap-mvp-triage-7d57a0d.yaml, findings RMAP-01..RMAP-05 (audited_commit 7d57a0d)."
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE = Decision 105,
+    Decision 92 (point 5), Decision 90, Decision 84, Decision 86, Decision 93. Flags: Decision 116 [WARN]
+    (CD.28 scheduled-agent clause already amended by 116 -> ratify AS AMENDED, scope tier statement to the
+    executor path, cite 116 + superseded 49); Decision 121 [NOTE] (model_registry gemini provider ->
+    reconcile as interim transport, not contradiction); Decision 105 [NOTE] (R1/R2/R3 atomicity -> couple
+    the two edits in one PR). RELATED: Decision 77, Decision 49, Decision 67/CD.17, Decision 114, Decision 48.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Evidence re-verified live this session (2026-07-06): T-1.14 -- inference-provider.yaml v1/ratified,
+    .md + config/agent/copilot/model_routing.yaml deleted, model_registry.py:24 reads YAML, PR #469
+    (53796b4) merged to main. T2.25 -- environment-taxonomy.md:59 SOLE-SoT Guard subsection,
+    terraform_apply_guard.py:37-40 in-budget classification vs terraform/bootstrap/authority_budget.json,
+    prompt_compliance --all clean. T3.17 -- validate.py:162 validate_tier_floor, plan_document.py:14,109-112
+    _V2_PHASE_ENUM, all 3 criteria already status=met.
+  - >-
+    CD.28 ratification is a HUMAN DECISION taken this session (2026-07-06, confirmed via AskUserQuestion:
+    "Ratify now"). Per the user's follow-up, Decision 122 additionally records that the current Gemini CLI
+    transport is interim: model_registry._VALID_PROVIDERS={"gemini"} / llm_client._gemini_call is the
+    frozen executor's placeholder transport, owned for removal by T4.2 (files_in_scope scripts/llm_client.py
+    "remove ... Gemini-CLI paths"; exit criterion "LiteLLM is the only LLM transport"). Decision 121's
+    "sole valid provider" is a snapshot of that interim state, not a permanence commitment. This is the
+    precise resolution of the Decision 121 [NOTE] flag.
+  - >-
+    Main divergence: preflight reported branch 0 behind / 0 ahead of origin/main at planning time; no
+    Scope-file overlap risk. ci_rca_unresolved_recs empty (no HARD BLOCK).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/roadmap-mvp-triage-audit-q2np7f)
+  - docs/PROJECT_CONTEXT.md read
+  - Audit source audits/platform-roadmap-mvp-triage-7d57a0d.yaml RMAP-01..RMAP-05 read
+  - All files in scope (docs/ROADMAP-PLATFORM.yaml, docs/DECISIONS.md) located and readable
+  - Acceptance criteria understood and verifiable
+  - Re-check current max "## Decision NNN:" header in docs/DECISIONS.md; confirm the drafted 122 is still free (else shift consistently)
+execution_steps:
+  - >-
+    ROADMAP completions (RMAP-02/01/03). In docs/ROADMAP-PLATFORM.yaml, for EACH of T-1.14, T2.25, T3.17:
+    set `status: complete` and add `completed_at: "2026-07-06"`. Replace/extend each item's progress_note
+    with the audit evidence anchor: T-1.14 -> "2026-07-06 (RMAP-02): PR #469 (53796b4) merged to main behind
+    required pr-validate, satisfying the last 'CI green' sub-clause; inference-provider.yaml v1/ratified, .md
+    + model_routing.yaml deleted, model_registry.py reads the YAML."; T2.25 -> "2026-07-06 (RMAP-01): all five
+    criteria pass against read artifacts -- environment-taxonomy.md Guard subsection is SOLE SoT,
+    terraform_apply_guard.py classifies in-budget vs out-of-budget against authority_budget.json,
+    prompt_compliance --all clean; Decision 92 point 5 records 'IMPLEMENTED by T2.25 / 2026-06-29'. Status
+    simply never flipped."; T3.17 -> "2026-07-06 (RMAP-03): validate_tier_floor wired into validate.py and
+    _V2_PHASE_ENUM rejection in plan_document.py both landed by audit-remediation-wave-5; all three criteria
+    already status=met." Leave each item's exit_criteria form unchanged (bare-string stays bare; T3.17 stays
+    structured/met).
+  - >-
+    T5.4 tombstone + T1.5 c1 fold (RMAP-05). Set T5.4 `status: reserved`; rewrite its name to
+    "RESERVED -- superseded by T1.5 c1 (DECISIONS.md retirement, Phase 3b)"; rewrite intent to explain the
+    dedup (T5.4 duplicated T1.5's first exit criterion; its grep-no-production-references + file-deletion
+    mechanic is folded into T1.5 c1, the single owner; id preserved because roadmap prose at T1.5
+    files_in_scope and T2.26 coordination notes reference it; no depends_on/gate/CD reference); set
+    `depends_on: []`, `files_in_scope: []`, `exit_criteria: []`; add a `rename_history` block (from: original
+    T5.4 markdown-retirement item; to: reserved, mechanic owned by T1.5 c1, 2026-07-06 per audit RMAP-05).
+    Then rewrite T1.5 exit_criteria[0] (currently "docs/DECISIONS.md retired (Phase 3b)") to absorb the
+    mechanic, e.g.: "docs/DECISIONS.md retired (Phase 3b): docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md
+    deleted, and `grep -r 'DECISIONS.md' scripts/ src/ docs/ terraform/` returns no production references
+    (grep-no-production-references + file-deletion mechanic folded from T5.4, tombstoned 2026-07-06 per audit
+    RMAP-05; T1.5 c1 is the single owner of DECISIONS.md retirement)". Keep T1.5's criteria as bare strings.
+  - >-
+    CD.28 ratification (RMAP-04) -- EXECUTE ONLY after re-checking the max Decision number. (a) Author a new
+    Decision in docs/DECISIONS.md (drafted as Decision 122; shift to the next free number if taken, keeping
+    all references consistent) using the DRAFTED TEXT below. (b) Flip the roadmap CD.28 entry from
+    `state: pending` + `filed_via: pending_log_decision_lambda` to `state: ratified` + `ratified_as: dec-122`
+    + `filed_via: ops_decisions:dec-122`. (c) Flip T0.4 to `status: complete` + `completed_at: "2026-07-06"`
+    and append a progress_note: "2026-07-06 (RMAP-04): CD.28 ratified as Decision 122 (as amended by Decision
+    116); c1-c3 met, c4 rehomed to T2.9. Completion was gated solely on this ratification (a decision act)."
+    (a)+(b) MUST be in the SAME commit (Decision 105 R1/R2/R3 atomicity). After merge, run
+    `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` to sync ops_decisions (Decision 84).
+  - >-
+    DRAFTED Decision 122 text (author verbatim in intent, adjust number if shifted):
+    "## Decision 122: Ratify CD.28 -- executor LLM inference = DeepSeek-direct via LiteLLM (Tier 1),
+    Anthropic-direct (Tier 2); Bedrock retired (as amended by Decision 116) (Decided)".
+    Status: Decided. Date: 2026-07-06. Warehouse ID: dec-122 (keyed on the decision number; synced to
+    ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84).
+    Problem: CD.28 was operationally realized (DeepSeek + Anthropic keys live in Secrets Manager -- T0.4
+    c1-c3 met, LiteLLM smoke tests 200 on 2026-06-21; Bedrock code paths retired; inference-provider.yaml
+    v1 reflects the CD.28 tier model) but remained state: pending, gating completion of T0.4 and T4.1-T4.4.
+    Decision: Ratifies CD.28 AS AMENDED BY Decision 116. Executor LLM inference steady state -- Tier 1
+    = DeepSeek-direct via LiteLLM (deepseek/deepseek-chat, deepseek/deepseek-reasoner; remapping to
+    deepseek-v4-flash post-2026-07-24); Tier 2 = Anthropic-direct via LiteLLM (warm-fetched escape hatch,
+    Max x5 programmatic pool); Tier 3 = OpenRouter (deferred). Bedrock retired from the architecture as an
+    LLM substrate. Scheduled-agent provider routing is governed by Decision 116's split (routine/non-agentic
+    -> LiteLLM Tier 1; judgment/agentic -> claude -p), NOT CD.28's original blanket scheduled-agent clause.
+    Layer reconciliation (Decision 121): the tier model governs the EXECUTOR LiteLLM inference transport
+    (scripts/llm_client.py, repointed by T4.2). The current model_registry._VALID_PROVIDERS = {"gemini"} /
+    llm_client._gemini_call is the INTERIM executor transport pending T4.2's LiteLLM cutover, which OWNS its
+    removal (T4.2 files_in_scope scripts/llm_client.py 'rewrite to LiteLLM transport; remove Bedrock +
+    Gemini-CLI paths'; T4.2 exit criterion 'LiteLLM is the only LLM transport'). Decision 121's 'Gemini is
+    the sole valid provider' describes that interim state, not a permanent commitment -- no contradiction.
+    Reversal conditions: revert/re-evaluate if (a) DeepSeek direct API pricing changes >5x in either
+    direction, or (b) the Anthropic Max x5 programmatic pool is sustained >70% utilization over 30 days
+    (file a rec to provision an org-billed Anthropic API key as overflow). Mirrors
+    cost_projection.reevaluation_triggers. Related: Decision 116 (scheduled-agent provider split; amends
+    CD.28's scheduled-agent clause), Decision 49 (superseded by 116; Copilot SDK retirement), Decision 121
+    (model_registry interim Gemini state; layer reconciliation), Decision 47 (lock-in lesson; Anthropic-direct
+    preserves the warm-fetched escape hatch), Decision 84 (DECISIONS.md canonical + portal backfill),
+    Decision 105 (candidate-decision ratification lane). Supersedes: CD.7 (LLM-on-Bedrock primary), Decision
+    40 (Copilot SDK + Bedrock planning).
+  - Execute the Verification Plan -- run each step; loop until pass; a non-200/non-skip smoke failure or any validate --pre failure stops the flow for diagnosis (Decision 55, no workaround loops).
+  - "Report: which items flipped, the CD.28/Decision-122 ratification, the T5.4/T1.5 consolidation, and verification results."
+work_areas: []
+rollback: >-
+  All edits are confined to docs/ROADMAP-PLATFORM.yaml and docs/DECISIONS.md. If a post-merge issue
+  surfaces, `git revert` the squash-merge commit; no infrastructure or data-plane state is touched.
+  After a revert, re-run `ops_data_portal --backfill-decisions-md` so ops_decisions drops the reverted
+  Decision 122 row.
