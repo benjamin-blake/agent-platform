@@ -125,6 +125,24 @@ def run_lint_checks(failed: list[str], files: list[str] | None = None) -> None:
 
 
 def _file_budget_breach_rec(elapsed_s: float, diff_manifest: list[str], dominant_phase: str | None) -> None:
+    elapsed_min = elapsed_s / 60
+    manifest_summary = ", ".join(diff_manifest[:20]) + ("..." if len(diff_manifest) > 20 else "")
+
+    if os.environ.get("CI") == "true":
+        # CI-guard (Decision 84 I-4): the pr-validate CI job installs requirements-fast.txt (no
+        # python-ulid) and has no AWS credentials, so file_rec's portal write can never complete
+        # there -- it previously raised a swallowed ModuleNotFoundError inside the bare except
+        # below. Skip the write and print the full diagnostic LOUDLY instead: this is a no-op-plus
+        # -loud-log, never a silent `if CI: return` (Decision 55) and never a buffered/replayed
+        # outbox entry (Decision 84 I-4 -- nothing is staged for later delivery).
+        print(
+            f"WARNING: fast-tier budget breach rec NOT filed (CI environment, no portal access): "
+            f"{elapsed_min:.1f} min elapsed (limit 5 min). Dominant phase: {dominant_phase or 'unknown'}. "
+            f"Diff manifest ({len(diff_manifest)} files): {manifest_summary}.",
+            file=sys.stderr,
+        )
+        return
+
     try:
         from scripts.ops_data_portal import file_rec  # noqa: PLC0415
 
@@ -132,8 +150,6 @@ def _file_budget_breach_rec(elapsed_s: float, diff_manifest: list[str], dominant
             ["git", "branch", "--show-current"], capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT
         )
         branch = branch_r.stdout.strip() or "unknown"
-        elapsed_min = elapsed_s / 60
-        manifest_summary = ", ".join(diff_manifest[:20]) + ("..." if len(diff_manifest) > 20 else "")
         context = (
             f"Fast-tier budget breach: {elapsed_min:.1f} min elapsed (limit 5 min). "
             f"Branch: {branch}. Dominant phase: {dominant_phase or 'unknown'}. "
@@ -164,6 +180,22 @@ def _file_budget_breach_rec(elapsed_s: float, diff_manifest: list[str], dominant
 
 
 def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], reason: str | None) -> None:
+    manifest_summary = ", ".join(diff_manifest[:20]) + ("..." if len(diff_manifest) > 20 else "")
+    elapsed_part = f"{elapsed_s / 60:.1f} min" if elapsed_s is not None else "unknown"
+
+    if os.environ.get("CI") == "true":
+        # Defensive-only: validate.py's CI guard already hard-rejects --ignore-budget when
+        # CI=="true" before this helper can be reached in the integrated flow. Kept for parity
+        # with _file_budget_breach_rec and to cover any direct/test invocation (Decision 55: no
+        # silent skip, never a buffered outbox -- Decision 84 I-4).
+        print(
+            f"WARNING: fast-tier budget bypass rec NOT filed (CI environment, no portal access): "
+            f"Elapsed: {elapsed_part}. Reason: {reason or 'none provided'}. "
+            f"Diff manifest ({len(diff_manifest)} files): {manifest_summary}.",
+            file=sys.stderr,
+        )
+        return
+
     try:
         from scripts.ops_data_portal import file_rec  # noqa: PLC0415
 
@@ -171,8 +203,6 @@ def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], r
             ["git", "branch", "--show-current"], capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT
         )
         branch = branch_r.stdout.strip() or "unknown"
-        manifest_summary = ", ".join(diff_manifest[:20]) + ("..." if len(diff_manifest) > 20 else "")
-        elapsed_part = f"{elapsed_s / 60:.1f} min" if elapsed_s is not None else "unknown"
         context = (
             f"Fast-tier budget assertion bypassed via --ignore-budget on branch {branch}. "
             f"Elapsed: {elapsed_part}. Reason: {reason or 'none provided'}. "
@@ -514,16 +544,19 @@ def _runtime_heavy_dep_defer_reason(test_file: str, excluded: set[str]) -> str |
 
 
 def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
-    """Partition changed test files into (runnable, deferred) (Decision 104 / rec-2485).
+    """Partition changed test files into (runnable, deferred) via the cheap `--collect-only` pass
+    only (Decision 104 / rec-2485; single-execution reshape).
 
-    A file defers when EITHER: its `--collect-only` root-cause ModuleNotFoundError names a
-    deliberately-excluded heavy dependency (in requirements.txt, not requirements-fast.txt) that
-    is genuinely absent (`importlib.util.find_spec` is None); OR -- for a file that collects fine
-    -- an isolated real run of it fails with that same signature, catching a heavy dependency
-    imported lazily at runtime rather than at module scope (see `_runtime_heavy_dep_defer_reason`).
-    Every other shape -- a real test failure, a non-heavy collection/runtime error, or an error
-    with no "No module named" line at all -- routes to `runnable`, so the subsequent real pytest
-    run reproduces and reddens the genuine failure with full diagnostics (fail-closed).
+    A file defers when its `--collect-only` root-cause ModuleNotFoundError names a deliberately-
+    excluded heavy dependency (in requirements.txt, not requirements-fast.txt) that is genuinely
+    absent (`importlib.util.find_spec` is None) -- a module-scope import, visible without running
+    any test body. Every other shape -- a real test failure, a non-heavy collection error, or an
+    error with no "No module named" line at all -- routes to `runnable`, so the subsequent real
+    pytest run reproduces and reddens the genuine failure with full diagnostics (fail-closed).
+
+    A heavy dependency imported LAZILY (function scope, not module scope) is invisible to
+    `--collect-only` and is no longer proactively probed here -- `run_pytest_diff` catches that
+    shape reactively, only if and after the combined run fails (see `_runtime_heavy_dep_defer_reason`).
     """
     excluded = _excluded_heavy_import_names()
     runnable: list[str] = []
@@ -545,36 +578,91 @@ def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple
             else:
                 runnable.append(test_file)
             continue
-        runtime_missing = _runtime_heavy_dep_defer_reason(test_file, excluded)
-        if runtime_missing:
-            deferred.append((test_file, runtime_missing))
-        else:
-            runnable.append(test_file)
+        runnable.append(test_file)
     return runnable, deferred
 
 
-def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
-    """Orchestrate the --pre pytest-diff step: partition, warn, run, and report (Decision 104).
+def _print_deferred_warning(test_file: str, missing_dep: str) -> None:
+    print(
+        f"\n=== DEFERRED TO FULL TIER (main-validate) ===\n"
+        f"{test_file}: cannot run under the fast tier -- dependency '{missing_dep}' is "
+        "deliberately excluded from requirements-fast.txt. main-validate (full tier) runs "
+        "this file post-merge; a genuine failure there files a source=ci_rca critical rec."
+    )
 
-    Partitions changed_tests into (runnable, deferred); prints a loud un-swallowable warning
-    per deferred file naming the file and its missing dependency; runs pytest ONLY on the
-    runnable subset (preserving the exit-5/Decision 55 backstop on that subset); does NOT
-    redden the gate when every changed test file legitimately defers.
+
+def _reactive_heavy_dep_signature(combined_output: str, excluded: set[str]) -> str | None:
+    """Return the first deliberately-excluded, genuinely-absent heavy-dep name whose ModuleNotFoundError
+    signature appears in `combined_output`, or None if no such signature is present."""
+    for match in _NO_MODULE_NAMED_RE.findall(combined_output):
+        found = _excluded_and_absent(match, excluded)
+        if found:
+            return found
+    return None
+
+
+def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
+    """Orchestrate the --pre pytest-diff step: partition, warn, run once, and reactively fall
+    back only on failure (Decision 104 / rec-2485; single-execution reshape).
+
+    Common case: `--collect-only` partitions changed_tests into (runnable, deferred); a loud
+    un-swallowable warning is printed per deferred file; the runnable subset is run through pytest
+    EXACTLY ONCE. If that run passes (or every file deferred), the gate is done -- no proactive
+    per-file isolated probe.
+
+    Only on a non-zero return does this reactively check whether the failure signature names a
+    deliberately-excluded, genuinely-absent heavy dependency (a lazy, function-scope import
+    invisible to `--collect-only`, e.g. the rec-2572..2576 test_ops_writer.py shape). If so, it
+    falls back to per-file classification via `_runtime_heavy_dep_defer_reason` over the runnable
+    set, prints DEFERRED warnings for files that resolve to that shape, and re-runs the survivors
+    once (reddening only on a survivor failure). Any other failure shape reddens immediately
+    (fail-closed) -- no reactive re-run is spent chasing a genuine test failure.
     """
     if not changed_tests:
         return
     runnable, deferred = partition_changed_tests_by_collectability(changed_tests)
     for test_file, missing_dep in deferred:
-        print(
-            f"\n=== DEFERRED TO FULL TIER (main-validate) ===\n"
-            f"{test_file}: cannot run under the fast tier -- dependency '{missing_dep}' is "
-            "deliberately excluded from requirements-fast.txt. main-validate (full tier) runs "
-            "this file post-merge; a genuine failure there files a source=ci_rca critical rec."
-        )
+        _print_deferred_warning(test_file, missing_dep)
     if not runnable:
         print(f"\nAll {len(deferred)} changed test file(s) deferred to the full tier -- fast-tier gate not reddened.")
         return
+
     print("\n=== Tests (pytest -- explicit changed files) ===")
-    pytest_result = _common.run([_common.PYTHON, "-m", "pytest", *runnable, "-m", "not integration", "-v"], cwd=_common.ROOT)
-    if pytest_result.returncode != 0:
+    result = _common.run(
+        [_common.PYTHON, "-m", "pytest", *runnable, "-m", "not integration", "-v"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=_common.ROOT,
+    )
+    print(result.stdout or "", end="")
+    print(result.stderr or "", end="")
+    if result.returncode == 0:
+        return
+
+    excluded = _excluded_heavy_import_names()
+    combined = (result.stdout or "") + (result.stderr or "")
+    if _reactive_heavy_dep_signature(combined, excluded) is None:
+        # No excluded-heavy-dep signature in the failure output: a genuine failure, a non-heavy
+        # collection/runtime error, or an unrelated shape -- redden immediately (fail-closed).
+        failed.append("Tests (pytest)")
+        return
+
+    survivors: list[str] = []
+    for test_file in runnable:
+        runtime_missing = _runtime_heavy_dep_defer_reason(test_file, excluded)
+        if runtime_missing:
+            _print_deferred_warning(test_file, runtime_missing)
+        else:
+            survivors.append(test_file)
+    if not survivors:
+        print(
+            "\nAll remaining changed test file(s) deferred to the full tier on reactive "
+            "detection -- fast-tier gate not reddened."
+        )
+        return
+
+    print("\n=== Tests (pytest -- reactive re-run on survivors) ===")
+    rerun_result = _common.run([_common.PYTHON, "-m", "pytest", *survivors, "-m", "not integration", "-v"], cwd=_common.ROOT)
+    if rerun_result.returncode != 0:
         failed.append("Tests (pytest)")
