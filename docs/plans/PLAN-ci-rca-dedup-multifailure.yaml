@@ -1,0 +1,369 @@
+schema_version: 1
+slug: "ci-rca-dedup-multifailure"
+intent: >-
+  Harden the CI-RCA feedback loop -- the self-improving system's primary quality signal -- by
+  collapsing red-main duplicate storms to one rec per root cause (deterministic fingerprint dedup),
+  making multi-failure filing lossless, and tightening the RCA prompt so warn-mode rejects converge
+  toward the strict-flip gate.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-rca-dedup-multifailure.yaml
+phase: >-
+  Platform tier_item T1.13 (CI-RCA methodology contract) -- post-audit hardening from
+  audits/ci-rca-system-a49db8f.yaml (CIRCA-03, CIRCA-07, prompt-half of CIRCA-04). No product-roadmap
+  phase; platform-internal reliability. Sequenced AFTER PLAN-ci-rca-enforcement-spine-fixes (#496,
+  CIRCA-01/02/06/08) which is merged and which raised the schema_version-2 why_chain ceiling to 400.
+scope:
+  - file: scripts/ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      CIRCA-03(a). Compute and emit a stable grouping FINGERPRINT per bundle, anchored on
+      deterministic classifier output sha256(workflow_slug + "\0" + failed_check + "\0" +
+      failure_category), plus a normalized first-error-signature stored as a tie-breaker. Emit as a
+      bundle field and as a parseable stdout line (FINGERPRINT=<hex>) for the workflow. The fingerprint
+      must be invariant to run_id/timestamp/head_sha and distinct across differing failed_check or
+      failure_category.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      CIRCA-03(b)+(c). Add a SHARED read-only helper find_open_ci_rca_rec_by_fingerprint(fingerprint,
+      profile) -> Optional[str] that queries OPEN source=ci_rca recs via make_reader().current_state(
+      "ops_recommendations", row_filter="source = 'ci_rca'") (the parsed {column,value} structural form
+      used at :1613, NOT SQL-interpolated), Python-filters status=open, and returns the matching rec id
+      by fingerprint (parsed from each rec's context_v2_json) or None. It fails open NARROWLY (returns
+      None + loud log) only on reader-unreachable / Neon scale-to-zero; all other reader errors raise
+      (Decision 55). Expose it as a read-only CLI verb (e.g. --find-open-ci-rca-rec --fingerprint <hex>,
+      prints the rec id or nothing) so the workflow's pre-agent step (CIRCA-03(b)) uses the SAME in-
+      process reader path -- no local-cache scan (CLAUDE.md: a read cache is never a dedup source). The
+      write-time backstop (CIRCA-03(c)) in file_rec() source=ci_rca calls the same helper before the
+      writer insert and RETURNS the existing id instead of inserting on a match (the backstop returns
+      the id but does NOT bump the occurrence counter -- only the workflow update_rec path bumps).
+      Store fingerprint, failure_category, and the occurrence counter/last_seen INSIDE context_v2_json
+      as portal-derived (never agent-authored) fields on CiRcaContext, mirroring the warn_mode_reject
+      Tier-B pattern -- NO new ops_recommendations column (Decision 103 / 84 I-2). A dedup-bypass env
+      (set by the workflow when force_rca=true) skips the write-time guard (Decision 74).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      CIRCA-03(b) pre-agent skip + concurrency; CIRCA-07 mark gating + prompt-string alignment. Add a
+      NEW pre-agent dedup step (id=fp_dedup) that runs AFTER the existing per-category commit-status
+      "Dedup guard" (which is RETAINED -- it covers same-commit reruns and the terraform-apply-sandbox
+      red-record anchor, which the cross-commit fingerprint layer does not). For each enumerated
+      category it reads the bundle fingerprint and calls the portal read-only verb
+      (bin/venv-python -m scripts.ops_data_portal --find-open-ci-rca-rec --fingerprint <hex>); on a
+      live match it emits deduped=true and bumps the matched rec's occurrence counter/last_seen via
+      update_rec, UNLESS force_rca. The reader is reachable from the CI branch role (oidc.tf:456-460);
+      if the verb fails open (reader unreachable), fp_dedup emits deduped=false so the agent still runs
+      (never hard-fail the workflow). Compose the two layers in the "Run ci-rca agent" if: -- run the
+      agent only when NEITHER layer deduped: steps.dedup.outputs.already_filed != 'true' &&
+      steps.fp_dedup.outputs.deduped != 'true'. Add a top-level concurrency: block keyed on
+      head_sha+workflow with cancel-in-progress:false (never cancels -- preserves the
+      terraform-apply-sandbox convergence backstop, Decision 92/94). Gate mark_rca per-category on the
+      rec id actually parsed for that category (only mark filed categories). Change the agent-prompt
+      string "Local path:" to "Local bundle path:" to match ci-rca.md's extraction instruction.
+  - file: .claude/agents/scheduled/ci-rca.md
+    action: Modify
+    purpose: >-
+      CIRCA-07 + CIRCA-04(prompt). Delete the "If multiple checks failed, diagnose and file for the
+      primary cause only" sentence and mandate ONE rec per bundle. Extend the FILED: marker grammar to
+      one line per rec, each carrying its failure_category token. CIRCA-04: in Step 4 state the
+      per-entry why_chain character ceiling explicitly as 40-400 (the schema_version-2 ceiling shipped
+      in #496; the current "40-250" is stale) and require the terminus to contain one of the portal's
+      systemic keywords VERBATIM (gate, tier, policy, contract, gap, missing, absent, placement, scope,
+      invariant, enforcement) plus a file:line citation.
+  - file: scripts/ci_rca_filing.py
+    action: Modify
+    purpose: >-
+      CIRCA-07. Add extract_filed_recs() returning ALL filed (rec_id, category) pairs from the
+      per-rec FILED: markers (today extract_filed_rec_id last-marker-wins loses N-1 filings). Retain
+      the single-id function for the workflow's fail-loud "at least one filed" check and PR comment.
+  - file: tests/test_ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      CIRCA-03(a) coverage. Assert the fingerprint is deterministic and invariant to
+      run_id/timestamp/head_sha perturbation, and distinct across differing failed_check /
+      failure_category; assert the FINGERPRINT= stdout line is emitted.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      CIRCA-03(c) coverage. With a mocked reader: two file_rec(source=ci_rca) calls sharing a
+      fingerprint against an open matching rec yield exactly one insert (second returns the existing
+      id); force-bypass files anyway; reader-unreachable fails open (files, loud log) while an
+      unexpected reader error raises; fingerprint/failure_category/occurrence live in context_v2_json,
+      not a new column.
+  - file: tests/test_ci_rca_filing.py
+    action: Modify
+    purpose: >-
+      CIRCA-07 coverage. A 2-marker transcript returns both (rec_id, category) pairs; a single marker
+      still parses (backward compat); FILED: none yields no ids.
+  - file: tests/test_ci_rca_prompt_contract.py
+    action: Modify
+    purpose: >-
+      CIRCA-07 + CIRCA-04 coverage. Assert the "primary cause only" sentence is ABSENT; one-rec-per-
+      bundle language PRESENT; the FILED: per-rec-with-category grammar PRESENT; the 40-400 ceiling
+      PRESENT and the stale "40-250" ABSENT; all 11 systemic keywords listed verbatim; the doc extracts
+      "Local bundle path:".
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Bookkeeping (Decision 86). Append a dated T1.13 progress_note entry recording this post-audit
+      hardening AND a candidate note: a cheap-model (Haiku) semantic-dedup judge -- invoked ONLY on a
+      fingerprint match, biased to escalate-on-doubt -- is an evidence-gated FUTURE option if telemetry
+      shows a non-trivial fingerprint false-collapse rate. NO exit-criterion status flips
+      (Status-Trusted-Never-Inferred).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    CIRCA-03: scripts/ci_rca_evidence.py emits a fingerprint that is byte-identical across two runs
+    differing only in run_id/timestamp/head_sha, and differs when failed_check or failure_category
+    differs (unit test).
+  - >-
+    CIRCA-03: two file_rec(source='ci_rca') calls with the same fingerprint, against an open matching
+    rec, produce exactly ONE writer insert -- the second returns the existing rec id and inserts
+    nothing (unit test with mocked reader); the force-bypass env files anyway.
+  - >-
+    CIRCA-03: the shared helper find_open_ci_rca_rec_by_fingerprint() returns the matching open rec id
+    on a fingerprint hit and None on a miss; the read-only CLI verb prints that id; a reader-unreachable
+    error returns None with a loud log (fail-open) while a non-connectivity error raises (unit test).
+  - >-
+    CIRCA-03: a reader-unreachable / scale-to-zero error in the write-time guard fails OPEN (rec is
+    filed) with a loud log line, while a non-connectivity reader error raises (Decision 55).
+  - >-
+    CIRCA-03: fingerprint, failure_category, and the occurrence counter/last_seen are stored inside
+    context_v2_json (portal-derived) -- no new top-level ops_recommendations column is added
+    (Decision 103 / 84 I-2).
+  - >-
+    CIRCA-03: .github/workflows/ci-rca.yml contains a top-level concurrency: block keyed on
+    head_sha+workflow with cancel-in-progress:false, and a pre-agent dedup step that skips agent
+    dispatch on a fingerprint match against an open rec (force_rca bypasses it).
+  - >-
+    CIRCA-07: scripts/ci_rca_filing.extract_filed_recs() returns all (rec_id, category) pairs from a
+    multi-marker transcript; the single-marker and FILED: none cases still behave (unit test).
+  - >-
+    CIRCA-07: .claude/agents/scheduled/ci-rca.md no longer contains "primary cause only", mandates one
+    rec per bundle, and documents the one-line-per-rec FILED: <rec-id> <category> grammar.
+  - >-
+    CIRCA-07: mark_rca in ci-rca.yml marks only the categories whose rec id was parsed -- a 1-of-2
+    filing marks exactly one category context; and the workflow prompt emits "Local bundle path:".
+  - >-
+    CIRCA-04: ci-rca.md Step 4 states the 40-400 per-entry why_chain ceiling, lists all 11 systemic
+    keywords verbatim, and requires a file:line terminus citation; the stale "40-250" is gone.
+  - >-
+    Bookkeeping: docs/ROADMAP-PLATFORM.yaml T1.13 has a new dated progress_note entry (incl. the Haiku
+    evidence-gated candidate note) and NO exit-criterion status was changed; validate.py --pre passes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Fingerprint determinism/distinctness under classifier anchoring.
+    command: "bin/venv-python -m pytest tests/test_ci_rca_evidence.py -q"
+    expected: >-
+      Tests pass: identical (workflow_slug, failed_check, failure_category) with differing
+      run_id/timestamp/head_sha yield the same fingerprint; a differing failed_check or
+      failure_category yields a different fingerprint; FINGERPRINT= is emitted on stdout.
+    fix_if: >-
+      Fingerprint changes across run-only perturbations (over-fine -> storm persists) or collides
+      across distinct failed_check/category (over-coarse -> silent suppression). Re-anchor the hash
+      on the classifier fields only; move volatile tokens out of the primary key.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Both CIRCA-03 read paths -- the shared pre-agent helper AND the write-time backstop -- plus
+      force-bypass, narrow fail-open, and Tier-B storage, in one file-scoped run.
+    command: "bin/venv-python -m pytest tests/test_ops_data_portal.py -q"
+    expected: >-
+      find_open_ci_rca_rec_by_fingerprint() returns the matching open id on a hit and None on a miss;
+      the write-time guard's second same-fingerprint file_rec returns the existing id with NO writer
+      insert (and does not bump the counter); force-bypass inserts; reader-unreachable fails open
+      (returns None / inserts, loud log) while an unexpected reader error raises;
+      fingerprint/failure_category/occurrence live in context_v2_json, not a new column.
+    fix_if: >-
+      The helper misses a live match or the guard double-inserts (wrong match key / guard not reached);
+      a reader outage blocks filing (fail-open too narrow) or a broad except swallows a real error
+      (fail-open too wide); or a new ops_recommendations column appears (Decision 103 violation).
+  - step: 3
+    phase: pre-deploy
+    action: "Multi-rec FILED: marker parsing returns all filings."
+    command: "bin/venv-python -m pytest tests/test_ci_rca_filing.py -q"
+    expected: >-
+      extract_filed_recs() returns both pairs for a 2-marker transcript; single-marker still returns
+      one; FILED: none returns none; the legacy single-id helper is unchanged.
+    fix_if: >-
+      Only the last marker is returned (N-1 filings lost) or the category token is dropped; fix the
+      regex to capture per-rec (rec-id, category) and return the full list.
+  - step: 4
+    phase: pre-deploy
+    action: Prompt-contract assertions for CIRCA-07 + CIRCA-04.
+    command: "bin/venv-python -m pytest tests/test_ci_rca_prompt_contract.py -q"
+    expected: >-
+      Primary-cause-only ABSENT; one-rec-per-bundle PRESENT; FILED per-rec-with-category grammar
+      PRESENT; 40-400 ceiling PRESENT and 40-250 ABSENT; all 11 systemic keywords listed; extraction
+      string "Local bundle path:" PRESENT.
+    fix_if: >-
+      Any assertion fails -- update .claude/agents/scheduled/ci-rca.md Step 4/Step 5/Step 6 text to
+      satisfy the contract; do not weaken the test to pass.
+  - step: 5
+    phase: pre-deploy
+    action: Workflow structure -- concurrency block, per-category mark gating, prompt-string alignment.
+    command: "grep -nE '^concurrency:' .github/workflows/ci-rca.yml && grep -n 'Local bundle path:' .github/workflows/ci-rca.yml && ! grep -n 'Local path:' .github/workflows/ci-rca.yml"
+    expected: >-
+      A top-level concurrency: block exists; the agent-prompt string is "Local bundle path:"; the
+      stale "Local path:" is gone.
+    fix_if: >-
+      Missing concurrency block, or the prompt string still reads "Local path:" (mismatches
+      ci-rca.md's extraction instruction) -- add/rename accordingly.
+  - step: 6
+    phase: pre-deploy
+    action: Workflow YAML remains parseable after edits.
+    command: "bin/venv-python -c \"import yaml; yaml.safe_load(open('.github/workflows/ci-rca.yml'))\" && echo YAML_OK"
+    expected: "Prints YAML_OK with no exception."
+    fix_if: "YAML parse error -- fix indentation/quoting in the concurrency block or the dedup step."
+  - step: 7
+    phase: pre-deploy
+    action: Full fast-tier presubmit (coverage, schema, roadmap, prompt-compliance) passes.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: >-
+      --pre passes: new/modified source files carry test coverage; PlanDocument schema valid; roadmap
+      T1.13 progress_note edit validates; no prompt-compliance regression.
+    fix_if: >-
+      Any check fails -- address the specific failure (add missing test coverage, fix a schema/roadmap
+      referential error). Do NOT add a check to ci.yml without adding it to validate.py first.
+  - step: 8
+    phase: pre-deploy
+    action: Plan document self-validates.
+    command: "bin/venv-python -m scripts.plan_document docs/plans/PLAN-ci-rca-dedup-multifailure.yaml"
+    expected: "Validates with no schema error."
+    fix_if: "Schema error -- correct the offending field to match the PlanDocument schema."
+  - step: 9
+    phase: post-deploy
+    action: >-
+      End-to-end dedup observation on CI (the concurrency block, pre-agent skip, and per-category
+      mark manifest only in a real CI run). On the next main CI failure that recurs across two
+      pushes with the same failed_check+category, confirm exactly one open ci_rca rec accrues.
+    command: "bin/venv-python -m scripts.session_preflight"
+    expected: >-
+      The preflight "CI RCA Recs (open)" / "CI-RCA Telemetry" sections show a single open rec for the
+      recurring root cause (not one-per-push); the ci-rca run log for the second push shows
+      "deduped; agent not dispatched" (or the write-time guard returning the existing id).
+    fix_if: >-
+      Duplicates still accrue -- inspect the ci-rca run log: fingerprint mismatch across pushes
+      (re-anchor), reader query returned empty (verify branch-role reader reachability / structural
+      filter), or force_rca inadvertently set.
+constraints:
+  - "Only modify files listed in scope (AGENTS.md); out-of-scope bugs become recommendations, not inline fixes."
+  - "No rescue agents or workaround loops (Decision 55). Narrow fail-open only: reader-unreachable/scale-to-zero logged loudly; all other reader errors raise."
+  - >-
+    No LLM in the dedup decision -- dedup is fully deterministic (fingerprint + open-rec match). The
+    cheap-model (Haiku) judge is explicitly deferred as an evidence-gated candidate, not built here.
+  - >-
+    Store fingerprint / failure_category / occurrence-counter as portal-derived fields inside
+    context_v2_json (Tier-B, Decision 66) -- NO new top-level ops_recommendations column
+    (Decision 103 / Decision 84 I-2, writer-owned keyspace).
+  - >-
+    Reads transit the closed DuckLake reader via a single-key STRUCTURAL {column,value} filter
+    (Decision 84 I-3, no caller SQL); fingerprint matching is in-process Python post-filtering of the
+    returned rows -- no json_extract named verb required.
+  - >-
+    Preserve the workflow_dispatch force_rca escape hatch end-to-end (Decision 74): it bypasses both
+    the pre-agent skip and the write-time guard.
+  - >-
+    The terraform-apply-sandbox convergence backstop must not be suppressed (Decision 92/94):
+    concurrency is cancel-in-progress:false and the fingerprint (workflow_slug+failed_check+
+    failure_category) distinguishes distinct convergence failures -- only same-fingerprint-against-open
+    collapses.
+  - >-
+    RETAIN the existing per-category commit-status "Dedup guard" step (ci-rca.yml:220-252) and its
+    mark_rca counterpart -- the new fingerprint layer is ADDITIVE (cross-commit root-cause grouping),
+    and the commit-status layer still covers same-commit reruns and the terraform-apply-sandbox
+    red-record anchor. Compose both in the agent if: (run only when neither deduped).
+  - "Do not add a check to .github/workflows/ci.yml without adding it to scripts/validate.py first (Decision 104)."
+  - "Do not flip any T1.13 exit-criterion status during implementation for criteria this plan does not close (Status-Trusted-Never-Inferred)."
+context:
+  - >-
+    Source audit: audits/ci-rca-system-a49db8f.yaml (merged #487). This plan implements CIRCA-03 (high),
+    CIRCA-07 (medium), and the agent-prompt half of CIRCA-04 (high). CIRCA-01/02/06/08 landed in
+    PLAN-ci-rca-enforcement-spine-fixes (#496), which also raised the schema_version-2 why_chain ceiling
+    to 400 (ops_data_portal.py:219-229) -- hence CIRCA-04's "new ceiling" is 400, and ci-rca.md's
+    "40-250" is now stale.
+  - >-
+    CIRCA-03 mechanism: three deterministic layers -- (a) classifier-anchored fingerprint in
+    ci_rca_evidence.py; (b) pre-agent workflow skip (compute save) that queries open ci_rca recs via
+    the reader, which IS reachable from the CI branch OIDC role (terraform/personal/oidc.tf:456-460:
+    "CI/DQ reads recs over the DuckLake reader Function URL"); (c) write-time file_rec guard as the
+    cross-run race backstop. Self-correcting: matches OPEN recs only, so a genuine recurrence re-files
+    once the rec closes -- no permanent hash store, no close-hook.
+  - >-
+    Decision 88 (Neon egress) acknowledgement: this adds ONE reader read site (pre-agent, per enumerated
+    category) and ONE update_rec write site (occurrence counter), both at CI-FAILURE frequency (not
+    per-session), both named-verb/structural-filter mediated. The dedup NET-REDUCES downstream egress by
+    suppressing redundant 20-min agent runs and their portal traffic.
+  - >-
+    The roadmap progress_note (ROADMAP-PLATFORM.yaml ~4423) already flagged the FILE-ONLY back-validation
+    match key as weaker than failed_check+failure_category and "deferred until a failure_category field
+    lands in context_v2_json" -- the failure_category field this plan adds unblocks that future upgrade.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 84, Decision 88, Decision 72, Decision 73, Decision 55, Decision 66, Decision 74, Decision 92, Decision 94, Decision 86. WARN (Decision 103): occurrence counter must live in context_v2_json, not a new column -- incorporated. NOTE (Decision 88): new read/write sites acknowledged -- incorporated. NOTE (Decision 92/94): fingerprint distinguishes distinct convergence failures -- incorporated."
+  - "gates: decision-scout=FLAGS_FOUND (all incorporate-and-cite, no BLOCK) after 2 round(s); plan-critique=PROCEED after 1 REVISE round (pre-agent read mechanism specified as a shared portal helper + CLI verb; pre-deploy skip coverage folded into VP step 2; commit-status dedup layer retained and composed)"
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok); no Scope
+    overlap risk. No .tf in scope -> no infrastructure/speculative-plan pipeline. config/agent/ not
+    touched -> no Lambda deploy assessment; ci-rca.yml is a GitHub workflow, not a Lambda artifact.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/festive-volta-ciqqgc)
+  - docs/PROJECT_CONTEXT.md read
+  - Source audit audits/ci-rca-system-a49db8f.yaml read (CIRCA-03/07/04)
+  - PLAN-ci-rca-enforcement-spine-fixes (#496) confirmed merged; schema-2 ceiling is 400
+  - All 10 files in scope located and readable
+  - Reader reachability from CI branch role confirmed (oidc.tf:456-460)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/ci_rca_evidence.py: compute the grouping fingerprint sha256(workflow_slug + "\0" +
+    failed_check + "\0" + failure_category) plus a normalized first-error-signature tie-breaker; add
+    both to the emitted bundle dict and print FINGERPRINT=<hex> so the workflow can read it. Keep the
+    existing canonical BUNDLE_SHA (integrity hash) unchanged -- the fingerprint is a SEPARATE grouping
+    key.
+  - >-
+    scripts/ops_data_portal.py: add fingerprint, failure_category, and occurrence-counter/last_seen as
+    portal-derived optional fields on CiRcaContext (never agent-authored; stamped from the loaded
+    bundle, mirroring warn_mode_reject). Add the shared helper find_open_ci_rca_rec_by_fingerprint(
+    fingerprint, profile) -> Optional[str] using make_reader().current_state("ops_recommendations",
+    row_filter="source = 'ci_rca'") (single-key structural form) + Python status=open + fingerprint
+    match; narrow fail-open (return None + loud log on reader-unreachable; raise otherwise). Expose it
+    as a read-only CLI verb (--find-open-ci-rca-rec --fingerprint <hex>). In file_rec() source=ci_rca,
+    before the writer insert, call the helper and return the existing id on a hit (skip insert; do not
+    bump the counter). Honor a dedup-bypass env for force_rca.
+  - >-
+    .github/workflows/ci-rca.yml: add a top-level concurrency: block (group by head_sha+workflow,
+    cancel-in-progress:false). Add a pre-agent dedup step (id=fp_dedup) AFTER the retained
+    commit-status "Dedup guard": for each enumerated category read the bundle fingerprint, call
+    --find-open-ci-rca-rec; on a live match emit deduped=true and bump the matched rec via update_rec
+    (unless force_rca); on fail-open (verb reports reader unreachable) emit deduped=false so the agent
+    still runs. Change the "Run ci-rca agent" if: to run only when NEITHER layer deduped
+    (steps.dedup.outputs.already_filed != 'true' && steps.fp_dedup.outputs.deduped != 'true'). Gate
+    mark_rca per-category on the rec id parsed for that category. Rename the prompt string
+    "Local path:" to "Local bundle path:".
+  - >-
+    .claude/agents/scheduled/ci-rca.md: delete the "primary cause only" sentence (Step 5) and mandate
+    one rec per bundle; extend Step 6 FILED: grammar to one line per rec carrying its failure_category;
+    in Step 4 set the why_chain per-entry ceiling to 40-400 and list the 11 systemic keywords verbatim
+    plus the file:line terminus-citation requirement.
+  - >-
+    scripts/ci_rca_filing.py: add extract_filed_recs() -> list[(rec_id, category)] scanning all
+    per-rec markers; retain extract_filed_rec_id() for the workflow fail-loud check and PR comment.
+  - >-
+    Update tests: test_ci_rca_evidence.py (fingerprint), test_ops_data_portal.py (dedup guard +
+    portal-derived storage), test_ci_rca_filing.py (multi-marker), test_ci_rca_prompt_contract.py
+    (CIRCA-07/04 assertions). Ensure 100% coverage of new code (tests/CLAUDE.md policy).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: append a dated T1.13 progress_note entry recording the CIRCA-03/07/04
+    hardening and the evidence-gated Haiku-judge candidate note; do NOT change any exit-criterion status.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 failure stop
+    and RCA (Decision 55).
+  - "Report: what was implemented, verification results, and the post-deploy observation plan for step 9."
+work_areas: []
+rollback: >-
+  Revert the feature commit. The change is additive and gated (fail-open toward filing, force_rca
+  bypass preserved), so reverting restores the prior per-push filing behaviour with no data migration.
+  The portal-derived context_v2_json fields are optional (extra='ignore'), so recs written during the
+  window remain readable after revert.
