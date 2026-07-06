@@ -173,11 +173,12 @@ verification_plan:
       Rec closure -- after this plan merges to main, the 14 auto-filed budget_breach/bypass recs are
       closed (via the squash-merge Resolves: trailer / rec-autoclose, or the ops portal).
     command: >-
-      bin/venv-python -m scripts.sync_ops pull && grep -c '"status": "open".*budget_breach'
-      logs/.recommendations-log.jsonl
+      bin/venv-python -m scripts.sync_ops pull && grep -E
+      '"id": "rec-(2527|2538|2539|2540|2541|2542|2543|2544|2555|2556|2560|2562|2567|2569)"'
+      logs/.recommendations-log.jsonl | grep '"status": "open"' | wc -l
     expected: >-
-      The bundled recs no longer appear as open budget_breach rows (count drops to 0 for the bundled
-      IDs after sync).
+      Prints 0 -- none of the 14 bundled recs (both budget_breach AND budget_bypass sources) remains
+      open after sync. (wc -l exits 0 on zero matches, unlike grep -c.)
     fix_if: >-
       Recs remain open -- the Resolves: trailer omitted an ID or a rec was not eligible; close the
       remainder via bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed.
@@ -255,13 +256,22 @@ context:
     TEST-MAINTENANCE NOTE: TestBudgetAssertion / TestIgnoreBudgetFlag patch time.monotonic with fixed
     2-element side_effect lists ([0.0, 400.0] etc.). The added per-phase timing calls change the
     monotonic call count -- switch those mocks to a growth-safe generator/sequence (mock-exhaustion
-    discipline, tests/CLAUDE.md; cf. postflight rec-117/rec-325).
+    discipline, tests/CLAUDE.md; cf. postflight rec-117/rec-325) that still PINS the terminal elapsed
+    value deterministically (the breach/no-breach comparison against 300s must not depend on how many
+    intermediate timing calls occur).
+  - >-
+    CRITIQUE REFINEMENTS (plan-critique round 1, folded in): (1) VP step 7's closure check greps the
+    14 specific bundled rec IDs across BOTH sources (budget_breach and budget_bypass), not the
+    category count. (2) _file_budget_bypass_rec's CI-guard is DEFENSIVE-ONLY -- unreachable in the
+    integrated CI flow because validate.py:334 already hard-rejects --ignore-budget when CI=true
+    before the helper can run; TestBudgetRecFilingCiGuard exercises the helper directly, and the
+    guard is belt-and-suspenders, not load-bearing.
   - >-
     Decision-scout verdict + CITE list: FLAGS_FOUND (Decisions triaged: 81 of 81; one Decision 84 I-4
     NOTE -- CI-guard on file_rec -- judged non-violating and resolved by the loud-log constraint above).
     CITE = Decision 60, Decision 73, Decision 104, Decision 80, Decision 55, Decision 83.
     RELATED = Decision 103, Decision 48, Decision 79, Decision 43, Decision 102, Decision 75.
-  - "gates: decision-scout=FLAGS_FOUND (1 NOTE resolved) after 1 round; plan-critique=<PENDING>"
+  - "gates: decision-scout=FLAGS_FOUND (1 NOTE resolved) after 1 round; plan-critique=PROCEED after 1 round (2 non-blocking refinements folded in)"
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/fast-tier-budget-overrun-f7njpp)
   - docs/PROJECT_CONTEXT.md read
@@ -310,7 +320,8 @@ execution_steps:
     tests/test_validate.py -- add TestBudgetRecFilingCiGuard (CI=true -> no file_rec, prints
     diagnostic; CI unset -> file_rec called) and extend TestBudgetBreachRecFiling for the threaded
     dominant_phase. Update TestBudgetAssertion / TestIgnoreBudgetFlag time.monotonic mocks to a
-    growth-safe generator so the added per-phase timing calls do not exhaust the side_effect.
+    growth-safe generator so the added per-phase timing calls do not exhaust the side_effect, while
+    still pinning the terminal elapsed value deterministically so the 300s comparison stays exact.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop
     and RCA (Decision 55). Confirm bin/venv-python -m scripts.validate --pre is green and well under
