@@ -1,0 +1,312 @@
+schema_version: 1
+slug: ci-rca-contract-hygiene
+intent: >-
+  Close the two CI-RCA audit hygiene findings (CIRCA-09 prose half, CIRCA-10) so the
+  T1.13 methodology contract text and the abstention-review preflight surface stop
+  overstating enforcement -- keeping the RCA depth-guarantee honestly described as the
+  strict-mode flip approaches.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-contract-hygiene.yaml
+phase: >-
+  Platform tier_item T1.13 (CI-RCA methodology contract -- deterministic depth via
+  structured schema + evidence bundle). Closes the prose/observability hygiene findings
+  of audit audits/ci-rca-system-a49db8f.yaml: CIRCA-09 (Section 4 enforcement-claim
+  drift) and CIRCA-10 (abstention-review surface wording/overflow). Runs AFTER the
+  spine-wiring (#496), dedup/multi-failure (#498), and CIRCA-05 (#500) plans so every
+  annotation describes post-fix reality.
+scope:
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: >-
+      CIRCA-09 -- one editing pass over Section 4 (lines 447-461). Update check 1 text
+      (CIRCA-02 landed: strict now rejects a missing context_v2_json), and add inline
+      status annotations to checks 4/5/6 for the enforcements file_rec() does not raise,
+      matching the discipline of the existing [STALE] zones. Add a Decision 86
+      accuracy-preservation note.
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      CIRCA-10 -- move the [:5] cap from _derive_ci_rca_undetermined_open (line 485) to
+      print_ci_rca_undetermined_recs (lines 495-510) and add a "showing 5 of N" overflow
+      line; rename the "CI-RCA Mandatory Human Review" section to advisory wording that
+      references the generic Decision 73 L5 ci_rca hard-block; carry an untruncated total
+      into the preflight report JSON alongside the display-capped list.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Update TestFetchCiRcaUndeterminedRecs: retarget test_capped_at_five (cap now lives
+      at print time, derive returns the full list), add an overflow-display test asserting
+      "showing 5 of N", and add an advisory-wording test asserting the header no longer
+      says "Mandatory". 100% coverage of the changed lines (tests/CLAUDE.md).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Append a dated 2026-07-06 progress_note entry to T1.13 closing out CIRCA-09/CIRCA-10
+      and recording that Section 4's enforcement semantics remain owned by the
+      intent-migration extraction path (not discharged by this annotation pass).
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    CIRCA-09: within Section 4 (docs/INTENT-ci-rca-methodology.md lines ~447-461) every
+    enforcement claim that file_rec() does not raise carries an explicit inline status
+    annotation -- check 4 (actual_gate bundle comparison) UNBUILT, check 5 (prior_art_citation
+    required_when presence + relevance intersection) UNBUILT/DEFERRED, check 6 (terminus
+    override rate limit + auditable sibling rec) PARTIALLY-DEFERRED -- each naming its owner
+    or deferral. No un-annotated claim of a rejection the code does not perform remains.
+  - >-
+    CIRCA-09: check 1's text is updated to reflect that a missing context_v2_json is now a
+    hard reject in strict mode (CIRCA-02, ops_data_portal.py:1240-1252) while warn mode
+    accepts during the rollout window -- stated as enforced, not annotated UNBUILT.
+  - >-
+    CIRCA-09: check 6's annotation records that the structural why_chain floor AND the typed
+    _WhyChainTerminusOverride (reason 80-400 chars, CIRCA-08) ARE built; only the rate limit
+    and the ci_rca_terminus_override sibling rec are deferred.
+  - >-
+    CIRCA-09: a Decision 86 note in/adjacent to Section 4 states the annotations are
+    accuracy-preservation on a grandfathered doc and do NOT discharge the Wave-3 extraction
+    to docs/contracts/ (intent-migration/MANIFEST.yaml).
+  - >-
+    CIRCA-10: _derive_ci_rca_undetermined_open returns the full untruncated list of matching
+    rows; print_ci_rca_undetermined_recs displays at most 5 and prints "showing 5 of N" when
+    the full count exceeds 5.
+  - >-
+    CIRCA-10: the printed section header no longer contains the word "Mandatory"; it uses
+    advisory wording and notes that open ci_rca recs already hard-block /plan via Decision 73 L5.
+  - >-
+    CIRCA-10: the preflight report JSON still carries a bounded undetermined-recs list plus a
+    new total count so the overflow is machine-readable; no new warehouse read is introduced
+    (Decision 88 warm-cache only).
+  - >-
+    tests/test_session_preflight.py TestFetchCiRcaUndeterminedRecs passes with the retargeted
+    cap test, the overflow-display test, and the advisory-wording test; bin/venv-python -m
+    scripts.validate --pre passes.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml T1.13 progress_note has a new dated 2026-07-06 entry naming
+    CIRCA-09 and CIRCA-10 as closed and noting the extraction obligation remains open.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      CIRCA-09 annotation coverage -- confirm Section 4 gained inline status annotations for
+      checks 4/5/6 (over and above the pre-existing [STALE] zones).
+    command: >-
+      sed -n '/^### 4. Portal-level enforcement/,/^### 5\. What this contract/p'
+      docs/INTENT-ci-rca-methodology.md | grep -cE '\[(UNBUILT|DEFERRED|PARTIALLY-DEFERRED)'
+    expected: "Count is >= 3 (one annotation each for checks 4, 5, and 6)."
+    fix_if: >-
+      Fewer than 3 status annotations means a drifting check was left un-annotated; add the
+      missing UNBUILT/DEFERRED/PARTIALLY-DEFERRED marker naming its owner.
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      CIRCA-09 check-1 text update -- confirm check 1 now describes strict-mode enforcement
+      of the missing-context_v2_json reject (CIRCA-02) rather than the pre-fix claim.
+    command: >-
+      sed -n '/^### 4. Portal-level enforcement/,/^### 5\. What this contract/p'
+      docs/INTENT-ci-rca-methodology.md | grep -iE 'strict mode' | grep -iE 'context_v2_json'
+    expected: "At least one line ties context_v2_json presence to strict-mode enforcement."
+    fix_if: >-
+      No match means check 1 still reads as an unconditional hard reject; update it to state
+      strict-mode enforcement plus warn-mode rollout acceptance.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      CIRCA-09 Decision 86 accuracy-preservation note -- confirm Section 4 records that the
+      annotations do not discharge the extraction-to-contract obligation.
+    command: >-
+      sed -n '/^### 4. Portal-level enforcement/,/^### 5\. What this contract/p'
+      docs/INTENT-ci-rca-methodology.md | grep -iE 'MANIFEST|extraction|docs/contracts'
+    expected: "At least one line references the intent-migration extraction / contract path."
+    fix_if: "Add the Decision 86 note naming the Wave-3 extraction as the still-open owner of form."
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      CIRCA-10 unit behaviour -- run the updated undetermined-recs test class (cap-at-print,
+      overflow display, advisory wording). Grep-confirm the tests exist, then run the class.
+    command: >-
+      grep -nE 'def test_(capped_at_five|.*overflow.*|.*advisory.*)' tests/test_session_preflight.py
+      && bin/venv-python -m pytest tests/test_session_preflight.py::TestFetchCiRcaUndeterminedRecs -q
+    expected: "The three tests are present and the class passes (all green)."
+    fix_if: >-
+      A failure means the cap/overflow/rename behaviour diverges from the test contract; fix
+      _derive_ci_rca_undetermined_open / print_ci_rca_undetermined_recs to match.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      CIRCA-10 advisory rename -- confirm the printed section no longer claims "Mandatory".
+    command: >-
+      grep -nE 'def print_ci_rca_undetermined_recs' -A 20 scripts/session_preflight.py
+      | grep -ci 'Mandatory' | grep -qx 0 && echo "no-mandatory-OK"
+    expected: "Prints no-mandatory-OK (the print function body no longer contains 'Mandatory')."
+    fix_if: >-
+      The word survives; replace the section header with advisory wording referencing the
+      Decision 73 L5 generic ci_rca hard-block.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      CIRCA-10 report-JSON shape -- confirm preflight emits both a bounded list and a total
+      count key for the undetermined recs (machine-readable overflow).
+    command: >-
+      grep -nE 'ci_rca_undetermined_(total|count)' scripts/session_preflight.py
+    expected: "The NEW total/count key is present in the report-JSON assembly (proves the overflow is machine-readable, not just the pre-existing _recs key)."
+    fix_if: "Add the total-count key alongside the display-capped list in the report dict."
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Roadmap bookkeeping -- confirm the T1.13 progress_note gained a dated 2026-07-06 entry
+      naming both findings.
+    command: >-
+      bin/venv-python -m scripts.platform_roadmap >/dev/null 2>&1; grep -nE '2026-07-06' docs/ROADMAP-PLATFORM.yaml
+      | grep -iE 'CIRCA-09|CIRCA-10|hygiene'
+    expected: "The dated entry exists and references the CIRCA-09/CIRCA-10 hygiene closeout."
+    fix_if: "Append the dated progress_note entry to T1.13."
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Fast-tier gate -- run the authoritative --pre suite (plan-document schema, roadmap
+      validation, vp_replay of the hermetic steps above, sloc, test-count-coupling, ruff).
+      Not marked hermetic (it IS the --pre sequence; marking it hermetic would recurse the
+      vp_replay).
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0; all --pre checks pass including plan-document validation and vp_replay."
+    fix_if: >-
+      Address the specific failing check. If vp_replay flags a hermetic step above, the PR
+      tree does not actually satisfy that step -- fix the code/doc, not the step.
+constraints:
+  - >-
+    Decision 86: this is prose annotation + text-update of the grandfathered
+    docs/INTENT-ci-rca-methodology.md (tracked in docs/intent-migration/MANIFEST.yaml). Do
+    NOT create any new standing prose-architecture doc under docs/. Annotations are
+    accuracy-preservation only; they do not discharge the Wave-3 extraction to
+    docs/contracts/ci-rca.yaml.
+  - >-
+    Edits to docs/INTENT-ci-rca-methodology.md are confined to Section 4 (lines 447-461) plus,
+    if needed, the adjacent Decision 86 note. Do NOT re-annotate Section 1's override spec --
+    the audit (CIRCA-08) and CIRCA-09 acceptance scope the annotation to Section 4.
+  - >-
+    Annotations must describe POST-FIX reality verified against current code: check 1 TRUE in
+    strict (ops_data_portal.py:1240-1252); check 4 comparison absent from _run_ci_rca_cross_check
+    (ops_data_portal.py:487-633); check 5 prior_art_citation is Optional[str] shape-only
+    (ops_data_portal.py:201); check 6 typed override BUILT (_WhyChainTerminusOverride,
+    ops_data_portal.py:160-164) but rate limit + sibling rec UNBUILT.
+  - >-
+    CIRCA-10 direction is ADVISORY RENAME (human-chosen this session). Do NOT wire undetermined
+    recs into a dedicated /plan hard-block -- open ci_rca recs already hard-block /plan
+    generically via Decision 73 L5, so a second block is redundant.
+  - >-
+    Decision 88: the undetermined-recs derivation reads only the already-warmed recs_cache rows
+    preflight pulls -- introduce NO new reader/warehouse call.
+  - >-
+    Decision 66: warn_mode_reject / fingerprint / abstention fields are Tier-B portal-derived;
+    this plan does not touch agent-authored fields or the ci-rca agent prompt.
+  - "No rescue agents or workaround loops (Decision 55). Do not file recs (per task instruction)."
+  - "Only modify the four files in scope. Out-of-scope bugs become recommendations, not inline fixes."
+context:
+  - "Source: merged audit audits/ci-rca-system-a49db8f.yaml, findings CIRCA-09 (severity medium) and CIRCA-10 (severity low)."
+  - >-
+    Sequencing rationale: this plan is the LAST of the CI-RCA audit remediation set. CIRCA-02
+    (strict context_v2 reject) and CIRCA-08 (typed override) already landed, so check 1 gets a
+    text update (enforced) and check 6 gets a partial-deferral (floor+override built, rate limit
+    deferred) rather than blanket UNBUILT annotations.
+  - >-
+    Post-fix code anchors: _run_ci_rca_cross_check (ops_data_portal.py:487-633) implements
+    code-internal checks 1-4 = undetermined-mirror / evg bundle-wins / escape_mode bundle-wins /
+    vacuous_pass author-discipline. It does NOT compare actual_gate_that_caught_it -- that is
+    INTENT Section 4 check 4, which stays UNBUILT. The 'unknown' enum reconciliation for
+    not_a_gate workflows DID land (_DetectionGap.actual_gate_that_caught_it pattern, :172).
+  - >-
+    CIRCA-10 mechanics: _fetch_ci_rca_undetermined_recs (session_preflight.py:488) delegates to
+    _derive_ci_rca_undetermined_open (:466, currently returns results[:5]); print at :495;
+    caller at :2093/:2105/:2126; report JSON at :2189. Every undetermined rec is source=ci_rca
+    by construction (the derive filters source != 'ci_rca').
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (one Decision 86
+    NOTE, resolved via the accuracy-preservation note). CITE: Decision 86, Decision 73,
+    Decision 103, Decision 66, Decision 88. RELATED: Decision 55, Decision 90, Decision 67.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    Lambda deployment assessment: compute_affected_artifacts flags the active data-pipeline
+    artifact because docs/ROADMAP-PLATFORM.yaml is a bundled ASSET (src/lambdas/data-pipeline/
+    manifest.yaml assets:), NOT handler code. Per repo precedent (every prior T1.13 progress-note
+    edit) an asset-only roadmap edit to the operationally-disabled scheduled-agent functions is
+    NOT deploy-gated -- the bundled roadmap refreshes on the next routine data-pipeline build. No
+    build/deploy/smoke-test step is included; this is a documented deferral, not an omission.
+  - >-
+    Deferred (considered, out of scope): the user raised extracting the CI-RCA section of
+    session_preflight.py into its own module. Declined for this plan -- the file already carries a
+    complexity-waiver: decision-43 header (line 1), so validate_sloc_limits does NOT gate it, and
+    a CI-RCA-section extraction is a distinct structural refactor with test-namespace-migration
+    blast radius (every @patch("scripts.session_preflight.*") target would move -- tests/CLAUDE.md
+    Namespace migration discipline). Bundling it into a mechanical hygiene fix would dilute
+    reviewability. It is a candidate for its own dedicated plan if desired.
+  - >-
+    main_freshness at planning time: 0 behind / 0 ahead of origin/main; no scope-file divergence.
+    ci_rca=0 open recs at preflight (no Decision 73 L5 hard block active).
+  - >-
+    closes_criteria is INTENTIONALLY EMPTY. This is ci_rca-sourced audit-hygiene (findings
+    CIRCA-09/CIRCA-10); T1.13's open exit criteria are c2 (strict-mode flip), c3 (observability
+    <5% over 7d), and c5 (S3 SHA-256 roundtrip) -- none of which this pass closes. T1.13 is
+    touched ONLY for a progress_note bookkeeping edit. The empty set is deliberate, not an
+    oversight: /implement's criterion-flip bookkeeping walk must flip NO criterion, and a
+    fabricated closes_criteria ref would be false.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/clever-cannon-3ddwjs)
+  - docs/PROJECT_CONTEXT.md read
+  - "DECISIONS.md consulted via decision-scout gate (CITE 86/73/103/66/88)"
+  - All four scope files located and readable; post-fix code anchors verified
+  - Acceptance criteria understood and verifiable via the VP grep/pytest steps
+execution_steps:
+  - >-
+    docs/INTENT-ci-rca-methodology.md Section 4 (lines 447-461): update check 1's sentence to
+    state the missing-context_v2_json reject is enforced in strict mode (CIRCA-02) and accepted
+    in warn during rollout. Add inline status annotations: check 4 "[UNBUILT: actual_gate bundle
+    comparison not performed by _run_ci_rca_cross_check; the 'unknown' enum reconciliation for
+    not_a_gate workflows landed but the equality check did not -- owner: strict-flip enforcement
+    follow-on]"; check 5 "[DEFERRED: required_when presence + relevance-intersection unenforced --
+    prior_art_citation is shape-only Optional[str]; existence lookup already deferred to
+    PLAN-ci-rca-evidence-script Phase 2]"; check 6 "[PARTIALLY-DEFERRED: structural floor + typed
+    _WhyChainTerminusOverride (reason 80-400, CIRCA-08) built; the >2-unresolved-in-7d rate limit
+    and the ci_rca_terminus_override sibling rec are UNBUILT]". Add a Decision 86 note that these
+    are accuracy-preservation on a grandfathered doc and do not discharge the extraction to
+    docs/contracts/ (intent-migration/MANIFEST.yaml). Keep phrasing terse and ASCII-only.
+  - >-
+    scripts/session_preflight.py: remove the [:5] slice in _derive_ci_rca_undetermined_open so it
+    returns the full matching list; in print_ci_rca_undetermined_recs iterate recs[:5] and, when
+    len(recs) > 5, print a "... showing 5 of N open undetermined recs" line; rename the section
+    header away from "Mandatory Human Review" to advisory wording (e.g. "CI-RCA Abstention Review
+    (advisory)") and note in the printed body that open ci_rca recs already hard-block /plan via
+    Decision 73 L5. At the caller, cap the report-JSON list at 5 and add a ci_rca_undetermined_total
+    (or _count) key = len(full list). Keep the docstrings truthful to the new behaviour.
+  - >-
+    tests/test_session_preflight.py TestFetchCiRcaUndeterminedRecs: retarget test_capped_at_five
+    (10 rows -> derive returns 10; the cap is now a print concern); UPDATE the existing
+    test_print_ci_rca_undetermined_recs_with_recs (~line 3146) whose assertion
+    "MANDATORY HUMAN REVIEW" in out WILL break under the advisory rename -- change it to assert
+    the new advisory header; add a print overflow test (7 synthetic rows -> output contains
+    "showing 5 of 7"); add an advisory-wording test (output has no "Mandatory" and contains the
+    advisory header). If a report-JSON test asserts the undetermined list, extend it for the new
+    total key. Keep imports in one consolidated block.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml: append a dated "2026-07-06:" entry to the T1.13 progress_note
+    stating CIRCA-09 (Section 4 enforcement-claim annotations) and CIRCA-10 (abstention-review
+    advisory rename + showing-5-of-N overflow) are closed, and that Section 4's enforcement
+    semantics remain owned by the intent-migration extraction path (not discharged here).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. On an unrecoverable failure,
+    stop and RCA (Decision 55) rather than working around it.
+  - "Report: what was implemented (per finding), the VP results, and the T1.13 progress_note text added."
+work_areas: []
+rollback: >-
+  All four edits are additive/textual and revertable by a single git revert of the feature
+  commit; no schema, data, or infrastructure state changes.
