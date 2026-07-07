@@ -567,8 +567,11 @@ candidate_decisions:
           required (schema regenerate + handler import path).
         - Plan modifies the dispatcher Lambda (currently disabled per CLAUDE.md runbook) → deploy is fine
           but smoke-test is DEFERRED until dispatcher re-enabled. Smoke-test becomes REQUIRED for the
-          dispatcher Lambda once T4.3 status == complete (the dispatcher re-enablement tier item); CD.16's
-          DEFERRED clause expires at that point.
+          dispatcher Lambda once T4.3 status == complete (the dispatcher re-enablement tier item;
+          audit F-009 note, 2026-07-06 RMAP-07: T4.3 was split -- the actual dispatcher re-enable
+          (five remaining agents + provider routing) is now owned by T4.12, but this trigger
+          expression is left AS-IS per the implement skill's no-silent-retarget rule, flagged rather
+          than changed); CD.16's DEFERRED clause expires at that point.
         - Plan touches no Lambda code or schema → no Lambda steps required.
       This is correctly-scoped change verification. The previous blanket "all Lambda steps DEFERRED" placeholder
       was a workaround for executor-telemetry trust leaking into Lambda-deploy decisions; it is not intrinsic
@@ -704,8 +707,14 @@ candidate_decisions:
       or (b) void the stashed work — Phase 2 semantics will be re-derived from scratch inside T1.5's
       atomic plans against the Lambda-handler architecture. Option (a) preserves prior planning effort;
       option (b) avoids fitting the work to a now-superseded surface.
+      [Ratified 2026-07-06, Decision 123]: option (a) -- revive the stashed WIP into T1.5's Phase-2
+      decomposition. Reversal condition: if the revived WIP proves unfittable to the current
+      Lambda-handler / named-verb architecture during T1.5 decomposition, void it and re-derive Phase-2
+      semantics fresh per option (b); record the reversal as an amendment to Decision 123.
     gates: [T1.5]
-    state: pending
+    state: ratified
+    ratified_as: dec-123
+    filed_via: ops_decisions:dec-123
     decision_required_before: T1.5 status == "in_progress"
   - id: CD.19
     title: SCD2 timestamp preservation policy on T2.2 ops-table import
@@ -1170,7 +1179,8 @@ candidate_decisions:
           were deleted by PLAN-close-audit-findings-ulf-05-06-12 (2026-07-03); an agent still declaring
           either provider now raises RetiredProviderError instead of silently dispatching. CD.28 does
           NOT retire schedule.yaml's copilot-sdk provider FIELD -- that migration is still the
-          follow-on plan's job (T4.3-owned).
+          follow-on plan's job (T4.12-owned; re-pointed from T4.3 2026-07-06 per RMAP-07 -- T4.3's
+          surviving scope is the producer write-path repoint only).
         - Preserves Decision 47 (lock-in lesson) via Anthropic-direct serving the warm-fetched-escape-hatch role.
         - Preserves INTENT-provider-agnostic-executor.md's LiteLLM Layer-1 commitment. The provider
           adapter changes its routed tier; the abstraction does not change.
@@ -1228,7 +1238,9 @@ candidate_decisions:
           boundary; leaving it on the pre-pivot tier model creates the exact agent-first-repository drift
           CD.13 + CD.25 are designed to prevent.
 
-        - PLAN-resolve-scheduled-agent-provider (priority medium)
+        - PLAN-resolve-scheduled-agent-provider (priority medium; ownership re-pointed T4.3 -> T4.12
+          2026-07-06 per RMAP-07 -- T4.3's surviving scope is the producer write-path repoint only,
+          all scheduled-agent re-enable + Decision-116 provider routing now home at T4.12)
           Scope (Decision 116 routing): migrate .github/agents/schedule.yaml entries per agent
           judgment tier -- routine/non-agentic agents (doc-freshness, orphan-code, code-smell) get
           provider: litellm with tier-1 (DeepSeek) model selection; judgment/agentic agents
@@ -1246,7 +1258,9 @@ candidate_decisions:
           agents was already retired by Decision 116; file as the formal routing implementation.
           Gating: touches Lambda-packaged code (scheduled_agent_handler.py) and schedule.yaml --
           CD.16 per-Lambda gating applies (deploy no longer frozen per Decision 79; dispatcher
-          smoke-test deferred until T4.3).
+          smoke-test deferred until T4.3 completes per CD.16's surviving clause -- audit F-009 note:
+          the dispatcher's actual re-enable (the event that would make the smoke-test meaningful) is
+          now owned by T4.12, not this item's new T4.3 scope; flagged, not retargeted).
           Rationale: CD.28 commits non-agentic call sites to LiteLLM-only; Decision 116 resolves the
           scheduled-agent split so the architecture is internally consistent (no residual copilot-sdk
           dispatch, no blanket LiteLLM-for-everything claim that ignores judgment agents' agentic need).
@@ -2115,7 +2129,7 @@ tier_items:
       - "scripts/build_lambda.py exposes a LAMBDA_FILE_PATTERNS dict mapping Lambda name -> glob patterns"
       - "validate.py inspects plan scope (when invoked during /plan or /implement) and fails when a modified Lambda lacks required build/deploy/smoke-test steps in the plan VP"
       - "Planning skill Step 4 (Lambda Deployment Assessment) replaces hand-coded blanket rule with per-Lambda registry consultation"
-      - "Dispatcher-Lambda exception encoded: smoke-test marked DEFERRED until T4.3 completes; expires automatically when T4.3 status flips"
+      - "Dispatcher-Lambda exception encoded: smoke-test marked DEFERRED until T4.3 completes; expires automatically when T4.3 status flips (audit F-009 note, 2026-07-06 RMAP-07: the actual dispatcher re-enable is now owned by T4.12 after the T4.3 split; this completed item's shipped mechanism keys on T4.3 and is flagged, not retargeted, per the implement skill's no-silent-retarget rule)"
       - "After T-1.8 lands, LAMBDA_FILE_PATTERNS registry derives from the union of per-Lambda manifests rather than hand-curated globs (per CD.24). The hand-curated registry shipped by this tier item is the bootstrap form; T-1.8 supersedes it without requiring a separate migration plan -- T-1.8 deletes the hand-curated registry in the same commit that introduces the manifest-derived one"
     related_candidate_decisions: [CD.16, CD.24]
     effort: S
@@ -3056,9 +3070,6 @@ tier_items:
       the writer's verb set or calls through it per OQ.15, NEVER a direct Iceberg/Athena write);
       typed 4xx on failure. [Re-grounded 2026-06-09, audit F-008: the original text prescribed
       "idempotent Iceberg append" + Athena _current reads, authored pre-CD.31/CD.33/T2.19.]
-      Per round-2 architect MED-7, the payload contract MUST include an optional import_mode field;
-      when true the caller-supplied id and timestamps are preserved (used by T2.2 import). Default
-      normal operation rejects import_mode payloads without an admin-scoped principal.
       [Re-grounded 2026-06-18, OQ.15->(a) Decision 91: the log_rec write verb is realized as
       file_ops/write_ops in src/lambdas/ducklake_writer/handler.py (via scripts/ops_data_portal.py
       file_rec routing). The log_rec stub Lambda is retired. exit_criteria updated to the
@@ -3071,23 +3082,21 @@ tier_items:
       - "file_rec(payload) via ops_data_portal routes to ducklake_writer file_ops; rec_id allocated atomically by the writer in-transaction (Decision 84 I-2)"
       - "Invalid RecPayload schema rejected at the ducklake_writer schema gate with typed 4xx"
       - "Duplicate rec_id rejected by the OCC-keyed MERGE gate (stateful invariant, Decision 81 cl.3)"
-      - "import_mode=true with admin principal (PlatformAdmin) preserves caller-supplied id; without admin principal returns 403"
-      - "Unit tests cover happy, edge, poison, and import-mode payloads through the file_ops verb"
+      - "Unit tests cover happy, edge, and poison payloads through the file_ops verb"
     related_candidate_decisions: [CD.10, CD.12]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
     status: not_started
-    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: log_rec write verb realized as ducklake_writer.file_ops/write_ops; log_rec stub Lambda retired (Decision 91). Likely silent-completion: scripts/ops_data_portal.py file_rec routing to ducklake_writer.write_ops/file_ops is live (T2.19 recs cutover; preflight calls it each session). Formal per-item closeout requires a dedicated plan confirming import_mode admin gate and unit-test coverage against the named-verb surface.]"
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: log_rec write verb realized as ducklake_writer.file_ops/write_ops; log_rec stub Lambda retired (Decision 91). Likely silent-completion: scripts/ops_data_portal.py file_rec routing to ducklake_writer.write_ops/file_ops is live (T2.19 recs cutover; preflight calls it each session). Formal per-item closeout requires a dedicated plan confirming unit-test coverage against the named-verb surface. The admin-scoped caller-id/timestamp-preservation payload criterion (the round-2 MED-7 field) was dropped 2026-07-06 (RMAP-06/08): obsolete-by-consumer -- its sole stated consumer, the T2.2 data import, is complete and shipped WITHOUT it. Residual per-verb unit-test coverage confirmation moved to the consolidated closeout item T1.16. Flips complete WITH the consolidated verb-surface closeout item T1.16 when the Wave-4 closeout plan lands (RMAP-06 family).]"
   - id: T0.7b
     tier: T0
     name: log-decision Lambda (handler)
     intent: |
-      Append-only DecisionPayload write. Same shape as log-rec, including the optional import_mode
-      field for T2.2 use. Becomes the ratification vehicle once deployed (until then the ops portal
-      ratifies CDs -- see agent_instructions; T-1.1 files the backlog through whichever vehicle is
-      live). Decision id format dec-NNN allocated atomically in normal mode; preserved verbatim in
-      import_mode. [Transport note, 2026-06-09 audit F-008: ops_decisions remains on Iceberg/Athena
+      Append-only DecisionPayload write. Same shape as log-rec. Becomes the ratification vehicle once
+      deployed (until then the ops portal ratifies CDs -- see agent_instructions; T-1.1 files the
+      backlog through whichever vehicle is live). Decision id format dec-NNN allocated atomically.
+      [Transport note, 2026-06-09 audit F-008: ops_decisions remains on Iceberg/Athena
       until its T2.26 DuckLake migration -- if T2.26 lands first, the write transport is the closed
       ducklake_writer boundary; coordinate ordering at plan time. Do not build a second write path
       to a backend mid-retirement.]
@@ -3102,15 +3111,14 @@ tier_items:
       - scripts/ops_data_portal.py    # file_decision() portal surface routes to ducklake_writer.write_ops
     exit_criteria:
       - "file_decision(payload) via ops_data_portal routes to ducklake_writer write_ops; decision_id dec-NNN allocated atomically by the writer in-transaction"
-      - "import_mode=true with admin principal preserves caller-supplied decision_id"
-      - "Unit tests cover happy, edge, poison, and import-mode payloads through the write_ops verb"
+      - "Unit tests cover happy, edge, and poison payloads through the write_ops verb"
       - "Backfill path (--backfill-decisions-md) continues to route writes through the same ducklake_writer surface"
     related_candidate_decisions: [CD.10]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
     status: not_started
-    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: log_decision write verb realized as ducklake_writer.write_ops (file_decision); log_decision stub Lambda retired (Decision 91); ops_decisions already on DuckLake (T2.26 landed before T0.7b). Likely silent-completion: ops_data_portal.py file_decision routing is live and backfill-decisions-md uses it each session. Formal per-item closeout requires a dedicated plan confirming import_mode gate and unit-test coverage against write_ops.]"
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: log_decision write verb realized as ducklake_writer.write_ops (file_decision); log_decision stub Lambda retired (Decision 91); ops_decisions already on DuckLake (T2.26 landed before T0.7b). Likely silent-completion: ops_data_portal.py file_decision routing is live and backfill-decisions-md uses it each session. Formal per-item closeout requires a dedicated plan confirming unit-test coverage against write_ops. The admin-scoped caller-id/timestamp-preservation payload criterion was dropped 2026-07-06 (RMAP-08): obsolete-by-consumer -- its sole stated consumer, the T2.2 data import, is complete and shipped WITHOUT it. Residual per-verb unit-test coverage confirmation moved to the consolidated closeout item T1.16. Flips complete WITH the consolidated verb-surface closeout item T1.16 when the Wave-4 closeout plan lands (RMAP-06 family).]"
   - id: T0.7c
     tier: T0
     name: query Lambda (minimum verb set)
@@ -3137,14 +3145,13 @@ tier_items:
     exit_criteria:
       - "Each minimum verb (open_recs, rec_by_id, decision_by_id, decisions_max_updated, priority_queue_current) returns typed response via ducklake_reader.named_read"
       - "No verb accepts raw SQL or column names (closed named-verb boundary, Decision 84 I-3)"
-      - "Pagination implemented for list-family verbs via NAMED_READS row-limit parameter"
       - "Unit tests cover happy/empty/edge cases per verb through ducklake_reader.named_read dispatch"
     related_candidate_decisions: [CD.10, CD.15]
     effort: M
     strategic: false
     bootstrap_completion_exempt: true
     status: not_started
-    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: minimum verb set realized as NAMED_READS registry in src/common/ducklake_scd2_schema.py served via ducklake_reader.named_read; query stub Lambda retired (Decision 91). Likely silent-completion: session_preflight.py calls .named('open_recs') each session; all minimum verbs are live in the NAMED_READS registry. Formal per-item closeout requires a dedicated plan confirming unit-test coverage per verb against ducklake_reader.named_read.]"
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: minimum verb set realized as NAMED_READS registry in src/common/ducklake_scd2_schema.py served via ducklake_reader.named_read; query stub Lambda retired (Decision 91). Likely silent-completion: session_preflight.py calls .named('open_recs') each session; all minimum verbs are live in the NAMED_READS registry. Formal per-item closeout requires a dedicated plan confirming unit-test coverage per verb against ducklake_reader.named_read. Pagination decision (RMAP-06/10) moved to the consolidated closeout item T1.16 c1 (implement-or-drop-with-rationale). Flips complete WITH the consolidated verb-surface closeout item T1.16 when the Wave-4 closeout plan lands (RMAP-06 family).]"
   - id: T0.8
     tier: T0
     name: Agent SDK shim (boto3 + sigv4 wrapper)
@@ -3582,15 +3589,15 @@ tier_items:
       - src/lambdas/ducklake_writer/handler.py    # update_ops verb implements the update_rec read-validate-append shape
       - scripts/ops_data_portal.py    # update_rec() portal surface routes to ducklake_writer.update_ops
     exit_criteria:
-      - "update_rec(payload) via ops_data_portal routes to ducklake_writer update_ops; invalid status transition returns 422 typed error"
+      - "update_rec(payload) via ops_data_portal routes to ducklake_writer update_ops"
       - "Concurrent updates safe via the CD.33 writer-side OCC retry + ULID-keyed idempotent append (no reservedConcurrency=1, no DynamoDB locking)"
-      - "Audit trail: each update appends a new SCD2 row; old version visible via ducklake_reader named_read with version param"
+      - "Audit trail: each update appends a new SCD2 row"
       - "Recs read path transits ducklake_reader.named_read (closed boundary); no Athena/_current access for ops_recommendations"
     related_candidate_decisions: [CD.10, CD.12, CD.33]
     effort: M
     strategic: false
     status: not_started
-    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: update_rec write verb realized as ducklake_writer.update_ops; update_rec stub Lambda retired (Decision 91). Likely silent-completion: ops_data_portal.py update_rec routing to ducklake_writer.update_ops is live and exercised by each recommendation status update. Formal per-item closeout requires a dedicated plan confirming status-DAG enforcement and unit-test coverage against update_ops.]"
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: update_rec write verb realized as ducklake_writer.update_ops; update_rec stub Lambda retired (Decision 91). Likely silent-completion: ops_data_portal.py update_rec routing to ducklake_writer.update_ops is live and exercised by each recommendation status update. Formal per-item closeout requires a dedicated plan confirming unit-test coverage against update_ops. Status-DAG typed-422 enforcement (RMAP-06/09) and the history-version named read (RMAP-06/12) moved to the consolidated closeout item T1.16 c3/c4. Flips complete WITH the consolidated verb-surface closeout item T1.16 when the Wave-4 closeout plan lands (RMAP-06 family).]"
   - id: T1.2
     tier: T1
     name: query Lambda full verb expansion
@@ -3607,15 +3614,15 @@ tier_items:
       - src/lambdas/ducklake_reader/handler.py    # named_read dispatches full expanded verb set from NAMED_READS
       - src/common/ducklake_scd2_schema.py    # NAMED_READS registry - add ci_rca_open, ci_rca_since, recs_by_title_prefix, forward_fix_recursion, budget_bypass_recent, count_by_status and telemetry verbs
     exit_criteria:
-      - "NAMED_READS registry contains ~12-15 named verbs covering recs, decisions, queue, and telemetry dimensions"
+      - "NAMED_READS registry contains ~12-15 named verbs covering recs, decisions, and queue dimensions"
       - "No verb in the registry accepts raw SQL or column names (named-verb boundary enforced)"
-      - "ci_rca_open, recs_by_title_prefix, count_by_status, and telemetry verbs present in NAMED_READS"
+      - "ci_rca_open, recs_by_title_prefix, and count_by_status present in NAMED_READS"
       - "ducklake_reader.named_read dispatches each new verb and returns typed response"
     related_candidate_decisions: [CD.10, CD.15]
     effort: M
     strategic: false
     status: not_started
-    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: full verb expansion realized as NAMED_READS registry entries in src/common/ducklake_scd2_schema.py dispatched via ducklake_reader.named_read; query stub Lambda retired (Decision 91). Likely silent-completion: NAMED_READS already contains ci_rca_open, ci_rca_since, recs_by_title_prefix, forward_fix_recursion, budget_bypass_recent, count_by_status (10+ named reads total per T2.28 cutover). Formal per-item closeout requires a dedicated plan confirming verb-taxonomy target and telemetry-verb coverage.]"
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: full verb expansion realized as NAMED_READS registry entries in src/common/ducklake_scd2_schema.py dispatched via ducklake_reader.named_read; query stub Lambda retired (Decision 91). Likely silent-completion: NAMED_READS already contains ci_rca_open, ci_rca_since, recs_by_title_prefix, forward_fix_recursion, budget_bypass_recent, count_by_status (10+ named reads total per T2.28 cutover). Formal per-item closeout requires a dedicated plan confirming verb-taxonomy target. [2026-07-06, RMAP-11]: the non-telemetry verb expansion above is delivered (folded into T1.16). The telemetry-verb residual (the analysis QUERY surface) is re-homed to T1.16 c7, sequenced after T2.36 (telemetry tables cannot exist on DuckLake until T2.36 lands) -- this item no longer looks blocked on an unbuilt substrate. Flips complete WITH the consolidated verb-surface closeout item T1.16 when the Wave-4 closeout plan lands (RMAP-06 family).]"
   - id: T1.3
     tier: T1
     name: list-tools + describe Lambda
@@ -3638,12 +3645,11 @@ tier_items:
     exit_criteria:
       - "All named read verbs are discoverable from NAMED_READS keys in src/common/ducklake_scd2_schema.py (count derived from registry, not hard-coded)"
       - "All named write verbs are discoverable from the VERB_REGISTRY in src/lambdas/ducklake_writer/handler.py"
-      - "A describe capability returns the verb's parameter schema (Pydantic model_json_schema or equivalent) for any named verb"
     related_candidate_decisions: [CD.10]
     effort: S
     strategic: false
     status: not_started
-    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: list-tools discovery realized as NAMED_READS registry (read verbs) + VERB_REGISTRY (write verbs); list_tools stub Lambda retired (Decision 91). Likely silent-completion: NAMED_READS and VERB_REGISTRY are live and programmatically enumerable. Formal per-item closeout requires a dedicated plan confirming describe capability and agent_sdk binding.]"
+    note: "[Re-grounded 2026-06-18, OQ.15->(a), Decision 91: list-tools discovery realized as NAMED_READS registry (read verbs) + VERB_REGISTRY (write verbs); list_tools stub Lambda retired (Decision 91). Likely silent-completion: NAMED_READS and VERB_REGISTRY are live and programmatically enumerable. Formal per-item closeout requires a dedicated plan confirming agent_sdk binding. The describe capability (per-verb parameter schema) moved to the consolidated closeout item T1.16 c2. Flips complete WITH the consolidated verb-surface closeout item T1.16 when the Wave-4 closeout plan lands (RMAP-06 family).]"
   - id: T1.4
     tier: T1
     name: RESERVED — superseded by T2.18 (DuckLake maintenance) + ops_compaction-until-T2.26
@@ -4660,6 +4666,54 @@ tier_items:
       inventory); residual out-of-criterion doc/config Bedrock references owned by rec-2163
       (PLAN-sweep-bedrock-docs-references). bedrock_via_chain MOOT confirmed (verifier absent at
       HEAD; no live surface cites it). T-1.14 unblocked to consume CD.28-aligned contract content.
+  - id: T1.16
+    tier: T1
+    name: Verb-surface closeout (consolidated residuals of T0.7a/b/c + T1.1/T1.2/T1.3)
+    intent: |
+      Created 2026-07-06 (RMAP-06 family, audit platform-roadmap-mvp-triage-7d57a0d) to own the
+      verified residuals of the Decision 91 named-verb surface that T0.7a, T0.7b, T0.7c, T1.1, T1.2,
+      and T1.3 each carried as unmet/residual exit criteria after their delivered named-verb text was
+      confirmed. Consolidating the residuals into one closeout item avoids six separate near-duplicate
+      closeout plans for a single coherent surface (list-family pagination, describe schema
+      introspection, update_ops status-DAG enforcement, history-version reads, per-verb unit-test
+      coverage, and the telemetry read-verb expansion). The six source items flip status: complete
+      TOGETHER with this item when the Wave-4 closeout plan lands and verifies all criteria below.
+    depends_on: [T0.7c, T1.1, T1.3]
+    files_in_scope:
+      - src/common/ducklake_scd2_schema.py
+      - src/lambdas/ducklake_reader/handler.py
+      - src/lambdas/ducklake_writer/handler.py
+      - scripts/ops_data_portal.py
+    exit_criteria:
+      - id: c1
+        text: "Pagination decision for list-family NAMED_READS verbs: implement a row-limit parameter OR drop with recorded rationale"
+        status: open
+      - id: c2
+        text: "describe capability returns per-verb parameter schema (Pydantic model_json_schema or equivalent) for any named read/write verb"
+        status: open
+      - id: c3
+        text: "update_ops enforces the status-transition DAG with a typed 422 on illegal transitions"
+        status: open
+      - id: c4
+        text: "A history-version named read returns a prior SCD2 version of a rec (audit-trail read)"
+        status: open
+      - id: c5
+        text: "Per-verb unit-test coverage confirmed for all NAMED_READS verbs and all VERB_REGISTRY write verbs"
+        status: open
+      - id: c6
+        text: "On this item's completion, flip T0.7a/T0.7b/T0.7c/T1.1/T1.2/T1.3 to complete (the joint-closeout bookkeeping)"
+        status: open
+      - id: c7
+        text: >-
+          Telemetry read verbs (the analysis QUERY surface) added to NAMED_READS -- SEQUENCED AFTER
+          T2.36 (telemetry tables cannot exist on DuckLake until T2.36 lands); natural owner is the
+          T3.3 decomposition, which defines what analysis reads.
+        status: open
+    related_candidate_decisions: [CD.10, CD.15]
+    effort: M
+    strategic: false
+    status: not_started
+    note: "Created 2026-07-06 (RMAP-06/08/09/10/11/12, question_answers Q1 audit platform-roadmap-mvp-triage-7d57a0d). Consolidates the verified verb-surface residuals of T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3 into a single schedulable closeout item."
 
   # ----- T2: Full state migration to personal account -----
   - id: T2.1
@@ -4824,31 +4878,26 @@ tier_items:
     progress_note: "Parked post-MVP (Decision 93): T2.6 is the platform execution substrate (scripts/local_pysr_runner.py + pysr_staleness_alarm.py) for PRODUCT formula discovery (src/lab/pysr_factory.py, owned by ROADMAP-PRODUCT.yaml) -- not on the platform autonomous-loop critical path. No live platform item depends_on it (0 fan-out); gated by CD.3 (compute node, state pending). Reactivate -> not_started when product formula-discovery work begins."
   - id: T2.7
     tier: T2
-    name: Retire Athena _current views in personal account
+    name: "RESERVED -- residual absorbed into T2.26 (2026-07-06, RMAP-13)"
     intent: |
-      Per CD.15. Moved from T1 to T2 (architect HIGH-1) because it depends on T2.5 which lives in T2.
-      The personal account is deployed without _current views. The query Lambda reads Iceberg snapshots
-      directly via DuckDB inside the Lambda (still-Iceberg tables) and ducklake_reader (cut-over tables).
-      Athena retained as escape hatch only for ad-hoc large scans where DuckDB single-node memory binds
-      -- on still-Iceberg tables only; recs have NO Athena path (Decision 81 cl.7).
-      [Absorbed 2026-06-09 from T2.5 (audit F-012): the query-Lambda verb-parity and update_rec
-      hot-path criteria below were mis-homed on T2.5, which has no dependency path to their
-      producers; this item gains the T0.7c/T1.1/T1.2 edges that make them schedulable. Note the
-      _current views for the four deferred ops tables retire naturally with their T2.26 migrations;
-      this item owns whatever _current surface survives T2.26.]
-    depends_on: [T2.5, T0.7c, T1.1, T1.2]    # T0.7c/T1.1/T1.2 added 2026-06-09 (audit F-012): the absorbed criteria exercise the query/update-rec Lambdas
-    files_in_scope:
-      - terraform/iceberg_tables.tf    # personal-account variant omits _current view definitions
-      - src/lambdas/ducklake_reader/handler.py    # SCD2 dedup via DuckLake named_read registry; query stub retired per Decision 91
-    exit_criteria:
-      - "No _current views in personal AWS account"
-      - "All read paths go through query Lambda; Athena/DuckDB usage is implementation detail"
-      - "All query-Lambda verbs return same results before/after the DuckDB swap on a fixture suite (re-homed from T2.5)"
-      - "update_rec Lambda's read step no longer needs Athena availability (re-homed from T2.5; recs already read via ducklake_reader per T2.19)"
+      Supersession note (2026-07-06, RMAP-13, audit platform-roadmap-mvp-triage-7d57a0d): two of the
+      four original exit criteria are already satisfied by shipped work (query-Lambda verb parity via
+      recs off Athena entirely per the T2.19 recs cutover; the migrated-table _current views dropped
+      per T2.26 c4). The live residual -- retiring the Athena _current views of the two still-Iceberg
+      ops tables -- is folded into T2.26 (see T2.26's new exit criterion). id preserved (never
+      deleted) because CD.15's gate list and T2.26 coordination prose reference it; gates on reserved
+      items are inert (T1.4 precedent).
+    depends_on: []
+    files_in_scope: []
+    exit_criteria: []
     related_candidate_decisions: [CD.8, CD.15]
     effort: S
     strategic: false
-    status: not_started
+    status: reserved
+    rename_history:
+      from: T2.7 (Retire Athena _current views in personal account)
+      to: "RESERVED -- residual absorbed into T2.26 (2026-07-06, RMAP-13)"
+      reason: 2026-07-06 audit platform-roadmap-mvp-triage-7d57a0d, RMAP-13 -- two of four criteria already satisfied by shipped work (T2.19 recs-off-Athena; T2.26 c4 view drops); the live residual (still-Iceberg-table _current view retirement) folded into T2.26, which now owns any surviving _current view surface. id preserved per CD.15 gate list + T2.26 coordination prose reference (T1.4 precedent, gates on reserved items are inert).
   - id: T2.8
     tier: T2
     name: Backup / DR posture for the personal account
@@ -5915,7 +5964,8 @@ tier_items:
       table by table, preserving the Decision 69 Single-Portal invariant; then retire
       ops_compaction (its deprecation marker + T2.19-gated decommission runbook already exist,
       docs/runbooks/ducklake-catalog-operations.md Section 5) and the per-table Athena _current
-      views (coordinating with T2.7, which owns whatever _current surface survives). Sequencing
+      views (this item now owns whatever _current surface survives -- T2.7 reserved 2026-07-06 per
+      RMAP-13, its still-Iceberg-table residual folded in below). Sequencing
       notes per table: ops_decisions rebuilds from DECISIONS.md (coordinate with T1.5/T5.4);
       ops_session_log is slated for retirement per tier_item T3.20 / candidate_decision CD.40 -- migrate
       OR retire per that decision, do not migrate blindly; ops_priority_queue coordinates with
@@ -5971,9 +6021,16 @@ tier_items:
           on T3.20 (retire-or-migrate) + the unratified CD.40.
         status: open
       - id: c4
-        text: Per-table Athena _current views for migrated tables removed (T2.7 owns any survivor)
+        text: >-
+          Per-table Athena _current views for migrated tables removed; T2.26 owns any surviving
+          _current view of the still-Iceberg tables (T2.7 residual absorbed here, RMAP-13)
         status: met
         met_by: t2-26-drop-migrated-athena-views
+      - id: c8
+        text: >-
+          Retire the Athena _current views of the two still-Iceberg ops tables (the survivor surface
+          previously owned by T2.7, absorbed 2026-07-06 per RMAP-13)
+        status: open
       - id: c5
         text: scripts/sync_athena_to_pgvector.py deleted; rg returns no references
         status: met
@@ -6649,8 +6706,12 @@ tier_items:
   - id: T3.2
     tier: T3
     name: Causal-chain verifier (PRODUCE → TRANSPORT → PERSIST → QUERY → ASSERT)
-    intent: End-to-end verifier proving a telemetry record flows the full path atomically. Unblocks telemetry Phase E (cloud analysis agent trust).
-    depends_on: [T3.1, T0.12.6]    # T0.12.6 (telemetry Class A contracts) added by T-1.12 per CD.25 ritual
+    intent: >-
+      End-to-end verifier proving a telemetry record flows the full path atomically. Unblocks
+      telemetry Phase E (cloud analysis agent trust). [Storage edge added 2026-07-06, audit
+      platform-roadmap-mvp-triage-7d57a0d Q1: the PERSIST/QUERY assertions need the DuckLake
+      telemetry tables (T2.36) to exist before this verifier can run against them.]
+    depends_on: [T3.1, T0.12.6, T2.36]    # T0.12.6 (telemetry Class A contracts) added by T-1.12 per CD.25 ritual; T2.36 added 2026-07-06 (Q1) -- PERSIST/QUERY assertions need the DuckLake telemetry tables
     files_in_scope:
       - scripts/verifiers/telemetry_causal_chain.py    # new
     exit_criteria:
@@ -7549,53 +7610,45 @@ tier_items:
         all personas depend on it.
   - id: T4.3
     tier: T4
-    name: Scheduled-agent loop re-enabled in personal account
+    name: Priority-queue producer repoint onto the DuckLake boundary (MVP producer slice)
     intent: |
-      Re-enable doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality, rec-curator.
-      Per CD.27, the substrate is Step Functions scheduled executions (EventBridge-triggered) wrapping
-      the same agent-persona Durable Functions from T4.2 -- each scheduled agent reuses the persona
-      Durable Function pattern with a thin per-agent prompt wrapper. Alternative substrate (still under
-      consideration at T4.3 implementation time): GitHub Actions scheduled workflows on GITHUB-HOSTED
-      runners (option re-substrated 2026-06-09, audit F-016: the original named the Decision-68
-      self-hosted runner, retired by CD.21/Decision 73). CD.27 keeps both options open; T4.3 atomic
-      plans pick one.
-
-      Either way, findings write via log-rec Lambda; telemetry emits via agent_sdk; LLM transport
-      splits per Decision 116 (supersedes Decision 49; amends CD.28's scheduled-agent clause):
-      routine/non-agentic agents (doc-freshness, orphan-code, code-smell) -> LiteLLM Tier 1
-      (DeepSeek-direct) per CD.28; judgment/agentic agents (rec-curator, transcript-review,
-      prompt-quality) -> claude -p (Claude Code headless, Max OAuth), carved out of CD.28's
-      non-agentic->LiteLLM rule by CD.28's own agentic/non-agentic distinction.
-    depends_on: [T4.1, T0.7a, T0.8]
+      [Rewritten 2026-07-06, RMAP-07 split, audit platform-roadmap-mvp-triage-7d57a0d, per human
+      decisions recorded 2026-07-06: pick_rec feed = QUEUE-FED, so this producer repoint is
+      CRITICAL-PATH; provider-routing split = ALL scheduled-agent re-enable + Decision-116 provider
+      routing (incl. rec-curator) deferred to T4.12.] Restore REC PRODUCTION by repointing the
+      rec-curator / priority-queue producer WRITE PATH (scripts/s3_log_store.py producer flow) off
+      the retired OpsWriter/Iceberg staging onto the closed DuckLake writer boundary (Decision 84
+      caveat: repoint the producer before re-enabling), so queue writes land where the DuckLake
+      readers serve. The scheduled-agent re-enable (the five other agents) and ALL Decision-116
+      provider routing are OUT of scope here -- owned by T4.12.
+    depends_on: [T2.26, T0.7a, T0.8]
     files_in_scope:
-      - terraform/scheduled_agents.tf
-      - .github/workflows/scheduled-agents.yml
-      - .github/prompts/scheduled/
-      - .github/agents/schedule.yaml
+      - scripts/s3_log_store.py
+      - scripts/ops_data_portal.py
+      - src/lambdas/ducklake_writer/
     exit_criteria:
       - id: c1
-        text: "All six scheduled agents run on schedule"
+        text: "Priority-queue producer flow writes via the closed ducklake_writer boundary (no OpsWriter/Iceberg staging write survives on the producer path)"
         status: open
       - id: c2
-        text: "Findings file recs via log-rec Lambda"
+        text: "A produced rec is visible via the priority_queue_current named read"
         status: open
       - id: c3
-        text: "Telemetry emitted for each invocation"
-        status: open
-      - id: c4
-        text: "Substrate choice (Step Functions scheduled execution vs GitHub-hosted Actions schedule) documented in T4.3 atomic plan with rationale"
-        status: open
-      - id: c5
-        text: >-
-          Delete .github/prompts/scheduled/ and .github/agents/schedule.yaml, and repoint all
-          runtime consumers: scripts/run_scheduled_agent.py, src/data/handlers/scheduled_agent_handler.py,
-          src/data/handlers/findings_processor_handler.py, scripts/validate.py check_source_registry,
-          src/lambdas/data-pipeline/manifest.yaml. Rehomed from T5.3:c1 and T5.3:c2.
+        text: "DQ/replacement-closure check confirms the old staging producer path is dead"
         status: open
     related_candidate_decisions: [CD.27, CD.28]
-    effort: M
+    effort: S
     strategic: false
     status: not_started
+    note: >-
+      pick_rec feed = QUEUE-FED (operator decision 2026-07-06): the executor picks from
+      ops_priority_queue, so this producer repoint is CRITICAL-PATH -- the loop cannot pick from an
+      empty queue. Provider-routing split (operator decision 2026-07-06): ALL scheduled-agent
+      re-enable + Decision-116 provider routing (incl. rec-curator) are deferred to T4.12; this item
+      is strictly the producer WRITE-PATH repoint. OPEN COUPLING for T4.1/T4.3 decomposition: with
+      the producer AGENT (rec-curator re-enable) deferred to T4.12, name what populates
+      ops_priority_queue for the first queue-fed iteration (e.g. an inline curator invocation or a
+      minimal producer) -- decide at decomposition, do not discover (audit Q5 extension).
     progress_note: >-
       - 2026-06-29: Inherited scope from T5.3 (PLAN-t5-3-scheduled-surface-rehome). T5.3's two
         exit_criteria (grep-no-references + single-PR deletion) rehomed here as c5 per Decision 86
@@ -7608,6 +7661,11 @@ tier_items:
         `enabled: true` flags to `enabled: false` to match the deployed dispatcher's
         SCHEDULED_AGENTS_ENABLED=false reality. Provider fields and c5's deletion/repoint remain
         open, still owned by this item's Decision-116 realization / PLAN-resolve-scheduled-agent-provider.
+      - 2026-07-06 (RMAP-07 split): the scheduled-agent re-enable (all six agents), the c4/c5
+        deletion-and-repoint scope, and all Decision-116 provider routing are re-homed to the new
+        tier_item T4.12 (deferred_post_mvp). This item's surviving scope is strictly the producer
+        write-path repoint (c1-c3 above); T5.3's c1/c2 met_by re-pointed T4.3 -> T4.12 in the same
+        edit.
   - id: T4.4
     tier: T4
     name: Autonomy maturity gates A0-A5 (STRATEGIC)
@@ -7880,6 +7938,64 @@ tier_items:
     strategic: false
     status: deferred_post_mvp
     progress_note: "Parked deferred_post_mvp (Decision 93): bounded-budget layer over the CD.27 / T4.1 retry + concurrency model; EXTENDS T4.1 / T4.2 (does not duplicate concurrency=1 or the deterministic-retry split). Executor machinery -> automatable: false (Decision 44). depends_on T4.1 (live) + T4.10 (deferred) -- no live->deferred edge. No live item depends_on it. Reactivate with the T4 executor build."
+  - id: T4.12
+    tier: T4
+    name: Scheduled-agent loop re-enable (five agents) + provider routing + legacy prompt-surface deletion
+    intent: |
+      [Created 2026-07-06, RMAP-07 split of T4.3, audit platform-roadmap-mvp-triage-7d57a0d; Decision
+      93 (no-live-dep-on-deferred).] Re-enable doc-freshness, orphan-code, transcript-review,
+      code-smell, prompt-quality (rec-curator's producer WRITE-PATH is T4.3; its re-enable/routing
+      lands here with the rest), realize Decision-116 provider routing for all six agents
+      (routine -> LiteLLM/DeepSeek Tier-1; judgment incl. rec-curator -> claude -p Max OAuth), and
+      delete .github/prompts/scheduled/ + .github/agents/schedule.yaml with runtime-consumer repoint
+      (the former T4.3 c5).
+    depends_on: [T4.1, T4.3, T0.7a, T0.8]
+    files_in_scope:
+      - terraform/scheduled_agents.tf
+      - .github/workflows/scheduled-agents.yml
+      - .github/prompts/scheduled/
+      - .github/agents/schedule.yaml
+      - scripts/run_scheduled_agent.py
+      - src/data/handlers/scheduled_agent_handler.py
+      - src/data/handlers/findings_processor_handler.py
+      - scripts/validate.py
+      - src/lambdas/data-pipeline/manifest.yaml
+    exit_criteria:
+      - id: cA
+        text: "All five remaining scheduled agents run on schedule"
+        status: open
+      - id: cB
+        text: "Findings file recs via the log-rec verb"
+        status: open
+      - id: cC
+        text: "Telemetry emitted per invocation"
+        status: open
+      - id: cD
+        text: "Substrate choice (Step Functions scheduled execution vs GitHub-hosted Actions schedule) documented with rationale"
+        status: open
+      - id: cE
+        text: "Decision-116 provider routing realized for all six agents (schedule.yaml provider fields + enabled flipped)"
+        status: open
+      - id: cF
+        text: >-
+          Delete .github/prompts/scheduled/ + .github/agents/schedule.yaml and repoint all runtime
+          consumers (scripts/run_scheduled_agent.py, src/data/handlers/scheduled_agent_handler.py,
+          src/data/handlers/findings_processor_handler.py, scripts/validate.py
+          check_source_registry, src/lambdas/data-pipeline/manifest.yaml) -- rehomed from T4.3 c5 /
+          T5.3 c1-c2.
+        status: open
+    related_candidate_decisions: [CD.27, CD.28]
+    related_decisions: [116]
+    effort: M
+    strategic: false
+    status: deferred_post_mvp
+    progress_note: >-
+      Created deferred_post_mvp 2026-07-06 (RMAP-07 split of T4.3; Decision 93). Operator
+      forward-intent for the routing realization (Decision 86 routing to owning item): evaluate
+      DeepSeek-API vs claude -p OAuth in PARALLEL for direct comparison before committing final
+      per-agent routing -- a hint for the future PLAN-resolve-scheduled-agent-provider author, NOT a
+      routing Decision and NOT an amendment to Decision 116. No live item depends on T4.12 (no-live-dep
+      rule holds).
 
   # ----- T5: Decommissioning & cleanup -----
   - id: T5.1
@@ -7930,11 +8046,11 @@ tier_items:
       - id: c1
         text: "grep -r '.github/prompts' returns no references in production code"
         status: rehomed
-        met_by: T4.3
+        met_by: T4.12
       - id: c2
         text: "Directories deleted in a single PR"
         status: rehomed
-        met_by: T4.3
+        met_by: T4.12
     related_decisions: [58]
     effort: S
     strategic: false
@@ -7948,6 +8064,10 @@ tier_items:
         owned by T4.3; their deletion is T4.3 work, gated on T4.3 re-homing the loop onto the
         CD.27/CD.28 substrate. Both exit_criteria rehomed to T4.3 per Decision 86 (forward-route
         intent to the receiving tier_item). T5.3 complete; T4.3 not_started, inherits deletion scope.
+      - 2026-07-06 (RMAP-07 split): T4.3 was split; the .github/prompts/scheduled +
+        .github/agents/schedule.yaml deletion scope (formerly T4.3 c5) moved to the new tier_item
+        T4.12. c1/c2 met_by re-pointed T4.3 -> T4.12 in the same edit; T4.3's surviving scope is
+        strictly the producer write-path repoint.
   - id: T5.4
     tier: T5
     name: "RESERVED -- superseded by T1.5 c1 (DECISIONS.md retirement, Phase 3b)"
