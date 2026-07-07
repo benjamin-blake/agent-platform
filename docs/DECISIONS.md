@@ -2,6 +2,32 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 123: Ratify CD.18 -- revive the stashed agent/ops-decisions-phase-2 WIP into T1.5's Phase-2 decomposition (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-06
+**Warehouse ID:** dec-123 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CD.18 (promoted from KG.6) required a decision before T1.5 begins on the fate of the
+stashed agent/ops-decisions-phase-2-semantic-definition WIP (scripts/ops_data_portal.py,
+scripts/executor/rec_write_guidance.py, tests/test_ops_data_portal_decisions.py). CD.10 dismantles
+ops_data_portal as the agent surface, raising the question of whether the stashed WIP still fits the
+current architecture.
+
+**Decision:** Ratifies CD.18 option (a) -- revive the stashed work and land it inside T1.5's strategic
+decomposition; its semantic-definition content directly serves Phase 2 semantics and preserves prior
+planning effort.
+
+**Reversal conditions:** if, during T1.5 decomposition, the revived WIP proves unfittable to the
+current Lambda-handler / named-verb architecture (CD.10 dismantled ops_data_portal as the agent
+surface), void it and re-derive Phase-2 semantics fresh per CD.18 option (b); record the reversal as
+an amendment to this Decision.
+
+**Related:** CD.18 (this ratifies it), T1.5 (gated item; this decision unblocks its start), Decision
+84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+---
+
 ## Decision 122: Ratify CD.28 -- executor LLM inference = DeepSeek-direct via LiteLLM (Tier 1), Anthropic-direct (Tier 2); Bedrock retired (as amended by Decision 116) (Decided)
 
 **Status:** Decided
