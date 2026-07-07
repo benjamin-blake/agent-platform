@@ -1,0 +1,107 @@
+schema_version: 1
+slug: "executor-containment-resequence"
+intent: >-
+  Re-sequence the deferred executor-containment roadmap items (T4.9/T4.10/T4.11) per audit
+  findings EXR-01/EXR-03/EXR-02 so the MVP loop's merge leg, persona-governance layer, and
+  budget-containment layer are owned by not_started items reachable from the live loop -- moving
+  the autonomous executor toward a closable, contained MVP loop (Decision 93).
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-executor-containment-resequence.yaml
+phase: >-
+  Platform Tier T4 (autonomous executor). Roadmap-bookkeeping re-sequencing under the Decision 93
+  MVP boundary; touches tier_items T4.1, T4.2, T4.9, T4.10, T4.11 and adds T4.9a, T4.10a.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Split T4.9 and T4.10 into live MVP slices (T4.9a, T4.10a) plus deferred remnants; reactivate
+      T4.11 and re-point its depends_on; add merge/deploy states to T4.1; wire T4.2 depends_on and
+      exit criteria; add T4.9a to CD.38.gates. Sole file changed.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "EXR-01: a not_started item (T4.9a) owns the verdict-callback + merge-authority slice (callback auth, correlation ids incl. head SHA, PRE_PASS-permits-merge with SHA-equality check, duplicate/stale rejection), depends_on [T4.1, T2.20], reachable from T4.2's depends_on; the T4.9 remnant retains the full contract hardening (VF-14 verdict-alphabet mapping, full test matrix) as deferred_post_mvp."
+  - "EXR-01: T4.1's state-machine shape (intent) includes explicit merge and deploy_dispatch states; T4.2's e2e-smoke exit criterion names the T4.9a callback mechanism."
+  - "EXR-03: a not_started item (T4.10a) owns the persona-contract-authoring slice (eight persona contract YAMLs + validate.py rejection rules), added to T4.2's depends_on; the T4.10 remnant (rca/bookkeeping personas + registry hardening) stays deferred_post_mvp and no longer contains 'MUST conform' / 'author before' prose."
+  - "EXR-02: T4.11 status is not_started with depends_on [T4.1, T4.10a] (no deferred_post_mvp item in the chain); T4.2 carries an exit criterion asserting budget counters are enforced in the e2e smoke."
+  - "The platform_roadmap.py model_validator (no-live-dep invariant + cycle + dep-resolution) and validate_platform_roadmap criteria-integrity checks pass; each touched item's progress_note records the split/reactivation rationale citing the audit EXR id and Decision 93."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "Pydantic model_validator passes on load (no-live-dep check f, cycle detection, depends_on resolution) after the edits."
+    command: "bin/venv-python -c \"from scripts.platform_roadmap import load; load('docs/ROADMAP-PLATFORM.yaml'); print('LOAD_OK')\""
+    expected: "Prints LOAD_OK with no ValueError; in particular no 'no live item may depend on a parked item' from T4.9a/T4.10a/T4.11/T4.2 depends_on."
+    fix_if: "A ValueError names a live->deferred edge (e.g. T4.11 still depends_on T4.10) or a dangling/cyclic dep; re-point the offending depends_on to the live slice."
+  - step: 2
+    phase: pre-deploy
+    action: "validate_platform_roadmap criteria-integrity + size guard passes (checks i/ii/iii + Decision 114 10k-line ceiling); this exercises the full-tier checks that --pre does not."
+    command: "bin/venv-python -c \"from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap as v; f=[]; v(f); print('FAILS:', f); assert not f, f\""
+    expected: "Prints FAILS: [] and exits 0 -- no bare-string criteria on diff-touched items (check ii), no unresolved met_by (check i), no broken closes_criteria refs (check iii), under the 10k-line ceiling."
+    fix_if: "check (ii) reports a touched item 'still has bare-string criteria' -- convert that item's exit_criteria to structured ExitCriterion objects ({id, text, status: open}). If size guard fails, the diff overran 10k lines (not expected; ~120 lines added)."
+  - step: 3
+    phase: pre-deploy
+    action: "The named fast-tier gate passes on the changed roadmap."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0; roadmap guard tests force-selected by select_roadmap_guard_tests pass; no schema/plan-document failures."
+    fix_if: "Any --pre failure -- read the failing check name, correct the roadmap edit; if a plan-document check flags this PLAN file, fix the schema mismatch."
+  - step: 4
+    phase: pre-deploy
+    action: "No deferred_post_mvp item imposes a pre-MVP authoring obligation on a live item (EXR-03 grep acceptance)."
+    command: "bin/venv-python - <<'PY'\nimport re,sys\nimport yaml\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nbad=[]\nfor it in d['tier_items']:\n    if it.get('status')=='deferred_post_mvp':\n        blob=(it.get('intent','') or '')+(it.get('progress_note','') or '')\n        if 'MUST conform' in blob or 'author before' in blob:\n            bad.append(it['id'])\nprint('deferred items with MUST conform/author before:', bad)\nsys.exit(1 if bad else 0)\nPY"
+    expected: "Prints an empty list [] and exits 0 -- the phrases now live only on the live T4.10a, not on the deferred T4.10 remnant."
+    fix_if: "T4.10 (or any deferred item) still contains the phrases -- move the 'personas MUST conform' obligation onto the live T4.10a and rewrite the T4.10 remnant prose to reactivation-time semantics."
+  - step: 5
+    phase: pre-deploy
+    action: "Structural invariants of the re-sequencing hold (statuses, depends_on, T4.1 shape, T4.2 wiring, CD.38 gates)."
+    command: "bin/venv-python - <<'PY'\nimport yaml,sys\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nitems={it['id']:it for it in d['tier_items']}\ncds={c['id']:c for c in d.get('candidate_decisions',[])}\nchecks=[]\ndef c(name,cond): checks.append((name,bool(cond)))\nc('T4.9a not_started', items.get('T4.9a',{}).get('status')=='not_started')\nc('T4.9a deps', items.get('T4.9a',{}).get('depends_on')==['T4.1','T2.20'])\nc('T4.9 deferred', items.get('T4.9',{}).get('status')=='deferred_post_mvp')\nc('T4.10a not_started', items.get('T4.10a',{}).get('status')=='not_started')\nc('T4.10a deps', items.get('T4.10a',{}).get('depends_on')==['T4.1','T1.12'])\nc('T4.10 deferred', items.get('T4.10',{}).get('status')=='deferred_post_mvp')\nc('T4.11 not_started', items.get('T4.11',{}).get('status')=='not_started')\nc('T4.11 deps', items.get('T4.11',{}).get('depends_on')==['T4.1','T4.10a'])\ndep2=items.get('T4.2',{}).get('depends_on',[])\nc('T4.2 dep T4.9a', 'T4.9a' in dep2)\nc('T4.2 dep T4.10a', 'T4.10a' in dep2)\nshape=items.get('T4.1',{}).get('intent','')\nc('T4.1 merge state', 'merge' in shape and 'deploy_dispatch' in shape)\nc('CD.38 gates T4.9a', 'T4.9a' in cds.get('CD.38',{}).get('gates',[]))\nbad=[n for n,ok in checks if not ok]\nfor n,ok in checks: print(('OK ' if ok else 'BAD')+' '+n)\nsys.exit(1 if bad else 0)\nPY"
+    expected: "Every line prints 'OK ...' and exits 0."
+    fix_if: "Any 'BAD ...' line names the invariant to correct (status value, depends_on list, missing state, or missing gate ref)."
+  - step: 6
+    phase: pre-deploy
+    action: "T4.2 carries a budget-counter e2e-smoke exit criterion (EXR-02)."
+    command: "bin/venv-python - <<'PY'\nimport yaml,sys\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nt42=[it for it in d['tier_items'] if it['id']=='T4.2'][0]\ntexts=[ (c if isinstance(c,str) else c.get('text','')) for c in t42.get('exit_criteria',[]) ]\nhit=[t for t in texts if 'budget' in t.lower() and ('smoke' in t.lower() or 'counter' in t.lower())]\nprint('budget-counter criterion:', hit)\nsys.exit(0 if hit else 1)\nPY"
+    expected: "Prints a non-empty list -- a T4.2 exit criterion names enforced budget counters in the e2e smoke."
+    fix_if: "No hit -- add the exit criterion to T4.2 naming state-machine-enforced budget counters (max revisions / total LLM calls per rec) in the e2e smoke run."
+constraints:
+  - "Roadmap-bookkeeping only: every edit lands in docs/ROADMAP-PLATFORM.yaml. No source code, no recs, no decision entries (Decision 93 permits per-item deferred_post_mvp -> not_started reactivation with no decision entry; Decision 86 routes rationale to progress_notes, not new prose docs)."
+  - "Plan stays IMPLEMENTATION type; reactivating to not_started is roadmap sequencing, NOT executor execution -- the items remain gated behind their depends_on and the Decision 67 / CD.17 freeze (scout RELATED)."
+  - "Do NOT resolve EXR-07's CD.27-vs-CD.35 apply-authority contradiction: T4.1's new deploy_dispatch state is dispatch-and-wait only, described minimally, no apply-authority wording."
+  - "Preserve T4.2 exit criterion c5 (grace_period_elapsed CD.17-reversal precondition) verbatim; it is marked structurally-unchanged-from-pre-amendment-CD.17."
+  - "Final depends_on graph must contain zero live (not_started/in_progress) -> deferred_post_mvp edges (Decision 93 model_validator, platform_roadmap.py check f)."
+  - "New items T4.9a/T4.10a and any diff-touched remnant item (T4.9, T4.10, T4.11 -- adjacent to insertions) MUST use structured ExitCriterion objects, not bare strings (validate_platform_roadmap check ii)."
+  - "No rescue agents or workaround loops (Decision 55). On a verifier failure, forward-fix the roadmap edit; never suppress the check."
+context:
+  - "Authoritative brief: audits/executor-roadmap-review-7d57a0d.yaml findings EXR-01 (high, merge leg), EXR-03 (medium, persona-contract inversion), EXR-02 (critical, loop budgets)."
+  - "Decision 93 (Platform-MVP boundary): deferred_post_mvp is per-item reactivatable to not_started; no live item may depend_on a deferred_post_mvp item, enforced by platform_roadmap.py model_validator (check f) at load time. This is the sole governing decision and the sanctioned mechanism for the whole change."
+  - "no-live-dep invariant is DIRECT-edge only (platform_roadmap.py:532-542) -- transitive deferred deps are not checked; the re-point removes the one direct live->deferred edge (T4.11 -> T4.10)."
+  - "Dep-target statuses verified: T2.20=complete, T1.12=complete, T2.1=complete; T4.1=not_started, T3.4=not_started, T1.6=not_started, T3.2=not_started (all live). T4.9/T4.10 remnants stay deferred; T4.11 becomes live."
+  - "validate_platform_roadmap check (ii) flags only items whose `- id:` line appears in `git diff origin/main` (regex ^[+-]\\s+- id:) -- confirmed: new items always flag; body-only edits to existing items do not, though git line-attribution near an insertion can flag an adjacent item. Hence structured criteria on T4.9a/T4.10a (new) + T4.9/T4.10/T4.11 (adjacent). Decision 114 size guard + check (ii) run in the FULL tier, so VP steps 1-2 invoke them directly, not via --pre."
+  - "CD.38 (GH-Actions sole verifier / merge truth) gates: [T4.9]; the MVP callback slice moves to T4.9a, so gates becomes [T4.9a, T4.9] (coherence, human-approved). CD.38/CD.27/CD.17 are candidate_decisions in the roadmap, not DECISIONS.md entries."
+  - "Suffixed split-item ids (T4.9a, T4.10a) follow established convention: T0.7a/b/c, T2.11a/b, T2.16b. Tier-shortcut regex ^T-?\\d+$ does not match dotted ids, so new ids resolve as exact ids, not shortcuts."
+  - "Branch was 0 commits behind origin/main at planning time; no scope-file overlap (main_files_changed_since_branch = [])."
+  - "Decision-scout verdict + CITE list: NO_FLAGS; CITE = [Decision 93]. RELATED (awareness): Decision 86, Decision 114, Decision 90, Decision 67/CD.17, Decision 55, Decision 44/117, Decision 110."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - Decision 93 status semantics + platform_roadmap.py no-live-dep validator read
+  - audits/executor-roadmap-review-7d57a0d.yaml EXR-01/EXR-02/EXR-03 read in full
+  - docs/ROADMAP-PLATFORM.yaml T4.1/T4.2/T4.9/T4.10/T4.11 + CD.38 located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "EXR-01a: In docs/ROADMAP-PLATFORM.yaml, add explicit `await_verdict` (waitForTaskToken), `merge`, and `deploy_dispatch` states to T4.1's intent state-machine-shape list, after `file_pr` and before `emit_telemetry`. merge = callback-gated squash-merge (T4.9a: PRE_PASS + callback head-SHA == PR head); deploy_dispatch = dispatch deploy job and wait for completion (dispatch-and-wait only, no apply-authority wording -- EXR-07 out of scope)."
+  - "EXR-01b: Insert a NEW tier_item T4.9a immediately after the T4.9 block: name 'Executor verdict-callback + merge authority (MVP slice)', tier T4, depends_on [T4.1, T2.20], effort M, strategic false, status not_started, related_candidate_decisions [CD.38, CD.27, CD.35]. Structured exit_criteria (ExitCriterion objects, status open): (c1) contract states GH Actions is the only verifier for PR --pre; (c2) Step Functions stores correlation ids incl. head SHA; (c3) callback authenticated, without exposing raw task tokens; (c4) PRE_PASS permits merge only when callback head-SHA == PR head, SHA mismatch -> re-verify, repeated mismatch -> ci-rca; (c5) duplicate-callback idempotency + stale-callback rejection; (c6) every verdict-wait state carries HeartbeatSeconds/TimeoutSeconds, timeout -> ci-rca (Decision 72), never silent re-wait. files_in_scope: docs/contracts/executor-ci-handshake.yaml (new, MVP slice), .github/workflows/ci.yml (callback-emission), terraform/personal/executor_callbacks.tf (new), src/lambdas/executor_callback/handler.py (new), scripts/executor/github_checks.py (new). progress_note: dated entry -- 'Split from T4.9 per audit EXR-01 (7d57a0d): minimal verdict-callback + merge-authority slice pulled live (not_started) so the Decision 93 MVP merge leg is owned before the boundary; full contract hardening (VF-14 alphabet mapping, full test matrix) stays in the T4.9 remnant deferred_post_mvp. depends_on T4.1 (live) + T2.20 (complete); no live->deferred edge.'"
+  - "EXR-01c: Edit the T4.9 remnant: keep status deferred_post_mvp; convert its exit_criteria to structured ExitCriterion objects and trim to the hardening scope (VF-14 three-alphabet verdict mapping onto the single callback vocabulary; the full callback/idempotency/SHA test matrix), removing the criteria now owned by T4.9a; set depends_on [T4.1, T2.20, T4.9a]; append a dated progress_note entry citing EXR-01 and Decision 93 (the MVP slice is now T4.9a; this remnant is the post-MVP hardening tail)."
+  - "EXR-01d: Add T4.9a to CD.38.gates -> [T4.9a, T4.9]."
+  - "EXR-01e: In T4.2: add T4.9a to depends_on; reword the e2e-smoke exit criterion (currently 'rec -> plan_agent -> ... -> file_pr -> PR opens and validates green') to name the callback mechanism, e.g. '... -> file_pr -> verdict-callback (T4.9a) PRE_PASS permits merge -> PR opens and validates green'. Leave T4.2's other criteria as-is (bare strings) except the additions in this and the EXR-02 step; preserve c5 verbatim."
+  - "EXR-03a: Insert a NEW tier_item T4.10a immediately after the T4.10 block: name 'Persona contract authoring (MVP slice)', tier T4, depends_on [T4.1, T1.12], effort S, strategic false, status not_started, related_candidate_decisions [CD.27]. Structured exit_criteria (status open): (c1) each of the eight personas (plan_agent, plan_critic, decision_scout, implement_agent, code_reviewer, rca, bookkeeping) has a contract-versioned YAML with input_schema/output_schema/allowed_tools/forbidden_tools/max_llm_calls/max_revisions/failure_outputs; (c2) validate.py rejects persona contracts with missing schemas, unknown tools, or unbounded retry/revision; (c3) implement_agent is the only persona permitted to produce repo patches -- no contract permits direct merge, direct rec closure, or direct terraform apply; (c4) T4.2 persona implementations conform to these contracts (obligation lives here, on this live item). files_in_scope: docs/contracts/executor-personas.yaml (new registry index), docs/contracts/personas/*.yaml (eight, new), config/agent/executor/personas.yaml (new), scripts/validate.py. progress_note: dated entry citing EXR-03 and Decision 93 -- the persona-contract authoring slice is pulled live so T4.2 MVP personas ship governed; rca/bookkeeping persona additions + registry hardening stay in the T4.10 remnant."
+  - "EXR-03b: Edit the T4.10 remnant: keep status deferred_post_mvp; convert exit_criteria to structured objects and trim to the post-MVP scope (registry hardening + the rca/bookkeeping persona lifecycle beyond authoring); REWRITE the intent to remove 'T4.2's persona implementations MUST conform to these contracts' and REWRITE the progress_note to remove 'author before / with T4.2 persona implementation' -- replace with reactivation-time semantics ('extends T4.10a's authored contracts post-MVP'); set depends_on [T4.1, T1.12, T4.10a]; append a dated progress_note entry citing EXR-03 and Decision 93."
+  - "EXR-03c: In T4.2: add T4.10a to depends_on. Final T4.2 depends_on = [T4.1, T3.4, T1.6, T4.9a, T4.10a]."
+  - "EXR-02a: Reactivate T4.11: status deferred_post_mvp -> not_started; re-point depends_on [T4.1, T4.10] -> [T4.1, T4.10a]; keep exit_criteria as-is but convert to structured ExitCriterion objects (T4.11 is adjacent to the T4.10a insertion); prepend a dated progress_note entry citing EXR-02 and Decision 93 (per-item reactivation permitted; dep re-pointed to the live T4.10a contract slice so the chain contains no deferred_post_mvp item)."
+  - "EXR-02b: In T4.2: append a new exit criterion asserting state-machine-enforced budget counters (max revisions and total LLM calls per rec) are live and exercised in the e2e smoke run (the term 'budget' + 'smoke'/'counter' must appear)."
+  - "Execute Verification Plan -- run each step; loop until pass. On a check (ii) bare-string flag for an unexpected item, convert that item's criteria to structured objects and re-run. Do not suppress any check (Decision 55)."
+  - "Report: the diff summary (items split/reactivated, depends_on graph, CD.38.gates), and all six VP step results."
+rollback: >-
+  Single-file, data-only change. Revert with `git checkout origin/main -- docs/ROADMAP-PLATFORM.yaml`
+  (or revert the squash-merge commit); no deploy, no state, no downstream artefact to unwind.
