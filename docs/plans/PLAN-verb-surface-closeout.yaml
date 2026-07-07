@@ -121,7 +121,7 @@ verification_plan:
       rh = NAMED_READS['rec_history']; assert rh.params == ('id',) and '{hist}' in rh.sql, rh"
     expected: Exit 0 -- version is 3 and rec_history reads {hist} keyed by id.
     fix_if: KeyError/AssertionError -- rec_history not registered or version not bumped.
-    hermetic: true
+    hermetic: false
   - step: 2
     phase: pre-deploy
     action: >-
@@ -140,7 +140,7 @@ verification_plan:
       trailing-LIMIT verbs (ci_rca_open, budget_bypass_recent, now id-tiebroken); priority_queue_current is
       excluded (its LIMIT is a subquery, its outer output is unbounded ORDER BY rank).
     fix_if: Non-empty `bad` list -- a paginable or trailing-LIMIT verb lacks a unique-key tiebreak.
-    hermetic: true
+    hermetic: false
   - step: 3
     phase: pre-deploy
     action: >-
@@ -156,7 +156,7 @@ verification_plan:
     fix_if: >-
       AssertionError from a bare call -- a live transition is wrongly rejected (breaks executor reset /
       postmortem purge). pytest.raises failure -- a resurrection edge is not being blocked.
-    hermetic: true
+    hermetic: false
   - step: 4
     phase: pre-deploy
     action: describe capability returns a per-verb parameter schema over both read and write verbs.
@@ -168,7 +168,7 @@ verification_plan:
       print('describe-ok', len(r), len(w))"
     expected: Exit 0; describe covers every NAMED_READS verb and every VERB_REGISTRY write verb with a params schema.
     fix_if: KeyError/AssertionError -- a verb is missing from a describe map or lacks a params schema.
-    hermetic: true
+    hermetic: false
   - step: 5
     phase: pre-deploy
     action: Schema-module unit tests (pure DAG, describe, registry, rec_history, invariant) pass with full new-code coverage.
@@ -312,6 +312,7 @@ context:
   - "Offset/keyset pagination is deliberately NOT implemented (offset row-shift on a mutating table); `limit`-only + guaranteed total order is the MVP altitude. Keyset (WHERE id > :last ORDER BY id LIMIT n) is the correct future path if offset is ever needed."
   - "Branch was 0 commits behind origin/main at planning time; no Scope-file overlap with main divergence -- no rebase deferral."
   - "_VALID_STATUSES (scripts/executor/jsonl_store.py) and Recommendation.status Literal agree on {open,closed,failed,declined,superseded}; update_rec validates against this set client-side before the writer, so the DAG operates over the same enforced vocabulary."
+  - "VP hermeticity: all pre-deploy steps are hermetic: false. This is a PLAN-only PR (merged to main ahead of a separate /implement session), so steps 1-4 assert code that does NOT yet exist on the branch (NAMED_READS_VERSION==3, check_rec_status_transition, describe_named_reads, rec_history). validate_vp_replay (VF-01) independently re-executes hermetic pre-deploy steps against the PR tree on a CI runner that has NO .venv -- so hermetic steps testing unbuilt code (and invoking bin/venv-python) cannot pass at plan-merge. /implement runs every pre-deploy step locally via bin/venv-python once the code exists; the independent proof lands there, not at plan-merge."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/verb-surface-closeout-2mam38)
   - docs/PROJECT_CONTEXT.md read
