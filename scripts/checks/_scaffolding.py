@@ -78,6 +78,11 @@ _TERRAFORM_ROOTS = ("terraform", "terraform/personal", "terraform/github", "terr
 
 _DQ_FRESHNESS_SECONDS = 3600  # 1 hour
 
+# Parallelism + per-test timeout for both --pre pytest-diff invocations (primary and reactive
+# survivor re-run). Cap (60s) is comfortably above the slowest legitimate unit (~3s) and well
+# under the 300s fast-tier budget.
+_PYTEST_FLAGS = ["-n", "auto", "--timeout", "60", "--timeout-method=thread"]
+
 
 def run_precommit_checks(failed: list[str], *, all_files: bool, files: list[str] | None = None) -> None:
     """Run the pre-commit hook suite (detect-secrets, shape denylist, file hygiene).
@@ -135,12 +140,16 @@ def _file_budget_breach_rec(elapsed_s: float, diff_manifest: list[str], dominant
         # below. Skip the write and print the full diagnostic LOUDLY instead: this is a no-op-plus
         # -loud-log, never a silent `if CI: return` (Decision 55) and never a buffered/replayed
         # outbox entry (Decision 84 I-4 -- nothing is staged for later delivery).
-        print(
-            f"WARNING: fast-tier budget breach rec NOT filed (CI environment, no portal access): "
-            f"{elapsed_min:.1f} min elapsed (limit 5 min). Dominant phase: {dominant_phase or 'unknown'}. "
-            f"Diff manifest ({len(diff_manifest)} files): {manifest_summary}.",
-            file=sys.stderr,
+        message = (
+            f"WARNING: fast-tier budget breach ({elapsed_min:.1f}m, limit 5m): dominant_phase="
+            f"{dominant_phase or 'unknown'}, diff ({len(diff_manifest)} files): {manifest_summary}. Rec NOT filed (CI)."
         )
+        print(message, file=sys.stderr)
+        # CI-native diagnosability (no portal, no outbox -- Decision 84 I-4): mirror to the job's
+        # step summary; falls back to the stderr print above if unset.
+        if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(summary_path, "a", encoding="utf-8") as f:
+                f.write(f"\n## Fast-tier budget breach\n\n{message}\n")
         return
 
     try:
@@ -628,13 +637,8 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
         return
 
     print("\n=== Tests (pytest -- explicit changed files) ===")
-    result = _common.run(
-        [_common.PYTHON, "-m", "pytest", *runnable, "-m", "not integration", "-v"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        cwd=_common.ROOT,
-    )
+    cmd = [_common.PYTHON, "-m", "pytest", *runnable, "-m", "not integration", "-v", *_PYTEST_FLAGS]
+    result = _common.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT)
     print(result.stdout or "", end="")
     print(result.stderr or "", end="")
     if result.returncode == 0:
@@ -663,6 +667,7 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
         return
 
     print("\n=== Tests (pytest -- reactive re-run on survivors) ===")
-    rerun_result = _common.run([_common.PYTHON, "-m", "pytest", *survivors, "-m", "not integration", "-v"], cwd=_common.ROOT)
+    rerun_cmd = [_common.PYTHON, "-m", "pytest", *survivors, "-m", "not integration", "-v", *_PYTEST_FLAGS]
+    rerun_result = _common.run(rerun_cmd, cwd=_common.ROOT)
     if rerun_result.returncode != 0:
         failed.append("Tests (pytest)")
