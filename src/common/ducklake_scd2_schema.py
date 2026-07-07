@@ -77,6 +77,17 @@ class AppendOnlyUpdateError(DuckLakeRuntimeError):
     """
 
 
+class StatusTransitionError(DuckLakeRuntimeError):
+    """Raised when an update would silently REACTIVATE a resolved rec (closed/declined/superseded -> open).
+
+    Distinct from scripts/contracts_enforcement.check_status_transition (the contract-lifecycle check)
+    to avoid a same-name collision (Decision 103: the DAG is a resolved-reactivation guard, not a
+    forward-only/terminal whitelist -- every live transition, incl. failed->open executor restart and
+    *->superseded / open|failed->declined postmortem purge, passes; only a resolved->open reactivation
+    is rejected).
+    """
+
+
 # ---------------------------------------------------------------------------
 # Write identity and result dataclasses (minted by runtime, schema contract)
 # ---------------------------------------------------------------------------
@@ -267,8 +278,14 @@ def _build_merge_current_sql(spec: ScdTableSpec) -> str:
     )
 
 
-def _build_select_existing_created_sql(spec: ScdTableSpec) -> str:
-    return f"SELECT created_timestamp FROM {CATALOG_ALIAS}.{spec.current_table} WHERE {spec.merge_key} = ?"
+def _build_select_existing_created_sql(spec: ScdTableSpec, *, include_status: bool = False) -> str:
+    """SELECT the existing row's created_timestamp (+ status, when *include_status*) by merge key.
+
+    `include_status` reuses this SAME existing-row fetch to read the current status for the DAG
+    check (write_scd2's require_exists path) -- no second Neon round-trip (Decision 88).
+    """
+    cols = "created_timestamp, status" if include_status else "created_timestamp"
+    return f"SELECT {cols} FROM {CATALOG_ALIAS}.{spec.current_table} WHERE {spec.merge_key} = ?"
 
 
 def _write_params(spec: ScdTableSpec, record: dict[str, Any], identity: WriteIdentity, created_ts: datetime) -> list[Any]:
@@ -292,7 +309,7 @@ def _write_params(spec: ScdTableSpec, record: dict[str, Any], identity: WriteIde
 # crosses the boundary on this path. `{tbl}` = current projection, `{hist}` = history table.
 # ---------------------------------------------------------------------------
 
-NAMED_READS_VERSION = 2
+NAMED_READS_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -304,6 +321,7 @@ class NamedRead:
     sql: str
     params: tuple[str, ...] = ()
     description: str = ""
+    paginable: bool = False  # True => the caller-supplied `limit` (named_read) may bound this verb's rows
 
 
 NAMED_READS: dict[str, NamedRead] = {
@@ -314,6 +332,7 @@ NAMED_READS: dict[str, NamedRead] = {
             table="ops_recommendations",
             sql=("SELECT id, title, context, created_timestamp, automatable FROM {tbl} WHERE status = 'open' ORDER BY id"),
             description="Open recommendations with the fields the preflight tally consumes.",
+            paginable=True,
         ),
         NamedRead(
             verb="rec_by_id",
@@ -328,6 +347,7 @@ NAMED_READS: dict[str, NamedRead] = {
             sql="SELECT id, title, status, source FROM {tbl} WHERE title LIKE ? ORDER BY id",
             params=("title_prefix",),
             description="Recommendations whose title starts with the bound prefix (postmortem supersede sweep).",
+            paginable=True,
         ),
         NamedRead(
             verb="ci_rca_open",
@@ -335,7 +355,7 @@ NAMED_READS: dict[str, NamedRead] = {
             sql=(
                 "SELECT id, title, priority, created_timestamp, file FROM {tbl} "
                 "WHERE source = 'ci_rca' AND status IN ('open', 'in_progress') "
-                "ORDER BY created_timestamp DESC LIMIT 5"
+                "ORDER BY created_timestamp DESC, id LIMIT 5"
             ),
             description="Most recent open/in-progress CI-RCA recommendations (preflight hard-block surface).",
         ),
@@ -364,9 +384,16 @@ NAMED_READS: dict[str, NamedRead] = {
                 "SELECT id, context, created_timestamp FROM {tbl} "
                 "WHERE source = 'budget_bypass' "
                 "AND created_timestamp > (current_timestamp - INTERVAL 7 DAY) "
-                "ORDER BY created_timestamp DESC LIMIT 10"
+                "ORDER BY created_timestamp DESC, id LIMIT 10"
             ),
             description="budget_bypass recommendations filed in the last 7 days (fast-tier drift alert).",
+        ),
+        NamedRead(
+            verb="rec_history",
+            table="ops_recommendations",
+            sql="SELECT * FROM {hist} WHERE id = ? ORDER BY last_updated_timestamp DESC, ulid DESC",
+            params=("id",),
+            description="Prior SCD2 history versions of a rec, newest-first (agent-facing history read).",
         ),
         NamedRead(
             verb="count_by_status",
@@ -399,6 +426,159 @@ NAMED_READS: dict[str, NamedRead] = {
         ),
     )
 }
+
+
+def _params_schema(params: tuple[str, ...]) -> dict[str, Any]:
+    """A minimal JSON-schema-shaped object over *params* (all bind values are strings at this boundary)."""
+    return {
+        "type": "object",
+        "properties": {p: {"type": "string"} for p in params},
+        "required": list(params),
+    }
+
+
+def describe_named_reads() -> dict[str, dict[str, Any]]:
+    """Per-verb parameter schema for every NAMED_READS entry (agent-facing `describe`, CD.10 / CD.15)."""
+    return {
+        verb: {
+            "table": nr.table,
+            "description": nr.description,
+            "params": list(nr.params),
+            "paginable": nr.paginable,
+            "params_schema": _params_schema(nr.params),
+        }
+        for verb, nr in NAMED_READS.items()
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rec status DAG -- resolved-reactivation guard (Decision 103 / Decision 55).
+#
+# NOT a forward-only/terminal-status whitelist: every LIVE transition passes (failed->open executor
+# restart; *->superseded and open/failed->declined postmortem purge; open->{closed,failed,declined,
+# superseded}; same-status writes). The ONE thing rejected is a RESOLVED rec (closed/declined/
+# superseded) being silently REACTIVATED (-> open). Unrecognised status vocabulary is skipped
+# narrowly (Decision 55) -- never silently treated as an illegal transition.
+# ---------------------------------------------------------------------------
+
+_ENFORCED_REC_STATUSES = frozenset({"open", "closed", "failed", "declined", "superseded"})
+_RESOLVED_REC_STATUSES = frozenset({"closed", "declined", "superseded"})
+_ACTIVE_REC_STATUSES = frozenset({"open"})
+
+# table -> {enforced, resolved, active} status vocabulary the DAG is defined over. A table absent
+# from this registry has no declared DAG -- check_rec_status_transition is then a permissive no-op.
+STATUS_TRANSITIONS: dict[str, dict[str, frozenset[str]]] = {
+    "ops_recommendations": {
+        "enforced": _ENFORCED_REC_STATUSES,
+        "resolved": _RESOLVED_REC_STATUSES,
+        "active": _ACTIVE_REC_STATUSES,
+    },
+}
+
+
+def check_rec_status_transition(table: str, existing_status: Any, new_status: Any) -> None:
+    """Raise StatusTransitionError iff *table* declares a DAG and this is a resolved->active reactivation.
+
+    Permissive-skip (never raises) when: *table* has no declared DAG, either status is outside the
+    declared enforced vocabulary, or the transition is not resolved->active (this also covers
+    same-status writes, since resolved and active are disjoint).
+    """
+    dag = STATUS_TRANSITIONS.get(table)
+    if dag is None:
+        return
+    if existing_status not in dag["enforced"] or new_status not in dag["enforced"]:
+        return
+    if existing_status in dag["resolved"] and new_status in dag["active"]:
+        raise StatusTransitionError(
+            f"{table}: illegal status transition {existing_status!r} -> {new_status!r} -- a resolved rec "
+            "must not be silently reactivated (Decision 103). Record the reopen as a new event/rec instead."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Write-verb registry -- the pre-established write verbs the writer Lambda serves (CD.10 / CD.15
+# describe surface). Mirrors NAMED_READS' shape for the write side; params_schema is descriptive
+# metadata only -- schema_gate (per-table field_semantics) remains the enforced write contract.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WriteVerb:
+    """One pre-established write verb: a description + a descriptive params_schema."""
+
+    verb: str
+    description: str
+    params_schema: dict[str, Any]
+
+
+VERB_REGISTRY: dict[str, WriteVerb] = {
+    wv.verb: wv
+    for wv in (
+        WriteVerb(
+            verb="write_ops",
+            description=(
+                "Raw SCD2 upsert into an ops_* table (history MERGE-on-ULID append + current "
+                "write-through, schema-gated, bounded-OCC-retried). No id allocation, no require_exists."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {"table": {"type": "string"}, "record": {"type": "object"}},
+                "required": ["table", "record"],
+            },
+        ),
+        WriteVerb(
+            verb="update_ops",
+            description=(
+                "Update an existing ops_* record (record is the FULL merged row). Loud-fails "
+                "(ReferentialError) if the merge key is absent, or (StatusTransitionError) if the "
+                "update would silently reactivate a resolved rec."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {"table": {"type": "string"}, "record": {"type": "object"}},
+                "required": ["table", "record"],
+            },
+        ),
+        WriteVerb(
+            verb="file_ops",
+            description=(
+                "Create one ops_* record, allocating its merge key inside the write transaction "
+                "(writer-owned keyspace, Decision 84 I-2). idempotency_ulid replays to the "
+                "originally-allocated id on a response-lost retry."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string"},
+                    "record": {"type": "object"},
+                    "idempotency_ulid": {"type": "string"},
+                },
+                "required": ["table", "record"],
+            },
+        ),
+        WriteVerb(
+            verb="create_ops_tables",
+            description=(
+                "Admin provisioning verb: create (optionally force-recreate) an ops_* table pair with "
+                "partition transforms; bootstraps/repairs the writer-owned entity-id counter."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string"},
+                    "force_recreate_tables": {"type": "boolean"},
+                    "confirm_force_recreate": {"type": "string"},
+                },
+                "required": ["table"],
+            },
+        ),
+    )
+}
+
+
+def describe_write_verbs() -> dict[str, dict[str, Any]]:
+    """Per-verb description + params_schema for every VERB_REGISTRY entry (agent-facing `describe`)."""
+    return {verb: {"description": wv.description, "params_schema": wv.params_schema} for verb, wv in VERB_REGISTRY.items()}
 
 
 # ---------------------------------------------------------------------------

@@ -84,15 +84,27 @@ verbs:
       version_mismatch: "DuckDB/extension version mismatch (500)"
   named_read:
     payload_schema_ref: >-
-      event envelope {action: "named_read", verb, params?: {..}}. `verb` names a pre-established read
-      from the NAMED_READS registry (src/common/ducklake_scd2_schema.py); `params` binds named bind
-      values. No caller SQL crosses the boundary on this path (Decision 84 I-3).
+      event envelope {action: "named_read", verb, params?: {..}, limit?}. `verb` names a
+      pre-established read from the NAMED_READS registry (src/common/ducklake_scd2_schema.py);
+      `params` binds named bind values. No caller SQL crosses the boundary on this path (Decision
+      84 I-3). `limit` (T1.16 c1) is an optional server-side integer-cast trailing LIMIT, accepted
+      ONLY for a `paginable` verb (e.g. open_recs, recs_by_title_prefix) -- rejected with a
+      DuckLakeRuntimeError for a non-paginable verb.
     response_codes:
       200: "rows returned; body {ok, verb, registry_version, rows, row_count}"
-      500: "DuckLakeRuntimeError (empty/unknown verb; non-object params) / VersionMismatchError"
+      500: "DuckLakeRuntimeError (empty/unknown verb; non-object params; limit on a non-paginable verb) / VersionMismatchError"
     typed_errors:
-      runtime: "missing/unknown verb, or params not an object (500)"
+      runtime: "missing/unknown verb, params not an object, or limit supplied for a non-paginable verb (500)"
       version_mismatch: "DuckDB/extension version mismatch (500)"
+  describe:
+    payload_schema_ref: >-
+      event envelope {action: "describe"}. Agent-facing verb (CD.10 / CD.15): returns the per-verb
+      parameter schema for every NAMED_READS entry (table, description, params, paginable,
+      params_schema). Connectionless -- pure metadata, no Neon connection (Decision 88 bounded
+      egress).
+    response_codes:
+      200: "body {ok, verbs: {<verb>: {table, description, params, paginable, params_schema}, ...}}"
+    typed_errors: {}
   query_ops:
     payload_schema_ref: >-
       event envelope {action: "query_ops", table, sql, params?: []}. Caller-supplied read-only

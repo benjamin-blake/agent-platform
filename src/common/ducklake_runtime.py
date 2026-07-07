@@ -49,14 +49,18 @@ from src.common.ducklake_scd2_schema import (
     NAMED_READS_VERSION,  # noqa: F401 -- re-exported for the reader handler response envelope
     SMOKE_CURRENT_TABLE,  # noqa: F401 -- re-exported for backward compat
     SMOKE_HISTORY_TABLE,  # noqa: F401 -- re-exported for backward compat
+    STATUS_TRANSITIONS,  # noqa: F401 -- re-exported for tests/clients introspecting the DAG
+    VERB_REGISTRY,  # noqa: F401 -- re-exported for tests/clients introspecting the write-verb registry
     AppendOnlyUpdateError,  # noqa: F401 -- re-exported for clients catching write-once violations
     DuckLakeRuntimeError,
     NamedRead,  # noqa: F401 -- re-exported for tests/clients introspecting the registry
     ReferentialError,
     ScdTableSpec,  # noqa: F401 -- re-exported for backward compat
     SchemaGateError,
+    StatusTransitionError,  # noqa: F401 -- re-exported for clients catching illegal status reactivation
     WriteIdentity,
     WriteResult,
+    WriteVerb,  # noqa: F401 -- re-exported for tests/clients introspecting the write-verb registry
     _build_merge_current_sql,
     _build_merge_history_sql,
     _build_select_existing_created_sql,
@@ -66,6 +70,9 @@ from src.common.ducklake_scd2_schema import (
     _order_columns,  # noqa: F401 -- re-exported for backward compat
     _write_params,
     check_append_only_guard,
+    check_rec_status_transition,
+    describe_named_reads,  # noqa: F401 -- re-exported for the reader handler's `describe` action
+    describe_write_verbs,  # noqa: F401 -- re-exported for the writer handler's `describe` action
     load_field_semantics,
     ops_table_names,  # noqa: F401 -- re-exported for backward compat
     resolve_table_spec,
@@ -596,6 +603,13 @@ def write_scd2(
     in-transaction existing-row lookup must be non-empty -- an absent merge key raises ReferentialError
     BEFORE any MERGE, replacing the prior permissive upsert-on-absent.
 
+    Status-DAG gate (Decision 103 / T1.16 c3): when *table* declares a DAG (STATUS_TRANSITIONS) and
+    `require_exists=True`, the SAME existing-row fetch above also reads the current `status` (no
+    second Neon round-trip) and calls check_rec_status_transition before the MERGE -- a resolved rec
+    (closed/declined/superseded) silently reactivated to `open` raises StatusTransitionError. This
+    check is OUTSIDE the OCC-collision retry path (Decision 82 / Decision 88): it is terminal, never
+    retried, mirroring ReferentialError handling.
+
     `created_override` (operational backfill/re-seed path ONLY): when set AND the row is a fresh
     insert, it supplies the historical `created_timestamp` instead of `identity.timestamp`, so a
     migration/re-seed preserves each rec's ORIGINAL created time (Decision-64 anchor) while
@@ -614,9 +628,12 @@ def write_scd2(
 
     spec = resolve_table_spec(table, semantics)
     check_append_only_guard(spec, require_exists)  # loud-fail before any catalog work (Decision 70)
+    has_status_dag = table in STATUS_TRANSITIONS
     merge_history_sql = _build_merge_history_sql(spec)
     merge_current_sql = None if spec.write_mode == "append_only" else _build_merge_current_sql(spec)
-    select_existing_sql = None if spec.write_mode == "append_only" else _build_select_existing_created_sql(spec)
+    select_existing_sql = (
+        None if spec.write_mode == "append_only" else _build_select_existing_created_sql(spec, include_status=has_status_dag)
+    )
 
     identity = identity if identity is not None else mint_write_identity()
     key = record[spec.merge_key]
@@ -639,6 +656,8 @@ def write_scd2(
                         f"update of absent {spec.merge_key}={key!r} in {spec.current_table}: the record does "
                         "not exist (CD.33 cl.8 / D-5). An absent rec loud-fails -- it is not silently created."
                     )
+                if require_exists and has_status_dag and existing:
+                    check_rec_status_transition(table, existing[0][1], record.get("status"))
                 created_ts = (
                     existing[0][0] if existing else (created_override if created_override is not None else identity.timestamp)
                 )
@@ -649,7 +668,7 @@ def write_scd2(
             _advance_entity_counter(con, spec, key)
             con.execute("COMMIT")
             break
-        except (ReferentialError, AppendOnlyUpdateError):
+        except (ReferentialError, AppendOnlyUpdateError, StatusTransitionError):
             _safe_rollback(con)
             raise  # terminal failures, never retried
         except Exception as exc:  # noqa: BLE001 -- classify, then retry-or-raise
@@ -998,13 +1017,18 @@ def assert_read_only_sql(sql: str) -> None:
         raise SchemaGateError("read-only boundary: multi-statement SQL is rejected on the reader path (OQ.7).")
 
 
-def named_read(con: Any, *, verb: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def named_read(con: Any, *, verb: str, params: dict[str, Any] | None = None, limit: int | None = None) -> list[dict[str, Any]]:
     """Execute a pre-established read verb from the NAMED_READS registry (Decision 84 I-3).
 
     The SQL is server-side registry content; the caller supplies only the verb name and named
     bind params. Param presence is validated against the verb's declared param list; `{tbl}` and
     `{hist}` resolve to the verb's table current/history pair. Loud-fail on an unknown verb or a
     missing/extra param.
+
+    `limit` (T1.16 c1): a server-side integer-cast trailing LIMIT appended to the rendered SQL, for
+    `paginable` verbs only -- no caller SQL crosses the boundary (Decision 84 I-3). Loud-fail if
+    `limit` is supplied for a non-paginable verb (its SQL has no total-order guarantee for a
+    caller-visible bound).
     """
     entry = NAMED_READS.get(verb)
     if entry is None:
@@ -1012,10 +1036,14 @@ def named_read(con: Any, *, verb: str, params: dict[str, Any] | None = None) -> 
     supplied = dict(params or {})
     if set(supplied) != set(entry.params):
         raise DuckLakeRuntimeError(f"read verb {verb!r} requires params {list(entry.params)}; got {sorted(supplied)}")
+    if limit is not None and not entry.paginable:
+        raise DuckLakeRuntimeError(f"read verb {verb!r} is not paginable: `limit` is not accepted")
     spec = resolve_table_spec(entry.table)
     final_sql = entry.sql.replace("{tbl}", f"{CATALOG_ALIAS}.{spec.current_table}").replace(
         "{hist}", f"{CATALOG_ALIAS}.{spec.history_table}"
     )
+    if limit is not None:
+        final_sql += f" LIMIT {int(limit)}"
     bound = [supplied[name] for name in entry.params]
     cursor = con.execute(final_sql, bound) if bound else con.execute(final_sql)
     col_names = [desc[0] for desc in cursor.description]

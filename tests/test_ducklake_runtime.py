@@ -776,11 +776,54 @@ def test_write_scd2_ops_require_exists_loud_fails_on_absent():
 def test_write_scd2_ops_require_exists_proceeds_when_present():
     """update path proceeds and carries the original created_timestamp when the row exists."""
     original = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    con = FakeCon(created_lookup=[(original,)])  # existing current row
+    con = FakeCon(created_lookup=[(original, "open")])  # existing current row, status included
     record = {"id": "rec-1", "status": "closed"}
     result = rt.write_scd2(con, record, table="ops_recommendations", require_exists=True)
     assert result.created_timestamp == original  # carried, not re-stamped
     assert any(sql.startswith("MERGE INTO") for sql, _ in con.executed)
+
+
+def test_write_scd2_ops_require_exists_select_includes_status():
+    """The require_exists existing-row fetch on a DAG-declaring table selects status too (no 2nd round-trip)."""
+    con = FakeCon(created_lookup=[(datetime(2026, 1, 1, tzinfo=timezone.utc), "open")])
+    rt.write_scd2(con, {"id": "rec-1", "status": "closed"}, table="ops_recommendations", require_exists=True)
+    selects = [sql for sql, _ in con.executed if sql.startswith("SELECT created_timestamp")]
+    assert len(selects) == 1
+    assert "status" in selects[0]
+
+
+def test_write_scd2_ops_require_exists_rejects_resolved_reactivation():
+    """A resolved rec (closed) reactivated to open raises StatusTransitionError before any MERGE."""
+    con = FakeCon(created_lookup=[(datetime(2026, 1, 1, tzinfo=timezone.utc), "closed")])
+    with pytest.raises(rt.StatusTransitionError, match="illegal status transition"):
+        rt.write_scd2(con, {"id": "rec-1", "status": "open"}, table="ops_recommendations", require_exists=True)
+    merged = [sql for sql, _ in con.executed if sql.startswith("MERGE INTO")]
+    assert merged == []
+
+
+def test_write_scd2_ops_require_exists_allows_live_transitions():
+    """Every live transition (failed->open, *->superseded, open/failed->declined) proceeds to MERGE."""
+    live = [("failed", "open"), ("open", "superseded"), ("closed", "superseded"), ("failed", "declined"), ("open", "declined")]
+    for existing_status, new_status in live:
+        con = FakeCon(created_lookup=[(datetime(2026, 1, 1, tzinfo=timezone.utc), existing_status)])
+        rt.write_scd2(con, {"id": "rec-1", "status": new_status}, table="ops_recommendations", require_exists=True)
+        assert any(sql.startswith("MERGE INTO") for sql, _ in con.executed), (existing_status, new_status)
+
+
+def test_write_scd2_ops_require_exists_skips_unknown_vocab():
+    """An unrecognised status value is skipped narrowly (never treated as illegal)."""
+    con = FakeCon(created_lookup=[(datetime(2026, 1, 1, tzinfo=timezone.utc), "banana")])
+    rt.write_scd2(con, {"id": "rec-1", "status": "open"}, table="ops_recommendations", require_exists=True)
+    assert any(sql.startswith("MERGE INTO") for sql, _ in con.executed)
+
+
+def test_write_scd2_no_dag_table_select_omits_status():
+    """A table with no declared DAG (ops_decisions) does not select status on the require_exists fetch."""
+    con = FakeCon(created_lookup=[(datetime(2026, 1, 1, tzinfo=timezone.utc),)])
+    rt.write_scd2(con, {"id": "dec-1", "title": "t", "status": "open"}, table="ops_decisions", require_exists=True)
+    selects = [sql for sql, _ in con.executed if sql.startswith("SELECT created_timestamp")]
+    assert len(selects) == 1
+    assert "status" not in selects[0]
 
 
 def test_create_scd2_tables_ops_ddl_has_real_types(monkeypatch):
