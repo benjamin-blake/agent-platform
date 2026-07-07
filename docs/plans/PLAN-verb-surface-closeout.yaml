@@ -81,8 +81,9 @@ acceptance_criteria:
     c1: named_read accepts an optional integer `limit`; paginable list-family verbs return at most
     `limit` rows in a deterministic TOTAL order; ci_rca_open and budget_bypass_recent gain an `id`
     tiebreak; a growth-safe invariant test asserts that every NAMED_READS verb that is EITHER
-    paginable=True OR carries a static LIMIT ends its ORDER BY in a unique key (id or ulid). No caller
-    SQL crosses the boundary (server-side LIMIT only).
+    paginable=True OR carries a TRAILING output-bounding LIMIT ends its ORDER BY in a unique key (id or
+    ulid). A subquery LIMIT that does not bound the outer result (priority_queue_current) is excluded.
+    No caller SQL crosses the boundary (server-side LIMIT only).
   - >-
     c2: describe_named_reads() and describe_write_verbs() return per-verb parameter schema (JSON-schema
     shape); the reader and writer Lambdas each expose a `describe` action returning them.
@@ -124,17 +125,21 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: >-
-      Total-order invariant -- every NAMED_READS verb that is paginable OR carries a static LIMIT ends
-      its ORDER BY in a unique key (id or ulid), so a bounded read is reproducible.
+      Total-order invariant -- every NAMED_READS verb that is paginable OR carries a TRAILING (output
+      row-cap) LIMIT ends its ORDER BY in a unique key (id or ulid), so a bounded read is reproducible.
+      A subquery LIMIT that does not bound the outer result (priority_queue_current's `LIMIT 1` inside
+      the latest-run correlated subquery) is correctly excluded.
     command: >-
-      bin/venv-python -c "import re;from src.common.ducklake_scd2_schema import NAMED_READS;
-      bad=[v for v,n in NAMED_READS.items() if (getattr(n,'paginable',False) or 'LIMIT' in n.sql.upper())
-      and not re.search(r'ORDER BY .*\\b(id|ulid)\\b[^,]*$', n.sql, re.I|re.S)];
+      bin/venv-python -c "import re; from src.common.ducklake_scd2_schema import NAMED_READS;
+      lim=lambda s: bool(re.search(r'\\bLIMIT\\s+\\d+\\s*\$', s, re.I));
+      tot=lambda s: bool(re.search(r'ORDER BY .*\\b(id|ulid)\\b[^,]*\$', s, re.I|re.S));
+      bad=[v for v,n in NAMED_READS.items() if (getattr(n,'paginable',False) or lim(n.sql)) and not tot(n.sql)];
       assert not bad, bad; print('total-order-ok', sorted(NAMED_READS))"
     expected: >-
       Exit 0; prints total-order-ok -- covers the paginable verbs (open_recs, recs_by_title_prefix) AND the
-      static-LIMIT verbs (ci_rca_open, budget_bypass_recent, now id-tiebroken).
-    fix_if: Non-empty `bad` list -- a paginable or LIMIT-bearing verb lacks a unique-key tiebreak.
+      trailing-LIMIT verbs (ci_rca_open, budget_bypass_recent, now id-tiebroken); priority_queue_current is
+      excluded (its LIMIT is a subquery, its outer output is unbounded ORDER BY rank).
+    fix_if: Non-empty `bad` list -- a paginable or trailing-LIMIT verb lacks a unique-key tiebreak.
     hermetic: true
   - step: 3
     phase: pre-deploy
@@ -219,7 +224,7 @@ verification_plan:
     action: Reader closed-boundary + writer warm-reuse smoke gates still pass against the freshly deployed bundles (regression).
     command: >-
       bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-reader --profile agent_platform &&
-      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-writer-warm --profile agent_platform
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-warm-reuse-writer --profile agent_platform
     expected: Both gates report ok/within-budget -- the shared-module change did not regress the runtime primitives.
     fix_if: A gate fails -- the new shared code broke an existing runtime path; RCA before proceeding (Decision 55).
   - step: 13
@@ -228,7 +233,7 @@ verification_plan:
       ducklake_maintenance smoke gate passes against its freshly deployed bundle -- confirms the
       maintenance Lambda still loads the shared modules and its merge path works (regression for the two
       deploy-only artifacts that VP step 12 does not cover).
-    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-merge --profile agent_platform
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-merge --profile agent_platform
     expected: The daily-merge gate reports ok (files merged / count assertion holds) -- no shared-module import or runtime regression in maintenance.
     fix_if: Non-200 / import error -- the additive shared-module change broke maintenance's bundle; RCA (Decision 55).
   - step: 14
@@ -236,7 +241,7 @@ verification_plan:
     action: >-
       ducklake_catalog_dr smoke gate passes against its freshly deployed bundle -- confirms the DR
       Lambda still loads the shared modules and its dump path works.
-    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-dr --profile agent_platform
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-catalog-dr --profile agent_platform
     expected: The FP-B DR gate reports ok (dump object + engine-version tag + metric) -- no regression in catalog_dr.
     fix_if: Non-200 / import error -- the additive shared-module change broke catalog_dr's bundle; RCA (Decision 55).
   - step: 15
@@ -296,7 +301,7 @@ constraints:
   - "No rescue agents or workaround loops; loud-fail on unrecoverable V3 failure and RCA (Decision 55)."
 context:
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 91, Decision 84, Decision 81, CD.33, Decision 79, Decision 55. RELATED/handled: Decision 103 (DAG status basis; no new Class A cols), Decision 118 (contract-drift ritual -> verb contracts updated, enum reconciliation deferred), Decision 88 (Neon egress; bounded reads favoured; reuse require_exists fetch), Decision 86 (semantics to contracts, not prose), Decision 93 (roadmap validator on the flips/rehome), CD.10 + CD.15 (describe / typed-verb surface intent)."
-  - "gates: decision-scout=FLAGS_FOUND (all flags handled in scope/constraints); plan-critique=REVISE->addressed round 1 (4 findings: full status-DAG edge set grounded in live call sites; total-order invariant extended to paginable verbs; roadmap met_by values specified; maintenance+catalog_dr post-deploy smoke added)"
+  - "gates: decision-scout=FLAGS_FOUND (all flags handled in scope/constraints); plan-critique=REVISE(r1)->REVISE(r2)->addressed. r1: status-DAG edge set grounded in live call sites; invariant extended to paginable; met_by specified; maintenance+catalog_dr smoke added. r2: total-order invariant switched to a trailing-LIMIT regex (bare 'LIMIT' substring false-positived priority_queue_current's subquery LIMIT); smoke-gate flags corrected to --lambda-warm-reuse-writer / --lambda-maintenance-merge / --lambda-catalog-dr; describe registered connectionless (Decision 88)."
   - "Status-DAG safety (plan-critique round 1): the DAG is a resolved-reactivation guard, NOT a forward-only/terminal whitelist -- it was corrected to allow every live transition (failed->open executor reset; *->superseded and open/failed->declined postmortem purge, live via --purge-postmortems-for) and reject ONLY closed/declined/superseded -> open. VP steps 3/6 assert each live edge passes and each resurrection edge raises."
   - "Regression coverage (plan-critique round 1): VP steps 13/14 add --lambda-merge (ducklake_maintenance) and --lambda-dr (ducklake_catalog_dr) smoke gates so all 4 deployed active artifacts have a post-deploy check, not just reader/writer (Decision 79)."
   - "Scout flag handling: Decision 118 [WARN] -> add describe verb + limit?/422 to the two Class B verb contracts (verbs: additions, no amendment_log needed); defer the Class A status-enum divergence with a recorded note. Decision 55 [NOTE] -> unknown-vocab skip stays narrow, known-illegal edges raise. Decision 70->103 citation corrected (lifecycle-by-status is Decision 103, not Decision 70). Decision 82 -> status read reuses require_exists fetch, outside OCC loop. Decision 93 -> VP step 9 loads the roadmap under its validators."
@@ -315,13 +320,13 @@ pre_implementation_checklist:
   - Acceptance criteria understood and verifiable
   - AWS agent_platform assume-role chain confirmed (session-start hook) for the post-deploy V3 gates
 execution_steps:
-  - "src/common/ducklake_scd2_schema.py: add `paginable: bool = False` to NamedRead; add the `rec_history` verb (SELECT * FROM {hist} WHERE id = ? ORDER BY last_updated_timestamp DESC, ulid DESC, params=('id',)); bump NAMED_READS_VERSION to 3; append `, id` tiebreak to ci_rca_open and budget_bypass_recent ORDER BY; mark the list-family verbs (open_recs, recs_by_title_prefix) paginable=True."
+  - "src/common/ducklake_scd2_schema.py: add `paginable: bool = False` to NamedRead; add the `rec_history` verb (SELECT * FROM {hist} WHERE id = ? ORDER BY last_updated_timestamp DESC, ulid DESC, params=('id',)); bump NAMED_READS_VERSION to 3; append `, id` tiebreak to ci_rca_open and budget_bypass_recent ORDER BY (before their trailing LIMIT); mark the list-family verbs (open_recs, recs_by_title_prefix) paginable=True. The total-order invariant test keys off (paginable OR a TRAILING LIMIT via regex r'\\bLIMIT\\s+\\d+\\s*$') -- do NOT use a bare 'LIMIT' substring, which false-positives on priority_queue_current's subquery LIMIT."
   - "src/common/ducklake_scd2_schema.py: encode the status DAG as a resolved-reactivation guard -- _RESOLVED_REC_STATUSES = frozenset({'closed','declined','superseded'}) and _ACTIVE_REC_STATUSES = frozenset({'open'}); check_rec_status_transition(table, existing, new) raises StatusTransitionError iff existing in resolved AND new in active AND existing != new; permissive-skip on unknown vocab / same-status / a table with no declared DAG. Add the StatusTransitionError class. Verify against the live-transition list in constraints (failed->open, *->superseded, open/failed->declined all pass)."
   - "src/common/ducklake_scd2_schema.py: add describe_named_reads() (verb -> {table, description, params, paginable, params_schema}) and VERB_REGISTRY (write verbs: write_ops, update_ops, file_ops, create_ops_tables) + describe_write_verbs() returning per-verb params_schema (JSON-schema shape)."
   - "src/common/ducklake_runtime.py: add `limit: int | None = None` to named_read(); when set and the verb is paginable, append ` LIMIT {int(limit)}` to the rendered SQL (loud-fail if limit is passed for a non-paginable verb); re-export StatusTransitionError."
   - "src/common/ducklake_runtime.py: in write_scd2's require_exists branch, extend the existing existing-row fetch to also read the current `status` (only when the spec declares a DAG), and call check_rec_status_transition before the MERGE; keep it terminal (never OCC-retried), mirroring ReferentialError handling."
-  - "src/lambdas/ducklake_reader/handler.py: action_named_read reads event.get('limit') and passes it to rt.named_read; add action_describe returning {ok, verbs: describe_named_reads()} and register 'describe' in _ACTIONS."
-  - "src/lambdas/ducklake_writer/handler.py: add action_describe returning {ok, verbs: describe_write_verbs()} and register 'describe'; add `except rt.StatusTransitionError as exc: return _response(422, {ok:False, error_type:'status_transition', error:str(exc)})` in the dispatcher (before the generic DuckLakeRuntimeError clause)."
+  - "src/lambdas/ducklake_reader/handler.py: action_named_read reads event.get('limit') and passes it to rt.named_read; add action_describe returning {ok, verbs: describe_named_reads()}; register 'describe' in _ACTIONS AND in _CONNECTIONLESS_ACTIONS (pure metadata -- no Neon connection, Decision 88 bounded egress)."
+  - "src/lambdas/ducklake_writer/handler.py: add action_describe returning {ok, verbs: describe_write_verbs()}; register 'describe' in _ACTIONS AND in _CONNECTIONLESS_ACTIONS; add `except rt.StatusTransitionError as exc: return _response(422, {ok:False, error_type:'status_transition', error:str(exc)})` in the dispatcher (before the generic DuckLakeRuntimeError clause)."
   - "docs/contracts/ducklake_reader.yaml: add the `describe` verb block and the optional `limit?` field to the named_read envelope description. docs/contracts/ducklake_writer.yaml: add the `describe` verb block and the status_transition 422 entry to update_ops's error taxonomy. (verbs: additions only -- no amendment_log entry, no ops_recommendations.yaml edit.)"
   - "tests: extend the four test files per the scope purposes -- pure DAG/describe/registry/invariant (schema), named_read limit + write_scd2 DAG (runtime), describe action + limit passthrough + per-verb NAMED_READS dispatch (reader), describe action + 422 mapping + per-verb VERB_REGISTRY (writer). Growth-safe; 100% new-code coverage (tests/CLAUDE.md)."
   - "Execute the Verification Plan pre-deploy steps (1-10); loop until green. Then the post-deploy V3 steps (11-15): build+deploy the 4 DuckLake artifacts, run the regression smoke gates, and the live describe/limit/rec_history/422 probes. On an unrecoverable V3 failure, STOP and RCA (Decision 55)."
