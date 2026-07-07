@@ -198,6 +198,14 @@ def test_build_select_existing_created_sql():
     sql = schema._build_select_existing_created_sql(spec)
     assert f"SELECT created_timestamp FROM {schema.CATALOG_ALIAS}.{schema.SMOKE_CURRENT_TABLE}" in sql
     assert "WHERE rec_id = ?" in sql
+    assert "status" not in sql
+
+
+def test_build_select_existing_created_sql_include_status():
+    spec = schema.resolve_table_spec(None, _SEMANTICS)
+    sql = schema._build_select_existing_created_sql(spec, include_status=True)
+    assert sql.startswith("SELECT created_timestamp, status FROM")
+    assert "WHERE rec_id = ?" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -450,3 +458,132 @@ def test_ops_smoke_events_in_real_ops_table_names():
     """ops_smoke_events appears in ops_table_names() once added to field_semantics.yaml."""
     names = schema.ops_table_names()
     assert "ops_smoke_events" in names
+
+
+# ---------------------------------------------------------------------------
+# rec_history NAMED_READS entry + NAMED_READS_VERSION (T1.16 c4)
+# ---------------------------------------------------------------------------
+
+
+def test_named_reads_version_is_3():
+    assert schema.NAMED_READS_VERSION == 3
+
+
+def test_rec_history_verb_registered():
+    rh = schema.NAMED_READS["rec_history"]
+    assert rh.table == "ops_recommendations"
+    assert rh.params == ("id",)
+    assert "{hist}" in rh.sql
+    assert "ORDER BY last_updated_timestamp DESC, ulid DESC" in rh.sql
+
+
+# ---------------------------------------------------------------------------
+# Total-order invariant (T1.16 c1): every paginable or trailing-LIMIT verb ends in a unique key
+# ---------------------------------------------------------------------------
+
+
+def test_named_reads_total_order_invariant():
+    import re
+
+    def lim(s: str) -> bool:
+        return bool(re.search(r"\bLIMIT\s+\d+\s*$", s, re.I))
+
+    def tot(s: str) -> bool:
+        return bool(re.search(r"ORDER BY .*\b(id|ulid)\b[^,]*$", s, re.I | re.S))
+
+    bad = [v for v, n in schema.NAMED_READS.items() if (n.paginable or lim(n.sql)) and not tot(n.sql)]
+    assert not bad
+
+
+def test_priority_queue_current_excluded_from_total_order_check():
+    """priority_queue_current's LIMIT is a subquery bound, not a trailing output cap -- excluded."""
+    entry = schema.NAMED_READS["priority_queue_current"]
+    assert not entry.paginable
+    import re
+
+    assert not re.search(r"\bLIMIT\s+\d+\s*$", entry.sql, re.I)
+
+
+def test_ci_rca_open_and_budget_bypass_recent_have_id_tiebreak():
+    """The two trailing-LIMIT verbs' ORDER BY carries an `id` tiebreak (reproducible bounded reads)."""
+    for verb in ("ci_rca_open", "budget_bypass_recent"):
+        sql = schema.NAMED_READS[verb].sql
+        assert ", id LIMIT" in sql
+
+
+def test_open_recs_and_recs_by_title_prefix_are_paginable():
+    assert schema.NAMED_READS["open_recs"].paginable is True
+    assert schema.NAMED_READS["recs_by_title_prefix"].paginable is True
+
+
+# ---------------------------------------------------------------------------
+# describe_named_reads / describe_write_verbs (CD.10 / CD.15 agent-facing describe surface)
+# ---------------------------------------------------------------------------
+
+
+def test_describe_named_reads_covers_every_verb():
+    out = schema.describe_named_reads()
+    assert set(out) == set(schema.NAMED_READS)
+    entry = out["rec_by_id"]
+    assert entry["params"] == ["id"]
+    assert entry["params_schema"]["required"] == ["id"]
+    assert "table" in entry and "description" in entry and "paginable" in entry
+
+
+def test_describe_named_reads_no_params_verb():
+    out = schema.describe_named_reads()
+    assert out["open_recs"]["params"] == []
+    assert out["open_recs"]["params_schema"]["required"] == []
+
+
+def test_describe_write_verbs_covers_registry():
+    out = schema.describe_write_verbs()
+    assert set(out) == set(schema.VERB_REGISTRY)
+    assert set(out) >= {"write_ops", "update_ops", "file_ops", "create_ops_tables"}
+    for verb, entry in out.items():
+        assert entry["description"], verb
+        assert entry["params_schema"]["type"] == "object"
+
+
+def test_verb_registry_entries_are_writeverb_instances():
+    for verb, wv in schema.VERB_REGISTRY.items():
+        assert isinstance(wv, schema.WriteVerb)
+        assert wv.verb == verb
+
+
+# ---------------------------------------------------------------------------
+# check_rec_status_transition / StatusTransitionError (T1.16 c3, Decision 103)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "existing,new",
+    [
+        ("failed", "open"),  # executor restart
+        ("open", "superseded"),
+        ("closed", "superseded"),
+        ("failed", "declined"),
+        ("open", "declined"),
+        ("open", "closed"),
+        ("closed", "closed"),  # same-status write
+        ("banana", "open"),  # unrecognised vocab -- permissive skip
+        ("open", "banana"),
+    ],
+)
+def test_check_rec_status_transition_allows_live_edges(existing, new):
+    schema.check_rec_status_transition("ops_recommendations", existing, new)  # must not raise
+
+
+@pytest.mark.parametrize("existing", ["closed", "declined", "superseded"])
+def test_check_rec_status_transition_rejects_resolved_reactivation(existing):
+    with pytest.raises(schema.StatusTransitionError, match="illegal status transition"):
+        schema.check_rec_status_transition("ops_recommendations", existing, "open")
+
+
+def test_check_rec_status_transition_noop_for_undeclared_table():
+    """A table absent from STATUS_TRANSITIONS has no DAG -- always a permissive no-op."""
+    schema.check_rec_status_transition("ops_decisions", "closed", "open")  # must not raise
+
+
+def test_status_transition_error_is_ducklake_runtime_error():
+    assert issubclass(schema.StatusTransitionError, schema.DuckLakeRuntimeError)

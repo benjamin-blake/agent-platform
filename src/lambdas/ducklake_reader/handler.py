@@ -11,6 +11,7 @@ Actions:
   read_ops_current     -- production: current projection of an ops_* table (optional single-key filter).
   read_ops_history     -- production: append-history rows of an ops_* table.
   query_ops            -- production: a read-only SELECT over an ops_* current projection (pushdown).
+  describe             -- production: per-verb parameter schema for every NAMED_READS entry (agent-facing).
 
 PRODUCTION OPS PATH (T2.19 / Decision 81): the reader is the SOLE read authority for the ops_*
 governance tables -- the closed boundary. The read role is S3 GetObject only, so a write attempt is
@@ -147,7 +148,8 @@ def action_named_read(event: dict[str, Any], con: Any) -> dict[str, Any]:
     """Production: execute a pre-established read verb (Decision 84 I-3).
 
     The caller names a verb and binds named params; the SQL is registry content inside this
-    Lambda's bundle. No caller SQL crosses the boundary on this path.
+    Lambda's bundle. No caller SQL crosses the boundary on this path. An optional `limit` bounds a
+    paginable verb's rows (server-side integer-cast trailing LIMIT, T1.16 c1).
     """
     verb = event.get("verb")
     if not isinstance(verb, str) or not verb:
@@ -155,7 +157,7 @@ def action_named_read(event: dict[str, Any], con: Any) -> dict[str, Any]:
     params = event.get("params") or {}
     if not isinstance(params, dict):
         raise rt.DuckLakeRuntimeError("named_read 'params' must be an object of named bind values")
-    rows = rt.named_read(con, verb=verb, params=params)
+    rows = rt.named_read(con, verb=verb, params=params, limit=event.get("limit"))
     return {
         "ok": True,
         "verb": verb,
@@ -163,6 +165,15 @@ def action_named_read(event: dict[str, Any], con: Any) -> dict[str, Any]:
         "rows": _json_safe(rows),
         "row_count": len(rows),
     }
+
+
+def action_describe(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """Agent-facing describe verb (CD.10 / CD.15): per-verb parameter schema for every NAMED_READS entry.
+
+    Connectionless (pure metadata, Decision 88 bounded egress) -- registered in
+    _CONNECTIONLESS_ACTIONS so it runs before any connection open.
+    """
+    return {"ok": True, "verbs": rt.describe_named_reads()}
 
 
 def action_read_ops_history(event: dict[str, Any], con: Any) -> dict[str, Any]:
@@ -223,11 +234,13 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "query_ops": action_query_ops,
     "connect_probe": action_connect_probe,
     "reset_warm_connection": action_reset_warm_connection,
+    "describe": action_describe,
 }
 
 # Actions that run BEFORE the normal connection open (e.g. to diagnose a hanging connect, or to drop
-# the warm connection without opening a new one).
-_CONNECTIONLESS_ACTIONS = {"connect_probe", "reset_warm_connection"}
+# the warm connection without opening a new one). `describe` is pure metadata (no Neon connection,
+# Decision 88 bounded egress).
+_CONNECTIONLESS_ACTIONS = {"connect_probe", "reset_warm_connection", "describe"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:

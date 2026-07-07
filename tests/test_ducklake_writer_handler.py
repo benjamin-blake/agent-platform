@@ -381,6 +381,59 @@ def test_handler_runtime_error_maps_500(monkeypatch):
     assert json.loads(r["body"])["error_type"] == "runtime"
 
 
+def test_handler_status_transition_error_maps_422(monkeypatch):
+    """A resolved-rec reactivation (StatusTransitionError) maps to 422 error_type=status_transition."""
+    con = FakeCon()
+    monkeypatch.setattr(h, "_open_writer_connection", lambda: con)
+
+    def _raise(c, rec, **kw):
+        raise rt.StatusTransitionError("illegal status transition 'closed' -> 'open'")
+
+    monkeypatch.setattr(rt, "write_scd2", _raise)
+    monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
+    r = h.handler({"action": "update_ops", "table": "ops_recommendations", "record": {"id": "rec-1", "status": "open"}})
+    assert r["statusCode"] == 422
+    assert json.loads(r["body"])["error_type"] == "status_transition"
+
+
+# ---------------------------------------------------------------------------
+# describe: per-verb parameter schema (CD.10 / CD.15), connectionless
+# ---------------------------------------------------------------------------
+
+
+def test_action_describe_returns_write_verb_schema():
+    out = h.action_describe({}, None)
+    assert out["ok"] is True
+    assert set(out["verbs"]) == set(rt.VERB_REGISTRY)
+    assert "params_schema" in out["verbs"]["update_ops"]
+
+
+def test_describe_in_connectionless_actions():
+    assert "describe" in h._CONNECTIONLESS_ACTIONS
+    assert h._ACTIONS["describe"] is h.action_describe
+
+
+def test_handler_describe_end_to_end():
+    r = h.handler({"action": "describe"})
+    assert r["statusCode"] == 200
+    body = json.loads(r["body"])
+    assert body["ok"] is True
+    assert "write_ops" in body["verbs"]
+
+
+# ---------------------------------------------------------------------------
+# Growth-safe per-verb parametrized dispatch: every VERB_REGISTRY write verb has a describe entry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("verb", sorted(rt.VERB_REGISTRY))
+def test_describe_write_verbs_covers_every_registered_verb(verb):
+    out = h.action_describe({}, None)
+    assert verb in out["verbs"]
+    assert "description" in out["verbs"][verb]
+    assert "params_schema" in out["verbs"][verb]
+
+
 # ---------------------------------------------------------------------------
 # metadata helpers
 # ---------------------------------------------------------------------------

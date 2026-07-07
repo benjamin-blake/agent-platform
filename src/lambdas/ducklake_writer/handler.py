@@ -9,8 +9,10 @@ projection, the schema gate, bounded OCC retry, partition pruning, and inlining-
 PRODUCTION OPS PATH (T2.19 / Decision 81): the writer is the SOLE write authority for the ops_*
 governance tables (CD.33 clause 4). `write_ops` (INSERT history + MERGE current, schema-gated,
 bounded OCC) and `update_ops` (in-transaction referential existence check before MERGE -- loud-fail
-if the rec is absent, CD.33 clause 8 / D-5) are the production actions; the smoke actions remain for
-the T2.17 gates. Every ops write transits this URL; no out-of-band write path exists.
+if the rec is absent, CD.33 clause 8 / D-5; also enforces the rec status DAG, Decision 103) are the
+production actions; `describe` is the agent-facing per-verb parameter schema (CD.10 / CD.15); the
+smoke actions remain for the T2.17 gates. Every ops write transits this URL; no out-of-band write
+path exists.
 """
 
 from __future__ import annotations
@@ -228,6 +230,15 @@ def action_create_ops_tables(event: dict[str, Any], con: Any) -> dict[str, Any]:
         "force_recreate": force,
         "counter_seed": counter_seed,
     }
+
+
+def action_describe(event: dict[str, Any], _con: Any) -> dict[str, Any]:
+    """Agent-facing describe verb (CD.10 / CD.15): description + params_schema for every VERB_REGISTRY entry.
+
+    Connectionless (pure metadata, Decision 88 bounded egress) -- registered in
+    _CONNECTIONLESS_ACTIONS so it runs before any connection open.
+    """
+    return {"ok": True, "verbs": rt.describe_write_verbs()}
 
 
 def action_reset_warm_connection(event: dict[str, Any], _con: Any) -> dict[str, Any]:
@@ -652,12 +663,13 @@ _ACTIONS: dict[str, Callable[[dict[str, Any], Any], dict[str, Any]]] = {
     "churn_single": action_churn_single,
     "connect_probe": action_connect_probe,
     "reset_warm_connection": action_reset_warm_connection,
+    "describe": action_describe,
 }
 
 # Actions that manage their own connections (churn opens many; attach measures connect time itself;
 # connect_probe runs BEFORE the connection open to diagnose a hanging connect; reset_warm_connection
-# drops the warm connection without opening a new one).
-_CONNECTIONLESS_ACTIONS = {"churn", "churn_single", "connect_probe", "reset_warm_connection"}
+# drops the warm connection without opening a new one; describe is pure metadata, Decision 88).
+_CONNECTIONLESS_ACTIONS = {"churn", "churn_single", "connect_probe", "reset_warm_connection", "describe"}
 
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -708,6 +720,8 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
             return _response(200, fn(payload, con))
     except rt.SchemaGateError as exc:
         return _response(422, {"ok": False, "error_type": "schema_gate", "error": str(exc)})
+    except rt.StatusTransitionError as exc:
+        return _response(422, {"ok": False, "error_type": "status_transition", "error": str(exc)})
     except rt.ReferentialError as exc:
         return _response(409, {"ok": False, "error_type": "referential", "error": str(exc)})
     except WriterActionError as exc:

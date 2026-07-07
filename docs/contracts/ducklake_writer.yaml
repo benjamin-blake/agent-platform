@@ -104,13 +104,14 @@ verbs:
       200: "record updated; body {ok, table, ulid, key, occ_retries, commit_ms}"
       400: "WriterActionError: unknown/missing table"
       409: "ReferentialError: update of an absent merge key (CD.33 cl.8 / D-5 require_exists); never a silent create"
-      422: "SchemaGateError: record carries a field outside the table schema gate"
+      422: "SchemaGateError: record carries a field outside the table schema gate. OR StatusTransitionError: illegal rec status transition (Decision 103) -- a resolved rec (closed/declined/superseded) silently reactivated to open"
       503: "OCCRetryExhaustedError (retryable)"
       500: "DuckLakeRuntimeError / VersionMismatchError"
     typed_errors:
       action: "unknown table (400)"
       referential: "update of an absent merge key; loud-fail, no silent create (409)"
       schema_gate: "field outside the table schema gate (422)"
+      status_transition: "a resolved rec (closed/declined/superseded) reactivated to open (422); every LIVE transition (failed->open, *->superseded, open/failed->declined, open->closed, same-status) passes -- Decision 103"
       occ_exhausted: "OCC retry budget exhausted; safe to retry (503)"
       version_mismatch: "DuckDB/extension version mismatch (500)"
       runtime: "unclassified runtime loud-fail (500)"
@@ -144,6 +145,15 @@ verbs:
       action: "unknown table or missing destructive-action confirm guard (400)"
       version_mismatch: "DuckDB/extension version mismatch (500)"
       runtime: "unclassified runtime loud-fail (500)"
+  describe:
+    payload_schema_ref: >-
+      event envelope {action: "describe"}. Agent-facing verb (CD.10 / CD.15): returns the
+      description + params_schema for every VERB_REGISTRY write verb (write_ops, update_ops,
+      file_ops, create_ops_tables). Connectionless -- pure metadata, no Neon connection (Decision
+      88 bounded egress).
+    response_codes:
+      200: "body {ok, verbs: {<verb>: {description, params_schema}, ...}}"
+    typed_errors: {}
 audit_invariants:
   - "Closed boundary: every ops_* write transits this Function URL; there is no out-of-band write path (Decision 81 cl.7)."
   - "Loud-fail discipline: every failure maps to a typed 4xx/5xx; never a silent drop (Decision 55 / Decision 70)."

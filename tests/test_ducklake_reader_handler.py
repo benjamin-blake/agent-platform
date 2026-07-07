@@ -209,15 +209,27 @@ def test_action_read_ops_current_structural_filter(monkeypatch):
 def test_action_named_read(monkeypatch):
     captured = {}
 
-    def _named(con, *, verb, params):  # noqa: ARG001
-        captured.update(verb=verb, params=params)
+    def _named(con, *, verb, params, limit=None):  # noqa: ARG001
+        captured.update(verb=verb, params=params, limit=limit)
         return [{"id": "rec-9"}]
 
     monkeypatch.setattr(rt, "named_read", _named)
     out = h.action_named_read({"verb": "rec_by_id", "params": {"id": "rec-9"}}, FakeCon())
     assert out["ok"] is True
     assert out["registry_version"] == rt.NAMED_READS_VERSION
-    assert captured == {"verb": "rec_by_id", "params": {"id": "rec-9"}}
+    assert captured == {"verb": "rec_by_id", "params": {"id": "rec-9"}, "limit": None}
+
+
+def test_action_named_read_passes_limit_through(monkeypatch):
+    captured = {}
+
+    def _named(con, *, verb, params, limit=None):  # noqa: ARG001
+        captured.update(limit=limit)
+        return [{"id": "rec-9"}]
+
+    monkeypatch.setattr(rt, "named_read", _named)
+    h.action_named_read({"verb": "open_recs", "params": {}, "limit": 5}, FakeCon())
+    assert captured == {"limit": 5}
 
 
 def test_action_named_read_requires_verb():
@@ -380,6 +392,55 @@ def test_handler_connect_probe_success(monkeypatch):
 def test_connect_probe_in_connectionless_actions():
     """connect_probe must be in _CONNECTIONLESS_ACTIONS so it bypasses _open_reader_connection."""
     assert "connect_probe" in h._CONNECTIONLESS_ACTIONS
+
+
+# ---------------------------------------------------------------------------
+# describe: per-verb parameter schema (CD.10 / CD.15), connectionless
+# ---------------------------------------------------------------------------
+
+
+def test_action_describe_returns_named_reads_schema():
+    out = h.action_describe({}, None)
+    assert out["ok"] is True
+    assert set(out["verbs"]) == set(rt.NAMED_READS)
+    assert "params" in out["verbs"]["rec_by_id"]
+
+
+def test_describe_in_connectionless_actions():
+    assert "describe" in h._CONNECTIONLESS_ACTIONS
+    assert h._ACTIONS["describe"] is h.action_describe
+
+
+def test_handler_describe_end_to_end():
+    """describe dispatches without opening a connection (registered connectionless)."""
+    r = h.handler({"action": "describe"})
+    assert r["statusCode"] == 200
+    body = json.loads(r["body"])
+    assert body["ok"] is True
+    assert "open_recs" in body["verbs"]
+
+
+# ---------------------------------------------------------------------------
+# Growth-safe per-verb parametrized dispatch: every NAMED_READS verb renders + validates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("verb", sorted(rt.NAMED_READS))
+def test_named_read_dispatch_every_registered_verb(verb, monkeypatch):
+    """Every NAMED_READS verb dispatches through action_named_read with its declared params bound."""
+    entry = rt.NAMED_READS[verb]
+    captured = {}
+
+    def _named(con, *, verb, params, limit=None):  # noqa: ARG001
+        captured.update(verb=verb, params=params)
+        return []
+
+    monkeypatch.setattr(rt, "named_read", _named)
+    params = {p: "x" for p in entry.params}
+    out = h.action_named_read({"verb": verb, "params": params}, FakeCon())
+    assert out["ok"] is True
+    assert out["verb"] == verb
+    assert captured["params"] == params
 
 
 def test_action_read_ops_current_rejects_malformed_filter():
