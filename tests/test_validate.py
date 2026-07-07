@@ -2371,6 +2371,7 @@ class TestExtractEnforcedMap:
         assert result == {}
 
 
+@pytest.mark.usefixtures("_neutralized_pre_registry")
 class TestGraduationGuard:
     """Tests for _check_graduation_guard() -- enforced flip validation."""
 
@@ -3469,6 +3470,70 @@ class TestRunPytestDiffReactiveDefer:
         assert failed == ["Tests (pytest)"]
 
 
+class TestPytestDiffParallelAndTimeout:
+    """run_pytest_diff wires -n (parallel) and --timeout on both pytest invocations
+    (pre-validation-performance / rec-2387)."""
+
+    def test_primary_invocation_carries_parallel_and_timeout_flags(self) -> None:
+        captured_cmds: list[list[str]] = []
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            captured_cmds.append(list(cmd))
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            result.returncode = 0
+            return result
+
+        failed: list[str] = []
+        with patch("scripts.checks._common.run", side_effect=mock_run):
+            run_pytest_diff(["tests/test_a.py"], failed)
+
+        real_run_cmds = [c for c in captured_cmds if "--collect-only" not in c]
+        assert len(real_run_cmds) == 1
+        cmd = real_run_cmds[0]
+        assert "-n" in cmd
+        assert cmd[cmd.index("-n") + 1] == "auto"
+        assert "--timeout" in cmd
+        assert failed == []
+
+    def test_reactive_rerun_invocation_carries_parallel_and_timeout_flags(self) -> None:
+        captured_cmds: list[list[str]] = []
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            captured_cmds.append(list(cmd))
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            elif len([c for c in captured_cmds if "--collect-only" not in c]) == 1:
+                # the initial (non--collect-only) combined run: fail with a
+                # deliberately-excluded, genuinely-absent heavy-dep signature so the
+                # reactive re-run path fires
+                result.returncode = 1
+                result.stdout = "FAILED tests/test_ops_writer.py::A::test_a - ModuleNotFoundError: No module named 'pandas'\n"
+            else:
+                result.returncode = 0
+                result.stdout = ""
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_ops_writer.py"], failed)
+
+        real_run_cmds = [c for c in captured_cmds if "--collect-only" not in c]
+        assert len(real_run_cmds) >= 2, f"expected at least primary + reactive rerun, got: {captured_cmds}"
+        rerun_cmd = real_run_cmds[-1]
+        assert "-n" in rerun_cmd
+        assert rerun_cmd[rerun_cmd.index("-n") + 1] == "auto"
+        assert "--timeout" in rerun_cmd
+        assert failed == []
+
+
 @pytest.fixture
 def _neutralized_pre_registry():
     """Patch every check-kind step of pre_sequence() to a no-op on the `validate` namespace.
@@ -4233,6 +4298,53 @@ class TestBudgetRecFilingCiGuard:
             _file_budget_bypass_rec(60.0, ["scripts/validate.py"], "disk issue")
 
         mock_portal.file_rec.assert_called_once()
+
+
+class TestBudgetBreachCiTelemetry:
+    """CI-native budget-breach telemetry (pre-validation-performance / rec-2387): with
+    CI="true" and GITHUB_STEP_SUMMARY set, _file_budget_breach_rec writes dominant_phase +
+    the diff manifest to that file, files no rec, and stages no outbox entry."""
+
+    def test_writes_dominant_phase_and_manifest_to_step_summary(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("CI", "true")
+        summary_file = tmp_path / "step-summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
+        mock_portal = MagicMock()
+
+        with (
+            patch("scripts.checks._common.run") as mock_run,
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _file_budget_breach_rec(400.0, ["scripts/validate.py", "tests/test_validate.py"], "pytest_diff")
+
+        content = summary_file.read_text(encoding="utf-8")
+        assert "pytest_diff" in content
+        assert "scripts/validate.py" in content
+        mock_portal.file_rec.assert_not_called()
+        mock_run.assert_not_called()
+
+    def test_no_ops_outbox_staged(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("CI", "true")
+        summary_file = tmp_path / "step-summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
+        outbox_dir = tmp_path / "logs" / ".ops-outbox"
+
+        with patch("scripts.checks._common.run") as mock_run:
+            _file_budget_breach_rec(400.0, ["scripts/validate.py"], "pytest_diff")
+
+        mock_run.assert_not_called()
+        assert not outbox_dir.exists()
+
+    def test_falls_back_to_stderr_when_step_summary_unset(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+        _file_budget_breach_rec(400.0, ["scripts/validate.py"], "pytest_diff")
+
+        captured = capsys.readouterr()
+        assert "pytest_diff" in captured.err
 
 
 class TestValidateCiRcaTrigger:
