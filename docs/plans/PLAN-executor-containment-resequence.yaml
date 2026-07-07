@@ -47,10 +47,10 @@ verification_plan:
     fix_if: "Any --pre failure -- read the failing check name, correct the roadmap edit; if a plan-document check flags this PLAN file, fix the schema mismatch."
   - step: 4
     phase: pre-deploy
-    action: "No deferred_post_mvp item imposes a pre-MVP authoring obligation on a live item (EXR-03 grep acceptance)."
-    command: "bin/venv-python - <<'PY'\nimport re,sys\nimport yaml\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nbad=[]\nfor it in d['tier_items']:\n    if it.get('status')=='deferred_post_mvp':\n        blob=(it.get('intent','') or '')+(it.get('progress_note','') or '')\n        if 'MUST conform' in blob or 'author before' in blob:\n            bad.append(it['id'])\nprint('deferred items with MUST conform/author before:', bad)\nsys.exit(1 if bad else 0)\nPY"
-    expected: "Prints an empty list [] and exits 0 -- the phrases now live only on the live T4.10a, not on the deferred T4.10 remnant."
-    fix_if: "T4.10 (or any deferred item) still contains the phrases -- move the 'personas MUST conform' obligation onto the live T4.10a and rewrite the T4.10 remnant prose to reactivation-time semantics."
+    action: "No deferred_post_mvp item imposes a pre-MVP authoring/conformance obligation on a live item, scanning intent + progress_note AND exit_criteria text (EXR-03 grep acceptance; covers 'MUST conform', 'required to conform', and 'author before')."
+    command: "bin/venv-python - <<'PY'\nimport sys\nimport yaml\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nterms=('conform','author before')\nbad=[]\nfor it in d['tier_items']:\n    if it.get('status')=='deferred_post_mvp':\n        parts=[it.get('intent','') or '', it.get('progress_note','') or '']\n        for c in it.get('exit_criteria',[]):\n            parts.append(c if isinstance(c,str) else (c.get('text','') or ''))\n        blob=' '.join(parts).lower()\n        if any(t in blob for t in terms):\n            bad.append(it['id'])\nprint('deferred items imposing conform/author-before obligation:', bad)\nsys.exit(1 if bad else 0)\nPY"
+    expected: "Prints an empty list [] and exits 0 -- the conformance/authoring obligation lives only on the live T4.10a (intent + criteria), not on the deferred T4.10 remnant (incl. its old criterion-5 'required to conform', which EXR-03b drops)."
+    fix_if: "T4.10 (or any deferred item) still carries a 'conform'/'author before' obligation in intent, progress_note, OR an exit criterion -- move it onto the live T4.10a and rewrite/trim the T4.10 remnant to reactivation-time semantics."
   - step: 5
     phase: pre-deploy
     action: "Structural invariants of the re-sequencing hold (statuses, depends_on, T4.1 shape, T4.2 wiring, CD.38 gates)."
@@ -63,6 +63,12 @@ verification_plan:
     command: "bin/venv-python - <<'PY'\nimport yaml,sys\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nt42=[it for it in d['tier_items'] if it['id']=='T4.2'][0]\ntexts=[ (c if isinstance(c,str) else c.get('text','')) for c in t42.get('exit_criteria',[]) ]\nhit=[t for t in texts if 'budget' in t.lower() and ('smoke' in t.lower() or 'counter' in t.lower())]\nprint('budget-counter criterion:', hit)\nsys.exit(0 if hit else 1)\nPY"
     expected: "Prints a non-empty list -- a T4.2 exit criterion names enforced budget counters in the e2e smoke."
     fix_if: "No hit -- add the exit criterion to T4.2 naming state-machine-enforced budget counters (max revisions / total LLM calls per rec) in the e2e smoke run."
+  - step: 7
+    phase: pre-deploy
+    action: "AC2 + AC5 coverage: T4.2's e2e-smoke criterion names the T4.9a callback mechanism, and every touched item's progress_note cites an audit EXR id + Decision 93."
+    command: "bin/venv-python - <<'PY'\nimport sys\nimport yaml\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nitems={it['id']:it for it in d['tier_items']}\nfails=[]\nt42=items['T4.2']\ntexts=[(c if isinstance(c,str) else c.get('text','')) for c in t42.get('exit_criteria',[])]\nsmoke=[t for t in texts if 'file_pr' in t.lower()]\nif not any(('t4.9a' in t.lower() or 'callback' in t.lower()) for t in smoke):\n    fails.append('T4.2 e2e-smoke criterion does not name the T4.9a callback')\nfor tid in ['T4.1','T4.2','T4.9','T4.9a','T4.10','T4.10a','T4.11']:\n    pn=(items.get(tid,{}).get('progress_note','') or '')\n    if 'EXR-' not in pn or 'Decision 93' not in pn:\n        fails.append(tid+' progress_note missing EXR id or Decision 93 citation')\nfor f in fails: print('BAD', f)\nprint('OK' if not fails else 'FAILS='+str(len(fails)))\nsys.exit(1 if fails else 0)\nPY"
+    expected: "Prints OK and exits 0 -- T4.2's smoke names the T4.9a callback and all seven touched items' progress_notes cite an EXR id and Decision 93."
+    fix_if: "A 'BAD ...' line names the gap -- reword T4.2's smoke criterion to name T4.9a/callback, or add the missing EXR-id + Decision 93 citation to the named item's progress_note."
 constraints:
   - "Roadmap-bookkeeping only: every edit lands in docs/ROADMAP-PLATFORM.yaml. No source code, no recs, no decision entries (Decision 93 permits per-item deferred_post_mvp -> not_started reactivation with no decision entry; Decision 86 routes rationale to progress_notes, not new prose docs)."
   - "Plan stays IMPLEMENTATION type; reactivating to not_started is roadmap sequencing, NOT executor execution -- the items remain gated behind their depends_on and the Decision 67 / CD.17 freeze (scout RELATED)."
