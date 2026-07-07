@@ -225,3 +225,118 @@ entries:
       pattern: '## Decision 122: Ratify CD\.28'
       operator: eq
       count: 1
+  - check_id: roadmap-t4-deferred-no-conform-obligation
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: executor-containment-resequence
+    graduated_at: '2026-07-07'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "import sys,yaml\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nterms=('conform','author\
+        \ before')\nbad=[]\nfor it in d['tier_items']:\n    if it.get('status')=='deferred_post_mvp':\n\
+        \        parts=[it.get('intent','') or '', it.get('progress_note','') or '']\n        for c in it.get('exit_criteria',[]):\n\
+        \            parts.append(c if isinstance(c,str) else (c.get('text','') or ''))\n        blob='\
+        \ '.join(parts).lower()\n        if any(t in blob for t in terms):\n            bad.append(it['id'])\n\
+        sys.exit(1 if bad else 0)\n"
+  - check_id: roadmap-t4-containment-resequence-invariants
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: executor-containment-resequence
+    graduated_at: '2026-07-07'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import yaml,sys
+
+        d=yaml.safe_load(open(''docs/ROADMAP-PLATFORM.yaml''))
+
+        items={it[''id'']:it for it in d[''tier_items'']}
+
+        cds={c[''id'']:c for c in d.get(''candidate_decisions'',[])}
+
+        checks=[]
+
+        def c(name,cond): checks.append((name,bool(cond)))
+
+        c(''T4.9a not_started'', items.get(''T4.9a'',{}).get(''status'')==''not_started'')
+
+        c(''T4.9a deps'', items.get(''T4.9a'',{}).get(''depends_on'')==[''T4.1'',''T2.20''])
+
+        c(''T4.9 deferred'', items.get(''T4.9'',{}).get(''status'')==''deferred_post_mvp'')
+
+        c(''T4.10a not_started'', items.get(''T4.10a'',{}).get(''status'')==''not_started'')
+
+        c(''T4.10a deps'', items.get(''T4.10a'',{}).get(''depends_on'')==[''T4.1'',''T1.12''])
+
+        c(''T4.10 deferred'', items.get(''T4.10'',{}).get(''status'')==''deferred_post_mvp'')
+
+        c(''T4.11 not_started'', items.get(''T4.11'',{}).get(''status'')==''not_started'')
+
+        c(''T4.11 deps'', items.get(''T4.11'',{}).get(''depends_on'')==[''T4.1'',''T4.10a''])
+
+        dep2=items.get(''T4.2'',{}).get(''depends_on'',[])
+
+        c(''T4.2 dep T4.9a'', ''T4.9a'' in dep2)
+
+        c(''T4.2 dep T4.10a'', ''T4.10a'' in dep2)
+
+        shape=items.get(''T4.1'',{}).get(''intent'','''')
+
+        c(''T4.1 merge state'', ''merge'' in shape and ''deploy_dispatch'' in shape)
+
+        c(''CD.38 gates T4.9a'', ''T4.9a'' in cds.get(''CD.38'',{}).get(''gates'',[]))
+
+        bad=[n for n,ok in checks if not ok]
+
+        sys.exit(1 if bad else 0)
+
+        '
+  - check_id: roadmap-t4-2-budget-counter-exit-criterion
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: executor-containment-resequence
+    graduated_at: '2026-07-07'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import yaml,sys
+
+        d=yaml.safe_load(open(''docs/ROADMAP-PLATFORM.yaml''))
+
+        t42=[it for it in d[''tier_items''] if it[''id'']==''T4.2''][0]
+
+        texts=[(c if isinstance(c,str) else c.get(''text'','''')) for c in t42.get(''exit_criteria'',[])]
+
+        hit=[t for t in texts if ''budget'' in t.lower() and (''smoke'' in t.lower() or ''counter'' in t.lower())]
+
+        sys.exit(0 if hit else 1)
+
+        '
+  - check_id: roadmap-t4-2-callback-and-exr-citations
+    primitive_slot: command_exit_zero
+    guard_target: docs/ROADMAP-PLATFORM.yaml
+    guard_symbol: null
+    plan_slug: executor-containment-resequence
+    graduated_at: '2026-07-07'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - "import sys,yaml\nd=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))\nitems={it['id']:it for it\
+        \ in d['tier_items']}\nfails=[]\nt42=items['T4.2']\ntexts=[(c if isinstance(c,str) else c.get('text',''))\
+        \ for c in t42.get('exit_criteria',[])]\nsmoke=[t for t in texts if 'file_pr' in t.lower()]\nif\
+        \ not any(('t4.9a' in t.lower() or 'callback' in t.lower()) for t in smoke):\n    fails.append('missing')\n\
+        for tid in ['T4.1','T4.2','T4.9','T4.9a','T4.10','T4.10a','T4.11']:\n    pn=(items.get(tid,{}).get('progress_note','')\
+        \ or '')\n    if 'EXR-' not in pn or 'Decision 93' not in pn:\n        fails.append(tid)\nsys.exit(1\
+        \ if fails else 0)\n"
