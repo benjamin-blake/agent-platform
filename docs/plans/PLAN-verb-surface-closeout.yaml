@@ -80,16 +80,18 @@ acceptance_criteria:
   - >-
     c1: named_read accepts an optional integer `limit`; paginable list-family verbs return at most
     `limit` rows in a deterministic TOTAL order; ci_rca_open and budget_bypass_recent gain an `id`
-    tiebreak; a growth-safe invariant test asserts every LIMIT-bearing NAMED_READS verb ends its
-    ORDER BY in a unique key (id or ulid). No caller SQL crosses the boundary (server-side LIMIT only).
+    tiebreak; a growth-safe invariant test asserts that every NAMED_READS verb that is EITHER
+    paginable=True OR carries a static LIMIT ends its ORDER BY in a unique key (id or ulid). No caller
+    SQL crosses the boundary (server-side LIMIT only).
   - >-
     c2: describe_named_reads() and describe_write_verbs() return per-verb parameter schema (JSON-schema
     shape); the reader and writer Lambdas each expose a `describe` action returning them.
   - >-
-    c3: update_ops rejects a known-illegal rec status transition (e.g. closed->open) with a typed HTTP
-    422 (error_type "status_transition"); legal forward transitions and same-status writes pass;
-    unrecognised status vocabulary is skipped (not silently rejected). Enforcement reuses write_scd2's
-    require_exists fetch.
+    c3: update_ops rejects a known-illegal rec status transition -- reactivating a RESOLVED rec
+    (closed/declined/superseded -> open) -- with a typed HTTP 422 (error_type "status_transition"). ALL
+    live transitions pass: failed->open (executor restart), *->superseded and failed/open->declined
+    (postmortem purge), open->{closed,failed,declined,superseded}, and same-status writes; unrecognised
+    status vocabulary is skipped (not silently rejected). Enforcement reuses write_scd2's require_exists fetch.
   - >-
     c4: a `rec_history` named read returns the prior SCD2 versions of an updated rec (>=2 rows for a
     once-updated rec) ordered newest-first (last_updated_timestamp DESC, ulid DESC); NAMED_READS_VERSION == 3.
@@ -102,8 +104,9 @@ acceptance_criteria:
     ops_recommendations.yaml status-enum divergence is left unmodified with a recorded deferral note.
   - >-
     c6: T0.7a, T0.7b, T0.7c, T1.1, T1.2, T1.3 and T1.16 are status: complete in docs/ROADMAP-PLATFORM.yaml;
-    T1.16 c7 is rehomed to T3.3; the platform_roadmap Pydantic validators load without error (no stranded
-    dependency, Decision 93).
+    T1.16 criteria c1-c6 are status: met with met_by: verb-surface-closeout, and c7 is status: rehomed with
+    met_by: T3.3 (a reciprocal telemetry-read-verb criterion/note added on T3.3); the platform_roadmap
+    Pydantic validators load without error (rules (g)/(h) satisfied; no stranded dependency, Decision 93).
   - >-
     validate --pre is green and the 4 affected active Lambda artifacts (ducklake_reader, ducklake_writer,
     ducklake_catalog_dr, ducklake_maintenance) are rebuilt, deployed, and pass their smoke gates (Decision 79).
@@ -121,31 +124,33 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: >-
-      Total-order invariant -- every NAMED_READS verb whose SQL carries a LIMIT ends its ORDER BY in a
-      unique key (id or ulid), so a bounded read is reproducible.
+      Total-order invariant -- every NAMED_READS verb that is paginable OR carries a static LIMIT ends
+      its ORDER BY in a unique key (id or ulid), so a bounded read is reproducible.
     command: >-
       bin/venv-python -c "import re;from src.common.ducklake_scd2_schema import NAMED_READS;
-      bad=[v for v,n in NAMED_READS.items() if 'LIMIT' in n.sql.upper() and not
-      re.search(r'ORDER BY .*\\b(id|ulid)\\b[^,]*$', n.sql, re.I|re.S)];
+      bad=[v for v,n in NAMED_READS.items() if (getattr(n,'paginable',False) or 'LIMIT' in n.sql.upper())
+      and not re.search(r'ORDER BY .*\\b(id|ulid)\\b[^,]*$', n.sql, re.I|re.S)];
       assert not bad, bad; print('total-order-ok', sorted(NAMED_READS))"
-    expected: "Exit 0; prints total-order-ok -- includes ci_rca_open and budget_bypass_recent (now id-tiebroken)."
-    fix_if: Non-empty `bad` list -- a LIMIT-bearing verb lacks a unique-key tiebreak.
+    expected: >-
+      Exit 0; prints total-order-ok -- covers the paginable verbs (open_recs, recs_by_title_prefix) AND the
+      static-LIMIT verbs (ci_rca_open, budget_bypass_recent, now id-tiebroken).
+    fix_if: Non-empty `bad` list -- a paginable or LIMIT-bearing verb lacks a unique-key tiebreak.
     hermetic: true
   - step: 3
     phase: pre-deploy
     action: >-
-      The rec status-DAG checker rejects a known-illegal transition, allows a legal one and same-status,
-      and skips unrecognised vocabulary.
+      The rec status-DAG checker allows EVERY live transition (failed->open, *->superseded,
+      failed/open->declined, open->closed, same-status), skips unknown vocab, and rejects ONLY a
+      resolved-rec reactivation (closed/declined/superseded -> open).
     command: >-
-      bin/venv-python -c "from src.common.ducklake_scd2_schema import check_rec_status_transition as c, StatusTransitionError as E;
-      import pytest;
-      c('ops_recommendations','open','closed'); c('ops_recommendations','closed','closed');
-      c('ops_recommendations','open','open'); c('ops_recommendations','banana','open');
-      raised=False;
-      \nexec('try:\\n c(\"ops_recommendations\",\"closed\",\"open\")\\nexcept E:\\n raised=True');
-      assert raised, 'closed->open must raise'; print('dag-ok')"
-    expected: Exit 0; prints dag-ok -- illegal closed->open raises StatusTransitionError, others pass.
-    fix_if: AssertionError -- DAG missing an edge or wrongly rejecting a legal/unknown transition.
+      bin/venv-python -c "import pytest; from src.common.ducklake_scd2_schema import check_rec_status_transition as c, StatusTransitionError as E; T='ops_recommendations';
+      [c(T,a,b) for a,b in [('failed','open'),('open','superseded'),('closed','superseded'),('failed','declined'),('open','declined'),('open','closed'),('closed','closed'),('banana','open')]];
+      [pytest.raises(E, c, T, a, b) for a,b in [('closed','open'),('declined','open'),('superseded','open')]];
+      print('dag-ok')"
+    expected: Exit 0; prints dag-ok -- all live edges pass, all three resolved->open reactivations raise StatusTransitionError.
+    fix_if: >-
+      AssertionError from a bare call -- a live transition is wrongly rejected (breaks executor reset /
+      postmortem purge). pytest.raises failure -- a resurrection edge is not being blocked.
     hermetic: true
   - step: 4
     phase: pre-deploy
@@ -169,10 +174,12 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Runtime unit tests pass -- named_read limit application (paginable vs non-paginable) and
-      write_scd2 status-DAG enforcement on the require_exists path (illegal -> StatusTransitionError).
+      write_scd2 status-DAG enforcement on the require_exists path, covering each live transition as a
+      PASS (failed->open, *->superseded, failed/open->declined) and each resolved->open reactivation as
+      a StatusTransitionError.
     command: bin/venv-python -m pytest tests/test_ducklake_runtime.py -q
-    expected: All pass, including a test asserting a closed->open update_scd2 raises StatusTransitionError.
-    fix_if: Failure indicates limit not applied server-side or the DAG not wired into write_scd2.
+    expected: All pass, including a write_scd2(require_exists) closed->open case that raises StatusTransitionError and a failed->open case that commits.
+    fix_if: Failure indicates limit not applied server-side, the DAG not wired into write_scd2, or a live transition wrongly rejected.
   - step: 7
     phase: pre-deploy
     action: >-
@@ -217,6 +224,23 @@ verification_plan:
     fix_if: A gate fails -- the new shared code broke an existing runtime path; RCA before proceeding (Decision 55).
   - step: 13
     phase: post-deploy
+    action: >-
+      ducklake_maintenance smoke gate passes against its freshly deployed bundle -- confirms the
+      maintenance Lambda still loads the shared modules and its merge path works (regression for the two
+      deploy-only artifacts that VP step 12 does not cover).
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-merge --profile agent_platform
+    expected: The daily-merge gate reports ok (files merged / count assertion holds) -- no shared-module import or runtime regression in maintenance.
+    fix_if: Non-200 / import error -- the additive shared-module change broke maintenance's bundle; RCA (Decision 55).
+  - step: 14
+    phase: post-deploy
+    action: >-
+      ducklake_catalog_dr smoke gate passes against its freshly deployed bundle -- confirms the DR
+      Lambda still loads the shared modules and its dump path works.
+    command: bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-dr --profile agent_platform
+    expected: The FP-B DR gate reports ok (dump object + engine-version tag + metric) -- no regression in catalog_dr.
+    fix_if: Non-200 / import error -- the additive shared-module change broke catalog_dr's bundle; RCA (Decision 55).
+  - step: 15
+    phase: post-deploy
     action: The deployed reader serves `describe` and a bounded, ordered named_read; registry_version is 3.
     command: >-
       bin/venv-python -c "from src.common.iceberg_reader import DuckLakeReader;
@@ -226,7 +250,7 @@ verification_plan:
       assert p['registry_version']==3 and p['row_count']<=5, p; print('reader-live-ok', p['row_count'])"
     expected: Exit 0 -- describe lists verbs; open_recs honours limit=5 and stamps registry_version 3.
     fix_if: AssertionError/non-200 -- the deployed bundle lacks the new code (redeploy) or limit not applied.
-  - step: 14
+  - step: 16
     phase: post-deploy
     action: The deployed reader's rec_history verb returns >=2 ordered versions for a rec that has been updated at least once.
     command: >-
@@ -239,25 +263,28 @@ verification_plan:
       Exit 0 -- rec_history returns the append-history rows for the probed id (>=2 for a rec updated at
       least once), newest-first. (Pick an id known to have >1 version; a fresh file_rec+update_rec pair also qualifies.)
     fix_if: Non-200 or 0 rows for a multi-version id -- rec_history not reading {hist} or not deployed.
-  - step: 15
+  - step: 17
     phase: post-deploy
     action: >-
-      The deployed writer rejects a known-illegal status transition with a typed 422 -- exercised via
-      the portal against an already-closed rec (the write is rejected before any mutation, so this is
-      non-destructive).
+      The deployed writer rejects a resolved-rec reactivation (closed->open) with a typed 422 -- exercised
+      via the portal against an already-RESOLVED rec (the write is rejected before any mutation, so this
+      is non-destructive). NB: use a resolved rec (closed/declined/superseded), NOT a failed rec --
+      failed->open is a LEGAL executor-restart transition and would (correctly) succeed.
     command: >-
-      bin/venv-python -c "from scripts import ops_data_portal as p;
-      import os; rid=os.environ['CLOSED_REC_ID'];
-      raised=False;
-      \nexec('try:\\n p.update_rec(rid, {\"status\":\"open\"}, profile=\"agent_platform\")\\nexcept Exception as e:\\n raised=(\"status_transition\" in str(e) or \"422\" in str(e))');
-      assert raised, 'closed->open must be rejected 422'; print('writer-422-ok')"
+      bin/venv-python -c "import pytest; from scripts import ops_data_portal as p; import os;
+      rid=os.environ['RESOLVED_REC_ID'];
+      ei=pytest.raises(Exception, p.update_rec, rid, {'status':'open'}, profile='agent_platform');
+      assert 'status_transition' in str(ei.value) or '422' in str(ei.value), ei.value;
+      print('writer-422-ok')"
     expected: >-
       Exit 0; prints writer-422-ok -- the closed->open update is rejected with a status_transition 422 and
-      nothing is written. (Set CLOSED_REC_ID to any rec whose current status is closed/declined/superseded/failed.)
-    fix_if: No exception raised -- the DAG is not enforced in the deployed writer; redeploy / fix write_scd2 wiring.
+      nothing is written. (Set RESOLVED_REC_ID to any rec whose current status is closed/declined/superseded.)
+    fix_if: >-
+      No exception / wrong error -- the DAG is not enforced in the deployed writer, or a resurrection edge is
+      not blocked; redeploy / fix write_scd2 wiring.
 constraints:
   - "No caller SQL crosses the reader boundary: `limit` is a server-side integer-cast trailing LIMIT on registry SQL only (Decision 84 I-3)."
-  - "Status DAG is built over the ENFORCED rec status set {open, closed, failed, declined, superseded} (Decision 103). Reject known-illegal edges loudly; skip unrecognised vocabulary narrowly (Decision 55) -- do NOT silently accept a known-illegal transition."
+  - "Status DAG is built over the ENFORCED rec status set {open, closed, failed, declined, superseded} (Decision 103) and encodes ONE invariant: a RESOLVED rec (closed/declined/superseded) must not be silently REACTIVATED (-> open). It rejects exactly closed/declined/superseded -> open; it ALLOWS every live transition -- failed->open (executor restart, scripts/executor/jsonl_store.py:_reset_rec_status + scripts/execute_recommendation.py:936,1016), *->superseded and open/failed->declined (postmortem purge, scripts/ops_data_portal.py:1873/1887, live today), open->{closed,failed,declined,superseded}, and same-status. `failed` is deliberately NON-terminal (retryable). Skip unrecognised vocabulary narrowly (Decision 55) -- do NOT silently accept a resolved->open reactivation."
   - "Do NOT modify docs/contracts/ops_recommendations.yaml: the status-enum divergence (Pydantic {open,closed,failed,declined,superseded} vs the Class A contract's {open,closed,in_progress,deferred,superseded,declined}) reconciliation is OUT OF SCOPE -- record a deferral note citing Decision 118 and the field's re_ratification_trigger; touching the status field's description/semantics would trigger the category-6 amendment gate."
   - "Reuse write_scd2's existing require_exists existing-row fetch to read the current status; do NOT add a second Neon round-trip, and keep the status compare OUTSIDE the OCC-collision retry path (Decision 82 / Decision 88)."
   - "Add NO new Class A columns to ops_recommendations (Decision 103); c3/c4 add none."
@@ -269,7 +296,9 @@ constraints:
   - "No rescue agents or workaround loops; loud-fail on unrecoverable V3 failure and RCA (Decision 55)."
 context:
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 91, Decision 84, Decision 81, CD.33, Decision 79, Decision 55. RELATED/handled: Decision 103 (DAG status basis; no new Class A cols), Decision 118 (contract-drift ritual -> verb contracts updated, enum reconciliation deferred), Decision 88 (Neon egress; bounded reads favoured; reuse require_exists fetch), Decision 86 (semantics to contracts, not prose), Decision 93 (roadmap validator on the flips/rehome), CD.10 + CD.15 (describe / typed-verb surface intent)."
-  - "gates: decision-scout=FLAGS_FOUND (all flags handled in scope/constraints); plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND (all flags handled in scope/constraints); plan-critique=REVISE->addressed round 1 (4 findings: full status-DAG edge set grounded in live call sites; total-order invariant extended to paginable verbs; roadmap met_by values specified; maintenance+catalog_dr post-deploy smoke added)"
+  - "Status-DAG safety (plan-critique round 1): the DAG is a resolved-reactivation guard, NOT a forward-only/terminal whitelist -- it was corrected to allow every live transition (failed->open executor reset; *->superseded and open/failed->declined postmortem purge, live via --purge-postmortems-for) and reject ONLY closed/declined/superseded -> open. VP steps 3/6 assert each live edge passes and each resurrection edge raises."
+  - "Regression coverage (plan-critique round 1): VP steps 13/14 add --lambda-merge (ducklake_maintenance) and --lambda-dr (ducklake_catalog_dr) smoke gates so all 4 deployed active artifacts have a post-deploy check, not just reader/writer (Decision 79)."
   - "Scout flag handling: Decision 118 [WARN] -> add describe verb + limit?/422 to the two Class B verb contracts (verbs: additions, no amendment_log needed); defer the Class A status-enum divergence with a recorded note. Decision 55 [NOTE] -> unknown-vocab skip stays narrow, known-illegal edges raise. Decision 70->103 citation corrected (lifecycle-by-status is Decision 103, not Decision 70). Decision 82 -> status read reuses require_exists fetch, outside OCC loop. Decision 93 -> VP step 9 loads the roadmap under its validators."
   - "c7 resolution (human-confirmed 2026-07-07): rehome T1.16 c7 (telemetry read verbs) to T3.3 (Telemetry Phase E -- its stated natural owner, blocked on unbuilt substrate T2.36), so T1.16 completes on c1-c6."
   - "Lambda blast radius: editing shared src/common/ducklake_scd2_schema.py + ducklake_runtime.py fans out to 4 active manifest artifacts (compute_affected_artifacts): ducklake_reader, ducklake_writer, ducklake_catalog_dr, ducklake_maintenance -> V3 per-Lambda build+deploy+smoke (Decision 79). Reader/writer exercise the new verbs; catalog_dr/maintenance are regression-only."
@@ -287,7 +316,7 @@ pre_implementation_checklist:
   - AWS agent_platform assume-role chain confirmed (session-start hook) for the post-deploy V3 gates
 execution_steps:
   - "src/common/ducklake_scd2_schema.py: add `paginable: bool = False` to NamedRead; add the `rec_history` verb (SELECT * FROM {hist} WHERE id = ? ORDER BY last_updated_timestamp DESC, ulid DESC, params=('id',)); bump NAMED_READS_VERSION to 3; append `, id` tiebreak to ci_rca_open and budget_bypass_recent ORDER BY; mark the list-family verbs (open_recs, recs_by_title_prefix) paginable=True."
-  - "src/common/ducklake_scd2_schema.py: add STATUS_TRANSITIONS (table -> {from_status: frozenset(to_statuses)}) for ops_recommendations over the enforced set, check_rec_status_transition(table, existing, new) raising StatusTransitionError on a known-illegal edge (permissive-skip on unknown vocab / no declared DAG / same-status), and the StatusTransitionError class."
+  - "src/common/ducklake_scd2_schema.py: encode the status DAG as a resolved-reactivation guard -- _RESOLVED_REC_STATUSES = frozenset({'closed','declined','superseded'}) and _ACTIVE_REC_STATUSES = frozenset({'open'}); check_rec_status_transition(table, existing, new) raises StatusTransitionError iff existing in resolved AND new in active AND existing != new; permissive-skip on unknown vocab / same-status / a table with no declared DAG. Add the StatusTransitionError class. Verify against the live-transition list in constraints (failed->open, *->superseded, open/failed->declined all pass)."
   - "src/common/ducklake_scd2_schema.py: add describe_named_reads() (verb -> {table, description, params, paginable, params_schema}) and VERB_REGISTRY (write verbs: write_ops, update_ops, file_ops, create_ops_tables) + describe_write_verbs() returning per-verb params_schema (JSON-schema shape)."
   - "src/common/ducklake_runtime.py: add `limit: int | None = None` to named_read(); when set and the verb is paginable, append ` LIMIT {int(limit)}` to the rendered SQL (loud-fail if limit is passed for a non-paginable verb); re-export StatusTransitionError."
   - "src/common/ducklake_runtime.py: in write_scd2's require_exists branch, extend the existing existing-row fetch to also read the current `status` (only when the spec declares a DAG), and call check_rec_status_transition before the MERGE; keep it terminal (never OCC-retried), mirroring ReferentialError handling."
@@ -296,7 +325,7 @@ execution_steps:
   - "docs/contracts/ducklake_reader.yaml: add the `describe` verb block and the optional `limit?` field to the named_read envelope description. docs/contracts/ducklake_writer.yaml: add the `describe` verb block and the status_transition 422 entry to update_ops's error taxonomy. (verbs: additions only -- no amendment_log entry, no ops_recommendations.yaml edit.)"
   - "tests: extend the four test files per the scope purposes -- pure DAG/describe/registry/invariant (schema), named_read limit + write_scd2 DAG (runtime), describe action + limit passthrough + per-verb NAMED_READS dispatch (reader), describe action + 422 mapping + per-verb VERB_REGISTRY (writer). Growth-safe; 100% new-code coverage (tests/CLAUDE.md)."
   - "Execute the Verification Plan pre-deploy steps (1-10); loop until green. Then the post-deploy V3 steps (11-15): build+deploy the 4 DuckLake artifacts, run the regression smoke gates, and the live describe/limit/rec_history/422 probes. On an unrecoverable V3 failure, STOP and RCA (Decision 55)."
-  - "Roadmap bookkeeping (c6), only after the VP is green: in docs/ROADMAP-PLATFORM.yaml flip T0.7a/T0.7b/T0.7c/T1.1/T1.2/T1.3 and T1.16 to status: complete (+ completed_at + progress_note citing this plan); mark T1.16 c1-c6 met; rehome c7 to T3.3 (add a criterion/note on T3.3 and a rehome note on c7). Re-run VP step 9 (roadmap validators) after the edit."
+  - "Roadmap bookkeeping (c6), only after the VP is green: in docs/ROADMAP-PLATFORM.yaml flip T0.7a/T0.7b/T0.7c/T1.1/T1.2/T1.3 and T1.16 to status: complete (+ completed_at + progress_note citing this plan); set T1.16 criteria c1-c6 to status: met with met_by: verb-surface-closeout (rule (g): met needs non-empty met_by); set c7 to status: rehomed with met_by: T3.3 (rule (h): rehomed met_by must resolve to a real tier_item id) and add a reciprocal 'telemetry read verbs added to NAMED_READS' exit_criterion (or note) on T3.3. Re-run VP step 9 (roadmap validators) after the edit."
   - "Report: what was implemented per criterion, pre/post-deploy verification results, the 4 deployed artifacts, and the roadmap flips/rehome."
 work_areas: []
 rollback: >-
