@@ -1,0 +1,232 @@
+schema_version: 1
+slug: "executor-design-seams-exr040607"
+intent: >-
+  Tighten three under-specified executor-design seams per audit findings EXR-04/EXR-06/EXR-07 in
+  audits/executor-roadmap-review-7d57a0d.yaml: bind pick_rec's admission predicate to relevance /
+  automatable / risk-ceiling / self-modification boundary (EXR-04); state the A-gate ownership
+  boundary across T3.4 and T4.4 with rollback-from-birth for A0-A3 (EXR-06); and reconcile the
+  deploy-leg seam -- drop terraform apply from CD.27's in-executor escape-hatch examples, name the
+  dispatch-to-CD.35-and-wait deploy leg, and cross-reference rec-2523's red-record deadlock (EXR-07).
+  Roadmap-bookkeeping only.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-executor-design-seams-exr040607.yaml
+phase: >-
+  Platform Tier T4 (autonomous executor) forward-design tightening under the Decision 93 MVP
+  boundary and the Decision 67 / CD.17 freeze. Touches tier_items T4.1, T3.4, T4.4 and
+  candidate_decisions CD.27, CD.38. Body-only prose edits -- no new items, no status changes.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      EXR-04: add a pick_rec admission-predicate line to T4.1's state-machine shape + a matching
+      T4.1 exit criterion. EXR-06: amend T3.4's A0-A3 criterion to require per-gate rollback and
+      state the A-gate ownership boundary; add the reciprocal boundary statement to T4.4. EXR-07:
+      drop terraform apply from CD.27's escape-hatch examples (detail + narrowly_supersedes clause)
+      and T4.1's ESCAPE line, complete T4.1's deploy_dispatch state (dispatch-to-CD.35-and-wait +
+      rec-2523 precondition), and add a CD.38 deploy-leg discipline point. Optional Q5 h/i: add
+      T4.1 exit criteria for file_pr/merge credential scoping and a tested operator kill-switch.
+      Sole file changed.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "EXR-04: T4.1's exit_criteria include a pick_rec admission predicate naming T3.8 relevance (relevant), automatable, risk-vs-T4.4-gate-ceiling, and Decision 117 boundary_patterns; the pick_rec state-machine-shape line states the same predicate (no longer merely 'poll priority queue'); refused picks emit a typed telemetry event and boundary hits re-route to the human path. validate.py roadmap checks pass."
+  - "EXR-06: T3.4 and T4.4 each state the A-gate ownership boundary; T3.4's A0-A3 criterion requires a per-gate rollback criterion (rollback-from-birth, satisfying T4.4's MED-9 rationale at first-live); T4.4 states it extends to A4-A5 and owns rollback AUTOMATION + preflight gate exposure; no overlapping unqualified ownership remains and the two items cross-reference rather than duplicate."
+  - "EXR-07: grep 'terraform apply' over CD.27 (detail + narrowly_supersedes) and T4.1 no longer names it as an in-executor ECS escape-hatch task (every remaining mention frames it as dispatched to the CD.35 / Decision 92 pipeline, NOT an in-executor task); a deploy-dispatch sentence in T4.1's deploy_dispatch state states merged-change application is dispatched to the CD.35 pipeline and waited on like verification; CD.38 gains a matching deploy-leg discipline point; rec-2523's guard-BLOCK red-record deadlock is cross-referenced as a named precondition for the unattended deploy leg (referenced only, not fixed)."
+  - "Optional (Q5 h/i): T4.1 carries an exit criterion requiring the T4.1/T4.9(a) atomic plans to specify GitHub-side file_pr/merge credential scoping, and an exit criterion naming a single tested operator kill-switch (disable EventBridge trigger + concurrency=0) with documented authority."
+  - "The platform_roadmap.py model_validator (no-live-dep invariant + cycle + dep resolution) and validate_platform_roadmap criteria-integrity + size guard pass; no new depends_on edge is introduced (all cross-references are prose); each edited tier_item's progress_note (T4.1/T3.4/T4.4) cites the driving EXR id + Decision 93, and CD.27/CD.38 carry dated EXR-07 amendment markers."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "Pydantic model_validator passes on load (no-live-dep check f, cycle detection, depends_on resolution) after the edits -- confirms no depends_on edge was accidentally introduced by the prose cross-references."
+    command: "bin/venv-python -c \"from scripts.platform_roadmap import load; load('docs/ROADMAP-PLATFORM.yaml'); print('LOAD_OK')\""
+    expected: "Prints LOAD_OK with no ValueError; depends_on graph unchanged from origin/main (this plan edits only intent/exit_criteria/discipline_points/progress_note prose)."
+    fix_if: "A ValueError names a live->deferred edge or dangling dep -- a cross-reference was mistakenly written into a depends_on list instead of prose; move it back into intent/criterion text."
+  - step: 2
+    phase: pre-deploy
+    action: "validate_platform_roadmap criteria-integrity + size guard passes (checks i/ii/iii + Decision 114 line ceiling); this exercises the full-tier checks --pre does not."
+    command: "bin/venv-python -c \"from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap as v; f=[]; v(f); print('FAILS:', f); assert not f, f\""
+    expected: "Prints FAILS: [] and exits 0. Body-only edits leave every `- id:` line unchanged, so check (ii) flags no item; bare-string criteria added to T4.1/T3.4 (their existing style) are permitted for non-diff-touched id lines."
+    fix_if: "check (ii) reports an item 'still has bare-string criteria' (git line-attribution flagged an adjacent id) -- convert that item's exit_criteria to structured ExitCriterion objects ({id, text, status: open}) and re-run. If size guard fails, the diff overran the ceiling (not expected; ~40 lines added)."
+  - step: 3
+    phase: pre-deploy
+    action: "The named fast-tier gate passes on the changed roadmap."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0; roadmap guard tests pass; no schema / plan-document failures (this PLAN file included)."
+    fix_if: "Read the failing check name and correct the roadmap edit or this PLAN's schema; never suppress the check (Decision 55)."
+  - step: 4
+    phase: pre-deploy
+    action: "EXR-04 satisfied: T4.1 carries a pick_rec admission-predicate exit criterion naming relevance + automatable + risk/gate ceiling + Decision 117 boundary_patterns, AND the pick_rec state-machine-shape line names the predicate."
+    command: |
+      bin/venv-python - <<'PY'
+      import sys, yaml
+      d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+      t41 = [i for i in d['tier_items'] if i['id'] == 'T4.1'][0]
+      crit = ' '.join((c if isinstance(c, str) else c.get('text', '')) for c in t41.get('exit_criteria', [])).lower()
+      shape = t41.get('intent', '').lower()
+      fails = []
+      need = ['relevan', 'automatable', 'boundary_patterns', '117', 'ceiling']
+      for n in need:
+          if n not in crit:
+              fails.append(f'T4.1 exit_criteria missing "{n}"')
+      if 'pick_rec' not in shape or 'admission' not in shape:
+          fails.append('pick_rec shape line does not state an admission predicate')
+      if 'typed telemetry' not in crit and 'typed telemetry' not in shape:
+          fails.append('refused-pick typed telemetry event not stated')
+      if 'human path' not in crit and 'human path' not in shape:
+          fails.append('boundary-hit human-path re-route not stated')
+      for f in fails: print('BAD', f)
+      print('OK' if not fails else f'FAILS={len(fails)}')
+      sys.exit(1 if fails else 0)
+      PY
+    expected: "Prints OK and exits 0."
+    fix_if: "A 'BAD ...' line names the missing clause -- add it to T4.1's admission-predicate criterion or the pick_rec shape line."
+  - step: 5
+    phase: pre-deploy
+    action: "EXR-06 satisfied: T3.4's A0-A3 criterion requires rollback criteria, and both T3.4 and T4.4 state the A-gate ownership boundary."
+    command: |
+      bin/venv-python - <<'PY'
+      import sys, yaml
+      d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+      items = {i['id']: i for i in d['tier_items']}
+      def blob(it):
+          parts = [it.get('intent', '') or '', it.get('progress_note', '') or '', it.get('note', '') or '']
+          for c in it.get('exit_criteria', []):
+              parts.append(c if isinstance(c, str) else (c.get('text', '') or ''))
+          return ' '.join(parts).lower()
+      t34, t44 = blob(items['T3.4']), blob(items['T4.4'])
+      fails = []
+      t34_crit = ' '.join((c if isinstance(c, str) else c.get('text', '')) for c in items['T3.4'].get('exit_criteria', [])).lower()
+      if 'a0-a3' not in t34_crit or 'rollback' not in t34_crit:
+          fails.append('T3.4 A0-A3 criterion does not require rollback criteria')
+      for tid, b in (('T3.4', t34), ('T4.4', t44)):
+          if 'ownership boundary' not in b and 'a-gate ownership' not in b:
+              fails.append(f'{tid} does not state the A-gate ownership boundary')
+      if 'a4-a5' not in t44 or 'automation' not in t44:
+          fails.append('T4.4 does not state it extends to A4-A5 + owns rollback automation')
+      for f in fails: print('BAD', f)
+      print('OK' if not fails else f'FAILS={len(fails)}')
+      sys.exit(1 if fails else 0)
+      PY
+    expected: "Prints OK and exits 0 -- T3.4 requires A0-A3 rollback criteria, both items state the boundary, T4.4 owns A4-A5 + rollback automation."
+    fix_if: "A 'BAD ...' line names the gap -- add the rollback requirement to T3.4's criterion or the boundary statement to the named item's intent."
+  - step: 6
+    phase: pre-deploy
+    action: "EXR-07 satisfied: no remaining 'terraform apply' mention on CD.27/T4.1 frames it as an in-executor ECS task; the deploy_dispatch state names dispatch-to-CD.35-and-wait; rec-2523 is cross-referenced; CD.38 has the deploy-leg discipline point."
+    command: |
+      bin/venv-python - <<'PY'
+      import sys, yaml
+      d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+      items = {i['id']: i for i in d['tier_items']}
+      cds = {c['id']: c for c in d.get('candidate_decisions', [])}
+      t41 = items['T4.1']
+      cd27 = cds['CD.27']
+      cd38 = cds['CD.38']
+      fails = []
+      # (a) T4.1 ESCAPE line no longer lists terraform apply as an in-executor example
+      shape = t41.get('intent', '')
+      import re
+      escape_line = next((ln for ln in shape.splitlines() if 'ESCAPE' in ln), '')
+      if 'terraform apply' in escape_line and 'NOT an in-executor' not in escape_line:
+          fails.append('T4.1 ESCAPE line still lists terraform apply as an in-executor example')
+      # (b) deploy_dispatch names dispatch-to-CD.35 + wait
+      dd = next((ln for ln in shape.splitlines() if 'deploy_dispatch' in ln), '').lower()
+      if 'cd.35' not in dd or 'wait' not in dd:
+          fails.append('deploy_dispatch does not state dispatch-to-CD.35-and-wait')
+      if 'rec-2523' not in dd:
+          fails.append('deploy_dispatch does not cross-reference rec-2523')
+      # (c) CD.27 detail: any terraform apply mention is framed as NOT-in-executor
+      detail = cd27.get('detail', '')
+      clause = (cd27.get('narrowly_supersedes', {}) or {}).get('clause', '')
+      disc = ' '.join(str(p) for p in (cd27.get('discipline_points') or []))
+      cd27_all = detail + ' ' + clause + ' ' + disc
+      # the old in-executor example ('terraform apply against the personal account') must be GONE
+      if 'terraform apply against the personal account' in detail.lower():
+          fails.append('CD.27 detail still lists terraform apply in the escape-hatch example parenthetical')
+      if 'NOT an in-executor' not in cd27_all and 'not an in-executor' not in cd27_all.lower():
+          fails.append('CD.27 does not state terraform apply is NOT an in-executor task')
+      if 'EXR-07' not in cd27_all:
+          fails.append('CD.27 carries no EXR-07 amendment marker')
+      # (d) CD.38 deploy-leg discipline point
+      cd38_disc = ' '.join(str(p) for p in (cd38.get('discipline_points') or []))
+      if 'deploy leg' not in cd38_disc.lower() or 'cd.35' not in cd38_disc.lower():
+          fails.append('CD.38 has no deploy-leg discipline point naming CD.35')
+      if 'rec-2523' not in cd38_disc:
+          fails.append('CD.38 deploy-leg point does not cross-reference rec-2523')
+      for f in fails: print('BAD', f)
+      print('OK' if not fails else f'FAILS={len(fails)}')
+      sys.exit(1 if fails else 0)
+      PY
+    expected: "Prints OK and exits 0."
+    fix_if: "A 'BAD ...' line names the gap -- reword the CD.27 escape-hatch example, the T4.1 ESCAPE/deploy_dispatch lines, or the CD.38 discipline point as required."
+  - step: 7
+    phase: pre-deploy
+    action: "Optional Q5 h/i satisfied: T4.1 carries a file_pr/merge credential-scoping criterion and a tested operator kill-switch criterion; and progress_note / amendment-marker provenance holds (EXR ids + Decision 93 on T4.1/T3.4/T4.4)."
+    command: |
+      bin/venv-python - <<'PY'
+      import sys, yaml
+      d = yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml'))
+      items = {i['id']: i for i in d['tier_items']}
+      t41 = items['T4.1']
+      crit = ' '.join((c if isinstance(c, str) else c.get('text', '')) for c in t41.get('exit_criteria', [])).lower()
+      fails = []
+      if 'credential' not in crit or 'file_pr' not in crit:
+          fails.append('T4.1 missing file_pr/merge credential-scoping criterion (Q5 h)')
+      if 'kill-switch' not in crit and 'kill switch' not in crit:
+          fails.append('T4.1 missing operator kill-switch criterion (Q5 i)')
+      for tid, exr in (('T4.1', 'EXR-04'), ('T3.4', 'EXR-06'), ('T4.4', 'EXR-06')):
+          pn = (items[tid].get('progress_note', '') or '')
+          if 'EXR-0' not in pn or 'Decision 93' not in pn:
+              fails.append(f'{tid} progress_note missing EXR id or Decision 93 citation')
+      for f in fails: print('BAD', f)
+      print('OK' if not fails else f'FAILS={len(fails)}')
+      sys.exit(1 if fails else 0)
+      PY
+    expected: "Prints OK and exits 0 -- both optional criteria present; T4.1/T3.4/T4.4 progress_notes cite an EXR id + Decision 93."
+    fix_if: "A 'BAD ...' line names the gap -- add the missing T4.1 criterion or the EXR-id/Decision-93 citation to the named progress_note."
+constraints:
+  - "Roadmap-bookkeeping only: every edit lands in docs/ROADMAP-PLATFORM.yaml. No source code, no recs, no decision entries (Decision 86 routes rationale to progress_notes / dated amendment markers, not new prose docs; the STRATEGIC-plan freeze does not apply -- this is IMPLEMENTATION type)."
+  - "Body-only prose edits: do NOT change any item's status, effort, strategic flag, or depends_on list, and do NOT add or remove tier_items. All cross-references (T3.4<->T4.4, ESCAPE->deploy_dispatch, CD.27/T4.1->CD.35/Decision 92) are PROSE, never depends_on edges -- the no-live-dep graph must be identical to origin/main."
+  - "EXR-07 amends only the executor-side / candidate CD.27 + T4.1 escape-hatch wording and adds a CD.38 discipline point; it does NOT edit ratified Decision 92 / CD.35 text and does NOT attempt to fix rec-2523's deadlock -- that stays owned by rec-2523 (reference only)."
+  - "Editing pending candidate_decisions CD.27 and CD.38 (state: pending / not yet a numbered DECISIONS.md entry) is permitted; do not touch ratified CD.35 (dec-092) discipline text."
+  - "Preserve every existing T4.1 / T3.4 / T4.4 exit criterion verbatim except the EXR-06 amendment to T3.4's 'A0-A3 documented and live' criterion (which is edited, not replaced wholesale) and the EXR-04/EXR-07/optional additions (which are appended)."
+  - "Keep bare-string exit_criteria on T4.1/T3.4 (their existing style) -- body-only edits leave the `- id:` lines out of the diff, so validate_platform_roadmap check (ii) does not require structured objects. Only convert to structured objects if VP step 2 flags an adjacency false-positive."
+  - "No rescue agents or workaround loops (Decision 55). On a verifier failure, forward-fix the roadmap edit; never suppress the check."
+context:
+  - "Authoritative brief: audits/executor-roadmap-review-7d57a0d.yaml findings EXR-04 (high, pick_rec admission predicate), EXR-06 (medium, A-gate ownership split), EXR-07 (medium, deploy-leg seam) -- read current_behavior / proposed_change / acceptance in full; plus Q5 answers (h) credential scoping and (i) kill-switch, folded in as optional T4.1 exit criteria."
+  - "Prior sibling PLAN-executor-containment-resequence (EXR-01/02/03, merged #513) already added await_verdict/merge/deploy_dispatch states to T4.1's shape and split T4.9a/T4.10a. deploy_dispatch currently reads 'no apply-authority -- EXR-07 out of scope'; THIS plan brings EXR-07 in scope and completes that stub. Do not re-add merge/await_verdict (already present)."
+  - "Decision-scout verdict: NO_FLAGS (83/83 decisions triaged). No contradiction -- the plan tightens roadmap/candidate prose to MATCH ratified Decisions 92/103/117 and pending CD.27/CD.38; EXR-07 removes a stale CD.27 example that sits crosswise to Decision 92's apply authority."
+  - "CITE (scout): EXR-04 -> Decision 103 (CD.36, relevance verdict SSOT), Decision 117 (capabilities.yaml boundary_patterns SSOT, supersedes 44), Decision 92 (CD.35 ratchet = risk/gate ceiling), Decision 55 (typed telemetry + human re-route). EXR-06 -> Decision 92 (points 6-9 earned/revocable rollback), Decision 55 (deterministic rollback lane), Decision 73 (forward-fix axis, distinguish from autonomy-gate rollback). EXR-07 -> Decision 92 (apply authority), CD.38 (dispatch-and-wait model), Decision 55/72 (ci-rca routing for the rec-2523 precondition)."
+  - "RELATED (scout, awareness only): Decision 94 (OIDC environment-sub correction -- touch only if deploy-leg prose specifies OIDC trust), Decision 90 (four-tier workflow / executor-frozen state -- why these seams are forward-design, inert under CD.17), Decision 80 (T4.4 = concurrency revisit trigger, adjacent to the gate-ceiling language)."
+  - "Verified IDs at planning time: rec-2523 present in the rec cache (guard-BLOCK red-convergence-record deadlock, observed 2026-07-04); Decision 117 header live in DECISIONS.md; config/agent/executor/capabilities.yaml boundary_patterns SSOT present; T3.8 (relevance) at roadmap line ~6933; T3.4 line ~6754, T4.1 line ~7492, T4.4 line ~7695, CD.27 line ~1020, CD.38 line ~1842."
+  - "validate_platform_roadmap check (ii) flags only items whose `- id:` line appears in git diff (regex ^[+-]\\s+- id:). Body-only edits keep id lines out of the diff, so bare-string criteria are safe; adjacency false-positives (git attributing a nearby id line) are handled by VP step 2's fix_if. Decision 114 size guard + check (ii) run in the FULL tier, so VP steps 1-2 invoke them directly, not via --pre."
+  - "Branch claude/executor-audit-exr-findings-n4mfr5 was 0 behind / 0 ahead origin/main at planning time; main_files_changed_since_branch = [] (no scope-file overlap)."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 2 round(s) (round 1 REVISE -- VP step 6 TypeError + false-pass probe + EXR-07c block-scalar note; round 2 PROCEED)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - audits/executor-roadmap-review-7d57a0d.yaml EXR-04/EXR-06/EXR-07 + Q5 (h)(i) read in full
+  - docs/ROADMAP-PLATFORM.yaml T4.1 / T3.4 / T4.4 + CD.27 / CD.38 located and readable
+  - Prior sibling edits (merge/await_verdict/deploy_dispatch already in T4.1 shape) noted -- do not duplicate
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "EXR-04a (T4.1 pick_rec shape): In T4.1's intent state-machine-shape list, replace the pick_rec line ('poll priority queue, return rec_id + branch_slug') with an admission-predicate form: 'poll priority queue; ADMISSION PREDICATE gates the return -- admit a rec only when its T3.8 relevance verdict == relevant (CD.36 / Decision 103), automatable == true, and risk is within the current T4.4 autonomy-gate ceiling (Decision 92 ratchet), AND its targets do NOT match Decision 117 boundary_patterns (config/agent/executor/capabilities.yaml); a refused pick emits a typed telemetry event and a boundary_patterns hit re-routes the rec to the human path (Decision 55), never auto-executed; returns rec_id + branch_slug'."
+  - "EXR-04b (T4.1 exit criterion): Append a T4.1 exit criterion (bare string, existing style): 'pick_rec admission predicate enforced (not merely poll priority queue): a rec is admitted for autonomous execution only when its T3.8 relevance verdict == relevant (CD.36 / Decision 103), automatable == true, and its risk is within the current T4.4 autonomy-gate ceiling (Decision 92 ratchet), AND none of its targets match the Decision 117 boundary_patterns SSOT (config/agent/executor/capabilities.yaml); a refused pick emits a typed telemetry event, and a boundary_patterns hit re-routes the rec to the human path (Decision 55) -- never auto-executed'."
+  - "Optional Q5 (h) (T4.1 exit criterion): Append 'file_pr / merge GitHub-side credential scoping is specified in the T4.1 / T4.9(a) atomic plans (the IAM criteria above cover the AWS leg only): which credential (PAT or GitHub App) files and merges PRs, its scopes, storage, rotation, and why no persona environment other than file_pr / merge holds it (Decision 92 least-privilege OIDC precedent)'."
+  - "Optional Q5 (i) (T4.1 exit criterion): Append 'A single named operator kill-switch is documented (disable the EventBridge trigger AND set state-machine concurrency to 0) with its authority, and is covered by a test proving an in-flight execution stops cleanly (Decision 55) and no new execution starts'."
+  - "EXR-04/07 (T4.1 progress_note): Append a dated entry -- '2026-07-07 (PLAN-executor-design-seams-exr040607, EXR-04/EXR-07, Decision 93): bound pick_rec's admission predicate (T3.8 relevance / automatable / T4.4 risk ceiling / Decision 117 boundary_patterns; refused-pick typed telemetry + boundary-hit human re-route); completed the deploy_dispatch state to dispatch-to-CD.35-and-wait with the rec-2523 red-record-deadlock precondition and dropped terraform apply from the ESCAPE example; added file_pr/merge credential-scoping and operator kill-switch exit criteria (Q5 h/i).'"
+  - "EXR-07a (T4.1 ESCAPE line): Replace the ESCAPE state-shape line's parenthetical 'for deterministic steps that exceed 15 min (full pytest, terraform apply)' with 'for deterministic steps that exceed 15 min (e.g. full pytest, large data migration); terraform apply is NOT an in-executor escape-hatch task -- see deploy_dispatch (dispatched to the CD.35 / Decision 92 GitHub-Actions gated-apply pipeline, per CD.38)'."
+  - "EXR-07b (T4.1 deploy_dispatch line): Replace 'dispatch the deploy job and wait for completion (dispatch-and-wait only, no apply-authority -- EXR-07 out of scope)' with 'dispatch merged-change application to the CD.35 / Decision 92 GitHub-Actions gated-apply pipeline and wait on its server-side convergence-record verdict, exactly as the verify leg waits on a CI verdict (CD.38 sole-runner authority; the executor holds NO apply authority and never runs terraform apply in-cloud). PRECONDITION for running this leg unattended: rec-2523 guard-BLOCK red-convergence-record deadlock (a red record clearable by neither automated path, requiring an out-of-band admin apply) must have a designed exception path -- fixing that deadlock stays with rec-2523, out of scope here'."
+  - "EXR-06a (T3.4 criterion): Replace T3.4's exit criterion 'Autonomy maturity gates A0-A3 documented and live' with 'Autonomy maturity gates A0-A3 documented and live, WITH a per-gate rollback criterion for each (A-gate ownership boundary, EXR-06): T3.4 owns gate DEFINITION semantics for A0-A3 including rollback-from-birth, satisfying T4.4 MED-9 forward-only-autonomy-is-unsafe rationale at first-live (Decision 92 points 6-9); T4.4 extends the ladder to A4-A5 and owns rollback AUTOMATION + preflight/roadmap gate exposure -- see T4.4'."
+  - "EXR-06b (T3.4 progress_note): Add a progress_note (T3.4 currently has none) -- '2026-07-07 (PLAN-executor-design-seams-exr040607, EXR-06, Decision 93): stated the A-gate ownership boundary -- T3.4 owns A0-A3 gate definitions WITH rollback-from-birth (MED-9 at first-live); rollback AUTOMATION + A4-A5 extension owned by T4.4 (cross-referenced, not duplicated).'"
+  - "EXR-06c (T4.4 intent): Append to T4.4's intent a boundary paragraph -- 'A-gate ownership boundary (EXR-06): T3.4 owns gate DEFINITION semantics for A0-A3 and delivers them documented-and-live WITH per-gate rollback criteria before T4.2 (satisfying the MED-9 forward-only-is-unsafe rationale at first-live); T4.4 extends the ladder to A4-A5 and owns rollback AUTOMATION plus preflight/roadmap gate exposure. Cross-reference, not duplication -- see T3.4 for the A0-A3 definitions this item extends.'"
+  - "EXR-06d (T4.4 progress_note): Add a progress_note (T4.4 currently has none) -- '2026-07-07 (PLAN-executor-design-seams-exr040607, EXR-06, Decision 93): added the reciprocal A-gate ownership boundary statement (T3.4 owns A0-A3 definitions + rollback-from-birth; T4.4 extends to A4-A5 and owns rollback AUTOMATION + preflight exposure).'"
+  - "EXR-07c (CD.27 detail): In CD.27's detail escape-hatch paragraph, change the example parenthetical 'e.g. a full pytest suite, terraform apply against the personal account, large data migration' to 'e.g. a full pytest suite, a large data migration' and insert after the '...as an escape hatch.' sentence: 'terraform apply is NOT an in-executor escape-hatch task (EXR-07): merged-change application is dispatched to the GitHub-Actions gated-apply pipeline (CD.35 / Decision 92) behind the server-side convergence record, per CD.38 sole-runner authority; the executor never runs terraform apply in-cloud.' PRECISION: CD.27's detail is a literal block scalar and this parenthetical is WRAPPED across two source lines ('...a full pytest suite,\\nterraform apply against the personal account, large data migration'); the insertion anchor also wraps ('...as an escape\\nhatch.'). Reconcile the Edit old_string against the on-disk line wrapping (do NOT space-join into one line) or use two smaller anchored edits -- unlike the other EXR-04/06/07 old-strings, this one does not sit on a single source line."
+  - "EXR-07d (CD.27 narrowly_supersedes clause): Change '(full pytest, terraform apply, etc.)' in the narrowly_supersedes.clause to '(full pytest, large data migration, etc.; terraform apply is NOT an in-executor task -- it rides the CD.35 / Decision 92 gated-apply pipeline)'."
+  - "EXR-07e (CD.27 discipline_points): Append a discipline point -- '[Amended 2026-07-07, EXR-07 / audit 7d57a0d; extends nothing, overturns nothing:] terraform apply is removed from the ECS Run-Task escape-hatch examples -- apply authority is the GitHub-Actions CD.35 / Decision 92 gated-apply pipeline (CD.38 sole-runner), never an in-executor task. Reconciles a stale example with the ratified apply authority.'"
+  - "EXR-07f (CD.38 discipline_points): Append a discipline point -- 'Deploy leg (EXR-07): merged-change application is NOT an in-executor task -- terraform applies dispatch to the CD.35 / Decision 92 GitHub-Actions gated-apply pipeline and the executor waits on the server-side convergence record exactly as the verify leg waits on a CI verdict; Lambda deploys ride CD.16 per-Lambda steps. rec-2523 guard-BLOCK red-record deadlock is a named precondition for running the deploy leg unattended (fix owned by rec-2523; out of scope here).'"
+  - "Execute Verification Plan -- run each step; loop until pass. On a check (ii) bare-string flag for an unexpected item (git adjacency), convert that item's exit_criteria to structured ExitCriterion objects and re-run. Do not suppress any check (Decision 55)."
+  - "Report: the diff summary (T4.1 pick_rec/ESCAPE/deploy_dispatch + 3 new criteria; T3.4 criterion + progress_note; T4.4 intent + progress_note; CD.27 detail/clause/discipline; CD.38 discipline) and all seven VP step results."
+rollback: >-
+  Single-file, data-only prose change. Revert with `git checkout origin/main -- docs/ROADMAP-PLATFORM.yaml`
+  (or revert the squash-merge commit); no deploy, no state, no downstream artefact to unwind.
