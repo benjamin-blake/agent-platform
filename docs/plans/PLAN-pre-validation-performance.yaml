@@ -1,0 +1,212 @@
+schema_version: 1
+slug: "pre-validation-performance"
+intent: >-
+  Reclaim wall-clock headroom in the --pre fast tier so it stops breaching its 5-minute
+  budget on validation-infra branches, keeping the authoritative pre-merge gate (Decision 73)
+  fast and self-diagnosing without weakening any check.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-pre-validation-performance.yaml
+phase: >-
+  Platform hardening -- fast-tier presubmit performance (Decision 73 two-tier model,
+  Decision 104 check registry). No product-roadmap tier_item; ad-hoc performance remediation.
+scope:
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Apply the existing _neutralized_pre_registry fixture to TestGraduationGuard (the ~78s
+      culprit that invokes real main(--pre) with the ~28 registered checks unmocked) and sweep
+      for any other class invoking main(--pre) without neutralization; add unit tests asserting
+      run_pytest_diff wires -n (parallel) and --timeout, and that CI breach telemetry captures
+      dominant_phase. Closes rec-2387's intent.
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      Parallelize both pytest invocations in run_pytest_diff (-n auto) and add a per-test
+      timeout (--timeout=<cap> --timeout-method=thread); enhance _file_budget_breach_rec's
+      existing CI branch to emit dominant_phase + diff manifest to GITHUB_STEP_SUMMARY / job
+      log (CI-native, no portal, no outbox per Decision 84 I-4).
+  - file: requirements-fast.txt
+    action: Modify
+    purpose: Add pytest-xdist and pytest-timeout to the fast-tier CI dependency subset.
+  - file: requirements.txt
+    action: Modify
+    purpose: >-
+      Add pytest-xdist and pytest-timeout to the full dependency set, keeping fast/full and
+      the duckdb lockstep (Decision 99) / lockfile coherent.
+bundled_recommendations:
+  - rec-2387
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    TestGraduationGuard::test_pre_mode_does_not_call_guard passes in well under 30s (was ~78s),
+    proving the real check registry no longer executes inside it.
+  - >-
+    TestGraduationGuard carries the _neutralized_pre_registry fixture so the regression cannot
+    silently return.
+  - >-
+    run_pytest_diff runs pytest with -n auto and --timeout on both the primary and reactive
+    re-run invocations; pytest-xdist and pytest-timeout are installed and functional.
+  - >-
+    On a budget breach in CI, dominant_phase and the diff manifest are written to a CI-native
+    channel (GITHUB_STEP_SUMMARY / job log) with no ops-portal call and no buffered outbox.
+  - >-
+    rec-2387's acceptance command passes and the fast tier (bin/venv-python -m scripts.validate
+    --pre) is green on this branch under the 5-minute budget.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: The previously-78s tier-membership test now completes fast and passes.
+    command: timeout 30 bin/venv-python -m pytest "tests/test_validate.py::TestGraduationGuard::test_pre_mode_does_not_call_guard" -q
+    expected: Exit 0 within 30s (before the fix it ran the real registry and took ~78s).
+    fix_if: >-
+      Times out (still executing the real pre_sequence checks / differential gate subprocesses)
+      or the assertion fails -- confirm the _neutralized_pre_registry fixture is applied and the
+      test's own explicit patches still win as innermost.
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    action: Structural regression guard -- TestGraduationGuard carries the neutralization fixture.
+    command: grep -B1 "^class TestGraduationGuard:" tests/test_validate.py | grep -q "_neutralized_pre_registry"
+    expected: Match found (exit 0) -- the decorator sits immediately above the class.
+    fix_if: No match -- the fixture decorator is missing, so the class would re-run the real registry.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: pytest-xdist is installed and parallelizes a real multi-file selection.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py tests/test_plan_document.py -n auto -m "not integration" -q
+    expected: Exit 0 with tests distributed across workers (xdist active, no plugin/collection error).
+    fix_if: >-
+      "unrecognized arguments: -n" (plugin not installed) or a worker crash -- add pytest-xdist to
+      requirements and confirm interplay with pytest-randomly.
+  - step: 4
+    phase: pre-deploy
+    hermetic: true
+    action: run_pytest_diff wires both parallelism (-n) and a per-test timeout on its pytest commands.
+    command: bin/venv-python -c "import pathlib,re; src=pathlib.Path('scripts/checks/_scaffolding.py').read_text(); body=src[src.index('def run_pytest_diff'):]; assert '\"-n\"' in body or \"'-n'\" in body, 'missing -n'; assert '--timeout' in body, 'missing --timeout'; print('OK')"
+    expected: Prints OK -- both the -n flag and --timeout appear inside run_pytest_diff.
+    fix_if: AssertionError -- one of the flags is missing, or was added to only one of the two pytest invocations.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: New unit tests assert run_pytest_diff's built command carries -n and --timeout.
+    command: bin/venv-python -m pytest "tests/test_validate.py::TestPytestDiffParallelAndTimeout" -q
+    expected: Exit 0 -- the command-shape assertions pass.
+    fix_if: Test missing or failing -- add the class asserting the captured pytest argv includes -n and --timeout.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: CI breach telemetry writes dominant_phase to a CI-native channel with no portal/outbox.
+    command: bin/venv-python -m pytest "tests/test_validate.py::TestBudgetBreachCiTelemetry" -q
+    expected: >-
+      Exit 0 -- with CI=true and GITHUB_STEP_SUMMARY set to a temp file, _file_budget_breach_rec
+      writes dominant_phase + manifest to that file, files no rec, and stages no outbox entry.
+    fix_if: >-
+      Test missing/failing -- ensure the CI branch emits to GITHUB_STEP_SUMMARY (fallback stderr)
+      and never calls file_rec or writes logs/.ops-outbox (Decision 84 I-4).
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: Dependency edits keep lockstep / lockfile / import contracts coherent.
+    command: bin/venv-python -c "import scripts.validate as v; f=[]; v.validate_ducklake_version_lockstep(f); v.validate_lockfile_sync(f); v.validate_import_contracts(f); print(('FAIL',f) if f else 'OK')"
+    expected: Prints OK -- no duckdb-floor, lockfile-sync, or import-contract regression from the new deps.
+    fix_if: ('FAIL', [...]) -- reconcile the pytest-xdist/pytest-timeout pins with the duckdb lockstep SSOT and lockfile.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: Bundled rec-2387 acceptance passes (closure obligation).
+    command: bin/venv-python -m pytest tests/test_validate.py::TestPreModeChecks tests/test_validate.py::TestSlocLimitsInPreMode -q
+    expected: Exit 0 -- the tier-membership tests rec-2387 names remain hardened and green.
+    fix_if: Failure -- a downstream check executed live; extend neutralization coverage.
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: End-to-end -- the full fast tier is green on this branch, under the 5-minute budget.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exit 0, 'All checks passed.', elapsed well under 5 minutes (no budget-breach message)."
+    fix_if: Non-zero exit or budget-breach line -- inspect the printed dominant phase and re-profile.
+constraints:
+  - >-
+    Do NOT change _FAST_TIER_BUDGET_SECONDS (the 5-minute budget). Optimize the work done under
+    it; a budget change would require its own Decision Record (Decision 73 / the tier's own
+    breach-message guidance).
+  - >-
+    CI breach-telemetry capture must be CI-native (GITHUB_STEP_SUMMARY / job log). No ops-portal
+    call in CI and no buffered/replayed outbox entry (Decision 84 I-4 -- writes fail loud at the
+    call site, there is no offline outbox).
+  - >-
+    Test-only deps (pytest-xdist, pytest-timeout) must not enter any active Lambda manifest pip
+    set (Decision 79). compute_affected_artifacts confirmed empty for all scope files at planning
+    time; keep it that way.
+  - Preserve the duckdb version floor / lockstep SSOT and lockfile coherence (Decision 99).
+  - scripts/checks/_scaffolding.py must stay within its pinned SLOC budget (Decision 102 / 43).
+  - No rescue agents or workaround loops; fail loud on breach (Decision 55).
+  - Only modify the four files listed in scope.
+context:
+  - >-
+    Root cause (empirical): 19 of 20 phase-tracked budget-breach recs name pytest_diff as
+    dominant. Profiling showed tests/test_validate.py::TestGraduationGuard::test_pre_mode_does_not_call_guard
+    invokes real validate.main(--pre) with the ~28 registered checks unmocked; the heaviest,
+    validate_verification_registry's differential gate, spawns 69 real subprocesses (~66s) via
+    subprocess.run in scripts/verification_graduation.py:141/226, bypassing the _common.run mock.
+    One "unit" test = ~78s = 26% of the budget.
+  - >-
+    Fix precedent already in-repo: the _neutralized_pre_registry fixture (tests/test_validate.py:3473)
+    no-ops every pre_sequence check; eight classes already use it. TestGraduationGuard lacks it.
+  - >-
+    Contributing factors: run_pytest_diff runs pytest serially with no parallelism (4 idle cores,
+    pytest-xdist absent) and no per-test timeout; in CI the breach rec is not filed (no portal),
+    so 12/31 breaches lost dominant_phase telemetry.
+  - >-
+    rec-2387 relevance = unknown (rec_relevance, run_acceptance_probe=False). The two classes it
+    names (TestPreModeChecks, TestSlocLimitsInPreMode) already carry the fixture; the remaining
+    unhardened tier-membership class is TestGraduationGuard, which this plan closes -- satisfying
+    rec-2387's title/intent. Resolves via the merge-commit "Resolves: rec-2387" trailer.
+  - "Decision-scout verdict + CITE list: FLAGS_FOUND; CITE = Decision 73, Decision 104, Decision 84 (I-4), Decision 55, Decision 48. Related: Decision 80, Decision 99, Decision 102/43, Decision 79, Decision 67/90."
+  - "Scout flags handled: Decision 84 I-4 [WARN] accommodated (CI-native telemetry, no outbox); Decision 79 [NOTE] resolved (compute_affected_artifacts empty for all scope files -> stays V2)."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending>"
+  - >-
+    Do-less over orchestrator (Decision 80): this takes the lightweight xdist+timeout path and
+    deliberately does NOT fire the Bazel-revisit trigger, though a recurring budget breach is one
+    of its named arms.
+  - >-
+    Tradeoff accepted: -n auto adds small worker-spawn overhead on tiny single-file selections;
+    net win on the multi-file validation-infra diffs that actually breach.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/pre-validation-performance-n5qr15)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision-scout gate run (FLAGS_FOUND; flags resolved/accommodated)
+  - All four scope files located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    tests/test_validate.py -- add @pytest.mark.usefixtures("_neutralized_pre_registry") to
+    TestGraduationGuard; verify the test's own explicit patches (validate._check_graduation_guard
+    etc.) still intercept as innermost. Grep the file for any other class calling
+    _validate.main() in --pre mode without the fixture and neutralize it too.
+  - >-
+    scripts/checks/_scaffolding.py -- in run_pytest_diff, add "-n", "auto" and
+    "--timeout", "<cap>", "--timeout-method=thread" to BOTH the primary pytest command and the
+    reactive re-run command. Choose a cap comfortably above the slowest legitimate unit (~3s)
+    and well under 300s (e.g. 60s).
+  - >-
+    scripts/checks/_scaffolding.py -- in _file_budget_breach_rec's existing CI branch, additionally
+    append dominant_phase + elapsed + diff manifest to GITHUB_STEP_SUMMARY (fallback stderr) so
+    CI breaches are diagnosable. No file_rec call, no outbox write in CI (Decision 84 I-4).
+  - >-
+    requirements-fast.txt and requirements.txt -- add pytest-xdist and pytest-timeout pins; keep
+    fast/full coherent and do not disturb the duckdb floor (Decision 99).
+  - >-
+    tests/test_validate.py -- add TestPytestDiffParallelAndTimeout (asserts run_pytest_diff's
+    built pytest argv includes -n and --timeout on both invocations) and TestBudgetBreachCiTelemetry
+    (asserts the CI branch writes dominant_phase to GITHUB_STEP_SUMMARY and files no rec / stages
+    no outbox).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
+    and RCA (Decision 55). Confirm compute_affected_artifacts stays empty for the scope set.
+  - "Report: what was implemented, verification results, and the measured --pre wall-clock before/after."
+work_areas: []
+rollback: >-
+  Revert the four-file diff. The fixture/flag/dep additions are independent and individually
+  revertible; no data migration or infra state involved.
