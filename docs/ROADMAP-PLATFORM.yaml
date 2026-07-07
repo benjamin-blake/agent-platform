@@ -1855,7 +1855,7 @@ candidate_decisions:
       permits merge; main full-validate PASS permits promotion / escalation / rec closure; PRE_FAIL /
       FULL_FAIL routes to ci-rca (Decision 72). Encodes the Google-TAP-style flow and forecloses any future
       plan reintroducing an "AWS verifier runner". Inert under the Decision 67 / CD.17 freeze.
-    gates: [T4.9]
+    gates: [T4.9a, T4.9]
     state: pending
     filed_via: pending_log_decision_lambda
     discipline_points:
@@ -7509,6 +7509,9 @@ tier_items:
         - implement_agent [Durable Function, T4.2]   : iterative read-plan -> edit-files -> run-tests -> emit-diff
         - code_review [Durable Function, T4.2]       : structured review verdict
         - file_pr [Lambda]                           : idempotent PR creation via gh
+        - await_verdict [Lambda, waitForTaskToken]   : wait on the GitHub Actions verdict callback (T4.9a); Step Functions stores correlation ids incl. head SHA
+        - merge [Lambda]                             : callback-gated squash-merge (T4.9a) -- PRE_PASS permits merge only when the callback head SHA equals the PR head
+        - deploy_dispatch [Lambda, waitForTaskToken]  : dispatch the deploy job and wait for completion (dispatch-and-wait only, no apply-authority -- EXR-07 out of scope)
         - emit_telemetry [Lambda]                    : final session-close emission
         - ESCAPE [ECS Run Task synchronous integration] : for deterministic steps that exceed 15 min (full pytest, terraform apply)
     depends_on: [T2.1, T3.2]
@@ -7538,6 +7541,10 @@ tier_items:
         the replacement for the local write sites in scripts/execute_recommendation.py (Decision
         59/95's telemetry emission) is this item's emit_telemetry deterministic-glue Lambda, not a
         continuation of the frozen (Decision 67) local write path.
+      - 2026-07-07 (PLAN-executor-containment-resequence, EXR-01, Decision 93): added explicit
+        await_verdict, merge, and deploy_dispatch states to the state-machine shape after file_pr
+        and before emit_telemetry, so T4.9a's callback-gated merge leg and the dispatch-and-wait
+        deploy leg are named in the substrate T4.9a/T4.2 consume.
     decomposition_hints:
       split_by: subsystem
       atomic_plans:
@@ -7583,7 +7590,7 @@ tier_items:
       Atomic-plan decomposition per the freeze override: this XL tier item splits into multiple
       atomic IMPLEMENTATION plans -- one per persona Durable Function -- since STRATEGIC plan filing
       is blocked until CD.17 trigger fires, and THIS item is the trigger precondition.
-    depends_on: [T4.1, T3.4, T1.6]
+    depends_on: [T4.1, T3.4, T1.6, T4.9a, T4.10a]
     files_in_scope:
       - src/lambdas/plan_agent/         # new -- Durable Function persona
       - src/lambdas/plan_critic/        # new -- Durable Function persona
@@ -7594,10 +7601,11 @@ tier_items:
       - config/agent/executor/prompts/  # per-persona prompt templates (one per Durable Function)
     exit_criteria:
       - "Each persona Lambda Durable Function deployed; checkpoint-replay verified: a forced timeout mid-persona-loop resumes from last completed tool call on next invocation without re-issuing completed LLM calls"
-      - "End-to-end smoke: rec -> plan_agent -> Parallel(plan_critic, decision_scout) -> critique_gate PASS -> implement_agent -> code_reviewer -> file_pr -> PR opens and validates green"
+      - "End-to-end smoke: rec -> plan_agent -> Parallel(plan_critic, decision_scout) -> critique_gate PASS -> implement_agent -> code_reviewer -> file_pr -> verdict-callback (T4.9a) PRE_PASS permits merge -> PR opens and validates green"
       - "All telemetry emitted via agent_sdk per turn (rec_id, step_id, turn_index, model_id, tokens_in, tokens_out, cached_tokens_read, cached_tokens_written, est_cost_usd, latency_ms); no orphan process_events"
       - "LiteLLM is the only LLM transport: grep `import boto3.*bedrock` and `import google.generativeai` and `from copilot` return zero hits in src/lambdas/*/"
       - "Stability: grace_period_elapsed(T4.2, 14) AND zero unrecovered failures during the grace period -- this is the CD.17 reversal precondition (verbatim, structurally unchanged from the pre-amendment CD.17)"
+      - "State-machine-enforced budget counters (max plan/implementation revisions and total LLM calls per rec, per T4.11) are live and exercised in the e2e smoke run"
     related_candidate_decisions: [CD.17, CD.27, CD.28]
     related_intents: [recommendation-executor, provider-agnostic-executor]
     effort: XL
@@ -7608,6 +7616,10 @@ tier_items:
         agent_sdk) -- this is the replacement for the local write sites in
         scripts/execute_recommendation.py:226-268/:378-381 (Decision 59/95's telemetry emission),
         which stay frozen (Decision 67) and unmodified until this item's agent_sdk shim lands.
+      - 2026-07-07 (PLAN-executor-containment-resequence): per audit findings EXR-01/EXR-02/EXR-03
+        and Decision 93, wired T4.9a (verdict-callback + merge authority) and T4.10a (persona
+        contract authoring) into depends_on, reworded the e2e-smoke criterion to name the T4.9a
+        callback mechanism, and added the budget-counter e2e-smoke exit criterion (T4.11).
     decomposition_hints:
       split_by: per_persona
       atomic_plans:
@@ -7865,28 +7877,89 @@ tier_items:
       contract (docs/contracts/executor-ci-handshake.yaml) owns mapping them onto the single callback
       verdict vocabulary the executor consumes (T3.10's acceptance[] unification is the roadmap carrier
       for retiring the standalone `verification` projection this alphabet skew partly reflects).
-    depends_on: [T4.1, T2.20]
+    depends_on: [T4.1, T2.20, T4.9a]
     files_in_scope:
-      - docs/contracts/executor-ci-handshake.yaml    # new
-      - .github/workflows/ci.yml    # callback-emission only (no new CI gate; validate.py unchanged) -- report PR --pre / main full-validate verdicts to the executor callback
+      - docs/contracts/executor-ci-handshake.yaml    # new -- post-MVP hardening additions
       - .github/workflows/ci-rca.yml
-      - terraform/personal/executor_callbacks.tf    # new
-      - src/lambdas/executor_callback/handler.py    # new
-      - scripts/executor/github_checks.py    # new
       - scripts/validate.py
     exit_criteria:
-      - "Contract states GitHub Actions is the only verifier / validation runner for PR --pre and main full-validate; the executor runs neither in AWS"
-      - "Step Functions execution stores correlation ids: PR number, check-run id, workflow-run id, rec id, execution id, and head SHA (the exact commit the verdict attests)"
-      - "GitHub Actions reports PR --pre PASS/FAIL and main full-validate PASS/FAIL to the executor callback without exposing raw Step Functions task tokens"
-      - "PRE_PASS permits merge; FULL_PASS permits promotion / closure; PRE_FAIL / FULL_FAIL routes to ci-rca (Decision 72)"
-      - "Unit tests cover callback authentication, duplicate-callback idempotency, stale-callback rejection, and failed-workflow handling"
-      - "Merge is permitted only when the callback's verified head SHA equals the PR head at merge time; a SHA mismatch routes to re-verify, and a repeated mismatch routes to ci-rca (Decision 72) -- the executor-side analogue of the terraform no-TOCTOU artifact-verdict binding (Decision 92)"
-      - "Every verdict-wait state (waitForTaskToken) carries HeartbeatSeconds and TimeoutSeconds sized to expected verdict latency; a missing/late verdict times out to ci-rca (Decision 72), never a silent re-wait or retry"
+      - id: c1
+        text: "Contract states GitHub Actions is the only verifier / validation runner for PR --pre and main full-validate; the executor runs neither in AWS"
+        status: open
+      - id: c2
+        text: "FULL_PASS permits promotion / escalation / rec closure; PRE_FAIL / FULL_FAIL routes to ci-rca (Decision 72) -- the main full-validate leg beyond the T4.9a PR --pre / merge MVP slice"
+        status: open
+      - id: c3
+        text: "VF-14: the contract maps the three overlapping status alphabets (verifier harness PASS/FAIL/WARN/SKIPPED, typed-checks kernel PASS/FAIL, implement-skill VP PASS/FAIL/BLOCKED) onto the single callback verdict vocabulary the executor consumes"
+        status: open
+      - id: c4
+        text: "Full test matrix: unit tests cover callback authentication, duplicate-callback idempotency, stale-callback rejection, failed-workflow handling, and SHA-mismatch edge cases beyond the T4.9a MVP slice"
+        status: open
     related_candidate_decisions: [CD.38, CD.27, CD.35]
     effort: L
     strategic: false
     status: deferred_post_mvp
-    progress_note: "Parked deferred_post_mvp (Decision 93): forward intent making the CD.27 verification leg explicit; inert under the Decision 67 / CD.17 freeze. strategic: false per the CD.17 freeze-override (decomposes into atomic IMPLEMENTATION plans when reactivated). depends_on T4.1 (live, not_started) + T2.20 (complete) -- deferred->live, allowed. T3.1 dropped from deps (round-1 critique): a runtime consumer of the typed-checks registry, not an authoring prerequisite for the handshake contract. No live item depends_on it. Reactivate with the T4 executor build."
+    progress_note: >-
+      Parked deferred_post_mvp (Decision 93): forward intent making the CD.27 verification leg
+      explicit; inert under the Decision 67 / CD.17 freeze. strategic: false per the CD.17
+      freeze-override (decomposes into atomic IMPLEMENTATION plans when reactivated). depends_on
+      T4.1 (live, not_started) + T2.20 (complete) -- deferred->live, allowed. T3.1 dropped from
+      deps (round-1 critique): a runtime consumer of the typed-checks registry, not an authoring
+      prerequisite for the handshake contract. No live item depends_on it. Reactivate with the T4
+      executor build.
+      - 2026-07-07 (PLAN-executor-containment-resequence, EXR-01, Decision 93): split per audit
+        finding EXR-01 -- the MVP verdict-callback + merge-authority slice (PR --pre callback auth,
+        head-SHA correlation, PRE_PASS-permits-merge with SHA-equality check, duplicate/stale
+        rejection) moved to the live not_started T4.9a; this remnant keeps the full contract
+        hardening (VF-14 three-alphabet verdict mapping, the full callback/idempotency/SHA test
+        matrix, and the main full-validate promotion/closure leg) as deferred_post_mvp. depends_on
+        gains T4.9a (deferred->live, permitted).
+  - id: T4.9a
+    tier: T4
+    name: Executor verdict-callback + merge authority (MVP slice)
+    intent: |
+      Per audit finding EXR-01 (7d57a0d) and Decision 93, the minimal MVP slice of the T4.9
+      handshake contract pulled live so the Decision 93 MVP merge leg has a not_started owner
+      reachable from T4.2's depends_on: callback authentication, correlation ids (incl. head SHA),
+      PRE_PASS-permits-merge gated on head-SHA equality, and duplicate/stale-callback rejection.
+      The full contract hardening (VF-14 status-alphabet mapping, the full test matrix, and the
+      main full-validate promotion/closure leg) stays on the T4.9 remnant, deferred_post_mvp.
+    depends_on: [T4.1, T2.20]
+    files_in_scope:
+      - docs/contracts/executor-ci-handshake.yaml    # new, MVP slice
+      - .github/workflows/ci.yml    # callback-emission only (no new CI gate; validate.py unchanged) -- report PR --pre verdicts to the executor callback
+      - terraform/personal/executor_callbacks.tf    # new
+      - src/lambdas/executor_callback/handler.py    # new
+      - scripts/executor/github_checks.py    # new
+    exit_criteria:
+      - id: c1
+        text: "Contract states GitHub Actions is the only verifier / validation runner for PR --pre; the executor runs neither in AWS"
+        status: open
+      - id: c2
+        text: "Step Functions execution stores correlation ids: PR number, check-run id, workflow-run id, rec id, execution id, and head SHA (the exact commit the verdict attests)"
+        status: open
+      - id: c3
+        text: "The callback is authenticated without exposing raw Step Functions task tokens"
+        status: open
+      - id: c4
+        text: "PRE_PASS permits merge only when the callback's verified head SHA equals the PR head; a SHA mismatch routes to re-verify, and a repeated mismatch routes to ci-rca (Decision 72) -- the executor-side analogue of the terraform no-TOCTOU artifact-verdict binding (Decision 92)"
+        status: open
+      - id: c5
+        text: "Duplicate-callback idempotency and stale-callback rejection are enforced"
+        status: open
+      - id: c6
+        text: "Every verdict-wait state (waitForTaskToken) carries HeartbeatSeconds and TimeoutSeconds sized to expected verdict latency; a missing/late verdict times out to ci-rca (Decision 72), never a silent re-wait or retry"
+        status: open
+    related_candidate_decisions: [CD.38, CD.27, CD.35]
+    effort: M
+    strategic: false
+    status: not_started
+    progress_note: >-
+      - 2026-07-07 (PLAN-executor-containment-resequence, EXR-01, Decision 93): split from T4.9 per
+        audit EXR-01 (7d57a0d): minimal verdict-callback + merge-authority slice pulled live
+        (not_started) so the Decision 93 MVP merge leg is owned before the boundary; full contract
+        hardening (VF-14 alphabet mapping, full test matrix) stays in the T4.9 remnant
+        deferred_post_mvp. depends_on T4.1 (live) + T2.20 (complete); no live->deferred edge.
   - id: T4.10
     tier: T4
     name: Durable persona contract registry
@@ -7896,10 +7969,56 @@ tier_items:
       T4.2 does not: each persona as a versioned contract (CD.25 ritual) specifying purpose, input_schema,
       output_schema, allowed_tools, forbidden_tools, max_llm_calls, max_revisions, and a failure vocabulary
       -- so "laser-focused persona" is enforceable structure, not prompt-naming convention. Adds the two
-      personas T4.2 does not enumerate: rca (failure analysis) and bookkeeping (state reconciliation). T4.2's
-      persona implementations MUST conform to these contracts (this item is the contract surface T4.2
-      consumes; it does not re-implement the substrate). Forward intent; inert under the Decision 67 / CD.17
-      freeze.
+      personas T4.2 does not enumerate: rca (failure analysis) and bookkeeping (state reconciliation), and
+      hardens the registry (versioning, validate.py rejection rules) beyond the T4.10a authoring slice.
+      Forward intent; inert under the Decision 67 / CD.17 freeze.
+    depends_on: [T4.1, T1.12, T4.10a]
+    files_in_scope:
+      - docs/contracts/executor-personas.yaml    # registry index -- post-MVP hardening
+      - docs/contracts/personas/rca.yaml    # new
+      - docs/contracts/personas/bookkeeping.yaml    # new
+      - config/agent/executor/personas.yaml    # post-MVP hardening
+      - scripts/validate.py
+    exit_criteria:
+      - id: c1
+        text: "rca and bookkeeping have contract-versioned YAML contracts with input_schema, output_schema, allowed_tools, forbidden_tools, max_llm_calls, max_revisions, and failure_outputs"
+        status: open
+      - id: c2
+        text: "validate.py rejects persona contracts with missing schemas, unknown tools, or unbounded retry / revision settings, extended to the rca + bookkeeping registry entries"
+        status: open
+      - id: c3
+        text: "rca and bookkeeping have non-overlapping authority definitions against the seven-persona registry (matching the CD.27 / T4.2 identifiers plus the net-new rca + bookkeeping)"
+        status: open
+      - id: c4
+        text: "implement_agent remains the only persona permitted to produce repo patches; no persona contract (including rca, bookkeeping) permits direct merge, direct rec closure, or direct terraform apply"
+        status: open
+    related_candidate_decisions: [CD.27]
+    effort: M
+    strategic: false
+    status: deferred_post_mvp
+    progress_note: >-
+      Parked deferred_post_mvp (Decision 93): governance layer over the CD.27 / T4.2 personas;
+      EXTENDS T4.2 (does not duplicate its substrate) and adds the rca + bookkeeping personas.
+      Executor machinery -> automatable: false (Decision 44). depends_on T4.1 + T1.12 (live) --
+      deferred->live. No live item depends_on it. Reactivate with the T4 executor build; extends
+      T4.10a's authored contracts post-MVP.
+      - 2026-07-07 (PLAN-executor-containment-resequence, EXR-03, Decision 93): split per audit
+        finding EXR-03 -- the seven-persona contract-authoring slice moved to the live not_started
+        T4.10a; this remnant keeps registry hardening plus the rca/bookkeeping persona lifecycle
+        beyond authoring, deferred_post_mvp. depends_on gains T4.10a (deferred->live, permitted).
+  - id: T4.10a
+    tier: T4
+    name: Persona contract authoring (MVP slice)
+    intent: |
+      Per audit finding EXR-03 (7d57a0d) and Decision 93, the persona-contract-authoring slice
+      pulled live so T4.2's MVP personas ship governed: each of the seven personas (plan_agent,
+      plan_critic, decision_scout, implement_agent, code_reviewer, rca, bookkeeping) gets a
+      contract-versioned YAML (input_schema, output_schema, allowed_tools, forbidden_tools,
+      max_llm_calls, max_revisions, failure_outputs), and validate.py rejects contracts with
+      missing schemas, unknown tools, or unbounded retry/revision. T4.2's persona implementations
+      conform to these contracts (the obligation lives here, on this live item). Registry hardening
+      and the rca/bookkeeping persona lifecycle beyond authoring stay on the T4.10 remnant,
+      deferred_post_mvp.
     depends_on: [T4.1, T1.12]
     files_in_scope:
       - docs/contracts/executor-personas.yaml    # new -- registry index
@@ -7908,21 +8027,31 @@ tier_items:
       - docs/contracts/personas/decision_scout.yaml    # new
       - docs/contracts/personas/implement_agent.yaml    # new
       - docs/contracts/personas/code_reviewer.yaml    # new
-      - docs/contracts/personas/rca.yaml    # new
-      - docs/contracts/personas/bookkeeping.yaml    # new
       - config/agent/executor/personas.yaml    # new
       - scripts/validate.py
     exit_criteria:
-      - "Each executor persona has a contract-versioned YAML contract with input_schema, output_schema, allowed_tools, forbidden_tools, max_llm_calls, max_revisions, and failure_outputs"
-      - "validate.py rejects persona contracts with missing schemas, unknown tools, or unbounded retry / revision settings"
-      - "plan_agent, plan_critic, decision_scout, implement_agent, code_reviewer, rca, and bookkeeping have non-overlapping authority definitions (matching the CD.27 / T4.2 persona identifiers, plus the net-new rca + bookkeeping)"
-      - "implement_agent is the only persona permitted to produce repo patches; no persona contract permits direct merge, direct rec closure, or direct terraform apply"
-      - "T4.2 persona implementations are required to conform to these contracts (cross-referenced, not duplicated here)"
+      - id: c1
+        text: "Each of the seven personas (plan_agent, plan_critic, decision_scout, implement_agent, code_reviewer, rca, bookkeeping) has a contract-versioned YAML with input_schema, output_schema, allowed_tools, forbidden_tools, max_llm_calls, max_revisions, and failure_outputs"
+        status: open
+      - id: c2
+        text: "validate.py rejects persona contracts with missing schemas, unknown tools, or unbounded retry / revision settings"
+        status: open
+      - id: c3
+        text: "implement_agent is the only persona permitted to produce repo patches; no contract permits direct merge, direct rec closure, or direct terraform apply"
+        status: open
+      - id: c4
+        text: "T4.2 persona implementations conform to these contracts"
+        status: open
     related_candidate_decisions: [CD.27]
-    effort: M
+    effort: S
     strategic: false
-    status: deferred_post_mvp
-    progress_note: "Parked deferred_post_mvp (Decision 93): governance layer over the CD.27 / T4.2 personas; EXTENDS T4.2 (does not duplicate its substrate) and adds the rca + bookkeeping personas. Executor machinery -> automatable: false (Decision 44). depends_on T4.1 + T1.12 (live) -- deferred->live. No live item depends_on it. Reactivate with the T4 executor build (author before / with T4.2 persona implementation)."
+    status: not_started
+    progress_note: >-
+      - 2026-07-07 (PLAN-executor-containment-resequence, EXR-03, Decision 93): the
+        persona-contract-authoring slice is pulled live (not_started) so T4.2 MVP personas ship
+        governed; rca/bookkeeping persona additions plus registry hardening stay in the T4.10
+        remnant deferred_post_mvp. depends_on T4.1 (live) + T1.12 (complete); no live->deferred
+        edge.
   - id: T4.11
     tier: T4
     name: Executor loop-budget + retry policy contract
@@ -7936,22 +8065,41 @@ tier_items:
       LLM bad-output retry is prohibited except bounded schema-repair within a persona-local budget.
       Exhausted budgets route to RCA (Decision 55). Forward intent; inert under the Decision 67 / CD.17
       freeze.
-    depends_on: [T4.1, T4.10]
+    depends_on: [T4.1, T4.10a]
     files_in_scope:
       - docs/contracts/executor-loop-policy.yaml    # new
       - terraform/personal/executor_state_machine.tf    # new -- Step Functions counters
       - scripts/validate.py
     exit_criteria:
-      - "Loop policy defines max plan revisions, implementation revisions, review rounds, verification attempts, and total LLM calls per rec"
-      - "The Step Functions state machine enforces the counters and routes exhausted budgets to RCA (Decision 55)"
-      - "Transport-failure retry (deterministic) is separated from judgement-revision budget"
-      - "LLM bad-output retry is prohibited except bounded schema-repair within a persona-local budget"
-      - "ASL validation (or unit tests) covers exhausted-budget transitions"
+      - id: c1
+        text: "Loop policy defines max plan revisions, implementation revisions, review rounds, verification attempts, and total LLM calls per rec"
+        status: open
+      - id: c2
+        text: "The Step Functions state machine enforces the counters and routes exhausted budgets to RCA (Decision 55)"
+        status: open
+      - id: c3
+        text: "Transport-failure retry (deterministic) is separated from judgement-revision budget"
+        status: open
+      - id: c4
+        text: "LLM bad-output retry is prohibited except bounded schema-repair within a persona-local budget"
+        status: open
+      - id: c5
+        text: "ASL validation (or unit tests) covers exhausted-budget transitions"
+        status: open
     related_candidate_decisions: [CD.27]
     effort: M
     strategic: false
-    status: deferred_post_mvp
-    progress_note: "Parked deferred_post_mvp (Decision 93): bounded-budget layer over the CD.27 / T4.1 retry + concurrency model; EXTENDS T4.1 / T4.2 (does not duplicate concurrency=1 or the deterministic-retry split). Executor machinery -> automatable: false (Decision 44). depends_on T4.1 (live) + T4.10 (deferred) -- no live->deferred edge. No live item depends_on it. Reactivate with the T4 executor build."
+    status: not_started
+    progress_note: >-
+      - 2026-07-07 (PLAN-executor-containment-resequence, EXR-02, Decision 93): reactivated
+        deferred_post_mvp -> not_started per audit finding EXR-02 (critical, loop budgets) -- the
+        MVP loop needs a not_started owner for the bounded-budget layer. depends_on re-pointed
+        T4.10 -> T4.10a so the chain contains no deferred_post_mvp item (Decision 93 per-item
+        reactivation permitted).
+      Bounded-budget layer over the CD.27 / T4.1 retry + concurrency model; EXTENDS T4.1 / T4.2
+      (does not duplicate concurrency=1 or the deterministic-retry split). Executor machinery ->
+      automatable: false (Decision 44). depends_on T4.1 (live) + T4.10a (live) -- no
+      live->deferred edge. Reactivate with the T4 executor build.
   - id: T4.12
     tier: T4
     name: Scheduled-agent loop re-enable (five agents) + provider routing + legacy prompt-surface deletion
