@@ -7039,7 +7039,25 @@ tier_items:
     effort: M
     strategic: false
     status: not_started
-    progress_note: "[Reactivated 2026-07-03, VF-14, audit f80508b]: the reactivation trigger named below (\"T3.1 + T3.6 complete\") is now satisfied -- T3.6 complete 2026-06-25 (PLAN-t3-6-hermeticity-closeout), T3.1 closed complete 2026-07-03 (operator-confirmed closeout, this session). Flipped deferred_post_mvp -> not_started accordingly. [Prior deferral rationale, retained: Parked deferred_post_mvp (Decision 93) per operator scoping: the enforcement-side tail CD.29 / T0.12.5 deferred (the field-shape-early / enforcement-late skew names no owner). depends_on T0.12.5 (complete) + T3.1 / T3.6 (live) -- deferred->live, allowed. No live item depends_on it. Reactivate -> not_started once T3.1 + T3.6 are complete and the acceptance typed-checks enforcement flip is scheduled. CD.29.gates intentionally omits T3.10 (the typed-checks field-shape already ratified at T0.12.5; T3.10 is enforcement-only and binds CD.29 via related_candidate_decisions).]"
+    progress_note: >-
+      [Reactivated 2026-07-03, VF-14, audit f80508b]: the reactivation trigger named below ("T3.1 +
+      T3.6 complete") is now satisfied -- T3.6 complete 2026-06-25 (PLAN-t3-6-hermeticity-closeout),
+      T3.1 closed complete 2026-07-03 (operator-confirmed closeout, this session). Flipped
+      deferred_post_mvp -> not_started accordingly. [Prior deferral rationale, retained: Parked
+      deferred_post_mvp (Decision 93) per operator scoping: the enforcement-side tail CD.29 / T0.12.5
+      deferred (the field-shape-early / enforcement-late skew names no owner). depends_on T0.12.5
+      (complete) + T3.1 / T3.6 (live) -- deferred->live, allowed. No live item depends_on it.
+      Reactivate -> not_started once T3.1 + T3.6 are complete and the acceptance typed-checks
+      enforcement flip is scheduled. CD.29.gates intentionally omits T3.10 (the typed-checks
+      field-shape already ratified at T0.12.5; T3.10 is enforcement-only and binds CD.29 via
+      related_candidate_decisions).] 2026-07-08 (EXR-09, 7d57a0d): T3.10's files_in_scope
+      (scripts/executor/jsonl_store.py, step_runner.py, acceptance_lint.py) live INSIDE the frozen
+      (Decision 67) single-process executor -- the substrate CD.27/T4.2 replaces. Ordering note
+      relative to T4.2: T3.10 provides bridge value ONLY if it lands before T4.2's substrate
+      obsoletes those files; if T4.2 replaces the frozen executor first, its enforcement work is
+      dead-on-arrival and should re-home the acceptance[]-typed-checks enforcement onto the persona
+      substrate (T4.2 / T4.10a contracts) rather than the frozen code. No depends_on edge constrains
+      this ordering today; cross-ref T5.6 (frozen-executor disposition owner).
 
   - id: T3.11
     tier: T3
@@ -7723,7 +7741,7 @@ tier_items:
       the MED-9 forward-only-is-unsafe rationale at first-live); T4.4 extends the ladder to A4-A5
       and owns rollback AUTOMATION plus preflight/roadmap gate exposure. Cross-reference, not
       duplication -- see T3.4 for the A0-A3 definitions this item extends.
-    depends_on: [T4.2, T3.4]
+    depends_on: [T4.2, T3.4, T4.13]
     files_in_scope:
       - varies
     exit_criteria:
@@ -7737,7 +7755,13 @@ tier_items:
     effort: XL
     strategic: true
     status: not_started
-    progress_note: "2026-07-07 (PLAN-executor-design-seams-exr040607, EXR-06, Decision 93): added the reciprocal A-gate ownership boundary statement (T3.4 owns A0-A3 definitions + rollback-from-birth; T4.4 extends to A4-A5 and owns rollback AUTOMATION + preflight exposure)."
+    progress_note: >-
+      2026-07-07 (PLAN-executor-design-seams-exr040607, EXR-06, Decision 93): added the reciprocal
+      A-gate ownership boundary statement (T3.4 owns A0-A3 definitions + rollback-from-birth; T4.4
+      extends to A4-A5 and owns rollback AUTOMATION + preflight exposure).
+      2026-07-08 (EXR-05, Decision 93): added T4.13 (adversarial-input / prompt-injection threat
+      model) to depends_on -- the threat model is sequenced before this item raises autonomy-gate
+      authority (T4.13->T4.2 only; no cycle).
   - id: T4.5
     tier: T4
     name: Plan / critique / revision warehouse entities (ops_plans, ops_plan_revisions) + verb-RBAC
@@ -8182,6 +8206,93 @@ tier_items:
       per-agent routing -- a hint for the future PLAN-resolve-scheduled-agent-provider author, NOT a
       routing Decision and NOT an amendment to Decision 116. No live item depends on T4.12 (no-live-dep
       rule holds).
+  - id: T4.13
+    tier: T4
+    name: Executor adversarial-input / prompt-injection threat model
+    intent: |
+      [Created 2026-07-08, EXR-05, audit executor-roadmap-review-7d57a0d.] The autonomous executor's
+      personas (T4.2) read untrusted content by construction: rec title/context fields populated from
+      CI logs by ci-rca, repo/dependency/diff content read during /plan and /implement, and CI failure
+      output. None of this is currently modeled as an injection surface. This item owns the threat
+      model: inventory the untrusted-content ingress points, tag log-derived rec content with
+      provenance so personas treat quoted/untrusted spans as data (never as authority instructions),
+      harden the persona prompts against instruction-following from quoted content, and add an
+      injection red-team fixture to the T4.2 e2e smoke set.
+    depends_on: [T4.2]
+    files_in_scope:
+      - config/agent/executor/prompts/    # persona prompt-hardening
+      - scripts/ops_data_portal.py    # provenance tagging on log-derived rec content
+    exit_criteria:
+      - id: c1
+        text: >-
+          Untrusted-content ingress inventory covering rec title/context fields quoting CI logs via
+          ci-rca, and repo/dependency/diff content read during /plan and /implement.
+        status: open
+      - id: c2
+        text: >-
+          Provenance tagging for log-derived rec content so personas treat quoted/untrusted spans as
+          data, never as authority instructions.
+        status: open
+      - id: c3
+        text: >-
+          Persona prompt-hardening requirements for plan_agent/implement_agent/code_reviewer: boundary
+          / authority-relevant instructions are never taken from quoted content.
+        status: open
+      - id: c4
+        text: >-
+          An injection red-team fixture in the T4.2 e2e smoke set: a rec whose quoted content attempts
+          to steer a persona to merge/close/apply is neutralized.
+        status: open
+    related_candidate_decisions: [CD.27, CD.38]
+    related_decisions: [55, 117]
+    related_intents: [recommendation-executor]
+    effort: M
+    strategic: false
+    status: not_started
+    progress_note: >-
+      Created 2026-07-08 per EXR-05 (7d57a0d) / Decision 93; sequenced before T4.4 raises authority
+      via the T4.4.depends_on edge; depends_on T4.2 (not_started/live) -- no live->deferred edge.
+  - id: T4.14
+    tier: T4
+    name: Offline persona-eval / regression harness
+    intent: |
+      [Created 2026-07-08, EXR-08, audit executor-roadmap-review-7d57a0d.] Changes to persona prompts
+      or the model-tier registry currently ship with no offline regression signal -- the audit's
+      external_checklist row 12 (offline evaluation / regression harness) is the sole missed frontier
+      row. This item owns a golden-rec fixture set with a graded rubric, an offline runner that scores
+      a candidate persona prompt/model config against the fixture set with no production rec spend,
+      and an ADVISORY (alarm-not-gate, CD.12 posture) CI check on diffs to
+      config/agent/executor/prompts/ and the model-tier registry.
+    depends_on: [T4.2]
+    files_in_scope:
+      - config/agent/executor/prompts/
+      - scripts/validate.py    # advisory CI check wiring
+    exit_criteria:
+      - id: c1
+        text: "Golden-rec fixture set with a graded rubric (golden recs + expected/graded plan + diff outcomes)."
+        status: open
+      - id: c2
+        text: >-
+          An offline runner that scores a candidate persona prompt/model config against the fixture
+          set with no production rec spend.
+        status: open
+      - id: c3
+        text: >-
+          An ADVISORY (alarm-not-gate, CD.12 posture) CI check on diffs to config/agent/executor/prompts/
+          and the model-tier registry that files a rec / comments on regression but does NOT block
+          merge (Decision 55).
+        status: open
+    related_candidate_decisions: [CD.12, CD.27]
+    related_intents: [recommendation-executor]
+    effort: M
+    strategic: false
+    status: not_started
+    note: >-
+      Carries the audit's external_checklist row 12 (offline evaluation / regression harness) -- the
+      sole missed frontier row.
+    progress_note: >-
+      Created 2026-07-08 per EXR-08 (7d57a0d) / Decision 93; depends_on T4.2 (not_started/live) -- no
+      live->deferred edge.
 
   # ----- T5: Decommissioning & cleanup -----
   - id: T5.1
@@ -8332,6 +8443,47 @@ tier_items:
       - 2026-07-04: WAVE-2 first doc retired: session-log-architecture INTENT doc deleted (tier_item_deliverable archetype; surviving intent reconciled onto the canonical DuckLake telemetry model and extracted to new tier_item T3.20 + candidate_decision CD.40). 4 of 18 docs retired.
       - 2026-07-04: WAVE-2 second doc retired: terraform-cicd-agent-native INTENT doc deleted (tier_item_deliverable archetype; forward content already fully extracted -- Section-8 waves to tier_items T2.20-T2.25 + T2.35, CD.NN placeholder ratified as Decision 92 / dec-092 -- so delete-plus-pointer only). 5 of 18 docs retired.
       - 2026-07-06: Parked deferred_post_mvp (Decision 93; MVP-triage audit 7d57a0d / RMAP-27): INTENT extraction (16 of 18 docs remaining) is context-hygiene with real long-run agent value but no loop-closure contribution; L effort. Wave momentum can resume post-MVP; the intent-doc-freeze guard already prevents regression meanwhile. Transitive active dependents: none. Deferral valid. Reactivate post-MVP (mid-wave state is clean -- WAVE-1 closed).
+  - id: T5.6
+    tier: T5
+    name: Frozen executor decommission / disposition
+    intent: |
+      [Created 2026-07-08, EXR-09, audit executor-roadmap-review-7d57a0d.] The frozen (Decision 67)
+      single-process executor (scripts/execute_recommendation.py + scripts/executor/*) is unowned for
+      cutover: no tier_item names when/how it is harvested or retired once the T4.2 Durable Function
+      substrate replaces it. This item owns that disposition -- harvest reusable logic into the
+      substrate, retire the rest, and guarantee the two never run concurrently against the same queue.
+    depends_on: [T4.2]
+    files_in_scope:
+      - scripts/execute_recommendation.py    # harvest/retire
+      - scripts/executor/    # harvest/retire
+    exit_criteria:
+      - id: c1
+        text: >-
+          Harvest/retire inventory for scripts/execute_recommendation.py + scripts/executor/* -- each
+          module classified retire | harvest-into-substrate | already-replaced, with the replacing
+          owner named (T4.1 emit_telemetry, T4.2 personas/prompts, T3.10 verification consumption).
+        status: open
+      - id: c2
+        text: >-
+          Explicit no-dual-run statement: the frozen single-process executor and the Step Functions
+          substrate never run concurrently against the same queue; the frozen executor is retired, not
+          left dormant-but-runnable, at cutover.
+        status: open
+      - id: c3
+        text: >-
+          Predecessor closeout per T-1.22's replacement-closure check (old surface named, old path
+          proven dead / designed-rollback-only, superseded predecessor items closed out in the same
+          staged edit).
+        status: open
+    related_candidate_decisions: [CD.27]
+    related_decisions: [67]
+    effort: S
+    strategic: false
+    status: deferred_post_mvp
+    progress_note: >-
+      Created 2026-07-08 per EXR-09 (7d57a0d); owns the frozen-executor cutover the audit found
+      unowned (seed e); reactivate -> not_started when T4.2 flips complete (T-1.22 fires then);
+      depends_on T4.2 (live) -- deferred->live permitted; no live item depends on T5.6.
 
 cross_tier_gates:
   - id: G.1
