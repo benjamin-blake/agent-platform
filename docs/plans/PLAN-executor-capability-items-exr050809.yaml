@@ -1,0 +1,196 @@
+schema_version: 1
+slug: "executor-capability-items-exr050809"
+intent: >-
+  Close the three unowned executor-capability / cutover gaps the 7d57a0d executor-roadmap audit
+  found (EXR-05 adversarial-input threat model, EXR-08 offline persona-eval harness, EXR-09
+  frozen-executor disposition) by authoring their owning tier_items, so the North-Star autonomous
+  loop reaches its containment and quality frontier before the autonomy gates raise authority.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-executor-capability-items-exr050809.yaml
+phase: >-
+  Platform T4 (autonomous executor) + T5 (decommissioning). Roadmap bookkeeping: adds tier_items
+  T4.13 (EXR-05), T4.14 (EXR-08), T5.6 (EXR-09) and annotates T3.10 + T4.4. No product-phase impact.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add tier_items T4.13 (executor adversarial-input / prompt-injection threat model), T4.14
+      (offline persona-eval / regression harness), T5.6 (frozen-executor decommission /
+      disposition); add T4.13 to T4.4.depends_on (sequence the threat model before autonomy-gate
+      authority-raise); annotate T3.10 with its frozen-executor substrate assumption and T4.2
+      ordering note.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/ROADMAP-PLATFORM.yaml contains a new tier_item T4.13 (tier T4, status not_started,
+    depends_on [T4.2]) whose exit criteria name (a) an untrusted-content ingress inventory covering
+    rec fields quoting CI logs via ci-rca and repo/dependency content read during implement, (b)
+    provenance tagging for log-derived rec content, (c) persona prompt-hardening requirements, and
+    (d) an injection red-team fixture in the T4.2 smoke set.
+  - >-
+    T4.4.depends_on includes T4.13 (the threat model is sequenced before the autonomy gates raise
+    authority), and the edge is live->live (both not_started), so the Decision 93 no-live-dep
+    invariant holds.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml contains a new tier_item T4.14 (tier T4, status not_started,
+    depends_on [T4.2]) whose exit criteria name a golden-rec fixture set with a graded rubric, an
+    offline runner, and an ADVISORY (alarm-not-gate, CD.12 posture) check on diffs to
+    config/agent/executor/prompts/ and the model-tier registry; the item records that it carries
+    the audit's external_checklist row 12.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml contains a new tier_item T5.6 (tier T5, status deferred_post_mvp,
+    depends_on [T4.2]) whose exit criteria name a harvest/retire inventory for
+    scripts/execute_recommendation.py + scripts/executor/*, an explicit no-dual-run statement, and
+    predecessor closeout per T-1.22's replacement-closure check.
+  - >-
+    T3.10 carries an annotation stating its files_in_scope live inside the frozen (Decision 67)
+    executor and an explicit ordering note relative to T4.2 (bridge value only if it lands before
+    T4.2 obsoletes those files; otherwise re-home the enforcement onto the persona substrate).
+  - >-
+    bin/venv-python -m scripts.validate --pre passes (roadmap schema, Decision 93 no-live-dep
+    invariant, Decision 114 10,000-line ceiling guard).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Load the roadmap through platform_roadmap (which runs the RoadmapDocument model_validator,
+      enforcing the Decision 93 no-live-dep invariant) and assert the three new items exist with the
+      correct tier/status/depends_on and that T4.4 now depends on T4.13.
+    command: >-
+      bin/venv-python -c "import scripts.platform_roadmap as p; d=p.load_platform_roadmap();
+      it={i.id:i for i in d.tier_items};
+      a=it['T4.13']; assert a.tier=='T4' and a.status=='not_started' and a.depends_on==['T4.2'], a;
+      b=it['T4.14']; assert b.tier=='T4' and b.status=='not_started' and b.depends_on==['T4.2'], b;
+      c=it['T5.6']; assert c.tier=='T5' and c.status=='deferred_post_mvp' and c.depends_on==['T4.2'], c;
+      assert 'T4.13' in it['T4.4'].depends_on, it['T4.4'].depends_on;
+      print('OK', [a.id,b.id,c.id])"
+    expected: "Prints 'OK ['T4.13', 'T4.14', 'T5.6']'; the load raises no ValueError (Decision 93 holds)."
+    fix_if: >-
+      An item is missing, a status/tier/depends_on mismatch, or the model_validator raises
+      (e.g. a live item depends on a deferred_post_mvp item) -- correct the offending tier_item.
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Assert each new item's exit-criteria text and the T3.10 annotation cover the required concepts
+      by loading the roadmap and checking the joined criteria/notes text per item.
+    command: >-
+      bin/venv-python -c "import scripts.platform_roadmap as p; d=p.load_platform_roadmap();
+      it={i.id:i for i in d.tier_items};
+      j=lambda i:' '.join(c.text for c in it[i].exit_criteria).lower();
+      t413=j('T4.13'); assert all(k in t413 for k in ['ingress','provenance','harden','red-team']), t413;
+      assert 'ci-rca' in t413 and 'red-team' in t413;
+      t414=j('T4.14'); assert all(k in t414 for k in ['golden','rubric','offline','advisory']), t414;
+      assert 'config/agent/executor/prompts' in t414 and 'model-tier' in t414;
+      t56=j('T5.6'); assert all(k in t56 for k in ['harvest','no-dual-run','t-1.22']), t56;
+      assert 'execute_recommendation' in t56;
+      n=(it['T3.10'].progress_note or '').lower();
+      assert 'frozen' in n and 't4.2' in n, n;
+      print('OK concepts')"
+    expected: "Prints 'OK concepts'; every required concept keyword is present in the target item text."
+    fix_if: >-
+      A concept keyword is absent -- add or reword the exit criterion / progress_note so the required
+      concept (ingress inventory, provenance, prompt-hardening, red-team fixture; golden-rec/rubric/
+      offline/advisory + prompts + model-tier; harvest/no-dual-run/T-1.22 closeout; T3.10 frozen +
+      T4.2 ordering) is stated.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      Run the fast presubmit tier; it re-loads the roadmap and runs validate_platform_roadmap
+      (schema + Decision 93 dependency-direction check + Decision 114 _ROADMAP_MAX_LINES ceiling
+      guard). hermetic:false because the command invokes scripts.validate --pre (excluded from VP
+      replay to avoid self-recursion).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exit 0; roadmap checks pass, no line-ceiling breach, no live->deferred dependency error."
+    fix_if: >-
+      validate.py reports a roadmap schema error, a Decision 93 dependency-direction violation, or a
+      Decision 114 line-ceiling breach -- fix the flagged item or trim added lines.
+constraints:
+  - "Roadmap bookkeeping only: the sole file modified is docs/ROADMAP-PLATFORM.yaml. File NO recommendations and NO decisions (portal writes are out of scope for this plan)."
+  - "Decision 93: no not_started/in_progress item may depend on a deferred_post_mvp item. All new edges point to T4.2 (not_started/live): T4.13->T4.2, T4.14->T4.2, T4.4->T4.13 are live->live; T5.6(deferred)->T4.2(live) is the permitted deferred->live direction."
+  - "Decision 114: keep docs/ROADMAP-PLATFORM.yaml under the 10,000-line ceiling (currently 8,783; additions ~150 lines stay well under)."
+  - "No new standing prose-architecture docs (Decision 86): forward intent lands in tier_items, not a new docs/*.md file."
+  - "No rescue agents or workaround loops (Decision 55); the T4.14 advisory check files a rec / comments on regression and never blocks merge (CD.12 alarm-not-gate)."
+  - "Status-Trusted-Never-Inferred: this plan flips no criterion or item statuses; it only authors new items and annotates existing ones. T3.10's status is unchanged (the annotation is a progress_note)."
+context:
+  - "Source: audits/executor-roadmap-review-7d57a0d.yaml findings EXR-05 (novel, medium), EXR-08 (novel, medium, external_checklist row 12), EXR-09 (novel, medium). Each finding's current_behavior/proposed_change/acceptance were read in full before scoping."
+  - "EXR-05 T4.13 sequencing: 'before autonomy gates raise authority' is encoded structurally by adding T4.13 to T4.4.depends_on, matching the CD.13 'depends_on is the single source of truth' precedent that deleted redundant cross_tier_gates G.3-G.7."
+  - "EXR-08 T4.14 depends_on [T4.2]: the harness needs the personas to exist to evaluate them; the ADVISORY check adopts the CD.12 (runner = alarm not gate) posture grounded in Decisions 62/73."
+  - "EXR-09 T5.6 is deferred_post_mvp (mirrors T5.1): the frozen-executor harvest waits on T4.2; T-1.22's replacement-closure check fires at T4.2 completion, giving the closeout a named owner. T3.10's files_in_scope (scripts/executor/jsonl_store.py, step_runner.py, acceptance_lint.py) live inside the frozen (Decision 67) executor, hence the substrate/ordering annotation."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS; CITE = Decision 93, Decision 114, Decision 55; RELATED = Decision 117, Decision 86, Decision 62/73, Decision 67."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=<pending> after 0 round(s)"
+  - "Branch was 0 commits behind origin/main at planning time (preflight main=0 behind, 0 ahead); no scope-file divergence."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/executor-audit-findings-548zf1)
+  - docs/PROJECT_CONTEXT.md read
+  - Audit findings EXR-05/EXR-08/EXR-09 read in full (current_behavior, proposed_change, acceptance)
+  - docs/ROADMAP-PLATFORM.yaml located and readable; T3.10/T4.2/T4.4/T5.5 anchors confirmed
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml: insert tier_item T4.13 "Executor adversarial-input /
+    prompt-injection threat model" immediately after T4.12 (before the '# ----- T5' comment). tier
+    T4, depends_on [T4.2], status not_started, effort M, strategic false,
+    related_candidate_decisions [CD.27, CD.38], related_decisions [55, 117], related_intents
+    [recommendation-executor]. Exit criteria (id/text/status: open form): c1 untrusted-content
+    ingress inventory (rec title/context fields populated from CI logs by ci-rca; repo/dependency/
+    diff content read during plan/implement; CI failure output); c2 provenance tagging for
+    log-derived rec content so personas treat quoted/untrusted spans as data, never as authority
+    instructions; c3 persona prompt-hardening requirements for plan_agent/implement_agent/
+    code_reviewer (boundary/authority-relevant instructions never taken from quoted content); c4 an
+    injection red-team fixture in the T4.2 e2e smoke set (a rec whose quoted content attempts to
+    steer a persona to merge/close/apply is neutralized). progress_note: created 2026-07-08 per
+    EXR-05 (7d57a0d) / Decision 93; sequenced before T4.4 raises authority via the T4.4.depends_on
+    edge; depends_on T4.2 (not_started/live) -- no live->deferred edge.
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml: add T4.13 to T4.4.depends_on ([T4.2, T3.4] -> [T4.2, T3.4,
+    T4.13]) and append a T4.4 progress_note entry dated 2026-07-08 noting the threat-model
+    (T4.13) gate on authority-raise per EXR-05 / Decision 93 (no cycle: T4.13->T4.2 only).
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml: insert tier_item T4.14 "Offline persona-eval / regression
+    harness" after T4.13. tier T4, depends_on [T4.2], status not_started, effort M, strategic false,
+    related_candidate_decisions [CD.12, CD.27], related_intents [recommendation-executor]. Exit
+    criteria: c1 golden-rec fixture set with a graded rubric (golden recs + expected/graded plan +
+    diff outcomes); c2 an offline runner that scores a candidate persona prompt/model config against
+    the fixture set with no production rec spend; c3 an ADVISORY (alarm-not-gate, CD.12 posture) CI
+    check on diffs to config/agent/executor/prompts/ and the model-tier registry that files a rec /
+    comments on regression but does NOT block merge (Decision 55). note: carries the audit's
+    external_checklist row 12 (offline evaluation / regression harness) -- the sole missed frontier
+    row. progress_note: created 2026-07-08 per EXR-08 (7d57a0d) / Decision 93; depends_on T4.2
+    (not_started/live) -- no live->deferred edge.
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml: insert tier_item T5.6 "Frozen executor decommission /
+    disposition" after T5.5 (before the tier_items list ends / cross_tier_gates). tier T5,
+    depends_on [T4.2], status deferred_post_mvp, effort S, strategic false,
+    related_candidate_decisions [CD.27], related_decisions [67]. files_in_scope
+    scripts/execute_recommendation.py + scripts/executor/ (# harvest/retire). Exit criteria: c1
+    harvest/retire inventory for scripts/execute_recommendation.py + scripts/executor/* -- each
+    module classified retire | harvest-into-substrate | already-replaced, with the replacing owner
+    named (T4.1 emit_telemetry, T4.2 personas/prompts, T3.10 verification consumption); c2 explicit
+    no-dual-run statement (the frozen single-process executor and the Step Functions substrate never
+    run concurrently against the same queue; the frozen executor is retired, not left
+    dormant-but-runnable, at cutover); c3 predecessor closeout per T-1.22's replacement-closure
+    check (old surface named, old path proven dead / designed-rollback-only, superseded predecessor
+    items closed out in the same staged edit). progress_note: created 2026-07-08 per EXR-09
+    (7d57a0d); owns the frozen-executor cutover the audit found unowned (seed e); reactivate ->
+    not_started when T4.2 flips complete (T-1.22 fires then); depends_on T4.2 (live) -- deferred->
+    live permitted; no live item depends on T5.6.
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml: append a T3.10 progress_note entry dated 2026-07-08 (EXR-09):
+    T3.10's files_in_scope (scripts/executor/jsonl_store.py, step_runner.py, acceptance_lint.py)
+    live INSIDE the frozen (Decision 67) single-process executor -- the substrate CD.27/T4.2
+    replaces. Ordering note relative to T4.2: T3.10 provides bridge value ONLY if it lands before
+    T4.2's substrate obsoletes those files; if T4.2 replaces the frozen executor first, its
+    enforcement work is dead-on-arrival and should re-home the acceptance[]-typed-checks enforcement
+    onto the persona substrate (T4.2 / T4.10a contracts) rather than the frozen code. No depends_on
+    edge constrains this ordering today; cross-ref T5.6 (frozen-executor disposition owner).
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55) (N/A here -- V1, all steps pre-deploy)
+  - "Report: what was authored (T4.13, T4.14, T5.6, T3.10/T4.4 annotations), verification results"
+work_areas: []
+rollback: >-
+  Single-file, additive edit. Revert with git checkout docs/ROADMAP-PLATFORM.yaml (or drop the
+  three new items + the T4.4/T3.10 note edits); no runtime, data, or infrastructure state changes.
