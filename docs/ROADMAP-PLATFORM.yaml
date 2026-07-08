@@ -1049,8 +1049,11 @@ candidate_decisions:
            sub-15-minute by construction.
 
       Long-running deterministic steps that genuinely exceed 15 minutes (e.g. a full pytest suite,
-      terraform apply against the personal account, large data migration) use the Step Functions ECS Run
-      Task synchronous integration -- arn:aws:states:::ecs:runTask.sync -- as an escape hatch. Fargate is
+      a large data migration) use the Step Functions ECS Run
+      Task synchronous integration -- arn:aws:states:::ecs:runTask.sync -- as an escape hatch. terraform
+      apply is NOT an in-executor escape-hatch task (EXR-07): merged-change application is dispatched to
+      the GitHub-Actions gated-apply pipeline (CD.35 / Decision 92) behind the server-side convergence
+      record, per CD.38 sole-runner authority; the executor never runs terraform apply in-cloud. Fargate is
       not eliminated from the architecture; it is demoted from "the executor's primary substrate" to "the
       long-step escape hatch within the executor's Step Functions orchestrator."
 
@@ -1080,7 +1083,8 @@ candidate_decisions:
       clause: |
         Fargate-as-executor-substrate clause. Step Functions + Lambda Durable Functions + Lambda is the
         new executor substrate. Fargate retained for ECS Run Task escape-hatch integration within Step
-        Functions for steps that genuinely exceed 15 minutes (full pytest, terraform apply, etc.).
+        Functions for steps that genuinely exceed 15 minutes (full pytest, large data migration, etc.;
+        terraform apply is NOT an in-executor task -- it rides the CD.35 / Decision 92 gated-apply pipeline).
     discipline_points:
       - One Step Functions execution per rec (clean lifecycle scoping).
       - Agent personas as Durable Functions, not as regular Lambdas. Regular Lambdas are deterministic-only.
@@ -1090,6 +1094,7 @@ candidate_decisions:
       - Lambda Durable Functions maturity monitoring -- the service is ~5 months in GA at the time of CD.27 ratification. If API semantics regress within the first 12 months, fall back to self-checkpointed Lambda with state in DynamoDB (intentional re-evaluation trigger; recorded as an INTENT Open Question for re-eval at each T4.2 atomic-plan filing). Track via T4.2 exit criterion "checkpoint-replay verified" and the Health Signal "Lambda Durable Function checkpoint-replay rate" (INTENT line surfaces alarm threshold).
       - T4.2 "stable for 14 days" operational definition (required for the CD.17 reversal trigger). Across the 14-day grace window: per-persona checkpoint-replay rate < 5%; per-rec success rate >= rolling 7-day baseline; zero unrecovered failures (Decision 55 stop-clean-and-RCA path counts as recovered if a rec was filed); cost-per-rec rolling avg within 1.5x rolling 7-day baseline. Trigger fires only when ALL personas' executions satisfy these per-signal thresholds for the full 14-day window. This is the explicit semantic definition replacing the pre-CD.27 "Fargate handler runs the loop end-to-end without recovery agent" implicit definition.
       - T4.x atomic-plan template: each T4.x atomic plan must declare Plan Type IMPLEMENTATION (STRATEGIC remains suspended per AGENTS.md Temporary Operational Constraints) and must include CD.16 per-Lambda build/deploy/smoke-test steps for the Lambdas it touches (Decision 79 lifted the blanket Decision-67 deploy freeze; only the dispatcher smoke-test deferral survives until T4.3 -- audit F-009). T4.2 in particular splits per-persona; not all personas need to land in the same window.
+      - "[Amended 2026-07-07, EXR-07 / audit 7d57a0d; extends nothing, overturns nothing:] terraform apply is removed from the ECS Run-Task escape-hatch examples -- apply authority is the GitHub-Actions CD.35 / Decision 92 gated-apply pipeline (CD.38 sole-runner), never an in-executor task. Reconciles a stale example with the ratified apply authority."
 
   - id: CD.28
     title: LLM inference = DeepSeek-direct via LiteLLM (Tier 1); Anthropic-direct (Tier 2); Bedrock retired from architecture
@@ -1864,6 +1869,7 @@ candidate_decisions:
       - Two-tier TAP-style flow preserved: merge on PR --pre, promote/close only on main full-validate (CI authoritative per the AGENTS.md merge protocol).
       - Verdict-callback failures (stale/duplicate/auth/verdict-timeout) route to ci-rca (Decision 72 / Decision 55), never silent retry or re-wait; every waitForTaskToken state carries HeartbeatSeconds/TimeoutSeconds (T4.1/T4.9).
       - The per-rec differential verify (fail-on-revert: pre-change tree -> assert FAIL; head -> assert PASS) runs as a GitHub Actions job keyed by rec id -- NOT in AWS. Step Functions has a verify STATE that only dispatches and waits, consistent with the sole-runner rule (resolves the T3.1 c6 vs CD.38 substrate seam, VF-12).
+      - "Deploy leg (EXR-07): merged-change application is NOT an in-executor task -- terraform applies dispatch to the CD.35 / Decision 92 GitHub-Actions gated-apply pipeline and the executor waits on the server-side convergence record exactly as the verify leg waits on a CI verdict; Lambda deploys ride CD.16 per-Lambda steps. rec-2523 guard-BLOCK red-record deadlock is a named precondition for running the deploy leg unattended (fix owned by rec-2523; out of scope here)."
 
   - id: CD.39
     title: >-
@@ -6760,11 +6766,12 @@ tier_items:
       - varies — touches executor, scheduled agents, ops portal Lambdas, planning skill
     exit_criteria:
       - "Anomaly detected → rec filed → priority queued → /plan or executor → fix → telemetry delta proves fix"
-      - "Autonomy maturity gates A0-A3 documented and live"
+      - "Autonomy maturity gates A0-A3 documented and live, WITH a per-gate rollback criterion for each (A-gate ownership boundary, EXR-06): T3.4 owns gate DEFINITION semantics for A0-A3 including rollback-from-birth, satisfying T4.4 MED-9 forward-only-autonomy-is-unsafe rationale at first-live (Decision 92 points 6-9); T4.4 extends the ladder to A4-A5 and owns rollback AUTOMATION + preflight/roadmap gate exposure -- see T4.4"
     related_intents: [autonomous-improvement-control-plane]
     effort: XL
     strategic: true
     status: not_started
+    progress_note: "2026-07-07 (PLAN-executor-design-seams-exr040607, EXR-06, Decision 93): stated the A-gate ownership boundary -- T3.4 owns A0-A3 gate definitions WITH rollback-from-birth (MED-9 at first-live); rollback AUTOMATION + A4-A5 extension owned by T4.4 (cross-referenced, not duplicated)."
 
   - id: T3.5
     tier: T3
@@ -7501,7 +7508,7 @@ tier_items:
       Agent personas (T4.2) and scheduled-agent migration (T4.3) consume this substrate.
 
       State-machine shape (per CD.27 boundary diagram):
-        - pick_rec [Lambda]                          : poll priority queue, return rec_id + branch_slug
+        - pick_rec [Lambda]                          : poll priority queue; ADMISSION PREDICATE gates the return -- admit a rec only when its T3.8 relevance verdict == relevant (CD.36 / Decision 103), automatable == true, and risk is within the current T4.4 autonomy-gate ceiling (Decision 92 ratchet), AND its targets do NOT match Decision 117 boundary_patterns (config/agent/executor/capabilities.yaml); a refused pick emits a typed telemetry event and a boundary_patterns hit re-routes the rec to the human path (Decision 55), never auto-executed; returns rec_id + branch_slug
         - prepare_workspace [Lambda]                 : clone repo, create agent/{slug} branch, set up worktree, return workspace_uri
         - plan_agent [Durable Function, T4.2]        : iterative read-code -> LLM -> tool-use -> emit plan; writes PLAN-{slug}.md to S3; returns {plan_s3_uri, plan_summary}
         - Parallel { plan_critic, decision_scout, ... } [Durable Functions, T4.2]  : critic personas run in parallel
@@ -7511,9 +7518,9 @@ tier_items:
         - file_pr [Lambda]                           : idempotent PR creation via gh
         - await_verdict [Lambda, waitForTaskToken]   : wait on the GitHub Actions verdict callback (T4.9a); Step Functions stores correlation ids incl. head SHA
         - merge [Lambda]                             : callback-gated squash-merge (T4.9a) -- PRE_PASS permits merge only when the callback head SHA equals the PR head
-        - deploy_dispatch [Lambda, waitForTaskToken]  : dispatch the deploy job and wait for completion (dispatch-and-wait only, no apply-authority -- EXR-07 out of scope)
+        - deploy_dispatch [Lambda, waitForTaskToken]  : dispatch merged-change application to the CD.35 / Decision 92 GitHub-Actions gated-apply pipeline and wait on its server-side convergence-record verdict, exactly as the verify leg waits on a CI verdict (CD.38 sole-runner authority; the executor holds NO apply authority and never runs terraform apply in-cloud). PRECONDITION for running this leg unattended: rec-2523 guard-BLOCK red-convergence-record deadlock (a red record clearable by neither automated path, requiring an out-of-band admin apply) must have a designed exception path -- fixing that deadlock stays with rec-2523, out of scope here
         - emit_telemetry [Lambda]                    : final session-close emission
-        - ESCAPE [ECS Run Task synchronous integration] : for deterministic steps that exceed 15 min (full pytest, terraform apply)
+        - ESCAPE [ECS Run Task synchronous integration] : for deterministic steps that exceed 15 min (e.g. full pytest, large data migration); terraform apply is NOT an in-executor escape-hatch task -- see deploy_dispatch (dispatched to the CD.35 / Decision 92 GitHub-Actions gated-apply pipeline, per CD.38)
     depends_on: [T2.1, T3.2]
     files_in_scope:
       - terraform/executor_step_functions.tf    # new -- state machine + EventBridge trigger
@@ -7531,6 +7538,9 @@ tier_items:
       - "CloudWatch observability wired: per-Lambda p50/p99 + per-state-machine execution success/failure rate; alarms file rec via log-rec on threshold breach (per T1.9 pattern)"
       - "Concurrency cap = 1 on the state machine initially per Decision 55 RCA-first; raise as autonomy gates A2+ pass per T4.4"
       - "Every waitForTaskToken / verdict-wait state in the state machine carries HeartbeatSeconds and TimeoutSeconds; timeout transitions route to ci-rca (Decision 72), never a silent re-wait -- the executor analogue of the interactive dropped-green-signal backstop"
+      - "pick_rec admission predicate enforced (not merely poll priority queue): a rec is admitted for autonomous execution only when its T3.8 relevance verdict == relevant (CD.36 / Decision 103), automatable == true, and its risk is within the current T4.4 autonomy-gate ceiling (Decision 92 ratchet), AND none of its targets match the Decision 117 boundary_patterns SSOT (config/agent/executor/capabilities.yaml); a refused pick emits a typed telemetry event, and a boundary_patterns hit re-routes the rec to the human path (Decision 55) -- never auto-executed"
+      - "file_pr / merge GitHub-side credential scoping is specified in the T4.1 / T4.9(a) atomic plans (the IAM criteria above cover the AWS leg only): which credential (PAT or GitHub App) files and merges PRs, its scopes, storage, rotation, and why no persona environment other than file_pr / merge holds it (Decision 92 least-privilege OIDC precedent)"
+      - "A single named operator kill-switch is documented (disable the EventBridge trigger AND set state-machine concurrency to 0) with its authority, and is covered by a test proving an in-flight execution stops cleanly (Decision 55) and no new execution starts"
     related_candidate_decisions: [CD.10, CD.16, CD.17, CD.24, CD.27, CD.28]
     related_intents: [recommendation-executor]
     effort: L
@@ -7545,6 +7555,13 @@ tier_items:
         await_verdict, merge, and deploy_dispatch states to the state-machine shape after file_pr
         and before emit_telemetry, so T4.9a's callback-gated merge leg and the dispatch-and-wait
         deploy leg are named in the substrate T4.9a/T4.2 consume.
+      - 2026-07-07 (PLAN-executor-design-seams-exr040607, EXR-04/EXR-07, Decision 93): bound
+        pick_rec's admission predicate (T3.8 relevance / automatable / T4.4 risk ceiling /
+        Decision 117 boundary_patterns; refused-pick typed telemetry + boundary-hit human
+        re-route); completed the deploy_dispatch state to dispatch-to-CD.35-and-wait with the
+        rec-2523 red-record-deadlock precondition and dropped terraform apply from the ESCAPE
+        example; added file_pr/merge credential-scoping and operator kill-switch exit criteria
+        (Q5 h/i).
     decomposition_hints:
       split_by: subsystem
       atomic_plans:
@@ -7700,6 +7717,12 @@ tier_items:
       detection silence, and exception event rates. Each An -> An+1 transition is forward; each
       An -> An-1 is a rollback triggered automatically when a regression metric breaches threshold
       (architect round-2 MED-9: forward-only autonomy without a rollback contract is unsafe).
+
+      A-gate ownership boundary (EXR-06): T3.4 owns gate DEFINITION semantics for A0-A3 and
+      delivers them documented-and-live WITH per-gate rollback criteria before T4.2 (satisfying
+      the MED-9 forward-only-is-unsafe rationale at first-live); T4.4 extends the ladder to A4-A5
+      and owns rollback AUTOMATION plus preflight/roadmap gate exposure. Cross-reference, not
+      duplication -- see T3.4 for the A0-A3 definitions this item extends.
     depends_on: [T4.2, T3.4]
     files_in_scope:
       - varies
@@ -7714,6 +7737,7 @@ tier_items:
     effort: XL
     strategic: true
     status: not_started
+    progress_note: "2026-07-07 (PLAN-executor-design-seams-exr040607, EXR-06, Decision 93): added the reciprocal A-gate ownership boundary statement (T3.4 owns A0-A3 definitions + rollback-from-birth; T4.4 extends to A4-A5 and owns rollback AUTOMATION + preflight exposure)."
   - id: T4.5
     tier: T4
     name: Plan / critique / revision warehouse entities (ops_plans, ops_plan_revisions) + verb-RBAC
