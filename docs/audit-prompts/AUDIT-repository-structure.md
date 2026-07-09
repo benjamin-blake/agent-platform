@@ -98,8 +98,10 @@ anything:
 
 **Audited surfaces** (re-derive every count yourself -- section 5 trust-nothing rule):
 
-- **S1 -- Root / top-level**: files and dotfiles at the repository root, plus the set of
-  top-level directories.
+- **S1 -- Root / top-level**: files and dotfiles at the repository root, the set of top-level
+  directories, AND the internal shape of the smaller top-level trees not covered by S2-S7 --
+  `audits/` (the deliverable home, also implicated by candidate C3), `logs/`, `bin/`, and
+  `migrations/`.
 - **S2 -- `scripts/`**: automation, checks, executor, verifiers.
 - **S3 -- `src/`**: `data/`, `lambdas/`, `common/`, `schemas/`, `meta_learner/`, `live/`, `lab/`,
   `execution/`.
@@ -155,7 +157,8 @@ bin/venv-python -m scripts.session_preflight --roadmap-detail full
 
 This writes `logs/.preflight-report.json` and refreshes `logs/.recommendations-log.jsonl`.
 
-**Degraded-dedup hatch**: IF cache-gen fails (creds/egress down): do NOT abort -- set
+**Degraded-dedup hatch**: IF cache-gen fails for ANY reason (creds/egress down, module error,
+missing flag): do NOT abort -- set
 `meta.degraded_dedup = true`, set every finding's top-level `confidence` to `HYPOTHESIS` and
 every `roadmap_crossref.dedup_hit_count` to `null` (null is permitted here despite the schema
 default of `0`), and proceed using direct `rg` over `docs/ROADMAP-PLATFORM.yaml`,
@@ -241,7 +244,9 @@ Answer each as a first-class entry in `question_answers`. Pinned per-question ve
   EC1..EC11 (plus any researched additions). `applies_to_surfaces` lists which surfaces the
   property structurally implicates (e.g. EC2 tests-mirror-source implicates S3+S4; EC10
   root-minimalism implicates S1 only); it is the mapping the per-surface maturity computation
-  reads (section 15), so pin it deliberately -- not every EC applies to every surface. `partial`
+  reads (section 15), so pin it deliberately -- not every EC applies to every surface. **This
+  mapping is deliberately YOUR judgment call**: record the mapping you choose and it stands --
+  there is no external arbiter and no single correct answer, only a defensible one. `partial`
   requires an argued, property-matched compensating control in `evidence`.
 
 - **Q4 -- End-state convergence.** Reconcile the current tree against the ROADMAP-PLATFORM
@@ -334,7 +339,7 @@ re-verify each before relying on it (section 5 trust-nothing), and re-derive cou
 File-count observations (re-derive):
 - Total tracked files: ~1026. By top-level dir (descending): `docs` ~437, `scripts` ~179,
   `tests` ~168, `src` ~59, `terraform` ~40, `config` ~34, `.github` ~31, `.claude` ~24,
-  `audits` ~20, `logs` ~10, `bin` ~4.
+  `audits` ~20, `logs` ~10, `bin` ~4, `migrations` ~1.
 - `scripts/`: ~71 files directly at its root; subtrees `checks/` (~86, itself nested into
   `ci_guards/`, `contracts/`, `deps/`, `executor/`, `hygiene/`, ...), `executor/` (~13),
   `verifiers/` (~7). Anchor: `git ls-files scripts | awk -F/ 'NF==2'` and `.../ 'NF>2{print $2}'`.
@@ -365,7 +370,8 @@ File-count observations (re-derive):
 - `CLAUDE.md` files: 4 total -- root (`CLAUDE.md`, whose entire content is `@AGENTS.md`),
   `src/data/handlers/CLAUDE.md`, `terraform/CLAUDE.md`, `tests/CLAUDE.md`. `README.md` files: ~10
   (root, plus several under `config/` and `terraform/`).
-- Root directory holds ~28 tracked entries, including portal files (`README.md`, `AGENTS.md`,
+- Root directory holds ~31 tracked entries (19 files + 12 dirs), including portal files
+  (`README.md`, `AGENTS.md`,
   `CLAUDE.md`, `EVALUATION-PROMPTS.yaml`, `SECURITY.md`, `LICENCE`), build/config
   (`setup.py`, `pyproject.toml`, `requirements.txt`, `requirements.lock`, `requirements-fast.txt`,
   `requirements-dev.txt`, `.importlinter`, `.pre-commit-config.yaml`, `.secrets.baseline`,
@@ -400,7 +406,7 @@ neutral hypothesis, not a verdict. Some will resolve to sound decided structure 
 - **C9** (feeds Q2/EC7, VD3; DD-D): per-directory `CLAUDE.md` context-locality exists in only 3
   non-root directories (`src/data/handlers/`, `terraform/`, `tests/`), while ~10 `README.md`
   files exist -- an agent-index vs human-index ratio to assess for an agent-first repo.
-- **C10** (feeds Q1/EC10): the repository root holds ~28 tracked entries, including several
+- **C10** (feeds Q1/EC10): the repository root holds ~31 tracked entries, including several
   instruction/portal surfaces and four separate requirements files
   (`requirements.txt`/`.lock`/`-fast.txt`/`-dev.txt`).
 
@@ -506,7 +512,8 @@ audit:
     - {q: Q2, verdict: sufficient|partial|insufficient, basis: [], prose: ""}
     - {q: Q3, verdict: sufficient|partial|insufficient, basis: [], prose: "",
        external_checklist: [{property: EC1, rating: met|partial|missed, evidence: "",
-                             evidence_kind: static|researched}]}   # one row per EC1..EC11 (+ any researched additions)
+                             evidence_kind: static|researched,
+                             applies_to_surfaces: [S1]}]}   # one row per EC1..EC11 (+ any researched additions); applies_to_surfaces per section 7, read by section 15 maturity
     - {q: Q4, verdict: aligned|partial|divergent, basis: [], prose: ""}
     - {q: Q5, verdict: see surface_dispositions, basis: [], prose: ""}   # points to the decision block
     - {q: Q6, answers: [{question: "", answer: "", basis: [<finding ids>]}]}
@@ -608,13 +615,17 @@ A finding counts against a surface's thresholds if its `surface` equals that sur
 `surface = shared`) that surface is listed in the finding's `implicated_surfaces`. "The EC
 properties that apply to the surface" = exactly the Q3 `external_checklist` rows whose
 `applies_to_surfaces` includes this surface. Pin these thresholds:
-- **frontier** = 0 open critical AND 0 open high findings counting against that surface, AND
-  every applicable EC property is rated `met` or `partial` (never `missed`). The top rating
-  remains reachable if you argued a property-matched compensating control -- this framing does
-  not foreclose it.
+- **frontier** = 0 critical AND 0 high findings counting against that surface, AND every
+  applicable EC property is rated `met` or `partial` (never `missed`). The top rating remains
+  reachable if you argued a property-matched compensating control -- this framing does not
+  foreclose it.
 - **strong** = 0 critical AND <= 1 high counting against the surface.
-- **solid** = <= 1 critical counting against the surface.
-- **nascent** = otherwise.
+- **solid** = <= 1 critical AND <= 3 high counting against the surface.
+- **nascent** = otherwise (including any surface with >= 4 high findings, so a surface drowning
+  in high-severity placement defects never floors above nascent).
+
+(Every finding counts as "against a surface" per the `surface` / `implicated_surfaces` rule
+above; there is no finding status field -- all findings in `findings[]` count.)
 
 ---
 
@@ -625,7 +636,8 @@ properties that apply to the surface" = exactly the Q3 `external_checklist` rows
    `meta.audited_commit`. Do NOT re-fetch after this capture -- if `origin/main` advances while
    you work, your audit still pins the sha you captured. If a deliverable path
    (`audits/repository-structure-<sha>.*`) already exists before you write, you are on the wrong
-   base or a duplicate run -- stop and re-derive rather than overwriting.
+   base or a duplicate run -- STOP and report to the human (do not overwrite, do not loop
+   re-deriving the same sha).
 2. `git switch -c audit/repository-structure-<sha> origin/main` so the PR diff is exactly the two
    deliverable files. (This is a deliberate exception to the usual session-branch rule: the audit
    session needs a clean two-file diff off the audited base. The CI signal-green comment wake
@@ -651,6 +663,11 @@ properties that apply to the surface" = exactly the Q3 `external_checklist` rows
   them. You move, rename, and delete NOTHING else -- the target tree is a proposal.
 - **Precision over volume.** Fewer than ~6 surviving findings is a valid result -- state it; do
   NOT pad. A padded finding on a sound structure is a worse outcome than a short list.
+- **Look for excellence, not only defects.** The candidate list C1-C10 is deficiency-shaped by
+  construction; do not let it anchor you toward "the structure is bad." Identify at least one
+  surface that is frontier-exemplary (or explain why none is), and populate
+  `per_surface_assessment[].strengths` for every surface -- a surface that is genuinely well-shaped
+  is a first-class result, not an empty cell.
 - **No verdict smuggling in your own output**: state the fact, then convict. A candidate that
   traces to sound, decided structure belongs in `rejected_candidates` with its owning decision --
   that is a successful adjudication, not a gap in the audit.
