@@ -116,7 +116,7 @@ verification_plan:
     phase: pre-deploy
     hermetic: true
     action: Hermetic replay tripwire (validate_vp_replay) -- the _scaffolding facade import surface consumed by scripts/validate.py resolves. Dual-tree stable, so CI replay passes on the plan-only diff (symbols defined in _scaffolding today) AND after the move (symbols re-exported from _terraform).
-    command: bin/venv-python -c "from scripts.checks._scaffolding import run_terraform_checks, run_terraform_creds_free, _terraform_init_with_retry, _TERRAFORM_ROOTS, _TRANSIENT_INIT_SIGNATURES; print('scaffolding facade surface OK')"
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "from scripts.checks._scaffolding import run_terraform_checks, run_terraform_creds_free, _terraform_init_with_retry, _TERRAFORM_ROOTS, _TRANSIENT_INIT_SIGNATURES; print('scaffolding facade surface OK')"
     expected: Prints 'scaffolding facade surface OK'; exit 0. Runs in well under 1s (fleet vp-replay budget of 20 steps / 120s across all sibling plans is respected -- this plan marks exactly ONE hermetic step; verified green at planning time, 0.05s).
     fix_if: ImportError post-move -> the facade re-export block in _scaffolding.py omitted one of the five symbols scripts/validate.py imports; restore it. ImportError pre-move should be impossible (verified green at planning time).
 constraints:
