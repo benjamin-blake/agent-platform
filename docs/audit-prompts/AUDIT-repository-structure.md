@@ -40,9 +40,10 @@ A proposed target tree is a proposal, not an applied change.
 
 ## 2. CANDIDATE OBSERVATIONS vs VERDICTS -- the epistemic contract
 
-This prompt hands you FACTS and CANDIDATE hypotheses. It never hands you verdicts. Every
-candidate in section 10 is a neutrally-phrased observation you must adjudicate by tracing it in
-the repository yourself.
+This prompt hands you FACTS and CANDIDATE hypotheses. It never hands you verdicts. The
+candidates are the numbered list **C1-C10 in section 10** -- each a neutrally-phrased observation
+you must adjudicate by tracing it in the repository yourself. The facts and decisions in section
+10 are grounding; the C-list is what you adjudicate.
 
 **ASSUME NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT.** A run that merely confirms the
 candidates below has failed. Some candidates will resolve to deliberate, decided structure with a
@@ -155,8 +156,9 @@ bin/venv-python -m scripts.session_preflight --roadmap-detail full
 This writes `logs/.preflight-report.json` and refreshes `logs/.recommendations-log.jsonl`.
 
 **Degraded-dedup hatch**: IF cache-gen fails (creds/egress down): do NOT abort -- set
-`meta.degraded_dedup = true`, mark every `roadmap_crossref` confidence as HYPOTHESIS and every
-`dedup_hit_count` as null, and proceed using direct `rg` over `docs/ROADMAP-PLATFORM.yaml`,
+`meta.degraded_dedup = true`, set every finding's top-level `confidence` to `HYPOTHESIS` and
+every `roadmap_crossref.dedup_hit_count` to `null` (null is permitted here despite the schema
+default of `0`), and proceed using direct `rg` over `docs/ROADMAP-PLATFORM.yaml`,
 `docs/DECISIONS.md`, and `logs/.recommendations-log.jsonl` as a best-effort substitute.
 
 **Web-research availability** (section 11): if this session cannot browse the web, set
@@ -235,8 +237,12 @@ Answer each as a first-class entry in `question_answers`. Pinned per-question ve
   - EC11: Generated/derived artifacts segregated from source and gitignored.
   Verdict enum: `sufficient | partial | insufficient`. Add
   `external_checklist: [{property, rating: met|partial|missed, evidence, evidence_kind:
-  static|researched}]` to this question's answer. `partial` requires an argued, property-matched
-  compensating control in `evidence`.
+  static|researched, applies_to_surfaces: [S1..S7]}]` to this question's answer -- one row per
+  EC1..EC11 (plus any researched additions). `applies_to_surfaces` lists which surfaces the
+  property structurally implicates (e.g. EC2 tests-mirror-source implicates S3+S4; EC10
+  root-minimalism implicates S1 only); it is the mapping the per-surface maturity computation
+  reads (section 15), so pin it deliberately -- not every EC applies to every surface. `partial`
+  requires an argued, property-matched compensating control in `evidence`.
 
 - **Q4 -- End-state convergence.** Reconcile the current tree against the ROADMAP-PLATFORM
   end-state (`docs/ROADMAP-PLATFORM.yaml`: `north_star`, `rebuild_vs_refactor`,
@@ -368,6 +374,36 @@ File-count observations (re-derive):
   `statusline.py`. `.github/`: `workflows/` (~14), `instructions/` (~7), `prompts/` (~7),
   `agents/` (~1), `dependabot.yml`, `pull_request_template.md`.
 
+**CANDIDATE OBSERVATIONS (C1-C10)** -- adjudicate each per section 2's contract; each is a
+neutral hypothesis, not a verdict. Some will resolve to sound decided structure (-> a successful
+`rejected_candidates` entry); do not assume any is a defect.
+
+- **C1** (feeds Q1, Q3/EC4; DD-A): `scripts/` has ~71 files directly at its root, while
+  `scripts/checks/` uses nested subpackages; prefix families exist among the root files
+  (`ci_rca_*`, `sync_*`, `session_*`, roadmap/plan, `ops_*`, `llm_*`/`model_registry`).
+- **C2** (feeds Q1/EC5, Q4; DD-B): Lambda-handler code lives in two locations --
+  `src/lambdas/<slug>/handler.py` and `src/data/handlers/*_handler.py`.
+- **C3** (feeds Q1/EC5, Q2; DD-C): audit artifacts are written under three-plus locations --
+  top-level `audits/`, `docs/audit-prompts/`, `docs/audit-reports/`, plus loose
+  `docs/AUDIT-*.md`/`.yaml` at the docs root.
+- **C4** (feeds Q1/EC2): `tests/` holds ~142 files at its root and does not mirror the
+  `src/`/`scripts/` package layout.
+- **C5** (feeds Q1, Q2; DD-C): the `docs/` root holds ~31 mixed-class files (INTENT-*, AUDIT-*,
+  ROADMAP-*, ARCHITECTURE-*, REPORT-*, SESSION_LOG-*, plus indices and spike notes).
+- **C6** (feeds Q1/EC10, Q3): `docs/ROADMAP-PRODUCT.md` is a prose file alongside
+  `docs/ROADMAP-PRODUCT.yaml`. (The per-product YAMLs themselves are intentional -- section 3
+  trap 6; the question is only the `.md`-beside-`.yaml` prose mirror.)
+- **C7** (feeds Q1, Q2/VD3): `docs/plans/` holds ~357 accumulated plan files.
+- **C8** (feeds Q1/EC6, Q2/VD1, VD4): there is no `CODEOWNERS` or machine-readable
+  tree-ownership index; discovery leans on the hand-maintained "File Router" table in
+  `docs/PROJECT_CONTEXT.md`.
+- **C9** (feeds Q2/EC7, VD3; DD-D): per-directory `CLAUDE.md` context-locality exists in only 3
+  non-root directories (`src/data/handlers/`, `terraform/`, `tests/`), while ~10 `README.md`
+  files exist -- an agent-index vs human-index ratio to assess for an agent-first repo.
+- **C10** (feeds Q1/EC10): the repository root holds ~28 tracked entries, including several
+  instruction/portal surfaces and four separate requirements files
+  (`requirements.txt`/`.lock`/`-fast.txt`/`-dev.txt`).
+
 Governing decisions / roadmap items (read the cited anchors; do not trust these summaries):
 - `docs/ROADMAP-PLATFORM.yaml`: `north_star.principles` (NS.1-NS.5), `rebuild_vs_refactor`
   (surgical refactor of `scripts/`/`src/`/`tests/`; R.1 greenfield-rewrite retired),
@@ -477,23 +513,34 @@ audit:
   surface_dispositions:            # the Q5 decision block, one entry per surface S1..S7
     S1: {verdict: keep|reorganize-in-place|consolidate|split|defer, mechanism: "",
          what_changes: "", cost: "", rationale: "", confidence: CONFIRMED|HYPOTHESIS}
-    # ... S2..S7
+    # ... S2..S7. For the COMPOUND surfaces (S6 = config/ + terraform/, S7 = .claude/ +
+    # .github/): emit one verdict for the surface; if the two trees warrant different
+    # dispositions, add sub: {config: {verdict: ..., ...}, terraform: {...}} (S6) or
+    # sub: {claude: {...}, github: {...}} (S7), and set the top-level verdict to the dominant one.
   proposed_target_tree:            # the to-be map, planned to the roadmap end-state
     principles: [<the placement rules the target tree enforces>]
+    # Resolution: directory-level, PLUS any individual file that changes home. Do NOT enumerate
+    # unchanged files. The requester is open to refactoring; surgical refactor IS refactoring
+    # (section 6). If any node genuinely cannot be reached by surgical move/rename/consolidate,
+    # mark it {surgical: false} and say so explicitly rather than silently narrowing scope.
     nodes:
       - {path: "<dir-or-file>", role: "<one line>", moves_from: [<current paths, if any>],
-         rationale: "", roadmap_basis: [<tier/decision ids>], migration_hazard: ""}
+         rationale: "", roadmap_basis: [<tier/decision ids>], migration_hazard: "", surgical: true}
     sequencing: [<ordered surgical steps: what moves first and why, path-constant safety>]
-  per_surface_assessment:
-    - {surface: S1, maturity: <derived>, strengths: "", top_gaps: [<finding ids>]}
+  per_surface_assessment:            # per_surface_assessment[].maturity is the CANONICAL maturity value
+    - {surface: S1, maturity: <derived: frontier|strong|solid|nascent>, strengths: "",
+       top_gaps: [<finding ids>]}
     # ... S2..S7
   rubric_ratings:
     - {surface: S1, dimension: VD1, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|surface-count", note: ""}
     # every applicable (surface x dimension) cell
   findings:
-    - {id: RS-01, surface: S1..S7|shared, question: Q1..Q6, dimension: VD1..VD7,
-       title: "", evidence: "file:line|count-anchor", evidence_kind: static|observed|researched,
+    - {id: RS-01, surface: S1..S7|shared,
+       implicated_surfaces: [S1..S7],   # REQUIRED when surface=shared: the surfaces this finding's severity counts against for maturity (section 15). Omit or [] when surface is a single S#.
+       question: Q1..Q6, dimension: VD1..VD7,
+       title: "", evidence: "file:line|count-anchor",
+       evidence_kind: static|researched,   # static = read from the tree / re-derived count; researched = external web source (section 11). There is no "observed" value.
        current_behavior: "", ideal_behavior: "", gap: "",
        compensating_controls_considered: "",
        change_type: relocate|consolidate|split|rename|index|enforce|clarify,
@@ -523,12 +570,17 @@ dispositions, and the highest-leverage change. Prose, no padding.
 planned_unbuilt_count`. Fully-covered candidates and deliberate structures live in
 `rejected_candidates`, NOT `findings`. `rubric_ratings`, `question_answers`,
 `surface_dispositions`, and `proposed_target_tree` are systems-of-record referenced FROM findings,
-never re-counted. `top_improvements` and `highest_leverage_change` MUST be finding ids.
+never re-counted. `top_improvements` and `highest_leverage_change` MUST be finding ids -- EXCEPT
+when `findings` is empty (a valid outcome), in which case `top_improvements: []` and
+`highest_leverage_change: null`.
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates, and state why the control would
 FAIL if the defect were real. `CONFIRMED` requires the behavior traced to `file:line` or a
-re-derived count; anything less is `HYPOTHESIS`.
+re-derived count; anything less is `HYPOTHESIS`. A finding's `acceptance` is a one-line,
+human-checkable statement of the post-condition that would confirm the proposed change landed
+(e.g. "no `.py` file sits directly under `scripts/` except package markers" or "exactly one
+directory contains audit outputs") -- a stated condition, not necessarily an executable command.
 
 ---
 
@@ -550,13 +602,18 @@ exercise the same property AND fail if the defect were real (apply the counterfa
 control). A hand-maintained index that itself drifts does not neutralize a discoverability defect
 unless you can show it is actually kept in sync.
 
-**Maturity** -- compute LAST, per surface, top-down, first match wins. Pin these thresholds:
-- **frontier** = 0 open critical AND 0 open high findings on that surface, AND every EC property
-  that applies to the surface is rated `met` or `partial` (never `missed`) in Q3's
-  `external_checklist`. The top rating remains reachable if you argued a property-matched
-  compensating control -- this framing does not foreclose it.
-- **strong** = 0 critical AND <= 1 high on the surface.
-- **solid** = <= 1 critical on the surface.
+**Maturity** -- compute LAST, per surface, top-down, first match wins; the value lives in
+`per_surface_assessment[].maturity` (canonical) and is mirrored verbatim into `summary.maturity_S*`.
+A finding counts against a surface's thresholds if its `surface` equals that surface OR (when
+`surface = shared`) that surface is listed in the finding's `implicated_surfaces`. "The EC
+properties that apply to the surface" = exactly the Q3 `external_checklist` rows whose
+`applies_to_surfaces` includes this surface. Pin these thresholds:
+- **frontier** = 0 open critical AND 0 open high findings counting against that surface, AND
+  every applicable EC property is rated `met` or `partial` (never `missed`). The top rating
+  remains reachable if you argued a property-matched compensating control -- this framing does
+  not foreclose it.
+- **strong** = 0 critical AND <= 1 high counting against the surface.
+- **solid** = <= 1 critical counting against the surface.
 - **nascent** = otherwise.
 
 ---
@@ -565,7 +622,10 @@ unless you can show it is actually kept in sync.
 
 1. Derive the base ONCE: `git fetch origin main` then `git rev-parse --short origin/main`. This
    sha IS the audited tree; use it in both deliverable filenames, the branch name, and
-   `meta.audited_commit`.
+   `meta.audited_commit`. Do NOT re-fetch after this capture -- if `origin/main` advances while
+   you work, your audit still pins the sha you captured. If a deliverable path
+   (`audits/repository-structure-<sha>.*`) already exists before you write, you are on the wrong
+   base or a duplicate run -- stop and re-derive rather than overwriting.
 2. `git switch -c audit/repository-structure-<sha> origin/main` so the PR diff is exactly the two
    deliverable files. (This is a deliberate exception to the usual session-branch rule: the audit
    session needs a clean two-file diff off the audited base. The CI signal-green comment wake
