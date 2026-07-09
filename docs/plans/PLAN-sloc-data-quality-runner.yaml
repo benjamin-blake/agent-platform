@@ -1,0 +1,512 @@
+schema_version: 1
+slug: "sloc-data-quality-runner"
+intent: >-
+  Reduce scripts/data_quality_runner.py below the 500-SLOC limit by decomposing the declarative
+  data-quality check harness along its cohesion seams into importable sibling modules, so the DQ
+  harness grows by adding files rather than ratcheting one file's budget -- while preserving the
+  runner's CLI and dq-latest.json freshness-artifact contract byte-for-byte.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-data-quality-runner.yaml
+phase: >-
+  Platform hardening. Realizes the rec-2414 SLOC-reduction umbrella for
+  scripts/data_quality_runner.py under the Decision 43/102 per-file budget ratchet, applying the
+  ratified Decision 80/104 thin-CLI + facade decomposition pattern. Platform-internal tooling; no
+  product-roadmap phase; not Lambda-packaged (Decision 79 verified: compute_affected_artifacts
+  returns [] -- V2 stands per Decision 48).
+scope:
+  - file: scripts/data_quality_runner.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin (<=450 SLOC, expected ~260) CLI + facade. KEEP VERBATIM: the module usage
+      docstring, argparse surface (--file/-f, --table/-t, --dry-run, --json, --severity, --checks,
+      --profile), main(), _print_results(), _save_latest_result() (incl. the logs/debug/dq-latest.json
+      write + key schema), the module logger, and the `if __name__ == "__main__": sys.exit(main())`
+      guard. ADD facade re-exports of every public symbol AND every facade-targeted test-patched
+      private symbol from the three new modules (one consolidated import block per source module with
+      `# noqa: F401` on pure re-exports, per the tests/CLAUDE.md ruff-format single-block rule) so
+      `from scripts.data_quality_runner import X`, `import scripts.data_quality_runner as dq; dq.X`
+      getattr/patch access, and `python -m scripts.data_quality_runner` stay byte-stable. Drop the
+      line-1 `# complexity-waiver: decision-43` header ONLY as verified by VP step 5 (Decision 102
+      stale-waiver clause: never remove the comment without verifying the CC gate first; measured max
+      CC is 15).
+  - file: scripts/data_quality_models.py
+    action: Create
+    purpose: >-
+      DAG root; no intra-package dependency. The Check / CheckResult / RunResult dataclasses moved
+      verbatim (incl. every RunResult verdict-count property) plus the cross-cutting path constants
+      _ROOT, _DQ_DIR, _TOMBSTONES_PATH. ~60 SLOC, CC 0 -- no waiver header.
+  - file: scripts/data_quality_compile.py
+    action: Create
+    purpose: >-
+      YAML/tombstones -> Check compilation + SQL dialect translation -- the dry-run/compile path that
+      compiles instantly per rec-2184: load_checks, _compile_column_test (moved WHOLE; its internal
+      refactor is rec-629's scope, not this plan's), load_tombstones, build_tombstone_checks,
+      to_ducklake_sql, _uniqueness_sql, build_clause8_checks -- all verbatim. Imports Check +
+      _TOMBSTONES_PATH from data_quality_models; keeps the function-local
+      `from src.common.ducklake_runtime import resolve_table_spec`. ~320 SLOC, max CC 12 -- no waiver.
+  - file: scripts/data_quality_execute.py
+    action: Create
+    purpose: >-
+      Backend execution + aggregation -- the live Athena/DuckLake path: _verdict_for, _query_ops_rows,
+      _is_reader_unavailable, _execute_check_ducklake, _execute_check, apply_backend_routing,
+      run_checks moved verbatim, plus the backend-routing/poll constants _OPS_TABLES,
+      _DUCKLAKE_OPS_TABLES, _ops_backend, _POLL_INTERVAL, _MAX_POLL, _TRANSIENT_HTTP_RE. Imports the
+      dataclasses + _DQ_DIR from data_quality_models and to_ducklake_sql + build_clause8_checks from
+      data_quality_compile; keeps the function-local boto3 / resolve_aws_profile / DuckLakeReader /
+      requests imports. Decision 84 semantics move byte-stable: DuckLake sole ops backend for the
+      migrated set, query_ops as the sanctioned I-3 exception for the DQ harness, deferred tables
+      (ops_session_log/ops_execution_plans) staying on the Athena leg -- do NOT "clean up" either leg.
+      ~260 SLOC, max CC 11 -- no waiver.
+  - file: tests/test_data_quality_runner.py
+    action: Modify
+    purpose: >-
+      Retain ONLY the CLI-facade tests: main() flag/exit-code/severity/json/conflicting-workgroup
+      paths, _print_results, _save_latest_result + freshness-artifact schema tests, and
+      TestMainExitCodeDegraded. These keep patching scripts.data_quality_runner.{_DQ_DIR, _ROOT,
+      load_checks, load_tombstones, run_checks, apply_backend_routing} UNCHANGED -- their callers
+      (main, _save_latest_result) stay in the facade, so the facade-namespace patch still intercepts.
+  - file: tests/test_data_quality_models.py
+    action: Create
+    purpose: >-
+      Dataclass tests moved from the runner test file (Check defaults/enforced/exclude_before,
+      RunResult verdict-count properties incl. the graduation-guard RunResult assertions), extended
+      with a direct RunResult.hard_gated assertion so the models module is exercised independently of
+      _save_latest_result. Test-split hygiene only; no new behavior asserted.
+  - file: tests/test_data_quality_compile.py
+    action: Create
+    purpose: >-
+      Compile-path tests moved from the runner test file (load_checks variants, _compile_column_test
+      incl. exclude_before/list-form/non-dict cases, tombstone build, to_ducklake_sql,
+      build_clause8_checks incl. table_filter). No patch-target repoints -- these tests call the
+      compiled functions directly.
+  - file: tests/test_data_quality_execute.py
+    action: Create
+    purpose: >-
+      Execution-path tests moved from the runner test file (_execute_check Athena paths,
+      _execute_check_ducklake + TestExecuteCheckDucklakeUnavailable, TestIsReaderUnavailable,
+      _verdict_for, apply_backend_routing routing/env-flag tests, run_checks dry-run/boto3-profile/
+      DEGRADED-aggregate/ducklake-routing tests, _ops_backend, _DUCKLAKE_OPS_TABLES). REPOINT exactly
+      8 patch sites -- patch("scripts.data_quality_runner._execute_check") x7 and
+      patch("scripts.data_quality_runner._MAX_POLL") x1 -> scripts.data_quality_execute.* -- because
+      their consumers (run_checks, _execute_check) now resolve those names in the execute module
+      namespace (tests/CLAUDE.md namespace-migration discipline). The
+      monkeypatch.setattr("src.common.iceberg_reader.DuckLakeReader", ...) sites stay unchanged
+      (run_checks imports it function-locally at call time). Keep imports in ONE consolidated block.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Regenerated by `validate --update-sloc-budgets` as the LAST implementation step (Decision 102
+      down-only ratchet): the `scripts/data_quality_runner.py: 835` entry auto-drops (facade <=500)
+      and NO data_quality* key is seeded (every new module <=500). Never hand-edited. Asserted BY KEY,
+      never by full-file diff -- ~16 sibling decompositions on this shared branch regenerate the same
+      file.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The retained tests/test_data_quality_runner.py plus the three new split suites (models, compile,
+    execute) plus tests/test_verifiers/test_data_quality.py all pass with unchanged assertion
+    semantics (behavior preserved; the DataQualityVerifier importer and its 28 facade-namespace patch
+    sites keep working via lazy import + facade re-export).
+  - >-
+    Facade completeness: every public symbol and every facade-targeted test-patched private symbol
+    (Check, CheckResult, RunResult, load_checks, _compile_column_test, load_tombstones,
+    build_tombstone_checks, to_ducklake_sql, _uniqueness_sql, build_clause8_checks, _verdict_for,
+    _query_ops_rows, _is_reader_unavailable, _execute_check_ducklake, _execute_check,
+    apply_backend_routing, run_checks, main, _print_results, _save_latest_result, _OPS_TABLES,
+    _DUCKLAKE_OPS_TABLES, _ops_backend, _ROOT, _DQ_DIR, _TOMBSTONES_PATH) resolves via
+    `from scripts.data_quality_runner import <name>` and getattr on the module.
+  - >-
+    CLI + freshness-artifact contract byte-stable: `python -m scripts.data_quality_runner` accepts
+    every original flag with unchanged exit-code semantics, and logs/debug/dq-latest.json keeps its
+    path and key schema -- preserving the Decision 62 ensure_fresh_dq_results auto-invoke contract
+    (scripts/checks/_scaffolding.py shells out the bare module invocation and reads that artifact).
+  - >-
+    scripts/data_quality_runner.py drops to <=450 SLOC; no new scripts/data_quality_*.py module
+    exceeds 500 SLOC (sloc_limits formula: non-blank, non-#-comment lines).
+  - >-
+    CC verified, not assumed (decision-scout NOTE resolution): no function in the four modules
+    exceeds 20 branches under the cc_limits formula AND no complexity-waiver header remains in any of
+    them -- the stale line-1 waiver is dropped only on this proof; if any moved function measured >20
+    the waiver header would be carried into that specific module only.
+  - >-
+    Namespace-migration closure: zero residual patch("scripts.data_quality_runner._execute_check")
+    or patch("scripts.data_quality_runner._MAX_POLL") sites remain in tests/; the 8 migrated sites
+    target scripts.data_quality_execute and still intercept through the moved bodies (proven by the
+    passing execute suite).
+  - >-
+    Coverage gate green with NO change to scripts/test_coverage_checker.py: map_source_to_test maps
+    each scripts/data_quality_<x>.py to tests/test_data_quality_<x>.py via the existing
+    len(parts)==2 rule, --check-tests finds all four mapped test files, and the real gate command
+    exits 0 (per-file measurement currently resolves via the checker's informational no-data path
+    because pyproject pins coverage source=["src"] -- probed at planning time).
+  - >-
+    `python -m scripts.data_quality_runner --dry-run` compiles and prints SQL for all checks and
+    exits 0 with no traceback; live Athena/DuckLake execution is deliberately NOT exercised
+    (rec-2184: executed runs hang >150s per check from CC-web; Decision 88: avoid gratuitous Neon
+    egress).
+  - "`bin/venv-python -m scripts.validate --pre` exits 0."
+  - >-
+    config/sloc_budgets.yaml contains no data_quality* key after `validate --update-sloc-budgets`
+    (runner entry dropped, nothing seeded), asserted by key -- not by full-file equality.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Full targeted suite -- retained runner tests + the 3 split suites + the DataQualityVerifier
+      suite all pass (fully mocked; no live warehouse call anywhere).
+    command: bin/venv-python -m pytest tests/test_data_quality_runner.py tests/test_data_quality_models.py tests/test_data_quality_compile.py tests/test_data_quality_execute.py tests/test_verifiers/test_data_quality.py -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: >-
+      ImportError on `from scripts.data_quality_runner import X` -> facade omitted symbol X. A patched
+      _execute_check/_MAX_POLL no-ops (run_checks/timeout test fails) -> that patch site was not
+      repointed to scripts.data_quality_execute. A verifier test fails -> a lazily imported symbol
+      (load_checks/load_tombstones/build_tombstone_checks/run_checks/apply_backend_routing) is missing
+      from the facade.
+  - step: 2
+    phase: pre-deploy
+    action: Facade completeness -- every consumer-visible symbol resolves on the facade module namespace.
+    command: >-
+      bin/venv-python -c "import scripts.data_quality_runner as dq;
+      req=['Check','CheckResult','RunResult','load_checks','_compile_column_test','load_tombstones',
+      'build_tombstone_checks','to_ducklake_sql','_uniqueness_sql','build_clause8_checks',
+      '_verdict_for','_query_ops_rows','_is_reader_unavailable','_execute_check_ducklake',
+      '_execute_check','apply_backend_routing','run_checks','main','_print_results',
+      '_save_latest_result','_OPS_TABLES','_DUCKLAKE_OPS_TABLES','_ops_backend','_ROOT','_DQ_DIR',
+      '_TOMBSTONES_PATH'];
+      missing=[n for n in req if not hasattr(dq,n)]; print('missing',missing); assert not missing"
+    expected: prints "missing []"; exit 0.
+    fix_if: A name prints in missing -> add it to the facade re-export block from its new module.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Import equivalence / acyclic DAG -- each module imports in isolation in dependency order
+      (models <- compile <- execute <- facade).
+    command: >-
+      bin/venv-python -c "import importlib;
+      [importlib.import_module(m) for m in ('scripts.data_quality_models',
+      'scripts.data_quality_compile','scripts.data_quality_execute','scripts.data_quality_runner')];
+      print('imports ok')"
+    expected: prints "imports ok"; exit 0 (no ImportError, no circular import).
+    fix_if: >-
+      Circular import -> a lower DAG module imports a higher one; move the shared symbol down to
+      data_quality_models or use a function-local import.
+  - step: 4
+    phase: pre-deploy
+    action: SLOC assertion -- facade <=450 and every new module <=500, using the exact sloc_limits formula.
+    command: >-
+      bin/venv-python -c "import pathlib;
+      f=lambda p: len([l for l in pathlib.Path(p).read_text().splitlines() if l.strip() and not
+      l.strip().startswith('#')]);
+      runner=f('scripts/data_quality_runner.py');
+      mods={p:f(p) for p in ('scripts/data_quality_models.py','scripts/data_quality_compile.py',
+      'scripts/data_quality_execute.py')};
+      print('runner',runner,'mods',mods); assert runner<=450, runner;
+      assert all(v<=500 for v in mods.values()), mods"
+    expected: runner <=450 (expected ~260); models/compile/execute <=500 (expected ~60/~320/~260); exit 0.
+    fix_if: >-
+      A module exceeds 500 -> the seam split is uneven; re-balance which whole functions live where
+      (never split a function body across modules).
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      CC gate without waiver (decision-scout NOTE resolution) -- every function in the four modules
+      is <=20 branches under the cc_limits formula AND no complexity-waiver header remains, proving
+      the line-1 waiver drop is licensed by Decision 102's stale-waiver clause.
+    command: >-
+      bin/venv-python -c "import ast,pathlib;
+      BR=(ast.If,ast.For,ast.While,ast.Try,ast.ExceptHandler,ast.With,ast.BoolOp);
+      files=['scripts/data_quality_runner.py','scripts/data_quality_models.py',
+      'scripts/data_quality_compile.py','scripts/data_quality_execute.py'];
+      over=[(f,n.name,sum(1 for s in ast.walk(n) if isinstance(s,BR))) for f in files
+      for n in ast.walk(ast.parse(pathlib.Path(f).read_text()))
+      if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef))
+      and sum(1 for s in ast.walk(n) if isinstance(s,BR))>20];
+      waived=[f for f in files if any('complexity-waiver' in l for l in
+      pathlib.Path(f).read_text().splitlines()[:10])];
+      print('over',over,'waived',waived); assert not over and not waived"
+    expected: prints "over [] waived []"; exit 0 (planning-time measurement -- max CC 15 in main()).
+    fix_if: >-
+      A function measures >20 -> add '# complexity-waiver: decision-43' to THAT module's header only
+      and remove it from this step's waived-assertion for that file; a waiver header present with
+      nothing over 20 -> remove the stale header.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Stale-definition sweep -- no extracted function DEFINITION remains in the facade; only the CLI
+      trio is defined there.
+    command: "grep -E '^def ' scripts/data_quality_runner.py"
+    expected: >-
+      Exactly three lines -- def main, def _print_results, def _save_latest_result. No
+      load_checks/_compile_column_test/run_checks/_execute_check/apply_backend_routing/... definition
+      remains (those exist only as re-export imports).
+    fix_if: An extracted def still appears -> move its body to its module and leave only the re-export.
+  - step: 7
+    phase: pre-deploy
+    action: Patch-site closure -- zero residual facade-targeted patches for the migrated execute symbols.
+    command: >-
+      grep -rEc 'patch\("scripts\.data_quality_runner\.(_execute_check|_MAX_POLL)"' tests/ |
+      grep -v ':0$' || echo CLEAN
+    expected: prints CLEAN (no tests/ file still patches those two symbols on the runner namespace).
+    fix_if: A file:count line prints -> repoint that patch site to scripts.data_quality_execute.<symbol>.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      End-to-end compile path -- --dry-run exercises load_checks + _compile_column_test + tombstones +
+      apply_backend_routing (to_ducklake_sql/build_clause8_checks) across every real config YAML and
+      prints SQL, with NO live warehouse call (rec-2184-safe).
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -m scripts.data_quality_runner --dry-run > /dev/null
+    expected: >-
+      exit 0; no traceback; returns in seconds (compile path only; baseline-proven green
+      pre-refactor and stable AFTER the refactor too, since the CLI contract is byte-stable --
+      which is why this is the plan's SINGLE hermetic replay step). Portable interpreter idiom
+      (not bin/venv-python) is REQUIRED here and only here: hermetic steps are re-executed by
+      validate_vp_replay inside CI's pr-validate job, which has no .venv.
+    fix_if: >-
+      Traceback -> a moved compile symbol is unresolved or an intra-module reference broke; nonzero
+      exit -> main()'s dry-run branch lost a helper it depended on.
+    hermetic: true
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Freshness-artifact schema byte-stability -- --dry-run --json writes logs/debug/dq-latest.json
+      with the identical key set (Decision 62 contract).
+    command: >-
+      bin/venv-python -m scripts.data_quality_runner --dry-run --json > /dev/null &&
+      bin/venv-python -c "import json,pathlib;
+      d=json.loads(pathlib.Path('logs/debug/dq-latest.json').read_text());
+      exp={'verdict','total','passed','failed','unenforced_fail','warned','errored','hard_gated',
+      'unavailable','timestamp','duration_seconds','checks'};
+      print('keys',sorted(d)); assert exp<=set(d), exp-set(d)"
+    expected: dq-latest.json contains every expected key (incl. hard_gated, unenforced_fail, unavailable); exit 0.
+    fix_if: A key is absent -> _save_latest_result was altered during the move; restore it verbatim in the facade.
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Coverage gate -- every touched source module has its mapped test file and the real gate command
+      exits 0, with NO change to scripts/test_coverage_checker.py.
+    command: >-
+      bin/venv-python scripts/test_coverage_checker.py --check-tests --check-coverage --files
+      scripts/data_quality_runner.py scripts/data_quality_models.py scripts/data_quality_compile.py
+      scripts/data_quality_execute.py
+    expected: >-
+      "all 4 source files have test files"; exit 0. (Per-file measurement may resolve via the
+      checker's informational no-data path -- pyproject pins coverage source=["src"]; probed green at
+      planning time.)
+    fix_if: >-
+      Missing test file -> the split test file name does not match map_source_to_test's
+      tests/test_<stem>.py rule; rename it. A below-100% error -> add a direct assertion in that
+      module's own test file for the uncovered line.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Budget re-point (LAST implementation step) -- regenerate the SLOC budget; assert the runner
+      entry dropped and no data_quality* key was seeded. Key-scoped assertion only (sibling
+      decompositions regenerate this same file on this branch).
+    command: >-
+      bin/venv-python -m scripts.validate --update-sloc-budgets &&
+      bin/venv-python -c "import yaml,pathlib;
+      b=yaml.safe_load(pathlib.Path('config/sloc_budgets.yaml').read_text()).get('budgets') or {};
+      mine=[k for k in b if 'data_quality' in k]; print('data_quality budget keys',mine);
+      assert not mine, mine"
+    expected: prints "data_quality budget keys []"; exit 0.
+    fix_if: >-
+      A data_quality* key remains -> that module is still >500 SLOC; split it finer and re-run. NEVER
+      hand-edit config/sloc_budgets.yaml (Decision 102).
+  - step: 12
+    phase: pre-deploy
+    action: Authoritative fast-tier presubmit gate.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0 (includes the full-tree validate_sloc_limits + validate_cc_limits confirmation).
+    fix_if: >-
+      Any check reddens -> diagnose and forward-fix on the branch (Decision 55: never weaken a check,
+      never skip). This step is intentionally NOT hermetic -- it IS the check sequence and must never
+      be replay-recursed.
+constraints:
+  - >-
+    Behavior preservation is ABSOLUTE -- move every function and constant body verbatim; no signature
+    changes beyond relocation, no bug fixes, no SQL/verdict/routing/artifact changes. Open behavior
+    recs on this file (rec-629, rec-750, rec-751, rec-752, rec-753, rec-2100, rec-2184, rec-2245,
+    rec-2321, rec-631, rec-630) are explicitly OUT OF SCOPE and stay open (Decision 55: out-of-scope
+    findings become recs, not inline fixes).
+  - >-
+    Decision 84 -- DuckLake is the sole ops backend for the migrated set; apply_backend_routing /
+    _DUCKLAKE_OPS_TABLES / _OPS_TABLES / to_ducklake_sql / _query_ops_rows (query_ops sanctioned I-3
+    exception) move byte-stable, INCLUDING the retained Athena leg for the deferred tables and the
+    _is_reader_unavailable + _TRANSIENT_HTTP_RE transient-outage classification (loud-failure
+    semantics). Do not modernize, remove, or "clean up" either leg.
+  - >-
+    Decision 43 / Decision 102 -- every module <=500 SLOC and CC<=20; budgets ratchet DOWN only via
+    `validate --update-sloc-budgets`, never a hand-edit; the line-1 waiver is dropped ONLY on VP step
+    5's proof (stale-waiver clause), and the waiver header travels into any module whose function
+    measures >20.
+  - >-
+    Decision 80 / Decision 104 -- mirror the ratified thin-CLI + facade-re-export pattern: the
+    original import path re-exports every public + patched-private symbol; ONLY patches targeting
+    moved primitives repoint (the 8 _execute_check/_MAX_POLL sites), in the SAME change
+    (tests/CLAUDE.md namespace-migration discipline); grep-count closure required.
+  - >-
+    Decision 62 (amended) -- the presubmit freshness contract stays byte-stable: bare
+    `python -m scripts.data_quality_runner` invocation, exit codes, and the logs/debug/dq-latest.json
+    path + key schema are unchanged (ensure_fresh_dq_results / _DQ_FRESHNESS_SECONDS in
+    scripts/checks/_scaffolding.py consume exactly these). The amendment's non-gating-monitor
+    direction (CD.12/T1.6) is future work and out of scope.
+  - >-
+    Multi-plan coordination -- one of ~16 SLOC-decomposition plans sharing ONE branch/working tree.
+    Touch ONLY this plan's scope files. Shared surfaces are explicitly out of scope:
+    scripts/test_coverage_checker.py (not needed -- existing mapping rule covers sibling top-level
+    modules), scripts/checks/**, config/agent/** (incl. iam_runner_manifest.yaml), .github/**.
+    config/sloc_budgets.yaml is regenerated, never hand-edited, and asserted BY KEY only.
+  - >-
+    Verification must not execute live DQ checks against the warehouse (rec-2184 hang; Decision 88
+    egress discipline): pytest suites are fully mocked and the end-to-end check is --dry-run.
+  - >-
+    Public-repo boundary (Decision 101) -- no AWS account IDs/ARNs/secrets/internal hostnames in any
+    new file; moved constants are table names/infra patterns (SAFE class). No emojis; ASCII hyphens.
+  - >-
+    No rescue agents or workaround loops (Decision 55) -- on unrecoverable verification failure, stop
+    and RCA; never paper over a broken equivalence with a skip or a weakened assertion.
+  - >-
+    Decision 86 -- no new standing prose-architecture doc; this plan file and the code are the only
+    artefacts (no companion decomposition doc).
+context:
+  - >-
+    Root cause -- scripts/data_quality_runner.py is 835 SLOC (pinned at 835 in
+    config/sloc_budgets.yaml line 10), over the 500 limit. The file already exposes a clean 4-way
+    cohesion seam via its own section headers (data structures / YAML compilation / Athena+DuckLake
+    execution / CLI); one-concern-per-file sibling modules whose count grows freely while each stays
+    flat is the structural fix (rec-2414 umbrella -- CITED, not bundled, per the decomposition
+    program's design).
+  - >-
+    Measured decomposition arithmetic (planning-time AST analysis): defs-only SLOC -- models 53,
+    compile 312, execute 236, CLI trio 199 -- plus ~35 module-level lines (docstring, imports,
+    constants, __main__). Every function's CC <=15 (max: main; _compile_column_test 12, run_checks
+    11), so no module needs the decision-43 waiver -- VP step 5 re-proves this on the final tree
+    rather than trusting the planning measurement.
+  - >-
+    Facade chosen over bulk-importer migration because BOTH production importers use LAZY
+    function-local imports -- scripts/verifiers/data_quality.py (DataQualityVerifier) and
+    scripts/session_preflight.py -- and the 28 DataQualityVerifier test patch sites patch
+    scripts.data_quality_runner.*; lazy import + facade re-export keeps all of them working with ZERO
+    repoints. Only 8 sites repoint (patch("scripts.data_quality_runner._execute_check") x7,
+    patch("scripts.data_quality_runner._MAX_POLL") x1) because their consumers run_checks /
+    _execute_check move into the execute module. All other runner-test patches (_DQ_DIR, _ROOT,
+    load_checks, load_tombstones, run_checks, apply_backend_routing) target names whose CALLERS
+    (main, _save_latest_result) stay in the facade, so they intercept unchanged.
+  - >-
+    Freshness contract (Decision 62): scripts/checks/_scaffolding.py ensure_fresh_dq_results reads
+    only the mtime of logs/debug/dq-latest.json against _DQ_FRESHNESS_SECONDS and, when stale, shells
+    out bare `python -m scripts.data_quality_runner` (no flags). Both survive verbatim: main() +
+    __main__ guard + _save_latest_result stay in the facade.
+  - >-
+    Verification deliberately avoids live warehouse execution: rec-2184 (open) reports executed runs
+    hang >150s per check from CC-web while --dry-run compiles instantly; the existing suite is
+    already fully mocked (boto3.Session patched; DuckLakeReader monkeypatched), so V2 mocked suites +
+    a --dry-run compile invocation are the end-to-end oracle. rec-2186 (session_preflight globbing
+    the wrong config path for its DQ-coverage signal) is a sibling-file bug -- context only, NOT
+    fixed here.
+  - >-
+    Coverage-gate reality (probed at planning time): pyproject pins [tool.coverage.run]
+    source=["src"], so per-file measurement for scripts/ modules resolves via
+    test_coverage_checker's informational no-data path (real gate command exited 0 on the current
+    monolith with "[info] no coverage data"). The enforceable surface is mapped-test-file existence
+    plus the suites themselves. map_source_to_test maps scripts/data_quality_<x>.py (2 path parts) ->
+    tests/test_data_quality_<x>.py via the existing parts[0]=="scripts" and len(parts)==2 rule --
+    sibling TOP-LEVEL modules were chosen over a scripts/data_quality/ subpackage precisely because a
+    depth-3 non-checks path would map to None (silent coverage hole) or force an edit to the SHARED
+    test_coverage_checker.py, which sibling plans forbid.
+  - >-
+    Out-of-scope observation (note only): config/agent/validate/iam_runner_manifest.yaml annotates
+    source: scripts/data_quality_runner.py for athena:GetQueryResults + 3 glue:* actions, but
+    validate_iam_runner_policy only string-matches each action against terraform/ec2_runner.tf and
+    never reads the source field -- moving the athena/glue calls into data_quality_execute.py cannot
+    affect that gate. The annotation was already loose (StartQueryExecution attributed to
+    ops_writer.py). RELATED provenance drift: scripts/verifiers/data_quality.py's `covers` list
+    names only scripts/data_quality_runner.py, so post-split the three new modules fall outside the
+    DQ verifier's advisory coverage report (behavior unaffected -- the verifier still imports and
+    runs through the facade). One follow-up rec candidate should re-point BOTH annotations
+    (iam_runner_manifest source fields + the verifier covers list); flagged to the orchestrator,
+    NOT fixed here (covers is advisory metadata; both files are out of this plan's scope).
+  - >-
+    Branch topology (decision-scout NOTE on Decision 76, resolved): this plan is authored ON the
+    harness-assigned session branch claude/sloc-violations-refactor-p5svnl, which the orchestrator
+    (human-proxy for confirmation and push/PR/merge) designated as the shared working tree for ~16
+    sibling SLOC-decomposition plans. Rebase/merge mechanics are orchestrator-owned at commit-flow
+    time; in-plan mitigations are strict scope isolation and the key-scoped budget assertion (VP step
+    11), so sibling regenerations of config/sloc_budgets.yaml cannot false-fail this plan.
+  - >-
+    Preflight grounding: branch 0 commits behind / 0 ahead of origin/main at planning time
+    (main_files_changed_since_branch empty -- no Main Divergence); ci_rca_unresolved_recs empty (no
+    HARD BLOCK); creds ok. The preflight data_quality block reads 0 tables / 0 checks / null
+    last_run -- that is the rec-2186 wrong-path symptom plus a stale-or-absent dq-latest.json,
+    surfaced here as planning context per the planning skill (non-blocking; this plan does not touch
+    data pipelines' semantics).
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND -- NOTE-severity only, no
+    WARN, no BLOCK; 83/83 decisions triaged. CITE: Decision 43, Decision 102, Decision 104, Decision
+    80, Decision 84, Decision 79 (does not fire: no Lambda manifest references any data_quality*
+    file), Decision 48, Decision 62. RELATED: Decision 55, Decision 86, Decision 101, Decision 67
+    (IMPLEMENTATION type -- satisfied; suspended complexity heuristic sanctions this 9-file single
+    plan), Decision 63/64 (check semantics preserved verbatim), Decision 70 (tombstone provenance),
+    Decision 88 (egress discipline), Decision 76 (branch-topology NOTE resolved above), Decisions
+    100/75 (do not fire). NOTE 1 (CC waiver) resolved via VP step 5; NOTE 2 (branch topology)
+    resolved via the context item above.
+  - >-
+    VP-replay budget (fleet policy for the ~16-plan shared branch): exactly ONE hermetic step per
+    plan -- step 8 here (<5s dry-run, valid both before and after the refactor because the CLI
+    contract is byte-stable). Steps referencing post-refactor state (new modules, def sweep,
+    patch-site closure) are hermetic:false by design: they would fail replay at plan-merge time.
+    The implementer runs the FULL VP regardless; replay is only the independent spot-check.
+  - "gates: decision-scout=FLAGS_FOUND (NOTE-only, both resolved in-plan); plan-critique=PROCEED after 1 round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via decision-scout (83/83; CITE 43, 102, 104, 80, 84, 79, 48, 62)
+  - All files in scope located and readable; tests/test_verifiers/test_data_quality.py confirmed present
+  - Acceptance criteria understood and verifiable
+  - Planning-time AST measurement -- every function CC <=15; seam sizes 53/312/236/199 defs-only SLOC
+execution_steps:
+  - >-
+    Create scripts/data_quality_models.py -- move Check, CheckResult, RunResult verbatim plus _ROOT,
+    _DQ_DIR, _TOMBSTONES_PATH. No intra-package imports (DAG root).
+  - >-
+    Create scripts/data_quality_compile.py -- move load_tombstones, build_tombstone_checks,
+    load_checks, _compile_column_test (whole), to_ducklake_sql, _uniqueness_sql, build_clause8_checks
+    verbatim; import Check + _TOMBSTONES_PATH from scripts.data_quality_models; keep the
+    function-local resolve_table_spec import.
+  - >-
+    Create scripts/data_quality_execute.py -- move _verdict_for, _query_ops_rows,
+    _is_reader_unavailable, _execute_check_ducklake, _execute_check, apply_backend_routing,
+    run_checks verbatim plus _OPS_TABLES, _DUCKLAKE_OPS_TABLES, _ops_backend, _POLL_INTERVAL,
+    _MAX_POLL, _TRANSIENT_HTTP_RE; import the dataclasses + _DQ_DIR from scripts.data_quality_models
+    and to_ducklake_sql + build_clause8_checks from scripts.data_quality_compile; keep function-local
+    boto3 / resolve_aws_profile / DuckLakeReader / requests imports; define the module's OWN
+    `logger = logging.getLogger(__name__)` -- run_checks logs through the module-global logger
+    (original line ~725), so the execute module must not rely on the facade's logger.
+  - >-
+    Collapse scripts/data_quality_runner.py to the CLI + facade -- keep the usage docstring, argparse,
+    main(), _print_results(), _save_latest_result(), logger, __main__ guard verbatim; add one
+    consolidated re-export import block per new module with `# noqa: F401` on pure re-exports; drop
+    the line-1 complexity-waiver header (verified by VP step 5).
+  - >-
+    Split the tests along the same seams -- create tests/test_data_quality_models.py (dataclass tests
+    + direct hard_gated assertion), tests/test_data_quality_compile.py (compile-path tests, no
+    repoints), tests/test_data_quality_execute.py (execution-path tests; REPOINT the 8
+    _execute_check/_MAX_POLL patch sites to scripts.data_quality_execute); retain only the CLI-facade
+    tests in tests/test_data_quality_runner.py. One consolidated import block per file; run
+    `ruff check --fix` after the moves (F401 sweep per tests/CLAUDE.md).
+  - >-
+    Execute the Verification Plan in order (steps 1-10), then step 11 (`validate
+    --update-sloc-budgets` as the LAST implementation step, key-scoped assertion), then step 12
+    (--pre). Loop until pass; on unrecoverable failure stop and RCA (Decision 55).
+  - >-
+    Report -- modules created with final SLOC each, the 8-site patch repoint confirmation, VP step
+    results (incl. the CC-no-waiver proof), and the budget-key drop.
+work_areas: []
+rollback: >-
+  Pure refactor on a shared feature branch; nothing deploys (not Lambda-packaged, no .tf in scope).
+  If the equivalence gates cannot be made green, revert this plan's file moves and test split on the
+  branch (sibling plans' files are untouched by construction). If merged and a regression surfaces,
+  revert the squash commit -- facade + three modules + test split land atomically in one PR, restoring
+  the monolith.

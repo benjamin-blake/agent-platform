@@ -1,0 +1,438 @@
+schema_version: 1
+slug: "sloc-ops-data-portal"
+intent: >-
+  Decompose the scripts/ops_data_portal.py monolith (1774 SLOC) into a cohesive scripts/ops_portal/
+  package while keeping scripts/ops_data_portal.py as a thin, behaviour-preserving facade, so the entry
+  file drops below the 500-SLOC hard cap (target <=450 for ratchet headroom). Purely mechanical: no
+  feature work, no bug fixes, no signature changes beyond code movement. The Single Portal Invariant --
+  `python -m scripts.ops_data_portal` and every CLI flag/exit code, plus the file_rec/update_rec/sync
+  Python API -- is preserved byte-for-byte.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-ops-data-portal.yaml
+phase: >-
+  Platform / Directed Growth Governance (Decision 43/102). Executes one file of the deferred SLOC
+  breakdown program (rec-2414), applying the ratified validate.py decomposition pattern (Decision
+  80 pt 3 / Decision 104) to the ops-data layer. Platform-internal tooling; no product-roadmap phase.
+  NOT a ROADMAP tier_item closure (rec-2414 is the program tracker, not a roadmap edit).
+scope:
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin facade (<500 SLOC, target <=420). KEEPS DEFINED (patch-epicentre stability --
+      223 of 331 patch sites drive these via the facade namespace): file_rec (CC 37, retains the
+      module-level `# complexity-waiver: decision-43`), update_rec, propose_or_close_rec (Decision 103
+      home), _fetch_rec_from_reader, sync, and get_ci_rca_strict_mode + _FEATURE_FLAGS_YAML +
+      _ci_rca_strict_mode_cache/_path (kept here so the 18 `patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML")`
+      sites across the CI-RCA suites keep intercepting with zero churn). IMPORTS every test-patched private
+      dependency INTO this namespace (_ducklake_write, _resolve_writer_url, _project_ops_record,
+      _compute_risk_score, _derive_computed_fields, _load_write_time_validators, _validate_file_path,
+      _validate_context_length, _check_not_null, _run_ci_rca_cross_check, find_open_ci_rca_rec_by_fingerprint,
+      _validate_ci_rca_context_v2, _validate_ci_rca_dispute, _stamp_warn_mode_reject, _classify_schema_deficiency,
+      _sync_table, _refresh_cache_after_write, _sanitize_athena_record, _append_to_local_jsonl) so those
+      facade-resident callers resolve them as facade globals and `patch("scripts.ops_data_portal.<sym>")`
+      still intercepts. RE-EXPORTS every public symbol + the 6 imported-into-namespace names a functions-only
+      facade would miss (subprocess, xml.etree.ElementTree as ET, DECISIONS_JSONL, RECS_JSONL, Recommendation,
+      validate_source) + the _fetch_decision_from_athena alias. Delegates the CLI via `from scripts.ops_portal.cli
+      import main` and keeps `if __name__ == "__main__": sys.exit(main())`.
+  - file: scripts/ops_portal/__init__.py
+    action: Create
+    purpose: Package marker for the ops-portal implementation package (distinct from scripts/checks/ and scripts/verifiers/).
+  - file: scripts/ops_portal/_common.py
+    action: Create
+    purpose: >-
+      Sole source of shared primitives (ROOT/_REPO_ROOT, _SSO_PROFILE, _AWS_REGION) so no submodule
+      recomputes ROOT. Has no dependency on scripts.ops_data_portal (avoids a load-time cycle).
+  - file: scripts/ops_portal/ci_rca_schema.py
+    action: Create
+    purpose: >-
+      owner-concern: source=ci_rca STRUCTURED-CONTEXT SCHEMA. CiRcaContext + _EvidenceBundleRef +
+      _WhyChainTerminusOverride + _DetectionGap + CiRcaEvidenceDispute pydantic models; _validate_ci_rca_context_v2,
+      _validate_ci_rca_dispute; the evidence-bundle SHA-256 verifier (_load_and_verify_bundle, _check_bundle_s3_existence);
+      _classify_schema_deficiency, _stamp_warn_mode_reject; plus the CI-RCA schema constants (_CI_RCA_VALID_MODES,
+      _WHY_CHAIN_SYSTEMIC_KEYWORDS, _WHY_CHAIN_CITATION_RE, _SCHEMA_DEFICIENCY_RULES). Est ~217 SLOC. Max CC 11 (no waiver).
+  - file: scripts/ops_portal/ci_rca_runtime.py
+    action: Create
+    purpose: >-
+      owner-concern: source=ci_rca WRITE-TIME + AUDIT RUNTIME. _is_reader_unreachable_error,
+      find_open_ci_rca_rec_by_fingerprint, _run_ci_rca_cross_check (CC 33), back_validate_ci_rca (CC 20),
+      _print_ci_rca_back_validation_report, bump_ci_rca_occurrence + runtime constants (_READER_UNREACHABLE_MARKERS,
+      _CROSS_CHECK_TAG_RE, _CI_RCA_BACK_VALIDATE_DEFAULT_SINCE, _CI_RCA_BACK_VALIDATE_DAILY_CAP). MUST carry
+      `# complexity-waiver: decision-43` in its first 10 lines (CC 33 > 20). Cross-module calls to file_rec /
+      update_rec / _fetch_rec_from_reader / get_ci_rca_strict_mode use function-local imports from
+      scripts.ops_data_portal (facade) to avoid a load cycle. Est ~327 SLOC.
+  - file: scripts/ops_portal/writer_transport.py
+    action: Create
+    purpose: >-
+      owner-concern: DuckLake writer Function-URL SigV4 transport. _resolve_writer_url, _project_ops_record,
+      _ducklake_write + writer constants (_DUCKLAKE_WRITER_URL_ENV, _DUCKLAKE_WRITER_FUNCTION_NAME,
+      _DUCKLAKE_WRITER_SSM_PATH, _AWS_LAMBDA_SERVICE, _PORTAL_TABLE_NAMES, _WRITER_TRANSIENT_STATUS,
+      _WRITER_MAX_ATTEMPTS, _WRITER_RETRY_BACKOFF_S). Public-repo boundary (Decision 101): URL/ARN/account
+      resolution stays 100% RUNTIME (env DUCKLAKE_WRITER_URL / SSM / terraform output / lambda API) -- NO
+      Function-URL, account-id, or ARN literal is inlined. Est ~138 SLOC. Max CC 15 (no waiver).
+  - file: scripts/ops_portal/risk_scoring.py
+    action: Create
+    purpose: >-
+      owner-concern: rec risk/automatable derivation. _compute_risk_score, compute_risk, load_capabilities,
+      compute_automatable, _derive_computed_fields + constants (_EFFORT_SCALE, _COVERAGE_XML, _CAPABILITIES_YAML,
+      _capabilities_cache). Est ~103 SLOC. Max CC 11 (no waiver).
+  - file: scripts/ops_portal/write_validators.py
+    action: Create
+    purpose: >-
+      owner-concern: write-time rec-field content validation. _validate_file_path, _validate_context_length,
+      _check_not_null, _load_write_time_validators + constants (_OPS_YAML_PATH, _write_time_validators_cache).
+      Est ~72 SLOC. Max CC 19 (no waiver, but do NOT strip any waiver comment before checking validate_cc_limits).
+  - file: scripts/ops_portal/cache.py
+    action: Create
+    purpose: >-
+      owner-concern: local READ-cache refresh (downstream of the writer; NEVER a write source, Decision 88 /
+      warehouse-as-SoT). _sync_table, _refresh_cache_after_write, _sanitize_athena_record, _append_to_local_jsonl.
+      Uses generic `path.open("a", ...)` -- introduces NO literal that matches the validate_rec_write_paths /
+      validate_decisions_local_writes regexes. Est ~61 SLOC.
+  - file: scripts/ops_portal/decisions.py
+    action: Create
+    purpose: >-
+      owner-concern: ops_decisions CRUD + DECISIONS.md ETL. file_decision, _fetch_decision_from_reader,
+      the _fetch_decision_from_athena back-compat alias, update_decision, backfill_decisions_from_md +
+      _DECISION_BACKFILL_COLS. Preserves Decision 91 verb routing (file_decision -> write_ops). Est ~112 SLOC.
+  - file: scripts/ops_portal/maintenance_ops.py
+    action: Create
+    purpose: >-
+      owner-concern: non-CRUD portal operations (CLI-driven). selftest_read, selftest_roundtrip (moved
+      VERBATIM incl. the rec-2114 probe-leak -- do NOT fix here), enqueue_findings, find_open_postmortem_for,
+      purge_postmortems_for (Decision 70: stays private-surface; no public delete_rec introduced). Est ~157 SLOC.
+  - file: scripts/ops_portal/cli.py
+    action: Create
+    purpose: >-
+      owner-concern: argparse CLI. main() (CC 47) moved VERBATIM -- every flag, argument group, error string,
+      and exit code byte-identical (the Single Portal CLI contract). MUST carry `# complexity-waiver: decision-43`
+      in its first 10 lines. Cross-module verb calls (file_rec, update_rec, file_decision, update_decision, sync,
+      back_validate_ci_rca, find_open_ci_rca_rec_by_fingerprint, bump_ci_rca_occurrence, backfill_decisions_from_md,
+      enqueue_findings, purge_postmortems_for, selftest_read, selftest_roundtrip) use FUNCTION-LOCAL imports from
+      scripts.ops_data_portal (the facade) inside main() -- a module-level `from scripts.ops_data_portal import
+      file_rec` in cli.py would bind at load time and defeat facade patches for CLI-driven tests (critique
+      hardening 1). --guidance keeps its existing function-local import of get_rec_write_guidance from
+      scripts.executor.rec_write_guidance (Decision 66). Est ~289 SLOC.
+  - file: scripts/checks/ops_governance/check_source_registry.py
+    action: Modify
+    purpose: >-
+      REQUIRED (full-tier check). The scanner reads scripts/ops_data_portal.py and regex-matches source-string
+      literals (`source == "X"` / `"source": "X"`) against source_registry.yaml. Two such literals move out of
+      the facade -- "ci_rca_warn_period_audit" (back_validate_ci_rca -> ci_rca_runtime.py) and "manual"
+      (selftest_roundtrip -> maintenance_ops.py). Extend the scanner to ALSO read scripts/ops_portal/*.py so a
+      future unregistered source literal in a submodule is still caught (justified check-pattern update per the
+      decomposition doctrine). No literal is added/removed by this plan -- both are already registered.
+  - file: .importlinter
+    action: Modify
+    purpose: >-
+      REQUIRED (--pre validate_import_contracts). Add `scripts.ops_portal` to the layers list of the
+      `no-cycles-ops-data-portal-executor` contract, ABOVE scripts.executor, so the new package inherits the
+      "portal above executor; delegation via deferred imports" guarantee (Decision 80 pt 2). The existing
+      `ignore_imports: scripts.executor.jsonl_store -> scripts.ops_data_portal` stays valid (jsonl_store's
+      deferred import still targets the facade, which re-exports update_rec/file_rec/find_open_postmortem_for).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-pointed by `validate --update-sloc-budgets` as the LAST step (Decision 102). The facade drops <=500 so
+      its scripts/ops_data_portal.py entry is REMOVED (1800 + trailing CIRCA-03 comment on main; the shared
+      branch already carries it ratcheted to 1774 bare via a sibling regen -- step 7's diff assertion is anchored
+      on entry REMOVAL, robust to either base). Every new scripts/ops_portal/*.py is <500 so NONE is seeded.
+      Regenerated, NEVER hand-edited. Shared with ~15 sibling SLOC plans on this branch -- assert only THIS
+      plan's entries changed, not full-file equality.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Behaviour-preserving. Its 167 string-target + 55 module-object patch sites drive file_rec/update_rec
+      (facade-resident) so they need NO change once every patched private dep is imported into the facade
+      namespace. Add nothing except any repoint strictly required by the interception audit; assertion semantics unchanged.
+  - file: tests/test_ops_data_portal_decisions.py
+    action: Modify
+    purpose: >-
+      Namespace-migration (tests/CLAUDE.md): file_decision/update_decision/backfill move to decisions.py, so its
+      ~25 `patch("scripts.ops_data_portal._ducklake_write" | "._sync_table" | "._fetch_decision_from_reader")`
+      sites repoint to `scripts.ops_portal.decisions.<sym>` (the namespace where the moved caller resolves them).
+      `from scripts.ops_data_portal import <decision symbols>` stays (facade re-export). Assertion semantics unchanged.
+  - file: tests/test_ops_data_portal_validators.py
+    action: Modify
+    purpose: >-
+      Namespace-migration: _load_write_time_validators + its _write_time_validators_cache move to write_validators.py;
+      repoint the `patch("scripts.ops_data_portal._write_time_validators_cache")` sites (and any _COVERAGE_XML sites
+      that drive moved risk_scoring code) to their new module namespaces. The `from scripts.ops_data_portal import
+      _validate_file_path/_validate_context_length/_load_write_time_validators/_write_time_validators_cache` lines
+      stay (facade re-export). Assertion semantics unchanged.
+  - file: tests/test_ci_rca_back_validate.py
+    action: Modify
+    purpose: >-
+      Namespace-migration: back_validate_ci_rca / _print_ci_rca_back_validation_report / _run_ci_rca_cross_check
+      move to ci_rca_runtime.py. Its `from scripts.ops_data_portal import ...` lines stay (facade re-export). Repoint
+      ONLY the `patch("scripts.ops_data_portal.<sym>")` sites whose target symbol moved AND whose driven function is
+      the moved one (e.g. a symbol back_validate_ci_rca calls) to `scripts.ops_portal.ci_rca_runtime.<sym>`; patches
+      of file_rec / _FEATURE_FLAGS_YAML stay (facade-resident). Assertion semantics unchanged.
+  - file: tests/test_ops_portal_incremental_cache.py
+    action: Modify
+    purpose: >-
+      Namespace-migration: the cache helpers move to cache.py. Sites that patch a cache symbol while driving a
+      facade-resident caller (file_rec/update_rec) stay (facade global). Sites driving a moved caller (e.g.
+      backfill via decisions.py) repoint to the caller's module namespace. Assertion semantics unchanged.
+  - file: tests/test_ops_portal_facade.py
+    action: Create
+    purpose: >-
+      New guard suite (a test, not a doc -- Decision 86 compliant), mirroring test_checks_registry.py: (1)
+      facade completeness -- every one of the 38 required symbols + the 6 imported-name traps (subprocess, ET,
+      DECISIONS_JSONL, RECS_JSONL, Recommendation, validate_source) + the _fetch_decision_from_athena alias is
+      getattr-able on scripts.ops_data_portal AND importable via `from scripts.ops_data_portal import <name>`;
+      (2) patch-interception -- `patch("scripts.ops_data_portal._ducklake_write")` intercepts a file_rec call
+      through the moved transport body; (3) no scripts/ops_portal module recomputes ROOT (all use _common.ROOT);
+      (4) CLI-contract stability -- `python -m scripts.ops_data_portal --help` argument set and each action flag's
+      exit code are unchanged vs a frozen baseline captured before any movement.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 124 (short, mirroring Decision 104): ratify extending the Decision 80 pt 3 / Decision 104
+      facade-decomposition pattern to the ops-data layer; record the patch-interception hybrid (facade keeps the
+      write-path epicentre + imports patched deps into namespace; subsystem test files bulk-migrate their patch
+      targets), the DELIBERATE non-extension of scripts/test_coverage_checker.map_source_to_test for
+      scripts/ops_portal/** (the per-file 100% gate is full-tier + diff-gated only, and the CI-RCA tests are
+      spread across 10 files so a single-file 100% mapping is unsatisfiable without a separate test-consolidation
+      -- deferred), the check_source_registry scanner extension, and the Decision 123 / T1.5 / CD.10 coordination
+      (this mechanical facade is the intermediate the eventual import-site sweep rebases onto, not a conflict).
+      Sync to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The existing tests/test_ops_data_portal.py, tests/test_ops_data_portal_decisions.py, tests/test_ops_data_portal_validators.py suites plus the migrated CI-RCA/cache suites plus the external importer suites (test_cost_reconciliation, test_executor_jsonl_store, test_session_postflight, test_execute_recommendation, test_convergence_health, test_classify_risk, test_migrate_ops_data) pass with UNCHANGED assertion semantics.
+  - "Facade completeness: every one of the 38 required symbols (23 public + 15 private) is reachable both as `scripts.ops_data_portal.<name>` (getattr) and via `from scripts.ops_data_portal import <name>`; AND the 6 imported-into-namespace names (subprocess, ET, DECISIONS_JSONL, RECS_JSONL, Recommendation, validate_source) and the _fetch_decision_from_athena alias are attributes of the facade (a functions-only re-export would miss them)."
+  - "Patch interception preserved: `patch(\"scripts.ops_data_portal._ducklake_write\")` still intercepts a file_rec write; AND for every private symbol whose defining/calling function MOVED to a package module, ZERO residual `patch(\"scripts.ops_data_portal.<moved-sym>\")` sites remain in the affected subsystem test file (grep-count closure)."
+  - "Single Portal CLI contract byte-stable: `python -m scripts.ops_data_portal --help` exposes the identical action + field flag set, and --file-rec/--update-rec/--file-decision/--update-decision/--backfill-decisions-md/--enqueue-findings/--guidance/--sync/--selftest-read/--selftest-roundtrip/--back-validate/--find-open-ci-rca-rec/--bump-ci-rca-occurrence/--purge-postmortems-for keep identical exit-code semantics; .github/workflows/ci.yml is unmodified."
+  - scripts/ops_data_portal.py drops below the 500-SLOC limit (target <=450); no scripts/ops_portal/**.py module exceeds 500 SLOC or CC 20 without carrying the decision-43 waiver (cli.py and ci_rca_runtime.py carry it); config/sloc_budgets.yaml loses its scripts/ops_data_portal.py entry and gains NO scripts/ops_portal/*.py entry (diff-verified, this file's entries only).
+  - "validate_cc_limits passes post-extraction: the decision-43 complexity-waiver travelled into cli.py (main CC 47) and ci_rca_runtime.py (_run_ci_rca_cross_check CC 33, back_validate_ci_rca CC 20); the facade keeps its own waiver (file_rec CC 37)."
+  - "The three ops_governance write-path guards (validate_rec_write_paths, validate_decisions_local_writes, validate_warehouse_write_sources) stay green with NO whitelist change -- their regexes match OpsWriter/JSONL-append patterns absent from the portal's DuckLake code, and the facade stays whitelisted; the new submodules introduce no matching literal."
+  - "check_source_registry (full tier) passes and now scans scripts/ops_portal/*.py in addition to scripts/ops_data_portal.py, so the two source literals that moved (ci_rca_warn_period_audit, manual) are still validated against source_registry.yaml."
+  - "import-linter contracts pass (validate_import_contracts): the new scripts.ops_portal package creates no cycle and is layered above scripts.executor; no new upward scripts.executor -> scripts.ops_portal edge exists."
+  - "Behaviour preservation: Decision 84/91 verb routing (file_rec -> file_ops/write_ops, update_rec -> update_ops, file_decision -> write_ops, reads via named verbs), Decision 88 read-cache-only, and Decision 55 loud-fail are unchanged; no rec-2114 (selftest probe leak) or rec-2116 (duplicated resolver) fix is included (out of scope)."
+  - "Public-repo boundary (Decision 101): writer_transport.py inlines no Function-URL / account-id / ARN / internal-hostname literal; URL resolution stays runtime (env/SSM/terraform/lambda-api); the never-commit hook stays green."
+  - "Decision 124 exists in docs/DECISIONS.md and cites Decisions 80/104/102/43; bin/venv-python -m scripts.validate --pre passes (SLOC/import-contract/content gates green)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Capture the frozen CLI-contract baseline (the --help arg surface) BEFORE moving any code -- the
+      equivalence oracle for the Single Portal CLI. This is the plan's SOLE hermetic step (T3.15 /
+      validate_vp_replay re-executes it on the PR tree): it is a STABLE INVARIANT -- the portal module
+      imports and --help exits 0 on both the pre-refactor and post-refactor tree -- and it uses the
+      portable interpreter idiom because CI's pr-validate job has no .venv.
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -m scripts.ops_data_portal --help > /tmp/opdp_help_baseline.txt 2>&1 && test -s /tmp/opdp_help_baseline.txt
+    expected: Exit 0 with a non-empty --help dump captured at /tmp/opdp_help_baseline.txt (module imports cleanly under fast-tier deps; the argparse surface renders). Diffed against the post-refactor dump in step 8.
+    fix_if: --help tracebacks -> a module-level import broke (facade omitted an import) on the post-refactor tree, or a pre-existing environment problem on the baseline tree; resolve at the failing tree before proceeding.
+  - step: 2
+    phase: pre-deploy
+    action: Full portal + decisions + validators + migrated CI-RCA/cache suites + the new facade guard suite pass.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py tests/test_ops_data_portal_decisions.py tests/test_ops_data_portal_validators.py tests/test_ci_rca_back_validate.py tests/test_ops_portal_incremental_cache.py tests/test_ops_portal_facade.py -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: A `from scripts.ops_data_portal import X` fails -> facade omitted symbol X (check the 38-symbol set + 6 traps + alias); a `patch("scripts.ops_data_portal._ducklake_write")` no-ops -> a patched dep was not imported into the facade namespace, or a moved-caller patch site was not migrated.
+  - step: 3
+    phase: pre-deploy
+    action: External importer suites (which patch the facade's PUBLIC symbols) still pass via the facade re-exports, unchanged. Includes test_run_scheduled_agent (patches the moved enqueue_findings via the facade) and test_ci_rca_probe_health (critique hardening 3).
+    command: bin/venv-python -m pytest tests/test_cost_reconciliation.py tests/test_executor_jsonl_store.py tests/test_session_postflight.py tests/test_execute_recommendation.py tests/test_convergence_health.py tests/test_classify_risk.py tests/test_migrate_ops_data.py tests/test_run_scheduled_agent.py tests/test_ci_rca_probe_health.py -q
+    expected: All pass; exit 0 (these import/patch file_rec/update_rec/sync/file_decision/find_open_postmortem_for/enqueue_findings + the 2 private validators via the facade).
+    fix_if: An import/patch of a facade symbol fails -> a production-imported symbol (incl. private _validate_context_length/_validate_file_path used by cost_reconciliation, and enqueue_findings used by run_scheduled_agent) is not re-exported or not resolved at call time.
+  - step: 4
+    phase: pre-deploy
+    action: Facade-completeness + import-equivalence + no-local-ROOT (hermetic, import-only).
+    command: bin/venv-python -m pytest tests/test_ops_portal_facade.py -k "completeness or importable or root_single_source or trap" -q
+    expected: Every required symbol + the 6 imported-name traps + the alias are getattr-able and importable; no scripts/ops_portal module recomputes ROOT; exit 0.
+    fix_if: A symbol/trap/alias is missing -> add the re-import/re-export to the facade; a module recomputes ROOT -> route it through _common.ROOT.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Patch-interception preservation + residual-patch-site grep closure for every moved-and-migrated private
+      symbol in EVERY affected subsystem test file (AC-3; critique hardening 2 -- covers all four migrated
+      suites, one grep per file because `grep -c` over multiple files emits per-file counts, not a single
+      number). If the implementation audit migrates additional symbols in these files, extend the
+      corresponding alternation in the same commit.
+    command: bin/venv-python -m pytest tests/test_ops_portal_facade.py -k "interception" -q && test $(grep -cE 'patch\("scripts\.ops_data_portal\.(_ducklake_write|_sync_table|_fetch_decision_from_reader)"' tests/test_ops_data_portal_decisions.py) = 0 && test $(grep -cE 'patch\("scripts\.ops_data_portal\._write_time_validators_cache"' tests/test_ops_data_portal_validators.py) = 0 && test $(grep -cE 'patch\("scripts\.ops_data_portal\.(_validate_ci_rca_context_v2|_print_ci_rca_back_validation_report|load_all_recommendations)"' tests/test_ci_rca_back_validate.py) = 0 && test $(grep -cE 'patch\("scripts\.ops_data_portal\._sync_table"' tests/test_ops_portal_incremental_cache.py) = 0
+    expected: Interception fires through a moved body; ZERO residual old-target patch sites for the migrated symbols in ALL FOUR subsystem suites (decisions, validators, ci_rca_back_validate, incremental_cache); exit 0.
+    fix_if: Interception fails -> a moved caller references a bare symbol instead of the facade/module namespace; a residual count is nonzero -> a patch site in that file was not repointed (silent no-op mock). Patches of facade-RESIDENT symbols (file_rec, _FEATURE_FLAGS_YAML) legitimately remain and are deliberately NOT in these alternations.
+  - step: 6
+    phase: pre-deploy
+    action: Stale-reference sweep -- no extracted def/class BODY remains in the facade (only file_rec/update_rec/propose_or_close_rec/_fetch_rec_from_reader/sync/get_ci_rca_strict_mode + re-exports).
+    command: "grep -cE '^def (back_validate_ci_rca|_run_ci_rca_cross_check|_ducklake_write|_resolve_writer_url|_compute_risk_score|_load_write_time_validators|file_decision|update_decision|backfill_decisions_from_md|enqueue_findings|selftest_roundtrip|purge_postmortems_for|main)|^class (CiRcaContext|_DetectionGap)' scripts/ops_data_portal.py | grep -qx 0"
+    expected: Zero extracted definitions remain in the facade (they are imports/re-exports only); exit 0.
+    fix_if: A def/class still lives in the facade -> move its body to the owning module and leave only the re-export.
+  - step: 7
+    phase: pre-deploy
+    action: SLOC/CC re-point -- facade drops below limits, no new module over budget, no new registry entry (run --update-sloc-budgets LAST).
+    command: "bin/venv-python -m scripts.validate --update-sloc-budgets; bin/venv-python -c \"import pathlib; over=[str(p) for p in pathlib.Path('scripts/ops_portal').rglob('*.py') if len([l for l in p.read_text().splitlines() if l.strip() and not l.strip().startswith('#')])>500]; v=len([l for l in open('scripts/ops_data_portal.py').read().splitlines() if l.strip() and not l.strip().startswith('#')]); print('facade SLOC',v,'over',over); assert v<=500 and not over\"; git diff config/sloc_budgets.yaml | grep -E '^[+-].*ops_data_portal|^[+-].*ops_portal' | cat"
+    expected: facade SLOC <=500; zero over-budget ops_portal modules; the ONLY config/sloc_budgets.yaml change touching these paths is the REMOVAL of the scripts/ops_data_portal.py line (a leading '-'), with NO added (leading '+') scripts/ops_portal/*.py key. Sibling-plan entries may also move -- do NOT assert full-file equality.
+    fix_if: A '+scripts/ops_portal/...' key appears -> a module exceeds 500 and was auto-seeded; split it finer and re-run. The facade line not removed -> facade still >500; extract more.
+  - step: 8
+    phase: pre-deploy
+    action: CLI contract byte-stability -- the --help arg set is unchanged, and creds-free CLI actions keep their exit-code semantics.
+    command: "bin/venv-python -m scripts.ops_data_portal --help > /tmp/opdp_help_after.txt 2>&1; diff /tmp/opdp_help_baseline.txt /tmp/opdp_help_after.txt && echo HELP_IDENTICAL; bin/venv-python -m scripts.ops_data_portal 2>&1; echo \"no-action-rc=$?\"; bin/venv-python -m scripts.ops_data_portal --file-rec 2>&1; echo \"missing-required-rc=$?\""
+    expected: Prints HELP_IDENTICAL (argparse surface unchanged); the no-action invocation errors on the required mutually-exclusive group (rc=2, argparse) exactly as before; --file-rec with no fields prints the missing-fields error and rc=1 -- both matching pre-refactor behaviour.
+    fix_if: HELP differs -> the CLI moved an arg/group or changed help text; restore verbatim. An exit code changed -> cli.py dropped an arg branch or an error path.
+  - step: 9
+    phase: pre-deploy
+    action: import-linter contracts pass for the new package (no cycle; portal-above-executor preserved).
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)"
+    expected: All import contracts pass, including no-cycles-ops-data-portal-executor with scripts.ops_portal added to the layer; exit 0.
+    fix_if: A new cycle (a submodule importing the facade at MODULE scope) -> convert to a function-local import; a layer violation -> ensure no scripts.executor module imports scripts.ops_portal directly.
+  - step: 10
+    phase: pre-deploy
+    action: The three write-path governance guards + the extended source-registry scanner pass over the new tree (full-tier checks, run directly).
+    command: bin/venv-python -c "from scripts.checks.ops_governance.validate_rec_write_paths import validate_rec_write_paths as a; from scripts.checks.ops_governance.validate_decisions_local_writes import validate_decisions_local_writes as b; from scripts.checks.ops_governance.validate_warehouse_write_sources import validate_warehouse_write_sources as c; from scripts.checks.ops_governance.check_source_registry import check_source_registry as d; f=[]; [fn(f) for fn in (a,b,c,d)]; print('failed:',f); raise SystemExit(1 if f else 0)"
+    expected: No violation from any of the four; the source-registry scanner reads the ops_portal submodules and still validates the two moved source literals; exit 0.
+    fix_if: A write-path guard flags a submodule -> the submodule introduced a matching JSONL-append/OpsWriter literal (use generic path/_ducklake_write); source-registry flags a moved literal -> the scanner extension did not include that submodule, or the literal is genuinely unregistered.
+  - step: 11
+    phase: pre-deploy
+    action: SAFE live round-trip -- pull-only sync + read-only guidance (NO test-rec written; rec-2114 documents that selftest_roundtrip leaks a probe -- do NOT use it here).
+    command: bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -m scripts.ops_data_portal --guidance | head -5
+    expected: >-
+      --sync prints a pulled-counts JSON object (reader reachable, cache refreshed) and returns 0; --guidance
+      prints the field-semantics YAML head and returns 0. Both route through the facade -> package unchanged.
+      If creds are unavailable this SKIPs loudly (RuntimeError) -- a credential gap is not a refactor defect (AGENTS.md).
+    fix_if: --sync/--guidance traceback with an ImportError or AttributeError -> a facade delegation (sync / cli.main / get_rec_write_guidance import) broke; a RuntimeError about the reader/writer being unreachable is a creds/network condition, not a plan failure.
+  - step: 12
+    phase: pre-deploy
+    action: Author Decision 124 and sync it to the warehouse (idempotent ETL; skip loudly if creds absent, note in PR body).
+    command: grep -q "^## Decision 124:" docs/DECISIONS.md && grep -q "Decision 104" docs/DECISIONS.md && (bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md || echo "backfill deferred -- creds/network; re-run post-merge")
+    expected: Decision 124 heading exists and references Decision 104; the backfill ETL runs (or defers loudly). Prints the backfill JSON or the deferral note.
+    fix_if: Decision 124 heading missing / does not cite the precedent -> add/repair the entry.
+  - step: 13
+    phase: pre-deploy
+    action: Authoritative fast-tier presubmit passes (the whole gate, incl. validate_sloc_limits + validate_import_contracts + content checks).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 -- SLOC gate green (facade dropped out of the registry, no new over-budget module), import contracts green, content checks green.
+    fix_if: A check fails; read the failing check and fix within scope. Do NOT --ignore-budget to mask a real SLOC breach.
+constraints:
+  - "Behaviour preservation is ABSOLUTE: no feature work, no bug fixes, no signature changes beyond movement. Every function/class body moves VERBATIM. rec-2114 (selftest probe leak) and rec-2116 (duplicated _resolve_function_url_via_api) are OUT OF SCOPE -- move the affected code unchanged; do NOT fix (context notes only)."
+  - "Single Portal Invariant (Decision 84/69, CLAUDE.md): `python -m scripts.ops_data_portal` and every CLI flag/exit code, plus the file_rec/update_rec/sync Python API and the CLI verbs (--backfill-decisions-md, --guidance, find_open_ci_rca_rec_by_fingerprint, bump_ci_rca_occurrence), are a HARD public contract -- byte-stable. The facade is the sole entry module; other agents call it."
+  - "Import stability (tests/CLAUDE.md): the facade re-exports every public symbol AND every test-patched private symbol AND the 6 imported-into-namespace names (subprocess, ET, DECISIONS_JSONL, RECS_JSONL, Recommendation, validate_source) AND the _fetch_decision_from_athena alias. Where a moved caller's patch target must migrate, bulk-repoint EVERY such site in the SAME change and prove closure by grep -- never leave a silent no-op mock."
+  - "Decision 102: budgets ratchet DOWN only; re-point EXCLUSIVELY via `validate --update-sloc-budgets` as the LAST step, never a hand-raise; diff the yaml to catch a silently-seeded >500 module. No new >500-SLOC module (Decision 43 cap applies to every new module)."
+  - "Decision 43: CC<=20 per function; the decision-43 complexity-waiver header travels into cli.py (main) and ci_rca_runtime.py (_run_ci_rca_cross_check) in the FIRST 10 lines; the facade keeps its own waiver (file_rec). Do NOT strip any waiver comment before checking validate_cc_limits (Decision 102)."
+  - "Multi-plan coordination: this is one of ~15 SLOC-decomposition plans on the shared branch claude/sloc-violations-refactor-p5svnl. Touch ONLY the scope files, the new scripts/ops_portal/ modules, and the listed tests. config/sloc_budgets.yaml is REGENERATED, never hand-edited; assert only THIS plan's entries changed (siblings share the file). Do NOT edit any sibling's scope files."
+  - "Decision 86: no new standing prose-architecture doc under docs/. Rationale routes to Decision 124 only; the facade-completeness guard is a TEST (tests/test_ops_portal_facade.py), not a doc. map_source_to_test is deliberately NOT extended (deferral recorded in Decision 124)."
+  - "Public-repo boundary (Decision 101): no AWS account IDs/ARNs/secret names/internal hostnames in any new file; writer_transport.py keeps URL/ARN resolution at runtime (env/SSM/terraform/lambda-api). No emojis; ASCII hyphens."
+  - "No rescue agents or workaround loops (Decision 55): on an unrecoverable verification failure, stop and RCA; never paper over a broken facade/interception with a skip or an --ignore-budget."
+context:
+  - >-
+    Root cause -- scripts/ops_data_portal.py is the Single Portal write gateway and has accreted the entire
+    source=ci_rca structured-context subsystem (get_ci_rca_strict_mode..bump_ci_rca_occurrence, ~545 SLOC),
+    the DuckLake writer transport, risk scoring, write-time validators, decision CRUD, maintenance verbs, and
+    a 277-SLOC argparse CLI -- 1774 SLOC (budget 1800, 26 headroom). One-concern-per-module extraction behind a
+    behaviour-preserving facade is the structural fix, exactly as ratified for validate.py (Decision 80 pt 3 /
+    Decision 104). rec-2414 is the program tracker (cite, NOT bundle -- it closes only at `budgets: {}`).
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (83 of 83 triaged). CITE: Decision 104
+    (direct precedent -- facade re-exports of public + test-patched private symbols, coverage-gate mapping choice),
+    Decision 102 (SLOC ratchet; --update-sloc-budgets re-point), Decision 80 (tool-free decomposition direction;
+    pt 2 governs the .importlinter layer), Decision 48 (V2 tier + coverage gate), Decision 79 (per-Lambda deploy
+    gating -- governs the V2/not-Lambda-packaged claim AND the ops_writer SKIP double-deploy cost), Decision 84
+    (Single Portal Invariant / DuckLake sole backend / warehouse-as-SoT -- behaviour to preserve; second authority
+    for ops_writer SKIP), Decision 43 (500-SLOC + CC<=20), Decision 86 (no new prose doc). RELATED: Decision 91
+    (verb routing to preserve), Decision 103 (propose_or_close_rec home -> kept in facade), Decision 66
+    (get_rec_write_guidance callable before file_rec -> preserved in cli.py --guidance), Decision 70 (purge stays
+    private; no public delete_rec), Decision 67 (STRATEGIC freeze -> IMPLEMENTATION, ~22-file count does not trigger
+    STRATEGIC per the suspended heuristic), Decision 88/55 (read-cache-only + loud-fail preserved).
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s) -- round-1 PROCEED with 3 optional hardenings folded in post-verdict (cli.py function-local-import clause; VP step 5 four-file grep closure; VP step 3 suite additions), no re-critique required per gate guidance"
+  - >-
+    Decision 123 / T1.5 / CD.10 coordination (scout WARN -- surfaced for orchestrator sequencing, non-blocking):
+    Decision 123 ratifies reviving the stashed agent/ops-decisions-phase-2 WIP (edits scripts/ops_data_portal.py,
+    scripts/executor/rec_write_guidance.py, tests/test_ops_data_portal_decisions.py) INSIDE T1.5's strategic
+    decomposition, and T1.5 (ops_decisions graduation + ops_data_portal import-site sweep) shares scope files with
+    this plan. Assessment: NO conflict for a behaviour-preserving facade split. (1) T1.5 is status=not_started +
+    strategic=true, so it is FROZEN by Decision 67 (STRATEGIC suspended) -- not imminent; this mechanical split
+    lands first and the stashed WIP + T1.5's import-site sweep rebase onto the new scripts/ops_portal/ layout. (2)
+    The facade preserves the EXACT agent surface (scripts.ops_data_portal.file_rec/update_rec/file_decision), so
+    T1.5's importer migration (to agent_sdk verbs) and the WIP's ops_decisions semantic-definition content remain
+    directly applicable -- a clean facade+package is a BETTER base for T1.5 than the 1774-SLOC monolith. (3) CD.10's
+    "dismantle ops_data_portal as the agent surface" (Lambda verbs) is future-state; SLOC compliance is needed now
+    and the facade is the natural intermediate, not wasted investment. ORCHESTRATOR ACTION: if the stashed
+    agent/ops-decisions-phase-2 WIP is about to be revived, sequence it AFTER this split (rebase onto decisions.py)
+    or land it first; do not run both concurrently on the same file. Recorded in Decision 124.
+  - >-
+    Coverage-gate decision (load-bearing, defended with evidence): validate_test_coverage (test-file existence +
+    per-file 100% coverage via check_per_file_coverage) is in full_sequence() ONLY (registry.py:161), NOT in
+    pre_sequence(); the --pre coverage_report step (run_coverage_check) is ADVISORY ("Never appends to failed --
+    exit 0 unconditionally"). On main post-merge the full tier's merge-base diff is empty, so the per-file gate
+    no-ops. Therefore scripts/ops_portal/** is left UNMAPPED by map_source_to_test (returns None -> skipped),
+    IDENTICAL to how scripts/executor/** and scripts/verifiers/** are already treated, and there is no --pre
+    consequence. Extending the mapping would create an UNSATISFIABLE full-tier 100% requirement: no single test
+    file covers a whole portal region (tests/test_ops_data_portal.py alone is 81% -- back_validate 680-787, main
+    2047-2198, transport error paths are covered by the 10 spread test_ci_rca_*.py / _decisions / _validators
+    files), and consolidating those is a test REORGANISATION outside a behaviour-preserving code move. Closing the
+    per-file-coverage-floor hole for ops_portal is deferred (recorded in Decision 124); the moved code stays fully
+    exercised by the same suites (coverage attribution flows to the submodules when the full suite runs).
+  - >-
+    Hermetic authoring policy (T3.15 / VF-01 + fleet rule for this branch): EXACTLY ONE stable-invariant
+    hermetic step -- step 1 (portal --help renders + module imports), which passes on BOTH the pre- and
+    post-refactor tree and uses the portable interpreter idiom `PY=$(test -x .venv/bin/python && echo
+    .venv/bin/python || echo python)` because CI's pr-validate job (where validate_vp_replay re-executes
+    hermetic steps of diff-added plans) has NO .venv. All other steps are hermetic: false BY DESIGN: steps
+    2-5 invoke pytest (excluded per T3.15), step 6 is not stable-invariant (extracted defs still exist on
+    the pre-implementation tree), step 7 MUTATES the tree (--update-sloc-budgets regen), step 8 depends on
+    step 1's /tmp artifact (replay executes steps independently), steps 9-10 import heavier check deps,
+    steps 11-12 need network/creds or post-implementation tree state (Decision 124 heading), and step 13
+    would recurse into validate --pre (explicitly forbidden for hermetic marking).
+  - >-
+    Interception mechanics (from a 331-patch-site / 38-symbol sweep): 223 sites (167 string + 55 module-object in
+    tests/test_ops_data_portal.py) drive file_rec/update_rec, which STAY in the facade; importing every patched
+    private dep into the facade namespace preserves those with ZERO churn. get_ci_rca_strict_mode + _FEATURE_FLAGS_YAML
+    are kept in the facade specifically so the 18 _FEATURE_FLAGS_YAML patch sites spread across the CI-RCA suites do
+    not need migration. Only the SUBSYSTEM-LOCAL patch sites migrate: tests/test_ops_data_portal_decisions.py (~25,
+    -> scripts.ops_portal.decisions.*), tests/test_ops_data_portal_validators.py (_write_time_validators_cache/_COVERAGE_XML
+    -> their new modules), tests/test_ci_rca_back_validate.py and tests/test_ops_portal_incremental_cache.py (moved-caller
+    sites only). Cross-module test files that patch PUBLIC symbols (file_rec/update_rec/sync) at the facade need NO change
+    (facade re-export). 6 imported-name traps (subprocess, ET, DECISIONS_JSONL, RECS_JSONL, Recommendation, validate_source)
+    MUST be re-imported into the facade or `patch("scripts.ops_data_portal.<trap>")` silently no-ops.
+  - >-
+    Path-keyed reference audit (what a split could break, and disposition): (a) .importlinter no-cycles-ops-data-portal-executor
+    layer -> add scripts.ops_portal (in scope). (b) check_source_registry.py reads the portal by path for source literals; two
+    move out -> extend the scanner (in scope). (c) validate_rec_write_paths / validate_decisions_local_writes /
+    validate_warehouse_write_sources whitelist scripts/ops_data_portal.py by path -> NO change needed (regexes target
+    OpsWriter/JSONL-append literals absent from the DuckLake code; facade stays whitelisted; VP step 10 proves green). (d)
+    scripts/verifiers/{data_quality,outbox_health,schema_integrity}.py covers: lists and docs/contracts/*.yaml write_path
+    strings name scripts/ops_data_portal.py -> NO change needed (the facade still exists at that path and still hosts
+    file_rec/update_rec/file_decision, so those references stay accurate). (e) ops_data_portal.py is absent from every
+    src/lambdas/*/manifest.yaml -> NOT Lambda-packaged (confirms V2).
+  - >-
+    ops_writer.py SKIP recommendation (separate target; NO plan authored): scripts/ops_writer.py is 571 SLOC = ONE
+    OpsWriter class (456 SLOC) with no free-function seam, packaged into TWO active Lambda artifacts (data-pipeline,
+    ops-compaction) whose manifests list it in `includes:` by exact path (src/lambdas/*/manifest.yaml). Per Decision
+    79/CD.16 any change forces per-artifact build+deploy+smoke-test (V3) for BOTH; splitting the class forces adding
+    the new submodule(s) to both `includes:` lists or the Lambda ImportErrors at runtime. It is retirement-pending:
+    T2.26 (in_progress) c3 "ops_compaction retired" is OPEN and BLOCKED on telemetry retirement (T2.36/Phase 4) +
+    ops_session_log retire-or-migrate (T3.20 / unratified CD.40); the progress_note states "OpsWriter survives for
+    telemetry until Phase 4". It is AT budget (571/571), not over -- not failing CI, and rarely touched (telemetry
+    schema lives in scripts/telemetry_schemas.py). Two V3 deploy cycles + two manifest edits + class-split risk on a
+    live Iceberg/S3/Athena write path, for a ~71-SLOC win on a module marked for deletion, is a poor trade. The
+    registry entry `scripts/ops_writer.py: 571` should be cleared by DELETION at T2.26's final atomic plan, not by
+    decompose-then-delete now. Decisions 79 + 84 both support SKIP (scout-confirmed).
+  - "Branch 0 commits behind origin/main at planning time; main_files_changed_since_branch = [] (no scope-file divergence). Sibling SLOC planners work on OTHER files on this same branch concurrently. Additive/mechanical plan: resolves no recs and retires no surface (facade stays; no Delete row) -> Closure Obligation exempt. ci_rca_unresolved_recs empty -> no HARD BLOCK / Related-Work constraint."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scoped via decision-scout gate (FLAGS_FOUND; CITE 104/102/80/48/79/84/43/86; next number 124)
+  - All files in scope located and readable; the 331-patch-site / 38-symbol interception sweep complete
+  - Acceptance criteria understood and verifiable
+  - CLI-contract baseline (--help + action-flag exit codes) captured as the frozen equivalence oracle BEFORE moving any code
+execution_steps:
+  - "Capture baseline FIRST -- run `scripts.ops_data_portal --help` and record the argument set + a representative action-flag exit-code table (no-action rc, --file-rec-missing rc). Freeze in tests/test_ops_portal_facade.py as the CLI equivalence oracle. Precedes any code movement."
+  - "Create scripts/ops_portal/__init__.py and scripts/ops_portal/_common.py (ROOT/_REPO_ROOT, _SSO_PROFILE, _AWS_REGION). No submodule may recompute ROOT."
+  - "Extract each cohesive subsystem into its scripts/ops_portal/<module>.py per the Scope table, moving every body VERBATIM: ci_rca_schema, ci_rca_runtime (carry the decision-43 waiver in first 10 lines), writer_transport, risk_scoring, write_validators, cache, decisions, maintenance_ops, cli (carry the waiver). Constants used only inside a moved function travel WITH it. Cross-module calls to facade-resident functions (file_rec/update_rec/_fetch_rec_from_reader/get_ci_rca_strict_mode) use function-local imports from scripts.ops_data_portal to avoid a load cycle."
+  - "Collapse scripts/ops_data_portal.py to the facade: keep file_rec/update_rec/propose_or_close_rec/_fetch_rec_from_reader/sync/get_ci_rca_strict_mode (+ _FEATURE_FLAGS_YAML + strict-mode cache) DEFINED here; import every test-patched private dep into this namespace; re-export all public symbols + the 6 imported-name traps + the _fetch_decision_from_athena alias; delegate `from scripts.ops_portal.cli import main`; keep the __main__ block."
+  - "Bulk-migrate the SUBSYSTEM-LOCAL patch targets to their new module namespaces (tests/CLAUDE.md): tests/test_ops_data_portal_decisions.py (_ducklake_write/_sync_table/_fetch_decision_from_reader -> scripts.ops_portal.decisions.*), tests/test_ops_data_portal_validators.py (_write_time_validators_cache/_COVERAGE_XML -> write_validators/risk_scoring), tests/test_ci_rca_back_validate.py + tests/test_ops_portal_incremental_cache.py (moved-caller sites only). Leave every facade-driven patch site UNCHANGED. Prove closure by grep (VP step 5)."
+  - "Write tests/test_ops_portal_facade.py: facade completeness (38 symbols + 6 traps + alias, getattr + import), patch-interception (patch facade _ducklake_write -> intercept a file_rec write), no-local-ROOT, and the frozen CLI --help/exit-code baseline."
+  - "Extend scripts/checks/ops_governance/check_source_registry.py to scan scripts/ops_portal/*.py in addition to scripts/ops_data_portal.py (the two moved source literals stay validated)."
+  - "Add scripts.ops_portal to the .importlinter no-cycles-ops-data-portal-executor layers list (above scripts.executor); keep the existing ignore_imports line."
+  - "Author Decision 124 in docs/DECISIONS.md (short, mirroring Decision 104): ratify the ops-data-layer facade decomposition (extends Decision 80 pt 3 / 104), the patch-interception hybrid, the deliberate map_source_to_test non-extension + deferral, the check_source_registry scanner extension, and the Decision 123 / T1.5 / CD.10 coordination stance. Then run `ops_data_portal --backfill-decisions-md` (skip loudly + note in PR if creds absent)."
+  - "Run `validate --update-sloc-budgets` as the LAST implementation step, then `git diff config/sloc_budgets.yaml` and confirm the ONLY change touching these paths is REMOVAL of the scripts/ops_data_portal.py entry (no scripts/ops_portal/*.py key seeded); other sibling entries may shift."
+  - "Execute the Verification Plan steps 1-13; loop until pass; on unrecoverable failure stop and RCA (Decision 55). rec-2414 stays open (bundled_recommendations empty) -- do NOT add a Resolves trailer."
+  - "Report: what was extracted, the facade final SLOC, the patch-migration grep-closure result, CC/waiver status, the CLI-contract diff result, and the ops_writer SKIP recommendation."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; if the facade-completeness or patch-interception guard cannot be made
+  green, abandon the branch (no merge -- nothing is deployed; ops_data_portal.py is NOT Lambda-packaged). If
+  merged and a regression surfaces, revert the squash commit -- the facade + package + .importlinter + budget
+  re-point + Decision 124 land atomically in one PR, so a single revert restores the monolith.
