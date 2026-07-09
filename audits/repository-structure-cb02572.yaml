@@ -1,0 +1,676 @@
+# Repository-structure audit -- physical topology, agent-optimization, end-state convergence
+# Executed per docs/audit-prompts/AUDIT-repository-structure.md at origin/main cb02572.
+# COUNTING INVARIANT (stated per section 14): findings[] is the SOLE enumerated list;
+# total_findings = len(findings) = novel_count + planned_insufficient_count + planned_unbuilt_count.
+# Fully-covered candidates and deliberate structures live in rejected_candidates, not findings.
+audit:
+  meta:
+    audited_commit: cb02572
+    base_branch: main
+    model: claude-fable-5
+    methodology_version: 1
+    scope_surfaces: [S1, S2, S3, S4, S5, S6, S7]
+    degraded_dedup: false
+    web_research_available: true
+    contract_notes: >-
+      Tree diverged mildly from section 10 grounding: total tracked files 1027 (prompt ~1026);
+      docs/audit-prompts/ holds 9 files (prompt ~8; the 9th is this audit's own prompt, merged
+      after compose); scripts/ has two subtrees the prompt's list omits -- scripts/ci/ (1 file:
+      ci/claude_p_retry.sh) and scripts/agent_development/ (1 file: run_skill.py). docs/ root
+      count 31 confirmed exactly. Preflight cache-gen succeeded (no degraded-dedup hatch needed).
+      validate --pre was not run repo-wide per section 5 (advisory outside CI); the YAML-parse
+      gate on both deliverables is the pre-push gate used.
+    stale_anchors: []
+  question_answers:
+    - q: Q1
+      verdict: partial
+      basis: [RS-01, RS-02, RS-03]
+      prose: >-
+        Placement is predictable and obeyed across most of the tree: src/ is package-per-domain
+        with per-Lambda manifest dirs, tests/ has a machine-enforced location rule
+        (scripts/test_coverage_checker.py:55-59), config/ has the decided T-1.7 three-zone split,
+        terraform/ separates root/personal/github/bootstrap, .claude/ separates commands (L3)
+        from skills (L4) from hooks. Two surfaces have no stateable rule: scripts/ root (71 files
+        with at least 6 prefix families sitting beside nested checks//executor//verifiers/ --
+        "does a new script go to root or a package?" has no answer; RS-01) and the docs/ root
+        (31 files of ~10 classes where INTENT-*/DECISIONS*/SESSION_LOG* are owned by roadmap
+        items but REPORT-*, spike notes, and loose AUDIT-* files landed by accident; RS-02,
+        RS-03). Placement-by-accident is localized, not systemic.
+    - q: Q2
+      verdict: partial
+      basis: [RS-04, RS-05, RS-07]
+      prose: >-
+        The bones are genuinely agent-first: canonical YAML surfaces (roadmap, contracts, plans,
+        manifests) are machine-parseable and schema-validated, skills/commands load on demand,
+        and the root CLAUDE.md->AGENTS.md hop is a single ambient load. The gaps are in the
+        discovery layer: the canonical File Router (docs/PROJECT_CONTEXT.md:115) is hand-
+        maintained prose with three confirmed dead pointers and stale rows (RS-04), context-
+        locality is under-used exactly where edit-time rules already exist but live in
+        non-auto-loading README.md files (4 CLAUDE.md vs 10 README.md; RS-05), and the 357-file
+        flat docs/plans/ corpus has no lifecycle for context economy (RS-07). Locality is
+        under-used, not over-used: no existing CLAUDE.md is bloat; the four that exist are
+        accurate and directory-scoped.
+    - q: Q3
+      verdict: partial
+      basis: [RS-01, RS-04, RS-08]
+      prose: >-
+        Strong against the checklist where it counts: enforced import boundaries (EC3), an
+        ADR-plus decision convention (EC8), clean domain separation (EC1), a minimal sanctioned
+        root (EC10), and segregated derived artifacts (EC11) are all met. Two properties are
+        missed: flat-vs-nested discipline (EC4 -- scripts/ root and docs/ root/plans) and a
+        machine-readable discovery index kept in sync (EC6 -- the File Router drifts and nothing
+        checks it). CODEOWNERS absence is deliberately NOT the EC6 miss: researched (GitHub
+        docs), it has minimal value in a single-owner repo; the miss is the drifting
+        hand-maintained router. One researched property added (EC12, instruction-surface
+        single-sourcing per the agents.md declared-hierarchy convention): missed for S7.
+      external_checklist:
+        - {property: EC1, rating: met,
+           evidence: "Top-level dirs are single-domain: src/ scripts/ tests/ docs/ config/ terraform/ audits/ bin/ migrations/ logs/; no misc/ or utils/ catch-all exists at root (git ls-files top-level census, 1027 files)",
+           evidence_kind: static, applies_to_surfaces: [S1]}
+        - {property: EC2, rating: partial,
+           evidence: "Tests do not mirror the tree but location IS derivable and machine-enforced: scripts/test_coverage_checker.py:55-59 maps src/**/x.py and scripts/x.py to tests/test_x.py and scripts/checks/** to tests/test_validate.py, registered in both validate tiers (scripts/checks/registry.py:107,182). Researched: pytest good-practices blesses separate-tests-dir without mirroring. Residual: basename collisions already forced a shim (tests/test_handler.py docstring) and a parallel convention (test_ducklake_*_handler.py) -- RS-08",
+           evidence_kind: researched, applies_to_surfaces: [S3, S4]}
+        - {property: EC3, rating: met,
+           evidence: ".importlinter declares 4 contracts (executor/portal/verifiers layering + src.schemas purity); enforced as a registered check in both presubmit tiers via scripts/checks/deps/validate_import_contracts.py (registry.py:107,182)",
+           evidence_kind: static, applies_to_surfaces: [S2, S3]}
+        - {property: EC4, rating: missed,
+           evidence: "scripts/ holds 71 root files with clear prefix families (ci_rca_* x7, sync_* x3, session_* x3, plan/roadmap x5+, ops_* x2, llm_*+model_registry x3) beside an already-nested scripts/checks/ (86 files in 6 subpackages) proving the pattern; docs/ root holds 31 mixed-class files and docs/plans/ 357 flat. tests/ flatness is excluded here -- it is the deliberate enforced design adjudicated under EC2",
+           evidence_kind: static, applies_to_surfaces: [S2, S5]}
+        - {property: EC5, rating: partial,
+           evidence: "Live single-home holds for plans, contracts, skills, commands, terraform, config zones. Three exceptions, each with a live compensating control or owner: Lambda handlers in two homes bridged explicitly by manifests (src/lambdas/*/manifest.yaml handlers: keys name src/data/handlers/ paths; CD.24 ratified dec-079, T-1.8 complete, retirement owners T2.26/T4.12/Decision 61); audit outputs in one live home (audits/, pinned by .claude/skills/audit-prompt/SKILL.md:117) with inert legacy scatter (RS-02); executor instructions split across two homes with a stated rule at config/agent/executor/prompts/README.md:7 (RS-06)",
+           evidence_kind: static, applies_to_surfaces: [S1, S3, S5, S7]}
+        - {property: EC6, rating: missed,
+           evidence: "The discovery index is the hand-maintained prose File Router (docs/PROJECT_CONTEXT.md:115) with three dead pointers confirmed at cb02572 (GEMINI.md, docs/AGENT_WORKFLOW.md, scripts/bedrock_client.py -- none tracked) plus stale rows (PLAN-{slug}.md canonical vs Decision 85 .yaml; Lambda-handlers row omits src/lambdas/). No machine-checked index or link-validity check exists; the doc-freshness monitor that might compensate is disabled (Lambda loop disabled May 2026, CC re-enable owned by T4.12). Researched: CODEOWNERS absence is costless in a single-owner repo (GitHub docs) and is NOT counted as the miss",
+           evidence_kind: researched, applies_to_surfaces: [S5]}
+        - {property: EC7, rating: partial,
+           evidence: "Conventions present and accurate where they exist: root CLAUDE.md (@AGENTS.md), AGENTS.md, 3 directory CLAUDE.md files (src/data/handlers/, terraform/ 339 lines, tests/) all verified accurate; researched: agents.md convention endorses exactly this nested closest-wins model. Compensating control for the partial: the four existing files are correct -- incoherence is confined to the prose indices already captured as the EC6 miss. Gap is coverage: scripts/ (179 files) and docs/ (438) have zero local affordance while agent-relevant rules for them sit in non-auto-loading surfaces (RS-05)",
+           evidence_kind: researched, applies_to_surfaces: [S1, S2, S3, S4, S5, S6, S7]}
+        - {property: EC8, rating: met,
+           evidence: "docs/DECISIONS.md numbered stable IDs (Decision NNN) with warehouse mirror ids (dec-NNN), explicit statuses, reversal conditions, amendment logs, DECISIONS_ARCHIVE.md overflow, plus a pre-ratification candidate_decisions CD.n lifecycle in the roadmap -- exceeds ADR convention (adr.github.io consulted)",
+           evidence_kind: researched, applies_to_surfaces: [S5]}
+        - {property: EC9, rating: partial,
+           evidence: "Within-class taxonomies are uniform (PLAN-/AUDIT-/INTENT-/REPORT-/ROADMAP- prefixes; tier ids T{n}.{m}; snake_case python). Cross-surface residuals: src/lambdas/ mixes hyphenated manifest-only dirs (data-pipeline, ops-compaction) with underscored importable packages (ducklake_*) -- a stateable but undocumented rule; setup.py is an env-setup script, not setuptools packaging (setup.py:1-10 header), a misleading name; three instruction-file conventions coexist (.instructions.md applyTo, .prompt.md, SKILL.md), each internally uniform and named in the instruction-architecture contract",
+           evidence_kind: static, applies_to_surfaces: [S1, S2, S3, S5, S7]}
+        - {property: EC10, rating: met,
+           evidence: "19 root files + 12 dirs: 7 standard dotfiles, 6 sanctioned portal files (CD.23/Decision 111: README, AGENTS.md, CLAUDE.md, SECURITY.md, LICENCE, EVALUATION-PROMPTS.yaml), 6 build/deps files with documented roles (requirements-fast.txt:1-3 documents the fast-tier subset + Dependabot grouped-sync discipline; requirements.lock is the pip-tools lock)",
+           evidence_kind: static, applies_to_surfaces: [S1]}
+        - {property: EC11, rating: met,
+           evidence: "Derived read-caches are gitignored (.gitignore:81-137: .recommendations-log.jsonl, .decisions-index.jsonl, .preflight-report.json, outbox, runs); build artifacts never tracked. The 10 tracked logs/*.jsonl files are deliberate local persistence (AGENTS.md memory policy names structured logs as the persistence model), not derived artifacts -- the four warehouse-backed ones were already untracked per closed rec-507; the remainder await the T2.36 telemetry re-land",
+           evidence_kind: static, applies_to_surfaces: [S1, S4]}
+        - {property: EC12-instruction-single-sourcing, rating: missed,
+           evidence: "Researched addition (agents.md declared-hierarchy convention: every live instruction file reachable from the declared instruction architecture). The repo's own contract (docs/contracts/instruction-architecture.yaml) declares L5 content_locations as config/agent/executor/prompts/*.prompt.md ONLY, while six live executor instruction files sit in .github/instructions/ acknowledged only inside a legacy_surfaces_retired note whose ownership pointer is stale (says T5.3, which completed 2026-06-29 with its deletion scope re-homed to T4.12 -- and T4.12's criteria do not mention instructions/). One file (.github/instructions/behavioral-invariants.md) has zero consumers outside docs/plans history",
+           evidence_kind: researched, applies_to_surfaces: [S7]}
+    - q: Q4
+      verdict: partial
+      basis: [RS-01, RS-02, RS-04]
+      prose: >-
+        Mostly converging. Realized structure-touching end-state: T-1.7 config split (complete),
+        T-1.8 per-Lambda manifests (complete; build_lambda.py:15-16 confirms copytrees retired),
+        CD.24 ratified with retirement owners for the legacy handler home, T5.3 executed with
+        the scheduled survivors explicitly owned by T4.12, Decision 115 handoffs dir retired
+        (verified gone), Decision 85 one-way plan .md->.yaml migration (162 yaml and growing),
+        INTENT freeze enforced on-disk with wave-by-wave extraction (T5.5). Divergence pockets:
+        scripts/ root is measurably accreting AGAINST open rec-164 (filed 2026-04 citing "30+
+        files"; now 71 -- the owning remedy is unexecuted and stale), audit-artifact legacy
+        scatter has no owner, and the File Router accumulates drift with no checking mechanism.
+        The rebuild_vs_refactor stance (R.1 retired) is respected by every disposition below.
+    - q: Q5
+      verdict: see surface_dispositions
+      basis: [RS-01, RS-02, RS-03, RS-04, RS-05, RS-06]
+      prose: "Per-surface decision block below; every disposition is reachable by surgical move/rename/consolidate/index steps."
+    - q: Q6
+      answers:
+        - question: "Does the inversion 'more human README.md (10) than agent CLAUDE.md (4)' matter for an agent-first repo, and what is the right ratio/placement?"
+          answer: >-
+            The raw ratio matters less than WHERE the rules live. Six of the ten READMEs carry
+            agent-relevant placement/bundling invariants (config three-zone rule, config/agent
+            not-bundled rule, executor-prompt split rule) that do NOT auto-load in the CC-web
+            model when an agent edits those trees -- while the four CLAUDE.md files that do
+            auto-load are exactly the high-traffic edit surfaces. The right rule: CLAUDE.md
+            wherever edit-time invariants exist (scripts/, config/, docs/ qualify today);
+            README.md only at portal boundaries sanctioned by CD.23 (root, terraform/ for
+            public-facing infra docs, config/lambda placeholders). Ratio follows from the rule;
+            roughly 7 CLAUDE.md to 4-5 READMEs at the target tree.
+          basis: [RS-05]
+        - question: "Should there be an enforced, machine-checked placement rule, and where would it live?"
+          answer: >-
+            Yes, and the repo already has the exact chassis: validate.py's registered-check
+            registry (Decision 104). A placement check belongs at
+            scripts/checks/hygiene/validate_placement.py reading a small machine-readable
+            placement registry (the target-tree principles below rendered as YAML: allowed
+            docs/-root classes, scripts/-root allowlist, one-home-per-artifact-class map, File
+            Router link-validity). It fails CI when a file lands outside its class home --
+            converting every placement rule this audit states from convention to mechanism,
+            consistent with validate.py as the single source of truth (AGENTS.md merge
+            protocol).
+          basis: [RS-03, RS-04]
+        - question: "Does the target tree create migration hazard for path constants embedded in prompts, configs, and validate.py checks -- and how should a move be sequenced?"
+          answer: >-
+            Yes -- quantified: the ci_rca_* family alone has 166 references outside scripts/
+            (workflows ci-rca.yml, .claude/agents/scheduled/ci-rca.md,
+            config/agent/verification_registry/registry.yaml, the roadmap, 8+ test modules);
+            scripts.ops_data_portal appears 27+ times across AGENTS.md, workflows, and skills;
+            Lambda manifests name individual scripts/*.py files in includes:. Sequencing that
+            stays safe: (1) land the machine index + link-validity check FIRST so every
+            subsequent move fails loudly if a reference is missed; (2) move one family per PR
+            with git mv + same-commit repo-wide reference rewrite; (3) gates per PR = full
+            validate (not --pre), full pytest, and the CD.24 bundle-completeness check when any
+            manifest-named file moves; (4) ops_* family last (highest fan-out, portal is
+            operationally load-bearing) or deferred; (5) no compatibility shims -- deferred
+            imports and re-export stubs are the pattern the importlinter contracts exist to
+            prevent.
+          basis: [RS-01, RS-04]
+        - question: "What is the smallest high-leverage first move?"
+          answer: >-
+            RS-04: convert the File Router to a machine-checked index (docs/contracts/
+            file-router.yaml + a validate.py link-validity check) and fix the three dead
+            pointers. Effort S, zero file moves, no migration hazard -- and it is the enabling
+            move: every subsequent relocation updates one registry row and is caught by CI if
+            missed, converting the audit's whole target tree from risky to routine.
+          basis: [RS-04]
+        - question: "Do the ~357 accumulated docs/plans/ files warrant a retention/archival policy, and what is the right lifecycle for agent context economy?"
+          answer: >-
+            Yes -- archive-on-supersession, not prune. git history is not an agent-facing
+            archive (agents glob the working tree; 195 of the 357 are deprecated-format .md
+            whose active-set value is zero). Right lifecycle: docs/plans/ holds only plans not
+            yet merged-and-verified; a docs/plans/archive/ subtree (or per-year partitions)
+            receives completed legacy .md plans first (pure moves -- find_plan.py resolves
+            exact paths from the CURRENT branch slug, so archived historical slugs are never
+            resolved; verified scripts/find_plan.py:65-73), completed .yaml plans on a lagged
+            sweep. Keep-all-in-place fails context economy; deletion fails Decision 85's
+            history commitment; archive satisfies both.
+          basis: [RS-07]
+  surface_dispositions:
+    S1:
+      verdict: keep
+      mechanism: "No moves. Absorb legacy audit outputs INTO audits/ (executed under S5's consolidation, RS-02); logs/ tracked-file disposition rides T2.36."
+      what_changes: "audits/ gains a legacy/ subdir (receiver side of RS-02); nothing else at root changes."
+      cost: XS
+      rationale: "Root is minimal and sanctioned (EC10 met); audits/, bin/, logs/, migrations/ are single-class and small; the only S1-adjacent defect is the audit-legacy scatter whose files live in docs/."
+      confidence: CONFIRMED
+    S2:
+      verdict: reorganize-in-place
+      mechanism: "Nest the six prefix families into subpackages (ci_rca/, session/, sync/, roadmap/, llm/, ops/) one family per PR with same-commit reference rewrite, per the Q6 hazard sequencing; refresh rec-164 first (its file list is stale)."
+      what_changes: "~25 root files move into 6 subpackages; scripts/ root shrinks toward entry points (validate.py, build_lambda.py, execute_recommendation.py, ops_data_portal.py if deferred) + genuinely unclassed singles; scripts/CLAUDE.md added stating the rule (RS-05)."
+      cost: M
+      rationale: "71 flat root files with named families beside three nested subpackages is the repo's largest predictability gap (RS-01); the nested siblings (checks/, executor/, verifiers/) prove the pattern works here."
+      confidence: CONFIRMED
+    S3:
+      verdict: keep
+      mechanism: "No moves now. The two-home handler state resolves via its owners (T2.26 retires ops-compaction; T4.3/T4.12 + Decision 61 retire/re-home the dispatcher pair; future per-function Lambdas land as src/lambdas/<slug>/). Document the hyphen-vs-underscore rule in src/lambdas/ (one manifest-schema comment or CLAUDE.md line)."
+      what_changes: "Nothing physically; naming rule documented."
+      cost: XS
+      rationale: "src/ is the frontier exemplar: import-contract-enforced boundaries (.importlinter src.schemas purity), per-Lambda manifests with explicit bridges to the legacy home, retirement owners named. Moving handlers ahead of their owning items would churn Lambda deploy surfaces for zero convergence gain."
+      confidence: CONFIRMED
+    S4:
+      verdict: keep
+      mechanism: "Extend test_coverage_checker.py's mapping for basename collisions (dotted-path or parent-qualified names), retiring the tests/test_handler.py shim (RS-08). No relocation."
+      what_changes: "One mapping-rule extension; shim deleted once mapping covers the six handler.py files."
+      cost: XS
+      rationale: "Flat tests with a machine-enforced derivation rule is deliberate, pytest-endorsed (researched), and CI-enforced; the only crack is the collision family, which is fixable inside the rule."
+      confidence: CONFIRMED
+    S5:
+      verdict: consolidate
+      mechanism: "Three consolidations plus one index: (a) legacy audit outputs (docs/audit-reports/*, docs/AUDIT-test-hermeticity.yaml) -> audits/legacy/; loose docs/AUDIT-PROMPT-*.md -> docs/audit-prompts/; fix the two dead banner pointers in docs/ROADMAP-PRODUCT.md same PR. (b) REPORT-*.md + ducklake-spike-findings.md -> docs/plans/reports/ (they are plan deliverables per Decision 86's REPORT-ONLY clause). (c) docs/plans/archive/ receives completed legacy .md plans. (d) File Router -> docs/contracts/file-router.yaml + validate.py link-validity check; PROJECT_CONTEXT.md keeps a pointer row."
+      what_changes: "docs/ root drops from 31 files toward ~20 (INTENT-* et al. continue shrinking under owned T5.5/T1.5/T2.26); exactly one audit-output home; discovery index becomes machine-checked."
+      cost: S
+      rationale: "docs/ concentrates 5 of 8 findings including the sole high (RS-04); every step is a pure move/index with zero import hazard."
+      confidence: CONFIRMED
+    S6:
+      verdict: keep
+      mechanism: "No moves. Fix config/agent/README.md drift (names dead copilot/ subtree; omits live verification_registry/ and cost_reconciliation.yaml) and convert the two rule-bearing config READMEs' invariants into config/CLAUDE.md (RS-05)."
+      what_changes: "One README corrected; one CLAUDE.md added; content, not placement."
+      cost: XS
+      rationale: "Both trees are well-shaped: T-1.7 zones are real and build_lambda-consumed; terraform/ has the repo's best local affordance (339-line CLAUDE.md) and clean root/personal/github/bootstrap separation with annotated retired artifacts. Compound-surface note: config and terraform both rate keep independently -- no tie-break needed."
+      confidence: CONFIRMED
+    S7:
+      verdict: consolidate
+      mechanism: "Co-locate the six live .github/instructions/executor-*.instructions.md with their L5 siblings under config/agent/executor/ (instructions/ subdir), update the instruction-architecture contract content_locations + the stale T5.3 ownership note (actual owner of surviving-.github-surface deletion is T4.12, which also omits instructions/ -- assign explicitly), delete orphaned behavioral-invariants.md after a final consumer grep, and update the two consumers (prompts/README.md, tests) same PR."
+      what_changes: "7 files leave .github/instructions/ (6 moved, 1 deleted); .github/ retains workflows + the T4.12-owned scheduled surfaces + dependabot + PR template; .claude/ unchanged."
+      cost: S
+      rationale: "Compound-surface tie-break per the pinned order (consolidate > keep): .claude/ rates keep (clean L3/L4/hooks separation), .github/ rates consolidate (instruction split is live debt with a stale owner, RS-06) -- consolidate dominates. Executor freeze (Decision 67) makes this cheap now and expensive after T4 re-enable."
+      confidence: CONFIRMED
+      sub:
+        claude: {verdict: keep, rationale: "commands/skills/hooks/agents each single-class; settings + statusline at root; nothing misplaced."}
+        github: {verdict: consolidate, rationale: "executor instructions re-home to config/agent/executor/; scheduled prompts/agents stay pending T4.12; orphan deleted."}
+  proposed_target_tree:
+    principles:
+      - "One canonical home per artifact class; a machine-readable placement registry (consumed by a validate.py check) states each class -> home mapping."
+      - "scripts/ root holds only entry points and unclassed singles; any >=3-file prefix family is a subpackage."
+      - "docs/ root holds only canonical governance surfaces (roadmaps, DECISIONS, PROJECT_CONTEXT, GETTING_STARTED, CHANGELOG, ARCHITECTURE pair pending their own owners); everything else lives in a classed subtree (plans/, contracts/, audit-prompts/, dq/, runbooks/, intent-migration/)."
+      - "Audit prompts (inputs) live in docs/audit-prompts/; audit outputs (results) live in audits/; legacy outputs in audits/legacy/. Exactly two audit homes, by role."
+      - "Every directory whose files carry edit-time invariants has a CLAUDE.md (auto-loading); README.md only at CD.23 portal boundaries."
+      - "Discovery is machine-checked: the file-router registry's targets must exist (CI-enforced link validity)."
+      - "All moves are surgical (git mv + same-commit reference rewrite); R.1 stands -- nothing is rewritten."
+    nodes:
+      - {path: "docs/contracts/file-router.yaml", role: "Machine-readable discovery/ownership index replacing the prose File Router table",
+         moves_from: ["docs/PROJECT_CONTEXT.md:115 (File Router table content)"],
+         rationale: "EC6 miss; three dead pointers today; contracts/ is the decided home for machine-parseable semantics (Decision 86 routing rule)",
+         roadmap_basis: ["Decision 86", "CD.13/Decision 110"], migration_hazard: "None -- additive; PROJECT_CONTEXT.md keeps a pointer", surgical: true}
+      - {path: "scripts/checks/hygiene/validate_placement.py", role: "Placement + link-validity check reading the file-router registry",
+         moves_from: [], rationale: "Converts placement convention to mechanism inside the existing check registry (Decision 104)",
+         roadmap_basis: ["Decision 104", "AGENTS.md validate.py-is-SoT rule"], migration_hazard: "None -- additive", surgical: true}
+      - {path: "scripts/ci_rca/", role: "CI-RCA subpackage (7 modules from scripts/ci_rca_*.py)",
+         moves_from: ["scripts/ci_rca_back_validation.py", "scripts/ci_rca_evidence.py", "scripts/ci_rca_filing.py", "scripts/ci_rca_probe_health.py", "scripts/ci_rca_taxonomy.py", "scripts/ci_rca_tier_map.py", "scripts/ci_rca_vacuous_pass.py"],
+         rationale: "Highest-cohesion family; zero Lambda-manifest overlap verified", roadmap_basis: ["rec-164 Phase A"],
+         migration_hazard: "166 external refs (ci-rca.yml workflow, scheduled agent .md, verification registry, roadmap, 8 test modules) -- same-commit rewrite + full validate/pytest gate", surgical: true}
+      - {path: "scripts/session/", role: "Session automation subpackage", moves_from: ["scripts/session_preflight.py", "scripts/session_postflight.py", "scripts/session_metrics.py"],
+         rationale: "Named family per rec-164", roadmap_basis: ["rec-164 Phase A"], migration_hazard: "session_start hooks + AGENTS.md + skills reference scripts.session_preflight; same-commit rewrite", surgical: true}
+      - {path: "scripts/sync/", role: "Cache-sync subpackage", moves_from: ["scripts/sync_ops.py", "scripts/sync_recommendations.py", "scripts/sync_ducklake_version.py"],
+         rationale: "Named family", roadmap_basis: ["rec-164 Phase A"], migration_hazard: "AGENTS.md warehouse section + skills name scripts.sync_ops", surgical: true}
+      - {path: "scripts/roadmap/", role: "Roadmap/plan tooling subpackage", moves_from: ["scripts/platform_roadmap.py", "scripts/product_roadmap.py", "scripts/product_roadmap_schema.py", "scripts/plan_document.py", "scripts/plan_audit.py", "scripts/find_plan.py"],
+         rationale: "Named family (roadmap schema + plan artefact tooling)", roadmap_basis: ["rec-164 Phase A"], migration_hazard: "validate.py imports plan_document; skills invoke find_plan by path", surgical: true}
+      - {path: "scripts/llm/", role: "LLM client/routing subpackage", moves_from: ["scripts/llm_client.py", "scripts/llm_utils.py", "scripts/model_registry.py", "scripts/github_models_client.py"],
+         rationale: "Named family; File Router already groups them", roadmap_basis: ["rec-164 Phase A"],
+         migration_hazard: "data-pipeline + ops-compaction manifests name these files in includes: -- manifest edit + bundle-completeness check in the same PR", surgical: true}
+      - {path: "scripts/ops/", role: "Ops-portal subpackage (SEQUENCE LAST or defer)", moves_from: ["scripts/ops_data_portal.py", "scripts/ops_writer.py"],
+         rationale: "Completes the family rule, but the portal is the single write path (Decision 84) with 27+ external refs incl. AGENTS.md and workflows",
+         roadmap_basis: ["rec-164 Phase A", "Decision 84"], migration_hazard: "HIGHEST: rec-autoclose.yml, executor prompts, AGENTS.md, Lambda manifests all invoke python -m scripts.ops_data_portal; defer until the placement check is live and other families have proven the rewrite pattern", surgical: true}
+      - {path: "audits/legacy/", role: "Inert pre-convention audit outputs", moves_from: ["docs/audit-reports/PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml", "docs/audit-reports/wave-1-outputs/ (7 files)", "docs/AUDIT-test-hermeticity.yaml"],
+         rationale: "One audit-output home (EC5); files are inert history with zero live consumers (dedup: 0 roadmap/rec hits)", roadmap_basis: [],
+         migration_hazard: "docs/ROADMAP-PRODUCT.md banner cites two audit-reports/ paths ALREADY dead at cb02572 -- fix banner same PR", surgical: true}
+      - {path: "docs/audit-prompts/AUDIT-platform-roadmap-audit.md", role: "Legacy compose-time prompts join the prompt home",
+         moves_from: ["docs/AUDIT-PROMPT-platform-roadmap-audit.md", "docs/AUDIT-PROMPT-product-roadmap-yaml.md"],
+         rationale: "Same artifact class as docs/audit-prompts/ occupants", roadmap_basis: [], migration_hazard: "None found (loose-file refs are historical)", surgical: true}
+      - {path: "docs/plans/reports/", role: "REPORT-ONLY plan deliverables", moves_from: ["docs/REPORT-ducklake-catalog-neon-migration.md", "docs/ducklake-spike-findings.md"],
+         rationale: "Decision 86 routes deliberation to REPORT-ONLY plan deliverables; gives the class a home and a placement rule",
+         roadmap_basis: ["Decision 86"], migration_hazard: "Decision 84/CD.34 texts cite docs/REPORT-ducklake-catalog-neon-migration.md -- rewrite refs same PR (roadmap + DECISIONS are editable surfaces)", surgical: true}
+      - {path: "docs/plans/archive/", role: "Completed legacy plan artefacts (agent context economy)", moves_from: ["docs/plans/PLAN-*.md (195 deprecated-format files, completed subset first)"],
+         rationale: "Q6 lifecycle answer: active set stays glob-cheap; history preserved in-tree", roadmap_basis: ["Decision 85 (one-way migration; history retained)"],
+         migration_hazard: "find_plan.py resolves exact current-branch slugs (scripts/find_plan.py:65-73) -- archived historical slugs never resolve; sweep only merged plans", surgical: true}
+      - {path: "config/agent/executor/instructions/", role: "Executor stable-rules files co-located with L5 prompts",
+         moves_from: [".github/instructions/executor-critique.instructions.md", ".github/instructions/executor-implement.instructions.md", ".github/instructions/executor-planning.instructions.md", ".github/instructions/executor-review.instructions.md", ".github/instructions/executor-supervisor-rules.instructions.md", ".github/instructions/executor-supervisor-workflow.instructions.md"],
+         rationale: "Single executor-instruction home beside the prompts they pair with (prompts/README.md:7 documents the pairing); contract content_locations updated same PR",
+         roadmap_basis: ["Decision 86 collocation principle", "T4.12 (assign instructions/ scope explicitly)"],
+         migration_hazard: "Consumers: config/agent/executor/prompts/README.md, tests/test_executor_plan.py, test_executor_step_runner.py, test_model_registry.py, instruction-architecture.yaml -- all editable same PR; executor frozen (Decision 67) so no live runtime reads them", surgical: true}
+      - {path: "scripts/CLAUDE.md + config/CLAUDE.md + docs/CLAUDE.md", role: "Context-locality for the three rule-bearing uncovered trees",
+         moves_from: ["config/README.md + config/agent/README.md invariants (content, not files)"],
+         rationale: "RS-05: auto-loading rules where agents edit; each earns its context cost (placement rule, bundling invariants, root allowlist respectively)",
+         roadmap_basis: ["NS.4", "CD.23 (READMEs stay as portal projections)"], migration_hazard: "None -- additive", surgical: true}
+    sequencing:
+      - "1. Index first (zero-risk enabler): land docs/contracts/file-router.yaml + validate_placement.py link-validity check; fix the three dead File Router pointers and the config/agent/README.md drift in the same PR. Every later move now fails CI if a reference is missed."
+      - "2. Inert consolidations (pure moves, no code refs): audits/legacy/, audit-prompt strays, docs/plans/reports/, ROADMAP-PRODUCT.md banner fix."
+      - "3. Context-locality adds: scripts/, config/, docs/ CLAUDE.md files (additive only)."
+      - "4. scripts/ families one PR each, ci_rca/ first (highest cohesion), gates = full validate + full pytest + bundle-completeness when a manifest-named file moves (llm/ family); update the placement registry row in each PR."
+      - "5. Executor instructions co-location while Decision 67 freeze holds (cheapest window); update contract + T4.12 scope note."
+      - "6. ops/ family last or deferred; docs/plans/archive/ sweep last (lowest urgency, highest file count). At every step: assessment-time no-auto-rebase / commit-time auto-rebase per AGENTS.md git-ops."
+  per_surface_assessment:
+    - surface: S1
+      maturity: frontier
+      strengths: "Minimal sanctioned root (19 files, every class documented or decided: CD.23 portal, requirements quartet with stated roles); single-class small trees (audits/ = outputs only, bin/ = 4 wrappers, migrations/ = 1 DDL); derived caches properly gitignored while deliberate persistence logs are tracked per the documented memory policy."
+      top_gaps: [RS-02]
+    - surface: S2
+      maturity: strong
+      strengths: "The nested subtrees are exemplary: scripts/checks/ (86 files, 6 domain subpackages, registry-driven with frozen-count tests), executor/ and verifiers/ cleanly bounded with import-linter contracts enforcing their layering."
+      top_gaps: [RS-01, RS-05]
+    - surface: S3
+      maturity: frontier
+      strengths: "The frontier exemplar surface: enforced package boundaries including a pure-data-layer contract for src.schemas (.importlinter), per-Lambda manifest dirs with schema-validated explicit bundles (CD.24 realized -- build_lambda.py:15-16), legacy handler home explicitly bridged by manifests with named retirement owners, and a directory CLAUDE.md exactly where deploy invariants bite (src/data/handlers/)."
+      top_gaps: []
+    - surface: S4
+      maturity: frontier
+      strengths: "Machine-enforced test placement (location derivable from the rule at test_coverage_checker.py:55-59, CI-registered in both tiers), segregated fixtures/, a high-quality tests/CLAUDE.md carrying real edit-time invariants, and hermeticity governance tracked as data (the AUDIT-test-hermeticity.yaml lineage)."
+      top_gaps: [RS-08]
+    - surface: S5
+      maturity: strong
+      strengths: "contracts/ (29 machine-parseable YAML contracts), the ROADMAP-PLATFORM.yaml exemplar (Decision 110), an ADR-plus decision convention with archive discipline, and uniform artifact-class prefixes. The debt is concentrated at the root and in the prose discovery layer, and 3 of its 10 root classes already have extraction owners (T5.5, T1.5, T2.26)."
+      top_gaps: [RS-04, RS-03, RS-02]
+    - surface: S6
+      maturity: frontier
+      strengths: "T-1.7's decided three-zone config split is real and mechanically consumed (build_lambda reads config/lambda/<name>/ only); terraform/ pairs the repo's best directory CLAUDE.md (339 lines of applied invariants) with clean root/personal/github/bootstrap separation and annotated retired artifacts (ec2_runner.tf) instead of silent deletions."
+      top_gaps: [RS-05]
+    - surface: S7
+      maturity: strong
+      strengths: ".claude/ is textbook: L3 commands / L4 skills / hooks / scheduled agents each single-class, matching the declared instruction architecture; .github/workflows/ is flat-but-single-class with self-describing names; the surviving scheduled-agent surfaces are explicitly owned (T4.12) rather than orphaned."
+      top_gaps: [RS-06]
+  rubric_ratings:
+    - {surface: S1, dimension: VD1, rating: strong, evidence: "root census: 19 files each in a documented class; audits/ single-purpose", note: ""}
+    - {surface: S1, dimension: VD2, rating: strong, evidence: "CD.23 portal set + documented build files; audits/<slug>-<sha>.{yaml,md} pairs uniform", note: ""}
+    - {surface: S1, dimension: VD3, rating: strong, evidence: "CLAUDE.md is a single @AGENTS.md hop; no other root file ambient-loads", note: ""}
+    - {surface: S1, dimension: VD4, rating: adequate, evidence: "EVALUATION-PROMPTS.yaml machine-parseable portal; logs/ has no manifest of tracked-vs-derived (small enough to tolerate)", note: ""}
+    - {surface: S1, dimension: VD5, rating: adequate, evidence: "setup.py:1-10 is an env-setup script, not packaging -- misleading name; else uniform", note: "cosmetic; noted under EC9"}
+    - {surface: S1, dimension: VD6, rating: strong, evidence: "rec-507 executed (warehouse caches untracked); portal decisions (111) realized; Decision 115 handoffs dir verified gone", note: ""}
+    - {surface: S1, dimension: VD7, rating: strong, evidence: "EC1/EC10/EC11 met", note: ""}
+    - {surface: S2, dimension: VD1, rating: weak, evidence: "71 root files; locate-by-scan for anything outside the File Router's ~15 script rows", note: ""}
+    - {surface: S2, dimension: VD2, rating: weak, evidence: "no stateable root-vs-subpackage rule; 6 prefix families unnested beside nested checks/", note: ""}
+    - {surface: S2, dimension: VD3, rating: adequate, evidence: "checks/ subpackages scope loading; root sprawl inflates directory listings", note: ""}
+    - {surface: S2, dimension: VD4, rating: strong, evidence: "checks registry (Decision 104) machine-registers every check; .importlinter declared", note: ""}
+    - {surface: S2, dimension: VD5, rating: adequate, evidence: "snake_case uniform; family prefixes consistent; scripts/ci/ vs ci_rca_* vs checks/ci_guards/ is a three-way ci namespace", note: ""}
+    - {surface: S2, dimension: VD6, rating: weak, evidence: "rec-164 open since 2026-04 citing 30+ root files; now 71 -- measurably diverging", note: ""}
+    - {surface: S2, dimension: VD7, rating: adequate, evidence: "EC3 met; EC4 missed", note: ""}
+    - {surface: S3, dimension: VD1, rating: strong, evidence: "package-per-domain; per-Lambda dirs named by slug", note: ""}
+    - {surface: S3, dimension: VD2, rating: strong, evidence: "stateable: importable code in underscored packages, manifest-only dirs hyphenated; handlers legacy home manifest-bridged", note: ""}
+    - {surface: S3, dimension: VD3, rating: strong, evidence: "src/data/handlers/CLAUDE.md at the deploy-invariant hotspot; 59 files total", note: ""}
+    - {surface: S3, dimension: VD4, rating: strong, evidence: "manifest.yaml per Lambda, Pydantic-validated (LambdaManifest); derive_lambda_file_patterns from manifest union", note: ""}
+    - {surface: S3, dimension: VD5, rating: adequate, evidence: "hyphen/underscore mix in src/lambdas/ is rule-bearing but undocumented", note: ""}
+    - {surface: S3, dimension: VD6, rating: strong, evidence: "CD.24 ratified + T-1.8 complete; copytrees retired in build_lambda.py; retirement owners for legacy zips", note: ""}
+    - {surface: S3, dimension: VD7, rating: strong, evidence: "EC3 met; EC2/EC5 partial with controls", note: ""}
+    - {surface: S4, dimension: VD1, rating: adequate, evidence: "location derivable via checker rule; 142 flat files otherwise scan-heavy", note: ""}
+    - {surface: S4, dimension: VD2, rating: strong, evidence: "machine-enforced mapping, CI-registered both tiers (registry.py:107,182)", note: ""}
+    - {surface: S4, dimension: VD3, rating: adequate, evidence: "fixtures/ (19) and test_verifiers/ (7) segregated; root flat count inflates listings", note: ""}
+    - {surface: S4, dimension: VD4, rating: strong, evidence: "test_coverage_checker + conftest recursion guards documented in tests/CLAUDE.md", note: ""}
+    - {surface: S4, dimension: VD5, rating: adequate, evidence: "test_* uniform; collision family spawned parallel convention (test_ducklake_*_handler.py) + shim", note: ""}
+    - {surface: S4, dimension: VD6, rating: strong, evidence: "coverage policy + hermeticity audit lineage actively maintained", note: ""}
+    - {surface: S4, dimension: VD7, rating: strong, evidence: "EC2 partial-with-control; EC7 met for this surface (tests/CLAUDE.md)", note: ""}
+    - {surface: S5, dimension: VD1, rating: weak, evidence: "31 mixed-class root files; File Router (the intended locator) carries 3 dead pointers", note: ""}
+    - {surface: S5, dimension: VD2, rating: weak, evidence: "4 historical audit homes; REPORT-*/spike notes placed by accident; subtrees themselves single-class", note: ""}
+    - {surface: S5, dimension: VD3, rating: adequate, evidence: "plans/ 357 flat (195 deprecated .md) inflate the active set; contracts/ lean", note: ""}
+    - {surface: S5, dimension: VD4, rating: adequate, evidence: "roadmaps/contracts/plans are schema-validated YAML (exemplary); discovery layer is drift-prone prose", note: ""}
+    - {surface: S5, dimension: VD5, rating: strong, evidence: "prefix taxonomy (PLAN-/AUDIT-/INTENT-/ROADMAP-/REPORT-) uniform", note: ""}
+    - {surface: S5, dimension: VD6, rating: adequate, evidence: "INTENT/DECISIONS/SESSION_LOG classes have owners (T5.5/T1.5/T2.26); audit scatter + router unowned", note: ""}
+    - {surface: S5, dimension: VD7, rating: weak, evidence: "EC4 + EC6 missed here; EC8 met", note: ""}
+    - {surface: S6, dimension: VD1, rating: strong, evidence: "zone split (T-1.7) makes lambda-vs-agent config location predictable; terraform subtree by account/role", note: ""}
+    - {surface: S6, dimension: VD2, rating: strong, evidence: "three-zone rule stated (config/README.md:3-7) and mechanically consumed by build_lambda", note: ""}
+    - {surface: S6, dimension: VD3, rating: strong, evidence: "terraform/CLAUDE.md (339 lines) auto-loads at the edit surface; config zones keep Lambda payloads minimal", note: ""}
+    - {surface: S6, dimension: VD4, rating: adequate, evidence: "manifests + tfvars examples strong; config/agent/README.md drifted (dead copilot/ row, two live subtrees omitted)", note: ""}
+    - {surface: S6, dimension: VD5, rating: strong, evidence: "consistent naming both trees; retired artifacts annotated not renamed", note: ""}
+    - {surface: S6, dimension: VD6, rating: strong, evidence: "T-1.7 complete and consumed; ec2_runner.tf retained deliberately as evolution artifact", note: ""}
+    - {surface: S6, dimension: VD7, rating: strong, evidence: "EC5/EC11 met for this surface; EC7 partial (README drift)", note: ""}
+    - {surface: S7, dimension: VD1, rating: strong, evidence: "commands and skills named by verb/task; workflows self-describing", note: ""}
+    - {surface: S7, dimension: VD2, rating: adequate, evidence: "L3/L4/hooks split clean; executor instructions split across .github/instructions/ + config/agent/executor/prompts/", note: ""}
+    - {surface: S7, dimension: VD3, rating: strong, evidence: "skills load via Skill tool on demand (L4 by design); hooks small and single-purpose", note: ""}
+    - {surface: S7, dimension: VD4, rating: adequate, evidence: "schedule.yaml machine manifest; applyTo frontmatter machine-readable; contract note stale on ownership (T5.3 vs T4.12)", note: ""}
+    - {surface: S7, dimension: VD5, rating: adequate, evidence: ".instructions.md / .prompt.md / SKILL.md conventions coexist, each internally uniform", note: ""}
+    - {surface: S7, dimension: VD6, rating: adequate, evidence: "scheduled surfaces owned by T4.12; instructions/ relocation-or-deletion owned by nothing", note: ""}
+    - {surface: S7, dimension: VD7, rating: adequate, evidence: "EC7 met locally; EC12 (researched) missed", note: ""}
+  findings:
+    - id: RS-01
+      surface: S2
+      implicated_surfaces: []
+      question: Q1
+      dimension: VD2
+      title: "scripts/ root holds 71 files with six named prefix families beside already-nested subpackages -- no stateable placement rule"
+      evidence: "git ls-files scripts | awk -F/ 'NF==2' = 71; families: ci_rca_* x7, sync_* x3, session_* x3, plan_*/roadmap x6, ops_* x2, llm_*+model_registry+github_models_client x4; nested siblings checks/ (86 files, 6 subpackages), executor/ (13), verifiers/ (7)"
+      evidence_kind: static
+      current_behavior: "A new automation module lands at scripts/ root by default; the root mixes entry points, families, and singles. An agent locating 'the CI-RCA filing code' must know the prefix convention or scan 71 names."
+      ideal_behavior: "scripts/ root holds entry points and genuine singles; every >=3-file family is a subpackage (the pattern checks//executor//verifiers/ already prove); the rule is stated in a scripts/CLAUDE.md and enforced by the placement check."
+      gap: "Six families un-nested; no rule; root count grew from ~30 (rec-164, 2026-04) to 71 -- accreting against the open remedy."
+      compensating_controls_considered: "File Router rows cover ~15 of 71 scripts and the router itself drifts (RS-04) -- fails the property-match counterfactual. Import-linter contracts constrain layering, not placement."
+      change_type: relocate
+      proposed_change: "Refresh rec-164 (its file list is stale: names deleted delegate_runner/copilot_wrapper; cites superseded Decision 39 rationale), then nest one family per PR with same-commit reference rewrite per the Q6 sequencing; add scripts/CLAUDE.md stating the rule."
+      acceptance: "No >=3-file prefix family remains directly under scripts/; scripts/CLAUDE.md states the root-vs-subpackage rule."
+      severity: medium
+      severity_rationale: "Scatter with a clear surgical fix and no active breakage (medium class); discoverability cost is real but grep/import paths still resolve -- not high because no agent is actively misdirected to a WRONG file."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-insufficient, item_ids: [rec-164],
+                         dedup_search_terms: ["restructur (recs cache)", "scripts/ subpackage / nest scripts (roadmap+decisions)"],
+                         dedup_hit_count: 11,
+                         note: "rec-164 (open, High, 2026-04-21) owns the territory with the same Phase-A shape, but is stale (cites 30+ files -- now 71; names since-deleted modules; future-state src/ model predates CD.27/CD.28) and carries no path-constant hazard sequencing -- insufficient as written."}
+      effort: M
+      depends_on: [RS-04]
+      sequencing: {safe_to_queue_now: false, blocked_behind: [RS-04], note: "Land the link-validity/placement check first so each family move fails CI on any missed reference."}
+    - id: RS-02
+      surface: shared
+      implicated_surfaces: [S1, S5]
+      question: Q1
+      dimension: VD2
+      title: "Audit artifacts sit in four homes: two live-by-design (audits/ outputs, docs/audit-prompts/ inputs) plus two legacy scatter sites with no owner"
+      evidence: "audits/ 20 files (outputs, <slug>-<sha> pairs); docs/audit-prompts/ 9 (inputs); legacy: docs/audit-reports/ 8 (PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml + wave-1-outputs/ x7) + loose docs/AUDIT-PROMPT-*.md x2 + docs/AUDIT-test-hermeticity.yaml; docs/ROADMAP-PRODUCT.md:10-11 banner cites two docs/audit-reports/ paths that do not exist at cb02572"
+      evidence_kind: static
+      current_behavior: "Three generations of audit-output convention coexist; the docs root and audit-reports/ sites are inert but still the first grep hits for 'AUDIT'; one live banner points into the dead generation."
+      ideal_behavior: "Exactly two homes by role: docs/audit-prompts/ (compose-time inputs) and audits/ (outputs), with pre-convention outputs under audits/legacy/."
+      gap: "Legacy generation unswept; dead pointers into it from a live file."
+      compensating_controls_considered: "The live write path IS pinned (audit-prompt SKILL.md:117-118 and /audit command fix both homes), so no wrong-write risk exists -- this control is why severity is not high; it does not clean up the read-side scatter."
+      change_type: consolidate
+      proposed_change: "Move docs/audit-reports/* + docs/AUDIT-test-hermeticity.yaml to audits/legacy/; move the two loose AUDIT-PROMPT-*.md to docs/audit-prompts/; fix the ROADMAP-PRODUCT.md banner pointers in the same PR. The deliverable-home question C3 raises resolves to: audits/ IS the right single output home (this audit's own write location is also the recommended one)."
+      acceptance: "grep -l 'AUDIT' docs/*.{md,yaml} at the docs root returns nothing audit-output-shaped; exactly one directory (audits/) contains audit outputs."
+      severity: medium
+      severity_rationale: "Redundancy/scatter with a clear surgical fix; live producers are unaffected (pinned paths), so no critical two-home write divergence."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+                         dedup_search_terms: ["audit-reports (roadmap+decisions+recs)", "audits/ (recs cache)", "audit artifact"],
+                         dedup_hit_count: 0, note: "Zero ownership hits; the scatter is unowned territory."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Pure moves; verify-then-fix the two already-dead banner pointers in the same PR."}
+    - id: RS-03
+      surface: S5
+      implicated_surfaces: []
+      question: Q1
+      dimension: VD2
+      title: "docs/ root holds 31 files of ~10 classes with no placement rule for the unowned classes (reports, spike notes, loose audit files)"
+      evidence: "git ls-files docs | awk -F/ 'NF==2' = 31: INTENT-* x13 (owned T5.5), DECISIONS* x2 (owned T1.5), SESSION_LOG* x2 (owned T-1.9/T2.26 disposition), ROADMAP-* x4 (decided CD.32/KG.1), ARCHITECTURE* x2, PROJECT_CONTEXT/GETTING_STARTED/CHANGELOG x3, REPORT-ducklake-catalog-neon-migration.md + ducklake-spike-findings.md + AUDIT-PROMPT-* x2 + AUDIT-test-hermeticity.yaml (no rule, no owner)"
+      evidence_kind: static
+      current_behavior: "A report or spike-note class deliverable lands at the docs root because nothing states otherwise; the root mixes canonical governance surfaces with one-off deliverables."
+      ideal_behavior: "docs/ root = canonical governance surfaces only (allowlist); every other class has a subtree home (plans/, contracts/, audit-prompts/, plans/reports/), enforced by the placement check."
+      gap: "No allowlist; 5 unowned-class files at root; the owned classes shrink on their own schedules (T5.5 wave 1 of 18 done, deferred post-MVP)."
+      compensating_controls_considered: "Decision 86's intent-doc-freeze guard blocks NEW standing prose-architecture docs (property-matches for that class only -- verified in validate.py per T5.5 c5) but does not govern reports/spike/audit classes; the File Router does not index them."
+      change_type: relocate
+      proposed_change: "Adopt the root allowlist principle (target tree); move REPORT-* + spike findings to docs/plans/reports/ and the audit strays per RS-02; encode the allowlist in the placement check; INTENT/SESSION_LOG/DECISIONS classes stay put pending their owners."
+      acceptance: "docs/ root contains only allowlisted governance files (plus the grandfathered INTENT/SESSION_LOG/DECISIONS sets pending T5.5/T1.5/T2.26)."
+      severity: medium
+      severity_rationale: "Scatter/inconsistency, surgical fix, no active breakage; the root's noise is bounded and partially self-liquidating via owned items."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+                         dedup_search_terms: ["docs/ root / docs root (roadmap)", "REPORT- (roadmap)", "spike-findings"],
+                         dedup_hit_count: 0, note: "REPORT/spike/loose-audit placement is unowned; INTENT/DECISIONS/SESSION_LOG ownership verified separately (T5.5, T1.5, T2.26) and excluded from this finding."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Rides the same PR wave as RS-02; Decision 84/CD.34 citations of the REPORT file rewritten same PR."}
+    - id: RS-04
+      surface: S5
+      implicated_surfaces: []
+      question: Q2
+      dimension: VD4
+      title: "The canonical discovery index (File Router) is hand-maintained prose with three dead pointers and stale rows, and nothing checks it"
+      evidence: "docs/PROJECT_CONTEXT.md:115 table: GEMINI.md, docs/AGENT_WORKFLOW.md, scripts/bedrock_client.py all untracked at cb02572 (git ls-files --error-unmatch fails); 'Branch-specific plan files docs/plans/PLAN-{slug}.md' contradicts Decision 85 (.yaml canonical); 'Lambda handlers -> src/data/handlers/' omits the CD.24-canonical src/lambdas/ home. Corroborating same-class drift: config/agent/README.md names a dead copilot/ subtree and omits live verification_registry/ + cost_reconciliation.yaml; instruction-architecture.yaml's legacy note still names complete-T5.3 as cleanup owner"
+      evidence_kind: static
+      current_behavior: "The L2 surface workflows load for orientation actively misdirects: an agent following the router reaches dead paths or the legacy Lambda home; no CI check, and the doc-freshness monitor that might catch it is disabled pending T4.12."
+      ideal_behavior: "Discovery is a machine-readable index (docs/contracts/file-router.yaml) whose targets are CI-checked for existence; PROJECT_CONTEXT.md keeps a pointer."
+      gap: "Prose index, no sync mechanism, confirmed drift in at least 5 rows across 3 index surfaces."
+      compensating_controls_considered: "Root AGENTS.md is accurate but routes to this router for anything deeper; doc-freshness scheduled agent is disabled (Lambda loop off since May 2026; CC re-enable owned by T4.12) -- no live control property-matches; a drifting index cannot neutralize its own drift (section 15 rule applied)."
+      change_type: index
+      proposed_change: "Convert the File Router table to docs/contracts/file-router.yaml (Decision 86 routing: machine semantics to contracts/); add scripts/checks/hygiene/validate_placement.py verifying every target resolves; fix the three dead pointers and stale rows; correct config/agent/README.md and the contract's T5.3-vs-T4.12 note in the same PR."
+      acceptance: "A validate.py check fails when any file-router target does not exist; zero dead targets at merge."
+      severity: high
+      severity_rationale: "A placement/discoverability defect that misdirects agents across many sessions (the router is the designated L2 lookup surface) with compensating controls judged insufficient (monitor disabled, no CI check) -- the high class verbatim. Not critical: it misleads navigation but does not cause wrong WRITES (write paths are pinned elsewhere)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+                         dedup_search_terms: ["file router (roadmap+recs)", "PROJECT_CONTEXT (roadmap)", "CODEOWNERS"],
+                         dedup_hit_count: 5,
+                         note: "5 rec hits are adjacent-not-owning (rec-2406 row placement, rec-2163 Bedrock sweep, rec-031/088/484 historical); no tier item owns router conversion or link validity -- T-1.13's layer-table criterion covered instruction-architecture.yaml only."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "The designated first move (Q6): it is the safety net every relocation finding depends on."}
+    - id: RS-05
+      surface: shared
+      implicated_surfaces: [S2, S5, S6]
+      question: Q2
+      dimension: VD3
+      title: "Context-locality under-used: agent edit-time invariants live in non-auto-loading READMEs (or nowhere) for scripts/, config/, and docs/"
+      evidence: "4 CLAUDE.md vs 10 README.md repo-wide; scripts/ (179 files) and docs/ (438) have neither; config/'s three-zone rule + not-bundled invariant live in config/README.md:3-7 and config/agent/README.md:1-9, which the CC-web loading model does NOT auto-load on file read (AGENTS.md context-locality definition; agents.md convention researched)"
+      evidence_kind: static
+      current_behavior: "An agent editing config/agent/data_quality/ops.yaml does not ambiently learn the 'NOT bundled into any Lambda zip' invariant; an agent adding a script gets no placement rule; the invariants exist but in the wrong loading class."
+      ideal_behavior: "CLAUDE.md at every directory whose files carry edit-time invariants (scripts/, config/, docs/), each a compact rule-carrier like the existing four; READMEs remain as CD.23 portal projections."
+      gap: "Three high-traffic trees lack the auto-loading affordance their existing rules deserve; the inversion (more human indices than agent indices) contradicts NS.4 at the margin."
+      compensating_controls_considered: "Root AGENTS.md covers universal rules but explicitly defers per-directory semantics; the four existing CLAUDE.md files prove the mechanism works here (tests/CLAUDE.md, terraform/CLAUDE.md verified accurate and load-bearing)."
+      change_type: index
+      proposed_change: "Add scripts/CLAUDE.md (placement rule + venv-python invocation + family map), config/CLAUDE.md (three-zone + bundling invariants, converted from the READMEs), docs/CLAUDE.md (root allowlist + class-home map). Only these three: each earns its context cost; do not blanket-add."
+      acceptance: "The three CLAUDE.md files exist and carry the named invariants; config READMEs reduced to portal projections."
+      severity: medium
+      severity_rationale: "Loading-efficiency and rule-visibility gap; no misdirection to wrong files, so not high; more than cosmetic because real invariants (Lambda bundling) are invisible at edit time."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+                         dedup_search_terms: ["per-directory CLAUDE (recs+roadmap)", "CLAUDE.md (roadmap tier_items)", "context-locality"],
+                         dedup_hit_count: 0, note: "CD.32's OD-3 discusses CLAUDE.md sharding limits for the multi-product question -- adjacent, not owning this coverage gap."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Pure additions; step 3 of the target-tree sequencing."}
+    - id: RS-06
+      surface: S7
+      implicated_surfaces: []
+      question: Q1
+      dimension: VD2
+      title: "Executor instructions split across two homes with the canonical contract contradicting reality, a stale ownership pointer, and one orphaned file"
+      evidence: ".github/instructions/executor-*.instructions.md x6 live (applyTo frontmatter targets scripts/executor/ + config/agent/executor/prompts/) vs contract L5 content_locations = config/agent/executor/prompts/*.prompt.md only (docs/contracts/instruction-architecture.yaml:64-73); the contract's legacy_surfaces_retired note assigns cleanup to T5.3 -- complete 2026-06-29 with its deletion scope re-homed to T4.12, whose criteria omit instructions/; .github/instructions/behavioral-invariants.md has zero consumers outside docs/plans history (repo-wide grep)"
+      evidence_kind: static
+      current_behavior: "The artifact class 'executor instruction' has two homes; the declared architecture names one; the split's cleanup owner pointer is stale and the actual owner's scope omits the directory; rec-270 (open) already records content divergence between the paired files -- the failure mode two homes predict."
+      ideal_behavior: "One executor-instruction home co-located with the L5 prompts (config/agent/executor/instructions/), contract content_locations matching reality, orphan deleted, deletion/relocation scope explicitly owned."
+      gap: "Two homes + contract divergence + unowned cleanup + one orphan."
+      compensating_controls_considered: "config/agent/executor/prompts/README.md:7 states the split rule (stable rules -> instructions/), which keeps placement answerable -- this is why severity is medium; but the canonical contract contradicts it, failing the counterfactual (an agent trusting the contract reaches one home only)."
+      change_type: consolidate
+      proposed_change: "Move the six live files to config/agent/executor/instructions/; update contract content_locations + the stale T5.3 note; delete behavioral-invariants.md after a final consumer grep; update prompts/README.md and the three referencing tests in the same PR. Cheapest while the Decision 67 executor freeze holds."
+      acceptance: "Exactly one directory contains executor instruction files, and instruction-architecture.yaml content_locations lists it."
+      severity: medium
+      severity_rationale: "Inconsistency with a clear surgical fix; the executor freeze (Decision 67) means no live runtime is currently misdirected, holding this below high."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [rec-270],
+                         dedup_search_terms: ["github/instructions (roadmap+recs)", "instructions/ tier scope", "T4.12 criteria"],
+                         dedup_hit_count: 20,
+                         note: "20 rec hits are content-level (rec-270 owns prompt/instruction CONTENT dedup; rec-023/339 etc. edits); none owns the home/ownership question; T0.14 touched the dir for Windows sweeps only. The placement defect is novel."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Do before any T4 executor re-enable work reads these paths."}
+    - id: RS-07
+      surface: S5
+      implicated_surfaces: []
+      question: Q2
+      dimension: VD3
+      title: "docs/plans/ accumulates 357 flat files (195 deprecated-format .md) with no lifecycle policy"
+      evidence: "git ls-files docs/plans = 357, zero subdirs; 195 .md (deprecated per Decision 85 one-way migration) + 162 .yaml; no archival/retention statement in roadmap or decisions (dedup searches)"
+      evidence_kind: static
+      current_behavior: "Every plan ever authored shares one flat namespace with the active set; agents globbing or listing plans/ pay for the full corpus; the deprecated-format majority has zero active-set value."
+      ideal_behavior: "Active plans only at docs/plans/ root; completed/deprecated plans under docs/plans/archive/ (in-tree history, out of the hot path)."
+      gap: "No lifecycle; corpus grows monotonically; context economy erodes slowly rather than acutely."
+      compensating_controls_considered: "find_plan.py resolves exact current-branch slugs (find_plan.py:65-73), so plan RESOLUTION never scans the corpus -- this control property-matches the lookup path (holding severity at low) but not the browse/glob path."
+      change_type: relocate
+      proposed_change: "Adopt archive-on-supersession per the Q6 answer: sweep completed legacy .md plans to docs/plans/archive/ first; lagged sweep for completed .yaml plans; state the lifecycle in docs/CLAUDE.md (RS-05)."
+      acceptance: "docs/plans/ root contains no completed deprecated-format .md plan files."
+      severity: low
+      severity_rationale: "Context-economy erosion without breakage or misdirection; the lookup path is compensated."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+                         dedup_search_terms: ["plan archiv/retention/prune (roadmap+decisions)", "archiv (recs cache)"],
+                         dedup_hit_count: 13,
+                         note: "13 'archiv' rec hits reviewed by title -- none concerns plans/ lifecycle; Decision 85 keeps history but is silent on working-tree placement."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Sequenced last (step 6): lowest urgency, highest file count."}
+    - id: RS-08
+      surface: S4
+      implicated_surfaces: []
+      question: Q1
+      dimension: VD5
+      title: "The test-location mapping rule collapses on basename collisions, already requiring a shim file and a parallel naming convention"
+      evidence: "tests/test_handler.py:1-6 is a self-described 'coverage shim' existing only because test_coverage_checker.py maps all six src/lambdas/*/handler.py to one test path; real tests use an out-of-rule convention (tests/test_ducklake_reader_handler.py etc.); handler.py is the only current basename collision (derived: duplicate-basename scan across src/ + scripts/)"
+      evidence_kind: static
+      current_behavior: "The enforced mapping is basename-only; the collision family satisfies it with a placeholder while actual tests live at underivable names."
+      ideal_behavior: "The mapping disambiguates collisions deterministically (parent-qualified: src/lambdas/<slug>/handler.py -> tests/test_<slug>_handler.py -- which is what three of the four real test files already do), and the shim retires."
+      gap: "One collision family; rule and reality diverge exactly there."
+      compensating_controls_considered: "The checker still enforces existence (a missing shim fails CI), so coverage governance holds; only derivability suffers."
+      change_type: enforce
+      proposed_change: "Extend map_source_to_test with a parent-qualified rule for colliding basenames; delete tests/test_handler.py once the six files map to their real test homes."
+      acceptance: "map_source_to_test returns a unique existing path for every src/lambdas/*/handler.py and tests/test_handler.py is deleted."
+      severity: low
+      severity_rationale: "Naming/derivability wart, one family, mechanical fix inside an existing check."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+                         dedup_search_terms: ["test_handler (recs+roadmap)", "basename collision"],
+                         dedup_hit_count: 1, note: "Single hit rec-612 is an unrelated test-failure record."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Standalone XS."}
+  candidate_dispositions:
+    C1: RS-01
+    C2: rejected
+    C3: RS-02
+    C4: rejected
+    C5: RS-03
+    C6: rejected
+    C7: RS-07
+    C8: RS-04
+    C9: RS-05
+    C10: rejected
+  rejected_candidates:
+    - candidate: "C2 -- Lambda-handler code lives in two locations (src/lambdas/<slug>/handler.py and src/data/handlers/*_handler.py)"
+      why_dismissed: >-
+        Traced to a deliberate, decided migration state, not disorder. CD.24 is RATIFIED
+        (dec-079) and its mechanism is BUILT (T-1.8 complete 2026-06-03; build_lambda.py:15-16
+        confirms whole-src/whole-config copytrees retired in favor of manifests). The legacy
+        home is explicitly bridged: src/lambdas/data-pipeline/manifest.yaml:6-12 and
+        ops-compaction/manifest.yaml:5 NAME the src/data/handlers/ paths as their handlers --
+        the split is machine-declared, not accidental. Every legacy occupant has a retirement
+        owner: ops_compaction_handler retires at T2.26 (manifest DEPRECATED note), the
+        dispatcher/findings-processor pair re-homes under T4.3/T4.12 + Decision 61, and the
+        fetch/feature/write/discovery names are declared future-state per-function Lambdas
+        (manifest notes) that will land as src/lambdas/<slug>/. Relocating handlers ahead of
+        their owners would churn deploy artifacts for zero convergence gain.
+      compensating_control: "Per-Lambda manifests (schema-validated) explicitly declare which handler paths each artifact bundles; the CD.24 bundle-completeness check fails CI if a manifest-named path is wrong."
+      control_property_match: >-
+        The property EC5 protects is 'an agent finds/writes the right home for a Lambda
+        handler'. The manifest exercises exactly that property at build time: if the two-home
+        split were an unmanaged defect (an agent editing the wrong copy), the staged-bundle
+        py_compile check (CD.24 discipline point, wired via lambda_manifest) would fail the
+        deploy artifact -- the control fails loudly precisely when the defect would be real.
+      decision_or_item_id: "CD.24/dec-079, T-1.8 (complete), T2.26, T4.12, Decision 61"
+    - candidate: "C4 -- tests/ holds ~142 files at its root and does not mirror the src//scripts/ package layout"
+      why_dismissed: >-
+        The flat layout is a deliberate, machine-enforced design, not drift: a test's location
+        IS derivable from the file under test via the stated mapping
+        (test_coverage_checker.py:55-59), enforcement is registered in BOTH validate tiers
+        (checks/registry.py:107,182), and researched practice (pytest good-practices) endorses
+        separate-tests-without-mirroring. tests/CLAUDE.md carries the edit-time rules. EC2 is
+        therefore rated partial-with-control rather than a finding. The one place the rule
+        cracks -- basename collisions -- is filed separately as RS-08 (low), which is a rule
+        extension, not a layout change.
+      compensating_control: "scripts/test_coverage_checker.py existence+coverage enforcement in both presubmit tiers; tests/CLAUDE.md directory rules."
+      control_property_match: >-
+        EC2's property is 'a test's location is derivable from the file under test'. The
+        checker IS the derivation function and fails CI when the derived file is absent -- if
+        location were underivable (the defect C4 hypothesizes), the check could not pass, and
+        it demonstrably runs (frozen-count tests exercise the registry).
+      decision_or_item_id: "Decision 104 (check registry); coverage policy in tests/CLAUDE.md"
+    - candidate: "C6 -- docs/ROADMAP-PRODUCT.md is a prose file alongside docs/ROADMAP-PRODUCT.yaml"
+      why_dismissed: >-
+        The retention is decided, not accidental: KG.1 (roadmap) states the .md is 'superseded;
+        retained as a recovery artefact', and the file's own banner (ROADMAP-PRODUCT.md:3-11)
+        declares supersession and points to the .yaml -- the CD.23 projection-with-pointer
+        pattern, not a parallel source (the .yaml header reciprocally documents the
+        supersession). It is also a live Lambda runtime asset (data-pipeline manifest assets:
+        list), so deletion is coupled to the T4.x scheduled-agent re-home, which owns that
+        surface. Residual hygiene defects found while tracing -- the banner's two dead
+        docs/audit-reports/ pointers and its unfulfilled 'removed in a follow-up commit'
+        promise vs KG.1's retention stance -- are captured as evidence in RS-02's banner fix,
+        not as a duplication finding.
+      compensating_control: "Superseded banner at ROADMAP-PRODUCT.md:3 + KG.1 retention decision + reciprocal .yaml header note."
+      control_property_match: >-
+        The duplication property C6 hypothesizes is 'two sources an agent must sync'. The
+        banner exercises source-selection directly: an agent opening the .md is redirected to
+        the .yaml in line 3 before any content. If the .md were a live parallel source (the
+        real defect), the banner's supersession claim would be false and roadmap consumers
+        (product_roadmap.py validates the .yaml only) would contradict it -- they do not.
+      decision_or_item_id: "KG.1; CD.32 (per-product YAMLs intentional); CD.23 projection pattern"
+    - candidate: "C10 -- repository root holds ~31 tracked entries including several instruction/portal surfaces and four requirements files"
+      why_dismissed: >-
+        Re-derived: 19 files + 12 dirs. Every file is in a sanctioned or documented class: the
+        6-file human/agent portal is DECIDED (CD.23 ratified as Decision 111: curated projection,
+        not duplication); the 7 dotfiles are standard tool anchors that must live at root
+        (.importlinter, .pre-commit-config.yaml, .mcp.json, etc.); the 4 requirements files have
+        stated, mechanically-synced roles (requirements-fast.txt:1-3 documents the fast-tier
+        subset and Dependabot grouped-PR sync; .lock is the pip-tools lock; -dev is the dev
+        toolchain) matching the two-tier presubmit model (Decision 73); pyproject.toml +
+        setup.py complete the build class. EC10 rates met. Residual: setup.py's misleading name
+        (an env-setup script, not packaging, deprecated for CC-web per its own header) is
+        cosmetic and recorded under EC9/VD5 -- not worth a root-file finding.
+      compensating_control: "CD.23/Decision 111 sanction the portal set; requirements-file headers document role + sync discipline; Dependabot grouped updates keep fast/full in lockstep."
+      control_property_match: >-
+        EC10's property is 'root files are few and each has a stated reason'. The controls
+        state exactly those reasons in-file or in a ratified decision; if root files were
+        accreting unowned (the defect C10 hypothesizes), the never-commit hook + curated-portal
+        invariant (Decision 111 reversal conditions) would have no covering entry for them --
+        every present file has one.
+      decision_or_item_id: "CD.23/Decision 111; Decision 73 (two-tier presubmit); Decision 83"
+  summary:
+    total_findings: 8
+    novel_count: 7
+    planned_insufficient_count: 1
+    planned_unbuilt_count: 0
+    top_improvements: [RS-04, RS-01, RS-02]
+    highest_leverage_change: RS-04
+    maturity_S1: frontier
+    maturity_S2: strong
+    maturity_S3: frontier
+    maturity_S4: frontier
+    maturity_S5: strong
+    maturity_S6: frontier
+    maturity_S7: strong
