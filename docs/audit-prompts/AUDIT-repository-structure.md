@@ -270,6 +270,9 @@ Answer each as a first-class entry in `question_answers`. Pinned per-question ve
   - Does the target tree create migration hazard for the many path constants embedded in prompts,
     configs, and `validate.py` checks -- and how should a move be sequenced to stay safe?
   - What is the smallest high-leverage first move (the one reorganization that unlocks the most)?
+  - Do the ~357 accumulated `docs/plans/` files (C7) warrant a retention/archival policy, and
+    what is the right lifecycle -- keep-all, archive-on-merge, or prune -- for agent context
+    economy?
 
 ---
 
@@ -320,7 +323,13 @@ Each feeds named questions and needs end-to-end tracing beyond a rubric cell.
   audit artifacts are written (`audits/`, `docs/audit-prompts/`, `docs/audit-reports/`, and any
   loose `docs/AUDIT-*.md`/`.yaml`), and which producers write to which (the `/audit` command/skill
   and the audit executor). Inventory the `docs/` root file classes and whether a placement rule
-  exists. This deep-dive most directly informs the proposed target tree for `docs/`.
+  exists. This deep-dive most directly informs the proposed target tree for `docs/`. Note that
+  your own two deliverables land in top-level `audits/`, which is one of the homes C3
+  interrogates -- adjudicate C3 on the merits regardless of where you are told to write, and if
+  your recommended single home is not `audits/`, say so plainly (the write location is fixed by
+  mechanics, not by your verdict). The `.yaml`+`.md` deliverable pair is itself a controlled
+  instance of the C6 prose-beside-machine pattern, sanctioned as a human-portal projection
+  (CD.23) -- note this rather than letting it bias C6.
 
 - **DD-D -- Context-locality coverage (feeds Q2, Q3/EC7, Q6).** Inventory every `CLAUDE.md` and
   every `README.md` in the tree. For each major subtree lacking a `CLAUDE.md`, judge whether
@@ -523,7 +532,9 @@ audit:
     # ... S2..S7. For the COMPOUND surfaces (S6 = config/ + terraform/, S7 = .claude/ +
     # .github/): emit one verdict for the surface; if the two trees warrant different
     # dispositions, add sub: {config: {verdict: ..., ...}, terraform: {...}} (S6) or
-    # sub: {claude: {...}, github: {...}} (S7), and set the top-level verdict to the dominant one.
+    # sub: {claude: {...}, github: {...}} (S7), and set the top-level verdict to the dominant one
+    # -- "dominant" = the more consequential disposition, ordered split > consolidate >
+    # reorganize-in-place > keep > defer (higher wins); state the tie-break you applied in rationale.
   proposed_target_tree:            # the to-be map, planned to the roadmap end-state
     principles: [<the placement rules the target tree enforces>]
     # Resolution: directory-level, PLUS any individual file that changes home. Do NOT enumerate
@@ -558,6 +569,9 @@ audit:
        effort: XS|S|M|L, depends_on: [<finding ids>],
        sequencing: {safe_to_queue_now: true|false, blocked_behind: [<finding or roadmap ids>],
                     note: ""}}
+  candidate_dispositions:          # completeness index: EVERY candidate C1..C10 (plus any Cn you add) appears exactly once
+    C1: <finding-id | rejected | n/a>   # finding-id if it became a finding; "rejected" if in rejected_candidates; "n/a" only if it dissolved on tracing (say why in the matching rejected_candidates entry)
+    # ... C2..C10
   rejected_candidates:
     - {candidate: "", why_dismissed: "", compensating_control: "",
        control_property_match: "", decision_or_item_id: ""}
@@ -579,7 +593,10 @@ planned_unbuilt_count`. Fully-covered candidates and deliberate structures live 
 `surface_dispositions`, and `proposed_target_tree` are systems-of-record referenced FROM findings,
 never re-counted. `top_improvements` and `highest_leverage_change` MUST be finding ids -- EXCEPT
 when `findings` is empty (a valid outcome), in which case `top_improvements: []` and
-`highest_leverage_change: null`.
+`highest_leverage_change: null`. `candidate_dispositions` is a COMPLETENESS INDEX, not a count:
+every candidate C1..C10 (and any Cn you add) must appear in it exactly once, mapping to a
+finding-id or to `rejected`/`n/a` -- so no candidate silently vanishes. It does not feed
+`total_findings`.
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates, and state why the control would
