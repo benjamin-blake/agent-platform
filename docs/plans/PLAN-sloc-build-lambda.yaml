@@ -1,0 +1,373 @@
+schema_version: 1
+slug: "sloc-build-lambda"
+intent: >-
+  Decompose the scripts/build_lambda.py monolith (790 SLOC, sitting one line under its 791 SLOC
+  budget) into cohesion-based modules (config / packaging / deploy) behind a thin CLI facade, so the
+  Lambda build-and-deploy tool grows by adding files rather than by ratcheting one file's budget --
+  advancing the rec-2414 "empty the SLOC registry" program without changing what the tool builds or
+  deploys.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-build-lambda.yaml
+phase: >-
+  Platform hardening. Executes rec-2414 (break SLOC-budget-registered oversized files below 500 SLOC)
+  for scripts/build_lambda.py and realizes Decision 43's file-size-reduction intent, reusing the
+  ratified validate.py-decomposition pattern (Decision 80/104: thin CLI + facade re-exports + a
+  behaviour-equivalence oracle). Platform-internal tooling; no product-roadmap phase. build_lambda.py
+  is NOT Lambda-packaged (compute_affected_artifacts([...]) == []), so no V3 Lambda build/deploy/smoke
+  gating applies.
+scope:
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin (<=450 SLOC, target ~205) CLI + facade. RETAINS: the argparse builder
+      build_parser() with every flag byte-stable (--skip-upload, --bucket, --profile, --region,
+      --deploy, --ducklake-only, --list-bundle, --ducklake-publish-canary-layers), main() dispatch,
+      and the two build orchestrators _run_prod_build() and _run_ducklake_build() (they are the
+      functions tests patch AROUND, so they stay here and call their dependencies via names resolved
+      in THIS module's namespace). RETAINS module-level `import subprocess` and `import urllib.request`,
+      EACH carrying `# noqa: F401` with a "deliberately-retained patch anchor" comment -- post-split they
+      are otherwise UNUSED in the thin CLI, and pyproject selects ruff "F" with no unfixable/per-file-ignores,
+      so an un-noqa'd `ruff check --fix` would DELETE them and every
+      `patch("scripts.build_lambda.subprocess.run")` (34 sites) / `patch("scripts.build_lambda.urllib.request.urlopen")`
+      (2 sites) would raise AttributeError (critique finding A). With the noqa the anchors persist and the
+      patches keep resolving (patching an attribute on a shared stdlib module object patches it
+      globally, so the moved functions still observe the mock). ADDS a consolidated facade re-export
+      block `from scripts.build_lambda_config import (...)  # noqa: F401`, `... _packaging import (...)`,
+      `... _deploy import (...)` naming EVERY public symbol AND every test-patched private symbol so
+      `from scripts.build_lambda import X`, `bl.X`, and `patch("scripts.build_lambda.<orchestrated-callee>")`
+      all keep resolving. REMOVES the `# complexity-waiver: decision-43` header (no residual function
+      here exceeds CC 20; radon + the repo branch counter put all four retained functions at CC<=8).
+      Updates the module docstring to describe the thin-CLI role and point at the three extracted modules.
+  - file: scripts/build_lambda_config.py
+    action: Create
+    purpose: >-
+      owner=platform. One concern: build configuration DATA + resolution. Holds ROOT, the size limits
+      (LAMBDA_SIZE_LIMIT_BYTES, LAMBDA_SIZE_WARN_BYTES), the duckdb pin import from
+      src.common.ducklake_version + PINNED_DUCKDB_VERSION (call, never a literal -- keeps
+      validate_ducklake_version_lockstep green), PROD_DEPS, DUCKLAKE_DEPS, DUCKLAKE_EXTENSIONS,
+      DUCKLAKE_EXT_PLATFORM/URL_BASE/S3_PREFIX, _EXT_FETCH_HEADERS, the four _DUCKLAKE_*_FUNCTION names +
+      _DUCKLAKE_FUNCTION_ZIP_KEYS, DUCKLAKE_PGCLIENT_S3_PREFIX, PINNED_PG_MAJOR, DUCKLAKE_LAYER_NAMES,
+      _LAMBDA_SCRIPTS, _LAMBDA_FUNCTION_NAMES, _OPS_COMPACTION_FUNCTION_NAME/_ZIP_KEY; the lazy
+      build-contract loader (_BUILD_CONTRACT_PATH, _BUILD_CONTRACT_REGISTRY, _fallback_build_registry,
+      _load_build_contract, _build_size_limit_bytes, _build_prod_function_names, _build_ops_compaction,
+      _build_ducklake_function_zip_keys, _build_ducklake_layer_names); manifest-pattern resolution
+      (_get_lambda_file_patterns, LAMBDA_FILE_PATTERNS); and the pure argv helper _aws_profile_args
+      (shared by deploy + packaging's S3 fetch helpers). Bottom of the import DAG -- imports NOTHING
+      from the other build_lambda_* modules (no cycle). Estimated ~161 SLOC, CC<=5 (no waiver).
+  - file: scripts/build_lambda_packaging.py
+    action: Create
+    purpose: >-
+      owner=platform. One concern: bundle/zip assembly (the task's "bundle assembly" seam). Holds
+      OUTPUT_DIR, _FIXED_ZIP_DATETIME, _deterministic_zipinfo, _zip_staged_dir, the
+      _zip_layer_dir_deterministic alias, assert_within_size_limit, the prod builders
+      (build_app_package, build_ops_compaction_package, list_bundle, build_deps_layer), the DuckLake
+      builders (build_ducklake_function_package, build_ducklake_deps_layer,
+      build_ducklake_extensions_layer, build_pgclient_layer) and their input fetch helpers
+      (_fetch_extension_bytes, _try_s3_extension, _try_s3_pgclient -- kept HERE because they are
+      consumed only by the layer builders; splitting them into deploy would fracture a single
+      "assemble this layer" concern and create a packaging->deploy dependency). CARRIES the
+      `# complexity-waiver: decision-43` comment within the first 10 lines (cc_limits.py reads
+      lines[:10]) because build_pgclient_layer is at the CC ceiling (radon 20; the repo counter also
+      counts With/BoolOp, so it exceeds 20). Imports data/_aws_profile_args from
+      build_lambda_config only. Estimated ~359 SLOC (<400 aim); if a future artifact pushes it toward
+      500 the sanctioned next seam is prod-packaging vs ducklake-packaging.
+  - file: scripts/build_lambda_deploy.py
+    action: Create
+    purpose: >-
+      owner=platform. One concern: AWS deploy/publish + bucket resolution. Holds upload_to_s3,
+      update_lambda_functions, resolve_bucket, validate_bucket_exists, publish_canary_layers, and
+      _resolve_ducklake_profile. Imports the accessors it needs (_build_prod_function_names,
+      _build_ops_compaction, _build_ducklake_function_zip_keys, _build_ducklake_layer_names) and
+      _aws_profile_args from build_lambda_config only (no packaging import -> no cycle). Estimated
+      ~171 SLOC, CC<=6 (no waiver).
+  - file: tests/test_build_lambda.py
+    action: Modify
+    purpose: >-
+      Preserve behaviour. KEEPS the classes that exercise the retained CLI/orchestrators
+      (TestRunBuilds -> _run_prod_build/_run_ducklake_build; TestMainDispatch -> main). Their
+      `patch("scripts.build_lambda.<callee>")` sites (resolve_bucket, validate_bucket_exists,
+      upload_to_s3, update_lambda_functions, assert_within_size_limit, build_app_package,
+      build_ducklake_*_package/layer, build_pgclient_layer, publish_canary_layers, list_bundle,
+      _run_prod_build, _run_ducklake_build) STAY AS-IS -- those callees are invoked by orchestrators
+      that live here, so the facade re-export makes the patch intercept. MOVES every other class to
+      its module's mapped test file (below). ADDS test_facade_reexports_complete asserting every
+      re-exported name is present on scripts.build_lambda and is the same object as its defining
+      module. See execution_steps for the exact class->file map and the patch-repoint table.
+  - file: tests/test_build_lambda_config.py
+    action: Create
+    purpose: >-
+      New suite mapped to scripts/build_lambda_config.py (map_source_to_test: scripts/<name>.py ->
+      tests/test_<name>.py). Receives TestBuildLambdaContract MINUS test_canary_layers_sourced_from_accessor
+      (that single method exercises publish_canary_layers and relocates to tests/test_build_lambda_deploy.py --
+      critique finding B; applying the blanket bl_config repoint to it would create a silent no-op mock).
+      For the remaining contract-loader methods: mutable-global writes/reads
+      bl._BUILD_CONTRACT_REGISTRY/_BUILD_CONTRACT_PATH become bl_config._BUILD_CONTRACT_REGISTRY/_BUILD_CONTRACT_PATH
+      and _build_* accessor calls become bl_config._build_* -- because the loader now reads config's module
+      globals, not build_lambda's re-exported binding; the one exception is test_cli_flag_equivalence's
+      bl.build_parser() which stays bl. Also receives TestPinnedConstants, TestLambdaScriptsAndSdkConfig,
+      and the two pure _aws_profile_args tests (test_aws_profile_args_empty/_non_empty). ADDS a test for
+      _get_lambda_file_patterns (no prior coverage) to meet the per-file coverage floor.
+  - file: tests/test_build_lambda_packaging.py
+    action: Create
+    purpose: >-
+      New suite mapped to scripts/build_lambda_packaging.py. Receives TestSizeAssert,
+      TestBuildLambdaConfigScope (REPOINTED: bm = scripts.build_lambda_packaging; the OUTPUT_DIR patch
+      -> "scripts.build_lambda_packaging.OUTPUT_DIR"; the source-reading guard reads
+      scripts.build_lambda_packaging.__file__), TestBuildDucklakeFunctionPackage (REPOINT the
+      _zip_staged_dir patch -> packaging), TestBuildDucklakeDepsLayer (OUTPUT_DIR patch -> packaging),
+      TestBuildDucklakeExtensionsLayer (_fetch_extension_bytes + OUTPUT_DIR patches -> packaging),
+      TestFetchExtensionBytes (_try_s3_extension patch -> packaging), TestTryS3Extension,
+      TestBuildPgclientLayerPgRestoreGuard (_try_s3_pgclient + OUTPUT_DIR patches -> packaging),
+      TestDucklakeZipDeterminism (OUTPUT_DIR + _fetch_extension_bytes + _try_s3_pgclient patches ->
+      packaging), plus the two packaging-owned profileless tests (_try_s3_pgclient / _try_s3_extension
+      omit --profile). ADDS an explicit list_bundle test (satisfies the intent behind rec-2077; NOT
+      bundled). subprocess.run / urllib / shutil / zipfile / pathlib patches STAY (global stdlib
+      objects).
+  - file: tests/test_build_lambda_deploy.py
+    action: Create
+    purpose: >-
+      New suite mapped to scripts/build_lambda_deploy.py. Receives the three validate_bucket_exists
+      tests, TestUpdateLambdaFunctions, TestUpdateLambdaFunctionsDucklakeOnly, TestResolveBucket,
+      TestPublishCanaryLayers (moves AS-IS -- it patches only scripts.build_lambda.subprocess.run, a
+      global stdlib object), TestResolveDucklakeProfile, the deploy-owned profileless tests
+      (upload_to_s3 / validate_bucket_exists / update_lambda_functions omit/include --profile), AND the
+      single relocated method test_canary_layers_sourced_from_accessor (from TestBuildLambdaContract,
+      tests/test_build_lambda.py:885-906 -- critique finding B): its `patch.object(bl,
+      "_build_ducklake_layer_names")` becomes the string-form
+      `patch("scripts.build_lambda_deploy._build_ducklake_layer_names", ...)` because
+      publish_canary_layers resolves that imported name in deploy's namespace; placed next to
+      TestPublishCanaryLayers. All `patch("scripts.build_lambda.subprocess.run")` STAY (global stdlib object).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-point via `bin/venv-python -m scripts.validate --update-sloc-budgets` as the LAST
+      implementation step (Decision 102 down-only ratchet). build_lambda.py drops below 500 so its
+      `scripts/build_lambda.py: 791` entry is auto-removed; the three new modules are each <500 so
+      NONE is seeded. Then assert (grep, NOT full-file equality -- sibling decompositions share this
+      branch) that the build_lambda.py key is gone and no scripts/build_lambda_(config|packaging|deploy).py
+      key was added.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The full test set (tests/test_build_lambda.py + the three new module test files) passes with unchanged assertion semantics; no collection errors; `bin/venv-python -m pytest tests/test_build_lambda*.py -q` exits 0.
+  - "Facade completeness: every public symbol and every test-patched private symbol (assert_within_size_limit, update_lambda_functions, validate_bucket_exists, resolve_bucket, upload_to_s3, publish_canary_layers, list_bundle, build_app_package, build_ops_compaction_package, build_deps_layer, the four build_ducklake_* builders, _fetch_extension_bytes, _try_s3_extension, _try_s3_pgclient, _zip_staged_dir, _deterministic_zipinfo, _aws_profile_args, _resolve_ducklake_profile, _run_prod_build, _run_ducklake_build, the _build_* accessors, _BUILD_CONTRACT_PATH/_REGISTRY, _LAMBDA_SCRIPTS, _LAMBDA_FUNCTION_NAMES, _OPS_COMPACTION_*, _DUCKLAKE_*_FUNCTION, _DUCKLAKE_FUNCTION_ZIP_KEYS, DUCKLAKE_LAYER_NAMES, PINNED_DUCKDB_VERSION, PINNED_PG_MAJOR, LAMBDA_SIZE_LIMIT_BYTES, OUTPUT_DIR, LAMBDA_FILE_PATTERNS) resolves via `from scripts.build_lambda import X` and `getattr(bl, X)`."
+  - "CLI contract byte-stable: build_parser()'s `--` flag set equals docs/contracts/build-lambda.yaml cli_flags; `python -m scripts.build_lambda --list-bundle <slug>` and `--ducklake-only --skip-upload` dispatch unchanged (exit-code + routing preserved), so the two terraform-apply-sandbox.yml invocations and the run_scheduled_agent.py / ducklake_neon_smoke_test.py subprocess calls keep working."
+  - "Behaviour preservation: `--list-bundle data-pipeline` and `--list-bundle ops-compaction` emit file lists byte-identical to the pre-refactor baseline, and the DuckLake zip-determinism tests still md5-match two builds -- the build outputs are unchanged."
+  - scripts/build_lambda.py drops to <=500 SLOC (target ~205); each of build_lambda_config/packaging/deploy.py is <=500 SLOC (aim <=400); config/sloc_budgets.yaml loses its scripts/build_lambda.py entry and gains NO new build_lambda_* entry (diff-verified, not full-file equality).
+  - validate_cc_limits passes over the new tree (build_pgclient_layer's module carries the decision-43 waiver header; no other moved function trips the repo branch counter).
+  - "Namespace-migration discipline: zero residual silent-no-op patches remain -- no `patch(\"scripts.build_lambda.OUTPUT_DIR\"|._zip_staged_dir|._fetch_extension_bytes|._try_s3_extension|._try_s3_pgclient)` and no `patch.object(<any alias>, \"_build_ducklake_layer_names\")` (bl OR bl_config -- critique finding B) survive; the canary-accessor patch exists only as `patch(\"scripts.build_lambda_deploy._build_ducklake_layer_names\")`, and the other five repointed to their defining module."
+  - No extracted function DEFINITION remains in scripts/build_lambda.py (only re-exports plus main/build_parser/_run_prod_build/_run_ducklake_build); `bin/venv-python -m scripts.validate --pre` exits 0.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Full build_lambda test set across all four files passes with unchanged assertion semantics.
+    command: bin/venv-python -m pytest tests/test_build_lambda.py tests/test_build_lambda_config.py tests/test_build_lambda_packaging.py tests/test_build_lambda_deploy.py -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: A `from scripts.build_lambda import X` ImportError -> facade omitted X. A patch that no-ops (e.g. mock not called) -> a moved-together cross-helper/global patch was not repointed to its new defining module (OUTPUT_DIR/_zip_staged_dir/_fetch_extension_bytes/_try_s3_extension/_try_s3_pgclient/_build_ducklake_layer_names) or TestBuildLambdaContract still mutates bl.* instead of bl_config.*.
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: Facade completeness / import-equivalence -- every re-exported name is present on scripts.build_lambda and identical to its defining-module object.
+    command: bin/venv-python -m pytest tests/test_build_lambda.py -k facade_reexports -q
+    expected: test_facade_reexports_complete passes; exit 0.
+    fix_if: A name is missing on bl -> add it to the facade re-export block. A name resolves to a different object -> it was redefined instead of re-exported.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: SLOC assertion -- target file below limit and no new module over budget.
+    command: "bin/venv-python -c \"import pathlib; s=lambda p: len([l for l in pathlib.Path(p).read_text(encoding='utf-8').splitlines() if l.strip() and not l.strip().startswith('#')]); m={p:s(p) for p in ['scripts/build_lambda.py','scripts/build_lambda_config.py','scripts/build_lambda_packaging.py','scripts/build_lambda_deploy.py']}; print(m); assert m['scripts/build_lambda.py']<=500; assert all(v<=500 for v in m.values())\""
+    expected: build_lambda.py SLOC <=500 (target ~205); each new module <=500 (config ~161, packaging ~359, deploy ~171). Prints the map; exit 0.
+    fix_if: A module exceeds 500 -> split it on the documented next seam (packaging -> prod vs ducklake). build_lambda.py exceeds 500 -> more logic must move out of the facade.
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: CC gate passes post-extraction (waiver carried to build_pgclient_layer's module).
+    command: "bin/venv-python -c \"from scripts.checks.sloc.cc_limits import validate_cc_limits; f=[]; validate_cc_limits(f); print(f); raise SystemExit(1 if f else 0)\""
+    expected: No CC violation naming any scripts/build_lambda*.py function; exit 0.
+    fix_if: "A violation names build_pgclient_layer -> the `# complexity-waiver: decision-43` header is not within the first 10 lines of packaging.py. A violation names another moved function -> add the waiver header to its module (the repo branch counter also counts With/BoolOp)."
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: Build-only (NO deploy) bundle equivalence for two active artifacts, vs the baseline captured before any code moved.
+    command: bin/venv-python -m scripts.build_lambda --list-bundle data-pipeline > /tmp/lb_after_dp.txt && bin/venv-python -m scripts.build_lambda --list-bundle ops-compaction > /tmp/lb_after_ops.txt && diff /tmp/lb_before_dp.txt /tmp/lb_after_dp.txt && diff /tmp/lb_before_ops.txt /tmp/lb_after_ops.txt && echo BUNDLE_EQUIVALENT
+    expected: No diff in either artifact's static file list; prints BUNDLE_EQUIVALENT; exit 0. (Uses skip_pip=True, so it is unaffected by rec-2162's yanked github-copilot-sdk pin -- no full pip build attempted.)
+    fix_if: A diff appears -> a builder's manifest/stage_bundle wiring changed during the move (ROOT rebinding, an altered stage_dir path, or a dropped import); the file-list must be manifest-identical.
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: DuckLake zip byte-determinism preserved (the moved zip primitives still produce byte-identical archives).
+    command: bin/venv-python -m pytest tests/test_build_lambda_packaging.py -k "byte_identical or determinism" -q
+    expected: All four zip-determinism tests (staged_dir / deps_layer / extensions_layer / pgclient_layer) md5-match two builds; exit 0.
+    fix_if: A hash differs -> _deterministic_zipinfo / _FIXED_ZIP_DATETIME / sorted-iteration logic was altered during the move; restore the pinned-timestamp deterministic write verbatim.
+    hermetic: false
+  - step: 7
+    phase: pre-deploy
+    action: Stale-reference sweep -- no extracted definition remains in build_lambda.py.
+    command: "grep -cE '^def (build_app_package|build_ops_compaction_package|list_bundle|build_deps_layer|build_ducklake_function_package|build_ducklake_deps_layer|build_ducklake_extensions_layer|build_pgclient_layer|assert_within_size_limit|upload_to_s3|update_lambda_functions|resolve_bucket|validate_bucket_exists|publish_canary_layers|_fetch_extension_bytes|_try_s3_extension|_try_s3_pgclient|_deterministic_zipinfo|_zip_staged_dir|_load_build_contract|_fallback_build_registry|_get_lambda_file_patterns|_aws_profile_args|_resolve_ducklake_profile)\\b' scripts/build_lambda.py | grep -qx 0"
+    expected: Zero extracted defs remain (only main/build_parser/_run_prod_build/_run_ducklake_build define here); exit 0.
+    fix_if: A def still lives in build_lambda.py -> move its body to the domain module and leave only the re-export.
+    hermetic: false
+  - step: 8
+    phase: pre-deploy
+    action: Namespace-migration closure -- zero residual silent-no-op patch sites for moved-together helpers/globals.
+    command: "! grep -rEq 'patch\\(\"scripts\\.build_lambda\\.(OUTPUT_DIR|_zip_staged_dir|_fetch_extension_bytes|_try_s3_extension|_try_s3_pgclient)\"' tests/test_build_lambda*.py && ! grep -rEq 'patch\\.object\\([A-Za-z_]+, \"_build_ducklake_layer_names\"' tests/test_build_lambda*.py && ! grep -rEq 'patch\\(\"scripts\\.build_lambda(_config)?\\._build_ducklake_layer_names\"' tests/test_build_lambda*.py && echo REPOINTS_CLEAN"
+    expected: No facade-namespace patch remains for OUTPUT_DIR / _zip_staged_dir / _fetch_extension_bytes / _try_s3_extension / _try_s3_pgclient; NO patch.object on ANY module alias for _build_ducklake_layer_names (catches a bl_config mis-repoint, not just bl -- critique finding B), and no string-form bl/bl_config target for it either (only scripts.build_lambda_deploy._build_ducklake_layer_names is legitimate); prints REPOINTS_CLEAN; exit 0.
+    fix_if: A match survives -> that patch silently no-ops (targets the facade or config binding, not the namespace publish_canary_layers actually resolves); repoint it to scripts.build_lambda_packaging.* or scripts.build_lambda_deploy.* (string form).
+    hermetic: false
+  - step: 9
+    phase: pre-deploy
+    action: Test-file existence gate -- each new module maps to an existing test file.
+    command: bin/venv-python -m scripts.test_coverage_checker --check-tests --files scripts/build_lambda.py scripts/build_lambda_config.py scripts/build_lambda_packaging.py scripts/build_lambda_deploy.py
+    expected: All four map to an existing test file; exit 0.
+    fix_if: A "missing test file" error -> the mapped tests/test_build_lambda_<name>.py was not created.
+    hermetic: false
+  - step: 10
+    phase: pre-deploy
+    action: Decision 99 version-lockstep gate stays green after the pin import relocates (decision-scout WARN).
+    command: "bin/venv-python -c \"from scripts.checks.misc.validate_ducklake_version_lockstep import validate_ducklake_version_lockstep as v; f=[]; v(f); print('FAILURES', f); raise SystemExit(1 if f else 0)\""
+    expected: PASS on both derive surfaces (scripts/build_lambda.py has no `PINNED_DUCKDB_VERSION = \"<literal>\"` assignment -- the facade re-export is an import); requirements.txt floor matches the SSOT; exit 0.
+    fix_if: A failure names build_lambda.py -> the pin reached config as a string literal instead of src.common.ducklake_version.pinned_duckdb_version() (a call). Extending the gate to also scan build_lambda_config.py is OUT of scope (the check file is not in scope).
+    hermetic: false
+  - step: 11
+    phase: pre-deploy
+    action: Authoritative pre-merge gate -- full fast tier green (subsumes SLOC/CC/import-contract/coverage checks).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0.
+    fix_if: SLOC/CC/coverage failure -> address per that check's message; a genuine import cycle among build_lambda_* modules surfaces as ImportError at import time (VP steps 1/13), NOT via import-linter -- .importlinter carries only 4 contracts, none covering these modules (critique finding D); break a cycle with a function-local import or route the shared symbol through build_lambda_config.
+    hermetic: false
+  - step: 12
+    phase: pre-deploy
+    action: SLOC budget re-point (LAST implementation step) + diff assertion (my entry removed, none seeded).
+    command: "bin/venv-python -m scripts.validate --update-sloc-budgets && ! grep -qE '^[[:space:]]*scripts/build_lambda\\.py:' config/sloc_budgets.yaml && ! grep -qE '^[[:space:]]*scripts/build_lambda_(config|packaging|deploy)\\.py:' config/sloc_budgets.yaml && echo BUDGET_OK"
+    expected: scripts/build_lambda.py is removed from config/sloc_budgets.yaml and no build_lambda_* key was seeded; prints BUDGET_OK; exit 0. Do NOT assert full-file equality -- sibling SLOC decompositions on this branch also mutate this file.
+    fix_if: A build_lambda_* key was seeded -> that module exceeds 500 SLOC; split it and re-run. The build_lambda.py key survives -> it is still >500; move more out of the facade.
+    hermetic: false
+  - step: 13
+    phase: pre-deploy
+    action: Replay-safe stable invariant (fleet policy, sole hermetic step) -- the scripts.build_lambda facade imports and its CLI flag set equals the ratified contract. Green at ANY tree state (pre- and post-implementation), <1s, sibling-isolated; runnable at any point, not order-dependent. Uses the portable interpreter idiom (NOT bin/venv-python) because CI's pr-validate replay job has no .venv.
+    command: "PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c \"import yaml, pathlib; import scripts.build_lambda as bl; flags={s for s in bl.build_parser()._option_string_actions if s.startswith('--')}-{'--help'}; want=set(yaml.safe_load(pathlib.Path('docs/contracts/build-lambda.yaml').read_text(encoding='utf-8'))['cli_flags']); assert flags==want, sorted(flags^want); print('FACADE_CLI_STABLE')\""
+    expected: Prints `FACADE_CLI_STABLE` and exits 0 -- the module imports cleanly and the flag-name set matches docs/contracts/build-lambda.yaml cli_flags exactly, before and after the refactor.
+    fix_if: ImportError -> the facade re-export block references a missing/misnamed symbol in a build_lambda_* module. AssertionError (prints the symmetric difference) -> a CLI flag was added/dropped/renamed, breaking the byte-stable CLI contract.
+    hermetic: true
+constraints:
+  - "Behaviour preservation is absolute -- movement only. No signature changes beyond relocation, no feature work, no bug fixes. The build outputs must be byte-identical (proven by --list-bundle file-list equivalence + the zip-determinism md5 tests). Out-of-scope findings become context notes, never inline fixes (Decision 55 / AGENTS.md 'Only modify files explicitly in scope')."
+  - "CLI contract byte-stability -- `python -m scripts.build_lambda` module invocation, every flag, dispatch routing, and exit codes stay identical (two .github/workflows/terraform-apply-sandbox.yml calls + scripts.run_scheduled_agent + scripts.ducklake_neon_smoke_test depend on it). main/build_parser stay in build_lambda.py."
+  - "Import stability via facade -- build_lambda.py re-exports EVERY public symbol AND every test-patched private symbol; it also keeps `import subprocess` / `import urllib.request` each with `# noqa: F401` (post-split they are unused in the thin CLI; pyproject's ruff F rules have no unfixable/per-file-ignores, so an un-noqa'd --fix would silently delete the anchors and break 36 stdlib patch sites (34 subprocess.run + 2 urlopen) -- critique finding A). The only symbol-level importer is tests/test_build_lambda.py (verified: all other references are CLI invocations, a path-scan in validate_ducklake_version_lockstep, or comments), so no external-importer migration is required."
+  - "Decision 48 -- V2 tier is correct (the only files touched are build_lambda*.py + tests + regenerated config; none is Lambda-packaged: compute_affected_artifacts([...]) == []). The facade MUST keep _LAMBDA_SCRIPTS resolving from scripts.build_lambda -- it is Decision 48's V3-trigger anchor and the test imports it; the literal list moves to build_lambda_config.py but is re-exported. Executor planning/critique prompts reference the concept in prose (executor frozen, Decision 67); the symbol stays reachable, so no prompt edit is in scope."
+  - "Namespace-migration discipline (tests/CLAUDE.md) -- when a patched helper/global moves together with its only caller into a new module (OUTPUT_DIR, _zip_staged_dir, _fetch_extension_bytes, _try_s3_extension, _try_s3_pgclient, _build_ducklake_layer_names) OR the mutable module-global state it drives moves (TestBuildLambdaContract's _BUILD_CONTRACT_REGISTRY/_PATH), repoint EVERY patch/mutation site to the new module in the SAME change and prove closure with a grep gate. Never leave a silent no-op mock."
+  - "Decision 43 -- CC<=20 per function; the `# complexity-waiver: decision-43` header travels (within the first 10 lines, per cc_limits.py) with build_pgclient_layer into build_lambda_packaging.py; the thin CLI sheds the now-unneeded waiver."
+  - "Decision 102 -- SLOC budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets` as the last step, never a hand-edit; diff the yaml (not full-file equality, since siblings share the branch) to confirm removal + no silently-seeded >500 module."
+  - "Byte-reproducible zip path preserved verbatim (fixed ZipInfo timestamp, sorted iteration, pinned permission bits); the determinism md5 tests guard it. NOTE (decision-scout): this is a plan-internal correctness property -- Decision 77 governs the terraform apply path, not build_lambda zip determinism, so do not cite 77 as its governing authority."
+  - "Decision 99 -- the duckdb pin stays SSOT'd in config/lambda/ducklake/version.yaml; the moved code reaches it via src.common.ducklake_version.pinned_duckdb_version() (a call, never a literal), keeping validate_ducklake_version_lockstep green."
+  - "Decision 86 -- no new standing prose-architecture doc under docs/. Module rationale routes to this plan's context + the docstrings; no docs/INTENT-*.md."
+  - "Decision 101 / public-repo boundary -- no AWS account IDs, ARNs, ExternalIds, secrets, or internal hostnames introduced (constants moved verbatim; the pre-existing well-known bucket/function names are already public-safe). No emojis; ASCII hyphens only."
+  - "Multi-plan coordination -- this is one of ~16 SLOC-decomposition plans on the shared claude/sloc-violations-refactor-p5svnl branch. Touch ONLY scripts/build_lambda.py, the three new scripts/build_lambda_*.py modules, their four test files, and config/sloc_budgets.yaml (regenerated, never hand-edited). Do not modify scripts/test_coverage_checker.py (flat modules are already mapped) or any sibling's scope."
+  - No rescue agents or workaround loops (Decision 55). On an unrecoverable equivalence/verification failure, stop and RCA; never paper over a broken bundle-equivalence or a no-op mock with a skip.
+context:
+  - >-
+    Root cause -- build_lambda.py is the single build/deploy tool for every Lambda artifact (prod
+    data-pipeline + ops-compaction, and the T2.17/T2.18 DuckLake writer/reader/maintenance/catalog-dr
+    functions + deps/extensions/pgclient layers). Every new artifact family adds builders, so a
+    per-file SLOC cap only ratchets upward; it currently sits at 790 SLOC against a 791 budget (1 line
+    of headroom). One-concern-per-file modules that each stay flat while their count grows is the
+    structural fix (same axis-error argument as PLAN-validate-decomposition / Decision 80/104). This
+    plan realizes rec-2414's program for this file; rec-2414 (acceptance `grep -q '^budgets: {}'`) is
+    the whole-registry umbrella -- CITED, not bundled (a single-file split does not empty the registry).
+  - >-
+    Flat modules, not a subpackage -- scripts/test_coverage_checker.py map_source_to_test maps
+    scripts/<name>.py (depth-2) -> tests/test_<name>.py, but a NEW subpackage scripts/lambda_build/**
+    returns None (only scripts/checks/** is special-cased, from the validate decomposition). A
+    subpackage would silently drop out of the coverage-gate AND force editing test_coverage_checker.py,
+    colliding with sibling decomposition plans on this shared branch. Flat sibling modules are
+    auto-mapped and need zero shared-file edits.
+  - >-
+    Facade + patch-stability analysis (the load-bearing correctness argument) -- the ONLY symbol-level
+    consumer is tests/test_build_lambda.py; every other repo reference is a CLI invocation
+    (run_scheduled_agent.py:291, ducklake_neon_smoke_test.py:1079, terraform-apply-sandbox.yml) or a
+    path-scan/comment. 34 `patch("scripts.build_lambda.subprocess.run")` and 2
+    `urllib.request.urlopen` patches survive UNCHANGED because they patch an attribute on a shared
+    stdlib module object (global), provided build_lambda.py keeps `import subprocess`/`import
+    urllib.request`. Patches on orchestrated callees (builders, deploy funcs, assert_within_size_limit,
+    list_bundle, publish_canary_layers) survive via the facade because their callers (_run_prod_build /
+    _run_ducklake_build / main) stay in build_lambda.py and resolve them in this namespace. Only SIX
+    targets need repointing (caller+callee both moved, or mutable-global state moved): OUTPUT_DIR,
+    _zip_staged_dir, _fetch_extension_bytes, _try_s3_extension, _try_s3_pgclient (-> packaging);
+    _build_ducklake_layer_names -- whose ONLY patch site is
+    TestBuildLambdaContract.test_canary_layers_sourced_from_accessor (tests/test_build_lambda.py:902,
+    NOT TestPublishCanaryLayers; critique finding B) -- repoints to the string-form deploy target and
+    that single method relocates to the deploy test file, exempt from the blanket bl_config rule; and
+    TestBuildLambdaContract's remaining _BUILD_CONTRACT_REGISTRY/_BUILD_CONTRACT_PATH mutations
+    (-> bl_config). VP steps 1/2/8 prove closure.
+  - >-
+    Test relocation follows the coverage-mapper -- coverage is attributed to the file where code is
+    DEFINED, so tests may keep `import scripts.build_lambda as bl` + `bl.X` references (the facade),
+    but each test CLASS must live in the test file mapped to its function's new module so the per-file
+    coverage/existence gate (map_source_to_test) is satisfied. The class->file map and the six
+    repoints are enumerated in scope + execution_steps. The mutable-global TestBuildLambdaContract
+    repoint is the single most error-prone item -- flagged explicitly.
+  - >-
+    CC/waiver -- radon rates only build_pgclient_layer at the ceiling (CC 20); the repo counter
+    (cc_limits.py, _BRANCH_TYPES includes With + BoolOp) puts it above 20, and today the whole file is
+    CC-exempt via the header waiver. build_lambda_packaging.py must carry `# complexity-waiver:
+    decision-43` in its first 10 lines; the other three files need no waiver (all functions CC<=8).
+    VP step 4 re-runs validate_cc_limits to confirm no other moved function trips the repo counter.
+  - >-
+    S3/CDN fetch-helper placement (a deliberate cohesion call the critique should weigh) --
+    _fetch_extension_bytes/_try_s3_extension/_try_s3_pgclient do AWS/network I/O (deploy-flavoured) but
+    are consumed ONLY by the extension/pgclient LAYER builders. They live in packaging to keep each
+    "assemble this layer" concern whole and to avoid a packaging->deploy import edge. _aws_profile_args
+    (the argv helper both they and the deploy funcs need) lives in build_lambda_config (bottom of the
+    DAG) so both import it without a cycle.
+  - >-
+    Out-of-scope notes (do NOT fix here) -- (1) rec-2077 asks for a list_bundle test; the decomposition
+    adds one incidentally (packaging is coverage-gated), but the rec is NOT bundled per direction. (2)
+    rec-2162 (yanked github-copilot-sdk==0.2.2 in src/lambdas/data-pipeline/manifest.yaml) would break a
+    full `--skip-upload` pip build of data-pipeline, so the equivalence oracle uses `--list-bundle`
+    (skip_pip=True), not a pip build. (3) validate_ducklake_version_lockstep scans scripts/build_lambda.py
+    for a hardcoded PINNED_DUCKDB_VERSION literal; post-split the derivation lives in
+    build_lambda_config.py (still a call, no literal, so build_lambda.py stays clean and the check stays
+    green). Extending that check to also scan build_lambda_config.py is a separate hardening item, not
+    done here (the check file is out of scope).
+  - Branch claude/sloc-violations-refactor-p5svnl is 0 commits behind origin/main at planning time (preflight main_files_changed_since_branch == []); no Scope-file divergence, no rebase needed. Executor is FROZEN (Decision 67) -- IMPLEMENTATION plan only (STRATEGIC suspended).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (83 of 83 triaged; NOTE/WARN only, no BLOCK). CITE: Decision 43 (SLOC/CC caps + complexity-waiver pattern), Decision 102 (budget down-only ratchet -- the --update-sloc-budgets repoint authority), Decision 104 (the ratified validate.py thin-CLI + facade re-export + coverage-map-gotcha precedent this mirrors), Decision 79 (build_lambda is NOT Lambda-packaged / NOT executor machinery; homes CD.24 manifest bundling per Decision 105), Decision 48 (V2 tier classification + the _LAMBDA_SCRIPTS V3-trigger anchor the facade must keep resolving), Decision 99 (duckdb pin SSOT + the ducklake-version-lockstep gate), Decision 101 (public-repo boundary). RELATED: Decision 80 (decomposition precedent lineage; NOTE per critique finding D -- .importlinter has only 4 contracts, NONE covering build_lambda modules, so import-linter will NOT verify the config<-packaging/deploy<-CLI edges; the DAG is acyclic by construction and a genuine cycle fails loudly as ImportError in VP steps 1/13), Decision 86 (no new prose-architecture docs), Decision 67 (IMPLEMENTATION-only; >5-file/>8-step complexity heuristic suspended)."
+  - "Decision-scout NOTE (Decision 102): the 'no new module registered' claim holds only if build_lambda_packaging.py lands <=500 SLOC (est ~359). VP step 3 enforces per-module <=500 and VP step 12 fails if any build_lambda_* key is seeded; if packaging exceeds 500 at implement time, split it on the prod-vs-ducklake seam (do NOT hand-register). Decision-scout WARN (Decision 99): resolved -- validate_ducklake_version_lockstep regex-scans build_lambda.py for a `PINNED_DUCKDB_VERSION = \"<literal>\"` assignment; post-move build_lambda.py has none (the facade re-export is an import, not an assignment), so it stays green (VP step 10 runs it explicitly). Decision-scout correction: Decision 77 governs the terraform sandbox apply path, NOT build_lambda zip determinism -- the byte-reproducible-zip preservation here is a plan-internal correctness property, not cited to 77."
+  - >-
+    Hermetic-replay fleet policy (validate_vp_replay, T3.15/VF-01) -- the CI gate re-executes every
+    pre-deploy+hermetic:true VP step of every PLAN-*.yaml in the PR diff under a SHARED budget
+    (20 steps / 120s) across all ~16 sibling SLOC plans on this branch, at ANY tree state while the
+    plan file stays in the diff. Therefore exactly ONE step (13) is hermetic: a <1s facade-import +
+    CLI-flag-contract invariant that passes both before and after implementation (verified green
+    pre-implementation). Steps 3/7/8 are deliberately hermetic:false DESPITE being creds-free: they
+    are state-dependent (3 reads module files that do not exist yet; 7's zero-defs grep and 8's
+    negative patch-grep only pass post-refactor), so replaying them pre-implementation would fail CI.
+    The implement agent must NOT flip them back to hermetic:true. Portability rule: CI's pr-validate
+    replay job has NO .venv, so the hermetic step 13 command resolves its interpreter via
+    PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python) instead of bin/venv-python;
+    non-hermetic steps keep bin/venv-python (they run only in agent sessions).
+  - "gates: decision-scout=FLAGS_FOUND after 1 round (NOTE/WARN resolved in-plan, no BLOCK); plan-critique=PROCEED after 2 round(s) (round 1 REVISE -- findings A: ruff-deletable patch anchors -> noqa'd; B: _build_ducklake_layer_names patch-site attribution + single-method relocation + broadened VP8 grep; C: shared test helpers duplicated; D: import-linter claim softened. Round 2: all five deltas VERIFIED empirically incl. a verbatim VP13 replay, no new defects; three cosmetic fixes applied post-verdict: patch-site counts corrected to 34+2=36, anchor-specific ruff-survival grep, acceptance-criterion dedupe)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md decisions read/cited (43, 102, 104, 79, 48, 99, 101; RELATED 80, 86, 67; CD.24 homed in 79) via the decision-scout gate
+  - All files in scope located and readable (scripts/build_lambda.py, tests/test_build_lambda.py, config/sloc_budgets.yaml, docs/contracts/build-lambda.yaml)
+  - Acceptance criteria understood and verifiable
+  - "Baselines captured FIRST: `bin/venv-python -m scripts.build_lambda --list-bundle data-pipeline > /tmp/lb_before_dp.txt` and `... --list-bundle ops-compaction > /tmp/lb_before_ops.txt` recorded BEFORE moving any code (VP step 5 diffs against these)"
+execution_steps:
+  - "Capture baselines FIRST (before any code movement): write /tmp/lb_before_dp.txt and /tmp/lb_before_ops.txt from `--list-bundle data-pipeline` and `--list-bundle ops-compaction`. These freeze the manifest-driven file lists as the bundle-equivalence oracle (VP step 5)."
+  - "Create scripts/build_lambda_config.py: move the constants, the duckdb-pin import + PINNED_DUCKDB_VERSION (as a call, no literal), the build-contract loader + 5 accessors, _get_lambda_file_patterns + LAMBDA_FILE_PATTERNS, and _aws_profile_args -- verbatim bodies. Imports stdlib + src.common.ducklake_version only; scripts.lambda_manifest stays a function-local import inside _get_lambda_file_patterns. No intra-package import (bottom of DAG)."
+  - "Create scripts/build_lambda_deploy.py: move upload_to_s3, update_lambda_functions, resolve_bucket, validate_bucket_exists, publish_canary_layers, _resolve_ducklake_profile verbatim. `from scripts.build_lambda_config import _aws_profile_args, _build_prod_function_names, _build_ops_compaction, _build_ducklake_function_zip_keys, _build_ducklake_layer_names` (+ any constants used). publish_canary_layers calls the imported _build_ducklake_layer_names by bare name (its patch repoints to this module)."
+  - "Create scripts/build_lambda_packaging.py WITH `# complexity-waiver: decision-43` in the first 10 lines: move OUTPUT_DIR, _FIXED_ZIP_DATETIME, _deterministic_zipinfo, _zip_staged_dir (+ alias), assert_within_size_limit, the four prod builders, the four DuckLake builders, and _fetch_extension_bytes/_try_s3_extension/_try_s3_pgclient verbatim. Import ROOT + constants + _aws_profile_args from build_lambda_config; keep scripts.lambda_manifest function-local. Replace bare cross-helper calls (build_ducklake_function_package->_zip_staged_dir, build_ducklake_extensions_layer->_fetch_extension_bytes->_try_s3_extension, build_pgclient_layer->_try_s3_pgclient) so they resolve in THIS module (their patches repoint here)."
+  - "Collapse scripts/build_lambda.py to the thin CLI + facade: keep build_parser, main, _run_prod_build, _run_ducklake_build (verbatim; they call builders/deploy funcs by bare name resolved via the facade re-exports). Keep `import subprocess  # noqa: F401 -- deliberately-retained patch anchor` + `import urllib.request  # noqa: F401 -- deliberately-retained patch anchor` (MANDATORY noqa: post-split both are unused here and ruff --fix would otherwise delete them, breaking 36 patch sites). Add one consolidated `from scripts.build_lambda_config/_packaging/_deploy import (...)  # noqa: F401` block re-exporting every public symbol + every test-patched private symbol (see acceptance list). Remove the decision-43 header. Update the module docstring."
+  - "Split the test suite to the mapped test files, preserving assertion semantics: (a) tests/test_build_lambda.py keeps TestRunBuilds + TestMainDispatch and ADDS test_facade_reexports_complete. (b) tests/test_build_lambda_config.py <- TestBuildLambdaContract MINUS test_canary_layers_sourced_from_accessor (REPOINT the remaining methods' _BUILD_CONTRACT_REGISTRY/_BUILD_CONTRACT_PATH writes/reads and _build_* calls to `import scripts.build_lambda_config as bl_config`; keep test_cli_flag_equivalence's bl.build_parser()), TestPinnedConstants, TestLambdaScriptsAndSdkConfig, the two pure _aws_profile_args tests, + a new _get_lambda_file_patterns test. (c) tests/test_build_lambda_packaging.py <- TestSizeAssert, TestBuildLambdaConfigScope (bm=packaging module; OUTPUT_DIR + source-read repoint), TestBuildDucklakeFunctionPackage, TestBuildDucklakeDepsLayer, TestBuildDucklakeExtensionsLayer, TestFetchExtensionBytes, TestTryS3Extension, TestBuildPgclientLayerPgRestoreGuard, TestDucklakeZipDeterminism, the packaging-owned profileless tests, + a new list_bundle test. (d) tests/test_build_lambda_deploy.py <- validate_bucket_exists tests, TestUpdateLambdaFunctions, TestUpdateLambdaFunctionsDucklakeOnly, TestResolveBucket, TestPublishCanaryLayers (as-is: subprocess patches only), test_canary_layers_sourced_from_accessor relocated beside it (REPOINT patch.object(bl, ...) -> string-form patch(\"scripts.build_lambda_deploy._build_ducklake_layer_names\") -- finding B), TestResolveDucklakeProfile, deploy-owned profileless tests. SHARED HELPERS (finding C): duplicate _FakePath into each destination file that uses it (cli/packaging/deploy), _args into cli+deploy, _make_pgclient_bundle + _fake_version_run into packaging, and set `pytestmark = pytest.mark.unit` at module scope in ALL three new test files (do NOT hoist to tests/conftest.py -- shared file, out of scope). Keep each new file's imports in one consolidated block (ruff-format gotcha)."
+  - "Apply the six patch/mutation repoints and run VP step 8 (grep closure) to confirm zero residual silent-no-op patch sites. Run `ruff check --fix` after each 1-2 file edit (per the batch-linting gotcha); AFTER each ruff pass on build_lambda.py, verify the two noqa'd stdlib anchors survived, anchor-specifically (do not count facade-block noqa lines): `grep -cE '^import (subprocess|urllib\\.request)  # noqa: F401' scripts/build_lambda.py` must return exactly 2. Keep facade re-export imports in ONE consolidated block with `# noqa: F401` (ruff-format drops symbols from a second same-module block)."
+  - "Execute the Verification Plan steps 1-11 and 13 in order; loop until each passes; on unrecoverable failure stop and RCA (Decision 55) -- never skip a broken equivalence or a no-op mock. Do NOT mark any additional step hermetic:true (fleet replay budget -- see context)."
+  - "As the LAST step, run VP step 12: `bin/venv-python -m scripts.validate --update-sloc-budgets`, then confirm via grep that scripts/build_lambda.py left config/sloc_budgets.yaml and no build_lambda_* key was seeded (do NOT assert full-file equality)."
+  - "Report: what moved to each module, final SLOC per file, CC/waiver status, the bundle-equivalence result, the six repoints applied, and confirmation the CLI flag set + --list-bundle output are unchanged. No Resolves trailer (no bundled recs; rec-2414 stays open as the umbrella)."
+work_areas: []
+rollback: >-
+  Pure movement refactor on a feature branch; if bundle-equivalence (VP5/VP6) or the facade/patch
+  closure (VP1/VP2/VP8) cannot be made green, abandon the branch (nothing is deployed -- build_lambda.py
+  is not Lambda-packaged). If merged and a regression surfaces, revert the single squash commit: the
+  three new modules + thin facade + test split + budget re-point land atomically, so one revert restores
+  the monolith.
