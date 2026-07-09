@@ -586,7 +586,7 @@ class TestRunTerraformChecks:
             return result
 
         with (
-            patch("scripts.checks._scaffolding.validate_terraform_try"),
+            patch("scripts.checks._terraform.validate_terraform_try"),
             patch("validate.shutil.which", return_value="/usr/bin/terraform"),
             patch("scripts.checks._common.run", side_effect=mock_run),
         ):
@@ -609,7 +609,7 @@ class TestRunTerraformChecks:
             return result
 
         with (
-            patch("scripts.checks._scaffolding.validate_terraform_try"),
+            patch("scripts.checks._terraform.validate_terraform_try"),
             patch("validate.shutil.which", return_value="/usr/bin/terraform"),
             patch("scripts.checks._common.run", side_effect=mock_run),
         ):
@@ -623,7 +623,7 @@ class TestRunTerraformChecks:
     def test_skips_terraform_binary_steps_when_not_found(self, capsys: pytest.CaptureFixture) -> None:
         """No terraform binary -> creds-free helper prints a skip and `run` is never invoked."""
         with (
-            patch("scripts.checks._scaffolding.validate_terraform_try"),
+            patch("scripts.checks._terraform.validate_terraform_try"),
             patch("validate.shutil.which", return_value=None),
             patch("scripts.checks._common.run", side_effect=AssertionError("run must not be called when terraform is absent")),
         ):
