@@ -1,0 +1,177 @@
+schema_version: 1
+slug: "sloc-executor-postflight"
+intent: >-
+  Decompose scripts/executor/postflight.py (1157 SLOC) into a thin facade plus cohesion-seam sibling
+  modules so every executor file drops to <=500 SLOC, removing the per-implement SLOC-budget friction and
+  advancing the rec-2414 breakdown program without changing any executor behaviour.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-executor-postflight.yaml
+phase: >-
+  Platform hardening / SLOC-governance during the executor freeze. Executes the rec-2414 umbrella
+  breakdown program (Decision 102 ratchet, Decision 43 cap) using the ratified PLAN-validate-decomposition
+  facade mechanism (Decision 104/80). One of four coordinated executor-decomposition plans on this branch.
+  Platform-internal tooling; no product-roadmap phase.
+scope:
+  - file: scripts/executor/postflight.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin facade (<=500 SLOC, target ~330) that RETAINS the top orchestrator finalize()
+      (CC 50 -- keeps the existing '# complexity-waiver: decision-43' header) and the __main__ block, and
+      FACADE RE-EXPORTS every extracted public symbol AND every test-patched private symbol so both
+      `from scripts.executor.postflight import <name>` and `patch("scripts.executor.postflight.<name>")`
+      keep resolving. finalize() calls its collaborators (wait_for_ci, merge_pr, _code_review_gate,
+      cleanup_after_merge, _run_verifiers_gate, _fix_ci_failure, _fix_code_review_findings) as module
+      globals in this facade (the re-imported names), so mock patches on the facade namespace intercept
+      natively with zero test migration.
+  - file: scripts/executor/postflight_gitops.py
+    action: Create
+    purpose: >-
+      owner=platform. Git/commit/push + merge + cleanup primitives: _git_commit_and_push_with_retry,
+      merge_pr, _safe_merge_origin_main, cleanup_after_merge (~278 SLOC; all CC<=20, no waiver needed).
+  - file: scripts/executor/postflight_fixers.py
+    action: Create
+    purpose: >-
+      owner=platform. LLM-escalation fixers: _get_ci_failure_details, _fix_ci_failure (CC 26 -> module
+      carries the decision-43 waiver header), _fix_code_review_findings (~200 SLOC).
+  - file: scripts/executor/postflight_gates.py
+    action: Create
+    purpose: >-
+      owner=platform. Review/verifier/scope gates: _scope_drift_check, _commits_ahead_of_main,
+      _code_review_gate (CC 22 -> module carries the decision-43 waiver header), _handle_failure,
+      _parse_scope_files, _run_verifiers_gate (~305 SLOC).
+  - file: scripts/executor/postflight_ciwait.py
+    action: Create
+    purpose: >-
+      owner=platform. CI polling + agent merge recovery: wait_for_ci, _agent_merge_recovery
+      (~155 SLOC; CC<=20, no waiver). _agent_merge_recovery calls cleanup_after_merge through the
+      postflight facade namespace (call-time attribute access) so its patch site keeps intercepting.
+  - file: tests/test_executor_postflight.py
+    action: Modify
+    purpose: >-
+      Preserve behaviour. Migrate only the shared-primitive patch targets that drive a MOVED leaf's
+      internals to the leaf's new module path (namespace-migration discipline, tests/CLAUDE.md):
+      postflight.subprocess sites exercising cleanup_after_merge/merge_pr/_safe_merge_origin_main ->
+      scripts.executor.postflight_gitops.subprocess; sites exercising wait_for_ci/_agent_merge_recovery ->
+      scripts.executor.postflight_ciwait.subprocess; postflight.llm_call -> postflight_fixers/_gates/_ciwait
+      per call site; postflight.load_prompt + model_registry -> postflight_gates. Symbol patches on
+      finalize-resident callees (wait_for_ci, _run_verifiers_gate, merge_pr, cleanup_after_merge,
+      _code_review_gate, _fix_*) stay on the facade namespace (preserved via re-export). No assertion changes.
+  - file: tests/test_postflight_gates.py
+    action: Modify
+    purpose: >-
+      Confirm `from scripts.executor.postflight import _run_verifiers_gate, finalize` still resolve via the
+      facade re-export; repoint any subprocess/llm_call primitive patch that now drives a moved gate body.
+  - file: tests/test_execute_recommendation.py
+    action: Modify
+    purpose: >-
+      Cross-cutting suite. Repoint only the postflight primitive patches (postflight.subprocess/llm_call)
+      that drive a moved leaf; the ~90 symbol patches on `scripts.executor.postflight.<name>` stay put
+      (facade re-export preserves them). No assertion changes.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-point via `validate --update-sloc-budgets` after the split (Decision 102): postflight.py drops out
+      of the registry at <=500 SLOC. Assert (grep, not full-file diff -- sibling plans co-mutate this file)
+      that the scripts/executor/postflight.py key is removed and no scripts/executor/postflight_*.py key is
+      seeded. Never hand-edit.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The full existing tests/test_executor_postflight.py, tests/test_postflight_gates.py, and the postflight-touching parts of tests/test_execute_recommendation.py pass unchanged in assertion semantics.
+  - Every public symbol AND every test-patched private symbol formerly defined in postflight.py is reachable both as `scripts.executor.postflight.<name>` (getattr) and via `from scripts.executor.postflight import <name>` (facade re-export).
+  - Mock interception is preserved -- patching a facade symbol (e.g. postflight.wait_for_ci) still intercepts finalize()'s call, and every migrated shared-primitive patch (postflight_gitops.subprocess, postflight_ciwait.subprocess, postflight_fixers.llm_call, postflight_gates.load_prompt) intercepts through the relocated body; zero residual `patch("scripts.executor.postflight.subprocess")` sites remain that target a moved-leaf's internals.
+  - scripts/executor/postflight.py drops to <=500 SLOC (target ~330); no new scripts/executor/postflight_*.py module exceeds 500 SLOC or CC 20 without the decision-43 waiver header; validate_cc_limits passes over the new tree.
+  - config/sloc_budgets.yaml loses its scripts/executor/postflight.py entry and gains NO scripts/executor/postflight_*.py entry (grep-verified; other entries may shift from sibling plans).
+  - No extracted function DEFINITION remains in the postflight.py facade except finalize() and the __main__ block; import-linter contracts still pass (no new import cycle from the sibling modules).
+  - The postflight surface path scripts.executor.postflight is unchanged (facade retained), so all production importers (scripts/execute_recommendation.py facade re-export, scripts/executor/batch.py lazy import, scripts/executor/__init__.py) resolve without edits.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Full postflight test suites + the cross-cutting executor suite pass with unchanged assertion semantics (behavioural-equivalence oracle).
+    command: bin/venv-python -m pytest tests/test_executor_postflight.py tests/test_postflight_gates.py tests/test_execute_recommendation.py -m "not integration" -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: A `from scripts.executor.postflight import X` fails -> facade omitted symbol X; a `patch("scripts.executor.postflight.<leaf>")` no-ops -> a moved leaf's cross-module call was not routed through the facade namespace, or a shared-primitive patch was not migrated to the leaf's module (silent no-op mock, StopIteration on subprocess side_effect exhaustion).
+  - step: 2
+    phase: pre-deploy
+    action: Facade completeness -- every public + test-patched private symbol is importable from the facade.
+    command: bin/venv-python -c "import scripts.executor.postflight as p; syms='finalize wait_for_ci merge_pr cleanup_after_merge _agent_merge_recovery _safe_merge_origin_main _git_commit_and_push_with_retry _code_review_gate _commits_ahead_of_main _scope_drift_check _handle_failure _parse_scope_files _run_verifiers_gate _get_ci_failure_details _fix_ci_failure _fix_code_review_findings'.split(); missing=[s for s in syms if not hasattr(p,s)]; print('missing:',missing); raise SystemExit(1 if missing else 0)"
+    expected: The printed missing list is empty; exit 0.
+    fix_if: A symbol is missing -> add its `from scripts.executor.postflight_<mod> import <name>` re-export to the facade.
+  - step: 3
+    phase: pre-deploy
+    action: Residual shared-primitive patch-site closure -- no facade-namespace subprocess patch is left driving a moved leaf.
+    command: bin/venv-python -m pytest tests/test_executor_postflight.py -k "merge or cleanup or wait_for_ci or recovery" -q && echo CLOSURE_OK
+    expected: The moved-leaf internal-behaviour tests pass through the relocated bodies (proving their subprocess/llm_call patches were repointed to the sibling modules); prints CLOSURE_OK; exit 0.
+    fix_if: A moved-leaf test fails with an unpatched real subprocess call or StopIteration -> the primitive patch still targets scripts.executor.postflight.subprocess instead of the sibling module.
+  - step: 4
+    phase: pre-deploy
+    action: SLOC re-point -- postflight.py drops below 500, no sibling over budget, budget entry removed with no new seed.
+    command: bin/venv-python -m scripts.validate --update-sloc-budgets && ! grep -qE '^\s*scripts/executor/postflight\.py:' config/sloc_budgets.yaml && ! grep -qE '^\s*scripts/executor/postflight_[a-z_]+\.py:' config/sloc_budgets.yaml && bin/venv-python -c "import pathlib; mods=['scripts/executor/postflight.py','scripts/executor/postflight_gitops.py','scripts/executor/postflight_fixers.py','scripts/executor/postflight_gates.py','scripts/executor/postflight_ciwait.py']; over=[m for m in mods if len([l for l in pathlib.Path(m).read_text().splitlines() if l.strip() and not l.strip().startswith('#')])>500]; print('over:',over); raise SystemExit(1 if over else 0)"
+    expected: postflight.py key removed; no postflight_*.py key seeded; the printed over list is empty; exit 0.
+    fix_if: A postflight_*.py key was seeded -> that module exceeds 500 SLOC; split it finer and re-run. postflight.py key remains -> facade still >500; move more out.
+  - step: 5
+    phase: pre-deploy
+    action: CC gate passes -- moved high-CC functions carry the decision-43 waiver header in their new module.
+    command: bin/venv-python -c "from scripts.validate import validate_cc_limits; f=[]; validate_cc_limits(f); print('cc_failed:',f); raise SystemExit(1 if f else 0)"
+    expected: The CC gate reports no failures; exit 0 (postflight_fixers.py has the waiver for _fix_ci_failure CC26; postflight_gates.py for _code_review_gate CC22; facade retains it for finalize CC50).
+    fix_if: "A module reddens the CC gate -> add a decision-43 complexity-waiver header within its first 10 lines."
+  - step: 6
+    phase: pre-deploy
+    action: Stale-definition sweep -- no extracted def remains in the facade except finalize.
+    command: grep -nE '^def (_git_commit_and_push_with_retry|_get_ci_failure_details|_fix_ci_failure|_fix_code_review_findings|_commits_ahead_of_main|_scope_drift_check|_code_review_gate|_handle_failure|wait_for_ci|_agent_merge_recovery|merge_pr|_safe_merge_origin_main|cleanup_after_merge|_parse_scope_files|_run_verifiers_gate)\b' scripts/executor/postflight.py; test $? -eq 1
+    expected: grep finds no matches (exit 1 -> test asserts closure); only finalize + re-exports remain.
+    fix_if: A def still lives in the facade -> move its body to the sibling module and leave only the re-export.
+  - step: 7
+    phase: pre-deploy
+    action: import-linter contracts pass -- no new cycle from the sibling modules.
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)"
+    expected: All import contracts pass; exit 0.
+    fix_if: A new cycle (a sibling importing the postflight facade at module scope) -> use a function-local import or route the call through the facade namespace at call time.
+  - step: 8
+    phase: pre-deploy
+    action: Fast presubmit tier is green over the change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0.
+    fix_if: A gate reddens -> address per its message; never bypass with --ignore-budget for a real SLOC/CC regression.
+constraints:
+  - Behaviour preservation is absolute -- no feature work, no bug fixes, no signature changes beyond movement. The existing suites must pass with unchanged assertion semantics. Out-of-scope findings become notes here, never inline fixes.
+  - Decision 104/80 -- facade mechanism -- the original path scripts.executor.postflight stays a thin facade re-exporting every public + test-patched-private symbol; cross-module intra-executor calls that tests patch resolve through the facade namespace (call-time) so symbol patches intercept with zero migration; shared-primitive patches migrate to the moved body's module (precedent bulk-repoint).
+  - Decision 102 -- budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets`, never a hand-edit; grep-verify the postflight.py key is dropped and no postflight_*.py key is seeded (do NOT assert full-file equality -- sibling plans co-mutate config/sloc_budgets.yaml on this branch).
+  - Decision 43 -- CC<=20 per function; the decision-43 complexity-waiver header must travel with any moved function over CC 20 (finalize CC50 stays in the facade which keeps its header; postflight_fixers/_gates carry it for _fix_ci_failure CC26 / _code_review_gate CC22).
+  - Decision 117 -- executor self-modification boundary -- capabilities.yaml is the SSOT; its boundary_patterns substring `scripts/executor/` already classifies every new postflight_*.py module as a boundary file, so config/agent/executor/capabilities.yaml is NOT edited by this plan.
+  - Decision 67 -- executor freeze (STRATEGIC clause) -- this is an IMPLEMENTATION plan; behaviour-preserving executor-machinery maintenance is routed through /plan -> /implement, permitted during the freeze.
+  - Decision 55 -- no rescue agents or workaround loops. On an unrecoverable equivalence/interception failure, stop and RCA; never paper over a broken mock with a skip.
+  - Multi-plan coordination -- this is one of ~16 SLOC-decomposition plans (4 executor) landing on branch claude/sloc-violations-refactor-p5svnl; touch ONLY postflight.py, the new postflight_*.py modules, and their test patch sites; config/sloc_budgets.yaml is regenerated (never hand-edited) and a merge conflict there is resolved by re-running `validate --update-sloc-budgets`.
+  - AGENTS.md code style -- Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens, default no comments.
+  - Public-repo boundary (Decision 101) -- no AWS account IDs/ARNs/secrets/internal hostnames introduced.
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE/RELATED flags, no BLOCK). CITE: Decision 102 (SLOC ratchet, governs re-point + names rec-2414), Decision 104 (validate.py facade/registry precedent -- the mechanism), Decision 80 (decomposition direction + patch-migration precedent), Decision 43 (500-SLOC/CC<=20 cap + waiver), Decision 117 (executor self-mod boundary; capabilities.yaml SSOT, supersedes Decision 44 -- cite 117), Decision 67 (freeze -- STRATEGIC clause; this plan is IMPLEMENTATION type)."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)"
+  - "Flag folded (Decision 48 verification tier): verified V2 -- bin/venv-python -m scripts.lambda_manifest.compute_affected_artifacts over postflight.py + the new postflight_*.py paths returns {} (no active Lambda artifact), so no V3 build/deploy/smoke-test steps are required."
+  - "Flag folded (Decision 75 frame-lock, conscious choice recorded): the executor is FROZEN (Decision 67) and the roadmap direction (CD.27 pending, T5.6 deferred_post_mvp) is a Step Functions + Durable-Function-Lambda rewrite that will HARVEST reusable helper logic and RETIRE the orchestration shell. postflight.py's contents (git/CI/merge/review helpers) are exactly the harvestable helper logic; decomposing them into clean cohesion-seam modules is justified as freeze-window SLOC-governance/maintainability (Decision 102/43 mandate; rec-2414 scopes it) and arguably eases the eventual T5.6 harvest -- it is NOT positioned as substrate-rewrite prep. The multi-month/many-tier-wave freeze (CD.17) realizes the maintainability value before any T4.2 obsolescence."
+  - "rec-2414 (open, umbrella 'Break down SLOC-budget-registered oversized files below 500 SLOC', file=config/sloc_budgets.yaml, automatable:false) is CITED as the parent program; this plan removes 1 of the 5 executor registry entries (a partial down-payment) and is NOT bundled (its acceptance fires only when the whole registry is empty)."
+  - "Importer topology (recon-verified): the only production importers of scripts.executor.postflight are the scripts/execute_recommendation.py facade re-export (lines 51-63), the scripts/executor/batch.py lazy import (line 372: _code_review_gate/_fix_code_review_findings/finalize), and scripts/executor/__init__.py -- all resolve through the retained facade path. No src/, config/, or .github importers. .github/instructions/executor-review.instructions.md pins applyTo=scripts/executor/postflight.py (a glob) -- unaffected because the file is retained as a facade (not renamed)."
+  - "Patch-site inventory (recon-verified): 129 string-literal patch sites on scripts.executor.postflight (90 in test_execute_recommendation.py, 34 in test_executor_postflight.py, 5 in test_postflight_gates.py); of these 17 are postflight.subprocess and 13 postflight.llm_call and 11 postflight.load_prompt -- the primitive-patch migration set. Symbol patches (wait_for_ci 10, _run_verifiers_gate 11, _code_review_gate 14, finalize, merge_pr, cleanup_after_merge) are preserved via facade re-export."
+  - "Coverage-gate: scripts/test_coverage_checker.map_source_to_test returns None for scripts/executor/**/*.py (depth>2), so no NEW test file is required and no per-file coverage floor is enforced on the sibling modules; the moved bodies stay covered by the existing suites through the facade imports. New tests are optional (convention tests/test_executor_postflight_<mod>.py)."
+  - "Mock-exhaustion gotcha (tests/CLAUDE.md, rec-117/325): finalize()/cleanup_after_merge() drive long subprocess.run side_effect sequences in tests/test_execute_recommendation.py. Because finalize() STAYS in the facade, its subprocess patches on postflight.subprocess remain valid; only cleanup_after_merge's own internal subprocess patches (when tested directly) migrate to postflight_gitops.subprocess. Count the side_effect sequences after migration."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (102, 104, 80, 43, 117, 67; and 48/75 flags folded)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Baseline captured -- the current tests/test_executor_postflight.py + test_postflight_gates.py + postflight parts of test_execute_recommendation.py pass BEFORE any code movement (the behavioural-equivalence oracle)
+execution_steps:
+  - "Capture baseline FIRST -- run the three suites green on the pre-refactor tree; that green run is the behavioural-equivalence oracle for this pure refactor."
+  - "Create scripts/executor/postflight_gitops.py, postflight_fixers.py, postflight_gates.py, postflight_ciwait.py; move each function body verbatim; carry the '# complexity-waiver: decision-43' header into postflight_fixers.py (_fix_ci_failure) and postflight_gates.py (_code_review_gate); route any intra-executor cross-module call a test patches through the postflight facade namespace (call-time attribute access) -- e.g. _agent_merge_recovery -> _pf.cleanup_after_merge."
+  - "Collapse scripts/executor/postflight.py to the facade: keep finalize() + __main__; add `from scripts.executor.postflight_<mod> import <name>` re-exports for every extracted public AND test-patched-private symbol; verify finalize()'s collaborator names resolve as facade module globals."
+  - "Bulk-migrate ONLY the shared-primitive patch targets that drive a moved leaf's internals (postflight.subprocess/llm_call/load_prompt/model_registry -> the leaf's sibling module) in tests/test_executor_postflight.py, tests/test_postflight_gates.py, and tests/test_execute_recommendation.py; leave finalize-resident symbol patches on the facade namespace; re-count subprocess side_effect sequences."
+  - "Run `validate --update-sloc-budgets`, then grep-confirm the postflight.py key is dropped and no postflight_*.py key was seeded."
+  - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report -- what was extracted, the equivalence-oracle result, final postflight.py SLOC, CC/coverage status, and the migrated-patch summary."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; if the equivalence oracle (existing suites) cannot be made green,
+  abandon the change (no merge). Nothing is deployed. If merged and a regression surfaces, revert the
+  squash commit -- the facade + siblings + test-patch migration land atomically in one PR.
