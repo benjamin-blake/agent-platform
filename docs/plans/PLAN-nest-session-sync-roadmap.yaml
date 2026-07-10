@@ -441,8 +441,9 @@ acceptance_criteria:
     Zero flat references remain in LIVE surfaces: a git grep for scripts[./](session_preflight|session_postflight|
     session_metrics|sync_ops|sync_recommendations|sync_ducklake_version|platform_roadmap|product_roadmap|
     product_roadmap_schema|plan_document|plan_audit|find_plan) AND `from scripts import (session_*|sync_*|...)`,
-    excluding docs/plans/, audits/, logs/, docs/DECISIONS*.md, docs/CHANGELOG.md, docs/SESSION_LOG*.md, and
-    docs/INTENT-*.md (append-only/grandfathered history), returns nothing.
+    excluding docs/plans/, audits/, logs/, docs/DECISIONS*.md, docs/CHANGELOG.md, docs/SESSION_LOG*.md,
+    docs/INTENT-*.md, the EXECUTED docs/audit-prompts/*.md, and config/lambda/ducklake/version.yaml
+    (append-only/grandfathered history + the Decision-79 Lambda carve-out), returns nothing.
   - >-
     docs/contracts/file-router.yaml: the 4 rewritten rows resolve to the new nested paths and the 3 new
     package routes (session-code/sync-code/roadmap-code) resolve; validate_placement is green (no dead target,
@@ -727,9 +728,18 @@ context:
     -- this plan realizes three of them in one commit (necessary because session.preflight cross-imports both the
     sync and roadmap families; splitting would create broken intermediate states).
   - >-
-    Branch claude/repo-restructure-audit-hm1gti at origin/main f119383 (includes P1+P2+P3+P4a); preflight clean
-    tree, 0 behind / 0 ahead -- no rebase needed (Main Divergence Assessment: main_files_changed_since_branch == [],
-    no scope overlap). open_recommendations=708 surfaced (none bundled per orchestrator constraint).
+    Branch claude/repo-restructure-audit-hm1gti REBASED onto current origin/main 5bfa1fe (branched at f119383/P4a;
+    #538 [Decision 125, lambda-deploy-channel-defaults] landed 1 commit ahead during planning and was rebased in).
+    Main Divergence Assessment: #538 touched 3 files IN this plan's scope -- AGENTS.md,
+    .claude/skills/planning/SKILL.md, config/agent/verification_registry/registry.yaml -- but the overlap is BENIGN:
+    Decision 125 added lambda-deploy-channel content in DIFFERENT sections than this plan's moving-module rewrite
+    targets and introduced NO new moving-module references; the global re.sub sweep is robust to the resulting line
+    shifts and does NOT touch the 2 new Decision-125 existence guards (agents-md-lambda-deploy-channel-rule-present
+    greps `deploy channel (Decision 125)`; planning-skill-lambda-deploy-channel-guidance-present greps `Deploy
+    channel by artifact class (Decision 125)` -- neither pattern contains a scripts. token, so the sweep cannot
+    break them). Re-verified post-rebase: the sweep still catches every moving-module ref in the 3 changed files
+    (AGENTS.md:129 sync_ops; SKILL.md:37/179 sync_ops + 394/397/447 plan_document; registry.yaml:138 plan_document
+    + 264/270/276/282 session_preflight). open_recommendations surfaced (none bundled per orchestrator constraint).
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/repo-restructure-audit-hm1gti)
   - AGENTS.md + scripts/CLAUDE.md (root-vs-subpackage rule; session_*/sync_*/roadmap grandfathered families) + tests/CLAUDE.md (namespace-migration discipline; single import block; @patch retargeting) read
