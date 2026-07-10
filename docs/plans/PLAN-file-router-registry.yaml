@@ -17,10 +17,11 @@ scope:
   - file: docs/contracts/file-router.yaml
     action: Create
     purpose: >-
-      Machine-readable topic->targets discovery/ownership index converted from the prose File
-      Router table. Top-level mapping (schema_version + routes); NO contract:/class: block so it
-      is a discovery index, not a CD.25 ritual contract. Row shape designed so a relocation is a
-      one-line targets edit.
+      Machine-readable discovery/ownership index converted from the prose File Router table.
+      Top-level mapping schema_version + routes, where routes is a LIST of route objects
+      {topic, targets, description?, runtime?} (NOT a mapping keyed by topic). NO contract:/class:
+      block so it is a discovery index, not a CD.25 ritual contract. Row shape designed so a
+      relocation is a one-line targets edit.
   - file: scripts/checks/hygiene/validate_placement.py
     action: Create
     purpose: >-
@@ -70,7 +71,7 @@ acceptance_criteria:
   - >-
     docs/contracts/file-router.yaml exists as a top-level YAML mapping (schema_version: 1 + routes:)
     with NO contract:/class: block, converted from the docs/PROJECT_CONTEXT.md File Router table;
-    each route has a unique topic and a non-empty targets list.
+    routes is a LIST of route objects, each with a unique topic field and a non-empty targets list.
   - >-
     scripts/checks/hygiene/validate_placement.py is registered via the scripts/checks registry in
     BOTH the --pre and full sequences and is reachable as validate.validate_placement and via
@@ -250,11 +251,13 @@ context:
     validate_claude_md_pointer_invariant only checks root CLAUDE.md; no check asserts the prose table's
     presence in PROJECT_CONTEXT.md.
   - >-
-    Suggested file-router.yaml row schema (design for one-line relocation): topic (unique kebab key),
-    targets (flow-style list of >=1 repo-relative paths; directories end with '/'), description
-    (optional one-liner), runtime (optional bool, default false). Top-level mapping is extensible so
-    later phases can add sibling placement-registry keys (docs-root allowlist, scripts-root allowlist)
-    without a schema break.
+    file-router.yaml row schema (design for one-line relocation): routes is a LIST of route objects
+    (NOT a mapping keyed by topic -- a topic-keyed mapping lets yaml.safe_load SILENTLY collapse
+    duplicate topics last-wins, dropping a discovery row and making the duplicate-topic gate
+    unconstructable). Each route object: topic (a unique kebab-case string FIELD), targets (flow-style
+    list of >=1 repo-relative paths; directories end with '/'), description (optional one-liner),
+    runtime (optional bool, default false). The top-level mapping is extensible so later phases can add
+    sibling placement-registry keys (docs-root allowlist, scripts-root allowlist) without a schema break.
   - >-
     Verification tier V2 (Decision 48): pure-Python check with 100% unit coverage; git is local and
     deterministic; no handlers, no terraform, and no active Lambda-manifest-packaged file in scope
@@ -274,23 +277,30 @@ pre_implementation_checklist:
     tests/test_validate.py
 execution_steps:
   - >-
-    Create docs/contracts/file-router.yaml: top-level mapping schema_version: 1 + routes:. Convert
-    every live File Router row from docs/PROJECT_CONTEXT.md into a route (topic + targets +
-    description). DROP the 4 dead rows (GEMINI.md, docs/AGENT_WORKFLOW.md, scripts/bedrock_client.py,
+    Create docs/contracts/file-router.yaml: top-level mapping schema_version: 1 + routes:, where
+    routes is a LIST of route objects {topic, targets, description?, runtime?} (NOT a topic-keyed
+    mapping). Convert every live File Router row from docs/PROJECT_CONTEXT.md into a route object. DROP
+    the 4 dead rows (GEMINI.md, docs/AGENT_WORKFLOW.md, scripts/bedrock_client.py,
     scripts/migrate_recommendations.py). CORRECT the plan-artefact row (targets: [docs/plans/],
     description names PLAN-{slug}.yaml per Decision 85) and the Lambda-handlers row (targets:
     [src/lambdas/, src/data/handlers/]). Mark the 4 warehouse read-caches runtime: true. Add a header
-    comment stating the relocation contract and the non-ritual (no contract:/class:) invariant.
+    comment stating the relocation contract and the non-ritual (no contract:/class:) invariant -- but
+    do NOT write the literal dropped-target filenames (GEMINI/AGENT_WORKFLOW/bedrock_client/
+    migrate_recommendations) anywhere in the file, since VP step 5 greps for their ABSENCE.
   - >-
     Create scripts/checks/hygiene/validate_placement.py: @registry.register("validate_placement",
     owner="platform"); def validate_placement(failed, router_path=None). Load router_path (default
-    _common.ROOT/docs/contracts/file-router.yaml); on missing file or malformed shape append a clear
-    failure and return (never raise -- import-safety). Snapshot tracked paths once via
-    _common.run(["git","ls-files"], ...). For each route: enforce unique topic; for each target, if
-    route runtime is true assert the parent dir is tracked, else assert the target is a tracked file
-    (in snapshot) or a tracked directory (some snapshot path startswith target.rstrip('/')+'/');
-    collect every dead target and duplicate topic; append one failure listing them if any, else print
-    a PASS line. Keep <=500 SLOC, CC<=20.
+    _common.ROOT/docs/contracts/file-router.yaml); on missing file or malformed shape (not a mapping,
+    routes absent or not-a-list, a route missing topic/targets) append a clear failure and return
+    (never raise -- import-safety). Snapshot tracked paths once via _common.run(["git","ls-files"],
+    capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT) -- mirror
+    _common.get_changed_files (_common.py:36); WITHOUT capture_output/text the snapshot is empty and
+    every directory target reads as dead. ITERATE the routes LIST tracking seen topics to detect
+    duplicates (do NOT rely on mapping-key uniqueness -- yaml.safe_load collapses duplicate mapping
+    keys silently). For each route target: if route runtime is true assert the parent dir is tracked,
+    else assert the target is a tracked file (in snapshot) or a tracked directory (some snapshot path
+    startswith target.rstrip('/')+'/'); collect every dead target and duplicate topic; append one
+    failure listing them if any, else print a PASS line. Keep <=500 SLOC, CC<=20.
   - >-
     Wire the check in: add the facade re-export in scripts/validate.py (hygiene block, alphabetical,
     between validate_cli_tools_in_prompts and validate_subprocess_encoding); insert
@@ -300,9 +310,10 @@ execution_steps:
   - >-
     Add tests/test_validate.py::TestValidatePlacement covering: happy path (temp router + fake
     ls-files -> no failure), dead-target (bogus path -> failure), runtime-row (gitignored file whose
-    parent dir is tracked -> no failure; bogus parent -> failure), duplicate-topic -> failure, and
-    malformed/missing file -> failure. Patch scripts.checks._common.run / .ROOT for isolation. Achieve
-    100% coverage of validate_placement.py.
+    parent dir is tracked -> no failure; bogus parent -> failure), duplicate-topic (two route objects
+    in the routes list sharing a topic) -> failure, and malformed/missing file (not a mapping, routes
+    not-a-list, route missing topic/targets) -> failure. Patch scripts.checks._common.run / .ROOT for
+    isolation. Achieve 100% coverage of validate_placement.py.
   - >-
     Replace the "## File Router" table in docs/PROJECT_CONTEXT.md with a one-line pointer to
     docs/contracts/file-router.yaml. Fix config/agent/README.md: remove the copilot/ line, add
