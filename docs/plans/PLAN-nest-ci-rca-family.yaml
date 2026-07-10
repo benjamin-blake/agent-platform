@@ -1,0 +1,485 @@
+schema_version: 1
+slug: "nest-ci-rca-family"
+intent: >-
+  Nest the seven-module ci_rca_* family from the scripts/ root into a scripts/ci_rca/ subpackage
+  (git mv + __init__.py) with a same-commit repo-wide reference rewrite -- the highest-fan-out move
+  of the repository-structure restructure. Converts the scripts/ root's largest predictability gap
+  into the proven scripts/checks//executor//verifiers/ subpackage pattern so agents locate CI-RCA
+  code by home, not by scanning 71 flat filenames. Audit finding RS-01, phase 1 of 3 (rec-164
+  Phase A territory).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-nest-ci-rca-family.yaml
+phase: >-
+  Repository-structure restructure Phase P4a (audit finding RS-01 [medium], phase 1 of 3, from
+  audits/repository-structure-cb02572.yaml RS-01 + the proposed_target_tree scripts/ci_rca/ node).
+  Runs AFTER P1 (RS-04 file-router registry + validate_placement link-validity check), P2 (RS-02/03
+  stray consolidation), and P3 (RS-05/RS-03 context-locality CLAUDE.md), all merged at origin/main
+  ed77d58 (scripts/CLAUDE.md now carries the root-vs-subpackage placement rule this phase realizes).
+  Platform axis; RS-01 is planned-insufficient via open rec-164. IMPLEMENTATION type (STRATEGIC
+  frozen, Decision 67). rec-164 does NOT close here -- it closes at RS-01 phase 3.
+scope:
+  - file: scripts/ci_rca_back_validation.py
+    action: Delete
+    purpose: git mv to scripts/ci_rca/back_validation.py (no ROOT anchor; one docstring path ref to probe_health rewritten by the sweep)
+  - file: scripts/ci_rca/back_validation.py
+    action: Create
+    purpose: Receives back_validation via git mv; docstring path ref scripts/ci_rca_probe_health.py -> scripts/ci_rca/probe_health.py
+  - file: scripts/ci_rca_evidence.py
+    action: Delete
+    purpose: git mv to scripts/ci_rca/evidence.py (workflow entry point; intra-family imports of taxonomy/tier_map/vacuous_pass; ROOT anchor)
+  - file: scripts/ci_rca/evidence.py
+    action: Create
+    purpose: >-
+      Receives evidence via git mv. Rewrite intra-family imports (scripts.ci_rca_taxonomy/tier_map/
+      vacuous_pass -> scripts.ci_rca.*) and CLI docstring; FIX ROOT=Path(__file__).parent.parent ->
+      parent.parent.parent (anchors _PENDING_DIR, sys.path, config.personal.yaml, --validate-path default).
+  - file: scripts/ci_rca_filing.py
+    action: Delete
+    purpose: git mv to scripts/ci_rca/filing.py (workflow entry point; no internal ci_rca refs, no ROOT anchor -- clean move)
+  - file: scripts/ci_rca/filing.py
+    action: Create
+    purpose: Receives filing via git mv; pure move (no internal reference or ROOT edit needed)
+  - file: scripts/ci_rca_probe_health.py
+    action: Delete
+    purpose: git mv to scripts/ci_rca/probe_health.py (two string-literal path refs to evidence.py; no ROOT anchor)
+  - file: scripts/ci_rca/probe_health.py
+    action: Create
+    purpose: Receives probe_health via git mv; rewrite the two scripts/ci_rca_evidence.py string-literal paths to scripts/ci_rca/evidence.py
+  - file: scripts/ci_rca_taxonomy.py
+    action: Delete
+    purpose: git mv to scripts/ci_rca/taxonomy.py (loads config/ci_rca_taxonomy.yaml via ROOT; docstring path ref; ROOT anchor)
+  - file: scripts/ci_rca/taxonomy.py
+    action: Create
+    purpose: >-
+      Receives taxonomy via git mv. Rewrite docstring path ref; FIX ROOT parent.parent ->
+      parent.parent.parent so _TAXONOMY_PATH still resolves config/ci_rca_taxonomy.yaml and the
+      workflows dir default still resolves .github/workflows. The config/ci_rca_taxonomy.yaml
+      string is NOT rewritten (not a scripts/ path) -- the config file stays put.
+  - file: scripts/ci_rca_tier_map.py
+    action: Delete
+    purpose: git mv to scripts/ci_rca/tier_map.py (ROOT anchors scripts/validate.py + cwd; no internal ci_rca import)
+  - file: scripts/ci_rca/tier_map.py
+    action: Create
+    purpose: Receives tier_map via git mv; FIX ROOT parent.parent -> parent.parent.parent (anchors scripts/validate.py path x2 and subprocess cwd)
+  - file: scripts/ci_rca_vacuous_pass.py
+    action: Delete
+    purpose: git mv to scripts/ci_rca/vacuous_pass.py (ROOT anchors subprocess cwd; no internal ci_rca import)
+  - file: scripts/ci_rca/vacuous_pass.py
+    action: Create
+    purpose: Receives vacuous_pass via git mv; FIX ROOT parent.parent -> parent.parent.parent (anchors subprocess cwd=ROOT)
+  - file: scripts/ci_rca/__init__.py
+    action: Create
+    purpose: New package marker with a one-line docstring (empty-equivalent; coverage-excluded) so scripts.ci_rca is an importable package
+  - file: scripts/preflight/ci_rca_gauges.py
+    action: Modify
+    purpose: >-
+      NON-moving importer. Rewrite its function-local imports of the moved modules
+      (scripts.ci_rca_probe_health -> scripts.ci_rca.probe_health x2; scripts.ci_rca_back_validation
+      -> scripts.ci_rca.back_validation + docstring). The file itself does NOT move (preflight package).
+  - file: scripts/checks/ci_guards/validate_ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      NON-moving check. Rewrite its function-local import (scripts.ci_rca_taxonomy ->
+      scripts.ci_rca.taxonomy). The check module name (validate_ci_rca_taxonomy) is NOT renamed.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Extend map_source_to_test with a ci_rca branch so scripts/ci_rca/<name>.py resolves to the
+      kept-in-place tests/test_ci_rca_<name>.py (otherwise the nested path maps to None and coverage
+      enforcement silently lapses). Self-excluded from its own coverage gate (name starts with test_).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: guard_target scripts/ci_rca_taxonomy.py -> scripts/ci_rca/taxonomy.py (the registry guard_target must resolve to the moved module)
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: Rewrite the 4 module invocations (python -m scripts.ci_rca_evidence -> scripts.ci_rca.evidence; scripts.ci_rca_filing -> scripts.ci_rca.filing x3)
+  - file: .claude/agents/scheduled/ci-rca.md
+    action: Modify
+    purpose: Rewrite the scheduled-agent doc path scripts/ci_rca_filing.py -> scripts/ci_rca/filing.py (acceptance -- the scheduled agent resolves its module path)
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Append one discovery route (topic ci-rca-code -> targets [scripts/ci_rca/]) registering the new
+      subpackage home. Realizes the RS-04 "each family move updates the registry" sequencing point.
+      No existing row targets a ci_rca path, so nothing to fix -- this is an additive discovery row.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Cosmetic sweep of ~10 live path refs (files_in_scope + prose) scripts/ci_rca_<name>.py ->
+      scripts/ci_rca/<name>.py. Verified NOT existence-validated by any CI check (no files_in_scope
+      existence gate), so non-blocking -- swept per the live-surface policy. The pathless `# new`
+      annotations stay.
+  - file: docs/INTENT-ci-rca-methodology.md
+    action: Modify
+    purpose: Cosmetic sweep of ~14 live path refs scripts/ci_rca_<name>.py / scripts.ci_rca_<name> -> nested form (grandfathered INTENT doc; live surface)
+  - file: tests/test_ci_rca_back_validation.py
+    action: Modify
+    purpose: Rewrite the import + docstring path (scripts.ci_rca_back_validation -> scripts.ci_rca.back_validation). File stays named test_ci_rca_back_validation.py (coverage map preserved).
+  - file: tests/test_ci_rca_evidence.py
+    action: Modify
+    purpose: Rewrite import of taxonomy_mod + evidence + all @patch("scripts.ci_rca_tier_map...") / @patch("scripts.ci_rca_evidence...") targets to the nested form (~75 refs)
+  - file: tests/test_ci_rca_evidence_ast.py
+    action: Modify
+    purpose: Rewrite the docstring + import from scripts.ci_rca_tier_map -> scripts.ci_rca.tier_map (this file tests tier_map's AST walker despite its name)
+  - file: tests/test_ci_rca_filing.py
+    action: Modify
+    purpose: Rewrite docstring + import + the subprocess CLI invocation ("-m", "scripts.ci_rca_filing" -> "scripts.ci_rca.filing") that proves the workflow entry path
+  - file: tests/test_ci_rca_probe_health.py
+    action: Modify
+    purpose: Rewrite docstring + import (scripts.ci_rca_probe_health -> scripts.ci_rca.probe_health)
+  - file: tests/test_ci_rca_taxonomy.py
+    action: Modify
+    purpose: Rewrite docstring + both imports (import scripts.ci_rca_taxonomy as taxonomy_mod; from scripts.ci_rca_taxonomy import ...) to the nested form
+  - file: tests/test_ci_rca_tier_map.py
+    action: Modify
+    purpose: Rewrite docstring + import + three @patch("scripts.ci_rca_tier_map.subprocess.run") targets to the nested form
+  - file: tests/test_ci_rca_vacuous_pass.py
+    action: Modify
+    purpose: Rewrite docstring + import + the @patch("scripts.ci_rca_vacuous_pass.subprocess.run") targets (~10 refs) to the nested form
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Rewrite the @patch targets for the moved modules used by ci_rca_gauges (scripts.ci_rca_probe_health.*,
+      scripts.ci_rca_back_validation.find_preventive_regressions) and the "scripts/ci_rca_tier_map.py"
+      string literals in the _derive_ci_rca_open projection tests -> nested form.
+  - file: tests/test_session_preflight_cache_serving.py
+    action: Modify
+    purpose: Rewrite the single "scripts/ci_rca_tier_map.py" marker_file string literal -> scripts/ci_rca/tier_map.py
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: Rewrite the three scripts.ci_rca_taxonomy imports in the validate_ci_rca_taxonomy check tests -> scripts.ci_rca.taxonomy
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    No ci_rca_*.py file remains DIRECTLY under scripts/: all 7 (back_validation, evidence, filing,
+    probe_health, taxonomy, tier_map, vacuous_pass) now live under scripts/ci_rca/ with an __init__.py.
+    The non-moving ci_rca-named siblings are untouched: scripts/ops_portal/ci_rca_{runtime,schema}.py,
+    scripts/preflight/ci_rca_{gauges,signals}.py, and scripts/checks/ci_guards/validate_ci_rca_taxonomy.py
+    keep their paths (only their imports of the moved modules are rewritten where present).
+  - >-
+    The ci-rca workflow (.github/workflows/ci-rca.yml) and the scheduled agent
+    (.claude/agents/scheduled/ci-rca.md) resolve their module paths: scripts.ci_rca.evidence,
+    scripts.ci_rca.filing, and scripts/ci_rca/filing.py.
+  - >-
+    Zero flat references remain in LIVE surfaces: `git grep -E "scripts[./]ci_rca_(back_validation|
+    evidence|filing|probe_health|taxonomy|tier_map|vacuous_pass)"` excluding docs/plans/, audits/,
+    logs/, and docs/audit-prompts/ returns nothing (append-only history left intact).
+  - >-
+    The 4 ROOT-anchoring modules resolve repo-root paths post-move: scripts.ci_rca.taxonomy._TAXONOMY_PATH
+    equals <repo>/config/ci_rca_taxonomy.yaml and exists; scripts.ci_rca.evidence.ROOT and
+    scripts.ci_rca.tier_map.ROOT each contain scripts/validate.py (proving parent.parent -> parent.parent.parent).
+  - >-
+    config/ci_rca_taxonomy.yaml is byte-unchanged and still loaded by scripts/ci_rca/taxonomy.py; the
+    DO-NOT-TOUCH set (scripts/ops_portal/ci_rca_{runtime,schema}.py, scripts/preflight/ci_rca_signals.py)
+    shows no diff versus origin/main.
+  - >-
+    scripts/test_coverage_checker.py resolves scripts/ci_rca/<name>.py to tests/test_ci_rca_<name>.py
+    (coverage enforcement preserved for the moved modules; the 8 ci_rca test modules keep their names).
+  - >-
+    docs/contracts/file-router.yaml carries a ci-rca-code route whose target scripts/ci_rca/ resolves;
+    validate_placement is green (no dead target, no duplicate topic).
+  - >-
+    FULL validate (bin/venv-python -m scripts.validate, not --pre) and FULL pytest
+    (bin/venv-python -m pytest) are both green, including import-linter; compute_affected_artifacts over
+    the changed paths returns {} (V2 -- no Lambda build/deploy/smoke-test step).
+  - rec-164 remains OPEN (it closes at RS-01 phase 3, not here).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: Validate this PLAN document against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-nest-ci-rca-family.yaml
+    expected: Reports the plan validates against the PlanDocument schema (no errors).
+    fix_if: A schema error names the offending field; correct it (extra keys forbidden; every VP step needs a non-empty command; unique step ids).
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the 7 modules moved into scripts/ci_rca/, the package marker exists, and no flat ci_rca_*.py remains directly under scripts/.
+    command: >-
+      test -f scripts/ci_rca/__init__.py && for m in back_validation evidence filing probe_health taxonomy tier_map vacuous_pass; do test -f "scripts/ci_rca/$m.py" || { echo "MISSING scripts/ci_rca/$m.py"; exit 1; }; test ! -e "scripts/ci_rca_$m.py" || { echo "STILL FLAT scripts/ci_rca_$m.py"; exit 1; }; done && echo MOVED_OK
+    expected: Prints MOVED_OK (all 7 present under scripts/ci_rca/, __init__.py present, zero flat originals).
+    fix_if: A MISSING or STILL FLAT line names the offender; complete the git mv for that module and re-run.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: Stale-reference sweep (Closure Obligation) -- zero flat module references remain in LIVE surfaces; append-only history is intentionally excluded.
+    command: >-
+      MATCHES=$(git grep -nE "scripts[./]ci_rca_(back_validation|evidence|filing|probe_health|taxonomy|tier_map|vacuous_pass)" -- ':(exclude)docs/plans/*' ':(exclude)audits/*' ':(exclude)logs/*' ':(exclude)docs/audit-prompts/*' || true); if [ -z "$MATCHES" ]; then echo SWEEP_CLEAN; else echo "STALE_REFS:"; echo "$MATCHES"; fi
+    expected: Prints SWEEP_CLEAN (no flat scripts.ci_rca_<name> / scripts/ci_rca_<name>.py reference survives on any live surface).
+    fix_if: STALE_REFS lists file:line -- apply the anchored rewrite to that live file (unless it is genuinely append-only, in which case widen the exclude pathspec, not the rewrite).
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: ROOT-anchor correctness -- the 4 modules that compute ROOT=Path(__file__).parent.parent.parent resolve to the repo root post-move (this is the move-sensitivity fix that the import rewrite alone does NOT provide).
+    command: >-
+      bin/venv-python -c "import scripts.ci_rca.taxonomy as t, scripts.ci_rca.evidence as e, scripts.ci_rca.tier_map as tm; assert t._TAXONOMY_PATH.name=='ci_rca_taxonomy.yaml' and t._TAXONOMY_PATH.exists(), t._TAXONOMY_PATH; assert (e.ROOT/'scripts'/'validate.py').exists(), e.ROOT; assert (tm.ROOT/'scripts'/'validate.py').exists(), tm.ROOT; print('ROOT_ANCHORS_OK')"
+    expected: Prints ROOT_ANCHORS_OK (taxonomy finds config/ci_rca_taxonomy.yaml; evidence and tier_map ROOT both contain scripts/validate.py).
+    fix_if: An AssertionError shows a wrong path -- the module still has parent.parent (2 levels); change it to parent.parent.parent (3 levels) for evidence, taxonomy, tier_map, vacuous_pass.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: DO-NOT-TOUCH invariants -- the config file and the sibling non-moving ci_rca packages are unchanged versus origin/main (proves the anchored sweep did not over-reach the broad "ci_rca" substring).
+    command: >-
+      CHANGED=$(git diff --name-only origin/main -- config/ci_rca_taxonomy.yaml scripts/ops_portal/ci_rca_runtime.py scripts/ops_portal/ci_rca_schema.py scripts/preflight/ci_rca_signals.py); if [ -z "$CHANGED" ]; then echo DONOTTOUCH_OK; else echo "UNEXPECTED_CHANGE:"; echo "$CHANGED"; fi
+    expected: Prints DONOTTOUCH_OK (config/ci_rca_taxonomy.yaml + ops_portal/ci_rca_{runtime,schema}.py + preflight/ci_rca_signals.py all byte-unchanged).
+    fix_if: UNEXPECTED_CHANGE names a file the sweep wrongly touched -- revert it (git checkout origin/main -- <file>); the anchored regex must never rewrite these.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: Functional -- run the moved family's own tests, which exercise real imports, all @patch targets, and the filing CLI via subprocess "-m scripts.ci_rca.filing" (proves the workflow/scheduled-agent invocation path end-to-end).
+    command: bin/venv-python -m pytest tests/test_ci_rca_back_validation.py tests/test_ci_rca_evidence.py tests/test_ci_rca_evidence_ast.py tests/test_ci_rca_filing.py tests/test_ci_rca_probe_health.py tests/test_ci_rca_taxonomy.py tests/test_ci_rca_tier_map.py tests/test_ci_rca_vacuous_pass.py -q
+    expected: All 8 ci_rca test modules pass (imports, patches, and the subprocess -m invocation resolve against the nested package).
+    fix_if: A failing test names the unresolved import/patch target; complete the anchored rewrite in that test file (imports + every @patch string) or the moved module.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: Coverage-map preservation -- the coverage checker resolves each moved module to its kept-in-place test.
+    command: >-
+      bin/venv-python -c "from scripts.test_coverage_checker import map_source_to_test as m; from pathlib import Path; import sys; ok = all(str(m(Path(f'scripts/ci_rca/{n}.py'))).endswith(f'tests/test_ci_rca_{n}.py') for n in ['back_validation','evidence','filing','probe_health','taxonomy','tier_map','vacuous_pass']); print('MAP_OK' if ok else 'MAP_FAIL'); sys.exit(0 if ok else 1)"
+    expected: Prints MAP_OK (every scripts/ci_rca/<name>.py maps to tests/test_ci_rca_<name>.py).
+    fix_if: MAP_FAIL means the ci_rca branch is missing/incorrect in map_source_to_test; add the `parts[1]=="ci_rca"` len==3 branch returning tests/test_ci_rca_<stem>.py.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: Discovery-index + placement -- the new ci-rca-code route resolves and validate_placement stays green (no dead target, no duplicate topic).
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_placement import validate_placement as v; f=[]; v(f); print('PLACEMENT_OK' if not f else 'PLACEMENT_FAIL: '+'; '.join(f))"
+    expected: Prints PLACEMENT_OK (scripts/ci_rca/ is tracked and resolves; ci-rca-code topic is unique; all other targets still resolve).
+    fix_if: PLACEMENT_FAIL names the issue -- a dead target means git add did not stage scripts/ci_rca/ before validate; a duplicate topic means ci-rca-code collides (rename the topic).
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: Lambda non-regression -- confirm zero Lambda artifacts are affected by the moved/edited paths (V2, no deploy gate).
+    command: >-
+      bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts as c; r=c(['scripts/ci_rca/evidence.py','scripts/ci_rca/filing.py','scripts/ci_rca/taxonomy.py','scripts/ci_rca/tier_map.py','scripts/ci_rca/probe_health.py','scripts/ci_rca/back_validation.py','scripts/ci_rca/vacuous_pass.py','scripts/ci_rca/__init__.py','scripts/preflight/ci_rca_gauges.py','scripts/checks/ci_guards/validate_ci_rca_taxonomy.py','scripts/test_coverage_checker.py']); print('LAMBDA_NONE' if r=={} else 'LAMBDA_AFFECTED: '+str(r))"
+    expected: Prints LAMBDA_NONE (no ci_rca module is Lambda-packaged; V2 confirmed, no build/deploy/smoke-test needed).
+    fix_if: LAMBDA_AFFECTED would mean a manifest names a moved file -- update that manifest include and add the per-Lambda deploy steps; not expected (audit + this session both measured {}).
+  - step: 10
+    phase: pre-deploy
+    hermetic: false
+    action: Authoritative gate 1 -- FULL validate (not --pre). Runs import-linter, validate_placement, the coverage checker, plan-document + prompt-compliance, and the whole registered check sequence.
+    command: bin/venv-python -m scripts.validate
+    expected: Exits 0 -- all checks pass, including import-linter (no new cycle/contract violation from the nested package) and validate_placement.
+    fix_if: A named check fails; forward-fix on-branch (Decision 55 -- never disable a check). If import-linter flags an unexpected contract, confirm no moved module was pulled into a layered contract (none should be).
+  - step: 11
+    phase: pre-deploy
+    hermetic: false
+    action: Authoritative gate 2 -- FULL pytest across the whole suite (catches any missed @patch target or import in cross-cutting tests such as test_session_preflight / test_validate).
+    command: bin/venv-python -m pytest -q
+    expected: The full suite passes (0 failures). If validate.py already ran pytest, this is the explicit confirmation the planning skill requires.
+    fix_if: A failure names the test/module; if it is an unresolved patch target in a cross-cutting test, finish the anchored rewrite there; if a moved module's runtime path broke, re-check the ROOT fix (step 4).
+constraints:
+  - IMPLEMENTATION plan type; no recommendations bundled or filed (orchestrator constraint; STRATEGIC suspended per Decision 67).
+  - >-
+    Do NOT close rec-164 -- it owns the whole RS-01 territory and closes only at RS-01 phase 3. This
+    phase moves ONE family (ci_rca) and leaves the other grandfathered families (session_*, sync_*,
+    roadmap/plan_*, llm_*, ops_*) untouched.
+  - >-
+    No import shims, re-export stubs, or compatibility deferred-imports (audit Q6 answer -- the
+    import-linter contracts exist precisely to prevent that pattern). The move is a hard cutover.
+  - >-
+    ANCHORED rewrite ONLY: target `scripts.ci_rca_<name>` and `scripts/ci_rca_<name>.py` for exactly
+    the 7 names. DO NOT rewrite the broad "ci_rca" substring. Leave untouched: config/ci_rca_taxonomy.yaml
+    (a config FILE, not a module -- references to it stay valid), scripts/ops_portal/ci_rca_{runtime,schema}.py
+    and scripts/preflight/ci_rca_{gauges,signals}.py MODULE names (different packages), and the
+    scripts/checks/ci_guards/validate_ci_rca_taxonomy.py check's own module name. Rewriting any of these
+    breaks the build.
+  - >-
+    Sweep LIVE surfaces only. Append-only history is LEFT untouched: docs/plans/ historical plans,
+    audits/ (incl. audits/legacy/ and audits/repository-structure-cb02572.yaml), logs/, and the EXECUTED
+    docs/audit-prompts/AUDIT-ci-rca-system.md.
+  - >-
+    The 4 ROOT-anchoring modules (evidence, taxonomy, tier_map, vacuous_pass) MUST have
+    Path(__file__).parent.parent changed to parent.parent.parent -- nesting one level deeper otherwise
+    resolves ROOT to scripts/ and breaks _TAXONOMY_PATH, the validate.py path, .github/workflows, and cwd.
+    This is a mandatory correctness edit, not optional.
+  - >-
+    Test files are NOT renamed. tests/test_ci_rca_<name>.py stay put; only their internal imports /
+    @patch targets / string literals are rewritten. The coverage-map extension keeps them resolvable.
+  - Gates are FULL validate (not --pre) AND FULL pytest, both green before the orchestrator pushes.
+  - No emojis; ASCII hyphens only; ruff line length 127; async for I/O; type hints (AGENTS.md style).
+  - "Public-repo content boundary (Decision 101): every touched file is engineering code/config/docs -- no account IDs, ARNs, ExternalIds, credentials, or trading alpha."
+  - No rescue agents or workaround loops (Decision 55). Forward-fix on-branch only.
+  - Never edit or commit on main; work on the harness claude/ branch only (AGENTS.md Git-ops).
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (84 of 84 decisions triaged;
+    zero CONTRADICT). CITE: Decision 104 (validate.py owner-tagged check registry + coverage-map
+    extension -- direct precedent for the test_coverage_checker map_source_to_test ci_rca branch and the
+    tests/test_validate.py edit); Decision 48 (Verification Tier Classification -- governs the V2
+    declaration; no scope file hits a V3 trigger); Decision 79 + CD.16/CD.24 (per-Lambda deploy gating --
+    the authority for compute_affected_artifacts == {} -> no deploy step, stays V2; manifest graph not
+    filesystem layout sets tier); Decision 86 (machine-parseable homes -- governs the file-router.yaml
+    discovery route and bounds the INTENT doc change to reference-only, not tripping intent-doc-freeze);
+    Decision 85 (PlanDocument schema this artefact validates against); Decision 67 (STRATEGIC freeze
+    ACTIVE + >5-file heuristic suspended -> this stays ONE IMPLEMENTATION plan). RELATED (scout-verified):
+    Decision 80 (import-linter -- none of the 7 moved modules appear in any of the 4 .importlinter
+    contracts; the ci_rca_runtime entry is scripts.ops_portal.ci_rca_runtime, a DO-NOT-TOUCH module;
+    scripts is already a root_package so scripts/ci_rca/ is auto-covered -- excluding .importlinter is
+    correct, not a gap); Decision 102 (SLOC ratchet -- no ci_rca module registered in
+    config/sloc_budgets.yaml and git mv is SLOC-neutral; no --update-sloc-budgets action needed, verified
+    this session); Decision 55 (the no-shim same-commit rewrite is the clean forward-fix Decision 55
+    favors); Decision 101 (CI-RCA methodology is platform engineering, SAFE to publish -- no boundary
+    risk); rec-164 (Phase A territory -- MUST NOT close at phase 1: do NOT add a Resolves: rec-164 trailer
+    to the squash-merge; it closes at phase 3).
+  - "gates: decision-scout=NO_FLAGS (84/84 triaged); plan-critique=PENDING (updated after Step 9)"
+  - >-
+    CRITICAL FINDING (design) -- move-sensitivity of ROOT: scripts/ci_rca_{evidence,taxonomy,tier_map,
+    vacuous_pass}.py compute ROOT=Path(__file__).parent.parent, which equals the repo root ONLY at the
+    flat depth. After nesting to scripts/ci_rca/<name>.py the same expression resolves to scripts/, so
+    taxonomy._TAXONOMY_PATH would point at scripts/config/ci_rca_taxonomy.yaml (nonexistent), evidence's
+    --validate-path default at scripts/scripts/validate.py, etc. The import rewrite does NOT catch this;
+    the fix is parent.parent -> parent.parent.parent in those 4 files. Verified via grep at ed77d58 that
+    back_validation/filing/probe_health have NO __file__-relative anchor (filing uses passed args;
+    probe_health's logs/... is a display string). VP step 4 asserts the anchors resolve.
+  - >-
+    CRITICAL FINDING (design) -- coverage-map lapse: scripts/test_coverage_checker.py map_source_to_test
+    returns None for scripts/ci_rca/<name>.py (len==3, parts[1]!='checks'), which silently drops coverage
+    enforcement (no CI failure, but a regression). Fix = a ci_rca branch mapping scripts/ci_rca/<name>.py
+    -> tests/test_ci_rca_<name>.py, keeping the 8 test modules in place. Verified test_coverage_checker.py
+    is self-excluded from its own gate (get_changed_source_files drops name.startswith('test_'), confirmed
+    empirically), so no new tests/test_test_coverage_checker.py is required and editing it triggers no
+    self-coverage obligation. A general len==3 rule was REJECTED (would start enforcing on sibling
+    subpackages executor/verifiers/preflight/ops_portal whose flat tests do not match, breaking future PRs).
+  - >-
+    Transform safety (design) -- the two anchored patterns are
+    `\\bscripts\\.ci_rca_(back_validation|evidence|filing|probe_health|taxonomy|tier_map|vacuous_pass)\\b`
+    -> scripts.ci_rca.\\1 and `\\bscripts/ci_rca_(...)\\.py\\b` -> scripts/ci_rca/\\1.py. The leading
+    scripts./scripts/ anchor + trailing \\b/.py exclude every false positive found this session:
+    config/ci_rca_taxonomy.yaml (no scripts prefix), validate_ci_rca_taxonomy (preceded by validate_),
+    ci_rca_evidence_dispute (a rec-source string in test_ops_data_portal.py -- \\b after 'evidence'
+    blocks the partial match), _print_ci_rca_back_validation_report (a facade SYMBOL in
+    test_ops_portal_facade.py, no scripts. prefix), scripts.ops_portal.ci_rca_runtime /
+    scripts.preflight.ci_rca_gauges (names not in the alternation). Prefer a Python re.sub sweep over
+    plain sed (sed lacks lookahead); apply to the explicit live-file list only.
+  - >-
+    Reference surface (verified at ed77d58): the anchored pattern hits 25 files across the tree; 3 are
+    append-only and LEFT (audits/repository-structure-cb02572.yaml, audits/legacy/wave-1-outputs/A2.yaml,
+    docs/audit-prompts/AUDIT-ci-rca-system.md), leaving 22 live rewrites + 3 structural edits
+    (test_coverage_checker mapping, file-router row, new __init__.py). test_checks_registry.py,
+    test_ops_data_portal.py, test_ops_portal_facade.py, scripts/checks/registry.py, scripts/validate.py
+    all reference the CHECK NAME 'validate_ci_rca_taxonomy' or a source string -- NOT the moving modules
+    (false positives, LEFT).
+  - >-
+    Lambda / import-linter / file-router verified: compute_affected_artifacts over the moved+edited paths
+    returns {} (no ci_rca module is Lambda-packaged; grep of src/lambdas/*/manifest.yaml confirms) -> V2,
+    NO deploy gate. .importlinter names no moving module in any contract (only
+    scripts.ops_portal.ci_rca_runtime, which is NOT moving); the .import_linter_cache/*.json is
+    regenerated, never hand-edited. docs/contracts/file-router.yaml currently has NO ci_rca row (so no
+    dead-target to fix) -- this plan ADDS a discovery route for the new package (realizing RS-04's
+    per-move registry-update sequencing point).
+  - >-
+    ci_rca HARD BLOCK status: preflight at ed77d58 reports ci_rca_unresolved_recs == [] (no active
+    ci-rca CI-failure rec surfaced) -- no HARD BLOCK fires. Per the orchestrator directive, the open
+    rec-2637 [Critical] (a CI-FAILURE rec about a stale re-export namespace in test_file_decision_skip_sync
+    after the ops_portal split) is under SEPARATE human investigation on branch
+    codex/investigate-ci-failure-root-cause and is DEFERRED; it is DISTINCT from the ci_rca CODE family
+    this phase moves (do not conflate). Recorded here per Related-Work/deferral discipline.
+  - >-
+    Sequencing/dependency: RS-01 depends on RS-04, which landed as P1 (docs/contracts/file-router.yaml +
+    validate_placement link-validity check). The safety net is live, so a missed reference fails CI loudly.
+    scripts/CLAUDE.md (P3) already states the root-vs-subpackage rule and names ci_rca_* as a grandfathered
+    family that migrates 'one family per PR with a same-commit reference rewrite' -- exactly this plan.
+  - >-
+    Branch claude/repo-restructure-audit-hm1gti at origin/main ed77d58 (includes P1+P2+P3); preflight
+    clean tree, 0 behind / 0 ahead -- no rebase needed (Main Divergence Assessment: scope files do not
+    overlap origin/main changes, main_files_changed_since_branch == []).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/repo-restructure-audit-hm1gti)
+  - AGENTS.md + scripts/CLAUDE.md (root-vs-subpackage rule; ci_rca_* grandfathered family) + tests/CLAUDE.md (namespace-migration + import-block discipline; keep imports in one block) read
+  - Audit RS-01 + proposed_target_tree scripts/ci_rca/ node + Q6 hazard sequencing read from audits/repository-structure-cb02572.yaml
+  - All 7 moving modules read; the 4 ROOT-anchor usages (evidence/taxonomy/tier_map/vacuous_pass) and the config/ci_rca_taxonomy.yaml load enumerated
+  - Reference surface enumerated at ed77d58 (25 anchored files; 22 live rewrites + 3 append-only LEFT; false positives classified)
+  - "Coverage-map behavior confirmed empirically: scripts/ci_rca/<name>.py currently maps to None; test_coverage_checker.py self-excluded from its own gate"
+  - "Lambda overlap re-verified: compute_affected_artifacts == {} (V2, no deploy gate)"
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - |
+    Create the package. Make scripts/ci_rca/__init__.py with exactly this one-line body (coverage-excluded):
+    ---8<--- scripts/ci_rca/__init__.py
+    """scripts.ci_rca -- CI-RCA evidence, filing, taxonomy, tier-mapping, probe-health, back-validation, and vacuous-pass subpackage (RS-01 / rec-164 Phase A)."""
+    --->8---
+  - |
+    Move the 7 modules with git mv (preserves history):
+      for m in back_validation evidence filing probe_health taxonomy tier_map vacuous_pass; do
+        git mv "scripts/ci_rca_$m.py" "scripts/ci_rca/$m.py"
+      done
+  - |
+    Apply the anchored reference rewrite with a Python re.sub sweep (NOT plain sed -- sed lacks the
+    lookahead-equivalent \b safety). Run this over the EXPLICIT live-file list below and no other file:
+    ---8<--- sweep (bin/venv-python - <<'PY')
+    import re, pathlib
+    DOTTED = re.compile(r"\bscripts\.ci_rca_(back_validation|evidence|filing|probe_health|taxonomy|tier_map|vacuous_pass)\b")
+    PATHRE = re.compile(r"\bscripts/ci_rca_(back_validation|evidence|filing|probe_health|taxonomy|tier_map|vacuous_pass)\.py\b")
+    FILES = [
+      # moved modules (at their NEW paths)
+      "scripts/ci_rca/back_validation.py", "scripts/ci_rca/evidence.py", "scripts/ci_rca/filing.py",
+      "scripts/ci_rca/probe_health.py", "scripts/ci_rca/taxonomy.py", "scripts/ci_rca/tier_map.py",
+      "scripts/ci_rca/vacuous_pass.py",
+      # non-moving importers / consumers
+      "scripts/preflight/ci_rca_gauges.py", "scripts/checks/ci_guards/validate_ci_rca_taxonomy.py",
+      "config/agent/verification_registry/registry.yaml", ".github/workflows/ci-rca.yml",
+      ".claude/agents/scheduled/ci-rca.md",
+      # live docs (cosmetic sweep)
+      "docs/ROADMAP-PLATFORM.yaml", "docs/INTENT-ci-rca-methodology.md",
+      # tests (imports, @patch targets, string literals, subprocess -m)
+      "tests/test_ci_rca_back_validation.py", "tests/test_ci_rca_evidence.py",
+      "tests/test_ci_rca_evidence_ast.py", "tests/test_ci_rca_filing.py",
+      "tests/test_ci_rca_probe_health.py", "tests/test_ci_rca_taxonomy.py",
+      "tests/test_ci_rca_tier_map.py", "tests/test_ci_rca_vacuous_pass.py",
+      "tests/test_session_preflight.py", "tests/test_session_preflight_cache_serving.py",
+      "tests/test_validate.py",
+    ]
+    for f in FILES:
+        p = pathlib.Path(f); t = p.read_text(encoding="utf-8")
+        t2 = PATHRE.sub(r"scripts/ci_rca/\1.py", DOTTED.sub(r"scripts.ci_rca.\1", t))
+        if t2 != t: p.write_text(t2, encoding="utf-8"); print("rewrote", f)
+    PY
+    --->8---
+    NOTE: config/ci_rca_taxonomy.yaml, scripts/ops_portal/ci_rca_{runtime,schema}.py, and
+    scripts/preflight/ci_rca_signals.py are deliberately ABSENT from FILES -- do not add them.
+    tests/CLAUDE.md rule: after editing a test file, keep all imports in ONE block (ruff format drops
+    symbols from a second same-module import block); the sweep edits existing lines in place so this is
+    preserved, but verify with `ruff check` afterward.
+  - |
+    Fix the ROOT depth in the 4 move-sensitive modules (the import sweep does NOT do this). In each of
+    scripts/ci_rca/evidence.py, scripts/ci_rca/taxonomy.py, scripts/ci_rca/tier_map.py, and
+    scripts/ci_rca/vacuous_pass.py, change the single ROOT definition line:
+      OLD:  ROOT = Path(__file__).parent.parent
+      NEW:  ROOT = Path(__file__).parent.parent.parent
+    (back_validation.py, filing.py, probe_health.py have NO ROOT line -- do not add one.)
+  - |
+    Extend scripts/test_coverage_checker.py map_source_to_test with a ci_rca branch. Insert this elif
+    AFTER the existing `parts[1] == "checks"` branch and BEFORE the `len(parts) == 2` branch:
+    ---8<--- scripts/test_coverage_checker.py (inside map_source_to_test)
+        elif parts[0] == "scripts" and len(parts) == 3 and parts[1] == "ci_rca":
+            # Nested ci_rca subpackage (RS-01 / rec-164 Phase A): the 7 modules moved from
+            # scripts/ci_rca_<name>.py keep their flat tests at tests/test_ci_rca_<name>.py.
+            stem = rel.stem
+            return ROOT / "tests" / f"test_ci_rca_{stem}.py"
+    --->8---
+    Also add ", scripts/ci_rca/<name>.py -> tests/test_ci_rca_<name>.py" to the docstring's mapping
+    list so the rule is documented. Do NOT add a general len==3 rule (it would break sibling subpackages).
+  - |
+    Add the discovery route to docs/contracts/file-router.yaml. APPEND this as the last entry of the
+    `routes:` list -- immediately AFTER the report-deliverables route and BEFORE the
+    `# docs/-root placement allowlist` comment block (it is a route, not a sibling key):
+    ---8<--- append to the routes: list in docs/contracts/file-router.yaml
+      - topic: ci-rca-code
+        targets: [scripts/ci_rca/]
+        description: "CI-RCA subpackage: evidence, filing, taxonomy, tier_map, probe_health,
+          back_validation, vacuous_pass (7 modules moved from scripts/ci_rca_*.py, RS-01 /
+          rec-164 Phase A). Invoked by .github/workflows/ci-rca.yml and the ci-rca scheduled agent."
+    --->8---
+  - "Stage everything: `git add -A` (git mv already staged the moves; this stages __init__.py, the sweep edits, the ROOT fixes, the coverage-map branch, and the file-router row) so validate_placement's `git ls-files` snapshot sees scripts/ci_rca/ as tracked."
+  - "Execute the Verification Plan -- run steps 1-11 in order; loop until all pass. Gates 10 (FULL validate) and 11 (FULL pytest) are authoritative. On any failure, forward-fix on-branch (Decision 55); never disable a check or add a re-export shim."
+  - "Report: the 7 modules moved + __init__.py, the anchored rewrite (files touched), the 4 ROOT fixes, the coverage-map branch, the file-router ci-rca-code row, the DO-NOT-TOUCH invariants held, compute_affected_artifacts=={}, and the full VP results (each step verdict incl. FULL validate + FULL pytest green). Confirm rec-164 left OPEN."
+work_areas: []
+rollback: >-
+  All changes are git mv + surgical text edits + one new __init__.py + one additive check branch + one
+  additive file-router row, all on the branch; revert with `git checkout -- . && git clean -fd scripts/ci_rca`
+  before commit, or `git revert <sha>` after. No infrastructure, no deploy, no data migration, no Lambda
+  artifact touched (compute_affected_artifacts == {}) -- rollback is a plain git operation with zero
+  external side effects. rec-164 is untouched, so no rec-state rollback is needed.
