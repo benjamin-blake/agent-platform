@@ -98,6 +98,12 @@ infrastructure_dependencies:
     decoupling (lifecycle ignore_changes + dedicated code-deploy CD) is filed as follow-on P2 and
     is blocked on follow-on P3b (clear the pending github_ci_drift out-of-budget IAM delta) -- see
     the follow-on recs filed by this plan.
+  - >-
+    compute_affected_artifacts(['src/lambdas/CLAUDE.md']) returns {data-pipeline, ops-compaction}
+    (both active) via the coarse `src/` copytree include, but the new file is inert documentation
+    with no runtime/import/asset role, so no rebuild/deploy/smoke-test applies (see the
+    affected-artifacts false-positive note in context). This is the sole manifest interaction and it
+    is a deliberate, justified divergence -- V1 stands.
 acceptance_criteria:
   - >-
     A new numbered Decision exists in docs/DECISIONS.md ratifying the decouple-code-from-infra
@@ -251,6 +257,24 @@ verification_plan:
       plan-schema violation. Fix and re-run. (Local --pre is advisory; PR CI --pre is authoritative
       per Decision 73.)
     hermetic: false
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Confirm the new src/lambdas/CLAUDE.md is the ONLY manifest interaction and is an inert
+      documentation false-positive (no genuine Lambda code changed), justifying the no-deploy stance.
+    command: >-
+      bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts as c;
+      m=c(['src/lambdas/CLAUDE.md']); assert set(m)=={'data-pipeline','ops-compaction'},m; import
+      pathlib; assert pathlib.Path('src/lambdas/CLAUDE.md').read_text().strip(); print('DOC_FALSE_POSITIVE_OK')"
+    expected: >-
+      Prints DOC_FALSE_POSITIVE_OK -- the affected set is exactly the two coarse-`src/`-include
+      artifacts and the file is a non-empty doc; no handler/import/asset was added, so no
+      rebuild/deploy/smoke-test is warranted (Decision 79 runtime-contract intent).
+    fix_if: >-
+      The affected set differs (a genuine Lambda source/asset file was added to scope) -- then the
+      no-deploy premise is void: either revert that file or escalate the plan to V3 with per-Lambda
+      build/deploy/smoke-test steps for the truly-affected active artifact(s).
+    hermetic: true
 constraints:
   - >-
     environment-taxonomy.md section 5 is the SOLE SoT for apply-model / guard classification
@@ -295,9 +319,21 @@ context:
     if it already deploys Lambda code, rather than add a new workflow -- the P2 plan verifies this.
   - >-
     Tier justification (Decision 48 WARN): V1 despite three .tf files in scope, because the edits
-    are comment-only (zero resource delta, no manifest-referenced file changed, no Lambda rebuild),
-    the terraform-validate CI job is the authoritative .tf verifier (Decision 119), and no external
-    system is exercised. Recorded as a conscious choice per the decision-scout WARN.
+    are comment-only (zero resource delta, no Lambda rebuild), the terraform-validate CI job is the
+    authoritative .tf verifier (Decision 119), and no external system is exercised. Recorded as a
+    conscious choice per the decision-scout WARN.
+  - >-
+    Affected-artifacts false positive (Decision 79 / plan-critique 12b/12m): the NEW
+    src/lambdas/CLAUDE.md is matched by the coarse `src/` copytree include in the data-pipeline and
+    ops-compaction manifests, so compute_affected_artifacts(['src/lambdas/CLAUDE.md']) returns
+    {data-pipeline, ops-compaction} (both status: active). This is an inert documentation file with
+    NO handler/import/asset/runtime role -- no active CI gate fails (bundle-completeness passes on
+    an inert doc; the coverage checker applies only to .py; the missing-manifest check keys on
+    src/lambdas/<name>/ directories, not a top-level file). Therefore NO Lambda rebuild/deploy/
+    smoke-test is warranted: a deliberate, justified divergence from the mechanical per-Lambda
+    build/deploy default, consistent with Decision 79's runtime-contract intent. Do NOT resolve by
+    adding deploy steps (contradicts Decision 79) or relocating the file (defeats directory-scoped
+    loading).
   - >-
     Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 92,
     Decision 77, Decision 79, Decision 119, Decision 86, Decision 55, Decision 72. RELATED =
