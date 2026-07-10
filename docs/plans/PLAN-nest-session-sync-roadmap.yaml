@@ -244,6 +244,34 @@ scope:
   - file: docs/ARCHITECTURE-WORKFLOW.md
     action: Modify
     purpose: Rewrite the live path refs scripts/plan_audit.py, scripts/session_metrics.py, scripts/sync_ops.py -> nested forms (allowlisted governance doc; live surface).
+  - file: docs/GETTING_STARTED.md
+    action: Modify
+    purpose: Rewrite the onboarding verify hint `-m scripts.session_preflight` -> `-m scripts.session.preflight` (allowlisted governance doc; live surface).
+  - file: docs/contracts/candidate-decision-ratification.yaml
+    action: Modify
+    purpose: Rewrite the three `scripts/platform_roadmap.py` location/detail semantics refs -> scripts/roadmap/platform_roadmap.py (live machine-readable contract).
+  - file: docs/contracts/exit-criteria-ledger.yaml
+    action: Modify
+    purpose: Rewrite `scripts/platform_roadmap.py::ExitCriterion` and `scripts/plan_document.py` refs -> scripts/roadmap/platform_roadmap.py / scripts/roadmap/plan_document.py (live contract).
+  - file: docs/contracts/session-id.yaml
+    action: Modify
+    purpose: Rewrite `scripts/session_preflight.py` and `scripts/session_postflight.py::close_telemetry_session()` refs -> scripts/session/preflight.py / scripts/session/postflight.py (live contract).
+  - file: docs/runbooks/ducklake-catalog-operations.md
+    action: Modify
+    purpose: Rewrite `scripts/sync_ducklake_version.py` and `-m scripts.sync_ducklake_version` refs -> scripts/sync/ducklake_version.py / -m scripts.sync.ducklake_version (live operational runbook).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Cosmetic sweep of ~41 live path/module refs (files_in_scope + prose) scripts/<moving>.py /
+      scripts.<moving> -> nested forms. Verified NOT existence-validated by any CI check (no files_in_scope
+      existence gate), so non-blocking -- swept per the live-surface policy (P4a precedent). The pathless
+      `# new` annotations and the out-of-scope platform_roadmap_{gate_rules,models,state} siblings stay.
+  - file: docs/ROADMAP-PRODUCT.yaml
+    action: Modify
+    purpose: Cosmetic sweep of the 4 live refs (product_roadmap / plan tooling) -> nested forms (live-surface policy; not existence-gated).
+  - file: docs/ROADMAP-SEMANTO.yaml
+    action: Modify
+    purpose: Cosmetic sweep of the 1 live ref -> nested form (live-surface policy; not existence-gated).
   # ---- .claude/ command + skill surfaces (MAKE-OR-BREAK: /plan + /implement depend on these post-merge)
   - file: .claude/commands/plan.md
     action: Modify
@@ -451,7 +479,7 @@ verification_plan:
     hermetic: false
     action: Stale-reference sweep (Closure Obligation) -- zero flat references (dotted, path, or from-scripts-import) survive in LIVE surfaces; append-only/grandfathered history is intentionally excluded.
     command: >-
-      ALT="product_roadmap_schema|sync_ducklake_version|session_preflight|session_postflight|sync_recommendations|platform_roadmap|session_metrics|product_roadmap|plan_document|plan_audit|find_plan|sync_ops"; MATCHES=$(git grep -nE "scripts[./]($ALT)\b|from scripts import ($ALT)\b" -- ':(exclude)docs/plans/*' ':(exclude)audits/*' ':(exclude)logs/*' ':(exclude)docs/DECISIONS.md' ':(exclude)docs/DECISIONS_ARCHIVE.md' ':(exclude)docs/CHANGELOG.md' ':(exclude)docs/SESSION_LOG*.md' ':(exclude)docs/INTENT-*.md' ':(exclude)config/lambda/ducklake/version.yaml' || true); if [ -z "$MATCHES" ]; then echo SWEEP_CLEAN; else echo "STALE_REFS:"; echo "$MATCHES"; fi
+      ALT="product_roadmap_schema|sync_ducklake_version|session_preflight|session_postflight|sync_recommendations|platform_roadmap|session_metrics|product_roadmap|plan_document|plan_audit|find_plan|sync_ops"; MATCHES=$(git grep -nE "scripts[./]($ALT)\b|from scripts import ($ALT)\b" -- ':(exclude)docs/plans/*' ':(exclude)audits/*' ':(exclude)logs/*' ':(exclude)docs/DECISIONS.md' ':(exclude)docs/DECISIONS_ARCHIVE.md' ':(exclude)docs/CHANGELOG.md' ':(exclude)docs/SESSION_LOG*.md' ':(exclude)docs/INTENT-*.md' ':(exclude)docs/audit-prompts/*' ':(exclude)config/lambda/ducklake/version.yaml' || true); if [ -z "$MATCHES" ]; then echo SWEEP_CLEAN; else echo "STALE_REFS:"; echo "$MATCHES"; fi
     expected: >-
       Prints SWEEP_CLEAN. (NB `scripts.platform_roadmap` inside scripts.platform_roadmap_gate_rules/_models/_state
       is NOT matched -- the \b after platform_roadmap fails before the `_` -- so the out-of-scope siblings
@@ -574,7 +602,11 @@ constraints:
   - >-
     Sweep LIVE surfaces only. Append-only / grandfathered history is LEFT untouched: docs/plans/ (PLAN-*,
     archive/, reports/), audits/ (incl. audits/repository-structure-cb02572.yaml), logs/, docs/DECISIONS.md,
-    docs/DECISIONS_ARCHIVE.md, docs/CHANGELOG.md, docs/SESSION_LOG*.md, and the grandfathered docs/INTENT-*.md.
+    docs/DECISIONS_ARCHIVE.md, docs/CHANGELOG.md, docs/SESSION_LOG*.md, the grandfathered docs/INTENT-*.md, and
+    the EXECUTED docs/audit-prompts/*.md (composed-and-run audit artifacts, P4a precedent). Conversely, these
+    ARE live surfaces and ARE swept: the 3 ROADMAP-*.yaml (cosmetic files_in_scope/prose), docs/GETTING_STARTED.md,
+    the 3 live docs/contracts/*.yaml (candidate-decision-ratification, exit-criteria-ledger, session-id), and
+    docs/runbooks/ducklake-catalog-operations.md.
   - >-
     file-router.yaml (docs/contracts/) is a live CI gate via validate_placement: the 4 rows targeting
     scripts/session_preflight.py / session_postflight.py / session_metrics.py / plan_audit.py MUST be repointed
