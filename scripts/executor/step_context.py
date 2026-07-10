@@ -13,6 +13,10 @@ scripts.executor.step_runner.<name> keep intercepting with zero migration.
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Known Gotcha injection
