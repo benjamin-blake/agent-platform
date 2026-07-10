@@ -114,78 +114,8 @@ Two roadmap files exist since PR #335. Apply this rule per call site:
 
 ## File Router
 
-| Topic | Look here |
-|-------|-----------|
-| Trading system design / data flow | [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) |
-| Development workflow / CI / telemetry | [docs/ARCHITECTURE-WORKFLOW.md](../docs/ARCHITECTURE-WORKFLOW.md) |
-| Product roadmap (phases, milestones) | [docs/ROADMAP-PRODUCT.yaml](../docs/ROADMAP-PRODUCT.yaml) |
-| Platform roadmap (tier_items, infra, governance) | [docs/ROADMAP-PLATFORM.yaml](../docs/ROADMAP-PLATFORM.yaml) |
-| Technical decisions | [docs/DECISIONS.md](../docs/DECISIONS.md) |
-| Setup / deploy / troubleshoot | [docs/GETTING_STARTED.md](../docs/GETTING_STARTED.md) |
-| Config reference | [config/README.md](../config/README.md) |
-| Terraform / infra | [terraform/README.md](../terraform/README.md) |
-| Data pipeline code | [src/data/](../src/data/) -- pipeline.py, feature_engine.py, writer.py |
-| Lambda handlers | [src/data/handlers/](../src/data/handlers/) -- fetch, features, write, maintenance, discovery |
-| Table maintenance | [src/data/handlers/maintenance_handler.py](../src/data/handlers/maintenance_handler.py) |
-| Iceberg table schemas | [terraform/iceberg_tables.tf](../terraform/iceberg_tables.tf) |
-| Step Functions / IAM | [terraform/data_pipeline.tf](../terraform/data_pipeline.tf) |
-| Formula discovery | [src/lab/pysr_factory.py](../src/lab/pysr_factory.py) |
-| Live trading | [src/live/rat_ensemble.py](../src/live/rat_ensemble.py) |
-| Execution engine | [src/execution/async_engine.py](../src/execution/async_engine.py) |
-| Meta-learner | [src/meta_learner/gating_network.py](../src/meta_learner/gating_network.py) |
-| Cost / budgets | [terraform/cost_monitoring.tf](../terraform/cost_monitoring.tf) |
-| Local CI / validation | [scripts/validate.py](../scripts/validate.py) |
-| Lambda build and deploy | [scripts/build_lambda.py](../scripts/build_lambda.py) |
-| S3 log store (agent logs) | [scripts/s3_log_store.py](../scripts/s3_log_store.py) |
-| Rec/Decision write portal | [scripts/ops_data_portal.py](../scripts/ops_data_portal.py) |
-| LLM client (LiteLLM / provider-agnostic) | [scripts/llm_client.py](../scripts/llm_client.py) |
-| LLM utilities (parsing/errors) | [scripts/llm_utils.py](../scripts/llm_utils.py) |
-| Bedrock Converse API client (retired; retained as architectural artefact) | [scripts/bedrock_client.py](../scripts/bedrock_client.py) |
-| Tool runtime (agentic tools) | [scripts/tool_runtime.py](../scripts/tool_runtime.py) |
-| Model routing config (provider + tier mapping) | [docs/contracts/inference-provider.yaml](../docs/contracts/inference-provider.yaml) |
-| Model registry (resolver, escalation) | [scripts/model_registry.py](../scripts/model_registry.py) |
-| Gemini CLI context file | [GEMINI.md](../GEMINI.md) |
-| Instruction architecture contract | [docs/contracts/instruction-architecture.yaml](../docs/contracts/instruction-architecture.yaml) |
-| Interactive orientation workflow | [.claude/commands/orient.md](../.claude/commands/orient.md) (canonical). Read-only; run before `/plan` to choose what to work on. |
-| Interactive planning workflow | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical) |
-| Interactive implementation workflow | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical) |
-| Interactive workflow skills (methodology) | [.claude/skills/](../.claude/skills/) (canonical) |
-| Planning / entry point (Opus) | [.claude/commands/plan.md](../.claude/commands/plan.md) (canonical) |
-| Branch-specific plan files | `docs/plans/PLAN-{slug}.md` (merged to main; handed off to `/implement` by path) |
-| Implementation entry point | [.claude/commands/implement.md](../.claude/commands/implement.md) (canonical) |
-| Pre-session checks (env, recs, friction) | [scripts/session_preflight.py](../scripts/session_preflight.py) |
-| Post-session automation (validate, commit, push) | [scripts/session_postflight.py](../scripts/session_postflight.py) |
-| Subagents and Reviewers | [.claude/skills/](../.claude/skills/) (canonical) |
-| Plan execution audit | [scripts/plan_audit.py](../scripts/plan_audit.py) |
-| Session metrics | [scripts/session_metrics.py](../scripts/session_metrics.py) |
-| Test coverage enforcement | [scripts/test_coverage_checker.py](../scripts/test_coverage_checker.py) -- AST-based; validates test file existence and per-file 100% coverage for new code |
-| Prompt compliance verification | [scripts/prompt_compliance.py](../scripts/prompt_compliance.py) -- Parses `## Behavioural Invariants` YAML from prompts; validates against retro-lite log and execution state |
-| North Star tracker | [scripts/north_star_tracker.py](../scripts/north_star_tracker.py) |
-| Human workflow guide | [docs/AGENT_WORKFLOW.md](../docs/AGENT_WORKFLOW.md) |
-| CI triage | [.claude/skills/orient/SKILL.md](../.claude/skills/orient/SKILL.md) -- CI RCA Recs surfaced in orient |
-| GitHub MCP config | [.mcp.json](../.mcp.json) |
-| Session continuity log | [docs/SESSION_LOG.md](../docs/SESSION_LOG.md) |
-| Scheduled agent manifest | [.github/agents/schedule.yaml](../.github/agents/schedule.yaml) |
-| Scheduled agent dispatcher (Lambda) | [src/data/handlers/scheduled_agent_handler.py](../src/data/handlers/scheduled_agent_handler.py) |
-| Findings processor (Lambda) | [src/data/handlers/findings_processor_handler.py](../src/data/handlers/findings_processor_handler.py) |
-| GitHub Models API client | [scripts/github_models_client.py](../scripts/github_models_client.py) |
-| Scheduled agent local runner | [scripts/run_scheduled_agent.py](../scripts/run_scheduled_agent.py) |
-| Scheduled agent prompts | [.github/prompts/scheduled/](../.github/prompts/scheduled/) -- doc-freshness, orphan-code, transcript-review, code-smell, findings-compare |
-| Scheduled agent infrastructure | [terraform/scheduled_agents.tf](../terraform/scheduled_agents.tf) -- Lambda dispatcher for scheduled agents; deploy per-Lambda via manifest-derived gating (Decision 79, CD.16) |
-| CI runner infrastructure | [terraform/personal/oidc.tf](../terraform/personal/oidc.tf) -- GitHub-hosted runners + OIDC roles (CD.21). [terraform/ec2_runner.tf](../terraform/ec2_runner.tf) retained as a retired-runner artefact |
-| Customisations manifest script | [scripts/list_customizations.py](../scripts/list_customizations.py) |
-| Recommendations migration script | [scripts/migrate_recommendations.py](../scripts/migrate_recommendations.py) |
-| Friction analysis JSONL log | [logs/.friction-analysis-log.jsonl](../logs/.friction-analysis-log.jsonl) |
-| Metrics analysis JSONL log | [logs/.session-metrics-log.jsonl](../logs/.session-metrics-log.jsonl) |
-| Plan audit JSONL log | [logs/.plan-audit-log.jsonl](../logs/.plan-audit-log.jsonl) |
-| North Star JSONL log | [logs/.north-star-log.jsonl](../logs/.north-star-log.jsonl) |
-| Machine-readable recommendations | [logs/.recommendations-log.jsonl](../logs/.recommendations-log.jsonl) |
-| Cron rejection memory | [logs/.rejected-suggestions.jsonl](../logs/.rejected-suggestions.jsonl) |
-| Decision index | [logs/.decisions-index.jsonl](../logs/.decisions-index.jsonl) |
-| Execution checkpoint state | [logs/.execution-state.json](../logs/.execution-state.json) |
-| Execution state management | [scripts/execution_state.py](../scripts/execution_state.py) |
-| Session telemetry (executor) | [scripts/executor/telemetry.py](../scripts/executor/telemetry.py) |
-| PR template | [.github/pull_request_template.md](../.github/pull_request_template.md) |
+Machine-readable discovery/ownership index: see [docs/contracts/file-router.yaml](../docs/contracts/file-router.yaml).
+Enforced by `scripts/checks/hygiene/validate_placement.py` (link-validity gate, both `--pre` and full presubmit tiers).
 
 ## Recommendations Log Schema
 
