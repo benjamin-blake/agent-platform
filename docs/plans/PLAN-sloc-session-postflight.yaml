@@ -1,0 +1,300 @@
+schema_version: 1
+slug: "sloc-session-postflight"
+intent: >-
+  Decompose scripts/session_postflight.py (652 SLOC, at its ratchet ceiling) into a same-named thin
+  facade over a minimal scripts/postflight/ package -- a deliberately small, cohesive extraction
+  (~280 SLOC out), not a full re-architecture -- so the session-close tooling complies with the
+  500-SLOC cap with byte-stable CLI contracts (flags, exit codes, JSON output shapes, and the
+  file-path self-reinvocation run_close depends on).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-session-postflight.yaml
+phase: >-
+  Platform hardening / SLOC-budget decomposition program (rec-2414 umbrella; Decision 102 ratchet).
+  Applies the ratified validate.py decomposition mechanism (Decision 80 point 3 / Decision 104),
+  sibling of PLAN-sloc-session-preflight. Platform-internal; no product-roadmap phase; no tier_item.
+scope:
+  - file: scripts/session_postflight.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin facade (~390 SLOC, hard cap 500): retains main() + argparse, run_validate,
+      run_pre_commit_sanity, run_commit, run_close, run_auto, and the scope-drift helpers
+      (_parse_scope_table, _get_changed_files, _normalize_path, _paths_match) VERBATIM in behaviour --
+      run_close's self-reinvocation by FILE PATH (`_run([PYTHON, "scripts/session_postflight.py",
+      "--pre-commit-sanity"])`) requires the facade to stay a runnable script with the __main__
+      guard. Facade-resident bodies reference shared primitives as _common.<name> (single canonical
+      patch target); moved siblings are called module-qualified (housekeeping.run_metrics(...),
+      remote.run_push(...)). Adds FACADE RE-EXPORTS (noqa F401, one consolidated block) of every
+      moved public + test-referenced private symbol, and keeps `import time`, `import subprocess`,
+      `import json` etc. so namespace-navigation patches (session_postflight.time.time/time.sleep,
+      10 sites) still resolve.
+  - file: scripts/postflight/__init__.py
+    action: Create
+    purpose: Package marker (~4 SLOC). No logic.
+  - file: scripts/postflight/_common.py
+    action: Create
+    purpose: >-
+      SOLE source of shared, test-patched primitives (~35 SLOC): ROOT, PYTHON, LOGS_DIR, ARCHIVE_DIR,
+      TELEMETRY_ACTIVE_SESSION_FILE, _PRUNE_SKIP_NAMES, MAX_COMMIT_RETRIES, CI_POLL_INTERVAL_SECONDS,
+      CI_POLL_TIMEOUT_SECONDS, DEFAULT_MAX_AGE_DAYS, _SSO_PROFILE, the module logger, _run,
+      _current_branch, and re-imports of find_plan_file + clear_checkpoint (used by both facade and
+      moved bodies). Every body -- facade-resident and moved -- resolves these as _common.<name> at
+      call time so one patch target (scripts.postflight._common.<name>) intercepts everywhere. No
+      import of scripts.session_postflight (no cycle).
+  - file: scripts/postflight/housekeeping.py
+    action: Create
+    purpose: >-
+      Local session-close housekeeping concern (~195 SLOC): close_telemetry_session,
+      _load_max_age_days, prune_telemetry_logs, _stage_document_derived_tables (neutered stub moves
+      verbatim), run_metrics (co-located with prune_telemetry_logs, which it calls), and
+      run_log_housekeeping. Bodies moved verbatim; _run/paths via _common.
+  - file: scripts/postflight/remote.py
+    action: Create
+    purpose: >-
+      Remote push/PR/CI concern (~95 SLOC): run_push (push, PR create, statusCheckRollup poll,
+      squash-merge, checkpoint clearing). Moved verbatim -- including its legacy gh-CLI poll loop
+      (time.sleep): this script is the executor-era automation surface, distinct from the CC-web MCP
+      merge flow; redesigning the poll is out of scope (movement only).
+  - file: tests/test_session_postflight.py
+    action: Modify
+    purpose: >-
+      Bulk-migrate EVERY mock-site class per tests/CLAUDE.md. String-form patch("session_postflight.X")
+      sites: shared primitives to scripts.postflight._common (_run 18, _current_branch 12,
+      find_plan_file 11, clear_checkpoint 3, TELEMETRY_ACTIVE_SESSION_FILE 2); moved functions to
+      their home module (run_push 9 -> remote; run_metrics 9, run_log_housekeeping 9,
+      _stage_document_derived_tables 6, prune_telemetry_logs 2, close_telemetry_session ->
+      housekeeping); two of these sites are LINE-WRAPPED (tests 859-860 and 863-864) -- the bulk
+      script must match wrapped call text, not single lines. Object-form patch.object(_postflight,
+      "X", ...) CONSTANT sites repoint to patch.object on the scripts.postflight._common module
+      object: LOGS_DIR 5 (lines 772, 794, 802, 814, 828), ARCHIVE_DIR 4 (773, 795, 815, 829),
+      ROOT 2 (837, 849). HAZARD if unmigrated: these become no-op patches on the facade while moved
+      bodies read _common -- the prune tests would then archive REAL >90-day entries under logs/ and
+      TestCloseTelemetrySession would read and unlink the real logs/.telemetry-active-session.json
+      before assertions fail (working-tree mutation, not just a red test). Facade-resident symbols
+      (run_validate 12, run_close 12, run_commit 10, _get_changed_files 2) and namespace navigations
+      (time.time 5, time.sleep 5) stay untouched. No assertion semantics change; counts are
+      planning-time greps, the implement-time audit is authoritative.
+  - file: tests/test_session_postflight_decomposition.py
+    action: Create
+    purpose: >-
+      New equivalence suite: (1) facade completeness -- every name on the frozen export list is
+      getattr-able and importable via `from scripts.session_postflight import <name>`; (2) mock
+      interception -- patching scripts.postflight._common._run intercepts through a moved body
+      (remote.run_push) AND through a facade-resident body (run_commit), and patching a _common
+      CONSTANT through a moved body (patch scripts.postflight._common.LOGS_DIR, assert
+      housekeeping.prune_telemetry_logs honours it); (3) full-inventory residual-site closure --
+      scans the sibling test file for old-namespace references to ANY migrated symbol across BOTH
+      idioms present (string-form patch("session_postflight.X") including line-wrapped call sites,
+      and object-form patch.object(_postflight, "X", ...)) and asserts zero; (4) argparse
+      flag-surface freeze via --help (all 13 flags); (5) BEHAVIOURAL self-reinvocation contract --
+      patch scripts.postflight._common._run, call run_close, and assert the recorded argv is
+      [PYTHON, "scripts/session_postflight.py", "--pre-commit-sanity"] (a plain source-grep
+      false-positives on the module docstring's usage line).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Regenerated ONLY via `bin/venv-python -m scripts.validate --update-sloc-budgets` as the LAST
+      implementation step (Decision 102): the scripts/session_postflight.py entry (652) auto-drops at
+      <=500 SLOC. Diff-assert the removal and that NO new entry is seeded for the facade or any
+      scripts/postflight/ module. Never hand-edited; shared with the sibling preflight plan and other
+      branch siblings -- no full-file equality assertion; conflicts resolve by re-running the regen.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - tests/test_session_postflight.py plus the new decomposition suite pass with unchanged assertion semantics (no test deleted or weakened).
+  - "CLI contracts byte-stable: argparse surface is exactly {--validate, --pre-commit-sanity, --commit, --push, --metrics, --close, --log-housekeeping, --close-session, --auto, --steps-total, --steps-friction, --outcome, --files-changed}; exit-code semantics and every mode's JSON output shape unchanged; `--close-session --outcome <x>` still prints '[close-session] outcome=<x>' and exits 0."
+  - The facade remains a runnable SCRIPT -- `bin/venv-python scripts/session_postflight.py --pre-commit-sanity` (the exact file-path form run_close self-reinvokes) exits 0 off-main and emits the frozen JSON keys {status, branch, planned, changed, unplanned, orphaned_todos}.
+  - Facade re-exports every moved public + test-referenced private symbol; the frozen export list resolves via `from scripts.session_postflight import <name>`.
+  - Mock interception preserved -- patching scripts.postflight._common._run (and _current_branch, find_plan_file, clear_checkpoint) intercepts through both moved and facade-resident bodies, and patching a _common constant (LOGS_DIR) intercepts through housekeeping.prune_telemetry_logs; zero residual old-namespace sites for migrated symbols across BOTH idioms (string-form and patch.object).
+  - scripts/session_postflight.py <=500 SLOC (target ~390); every scripts/postflight/*.py <=500 SLOC (target <=400); CC gate passes (the file-top decision-43 waiver header travels to any module whose moved function needs it).
+  - config/sloc_budgets.yaml loses its scripts/session_postflight.py entry via regeneration and gains NO new entry for the facade or package (scoped diff assertion).
+  - bin/venv-python -m scripts.validate --pre exits 0.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: Full postflight test surface -- existing suite plus the new decomposition suite.
+    command: bin/venv-python -m pytest tests/test_session_postflight.py tests/test_session_postflight_decomposition.py -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: A `from scripts.session_postflight import X` fails -> facade re-export missing; a mock silently no-ops -> patch site not migrated to _common / home module.
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: Residual-site grep closure for migrated symbols across BOTH mock idioms actually present in the suite -- string-form (anchored on target text so line-wrapped calls are caught) and object-form patch.object.
+    command: >-
+      test "$(grep -hE '"session_postflight\.(_run|_current_branch|find_plan_file|clear_checkpoint|run_push|run_metrics|run_log_housekeeping|prune_telemetry_logs|close_telemetry_session|_stage_document_derived_tables|TELEMETRY_ACTIVE_SESSION_FILE|LOGS_DIR|ARCHIVE_DIR)' tests/test_session_postflight.py | wc -l)" = "0"
+      && test "$(grep -hE 'patch\.object\(_postflight, .(LOGS_DIR|ARCHIVE_DIR|ROOT|PYTHON|TELEMETRY_ACTIVE_SESSION_FILE|_run|_current_branch|find_plan_file|clear_checkpoint|run_push|run_metrics|run_log_housekeeping|prune_telemetry_logs|close_telemetry_session|_stage_document_derived_tables)' tests/test_session_postflight.py | wc -l)" = "0"
+    expected: Zero residual sites in both arms; exit 0. Arm 1 anchors on the quoted TARGET TEXT ("session_postflight.X"), not the patch( call prefix, so the two line-wrapped patch sites (tests 859-860 and 863-864) are caught; arm 2 covers the 11 object-form constant sites (LOGS_DIR x5, ARCHIVE_DIR x4, ROOT x2). The suite has ZERO setattr/monkeypatch sites (verified inventory) -- no setattr arm is carried, knowingly; the decomposition suite's full-inventory scan is the belt-and-braces layer.
+    fix_if: Nonzero -> a site was missed by the bulk migration (string-form and patch.object classes BOTH migrate); repoint it -- never leave a silent no-op mock.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: File-path invocation contract (run_close's self-reinvocation form) + JSON output shape.
+    command: >-
+      bin/venv-python scripts/session_postflight.py --pre-commit-sanity > /tmp/pf_sanity.out
+      && bin/venv-python -c "import json; d=json.load(open('/tmp/pf_sanity.out'));
+      assert {'status','branch','planned','changed','unplanned','orphaned_todos'} <= set(d);
+      print('sanity-json-ok', d['status'])"
+    expected: Exit 0 on a non-main branch; JSON contains the frozen key set (status PASS or WARN both acceptable).
+    fix_if: Traceback or missing keys -> the facade lost the __main__ guard, an argparse branch, or run_pre_commit_sanity's output shape drifted.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: CLI flag-surface freeze (all 13 flags).
+    command: >-
+      bin/venv-python -m scripts.session_postflight --help > /tmp/pf_help2.out
+      && for f in validate pre-commit-sanity commit push metrics close log-housekeeping close-session auto steps-total steps-friction outcome files-changed; do grep -q -- "--$f" /tmp/pf_help2.out || exit 1; done && echo FLAGS-OK
+    expected: All 13 flags present; exit 0.
+    fix_if: A flag missing -> the argparse block was altered; restore it verbatim.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: Self-reinvocation callsite retained in the facade source.
+    command: grep -E "_run\(\[.*scripts/session_postflight\.py.*--pre-commit-sanity" scripts/session_postflight.py
+    expected: Matches the run_close CALLSITE only -- anchored on the _run([ argv construction, which the module docstring's usage line does not contain (a bare path+flag grep would false-positive on it); exit 0. The decomposition suite's behavioural item (5) is the authoritative proof.
+    fix_if: No match -> run_close was altered or moved; it must stay in the facade with the literal file-path self-invocation.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: SLOC assertion -- facade and every new module within limits.
+    command: >-
+      bin/venv-python -c "import pathlib;
+      sloc=lambda p: len([l for l in p.read_text().splitlines() if l.strip() and not l.strip().startswith('#')]);
+      f=sloc(pathlib.Path('scripts/session_postflight.py'));
+      mods={str(p): sloc(p) for p in sorted(pathlib.Path('scripts/postflight').glob('*.py'))};
+      over=[k for k,v in mods.items() if v>500];
+      print('facade', f); print(mods);
+      assert f<=500 and not over"
+    expected: Facade <=500 (target ~390); zero modules over 500; exit 0.
+    fix_if: Facade over -> move run_pre_commit_sanity + the scope-drift helpers to a local_checks module (next-finest seam) with their patch-site migration.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: Budget re-point (LAST implementation step) -- entry removed, nothing seeded.
+    command: >-
+      bin/venv-python -m scripts.validate --update-sloc-budgets
+      && git diff -- config/sloc_budgets.yaml | grep -E "^-.*scripts/session_postflight\.py"
+      && ! git diff -- config/sloc_budgets.yaml | grep -E "^\+.*(scripts/session_postflight\.py|scripts/postflight/)"
+    expected: The scripts/session_postflight.py line is REMOVED; no added line references the facade or scripts/postflight/. Sibling-plan entries may shift; out of this assertion's scope.
+    fix_if: An added scripts/postflight/ line appears -> a module exceeds 500 and was auto-seeded; split it finer and re-run the regen.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: Fast presubmit tier passes.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0.
+    fix_if: >-
+      Content check fails -> fix on branch. If ONLY the wall-clock budget assertion trips with all
+      content green, that is the known pre-existing pytest_diff drift (PR CI --pre authoritative per
+      Decision 73) -- document per existing --ignore-budget practice, never mask a content failure.
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: CC gate passes post-extraction.
+    command: >-
+      bin/venv-python -c "from scripts.validate import validate_cc_limits; f=[];
+      validate_cc_limits(f); print(f if f else 'cc-ok'); raise SystemExit(1 if f else 0)"
+    expected: No CC violation over the new tree; exit 0.
+    fix_if: A moved function over CC 20 reddens the gate -> carry the decision-43 waiver header into its new module.
+  - step: 10
+    phase: pre-deploy
+    hermetic: false
+    action: Stale-definition sweep -- only the retained defs remain in the facade.
+    command: >-
+      ! grep -E "^def " scripts/session_postflight.py | grep -vE "^def (main|run_validate|run_pre_commit_sanity|run_commit|run_close|run_auto|_parse_scope_table|_get_changed_files|_normalize_path|_paths_match)\("
+    expected: No extracted definition remains in the facade (imports/re-exports only); exit 0.
+    fix_if: A def survives -> move its body to the domain module and leave only the re-export.
+  - step: 11
+    phase: pre-deploy
+    hermetic: true
+    action: Facade import invariant (sole hermetic replay step, fleet 20-step/120s budget) -- the module imports cleanly both before and after decomposition.
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "import scripts.session_postflight; print('facade-import-ok')"
+    expected: Prints facade-import-ok; exit 0 in <5s; no network, no credentials (Import Safety Patterns -- nothing raises at import time). Portable interpreter idiom because CI's pr-validate replay job has no .venv.
+    fix_if: ImportError -> a facade re-export references a missing package symbol; fix the consolidated re-export block.
+constraints:
+  - "Behaviour preservation is absolute: movement-only refactor. No feature work (the --rollback flag from rec-025 does NOT exist and is NOT added), no bug fixes, no signature changes. CLI contracts byte-stable: all 13 flags, exit codes, per-mode JSON output shapes, the '[close-session] outcome=<x>' line, and the file-path self-reinvocation."
+  - Decision 102 -- budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets` as the LAST step; scoped diff assertion (sibling decompositions shift other entries; config/sloc_budgets.yaml conflicts resolve by re-running the regen).
+  - Decision 43 -- CC<=20 per function; the decision-43 waiver header travels with any moved function that needs it.
+  - "Decision 80 / Decision 104 precedent -- facade re-exports, _common single-canonical-patch-target namespace, bulk patch-site migration, frozen contract oracles, budget re-point with diff assertion. Minimal-extraction variant: only two domain modules; no registry (fixed mode dispatch, not a growing check set)."
+  - Namespace-migration discipline (tests/CLAUDE.md) -- bulk replacement script, zero residual old-namespace sites, interception test, one consolidated import block per test file.
+  - "Multi-plan coordination: one of ~16 SLOC-decomposition plans on branch claude/sloc-violations-refactor-p5svnl. Touch ONLY this Scope table's files (config/sloc_budgets.yaml is shared with siblings via regen). Do NOT modify scripts/test_coverage_checker.py or any shared surface."
+  - Decision 86 -- no new standing prose-architecture doc.
+  - Decision 101 -- public repo; no account IDs, ARNs, secrets, or internal hostnames.
+  - No rescue agents or workaround loops (Decision 55); on unrecoverable verification failure, stop and RCA.
+  - AGENTS.md code style -- Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens, default no comments.
+context:
+  - >-
+    Root cause: session_postflight.py is at its ratchet ceiling (652/652) and is invoked by the
+    /plan, /implement, and /audit close flows (--close-session --outcome, --log-housekeeping).
+    rec-2414 is the umbrella program (cited, NOT bundled). No per-file decomposition rec exists for
+    postflight (unlike preflight's rec-553), so bundled_recommendations is empty.
+  - >-
+    Importer/patch-binding reality (planning-time grep): ZERO production importers -- pure CLI entry
+    point plus one test suite, which loads the file via importlib under the short name
+    "session_postflight" and patches "session_postflight.<X>" (~130 patch/setattr sites). run_close
+    self-reinvokes by FILE PATH (`scripts/session_postflight.py --pre-commit-sanity`), so the facade
+    must remain a runnable script. Facade double-loads in tests (importlib alias + normal import);
+    shared mutable/patched state therefore lives ONCE in _common. Single-canonical-patch-target rule:
+    facade-resident AND moved bodies both resolve shared primitives as _common.<name>; moved
+    functions are called module-qualified from the facade.
+  - >-
+    Deliberately minimal extraction (orchestrator sizing: ~180+ SLOC out; this plan moves ~280
+    including run_metrics/run_log_housekeeping co-location): two domain modules (housekeeping,
+    remote) + _common. The commit/close/auto orchestration stays in the facade -- splitting it
+    further adds cross-module patch churn with no cohesion gain at 652 SLOC.
+  - >-
+    T-1.9 / CD.40 finding: T-1.9 complete (2026-06-09); ops_session_log retirement routes through
+    T3.20 / CD.40 (unratified) + T2.26, and rec-2510 records a future postflight writer-rewire
+    design intent. close_telemetry_session moves VERBATIM to housekeeping.py -- no dead-work
+    conflict: a later retirement/rewire edits the new home instead of the monolith.
+  - >-
+    Adjacent open recs deliberately NOT fixed (movement-only): rec-025 (--rollback FEATURE rec; the
+    flag does not exist today and this plan does not add it), rec-108 (_parse_json_output DRY),
+    rec-109 (datetime import placement), rec-1971 (exception-path logging), rec-257 (logs/debug
+    pruning feature), rec-418 (retro-lite in --auto). run_push's legacy gh-CLI sleep-poll loop moves
+    verbatim (executor-era surface; the CC-web MCP merge flow is a separate mechanism; redesign out
+    of scope). Post-decomposition these recs' file fields may need re-pointing; surfacing note only.
+  - >-
+    Coverage-gate note: map_source_to_test returns None for nested scripts/postflight/** paths, so
+    new modules are not per-file coverage-gated; moved bodies remain exercised through the existing
+    suite via the facade, which stays gated by tests/test_session_postflight.py. EXPLICIT DEFERRAL
+    (scout NOTE 2): this knowingly diverges from Decision 104, which extended map_source_to_test for
+    scripts/checks/** precisely because the len(parts)==2 rule skips nested modules; a follow-up rec
+    to extend the mapping for scripts/preflight/** and scripts/postflight/** AFTER the sibling SLOC
+    plans land is flagged in the planner's handoff (do not edit the shared checker inside this plan).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND -- 83/83 triaged, two NOTEs (both resolved in-plan), no BLOCK. CITE: Decision 80, Decision 104, Decision 102, Decision 43, Decision 55, Decision 86, Decision 101, Decision 73, Decision 88, Decision 118, Decision 103, Decision 84, Decision 79."
+  - >-
+    Scout obligations incorporated: Decision 84 -- close_telemetry_session is a legacy
+    OpsWriter/telemetry write path and moves VERBATIM pending the T2.26 disposition (CD.40 remains an
+    unratified candidate; nothing blocks a movement-only refactor); read-cache-never-write-source is
+    untouched (run_auto's cache refresh transits scripts.ops_data_portal.sync only, unchanged).
+    Decision 79 -- V2 tier authority: neither session tool appears in any active Lambda manifest.
+    Decision 88 -- cited for program consistency: postflight introduces NO warehouse-reader path and
+    this plan adds none. Decision 103 -- rec relevance lifecycle governs closure verdicts (none
+    bundled here; the sibling preflight plan's rec-553 closure is a Decision 103 action, not
+    Decision 70, which is bootstrap-record deletion only). Decision 118 -- preflight-side obligation
+    (provisional-contract scan); recorded because the scout triaged the two sibling plans jointly.
+  - "gates: decision-scout=FLAGS_FOUND (2 NOTEs, resolved in-plan); plan-critique=PROCEED after 2 rounds (round 1 REVISE -- VP-step-2 mock-idiom closure gap: patch.object(_postflight) constant sites (LOGS_DIR/ARCHIVE_DIR/ROOT) omitted, working-tree-mutation hazard; round 2 all four fixes verified empirically -- arm1 81 sites incl. 2 wrapped, arm2 exactly 11, both reach 0 post-migration; VP5 anchor matches only the real callsite; divergence line current)"
+  - Branch claude/sloc-violations-refactor-p5svnl was 0 behind / 0 ahead of origin/main at preflight; by critique time origin/main had moved 1 commit ahead (0852662, audits/* only -- zero overlap with this scope, no scoping impact). No Main Divergence overlap.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (80, 104, 102, 43, 86, 55 targeted)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Frozen baselines captured BEFORE any code movement -- 13-flag list, per-mode JSON key sets, self-reinvocation callsite, patched-symbol inventory (audit step)
+execution_steps:
+  - "Capture baselines FIRST: the 13 argparse flags, run_pre_commit_sanity's JSON key set, the run_close self-reinvocation callsite, and the export list; freeze them in tests/test_session_postflight_decomposition.py before any movement."
+  - "Audit patch surface: grep-enumerate every mock site in tests/test_session_postflight.py across BOTH idioms present (string-form patch, including the two line-wrapped calls; object-form patch.object -- zero setattr/monkeypatch sites exist today) and classify each as facade-resident (unchanged), home-module, or _common. Planning-time counts in the Scope table are indicative; this audit is authoritative."
+  - "Create scripts/postflight/__init__.py and scripts/postflight/_common.py (constants, logger, _run, _current_branch, find_plan_file/clear_checkpoint re-imports)."
+  - "Move close_telemetry_session, _load_max_age_days, prune_telemetry_logs, _stage_document_derived_tables, run_metrics, run_log_housekeeping verbatim into scripts/postflight/housekeeping.py and run_push into scripts/postflight/remote.py; rewrite shared-primitive references to _common.<name>."
+  - "Rewrite the facade: retained functions reference _common.<name> for shared primitives and call moved siblings module-qualified (housekeeping.run_metrics, remote.run_push); add the consolidated re-export block; keep time/subprocess/json imports for namespace-navigation patches; keep the __main__ guard."
+  - "Bulk-migrate patch sites in tests/test_session_postflight.py per the audit table (replacement script; both string-form and patch.object idioms, wrapped-call-aware -- zero setattr sites exist); verify zero residuals (VP step 2 + decomposition-suite scan)."
+  - "Write tests/test_session_postflight_decomposition.py: facade completeness; _common._run interception through moved AND facade-resident bodies plus _common.LOGS_DIR constant interception through housekeeping.prune_telemetry_logs; full-inventory residual scan across both idioms; flag freeze; BEHAVIOURAL self-reinvocation contract (patch _common._run, call run_close, assert the literal argv)."
+  - "Execute the Verification Plan: run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55). Budget regen (VP step 7) runs LAST among implementation actions."
+  - "Report: modules created with final SLOC each, facade SLOC, migration-site counts, interception results, budget-diff outcome."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; abandon the branch if equivalence cannot go green (nothing
+  deployed; not Lambda-packaged). Post-merge regression: revert the squash commit -- facade, package,
+  test migration, and budget regen land atomically, so a single revert restores the monolith.

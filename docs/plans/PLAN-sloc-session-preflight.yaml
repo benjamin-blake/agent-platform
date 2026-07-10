@@ -1,0 +1,381 @@
+schema_version: 1
+slug: "sloc-session-preflight"
+intent: >-
+  Decompose scripts/session_preflight.py (1989 SLOC, sitting exactly at its ratchet ceiling) into a
+  same-named thin CLI facade over a new scripts/preflight/ package so the session-start tooling
+  complies with the 500-SLOC cap without waivers, with byte-stable entry contracts (argparse flags,
+  exit codes, one-line stdout summary, preflight-report JSON schema). Keeps every-session tooling
+  within agent-loadable budgets in service of the self-improving loop.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-session-preflight.yaml
+phase: >-
+  Platform hardening / SLOC-budget decomposition program (rec-2414 umbrella; Decision 102 ratchet).
+  Applies the ratified validate.py decomposition mechanism (Decision 80 point 3 / Decision 104) to
+  the session-start tooling. Platform-internal; no product-roadmap phase; no tier_item claimed.
+scope:
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin facade (~400 SLOC, hard cap 500): retains main(), _slim_roadmap_state,
+      _format_preflight_summary, open_telemetry_session, and the argparse __main__ block VERBATIM in
+      behaviour; adds FACADE RE-EXPORTS (noqa F401, one consolidated import block per tests/CLAUDE.md)
+      of every public function and every test-referenced private symbol -- including the back-compat
+      _sync_ops_pull and _DuckDBIcebergReader re-imports (rec-2210's dead patches must keep resolving)
+      -- and keeps stdlib imports (subprocess, sys, os, json, Path) so module-attribute patch
+      navigations (e.g. patch("session_preflight.subprocess.run"), 33 sites) still resolve. main()
+      resolves ALL package functions via module-qualified attributes (e.g. env_git.check_venv(),
+      recs_cache._count_recommendations_reader()) so each symbol has exactly ONE canonical patch
+      target: its home module. Keeps `from scripts import platform_roadmap` / product_roadmap_module
+      (patched via namespace navigation). Contingency: if the facade exceeds 450 SLOC, relocate
+      open_telemetry_session to scripts/preflight/telemetry_session.py with its patch-site migration.
+  - file: scripts/preflight/__init__.py
+    action: Create
+    purpose: Package marker for the preflight decomposition (~4 SLOC). No logic, no imports with side effects.
+  - file: scripts/preflight/_common.py
+    action: Create
+    purpose: >-
+      SOLE source of shared, test-patched primitives (~100 SLOC): ROOT, path constants read by moved
+      bodies (RECOMMENDATIONS_FILE, SESSION_LOG_FILE, ROADMAP_FILE, ROADMAP_PLATFORM_PATH,
+      ROADMAP_PRODUCT_PATH, DECISIONS_FILE, PRIORITY_QUEUE_FILE, TERRAFORM_DIR), tunables
+      (STRATEGIC_REVIEW_LOOKBACK_DAYS, _NON_AUTOMATABLE_SOFTCAP), _READER_SENTINEL, _make_reader,
+      _row_ts, _parse_ts_utc, and external re-imports used inside moved bodies (resolve_aws_profile,
+      get_backend, read_jsonl). Moved bodies reference these as _common.<name> at call time so a
+      single patch target (scripts.preflight._common.<name>) intercepts everywhere. No dependency on
+      scripts.session_preflight (no cycle). PREFLIGHT_REPORT and TELEMETRY_ACTIVE_SESSION_FILE stay
+      in the facade (read only by facade-resident code; 14+1 patch sites unchanged).
+  - file: scripts/preflight/env_git.py
+    action: Create
+    purpose: >-
+      Environment + git concern (~260 SLOC): _print_activate_hint, check_venv, is_worktree,
+      get_git_status, check_main_freshness, _get_recent_main_commits, run_log_sync,
+      _print_recent_main_commits. Bodies moved verbatim.
+  - file: scripts/preflight/aws_infra.py
+    action: Create
+    purpose: >-
+      Credentials + infra-state concern (~110 SLOC): check_credentials, _handle_credentials_startup,
+      _prime_reader_url, check_terraform_pending.
+  - file: scripts/preflight/recs_cache.py
+    action: Create
+    purpose: >-
+      Open-recommendation tallies over the warm cache (~200 SLOC): _derive_open_recs,
+      _derive_decisions_max_updated, _tally_rec_counts, _count_recommendations_reader,
+      count_recommendations, _check_non_automatable_softcap, _get_latest_decision_ts.
+  - file: scripts/preflight/ci_rca_signals.py
+    action: Create
+    purpose: >-
+      CI-RCA rec derivation/fetch/print + liveness concern (~390 SLOC): _derive_ci_rca_open,
+      _derive_ci_rca_dispute_open, _derive_ci_rca_undetermined_open, _derive_ci_rca_closed,
+      _derive_ci_rca_since, _fetch_ci_rca_recs, _fetch_ci_rca_dispute_recs,
+      _fetch_ci_rca_undetermined_recs, _fetch_ci_rca_recs_since, _check_ci_rca_liveness,
+      _check_convergence_rca_gap, _CONVERGENCE_RCA_GAP_GRACE_MINUTES, print_ci_rca_recs,
+      print_ci_rca_dispute_recs, print_ci_rca_undetermined_recs. Callers and callees co-locate
+      (_check_* call _fetch_ci_rca_recs_since intra-module).
+  - file: scripts/preflight/ci_rca_gauges.py
+    action: Create
+    purpose: >-
+      CI-RCA gauge concern (~230 SLOC): _compute_ci_rca_abstention, _escalate_ci_rca_probe_health,
+      print_ci_rca_abstention_gauge, _compute_ci_rca_telemetry, print_ci_rca_telemetry,
+      _derive_ci_rca_back_validation, print_ci_rca_back_validation, and the _CI_RCA_* window/threshold
+      constants.
+  - file: scripts/preflight/alerts.py
+    action: Create
+    purpose: >-
+      Recurrence/bypass alert concern (~90 SLOC): _derive_forward_fix_recursion,
+      _check_forward_fix_recursion, _derive_budget_bypass_recent, _check_budget_bypass_alert.
+  - file: scripts/preflight/priority_queue.py
+    action: Create
+    purpose: >-
+      Priority-queue concern (~110 SLOC): _shape_priority_queue_rows, _read_priority_queue_cache,
+      read_priority_queue, print_priority_queue.
+  - file: scripts/preflight/correlation.py
+    action: Create
+    purpose: >-
+      Rec/commit correlation concern (~130 SLOC): _CI_TITLE_STOPWORDS, _title_jaccard,
+      _file_paths_correlate, correlate_recs_with_commits, correlate_ci_rca_with_main,
+      surface_queue_relevance_triage.
+  - file: scripts/preflight/context_docs.py
+    action: Create
+    purpose: >-
+      Context-document + health concern (~250 SLOC): parse_last_session, read_context_files,
+      check_telemetry_health, check_data_quality_coverage, print_telemetry_health,
+      _check_endstate_drift, _scan_provisional_contracts. The rec-2186 wrong-config-path behaviour in
+      check_data_quality_coverage moves VERBATIM (bug preserved by design; out of scope).
+      _scan_provisional_contracts is the CD.25 re-ratification CI enforcement surface (Decision 118)
+      and moves verbatim with the provisional_contracts_due report key intact.
+  - file: tests/test_session_preflight.py
+    action: Modify
+    purpose: >-
+      Bulk-migrate patch/setattr targets of MOVED symbols to their canonical new homes (per
+      tests/CLAUDE.md): shared primitives to scripts.preflight._common (_make_reader 35 sites incl the
+      autouse fixture, ROOT 9, RECOMMENDATIONS_FILE 12, SESSION_LOG_FILE 10, ROADMAP_FILE 9,
+      DECISIONS_FILE 9, resolve_aws_profile 6, PRIORITY_QUEUE_FILE); moved functions to their home
+      module (check_venv 14, get_git_status 14, check_credentials 14, check_terraform_pending 14,
+      parse_last_session 14, _check_ci_rca_liveness 16, _count_recommendations_reader 7,
+      count_recommendations 7, _fetch_ci_rca_recs_since 5, read_priority_queue 5, and remaining
+      audited sites). Facade-resident symbols (main, _slim_roadmap_state, _format_preflight_summary,
+      open_telemetry_session, PREFLIGHT_REPORT) and namespace navigations
+      (session_preflight.subprocess.run, sys.executable, platform_roadmap.*) stay untouched. No
+      assertion semantics change. Counts above are planning-time grep results; the implement-time
+      audit (execution step 2) is authoritative.
+  - file: tests/test_session_preflight_cache_serving.py
+    action: Modify
+    purpose: Same bulk migration for this suite's sites targeting moved symbols; assertions unchanged.
+  - file: tests/test_session_preflight_platform_roadmap.py
+    action: Modify
+    purpose: Same bulk migration; repoint only sites the audit identifies (may be a no-op); assertions unchanged.
+  - file: tests/test_session_preflight_product_roadmap.py
+    action: Modify
+    purpose: Same bulk migration; repoint only sites the audit identifies (may be a no-op); assertions unchanged.
+  - file: tests/test_session_preflight_contracts.py
+    action: Modify
+    purpose: Same bulk migration; repoint only sites the audit identifies (may be a no-op); assertions unchanged.
+  - file: tests/test_session_preflight_decomposition.py
+    action: Create
+    purpose: >-
+      New equivalence suite: (1) report-schema freeze -- a stubbed main() run writes a report whose
+      top-level key set equals the frozen 44-key list captured from the pre-refactor code; (2) facade
+      completeness -- every name on the frozen export list (all public functions + every
+      test-referenced private symbol incl _sync_ops_pull and _DuckDBIcebergReader) is getattr-able on
+      the module AND importable via `from scripts.session_preflight import <name>`; (3) mock
+      interception -- patching scripts.preflight._common._make_reader and one home-module function
+      per domain intercepts through moved bodies invoked via the facade; (4) full residual-site
+      closure -- scans the sibling test files for any old-namespace reference to a migrated symbol
+      across ALL FOUR mock idioms (patch("session_preflight.X"); patch.object(_preflight, "X", ...);
+      monkeypatch.setattr("session_preflight.X", ...); monkeypatch.setattr(_preflight, "X", ...))
+      and asserts zero; (5) the summary block's first line "Preflight OK -> " frozen -- asserted
+      line-anchored within whole stdout; the summary is never process-stdout line 1, which is a
+      blank line from the telemetry-health block; (6) argparse flag-surface freeze via --help;
+      (7) Decision 88 topology guard -- greps
+      scripts/preflight/ for _make_reader/make_reader bindings outside _common.py and asserts zero.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Regenerated ONLY via `bin/venv-python -m scripts.validate --update-sloc-budgets` as the LAST
+      implementation step (Decision 102): the scripts/session_preflight.py entry (1989) auto-drops at
+      <=500 SLOC. Diff-assert the removal and that NO new entry is seeded for the facade or any
+      scripts/preflight/ module. Never hand-edited. Sibling decomposition plans on this branch may
+      legitimately shift other entries -- no full-file equality assertion.
+bundled_recommendations:
+  - rec-553
+infrastructure_dependencies: []
+acceptance_criteria:
+  - All five existing preflight suites plus the new decomposition suite pass with unchanged assertion semantics (no test deleted or weakened).
+  - "Entry contracts byte-stable: report JSON has the identical 44 top-level keys (frozen-list test); the summary block's first line -- line-anchored within whole stdout, emitted near the end of the run, NOT process-stdout line 1 -- keeps the exact 'Preflight OK -> <path>' shape; argparse surface is exactly {--health, --open-session, --workflow, --branch, --roadmap-detail}; exit codes preserved (1 only on wrong venv; --open-session prints a UUID and exits 0)."
+  - Facade re-exports every public function and every test-referenced private symbol (including _sync_ops_pull and _DuckDBIcebergReader); the frozen export list resolves via `from scripts.session_preflight import <name>`.
+  - Mock interception preserved -- patching scripts.preflight._common._make_reader (and each migrated _common primitive) plus one home-module function per domain intercepts through moved bodies; zero residual old-namespace patch/setattr sites for migrated symbols (grep closure, VP step 2 + decomposition-test scan).
+  - "Decision 88 topology preserved: the only _make_reader binding in the package is scripts/preflight/_common.py (facade re-export aside); no new reader instantiation or named-verb call is introduced anywhere in scripts/preflight/; moved bodies resolve the reader exclusively as _common._make_reader (decomposition-test guard)."
+  - scripts/session_preflight.py <=500 SLOC (target ~400); every scripts/preflight/*.py <=500 SLOC (target <=400); the CC gate passes with the decision-43 complexity-waiver header carried to any module whose moved function needs it.
+  - config/sloc_budgets.yaml loses its scripts/session_preflight.py entry via regeneration and gains NO new entry for the facade or package (scoped diff assertion).
+  - bin/venv-python -m scripts.validate --pre exits 0.
+  - rec-553 closes post-merge via the Resolves trailer (its acceptance -- facade below 500 SLOC, functionality preserved across sub-modules -- is this plan's AC set).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: Full preflight test surface -- five existing suites plus the new decomposition suite.
+    command: bin/venv-python -m pytest tests/test_session_preflight.py tests/test_session_preflight_cache_serving.py tests/test_session_preflight_platform_roadmap.py tests/test_session_preflight_product_roadmap.py tests/test_session_preflight_contracts.py tests/test_session_preflight_decomposition.py -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: A `from scripts.session_preflight import X` fails -> facade re-export missing; a mock silently no-ops -> patch site not migrated to its home module / _common (silent no-op mock, tests/CLAUDE.md).
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: Residual-site grep closure for the top migrated symbols across ALL FOUR mock idioms -- patch-string, patch.object, monkeypatch-string, monkeypatch-object (full-inventory closure runs inside the decomposition suite).
+    command: >-
+      test "$(grep -hE "(patch\(.session_preflight\.|patch\.object\(_preflight, .|setattr\(.session_preflight\.|setattr\(_preflight, .)(_make_reader|ROOT|RECOMMENDATIONS_FILE|SESSION_LOG_FILE|ROADMAP_FILE|DECISIONS_FILE|PRIORITY_QUEUE_FILE|resolve_aws_profile|check_venv|get_git_status|check_credentials|check_terraform_pending|parse_last_session|_check_ci_rca_liveness|_fetch_ci_rca_recs_since|_count_recommendations_reader|count_recommendations|read_priority_queue)" tests/test_session_preflight.py tests/test_session_preflight_cache_serving.py tests/test_session_preflight_platform_roadmap.py tests/test_session_preflight_product_roadmap.py tests/test_session_preflight_contracts.py | wc -l)" = "0"
+    expected: Zero residual sites across all four idioms -- patch("session_preflight.X"); patch.object(_preflight, "X", ...); monkeypatch.setattr("session_preflight.X", ...); monkeypatch.setattr(_preflight, "X", ...) -- in all five suites; exit 0.
+    fix_if: Nonzero -> a site was not repointed by the bulk migration (the cache-serving suite standardises on patch.object per its own header comment; test_session_preflight.py lines 83/91 use monkeypatch string-form on ROOT); repoint it -- never leave a silent no-op mock.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: End-to-end real run -- module entry point, exit code, one-line summary shape, report parses.
+    command: >-
+      bin/venv-python -m scripts.session_preflight > /tmp/pf_e2e.out
+      && grep -q "^Preflight OK -> " /tmp/pf_e2e.out
+      && bin/venv-python -m json.tool logs/.preflight-report.json > /dev/null && echo E2E-OK
+    expected: Exit 0 (degraded creds mode also exits 0); the line-anchored "Preflight OK -> " summary line is present in stdout -- emitted near the END of the run; the summary is never process-stdout line 1 (which is a blank line from the telemetry-health block), hence no head -n1 oracle; report JSON parses. Key-set equality vs the frozen 44-key list is asserted by the decomposition suite (step 1).
+    fix_if: Nonzero exit or the summary line missing -> facade main()/_format_preflight_summary drifted (do NOT reorder stdout to satisfy the check -- stdout ordering is itself frozen behaviour); report unparseable -> report assembly broken during movement.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: CLI flag-surface freeze.
+    command: >-
+      bin/venv-python -m scripts.session_preflight --help > /tmp/pf_help.out
+      && for f in health open-session workflow branch roadmap-detail; do grep -q -- "--$f" /tmp/pf_help.out || exit 1; done && echo FLAGS-OK
+    expected: All five flags present; exit 0.
+    fix_if: A flag missing -> the argparse block was altered; restore it verbatim.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: SLOC assertion -- facade and every new module within limits.
+    command: >-
+      bin/venv-python -c "import pathlib;
+      sloc=lambda p: len([l for l in p.read_text().splitlines() if l.strip() and not l.strip().startswith('#')]);
+      f=sloc(pathlib.Path('scripts/session_preflight.py'));
+      mods={str(p): sloc(p) for p in sorted(pathlib.Path('scripts/preflight').glob('*.py'))};
+      over=[k for k,v in mods.items() if v>500];
+      print('facade', f); print(mods);
+      assert f<=500 and not over"
+    expected: Facade <=500 (target ~400); zero modules over 500 (target <=400 each); exit 0.
+    fix_if: Facade over -> relocate open_telemetry_session per the scope contingency; a module over 500 -> split it on its next-finest concern seam.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: Budget re-point (LAST implementation step) -- entry removed, nothing seeded.
+    command: >-
+      bin/venv-python -m scripts.validate --update-sloc-budgets
+      && git diff -- config/sloc_budgets.yaml | grep -E "^-.*scripts/session_preflight\.py"
+      && ! git diff -- config/sloc_budgets.yaml | grep -E "^\+.*(scripts/session_preflight\.py|scripts/preflight/)"
+    expected: The scripts/session_preflight.py line is REMOVED; no added line references the facade or scripts/preflight/. Sibling-plan entries may shift; that is out of this assertion's scope.
+    fix_if: An added scripts/preflight/ line appears -> a module exceeds 500 and was auto-seeded; split it finer and re-run the regen.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: Fast presubmit tier passes.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0.
+    fix_if: >-
+      Content check fails -> fix on branch. If ONLY the wall-clock budget assertion trips with all
+      content checks green, that is the known pre-existing pytest_diff drift (10 budget_bypass recs in
+      7d; PR CI --pre is authoritative per Decision 73) -- document per existing --ignore-budget
+      practice rather than masking a content failure.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: CC gate passes post-extraction (decision-43 waiver carried with moved functions).
+    command: >-
+      bin/venv-python -c "from scripts.validate import validate_cc_limits; f=[];
+      validate_cc_limits(f); print(f if f else 'cc-ok'); raise SystemExit(1 if f else 0)"
+    expected: No CC violation over the new tree; exit 0.
+    fix_if: "A moved function over CC 20 reddens the gate -> carry the `# complexity-waiver: decision-43` header comment into its new module."
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: Stale-definition sweep -- only the four retained defs remain in the facade.
+    command: >-
+      ! grep -E "^def " scripts/session_preflight.py | grep -vE "^def (main|_slim_roadmap_state|_format_preflight_summary|open_telemetry_session)\("
+    expected: No extracted definition remains in the facade (imports/re-exports only); exit 0.
+    fix_if: A def survives -> move its body to the domain module and leave only the re-export.
+  - step: 10
+    phase: pre-deploy
+    hermetic: false
+    action: rec-553 closes after merge (bundled-rec closure obligation).
+    command: >-
+      bin/venv-python -m scripts.sync_ops pull && bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      r=next((x for x in rows if x.get('id')=='rec-553'), None);
+      print('rec-553', r and r.get('status'));
+      raise SystemExit(0 if r and r.get('status')=='closed' else 1)"
+    expected: Post-merge, rec-553 reads closed (Resolves trailer / rec-autoclose). Pre-merge it may read open -- authoritative only after the squash-merge lands.
+    fix_if: Stays open post-merge -> the Resolves trailer was omitted; close via `bin/venv-python -m scripts.ops_data_portal --update-rec rec-553 --status closed --resolution "..."` (Decision 103 closure proof via the portal).
+  - step: 11
+    phase: pre-deploy
+    hermetic: true
+    action: Facade import invariant (sole hermetic replay step, fleet 20-step/120s budget) -- the module imports cleanly both before and after decomposition.
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "import scripts.session_preflight; print('facade-import-ok')"
+    expected: Prints facade-import-ok; exit 0 in <5s; no network, no credentials (Import Safety Patterns -- nothing raises at import time). Portable interpreter idiom because CI's pr-validate replay job has no .venv.
+    fix_if: ImportError -> a facade re-export references a missing package symbol; fix the consolidated re-export block.
+constraints:
+  - "Behaviour preservation is absolute: movement-only refactor. No feature work, no bug fixes, no signature changes. Entry contracts byte-stable: module invocation path (bin/venv-python -m scripts.session_preflight), argparse flags, exit codes, stdout one-line summary, the 44 report JSON top-level keys, and the --open-session UUID-print contract."
+  - Decision 102 -- budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets` as the LAST step, never a hand-edit; scoped diff assertion (this branch carries ~16 sibling decompositions; other entries may shift; conflict resolution on config/sloc_budgets.yaml is re-running the regen command).
+  - "Decision 43 -- CC<=20 per function; the `# complexity-waiver: decision-43` header travels with any moved function that needs it (the current file carries the waiver at file top)."
+  - "Decision 80 / Decision 104 precedent -- facade re-exports (public AND test-patched private symbols), _common shared-primitive namespace with single canonical patch targets, bulk patch-site migration, frozen equivalence oracles, budget re-point with diff assertion. Deliberate divergence -- no check registry: main() is a fixed orchestration pipeline, not a growing check set; module-qualified resolution from the facade replaces getattr dispatch."
+  - "Decision 88 (Neon catalog egress budget) -- session_preflight IS Decision 88 machinery: preserve the single warm-sync + single _make_reader topology. Exactly one _make_reader binding lives in scripts/preflight/_common.py (facade re-export aside); no preflight module may instantiate its own reader, add a reader/named-verb call, or re-fetch warm-cache tables; every Phase-B signal keeps deriving from the warm-up sync's already-pulled rows (Decision 88 invariant ii)."
+  - "Decision 118 -- _scan_provisional_contracts is the CD.25 re-ratification CI enforcement surface: the scan and the provisional_contracts_due report key move intact, behaviour unchanged."
+  - Namespace-migration discipline (tests/CLAUDE.md) -- bulk replacement script for the ~380-site suite, zero residual old-namespace sites, interception test; one consolidated import block per test file (ruff format silently drops symbols from a second block).
+  - "Multi-plan coordination: this is one of ~16 SLOC-decomposition plans landing on branch claude/sloc-violations-refactor-p5svnl. Touch ONLY the files in this Scope table (plus the sibling PLAN-sloc-session-postflight shares config/sloc_budgets.yaml via regen). Do NOT modify scripts/test_coverage_checker.py or any shared surface."
+  - Decision 86 -- no new standing prose-architecture doc; rationale lives in this plan + the code.
+  - Decision 101 -- public repo; no account IDs, ARNs, secrets, or internal hostnames in code or plan.
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable verification failure, stop and RCA; never paper over a broken equivalence with a skip.
+  - AGENTS.md code style -- Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens, default no comments.
+context:
+  - >-
+    Root cause: session_preflight.py is at its exact ratchet ceiling (1989/1989; its budget entry
+    previously carried a ratchet-bump annotation, since dropped by a regen) and is loaded at every session start and inside /plan and
+    /implement Step 1. rec-2414 is the umbrella program (break down all SLOC-registered oversized
+    files; cited, NOT bundled -- it closes only when the whole program completes). rec-553
+    ("Modularize scripts/session_preflight.py", relevance verdict: unknown -> proceed) is the exact
+    per-file rec and is bundled.
+  - >-
+    Importer/patch-binding reality (planning-time grep, counts are indicative): ZERO production
+    importers -- the module is a pure CLI entry point plus 5 test suites. Tests load the file via
+    importlib.spec_from_file_location under the short name "session_preflight" (sys.modules alias)
+    and patch string targets "session_preflight.<X>" (~380 patch/setattr sites). Because main() stays
+    in the facade, patches on facade-RESIDENT symbols keep intercepting; symbols moved to the package
+    get exactly one canonical patch target (home module or _common) and main() reaches them ONLY via
+    module-qualified attributes -- eliminating every dual-binding path. The facade is double-loaded
+    in tests (importlib alias + normal import); shared mutable/patched state therefore lives ONCE in
+    _common / home modules, never duplicated in the facade.
+  - >-
+    Entry-contract consumers (grep-enumerated): .claude/commands/plan.md, implement.md, audit.md
+    (plain run + --open-session --workflow <name>), orient.md (--roadmap-detail full); the planning
+    and implement skills read logs/.preflight-report.json (44 top-level keys frozen by this plan);
+    scripts/session_metrics.py reads the session_start key; scripts/product_roadmap.py
+    --check-preflight-report reads the product_roadmap block. postflight's --close-session consumes
+    the logs/.telemetry-active-session.json written by open_telemetry_session.
+  - >-
+    T-1.9 / CD.40 finding (recorded per orchestrator instruction): T-1.9 (session-log architecture
+    audit) is status complete (2026-06-09). ops_session_log retirement routes through T3.20 / CD.40
+    (unratified) and T2.26; rec-2510 records the postflight writer-rewire design intent. The
+    --open-session/--close-session telemetry glue moves VERBATIM here -- no dead-work conflict: a
+    later retirement plan deletes the glue from its new home instead of the monolith.
+  - >-
+    Adjacent open recs on these files are deliberately NOT fixed (movement-only): rec-1994/rec-1995
+    (dead is-not-None guards move verbatim), rec-2210 (dead _sync_ops_pull test patches -- the facade
+    MUST keep the _sync_ops_pull re-export so those patches keep resolving; their cleanup stays
+    rec-2210's), rec-2186 (DQ-coverage wrong config path moves verbatim), rec-025 (a --rollback flag
+    does NOT exist on either session tool -- it is an open FEATURE rec and is not implemented here).
+    Post-decomposition, open recs citing scripts/session_preflight.py line-level internals may need
+    file-field re-pointing; surfacing note only.
+  - >-
+    Coverage-gate note: scripts/test_coverage_checker.py map_source_to_test returns None for nested
+    scripts/preflight/** paths, so new modules are not per-file coverage-gated. Deliberately NOT
+    extending the checker (shared file across ~16 sibling plans = guaranteed integration conflict;
+    the moved bodies remain exercised through the existing suites via the facade, and the facade
+    itself stays gated by tests/test_session_preflight.py). EXPLICIT DEFERRAL (scout NOTE 2): this
+    knowingly diverges from Decision 104, which extended map_source_to_test for scripts/checks/**
+    precisely because the len(parts)==2 rule skips nested modules; a follow-up rec to extend the
+    mapping for scripts/preflight/** and scripts/postflight/** AFTER the sibling SLOC plans land is
+    flagged in the planner's handoff (do not edit the shared checker inside this plan).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND -- 83/83 triaged, two NOTEs (both resolved in-plan), no BLOCK. CITE: Decision 80, Decision 104, Decision 102, Decision 43, Decision 55, Decision 86, Decision 101, Decision 73, Decision 88, Decision 118, Decision 103, Decision 84, Decision 79."
+  - >-
+    Scout obligations incorporated: Decision 88 -- session_preflight IS the Neon egress-budget
+    machinery (its warm-cache fan-out was driver D4); the single warm-sync + single _make_reader
+    topology is preserved via a dedicated constraint, acceptance criterion, and decomposition-test
+    guard (invariant ii: Phase-B signals serve from the warm-up sync's rows, never re-fetch).
+    Decision 118 -- _scan_provisional_contracts is the CD.25 re-ratification CI enforcement surface;
+    the scan moves verbatim and the provisional_contracts_due report key stays in the frozen 44.
+    Decision 103 -- the rec relevance lifecycle governs the rec-553 closure verdict and names the
+    correlation engine extracted to scripts/preflight/correlation.py; VP step 10's portal fallback is
+    a Decision 103 closure-proof action (the earlier Decision 70 label was a recurring mis-cite;
+    Decision 70 is bootstrap-record deletion only). Decision 84 -- recs_cache and priority_queue
+    modules exercise the I-3 named-verb boundary and read-cache-never-write-source invariants
+    unchanged; the telemetry/session_log legacy OpsWriter paths move verbatim pending T2.26; CD.40
+    remains an unratified candidate (nothing blocks a movement-only refactor). Decision 79 -- V2
+    tier authority: neither session tool appears in any active Lambda manifest.
+  - "gates: decision-scout=FLAGS_FOUND (2 NOTEs, resolved in-plan); plan-critique=PROCEED after 2 round(s)"
+  - Branch claude/sloc-violations-refactor-p5svnl was 0 behind / 0 ahead of origin/main at planning time; main_files_changed_since_branch is empty -- no Main Divergence overlap with this scope.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (80, 104, 102, 43, 86, 55 targeted)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Frozen baselines captured BEFORE any code movement -- 44-key report list, argparse flag list, summary-line prefix (line-anchored, not process-stdout line 1), and the patched-symbol inventory (audit step)
+execution_steps:
+  - "Capture baselines FIRST: record the 44 report top-level keys from the CURRENT main() (report dict literal + the 7 post-assignments), the argparse flag list, and the line-anchored summary-line prefix (the 'Preflight OK -> ' line near the end of stdout, NOT process-stdout line 1); freeze them in tests/test_session_preflight_decomposition.py. This precedes any code movement."
+  - "Audit patch surface: grep-enumerate every patch/setattr symbol across the 5 preflight suites and classify each as facade-resident (site unchanged), home-module (site -> scripts.preflight.<module>.<name>), or _common (site -> scripts.preflight._common.<name>). This table drives steps 5-6; planning-time counts in the Scope table are indicative, this audit is authoritative."
+  - "Create scripts/preflight/__init__.py and scripts/preflight/_common.py (constants, _READER_SENTINEL, _make_reader, _row_ts, _parse_ts_utc, external re-imports)."
+  - "Move bodies VERBATIM into the 9 domain modules per the Scope table; inside moved bodies rewrite shared-primitive references to _common.<name> and cross-module calls to <module>.<name> (call-time resolution); carry the decision-43 waiver header where a moved function needs it."
+  - "Rewrite the facade: keep main/_slim_roadmap_state/_format_preflight_summary/open_telemetry_session/argparse verbatim in behaviour; main() resolves package functions via module-qualified attributes; add the consolidated re-export block (every public + test-referenced private symbol, incl _sync_ops_pull and _DuckDBIcebergReader, noqa F401); keep stdlib and roadmap-module imports for namespace-navigation patches."
+  - "Bulk-migrate patch/setattr sites across the 5 test files per the audit table using a replacement script (tests/CLAUDE.md); then verify zero residual old-namespace sites for migrated symbols (VP step 2 grep + the decomposition suite's full-inventory scan)."
+  - "Write tests/test_session_preflight_decomposition.py: report-key freeze, facade completeness, mock interception (one _common primitive + one home-module function per domain), residual-site scan, stdout prefix + flag freeze."
+  - "Execute the Verification Plan: run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55). Steps 6 (budget regen) runs LAST among implementation actions."
+  - "Include `Resolves: rec-553` in the squash-merge body."
+  - "Report: modules created with final SLOC each, facade SLOC, migration-site counts, interception results, budget-diff outcome."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; if the equivalence guards cannot go green, abandon the branch
+  (nothing deployed; neither file is Lambda-packaged -- compute_affected_artifacts is empty). If
+  merged and a regression surfaces, revert the squash commit: facade + package + test migration +
+  budget regen land atomically in one PR, so a single revert restores the monolith.
