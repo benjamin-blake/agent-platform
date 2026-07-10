@@ -9,6 +9,7 @@ returns on any missing-file / unparseable / malformed-shape problem.
 
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 
 import yaml
@@ -109,6 +110,48 @@ def _dead_targets_for_route(route: dict, tracked: set[str]) -> list[str]:
     return dead
 
 
+def _load_docs_root_allowlist(path: Path) -> tuple[set[str] | None, list[str], str | None]:
+    """Parse the optional `docs_root_allowlist` sibling key from the router file.
+
+    Returns (allowed_files, grandfathered_globs, error):
+      - (None, [], None)   -> key ABSENT: rule not configured; caller skips the docs-root scan.
+      - (set, list, None)  -> key present and well-formed: caller runs the scan.
+      - (None, [], "msg")  -> key present but malformed: caller appends the failure.
+    Never raises.
+    """
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return None, [], f"could not read/parse {path}: {exc}"
+    if not isinstance(data, dict) or "docs_root_allowlist" not in data:
+        return None, [], None
+    block = data["docs_root_allowlist"]
+    if not isinstance(block, dict):
+        return None, [], "docs_root_allowlist is not a mapping"
+    allowed = block.get("allowed_files", [])
+    globs = block.get("grandfathered_globs", [])
+    if not isinstance(allowed, list) or any(not isinstance(x, str) or not x for x in allowed):
+        return None, [], "docs_root_allowlist.allowed_files must be a list of non-empty strings"
+    if not isinstance(globs, list) or any(not isinstance(x, str) or not x for x in globs):
+        return None, [], "docs_root_allowlist.grandfathered_globs must be a list of non-empty strings"
+    return set(allowed), list(globs), None
+
+
+def _docs_root_stray_files(tracked: set[str], allowed: set[str], globs: list[str]) -> list[str]:
+    """Depth-1 tracked files under docs/ that are neither allowlisted nor grandfathered."""
+    strays: list[str] = []
+    for path_str in sorted(tracked):
+        if not path_str.startswith("docs/"):
+            continue
+        rest = path_str[len("docs/") :]
+        if not rest or "/" in rest:
+            continue
+        if rest in allowed or any(fnmatch.fnmatch(rest, g) for g in globs):
+            continue
+        strays.append(path_str)
+    return strays
+
+
 @registry.register("validate_placement", owner="platform")
 def validate_placement(failed: list[str], router_path: Path | None = None) -> None:
     """Link-validity gate (RS-04): every docs/contracts/file-router.yaml target must
@@ -141,3 +184,16 @@ def validate_placement(failed: list[str], router_path: Path | None = None) -> No
 
     if not (malformed or duplicate_topics or dead_targets):
         print(f"  PASS: {len(valid_routes)} route(s), zero dead targets.")
+
+    print("\n=== Docs-root allowlist check (RS-03) ===")
+    allowed, globs, allow_err = _load_docs_root_allowlist(path)
+    if allow_err is not None:
+        failed.append(f"Docs-root allowlist: {allow_err}")
+    elif allowed is None:
+        print("  SKIP: no docs_root_allowlist key configured.")
+    else:
+        strays = _docs_root_stray_files(tracked, allowed, globs)
+        if strays:
+            failed.append("Docs-root allowlist: out-of-class docs-root file(s) (RS-03): " + ", ".join(strays))
+        else:
+            print(f"  PASS: docs/ root within allowlist ({len(allowed)} allowed, {len(globs)} grandfathered).")

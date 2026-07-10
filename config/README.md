@@ -1,10 +1,9 @@
 # Configuration Guide
 
-This directory is split into three zones:
-
-- **Root (shared):** `config.yaml`, `config.yaml.example`, `config.company.yaml`, `config.personal.yaml` -- runtime config loaded by `src.common.config`. Bundled into Lambda zips.
-- **`lambda/<name>/`:** Per-Lambda runtime payloads. Bundled into `<name>.zip` by `scripts/build_lambda.py`. Initially empty placeholders for `data-pipeline` and `ops-compaction`.
-- **`agent/<consumer>/`:** Agent-consumed config (DQ rules, executor prompts, copilot registry, IAM manifest). NOT bundled into any Lambda zip. Only Claude Code agents and CI scripts read from here.
+This directory splits into three zones (root shared / `lambda/<name>/` / `agent/<consumer>/`). The
+authoritative zone layout and the "config/agent/ is never Lambda-bundled" invariant live in
+`config/CLAUDE.md` (auto-loads when you edit this tree). This README is a CD.23 portal projection
+for human config reference; it does not restate the placement/bundling rules.
 
 ## Configuration Files
 
