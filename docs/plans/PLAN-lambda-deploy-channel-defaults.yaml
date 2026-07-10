@@ -1,0 +1,405 @@
+schema_version: 1
+slug: "lambda-deploy-channel-defaults"
+intent: >-
+  Make the governed deploy CHANNEL for terraform/personal DuckLake Lambda code ambient and
+  unambiguous, and ratify the industry-best-practice DECOUPLING of application code from infra
+  apply (which environment-taxonomy.md section 5 already prescribes but the DuckLake Lambdas never
+  followed), so agents stop defaulting to out-of-band local `build_lambda --deploy` and code
+  changes ride a governed CD path.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-lambda-deploy-channel-defaults.yaml
+phase: >-
+  Platform / T2 governance (instruction-architecture + apply-model clarity). No product-roadmap
+  phase; this is platform infrastructure-governance work underneath the DuckLake ops backbone
+  (Decision 84 / T2.17).
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add a new numbered Decision ratifying "decouple DuckLake Lambda code from infra apply per
+      environment-taxonomy.md section 5 (industry best practice)". Rationale = the wave-3
+      routing/stranding evidence (a code-only change routed by an unrelated out-of-budget IAM
+      delta in the same root module). Names the target channel = a dedicated code-deploy CD path;
+      demotes local `build_lambda --deploy` to break-glass / admin-IAM-path step only. Makes the
+      correction citable (Decision 86 rationale routing). Include explicit reversal conditions.
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      Correct section 5's stale "(No such Lambda exists today...)" note. Record the DuckLake
+      Lambdas (writer/reader/maintenance/catalog-dr) as the first personal-account Lambdas, that
+      they currently COUPLE code to terraform apply via source_code_hash=filemd5(zip), and that
+      they are being brought into conformance with the decoupling principle (cite the new
+      Decision). This file REMAINS the sole SoT for the apply-model / guard classification
+      (Decision 92 point 5) -- extend it, do not create a competitor.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add a short Layer-1 ambient "Lambda deploy channel" rule and the heuristic "when a
+      production action is auto-denied, grep .github/workflows for a governed CD path before
+      falling back to a local permission grant". Both POINT to environment-taxonomy.md section 5
+      and build-lambda.yaml -- they must NOT restate the guard/apply-model classification
+      (Decision 92 pt5 sole-SoT / Decision 86 anti-drift).
+  - file: docs/contracts/build-lambda.yaml
+    action: Modify
+    purpose: >-
+      Add a thin `deploy_channels:` section mapping each build-artifact class to its channel class
+      (terraform/personal filemd5-managed vs decoupled build-pipeline target), pointing to
+      environment-taxonomy.md section 5 for the authoritative classification. Build-artifact-scoped
+      only; no classification logic restated. Must not break the cli_flags / deploy_targets
+      equivalence tests.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Update the Infrastructure & Lambda Assessment so that for terraform/personal-managed active
+      Lambdas the plan emits the governed decoupled code-deploy CD channel VP steps (grep-only /
+      CI-delegated per Decision 119 -- no local terraform init/plan for terraform/personal),
+      instead of a bare local `build_lambda --deploy` post-deploy step.
+  - file: terraform/personal/ducklake_lambdas.tf
+    action: Modify
+    purpose: >-
+      COMMENT-ONLY correction: describe the target decoupled model, the interim coupled reality
+      (filemd5), and the break-glass-only role of local `build_lambda --ducklake-only --deploy`.
+      No resource, argument, or lifecycle change (that is the follow-on V3 P2 work).
+  - file: terraform/personal/ducklake_catalog_dr.tf
+    action: Modify
+    purpose: >-
+      COMMENT-ONLY correction mirroring ducklake_lambdas.tf for the catalog-dr function. No
+      resource/argument/lifecycle change.
+  - file: terraform/personal/ducklake_maintenance.tf
+    action: Modify
+    purpose: >-
+      COMMENT-ONLY correction mirroring ducklake_lambdas.tf for the maintenance function (incl. the
+      output description referencing `build_lambda --ducklake-only --deploy`). No
+      resource/argument/lifecycle change.
+  - file: src/lambdas/CLAUDE.md
+    action: Create
+    purpose: >-
+      New directory-scoped, thin deploy-channel pointer loaded exactly when an agent edits DuckLake
+      Lambda code under src/lambdas/** -- the missing in-context signal. Points to
+      environment-taxonomy.md section 5 + build-lambda.yaml + the new Decision; states no standing
+      rationale (Decision 86).
+  - file: src/data/handlers/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Clarify that the two functions here (dispatcher, findings-processor) are the decoupled
+      `build_lambda --deploy` targets, DISTINCT from the terraform/personal filemd5-coupled
+      DuckLake functions; cross-reference the new src/lambdas/CLAUDE.md and environment-taxonomy
+      section 5 so the two Lambda classes are not conflated.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    Three terraform/personal/*.tf files are in scope but edited COMMENT-ONLY (zero resource delta,
+    no source_code_hash / lifecycle / IAM change). No terraform apply is triggered by this plan.
+    The authoritative .tf verifier is the CI `terraform-validate` job (Decision 119); local
+    terraform init/plan for terraform/personal is egress-blocked and intentionally not run.
+  - >-
+    This plan does NOT alter any live Lambda, role, or the convergence anchor. The actual
+    decoupling (lifecycle ignore_changes + dedicated code-deploy CD) is filed as follow-on P2 and
+    is blocked on follow-on P3b (clear the pending github_ci_drift out-of-budget IAM delta) -- see
+    the follow-on recs filed by this plan.
+  - >-
+    compute_affected_artifacts(['src/lambdas/CLAUDE.md']) returns {data-pipeline, ops-compaction}
+    (both active) via the coarse `src/` copytree include, but the new file is inert documentation
+    with no runtime/import/asset role, so no rebuild/deploy/smoke-test applies (see the
+    affected-artifacts false-positive note in context). This is the sole manifest interaction and it
+    is a deliberate, justified divergence -- V1 stands.
+acceptance_criteria:
+  - >-
+    A new numbered Decision exists in docs/DECISIONS.md ratifying the decouple-code-from-infra
+    model for DuckLake Lambdas, with rationale (routing/stranding evidence) and explicit reversal
+    conditions, and is reflected in ops_decisions after --backfill-decisions-md.
+  - >-
+    environment-taxonomy.md section 5 no longer contains the stale "No such Lambda exists today"
+    claim and records the DuckLake Lambdas' coupled-interim / decoupled-target state citing the
+    new Decision; it remains the sole classification SoT.
+  - >-
+    AGENTS.md contains an ambient Lambda deploy-channel rule and the auto-denied->grep-workflows
+    heuristic, both pointing to (not restating) environment-taxonomy.md section 5.
+  - >-
+    build-lambda.yaml has a deploy_channels section that points to section 5 and does not restate
+    classification; tests/test_build_lambda_config.py still passes.
+  - >-
+    .claude/skills/planning/SKILL.md's Lambda Deployment Assessment emits the decoupled CD
+    code-deploy channel for terraform/personal-managed active Lambdas (grep-only/CI-delegated), not
+    a bare local build_lambda --deploy.
+  - >-
+    The three terraform/personal/*.tf edits are comment-only (git diff shows no non-comment lines
+    changed) and describe the target + interim + break-glass model correctly.
+  - >-
+    src/lambdas/CLAUDE.md exists as a thin pointer and src/data/handlers/CLAUDE.md distinguishes
+    the decoupled dispatcher/findings-processor targets from the filemd5-coupled DuckLake functions.
+  - >-
+    Follow-on recommendations are filed via the ops portal for P2 (decoupling implementation), P3a
+    (workflow_dispatch+routed-plan has no gated-apply path), P3b (green convergence record masks a
+    pending out-of-budget IAM delta / drift not catching config-vs-state), and an operational note
+    that the 4 DuckLake functions currently run pre-wave-3 code.
+  - >-
+    validate.py --pre passes on the branch (placement, contract validity, intent-doc-freeze,
+    plan-document schema).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: New Decision landed in DECISIONS.md and rebuilt into ops_decisions.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md && grep -nc "decouple"
+      docs/DECISIONS.md
+    expected: >-
+      Backfill completes without error; grep returns >=1 (the new Decision header/body naming the
+      decouple-code-from-infra ratification is present).
+    fix_if: >-
+      Backfill errors (static-key chain down -- verify aws sts get-caller-identity --profile
+      agent_platform) or the Decision header is missing/misnumbered (re-check the current max
+      "## Decision NNN" and renumber; the referential guard catches header mismatch).
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: environment-taxonomy.md section 5 stale note removed and conformance note added.
+    command: >-
+      ! grep -q "No such Lambda exists today" docs/contracts/environment-taxonomy.md && grep -niq
+      "ducklake" docs/contracts/environment-taxonomy.md
+    expected: >-
+      The stale sentence is gone (first clause true) AND section 5 now references the DuckLake
+      Lambdas (second clause true).
+    fix_if: >-
+      Stale string still present, or the DuckLake conformance/interim note was not added -- re-edit
+      section 5 to record coupled-interim + decoupled-target citing the new Decision.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: AGENTS.md ambient deploy-channel rule + auto-denied heuristic present, pointing to the SoT.
+    command: >-
+      grep -niq "deploy channel" AGENTS.md && grep -niq "governed CD path" AGENTS.md && grep -niq
+      "environment-taxonomy" AGENTS.md
+    expected: All three greps match (rule + heuristic + pointer to the SoT contract).
+    fix_if: >-
+      Any clause missing -- add the concise ambient rule and/or the "production action auto-denied
+      -> grep .github/workflows" heuristic, ensuring they POINT to section 5, not restate it.
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: build-lambda.yaml deploy_channels added and contract tests still green.
+    command: >-
+      grep -q "deploy_channels" docs/contracts/build-lambda.yaml && bin/venv-python -m pytest
+      tests/test_build_lambda_config.py -q
+    expected: >-
+      deploy_channels key present; the full build-lambda contract test module passes (cli_flags /
+      deploy_targets equivalence unaffected by the additive key).
+    fix_if: >-
+      Test failure -- a restated classification or a touched pipelines/deploy_targets/cli_flags
+      value; revert to an additive, pointer-only deploy_channels block.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: Planning SKILL Lambda Deployment Assessment emits the decoupled CD channel (no local build_lambda --deploy default).
+    command: >-
+      grep -niq "deploy channel\|code-deploy" .claude/skills/planning/SKILL.md && ! grep -nE
+      "post-deploy.*build_lambda --deploy|--deploy.*post-deploy" .claude/skills/planning/SKILL.md
+    expected: >-
+      The assessment references the decoupled code-deploy channel; no remaining instruction to
+      emit a bare local build_lambda --deploy as the terraform/personal post-deploy step.
+    fix_if: >-
+      The old local-deploy default persists -- rewrite the assessment to emit the governed CD
+      channel VP steps, grep-only/CI-delegated per Decision 119.
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: The three terraform/personal .tf edits are comment-only (no resource/argument delta).
+    command: >-
+      git fetch origin main --quiet; git diff origin/main -- terraform/personal/ducklake_lambdas.tf
+      terraform/personal/ducklake_catalog_dr.tf terraform/personal/ducklake_maintenance.tf | grep
+      -E '^[+-]' | grep -vE '^[+-]{3} ' | grep -vE '^[+-][[:space:]]*#' | grep -vE '^[+-][[:space:]]*$'
+      || echo COMMENT_ONLY_OK
+    expected: >-
+      Prints COMMENT_ONLY_OK -- every changed line is a comment (leading #) or blank; no HCL
+      resource/argument line was altered.
+    fix_if: >-
+      A non-comment line appears in the diff -- revert it; resource/lifecycle changes belong to the
+      follow-on V3 P2 plan, not here.
+    hermetic: false
+  - step: 7
+    phase: pre-deploy
+    action: src/lambdas/CLAUDE.md created (thin pointer) and src/data/handlers/CLAUDE.md distinguishes the two Lambda classes.
+    command: >-
+      test -f src/lambdas/CLAUDE.md && grep -niq "environment-taxonomy\|build-lambda" src/lambdas/CLAUDE.md
+      && grep -niq "filemd5\|ducklake\|terraform/personal" src/data/handlers/CLAUDE.md
+    expected: >-
+      New pointer file exists and references the SoT; handlers CLAUDE.md now distinguishes its
+      decoupled targets from the filemd5-coupled DuckLake functions.
+    fix_if: >-
+      File missing or pointers absent -- create/adjust the thin pointer (no standing rationale,
+      Decision 86) and the handlers clarification.
+    hermetic: false
+  - step: 8
+    phase: pre-deploy
+    action: Follow-on recs filed for P2 / P3a / P3b / stale-code operational note.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync >/dev/null 2>&1; grep -c
+      "decouple\|gated-apply\|convergence record\|pre-wave-3\|deploy channel"
+      logs/.recommendations-log.jsonl
+    expected: >-
+      >=4 matching open recs present in the refreshed local cache (P2 decoupling impl, P3a
+      dispatch/gated-apply gap, P3b convergence/drift observability, stale-code note).
+    fix_if: >-
+      Fewer than four -- file the missing follow-on rec(s) via file_rec (get_rec_write_guidance
+      first, Precision Context Injection), then re-sync. A write that cannot complete FAILS LOUDLY
+      -- restore the static-key chain and re-file (no offline outbox).
+    hermetic: false
+  - step: 9
+    phase: pre-deploy
+    action: Fast presubmit passes on the branch.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0 -- placement (docs_root_allowlist, new CLAUDE.md placement), contract validity,
+      intent-doc-freeze, and plan-document schema all green.
+    fix_if: >-
+      Any check fails -- read the diagnostic; common causes are a mis-placed new file or a
+      plan-schema violation. Fix and re-run. (Local --pre is advisory; PR CI --pre is authoritative
+      per Decision 73.)
+    hermetic: false
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Confirm the new src/lambdas/CLAUDE.md is the ONLY manifest interaction and is an inert
+      documentation false-positive (no genuine Lambda code changed), justifying the no-deploy stance.
+    command: >-
+      bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts as c;
+      m=c(['src/lambdas/CLAUDE.md']); assert set(m)=={'data-pipeline','ops-compaction'},m; import
+      pathlib; assert pathlib.Path('src/lambdas/CLAUDE.md').read_text().strip(); print('DOC_FALSE_POSITIVE_OK')"
+    expected: >-
+      Prints DOC_FALSE_POSITIVE_OK -- the affected set is exactly the two coarse-`src/`-include
+      artifacts and the file is a non-empty doc; no handler/import/asset was added, so no
+      rebuild/deploy/smoke-test is warranted (Decision 79 runtime-contract intent).
+    fix_if: >-
+      The affected set differs (a genuine Lambda source/asset file was added to scope) -- then the
+      no-deploy premise is void: either revert that file or escalate the plan to V3 with per-Lambda
+      build/deploy/smoke-test steps for the truly-affected active artifact(s).
+    hermetic: false
+constraints:
+  - >-
+    environment-taxonomy.md section 5 is the SOLE SoT for apply-model / guard classification
+    (Decision 92 point 5). AGENTS.md, build-lambda.yaml, the CLAUDE.md pointers, and the .tf
+    comments must POINT to it and MUST NOT restate the classification (Decision 86 anti-drift).
+  - >-
+    Comment-only .tf edits. No source_code_hash, lifecycle, IAM, trust, or any resource/argument
+    change to terraform/personal/*. No terraform apply, no Lambda rebuild/deploy is performed by
+    this plan.
+  - >-
+    Do NOT touch the convergence anchor, the deterministic guard, terraform-apply-sandbox.yml, or
+    terraform-drift.yml. The masked-drift observability gap (P3b) is RCA-first and filed as a
+    follow-on rec, never inline-patched (Decision 55 / Decision 72).
+  - >-
+    Do NOT reintroduce a local terraform init/plan for terraform/personal in the planning SKILL VP
+    guidance (Decision 119 egress constraint; Decision 120 relaxes but does not remove the
+    CI-delegation for routine non-admin flows).
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    The harness auto-mode classifier denial message is NOT repo-editable (harness-gated, same class
+    as the send_later permission gotcha); it is explicitly out of scope, not a deferred fix.
+context:
+  - >-
+    Root cause (deeper than the source retrospective): DuckLake Lambda code is COUPLED to terraform
+    apply via source_code_hash=try(filemd5(zip),null). A code-only wave-3 change was routed+stranded
+    because an unrelated out-of-budget IAM delta (github_ci_drift policy UPDATE) in the same
+    terraform/personal root routed the whole plan; workflow_dispatch has no gated-apply path
+    (gated-apply is push-only), so nothing applied and the 4 functions still run pre-wave-3 code.
+  - >-
+    Industry best practice + Decision-driven fix: environment-taxonomy.md section 5 already
+    prescribes decoupling code from infra (lifecycle ignore_changes=[source_code_hash]; code ships
+    via the build pipeline). The DuckLake Lambdas -- the first personal-account Lambdas -- never
+    followed it. This plan ratifies conformance as direction; the physical decoupling is a
+    sequenced follow-on (V3, blocked on P3b).
+  - >-
+    Sequencing: P3b (clear the pending github_ci_drift out-of-budget delta via admin apply + close
+    the drift/convergence observability gap) is a PREREQUISITE for P2 (add ignore_changes +
+    dedicated code-deploy CD), because the pending delta will route any terraform/personal apply
+    including the decoupling change itself. P3a (dispatch/gated-apply gap) is independent.
+  - >-
+    The dedicated code-deploy CD channel (P2) should extend the existing .github/workflows/deploy.yml
+    if it already deploys Lambda code, rather than add a new workflow -- the P2 plan verifies this.
+  - >-
+    Tier justification (Decision 48 WARN): V1 despite three .tf files in scope, because the edits
+    are comment-only (zero resource delta, no Lambda rebuild), the terraform-validate CI job is the
+    authoritative .tf verifier (Decision 119), and no external system is exercised. Recorded as a
+    conscious choice per the decision-scout WARN.
+  - >-
+    Affected-artifacts false positive (Decision 79 / plan-critique 12b/12m): the NEW
+    src/lambdas/CLAUDE.md is matched by the coarse `src/` copytree include in the data-pipeline and
+    ops-compaction manifests, so compute_affected_artifacts(['src/lambdas/CLAUDE.md']) returns
+    {data-pipeline, ops-compaction} (both status: active). This is an inert documentation file with
+    NO handler/import/asset/runtime role -- no active CI gate fails (bundle-completeness passes on
+    an inert doc; the coverage checker applies only to .py; the missing-manifest check keys on
+    src/lambdas/<name>/ directories, not a top-level file). Therefore NO Lambda rebuild/deploy/
+    smoke-test is warranted: a deliberate, justified divergence from the mechanical per-Lambda
+    build/deploy default, consistent with Decision 79's runtime-contract intent. Do NOT resolve by
+    adding deploy steps (contradicts Decision 79) or relocating the file (defeats directory-scoped
+    loading).
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 92,
+    Decision 77, Decision 79, Decision 119, Decision 86, Decision 55, Decision 72. RELATED =
+    Decision 120, Decision 84, Decision 81, Decision 35, Decision 67, Decision 100/75. Flags:
+    Decision 48 [WARN] V1-tier justification (addressed above); Decision 92 pt5 / Decision 86
+    [NOTE] pointers must not restate classification (addressed via pointer-only discipline).
+  - >-
+    VP steps are all hermetic:false by design: this is a /plan-authored document merged BEFORE its
+    implementation, so every VP step verifies future post-implementation state that cannot pass on
+    the plan-only PR tree. Marking them hermetic would make the VF-01 vp-replay check (--pre)
+    re-execute them at plan-PR time and fail (T3.15 c2). /implement runs them after the work lands.
+  - "gates: decision-scout=FLAGS_FOUND (2 rounds, revised approach); plan-critique=PROCEED after 2 round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/lambda-deploy-channel-defaults-o2sppr)
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    DECISIONS.md read (targeted -- Decisions 77/92/79/119/86/55/72/35/84/81; re-check current max
+    Decision number before authoring the new one)
+  - >-
+    environment-taxonomy.md section 5 read and confirmed as the classification SoT to extend, not
+    duplicate
+  - All files in scope located and readable; src/lambdas/CLAUDE.md is a new file
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Author the new Decision in docs/DECISIONS.md (re-check current max "## Decision NNN" first):
+    title + body ratifying decouple-code-from-infra for DuckLake Lambdas, rationale = the
+    routing/stranding evidence, target channel = dedicated code-deploy CD, local build_lambda
+    --deploy demoted to break-glass, plus explicit reversal conditions. Then run ops_data_portal
+    --backfill-decisions-md.
+  - >-
+    Edit docs/contracts/environment-taxonomy.md section 5: remove the stale "No such Lambda exists
+    today" note; record the DuckLake Lambdas as coupled-interim / decoupled-target, citing the new
+    Decision. Keep it the sole classification SoT.
+  - >-
+    Edit AGENTS.md: add the concise ambient Lambda deploy-channel rule + the auto-denied->grep
+    .github/workflows heuristic, pointing to section 5 + build-lambda.yaml (no classification
+    restated).
+  - >-
+    Edit docs/contracts/build-lambda.yaml: add an additive, pointer-only deploy_channels section
+    (artifact->channel-class), referencing section 5. Do not touch pipelines/deploy_targets/cli_flags.
+  - >-
+    Edit .claude/skills/planning/SKILL.md Infrastructure & Lambda Assessment: emit the decoupled
+    code-deploy CD channel VP steps for terraform/personal-managed active Lambdas (grep-only /
+    CI-delegated, Decision 119); remove the bare local build_lambda --deploy default for that class.
+  - >-
+    Comment-only edits to terraform/personal/ducklake_lambdas.tf, ducklake_catalog_dr.tf,
+    ducklake_maintenance.tf (incl. the maintenance output description): describe target decoupled
+    model + interim filemd5 coupling + build_lambda --deploy break-glass role. Change no HCL.
+  - >-
+    Create src/lambdas/CLAUDE.md as a thin deploy-channel pointer; edit src/data/handlers/CLAUDE.md
+    to distinguish its decoupled dispatcher/findings-processor targets from the filemd5-coupled
+    DuckLake functions.
+  - >-
+    File follow-on recs via the ops portal (call get_rec_write_guidance first): P2 decoupling
+    implementation (V3, blocked on P3b, extend deploy.yml if possible); P3a workflow_dispatch+routed
+    plan has no gated-apply path; P3b green convergence record masks a pending out-of-budget IAM
+    delta + drift not catching config-vs-state; and an operational note that the 4 DuckLake
+    functions run pre-wave-3 code.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop
+    and RCA (Decision 55).
+  - "Report: what was implemented, verification results, and the filed follow-on rec ids."
+work_areas: []
+rollback: >-
+  All changes are docs/config/comments plus one Decision and follow-on rec filings; revert the
+  branch commits to undo. The new Decision, if already backfilled, is superseded/retracted via a
+  follow-up DECISIONS.md edit + --backfill-decisions-md rather than a raw ops write. No live
+  infrastructure is touched, so there is nothing to un-apply.
