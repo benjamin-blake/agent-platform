@@ -99,6 +99,7 @@ from scripts.checks.hygiene.validate_cli_tools_in_prompts import (  # noqa: E402
     _OPTIONAL_CLI_TOOLS,  # noqa: F401
     validate_cli_tools_in_prompts,  # noqa: F401
 )
+from scripts.checks.hygiene.validate_placement import validate_placement  # noqa: F401,E402
 from scripts.checks.hygiene.validate_subprocess_encoding import validate_subprocess_encoding  # noqa: F401,E402
 from scripts.checks.hygiene.validate_sys_executable import validate_sys_executable  # noqa: F401,E402
 from scripts.checks.hygiene.validate_test_count_coupling import validate_test_count_coupling  # noqa: F401,E402
