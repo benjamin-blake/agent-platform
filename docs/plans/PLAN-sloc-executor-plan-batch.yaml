@@ -1,0 +1,200 @@
+schema_version: 1
+slug: "sloc-executor-plan-batch"
+intent: >-
+  Decompose scripts/executor/plan.py (752 SLOC) and scripts/executor/batch.py (568 SLOC) into thin facades
+  plus cohesion-seam sibling modules so every executor file drops to <=500 SLOC, removing the per-implement
+  SLOC-budget friction and advancing the rec-2414 breakdown program without changing any executor behaviour.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-executor-plan-batch.yaml
+phase: >-
+  Platform hardening / SLOC-governance during the executor freeze. Executes the rec-2414 umbrella
+  breakdown program (Decision 102 ratchet, Decision 43 cap) using the ratified PLAN-validate-decomposition
+  facade mechanism (Decision 104/80). Combines the two smallest executor targets (plan + batch) which are
+  cohesively coupled (batch.execute_compound drives plan.critique_plan/refine_plan). One of four
+  coordinated executor-decomposition plans on this branch. Platform-internal tooling; no product phase.
+scope:
+  - file: scripts/executor/plan.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin facade (<=500 SLOC, target ~210) retaining the dataclasses (PlanStep, ExecutionPlan
+      -- ExecutionPlan.load classmethod patches, 5 sites, patch the CLASS object so it must stay), load_prompt
+      with PROMPTS_DIR (17 combined patch sites -- load_prompt stays so PROMPTS_DIR patches intercept
+      natively), save_plan + get_latest_plan with PLANS_JSONL and OpsWriter (save_plan/get_latest_plan stay
+      so the 6 PLANS_JSONL and 3 OpsWriter patch.object sites intercept natively), the model wrappers
+      (get_plan_timeout_secs, get_planning_model, escalate_planning_model, _validate_model_hierarchy + call),
+      _PLANNING_FAILURE_COUNT re-export (6 direct plan_mod attribute references), DEFAULT_PLAN_TIMEOUT_SECS,
+      all current module-scope imports (os, re, json, llm_call, LLMResponseError, _PLAN_EXCLUDED_TOOLS,
+      MODEL_PLANNING, build_context_path, OpsWriter, PLANS_JSONL), and FACADE RE-EXPORTS of every extracted
+      symbol. ZERO-MIGRATION INTERCEPTION RULE (uniform across the four executor plans): moved bodies
+      reference every routed-name via a function-local `import scripts.executor.plan as _pl` alias, so all
+      63 string + 27 patch.object sites keep intercepting with ZERO test migration. Remove the decision-43
+      waiver header only if the CC gate stays green without it.
+  - file: scripts/executor/plan_parsing.py
+    action: Create
+    purpose: >-
+      owner=platform. Plan-text parsing + step scope validation: parse_steps_from_plan, _compute_step_scope,
+      _validate_step_scope (~150 SLOC; CC<=20, no waiver). Pure-logic bodies; no routed-name references.
+  - file: scripts/executor/plan_generation.py
+    action: Create
+    purpose: >-
+      owner=platform. LLM plan generation/critique/refinement: generate_initial_plan (CC 34 -> module carries
+      the decision-43 waiver header), generate_compound_plan, critique_plan, refine_plan, _looks_like_no_changes,
+      _all_steps_already_done, _extract_scope_files, _detect_critique_cycling, _NO_STEPS_KEYWORDS,
+      _VIOLATION_PATTERN (~470 SLOC). Bodies route llm_call, load_prompt, save_plan, parse_steps_from_plan,
+      _validate_step_scope, get_latest_plan, get_planning_model, and os (env reads) via _pl; the lazy
+      `from scripts.executor.step_runner import gather_step_context` and jsonl_store imports stay function-local
+      exactly as today (their patch sites live on the step_runner/jsonl_store namespaces -- location-independent).
+  - file: scripts/executor/batch.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin facade (<=500 SLOC, target ~260) retaining the constants (EFFORT_WEIGHTS,
+      EFFORT_ORDER, PRIORITY_ORDER, MAX_BATCH_EFFORT, MAX_BATCH_SIZE, DEFAULT_NEXT_BATCH_LIMIT), the
+      selection functions (select_compound_batch, get_eligible_recs, select_next_batch,
+      topological_sort_recs), execute_batch, module-scope imports (graphlib, json, logging, os, subprocess,
+      datetime, Path), and FACADE RE-EXPORTS of load_cluster, _ensure_compound_branch, execute_compound.
+      Remove the decision-43 waiver header only if the CC gate stays green without it (execute_compound
+      CC52 moves out).
+  - file: scripts/executor/batch_compound.py
+    action: Create
+    purpose: >-
+      owner=platform. Compound-branch execution: load_cluster, _ensure_compound_branch, execute_compound
+      (CC 52 -> module carries the decision-43 waiver header) (~415 SLOC). CONFIRMED-BREAK FIXES (critique
+      round 1): execute_compound calls _ensure_compound_branch via _ba._ensure_compound_branch (7 patch
+      sites on the batch facade namespace -- a bare co-located call would no-op them, breaking
+      test_compound_creates_single_branch's assert_called_once_with), and all subprocess references route
+      via _ba.subprocess (test_compound_aborts_when_jsonl_dirty patches scripts.executor.batch.subprocess.run).
+      execute_compound's function-local imports of the plan/postflight/step_runner facades and
+      scripts.execute_recommendation stay lazy exactly as today (patch sites live on those namespaces).
+  - file: .importlinter
+    action: Modify
+    purpose: >-
+      Add ignore lines for the new direct edge scripts.executor.batch_compound -> scripts.execute_recommendation
+      (execute_compound/_ensure_compound_branch keep their function-local execute_recommendation imports) under
+      BOTH the no-cycles-execute-recommendation-executor-batch contract AND the no-cycles-ops-data-portal-executor
+      contract, mirroring the existing scripts.executor.batch entries. import-linter parses function-scope
+      imports (the existing batch entries exist for exactly that reason), so omitting this reddens both contracts.
+  - file: tests/test_executor_plan.py
+    action: Modify
+    purpose: >-
+      ZERO patch-target migration expected (the plan_mod patch.object idiom and string patches keep working
+      via facade re-exports, retained module state, and the routing rule). Only permitted edits are
+      import-line touch-ups if an assertion imports a symbol directly from a moved location. Assertion
+      semantics unchanged.
+  - file: tests/test_executor_batch.py
+    action: Modify
+    purpose: >-
+      ZERO patch-target migration expected (all 14 batch-namespace sites -- _ensure_compound_branch 7,
+      get_eligible_recs 6, subprocess.run 1 -- keep intercepting via the routing rule and retained facade
+      functions). Only import-line touch-ups permitted. Assertion semantics unchanged.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-point via `validate --update-sloc-budgets` after the split (Decision 102): plan.py and batch.py drop
+      out of the registry at <=500 SLOC. Assert via grep (not full-file diff) that both keys are removed and
+      no plan_parsing/plan_generation/batch_compound key is seeded. Never hand-edit.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The full existing tests/test_executor_plan.py and tests/test_executor_batch.py, plus the plan/batch-touching parts of tests/test_execute_recommendation.py, tests/test_executor_postflight.py, and tests/test_postflight_gates.py, pass unchanged in assertion semantics with ZERO patch-target migration (all 63+14 string sites and 27 patch.object sites still intercept).
+  - Every public symbol AND every test-patched private symbol formerly defined in plan.py is reachable via the scripts.executor.plan facade (including parse_steps_from_plan, _compute_step_scope, _validate_step_scope, critique_plan, refine_plan, generate_initial_plan, generate_compound_plan, _detect_critique_cycling, _looks_like_no_changes, _all_steps_already_done and the test from-imports ExecutionPlan/_all_steps_already_done/generate_initial_plan); and every batch symbol via the scripts.executor.batch facade (the 6 constants, selection functions, execute_batch, load_cluster, _ensure_compound_branch, execute_compound).
+  - Mock interception is preserved by construction -- execute_compound resolves _ensure_compound_branch and subprocess through _ba (closing the two round-1 confirmed breaks), plan_generation bodies resolve llm_call/load_prompt/save_plan/parse_steps_from_plan/_validate_step_scope through _pl, and tests contain ZERO patches on the new sibling namespaces (grep-verified).
+  - scripts/executor/plan.py and scripts/executor/batch.py each drop to <=500 SLOC; no new sibling module exceeds 500 SLOC or CC 20 without the decision-43 waiver header (plan_generation carries it for generate_initial_plan CC34; batch_compound for execute_compound CC52); validate_cc_limits passes.
+  - config/sloc_budgets.yaml loses its scripts/executor/plan.py and scripts/executor/batch.py entries and gains NO plan_parsing/plan_generation/batch_compound entry (grep-verified; other entries may shift from sibling plans).
+  - No extracted function DEFINITION remains in either facade; import-linter contracts pass with exactly the new batch_compound -> execute_recommendation ignore lines under the two named contracts and no other .importlinter change from this plan.
+  - Both surface paths scripts.executor.plan and scripts.executor.batch are unchanged (facades retained), so all production importers (execute_recommendation.py facade, postflight.py ExecutionPlan/load_prompt, step_runner.py load_prompt, the batch<->plan<->execute_recommendation lazy imports, __init__.py) resolve without edits.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Full plan + batch suites + the cross-cutting executor suites pass with unchanged assertion semantics and zero patch migration (behavioural-equivalence oracle).
+    command: bin/venv-python -m pytest tests/test_executor_plan.py tests/test_executor_batch.py tests/test_execute_recommendation.py tests/test_executor_postflight.py tests/test_postflight_gates.py -m "not integration" -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: "A patch on scripts.executor.plan.<name> / scripts.executor.batch.<name> or patch.object(plan_mod, <name>) no-ops means a moved body referenced that routed-name bare instead of via _pl/_ba; fix the body, never the test. test_compound_creates_single_branch failing on assert_called_once_with means execute_compound bypassed _ba._ensure_compound_branch."
+  - step: 2
+    phase: pre-deploy
+    action: Facade completeness for both plan and batch facades (stable invariant, holds pre- and post-implementation).
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "import scripts.executor.plan as p, scripts.executor.batch as b; ps='ExecutionPlan PlanStep load_prompt PROMPTS_DIR PLANS_JSONL save_plan get_latest_plan parse_steps_from_plan _compute_step_scope _validate_step_scope critique_plan refine_plan generate_initial_plan generate_compound_plan _detect_critique_cycling _looks_like_no_changes _all_steps_already_done escalate_planning_model get_planning_model get_plan_timeout_secs _PLANNING_FAILURE_COUNT OpsWriter'.split(); bs='EFFORT_WEIGHTS EFFORT_ORDER PRIORITY_ORDER MAX_BATCH_EFFORT MAX_BATCH_SIZE DEFAULT_NEXT_BATCH_LIMIT select_compound_batch get_eligible_recs select_next_batch topological_sort_recs execute_batch load_cluster _ensure_compound_branch execute_compound subprocess'.split(); miss=[('plan',s) for s in ps if not hasattr(p,s)]+[('batch',s) for s in bs if not hasattr(b,s)]; print('missing', miss); raise SystemExit(1 if miss else 0)"
+    expected: The printed missing list is empty; exit 0.
+    fix_if: "A symbol is missing means its re-export (or retained import, e.g. batch.subprocess) was omitted; add it to the facade."
+    hermetic: true
+  - step: 3
+    phase: pre-deploy
+    action: Grep-closure (Decision 104 discipline, inverted for zero-migration) -- tests carry NO patches on the new sibling namespaces AND the new siblings carry NO module-scope import of a routed-name.
+    command: "! grep -rnE \"patch\\((['\\\"])scripts\\.executor\\.(plan_parsing|plan_generation|batch_compound)\" tests/ && ! grep -nE '^\\s*(import subprocess\\b|import os\\b|from scripts\\.llm_client import|from scripts\\.ops_writer import|from scripts\\.executor\\.jsonl_store import)' scripts/executor/plan_parsing.py scripts/executor/plan_generation.py scripts/executor/batch_compound.py && echo CLOSURE_OK"
+    expected: Both greps find nothing; prints CLOSURE_OK; exit 0.
+    fix_if: "A test patches a new sibling namespace means an unauthorised migration happened -- revert it and fix the body routing; a sibling imports a routed-name at module scope means the routing rule was violated -- replace with _pl./_ba. (function-local jsonl_store imports inside moved bodies are permitted -- the grep matches only module scope at line start)."
+  - step: 4
+    phase: pre-deploy
+    action: SLOC re-point -- plan.py and batch.py drop below 500, no sibling over budget, both budget entries removed with no new seed.
+    command: bin/venv-python -m scripts.validate --update-sloc-budgets && ! grep -qE '^\s*scripts/executor/(plan|batch)\.py:' config/sloc_budgets.yaml && ! grep -qE '^\s*scripts/executor/(plan_parsing|plan_generation|batch_compound)\.py:' config/sloc_budgets.yaml && bin/venv-python -c "import pathlib; mods=['scripts/executor/plan.py','scripts/executor/plan_parsing.py','scripts/executor/plan_generation.py','scripts/executor/batch.py','scripts/executor/batch_compound.py']; over=[m for m in mods if len([l for l in pathlib.Path(m).read_text().splitlines() if l.strip() and not l.strip().startswith('#')])>500]; print('over', over); raise SystemExit(1 if over else 0)"
+    expected: plan.py and batch.py keys removed; no sibling key seeded; the printed over list is empty; exit 0.
+    fix_if: "A sibling key was seeded means that module exceeds 500 SLOC; split it finer and re-run."
+  - step: 5
+    phase: pre-deploy
+    action: CC gate passes -- moved high-CC functions carry the decision-43 waiver header in their new module.
+    command: bin/venv-python -c "from scripts.validate import validate_cc_limits; f=[]; validate_cc_limits(f); print('cc', f); raise SystemExit(1 if f else 0)"
+    expected: The CC gate reports no failures; exit 0 (plan_generation.py carries the waiver for generate_initial_plan CC34; batch_compound.py for execute_compound CC52).
+    fix_if: "A module reddens the CC gate -> add a decision-43 complexity-waiver header within its first 10 lines."
+  - step: 6
+    phase: pre-deploy
+    action: Stale-definition sweep -- no extracted def remains in either facade.
+    command: grep -nE '^def (parse_steps_from_plan|_compute_step_scope|_validate_step_scope|generate_initial_plan|generate_compound_plan|critique_plan|refine_plan|_extract_scope_files|_detect_critique_cycling|_looks_like_no_changes|_all_steps_already_done|load_cluster|_ensure_compound_branch|execute_compound)\b' scripts/executor/plan.py scripts/executor/batch.py; test $? -eq 1
+    expected: grep finds no matches (exit 1, so the test asserts closure); only the retained functions + re-exports remain in each facade.
+    fix_if: "A def still lives in a facade -> move its body to the sibling module and leave only the re-export."
+  - step: 7
+    phase: pre-deploy
+    action: import-linter contracts pass with the new batch_compound ignore lines under both named contracts.
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)" && grep -c "scripts.executor.batch_compound -> scripts.execute_recommendation" .importlinter | grep -qx 2
+    expected: All import contracts pass and .importlinter carries the batch_compound -> execute_recommendation ignore exactly twice (once per contract); exit 0.
+    fix_if: "A contract reddens naming batch_compound means an ignore line is missing under that contract; a count other than 2 means over- or under-reach -- match the existing scripts.executor.batch entry pattern."
+  - step: 8
+    phase: pre-deploy
+    action: Fast presubmit tier is green over the change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0.
+    fix_if: "A gate reddens -> address per its message; never bypass with --ignore-budget for a real SLOC/CC regression."
+constraints:
+  - Behaviour preservation is absolute -- no feature work, no bug fixes, no signature changes beyond movement. Both facades' existing suites must pass with unchanged assertion semantics. Out-of-scope findings become notes here, never inline fixes.
+  - Decision 104/80 facade mechanism, ZERO-MIGRATION variant -- scripts.executor.plan and scripts.executor.batch stay thin facades re-exporting every symbol; persistence/prompt/model state (PROMPTS_DIR, PLANS_JSONL, OpsWriter, _PLANNING_FAILURE_COUNT) stays in the plan facade; moved bodies reference every routed-name via function-local _pl/_ba aliases; NO test patch target moves. The grep-closure VP step enforces both directions.
+  - Decision 102 -- budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets`, never a hand-edit; grep-verify key removal + no new seed (do NOT assert full-file equality -- sibling plans co-mutate config/sloc_budgets.yaml).
+  - Decision 43 -- CC<=20 per function; the decision-43 waiver header travels with any moved function over CC 20 (plan_generation for generate_initial_plan CC34; batch_compound for execute_compound CC52); remove the now-stale facade waivers only if the CC gate stays green without them.
+  - Decision 117 -- executor self-modification boundary -- capabilities.yaml SSOT; its substring pattern scripts/executor/ classifies plan_parsing.py, plan_generation.py, batch_compound.py as boundary files, so capabilities.yaml is NOT edited.
+  - Decision 67 -- executor freeze (STRATEGIC clause) -- this is an IMPLEMENTATION plan; behaviour-preserving executor-machinery maintenance is routed through /plan -> /implement, permitted during the freeze.
+  - Decision 55 -- no rescue agents or workaround loops. On an unrecoverable equivalence/interception failure, stop and RCA.
+  - Multi-plan coordination -- one of ~16 SLOC-decomposition plans (4 executor) on branch claude/sloc-violations-refactor-p5svnl; touch ONLY plan.py, batch.py, the new sibling modules, .importlinter (the batch_compound ignore lines), and test import touch-ups; config/sloc_budgets.yaml is regenerated and a conflict there is resolved by re-running the regen command.
+  - Hermetic VP discipline (fleet rule) -- exactly ONE hermetic step (step 2, a stable invariant true pre- and post-implementation) using the portable PY idiom because CI's pr-validate job has no .venv; all other steps are hermetic false.
+  - AGENTS.md code style -- Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens, default no comments.
+  - Public-repo boundary (Decision 101) -- no AWS account IDs/ARNs/secrets/internal hostnames introduced.
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE/RELATED flags, no BLOCK). CITE: Decision 102, Decision 104, Decision 80, Decision 43, Decision 117, Decision 67."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s) (round 1 CONFIRMED two patch-target breaks -- scripts.executor.batch._ensure_compound_branch, asserted via assert_called_once_with in test_compound_creates_single_branch, and scripts.executor.batch.subprocess.run in test_compound_aborts_when_jsonl_dirty, both moving into batch_compound -- fixed by the uniform zero-migration routing rule; the batch patch inventory was re-derived mechanically)"
+  - "MECHANICAL PATCH INVENTORY (regex sweep over tests/**, both quote styles + patch.object + from-imports; not from memory): scripts.executor.plan string-patch sites total 63 -- llm_call 12, PROMPTS_DIR 7, save_plan 6, _detect_critique_cycling 6, refine_plan 6, critique_plan 6, generate_initial_plan 6, ExecutionPlan.load 5, get_latest_plan 3, PLANS_JSONL 2, load_prompt 2, os.getenv 2. patch.object(plan_mod/...) sites total 27 -- PROMPTS_DIR 10, PLANS_JSONL 4, llm_call 4, load_prompt 4, OpsWriter 3, save_plan 2. Direct module-state references: _PLANNING_FAILURE_COUNT 6. scripts.executor.batch string-patch sites total 14 -- _ensure_compound_branch 7, get_eligible_recs 6, subprocess.run 1. Test from-imports: ExecutionPlan (test_executor_postflight), _all_steps_already_done + generate_initial_plan (test_executor_plan)."
+  - "ROUTED-NAME INVENTORY: plan_generation bodies route llm_call, load_prompt, save_plan, get_latest_plan, parse_steps_from_plan, _validate_step_scope, get_planning_model, os via _pl (never bare); plan_parsing is pure logic (no routed names). batch_compound bodies route _ensure_compound_branch (execute_compound's call), subprocess, and os (execute_compound env reads; 0 patch sites -- _ba.os or function-local import, since the closure grep forbids module-scope import os); _check_jsonl_clean stays a function-local execute_recommendation from-import exactly as today (patched on the execute_recommendation namespace, resolved at call time). ExecutionPlan.load patches target the CLASS retained in the plan facade -- location-independent for any referencing body. Names used ONLY by facade-resident functions (OpsWriter, PLANS_JSONL, PROMPTS_DIR) stay facade module globals."
+  - "Flag folded (Decision 48 verification tier): verified V2 -- compute_affected_artifacts over plan.py, batch.py + the new sibling paths returns {} (no active Lambda artifact); no V3 steps required."
+  - "Flag folded (Decision 75 frame-lock, conscious choice recorded): the executor is FROZEN (Decision 67) and the roadmap direction (CD.27 pending, T5.6 deferred_post_mvp) is a Step Functions + Durable-Function-Lambda rewrite that HARVESTS reusable helper logic and RETIRES the orchestration shell. plan.py and batch.py contents are harvestable helper logic; decomposing them is freeze-window SLOC-governance (Decision 102/43 mandate; rec-2414 scopes it), NOT substrate-rewrite prep."
+  - "rec-2414 (open umbrella, file=config/sloc_budgets.yaml, automatable:false) is CITED as the parent program; this plan removes 2 of the 5 executor registry entries and is NOT bundled. rec-445 (Create executor/batch.py) and rec-446 (Create executor/model_routing.py) are already satisfied (both files exist) -- not bundled."
+  - "Importer topology (recon-verified): scripts.executor.plan is imported by the execute_recommendation.py facade (12 symbols), postflight.py (ExecutionPlan/load_prompt + lazy ExecutionPlan), step_runner.py (load_prompt), batch lazy imports, __init__.py. scripts.executor.batch is imported by the execute_recommendation.py facade (14 symbols) and __init__.py. .github/instructions executor-critique/executor-planning applyTo globs pin plan.py -- unaffected (file retained)."
+  - ".importlinter assessment (explicit, per critique): import-linter parses function-scope imports. Moving execute_compound/_ensure_compound_branch (with their function-local scripts.execute_recommendation imports) into batch_compound creates the new direct edge scripts.executor.batch_compound -> scripts.execute_recommendation, which must be ignored under BOTH no-cycles-execute-recommendation-executor-batch (the indirect chain batch -> batch_compound -> execute_recommendation is otherwise flagged, since the batch facade imports batch_compound at module scope for re-exports) AND no-cycles-ops-data-portal-executor (the transitive executor -> execute_recommendation -> ops_data_portal path), mirroring the existing scripts.executor.batch entries. plan_parsing/plan_generation create no contract-crossing edge (intra-package _pl + lazy step_runner/jsonl_store imports already covered by existing entries or non-contract modules)."
+  - "Cross-plan sequencing: independent of the other 3 executor plans -- all cross-file references go through FACADE paths, which every plan retains. Landing order among the four executor plans does not matter."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (102, 104, 80, 43, 117, 67; and 48/75 flags folded)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Baseline captured -- the current plan + batch suites pass BEFORE any code movement (the behavioural-equivalence oracle)
+execution_steps:
+  - "Capture baseline FIRST -- run tests/test_executor_plan.py + tests/test_executor_batch.py + the plan/batch parts of tests/test_execute_recommendation.py green on the pre-refactor tree."
+  - "Create plan_parsing.py (parse_steps_from_plan + scope validators) and plan_generation.py (generate/critique/refine + helpers, decision-43 waiver header); move each body verbatim EXCEPT rewriting every routed-name reference to the _pl facade alias resolved function-locally; keep the lazy step_runner/jsonl_store imports exactly as today."
+  - "Create batch_compound.py (load_cluster + _ensure_compound_branch + execute_compound, decision-43 waiver header); rewrite execute_compound's _ensure_compound_branch call and all subprocess references to the _ba facade alias; execute_compound also references os (env reads: PLAN_MAX_REVISIONS, SKIP_CODE_REVIEW, REVIEW_FIX_RETRIES) -- reference it as _ba.os or a function-local import (0 patch sites on it, but VP step 3's closure grep forbids module-scope import os in siblings); keep the lazy execute_recommendation/plan/postflight/step_runner facade imports exactly as today."
+  - "Collapse plan.py and batch.py to facades: keep the retained clusters + module state + module-scope imports; add re-exports for every extracted symbol; remove the now-stale waiver headers only if the CC gate stays green."
+  - "Add the batch_compound -> execute_recommendation ignore lines to BOTH named .importlinter contracts."
+  - "Run the suites; ZERO patch migration is expected -- if a test fails on interception, fix the body's routing, never the test."
+  - "Run `validate --update-sloc-budgets`, then grep-confirm the plan.py and batch.py keys are dropped and no sibling key was seeded."
+  - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report -- what was extracted, the equivalence-oracle result, final plan.py and batch.py SLOC, CC status, the .importlinter diff, and confirmation of zero patch migration."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; if the equivalence oracle (existing suites) cannot be made green,
+  abandon the change (no merge). Nothing is deployed. If merged and a regression surfaces, revert the
+  squash commit -- the two facades + siblings + .importlinter lines land atomically in one PR.

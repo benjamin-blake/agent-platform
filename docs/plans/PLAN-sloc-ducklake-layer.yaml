@@ -1,0 +1,494 @@
+schema_version: 1
+slug: "sloc-ducklake-layer"
+intent: >-
+  Behavior-preserving SLOC decomposition of the DuckLake layer so each oversized file drops below
+  the 500-SLOC budget (aim <=450 for ratchet headroom): split src/common/ducklake_runtime.py and
+  src/lambdas/ducklake_writer/handler.py on cohesion seams behind thin facades that preserve every
+  public import path, every test-patched symbol, and the exact Lambda response semantics. Advances
+  the umbrella rec-2414 (reduce SLOC-budget-registered oversized files below 500) and Decision 43's
+  reduction target -- one file added per concern, not one file's budget ratcheted up.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-sloc-ducklake-layer.yaml
+phase: >-
+  Platform hardening (Decision 43 SLOC reduction; Decision 80/104 tool-free-decomposition precedent).
+  Executes the umbrella rec-2414 for two of the seventeen oversized files. DuckLake runtime is the
+  closed verb boundary (Decision 81 / Decision 84 I-2/I-3, CD.33/CD.34). No product-roadmap phase.
+scope:
+  - file: src/common/ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin (<450 SLOC) module that RETAINS its headline "single ATTACH / connection
+      authority" concern -- open_connection, fetch_dsn, _parse_secret_string, libpq_conninfo,
+      assert_duckdb_version + VersionMismatchError, and the entire warm-connection cache
+      (_WARM_CONNECTION_LOCK, _warm_connection, _DEAD_CONNECTION_SIGNATURES, is_dead_connection_error,
+      _probe_connection_alive, reset_warm_connection, get_warm_connection) plus the connection
+      constants (DSN_SECRET_ID, META_SCHEMA, SMOKE_META_SCHEMA, SMOKE_DATA_PATH, BAKED_EXTENSIONS,
+      LAMBDA_EXTENSION_DIRECTORY) STAY here. Keep the module docstring (trimmed), the ducklake_spike
+      import (so rt.ducklake_spike resolves), the verbatim ducklake_scd2_schema re-export block, and
+      the __getattr__ + _PINNED_DUCKDB_VERSION shim (PINNED_DUCKDB_VERSION keeps resolving via
+      src.common.ducklake_version.pinned_duckdb_version() -- NO hardcoded literal, NO version bump).
+      Add FACADE RE-EXPORTS (`from src.common.ducklake_writes|_tables|_reads|_metrics import (...)`)
+      for every public symbol AND every census-enumerated private symbol that moved
+      (_emit_write_metrics, _occ_backoff, _safe_rollback, and the write/read/metrics publics) so all
+      `from src.common.ducklake_runtime import X`, `rt.X` reads, and `patch("src.common.ducklake_runtime.X")`
+      sites keep binding to real module attributes at the original path.
+  - file: src/common/ducklake_writes.py
+    action: Create
+    purpose: >-
+      owner concern: the writer-owned SCD2 write path. Holds mint_write_identity, the OCC constants +
+      churn-gate budgets + _OCC_COLLISION_MARKERS, OCCRetryExhaustedError, is_occ_collision,
+      _occ_backoff, _safe_rollback, _emit_write_metrics, write_scd2, file_scd2, and the entity-id
+      allocation cluster (ENTITY_COUNTERS_TABLE, ensure_entity_counters_table, bootstrap_entity_counter,
+      _allocate_entity_id, _advance_entity_counter). Entity-allocation is co-located with the write
+      primitives that call it (write_scd2 -> _advance_entity_counter; file_scd2 -> _allocate_entity_id;
+      bootstrap -> _safe_rollback) so ALL those calls stay intra-module -- no writes<->tables import
+      cycle. Imports schema spec/SQL-builders/gate/exceptions from ducklake_scd2_schema only. <=400 SLOC.
+  - file: src/common/ducklake_tables.py
+    action: Create
+    purpose: >-
+      owner concern: table-lifecycle DDL. Holds create_scd2_tables and reconcile_table_columns.
+      Imports resolve_table_spec / _column_ddl / CATALOG_ALIAS from ducklake_scd2_schema; calls nothing
+      in ducklake_writes (no cycle). <=400 SLOC.
+  - file: src/common/ducklake_reads.py
+    action: Create
+    purpose: >-
+      owner concern: the closed read boundary primitives (Decision 84 I-3). Holds read_current,
+      read_history, assert_read_only_sql, named_read, query_current. query_current -> assert_read_only_sql
+      stays intra-module. Imports NAMED_READS / resolve_table_spec / CATALOG_ALIAS / SchemaGateError /
+      DuckLakeRuntimeError from ducklake_scd2_schema. <=400 SLOC.
+  - file: src/common/ducklake_metrics.py
+    action: Create
+    purpose: >-
+      owner concern: CloudWatch metric emission (EC9). Holds CLOUDWATCH_NAMESPACE, emit_metric,
+      make_metric_sink (make_metric_sink -> emit_metric stays intra-module). <=400 SLOC.
+  - file: src/lambdas/ducklake_writer/handler.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin (<450 SLOC) Lambda entrypoint that RETAINS the `handler` function (the manifest
+      `handlers:` contract -- src.lambdas.ducklake_writer.handler.handler MUST keep resolving), the
+      env-config constants (DATA_PATH/META_SCHEMA/EXTENSION_DIRECTORY), WriterActionError, the connection
+      helpers (_open_writer_connection, _warm_writer_connection), the PRODUCTION ops actions
+      (action_write_ops, action_file_ops, action_update_ops, action_create_ops_tables, action_describe,
+      _require_ops_table), the _ACTIONS / _CONNECTIONLESS_ACTIONS dispatch tables, _parse_event,
+      _response, and the EXACT exception->status mapping in handler() (SchemaGateError->422,
+      StatusTransitionError->422, ReferentialError->409, WriterActionError->400, OCCRetryExhaustedError->503,
+      VersionMismatchError->500, DuckLakeRuntimeError->500, unknown action->400; the dead-connection
+      reopen-once path unchanged). Import the extracted smoke/probe/churn actions from smoke_actions and
+      RE-EXPORT them (so _ACTIONS wiring and h.<action>/h.<helper> test access keep resolving).
+  - file: src/lambdas/ducklake_writer/smoke_actions.py
+    action: Create
+    purpose: >-
+      owner concern: the T2.17 smoke/probe/churn gates (NOT the production ops path). Holds
+      action_attach_check, action_create_tables, action_write, action_idempotency_probe,
+      action_partition_probe, action_inlining_probe, action_loudfail_probe, action_connect_probe,
+      action_reset_warm_connection, action_churn, action_churn_single, and their private helpers
+      (_churn_one_writer, _churn_one_single_write, _frozen_creds, _measure_cold_warm_connect, _p95,
+      _count_files, _count_files_for_predicate, _count_inlined_rows, _concurrency_probe,
+      _AlwaysCollidingConnection). Imports `from src.common import ducklake_runtime as rt`; resolves its
+      own DATA_PATH/META_SCHEMA/EXTENSION_DIRECTORY from os.environ (mirroring handler.py, identical
+      values) so there is NO handler<->smoke_actions import cycle. All intra-smoke helper calls
+      (action_inlining_probe -> _concurrency_probe -> _churn_one_writer -> _frozen_creds; probes ->
+      _count_files*) stay intra-module. <=400 SLOC.
+  - file: src/lambdas/ducklake_writer/manifest.yaml
+    action: Modify
+    purpose: >-
+      Add the four new src/common modules (ducklake_writes.py, ducklake_tables.py, ducklake_reads.py,
+      ducklake_metrics.py) AND src/lambdas/ducklake_writer/smoke_actions.py to includes[] -- the facade
+      imports them at module scope, so the staged bundle must carry them or validate_lambda_bundle_completeness
+      (import-resolve) fails. Handler path unchanged.
+  - file: src/lambdas/ducklake_reader/manifest.yaml
+    action: Modify
+    purpose: >-
+      Add the four new src/common modules to includes[] -- the reader bundles ducklake_runtime.py, whose
+      module-scope re-export imports resolve to the new modules.
+  - file: src/lambdas/ducklake_maintenance/manifest.yaml
+    action: Modify
+    purpose: Add the four new src/common modules to includes[] (maintenance bundles ducklake_runtime.py).
+  - file: src/lambdas/ducklake_catalog_dr/manifest.yaml
+    action: Modify
+    purpose: Add the four new src/common modules to includes[] (catalog-dr bundles ducklake_runtime.py).
+  - file: src/lambdas/data-pipeline/manifest.yaml
+    action: Modify
+    purpose: >-
+      Add the four new src/common ducklake module paths to excludes[] (extending the existing ducklake
+      exclude block, whose own comment mandates exactly this: "T2.17 DuckLake runtime code lives ONLY in
+      the ducklake-deps/-extensions layers + the two ducklake_* zips. The wildcard `includes: - src/`
+      above would otherwise drag it into data-pipeline.zip (and mark this artifact affected by DuckLake
+      changes). Keep it out."). Without this, `includes: - src/` matches the new files and
+      compute_affected_artifacts attributes them to data-pipeline (verified empirically at planning time),
+      making it deploy-obligated under Decision 79's tier-from-manifest-graph rule -- and data-pipeline's
+      deploy is BROKEN (rec-2162). The exclude keeps its bundle content byte-identical, so no deploy
+      obligation arises. smoke_actions.py needs NO new exclude: the existing `src/lambdas/ducklake_writer`
+      dir exclude already covers it (verified: it attributes nowhere pre-remediation).
+  - file: src/lambdas/ops-compaction/manifest.yaml
+    action: Modify
+    purpose: >-
+      Same four-path exclude addition as data-pipeline (its excludes block carries the same "must not
+      leak in via `includes: - src/`" doctrine and the same src/lambdas/ducklake_writer dir exclude).
+      Keeps ops-compaction's bundle content unchanged -- no deploy obligation (artifact is DEPRECATED,
+      retires at T2.26). Import safety proven: bundle completeness passes TODAY with ducklake_runtime.py
+      excluded from both prod bundles (so no handler in them can import ANY ducklake module); their only
+      "ducklake" references are a docstring and log strings in ops_compaction_handler.py, not imports.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Extend map_source_to_test so the new sub-modules route to their colocated behavior-oracle test
+      files, mirroring the Decision 104 precedent (scripts/checks/** -> test_validate.py): the four
+      src/common/ducklake_{writes,tables,reads,metrics}.py -> tests/test_ducklake_runtime.py, and any
+      src/lambdas/ducklake_writer/*.py whose stem is not `handler` (i.e. smoke_actions) ->
+      tests/test_ducklake_writer_handler.py. Closes the coverage-gate existence hole for the split.
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: Add cases asserting the new ducklake routing (each new module maps to its oracle test file; non-ducklake paths unchanged; handler.py still maps to test_ducklake_writer_handler.py).
+  - file: tests/test_ducklake_runtime.py
+    action: Modify
+    purpose: >-
+      Preserve behaviour; it stays the write/read/metrics/connection behavior oracle (tests via rt.X
+      through the facade, so coverage lands on the moved modules). Migrate ONLY intra-module-call patch
+      targets that the interception test surfaces (expected: none for write/read/metrics because those
+      symbols are patched for EXTERNAL rt.X calls; confirm via the interception test). No assertion
+      semantics change.
+  - file: tests/test_ducklake_writer_handler.py
+    action: Modify
+    purpose: >-
+      Preserve behaviour; stays the handler + smoke/churn behavior oracle. Migrate the 7 private
+      churn/probe-helper patch targets from `setattr(h, "<helper>", ...)` to the smoke_actions module
+      (they are called INTRA smoke_actions, so a handler-namespace patch would silently no-op):
+      _churn_one_writer, _churn_one_single_write, _frozen_creds, _concurrency_probe, _count_files,
+      _count_files_for_predicate, _count_inlined_rows. _open_writer_connection STAYS patched on the
+      handler (it stays in handler.py). setattr(rt, ...) sites are unchanged (external rt.X calls still
+      intercept via the facade re-export). No assertion semantics change.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Migrate the single CATALOG_ALIAS patch (line ~1671) from `patch("src.common.ducklake_runtime.CATALOG_ALIAS")`
+      to `patch("src.common.ducklake_tables.CATALOG_ALIAS")` -- it drives reconcile_table_columns, which
+      moves to ducklake_tables; a facade-namespace patch would no-op after the move. No other change.
+  - file: tests/test_ducklake_facade.py
+    action: Create
+    purpose: >-
+      New suite proving the two facade contracts in one place: (1) re-export completeness -- every
+      census-enumerated public + private symbol is a real attribute at src.common.ducklake_runtime.* and
+      every accessed handler symbol at src.lambdas.ducklake_writer.handler.*; (2) interception
+      preservation -- patching each migrated target (src.common.ducklake_tables.CATALOG_ALIAS; the 7
+      smoke_actions private helpers) fires through the moved body; (3) dispatch integrity -- _ACTIONS maps
+      the same action names to callables and _CONNECTIONLESS_ACTIONS is unchanged.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-point ONLY via `bin/venv-python -m scripts.validate --update-sloc-budgets` (Decision 102): the
+      two target entries auto-drop at <=500 SLOC. Never hand-edit. Assert the diff removes both target
+      entries and seeds NO new module entry (a >500 module would be silently added). Do NOT assert
+      full-file equality -- sibling SLOC-decomposition plans share this branch and regenerate this file.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - "No .tf files in scope. Lambda artifacts affected (Decision 79 / CD.16 V3): ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr -- all bundle src/common/ducklake_runtime.py, so all four require build + deploy + smoke-test."
+  - "Version lockstep (config/lambda/ducklake/version.yaml, duckdb 1.5.4 / ducklake v1.0): NO bump. (a) requirements.txt duckdb floor is unchanged (no dependency change); (b) no PINNED_DUCKDB_VERSION literal is introduced in ducklake_runtime.py or build_lambda.py -- resolution stays via the loader. Only function zips rebuild (code movement); the ducklake-deps/extensions/pgclient LAYERS are untouched, so no layer republish and no clone-rehearsal."
+  - "ducklake-* artifacts declare pip_packages: [] (duckdb/psycopg2/ulid live in the ducklake-deps LAYER, not the zip). `build_lambda --ducklake-only` does NOT touch data-pipeline, so rec-2162's yanked data-pipeline dep pin is out of this deploy path."
+  - "Affected-artifact attribution (Decision 79 'tier from manifest graph': a plan modifying files named in any active manifest triggers V3 + per-Lambda deploy steps; additions no manifest references stay V2): data-pipeline and ops-compaction include src/ WHOLESALE and match the four new src/common modules (verified via compute_affected_artifacts on the prospective diff) -- without the exclude additions they become deploy-obligated, and data-pipeline's deploy is broken (rec-2162, hard blocker). The exclude rows keep their bundle content byte-identical, so the deploy scope stays EXACTLY the four ducklake artifacts. The advisory validate_lambda_deploy_gating printout will still list data-pipeline/ops-compaction (their manifest.yaml files change in this plan) -- expected and explained: a manifest edit whose sole effect is PREVENTING new content from entering leaves the shipped zip unchanged; no deploy step is required or included for them."
+acceptance_criteria:
+  - "src/common/ducklake_runtime.py and src/lambdas/ducklake_writer/handler.py each drop to <=500 SLOC (target <=450); every new module (ducklake_writes/tables/reads/metrics, smoke_actions) is <=500 SLOC (aim <=400) and every function is CC<=20 (a decision-43 complexity-waiver header travels with any moved function that needs it)."
+  - "The full existing DuckLake test suites (test_ducklake_runtime.py, test_ducklake_runtime_warm_connection.py, test_ducklake_writer_handler.py, test_ducklake_reader_handler.py, test_ducklake_maintenance_handler.py, test_ducklake_scd2_schema.py, test_ducklake_connect_probe.py) plus test_ops_data_portal.py and test_coverage_checker.py pass unchanged in assertion semantics."
+  - "Facade completeness: every census-enumerated symbol is a real attribute at src.common.ducklake_runtime.<sym> (45 non-test import symbols + 17 patched symbols + the 12 private internals read by test_ducklake_runtime.py + PINNED_DUCKDB_VERSION via __getattr__) and every accessed handler symbol resolves at src.lambdas.ducklake_writer.handler.<sym> (including the 8 private helpers and _AlwaysCollidingConnection). rt.ducklake_spike still resolves."
+  - "Interception preservation: patching src.common.ducklake_tables.CATALOG_ALIAS fires through reconcile_table_columns, and patching each of the 7 migrated smoke_actions private helpers fires through its intra-module caller; a grep-count closure shows ZERO residual stale patch targets (no `setattr(h, \"_churn_one_writer\"|...)` in the writer test; no `src.common.ducklake_runtime.CATALOG_ALIAS` patch in test_ops_data_portal.py)."
+  - "The Lambda response contract is byte-for-byte preserved: the handler status/error_type mapping (200 ok; 400 unknown-action/WriterActionError; 409 referential; 422 schema_gate + status_transition; 503 occ_exhausted; 500 version_mismatch/runtime) and the dead-connection reopen-once path are unchanged, proven by the existing writer-handler tests."
+  - "Bundle completeness passes for all four active artifacts: `lambda_manifest --check-bundles` stages each manifest and import-resolves its handler with the new modules present; each artifact's static bundle list (`build_lambda --list-bundle <slug>`) contains the four new src/common modules (and the writer bundle also contains smoke_actions.py)."
+  - "Attribution correctness: compute_affected_artifacts over the five new module paths returns EXACTLY the four ducklake artifacts (writer also matching smoke_actions.py); the new modules are ABSENT from the data-pipeline and ops-compaction static bundle lists (exclude rows effective); NO deploy of data-pipeline/ops-compaction is required or performed (bundle content unchanged; rec-2162 blocker avoided, not worked around)."
+  - "config/sloc_budgets.yaml loses BOTH target entries and gains NO new module entry (diff-verified); no new >500-SLOC module was auto-seeded by the ratchet."
+  - "DuckLake version-lockstep gate stays green (no requirements.txt floor drift; no hardcoded PINNED_DUCKDB_VERSION literal in ducklake_runtime.py or build_lambda.py); no version bump."
+  - "`bin/venv-python -m scripts.validate --pre` exits 0 on the branch tree."
+  - "Post-deploy (executed LAST, after all sibling V2 plans integrate): all four DuckLake functions are rebuilt+deployed in one --ducklake-only cycle; the writer smoke gates (attach + idempotency + loudfail + ops-read-your-write + churn), the reader closed-path gate, the maintenance merge gate, and the catalog-dr DR gate all pass against the deployed artifacts."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: All DuckLake + facade + coverage-mapper test suites pass unchanged (behavior oracle).
+    command: bin/venv-python -m pytest tests/test_ducklake_runtime.py tests/test_ducklake_runtime_warm_connection.py tests/test_ducklake_writer_handler.py tests/test_ducklake_reader_handler.py tests/test_ducklake_maintenance_handler.py tests/test_ducklake_scd2_schema.py tests/test_ducklake_connect_probe.py tests/test_ops_data_portal.py tests/test_coverage_checker.py tests/test_ducklake_facade.py -m "not integration" -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: "A `from src.common.ducklake_runtime import X` or `h.<sym>` AttributeError -> facade omitted a re-export; a patched helper silently no-ops (assertion flips) -> an intra-module patch target was not migrated to its new module."
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    action: Facade re-export completeness for BOTH facades (import + hasattr; no network/creds; import triggers no duckdb). Portable interpreter -- CI's pr-validate replay job has no .venv, so this hermetic step resolves the interpreter itself; all non-hermetic steps keep bin/venv-python.
+    command: >-
+      PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "import importlib; rt=importlib.import_module('src.common.ducklake_runtime');
+      req=['open_connection','fetch_dsn','_parse_secret_string','libpq_conninfo','assert_duckdb_version','get_warm_connection','reset_warm_connection','is_dead_connection_error','_probe_connection_alive','_warm_connection','write_scd2','file_scd2','mint_write_identity','is_occ_collision','_occ_backoff','_safe_rollback','_emit_write_metrics','bootstrap_entity_counter','ensure_entity_counters_table','_allocate_entity_id','_advance_entity_counter','create_scd2_tables','reconcile_table_columns','read_current','read_history','assert_read_only_sql','named_read','query_current','emit_metric','make_metric_sink','CATALOG_ALIAS','SMOKE_DATA_PATH','SMOKE_HISTORY_TABLE','SMOKE_CURRENT_TABLE','META_SCHEMA','SMOKE_META_SCHEMA','LAMBDA_EXTENSION_DIRECTORY','DSN_SECRET_ID','ENTITY_COUNTERS_TABLE','BAKED_EXTENSIONS','CHURN_WRITERS','CHURN_WRITES_PER_WRITER','COMMIT_LATENCY_BUDGET_MS','OCC_COLLISION_RATE_BUDGET','CLOUDWATCH_NAMESPACE','OCCRetryExhaustedError','VersionMismatchError','DuckLakeRuntimeError','WriteIdentity','WriteResult','ReferentialError','SchemaGateError','StatusTransitionError','ducklake_spike','ops_table_names','describe_write_verbs','describe_named_reads','resolve_table_spec','schema_gate','NAMED_READS','NAMED_READS_VERSION','PINNED_DUCKDB_VERSION'];
+      miss=[s for s in req if not hasattr(rt,s)]; print('rt missing:',miss); assert not miss, miss;
+      h=importlib.import_module('src.lambdas.ducklake_writer.handler');
+      hreq=['handler','_ACTIONS','_CONNECTIONLESS_ACTIONS','_parse_event','_response','_open_writer_connection','_warm_writer_connection','_require_ops_table','WriterActionError','action_write_ops','action_file_ops','action_update_ops','action_create_ops_tables','action_describe','action_attach_check','action_create_tables','action_write','action_idempotency_probe','action_partition_probe','action_inlining_probe','action_loudfail_probe','action_connect_probe','action_reset_warm_connection','action_churn','action_churn_single','_churn_one_writer','_churn_one_single_write','_frozen_creds','_concurrency_probe','_count_files','_count_files_for_predicate','_count_inlined_rows','_AlwaysCollidingConnection','_p95'];
+      hmiss=[s for s in hreq if not hasattr(h,s)]; print('handler missing:',hmiss); assert not hmiss, hmiss; print('FACADE-COMPLETE')"
+    expected: Prints FACADE-COMPLETE; both missing lists empty; exit 0.
+    fix_if: A symbol is missing -> add its re-export to the facade (ducklake_runtime.py) or handler.py; PINNED_DUCKDB_VERSION missing -> the __getattr__ shim was dropped.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: Interception preservation + dispatch integrity (the migrated-patch fires through the moved body).
+    command: bin/venv-python -m pytest tests/test_ducklake_facade.py -q
+    expected: Patching src.common.ducklake_tables.CATALOG_ALIAS intercepts reconcile_table_columns; patching each of the 7 smoke_actions helpers intercepts its intra-module caller; _ACTIONS/_CONNECTIONLESS_ACTIONS unchanged; exit 0.
+    fix_if: An interception assertion fails -> the caller resolves the symbol in a different module than the patched one; move caller+callee into the same module or migrate the patch target.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: Stale-definition + stale-patch closure (no moved body remains DEFINED in a facade; no residual no-op patch target).
+    command: >-
+      test $(grep -cE '^(def |class )(write_scd2|file_scd2|mint_write_identity|is_occ_collision|_occ_backoff|_safe_rollback|_emit_write_metrics|bootstrap_entity_counter|ensure_entity_counters_table|_allocate_entity_id|_advance_entity_counter|create_scd2_tables|reconcile_table_columns|read_current|read_history|assert_read_only_sql|named_read|query_current|emit_metric|make_metric_sink)\b' src/common/ducklake_runtime.py) -eq 0 &&
+      test $(grep -cE '^(def |class )(action_attach_check|action_create_tables|action_write|action_idempotency_probe|action_partition_probe|action_inlining_probe|action_loudfail_probe|action_connect_probe|action_reset_warm_connection|action_churn|action_churn_single|_churn_one_writer|_churn_one_single_write|_frozen_creds|_measure_cold_warm_connect|_p95|_count_files|_count_files_for_predicate|_count_inlined_rows|_concurrency_probe|_AlwaysCollidingConnection)\b' src/lambdas/ducklake_writer/handler.py) -eq 0 &&
+      test $(grep -cE 'setattr\(h, "(_churn_one_writer|_churn_one_single_write|_frozen_creds|_concurrency_probe|_count_files|_count_files_for_predicate|_count_inlined_rows)"' tests/test_ducklake_writer_handler.py) -eq 0 &&
+      test $(grep -cE 'src\.common\.ducklake_runtime\.CATALOG_ALIAS' tests/test_ops_data_portal.py) -eq 0 &&
+      echo CLOSURE-OK
+    expected: Prints CLOSURE-OK -- zero moved definitions remain in either facade; zero residual stale patch targets; exit 0.
+    fix_if: A def/class still lives in a facade -> move its body to the sub-module and leave only the re-export; a residual patch target remains -> migrate it (silent no-op mock otherwise).
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: SLOC assertion -- both facades <=500 and no new module >500.
+    command: >-
+      bin/venv-python -c "import pathlib; s=lambda p: sum(1 for l in pathlib.Path(p).read_text().splitlines() if l.strip() and not l.strip().startswith('#'));
+      fac={p:s(p) for p in ['src/common/ducklake_runtime.py','src/lambdas/ducklake_writer/handler.py']};
+      new=['src/common/ducklake_writes.py','src/common/ducklake_tables.py','src/common/ducklake_reads.py','src/common/ducklake_metrics.py','src/lambdas/ducklake_writer/smoke_actions.py'];
+      over={p:s(p) for p in new if s(p)>500}; print('facades',fac); print('over-budget-new',over);
+      assert all(v<=500 for v in fac.values()), fac; assert not over, over; print('SLOC-OK')"
+    expected: Prints SLOC-OK; both facades <=500 (target <=450); zero over-budget new modules.
+    fix_if: A facade exceeds 500 -> extract more; a new module exceeds 500 -> split it finer on a sub-seam.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: Bundle completeness -- stage every active manifest and import-resolve each handler with the new modules bundled.
+    command: bin/venv-python -m scripts.lambda_manifest --check-bundles
+    expected: "All four DuckLake artifacts (plus data-pipeline/ops-compaction): handlers import-resolved, assets present; exit 0."
+    fix_if: "`missing module 'src.common.ducklake_writes'` (or _tables/_reads/_metrics/smoke_actions) -> the module was not added to that artifact's manifest includes[]."
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: The new modules ship in EXACTLY the right bundles -- present in all four ducklake bundle lists (writer also carries smoke_actions), ABSENT from data-pipeline/ops-compaction (exclude rows effective), and compute_affected_artifacts attribution lands on exactly the four ducklake artifacts.
+    command: >-
+      for slug in ducklake_writer ducklake_reader ducklake_maintenance ducklake_catalog_dr; do
+      echo "== $slug =="; bin/venv-python -m scripts.build_lambda --list-bundle "$slug" | grep -E 'ducklake_writes.py|ducklake_tables.py|ducklake_reads.py|ducklake_metrics.py|smoke_actions.py' || { echo "MISSING in $slug"; exit 1; }; done &&
+      for slug in data-pipeline ops-compaction; do cnt=$(bin/venv-python -m scripts.build_lambda --list-bundle "$slug" | grep -cE 'ducklake_writes.py|ducklake_tables.py|ducklake_reads.py|ducklake_metrics.py|smoke_actions.py'); echo "$slug new-module matches: $cnt"; test "$cnt" -eq 0 || { echo "LEAKED into $slug"; exit 1; }; done &&
+      bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts as caa; mods=['src/common/ducklake_writes.py','src/common/ducklake_tables.py','src/common/ducklake_reads.py','src/common/ducklake_metrics.py','src/lambdas/ducklake_writer/smoke_actions.py']; res=caa(mods); print({k: len(v) for k,v in sorted(res.items())}); assert set(res)=={'ducklake_writer','ducklake_reader','ducklake_maintenance','ducklake_catalog_dr'}, res; print('ATTRIBUTION-OK')"
+    expected: "Each ducklake slug lists the new modules (writer also smoke_actions.py); data-pipeline and ops-compaction print 'new-module matches: 0'; ATTRIBUTION-OK -- the affected set for the new paths is exactly the four ducklake artifacts."
+    fix_if: "MISSING -> add the module to that ducklake manifest's includes[]; LEAKED -> the exclude row is absent or typoed in that prod manifest (excludes are exact-path prefix matches, no globs); attribution assert fails -> an include/exclude edit is wrong."
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: DuckLake version-lockstep gate green (no floor drift; no hardcoded literal; no bump).
+    command: >-
+      bin/venv-python -c "import sys; from scripts.checks.misc.validate_ducklake_version_lockstep import validate_ducklake_version_lockstep as v; f=[]; v(f); print('lockstep failures:', f); sys.exit(1 if f else 0)"
+    expected: No failures; exit 0 (requirements floor matches SSOT; no PINNED_DUCKDB_VERSION literal in the two derive surfaces).
+    fix_if: A hardcoded literal was introduced -> repoint through src.common.ducklake_version.pinned_duckdb_version().
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: SLOC re-point + sibling-safe diff (both target entries removed; no new module seeded).
+    command: >-
+      bin/venv-python -m scripts.validate --update-sloc-budgets &&
+      bin/venv-python -c "import subprocess; d=subprocess.run(['git','diff','--','config/sloc_budgets.yaml'],capture_output=True,text=True).stdout;
+      removed=[l for l in d.splitlines() if l.startswith('-') and ('ducklake_runtime.py' in l or 'ducklake_writer/handler.py' in l)];
+      added=[l for l in d.splitlines() if l.startswith('+') and any(m in l for m in ('ducklake_writes.py','ducklake_tables.py','ducklake_reads.py','ducklake_metrics.py','smoke_actions.py'))];
+      print('removed:',removed); print('added_new:',added); assert len(removed)>=2, 'target entries not removed'; assert not added, 'a >500 module was auto-seeded -- split it finer'; print('BUDGET-OK')"
+    expected: Prints BUDGET-OK; both target lines removed; no new module line added. Does NOT assert full-file equality (siblings share this file).
+    fix_if: A new module line appears -> that module exceeds 500 SLOC and was auto-seeded; split it and re-run.
+  - step: 10
+    phase: pre-deploy
+    hermetic: false
+    action: Import-linter contracts pass -- no EXISTING import contract regresses from the new src/common modules. (.importlinter carries NO src.common layers contract today, so this step guards the live contracts, e.g. the src.schemas purity rule; acyclicity of the new module graph is proven by steps 1-3, since a module-scope cycle fails import loudly.)
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)"
+    expected: All existing import contracts still pass; exit 0.
+    fix_if: "A contract failure naming a new module -> it imported a forbidden layer; a facade<->sub-module cycle will already have failed steps 1-3 at import time -> route the shared symbol through ducklake_scd2_schema or use a function-local deferred import (Decision 80's sanctioned acyclic pattern)."
+  - step: 11
+    phase: pre-deploy
+    hermetic: false
+    action: Full fast-tier presubmit gate is green on the branch tree.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 (import-linter, SLOC, CC, coverage-existence, manifests, version-lockstep, etc. all pass).
+    fix_if: A check reddens -> address per its message; do NOT --ignore-budget past a real regression (Decision 55).
+  - step: 12
+    phase: post-deploy
+    hermetic: false
+    action: "[executed LAST, after all sibling plans integrate] Build + upload + deploy all four DuckLake function zips in one cycle (layers untouched)."
+    command: bin/venv-python -m scripts.build_lambda --ducklake-only --deploy --profile agent_platform --region eu-west-2
+    expected: All four function zips build (<262 MB), upload, and update; the writer zip carries handler.py + smoke_actions.py + the four new src/common modules. No pip step (pip_packages empty; deps are in the layer).
+    fix_if: A function update errors on missing module -> a manifest include is wrong (re-run step 6); confirm the resolved profile in the build banner if the default company profile is picked instead of agent_platform.
+  - step: 13
+    phase: post-deploy
+    hermetic: false
+    action: Writer smoke gates prove ATTACH + idempotent MERGE + loud-fail response semantics + the production write/read path (incl 409) + churn actions post-decomposition.
+    command: >-
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-attach --profile agent_platform --region eu-west-2 &&
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-idempotency --profile agent_platform --region eu-west-2 &&
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-loudfail --profile agent_platform --region eu-west-2 &&
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-read-your-write --profile agent_platform --region eu-west-2 &&
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-churn --profile agent_platform --region eu-west-2
+    expected: Each gate prints its PASS line (attach ok; idempotent 1 history + 1 current row; schema/OCC loud-fail raised; write_ops->read_current round-trip + absent update->409; churn within budget). Non-zero exit on any failure.
+    fix_if: attach fails on missing module -> bundle regression (redeploy); loudfail/ops-read-your-write status mismatch -> the handler exception->status mapping was altered (must be byte-for-byte preserved).
+  - step: 14
+    phase: post-deploy
+    hermetic: false
+    action: Reader + maintenance + catalog-dr gates prove each OTHER artifact still imports the runtime facade + new modules and runs live.
+    command: >-
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-reader --profile agent_platform --region eu-west-2 &&
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-merge --profile agent_platform --region eu-west-2 &&
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-catalog-dr --profile agent_platform --region eu-west-2
+    expected: Reader closed-path read returns rows; maintenance merge asserts files_after <= files_before; catalog-dr writes an engine-version-tagged dump + emits CatalogDumpSuccess. Non-zero exit on any failure.
+    fix_if: An artifact 5xxs on import (ModuleNotFoundError for a new src/common module) -> that manifest's includes[] is missing the module; fix and redeploy that function.
+constraints:
+  - "Behaviour preservation is absolute -- pure code movement + re-export. No feature work, no bug fixes, no signature changes beyond movement. The handler exception->status mapping and every action's return dict are byte-for-byte preserved. Out-of-scope findings become notes, not fixes."
+  - "Import stability -- the facade at src.common.ducklake_runtime.* and the handler at src.lambdas.ducklake_writer.handler.* re-export every public symbol AND every census-enumerated test-patched/read private symbol; the ducklake_scd2_schema re-export block is preserved verbatim; rt.ducklake_spike stays resolvable."
+  - "Manifest handler contract -- src.lambdas.ducklake_writer.handler.handler MUST stay the Lambda entrypoint named in the writer manifest; every new src/common module bundled by ducklake_runtime.py is added to ALL FOUR ducklake manifests' includes[]; smoke_actions.py is added to the writer manifest only; the SAME four src/common paths are added to data-pipeline + ops-compaction excludes[] so their wholesale 'includes: - src/' does not drag DuckLake runtime code into prod bundles (their excludes-block doctrine) and does not create a deploy obligation on a broken deploy path (rec-2162)."
+  - "Namespace-migration discipline (tests/CLAUDE.md) -- a patched symbol called INTRA a moved module migrates its patch target to that module in the SAME change, proven by an interception test + grep-count closure; never leave a silent no-op mock."
+  - "Decision 102 -- SLOC budgets ratchet DOWN only; re-point EXCLUSIVELY via `validate --update-sloc-budgets`; config/sloc_budgets.yaml is regenerated, never hand-edited; diff-verify no >500 module is auto-seeded."
+  - "Decision 43 -- CC<=20 per function; the decision-43 complexity-waiver header travels with any moved function that genuinely exceeds CC 20 (ducklake_runtime.py and handler.py both currently carry the header -- keep it wherever a residual/moved waivered function lands)."
+  - "Decision 79 / CD.16 -- all four affected active artifacts get per-Lambda build + deploy + smoke-test (V3). No version bump (config/lambda/ducklake/version.yaml unchanged); layers are not rebuilt."
+  - "Multi-plan coordination -- this is one of ~16 SLOC-decomposition plans on branch claude/sloc-violations-refactor-p5svnl. Touch ONLY the scope files, the new modules, and the tests. config/sloc_budgets.yaml and scripts/test_coverage_checker.py are shared surfaces: the budget file is regenerated (never hand-edited) and the coverage-mapper edit is additive (a ducklake-specific branch) to minimise merge conflict; the orchestrator resolves integration. The V3 deploy+smoke phase (steps 12-14) runs LAST, after all V2 plans integrate, so deployed artifacts reflect the integrated branch -- steps 12-14 are a cleanly separable final phase."
+  - "Decision 55 -- loud-fail; no rescue agents / workaround loops. On an unrecoverable V3 deploy/smoke failure stop and RCA; never paper over a broken gate with a skip or an --ignore-budget past a real regression."
+  - "Decision 101 (public repo) -- no AWS account IDs/ARNs/ExternalIds/secrets/internal hostnames in code, tests, or this plan. Account-relative `--profile agent_platform` commands are fine. No emojis; ASCII hyphens only; Python 3.12+, type hints, ruff line length 127."
+context:
+  - >-
+    Root cause -- ducklake_runtime.py (855 SLOC, budget 859: 4 lines headroom) and
+    ducklake_writer/handler.py (580 SLOC, budget 580: 0 headroom) are at their SLOC ceiling. Capping a
+    cohesive multi-concern file only ratchets upward; the structural fix is one-concern-per-file modules
+    whose count grows freely while each stays flat (mirrors Decision 80/104's validate.py decomposition).
+  - >-
+    Design choice -- ONE combined plan (not two). The runtime decomposition affects ALL FOUR active
+    artifacts (writer/reader/maintenance/catalog-dr all bundle ducklake_runtime.py); the handler
+    decomposition affects only the writer. A single `build_lambda --ducklake-only --deploy` cycle
+    build+deploy+smokes all four ONCE (the writer smoke covers BOTH the runtime and handler changes);
+    two plans would deploy+smoke the writer twice and both edit ducklake_writer/manifest.yaml (cross-plan
+    conflict on one file). Combining also means one coverage-mapper edit and one --update-sloc-budgets
+    diff covering both files. The executor freeze suspends the >5-file STRATEGIC heuristic (author as a
+    single larger IMPLEMENTATION plan).
+  - >-
+    Decomposition doctrine -- Design keeps ducklake_runtime.py's headline "single ATTACH / connection
+    authority" concern IN the facade (open_connection + fetch_dsn + warm-connection cache stay), which
+    (a) preserves the existing warm-connection test patch bindings and coverage arrangement completely
+    untouched (test_ducklake_runtime_warm_connection.py is NOT in scope), and (b) still lands the facade
+    at ~340 SLOC. The four extracted src/common modules import only from ducklake_scd2_schema (+ stdlib)
+    and never import the facade, so the dependency DAG is acyclic (schema <- {writes,tables,reads,metrics}
+    <- runtime-facade). Entity-allocation is co-located with the write primitives (in ducklake_writes.py)
+    to keep write_scd2 -> _advance_entity_counter and file_scd2 -> _allocate_entity_id intra-module and
+    avoid a writes<->tables cycle.
+  - >-
+    Census (fresh-context subagent, cross-verified) -- 20 importer files of ducklake_runtime (10 non-test
+    + 10 test); 135 direct-on-module patch sites over 17 distinct patched symbols (ALL public), plus 12
+    private internals read by test_ducklake_runtime.py that the facade must ALSO re-export. Writer handler:
+    1 importer (the test), 33 setattr(h,...) sites over 8 private symbols (7 move to smoke_actions, 1 --
+    _open_writer_connection -- stays). Sibling precedent: ducklake_scd2_schema.py is a 468-SLOC flat
+    src/common sibling that ducklake_runtime imports and all four Lambdas reach transitively via rt.* --
+    the model this plan follows.
+  - >-
+    Verified intra-module patch hazards (drove the module boundaries): (1) test_ducklake_runtime_warm_connection.py
+    patches open_connection to intercept get_warm_connection's internal call -- NEUTRALISED by keeping both
+    in the facade (no migration). (2) test_ops_data_portal.py:~1671 patches ducklake_runtime.CATALOG_ALIAS to
+    intercept reconcile_table_columns -> migrate to ducklake_tables. (3) the 7 writer private helpers are
+    called intra smoke_actions -> migrate their setattr(h,...) to smoke_actions. schema_gate/mint_write_identity
+    are patched only for EXTERNAL rt.X calls (loudfail/file_ops/idempotency probes) -> facade re-export suffices
+    (confirmed: no test patches them to intercept write_scd2/file_scd2 internally).
+  - >-
+    Coverage gate mechanics -- validate_test_coverage gates on test-file EXISTENCE (per-file 100% via the
+    single stem-mapped file is effectively advisory: pyproject sets a global floor fail_under=37, and
+    ducklake_runtime.py passes today although its warm-cache is covered only by the separate warm test
+    file). map_source_to_test maps src/**/*.py -> test_{stem}.py, so the new modules are routed to their
+    colocated oracle test files via the extended mapper (mirrors Decision 104's scripts/checks/** ->
+    test_validate.py), satisfying existence without moving test bodies (lowest behaviour-preservation risk).
+  - >-
+    Version lockstep -- NO bump. validate_ducklake_version_lockstep checks (a) requirements.txt duckdb
+    floor == config/lambda/ducklake/version.yaml (unchanged; no dep change) and (b) no PINNED_DUCKDB_VERSION
+    literal in ducklake_runtime.py / build_lambda.py (resolution stays via the loader + __getattr__ shim).
+    Only function zips rebuild; duckdb 1.5.4 / ducklake v1.0 and all layers are untouched.
+  - >-
+    Recs -- rec-2414 (umbrella "break SLOC-registered oversized files below 500") is CITED and ADVANCED
+    (2 of 17 files) but NOT bundled (partial). Open recs on the touched files are behaviour changes this
+    refactor must NOT make and are left open as out-of-scope notes: rec-2090 (action_write omits
+    created/last_updated_timestamp), rec-2092 (churn emits 5 put_metric_data calls), rec-2097
+    (CHURN_WRITES_PER_WRITER diagnostic-only clarification), rec-2158 (add delete_ops verb), rec-2247
+    (writer dead-connection retry blanket / action_write not idempotent). No exact-match rec is fully
+    satisfied by a behaviour-preserving move, so bundled_recommendations is empty.
+  - >-
+    No conflict with T2.26 / CD.34 -- this is behaviour-preserving code movement; the deferred-table
+    migration (telemetry/session_log/execution_plans) and the Neon catalog mechanics (inlining-off, pg_dump
+    DR, closed boundary) are untouched. Branch is 0 commits behind origin/main at planning time (preflight);
+    no scope-file divergence; ci_rca_unresolved_recs empty (no HARD BLOCK).
+  - >-
+    Acyclic import discipline (Decision 80 WARN from decision-scout) -- the four new src/common sub-modules
+    import their shared base exception (DuckLakeRuntimeError) and all shared schema symbols FROM
+    ducklake_scd2_schema, and NEVER from the facade. OCCRetryExhaustedError is DEFINED in ducklake_writes.py
+    (subclassing the scd2_schema DuckLakeRuntimeError); VersionMismatchError stays in the facade with the
+    connection cluster. The OCC/entity constants (OCC_MAX_ATTEMPTS, OCC_*_BACKOFF_S, ENTITY_COUNTERS_TABLE,
+    churn budgets) are DEFINED in ducklake_writes.py and re-exported by the facade for external rt.X readers.
+    Net DAG: ducklake_scd2_schema <- {ducklake_writes, ducklake_tables, ducklake_reads, ducklake_metrics} <-
+    ducklake_runtime (facade). No sub-module imports the facade, so there is no facade<->sub-module cycle.
+    Acyclicity is proven at import time by VP steps 1-3 (a module-scope cycle fails import loudly); VP
+    step 10 (import-linter, LIVE per Decision 80) guards that no EXISTING contract regresses --
+    .importlinter carries no src.common layers contract today, and adding one is an optional follow-up
+    surfaced to the orchestrator, NOT scope here.
+  - >-
+    Write-path-in-read-artifact NOTE (Decision 81/84 from decision-scout) -- adding ducklake_writes.py to the
+    reader/maintenance/catalog_dr manifests places write CODE in read-only bundles, but this is status quo:
+    ducklake_runtime.py already contains write_scd2 and is already bundled into all four artifacts. The closed
+    boundary is enforced at the IAM / Function-URL layer (read-only IAM principals + AWS_IAM ingress), not by
+    symbol absence; code movement introduces NO new write capability to any read-only principal. No action
+    beyond this note.
+  - >-
+    Umbrella-rec discipline (Decision 103/70) -- rec-2414 is an umbrella (2 of 17 files); do NOT emit a
+    `Resolves: rec-2414` trailer on the squash-merge (it stays open until all 17 land). bundled_recommendations
+    is empty, so there is no rec-closure obligation for this plan.
+  - >-
+    Tier note (Decision 73/79) -- `--pre` (VP step 11) is the authoritative PR gate. Bundle-completeness
+    (step 6) is a FULL-tier check (NOT `--pre`, per Decision 79/73), so the plan runs it directly as a
+    dedicated pre-deploy step to avoid deferring the manifest-include proof to the post-merge tier.
+    Version-lockstep (step 8) runs in BOTH tiers (registry pre_sequence AND full), so `--pre` already
+    covers it -- the dedicated step 8 run is retained so the no-bump proof is explicit in this plan's own
+    VP; the conclusion holds a fortiori.
+  - >-
+    Hermetic-replay budget (fleet policy, T3.15/VF-01) -- validate_vp_replay re-executes every
+    pre-deploy+hermetic:true step of every PLAN-*.yaml in the PR diff under a SHARED 20-step/120s budget
+    across all ~16 sibling SLOC plans on this branch. This plan therefore marks exactly ONE step hermetic:
+    step 2 (facade re-export completeness), a <5s creds-free stable invariant that passes both before
+    (verified on the monolith: FACADE-COMPLETE) and after the refactor. All other steps are hermetic: false
+    BY DESIGN -- do NOT re-mark them; the implementer still executes the FULL VP (steps 1-14) directly.
+  - >-
+    Affected-artifact evidence (orchestrator finding, verified empirically this session) -- data-pipeline
+    and ops-compaction manifests both carry `includes: - src/` (wholesale) plus an explicit ducklake
+    excludes block; compute_affected_artifacts on the prospective diff attributed the four new src/common
+    modules to data-pipeline + ops-compaction and NOT to the ducklake artifacts (their manifests do not
+    list the new paths yet), while smoke_actions.py attributed NOWHERE (both prod manifests already
+    dir-exclude src/lambdas/ducklake_writer). Decision 79 rules tier-from-manifest-graph, so the fix is
+    the exclude rows; a post-remediation simulation (excludes added + ducklake includes added) confirms
+    attribution == exactly the four ducklake artifacts. Import safety: cmd_check_bundles passes TODAY
+    with ducklake_runtime.py excluded from both prod bundles (no handler import path to any ducklake
+    module); grep confirms zero ducklake imports in src/data/ and in the nine scripts/*.py files both
+    manifests include (the only hits are a docstring + log strings in ops_compaction_handler.py).
+    validate_lambda_deploy_gating is ADVISORY (prints affected slugs; never fails the build) -- it will
+    list the two prod artifacts because their manifest.yaml files change; this is expected and carries no
+    deploy obligation (shipped zip content is unchanged). rec-2162 (data-pipeline deploy broken on a
+    yanked dep pin) is thereby AVOIDED, not worked around (Decision 55). Critique observation: rec-2162's
+    yanked-pin premise is not reproducible in the current tree (the data-pipeline manifest declares
+    pip_packages: [] and build_lambda's PROD_DEPS carries no yanked pin) -- a Decision 103 relevance
+    check on rec-2162 is recommended to the orchestrator; out of scope for this plan.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (triaged 83 of 83). CITE: Decision 104 (facade + coverage-mapper precedent), 80 (tool-free decomposition + LIVE import-linter gate), 102 (SLOC ratchet down-only), 43 (500 cap + CC<=20 waiver), 81/CD.33 (runtime invariants), 84 (I-2 writer-owned allocation, I-3 named-verb read boundary), 79/CD.16 (manifest SSOT, bundle-completeness import-resolve, V3 build+deploy+smoke), 99 (DuckDB version-lockstep SSOT), 82 (EC8 churn semantics preserved), 88 (warm-connection reuse -> connection stays in facade). RELATED: 55, 103/70, 73, 101, 107/CD.34, 67."
+  - "gates: decision-scout=FLAGS_FOUND after 1 round (WARN import-cycle -> resolved via explicit acyclic import discipline, proven at import time by VP steps 1-3; NOTE write-in-read-only-artifact -> accepted as status-quo note); plan-critique=PROCEED after 2 rounds (round 1 killed by a session limit mid-investigation of affected-artifact attribution -- the finding was investigated and remediated by the planner; round 2 PROCEED with both deltas empirically confirmed and three non-blocking wording notes folded in)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md decisions cited by the scout read (43, 55, 67, 70, 73, 79, 80, 81, 82, 84, 88, 99, 101, 102, 103, 104, 107)
+  - All 20 scope files located and readable; all six touched manifests, build_lambda.py flags, and the two governing checks read
+  - Census of importers + patch sites reviewed (facade re-export set + patch-migration set enumerated)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "Create the four src/common sub-modules (ducklake_writes.py, ducklake_tables.py, ducklake_reads.py, ducklake_metrics.py). Move each body VERBATIM from ducklake_runtime.py. Import the shared base exception DuckLakeRuntimeError and ALL shared schema symbols (spec/SQL-builders/gate/STATUS_TRANSITIONS/CATALOG_ALIAS/etc.) FROM ducklake_scd2_schema -- NEVER from the facade (acyclic-import discipline, Decision 80). Define OCCRetryExhaustedError + the OCC/entity/churn constants IN ducklake_writes.py; keep entity-allocation with the write primitives there (no writes<->tables cycle). Carry the decision-43 complexity-waiver header onto any moved function that needs it."
+  - "Collapse ducklake_runtime.py to the connection-authority + facade module: keep the connection cluster + warm cache + connection constants + the ducklake_scd2_schema re-export block + the __getattr__/_PINNED shim; add `from src.common.ducklake_writes|_tables|_reads|_metrics import (...)` re-exports covering every public symbol AND the census private set (_emit_write_metrics, _occ_backoff, _safe_rollback). Leave NO moved body defined here."
+  - "Create src/lambdas/ducklake_writer/smoke_actions.py: move the smoke/probe/churn actions + their private helpers VERBATIM; `import ducklake_runtime as rt`; resolve DATA_PATH/META_SCHEMA/EXTENSION_DIRECTORY from os.environ locally (no handler import). Collapse handler.py to entrypoint + production actions + dispatch + exact exception mapping; re-import the extracted actions/helpers from smoke_actions for _ACTIONS and test access; keep handler() byte-for-byte in its status mapping."
+  - "Edit SIX manifests: add ducklake_writes.py/ducklake_tables.py/ducklake_reads.py/ducklake_metrics.py to includes[] of writer/reader/maintenance/catalog_dr (writer also gains smoke_actions.py); add the SAME four src/common paths to excludes[] of data-pipeline and ops-compaction, extending their existing ducklake exclude blocks (exact paths -- excludes support no globs; smoke_actions.py is already covered by their src/lambdas/ducklake_writer dir exclude)."
+  - "Extend scripts/test_coverage_checker.py map_source_to_test (route the new ducklake sub-modules to their oracle test files) and add tests/test_coverage_checker.py cases."
+  - "Migrate patch targets (namespace discipline): test_ops_data_portal.py CATALOG_ALIAS -> ducklake_tables; the 7 writer private-helper setattr(h,...) -> smoke_actions. Author tests/test_ducklake_facade.py (re-export completeness for both facades + interception preservation + dispatch integrity). Audit test_ducklake_runtime.py for any residual intra-module patch that the interception test flags (expected none)."
+  - "Run pre-deploy VP steps 1-11; loop until green (steps 1-3 prove the new module graph acyclic at import time; step 10 guards existing import contracts). Run `validate --update-sloc-budgets` (step 9) as the LAST budget-mutating action and diff-assert both entries removed + no new module seeded."
+  - "Post-deploy (LAST, after sibling integration): VP step 12 build+deploy all four artifacts in one --ducklake-only cycle; steps 13-14 run the writer/reader/maintenance/catalog-dr smoke gates. On an unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: final SLOC per file, facade-completeness + interception results, bundle-completeness across all four artifacts, the sloc_budgets diff, version-lockstep (no bump), and the per-artifact deploy+smoke outcomes."
+rollback: >-
+  Pure refactor + re-export on a feature branch; if any pre-deploy gate cannot be made green, abandon the
+  branch (nothing deployed). If merged and a regression surfaces, revert the squash commit -- the facades,
+  new modules, manifest includes, coverage-mapper edit, and patch migrations land atomically in one PR, so
+  a single revert restores the pre-decomposition state. Post-deploy: the four function zips are
+  code-only (layers untouched), so redeploying the prior commit's zips via `build_lambda --ducklake-only
+  --deploy` restores the previous function code with no layer/version churn.

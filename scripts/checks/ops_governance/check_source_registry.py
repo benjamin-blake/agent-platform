@@ -1,4 +1,5 @@
-"""Source-registry CI guard: schedule.yaml agent names + ops_data_portal.py literals (Decision 104)."""
+"""Source-registry CI guard: schedule.yaml agent names + ops_data_portal.py / ops_portal/*.py literals
+(Decision 104, extended by Decision 124)."""
 
 from __future__ import annotations
 
@@ -9,8 +10,9 @@ from scripts.checks import _common, registry
 def check_source_registry(failed: list[str]) -> None:
     """Verify that all agent names in schedule.yaml are registered canonical_ids.
 
-    Also checks ops_data_portal.py for hardcoded source string literals and verifies
-    each is registered. Wired into run_python_checks() -- runs on presubmit.
+    Also checks ops_data_portal.py (the facade) and scripts/ops_portal/*.py (the
+    implementation package, Decision 124) for hardcoded source string literals and
+    verifies each is registered. Wired into run_python_checks() -- runs on presubmit.
     """
     import yaml as _yaml
 
@@ -37,15 +39,23 @@ def check_source_registry(failed: list[str]) -> None:
     else:
         print(f"  WARNING: {schedule_path} not found -- skipping agent name check")
 
-    portal_path = _common.ROOT / "scripts" / "ops_data_portal.py"
-    if portal_path.exists():
+    import re as _re
+
+    portal_paths = [_common.ROOT / "scripts" / "ops_data_portal.py"]
+    ops_portal_dir = _common.ROOT / "scripts" / "ops_portal"
+    if ops_portal_dir.is_dir():
+        portal_paths.extend(sorted(ops_portal_dir.glob("*.py")))
+
+    for portal_path in portal_paths:
+        if not portal_path.exists():
+            continue
         portal_source = portal_path.read_text(encoding="utf-8")
-        import re as _re
+        rel_label = portal_path.relative_to(_common.ROOT).as_posix()
 
         for match in _re.finditer(r'source\s*==\s*[\'"]([^\'"]+)[\'"]|"source"\s*:\s*"([^"]+)"', portal_source):
             literal = match.group(1) or match.group(2)
             if literal and not literal.startswith("{") and literal not in valid_ids:
-                violations.append(f"ops_data_portal.py hardcoded source '{literal}' not in source_registry.yaml")
+                violations.append(f"{rel_label} hardcoded source '{literal}' not in source_registry.yaml")
 
     if violations:
         for v in violations:

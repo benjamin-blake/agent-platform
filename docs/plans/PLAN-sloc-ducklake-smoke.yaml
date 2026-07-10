@@ -1,0 +1,436 @@
+schema_version: 1
+slug: "sloc-ducklake-smoke"
+intent: >-
+  Decompose scripts/ducklake_neon_smoke_test.py (1343 SLOC, the sole implementation of the live
+  DuckLake-on-Neon smoke/verification gate suite) into a cohesive scripts/ducklake_smoke/ package
+  behind a byte-stable thin CLI facade, retiring the largest non-executor SLOC-budget entry while
+  preserving every gate's behavior, label, and exit code exactly (rec-2414 umbrella program).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-ducklake-smoke.yaml
+phase: >-
+  Platform hardening (SLOC governance, Decision 43/102). One of ~16 sibling SLOC-decomposition
+  plans on this shared branch under the rec-2414 umbrella. No product-roadmap phase; no tier_item
+  targeted (ad_hoc governance work -- Tier Item Freshness Gate skipped per soft-warn exception).
+scope:
+  - file: scripts/ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin CLI facade (<=500 SLOC, target <=300; est ~240). KEEPS byte-identical:
+      module docstring, main() with the full argparse block (prog name, all 26 mutually-exclusive
+      mode flags with dest names, --profile/--region/--json), the SmokeTestFailure->stderr->exit-1
+      handler, _LAMBDA_GATES dict, _selected_lambda_gate (globals()-resolution so facade-level
+      monkeypatches still intercept dispatch), and the __main__ guard. ADDS re-exports: every
+      public symbol, every test-referenced private symbol, the runtime constants
+      (CHURN_WRITERS/CHURN_WRITES_PER_WRITER/COMMIT_LATENCY_BUDGET_MS/OCC_COLLISION_RATE_BUDGET/
+      DSN_SECRET_ID/SMOKE_DATA_PATH/CATALOG_ALIAS/META_SCHEMA/*_URL_ENV/_CANARY_* maps), and the
+      module aliases tests patch through (subprocess, neon_api, ducklake_runtime, ducklake_spike,
+      _catalog_dr) -- the frozen re-export checklist is enumerated by grep at implementation start.
+      DROPS the stale module-level '# complexity-waiver: decision-43' header (max function CC by
+      the gate's _BRANCH_TYPES definition is 15 (canary_rehearsal) < 20; Decision 102 requires a
+      green validate_cc_limits run before removal -- VP step 7 provides it).
+  - file: scripts/ducklake_smoke/__init__.py
+    action: Create
+    purpose: Package marker only (empty or docstring-only; excluded from SLOC/CC/coverage gates).
+  - file: scripts/ducklake_smoke/core.py
+    action: Create
+    purpose: >-
+      Shared harness plumbing (est ~85 SLOC): SmokeTestFailure, DSN_SECRET_ID, SMOKE_DATA_PATH,
+      CATALOG_ALIAS, META_SCHEMA, the four *_URL_ENV names, fetch_dsn/_libpq_conninfo re-exports
+      from ducklake_runtime, _p95, _function_url, _sigv4_invoke, _ok_json. Every other module
+      calls these via the core module object (core._sigv4_invoke(...)) so each symbol has ONE
+      canonical patch target -- the Decision 104 _common convention.
+  - file: scripts/ducklake_smoke/direct_gates.py
+    action: Create
+    purpose: >-
+      Direct TCP/5432 gates + helpers, moved verbatim (est ~180 SLOC): _open_attached,
+      attach_roundtrip, _is_occ_collision, _single_writer_commit, _run_churn_burst,
+      _evaluate_churn, churn_gate, _engine_tag, _run, _dsn_uri, _consistent_pg_dump,
+      _restore_dump, _write_probe, _verify_probe, _derive_scratch_dsn, restore_drill. The
+      DUCKLAKE_ALLOW_DIRECT_GATE refusal guards (DIRECT_GATE_REFUSED messages) stay byte-stable
+      (Decision 55 surface).
+  - file: scripts/ducklake_smoke/lambda_ec_gates.py
+    action: Create
+    purpose: >-
+      Writer/reader EC + warm-reuse Function-URL gates, moved verbatim (est ~220 SLOC):
+      lambda_attach, lambda_ingress, lambda_idempotency, lambda_partition, lambda_inlining,
+      lambda_loudfail, lambda_churn (EC8 fan-out -- Decision 82 semantics byte-identical:
+      pre-warm phase, wall-p95 term, runtime-sourced budget constants), lambda_churn_incontainer
+      (diagnostic), lambda_reader, _warm_reuse_probe, _assert_warm_reuse, lambda_warm_reuse,
+      lambda_warm_reuse_writer (Decision 88 egress-invariant enforcement counterparts).
+  - file: scripts/ducklake_smoke/lambda_maintenance_gates.py
+    action: Create
+    purpose: >-
+      Maintenance + catalog-DR gates, moved verbatim (est ~160 SLOC): lambda_maintenance_merge,
+      lambda_maintenance_gc, lambda_maintenance_breaker, lambda_catalog_dr,
+      lambda_maintenance_hot_merge (Decision 81 maintenance/DR surface).
+  - file: scripts/ducklake_smoke/lambda_ops_gates.py
+    action: Create
+    purpose: >-
+      Ops-schema end-to-end gates, moved verbatim (est ~215 SLOC): ops_read_your_write,
+      ops_churn_regate (delegates via lambda_ec_gates.lambda_churn module-object call),
+      catalog_restore_drill, migrate_ops_recs_columns, connect_probe, lambda_append_only
+      (Decision 84 closed-boundary verification surface).
+  - file: scripts/ducklake_smoke/canary.py
+    action: Create
+    purpose: >-
+      OQ.12 canary-rehearsal orchestration, moved verbatim (est ~345 SLOC): _CANARY_* constant
+      maps, _aws_cmd, _publish_candidate_layers, _get_function_role_arn, _canary_create_function,
+      _wait_function_active, _canary_delete_function, _lambda_invoke_cli, canary_rehearsal
+      (Decision 100 Neon branch create/finally-delete lifecycle preserved verbatim).
+  - file: tests/test_ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: >-
+      Preserve behavior; assertion semantics unchanged. Bulk-migrate the sibling-consumed
+      monkeypatch.setattr(smoke, X) sites to their owning submodule per the enumerated ownership
+      map (tests/CLAUDE.md namespace-migration discipline; script-assisted): to core --
+      _sigv4_invoke (22), _function_url (21), fetch_dsn (3); to direct_gates -- _open_attached
+      (9), _run_churn_burst (4), _write_probe (4), _verify_probe (4), _consistent_pg_dump (4),
+      _restore_dump (4), _engine_tag (4), _run (4); to canary -- _lambda_invoke_cli (3),
+      _publish_candidate_layers (2), _get_function_role_arn (2), _canary_create_function (2),
+      _canary_delete_function (2); to lambda_ec_gates -- the single ops_churn_regate-delegation
+      lambda_churn site. Migration MUST use a multiline-aware matcher (8 sites span lines).
+      UNCHANGED: module-object patches (smoke.subprocess/smoke.neon_api/
+      smoke.ducklake_runtime/smoke.ducklake_spike, 21 sites -- they set attributes on the global
+      module objects) and facade-dispatch patches whose exercised entrypoint is smoke.main
+      (attach_roundtrip, churn_gate, restore_drill, canary_rehearsal, lambda_attach,
+      lambda_churn_incontainer, lambda_reader -- intercepted via main()'s globals() resolution).
+      ADD (one consolidated import block, ruff-safe): facade-completeness test (every smoke.<name>
+      the suite references is identity-equal to the owning submodule attribute; membership DERIVED
+      from the submodules, no hardcoded counts per tests/CLAUDE.md), interception tests (patching
+      core._sigv4_invoke intercepts one gate per family; patching lambda_ec_gates.lambda_churn
+      intercepts ops_churn_regate; patching smoke.lambda_attach intercepts main --lambda-attach
+      dispatch).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Regenerated ONLY via `validate --update-sloc-budgets` as the last implementation step
+      (never hand-edited): the scripts/ducklake_neon_smoke_test.py: 1343 entry auto-drops at
+      <=500 SLOC; no scripts/ducklake_smoke/ entry may be seeded. Sibling-safe scoped assertions
+      only (no full-file diff equality -- ~16 sibling decompositions share this branch).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The full pre-existing tests/test_ducklake_neon_smoke_test.py suite (104 tests) plus the new
+    facade-completeness and interception tests pass; zero assertion-semantics changes (patch
+    targets repointed only, per the ownership map).
+  - "CLI contract byte-stable: `bin/venv-python -m scripts.ducklake_neon_smoke_test --help` output
+    is byte-identical to the pre-refactor file run from the merge-base; no-flag invocation still
+    exits 2 (argparse usage error); --churn-gate and --restore-drill without
+    DUCKLAKE_ALLOW_DIRECT_GATE still exit 1 with the byte-stable DIRECT_GATE_REFUSED message;
+    all emitted gate labels unchanged (pinned by the existing capsys assertions)."
+  - scripts/ducklake_neon_smoke_test.py is <=500 SLOC (target <=300) and every
+    scripts/ducklake_smoke/*.py module is <=500 SLOC (target <=400); the SLOC-assert command in
+    VP step 6 proves both.
+  - "No '# complexity-waiver: decision-43' comment remains in the facade or any new module, AND
+    validate_cc_limits reports zero violations (the Decision 102 precondition for dropping the
+    waiver)."
+  - Facade completeness holds -- every module-level symbol the test suite references via
+    smoke.<name> (including private helpers, constants, and module aliases) resolves on the
+    facade and is identity-equal to the owning submodule attribute (derived-membership test,
+    growth-safe).
+  - "Patch-site migration closure: zero residual monkeypatch.setattr(smoke, \"<moved-symbol>\")
+    sites for the 17 moved sibling-consumed symbols (multiline-aware re.S count = 0, VP step 2 --
+    line-based grep is NOT the oracle), and the interception tests prove the core module-object
+    convention, the ec-gate delegation repoint, and the preserved facade-dispatch globals path."
+  - config/sloc_budgets.yaml no longer contains any ducklake_neon_smoke_test entry and contains
+    no scripts/ducklake_smoke/ entry after `validate --update-sloc-budgets` (scoped greps;
+    sibling-safe).
+  - bin/venv-python -m scripts.validate --pre exits 0 on the final tree.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: Full unit suite (pre-existing 104 tests + new facade/interception tests) passes.
+    command: bin/venv-python -m pytest tests/test_ducklake_neon_smoke_test.py -q
+    expected: All tests pass, zero failures/errors; exit 0.
+    fix_if: >-
+      A gate test fails on an un-intercepted mock -> its setattr site was left on smoke while the
+      consuming call moved (repoint per ownership map); an ImportError/AttributeError on
+      smoke.<name> -> the facade re-export checklist missed that symbol.
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: Residual patch-site closure for moved symbols + new tests exist.
+    command: >-
+      bin/venv-python -c "import re,pathlib;
+      txt=pathlib.Path('tests/test_ducklake_neon_smoke_test.py').read_text(encoding='utf-8');
+      pat=re.compile(r'monkeypatch\.setattr\(\s*smoke\s*,\s*\"(_open_attached|_run_churn_burst|_write_probe|_verify_probe|_consistent_pg_dump|_restore_dump|_engine_tag|_run|_sigv4_invoke|_function_url|fetch_dsn|_lambda_invoke_cli|_publish_candidate_layers|_get_function_role_arn|_canary_create_function|_canary_delete_function|lambda_churn)\"',
+      re.S); n=len(pat.findall(txt)); print('residual movable-symbol smoke sites:', n);
+      raise SystemExit(0 if n==0 else 1)" && grep -q "def test_facade_reexports"
+      tests/test_ducklake_neon_smoke_test.py && grep -q "interception"
+      tests/test_ducklake_neon_smoke_test.py
+    expected: >-
+      Zero residual smoke-target sites for the 17 moved symbols (MULTILINE-AWARE count -- 8 of
+      the 95 pre-migration sites span lines, so a line-based grep undercounts at 87; the re.S
+      form is the oracle); both new test groups present; exit 0.
+    fix_if: >-
+      Count nonzero -> a patch site was not repointed (silent no-op mock; the moved body no longer
+      reads the facade global) -- all 4 _run_churn_burst sites and 4 _sigv4_invoke sites are
+      multi-line, check those first. Missing test -> add the facade-completeness/interception tests.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: --help byte-diff against the pre-refactor file taken from the merge-base.
+    command: >-
+      T=$(mktemp -d) && git show $(git merge-base origin/main HEAD):scripts/ducklake_neon_smoke_test.py
+      > "$T/base.py" && PYTHONPATH=. bin/venv-python "$T/base.py" --help > "$T/before.txt"
+      && bin/venv-python -m scripts.ducklake_neon_smoke_test --help > "$T/after.txt"
+      && diff -u "$T/before.txt" "$T/after.txt"
+    expected: Empty diff (byte-identical help text, prog name, flag set, help strings); exit 0.
+    fix_if: >-
+      Any diff hunk -> the argparse block was not moved verbatim into the facade (a flag, dest,
+      or help string drifted); restore the original block byte-for-byte.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: Hermetic-path CLI wiring end-to-end -- refusal guards and usage error, no live Neon/AWS.
+    command: >-
+      T=$(mktemp -d); bin/venv-python -m scripts.ducklake_neon_smoke_test >/dev/null 2>&1;
+      test "$?" = "2" && env -u DUCKLAKE_ALLOW_DIRECT_GATE bin/venv-python -m
+      scripts.ducklake_neon_smoke_test --churn-gate 2>"$T/e1"; test "$?" = "1" && grep -q
+      DIRECT_GATE_REFUSED "$T/e1" && env -u DUCKLAKE_ALLOW_DIRECT_GATE bin/venv-python -m
+      scripts.ducklake_neon_smoke_test --restore-drill 2>"$T/e2"; test "$?" = "1" && grep -q
+      DIRECT_GATE_REFUSED "$T/e2"
+    expected: >-
+      No-flag run exits 2; both direct gates exit 1 with DIRECT_GATE_REFUSED on stderr (the
+      Decision 55 loud-fail path exercised through the real facade -> package import -> gate
+      wiring, before any credential/network use).
+    fix_if: >-
+      Exit 1 without the message or a traceback -> the refusal guard moved but the facade dispatch
+      broke (import error surfaces here); exit 0 -> the guard was lost in the move (Decision 55
+      violation -- restore verbatim).
+  - step: 5
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Stable CLI flag-surface contract at the stable module path (invariant on BOTH the current
+      monolith and the post-refactor facade; stdlib-only, <5s, no venv dependency).
+    command: >-
+      PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "import ast;
+      src=open('scripts/ducklake_neon_smoke_test.py',encoding='utf-8').read(); ast.parse(src);
+      need=['--attach','--churn-gate','--restore-drill','--ops-read-your-write','--ops-churn-regate','--catalog-restore-drill','--lambda-attach','--lambda-ingress','--lambda-idempotency','--lambda-partition','--lambda-inlining','--lambda-loudfail','--lambda-churn','--lambda-churn-incontainer','--lambda-reader','--lambda-warm-reuse','--lambda-warm-reuse-writer','--lambda-maintenance-merge','--lambda-maintenance-gc','--lambda-maintenance-breaker','--lambda-catalog-dr','--lambda-maintenance-hot-merge','--connect-probe','--migrate-ops-recs-columns','--lambda-append-only','--canary-rehearsal','--profile','--region','--json','ducklake_neon_smoke_test','ATTACH OK rows=','CHURN_GATE PASS','RESTORE_OK read-your-write verified'];
+      missing=[t for t in need if t not in src]; assert not missing, missing; print('cli-contract-ok')"
+    expected: Prints cli-contract-ok; exit 0. (Passes on the pre-refactor tree too -- stable invariant.)
+    fix_if: >-
+      AssertionError listing tokens -> a mode flag, the prog name, or a main()-printed gate label
+      was dropped or renamed in the facade; restore the argparse/main block verbatim.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: SLOC assertions -- facade <=500 (target <=300), every package module <=500 (target <=400).
+    command: >-
+      bin/venv-python -c "import pathlib; f=lambda p: len([l for l in
+      pathlib.Path(p).read_text(encoding='utf-8').splitlines() if l.strip() and not
+      l.strip().startswith('#')]); mods={str(p): f(p) for p in
+      pathlib.Path('scripts/ducklake_smoke').glob('*.py')};
+      fac=f('scripts/ducklake_neon_smoke_test.py'); print('facade', fac, mods); assert fac<=500
+      and all(v<=500 for v in mods.values()), (fac, mods)"
+    expected: Facade well under 500 (est ~240); largest module canary.py (est ~345); exit 0.
+    fix_if: >-
+      Facade over -> re-exports bloated (use consolidated multi-name import lines) or gate logic
+      left behind; a module over 500 -> split it on its next cohesion seam (never arbitrary
+      line counts).
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: CC gate green with ZERO waiver headers in the facade/package (Decision 102 drop license).
+    command: >-
+      bin/venv-python -c "from scripts.validate import validate_cc_limits; failed=[];
+      validate_cc_limits(failed); print(failed); raise SystemExit(1 if failed else 0)"
+      && ! grep -rn "complexity-waiver" scripts/ducklake_neon_smoke_test.py scripts/ducklake_smoke/
+    expected: validate_cc_limits reports no violations tree-wide; no waiver comment in facade or package; exit 0.
+    fix_if: >-
+      A ducklake function is flagged over CC 20 -> the verbatim-move constraint was broken
+      (bodies must not be restructured); restore the original body -- measured max is 15.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: Import contracts pass (no new cycle from the scripts/ducklake_smoke package).
+    command: >-
+      bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts();
+      print(out); raise SystemExit(0 if ok else 1)"
+    expected: All import contracts pass; exit 0.
+    fix_if: >-
+      A cycle (e.g. core importing a gate module, or the package importing the facade) -> invert
+      the edge; only the facade may import gate modules, gate modules import core/lambda_ec_gates
+      via module objects.
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: Budget re-point via the canonical command (LAST implementation step), sibling-safe asserts.
+    command: >-
+      bin/venv-python -m scripts.validate --update-sloc-budgets && test "$(grep -c
+      'ducklake_neon_smoke_test' config/sloc_budgets.yaml)" = "0" && test "$(grep -c
+      'ducklake_smoke/' config/sloc_budgets.yaml)" = "0"
+    expected: >-
+      The scripts/ducklake_neon_smoke_test.py: 1343 entry is dropped by the ratchet; NO
+      scripts/ducklake_smoke/ entry is seeded. No full-file equality assert (sibling
+      decompositions share this branch and this regenerated file).
+    fix_if: >-
+      ducklake_neon_smoke_test entry survives -> facade still >500 SLOC (see step 6); a
+      ducklake_smoke/ entry appears -> a module exceeds 500 and was auto-seeded -- split it and
+      re-run; NEVER hand-edit the yaml.
+  - step: 10
+    phase: pre-deploy
+    hermetic: false
+    action: Full fast-tier presubmit green on the final tree.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 (SLOC/CC/coverage-existence/import/test gates all green).
+    fix_if: >-
+      A failure names a ducklake file -> diagnose against steps 1-9 (do not bypass with
+      --ignore-budget); an unrelated sibling-plan failure -> surface to the orchestrator, do not
+      fix out-of-scope files.
+constraints:
+  - "Behavior preservation is absolute: every gate body moves VERBATIM -- no logic edits, no
+    signature changes beyond movement, no label/message rewording, no exception-type changes.
+    Out-of-scope findings become notes in this plan's Context (rec-2093/rec-2097/rec-2098 stay
+    open and untouched), never inline fixes."
+  - "Decision 82 / Decision 81 / Decision 107 / Decision 100 / Decision 84 / Decision 88 gate
+    semantics are load-bearing and MUST NOT drift: EC8 stays wall-p95 fan-out with
+    runtime-sourced budget constants (never literals -- also Decision 99 lockstep), the canary
+    Neon-branch create/finally-delete lifecycle stays verbatim, refusal/loud-fail messages stay
+    byte-stable (Decision 55: gates are stop signals, never knobs)."
+  - "Decision 104 convention: cross-module intra-package calls go through the owning module
+    object (core._sigv4_invoke, lambda_ec_gates.lambda_churn) -- no bare cross-module imports of
+    patched symbols -- so each symbol keeps ONE canonical patch target; the facade preserves
+    globals()-resolution dispatch for main()."
+  - "Decision 102/43: budgets ratchet down only; config/sloc_budgets.yaml is regenerated via
+    `validate --update-sloc-budgets`, never hand-edited; every new module <=500 SLOC; the CC
+    waiver header is dropped only under a green validate_cc_limits run."
+  - "Multi-plan coordination: one of ~16 SLOC-decomposition plans sharing this branch. Touch ONLY
+    the files in Scope. No edits to scripts/test_coverage_checker.py, scripts/validate.py,
+    scripts/checks/**, or any sibling plan's files. No full-file equality assertions on
+    config/sloc_budgets.yaml."
+  - "tests/CLAUDE.md discipline: bulk-migrate patch sites with a replacement script (enumerate
+    via grep first); one consolidated import block (ruff format drops symbols from split blocks);
+    no exact-count assertions against growing collections -- the facade-completeness test derives
+    membership from the submodules."
+  - Decision 101 public-repo boundary -- no AWS account IDs/ARNs/secrets/internal hostnames in
+    any new module; no emojis; ASCII hyphens.
+  - Decision 86 -- no new standing prose-architecture doc; the package layout is self-describing
+    and this plan is the only artefact.
+  - No rescue agents or workaround loops (Decision 55). On unrecoverable verification failure,
+    stop and RCA; never paper over a broken equivalence.
+context:
+  - "Liveness assessment (planning recon): STILL-LIVE operator-invoked tooling, NOT
+    retirement-pending. The file is the sole implementation of ~25 hard verification gates for
+    the DuckLake-on-Neon backbone (CD.33/CD.34 OCC budget, DR drills, closed-boundary E2E,
+    OQ.12 canary rehearsal); it was extended within the last month (canary/append-only gates),
+    is cited by docs/runbooks/ducklake-catalog-operations.md and many plan VPs, and its refusal
+    guards route CC-web users to the canonical 443 paths. It is NOT CI-wired (no
+    .github/workflows reference) and NOT in the verification registry as a graduated check --
+    it is a human/plan-run gate harness. Zero production importers; the only consumers are the
+    CLI entrypoint and tests/test_ducklake_neon_smoke_test.py."
+  - "Patch-binding reality: the test suite imports `import scripts.ducklake_neon_smoke_test as
+    smoke` and uses pytest monkeypatch (NOT unittest.mock string patches): 103
+    monkeypatch.setattr(smoke, X) sites across 24 symbols, plus 21 module-object patch sites
+    (smoke.subprocess/neon_api/ducklake_runtime/ducklake_spike, incl. 2 nested
+    smoke.ducklake_runtime.ducklake_spike -- attributes set ON the global module objects, survive
+    any move; zero alias-replacement sites) and ~30 other direct smoke.<attr> references.
+    Sibling-consumed symbols (95 sites over 17 symbols, 8 of them multi-line) MUST repoint to the
+    owning submodule because a facade re-export is a separate binding; facade-dispatch sites (8
+    sites over 7 symbols) survive via main()'s globals() resolution. The
+    ownership map in the tests Scope row is the authoritative worklist; enumerate exact sites by
+    grep before moving code."
+  - "Coverage-gate reality (recon, empirically verified): map_source_to_test maps depth-3
+    non-checks paths (scripts/ducklake_smoke/*.py) to None -> existence check skipped; the
+    facade keeps tests/test_ducklake_neon_smoke_test.py -> existence check passes; the per-file
+    100% coverage half of validate_test_coverage is de-facto inert for this file (the checker
+    invokes pytest --cov with a path-form target that yields no data -> '[info] no coverage
+    data' -> non-blocking), while true dotted-form coverage is 74.7% (7 gates + canary helpers
+    untested). This plan PRESERVES the coverage posture (does not improve it): behavior
+    preservation forbids new gate tests here beyond the facade/interception tests."
+  - "Decision-scout NOTE 1 (Decision 104 coverage-mapping clause) -- resolution: deliberate,
+    recorded deviation. The ratified precedent extended map_source_to_test for scripts/checks/**;
+    this plan does NOT extend it for scripts/ducklake_smoke/** because (a) the checker is a
+    SHARED file across ~16 sibling decomposition plans on this branch (edit collision), (b) the
+    mapping's coverage half is currently inert (path-form --cov quirk), and (c) binding the
+    package to a future-100% gate at 74.7% actual coverage would plant a latent CI bomb inside a
+    behavior-preserving refactor. Recommended follow-up (orchestrator decision): ONE sibling-wide
+    rec under the rec-2414 program to extend the mapping for all decomposition packages at once."
+  - "Decision-scout NOTE 2 (Decision 48 V2 standard vs inert coverage gate) -- resolution: V2 is
+    declared on the deterministic classifier (pure Python, no external integration; Decision 79
+    compute_affected_artifacts([]) == empty verified -- not Lambda-packaged, no deploy leg); the
+    plan states coverage is preserved-not-improved. Recommended follow-up (orchestrator
+    decision): file the path-form --cov invocation quirk in scripts/test_coverage_checker.py as
+    a rec via the ops portal -- it silently no-ops the coverage floor for ALL scripts/ files and
+    predates this plan."
+  - "Rec disposition: rec-2414 (open umbrella, 'Break down SLOC-budget-registered oversized
+    files below 500 SLOC') is the parent program -- cited, NOT bundled (this plan satisfies one
+    slice of ~16). rec-2093 (OCC marker set), rec-2097 (CHURN_WRITES_PER_WRITER semantics),
+    rec-2098 (EC8 label wording) are open BEHAVIORAL changes against this file -- explicitly out
+    of scope (byte-stable refactor); their target symbols move but their reproduction surfaces
+    are unchanged. rec-2115/rec-2354 are feature/hardening work, untouched. No open rec exists
+    that this decomposition alone would directly and completely satisfy -> bundled_recommendations
+    is empty; no closure-obligation VP step needed (nothing bundled, no surface retired -- the
+    original path LIVES ON as the facade)."
+  - "Branch state: 0 commits behind / 0 ahead of origin/main at planning time;
+    main_files_changed_since_branch empty -> no Main Divergence overlap. ci_rca_unresolved_recs
+    empty -> no Related-Work hard block. Tier Item Freshness Gate skipped (no tier_item named;
+    ad_hoc governance work under a soft-warn exception category)."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE-level, no
+    BLOCK; both resolved by recorded deferrals above). CITE: Decision 102, Decision 43,
+    Decision 104, Decision 80, Decision 48, Decision 79, Decision 82, Decision 100, Decision 55,
+    Decision 67, Decision 101, Decision 86. RELATED (cite numbered decisions, not bare CDs):
+    Decision 81, Decision 107, Decision 84, Decision 88. Decisions triaged: 83 of 83."
+  - "gates: decision-scout=FLAGS_FOUND (2 NOTE, deferrals recorded); plan-critique=PROCEED after
+    1 round(s) -- 3 binding implementation-time adjustments incorporated: multiline-aware
+    residual-site oracle (VP step 2 / AC-6 / execution step 1), exact 103/24 + 95/17
+    reconciliation totals, and the two decision-scout-NOTE follow-ups routed to the orchestrator
+    for portal filing at the rec-2414 program level"
+  - "Plan type IMPLEMENTATION under the Decision 67 STRATEGIC freeze; the >5-files/>8-steps
+    complexity heuristic is suspended -- authored as a single atomic IMPLEMENTATION plan per the
+    orchestrated rec-2414 program shape."
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scout-triaged (83/83) and CITE-list decisions loaded
+  - All files in scope located and readable; scripts/ducklake_smoke/ does not exist yet
+  - Acceptance criteria understood and verifiable
+  - "Verified NOT Lambda-packaged: compute_affected_artifacts over the scope returns no artifacts (Decision 79)"
+  - "CLI baseline oracle plan understood: --help byte-diff sources the pre-refactor file from git merge-base (VP step 3), so no pre-move capture file is needed"
+execution_steps:
+  - "Enumerate the authoritative surfaces FIRST (before moving any code): (a) grep -oE
+    'smoke\\.[A-Za-z_][A-Za-z0-9_]*' tests/test_ducklake_neon_smoke_test.py | sort -u -> the
+    frozen facade re-export checklist; (b) enumerate the monkeypatch.setattr(smoke, ...) sites
+    per symbol with a MULTILINE-AWARE matcher (python re.S or rg -U -- 8 sites span lines: all 4
+    _run_churn_burst and 4 _sigv4_invoke; line-based grep sees only 87) and reconcile against the
+    ownership map: expect EXACTLY 103 sites over 24 symbols, of which 95 sites over 17 symbols
+    are movable; on any drift STOP and record before moving code. The bulk-migration script must
+    use the same multiline-aware matcher."
+  - "Create scripts/ducklake_smoke/: __init__.py (empty), then core.py, direct_gates.py,
+    lambda_ec_gates.py, lambda_maintenance_gates.py, lambda_ops_gates.py, canary.py -- moving
+    each function/constant VERBATIM per the Scope-table ownership; rewrite ONLY the cross-module
+    references to the module-object convention (core.<name>, lambda_ec_gates.lambda_churn);
+    per-module imports; no waiver headers; no docstring/label edits."
+  - "Collapse scripts/ducklake_neon_smoke_test.py to the facade: keep docstring + main() +
+    argparse + _LAMBDA_GATES + _selected_lambda_gate + __main__ guard byte-identical; add
+    consolidated re-export imports covering the step-1 checklist (symbols, constants, module
+    aliases subprocess/neon_api/ducklake_runtime/ducklake_spike/_catalog_dr); drop the stale
+    complexity-waiver header."
+  - "Bulk-migrate test patch sites per the ownership map with a replacement script
+    (tests/CLAUDE.md); add the consolidated submodule import block (core, direct_gates,
+    lambda_ec_gates, lambda_maintenance_gates, lambda_ops_gates, canary)."
+  - "Add the new tests: facade-completeness (derived membership, identity-equal to owning
+    submodule attributes), core-object interception (one gate per family), ec-delegation
+    interception (lambda_ec_gates.lambda_churn <- ops_churn_regate), and facade-dispatch
+    interception (smoke.lambda_attach <- main)."
+  - "Run ruff check --fix + ruff format after each 1-2 file batch (never batch-modify all files
+    before linting); verify structural integrity after each non-contiguous edit before
+    proceeding."
+  - "Execute Verification Plan steps 1-8 in order; loop until pass; on unrecoverable failure
+    stop and RCA (Decision 55) -- never relax a gate, label, or budget to get green."
+  - "LAST implementation action: VP step 9 (validate --update-sloc-budgets + sibling-safe scoped
+    asserts), then VP step 10 (validate --pre). The budgets regeneration must follow all source
+    edits so the ratchet sees final SLOC."
+  - "Report: modules created with final SLOC each, facade SLOC, patch-sites migrated per module
+    (counts), facade re-export count, VP results, and confirmation that rec-2093/2097/2098
+    surfaces are unchanged."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; nothing is deployed (not Lambda-packaged). If the
+  equivalence cannot be made green, abandon the change (no merge). If merged and a regression
+  surfaces, revert the squash commit -- facade + package + test migration + budget re-point land
+  atomically in one commit, so a single revert restores the 1343-SLOC monolith and its budget
+  entry exactly.

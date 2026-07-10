@@ -20,6 +20,7 @@ name = scripts.ops_data_portal is above scripts.executor (no upward imports; del
 type = layers
 layers =
     scripts.ops_data_portal
+    scripts.ops_portal
     scripts.executor
 ignore_imports =
     # scripts.executor.jsonl_store imports scripts.ops_data_portal in function bodies (update_rec, file_rec,
@@ -33,6 +34,16 @@ ignore_imports =
     # ops_data_portal > executor layering. Deferred imports are intentional migration scaffolding.
     scripts.executor.batch -> scripts.execute_recommendation
     scripts.executor -> scripts.execute_recommendation
+    # Decision 124: scripts.ops_portal submodules call BACK into the facade for the handful of
+    # symbols that stay facade-resident (file_rec/update_rec/_fetch_rec_from_reader/
+    # get_ci_rca_strict_mode) via function-local imports inside the calling function, never at
+    # module level -- this is what avoids a real module-load cycle (the facade imports these
+    # submodules at module level; a module-level back-import would be circular). Import-linter's
+    # static layers check cannot distinguish a deferred call-time import from a module-level one,
+    # so each such submodule is named here, mirroring the jsonl_store carve-out above.
+    scripts.ops_portal.maintenance_ops -> scripts.ops_data_portal
+    scripts.ops_portal.ci_rca_runtime -> scripts.ops_data_portal
+    scripts.ops_portal.cli -> scripts.ops_data_portal
 
 [importlinter:contract:no-cycles-verifiers-executor]
 name = scripts.verifiers is above scripts.executor (verifiers use executor infrastructure; not vice versa)
@@ -44,8 +55,8 @@ ignore_imports =
     # scripts.executor.postflight imports scripts.verifiers and scripts.verifiers.harness in a function body
     # (_run_verifiers_gate): executor bootstraps the verification gate without creating a module-load cycle.
     # verifiers import executor submodules at module level (the intended direction).
-    scripts.executor.postflight -> scripts.verifiers
-    scripts.executor.postflight -> scripts.verifiers.harness
+    scripts.executor.postflight_gates -> scripts.verifiers
+    scripts.executor.postflight_gates -> scripts.verifiers.harness
 
 [importlinter:contract:src-schemas-is-pure-data-layer]
 name = src.schemas is a pure data layer -- no imports from other first-party packages

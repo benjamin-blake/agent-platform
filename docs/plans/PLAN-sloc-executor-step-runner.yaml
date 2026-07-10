@@ -1,0 +1,176 @@
+schema_version: 1
+slug: "sloc-executor-step-runner"
+intent: >-
+  Decompose scripts/executor/step_runner.py (988 SLOC) into a thin facade plus cohesion-seam sibling
+  modules so every executor file drops to <=500 SLOC, removing the per-implement SLOC-budget friction and
+  advancing the rec-2414 breakdown program without changing any executor behaviour.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-executor-step-runner.yaml
+phase: >-
+  Platform hardening / SLOC-governance during the executor freeze. Executes the rec-2414 umbrella
+  breakdown program (Decision 102 ratchet, Decision 43 cap) using the ratified PLAN-validate-decomposition
+  facade mechanism (Decision 104/80). One of four coordinated executor-decomposition plans on this branch.
+  Platform-internal tooling; no product-roadmap phase.
+scope:
+  - file: scripts/executor/step_runner.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin facade (<=500 SLOC, target ~430) that RETAINS implement_step() (CC 44 -- keeps the
+      existing decision-43 waiver header), _detect_ghost_step, _list_meaningful_worktree_changes,
+      _append_step_telemetry, the StepOutcome enum, the model wrappers (get_implementation_model,
+      get_step_timeout_secs, escalate_implementation_model), ALL shared module state (STEP_TELEMETRY_JSONL,
+      OPUS_FALLBACK, DEFAULT_STEP_TIMEOUT_SECS, _LARGE_FILE_THRESHOLD, _EXECUTOR_ACC_VARS, and the
+      _REPO_ROOT/_VENV_PYTHON/_PROJECT_PYTHON venv-resolution block -- _PROJECT_PYTHON MUST stay here: 3
+      direct sr_mod attribute references in tests), all current module-scope imports (subprocess, shutil,
+      json, os, re, sys, time, Path, llm_call, kill_process_tree, build_context_path, load_prompt,
+      emit_step/emit_transcript/emit_process_event, append_jsonl/get_backend), the _IMPL_FAILURE_COUNT and
+      formatters re-exports (5 direct sr_mod._IMPL_FAILURE_COUNT references), and FACADE RE-EXPORTS of every
+      extracted symbol. ZERO-MIGRATION INTERCEPTION RULE (uniform across the four executor plans): every
+      moved body references every routed-name (see context inventory) via a function-local facade alias
+      (import scripts.executor.step_runner as _sr), so ALL 125 string patches + 5 patch.object(sr_mod, ...)
+      sites keep intercepting with ZERO test migration. implement_step()'s callees remain facade module
+      globals (native interception for gather_step_context/run_acceptance/auto_format_test_files/
+      _run_ruff_fix/_run_ruff_format/_extract_acceptance_command patches).
+  - file: scripts/executor/step_context.py
+    action: Create
+    purpose: >-
+      owner=platform. Per-step file-context gathering: gather_step_context (CC 33 -> module carries the
+      decision-43 waiver header) with its nested helpers, plus _get_relevant_gotchas, _GOTCHA_MAP,
+      _GOTCHA_INJECTION_MAX_CHARS (~205 SLOC). Bodies route Path (1 patch.object site) and the patched
+      co-located _get_relevant_gotchas (1 site) via _sr; reads _sr._LARGE_FILE_THRESHOLD.
+  - file: scripts/executor/step_acceptance.py
+    action: Create
+    purpose: >-
+      owner=platform. Acceptance/verification command running: _normalize_acceptance, run_acceptance,
+      get_last_acceptance_output, run_verification, get_last_verification_output, _extract_acceptance_command,
+      and the _LAST_ACCEPTANCE_OUTPUT/_LAST_VERIFICATION_OUTPUT module globals (their getters co-locate so
+      the globals stay coherent) (~300 SLOC; all CC<=20). Bodies route subprocess, kill_process_tree (4 patch
+      sites), _EXECUTOR_ACC_VARS, _PROJECT_PYTHON, and Path via _sr; shutil.which (0 patch sites) may import
+      directly.
+  - file: scripts/executor/step_commit.py
+    action: Create
+    purpose: >-
+      owner=platform. Git commit + pre-commit scope enforcement: commit_step, _enforce_step_scope (~130 SLOC;
+      CC<=20, no waiver). CONFIRMED-BREAK FIX (critique round 1): commit_step calls _enforce_step_scope via
+      _sr._enforce_step_scope (10 patch sites on the facade namespace -- a bare co-located call would no-op
+      them), and _enforce_step_scope calls _list_meaningful_worktree_changes via _sr (7 sites); subprocess
+      and Path route via _sr.
+  - file: tests/test_executor_step_runner.py
+    action: Modify
+    purpose: >-
+      ZERO patch-target migration expected (81 string sites + patch.object(sr_mod, ...) sites keep working
+      via facade re-exports, retained module state, and the routing rule). Only permitted edits are
+      import-line touch-ups if an assertion imports a symbol directly from a moved location. Assertion
+      semantics unchanged.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-point via `validate --update-sloc-budgets` after the split (Decision 102): step_runner.py drops out
+      of the registry at <=500 SLOC. Assert via grep (not full-file diff -- sibling plans co-mutate this
+      file) that the scripts/executor/step_runner.py key is removed and no scripts/executor/step_*.py key is
+      seeded. Never hand-edit.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The full existing tests/test_executor_step_runner.py and tests/test_step_runner.py, plus the step_runner-touching parts of tests/test_execute_recommendation.py, tests/test_executor_plan.py, and tests/test_executor_acceptance_lint.py, pass unchanged in assertion semantics with ZERO patch-target migration (all 125 string + 5 patch.object sites still intercept).
+  - Every public symbol AND every test-patched private symbol formerly defined in step_runner.py is reachable both as scripts.executor.step_runner.<name> and via `from scripts.executor.step_runner import <name>` (facade re-export), including the test from-import sites (StepOutcome, _EXECUTOR_ACC_VARS in tests/conftest.py, _get_relevant_gotchas, gather_step_context) and the direct module-state references (_IMPL_FAILURE_COUNT, _PROJECT_PYTHON, STEP_TELEMETRY_JSONL).
+  - Mock interception is preserved by construction -- moved bodies reference every routed-name via _sr (grep-verified closure, no module-scope import of a routed-name in the siblings), and tests contain ZERO patches on the new step_*.py namespaces (grep-verified, proving zero migration). In particular the round-1 confirmed break is closed -- commit_step resolves _enforce_step_scope through _sr so its 10 patch sites intercept.
+  - scripts/executor/step_runner.py drops to <=500 SLOC (target ~430); no new scripts/executor/step_*.py module exceeds 500 SLOC or CC 20 without the decision-43 waiver header (step_context.py carries it for gather_step_context CC33; facade retains it for implement_step CC44); validate_cc_limits passes.
+  - config/sloc_budgets.yaml loses its scripts/executor/step_runner.py entry and gains NO scripts/executor/step_*.py entry (grep-verified; other entries may shift from sibling plans).
+  - No extracted function DEFINITION remains in the step_runner.py facade except implement_step, _detect_ghost_step, _list_meaningful_worktree_changes, _append_step_telemetry, and the model wrappers; import-linter contracts pass with NO .importlinter change (siblings import only the intra-package facade -- assessed, no contract crossed).
+  - The step_runner surface path scripts.executor.step_runner is unchanged (facade retained), so all production importers (execute_recommendation.py facade, plan.py lazy gather_step_context, batch.py lazy imports, acceptance_lint.py lazy run_acceptance, __init__.py, tests/conftest.py) resolve without edits.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Full step_runner test suites + the cross-cutting executor suite pass with unchanged assertion semantics and zero patch migration (behavioural-equivalence oracle).
+    command: bin/venv-python -m pytest tests/test_executor_step_runner.py tests/test_step_runner.py tests/test_execute_recommendation.py tests/test_executor_acceptance_lint.py -m "not integration" -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: "A patch on scripts.executor.step_runner.<name> or patch.object(sr_mod, <name>) no-ops means a moved body referenced that routed-name bare instead of via _sr; fix the body, never the test."
+  - step: 2
+    phase: pre-deploy
+    action: Facade completeness -- every public + test-patched private symbol is importable from the facade (stable invariant, holds pre- and post-implementation).
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "import scripts.executor.step_runner as p; syms='implement_step commit_step _enforce_step_scope gather_step_context run_acceptance run_verification get_last_acceptance_output get_last_verification_output _extract_acceptance_command _normalize_acceptance _get_relevant_gotchas _EXECUTOR_ACC_VARS _PROJECT_PYTHON OPUS_FALLBACK StepOutcome STEP_TELEMETRY_JSONL _IMPL_FAILURE_COUNT _append_step_telemetry _detect_ghost_step _list_meaningful_worktree_changes get_implementation_model escalate_implementation_model get_step_timeout_secs _run_ruff_fix _run_ruff_format auto_format_test_files'.split(); missing=[s for s in syms if not hasattr(p,s)]; print('missing', missing); raise SystemExit(1 if missing else 0)"
+    expected: The printed missing list is empty; exit 0.
+    fix_if: "A symbol is missing means its re-export was omitted; add the from-sibling import to the facade."
+    hermetic: true
+  - step: 3
+    phase: pre-deploy
+    action: Grep-closure (Decision 104 discipline, inverted for zero-migration) -- tests carry NO patches on the new sibling namespaces AND the new siblings carry NO module-scope import of a routed-name.
+    command: "! grep -rnE \"patch\\((['\\\"])scripts\\.executor\\.step_(context|acceptance|commit)\" tests/ && ! grep -nE '^\\s*(import subprocess\\b|from pathlib import|from scripts\\.llm_client import|from scripts\\.llm_utils import|from scripts\\.executor\\.telemetry import|from scripts\\.executor\\.plan import|from scripts\\.s3_log_store import)' scripts/executor/step_context.py scripts/executor/step_acceptance.py scripts/executor/step_commit.py && echo CLOSURE_OK"
+    expected: Both greps find nothing; prints CLOSURE_OK; exit 0.
+    fix_if: "A test patches a step_*.py namespace means an unauthorised migration happened -- revert it and fix the body routing; a sibling imports a routed-name at module scope means the routing rule was violated -- replace with _sr.<name>."
+  - step: 4
+    phase: pre-deploy
+    action: SLOC re-point -- step_runner.py drops below 500, no sibling over budget, budget entry removed with no new seed.
+    command: bin/venv-python -m scripts.validate --update-sloc-budgets && ! grep -qE '^\s*scripts/executor/step_runner\.py:' config/sloc_budgets.yaml && ! grep -qE '^\s*scripts/executor/step_(context|acceptance|commit)\.py:' config/sloc_budgets.yaml && bin/venv-python -c "import pathlib; mods=['scripts/executor/step_runner.py','scripts/executor/step_context.py','scripts/executor/step_acceptance.py','scripts/executor/step_commit.py']; over=[m for m in mods if len([l for l in pathlib.Path(m).read_text().splitlines() if l.strip() and not l.strip().startswith('#')])>500]; print('over', over); raise SystemExit(1 if over else 0)"
+    expected: step_runner.py key removed; no step_context/step_acceptance/step_commit key seeded; the printed over list is empty; exit 0.
+    fix_if: "A step_*.py key was seeded means that module exceeds 500 SLOC; split it finer and re-run."
+  - step: 5
+    phase: pre-deploy
+    action: CC gate passes -- moved high-CC functions carry the decision-43 waiver header in their new module.
+    command: bin/venv-python -c "from scripts.validate import validate_cc_limits; f=[]; validate_cc_limits(f); print('cc', f); raise SystemExit(1 if f else 0)"
+    expected: The CC gate reports no failures; exit 0 (step_context.py carries the waiver for gather_step_context CC33; the facade retains it for implement_step CC44).
+    fix_if: "A module reddens the CC gate -> add a decision-43 complexity-waiver header within its first 10 lines."
+  - step: 6
+    phase: pre-deploy
+    action: Stale-definition sweep -- no extracted def remains in the facade.
+    command: grep -nE '^def (gather_step_context|_get_relevant_gotchas|_normalize_acceptance|run_acceptance|get_last_acceptance_output|run_verification|get_last_verification_output|_extract_acceptance_command|commit_step|_enforce_step_scope)\b' scripts/executor/step_runner.py; test $? -eq 1
+    expected: grep finds no matches (exit 1, so the test asserts closure); only the retained functions + re-exports remain.
+    fix_if: "A def still lives in the facade -> move its body to the sibling module and leave only the re-export."
+  - step: 7
+    phase: pre-deploy
+    action: import-linter contracts pass with NO .importlinter change (assessed -- siblings cross no contract).
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)" && git diff --quiet main... -- .importlinter || bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); raise SystemExit(0 if ok else 1)"
+    expected: All import contracts pass; this plan makes no .importlinter edit (sibling executor plans may have edited it on the shared branch -- the contract run is the authoritative check).
+    fix_if: "A contract reddens naming a step_*.py module means a sibling imported a contract-crossing module at module scope (e.g. s3_log_store is fine, ops_data_portal is not) -- route via _sr instead."
+  - step: 8
+    phase: pre-deploy
+    action: Fast presubmit tier is green over the change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0.
+    fix_if: "A gate reddens -> address per its message; never bypass with --ignore-budget for a real SLOC/CC regression."
+constraints:
+  - Behaviour preservation is absolute -- no feature work, no bug fixes, no signature changes beyond movement. The existing suites must pass with unchanged assertion semantics. Out-of-scope findings become notes here, never inline fixes.
+  - Decision 104/80 facade mechanism, ZERO-MIGRATION variant -- scripts.executor.step_runner stays a thin facade re-exporting every symbol; implement_step and ALL shared module state (_PROJECT_PYTHON, _EXECUTOR_ACC_VARS, STEP_TELEMETRY_JSONL, _IMPL_FAILURE_COUNT) stay in the facade; moved bodies reference every routed-name via a function-local _sr alias; NO test patch target moves. The grep-closure VP step enforces both directions.
+  - Decision 102 -- budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets`, never a hand-edit; grep-verify key removal + no new seed (do NOT assert full-file equality -- sibling plans co-mutate config/sloc_budgets.yaml on this branch).
+  - Decision 43 -- CC<=20 per function; the decision-43 waiver header travels with any moved function over CC 20 (implement_step CC44 stays in the facade which keeps its header; step_context.py carries it for gather_step_context CC33).
+  - Decision 117 -- executor self-modification boundary -- capabilities.yaml is the SSOT; its boundary_patterns substring scripts/executor/ already classifies every new step_*.py module as a boundary file, so config/agent/executor/capabilities.yaml is NOT edited by this plan.
+  - Decision 67 -- executor freeze (STRATEGIC clause) -- this is an IMPLEMENTATION plan; behaviour-preserving executor-machinery maintenance is routed through /plan -> /implement, permitted during the freeze.
+  - Decision 55 -- no rescue agents or workaround loops. On an unrecoverable equivalence/interception failure, stop and RCA; never paper over a broken mock with a skip.
+  - Multi-plan coordination -- one of ~16 SLOC-decomposition plans (4 executor) on branch claude/sloc-violations-refactor-p5svnl; touch ONLY step_runner.py, the new step_*.py modules, and test import touch-ups; config/sloc_budgets.yaml is regenerated and a conflict there is resolved by re-running the regen command.
+  - Hermetic VP discipline (fleet rule) -- exactly ONE hermetic step (step 2, a stable invariant true pre- and post-implementation) using the portable PY idiom because CI's pr-validate job has no .venv; all other steps are hermetic false.
+  - AGENTS.md code style -- Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens, default no comments.
+  - Public-repo boundary (Decision 101) -- no AWS account IDs/ARNs/secrets/internal hostnames introduced.
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE/RELATED flags, no BLOCK). CITE: Decision 102, Decision 104, Decision 80, Decision 43, Decision 117, Decision 67."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s) (round 1 confirmed an interception break -- commit_step calling co-located _enforce_step_scope would no-op its 10 facade-namespace patch sites -- fixed by the uniform zero-migration routing rule; _PROJECT_PYTHON placement corrected to stay in the facade, 3 direct sr_mod attribute references)"
+  - "MECHANICAL PATCH INVENTORY (regex sweep over tests/**, both quote styles + patch.object + from-imports; not from memory): scripts.executor.step_runner string-patch sites total 125 (81 in test_executor_step_runner.py, 37 in test_execute_recommendation.py, 5 in test_executor_plan.py, 2 in test_executor_acceptance_lint.py) -- llm_call 15, auto_format_test_files 14, run_acceptance 12, _enforce_step_scope 10, _run_ruff_fix 10, gather_step_context 8, _list_meaningful_worktree_changes 7, _append_step_telemetry 6, commit_step 6, implement_step 6, kill_process_tree 4, _run_ruff_format 4, emit_step 4, emit_transcript 4, emit_process_event 4, STEP_TELEMETRY_JSONL 3, _detect_ghost_step 3, subprocess.Popen 2, load_prompt 1, build_context_path 1, _get_relevant_gotchas 1. patch.object(sr_mod, ...): STEP_TELEMETRY_JSONL 3, Path 1, llm_call 1. Direct module-state references: _IMPL_FAILURE_COUNT 5, _PROJECT_PYTHON 3. From-imports in tests: StepOutcome, _EXECUTOR_ACC_VARS (conftest), _get_relevant_gotchas, gather_step_context."
+  - "ROUTED-NAME INVENTORY (every moved body must reference these via _sr, never bare): subprocess, Path, kill_process_tree, _EXECUTOR_ACC_VARS, _PROJECT_PYTHON, _LARGE_FILE_THRESHOLD, plus every cross-module call to a patched step_runner symbol (_enforce_step_scope from commit_step; _list_meaningful_worktree_changes from _enforce_step_scope; _get_relevant_gotchas from gather_step_context; _extract_acceptance_command may be called bare only where co-located in step_acceptance -- it has 0 patch sites -- but route it for uniformity). Names used ONLY by facade-resident functions (llm_call, load_prompt, build_context_path, emit_step, emit_transcript, emit_process_event, auto_format_test_files, _run_ruff_fix, _run_ruff_format, append_jsonl, get_backend) stay facade module globals -- implement_step and _append_step_telemetry remain in the facade so those patches intercept natively."
+  - "Flag folded (Decision 48 verification tier): verified V2 -- compute_affected_artifacts over step_runner.py + the new step_*.py paths returns {} (no active Lambda artifact); no V3 steps required."
+  - "Flag folded (Decision 75 frame-lock, conscious choice recorded): the executor is FROZEN (Decision 67) and the roadmap direction (CD.27 pending, T5.6 deferred_post_mvp) is a Step Functions + Durable-Function-Lambda rewrite that HARVESTS reusable helper logic and RETIRES the orchestration shell. step_runner.py's contents (context gathering, acceptance/verification running, commit) are harvestable helper logic; decomposing them is freeze-window SLOC-governance (Decision 102/43 mandate; rec-2414 scopes it), NOT substrate-rewrite prep."
+  - "rec-2414 (open umbrella, file=config/sloc_budgets.yaml, automatable:false) is CITED as the parent program; this plan removes 1 of the 5 executor registry entries and is NOT bundled. rec-447 (Create executor/formatters.py) is already satisfied (formatters.py exists, re-exported); not bundled."
+  - "Importer topology (recon-verified): production importers of scripts.executor.step_runner are the execute_recommendation.py facade re-export, plus lazy imports from plan.py (gather_step_context), batch.py (StepOutcome/_append_step_telemetry/commit_step/get_implementation_model/implement_step), acceptance_lint.py (run_acceptance), __init__.py, and tests/conftest.py (_EXECUTOR_ACC_VARS). All resolve through the retained facade path. .github/instructions/executor-implement.instructions.md applyTo glob pins step_runner.py -- unaffected (file retained)."
+  - ".importlinter assessment (explicit, per critique): the three siblings import ONLY the intra-package facade (scripts.executor.step_* -> scripts.executor.step_runner) plus stdlib/logging; no edge to scripts.execute_recommendation, scripts.ops_data_portal, or scripts.verifiers is created, so NO .importlinter change is needed by this plan. scripts.s3_log_store stays imported by the facade only (_append_step_telemetry stays). VP step 7 runs the contracts as the authoritative check."
+  - "_LAST_ACCEPTANCE_OUTPUT/_LAST_VERIFICATION_OUTPUT are assign-rebound module globals -- their getters (get_last_acceptance_output/get_last_verification_output) co-locate with them in step_acceptance so state stays coherent; the facade re-exports the getters (functions), never the raw globals (a re-exported binding would go stale on reassignment). No test references the raw globals directly (inventory-verified)."
+  - "Cross-plan sequencing: independent of the other 3 executor plans -- they all import the FACADE paths, which are unchanged. Landing order among the four executor plans does not matter for this plan."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (102, 104, 80, 43, 117, 67; and 48/75 flags folded)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Baseline captured -- the current step_runner suites pass BEFORE any code movement (the behavioural-equivalence oracle)
+execution_steps:
+  - "Capture baseline FIRST -- run tests/test_executor_step_runner.py + tests/test_step_runner.py + the step_runner parts of tests/test_execute_recommendation.py green on the pre-refactor tree."
+  - "Create step_context.py (gather_step_context + gotchas, decision-43 waiver header), step_acceptance.py (acceptance/verification runners + _LAST_* globals + their getters), step_commit.py (commit_step + _enforce_step_scope); move each body verbatim EXCEPT rewriting every routed-name reference (see context inventory) to the _sr facade alias resolved function-locally -- in particular commit_step -> _sr._enforce_step_scope and _enforce_step_scope -> _sr._list_meaningful_worktree_changes."
+  - "Collapse scripts/executor/step_runner.py to the facade: keep implement_step + _detect_ghost_step + _list_meaningful_worktree_changes + _append_step_telemetry + StepOutcome + model wrappers + ALL shared module state (_PROJECT_PYTHON block, _EXECUTOR_ACC_VARS, STEP_TELEMETRY_JSONL, constants) + all module-scope imports; add re-exports for every extracted symbol."
+  - "Run the suites; ZERO patch migration is expected -- if a test fails on interception, fix the body's routing, never the test. Apply only import-line touch-ups where a test from-imports a moved symbol."
+  - "Run `validate --update-sloc-budgets`, then grep-confirm the step_runner.py key is dropped and no step_*.py key was seeded."
+  - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report -- what was extracted, the equivalence-oracle result, final step_runner.py SLOC, CC status, and confirmation of zero patch migration and zero .importlinter change."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; if the equivalence oracle (existing suites) cannot be made green,
+  abandon the change (no merge). Nothing is deployed. If merged and a regression surfaces, revert the
+  squash commit -- the facade + siblings land atomically in one PR.

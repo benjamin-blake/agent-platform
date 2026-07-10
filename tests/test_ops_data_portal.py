@@ -4,6 +4,19 @@ The offline outbox is retired: file_rec/file_decision raise loudly on failure an
 never return 'pending-...'. IDs are allocated by the ducklake_writer (file_ops) or
 supplied by the caller (decisions / migration backfill). All warehouse reads transit
 the DuckLake reader's named-verb surface.
+
+Decision 124 namespace migration: most patches below target the facade
+(scripts.ops_data_portal) because the driving call (file_rec/update_rec/propose_or_close_rec/
+_fetch_rec_from_reader/sync/get_ci_rca_strict_mode) is facade-resident and resolves its
+dependencies as its own module globals. Where the driving call has MOVED to a
+scripts/ops_portal submodule that holds its own bare-imported copy of the dependency
+(file_decision/update_decision/backfill_decisions_from_md -> decisions.py;
+selftest_roundtrip/find_open_postmortem_for -> maintenance_ops.py; compute_risk ->
+risk_scoring.py; _load_write_time_validators's cache -> write_validators.py;
+_run_ci_rca_cross_check's bundle load -> ci_rca_schema.py; _ducklake_write's URL
+resolution -> writer_transport.py), the patch targets that submodule instead -- the
+namespace the moved caller actually resolves at call time (tests/CLAUDE.md namespace
+migration discipline).
 """
 
 from __future__ import annotations
@@ -19,6 +32,9 @@ import pytest
 duckdb = pytest.importorskip("duckdb")
 from pydantic import ValidationError  # noqa: E402
 
+from scripts.ops_portal import ci_rca_schema as _ci_rca_schema_mod  # noqa: E402
+from scripts.ops_portal import maintenance_ops as _maintenance_ops_mod  # noqa: E402
+from scripts.ops_portal import writer_transport as _writer_transport_mod  # noqa: E402
 from src.common import ducklake_runtime as rt  # noqa: E402
 from src.common.ducklake_scd2_schema import load_field_semantics, resolve_table_spec  # noqa: E402
 
@@ -290,10 +306,10 @@ class TestFileDecision:
         """file_decision() forms dec-NNN from fields['decision_id'] and writes via write_ops."""
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
         with (
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table") as mock_sync,
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table") as mock_sync,
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
@@ -313,7 +329,7 @@ class TestFileDecision:
 
     def test_file_decision_requires_decision_id(self, tmp_path: Path) -> None:
         """file_decision() raises ValueError when no DECISIONS.md-assigned integer is supplied."""
-        with patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write:
+        with patch("scripts.ops_portal.decisions._ducklake_write") as mock_dl_write:
             from scripts.ops_data_portal import file_decision
 
             with pytest.raises(ValueError, match="DECISIONS.md-assigned integer"):
@@ -333,10 +349,10 @@ class TestFileDecision:
     def test_file_decision_migration_int_id_takes_precedence(self, tmp_path: Path) -> None:
         """_migration_int_id supplies the number on the backfill path (no decision_id field needed)."""
         with (
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", tmp_path / "dec.jsonl"),
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", tmp_path / "dec.jsonl"),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
@@ -363,10 +379,10 @@ class TestUpdateDecision:
         """update_decision() merges and writes via _ducklake_write(action='update_ops')."""
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
         with (
-            patch("scripts.ops_data_portal._fetch_decision_from_reader", return_value=dict(self._EXISTING)),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=dict(self._EXISTING)),
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table") as mock_sync,
         ):
             from scripts.ops_data_portal import update_decision
 
@@ -384,8 +400,8 @@ class TestUpdateDecision:
     def test_update_decision_absent_loud_fails(self) -> None:
         """update_decision() raises RuntimeError when the decision is absent from the projection."""
         with (
-            patch("scripts.ops_data_portal._fetch_decision_from_reader", return_value=None),
-            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_portal.decisions._ducklake_write") as mock_dl_write,
         ):
             from scripts.ops_data_portal import update_decision
 
@@ -527,7 +543,7 @@ class TestPostmortems:
         }
         recs_file.write_text(json.dumps(postmortem) + "\n", encoding="utf-8")
 
-        with patch("scripts.ops_data_portal.RECS_JSONL", recs_file):
+        with patch("scripts.ops_portal.maintenance_ops.RECS_JSONL", recs_file):
             from scripts.ops_data_portal import find_open_postmortem_for
 
             result = find_open_postmortem_for("rec-100")
@@ -545,7 +561,7 @@ class TestPostmortems:
         }
         recs_file.write_text(json.dumps(postmortem) + "\n", encoding="utf-8")
 
-        with patch("scripts.ops_data_portal.RECS_JSONL", recs_file):
+        with patch("scripts.ops_portal.maintenance_ops.RECS_JSONL", recs_file):
             from scripts.ops_data_portal import find_open_postmortem_for
 
             result = find_open_postmortem_for("rec-100")
@@ -554,7 +570,7 @@ class TestPostmortems:
 
     def test_find_open_postmortem_for_returns_none_when_file_missing(self, tmp_path: Path) -> None:
         missing_file = tmp_path / "missing.jsonl"
-        with patch("scripts.ops_data_portal.RECS_JSONL", missing_file):
+        with patch("scripts.ops_portal.maintenance_ops.RECS_JSONL", missing_file):
             from scripts.ops_data_portal import find_open_postmortem_for
 
             result = find_open_postmortem_for("rec-100")
@@ -667,8 +683,8 @@ class TestBackfillDecisionsFromMd:
         ]
         with (
             patch("scripts.decisions_md.parse_decisions_md", return_value=entries),
-            patch("scripts.ops_data_portal.file_decision", return_value="dec-084") as mock_fd,
-            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.ops_portal.decisions.file_decision", return_value="dec-084") as mock_fd,
+            patch("scripts.ops_portal.decisions._sync_table") as mock_sync,
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
@@ -691,8 +707,8 @@ class TestBackfillDecisionsFromMd:
         ]
         with (
             patch("scripts.decisions_md.parse_decisions_md", return_value=entries),
-            patch("scripts.ops_data_portal.file_decision", side_effect=RuntimeError("writer down")),
-            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.ops_portal.decisions.file_decision", side_effect=RuntimeError("writer down")),
+            patch("scripts.ops_portal.decisions._sync_table") as mock_sync,
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
@@ -846,7 +862,7 @@ class TestWriteTimeDispatch:
             patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-950"}) as mock_dl_write,
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-            patch("scripts.ops_data_portal._write_time_validators_cache", {}),
+            patch("scripts.ops_portal.write_validators._write_time_validators_cache", {}),
         ):
             from scripts.ops_data_portal import file_rec
 
@@ -865,7 +881,7 @@ class TestWriteTimeDispatch:
             patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-951"}) as mock_dl_write,
             patch("scripts.ops_data_portal._sync_table"),
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
-            patch("scripts.ops_data_portal._write_time_validators_cache", {}),
+            patch("scripts.ops_portal.write_validators._write_time_validators_cache", {}),
         ):
             from scripts.ops_data_portal import file_rec
 
@@ -1015,7 +1031,7 @@ class TestComputeRisk:
         )
         with (
             patch("scripts.ops_data_portal.subprocess.run", return_value=self._radon_mock("file.py\n    F 1:0 f - A (1)\n")),
-            patch("scripts.ops_data_portal._COVERAGE_XML", coverage_xml),
+            patch("scripts.ops_portal.risk_scoring._COVERAGE_XML", coverage_xml),
         ):
             from scripts.ops_data_portal import compute_risk
 
@@ -1167,7 +1183,7 @@ class TestMigrationParams:
             patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700"}),
             patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
-            patch("scripts.ops_data_portal._append_to_local_jsonl") as mock_append,
+            patch("scripts.ops_portal.cache._append_to_local_jsonl") as mock_append,
             patch("scripts.sync_ops.upsert_cache_row") as mock_upsert,
         ):
             from scripts.ops_data_portal import file_rec
@@ -1360,7 +1376,7 @@ class TestDuckLakeTransportHelpers:
     def test_ducklake_write_referential_409_maps_to_runtimeerror(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        monkeypatch.setattr(_writer_transport_mod, "_resolve_writer_url", lambda *a, **k: "https://w.example")
         _patch_writer_transport(monkeypatch, [_FakeResp(409, text="absent")])
         with pytest.raises(RuntimeError, match="referential"):
             p._ducklake_write("ops_recommendations", {"id": "rec-x", "status": "closed"}, action="update_ops")
@@ -1368,7 +1384,7 @@ class TestDuckLakeTransportHelpers:
     def test_ducklake_write_schema_422_maps_to_valueerror(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        monkeypatch.setattr(_writer_transport_mod, "_resolve_writer_url", lambda *a, **k: "https://w.example")
         _patch_writer_transport(monkeypatch, [_FakeResp(422, text="bad field")])
         with pytest.raises(ValueError, match="schema-gate"):
             p._ducklake_write("ops_recommendations", {"id": "rec-1", "status": "open"}, action="write_ops")
@@ -1377,7 +1393,7 @@ class TestDuckLakeTransportHelpers:
         """A 503 (Neon cold-resume) retries when idempotency_ulid is set; the retry consumes the 200."""
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        monkeypatch.setattr(_writer_transport_mod, "_resolve_writer_url", lambda *a, **k: "https://w.example")
         sleeps: list = []
         bodies = _patch_writer_transport(
             monkeypatch,
@@ -1397,7 +1413,7 @@ class TestDuckLakeTransportHelpers:
         """A non-idempotent write (write_ops without ULID is caller-keyed but file-path-unsafe) fails fast."""
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        monkeypatch.setattr(_writer_transport_mod, "_resolve_writer_url", lambda *a, **k: "https://w.example")
         bodies = _patch_writer_transport(monkeypatch, [_FakeResp(503, text="cold")])
 
         with pytest.raises(RuntimeError, match="HTTP 503"):
@@ -1408,7 +1424,7 @@ class TestDuckLakeTransportHelpers:
         """update_ops is idempotent by id, so transient 5xx retries even without a ULID."""
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        monkeypatch.setattr(_writer_transport_mod, "_resolve_writer_url", lambda *a, **k: "https://w.example")
         sleeps: list = []
         bodies = _patch_writer_transport(
             monkeypatch, [_FakeResp(502, text="cold"), _FakeResp(200, {"ok": True})], sleeps=sleeps
@@ -1422,7 +1438,7 @@ class TestDuckLakeTransportHelpers:
         """Three transient failures exhaust the retry budget and raise loudly."""
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_resolve_writer_url", lambda *a, **k: "https://w.example")
+        monkeypatch.setattr(_writer_transport_mod, "_resolve_writer_url", lambda *a, **k: "https://w.example")
         bodies = _patch_writer_transport(
             monkeypatch,
             [_FakeResp(503, text="cold")] * 3,
@@ -1467,7 +1483,9 @@ class TestSelftests:
         import scripts.ops_data_portal as p
 
         written: dict = {}
-        monkeypatch.setattr(p, "_ducklake_write", lambda t, r, *, action, profile=None: written.update(id=r["id"]))
+        monkeypatch.setattr(
+            _maintenance_ops_mod, "_ducklake_write", lambda t, r, *, action, profile=None: written.update(id=r["id"])
+        )
 
         class _Reader:
             def current_state(self, table, *, row_filter=None, **kw):
@@ -1480,7 +1498,7 @@ class TestSelftests:
     def test_selftest_roundtrip_loud_fails_when_not_read_back(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p
 
-        monkeypatch.setattr(p, "_ducklake_write", lambda *a, **k: {"ok": True})
+        monkeypatch.setattr(_maintenance_ops_mod, "_ducklake_write", lambda *a, **k: {"ok": True})
 
         class _Reader:
             def current_state(self, table, *, row_filter=None, **kw):
@@ -2056,7 +2074,7 @@ class TestCiRcaCrossCheckSpine:
 
         ctx = self._ctx_v2()
         ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": "", "upload_status": "ok"}
-        with patch.object(p, "ROOT", tmp_path):
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
             p._run_ci_rca_cross_check(ctx)  # should not raise
 
     def test_sha256_mismatch_always_loud_fails(self, tmp_path):
@@ -2073,7 +2091,7 @@ class TestCiRcaCrossCheckSpine:
         )
         ctx = self._ctx_v2()
         ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
-        with patch.object(p, "ROOT", tmp_path):
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
             with pytest.raises(ValueError, match="SHA-256 mismatch"):
                 p._run_ci_rca_cross_check(ctx)
 
@@ -2088,7 +2106,7 @@ class TestCiRcaCrossCheckSpine:
         flags_file = tmp_path / "feature_flags.yaml"
         flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
         ):
             with pytest.raises(ValueError, match="check-1"):
@@ -2105,7 +2123,7 @@ class TestCiRcaCrossCheckSpine:
         flags_file = tmp_path / "feature_flags.yaml"
         flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
         ):
             with pytest.raises(ValueError, match="check-2"):
@@ -2123,7 +2141,7 @@ class TestCiRcaCrossCheckSpine:
         flags_file = tmp_path / "feature_flags.yaml"
         flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
         ):
             with pytest.raises(ValueError, match="check-3"):
@@ -2141,7 +2159,7 @@ class TestCiRcaCrossCheckSpine:
         flags_file = tmp_path / "feature_flags.yaml"
         flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
         ):
             with pytest.raises(ValueError, match="check-4"):
@@ -2156,7 +2174,7 @@ class TestCiRcaCrossCheckSpine:
         ctx["detection_gap"]["escape_mode"] = "tier_misplaced"
         ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
 
-        with patch.object(p, "ROOT", tmp_path):
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
             p._run_ci_rca_cross_check(ctx)  # must not raise
 
     def test_emit_dir_reachable_when_absent_from_pending_dir(self, tmp_path, monkeypatch):
@@ -2188,7 +2206,7 @@ class TestCiRcaCrossCheckSpine:
         ctx = self._ctx_v2(earliest_viable_gate="pre")  # deliberately disagrees with bundle's "CI"
         ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
 
-        with patch.object(p, "ROOT", tmp_path):
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
             p._run_ci_rca_cross_check(ctx)  # warn mode: must not raise
         assert ctx["warn_mode_reject"]["reasons"] == ["cross_check_check_2"]
 
@@ -2197,7 +2215,7 @@ class TestCiRcaCrossCheckSpine:
         flags_file = tmp_path / "feature_flags.yaml"
         flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
         ):
             with pytest.raises(ValueError, match="check-2"):
@@ -2333,7 +2351,7 @@ class TestCiRcaFingerprintDedup:
         sha, bundle_data = self._make_bundle(tmp_path)
         ctx = self._ctx_v2()
         ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
-        with patch.object(p, "ROOT", tmp_path):
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
             p._run_ci_rca_cross_check(ctx)
         assert ctx["fingerprint"] == bundle_data["fingerprint"]
         assert ctx["failure_category"] == bundle_data["failure_category"]
@@ -2359,7 +2377,7 @@ class TestCiRcaFingerprintDedup:
         fields = {**_VALID_FIELDS, "source": "ci_rca"}
 
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint", return_value="rec-999") as mock_find,
             patch.object(p, "_ducklake_write") as mock_write,
         ):
@@ -2379,7 +2397,7 @@ class TestCiRcaFingerprintDedup:
         fields = {**_VALID_FIELDS, "source": "ci_rca"}
 
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint", return_value=None) as mock_find,
             patch.object(p, "_ducklake_write", return_value={"key": "rec-800"}) as mock_write,
             patch.object(p, "RECS_JSONL", tmp_path / "recs.jsonl"),
@@ -2402,7 +2420,7 @@ class TestCiRcaFingerprintDedup:
         fields = {**_VALID_FIELDS, "source": "ci_rca"}
 
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint") as mock_find,
             patch.object(p, "_ducklake_write", return_value={"key": "rec-801"}),
             patch.object(p, "RECS_JSONL", tmp_path / "recs.jsonl"),
@@ -2424,7 +2442,7 @@ class TestCiRcaFingerprintDedup:
         fields = {**_VALID_FIELDS, "source": "ci_rca"}
 
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint", return_value="rec-999"),
             patch.object(p, "update_rec") as mock_update,
         ):
@@ -2936,7 +2954,7 @@ class TestEvidenceS3Existence:
         ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": self._S3_URI, "upload_status": "ok"}
         mock_client = MagicMock()
         mock_client.head_object.return_value = {}
-        with patch.object(p, "ROOT", tmp_path):
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
             p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
         mock_client.head_object.assert_called_once()
 
@@ -2951,7 +2969,7 @@ class TestEvidenceS3Existence:
         flags_file = tmp_path / "feature_flags.yaml"
         flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
         ):
             with pytest.raises(ValueError, match="CI_RCA_EVIDENCE_S3_MISSING"):
@@ -2966,7 +2984,7 @@ class TestEvidenceS3Existence:
         mock_client = MagicMock()
         mock_client.head_object.side_effect = Exception("404 NoSuchKey")
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
         ):
             p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
@@ -2980,7 +2998,7 @@ class TestEvidenceS3Existence:
         ctx["evidence_bundle_ref"] = {"sha256": "a" * 64, "s3_uri": self._S3_URI, "upload_status": "upload_failed"}
         mock_client = MagicMock()
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
         ):
             p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
@@ -2998,7 +3016,7 @@ class TestEvidenceS3Existence:
         flags_file = tmp_path / "feature_flags.yaml"
         flags_file.write_text("CI_RCA_STRICT_MODE: strict\n", encoding="utf-8")
         with (
-            patch.object(p, "ROOT", tmp_path),
+            patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch("scripts.ops_data_portal._FEATURE_FLAGS_YAML", flags_file),
             caplog.at_level(logging.WARNING, logger="scripts.ops_data_portal"),
         ):
@@ -3096,7 +3114,7 @@ class TestWarnModeRejectMarker:
         }
         mock_client = MagicMock()
         mock_client.head_object.side_effect = Exception("404 NoSuchKey")
-        with patch.object(p, "ROOT", tmp_path):
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
             p._run_ci_rca_cross_check(ctx, s3_client_factory=lambda: mock_client)  # must not raise
         assert ctx["warn_mode_reject"]["reasons"] == ["s3_missing"]
 
@@ -3120,7 +3138,7 @@ class TestWarnModeRejectMarker:
         )
         ctx = self._ctx_v2(earliest_viable_gate="pre")
         ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
-        with patch.object(p, "ROOT", tmp_path):
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
             p._run_ci_rca_cross_check(ctx)  # must not raise
         assert ctx["warn_mode_reject"]["reasons"] == ["cross_check_check_2"]
 

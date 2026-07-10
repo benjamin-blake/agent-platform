@@ -3,6 +3,13 @@
 Decision 84: decision numbering authority is DECISIONS.md (caller supplies decision_id);
 writes transit _ducklake_write (write_ops / update_ops); the offline decisions outbox and
 the DynamoDB allocator are retired.
+
+Decision 124 namespace migration: file_decision/update_decision/backfill_decisions_from_md
+and _fetch_decision_from_reader moved to scripts/ops_portal/decisions.py, which imports
+_ducklake_write, DECISIONS_JSONL, _sync_table, and _load_write_time_validators into its OWN
+module namespace (a plain `from ... import` creates a separate binding from the facade's
+re-exported copy). Patches therefore target scripts.ops_portal.decisions.<sym> -- the
+namespace decisions.py's callers actually resolve at call time -- not the facade.
 """
 
 from __future__ import annotations
@@ -30,10 +37,10 @@ class TestFileDecision:
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}) as mock_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
@@ -52,10 +59,10 @@ class TestFileDecision:
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
@@ -73,10 +80,10 @@ class TestFileDecision:
         decisions_jsonl = tmp_path / ".decisions-index.jsonl"
 
         with (
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
@@ -90,7 +97,7 @@ class TestFileDecision:
 
     def test_missing_decision_id_raises(self) -> None:
         """Without decision_id or _migration_int_id, file_decision raises ValueError (Decision 84 I-2)."""
-        with patch("scripts.ops_data_portal._ducklake_write") as mock_write:
+        with patch("scripts.ops_portal.decisions._ducklake_write") as mock_write:
             from scripts.ops_data_portal import file_decision
 
             with pytest.raises(ValueError, match="DECISIONS.md-assigned integer"):
@@ -104,12 +111,12 @@ class TestFileDecision:
 
         with (
             patch(
-                "scripts.ops_data_portal._ducklake_write",
+                "scripts.ops_portal.decisions._ducklake_write",
                 side_effect=RuntimeError("ducklake_writer write_ops ops_decisions failed (HTTP 500)"),
             ),
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
         ):
             from scripts.ops_data_portal import file_decision
 
@@ -135,10 +142,10 @@ class TestUpdateDecision:
         }
 
         with (
-            patch("scripts.ops_data_portal._fetch_decision_from_reader", return_value=existing),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=existing),
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}) as mock_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
         ):
             from scripts.ops_data_portal import update_decision
 
@@ -160,10 +167,10 @@ class TestUpdateDecision:
         }
 
         with (
-            patch("scripts.ops_data_portal._fetch_decision_from_reader", return_value=existing),
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", decisions_jsonl),
-            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=existing),
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
         ):
             from scripts.ops_data_portal import update_decision
 

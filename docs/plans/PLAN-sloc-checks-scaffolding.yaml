@@ -1,0 +1,209 @@
+schema_version: 1
+slug: "sloc-checks-scaffolding"
+intent: >-
+  Bring scripts/checks/_scaffolding.py under the 500-SLOC limit with headroom (target <=450) by
+  extracting the cohesive terraform-gate concern into a new sibling module, so platform validation
+  grows by adding files rather than ratcheting one file's budget (Decision 104 mechanism; rec-2414
+  downward-ratchet program).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-checks-scaffolding.yaml
+phase: >-
+  Platform hardening. Continues the Decision 104 check-registry decomposition and the Decision 43 /
+  Decision 102 downward-only SLOC ratchet (rec-2414 umbrella). Platform-internal tooling; no
+  product-roadmap phase.
+scope:
+  - file: scripts/checks/_terraform.py
+    action: Create
+    purpose: >-
+      New sibling module (parallel to _scaffolding.py / _common.py) owning the terraform validation
+      gate, moved VERBATIM: the transient-registry and proxy-403 signature constants
+      (_TRANSIENT_INIT_SIGNATURES, _PROXY_BLOCK_FORBIDDEN_MARKERS, _PROXY_BLOCK_HOST_MARKERS,
+      _PROXY_BLOCK_CHECKSUM_MARKERS), _TERRAFORM_ROOTS, _is_proxy_blocked_init,
+      _terraform_init_with_retry, run_terraform_creds_free, run_terraform_checks. Imports shutil,
+      time, scripts.checks._common, and scripts.checks.iam_tf.validate_terraform_try. About 128 SLOC.
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      Remove the 9 moved terraform symbols and their now-unused imports (import shutil; the
+      validate_terraform_try import). Add a facade re-export block
+      `from scripts.checks._terraform import (_TERRAFORM_ROOTS, _TRANSIENT_INIT_SIGNATURES,
+      _terraform_init_with_retry, run_terraform_checks, run_terraform_creds_free)  # noqa: F401`
+      so scripts/validate.py (UNTOUCHED) and the acceptance-test importer keep resolving via
+      scripts.checks._scaffolding. Retains _TRANSIENT_CLAUDE_SIGNATURES, _DQ_FRESHNESS_SECONDS,
+      _PYTEST_FLAGS, `import time`, and every non-terraform body unchanged. Drops 529 to about 419 SLOC.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Repoint the 3 intra-module patch sites in TestRunTerraformChecks (approx lines 589/612/626)
+      from patch("scripts.checks._scaffolding.validate_terraform_try") to
+      patch("scripts.checks._terraform.validate_terraform_try") -- run_terraform_checks now calls
+      validate_terraform_try inside _terraform, so the old target would be a silent no-op mock
+      (tests/CLAUDE.md namespace-migration discipline; a facade re-export cannot intercept an
+      intra-module call). No assertion semantics change. All other terraform references in this file
+      resolve via the _validate facade or patch _common.run / validate.shutil.which (unaffected).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Regenerated (NEVER hand-edited) by `validate --update-sloc-budgets` as the LAST implementation
+      step: _scaffolding.py drops <=500 so its scripts/checks/_scaffolding.py budget entry is REMOVED;
+      _terraform.py at about 128 SLOC seeds NO new entry. Diff-verified (entry removed, no new key);
+      NOT full-file equality (sibling SLOC-decomposition plans share this branch and regenerate this file too).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - scripts/checks/_scaffolding.py is <=450 SLOC (target) and strictly <=500 (limit), counted as non-blank non-comment-only lines.
+  - scripts/checks/_terraform.py exists, is <=500 SLOC, and contains the terraform gate moved verbatim (run_terraform_checks, run_terraform_creds_free, _terraform_init_with_retry, _is_proxy_blocked_init, plus the 5 signature/root constants).
+  - Every symbol scripts/validate.py imports from scripts.checks._scaffolding still resolves (run_terraform_checks, run_terraform_creds_free, _terraform_init_with_retry, _TERRAFORM_ROOTS, _TRANSIENT_INIT_SIGNATURES) via the facade re-export; scripts/validate.py is unmodified.
+  - "`from scripts.validate import run_terraform_checks, run_terraform_creds_free, _terraform_init_with_retry, _TERRAFORM_ROOTS, _TRANSIENT_INIT_SIGNATURES` all resolve and are the SAME objects (identity) as scripts.checks._terraform's definitions."
+  - The full tests/test_validate.py suite (incl. TestRunTerraformChecks) and tests/test_terraform_drift_acceptance.py pass with unchanged assertion semantics; zero residual patch("scripts.checks._scaffolding.validate_terraform_try") sites remain.
+  - tests/test_checks_registry.py frozen-baseline trace tests (pre_sequence + full_sequence) still pass -- the terraform_checks scaffold step and both sequences are byte-stable (registry.py is not touched).
+  - The CC-web proxy-403 graceful-skip behaviour is preserved verbatim (Decision 119) -- _is_proxy_blocked_init stays the narrow three-marker co-occurrence check and run_terraform_creds_free still defers `terraform validate` to the terraform-validate CI job on a proxy_blocked outcome.
+  - validate_cc_limits passes over the new tree (no moved function exceeds CC 20; the decision-43 waiver header travels only if one does -- _scaffolding.py currently carries none).
+  - config/sloc_budgets.yaml loses its scripts/checks/_scaffolding.py entry and gains NO scripts/checks/_terraform.py entry (diff-verified, not full-file equality).
+  - "`bin/venv-python -m scripts.validate --pre` exits 0 on content checks (a wall-clock-only fast-tier budget breach is the documented systemic drift -- PR CI is authoritative per Decision 73)."
+  - import-linter contracts pass (no new import cycle introduced by _terraform.py).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Targeted suites pass -- terraform-gate tests, the drift-parity acceptance import, and the registry mechanism/trace tests.
+    command: bin/venv-python -m pytest tests/test_validate.py tests/test_terraform_drift_acceptance.py tests/test_checks_registry.py -m "not integration" -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: A patch("scripts.checks._scaffolding.validate_terraform_try") no-ops (terraform tests fail on an unexpected real call) -> repoint the 3 sites to _terraform. A from scripts.checks._scaffolding import _TRANSIENT_INIT_SIGNATURES ImportError -> the facade re-export omitted it.
+  - step: 2
+    phase: pre-deploy
+    action: Facade + import-equivalence -- every symbol validate.py imports resolves through _scaffolding and is identical to the _terraform definition.
+    command: bin/venv-python -c "from scripts.validate import run_terraform_checks, run_terraform_creds_free, _terraform_init_with_retry, _TERRAFORM_ROOTS, _TRANSIENT_INIT_SIGNATURES; from scripts.checks import _terraform, _scaffolding; assert _scaffolding.run_terraform_checks is _terraform.run_terraform_checks; assert run_terraform_checks is _terraform.run_terraform_checks; assert _scaffolding._TERRAFORM_ROOTS is _terraform._TERRAFORM_ROOTS; print('facade OK')"
+    expected: Prints 'facade OK'; exit 0.
+    fix_if: ImportError -> a symbol is missing from the _scaffolding facade re-export. Identity mismatch -> a duplicate definition was left in _scaffolding instead of a pure re-export.
+  - step: 3
+    phase: pre-deploy
+    action: SLOC assertion -- _scaffolding.py <=450 (target) and _terraform.py <=500, counted as non-blank non-comment-only lines.
+    command: "bin/venv-python -c \"import pathlib; sloc=lambda p: len([ln for ln in pathlib.Path(p).read_text().splitlines() if ln.strip() and not ln.strip().startswith('#')]); s=sloc('scripts/checks/_scaffolding.py'); t=sloc('scripts/checks/_terraform.py'); print('scaffolding', s, 'terraform', t); assert s <= 450, s; assert t <= 500, t\""
+    expected: scaffolding <=450 and terraform <=500; exit 0.
+    fix_if: scaffolding >450 -> the terraform block was not fully moved or the facade re-export block is oversized. terraform >500 -> unexpected; a finer split would be needed (not expected at about 128).
+  - step: 4
+    phase: pre-deploy
+    action: Byte-stable sequences plus zero residual old patch target.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -k "baseline or sequence" -q && test $(grep -c "scripts.checks._scaffolding.validate_terraform_try" tests/test_validate.py) -eq 0
+    expected: The pre_sequence and full_sequence frozen-baseline tests pass (terraform_checks step and order unchanged); zero residual _scaffolding.validate_terraform_try patch targets remain; exit 0.
+    fix_if: A sequence test fails -> registry.py was inadvertently edited or a step label changed. Residual count nonzero -> a validate_terraform_try patch site was not repointed (silent no-op mock).
+  - step: 5
+    phase: pre-deploy
+    action: CC gate passes over the new tree (waiver travels only if needed).
+    command: bin/venv-python -c "from scripts.validate import validate_cc_limits; f=[]; validate_cc_limits(f); print('cc failures', f); raise SystemExit(1 if f else 0)"
+    expected: validate_cc_limits reports no violation; exit 0.
+    fix_if: A moved function over 20 branches reddens the CC gate -> add the decision-43 complexity-waiver header comment to _terraform.py (none of the moved functions is expected to exceed CC 20).
+  - step: 6
+    phase: pre-deploy
+    action: import-linter contracts pass for the new package layout (no new cycle from _terraform.py).
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)"
+    expected: All import contracts pass; exit 0.
+    fix_if: A new cycle (e.g. _terraform importing _scaffolding, or iam_tf importing _terraform) -> route through _common or use a function-local import; _terraform must depend only on _common and iam_tf.validate_terraform_try.
+  - step: 7
+    phase: pre-deploy
+    action: Budget re-point as the LAST step -- regenerate config/sloc_budgets.yaml and assert the _scaffolding entry is removed and no _terraform entry seeded (targeted, not full-file equality).
+    command: bin/venv-python -m scripts.validate --update-sloc-budgets && bin/venv-python -c "import pathlib; t=pathlib.Path('config/sloc_budgets.yaml').read_text(); assert 'checks/_scaffolding.py' not in t, 'scaffolding entry not removed'; assert 'checks/_terraform.py' not in t, 'terraform entry seeded'; print('budget OK')" && git --no-pager diff -- config/sloc_budgets.yaml
+    expected: Prints 'budget OK'; the diff shows the removal of the scripts/checks/_scaffolding.py budget line (value 530); concurrent sibling entries may also appear and are NOT asserted; exit 0.
+    fix_if: scaffolding entry remains -> _scaffolding.py still >500 (move incomplete). A _terraform entry appears -> _terraform.py >500 (split finer and re-run).
+  - step: 8
+    phase: pre-deploy
+    action: Fast-tier presubmit is green on content.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. If it exits 1 ONLY on the wall-clock fast-tier budget assertion (dominant phase pytest_diff), that is the documented systemic container drift (preflight budget_bypass_alert 10 in 7 days); PR CI is the authoritative --pre gate (Decision 73). A CONTENT check failure must be fixed.
+    fix_if: A named check (lint/format/a validate_* check) fails -> fix it. A budget-only breach with all checks green -> known drift; do not chase it locally (Decision 73), let PR CI adjudicate.
+  - step: 9
+    phase: pre-deploy
+    hermetic: true
+    action: Hermetic replay tripwire (validate_vp_replay) -- the _scaffolding facade import surface consumed by scripts/validate.py resolves. Dual-tree stable, so CI replay passes on the plan-only diff (symbols defined in _scaffolding today) AND after the move (symbols re-exported from _terraform).
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "from scripts.checks._scaffolding import run_terraform_checks, run_terraform_creds_free, _terraform_init_with_retry, _TERRAFORM_ROOTS, _TRANSIENT_INIT_SIGNATURES; print('scaffolding facade surface OK')"
+    expected: Prints 'scaffolding facade surface OK'; exit 0. Runs in well under 1s (fleet vp-replay budget of 20 steps / 120s across all sibling plans is respected -- this plan marks exactly ONE hermetic step; verified green at planning time, 0.05s).
+    fix_if: ImportError post-move -> the facade re-export block in _scaffolding.py omitted one of the five symbols scripts/validate.py imports; restore it. ImportError pre-move should be impossible (verified green at planning time).
+constraints:
+  - Behaviour preservation is absolute -- move the terraform gate VERBATIM. No feature work, no bug fixes, no signature changes beyond movement. Out-of-scope findings (rec-2516 proxy-marker breadth, rec-2486 signature dedup) are notes, not fixes.
+  - Decision 104 -- _common stays the sole source of shared primitives; moved bodies keep using _common.run/.ROOT/.PYTHON/.invoke_step (no module recomputes ROOT). registry.py is NOT touched, so the terraform_checks scaffold step and the pre/full ordered sequences stay byte-stable.
+  - Decision 119 -- preserve the CC-web terraform-init proxy-403 graceful-skip VERBATIM. _is_proxy_blocked_init stays a narrow three-marker co-occurrence check (never a bare 403), and run_terraform_creds_free keeps deferring `terraform validate` to the required terraform-validate CI job on a proxy_blocked outcome. Decision 119's Related locator ("terraform gate logic stays in scripts/checks/_scaffolding.py") becomes imprecise after this move but is a descriptive pointer, not normative; the facade re-export keeps scripts.checks._scaffolding.run_terraform_creds_free resolvable.
+  - Decision 102 -- SLOC budgets ratchet DOWN only; re-point EXCLUSIVELY via `validate --update-sloc-budgets`, never a hand-edit. Diff config/sloc_budgets.yaml to confirm the _scaffolding entry is removed and no new entry seeded; do NOT assert full-file equality (shared branch).
+  - Decision 43 -- CC<=20 per function; carry the decision-43 complexity-waiver header comment only if a moved function genuinely exceeds CC 20 (none is expected to; _scaffolding.py carries no waiver today).
+  - Namespace-migration discipline (tests/CLAUDE.md) -- moving a symbol a test patches at the _scaffolding target requires repointing that patch site in the SAME change, verified by the zero-residual grep. The facade re-export covers cross-module name resolution only, never an intra-module call.
+  - Multi-plan coordination -- this is one of about 16 SLOC-decomposition plans on the shared branch claude/sloc-violations-refactor-p5svnl. Touch ONLY the four scope files (plus the new module). config/sloc_budgets.yaml is regenerated, never hand-edited; do not assert full-file equality on it.
+  - Decision 86 -- no new standing prose-architecture doc under docs/; rationale lives in the _terraform.py module docstring, not a docs/ file.
+  - Decision 101 -- public-repo boundary; introduce no AWS account IDs/ARNs/secrets/internal hostnames. No emojis; ASCII hyphens only.
+  - No rescue agents or workaround loops (Decision 55) -- on an unrecoverable verification failure, stop and RCA; never paper over a broken facade or coverage with a skip.
+context:
+  - >-
+    Extraction choice (terraform over the pytest-diff/heavy-dep block): the terraform gate is the
+    minimal cohesive concern (119 SLOC moved -- 4 functions plus 5 constants) that lands _scaffolding.py
+    at about 419 SLOC (<=450 target, <=500 limit) in a single move, dead-center in the minimal-extraction
+    mandate. The alternative block (fast-tier pytest-diff/heavy-dep deferral, lines 457-EOF, 173 SLOC)
+    is also cohesive but 33% larger than needed, has 5+ dedicated test classes, and carries four open
+    _scaffolding-filed recs (rec-2490/2491/2493/2494) whose file paths a move would make stale. Terraform
+    moves only rec-2516's path (terraform proxy marker). No multi-module shatter -- one new sibling module.
+  - >-
+    Facade mechanics: scripts/validate.py imports run_terraform_checks / run_terraform_creds_free /
+    _terraform_init_with_retry / _TERRAFORM_ROOTS / _TRANSIENT_INIT_SIGNATURES from
+    scripts.checks._scaffolding and re-exports them; a `from scripts.checks._terraform import (...)  #
+    noqa F401` line in _scaffolding.py preserves that chain, so validate.py is UNTOUCHED and both
+    `patch("validate.<sym>")` (the scaffold-closure/globals() dispatch) and `from scripts.validate
+    import <sym>` keep working. Check dispatch uses globals()[name]; scaffold steps call the facade
+    names in main() closures (_scaffold_terraform_checks -> run_terraform_checks(failed)).
+  - >-
+    Only intra-module hazard: run_terraform_checks calls validate_terraform_try (imported from iam_tf)
+    and run_terraform_creds_free as bare names; tests patch scripts.checks._scaffolding.validate_terraform_try
+    at 3 sites in TestRunTerraformChecks (tests/test_validate.py approx 589/612/626). These MUST repoint to
+    scripts.checks._terraform.validate_terraform_try (a re-export cannot intercept an intra-module
+    call). run_terraform_creds_free is NOT patched intra-block (tests mock at the _common.run boundary),
+    so moving both functions together is safe. All other terraform references use the _validate facade
+    or patch _common.run / validate.shutil.which / validate.time.sleep (global module identity) -- unaffected.
+  - >-
+    Coverage gate: map_source_to_test (scripts/test_coverage_checker.py) maps scripts/checks/_terraform.py
+    to tests/test_validate.py -- it is not in _CHECKS_REGISTRY_MECHANISM_FILES (which is _common.py and
+    registry.py) -- which is exactly where TestRunTerraformChecks already lives. So NO new test file and NO
+    map_source_to_test change are needed; the moved-verbatim code retains its existing 100% coverage.
+  - >-
+    Unaffected references confirmed by grep: scripts/ci_rca_tier_map.py:137 uses the STRING
+    "run_terraform_checks" (RCA aggregator classification -- the function name is unchanged, and the
+    real-validate path short-circuits to _build_tier_membership_from_registry before any AST walk);
+    scripts/checks/verification/validate_hermeticity_flags.py:20 imports _build_unit_test_cmd (a
+    NON-moved symbol that stays in _scaffolding); config/agent/verification_registry/registry.yaml
+    guard_symbol references are metadata with no scripts/ consumer. tests/test_terraform_drift_acceptance.py:16
+    (`from scripts.checks._scaffolding import _TRANSIENT_INIT_SIGNATURES`) is preserved by the re-export
+    (NOT in scope; no repoint needed).
+  - >-
+    Decision 119 locator note (from the decision-scout gate): Decision 119's Related section pins
+    "Decision 104 (... terraform gate logic stays in scripts/checks/_scaffolding.py)". This move relocates
+    that logic to _terraform.py, making the parenthetical LOCATOR imprecise -- but it is a descriptive
+    pointer, not a normative clause, and the facade re-export keeps scripts.checks._scaffolding.run_terraform_creds_free
+    resolvable, so the pointer does not break. Accepted-with-note per the scout's suggested resolution;
+    the gate's CI-delegation and proxy-403 graceful-skip behaviour is preserved verbatim. Plan-critique
+    round 1 flagged the same staleness (DECISIONS.md:205, optional non-blocking note) -- deliberately NOT
+    edited: DECISIONS.md is out of scope for this plan and the implementer must not touch it. If the
+    locator is ever re-grounded, that is a separate decision-governance edit outside this plan.
+  - _TRANSIENT_CLAUDE_SIGNATURES (Claude-API 5xx parity, not terraform) STAYS in _scaffolding.py and remains re-exported by validate.py. `import time` stays (used by ensure_fresh_dq_results); `import shutil` moves out (terraform-exclusive) and is deleted from _scaffolding.py.
+  - rec-2414 is the umbrella SLOC-breakdown rec (CITED, not bundled). No open rec is a direct-and-complete match for decomposing _scaffolding.py; the _scaffolding-filed recs are behaviour/feature/doc changes out of scope for a verbatim move and are left untouched (their target functions in the heavy-dep block stay in _scaffolding under this extraction, so their file paths remain valid).
+  - >-
+    Branch claude/sloc-violations-refactor-p5svnl was 0 commits behind origin/main at planning time
+    (preflight main_freshness ok); no scope-file divergence. Preflight had no ci_rca HARD BLOCK
+    (ci_rca_unresolved_recs empty); non_automatable_softcap_breached true and budget_bypass_alert 10 in
+    7 days (fast-tier wall-clock drift) surfaced as context only.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (1 NOTE). CITE = Decision 104, Decision 102, Decision 119, Decision 55, Decision 43, Decision 80. RELATED = Decision 73, Decision 86, Decision 101, Decision 120, Decision 83, Decision 77, Decision 92. Decisions triaged 83 of 83."
+  - "gates: decision-scout=FLAGS_FOUND (Decision 119 locator NOTE, accepted-with-note, not a blocker); plan-critique=PROCEED after 1 round(s) (zero blocking findings; facade/import-equivalence, byte-stable trace, coverage mapping, budget-regen semantics, and no-import-cycle independently confirmed)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (104, 102, 119, 55, 43, 80, 86, 101, 73)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirmed map_source_to_test maps scripts/checks/_terraform.py to tests/test_validate.py (no new test file, no coverage-checker change)
+execution_steps:
+  - "Create scripts/checks/_terraform.py: module docstring (rationale plus the Decision 104 sibling-module note and the Decision 119 proxy-403 behaviour note); `from __future__ import annotations`; `import shutil`; `import time`; `from scripts.checks import _common`; `from scripts.checks.iam_tf.validate_terraform_try import validate_terraform_try`. Move VERBATIM (byte-identical bodies, already using _common.*): _TRANSIENT_INIT_SIGNATURES, _PROXY_BLOCK_FORBIDDEN_MARKERS, _PROXY_BLOCK_HOST_MARKERS, _PROXY_BLOCK_CHECKSUM_MARKERS, _is_proxy_blocked_init, _TERRAFORM_ROOTS, _terraform_init_with_retry, run_terraform_creds_free, run_terraform_checks."
+  - "Edit scripts/checks/_scaffolding.py: delete the 9 moved symbols and their comment blocks; delete `import shutil` and the `from scripts.checks.iam_tf.validate_terraform_try import validate_terraform_try` line (now unused). KEEP `import time`, _TRANSIENT_CLAUDE_SIGNATURES, _DQ_FRESHNESS_SECONDS, _PYTEST_FLAGS, and all other bodies. Add the facade re-export `from scripts.checks._terraform import (_TERRAFORM_ROOTS, _TRANSIENT_INIT_SIGNATURES, _terraform_init_with_retry, run_terraform_checks, run_terraform_creds_free)  # noqa: F401` in the import section. Run `ruff check --fix scripts/checks/_scaffolding.py scripts/checks/_terraform.py` immediately (PROJECT_CONTEXT batch-ruff gotcha)."
+  - "Repoint the 3 patch sites in tests/test_validate.py TestRunTerraformChecks: patch(\"scripts.checks._scaffolding.validate_terraform_try\") -> patch(\"scripts.checks._terraform.validate_terraform_try\"). Change nothing else in that class. Run `ruff check --fix tests/test_validate.py`."
+  - "Verify structural integrity BEFORE logic checks (PROJECT_CONTEXT Refactoring Protocol): `bin/venv-python -c \"import scripts.validate, scripts.checks._scaffolding, scripts.checks._terraform\"` imports cleanly."
+  - "Execute the Verification Plan steps 1-9 in order; loop until each passes; on an unrecoverable failure stop and RCA (Decision 55). Run `validate --update-sloc-budgets` as the LAST mutating step (step 7) and diff-verify config/sloc_budgets.yaml (entry removed, no new key); steps 8-9 are read-only re-checks."
+  - "Report: SLOC before/after for both files, facade/import-equivalence result, byte-stable trace result, CC/coverage status, and the config/sloc_budgets.yaml diff."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch. If any verification cannot be made green, abandon the change (no
+  merge) -- nothing is deployed. If merged and a regression surfaces, revert the squash commit: the new
+  module, the _scaffolding edit, the test repoint, and the budget regeneration land atomically in one PR.

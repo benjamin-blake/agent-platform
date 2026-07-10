@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.preflight import _common
+
 boto3 = pytest.importorskip("boto3")
 
 # Load the module under test
@@ -33,7 +35,7 @@ def _disable_reader_and_git_fetch(request: pytest.FixtureRequest):
     Reader: every warehouse read in this module transits _make_reader().named(verb)
     (Decision 84 I-3). The default stub returns [] for every verb so read_priority_queue()
     does not sys.exit(1) and the rec counters report empty rather than reaching the network.
-    Tests that need specific rows or failures re-patch session_preflight._make_reader.
+    Tests that need specific rows or failures re-patch scripts.preflight._common._make_reader.
 
     Git fetch: check_main_freshness() shells out to ``git fetch origin main``; patch it to
     a deterministic stub for every test except TestCheckMainFreshness (which exercises the
@@ -65,12 +67,12 @@ def _disable_reader_and_git_fetch(request: pytest.FixtureRequest):
     }
 
     with ExitStack() as stack:
-        stack.enter_context(patch("session_preflight._make_reader", return_value=reader_stub))
+        stack.enter_context(patch("scripts.preflight._common._make_reader", return_value=reader_stub))
         stack.enter_context(patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}))
         stack.enter_context(patch("scripts.sync_ops.warm_sync", return_value=warm_sync_stub))
         stack.enter_context(patch("session_preflight._sync_ops_pull", return_value={}))
         if class_name != "TestCheckMainFreshness":
-            stack.enter_context(patch("session_preflight.check_main_freshness", return_value=freshness_stub))
+            stack.enter_context(patch("scripts.preflight.env_git.check_main_freshness", return_value=freshness_stub))
         yield
 
 
@@ -80,7 +82,7 @@ class TestCheckVenv:
             "session_preflight.sys.executable",
             "C:/Users/user/Git Repos/agent-platform/.venv/Scripts/python.exe",
         )
-        monkeypatch.setattr("session_preflight.ROOT", Path("C:/Users/user/Git Repos/agent-platform"))
+        monkeypatch.setattr("scripts.preflight._common.ROOT", Path("C:/Users/user/Git Repos/agent-platform"))
         assert _preflight.check_venv() is True
 
     def test_wrong_venv_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,7 +90,7 @@ class TestCheckVenv:
             "session_preflight.sys.executable",
             "C:/Users/user/Git Repos/da-data-athena/.venv/Scripts/python.exe",
         )
-        monkeypatch.setattr("session_preflight.ROOT", Path("C:/Users/user/Git Repos/agent-platform"))
+        monkeypatch.setattr("scripts.preflight._common.ROOT", Path("C:/Users/user/Git Repos/agent-platform"))
         assert _preflight.check_venv() is False
 
 
@@ -166,7 +168,7 @@ class TestCheckTerraformPending:
         from contextlib import ExitStack
 
         with ExitStack() as stack:
-            stack.enter_context(patch("session_preflight.resolve_aws_profile", return_value="agent_platform"))
+            stack.enter_context(patch("scripts.preflight._common.resolve_aws_profile", return_value="agent_platform"))
             stack.enter_context(patch("boto3.Session"))
             stack.enter_context(patch("scripts.convergence_health.read_convergence_record", return_value={}))
             stack.enter_context(patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]))
@@ -226,7 +228,7 @@ class TestCheckTerraformPending:
         assert health["stuck_approvals"] == 2
 
     def test_returns_none_none_on_exception(self) -> None:
-        with patch("session_preflight.resolve_aws_profile", side_effect=RuntimeError("creds down")):
+        with patch("scripts.preflight._common.resolve_aws_profile", side_effect=RuntimeError("creds down")):
             result = _preflight.check_terraform_pending()
         assert result == (None, None)
 
@@ -404,15 +406,15 @@ class TestStdoutDoesNotDumpFullJson:
     def test_main_does_not_print_full_json_to_stdout(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         preflight_report = tmp_path / ".preflight-report.json"
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight.count_recommendations", return_value=(3, 0, 0, [])),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache.count_recommendations", return_value=(3, 0, 0, [])),
             patch("session_preflight._sync_ops_pull", return_value={}),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 1.5",
                     "open_decisions_count": 0,
@@ -422,10 +424,10 @@ class TestStdoutDoesNotDumpFullJson:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
         ):
             _preflight.main()
@@ -443,10 +445,10 @@ class TestJsonOutputSchema:
         preflight_report = tmp_path / ".preflight-report.json"
 
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("main", False, [])),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("main", False, [])),
             patch(
-                "session_preflight.check_main_freshness",
+                "scripts.preflight.env_git.check_main_freshness",
                 return_value={
                     "status": "ok",
                     "fetched_at": "2026-05-24T00:00:00+00:00",
@@ -455,13 +457,13 @@ class TestJsonOutputSchema:
                     "main_files_changed_since_branch": [],
                 },
             ),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value="## [2026-03-01] -- test"),
-            patch("session_preflight.count_recommendations", return_value=(5, 1, 0, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value="## [2026-03-01] -- test"),
+            patch("scripts.preflight.recs_cache.count_recommendations", return_value=(5, 1, 0, [])),
             patch("session_preflight._sync_ops_pull", return_value={}),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 1.5",
                     "open_decisions_count": 2,
@@ -471,10 +473,10 @@ class TestJsonOutputSchema:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):
@@ -514,10 +516,10 @@ class TestJsonOutputSchema:
         preflight_report = tmp_path / ".preflight-report.json"
 
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
             patch(
-                "session_preflight.check_main_freshness",
+                "scripts.preflight.env_git.check_main_freshness",
                 return_value={
                     "status": "ok",
                     "fetched_at": "2026-05-24T00:00:00+00:00",
@@ -526,10 +528,10 @@ class TestJsonOutputSchema:
                     "main_files_changed_since_branch": [],
                 },
             ),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight.count_recommendations", return_value=(3, 0, 0, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache.count_recommendations", return_value=(3, 0, 0, [])),
             patch(
                 "scripts.sync_ops.warm_sync",
                 return_value={
@@ -540,7 +542,7 @@ class TestJsonOutputSchema:
                 },
             ) as mock_warm_sync,
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 1.5",
                     "open_decisions_count": 0,
@@ -550,10 +552,10 @@ class TestJsonOutputSchema:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):
@@ -567,15 +569,15 @@ class TestJsonOutputSchema:
 class TestGracefulMissingFiles:
     def test_missing_session_log(self, tmp_path: Path) -> None:
         missing = tmp_path / "SESSION_LOG.md"
-        with patch("session_preflight.SESSION_LOG_FILE", missing):
+        with patch("scripts.preflight._common.SESSION_LOG_FILE", missing):
             result = _preflight.parse_last_session()
         assert result == ""
 
     def test_missing_recommendations(self, tmp_path: Path) -> None:
         missing = tmp_path / "RECOMMENDATIONS.md"
         with (
-            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", missing),
+            patch("scripts.preflight.recs_cache._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", missing),
         ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 0
@@ -603,8 +605,8 @@ class TestNonAutomatableRecommendations:
         recs_file = tmp_path / ".recommendations-log.jsonl"
         recs_file.write_text(self._REC_001 + self._REC_002 + self._REC_003, encoding="utf-8")
         with (
-            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+            patch("scripts.preflight.recs_cache._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", recs_file),
         ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 2
@@ -624,8 +626,8 @@ class TestNonAutomatableRecommendations:
         lines = [_line.format(i=i) for i in range(1, 16)]
         recs_file.write_text("".join(lines), encoding="utf-8")
         with (
-            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+            patch("scripts.preflight.recs_cache._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", recs_file),
         ):
             _, _, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert non_auto_count == 15
@@ -635,18 +637,18 @@ class TestNonAutomatableRecommendations:
         """non_automatable_recommendations and non_automatable_details appear in preflight JSON."""
         preflight_report = tmp_path / ".preflight-report.json"
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
             patch(
-                "session_preflight._count_recommendations_reader",
+                "scripts.preflight.recs_cache._count_recommendations_reader",
                 return_value=(2, 0, 1, [{"id": "rec-001", "title": "Manual", "context_excerpt": "ctx"}]),
             ),
             patch("session_preflight._sync_ops_pull", return_value={}),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 1.5",
                     "open_decisions_count": 0,
@@ -656,10 +658,10 @@ class TestNonAutomatableRecommendations:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):
@@ -681,8 +683,8 @@ class TestNonAutomatableRecommendations:
             encoding="utf-8",
         )
         with (
-            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+            patch("scripts.preflight.recs_cache._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", recs_file),
         ):
             _, _, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert non_auto_count == 0
@@ -696,8 +698,8 @@ class TestNonAutomatableRecommendations:
             encoding="utf-8",
         )
         with (
-            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", recs_file),
+            patch("scripts.preflight.recs_cache._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", recs_file),
         ):
             open_count, aging_count, non_auto_count, non_auto_details = _preflight.count_recommendations()
         assert open_count == 1
@@ -709,20 +711,20 @@ class TestReadContextFiles:
         roadmap = tmp_path / "ROADMAP.md"
         roadmap.write_text("# Roadmap\n\n## Phase 1.5: Schema Flattening\n", encoding="utf-8")
         with (
-            patch("session_preflight.ROADMAP_FILE", roadmap),
-            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common.ROADMAP_FILE", roadmap),
+            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
         ):
             result = _preflight.read_context_files()
         assert result["roadmap_phase"] == "Phase 1.5: Schema Flattening"
 
     def test_roadmap_phase_defaults_unknown_when_missing(self, tmp_path: Path) -> None:
         with (
-            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing3.md"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", tmp_path / "missing4.md"),
+            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing4.md"),
         ):
             result = _preflight.read_context_files()
         assert result["roadmap_phase"] == "unknown"
@@ -734,10 +736,10 @@ class TestReadContextFiles:
             encoding="utf-8",
         )
         with (
-            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.DECISIONS_FILE", decisions),
-            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.DECISIONS_FILE", decisions),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
         ):
             result = _preflight.read_context_files()
         # Decision 1 and 3 are open; Decision 2 is Decided
@@ -751,10 +753,10 @@ class TestReadContextFiles:
             encoding="utf-8",
         )
         with (
-            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.SESSION_LOG_FILE", session_log),
-            patch("session_preflight.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", session_log),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
         ):
             result = _preflight.read_context_files()
         assert len(result["recent_sessions"]) == 2
@@ -771,10 +773,10 @@ class TestReadContextFiles:
             encoding="utf-8",
         )
         with (
-            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.SESSION_LOG_FILE", session_log),
-            patch("session_preflight.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", session_log),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
         ):
             result = _preflight.read_context_files()
         assert result["strategic_review_due"] is True
@@ -789,20 +791,20 @@ class TestReadContextFiles:
             encoding="utf-8",
         )
         with (
-            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.SESSION_LOG_FILE", session_log),
-            patch("session_preflight.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", session_log),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
         ):
             result = _preflight.read_context_files()
         assert result["strategic_review_due"] is False
 
     def test_missing_files_return_defaults(self, tmp_path: Path) -> None:
         with (
-            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing3.md"),
-            patch("session_preflight.RECOMMENDATIONS_FILE", tmp_path / "missing4.md"),
+            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing4.md"),
         ):
             result = _preflight.read_context_files()
         assert result["roadmap_phase"] == "unknown"
@@ -822,7 +824,7 @@ class TestCheckVenvWorktree:
         venv_exe.parent.mkdir(parents=True)
         venv_exe.touch()
         with (
-            patch("session_preflight.ROOT", fake_root),
+            patch("scripts.preflight._common.ROOT", fake_root),
             patch("session_preflight.sys.executable", str(venv_exe)),
         ):
             assert _preflight.check_venv() is True
@@ -834,7 +836,7 @@ class TestCheckVenvWorktree:
         venv_exe.parent.mkdir(parents=True)
         venv_exe.touch()
         with (
-            patch("session_preflight.ROOT", fake_root),
+            patch("scripts.preflight._common.ROOT", fake_root),
             patch("session_preflight.sys.executable", str(venv_exe)),
         ):
             assert _preflight.check_venv() is True
@@ -849,7 +851,7 @@ class TestCheckVenvWorktree:
         (fake_root / ".venv").mkdir(parents=True)
         (fake_root / ".venv" / "pyvenv.cfg").touch()
         with (
-            patch("session_preflight.ROOT", fake_root),
+            patch("scripts.preflight._common.ROOT", fake_root),
             patch("sys.executable", "C:/unrelated/path/python.exe"),
             patch("session_preflight.sys.executable", "C:/unrelated/path/python.exe"),
         ):
@@ -860,7 +862,7 @@ class TestCheckVenvWorktree:
         fake_root = tmp_path / "agent-platform"
         fake_root.mkdir()  # deliberately no .venv -> fallback must be False
         with (
-            patch("session_preflight.ROOT", fake_root),
+            patch("scripts.preflight._common.ROOT", fake_root),
             patch("sys.executable", "C:/other-repo/.venv/Scripts/python.exe"),
             patch("session_preflight.sys.executable", "C:/other-repo/.venv/Scripts/python.exe"),
         ):
@@ -1015,17 +1017,17 @@ class TestTelemetryHealth:
         mock_health = {"overall": "ok", "checks": [], "friction_patterns": []}
 
         with (
-            patch("session_preflight.check_telemetry_health", return_value=mock_health),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("main", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
+            patch("scripts.preflight.context_docs.check_telemetry_health", return_value=mock_health),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("main", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache.count_recommendations", return_value=(0, 0, 0, [])),
             patch("session_preflight._sync_ops_pull", return_value={}),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 1.5",
                     "open_decisions_count": 0,
@@ -1046,21 +1048,21 @@ class TestTelemetryHealth:
     def test_health_flag_exits_zero_on_ok(self) -> None:
         """--health flag exits 0 when overall is ok."""
         mock_health = {"overall": "ok", "checks": []}
-        with patch("session_preflight.check_telemetry_health", return_value=mock_health):
+        with patch("scripts.preflight.context_docs.check_telemetry_health", return_value=mock_health):
             exit_code = 1 if mock_health["overall"] == "critical" else 0
         assert exit_code == 0
 
     def test_health_flag_exits_nonzero_on_critical(self) -> None:
         """--health flag exits 1 when overall is critical."""
         mock_health = {"overall": "critical", "checks": []}
-        with patch("session_preflight.check_telemetry_health", return_value=mock_health):
+        with patch("scripts.preflight.context_docs.check_telemetry_health", return_value=mock_health):
             exit_code = 1 if mock_health["overall"] == "critical" else 0
         assert exit_code == 1
 
     def test_health_flag_exits_zero_on_warning(self) -> None:
         """--health flag exits 0 when overall is warning (not critical)."""
         mock_health = {"overall": "warning", "checks": []}
-        with patch("session_preflight.check_telemetry_health", return_value=mock_health):
+        with patch("scripts.preflight.context_docs.check_telemetry_health", return_value=mock_health):
             exit_code = 1 if mock_health["overall"] == "critical" else 0
         assert exit_code == 0
 
@@ -1084,7 +1086,7 @@ class TestReadPriorityQueueDegraded:
         """A verb failure with credentials ok is an infrastructure fault -> SystemExit(1) (Decision 60)."""
         reader = MagicMock()
         reader.named.side_effect = RuntimeError("ducklake_reader 'named_read' failed (HTTP 500)")
-        with patch("session_preflight._make_reader", return_value=reader):
+        with patch("scripts.preflight._common._make_reader", return_value=reader):
             with pytest.raises(SystemExit):
                 _preflight.read_priority_queue(creds_status="ok")
 
@@ -1098,8 +1100,8 @@ class TestReadPriorityQueueDegraded:
             encoding="utf-8",
         )
         with (
-            patch.object(_preflight, "PRIORITY_QUEUE_FILE", cache),
-            patch("session_preflight._make_reader") as mock_reader,
+            patch.object(_common, "PRIORITY_QUEUE_FILE", cache),
+            patch("scripts.preflight._common._make_reader") as mock_reader,
         ):
             result = _preflight.read_priority_queue(creds_status="unavailable")
         mock_reader.assert_not_called()
@@ -1109,7 +1111,7 @@ class TestReadPriorityQueueDegraded:
     def test_empty_when_cache_absent_and_creds_unavailable(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """Absent cache + creds down -> [] with a loud warning, never a crash."""
         missing = tmp_path / "does-not-exist.jsonl"
-        with patch.object(_preflight, "PRIORITY_QUEUE_FILE", missing):
+        with patch.object(_common, "PRIORITY_QUEUE_FILE", missing):
             result = _preflight.read_priority_queue(creds_status="unavailable")
         assert result == []
         assert "priority queue unavailable" in capsys.readouterr().err
@@ -1122,7 +1124,7 @@ class TestCheckCredentials:
         mock_result = MagicMock()
         mock_result.returncode = 0
         with (
-            patch("session_preflight.resolve_aws_profile", return_value="agent_platform"),
+            patch("scripts.preflight._common.resolve_aws_profile", return_value="agent_platform"),
             patch("session_preflight.subprocess.run", return_value=mock_result) as mock_run,
         ):
             assert _preflight.check_credentials() == "ok"
@@ -1134,14 +1136,14 @@ class TestCheckCredentials:
         mock_result = MagicMock()
         mock_result.returncode = 255
         with (
-            patch("session_preflight.resolve_aws_profile", return_value="agent_platform"),
+            patch("scripts.preflight._common.resolve_aws_profile", return_value="agent_platform"),
             patch("session_preflight.subprocess.run", return_value=mock_result),
         ):
             assert _preflight.check_credentials() == "unavailable"
 
     def test_unavailable_when_cli_missing(self) -> None:
         with (
-            patch("session_preflight.resolve_aws_profile", return_value="agent_platform"),
+            patch("scripts.preflight._common.resolve_aws_profile", return_value="agent_platform"),
             patch("session_preflight.subprocess.run", side_effect=FileNotFoundError),
         ):
             assert _preflight.check_credentials() == "unavailable"
@@ -1151,7 +1153,7 @@ class TestCheckCredentials:
         mock_result = MagicMock()
         mock_result.returncode = 0
         with (
-            patch("session_preflight.resolve_aws_profile", return_value=None),
+            patch("scripts.preflight._common.resolve_aws_profile", return_value=None),
             patch("session_preflight.subprocess.run", return_value=mock_result) as mock_run,
         ):
             assert _preflight.check_credentials() == "ok"
@@ -1242,31 +1244,31 @@ class TestMainIncludesPriorityQueue:
         ]
         with (
             patch(
-                "session_preflight.check_venv",
+                "scripts.preflight.env_git.check_venv",
                 return_value=True,
             ),
             patch(
-                "session_preflight.get_git_status",
+                "scripts.preflight.env_git.get_git_status",
                 return_value=("main", False, []),
             ),
             patch(
-                "session_preflight.check_terraform_pending",
+                "scripts.preflight.aws_infra.check_terraform_pending",
                 return_value=False,
             ),
             patch(
-                "session_preflight.check_credentials",
+                "scripts.preflight.aws_infra.check_credentials",
                 return_value="ok",
             ),
             patch(
-                "session_preflight.parse_last_session",
+                "scripts.preflight.context_docs.parse_last_session",
                 return_value="",
             ),
             patch(
-                "session_preflight.count_recommendations",
+                "scripts.preflight.recs_cache.count_recommendations",
                 return_value=(1, 0, 0, []),
             ),
             patch(
-                "session_preflight.read_priority_queue",
+                "scripts.preflight.priority_queue.read_priority_queue",
                 return_value=mock_queue,
             ),
             patch(
@@ -1274,7 +1276,7 @@ class TestMainIncludesPriorityQueue:
                 return_value={},
             ),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 2",
                     "open_decisions_count": 0,
@@ -1284,10 +1286,10 @@ class TestMainIncludesPriorityQueue:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch(
                 "session_preflight.PREFLIGHT_REPORT",
                 preflight_report,
@@ -1317,31 +1319,31 @@ class TestMainIncludesPriorityQueue:
 
         with (
             patch(
-                "session_preflight.check_venv",
+                "scripts.preflight.env_git.check_venv",
                 return_value=True,
             ),
             patch(
-                "session_preflight.get_git_status",
+                "scripts.preflight.env_git.get_git_status",
                 return_value=("main", False, []),
             ),
             patch(
-                "session_preflight.check_terraform_pending",
+                "scripts.preflight.aws_infra.check_terraform_pending",
                 return_value=False,
             ),
             patch(
-                "session_preflight.check_credentials",
+                "scripts.preflight.aws_infra.check_credentials",
                 return_value="ok",
             ),
             patch(
-                "session_preflight.parse_last_session",
+                "scripts.preflight.context_docs.parse_last_session",
                 return_value="",
             ),
             patch(
-                "session_preflight.count_recommendations",
+                "scripts.preflight.recs_cache.count_recommendations",
                 return_value=(0, 0, 0, []),
             ),
             patch(
-                "session_preflight.read_priority_queue",
+                "scripts.preflight.priority_queue.read_priority_queue",
                 return_value=[],
             ),
             patch(
@@ -1349,7 +1351,7 @@ class TestMainIncludesPriorityQueue:
                 return_value={},
             ),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 2",
                     "open_decisions_count": 0,
@@ -1359,10 +1361,10 @@ class TestMainIncludesPriorityQueue:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch(
                 "session_preflight.PREFLIGHT_REPORT",
                 preflight_report,
@@ -1434,7 +1436,7 @@ class TestCiRcaLivenessAlert:
         old_ts = (datetime.now(timezone.utc) - timedelta(minutes=45)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with (
             patch("session_preflight.subprocess.run", return_value=self._make_gh_result("failure", old_ts)),
-            patch("session_preflight._fetch_ci_rca_recs_since", return_value=[]),
+            patch("scripts.preflight.ci_rca_signals._fetch_ci_rca_recs_since", return_value=[]),
         ):
             result = _preflight._check_ci_rca_liveness("ok")
         assert result is not None
@@ -1447,7 +1449,7 @@ class TestCiRcaLivenessAlert:
         old_ts = (datetime.now(timezone.utc) - timedelta(minutes=45)).strftime("%Y-%m-%dT%H:%M:%SZ")
         with (
             patch("session_preflight.subprocess.run", return_value=self._make_gh_result("failure", old_ts)),
-            patch("session_preflight._fetch_ci_rca_recs_since", return_value=[{"id": "rec-1"}]),
+            patch("scripts.preflight.ci_rca_signals._fetch_ci_rca_recs_since", return_value=[{"id": "rec-1"}]),
         ):
             result = _preflight._check_ci_rca_liveness("ok")
         assert result is None
@@ -1481,14 +1483,14 @@ class TestConvergenceRcaGapAlert:
         }
 
     def test_convergence_rca_gap_alert_set_when_red_beyond_grace_no_matching_rec(self) -> None:
-        with patch("session_preflight._fetch_ci_rca_recs_since", return_value=[]):
+        with patch("scripts.preflight.ci_rca_signals._fetch_ci_rca_recs_since", return_value=[]):
             result = _preflight._check_convergence_rca_gap(self._red_health())
         assert result is not None
         assert result["commit_sha"] == "0b81f6a184d1a74b075082801ec9de2bfc4157d8"  # pragma: allowlist secret
         assert result["red_age_hours"] == 1.0
 
     def test_convergence_rca_gap_alert_none_when_matching_open_rec_exists(self) -> None:
-        with patch("session_preflight._fetch_ci_rca_recs_since", return_value=[{"id": "rec-1"}]):
+        with patch("scripts.preflight.ci_rca_signals._fetch_ci_rca_recs_since", return_value=[{"id": "rec-1"}]):
             result = _preflight._check_convergence_rca_gap(self._red_health())
         assert result is None
 
@@ -1498,7 +1500,7 @@ class TestConvergenceRcaGapAlert:
 
     def test_convergence_rca_gap_alert_none_when_red_within_grace(self) -> None:
         health = self._red_health(red_age_hours=0.1)  # 6 minutes, within the 30-minute grace
-        with patch("session_preflight._fetch_ci_rca_recs_since", return_value=[]):
+        with patch("scripts.preflight.ci_rca_signals._fetch_ci_rca_recs_since", return_value=[]):
             result = _preflight._check_convergence_rca_gap(health)
         assert result is None
 
@@ -1605,16 +1607,16 @@ class TestAbstentionGauge:
             "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
         }
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("main", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight.read_priority_queue", return_value=[]),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("main", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.priority_queue.read_priority_queue", return_value=[]),
             patch("session_preflight._sync_ops_pull", return_value={}),
             patch("scripts.sync_ops.warm_sync", return_value=warm_sync_stub),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 2",
                     "open_decisions_count": 0,
@@ -1624,10 +1626,10 @@ class TestAbstentionGauge:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("scripts.ci_rca_probe_health.escalate", return_value={"action": "none", "rec_id": None}) as mock_escalate,
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
@@ -1648,7 +1650,7 @@ class TestForwardFixRecursion:
 
     def test_alert_set_at_threshold(self) -> None:
         rows = [{"file": "scripts/validate.py", "cnt": "3"}]
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = rows
             result = _preflight._check_forward_fix_recursion()
         assert result is not None
@@ -1660,13 +1662,13 @@ class TestForwardFixRecursion:
         assert "since_ts" in kwargs  # the 24h cutoff is bound as a verb param
 
     def test_alert_none_when_no_groups(self) -> None:
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = []
             result = _preflight._check_forward_fix_recursion()
         assert result is None
 
     def test_alert_none_when_reader_unavailable(self) -> None:
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.side_effect = RuntimeError("reader down")
             result = _preflight._check_forward_fix_recursion()
         assert result is None
@@ -1695,24 +1697,24 @@ class TestCredentialsOrderingInMain:
         preflight_report = tmp_path / ".preflight-report.json"
 
         with (
-            patch("session_preflight.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"friction_patterns": [], "overall": "ok", "checks": []},
             ),
-            patch("session_preflight.print_telemetry_health"),
-            patch("session_preflight.run_log_sync", return_value={}),
-            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight._handle_credentials_startup", side_effect=_track_creds),
+            patch("scripts.preflight.context_docs.print_telemetry_health"),
+            patch("scripts.preflight.env_git.run_log_sync", return_value={}),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.aws_infra._handle_credentials_startup", side_effect=_track_creds),
             patch("scripts.sync_ops.warm_sync", side_effect=_track_sync),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
-            patch("session_preflight.read_priority_queue", return_value=[]),
-            patch("session_preflight.print_priority_queue"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache.count_recommendations", return_value=(0, 0, 0, [])),
+            patch("scripts.preflight.priority_queue.read_priority_queue", return_value=[]),
+            patch("scripts.preflight.priority_queue.print_priority_queue"),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "",
                     "open_decisions_count": 0,
@@ -1721,8 +1723,8 @@ class TestCredentialsOrderingInMain:
                     "recommendations_count": 0,
                 },
             ),
-            patch("session_preflight.check_data_quality_coverage", return_value={}),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.context_docs.check_data_quality_coverage", return_value={}),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
         ):
             _preflight.main()
@@ -1743,7 +1745,7 @@ class TestBudgetBypassAlert:
             {"id": "rec-001", "context": "bypass 1", "created_timestamp": "2026-05-12 10:00:00"},
             {"id": "rec-002", "context": "bypass 2", "created_timestamp": "2026-05-11 10:00:00"},
         ]
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = rows
             result = _preflight._check_budget_bypass_alert()
         assert result is None
@@ -1756,7 +1758,7 @@ class TestBudgetBypassAlert:
             {"id": "rec-002", "context": "bypass 2", "created_timestamp": "2026-05-11 10:00:00"},
             {"id": "rec-003", "context": "bypass 3", "created_timestamp": "2026-05-10 10:00:00"},
         ]
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = rows
             result = _preflight._check_budget_bypass_alert()
         assert result is not None
@@ -1765,14 +1767,14 @@ class TestBudgetBypassAlert:
 
     def test_returns_none_on_reader_failure(self) -> None:
         """Returns None (not raises) when reader raises an exception (Decision 55)."""
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.side_effect = RuntimeError("reader unreachable")
             result = _preflight._check_budget_bypass_alert()
         assert result is None
 
     def test_returns_none_when_verb_returns_empty(self) -> None:
         """Returns None when the verb returns an empty row list (count 0 < 3)."""
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = []
             result = _preflight._check_budget_bypass_alert()
         assert result is None
@@ -1806,7 +1808,7 @@ class TestReadPriorityQueueReader:
 
     def test_reader_path_returns_shaped_sorted_rows(self) -> None:
         """Verb success -> rows shaped {rank, rec_id, rationale, north_star_impact} and rank-sorted."""
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = list(self._PQ_ROWS)
 
             result = _preflight.read_priority_queue()
@@ -1821,7 +1823,7 @@ class TestReadPriorityQueueReader:
     def test_reader_string_rank_cast_to_int(self) -> None:
         """String ranks from the reader are cast to int during shaping."""
         rows = [{"rec_id": "rec-99", "rank": "1", "rationale": "r", "north_star_impact": "medium"}]
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = rows
 
             result = _preflight.read_priority_queue()
@@ -1830,7 +1832,7 @@ class TestReadPriorityQueueReader:
 
     def test_reader_empty_returns_empty_list(self) -> None:
         """Verb returns [] -> function returns [] (empty queue, not an error)."""
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = []
 
             result = _preflight.read_priority_queue()
@@ -1860,7 +1862,7 @@ class TestCountRecommendationsReader:
 
     def test_reader_path_returns_counts(self) -> None:
         """open_recs verb success -> counts returned as tuple."""
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = list(self._OPEN_ROWS)
 
             result = _preflight._count_recommendations_reader()
@@ -1873,7 +1875,7 @@ class TestCountRecommendationsReader:
 
     def test_reader_failure_returns_reader_unreachable_string(self) -> None:
         """Reader raises -> returns 'reader_unreachable' string (no Athena fallback, Decision 55)."""
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.side_effect = RuntimeError("reader down")
 
             result = _preflight._count_recommendations_reader()
@@ -1882,7 +1884,7 @@ class TestCountRecommendationsReader:
 
     def test_reader_failure_only_returns_reader_unreachable(self) -> None:
         """Reader fails -> 'reader_unreachable' string, never None (T2.19: no Athena escape)."""
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.side_effect = ConnectionError("timeout")
 
             result = _preflight._count_recommendations_reader()
@@ -1899,10 +1901,10 @@ class TestRecsReadStatusDegradation:
         preflight_report = tmp_path / ".preflight-report.json"
 
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("claude/test", False, [])),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("claude/test", False, [])),
             patch(
-                "session_preflight.check_main_freshness",
+                "scripts.preflight.env_git.check_main_freshness",
                 return_value={
                     "status": "ok",
                     "fetched_at": "2026-06-09T00:00:00+00:00",
@@ -1911,15 +1913,15 @@ class TestRecsReadStatusDegradation:
                     "main_files_changed_since_branch": [],
                 },
             ),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight._count_recommendations_reader", return_value="reader_unreachable"),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache._count_recommendations_reader", return_value="reader_unreachable"),
             patch("session_preflight._sync_ops_pull", return_value={}),
-            patch("session_preflight.read_priority_queue", return_value=[]),
-            patch("session_preflight.print_priority_queue"),
+            patch("scripts.preflight.priority_queue.read_priority_queue", return_value=[]),
+            patch("scripts.preflight.priority_queue.print_priority_queue"),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 2",
                     "open_decisions_count": 0,
@@ -1929,15 +1931,15 @@ class TestRecsReadStatusDegradation:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
             patch(
-                "session_preflight.check_data_quality_coverage",
+                "scripts.preflight.context_docs.check_data_quality_coverage",
                 return_value={"tables_covered": 0, "checks_defined": 0, "last_run": None},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
-            patch("session_preflight._fetch_ci_rca_recs", return_value=[]),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._fetch_ci_rca_recs", return_value=[]),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):
@@ -1954,14 +1956,14 @@ class TestFetchCiRcaRecs:
 
     def test_fetch_ci_rca_recs_uses_ci_rca_open_verb(self) -> None:
         rows = [{"id": "rec-900", "title": "CI broken", "priority": "critical"}]
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = rows
             result = _preflight._fetch_ci_rca_recs()
         assert result == rows
         MockReader.return_value.named.assert_called_once_with("ci_rca_open")
 
     def test_fetch_ci_rca_recs_degrades_to_empty_with_warning(self, capsys: pytest.CaptureFixture) -> None:
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.side_effect = RuntimeError("reader down")
             result = _preflight._fetch_ci_rca_recs()
         assert result == []
@@ -1969,14 +1971,14 @@ class TestFetchCiRcaRecs:
 
     def test_fetch_ci_rca_recs_since_binds_since_ts(self) -> None:
         rows = [{"id": "rec-901"}]
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = rows
             result = _preflight._fetch_ci_rca_recs_since("2026-06-10T00:00:00Z")
         assert result == rows
         MockReader.return_value.named.assert_called_once_with("ci_rca_since", since_ts="2026-06-10T00:00:00Z")
 
     def test_fetch_ci_rca_recs_since_returns_empty_on_failure(self) -> None:
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.side_effect = RuntimeError("reader down")
             assert _preflight._fetch_ci_rca_recs_since("2026-06-10T00:00:00Z") == []
 
@@ -2039,7 +2041,7 @@ class TestGetLatestDecisionTs:
     """_get_latest_decision_ts() reads via the decisions_max_updated verb."""
 
     def test_returns_ts_from_first_row(self) -> None:
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = [{"ts": "2026-06-10T12:00:00+00:00"}]
             result = _preflight._get_latest_decision_ts()
         assert result == "2026-06-10T12:00:00+00:00"
@@ -2047,17 +2049,17 @@ class TestGetLatestDecisionTs:
         MockReader.return_value.named.assert_called_once_with("decisions_max_updated")
 
     def test_returns_none_on_empty_rows(self) -> None:
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = []
             assert _preflight._get_latest_decision_ts() is None
 
     def test_returns_none_on_empty_ts_value(self) -> None:
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.return_value = [{"ts": ""}]
             assert _preflight._get_latest_decision_ts() is None
 
     def test_returns_none_on_reader_failure(self) -> None:
-        with patch("session_preflight._make_reader") as MockReader:
+        with patch("scripts.preflight._common._make_reader") as MockReader:
             MockReader.return_value.named.side_effect = RuntimeError("reader down")
             assert _preflight._get_latest_decision_ts() is None
 
@@ -2069,10 +2071,10 @@ class TestReadContextFilesRecsCount:
         reader = MagicMock()
         reader.named.return_value = [{"id": "rec-1"}, {"id": "rec-2"}, {"id": "rec-3"}]
         with (
-            patch("session_preflight._make_reader", return_value=reader),
-            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common._make_reader", return_value=reader),
+            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", tmp_path / "missing3.md"),
         ):
             result = _preflight.read_context_files()
         assert result["recommendations_count"] == 3
@@ -2082,10 +2084,10 @@ class TestReadContextFilesRecsCount:
         reader = MagicMock()
         reader.named.side_effect = RuntimeError("reader down")
         with (
-            patch("session_preflight._make_reader", return_value=reader),
-            patch("session_preflight.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("session_preflight.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("session_preflight.SESSION_LOG_FILE", tmp_path / "missing3.md"),
+            patch("scripts.preflight._common._make_reader", return_value=reader),
+            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
+            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
+            patch("scripts.preflight._common.SESSION_LOG_FILE", tmp_path / "missing3.md"),
         ):
             result = _preflight.read_context_files()
         assert result["recommendations_count"] == 0
@@ -2111,15 +2113,15 @@ class TestPriorityQueueSourceCache:
     def test_report_source_cache_when_creds_down(self, tmp_path: Path) -> None:
         preflight_report = tmp_path / ".preflight-report.json"
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("claude/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="unavailable"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight._count_recommendations_reader", return_value=(0, 0, 0, [])),
-            patch("session_preflight.read_priority_queue", return_value=[]),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("claude/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="unavailable"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache._count_recommendations_reader", return_value=(0, 0, 0, [])),
+            patch("scripts.preflight.priority_queue.read_priority_queue", return_value=[]),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 2",
                     "open_decisions_count": 0,
@@ -2128,7 +2130,7 @@ class TestPriorityQueueSourceCache:
                     "recommendations_count": 0,
                 },
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):
@@ -2434,7 +2436,7 @@ class TestCorrelateRecsWithCommits:
         """Serving from read-cache only; no warehouse re-fetch (Decision 88)."""
         rec = self._rec("rec-004", file="scripts/foo.py")
         commit = self._commit("ddd12345", "2026-06-11T10:00:00+00:00", ["scripts/foo.py"])
-        with patch("session_preflight._make_reader") as mock_reader:
+        with patch("scripts.preflight._common._make_reader") as mock_reader:
             _preflight.correlate_recs_with_commits([rec], [commit])
         mock_reader.assert_not_called()
 
@@ -2480,7 +2482,7 @@ class TestSurfaceQueueRelevanceTriage:
         """Surfacing is read-cache only; no DuckLake reader call (Decision 88)."""
         cache = [self._row("rec-300", "open", "planning", "scripts/bar.py", "2026-06-10T10:00:00Z")]
         commits = [{"sha": "def12345", "date": "2026-06-11T10:00:00+00:00", "subject": "fix", "files": ["scripts/bar.py"]}]
-        with patch("session_preflight._make_reader") as mock_reader:
+        with patch("scripts.preflight._common._make_reader") as mock_reader:
             _preflight.surface_queue_relevance_triage(cache, commits)
         mock_reader.assert_not_called()
 
@@ -2507,17 +2509,17 @@ class TestSyncCollapse:
     def _full_main_ctx(tmp_path: Path, extra: dict | None = None):
         """Return a list of patch context managers sufficient to run main() in isolation."""
         patches = [
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
             # Phase B / pre-Phase-A subprocess users -- patch by name so main() never
             # shells out to real git (tests/CLAUDE.md isolation: no real subprocess in unit tests).
-            patch("session_preflight._get_recent_main_commits", return_value=[]),
-            patch("session_preflight.run_log_sync", return_value={"status": "skipped", "files": []}),
+            patch("scripts.preflight.env_git._get_recent_main_commits", return_value=[]),
+            patch("scripts.preflight.env_git.run_log_sync", return_value={"status": "skipped", "files": []}),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 1.5",
                     "open_decisions_count": 0,
@@ -2526,7 +2528,7 @@ class TestSyncCollapse:
                     "recommendations_count": 0,
                 },
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", tmp_path / ".preflight-report.json"),
             patch("builtins.print"),
         ]
@@ -2585,14 +2587,14 @@ class TestUrlPriming:
         fake_url = "https://abc123.lambda-url.eu-west-2.on.aws"
         mock_reader = MagicMock()
         mock_reader._reader_url.return_value = fake_url
-        with patch("session_preflight._make_reader", return_value=mock_reader):
+        with patch("scripts.preflight._common._make_reader", return_value=mock_reader):
             _preflight._prime_reader_url("ok")
         assert os.environ.get("DUCKLAKE_READER_URL") == fake_url
 
     def test_skips_when_creds_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Credentials unavailable -> reader is never called and env var is not set."""
         monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
-        with patch("session_preflight._make_reader") as mock_make:
+        with patch("scripts.preflight._common._make_reader") as mock_make:
             _preflight._prime_reader_url("unavailable")
         mock_make.assert_not_called()
         assert "DUCKLAKE_READER_URL" not in os.environ
@@ -2600,7 +2602,7 @@ class TestUrlPriming:
     def test_skips_if_already_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If DUCKLAKE_READER_URL is already set, the existing value is preserved."""
         monkeypatch.setenv("DUCKLAKE_READER_URL", "https://original.url")
-        with patch("session_preflight._make_reader") as mock_make:
+        with patch("scripts.preflight._common._make_reader") as mock_make:
             _preflight._prime_reader_url("ok")
         mock_make.assert_not_called()
         assert os.environ["DUCKLAKE_READER_URL"] == "https://original.url"
@@ -2610,7 +2612,7 @@ class TestUrlPriming:
         monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
         mock_reader = MagicMock()
         mock_reader._reader_url.side_effect = RuntimeError("SSM unavailable")
-        with patch("session_preflight._make_reader", return_value=mock_reader):
+        with patch("scripts.preflight._common._make_reader", return_value=mock_reader):
             _preflight._prime_reader_url("ok")  # must not raise
         assert "DUCKLAKE_READER_URL" not in os.environ
 
@@ -2619,7 +2621,7 @@ class TestUrlPriming:
         monkeypatch.delenv("DUCKLAKE_READER_URL", raising=False)
         mock_reader = MagicMock()
         mock_reader._reader_url.return_value = MagicMock()  # not a string
-        with patch("session_preflight._make_reader", return_value=mock_reader):
+        with patch("scripts.preflight._common._make_reader", return_value=mock_reader):
             _preflight._prime_reader_url("ok")
         assert "DUCKLAKE_READER_URL" not in os.environ
 
@@ -2682,18 +2684,18 @@ class TestVerbDedup:
             "reader_ok": {"ops_recommendations": True, "ops_decisions": True, "ops_priority_queue": True},
         }
         with (
-            patch("session_preflight._make_reader", return_value=counting_reader),
+            patch("scripts.preflight._common._make_reader", return_value=counting_reader),
             patch("scripts.sync_ops.warm_sync", return_value=warm_sync_rows),
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
             # Patch subprocess users by name so the verb-count assertions are not perturbed
             # by real git calls (tests/CLAUDE.md isolation: no real subprocess in unit tests).
-            patch("session_preflight._get_recent_main_commits", return_value=[]),
-            patch("session_preflight.run_log_sync", return_value={"status": "skipped", "files": []}),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.env_git._get_recent_main_commits", return_value=[]),
+            patch("scripts.preflight.env_git.run_log_sync", return_value={"status": "skipped", "files": []}),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):
@@ -2727,14 +2729,14 @@ class TestErrorPropagation:
         """sys.exit(1) from read_priority_queue (verb failure, creds ok) re-raises in main thread."""
         preflight_report = tmp_path / ".preflight-report.json"
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight.read_priority_queue", side_effect=SystemExit(1)),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.priority_queue.read_priority_queue", side_effect=SystemExit(1)),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "Phase 1.5",
                     "open_decisions_count": 0,
@@ -2743,7 +2745,7 @@ class TestErrorPropagation:
                     "recommendations_count": 0,
                 },
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):
@@ -2860,7 +2862,7 @@ class TestEndstateDrift:
         roadmap = self._make_old_roadmap_yaml()
         self._setup_tmpdir(tmp_path, context, roadmap)
 
-        with patch("session_preflight.ROOT", tmp_path):
+        with patch("scripts.preflight._common.ROOT", tmp_path):
             result = _preflight._check_endstate_drift()
 
         assert result["stale"] is False
@@ -2878,7 +2880,10 @@ class TestEndstateDrift:
         git_result.returncode = 0
         git_result.stdout = self._make_old_roadmap_yaml()
 
-        with patch("session_preflight.ROOT", tmp_path), patch("session_preflight.subprocess.run", return_value=git_result):
+        with (
+            patch("scripts.preflight._common.ROOT", tmp_path),
+            patch("session_preflight.subprocess.run", return_value=git_result),
+        ):
             result = _preflight._check_endstate_drift()
 
         assert result["stale"] is True
@@ -2892,7 +2897,7 @@ class TestEndstateDrift:
         roadmap = self._make_completed_roadmap_yaml()
         self._setup_tmpdir(tmp_path, context, roadmap)
 
-        with patch("session_preflight.ROOT", tmp_path):
+        with patch("scripts.preflight._common.ROOT", tmp_path):
             result = _preflight._check_endstate_drift()
 
         assert result["stale"] is False
@@ -3053,19 +3058,19 @@ class TestPreflightReportDisputeKey:
 
         with (
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
-            patch("session_preflight._fetch_ci_rca_dispute_recs", return_value=dispute_recs),
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("claude/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
-            patch("session_preflight.read_context_files", return_value={}),
+            patch("scripts.preflight.ci_rca_signals._fetch_ci_rca_dispute_recs", return_value=dispute_recs),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("claude/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache.count_recommendations", return_value=(0, 0, 0, [])),
+            patch("scripts.preflight.context_docs.read_context_files", return_value={}),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("builtins.print"),
         ):
             _preflight.main()

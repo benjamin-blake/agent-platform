@@ -1,0 +1,271 @@
+schema_version: 1
+slug: "sloc-platform-roadmap"
+intent: >-
+  Reduce scripts/platform_roadmap.py from 748 SLOC to a thin (~55 SLOC) facade by extracting three
+  cohesion-seam modules, executing the Decision 43 / 80 / 102 directed-growth program (rec-2414 umbrella)
+  so this platform-validation substrate drops below the 500-SLOC cap without a bare SLOC waiver and stays
+  maintainable for agent consumption (North Star NS.4). Pure behavior-preserving movement -- no schema,
+  behavior, or signature change.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-platform-roadmap.yaml
+phase: >-
+  Platform hardening / tech-debt reduction. Executes the Decision 43 (directed size reduction of
+  complexity-waivered files) + Decision 80 (decompose oversized SLOC-budget-registered files as separate
+  IMPLEMENTATION plans) + Decision 102 (budgets ratchet DOWN only) program for scripts/platform_roadmap.py,
+  under the rec-2414 umbrella. Mirrors the ratified Decision 104 validate.py decomposition precedent
+  (facade + one-concern-per-module). Not a roadmap tier_item; platform-internal tooling, no product-roadmap
+  phase. One of ~16 sibling SLOC-decomposition plans sharing branch claude/sloc-violations-refactor-p5svnl.
+scope:
+  - file: scripts/platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin facade (~55 SLOC, target <=450) that re-exports EVERY public symbol
+      (GateRuleEvaluator, GateRuleParser, all 12 Pydantic model classes, PlatformRoadmapState, load,
+      compute_followon_state, compute_state_dict) PLUS the test-imported private constant _GATE_HELPERS,
+      declares __all__, and RETAINS the existing `if __name__ == "__main__"` argparse CLI block BYTE-FOR-BYTE
+      (module stays a module, NOT a package, so `python -m scripts.platform_roadmap [path]` output and exit
+      codes are unchanged). Drops the now-unnecessary `# complexity-waiver: decision-43` header (no >CC20
+      function remains here). Defines no top-level class/def of its own.
+  - file: scripts/platform_roadmap_gate_rules.py
+    action: Create
+    purpose: >-
+      Gate-rule mini-language (one concern): _Token, _tokenize, _Verdict, GateRuleEvaluator, GateRuleParser,
+      plus the constants they own (_EVAL_TOKEN_RE, and _INACTIVE_FOR_TIER -- placed here as the lowest DAG
+      node that uses it; state imports it from here). Carries the `# complexity-waiver: decision-43` header
+      (its _eval_function is CC ~29). References PlatformRoadmapState ONLY under `if TYPE_CHECKING` (no
+      runtime import of state or models) so the runtime import graph stays acyclic. Bodies moved verbatim.
+  - file: scripts/platform_roadmap_models.py
+    action: Create
+    purpose: >-
+      Pydantic schema (one concern): GateHelper, DocumentMeta, ExitCriterion, TierItem, CandidateDecision,
+      CrossTierGate, OpenQuestion, KnownGap, NorthStarPrinciple, NorthStar, FoundationItem, RoadmapDocument
+      (incl. the _validate_graph model_validator), plus schema constants _SUPPORTED_VERSIONS, _OPS_DECISIONS_RE,
+      _TIER_SHORTCUT_RE, _GATE_HELPERS. Imports GateRuleParser from platform_roadmap_gate_rules. Carries the
+      `# complexity-waiver: decision-43` header (_validate_graph is CC ~53). extra="forbid" model_config
+      preserved verbatim -- unknown-field YAML must still fail at load. No I/O in this module.
+  - file: scripts/platform_roadmap_state.py
+    action: Create
+    purpose: >-
+      Loader + eligibility/graduation computation (one concern): load, compute_followon_state,
+      compute_state_dict, PlatformRoadmapState, helpers _item_dict / _pending_gating_cds_for_item, plus
+      constants _CANONICAL_TIER_ORDER, _CD_REF_RE. Imports models (TierItem, RoadmapDocument, _TIER_SHORTCUT_RE)
+      and GateRuleEvaluator + _INACTIVE_FOR_TIER from platform_roadmap_gate_rules. All functions <=CC20 so NO
+      waiver header. Maps to the ALREADY-EXISTING tests/test_platform_roadmap_state.py. Bodies moved verbatim.
+  - file: tests/test_platform_roadmap_gate_rules.py
+    action: Create
+    purpose: >-
+      New suite covering scripts/platform_roadmap_gate_rules.py to per-file 100%. Receives the relocated
+      TestGateRuleGrammar and TestGateRuleEvaluator classes plus any focused gate-evaluation cases needed so
+      gate_rules.py coverage does NOT depend on TestLiveGateEvaluations (which lives in the state suite).
+      Carries its own copy of the small _BASE_DOC/_doc/_item/_cd/_state_from_doc fixture helpers (the
+      established per-file convention here).
+  - file: tests/test_platform_roadmap_models.py
+    action: Create
+    purpose: >-
+      New suite covering scripts/platform_roadmap_models.py to per-file 100%. Receives the relocated model /
+      validation classes: TestStructuralValidation, TestIdUniqueness, TestDanglingDependsOn, TestCycleDetection,
+      TestFiledViaUnion, TestCD25SchemaAmendments, TestDeferredPostMvp, TestUserActionRequired,
+      TestExitCriterionNormalizer, TestExitCriteriaIntegrity, TestOpenQuestionKnownGapLifecycle. Own fixture-helper copy.
+  - file: tests/test_platform_roadmap_state.py
+    action: Modify
+    purpose: >-
+      Extend the existing state suite (already maps to scripts/platform_roadmap_state.py) with the relocated
+      loader/state/CD-lifecycle classes: TestLoad, TestPlatformRoadmapState, TestBlockedOnCd, TestRatifiableCds,
+      TestRealizedButPendingCds, TestLiveGateEvaluations, TestComputeFollowonState, TestCompletionBlockedOnCd.
+      Bring in the fixture helpers/imports those classes need (_cd, _state_from_doc, _LIVE_ROADMAP,
+      _slim_roadmap_state) with a single consolidated import block (ruff-format duplicate-import gotcha). Must
+      reach per-file 100% on state.py.
+  - file: tests/test_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Becomes the facade + CLI test. Remove the classes relocated to the three module suites; retain/add
+      (1) a facade-completeness + import-equivalence test asserting the full public surface + _GATE_HELPERS
+      import from scripts.platform_roadmap and are identity-equal to the submodule objects; (2) a
+      compute_state_dict patch-interception test proving patch("scripts.platform_roadmap.compute_state_dict")
+      is observed; (3) a CLI test via runpy.run_module("scripts.platform_roadmap", run_name="__main__") with
+      monkeypatched sys.argv, asserting the exact PASS line + exit 0 (covers the __main__ body). Run
+      `ruff check --fix` to clear F401 after deletions. Must reach per-file 100% on the facade.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Regenerated by `bin/venv-python -m scripts.validate --update-sloc-budgets` (Decision 102), NEVER
+      hand-edited. The scripts/platform_roadmap.py: 752 entry auto-drops (file now <=500) and no
+      scripts/platform_roadmap_*.py entry is seeded (all new modules <=500). Diff assertion is SCOPED to that
+      removal/absence, NOT full-file equality -- ~16 sibling decompositions share this file on this branch.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - scripts/platform_roadmap.py drops to <=500 SLOC (target <=450); each new scripts/platform_roadmap_*.py module is <=500 SLOC (target <=400), measured by the ratchet's own formula (non-blank, non-#-comment lines).
+  - Every public symbol AND the private _GATE_HELPERS remain importable from scripts.platform_roadmap and are identity-equal to their submodule definitions; the sole external patch site patch("session_preflight.platform_roadmap.compute_state_dict") still intercepts (facade attribute access).
+  - "`python -m scripts.platform_roadmap docs/ROADMAP-PLATFORM.yaml` prints exactly `PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema.` and exits 0 -- CLI byte-stable; the /orient egress-ban semantics are unaffected."
+  - All existing platform_roadmap tests pass unchanged in assertion semantics after relocation; the four non-test consumers (session_preflight, product_roadmap, validate_platform_roadmap check, validate_candidate_decision_ratification check) and the external test importers resolve through the facade with zero edits to them.
+  - Per-file line coverage is 100% for each of the four modules via its map_source_to_test-mapped test file, and each module's coverage comes from its OWN mapped file (the checker runs only the mapped file per module).
+  - validate_cc_limits passes with the decision-43 waiver header present on models.py and gate_rules.py (their >CC20 functions) and absent elsewhere; the facade contains no top-level class/def definition.
+  - No import cycle -- all four modules import cleanly in any order; gate_rules references PlatformRoadmapState only under TYPE_CHECKING; mypy and import-linter contracts pass.
+  - config/sloc_budgets.yaml loses its scripts/platform_roadmap.py entry and gains NO scripts/platform_roadmap_*.py entry (scoped grep assertion; full-file equality is NOT asserted because sibling plans share the file).
+  - "`bin/venv-python -m scripts.validate --pre` exits 0 (content checks green; a wall-clock fast-tier budget breach is pre-existing env drift, not a content failure)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Relocated module suites + facade suite + all external consumer suites pass with unchanged assertion semantics.
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py tests/test_platform_roadmap_gate_rules.py tests/test_platform_roadmap_models.py tests/test_platform_roadmap_state.py tests/test_session_preflight_platform_roadmap.py tests/test_session_preflight_product_roadmap.py tests/test_implement_skill_decomposition_hints.py tests/test_product_roadmap.py -q
+    expected: All pass; no collection/import errors; exit 0.
+    fix_if: A `from scripts.platform_roadmap import X` raises ImportError -> the facade omitted symbol X; a relocated test fails -> assertion semantics were changed during the move (must be verbatim).
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: Facade completeness + import-equivalence + compute_state_dict patch-interception + CLI-body coverage.
+    command: bin/venv-python -m pytest tests/test_platform_roadmap.py -k "facade or reexport or equivalence or interception or cli or main" -q
+    expected: The full public surface + _GATE_HELPERS import from scripts.platform_roadmap and are identity-equal to the submodule objects; patching scripts.platform_roadmap.compute_state_dict is observed; the runpy __main__ test asserts the exact PASS line + exit 0; exit 0.
+    fix_if: A symbol is missing or not identity-equal -> facade re-export omission; interception fails -> compute_state_dict not exposed as a facade module attribute; CLI test fails -> the __main__ block was altered.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: CLI byte-stability end-to-end against the live ROADMAP file (behavior-equivalence proof).
+    command: 'PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); out=$($PY -m scripts.platform_roadmap docs/ROADMAP-PLATFORM.yaml); rc=$?; printf "%s\n" "$out"; test "$out" = "PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema." && test $rc -eq 0'
+    expected: stdout is exactly the PASS line and exit code is 0 (identical to pre-refactor output captured this session).
+    fix_if: Output or exit code differs -> the CLI block changed or load() moved without a facade re-export; restore verbatim.
+    hermetic: true
+  - step: 4
+    phase: pre-deploy
+    action: SLOC assertion -- target file under the cap and no new module over it (ratchet formula).
+    command: |-
+      bin/venv-python -c "import pathlib; f=lambda p:len([l for l in pathlib.Path(p).read_text(encoding='utf-8').splitlines() if l.strip() and not l.strip().startswith('#')]); fac=f('scripts/platform_roadmap.py'); mods={m:f('scripts/'+m) for m in ['platform_roadmap_gate_rules.py','platform_roadmap_models.py','platform_roadmap_state.py']}; print('facade',fac,'modules',mods); assert fac<=500, ('facade',fac); assert all(v<=500 for v in mods.values()), mods"
+    expected: facade SLOC <=500 (target <=450); each new module <=500 (target <=400); prints the counts.
+    fix_if: facade >500 -> extract more; a module >500 -> split that concern finer.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: Per-file test existence + 100% line coverage via the map_source_to_test-mapped test file for each module.
+    command: bin/venv-python scripts/test_coverage_checker.py --check-tests --check-coverage --files scripts/platform_roadmap.py scripts/platform_roadmap_gate_rules.py scripts/platform_roadmap_models.py scripts/platform_roadmap_state.py
+    expected: all four source files have a mapped test file and report 100% per-file line coverage; exit 0.
+    fix_if: "<100% -> add focused tests to that module's MAPPED test file (coverage must come from the mapped file; the checker runs only that file per module -- e.g. gate_rules.py cannot rely on TestLiveGateEvaluations in the state suite); missing test file -> module/test naming mismatch."
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: CC gate + waiver-header placement + no-residual-definition sweep on the facade.
+    command: |-
+      bin/venv-python -c "from scripts.checks.sloc.cc_limits import validate_cc_limits; f=[]; validate_cc_limits(f); print('cc_fail', f); raise SystemExit(1 if f else 0)" && grep -qE '#[[:space:]]*complexity-waiver:[[:space:]]*decision-43' scripts/platform_roadmap_models.py && grep -qE '#[[:space:]]*complexity-waiver:[[:space:]]*decision-43' scripts/platform_roadmap_gate_rules.py && ! grep -qnE '^(class |def )' scripts/platform_roadmap.py
+    expected: validate_cc_limits reports zero CC>20 violations; models.py and gate_rules.py carry the decision-43 waiver header; the facade defines no top-level class/def (only re-exports + the inline __main__ CLI); exit 0.
+    fix_if: A CC violation -> add the waiver header to the offending new module; a residual def/class in the facade -> move its body to the owning submodule and leave only the re-export.
+    hermetic: false
+  - step: 7
+    phase: pre-deploy
+    action: Acyclic runtime import graph -- import all four modules in dependency-agnostic order.
+    command: bin/venv-python -c "import importlib; [importlib.import_module(m) for m in ['scripts.platform_roadmap_gate_rules','scripts.platform_roadmap_models','scripts.platform_roadmap_state','scripts.platform_roadmap']]; print('import ok, no cycle')"
+    expected: all four import without ImportError / circular-import; prints 'import ok, no cycle'.
+    fix_if: A circular import -> a runtime import edge violates the gate_rules<-models<-state<-facade DAG; gate_rules must reference PlatformRoadmapState only under TYPE_CHECKING.
+    hermetic: false
+  - step: 8
+    phase: pre-deploy
+    action: Budget re-point (LAST implementation step) + SCOPED diff assertion (never full-file equality).
+    command: |-
+      bin/venv-python -m scripts.validate --update-sloc-budgets && ! grep -qE '^[[:space:]]*scripts/platform_roadmap\.py:' config/sloc_budgets.yaml && ! grep -qE '^[[:space:]]*scripts/platform_roadmap_(gate_rules|models|state)\.py:' config/sloc_budgets.yaml && echo "budget ok -- entry removed, none seeded"
+    expected: after regeneration the scripts/platform_roadmap.py entry is removed and no scripts/platform_roadmap_*.py entry is present; exit 0.
+    fix_if: platform_roadmap.py entry remains -> facade still >500 (extract more); a platform_roadmap_*.py entry appears -> that module >500 (split finer). Do not hand-edit the file.
+    hermetic: false
+  - step: 9
+    phase: pre-deploy
+    action: Fast-tier presubmit gate green (ruff, mypy, import contracts, diff-aware pytest, sloc/cc, coverage, roadmap schema).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0 (all content checks pass).
+    fix_if: mypy forward-ref error -> ensure the TYPE_CHECKING import in gate_rules; import-linter cycle -> fix the DAG; roadmap schema check regressed -> the models move altered validation (must not happen). A wall-clock fast-tier budget breach (pytest_diff phase) may be treated as pre-existing env drift per the preflight budget_bypass_alert ONLY after confirming it reproduces on a clean pre-change checkout and is not amplified by the two new test files' runtime; otherwise investigate as a content failure.
+    hermetic: false
+constraints:
+  - Behavior preservation is ABSOLUTE -- pure code movement. No feature work, no bug fixes, no schema/signature/CLI changes. extra="forbid" on TierItem/CandidateDecision/all models stays verbatim (unknown-field YAML must still fail at load, covered by tests). Move bodies verbatim; only add per-module imports and (where needed) the decision-43 waiver header.
+  - Import stability -- scripts/platform_roadmap.py stays a thin facade re-exporting every public symbol AND the test-imported private _GATE_HELPERS; the `python -m scripts.platform_roadmap [path]` CLI (default docs/ROADMAP-PLATFORM.yaml, PASS/exit 0, FAIL/exit 1) stays byte-stable. The module stays a MODULE (not converted to a package) so the CLI entrypoint and ~40 doc/plan references keep working.
+  - Namespace-migration discipline (tests/CLAUDE.md) -- there is exactly ONE external patch site, patch("session_preflight.platform_roadmap.compute_state_dict") at tests/test_session_preflight_product_roadmap.py:195; it references session_preflight's attribute binding and is UNAFFECTED by the internal split (no patch-string rewrite needed); VP step 1 runs that suite as the direct exercise. Test RELOCATION must preserve assertion semantics; use one consolidated import block per test file (ruff-format duplicate-import gotcha) and run `ruff check --fix` for F401 after moving classes out.
+  - "Decision 43 -- CC<=20 per function; the `# complexity-waiver: decision-43` header travels to models.py (_validate_graph, CC ~53) and gate_rules.py (_eval_function, CC ~29). The waiver waives CC only, not SLOC (Decision 102); every new module is <=500 SLOC so no SLOC waiver is used."
+  - "Hermetic-replay fleet budget -- validate_vp_replay (pr-validate) independently re-executes every phase pre-deploy + hermetic true VP step of diff-included plans ON THE CURRENT TREE, and the ~16 sibling plans share a 20-step/120s replay budget, so this plan marks EXACTLY ONE step hermetic -- step 3, the CLI byte-stability invariant, which is a STABLE INVARIANT green both pre- and post-refactor (~0.7s measured pre-refactor this session). All other steps stay hermetic false; the implementing agent still executes the FULL VP per the Live Verification Protocol (replay is only the independent spot-check). Do NOT re-mark future-state steps (4, 6, 7, 8) hermetic -- they reference modules that do not exist on the pre-implementation tree and redden pr-validate."
+  - Decision 102 -- config/sloc_budgets.yaml ratchets DOWN only; re-point EXCLUSIVELY via `--update-sloc-budgets`, never a hand-edit; assert the scoped removal/absence, not full-file equality (shared branch).
+  - Decision 55 -- no rescue agents or workaround loops. On an unrecoverable verification failure, stop and RCA; never paper a broken equivalence over with a skip or a coverage pragma dodge.
+  - Decision 101 -- public repo. No AWS account IDs/ARNs, ExternalIds, credentials, or internal hostnames (none are introduced; this is pure roadmap-schema code that touches no ops/AWS path). No emojis; ASCII hyphens only; line length 127; type hints; default no comments.
+  - Decision 86 -- no new standing prose-architecture doc; rationale for this decomposition lives in this plan + the cited Decisions, not a docs/INTENT-*.md.
+  - "Decision 93 preservation -- the deferred_post_mvp no-live-dependency invariant (check (f) in _validate_graph -- no not_started/in_progress item may depend_on a deferred_post_mvp item) and its Decision-55 fail-loud style MUST survive the verbatim move to models.py; TestDeferredPostMvp (relocated to the models suite) is the guard."
+  - Decision 114 preservation -- OpenQuestion/KnownGap status + resolution_ref lifecycle fields and their (i)/(j) validators ride on those model classes moving to models.py; keep verbatim (TestOpenQuestionKnownGapLifecycle relocated to the models suite guards them).
+  - Do NOT couple scripts/product_roadmap_schema.py to the new gate_rules module -- it deliberately keeps its OWN GateRuleParser copy ("do NOT import from platform_roadmap"); leave it untouched (it is not in scope).
+  - Multi-plan coordination -- one of ~16 SLOC-decomposition plans on branch claude/sloc-violations-refactor-p5svnl. Touch ONLY the nine scope files (target facade, three new modules, four test files, and the tool-regenerated budgets file). Do NOT touch scripts/session_preflight.py (a sibling planner is decomposing it) -- read-only; the facade preserves compute_state_dict so that work is unaffected.
+context:
+  - >-
+    Root cause -- scripts/platform_roadmap.py is 748 SLOC (budget 752, ~4 lines headroom) and carries a bare
+    decision-43 complexity waiver. It has three clean cohesion seams: the gate-rule mini-language
+    (tokenizer + evaluator + parser, 215 SLOC), the Pydantic schema (all models + _validate_graph, 233 SLOC),
+    and the loader + eligibility/graduation computation (PlatformRoadmapState + module helpers, 279 SLOC).
+    Splitting on those seams and re-exporting through a facade drops the file to ~55 SLOC and removes the waiver.
+  - >-
+    Layout choice -- FLAT sibling modules under scripts/ (scripts/platform_roadmap_{gate_rules,models,state}.py),
+    NOT a nested scripts/roadmap/ package. Reason: scripts/test_coverage_checker.py map_source_to_test maps
+    scripts/*.py (depth 2) to tests/test_<name>.py automatically, but returns None (UNMAPPED -> silent
+    coverage-gate hole) for any nested scripts/<pkg>/*.py that is not scripts/checks/**. Flat modules need zero
+    tooling change, and scripts/platform_roadmap_state.py aligns with the ALREADY-EXISTING
+    tests/test_platform_roadmap_state.py (which already tests PlatformRoadmapState + compute_state_dict). A
+    scripts/roadmap/ name would also be ambiguous against the sibling scripts/product_roadmap.py.
+  - >-
+    Runtime DAG (acyclic): gate_rules <- models (imports GateRuleParser) <- state (imports models +
+    GateRuleEvaluator) <- facade. gate_rules references PlatformRoadmapState only under `if TYPE_CHECKING`, so
+    there is no runtime cycle even though state depends on gate_rules. All external imports (4 non-test + 5 test
+    consumers) already hit scripts.platform_roadmap, so the facade re-export satisfies them with zero edits.
+  - >-
+    Consumer inventory (fresh-context sweep + critique correction): importing files -- non-test: session_preflight.py
+    (attr `platform_roadmap.compute_state_dict`), product_roadmap.py (`load`), and the two roadmap checks
+    validate_platform_roadmap / validate_candidate_decision_ratification (`load`, `ExitCriterion`); test:
+    test_platform_roadmap.py (12 symbols incl. _GATE_HELPERS), test_platform_roadmap_state.py,
+    test_implement_skill_decomposition_hints.py, test_session_preflight_platform_roadmap.py, test_product_roadmap.py.
+    Exactly ONE patch site -- patch("session_preflight.platform_roadmap.compute_state_dict") -- lives in
+    tests/test_session_preflight_product_roadmap.py:195 (a patcher, not an importer; included in VP step 1);
+    it survives untouched because session_preflight resolves the facade attribute at call time. The implement
+    skill's decomposition_hints reads are about PLAN-yaml parent/child plans, NOT this module -- unrelated.
+  - >-
+    CLI -- the module is a CLI (`python -m scripts.platform_roadmap [path]`), referenced by ~40 docs/plans and
+    explicitly BANNED for egress reasons inside /orient (Decision 88), with ZERO CI/shell/Make invocations.
+    Kept byte-stable by leaving the `if __name__ == "__main__"` block verbatim in the facade module. Current
+    output captured this session: `PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema.` (exit 0).
+  - >-
+    Coverage partition risk (main implementation subtlety) -- the coverage checker runs ONLY each module's
+    mapped test file for that module, so a test that exercises another module's code (e.g. TestLiveGateEvaluations
+    calls state.evaluate_gates which drives GateRuleEvaluator) does not count toward the other module. Each module
+    must reach 100% from its OWN mapped file; add focused gate-rule tests to test_platform_roadmap_gate_rules.py
+    if any GateRuleEvaluator branch is otherwise only hit from the state suite. The current CLI __main__ block is
+    presently uncovered -> add a runpy.run_module(run_name="__main__") test in the facade suite.
+  - >-
+    rec-2414 (umbrella "Break down SLOC-budget-registered oversized files below 500 SLOC") is CITED, not bundled:
+    its acceptance (`grep -q '^budgets: {}$'`) only passes when the ENTIRE registry is empty, which a single-file
+    decomposition does not achieve. Out-of-scope open code-review recs against scripts/platform_roadmap.py --
+    rec-2056 (add OpenQuestion.resolved field), rec-2343 (_parse_or reason string), rec-2344 (_by_id accessor),
+    rec-2393 (to_preflight_dict early-return), rec-2468 (ratifiable_cds comment), rec-2391 (test assertion) -- are
+    NOT touched (each is a behavior/schema/comment/test change, out of bounds for a behavior-preserving move).
+    FLAG for the orchestrator: those recs' `file`/acceptance greps target scripts/platform_roadmap.py and will
+    need repointing to the new submodule after this split (a rec-curation follow-up, not this plan).
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight), no scope-file divergence; Main Divergence
+    Assessment is a no-op. No ci-rca recs open (no HARD BLOCK). Not Lambda-packaged (compute_affected_artifacts []).
+    Tier Item Freshness Gate skipped -- no tier_item is targeted (tech-debt under rec-2414).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (83 of 83 decisions triaged, no truncation). CITE: Decision 104 (validate.py decomposition precedent -- facade re-export + patch-migration caveat), Decision 102 (SLOC ratchet / --update-sloc-budgets), Decision 43 (500-cap + CC<=20 + decision-43 waiver), Decision 80 (decompose oversized file tool-free as IMPLEMENTATION; thin CLI facade), Decision 93 (deferred_post_mvp no-live-dep invariant in _validate_graph -- preserve), Decision 86 (no new prose docs). RELATED (noted, not must-cite): Decision 114, Decision 48 (V2 tier authority), Decision 79 (not Lambda-packaged), Decision 90/110 (loader consumed by skills each session), Decision 55, Decision 67 (IMPLEMENTATION correct), Decision 84/88 (DuckLake/ops boundary NOT implicated -- read-only)."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round (3 non-blocking refinements folded in: patch-site file corrected to tests/test_session_preflight_product_roadmap.py and added to VP step 1; models-suite coverage-attribution note; VP step 9 clean-checkout confirmation before attributing a timing breach to env drift). Post-critique mechanical CI fix: hermetic flags reduced to the single stable-invariant step 3 per the fleet validate_vp_replay budget -- no scope/architecture/acceptance change."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant sections read (43, 80, 102, 101, 55, 86, 93, 114; precedent 104)
+  - All nine scope files located and readable (three new modules + two new test files are Create)
+  - Acceptance criteria understood and verifiable
+  - Coverage partition understood -- each module must reach per-file 100% from its OWN mapped test file
+  - Pre-refactor CLI output captured for byte-equivalence (PASS line + exit 0)
+execution_steps:
+  - "Create scripts/platform_roadmap_gate_rules.py -- move _Token, _tokenize, _Verdict, GateRuleEvaluator, GateRuleParser and constants _EVAL_TOKEN_RE, _INACTIVE_FOR_TIER verbatim. First line: `# complexity-waiver: decision-43`; then `from __future__ import annotations`, imports (re, datetime/timezone), and `if TYPE_CHECKING: from scripts.platform_roadmap_state import PlatformRoadmapState`. No body edits."
+  - "Create scripts/platform_roadmap_models.py -- move all 12 model classes + RoadmapDocument (_validate_graph) and constants _SUPPORTED_VERSIONS, _OPS_DECISIONS_RE, _TIER_SHORTCUT_RE, _GATE_HELPERS verbatim. First line `# complexity-waiver: decision-43`; import GateRuleParser from scripts.platform_roadmap_gate_rules; imports (re, typing, pydantic). Preserve extra='forbid' exactly."
+  - "Create scripts/platform_roadmap_state.py -- move _item_dict, _pending_gating_cds_for_item, load, compute_followon_state, PlatformRoadmapState, compute_state_dict and constants _CANONICAL_TIER_ORDER, _CD_REF_RE verbatim. Import TierItem/RoadmapDocument/_TIER_SHORTCUT_RE from scripts.platform_roadmap_models and GateRuleEvaluator/_INACTIVE_FOR_TIER from scripts.platform_roadmap_gate_rules; imports (datetime, pathlib, typing, yaml). No waiver header (all funcs <=CC20)."
+  - "Collapse scripts/platform_roadmap.py to the facade -- keep the module docstring; re-export every public symbol from the three submodules plus _GATE_HELPERS; add __all__; RETAIN the `if __name__ == \"__main__\"` argparse CLI block verbatim (imports argparse, sys, Path; calls the re-exported load). Remove the old decision-43 header. Ensure no top-level class/def remains."
+  - "Relocate gate-rule tests (TestGateRuleGrammar, TestGateRuleEvaluator) from tests/test_platform_roadmap.py into new tests/test_platform_roadmap_gate_rules.py with a local fixture-helper copy; add focused GateRuleEvaluator/GateRuleParser cases if needed for standalone 100% coverage of gate_rules.py."
+  - "Relocate model/validation tests (TestStructuralValidation, TestIdUniqueness, TestDanglingDependsOn, TestCycleDetection, TestFiledViaUnion, TestCD25SchemaAmendments, TestDeferredPostMvp, TestUserActionRequired, TestExitCriterionNormalizer, TestExitCriteriaIntegrity, TestOpenQuestionKnownGapLifecycle) into new tests/test_platform_roadmap_models.py with a local fixture-helper copy. Coverage attribution: relocated cases that reach _validate_graph via load() attribute their coverage to state.py, so where a models.py branch is only hit that way, add focused RoadmapDocument.model_validate(...) cases in this suite."
+  - "Relocate loader/state/CD-lifecycle tests (TestLoad, TestPlatformRoadmapState, TestBlockedOnCd, TestRatifiableCds, TestRealizedButPendingCds, TestLiveGateEvaluations, TestComputeFollowonState, TestCompletionBlockedOnCd) from tests/test_platform_roadmap.py into the existing tests/test_platform_roadmap_state.py; consolidate imports into one block; bring _cd/_state_from_doc/_LIVE_ROADMAP/_slim_roadmap_state as needed."
+  - "Reduce tests/test_platform_roadmap.py to the facade suite -- add the facade-completeness/import-equivalence test, the compute_state_dict patch-interception test, and the runpy __main__ CLI test; run `ruff check --fix` to clear F401 from removed classes."
+  - "Execute the Verification Plan steps 1-7 in order; loop until green; on an unrecoverable failure stop and RCA (Decision 55) -- do not skip or pragma-dodge."
+  - "Run `bin/venv-python -m scripts.validate --update-sloc-budgets` as the LAST implementation step (VP step 8), then assert the scoped budgets diff (platform_roadmap.py entry removed, no new module seeded)."
+  - "Run VP step 9 (`bin/venv-python -m scripts.validate --pre`) and confirm exit 0 (content-green)."
+  - "Report -- final facade SLOC, per-module SLOC, per-file coverage results, CC/waiver status, CLI byte-equivalence result, and confirmation that all nine consumers resolve through the facade."
+rollback: >-
+  Pure refactor on a feature branch; if the behavior-equivalence, coverage, or import-cycle checks cannot be
+  made green, abandon the branch (no merge) -- nothing is deployed. If merged and a regression surfaces, revert
+  the squash commit: the facade thinning, the three new modules, the test relocation, and the budgets
+  regeneration land atomically in one PR, so a single revert restores the pre-split module.
