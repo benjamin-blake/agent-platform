@@ -32,6 +32,13 @@
 # the writer is the sole ops_* write authority, the reader the sole read authority. ops_data_portal
 # transits them unconditionally (sole backend, Decision 84 I-1); the caller surface is unchanged. This
 # apply widens both roles to the production ducklake/ data path + flips DUCKLAKE_DATA_PATH smoke->prod.
+#
+# 2026-07-10 recovery note (rec-2646/rec-2647/rec-2652): this file's CODE/INFRA COUPLING comment above
+# is not theoretical -- it caused a live gated-apply failure the same day (non-reproducible package
+# rebuild -> phantom aws_lambda_layer_version.ducklake_deps replace -> guard BLOCKED -> workflow_dispatch
+# has no gated-apply path, since that job only wires on push). This comment-only commit exists solely to
+# route a push event through CD so the pending gated-apply approval can clear the resulting red
+# convergence record; it is not a substitute for the P2 physical decoupling tracked in rec-2646.
 
 locals {
   ducklake_smoke_data_path   = "s3://${aws_s3_bucket.data_lake.bucket}/ducklake-neon-smoke/"
