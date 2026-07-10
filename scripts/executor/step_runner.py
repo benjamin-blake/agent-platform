@@ -3,13 +3,22 @@
 
 Handles per-step file-context gathering, LLM calls, acceptance command
 execution, git commits, and step-level telemetry writes.
+
+This module is a thin facade (Decision 102/104 facade mechanism, T-1 SLOC
+decomposition): context gathering lives in step_context.py, acceptance and
+verification command running in step_acceptance.py, and commit/scope
+enforcement in step_commit.py. Every symbol from those siblings is
+re-exported here so `scripts.executor.step_runner.<name>` and
+`from scripts.executor.step_runner import <name>` keep resolving for every
+existing importer and test patch with zero migration. implement_step and all
+shared module state stay here because they are the interception surface the
+siblings route back through via a function-local `import
+scripts.executor.step_runner as _sr` alias.
 """
 
 import json
 import logging
 import os
-import re
-import shutil
 import subprocess
 import sys
 import time
@@ -27,7 +36,6 @@ from scripts.s3_log_store import append_jsonl, get_backend
 logger = logging.getLogger(__name__)
 
 STEP_TELEMETRY_JSONL = Path("logs/.execution-step-telemetry.jsonl")
-_LAST_ACCEPTANCE_OUTPUT = ""
 
 
 class StepOutcome(Enum):
@@ -65,71 +73,6 @@ _EXECUTOR_ACC_VARS = frozenset(
         "CI_FIX_RETRIES",
     ]
 )
-
-# ---------------------------------------------------------------------------
-# Known Gotcha injection
-# ---------------------------------------------------------------------------
-
-# Maps file-path prefixes (or substrings) to relevant Known Gotcha strings.
-# Keys are matched as prefixes first, then as substrings, against the step's
-# target file path. Entries are ordered from most-specific to least-specific.
-_GOTCHA_MAP: dict[str, list[str]] = {
-    "scripts/executor/": [
-        "replace_string_in_file context boundary: Include 3-5 lines of unchanged code before "
-        "and after target text. Weak boundaries cause wrong-occurrence matches or silent formatting changes.",
-        "ruff E501 and multi-line section builders: Define intermediate _header, _footer, _section "
-        "variables for long f-strings to stay under 127 chars.",
-        "Executor self-modification boundary: Never modify executor machinery files from within the executor.",
-    ],
-    "terraform/": [
-        "Terraform File-Optional Operations: Always wrap filemd5() and file() calls on optional "
-        "artifacts with try(). BAD: source_code_hash = filemd5('build/lambda.zip'). "
-        "GOOD: source_code_hash = try(filemd5('build/lambda.zip'), md5(file('module_file.tf'))).",
-        "Lambda tag values must use ASCII-safe characters: use plain ASCII hyphens (-) not em dashes.",
-    ],
-    "tests/": [
-        "Test Isolation Patterns: Never spawn pytest tests/ from a script any test imports -- "
-        "recursion risk. Always mock both subprocess.Popen AND subprocess.run for subprocess-spawning functions.",
-        "ruff format duplicate import consolidation: Never split the same module imports across two "
-        "blocks -- ruff silently drops symbols from the second block during format.",
-        "postflight.py function mock exhaustion: Count total subprocess.run call sequence and update "
-        "mock side_effect counts in tests/test_execute_recommendation.py when adding new calls.",
-    ],
-    "src/data/handlers/": [
-        "Import Safety Patterns: Never raise exceptions during module import -- breaks pytest collection in CI. "
-        "Defer validation to explicit validate() calls.",
-        "Lambda deployment pipeline: Any plan modifying Lambda-packaged files must include "
-        "build and deploy steps via scripts/build_lambda.py.",
-    ],
-}
-
-_GOTCHA_INJECTION_MAX_CHARS = 2000
-
-
-def _get_relevant_gotchas(file_path: str) -> str:
-    """Return a string of relevant Known Gotchas for the given file path.
-
-    Matches entries in ``_GOTCHA_MAP`` by prefix (checked first) then
-    substring. Returns an empty string when no match is found.
-    """
-    if not file_path:
-        return ""
-
-    matched: list[str] = []
-    for key, gotchas in _GOTCHA_MAP.items():
-        if file_path.startswith(key) or key in file_path:
-            matched.extend(gotchas)
-
-    if not matched:
-        return ""
-
-    lines = ["## Relevant Known Gotchas"]
-    for item in matched:
-        lines.append(f"- {item}")
-    result = "\n".join(lines)
-    if len(result) > _GOTCHA_INJECTION_MAX_CHARS:
-        result = result[:_GOTCHA_INJECTION_MAX_CHARS] + "\n# ... (truncated)"
-    return result
 
 
 def get_implementation_model(effort: str, file: str = "", action: str = "") -> str | None:
@@ -179,201 +122,15 @@ _PROJECT_PYTHON: str = str(_VENV_PYTHON) if _VENV_PYTHON.exists() else sys.execu
 
 
 # ---------------------------------------------------------------------------
-# Context gathering
+# Context gathering (extracted to scripts/executor/step_context.py)
+# Re-exports preserved for backward compatibility.
 # ---------------------------------------------------------------------------
-
-
-def gather_step_context(step: dict, max_chars: int = 28000, recommendation_target_file: str = "") -> dict:
-    """Gather file context for a step to inject into the implementation prompt.
-
-    For action == 'modify': reads step['file'] if it exists.
-        For large files (> _LARGE_FILE_THRESHOLD lines), attempts to extract
-        a targeted function region based on context hints in step['title']
-        or step['description']. The targeted region includes: imports section
-        (first 60 lines) + 50 lines before target function + entire function body.
-    For action == 'create': finds the most recently modified file with the same
-        extension in the same directory to use as a coding pattern.
-    Always looks for a corresponding test file at tests/test_{stem}.py.
-
-    All content is capped at max_chars total (summed across all three keys).
-    Oversized content is truncated with an '# ... (N lines omitted)' marker.
-
-    Args:
-        step: PlanStep dict with keys 'action' and 'file'.
-        max_chars: Maximum total characters across all returned content strings.
-        recommendation_target_file: Optional fallback file path when step has
-            no 'file' field. Used to provide context for the recommendation's
-            target file.
-
-    Returns:
-        dict with keys: file_content, test_content, pattern_content.
-        Each value is a string (empty string if not found or not applicable).
-    """
-    result: dict[str, str] = {"file_content": "", "test_content": "", "pattern_content": ""}
-
-    file_path_str: str = step.get("file", "") or recommendation_target_file
-    if not file_path_str:
-        return result
-
-    file_path = Path(file_path_str)
-    action: str = step.get("action", "").lower()
-
-    def _read_truncated(path: Path, budget: int) -> str:
-        try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return ""
-        if len(content) <= budget:
-            return content
-        truncated = content[:budget]
-        lines_omitted = content[budget:].count("\n")
-        return truncated + f"\n# ... ({lines_omitted} lines omitted)\n"
-
-    def _extract_targeted_function_region(path: Path, context_hint: str, budget: int) -> str:
-        """Extract targeted function region from a large file using context hints.
-
-        Scans context_hint for function name patterns, then extracts:
-        - Imports section (first 60 lines)
-        - 50 lines before target function definition
-        - Entire function body (until next def or class at same indentation)
-
-        Returns empty string if no function hint found or extraction fails.
-        """
-        try:
-            full_content = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return ""
-
-        lines = full_content.splitlines(keepends=True)
-
-        # Extract function name from context_hint
-        # Pattern: "modify function_name" or "update function_name" or just "function_name"
-        # Use word boundary after optional verb to prevent matching irrelevant words
-        func_pattern = r"\b(?:modify|update|enhance|add|change|fix)\s+([a-zA-Z_][a-zA-Z0-9_]*)\b"
-        matches = re.findall(func_pattern, context_hint.lower())
-        # Also try matching standalone function-like identifiers if no verb match
-        if not matches:
-            func_pattern = r"\b([a-zA-Z_][a-zA-Z0-9_]{3,})\b"
-            matches = re.findall(func_pattern, context_hint.lower())
-        if not matches:
-            return ""
-
-        # Try each extracted name as a potential function name
-        for func_name in matches:
-            # Find the function definition line
-            # Use case-insensitive matching to support CamelCase function names
-            func_def_pattern = re.compile(rf"^\s*def\s+{re.escape(func_name)}\s*\(", re.IGNORECASE)
-            insertion_point = -1
-
-            for i, line in enumerate(lines):
-                if func_def_pattern.match(line):
-                    insertion_point = i
-                    break
-
-            if insertion_point == -1:
-                continue  # Try next function name candidate
-
-            # Extract function body by finding the end of the function
-            # Normalize indentation: count leading whitespace in visual columns
-            # by expanding tabs to spaces (Python default: 8 spaces per tab)
-            def get_indent_level(line: str) -> int:
-                return len(line.expandtabs(8)) - len(line.expandtabs(8).lstrip())
-
-            func_indent = get_indent_level(lines[insertion_point])
-            func_end = insertion_point + 1
-
-            for j in range(insertion_point + 1, len(lines)):
-                line = lines[j]
-                if line.strip() == "":
-                    continue  # Skip blank lines
-                current_indent = get_indent_level(line)
-                # End when we hit next function/class definition at same or lower indentation
-                if current_indent <= func_indent and (line.lstrip().startswith("def ") or line.lstrip().startswith("class ")):
-                    func_end = j
-                    break
-            else:
-                func_end = len(lines)  # Function extends to end of file
-
-            # Build the targeted region
-            region_parts = []
-
-            # 1. Imports section (first 60 lines)
-            import_section = "".join(lines[:60])
-            region_parts.append(import_section)
-            region_parts.append("\n# ... (imports section) ...\n\n")
-
-            # 2. 50 lines before the function
-            context_start = max(60, insertion_point - 50)
-            if context_start < insertion_point:
-                context_before = "".join(lines[context_start:insertion_point])
-                region_parts.append(context_before)
-
-            # 3. The target function body
-            # Include func_end in the slice to capture the final line of the function
-            function_body = "".join(lines[insertion_point : func_end + 1])
-            region_parts.append(function_body)
-
-            targeted_content = "".join(region_parts)
-
-            # Apply budget limit
-            if len(targeted_content) <= budget:
-                return targeted_content
-
-            truncated = targeted_content[:budget]
-            lines_omitted = targeted_content[budget:].count("\n")
-            return truncated + f"\n# ... ({lines_omitted} lines omitted)\n"
-
-        return ""  # No valid function found
-
-    remaining = max_chars
-
-    if action == "modify" and file_path.exists():
-        # Check if file is large and we have context hints
-        try:
-            file_lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
-            is_large_file = len(file_lines) > _LARGE_FILE_THRESHOLD
-        except OSError:
-            is_large_file = False
-
-        if is_large_file:
-            # Try to extract context hint from title or description
-            context_hint = step.get("title", "") + " " + step.get("description", "")
-            targeted_region = _extract_targeted_function_region(file_path, context_hint, remaining)
-
-            if targeted_region:
-                result["file_content"] = targeted_region
-                remaining -= len(result["file_content"])
-            else:
-                # Fallback to top-of-file truncation
-                result["file_content"] = _read_truncated(file_path, remaining)
-                remaining -= len(result["file_content"])
-        else:
-            # Small file: use normal truncation
-            result["file_content"] = _read_truncated(file_path, remaining)
-            remaining -= len(result["file_content"])
-
-    elif action == "create":
-        parent = file_path.parent
-        suffix = file_path.suffix
-        if parent.is_dir() and suffix:
-            candidates = sorted(parent.glob(f"*{suffix}"), key=lambda p: p.stat().st_mtime, reverse=True)
-            candidates = [c for c in candidates if c.resolve() != file_path.resolve()]
-            if candidates:
-                result["pattern_content"] = _read_truncated(candidates[0], remaining)
-                remaining -= len(result["pattern_content"])
-
-    if remaining > 0:
-        stem = file_path.stem
-        test_file = Path("tests") / f"test_{stem}.py"
-        if test_file.exists():
-            result["test_content"] = _read_truncated(test_file, remaining)
-
-    # Inject relevant Known Gotchas for the target file path.
-    gotchas = _get_relevant_gotchas(file_path_str)
-    if gotchas:
-        result["file_content"] = result["file_content"] + "\n\n" + gotchas if result["file_content"] else gotchas
-
-    return result
+from scripts.executor.step_context import (  # noqa: E402, F401, I001
+    _GOTCHA_INJECTION_MAX_CHARS,
+    _GOTCHA_MAP,
+    _get_relevant_gotchas,
+    gather_step_context,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -388,316 +145,21 @@ from scripts.executor.formatters import (  # noqa: E402, F401, I001
 
 
 # ---------------------------------------------------------------------------
-# Acceptance verification
+# Acceptance and verification command running (extracted to
+# scripts/executor/step_acceptance.py). Re-exports preserved for backward
+# compatibility. The raw _LAST_ACCEPTANCE_OUTPUT/_LAST_VERIFICATION_OUTPUT
+# globals stay co-located with their setters in step_acceptance.py and are
+# deliberately NOT re-exported here -- only the getters (which always read
+# the live current value) are, so a re-exported binding never goes stale.
 # ---------------------------------------------------------------------------
-
-
-def _normalize_acceptance(acceptance_cmd: object) -> str:
-    """Normalize acceptance scalar-or-list to a str before any str methods are applied.
-
-    Handles three shapes (T0.12.5 CD.29 shim; full typed-check dispatch deferred to T3.6):
-      - str: returned unchanged.
-      - list[str]: elements joined with ' && '. An empty list or all-empty-strings list
-        is treated as null (empty string).
-      - list[dict] TypedCheck: the 'command' field from each element is extracted then
-        joined with ' && '. Only command_exit_zero / bare-command elements are executed at
-        T0.12.5; full typed-check dispatch by type deferred to T3.6.
-    """
-    if isinstance(acceptance_cmd, str):
-        return acceptance_cmd
-    if not isinstance(acceptance_cmd, list) or not acceptance_cmd:
-        return ""
-    if isinstance(acceptance_cmd[0], dict):
-        parts = [c.get("command", "") for c in acceptance_cmd if isinstance(c, dict)]
-    else:
-        parts = [str(p) for p in acceptance_cmd]
-    joined = " && ".join(p for p in parts if p and p.strip())
-    return joined
-
-
-def run_acceptance(acceptance_cmd: object) -> bool:
-    """Run acceptance command for a plan step.
-
-    Returns True immediately if acceptance_cmd is empty or whitespace
-    (no check required).
-
-    Returns True when acceptance_cmd is non-empty but contains no extractable
-    shell command -- prose-only acceptance fields are silently allowed
-    (backwards compatible with existing step patterns).
-
-    LLM-generated acceptance commands may be wrapped in backticks (markdown
-    inline code) or contain shell operators (&&, |, >). The command is run
-    via ``bash -c`` so Unix tools (grep, python, git) and shell operators work
-    on all platforms including Windows (Git Bash required).
-
-    Accepts str | list[str] | list[dict] (CD.29 TypedCheck) per T0.12.5 shim.
-    """
-    global _LAST_ACCEPTANCE_OUTPUT
-    _LAST_ACCEPTANCE_OUTPUT = ""
-    acceptance_cmd = _normalize_acceptance(acceptance_cmd)
-    if not acceptance_cmd or not acceptance_cmd.strip():
-        return True
-
-    cmd_str = _extract_acceptance_command(acceptance_cmd)
-
-    if not cmd_str:
-        logger.debug(
-            "[ACCEPTANCE] No executable command found in acceptance field; skipping check. Raw acceptance value: %r",
-            acceptance_cmd[:200],
-        )
-        _LAST_ACCEPTANCE_OUTPUT = ""
-        return True
-
-    # Normalize 'python scripts/MODULE.py' → 'python -m scripts.MODULE'
-    # Only apply this transformation if it's a safe mechanical fix
-    cmd_str = re.sub(r"\bpython\s+scripts/(\w+)\.py\b", r"python -m scripts.\1", cmd_str)
-    # Make plain grep presence checks case-insensitive unless the command already opts in.
-    cmd_str = re.sub(r"\bgrep\s+-q(?![A-Za-z])", "grep -qi", cmd_str)
-
-    # Reject python -c "..." one-liners: nested double-quotes in bash -c "..." produce
-    # mangled commands on Windows (commander.js splits on the embedded "). The planner
-    # should use grep or pytest instead. Fail fast with a clear message rather than
-    # letting bash produce a cryptic syntax error.
-    if re.search(r'\bpython\s+-c\s+["\']', cmd_str):
-        logger.error(
-            "[ACCEPTANCE] Banned pattern: python -c one-liner in acceptance command. "
-            "Nested double-quotes break on Windows. "
-            "Use grep -q or python -m pytest instead. Command: %r",
-            cmd_str[:200],
-        )
-        _LAST_ACCEPTANCE_OUTPUT = "Acceptance command rejected: python -c one-liner is banned for Windows bash compatibility."
-        return False
-
-    bash = shutil.which("bash")
-    if not bash:
-        logger.warning("[ACCEPTANCE] bash not found; skipping acceptance check for: %r", cmd_str)
-        _LAST_ACCEPTANCE_OUTPUT = ""
-        return True
-
-    _accept_env = os.environ.copy()
-    _venv_bin = str(Path(_PROJECT_PYTHON).parent)
-    _accept_env["PATH"] = _venv_bin + os.pathsep + _accept_env.get("PATH", "")
-
-    # Strip executor-mode env vars to prevent contaminating acceptance behavior
-    for var in _EXECUTOR_ACC_VARS:
-        _accept_env.pop(var, None)
-
-    with subprocess.Popen(
-        [bash, "-c", cmd_str],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=_accept_env,
-    ) as proc:
-        try:
-            stdout, stderr = proc.communicate(timeout=300)
-        except subprocess.TimeoutExpired:
-            kill_process_tree(proc.pid)
-            proc.wait()
-            logger.error("[ACCEPTANCE] Timeout (300s): %r", cmd_str)
-            _LAST_ACCEPTANCE_OUTPUT = "Acceptance command timed out after 300s."
-            return False
-
-    _LAST_ACCEPTANCE_OUTPUT = f"{stdout}\n{stderr}".strip()
-    passed = proc.returncode == 0
-    if passed:
-        logger.info("[ACCEPTANCE] Passed: %r (exit 0)", cmd_str)
-    else:
-        logger.error(
-            "[ACCEPTANCE] Failed: %r (exit %d)\nstdout: %s\nstderr: %s",
-            cmd_str,
-            proc.returncode,
-            stdout[:1500],
-            stderr[:1500],
-        )
-    return passed
-
-
-def get_last_acceptance_output() -> str:
-    """Return stdout/stderr captured from the most recent acceptance command run."""
-    return _LAST_ACCEPTANCE_OUTPUT
-
-
-# ---------------------------------------------------------------------------
-# Verification command runner (post-acceptance behavioural proof)
-# ---------------------------------------------------------------------------
-
-_LAST_VERIFICATION_OUTPUT: str = ""
-
-
-def run_verification(verification_cmd: str) -> dict[str, object]:
-    """Run a behavioural verification command after acceptance passes.
-
-    Returns a dict with keys:
-        passed (bool): True if the command exited 0.
-        output (str): Combined stdout/stderr (truncated).
-        skipped (bool): True if the command was empty or no executable
-            command could be extracted.
-        rejected (bool): True if the command was rejected (e.g. python -c).
-        error (str): Reason for rejection or failure, empty on success.
-
-    Unlike run_acceptance(), verification failure is advisory -- the caller
-    decides whether to abort or continue.
-    """
-    global _LAST_VERIFICATION_OUTPUT
-    _LAST_VERIFICATION_OUTPUT = ""
-
-    if not verification_cmd or not verification_cmd.strip():
-        return {"passed": True, "output": "", "skipped": True, "rejected": False, "error": ""}
-
-    cmd_str = _extract_acceptance_command(verification_cmd)
-    if not cmd_str:
-        logger.debug(
-            "[VERIFICATION] No executable command found; skipping. Raw: %r",
-            verification_cmd[:200],
-        )
-        return {"passed": True, "output": "", "skipped": True, "rejected": False, "error": ""}
-
-    # Same normalisations as run_acceptance
-    cmd_str = re.sub(r"\bpython\s+scripts/(\w+)\.py\b", r"python -m scripts.\1", cmd_str)
-    cmd_str = re.sub(r"\bgrep\s+-q(?![A-Za-z])", "grep -qi", cmd_str)
-
-    # Ban python -c one-liners (Windows bash compatibility)
-    if re.search(r'\bpython\s+-c\s+["\']', cmd_str):
-        msg = "Verification command rejected: python -c one-liner is banned for Windows bash compatibility."
-        logger.error("[VERIFICATION] Banned pattern: python -c in verification command: %r", cmd_str[:200])
-        _LAST_VERIFICATION_OUTPUT = msg
-        return {"passed": False, "output": msg, "skipped": False, "rejected": True, "error": msg}
-
-    bash = shutil.which("bash")
-    if not bash:
-        logger.warning("[VERIFICATION] bash not found; skipping verification for: %r", cmd_str)
-        return {"passed": True, "output": "", "skipped": True, "rejected": False, "error": ""}
-
-    _verify_env = os.environ.copy()
-    _venv_bin = str(Path(_PROJECT_PYTHON).parent)
-    _verify_env["PATH"] = _venv_bin + os.pathsep + _verify_env.get("PATH", "")
-    for var in _EXECUTOR_ACC_VARS:
-        _verify_env.pop(var, None)
-
-    with subprocess.Popen(
-        [bash, "-c", cmd_str],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=_verify_env,
-    ) as proc:
-        try:
-            stdout, stderr = proc.communicate(timeout=300)
-        except subprocess.TimeoutExpired:
-            kill_process_tree(proc.pid)
-            proc.wait()
-            msg = "Verification command timed out after 300s."
-            logger.error("[VERIFICATION] Timeout (300s): %r", cmd_str)
-            _LAST_VERIFICATION_OUTPUT = msg
-            return {"passed": False, "output": msg, "skipped": False, "rejected": False, "error": msg}
-
-    output = f"{stdout}\n{stderr}".strip()
-    _LAST_VERIFICATION_OUTPUT = output
-    passed = proc.returncode == 0
-
-    if passed:
-        logger.info("[VERIFICATION] Passed: %r (exit 0)", cmd_str)
-    else:
-        logger.warning(
-            "[VERIFICATION] Failed (advisory): %r (exit %d)\nstdout: %s\nstderr: %s",
-            cmd_str,
-            proc.returncode,
-            stdout[:1500],
-            stderr[:1500],
-        )
-
-    _error = "" if passed else f"exit {proc.returncode}"
-    return {"passed": passed, "output": output, "skipped": False, "rejected": False, "error": _error}
-
-
-def get_last_verification_output() -> str:
-    """Return stdout/stderr captured from the most recent verification command run."""
-    return _LAST_VERIFICATION_OUTPUT
-
-
-def _extract_acceptance_command(acceptance_cmd: object) -> str:
-    """Extract the first executable shell command from an acceptance field string.
-
-    Returns an empty string if no command could be found.
-
-    Accepts str | list[str] | list[dict] (CD.29 TypedCheck) -- normalizes via
-    _normalize_acceptance before applying string-based extraction logic (T0.12.5 shim).
-
-    Priority (highest to lowest):
-    0. Fenced code block (``` ... ```) -- join the block body
-    1. Inline-code span (`...`) -- content between first backtick pair
-    2. Line-by-line scan -- fallback for plain-text commands
-    """
-    acceptance_cmd = _normalize_acceptance(acceptance_cmd)
-    # Pass 0: fenced code block
-    fence_match = re.search(r"```(?:\w+)?\n(.*?)```", acceptance_cmd, re.DOTALL)
-    if fence_match:
-        block_body = fence_match.group(1).strip()
-        if block_body:
-            return block_body
-
-    # Pass 1: inline-code span
-    inline_match = re.search(r"`([^`\n]+)`", acceptance_cmd)
-    if inline_match:
-        candidate = inline_match.group(1).strip()
-        _shell_prefixes = (
-            "python",
-            "pytest",
-            "grep",
-            "git",
-            "gh",
-            "bash",
-            "sh",
-            "cat",
-            "ls",
-            "find",
-            "echo",
-            "wc",
-            "awk",
-            "sed",
-            "test",
-            "[",
-        )
-        if any(candidate.startswith(p) for p in _shell_prefixes) or "/" in candidate or "--" in candidate:
-            return candidate
-
-    # Pass 2: line-by-line scan
-    _lang_tags = {"bash", "sh", "python", "python3", "zsh", "fish", "shell"}
-    for raw_line in acceptance_cmd.splitlines():
-        line = raw_line.strip().strip("`").strip()
-        if not line or line == "---" or line.startswith("#"):
-            continue
-        if line.lower() in _lang_tags:
-            continue
-        if any(
-            line.startswith(p)
-            for p in (
-                "python",
-                "pytest",
-                "grep",
-                "git",
-                "gh",
-                "bash",
-                "sh",
-                "cat",
-                "ls",
-                "find",
-                "echo",
-                "wc",
-                "awk",
-                "sed",
-            )
-        ):
-            return line
-        if "/" in line or "--" in line or (line and line[0].islower()):
-            return line
-
-    return ""
+from scripts.executor.step_acceptance import (  # noqa: E402, F401, I001
+    _extract_acceptance_command,
+    _normalize_acceptance,
+    get_last_acceptance_output,
+    get_last_verification_output,
+    run_acceptance,
+    run_verification,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1091,145 +553,11 @@ def implement_step(
 
 
 # ---------------------------------------------------------------------------
-# Pre-commit scope enforcement
+# Pre-commit scope enforcement and git commit (extracted to
+# scripts/executor/step_commit.py). Re-exports preserved for backward
+# compatibility.
 # ---------------------------------------------------------------------------
-
-
-def _enforce_step_scope(step: dict, step_n: int) -> bool:
-    """Verify worktree changes are limited to the declared step file.
-
-    Compares the normalized declared step file path against non-log
-    worktree changes reported by ``git diff --name-only`` (unstaged),
-    ``git diff --name-only --cached`` (staged), and
-    ``git ls-files --others --exclude-standard`` (untracked).
-
-    Paths are normalized to forward-slash POSIX form for comparison
-    because Git always reports paths with forward slashes regardless
-    of the OS.
-
-    Returns True if all changed files are in scope (the declared step
-    file, its corresponding test file, or log/cache paths already
-    filtered by ``_list_meaningful_worktree_changes``). Returns False
-    and logs an error when out-of-scope files are detected.
-    """
-    step_file = (step.get("file", "") or "").strip()
-    if not step_file:
-        # No declared file -- nothing to enforce.
-        return True
-
-    # Normalize to POSIX forward-slash form to match git output.
-    declared = step_file.replace("\\", "/").strip("/")
-
-    # Build the set of allowed paths: the declared step file and its
-    # conventional test file (tests/test_{stem}.py).
-    allowed: set[str] = {declared}
-    try:
-        stem = Path(declared).stem
-        if stem:
-            test_path = f"tests/test_{stem}.py"
-            allowed.add(test_path)
-    except Exception:
-        pass
-
-    changed = _list_meaningful_worktree_changes()
-    if not changed:
-        return True
-
-    out_of_scope = [p for p in changed if p not in allowed]
-    if not out_of_scope:
-        return True
-
-    logger.error(
-        "[SCOPE] Step %d declared file %r but worktree has out-of-scope changes: %s",
-        step_n,
-        declared,
-        ", ".join(out_of_scope),
-    )
-    return False
-
-
-# ---------------------------------------------------------------------------
-# Git commit
-# ---------------------------------------------------------------------------
-
-
-def commit_step(step: dict, rec_id: str, step_n: int) -> tuple[bool, str]:
-    """Commit changes from a single step.
-
-    Runs scope enforcement before ``git add -A`` to prevent out-of-scope
-    files from being swept into the step commit.
-
-    Retries up to 3 times: pre-commit hooks may modify files and abort the
-    first attempt.
-
-    Returns:
-        Tuple of (success, diff_stat) where diff_stat is the output of
-        ``git diff HEAD~1 --stat`` (empty on failure or nothing to commit).
-    """
-    try:
-        if not _enforce_step_scope(step, step_n):
-            logger.error(
-                "[GIT] Scope enforcement failed for step %d — aborting commit",
-                step_n,
-            )
-            return False, ""
-
-        msg = f"impl({rec_id}): step {step_n} - {step.get('title', 'untitled')[:50]}"
-        for attempt in range(1, 4):
-            subprocess.run(
-                ["git", "add", "-A"],
-                check=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            try:
-                commit_cmd = ["git", "commit", "-m", msg]
-                if attempt == 3:
-                    commit_cmd.append("--no-verify")
-                subprocess.run(
-                    commit_cmd,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                break
-            except subprocess.CalledProcessError as e:
-                err_out = (e.stderr or "") + (e.stdout or "")
-                if "nothing to commit" in err_out or "nothing added to commit" in err_out:
-                    logger.info("[GIT] No changes to commit for step %d", step_n)
-                    return True, ""
-                if attempt < 3 and ("files were modified by this hook" in err_out or "modified by hooks" in err_out):
-                    logger.warning("[GIT] Pre-commit hooks modified files, retrying (%d/3)", attempt)
-                    continue
-                raise
-        logger.info("[GIT] Committed step %d", step_n)
-
-        diff_stat = ""
-        try:
-            diff_result = subprocess.run(
-                ["git", "diff", "HEAD~1", "--stat"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-            )
-            if diff_result.returncode == 0:
-                diff_stat = diff_result.stdout.strip()
-        except Exception:
-            pass
-
-        return True, diff_stat
-    except subprocess.CalledProcessError as e:
-        if "nothing to commit" in str(e.stderr):
-            logger.info("[GIT] No changes to commit for step %d", step_n)
-            return True, ""
-        logger.error("[GIT] Commit failed for step %d: %s", step_n, e)
-        return False, ""
+from scripts.executor.step_commit import _enforce_step_scope, commit_step  # noqa: E402, F401, I001
 
 
 # ---------------------------------------------------------------------------
