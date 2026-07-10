@@ -1,0 +1,283 @@
+schema_version: 2
+slug: ci-rca-ops-portal-patch-targets
+intent: >-
+  Clear the main-validate CI red in
+  tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table
+  (rec-2637) by repointing the stale mock targets the Decision 124 ops_data_portal facade
+  split left behind, and add a caller-aware presubmit guard so future facade-to-submodule
+  moves cannot silently leave tests patching a no-op re-export namespace.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-ops-portal-patch-targets.yaml
+phase: >-
+  Platform reliability / CI merge-gate integrity. No tier_item: ci_rca forward-fix
+  (soft-warn exception) scoped to the unresolved critical CI-RCA rec-2637.
+scope:
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Repoint test_file_decision_skip_sync_suppresses_sync_table from the
+      scripts.ops_data_portal facade namespace to scripts.ops_portal.decisions, where the
+      moved file_decision caller binds _ducklake_write, DECISIONS_JSONL,
+      _load_write_time_validators and _refresh_cache_after_write at its own module scope.
+      Replace the semantically-vacuous _sync_table assert_not_called() (file_decision never
+      calls _sync_table on the single-write path) with a positive assertion that
+      _refresh_cache_after_write is invoked with append_only=True.
+  - file: scripts/checks/ci_guards/validate_ops_portal_patch_targets.py
+    action: Create
+    purpose: >-
+      Caller-aware static guard: for each test function in tests/**, if it exercises a
+      MOVED ops_portal caller (per an explicit moved-caller -> submodule map) and patches
+      scripts.ops_data_portal.<sym> for a symbol that caller resolves in its submodule,
+      require the patch target be the submodule namespace instead. Keyed on the caller the
+      test drives, not the symbol alone, so facade-resident callers (file_rec, update_rec)
+      that legitimately patch scripts.ops_data_portal are not flagged.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the import that runs the guard's @registry.register decorator and exposes the
+      check name for globals()-based dispatch, mirroring the existing ci_guards imports.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register the guard in the authoritative check sequences: add
+      _c("validate_ops_portal_patch_targets") to BOTH pre_sequence() and full_sequence() so
+      the failure class is enforced in the fast presubmit tier and the full post-merge tier.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Cover the guard with positive and negative fixtures using temp files: a stale
+      file_decision facade patch is rejected; a corrected scripts.ops_portal.decisions patch
+      passes; and a facade-resident file_rec patch of scripts.ops_data_portal is NOT flagged.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Adding the guard to pre_sequence() and full_sequence() breaks the exact-equality
+      baseline tests. Insert ("check", "validate_ops_portal_patch_targets") into
+      FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE at the positions matching the registry
+      edit so test_pre_sequence_matches_frozen_baseline / test_full_sequence_matches_frozen_baseline
+      stay green.
+bundled_recommendations:
+  - rec-2637
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table
+    passes without reaching writer_transport._resolve_writer_url and without any real
+    DuckLake writer resolution or non-local socket connection (no creds-dependent success).
+  - >-
+    The updated test proves _skip_sync=True on file_decision flows to
+    _refresh_cache_after_write(..., append_only=True), replacing the vacuous retired
+    _sync_table assertion.
+  - >-
+    The new guard rejects a test that patches scripts.ops_data_portal.<sym> while exercising
+    a moved caller (file_decision/update_decision/backfill_decisions_from_md) for a symbol
+    that caller resolves in scripts.ops_portal.decisions.
+  - >-
+    The guard does NOT flag facade-resident callers: a test patching
+    scripts.ops_data_portal._ducklake_write while exercising file_rec/update_rec passes.
+  - >-
+    The guard is registered in both registry.pre_sequence() and registry.full_sequence() and
+    runs under scripts.validate --pre.
+  - >-
+    rec-2637 is the sole bundled recommendation and is closed by the merge Resolves: trailer
+    after the implementation lands.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the pre-fix failure mode. NOTE: outcome is environment-dependent -- this is a
+      diagnostic, not a hermetic proof, so hermetic:false (excluded from vp_replay).
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table -q
+    expected: >-
+      In hermetic CI (no AWS creds, sockets blocked) the pre-fix test FAILS reaching
+      writer_transport._resolve_writer_url because the facade _ducklake_write patch does not
+      intercept scripts.ops_portal.decisions.file_decision. In a creds-present dev session it
+      instead PASSES but issues a real ops_decisions write (side-effect leak) -- either
+      outcome confirms the facade patch misses the moved caller.
+    fix_if: >-
+      If it passes cleanly and fast (<2s) with no network, the caller may not be resolving
+      the real writer; re-inspect scripts/ops_portal/decisions.py binding sites before editing.
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: Verify the repointed test passes hermetically after the fix.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table -q
+    expected: >-
+      1 passed. The patched scripts.ops_portal.decisions._ducklake_write intercepts the
+      write; no writer_transport._resolve_writer_url call and no socket appear in logs.
+    fix_if: >-
+      If the test still reaches writer_transport, a patch target is still the facade; patch
+      scripts.ops_portal.decisions._ducklake_write, not scripts.ops_data_portal.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Run the full ops portal test file plus the check-registry frozen-baseline tests to
+      catch collateral regressions and confirm the sequence-registration edit is consistent.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py tests/test_checks_registry.py -q
+    expected: >-
+      All tests pass, including the facade-resident file_rec tests that still patch
+      scripts.ops_data_portal (unchanged) AND test_pre_sequence_matches_frozen_baseline /
+      test_full_sequence_matches_frozen_baseline (proving FROZEN_PRE_SEQUENCE /
+      FROZEN_FULL_SEQUENCE were updated with the new check).
+    fix_if: >-
+      A test_ops_data_portal failure means the namespace change touched a facade-resident
+      caller's test -- diagnose the exact caller/binding namespace. A frozen-baseline failure
+      means the FROZEN_*_SEQUENCE tuples were not updated to match the registry sequence edit.
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: Exercise the new guard's positive and negative fixtures.
+    command: bin/venv-python -m pytest tests/test_validate.py -k ops_portal_patch_targets -q
+    expected: >-
+      Guard tests pass: the stale file_decision facade patch fixture is rejected, the
+      corrected scripts.ops_portal.decisions fixture passes, and the facade-resident file_rec
+      fixture is NOT flagged (caller-aware behaviour proven, guard non-vacuous).
+    fix_if: >-
+      If the stale fixture is accepted the guard is vacuous; if the file_rec fixture is
+      rejected the guard is caller-blind -- key the check on the exercised caller, not the
+      symbol alone.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run the authoritative fast presubmit gate. hermetic:false is mandatory -- this command
+      transitively re-invokes the check sequence and vp_replay; marking it hermetic would
+      recurse.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Fast presubmit passes; the run lists validate_ops_portal_patch_targets in the executed
+      checks and reports this plan's pre-deploy steps as EXCLUDED (not-hermetic) in vp_replay.
+    fix_if: >-
+      Any failure is fixed in the owning file; never bypass with --ignore-budget except for a
+      documented local timing-budget limitation.
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm rec-2637 is the CI-RCA blocker this plan closes (linkage check; closure itself
+      happens post-merge via the Resolves: trailer, so this is pre-condition confirmation).
+    command: >-
+      bin/venv-python -m scripts.sync_ops sync && grep '"id": "rec-2637"' logs/.recommendations-log.jsonl
+    expected: >-
+      The synced single-line JSONL record for rec-2637 prints and shows "source": "ci_rca",
+      "status": "open", and file tests/test_ops_data_portal.py.
+    fix_if: >-
+      If rec-2637 is already closed or points elsewhere, stop and rescope before adding the
+      Resolves trailer.
+    hermetic: false
+constraints:
+  - >-
+    Root-cause fix only. Do NOT silence the failure by setting DUCKLAKE_WRITER_URL, enabling
+    sockets, skipping the test, or weakening the writer's loud failure (Decision 84).
+  - >-
+    Patch at the namespace where the caller resolves the dependency: file_decision resolves
+    its deps in scripts.ops_portal.decisions, NOT scripts.ops_data_portal (Decision 124).
+  - >-
+    Preserve legitimate facade behaviour: file_rec/update_rec are facade-resident, so their
+    tests may keep patching scripts.ops_data_portal globals -- the guard must not flag them.
+  - >-
+    No pytest step is marked hermetic:true. Per the planning skill, pytest/validate steps stay
+    hermetic:false and are reported EXCLUDED by vp_replay, never silently skipped. Only step 5
+    invokes validate --pre and MUST stay hermetic:false to avoid vp_replay self-recursion.
+  - >-
+    No source refactor beyond the failing-test fix and the guard's registration wiring
+    (validate.py import + registry.py sequence entries).
+  - >-
+    No rescue agents or workaround loops. On unrecoverable verification failure, stop and RCA
+    (Decision 55).
+context:
+  - >-
+    rec-2637 (open, source=ci_rca, file=tests/test_ops_data_portal.py): "test_file_decision_skip_sync
+    mock targets stale re-export namespace after ops_portal split". Confirmed present in the
+    synced read cache at planning time.
+  - >-
+    Mechanism: after Decision 124, file_decision lives in scripts/ops_portal/decisions.py and
+    binds _ducklake_write (from writer_transport), DECISIONS_JSONL (from executor.jsonl_store),
+    _load_write_time_validators (from write_validators) and _refresh_cache_after_write (from
+    cache) at its own module scope. patch("scripts.ops_data_portal.<sym>") rebinds only the
+    facade module attribute, so the real callee still runs. In hermetic CI that raises; with
+    creds it succeeds and writes a real ops_decisions row.
+  - >-
+    The old _sync_table assertion is doubly obsolete: single-write file_decision never calls
+    _sync_table (only backfill_decisions_from_md does), and per-write cache behaviour moved to
+    _refresh_cache_after_write(..., append_only=_skip_sync). The meaningful assertion is
+    append_only=True.
+  - >-
+    Guard must be caller-aware. _ducklake_write is bound by BOTH facade-resident file_rec and
+    moved file_decision; a symbol-only guard would false-positive on the file_rec tests. The
+    guard's unit is the test function: flag a facade patch only when the same test exercises a
+    moved caller that binds the patched symbol in its submodule.
+  - >-
+    Registration touches scripts/checks/registry.py (both pre_sequence and full_sequence) plus
+    an import in scripts/validate.py -- the same wiring the existing ci_guards use
+    (validate_ci_rca_taxonomy, validate_ci_workflow_guards). Precedent for a tests/**-scanning
+    presubmit guard: validate_test_count_coupling (Decision 104).
+  - >-
+    Interactive VP replay (validate_vp_replay, T3.15 / VF-01): re-executes every pre-deploy +
+    hermetic:true step of a diff-added PLAN and requires exit 0. All steps here are pytest /
+    validate / portal reads, none hermetic-replayable, so all are honestly hermetic:false and
+    reported EXCLUDED (not-hermetic) -- this is why the prior all-hermetic:true plan could not
+    go green as a plan-only change.
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": NO_FLAGS. CITE: Decision 124
+    (ops_data_portal facade split / patch-interception), Decision 104 (validate.py check-registry
+    decomposition + coverage-gate test location), Decision 73 (two-tier presubmit authoritative
+    gate), Decision 55 (RCA-first forward-fix). RELATED: Decision 84, Decision 72, Decision 80,
+    Decision 102.
+  - >-
+    "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 2 REVISE round(s)". Round 1
+    surfaced two mechanical gaps: tests/test_checks_registry.py missing from scope (adding the
+    guard to pre_sequence/full_sequence breaks the FROZEN_*_SEQUENCE equality tests) and step 6
+    referencing a non-existent scripts.ops_portal_rec_probe module. Round 2 caught that the
+    step-6 replacement used an invalid sync_ops subcommand (pull); corrected to `sync` and
+    empirically verified the command runs. Frozen-baseline update landed in scope, execution
+    steps, and VP step 3. Final one-token fix verified by direct execution rather than a third
+    full critique round (convergence judgment).
+pre_implementation_checklist:
+  - Branch confirmed not main before edits.
+  - rec-2637 confirmed open (ci_rca) against tests/test_ops_data_portal.py via synced cache.
+  - Failing test's real caller namespace identified as scripts.ops_portal.decisions.
+  - file_rec/update_rec confirmed facade-resident (guard must not flag their tests).
+  - Acceptance criteria are deterministic and hermetic (pytest with all writer deps patched).
+execution_steps:
+  - >-
+    Edit tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table:
+    patch scripts.ops_portal.decisions._ducklake_write, .DECISIONS_JSONL,
+    ._load_write_time_validators and ._refresh_cache_after_write. Call
+    file_decision({"title": "d", "status": "open", "decision_id": 77}, _skip_sync=True) and
+    assert _refresh_cache_after_write was called with append_only=True (kwargs or positional).
+    Drop the _sync_table patch/assertion.
+  - >-
+    Create scripts/checks/ci_guards/validate_ops_portal_patch_targets.py with
+    @registry.register("validate_ops_portal_patch_targets", owner="platform"). Parse each
+    tests/**/*.py with ast: for every test function, collect the ops_portal callers it
+    imports/invokes and the patch("scripts.ops_data_portal.<sym>") targets it opens. Given the
+    moved-caller map {file_decision, update_decision, backfill_decisions_from_md ->
+    scripts.ops_portal.decisions} and each moved caller's bound-symbol set, append a failure
+    when a test exercises a moved caller AND patches the facade namespace for one of that
+    caller's submodule-bound symbols. Structure the map so maintenance_ops/risk_scoring/
+    write_validators mappings can be added later without changing the contract.
+  - >-
+    Add the guard import to scripts/validate.py (alongside the other
+    scripts.checks.ci_guards.* imports) and add _c("validate_ops_portal_patch_targets") to
+    both pre_sequence() and full_sequence() in scripts/checks/registry.py.
+  - >-
+    Update tests/test_checks_registry.py: insert ("check", "validate_ops_portal_patch_targets")
+    into FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE at the exact index matching the
+    registry.py insertion point, so the frozen-baseline equality tests stay green.
+  - >-
+    Add guard tests to tests/test_validate.py using tmp_path fixtures (never mutate production
+    test files at runtime): stale-facade-file_decision rejected, corrected-decisions passes,
+    facade-resident-file_rec not flagged.
+  - >-
+    Run Verification Plan steps 1-6. Include "Resolves: rec-2637" in the squash-merge commit
+    body; fall back to ops_data_portal --update-rec if the trailer automation does not fire.
+  - 'Report: what was implemented and each verification step result.'
+rollback: >-
+  Revert the implementation commit. The change is test-only plus a validate.py/registry.py
+  guard registration; rollback restores prior behaviour but reopens rec-2637 and the post-merge
+  CI red, so follow rollback with a fresh CI-RCA plan rather than leaving main red.
