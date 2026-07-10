@@ -1,4 +1,4 @@
-"""Tests for scripts/ci_rca_vacuous_pass.py (100% coverage)."""
+"""Tests for scripts/ci_rca/vacuous_pass.py (100% coverage)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.ci_rca_vacuous_pass import (  # noqa: E402
+from scripts.ci_rca.vacuous_pass import (  # noqa: E402
     _TEST_FILE_RE,
     _UNDETERMINED,
     compute_coverage_regression,
@@ -77,7 +77,7 @@ class TestParseVacuousPass:
 
 class TestMergedDiffFiles:
     def test_returns_list_on_success(self, tmp_path):
-        with patch("scripts.ci_rca_vacuous_pass.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.vacuous_pass.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "scripts/foo.py\ntests/test_foo.py\n"
             result = merged_diff_files()
@@ -86,7 +86,7 @@ class TestMergedDiffFiles:
         assert "tests/test_foo.py" in result
 
     def test_returns_undetermined_on_nonzero_exit(self):
-        with patch("scripts.ci_rca_vacuous_pass.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.vacuous_pass.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 128
             mock_run.return_value.stdout = ""
             mock_run.return_value.stderr = "fatal: ambiguous argument 'HEAD^'"
@@ -94,12 +94,12 @@ class TestMergedDiffFiles:
         assert result == _UNDETERMINED
 
     def test_returns_undetermined_on_exception(self):
-        with patch("scripts.ci_rca_vacuous_pass.subprocess.run", side_effect=FileNotFoundError("git not found")):
+        with patch("scripts.ci_rca.vacuous_pass.subprocess.run", side_effect=FileNotFoundError("git not found")):
             result = merged_diff_files()
         assert result == _UNDETERMINED
 
     def test_empty_diff_returns_empty_list(self):
-        with patch("scripts.ci_rca_vacuous_pass.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.vacuous_pass.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = ""
             result = merged_diff_files()
@@ -108,7 +108,7 @@ class TestMergedDiffFiles:
 
 class TestDeletedTestFiles:
     def test_returns_only_test_files(self):
-        with patch("scripts.ci_rca_vacuous_pass.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.vacuous_pass.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "tests/test_foo.py\nscripts/bar.py\n"
             result = deleted_test_files()
@@ -117,7 +117,7 @@ class TestDeletedTestFiles:
         assert "scripts/bar.py" not in result
 
     def test_returns_undetermined_on_failure(self):
-        with patch("scripts.ci_rca_vacuous_pass.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.vacuous_pass.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 128
             mock_run.return_value.stdout = ""
             mock_run.return_value.stderr = "fatal: ambiguous argument 'HEAD^'"
@@ -125,14 +125,14 @@ class TestDeletedTestFiles:
         assert result == _UNDETERMINED
 
     def test_empty_when_no_deleted_tests(self):
-        with patch("scripts.ci_rca_vacuous_pass.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.vacuous_pass.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "scripts/bar.py\n"
             result = deleted_test_files()
         assert result == []
 
     def test_uses_diff_filter_D(self):
-        with patch("scripts.ci_rca_vacuous_pass.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.vacuous_pass.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = ""
             deleted_test_files()

@@ -1,4 +1,4 @@
-"""Tests for scripts/ci_rca_evidence.py (100% coverage)."""
+"""Tests for scripts/ci_rca/evidence.py (100% coverage)."""
 
 import json
 import os
@@ -12,8 +12,8 @@ import yaml
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-import scripts.ci_rca_taxonomy as taxonomy_mod  # noqa: E402
-from scripts.ci_rca_evidence import (  # noqa: E402
+import scripts.ci_rca.taxonomy as taxonomy_mod  # noqa: E402
+from scripts.ci_rca.evidence import (  # noqa: E402
     _canonical_json,
     _resolve_bucket,
     _resolve_current_pre_runtime,
@@ -106,7 +106,7 @@ class TestResolveBucket:
 
 class TestWritePending:
     def test_creates_file(self, tmp_path):
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         original = ev_mod._PENDING_DIR
         ev_mod._PENDING_DIR = tmp_path / "pending"
@@ -123,20 +123,20 @@ class TestWritePending:
 class TestUploadAndPersist:
     def test_successful_upload(self, tmp_path):
         bundle = {"sha256": "a" * 64, "data": "x"}
-        with patch("scripts.ci_rca_evidence._upload_to_s3") as mock_up:
+        with patch("scripts.ci_rca.evidence._upload_to_s3") as mock_up:
             result = upload_and_persist(bundle, "my-bucket")
         assert result["upload_status"] == "ok"
         assert "my-bucket" in result["s3_uri"]
         mock_up.assert_called_once()
 
     def test_upload_failure_writes_pending(self, tmp_path):
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         original = ev_mod._PENDING_DIR
         ev_mod._PENDING_DIR = tmp_path / "pending"
         try:
             bundle = {"sha256": "b" * 64, "data": "y"}
-            with patch("scripts.ci_rca_evidence._upload_to_s3", side_effect=Exception("S3 down")):
+            with patch("scripts.ci_rca.evidence._upload_to_s3", side_effect=Exception("S3 down")):
                 result = upload_and_persist(bundle, "my-bucket")
             assert result["upload_status"] == "upload_failed"
             assert result["s3_uri"] == ""
@@ -145,7 +145,7 @@ class TestUploadAndPersist:
             ev_mod._PENDING_DIR = original
 
     def test_empty_bucket_writes_pending(self, tmp_path):
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         original = ev_mod._PENDING_DIR
         ev_mod._PENDING_DIR = tmp_path / "pending"
@@ -159,8 +159,8 @@ class TestUploadAndPersist:
 
 class TestGenerateBundles:
     def test_happy_path(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={"validate_sloc_limits": ["presubmit"]}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={"validate_sloc_limits": ["presubmit"]}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -188,8 +188,8 @@ class TestGenerateBundles:
         assert bundles[0]["failure_category"] == "unknown"
 
     def test_sha_roundtrip(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -204,8 +204,8 @@ class TestGenerateBundles:
     def test_with_jobs_file(self, log_file, taxonomy_file, tmp_path):
         jobs_file = tmp_path / "jobs.json"
         jobs_file.write_text(json.dumps({"jobs": []}))
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -220,10 +220,10 @@ class TestEmitDir:
     def test_emit_dir_writes_local_bundle(self, log_file, taxonomy_file, tmp_path, capsys):
         """--emit-dir writes <dir>/<sha>.json independent of S3 outcome and prints BUNDLE_LOCAL=<path>."""
         emit_dir = tmp_path / "emit"
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
-                with patch("scripts.ci_rca_evidence._upload_to_s3"):
-                    with patch("scripts.ci_rca_evidence._resolve_bucket", return_value="test-bucket"):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
+                with patch("scripts.ci_rca.evidence._upload_to_s3"):
+                    with patch("scripts.ci_rca.evidence._resolve_bucket", return_value="test-bucket"):
                         main(
                             [
                                 "--log-file",
@@ -249,16 +249,16 @@ class TestEmitDir:
 
     def test_emit_dir_writes_on_s3_failure(self, log_file, taxonomy_file, tmp_path, capsys):
         """--emit-dir writes the local bundle even when S3 upload fails."""
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         emit_dir = tmp_path / "emit_fail"
         original_pending = ev_mod._PENDING_DIR
         ev_mod._PENDING_DIR = tmp_path / "pending"
         try:
-            with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-                with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
-                    with patch("scripts.ci_rca_evidence._upload_to_s3", side_effect=Exception("S3 down")):
-                        with patch("scripts.ci_rca_evidence._resolve_bucket", return_value="test-bucket"):
+            with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+                with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
+                    with patch("scripts.ci_rca.evidence._upload_to_s3", side_effect=Exception("S3 down")):
+                        with patch("scripts.ci_rca.evidence._resolve_bucket", return_value="test-bucket"):
                             main(
                                 [
                                     "--log-file",
@@ -291,10 +291,10 @@ class TestMain:
         assert exc_info.value.code != 0
 
     def test_print_bundle(self, log_file, taxonomy_file, capsys):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
-                with patch("scripts.ci_rca_evidence._upload_to_s3"):
-                    with patch("scripts.ci_rca_evidence._resolve_bucket", return_value="test-bucket"):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
+                with patch("scripts.ci_rca.evidence._upload_to_s3"):
+                    with patch("scripts.ci_rca.evidence._resolve_bucket", return_value="test-bucket"):
                         main(
                             [
                                 "--log-file",
@@ -319,9 +319,9 @@ class TestBundleToSchema:
         """generate_bundles() output feeds a composed CiRcaContext that model_validate accepts."""
         from scripts.ops_data_portal import CiRcaContext
 
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=30ms", 0.03)):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=30ms", 0.03)):
             with patch(
-                "scripts.ci_rca_tier_map.build_tier_membership",
+                "scripts.ci_rca.tier_map.build_tier_membership",
                 return_value={"validate_sloc_limits": ["presubmit"]},
             ):
                 bundles = generate_bundles(
@@ -381,8 +381,8 @@ class TestNewBundleFields:
     """schema_version=3 and the new evidence fields are present in every bundle."""
 
     def test_schema_version_is_2(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -392,8 +392,8 @@ class TestNewBundleFields:
         assert bundles[0]["schema_version"] == 3
 
     def test_new_fields_present(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -405,8 +405,8 @@ class TestNewBundleFields:
             assert field in b, f"bundle missing field {field!r}"
 
     def test_gate_is_postmerge_canary_true_for_ci(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -416,8 +416,8 @@ class TestNewBundleFields:
         assert bundles[0]["gate_is_postmerge_canary"] is True
 
     def test_gate_is_postmerge_canary_false_for_unknown_workflow(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="UnknownWorkflow",
@@ -440,8 +440,8 @@ class TestSchemaVersion3:
     """c9/c10: schema_version=3 bundles include escape_mode."""
 
     def test_escape_mode_present_in_bundle(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -453,8 +453,8 @@ class TestSchemaVersion3:
         assert "escape_mode" in b
 
     def test_escape_mode_is_string(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -506,8 +506,8 @@ class TestMultiFailureEnumeration:
         return p
 
     def test_multi_failure_enumeration_yields_n_bundles(self, multi_failure_log_file, multi_taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=multi_failure_log_file,
                     workflow_name="CI",
@@ -517,8 +517,8 @@ class TestMultiFailureEnumeration:
         assert len(bundles) == 2
 
     def test_multi_failure_distinct_sha256(self, multi_failure_log_file, multi_taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=multi_failure_log_file,
                     workflow_name="CI",
@@ -529,8 +529,8 @@ class TestMultiFailureEnumeration:
         assert len(set(shas)) == 2
 
     def test_multi_failure_shared_workflow_run_id(self, multi_failure_log_file, multi_taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=multi_failure_log_file,
                     workflow_name="CI",
@@ -540,8 +540,8 @@ class TestMultiFailureEnumeration:
         assert all(b["workflow_run_id"] == 42 for b in bundles)
 
     def test_single_failure_still_yields_one_bundle(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -555,8 +555,8 @@ class TestFingerprint:
     """CIRCA-03(a): grouping fingerprint determinism/distinctness (VP step 1)."""
 
     def test_fingerprint_present_and_hex64(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file, workflow_name="CI", workflow_run_id=1, taxonomy_path=taxonomy_file
                 )
@@ -567,8 +567,8 @@ class TestFingerprint:
 
     def test_fingerprint_invariant_to_run_id_timestamp_head_sha(self, log_file, taxonomy_file):
         """Identical (workflow, failed_check, failure_category) with differing run_id yields the same fingerprint."""
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles_a = generate_bundles(
                     log_file=log_file, workflow_name="CI", workflow_run_id=111, taxonomy_path=taxonomy_file
                 )
@@ -580,21 +580,21 @@ class TestFingerprint:
         assert bundles_a[0]["workflow_run_id"] != bundles_b[0]["workflow_run_id"]
 
     def test_fingerprint_distinct_across_failed_check(self):
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         fp1 = ev_mod._compute_fingerprint("ci", "check_a", "sloc_violation")
         fp2 = ev_mod._compute_fingerprint("ci", "check_b", "sloc_violation")
         assert fp1 != fp2
 
     def test_fingerprint_distinct_across_failure_category(self):
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         fp1 = ev_mod._compute_fingerprint("ci", "check_a", "sloc_violation")
         fp2 = ev_mod._compute_fingerprint("ci", "check_a", "iam_policy_gap")
         assert fp1 != fp2
 
     def test_fingerprint_deterministic_same_inputs(self):
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         assert ev_mod._compute_fingerprint("ci", "check_a", "sloc_violation") == ev_mod._compute_fingerprint(
             "ci", "check_a", "sloc_violation"
@@ -625,8 +625,8 @@ class TestFingerprint:
             "validate_sloc_limits FAILED -- scripts/foo.py is 631 SLOC\n"
             "validate_iam_runner_policy FAILED -- missing iam:PutRolePolicy\n"
         )
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_path, workflow_name="CI", workflow_run_id=42, taxonomy_path=taxonomy_path
                 )
@@ -634,15 +634,15 @@ class TestFingerprint:
         assert len(set(fingerprints)) == 2
 
     def test_slugify_workflow(self):
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         assert ev_mod._slugify_workflow("CI") == "ci"
         assert ev_mod._slugify_workflow("Main Canary") == "main_canary"
         assert ev_mod._slugify_workflow("terraform-apply-sandbox") == "terraform-apply-sandbox"
 
     def test_first_error_signature_present(self, log_file, taxonomy_file):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file, workflow_name="CI", workflow_run_id=1, taxonomy_path=taxonomy_file
                 )
@@ -650,7 +650,7 @@ class TestFingerprint:
         assert isinstance(bundles[0]["first_error_signature"], str)
 
     def test_first_error_signature_normalizes_digits(self):
-        import scripts.ci_rca_evidence as ev_mod
+        import scripts.ci_rca.evidence as ev_mod
 
         sig = ev_mod._normalize_first_error_signature(
             "validate_sloc_limits FAILED -- foo.py is 631 SLOC\n", "validate_sloc_limits"
@@ -659,10 +659,10 @@ class TestFingerprint:
         assert "#" in sig
 
     def test_main_prints_fingerprint(self, log_file, taxonomy_file, capsys):
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
-                with patch("scripts.ci_rca_evidence._upload_to_s3"):
-                    with patch("scripts.ci_rca_evidence._resolve_bucket", return_value="test-bucket"):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
+                with patch("scripts.ci_rca.evidence._upload_to_s3"):
+                    with patch("scripts.ci_rca.evidence._resolve_bucket", return_value="test-bucket"):
                         main(
                             [
                                 "--log-file",
@@ -688,13 +688,13 @@ class TestLiveS3Roundtrip:
     @pytest.mark.enable_socket
     def test_live_s3_roundtrip(self, log_file, tmp_path):
         import boto3  # noqa: PLC0415, I001
-        from scripts.ci_rca_evidence import _EVIDENCE_PREFIX, _resolve_bucket, generate_bundles  # noqa: PLC0415
+        from scripts.ci_rca.evidence import _EVIDENCE_PREFIX, _resolve_bucket, generate_bundles  # noqa: PLC0415
 
         taxonomy_file = tmp_path / "taxonomy.yaml"
         taxonomy_file.write_text(yaml.dump(MINI_TAXONOMY))
 
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
-            with patch("scripts.ci_rca_tier_map.build_tier_membership", return_value={}):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=log_file,
                     workflow_name="CI",
@@ -753,9 +753,9 @@ class TestPreRuntimeStamp:
 
     def test_bundle_env_unset_undetermined_marker(self, monkeypatch, log_file, taxonomy_file):
         monkeypatch.delenv("CI_RCA_PRE_RUNTIME_SECONDS", raising=False)
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch(
-                "scripts.ci_rca_tier_map.build_tier_membership",
+                "scripts.ci_rca.tier_map.build_tier_membership",
                 return_value={"validate_sloc_limits": ["presubmit"]},
             ):
                 bundles = generate_bundles(
@@ -771,9 +771,9 @@ class TestPreRuntimeStamp:
 
     def test_bundle_env_set_embeds_measured_runtime(self, monkeypatch, log_file, taxonomy_file):
         monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "150")
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch(
-                "scripts.ci_rca_tier_map.build_tier_membership",
+                "scripts.ci_rca.tier_map.build_tier_membership",
                 return_value={"validate_sloc_limits": ["presubmit"]},
             ):
                 bundles = generate_bundles(
@@ -788,9 +788,9 @@ class TestPreRuntimeStamp:
 
     def test_bundle_env_invalid_falls_back_to_none(self, monkeypatch, log_file, taxonomy_file):
         monkeypatch.setenv("CI_RCA_PRE_RUNTIME_SECONDS", "not-a-number")
-        with patch("scripts.ci_rca_tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch(
-                "scripts.ci_rca_tier_map.build_tier_membership",
+                "scripts.ci_rca.tier_map.build_tier_membership",
                 return_value={"validate_sloc_limits": ["presubmit"]},
             ):
                 bundles = generate_bundles(

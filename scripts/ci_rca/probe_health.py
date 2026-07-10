@@ -151,7 +151,7 @@ def _build_context(undetermined_count: int, total_count: int, rate: float, windo
         f"above the {ABSTENTION_RATE_THRESHOLD:.0%} escalation threshold. Sustained abstention means the "
         "deterministic evidence bundle is systematically unable to classify earliest_viable_gate / "
         "escape_mode -- the probe's depth-enforcement gate is silently degrading to a pass-through. "
-        "Investigate scripts/ci_rca_evidence.py and recent bundle payloads under "
+        "Investigate scripts/ci_rca/evidence.py and recent bundle payloads under "
         "logs/.ci-rca-evidence-pending/ or s3://agent-platform-data-lake/ci-rca-evidence/ for a common "
         "failure shape (a missing log field, a new CI step the probe doesn't parse, etc). This rec closes "
         "automatically once the abstention rate returns under threshold (escalate() runs the close branch "
@@ -162,7 +162,7 @@ def _build_context(undetermined_count: int, total_count: int, rate: float, windo
 def _build_rec_fields(undetermined_count: int, total_count: int, rate: float, window_days: int) -> dict[str, Any]:
     return {
         "title": "CI-RCA evidence probe sustained abstention -- depth-enforcement degrading",
-        "file": "scripts/ci_rca_evidence.py",
+        "file": "scripts/ci_rca/evidence.py",
         "status": "open",
         "source": "ci_rca_probe_health",
         "priority": "High",

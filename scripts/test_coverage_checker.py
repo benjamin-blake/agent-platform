@@ -71,6 +71,8 @@ def map_source_to_test(source_path: Path) -> Path | None:
                               from ducklake_runtime.py, PLAN-sloc-ducklake-layer, same Decision 104 precedent).
     src/lambdas/ducklake_writer/<non-handler>.py -> tests/test_ducklake_writer_handler.py (e.g.
                               smoke_actions.py, split-out from handler.py, same precedent).
+    scripts/ci_rca/<name>.py -> tests/test_ci_rca_<name>.py (nested subpackage, RS-01 / rec-164 Phase A;
+                              the 7 modules moved from scripts/ci_rca_<name>.py keep their flat tests).
 
     Returns None for paths not under src/ or scripts/.
     """
@@ -100,6 +102,11 @@ def map_source_to_test(source_path: Path) -> Path | None:
         if len(parts) >= 3 and parts[2] in _CHECKS_REGISTRY_MECHANISM_FILES:
             return ROOT / "tests" / "test_checks_registry.py"
         return ROOT / "tests" / "test_validate.py"
+    elif parts[0] == "scripts" and len(parts) == 3 and parts[1] == "ci_rca":
+        # Nested ci_rca subpackage (RS-01 / rec-164 Phase A): the 7 modules moved from
+        # scripts/ci_rca_<name>.py keep their flat tests at tests/test_ci_rca_<name>.py.
+        stem = rel.stem
+        return ROOT / "tests" / f"test_ci_rca_{stem}.py"
     elif parts[0] == "scripts" and len(parts) == 2:
         stem = rel.stem
         return ROOT / "tests" / f"test_{stem}.py"

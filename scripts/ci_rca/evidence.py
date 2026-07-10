@@ -1,6 +1,6 @@
 """CI-RCA evidence bundle generator and uploader.
 
-CLI: python -m scripts.ci_rca_evidence \\
+CLI: python -m scripts.ci_rca.evidence \\
        --log-file LOG --workflow-name NAME --workflow-run-id ID [--jobs-file JOBS] [--print-bundle]
 
 Reads pre-fetched CI run logs (NO gh dependency at runtime -- CC-web has no gh CLI).
@@ -23,7 +23,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 _PENDING_DIR = ROOT / "logs" / ".ci-rca-evidence-pending"
 _EVIDENCE_PREFIX = "ci-rca-evidence"
 
@@ -164,14 +164,14 @@ def _assemble_core(
     coverage_regression: "bool | str" = "undetermined",
     first_error_signature: str = "",
 ) -> dict[str, Any]:
-    from scripts.ci_rca_taxonomy import load_taxonomy, resolve_workflow_tier
-    from scripts.ci_rca_tier_map import (
+    from scripts.ci_rca.taxonomy import load_taxonomy, resolve_workflow_tier
+    from scripts.ci_rca.tier_map import (
         AST_WALKER_VERSION,
         build_tier_membership,
         compute_earliest_viable_gate,
         probe_runtime,
     )
-    from scripts.ci_rca_vacuous_pass import compute_escape_mode
+    from scripts.ci_rca.vacuous_pass import compute_escape_mode
 
     taxonomy = load_taxonomy(taxonomy_path)
     taxonomy_version = taxonomy.get("taxonomy_version", 1)
@@ -247,8 +247,8 @@ def generate_bundles(
     repo: str | None = None,
 ) -> list[dict[str, Any]]:
     """Parse log, classify failure(s), assemble + hash bundles. Returns one bundle per failed check."""
-    from scripts.ci_rca_taxonomy import classify_failures, load_taxonomy
-    from scripts.ci_rca_vacuous_pass import (
+    from scripts.ci_rca.taxonomy import classify_failures, load_taxonomy
+    from scripts.ci_rca.vacuous_pass import (
         compute_coverage_regression,
         compute_merge_gate_test_coverage,
         deleted_test_files,

@@ -12,7 +12,7 @@ def validate_ci_rca_taxonomy(failed: list[str]) -> None:
     Pure file-glob + YAML parse (sub-100ms); --pre eligible (Decision 60).
     """
     print("\n=== CI-RCA taxonomy coverage (workflow_to_tier map) ===")
-    from scripts.ci_rca_taxonomy import enumerate_workflow_names, load_taxonomy  # noqa: PLC0415
+    from scripts.ci_rca.taxonomy import enumerate_workflow_names, load_taxonomy  # noqa: PLC0415
 
     try:
         taxonomy = load_taxonomy()

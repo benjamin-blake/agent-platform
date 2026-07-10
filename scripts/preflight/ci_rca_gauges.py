@@ -16,7 +16,7 @@ def _compute_ci_rca_abstention(cache_rows: list[dict] | None, window_days: int =
     """
     if cache_rows is None:
         return None
-    from scripts.ci_rca_probe_health import compute_abstention_rate  # noqa: PLC0415
+    from scripts.ci_rca.probe_health import compute_abstention_rate  # noqa: PLC0415
 
     undetermined_count, total_count, rate = compute_abstention_rate(cache_rows, window_days=window_days)
     return {
@@ -41,7 +41,7 @@ def _escalate_ci_rca_probe_health(
     if creds_status != "ok" or cache_rows is None or gauge is None:
         return None
     try:
-        from scripts.ci_rca_probe_health import escalate  # noqa: PLC0415
+        from scripts.ci_rca.probe_health import escalate  # noqa: PLC0415
 
         open_recs = [r for r in cache_rows if r.get("status") == "open"]
         return escalate(
@@ -184,14 +184,14 @@ def print_ci_rca_telemetry(telemetry: dict | None) -> None:
 def _derive_ci_rca_back_validation(cache_rows: list[dict] | None) -> list[dict] | None:
     """Compute the CI-RCA Section 7 back-validation (preventive_action did not hold) gauge.
 
-    T1.13 c12(iii): delegates to scripts.ci_rca_back_validation.find_preventive_regressions,
+    T1.13 c12(iii): delegates to scripts.ci_rca.back_validation.find_preventive_regressions,
     which is Python-side over the already-loaded warm cache -- zero new reader egress
     (Decision 88), no new NAMED_READS verb, no Lambda redeploy. Returns None when the warm
     cache is unavailable (reader unreachable / offline).
     """
     if cache_rows is None:
         return None
-    from scripts.ci_rca_back_validation import find_preventive_regressions  # noqa: PLC0415
+    from scripts.ci_rca.back_validation import find_preventive_regressions  # noqa: PLC0415
 
     return find_preventive_regressions(cache_rows)
 

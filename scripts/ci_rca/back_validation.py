@@ -6,7 +6,7 @@ cross-check -- Decision 55 (surfacing-only, never remediates) and Decision 57 (c
 loop-closure: "proof a fix reduced the failure mode").
 
 Reads ONLY the warm recommendation cache injected by the caller (Decision 88 -- zero new
-reader egress); mirrors scripts/ci_rca_probe_health.py's structure and never constructs a
+reader egress); mirrors scripts/ci_rca/probe_health.py's structure and never constructs a
 DuckLake reader.
 
 Match key is FILE-ONLY (rec.file) plus the closed prior rec carrying a non-empty

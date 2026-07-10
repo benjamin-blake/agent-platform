@@ -404,7 +404,7 @@ class TestLiveDuckLakeCiRcaOpenFile:
         import scripts.ops_data_portal as p
         from src.common.iceberg_reader import make_reader
 
-        marker_file = "scripts/ci_rca_tier_map.py"
+        marker_file = "scripts/ci_rca/tier_map.py"
         rec_id = p.file_rec(
             {
                 "title": "test_live_file_ci_rca_open_returns_file (ci-rca-likely-resolved-detection VP7)",

@@ -4,7 +4,7 @@ Loads config/ci_rca_taxonomy.yaml and classifies CI failures by function name (p
 and log-pattern regex (fallback). Also resolves workflow names to tier values and
 enumerates workflow names from .github/workflows/*.yml.
 
-Used by: scripts/ci_rca_evidence.py, scripts/validate.py (validate_ci_rca_taxonomy).
+Used by: scripts/ci_rca/evidence.py, scripts/validate.py (validate_ci_rca_taxonomy).
 """
 
 import logging
@@ -13,7 +13,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 _TAXONOMY_PATH = ROOT / "config" / "ci_rca_taxonomy.yaml"
 _TAXONOMY_CACHE: dict | None = None
 

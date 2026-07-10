@@ -21,7 +21,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 _UNDETERMINED = "undetermined"
 
 # mirrors scripts/validate.py:3871 -- keep in sync

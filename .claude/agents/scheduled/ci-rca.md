@@ -173,7 +173,7 @@ For a single-failure run, emit exactly one `FILED:` line. For a multi-failure ru
 `FILED:` line per bundle, in the order the bundles were diagnosed.
 
 These markers are the sole authoritative filing signal parsed by the workflow.
-Downstream tooling (`scripts/ci_rca_filing.py`) reads only these markers --
+Downstream tooling (`scripts/ci_rca/filing.py`) reads only these markers --
 a bare mention of a rec id elsewhere in the output does NOT count as filed.
 
 ## Hard Rules

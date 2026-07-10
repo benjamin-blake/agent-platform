@@ -1,4 +1,4 @@
-"""Tests for scripts/ci_rca_filing.py -- extract_filed_rec_id and CLI."""
+"""Tests for scripts/ci_rca/filing.py -- extract_filed_rec_id and CLI."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.ci_rca_filing import extract_filed_rec_id, extract_filed_recs
+from scripts.ci_rca.filing import extract_filed_rec_id, extract_filed_recs
 
 
 def _write(tmp_path: Path, content: str) -> Path:
@@ -158,7 +158,7 @@ class TestExtractFiledRecs:
 class TestCLI:
     def _run(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, "-m", "scripts.ci_rca_filing", *args],
+            [sys.executable, "-m", "scripts.ci_rca.filing", *args],
             capture_output=True,
             text=True,
             encoding="utf-8",

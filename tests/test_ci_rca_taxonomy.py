@@ -1,4 +1,4 @@
-"""Tests for scripts/ci_rca_taxonomy.py (100% coverage)."""
+"""Tests for scripts/ci_rca/taxonomy.py (100% coverage)."""
 
 import re
 import sys
@@ -10,8 +10,8 @@ import yaml
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-import scripts.ci_rca_taxonomy as taxonomy_mod  # noqa: E402
-from scripts.ci_rca_taxonomy import (  # noqa: E402
+import scripts.ci_rca.taxonomy as taxonomy_mod  # noqa: E402
+from scripts.ci_rca.taxonomy import (  # noqa: E402
     classify_failure,
     classify_failures,
     enumerate_workflow_names,

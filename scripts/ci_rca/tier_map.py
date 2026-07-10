@@ -15,7 +15,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 AST_WALKER_VERSION = 1
 _FAST_TIER_BUDGET_SECONDS = 300
 

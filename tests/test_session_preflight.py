@@ -1520,7 +1520,7 @@ class TestAbstentionGauge:
         assert _preflight._compute_ci_rca_abstention(None) is None
 
     def test_compute_delegates_to_ci_rca_probe_health(self) -> None:
-        with patch("scripts.ci_rca_probe_health.compute_abstention_rate", return_value=(2, 5, 0.4)) as mock_compute:
+        with patch("scripts.ci_rca.probe_health.compute_abstention_rate", return_value=(2, 5, 0.4)) as mock_compute:
             gauge = _preflight._compute_ci_rca_abstention([{"id": "rec-1"}], window_days=14)
         mock_compute.assert_called_once_with([{"id": "rec-1"}], window_days=14)
         assert gauge == {
@@ -1531,7 +1531,7 @@ class TestAbstentionGauge:
         }
 
     def test_escalate_skipped_when_creds_not_ok(self) -> None:
-        with patch("scripts.ci_rca_probe_health.escalate") as mock_escalate:
+        with patch("scripts.ci_rca.probe_health.escalate") as mock_escalate:
             result = _preflight._escalate_ci_rca_probe_health(
                 "unavailable", [{"id": "rec-1"}], {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
             )
@@ -1539,7 +1539,7 @@ class TestAbstentionGauge:
         mock_escalate.assert_not_called()
 
     def test_escalate_skipped_when_cache_unavailable(self) -> None:
-        with patch("scripts.ci_rca_probe_health.escalate") as mock_escalate:
+        with patch("scripts.ci_rca.probe_health.escalate") as mock_escalate:
             result = _preflight._escalate_ci_rca_probe_health(
                 "ok", None, {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
             )
@@ -1547,7 +1547,7 @@ class TestAbstentionGauge:
         mock_escalate.assert_not_called()
 
     def test_escalate_skipped_when_gauge_is_none(self) -> None:
-        with patch("scripts.ci_rca_probe_health.escalate") as mock_escalate:
+        with patch("scripts.ci_rca.probe_health.escalate") as mock_escalate:
             result = _preflight._escalate_ci_rca_probe_health("ok", [{"id": "rec-1"}], None)
         assert result is None
         mock_escalate.assert_not_called()
@@ -1559,7 +1559,7 @@ class TestAbstentionGauge:
         ]
         gauge = {"undetermined_count": 3, "total_count": 6, "rate": 0.5, "window_days": 14}
         with patch(
-            "scripts.ci_rca_probe_health.escalate", return_value={"action": "file", "rec_id": "rec-9"}
+            "scripts.ci_rca.probe_health.escalate", return_value={"action": "file", "rec_id": "rec-9"}
         ) as mock_escalate:
             result = _preflight._escalate_ci_rca_probe_health("ok", cache_rows, gauge)
         assert result == {"action": "file", "rec_id": "rec-9"}
@@ -1573,7 +1573,7 @@ class TestAbstentionGauge:
 
     def test_escalate_failure_is_non_fatal(self) -> None:
         gauge = {"undetermined_count": 1, "total_count": 1, "rate": 1.0, "window_days": 14}
-        with patch("scripts.ci_rca_probe_health.escalate", side_effect=RuntimeError("portal down")):
+        with patch("scripts.ci_rca.probe_health.escalate", side_effect=RuntimeError("portal down")):
             result = _preflight._escalate_ci_rca_probe_health("ok", [], gauge)
         assert result is None
 
@@ -1630,7 +1630,7 @@ class TestAbstentionGauge:
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
             patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
-            patch("scripts.ci_rca_probe_health.escalate", return_value={"action": "none", "rec_id": None}) as mock_escalate,
+            patch("scripts.ci_rca.probe_health.escalate", return_value={"action": "none", "rec_id": None}) as mock_escalate,
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
             patch("builtins.print"),
         ):
@@ -2272,17 +2272,17 @@ class TestCiRcaCorrelation:
             "created_timestamp": "2026-06-17T08:00:00Z",
             "source": "ci_rca",
             "status": "open",
-            "file": "scripts/ci_rca_tier_map.py",
+            "file": "scripts/ci_rca/tier_map.py",
         }
         derived = _preflight._derive_ci_rca_open([raw_row])
         assert len(derived) == 1
-        assert derived[0]["file"] == "scripts/ci_rca_tier_map.py", "file must survive _derive_ci_rca_open projection"
+        assert derived[0]["file"] == "scripts/ci_rca/tier_map.py", "file must survive _derive_ci_rca_open projection"
 
         commit = self._make_commit(
             "e779dd30",
             "2026-06-18T09:00:00+00:00",
             "fix: add encoding utf-8 to ci_rca_tier_map (#184)",
-            files=["scripts/ci_rca_tier_map.py"],
+            files=["scripts/ci_rca/tier_map.py"],
         )
         result = _preflight.correlate_ci_rca_with_main(derived, [commit])
         assert result["likely_resolved"] == derived, "rec-2268 shape must classify as likely_resolved end-to-end"
@@ -3330,13 +3330,13 @@ class TestCiRcaBackValidationSection:
                 "preventive_action_excerpt": "Fix it.",
             }
         ]
-        with patch("scripts.ci_rca_back_validation.find_preventive_regressions", return_value=flagged) as mock_find:
+        with patch("scripts.ci_rca.back_validation.find_preventive_regressions", return_value=flagged) as mock_find:
             result = _preflight._derive_ci_rca_back_validation([{"id": "rec-1"}])
         mock_find.assert_called_once_with([{"id": "rec-1"}])
         assert result == flagged
 
     def test_empty_on_no_matches(self) -> None:
-        with patch("scripts.ci_rca_back_validation.find_preventive_regressions", return_value=[]):
+        with patch("scripts.ci_rca.back_validation.find_preventive_regressions", return_value=[]):
             result = _preflight._derive_ci_rca_back_validation([])
         assert result == []
 
