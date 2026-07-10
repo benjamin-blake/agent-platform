@@ -1,0 +1,282 @@
+schema_version: 1
+slug: "ci-rca-dedup-fire-and-selftest"
+intent: >-
+  Fix the CI-RCA cross-commit fingerprint dedup so a recurring, already-diagnosed CI failure
+  stops re-invoking the expensive ci-rca agent on every merge to main while red, and make this
+  class of "only provable on a real production failure" gap self-catching via a synthetic
+  self-test probe and a dedup-effectiveness SLI -- so correctness never again depends on a human
+  thinking to check. Contributes to the self-improving loop's forward-fix reliability (Decision 72).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-dedup-fire-and-selftest.yaml
+phase: >-
+  Platform: CI-RCA forward-fix subsystem (Decision 72) + verification-in-production hardening
+  (VF-01 / verification-system lineage). No product-phase dependency.
+scope:
+  - file: scripts/ci_rca_dedup.py
+    action: Create
+    purpose: >-
+      New single-implementation dedup decision function extracted from the ci-rca.yml shell.
+      Given the emitted evidence bundles, returns per-bundle verdicts (matched-open -> skip+bump,
+      novel -> run agent). Both the workflow (WS1) and the synthetic probe (WS4) call this one
+      function -- mirrors ghas-probe's "single probe implementation, multiple callers" invariant
+      so the decision logic is unit-testable instead of living in untested workflow shell.
+  - file: scripts/ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      Stop a single failing check from fanning out into spurious extra-category bundles (the
+      6-category fan-out that let a novel spurious fingerprint defeat the all-or-nothing guard).
+      Constrain bundle emission to genuinely-distinct failed checks; do NOT drop a real
+      multi-category failure (Decision 55).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Replace the inline all-or-nothing "Fingerprint dedup guard" shell loop with a call to
+      scripts.ci_rca_dedup (per-bundle). Preserve the force_rca/workflow_dispatch bypass
+      (Decision 74) and the fail-closed-runs-agent behaviour on any novel/unknown fingerprint.
+  - file: scripts/ops_portal/ci_rca_runtime.py
+    action: Modify
+    purpose: >-
+      Make the write-time dedup backstop record recurrence -- bump occurrence_count / stamp
+      last_seen on a match -- via the existing update_rec writer path, reusing the existing
+      context_v2_json.occurrence_count field (no new Class A column; Decision 84). Today only the
+      workflow fp_dedup path bumps. ALSO update the bump_ci_rca_occurrence docstring (approx lines
+      406-413), which currently states the write-time backstop returns the id WITHOUT bumping --
+      that prose becomes stale under this change.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      file_rec()'s write-time backstop is facade-resident here (Decision 124 case (a)). On a
+      backstop match, invoke the occurrence-recording path before returning the existing id, and
+      update the stale backstop comment (approx lines 274-280, currently 'does NOT bump
+      occurrence_count/last_seen'). Keep the force_rca env bypass intact.
+  - file: scripts/preflight/ci_rca_gauges.py
+    action: Modify
+    purpose: >-
+      Add a dedup-effectiveness SLI gauge computed READ-TIME from the warm recommendation cache
+      (Decision 88; zero new reader egress) plus an idempotent escalate() that files a
+      source=ci_rca rec when effectiveness degrades below threshold (reuses the existing
+      ci_rca_probe_health escalate pattern in this file). No telemetry-table write (Decision 84 /
+      95-97 telemetry substrate is stubbed).
+  - file: scripts/session_preflight.py
+    action: Modify
+    purpose: Wire the new dedup-effectiveness gauge into the preflight report + printed surface.
+  - file: .github/workflows/dedup-probe.yml
+    action: Create
+    purpose: >-
+      New scheduled GitHub-Actions standing monitor (mirrors ghas-probe.yml / ULF-01), NOT the
+      frozen Lambda scheduled-agent dispatcher (Decision 116). Injects a synthetic recurring
+      ci_rca failure through scripts.ci_rca_dedup and asserts the second invocation dedupes and
+      bumps occurrence. Loud-fail, alarm-only, non-gating / never a required check (Decision 83),
+      with a liveness/persistent-unavailability alarm so a silently-dead cron cannot read as
+      "dedup verified" (Decision 62).
+  - file: tests/test_ci_rca_dedup.py
+    action: Create
+    purpose: >-
+      Unit-cover the extracted dedup fn: matched-open bundle skips+bumps; a GENUINELY-NOVEL
+      fingerprint still returns run-agent (Decision 55 guard); a mixed set only runs the agent for
+      the novel bundle(s); force_rca bypasses.
+  - file: tests/test_ci_rca_evidence.py
+    action: Modify
+    purpose: >-
+      Assert a single failing check yields exactly one bundle/category (no spurious fan-out) and
+      that a real multi-category failure still emits its distinct bundles.
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      INVERT the existing test_file_rec_backstop_does_not_bump_occurrence (approx line 2435, which
+      asserts the OPPOSITE of the new behaviour) and assert the write-time backstop now bumps
+      occurrence_count / stamps last_seen on a fingerprint match (reader/writer mocked). Patch
+      file_rec's deps (find_open_ci_rca_rec_by_fingerprint / bump_ci_rca_occurrence / update_rec)
+      at the FACADE scripts.ops_data_portal namespace -- file_rec is facade-resident (Decision 124
+      case (a)), matching the existing passing test_file_rec_backstop_* / test_bump_ci_rca_occurrence_*
+      tests and the test-file docstring. Still returns the existing id without a duplicate insert.
+  - file: tests/test_ci_rca_gauges.py
+    action: Create
+    purpose: >-
+      Unit-cover the dedup-effectiveness gauge computation and that escalate() files a
+      source=ci_rca rec when degraded (portal mocked) and is idempotent otherwise.
+bundled_recommendations:
+  - rec-2643
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Per-bundle dedup: given bundles where one fingerprint matches an OPEN ci_rca rec and another
+    is novel, scripts.ci_rca_dedup runs the agent ONLY for the novel bundle and skips+bumps the
+    matched one; when ALL bundles match, the agent is not invoked.
+  - >-
+    Decision 55 guard: a genuinely-novel fingerprint always results in run-agent (dedup never
+    silently swallows an undiagnosed failure).
+  - >-
+    ci_rca_evidence emits exactly one bundle for a single failing check (no spurious extra-category
+    fan-out), and still emits distinct bundles for a genuine multi-category failure.
+  - >-
+    .github/workflows/ci-rca.yml's fingerprint dedup step invokes scripts.ci_rca_dedup rather than
+    an inline all-or-nothing loop, and preserves the force_rca bypass.
+  - >-
+    The write-time backstop bumps context_v2_json.occurrence_count and stamps last_seen on a match
+    (via update_rec), and still returns the existing rec id without inserting a duplicate.
+  - >-
+    rec-2643 is closed through the ops portal (--update-rec --status closed) with a 'satisfied'
+    resolution naming the passing test as recorded proof (deterministic satisfied-close, Decision
+    103); the local cache reflects status=closed for rec-2643 after sync.
+  - >-
+    .github/workflows/dedup-probe.yml exists as a scheduled + workflow_dispatch standing monitor
+    that calls scripts.ci_rca_dedup, is loud-fail and non-gating, and carries a liveness alarm.
+  - >-
+    A dedup-effectiveness gauge is surfaced by session_preflight (read-time from the warm cache)
+    and files a source=ci_rca rec when effectiveness degrades below threshold.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise the extracted per-bundle dedup decision: matched-open skips+bumps, novel runs
+      agent, mixed runs agent only for novel, force_rca bypasses.
+    command: bin/venv-python -m pytest tests/test_ci_rca_dedup.py -q
+    expected: All dedup-decision cases pass, including the novel-fingerprint-still-runs-agent guard.
+    fix_if: >-
+      A novel fingerprint is deduped (Decision 55 violation), or a matched bundle re-runs the
+      agent (the original all-or-nothing bug), or force_rca is not bypassed.
+  - step: 2
+    phase: pre-deploy
+    action: Exercise evidence-bundle emission for a single failing check vs a genuine multi-category failure.
+    command: bin/venv-python -m pytest tests/test_ci_rca_evidence.py -q
+    expected: >-
+      Single failing check -> exactly one bundle/category; genuine multi-category failure -> its
+      distinct bundles retained.
+    fix_if: A single test failure still fans out into spurious categories, or a real multi-category failure loses a bundle.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the workflow calls the shared Python dedup entrypoint, not an inline loop, and keeps force_rca.
+    command: >-
+      grep -q "scripts.ci_rca_dedup" .github/workflows/ci-rca.yml && grep -q "force_rca"
+      .github/workflows/ci-rca.yml && ! grep -q "has no open match; running agent" .github/workflows/ci-rca.yml
+    expected: The fp_dedup step references scripts.ci_rca_dedup; the legacy inline all-or-nothing loop text is gone; force_rca preserved.
+    fix_if: The inline all-or-nothing loop remains, or the force_rca bypass was dropped.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Exercise the write-time backstop occurrence bump (reader/writer mocked). file_rec's deps are
+      patched at the FACADE scripts.ops_data_portal (file_rec is facade-resident, Decision 124 case
+      (a)); the prior does-not-bump test is inverted.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -q
+    expected: >-
+      Backstop match bumps occurrence_count + stamps last_seen via update_rec and returns the
+      existing id (no duplicate insert); the inverted test and all other backstop tests pass.
+    fix_if: >-
+      occurrence_count stays unset on a backstop match, a duplicate row is inserted, or the test
+      patches file_rec's deps at scripts.ops_portal.ci_rca_runtime instead of the facade
+      scripts.ops_data_portal (that would not intercept file_rec's facade-global read; update_rec
+      is a deferred import there and would AttributeError).
+  - step: 5
+    phase: pre-deploy
+    action: Exercise the dedup-effectiveness gauge and its escalate() producer.
+    command: bin/venv-python -m pytest tests/test_ci_rca_gauges.py -q
+    expected: Gauge computes effectiveness from the warm cache; escalate() files a source=ci_rca rec when degraded and is idempotent otherwise.
+    fix_if: The gauge misreads recurrence/occurrence signals, or escalate() double-files or writes a telemetry table.
+  - step: 6
+    phase: pre-deploy
+    action: Parse and shape-check the new probe workflow (scheduled + dispatch, calls shared dedup fn, non-gating, liveness alarm).
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('.github/workflows/dedup-probe.yml'));
+      on=d.get(True, d.get('on', {})); assert 'schedule' in on and 'workflow_dispatch' in on; print('probe ok')" &&
+      grep -q "scripts.ci_rca_dedup" .github/workflows/dedup-probe.yml
+    expected: >-
+      dedup-probe.yml parses; its trigger block (PyYAML parses the `on:` key as boolean True) has
+      both schedule and workflow_dispatch; and it invokes scripts.ci_rca_dedup.
+    fix_if: The probe reimplements dedup instead of calling the shared fn, is a required/gating check, or lacks the liveness alarm.
+  - step: 7
+    phase: pre-deploy
+    action: Run the authoritative fast presubmit tier to confirm no regression across the changed surface.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Fast tier passes (ruff, mypy, targeted pytest, registered checks) with the new/changed files.
+    fix_if: Any content check regresses; fix forward (Decision 55), never weaken a check.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Close rec-2643 via the portal on a satisfied verdict (its underlying test passes on main),
+      then sync and confirm the rec is actually status=closed (not merely present).
+    command: >-
+      bin/venv-python -m pytest
+      "tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table" -q &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-2643 --status closed --resolution "satisfied: test_file_decision_skip_sync_suppresses_sync_table passes on main (fixed by PR #530)"
+      && bin/venv-python -m scripts.sync_ops sync && bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      r=next(x for x in rows if x.get('id')=='rec-2643'); assert r.get('status')=='closed', r.get('status'); print('rec-2643 closed')"
+    expected: The test passes on main; rec-2643 transitions to status=closed via the portal; the synced cache shows rec-2643 status=closed (closure obligation satisfied, not just row existence).
+    fix_if: >-
+      The test is NOT actually passing (do not close on an unverified claim; Decision 103/55), the
+      status assertion fails (close did not land), or the portal write fails loudly (re-file after
+      restoring the static-key chain; Decision 84 I-4).
+constraints:
+  - No rescue agents or workaround loops; forward-fix only (Decision 55). Dedup must fail closed (run the agent) on any novel/unknown fingerprint.
+  - All rec/decision writes transit the ops portal (file_rec/update_rec/propose_or_close_rec); never edit logs/*.jsonl directly (Decision 84, Single Portal Invariant).
+  - >-
+    WS2 patch-target discipline (Decision 124): edit the bump logic in scripts.ops_portal.ci_rca_runtime,
+    but the NEW file_rec write-time-backstop test patches file_rec's deps
+    (find_open_ci_rca_rec_by_fingerprint / bump_ci_rca_occurrence / update_rec) at the FACADE
+    scripts.ops_data_portal -- file_rec is facade-resident (case (a)), matching the existing passing
+    test_file_rec_backstop_* / test_bump_ci_rca_occurrence_* tests. Do NOT transfer rec-2643's
+    case-(b) lesson (file_decision -> decisions.py, patched at the submodule) onto file_rec.
+  - >-
+    WS2 behaviour inversion: this change flips the backstop from does-not-bump to does-bump. Explicitly
+    INVERT the existing test_file_rec_backstop_does_not_bump_occurrence (approx line 2435) AND update
+    the two stale prose sites in the same change -- the backstop comment in ops_data_portal.py (approx
+    274-280) and the bump_ci_rca_occurrence docstring in ci_rca_runtime.py (approx 406-413) -- so the
+    branch does not ship a contradicting test + stale docs.
+  - Reuse the existing context_v2_json.occurrence_count field; do NOT add a new Class A column to ops_recommendations (Decision 84 / 103).
+  - The WS5 SLI is read-time-only from the warm cache (Decision 88); it must not write to any telemetry table (that substrate is stubbed -- Decision 84 Phase 4 / Decisions 95-97).
+  - The WS4 probe is a GitHub-Actions standing monitor (ghas-probe/ULF-01 lineage), NOT the frozen Lambda scheduled-agent dispatcher (Decision 116); it is non-gating / never a required check (Decision 83) and carries a liveness alarm (Decision 62).
+  - Preserve the force_rca / workflow_dispatch dedup-bypass in ci-rca.yml (Decision 74).
+  - No STRATEGIC plan-type (executor freeze; Decision 67). Single IMPLEMENTATION plan; the >5-file complexity heuristic is suspended during the freeze.
+context:
+  - >-
+    Incident (verified this session): break introduced 14:03 UTC by 8711075 (PR #520, sloc-wave1);
+    5 commits merged to main while red; rec-2637 filed once; the fp_dedup pre-agent skip never fired
+    (bundle fingerprint 5c5b07fa 'has no open match') so the agent ran ~4-8 min each on fcb137c /
+    2216f01 / 3f00ee2; only the write-time backstop (matching rec-2637's fp 26031c33) prevented
+    duplicates. occurrence_count stayed None on both recs. Contrast: 2026-07-05 filed ~23 duplicates
+    (rec-2552..rec-2585) for one issue.
+  - >-
+    rec-2643 is a functional duplicate of rec-2637 (identical fingerprint 26031c33) filed only
+    because rec-2637 had just been auto-closed and fingerprint dedup matches only OPEN recs
+    (close-then-recur blind spot). Its test passes on current main -> stale-open. Closing it clears
+    the HARD BLOCK on /plan.
+  - >-
+    OUT OF SCOPE (follow-up rec): the deeper close-then-recur fix (match recently-closed recs within
+    a window, or gate rec-autoclose on post-merge green). File as a separate rec/plan; not bitten off here.
+  - >-
+    Root-cause detail: _compute_fingerprint (ci_rca_evidence.py) is itself stable
+    (sha256(workflow_slug\0failed_check\0failure_category)); the defeater was spurious multi-category
+    bundle fan-out combined with the all-or-nothing pre-agent guard, NOT fingerprint nondeterminism.
+  - >-
+    Architect rationale for WS4/WS5 (industry practice): this gap was only caught by manual
+    inspection because a production-only invariant had telemetry (occurrence_count) but no alarm.
+    WS4 = synthetic fault injection (don't wait for / don't force a real failure -- inject a
+    controlled synthetic one on a schedule through the real code path). WS5 = promote the mechanism's
+    own health to an SLI with a loud alarm. Both mirror the existing ghas-probe standing-monitor pattern.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 passes -- narrow then revised 5-workstream). CITE: dec-124, dec-84, dec-103, dec-72, dec-74, dec-55, dec-83, dec-88, dec-73, dec-67; NOTE: dec-62, dec-116, dec-48."
+  - "gates: decision-scout=FLAGS_FOUND (2 passes, non-blocking); plan-critique=PROCEED after 3 rounds (r1: 6 findings -- 2 broken VP commands, inverted Decision-124 namespace, test/doc inversion accounting, criterion-6 mechanism, taxonomy-scope note; r2: sync_ops subcommand fix; r3: PROCEED)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-dedup-check-6r853v)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision-scout gate run (FLAGS_FOUND, non-blocking) and flags folded into constraints
+  - All files in scope located and readable; ci_rca_runtime.py backstop + ci_rca_evidence fingerprint confirmed
+  - Acceptance criteria understood and independently verifiable
+  - "Confirmed: file_rec write-time backstop is facade-resident in ops_data_portal.py (Decision 124 case (a)); its tests patch at the facade scripts.ops_data_portal"
+  - "Confirm at implement time: whether constraining the spurious single-check bundle fan-out is achievable within ci_rca_evidence.py (generate_bundles) alone, or requires scripts/ci_rca_taxonomy.py (classify_failures, currently OUT of scope) -- if so, add ci_rca_taxonomy.py + its test to scope before editing"
+execution_steps:
+  - Create scripts/ci_rca_dedup.py with the per-bundle dedup decision fn (matched-open -> skip+bump, novel -> run agent; force_rca bypass); add tests/test_ci_rca_dedup.py.
+  - Modify scripts/ci_rca_evidence.py to stop spurious single-check multi-category fan-out; extend tests/test_ci_rca_evidence.py.
+  - Modify .github/workflows/ci-rca.yml to call scripts.ci_rca_dedup from the fp_dedup step, preserving force_rca; remove the inline all-or-nothing loop.
+  - Modify scripts/ops_portal/ci_rca_runtime.py + the scripts/ops_data_portal.py backstop call-site so a backstop match bumps occurrence_count / stamps last_seen via update_rec; in the SAME change invert test_file_rec_backstop_does_not_bump_occurrence and update the stale backstop comment (ops_data_portal.py ~274-280) and bump_ci_rca_occurrence docstring (ci_rca_runtime.py ~406-413). Patch file_rec's deps at the facade scripts.ops_data_portal.
+  - Add the dedup-effectiveness SLI gauge + escalate() to scripts/preflight/ci_rca_gauges.py and wire it into scripts/session_preflight.py; add tests/test_ci_rca_gauges.py.
+  - Create .github/workflows/dedup-probe.yml as a scheduled/dispatch loud-fail non-gating standing monitor that calls scripts.ci_rca_dedup and carries a liveness alarm.
+  - Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
+  - "Close rec-2643 via the portal on a satisfied verdict (VP step 8) and include 'Resolves: rec-2643' in the squash-merge body."
+  - 'Report: what was implemented, verification results, and the follow-up rec filed for the close-then-recur blind spot.'
+work_areas: []
+rollback: >-
+  Revert the branch's commits. The WS3 rec-2643 closure is a portal state change, not code; if
+  reverted, rec-2643 can be reopened via the portal. No infra/Terraform or Lambda deploy is
+  involved, so rollback is a pure git revert plus (if needed) a portal status update.
