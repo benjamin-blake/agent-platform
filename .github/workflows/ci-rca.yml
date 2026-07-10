@@ -188,7 +188,7 @@ jobs:
         run: |
           RUN_ID="${{ steps.meta.outputs.run_id }}"
           WORKFLOW_NAME="${{ steps.meta.outputs.workflow_name }}"
-          .venv/bin/python -m scripts.ci_rca_evidence \
+          .venv/bin/python -m scripts.ci_rca.evidence \
             --log-file /tmp/ci-rca-failed.log \
             --jobs-file /tmp/ci-rca-jobs.json \
             --workflow-name "$WORKFLOW_NAME" \
@@ -342,7 +342,7 @@ jobs:
           # EARLIER bundle genuinely filed would otherwise report zero filings and skip mark_rca
           # entirely for a rec that was actually filed. --all is empty only when truly nothing
           # was filed (fail-open toward re-diagnosis, per Decision 74).
-          FILED_PAIRS=$(bin/venv-python -m scripts.ci_rca_filing --all /tmp/ci-rca-output.json || true)
+          FILED_PAIRS=$(bin/venv-python -m scripts.ci_rca.filing --all /tmp/ci-rca-output.json || true)
           if [ -z "$FILED_PAIRS" ]; then
             echo "::error::ci-rca agent filed no recommendation (no FILED: marker in output)"
             exit 1
@@ -350,7 +350,7 @@ jobs:
           # rec_id output feeds the PR-comment step, which reports a single rec id -- prefer the
           # legacy last-marker helper's value, falling back to the last --all pair when the final
           # marker was "none" but an earlier bundle filed (the case this fix addresses).
-          REC_ID=$(bin/venv-python -m scripts.ci_rca_filing /tmp/ci-rca-output.json || true)
+          REC_ID=$(bin/venv-python -m scripts.ci_rca.filing /tmp/ci-rca-output.json || true)
           if [ -z "$REC_ID" ]; then
             REC_ID=$(echo "$FILED_PAIRS" | tail -1 | cut -d, -f1)
           fi
@@ -369,7 +369,7 @@ jobs:
           ANCHOR_SHA="${{ steps.meta.outputs.anchor_sha }}"
           WORKFLOW_SLUG="${{ steps.meta.outputs.workflow_slug }}"
           if [ -n "$ANCHOR_SHA" ]; then
-            bin/venv-python -m scripts.ci_rca_filing --all /tmp/ci-rca-output.json | while IFS=',' read -r REC_ID CAT; do
+            bin/venv-python -m scripts.ci_rca.filing --all /tmp/ci-rca-output.json | while IFS=',' read -r REC_ID CAT; do
               [ -z "$REC_ID" ] && continue
               [ -z "$CAT" ] && CAT="unknown"
               CONTEXT="ci-rca/${WORKFLOW_SLUG}/${CAT}"

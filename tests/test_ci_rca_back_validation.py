@@ -1,4 +1,4 @@
-"""Unit tests for scripts.ci_rca_back_validation.
+"""Unit tests for scripts.ci_rca.back_validation.
 
 All tests are free of live AWS, network, and DuckLake-reader dependencies: cache_rows is
 always injected (never fetched). A dedicated test asserts no reader is constructed, guarding
@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from scripts.ci_rca_back_validation import DEFAULT_WINDOW_DAYS, find_preventive_regressions
+from scripts.ci_rca.back_validation import DEFAULT_WINDOW_DAYS, find_preventive_regressions
 
 NOW = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 

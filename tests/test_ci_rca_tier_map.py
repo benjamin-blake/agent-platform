@@ -1,4 +1,4 @@
-"""Tests for scripts/ci_rca_tier_map.py (100% coverage)."""
+"""Tests for scripts/ci_rca/tier_map.py (100% coverage)."""
 
 import sys
 import textwrap
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.ci_rca_tier_map import (  # noqa: E402
+from scripts.ci_rca.tier_map import (  # noqa: E402
     AST_WALKER_VERSION,
     build_tier_membership,
     compute_earliest_viable_gate,
@@ -112,7 +112,7 @@ class TestProbeRuntime:
         vpath = tmp_path / "validate.py"
         vpath.write_text("def validate_fast(failed):\n    pass\n")
         fake_samples = [0.05, 0.06, 0.05, 0.06, 0.05]
-        with patch("scripts.ci_rca_tier_map.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.tier_map.subprocess.run") as mock_run:
             responses = []
             for s in fake_samples:
                 m = MagicMock()
@@ -135,7 +135,7 @@ class TestProbeRuntime:
         vpath = tmp_path / "validate.py"
         vpath.write_text("def validate_fast(failed):\n    pass\n")
         fake_samples = [0.001, 0.001, 0.5, 1.0, 2.0]
-        with patch("scripts.ci_rca_tier_map.subprocess.run") as mock_run:
+        with patch("scripts.ci_rca.tier_map.subprocess.run") as mock_run:
             responses = []
             for s in fake_samples:
                 m = MagicMock()
@@ -150,7 +150,7 @@ class TestProbeRuntime:
     def test_probe_exception_returns_error(self, tmp_path):
         vpath = tmp_path / "validate.py"
         vpath.write_text("def validate_fast(failed):\n    pass\n")
-        with patch("scripts.ci_rca_tier_map.subprocess.run", side_effect=Exception("network error")):
+        with patch("scripts.ci_rca.tier_map.subprocess.run", side_effect=Exception("network error")):
             conf, median = probe_runtime("validate_fast", vpath)
         assert median is None
         assert "probe_failed" in conf

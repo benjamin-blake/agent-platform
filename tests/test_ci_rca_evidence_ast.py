@@ -1,4 +1,4 @@
-"""Golden-fixture contract test for the AST walker in scripts/ci_rca_tier_map.py.
+"""Golden-fixture contract test for the AST walker in scripts/ci_rca/tier_map.py.
 
 Pins the walker output against a frozen expected tier_membership for a fixture mirror
 of validate.py structure (all four control-flow cases). Fixture changes require
@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.ci_rca_tier_map import build_tier_membership  # noqa: E402
+from scripts.ci_rca.tier_map import build_tier_membership  # noqa: E402
 
 FIXTURE_VALIDATE_SOURCE = textwrap.dedent("""
     import sys

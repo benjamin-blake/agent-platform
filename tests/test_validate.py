@@ -5415,7 +5415,7 @@ class TestValidateCiRcaTaxonomy:
         assert not failed, f"Expected no failures, got: {failed}"
 
     def test_missing_workflow_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        import scripts.ci_rca_taxonomy as taxonomy_mod  # noqa: I001
+        import scripts.ci_rca.taxonomy as taxonomy_mod  # noqa: I001
         import yaml
 
         incomplete_taxonomy = {
@@ -5432,7 +5432,7 @@ class TestValidateCiRcaTaxonomy:
         original_path = taxonomy_mod._TAXONOMY_PATH
         taxonomy_mod._TAXONOMY_PATH = tax_path
         try:
-            from scripts.ci_rca_taxonomy import enumerate_workflow_names
+            from scripts.ci_rca.taxonomy import enumerate_workflow_names
 
             workflows_dir = ROOT / ".github" / "workflows"
             actual_names = enumerate_workflow_names(workflows_dir)
@@ -5450,7 +5450,7 @@ class TestValidateCiRcaTaxonomy:
             taxonomy_mod._TAXONOMY_CACHE = None
 
     def test_taxonomy_file_missing_fails(self, tmp_path: Path) -> None:
-        import scripts.ci_rca_taxonomy as taxonomy_mod
+        import scripts.ci_rca.taxonomy as taxonomy_mod
 
         taxonomy_mod._TAXONOMY_CACHE = None
         original_path = taxonomy_mod._TAXONOMY_PATH

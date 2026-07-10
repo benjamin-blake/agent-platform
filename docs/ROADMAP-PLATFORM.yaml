@@ -4078,7 +4078,7 @@ tier_items:
       write time. Replaces the ci-rca agent's free-text context with a typed schema (proximate_cause,
       why_chain, detection_gap, recurrence_class, corrective_action, preventive_action, prior_art_citation),
       pre-computes facts the LLM cannot dispute via a deterministic evidence-bundle script
-      (scripts/ci_rca_evidence.py), and cross-checks agent claims against the bundle with the bundle
+      (scripts/ci_rca/evidence.py), and cross-checks agent claims against the bundle with the bundle
       authoritative on disagreement. Extends Decision 66 (Precision Context Injection) from advisory
       field semantics to enforced structure for source=ci_rca writes. Closes a feedback-loop quality
       gap in the self-improving system: shallow RCAs cause the system to optimise the wrong target.
@@ -4090,8 +4090,8 @@ tier_items:
     files_in_scope:
       - docs/INTENT-ci-rca-methodology.md
       - scripts/ops_data_portal.py
-      - scripts/ci_rca_evidence.py    # new
-      - scripts/ci_rca_filing.py    # new (PLAN-ci-rca-workflow-correctness)
+      - scripts/ci_rca/evidence.py    # new
+      - scripts/ci_rca/filing.py    # new (PLAN-ci-rca-workflow-correctness)
       - .github/workflows/ci-rca.yml    # PLAN-ci-rca-workflow-correctness trigger + filing correctness
       - .claude/agents/scheduled/ci-rca.md
       - config/ci_rca_taxonomy.yaml    # new
@@ -4100,8 +4100,8 @@ tier_items:
       - scripts/validate.py    # validate_ci_rca_taxonomy coverage check; validate_ci_rca_trigger wired in by PLAN-ci-rca-workflow-correctness
       - tests/test_ci_rca_evidence_ast.py    # new contract test for AST walker
       - scripts/ci_rca_gate_evidence.py    # new (HARDENING c8: compute vacuous_pass from validate.py execution manifest + main-log fallback)
-      - scripts/ci_rca_taxonomy.py    # HARDENING c9b: classify_failure prefers structured jobs JSON; add test_collection_empty/gate_escape categories
-      - scripts/ci_rca_tier_map.py    # HARDENING c7: probe-abstention -> earliest_viable_gate=undetermined (not silent null skip)
+      - scripts/ci_rca/taxonomy.py    # HARDENING c9b: classify_failure prefers structured jobs JSON; add test_collection_empty/gate_escape categories
+      - scripts/ci_rca/tier_map.py    # HARDENING c7: probe-abstention -> earliest_viable_gate=undetermined (not silent null skip)
     exit_criteria:
       - id: c1
         text: >-
@@ -4135,7 +4135,7 @@ tier_items:
       - id: c6
         text: >-
           PLAN-ci-rca-workflow-correctness landed: ci-rca.yml rca job if: gates on head_branch==default_branch
-          (main-only trigger); filing detection uses scripts/ci_rca_filing.py FILED: marker (not grep);
+          (main-only trigger); filing detection uses scripts/ci_rca/filing.py FILED: marker (not grep);
           ci-rca-filter guard wired into scripts/validate.py presubmit tier
         status: met
         met_by: ci-rca-probe-health-failloud
@@ -4279,7 +4279,7 @@ tier_items:
           RE-GROUNDED (delivered reality, PLAN-ci-rca-observability-dashboard): the "join needs a NEW
           ducklake_reader named-read verb with server-side json_extract predicates" clause is SUPERSEDED --
           context_v2_json is already carried in the warm recommendation cache for every row (open + closed),
-          so the join is Python-side over the already-loaded cache (scripts/ci_rca_back_validation.py,
+          so the join is Python-side over the already-loaded cache (scripts/ci_rca/back_validation.py,
           zero new reader egress, Decision 88, no new NAMED_READS verb, no Lambda redeploy). The match key
           is DELIVERED as FILE-ONLY (rec.file) -- a materially WEAKER heuristic than this criterion's
           original "failed_check + failure_category (bundle-derived)" spec, which is DEFERRED until a
@@ -4417,7 +4417,7 @@ tier_items:
       remain open for P2 (PLAN-ci-rca-abstention-and-gate-escape) and P3
       (PLAN-ci-rca-observability-dashboard extension).
       2026-07-01: shipped PLAN-ci-rca-probe-health-failloud -- safety-slice of c12 plus two
-      bookkeeping closeouts. c12(i): new scripts/ci_rca_probe_health.py sensor (compute_abstention_rate,
+      bookkeeping closeouts. c12(i): new scripts/ci_rca/probe_health.py sensor (compute_abstention_rate,
       escalation_action, idempotent escalate() mirroring convergence_health's file/update/close pattern,
       reads only the warm preflight cache -- zero new reader egress per Decision 88, never constructs a
       DuckLake reader); ci_rca_probe_health registered in source_registry.yaml; session_preflight.py
@@ -4446,7 +4446,7 @@ tier_items:
       1) on every warn-mode branch that would have rejected in strict mode (schema-deficiency,
       bundle-absent, S3-missing, cross-check checks 1-4) -- previously these paths only
       logger.warning()'d with no persisted trace, so the warn-mode rejection rate was underivable.
-      c12(iii): new scripts/ci_rca_back_validation.py (find_preventive_regressions, mirrors
+      c12(iii): new scripts/ci_rca/back_validation.py (find_preventive_regressions, mirrors
       ci_rca_probe_health.py's structure) flags an OPEN ci_rca rec recurring on a file whose CLOSED
       prior ci_rca rec on that file claimed a preventive_action -- FILE-ONLY match key (weaker than
       this criterion's original failed_check+failure_category spec; disclosed, deferred until a
@@ -4500,7 +4500,7 @@ tier_items:
       cutover as before).
       2026-07-06: PLAN-ci-rca-dedup-multifailure -- post-audit hardening from
       audits/ci-rca-system-a49db8f.yaml (CIRCA-03 high, CIRCA-07 medium, CIRCA-04 prompt half).
-      CIRCA-03: scripts/ci_rca_evidence.py now emits a classifier-anchored grouping fingerprint
+      CIRCA-03: scripts/ci_rca/evidence.py now emits a classifier-anchored grouping fingerprint
       (sha256 of workflow_slug+failed_check+failure_category, invariant to run_id/timestamp/
       head_sha) plus a normalized first-error-signature tie-breaker; ops_data_portal.py gained
       find_open_ci_rca_rec_by_fingerprint() (shared reader helper + read-only CLI verb) and a

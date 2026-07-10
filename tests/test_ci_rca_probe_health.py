@@ -1,4 +1,4 @@
-"""Unit tests for scripts.ci_rca_probe_health.
+"""Unit tests for scripts.ci_rca.probe_health.
 
 All tests are free of live AWS, network, and DuckLake-reader dependencies:
 open_recs is always injected (never fetched), and the portal caller is injected.
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scripts.ci_rca_probe_health import (
+from scripts.ci_rca.probe_health import (
     ABSTENTION_MIN_SAMPLE,
     ABSTENTION_RATE_THRESHOLD,
     compute_abstention_rate,
