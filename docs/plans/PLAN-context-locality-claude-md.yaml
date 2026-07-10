@@ -1,0 +1,491 @@
+schema_version: 1
+slug: "context-locality-claude-md"
+intent: >-
+  Convert the placement and Lambda-bundling invariants that today live in non-auto-loading READMEs
+  (or nowhere) into three directory CLAUDE.md files that auto-load exactly where agents edit
+  (scripts/, config/, docs/), and turn the docs/-root placement convention into a machine-checked
+  rule inside the existing validate_placement gate -- so the agent-first repository teaches its own
+  edit-time rules and fails CI on a NEW out-of-class docs-root file (NS.4). Implements audit
+  findings RS-05 and the RS-03 docs-root allowlist.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-context-locality-claude-md.yaml
+phase: >-
+  Repository-structure restructure Phase P3 (audit finding RS-05 [medium] + the RS-03 docs-root
+  allowlist, from audits/repository-structure-cb02572.yaml). Runs AFTER P1 (RS-04 file-router
+  registry + validate_placement link-validity check) and P2 (RS-02/RS-03 stray consolidation), both
+  merged at origin/main 69b209a. Platform axis; RS-05/RS-03 are novel unowned findings
+  (dedup_hit_count 0) with no owning tier_item. Context-locality + class-home routing per Decision 86
+  / NS.4. IMPLEMENTATION type (STRATEGIC frozen, Decision 67).
+scope:
+  - file: scripts/CLAUDE.md
+    action: Create
+    purpose: >-
+      Auto-loading edit-time rules for scripts/: the root-vs-subpackage placement rule (root = entry
+      points + genuine singles; any >=3-file prefix family is a subpackage; governs NEW files now,
+      existing families migrate under RS-01/rec-164), the bin/venv-python invocation rule, and the
+      pointer to the checks registry (scripts/checks/registry.py). Verbatim body in execution_steps.
+  - file: config/CLAUDE.md
+    action: Create
+    purpose: >-
+      Auto-loading edit-time rules for config/: the T-1.7 three-zone layout + the "config/agent/ is
+      never Lambda-bundled" invariant (converted from config/README.md + config/agent/README.md) +
+      the CD.23 README-is-projection rule. Verbatim body in execution_steps.
+  - file: docs/CLAUDE.md
+    action: Create
+    purpose: >-
+      Auto-loading edit-time rules for docs/: the docs-root class allowlist, the class->home map
+      (plans/, contracts/, audit-prompts/, plans/reports/, dq/, runbooks/, intent-migration/), and
+      the RS-07 plans-lifecycle statement (active at docs/plans/ root; completed/deprecated under
+      docs/plans/archive/). Verbatim body in execution_steps. NOTE: docs/CLAUDE.md is itself a
+      depth-1 docs-root file, so CLAUDE.md must be in the allowlist (see scope row for file-router).
+  - file: config/README.md
+    action: Modify
+    purpose: >-
+      Reduce to a CD.23 portal projection: replace the three-zone bullet block (current lines 3-7)
+      with a short pointer to config/CLAUDE.md; the invariant now lives once, in config/CLAUDE.md.
+      PRESERVE the rest of the file (human config reference, env vars, troubleshooting) unchanged --
+      it is not an edit-time invariant and is not duplicated in CLAUDE.md. Verbatim replacement in
+      execution_steps.
+  - file: config/agent/README.md
+    action: Modify
+    purpose: >-
+      Reduce to a CD.23 portal projection: a short pointer stub to config/CLAUDE.md (the file is
+      entirely invariant content, all of which moves to config/CLAUDE.md). Verbatim body in
+      execution_steps. No live code/infra references it (grep-verified).
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Append the sibling top-level key docs_root_allowlist: (allowed_files list of the 10 sanctioned
+      governance root files INCLUDING CLAUDE.md, + grandfathered_globs for the retiring INTENT-* /
+      DECISIONS* / SESSION_LOG* sets). This is the placement-registry key the P1 header explicitly
+      reserved; file-router.yaml is non-ritual (its header opts it out of validate_contract_drift),
+      so the addition is drift-safe. Verbatim block in execution_steps.
+  - file: scripts/checks/hygiene/validate_placement.py
+    action: Modify
+    purpose: >-
+      Extend the EXISTING registered validate_placement check (a rule inside it, NOT a new registered
+      check -- no registry/facade edit) with the docs-root allowlist scan: two helpers
+      (_load_docs_root_allowlist, _docs_root_stray_files) + a block that reuses the already-computed
+      git ls-files snapshot to fail any NEW depth-1 docs-root file outside the allowlist. Absent key
+      -> skip (back-compat); malformed key -> fail. Verbatim code in execution_steps.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add unit tests to TestValidatePlacement covering the new allowlist logic to 100% new-code
+      coverage (per the scripts/checks/** -> tests/test_validate.py mapping, Decision 104), including
+      a regression test that docs/CLAUDE.md is allowlisted and not flagged by intent-doc-freeze.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    RS-05: scripts/CLAUDE.md, config/CLAUDE.md, and docs/CLAUDE.md all exist and carry their named
+    invariants -- scripts/ (root-vs-subpackage placement + bin/venv-python + checks-registry
+    pointer), config/ (T-1.7 three-zone + "config/agent/ NOT bundled into any Lambda zip"), docs/
+    (docs-root allowlist + class->home map + RS-07 plans lifecycle).
+  - >-
+    config/README.md and config/agent/README.md are reduced to CD.23 portal projections that point
+    at config/CLAUDE.md and no longer restate the three-zone/bundling invariant (config/README.md's
+    "Bundled into Lambda zips" three-zone bullet block is gone).
+  - >-
+    RS-03: docs/contracts/file-router.yaml carries a docs_root_allowlist key whose allowed_files
+    includes all 10 governance surfaces (the 9 sanctioned files + CLAUDE.md) and whose
+    grandfathered_globs cover INTENT-*.md, DECISIONS.md, DECISIONS_ARCHIVE.md, SESSION_LOG.md,
+    SESSION_LOG_ARCHIVE.md.
+  - >-
+    RS-03 enforcement: validate_placement fails when a NEW out-of-class file is added at the docs
+    root (proven by the staged-probe VP step), and PASSES on the current tree (all 27 post-merge
+    docs-root files -- 26 existing + docs/CLAUDE.md -- are allowlisted or grandfathered), so it is
+    TRUE at merge.
+  - >-
+    The INTENT-*/DECISIONS*/SESSION_LOG* grandfathered sets are NOT stray-flagged, and docs/CLAUDE.md
+    is not flagged by validate_intent_doc_freeze (self-consistency: the plan does not fail on the
+    file it creates).
+  - >-
+    New allowlist logic in validate_placement.py has 100% unit-test coverage in
+    tests/test_validate.py; the existing link-validity behaviour and its tests are unchanged.
+  - >-
+    validate.py --pre passes green (authoritative pre-merge gate), and no Lambda build/deploy is
+    triggered (compute_affected_artifacts over the scope files returns {} -- V2 confirmed).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: Validate this PLAN document against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-context-locality-claude-md.yaml
+    expected: Reports the plan validates against the PlanDocument schema (no errors).
+    fix_if: A schema error names the offending field; correct it (extra keys forbidden; every VP step needs a non-empty command).
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the three CLAUDE.md files exist and carry their named invariant anchors.
+    command: >-
+      test -f scripts/CLAUDE.md && test -f config/CLAUDE.md && test -f docs/CLAUDE.md && grep -q 'subpackage' scripts/CLAUDE.md && grep -q 'bin/venv-python' scripts/CLAUDE.md && grep -q 'registry.py' scripts/CLAUDE.md && grep -qi 'three-zone' config/CLAUDE.md && grep -q 'NOT bundled into any Lambda zip' config/CLAUDE.md && grep -q 'docs_root_allowlist' docs/CLAUDE.md && grep -q 'docs/plans/archive/' docs/CLAUDE.md && echo CLAUDE_MD_OK
+    expected: Prints CLAUDE_MD_OK (all three files present with their invariant anchors).
+    fix_if: A missing file or absent anchor means the body was not written per execution_steps; add the missing content.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm both config READMEs are reduced to CD.23 projections pointing at config/CLAUDE.md and no longer restate the bundling invariant.
+    command: >-
+      grep -q 'config/CLAUDE.md' config/README.md && grep -q 'config/CLAUDE.md' config/agent/README.md && ! grep -q 'Bundled into Lambda zips' config/README.md && echo READMES_REDUCED
+    expected: Prints READMES_REDUCED (both point at config/CLAUDE.md; the old three-zone "Bundled into Lambda zips" bullet is gone from config/README.md).
+    fix_if: If a pointer is missing or the old three-zone bullet block remains, re-apply the verbatim README edits from execution_steps.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the docs_root_allowlist key exists with the 10 governance files (incl CLAUDE.md) and the grandfathered globs.
+    command: >-
+      bin/venv-python -c "import yaml; a=yaml.safe_load(open('docs/contracts/file-router.yaml'))['docs_root_allowlist']; ok = 'CLAUDE.md' in a['allowed_files'] and len(a['allowed_files'])==10 and 'INTENT-*.md' in a['grandfathered_globs'] and 'DECISIONS_ARCHIVE.md' in a['grandfathered_globs'] and 'SESSION_LOG_ARCHIVE.md' in a['grandfathered_globs']; print('ALLOWLIST_OK' if ok else 'ALLOWLIST_FAIL')"
+    expected: Prints ALLOWLIST_OK.
+    fix_if: ALLOWLIST_FAIL means an entry is missing/misspelled; correct the docs_root_allowlist block (CLAUDE.md must be present; allowed_files must be exactly 10).
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: Run validate_placement against the REAL tree -- both link-validity (RS-04) and the docs-root allowlist (RS-03) must pass now (TRUE at merge; grandfathered sets + docs/CLAUDE.md not flagged).
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_placement import validate_placement; f=[]; validate_placement(f); print('PLACEMENT_OK' if not f else 'PLACEMENT_FAIL: '+'; '.join(f))"
+    expected: Prints PLACEMENT_OK (zero dead targets, zero docs-root strays -- all 27 docs-root files allowlisted or grandfathered).
+    fix_if: PLACEMENT_FAIL lists the offender; if a real docs-root file is flagged, add it to allowed_files/grandfathered_globs (it is a genuine governance/retiring surface); if a dead target, fix that file-router row.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: Enforcement negative-proof -- a NEW out-of-class docs-root file must fail the check. Stage a probe stray, run the check, expect it flagged, then unstage and remove it (self-cleaning).
+    command: >-
+      tmpf=docs/__placement_probe_DELETE_ME.md; printf 'probe\n' > "$tmpf"; git add -- "$tmpf"; OUT=$(bin/venv-python -c "from scripts.checks.hygiene.validate_placement import validate_placement; f=[]; validate_placement(f); print('ENFORCED' if any('__placement_probe' in x for x in f) else 'NOT_ENFORCED')"); git rm -q --cached -- "$tmpf"; rm -f -- "$tmpf"; echo "$OUT"
+    expected: Prints ENFORCED (the staged probe was flagged as an out-of-class docs-root file), and the probe is unstaged + deleted afterward.
+    fix_if: NOT_ENFORCED means the docs-root scan did not run or did not flag the probe -- confirm the docs_root_allowlist key is present and the scan enumerates depth-1 docs/ files from the tracked snapshot.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: Self-consistency -- confirm validate_intent_doc_freeze does NOT flag the new docs/CLAUDE.md (Decision 86 mechanism-interaction check).
+    command: >-
+      bin/venv-python -c "from scripts.checks.contracts.validate_intent_doc_freeze import validate_intent_doc_freeze; f=[]; validate_intent_doc_freeze(f); print('FREEZE_OK' if not any('CLAUDE' in x for x in f) else 'FREEZE_FLAGS_CLAUDE')"
+    expected: Prints FREEZE_OK (the guard scans only INTENT-*.md; docs/CLAUDE.md is untouched).
+    fix_if: FREEZE_FLAGS_CLAUDE would indicate the freeze guard's scope changed to include CLAUDE.md -- it should not; do not broaden that guard in this plan.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: Run the validate_placement unit tests (existing link-validity + new docs-root allowlist) by class path.
+    command: bin/venv-python -m pytest tests/test_validate.py::TestValidatePlacement -q
+    expected: All tests pass (existing tests unchanged; new docs-root allowlist tests green).
+    fix_if: A failing test names the case; fix the check or the test. If an EXISTING link-validity test broke, the change was not additive -- restore _load_router untouched.
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm 100% coverage of the new validate_placement lines (V2 obligation) via the diff-aware coverage checker.
+    command: bin/venv-python -m pytest tests/test_validate.py::TestValidatePlacement --cov=scripts.checks.hygiene.validate_placement --cov-report=term-missing -q
+    expected: The class passes and the term-missing report shows no uncovered lines in the new _load_docs_root_allowlist / _docs_root_stray_files helpers or the new block.
+    fix_if: term-missing lists an uncovered new line; add a direct helper/integration test hitting it. (If pytest-cov is unavailable, run `bin/venv-python -m scripts.validate` and confirm validate_test_coverage reports 100% for the new code.)
+  - step: 10
+    phase: pre-deploy
+    hermetic: false
+    action: Run the authoritative fast presubmit tier over the whole change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exits 0 (all checks pass, incl validate_placement, validate_test_count_coupling, and pytest_diff).
+    fix_if: A named check fails; diagnose and forward-fix on-branch (never disable a check).
+constraints:
+  - IMPLEMENTATION plan type; no recommendations bundled or filed (orchestrator constraint; STRATEGIC suspended per Decision 67).
+  - >-
+    Exactly three CLAUDE.md files are created (scripts/, config/, docs/) -- the audit judged each
+    earns its context cost. Do NOT blanket-add CLAUDE.md to other directories in this plan.
+  - >-
+    Do NOT touch the root CLAUDE.md -- validate_claude_md_pointer_invariant requires it to remain
+    exactly "@AGENTS.md\n". The three new files are DIRECTORY CLAUDE.md files, which that check does
+    not police.
+  - >-
+    The docs-root rule is a rule INSIDE the already-registered validate_placement check -- do NOT add
+    a new registered check, do NOT edit scripts/checks/registry.py or the scripts/validate.py facade
+    (the registry frozen-count test tests/test_checks_registry.py must stay green), and do NOT add a
+    check to ci.yml (validate.py is the single source of truth).
+  - >-
+    Keep _load_router and its existing 20 TestValidatePlacement tests UNCHANGED -- the docs-root scan
+    is purely additive (a second block reusing the same git ls-files snapshot). Absent
+    docs_root_allowlist key -> scan skipped (back-compat); malformed-present -> fail.
+  - >-
+    Reduce, do not gut: config/README.md keeps its human config-reference body (Configuration Files,
+    env vars, troubleshooting) -- only the three-zone invariant block is replaced by a CD.23 pointer.
+    The file-router config-reference route still resolves.
+  - No emojis; ASCII hyphens only (AGENTS.md style -- do NOT use em dashes in the new CLAUDE.md headings even though older sibling files do); ruff line length 127.
+  - "Public-repo content boundary (Decision 101): all new/edited files are engineering docs/config -- no account IDs, ARNs, ExternalIds, credentials, or alpha."
+  - No rescue agents or workaround loops (Decision 55). Forward-fix on-branch only.
+  - Never edit or commit on main; work on the harness claude/ branch only (AGENTS.md Git-ops).
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (84/84 decisions triaged; 3 NOTE-severity flags, all resolved -- no BLOCK/WARN). CITE: Decision 86 (route machine field-semantics -> docs/contracts/ [the docs_root_allowlist lives in file-router.yaml] + anti-companion-doc de-duplication [READMEs -> config/CLAUDE.md pointer; the retained config/README.md body must NOT re-duplicate the three-zone invariant]); Decision 104 (validate.py registered-check registry -- the docs-root rule goes INSIDE validate_placement, tests in tests/test_validate.py per the scripts/checks/** mapping); Decision 101 (public-content boundary; and allowlist-completeness -- ROADMAP-SEMANTO.yaml must be in allowed_files); Decision 79/CD.24 (per-Lambda deploy gating -- compute_affected_artifacts over the scope files returns {} so V2 not V3 is correct; substantiates the config/agent-not-bundled invariant). CD.23 (candidate_decision in ROADMAP-PLATFORM.yaml: 'the human portal is a CURATED PROJECTION, not a parallel source; if a README conflicts with CLAUDE.md the canonical CLAUDE.md wins' -- the ACTUAL basis for reducing the two config READMEs to CLAUDE.md-pointer projections). RELATED: Decision 105 (DECISIONS_ARCHIVE.md is a real docs-root target -- covered by the DECISIONS_ARCHIVE.md glob), Decision 67 (STRATEGIC clause retained -> single IMPLEMENTATION plan), Decision 85/87 (plans artefacts / plans-as-warehouse deferred -- neighbourhood for the RS-07 lifecycle statement; no decision mandates archive/, the convention is additive), Decision 65 (ops.yaml canonical / no new briefing docs -- aligns with README->pointer)."
+  - "gates: decision-scout=FLAGS_FOUND (3 NOTE, all resolved); plan-critique=PROCEED after 1 round(s)"
+  - "Scout NOTE 1 (Decision 86 self-consistency) RESOLVED: docs/CLAUDE.md is itself a depth-1 docs-root file the new check enumerates, so CLAUDE.md is ADDED to allowed_files (now 10 entries) and VP step 5/6/7 assert it passes both validate_placement and validate_intent_doc_freeze. This was a real bug catch -- without it CI would fail on the file the plan creates."
+  - "Scout NOTE 2 (Decision 111 vs CD.23 citation precision) RESOLVED: Decision 111 ratifies CD.20 (the top-level PUBLIC portal set: root README.md/AGENTS.md/SECURITY.md/EVALUATION-PROMPTS.yaml) -- NOT directory-level READMEs. The correct authority for reducing config/README.md + config/agent/README.md to CLAUDE.md-pointer projections is CD.23 (projection-not-parallel-source invariant, verified in ROADMAP-PLATFORM.yaml). The plan + config/CLAUDE.md cite CD.23; Decision 111 is retained only as public-boundary context."
+  - "Scout NOTE 3 (Decision 118/CD.25 contract-drift) RESOLVED: docs/contracts/file-router.yaml's own header declares it is NOT a Class A/B/C ritual contract (no top-level contract:/class: block), so validate_contract_drift skips it (precedent: telemetry-lexicon.yaml). Adding the docs_root_allowlist sibling key is exactly the additive extension the P1 header reserved ('later placement-registry keys (docs-root allowlist, scripts-root allowlist)') -- drift-safe, no ritual needed."
+  - "ci_rca HARD BLOCK deferred by human directive (relayed by orchestrator): the open rec-2637 [Critical] (test_file_decision_skip_sync mock targets a stale re-export namespace after the ops_portal split) is a CI failure under SEPARATE investigation on branch codex/investigate-ci-failure-root-cause (confirmed live on origin). It is unrelated to P3 docs/config/check scope and does not block this plan (same deferral basis as P2 / PLAN-audit-artifact-consolidation)."
+  - "Design: the docs-root allowlist is DATA-DRIVEN (a docs_root_allowlist sibling key in file-router.yaml the check reads), not hardcoded in the .py -- matches the P1 header's reserved-key note, Decision 86 (machine semantics in contracts/), and lets future strays be governed by editing one registry, not code. Chosen over an in-code path list."
+  - "Design: grandfathering is by DEFERRAL, not duplication. INTENT-*.md existence-eligibility stays owned by the EXISTING validate_intent_doc_freeze guard (which reads docs/intent-migration/MANIFEST.yaml and AUTO-SHRINKS as waves flip entries to disposition_state: done); the docs-root allowlist merely exempts the retiring-set globs from its stray-scan so it does not double-report the 13 live INTENT docs. A NEW INTENT-foo.md without a manifest entry is still blocked -- by intent-doc-freeze, not by the docs-root check. This avoids the two-surfaces-that-must-sync anti-pattern (AGENTS.md). DECISIONS*/SESSION_LOG* have no dedicated guard, so their grandfathered_globs are the allow-for-now mechanism, annotated with owners T1.5 / T2.26-T-1.9."
+  - "Design: the check polices depth-1 FILES under docs/ only (from the git ls-files TRACKED snapshot, so untracked scratch files never trip CI and only committed strays fail -- matching the audit's `git ls-files docs | awk 'NF==2'` evidence). Subdirectories are the classed homes and are NOT policed by this rule (adding a class home is a deliberate registry act; the finding is about loose files)."
+  - "Verified (69b209a): validate_claude_md_pointer_invariant polices ONLY the root CLAUDE.md; directory CLAUDE.md content is unconstrained. No other check polices directory CLAUDE.md content. validate_placement is registered + wired into BOTH tiers (registry.py pre_sequence L100, full_sequence L176); extending it needs no registry/facade change. compute_affected_artifacts(scope)=={} (V2). P2 homes exist tracked: docs/plans/reports/, audits/legacy/. Current docs root = 26 depth-1 files (9 governance + 13 INTENT + DECISIONS x2 + SESSION_LOG x2); +docs/CLAUDE.md = 27 post-merge, all covered."
+  - "Branch claude/repo-restructure-audit-hm1gti at origin/main 69b209a (includes P1+P2); clean tree at planning time, 0 commits behind -- no rebase needed (Main Divergence Assessment: no overlap)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/repo-restructure-audit-hm1gti)
+  - docs/PROJECT_CONTEXT.md read (File Router section already points at file-router.yaml + validate_placement.py -- no PROJECT_CONTEXT edit needed)
+  - Audit findings RS-05 + RS-03 + proposed_target_tree principles/nodes read from audits/repository-structure-cb02572.yaml
+  - Current config/README.md + config/agent/README.md read (three-zone rule at README.md:3-7; agent README is entirely invariant content; config/agent/README.md already drift-free -- names the 4 live subtrees + cost_reconciliation.yaml)
+  - validate_placement.py + its 20 TestValidatePlacement tests + _common helpers read; the docs-root extension designed to leave _load_router and all existing tests untouched
+  - docs/intent-migration/MANIFEST.yaml grandfather mechanism + validate_intent_doc_freeze confirmed (allowed set = documents[] with disposition_state != done; auto-shrinks)
+  - "CLAUDE.md added to allowed_files (self-consistency: docs/CLAUDE.md is a depth-1 docs-root file)"
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - |
+    Create scripts/CLAUDE.md with exactly this body (ASCII hyphens, no emoji, lines <=127):
+    ---8<--- scripts/CLAUDE.md
+    # scripts/ - directory-scoped rules
+
+    Loaded automatically when Claude reads or edits files in this directory. Universal rules in repo-root `CLAUDE.md` still apply.
+
+    ## Placement: root vs subpackage
+    `scripts/` root holds only entry points (run as `python -m scripts.<name>`) and genuine unclassed
+    singles. Any prefix family of >= 3 related modules is a subpackage, not loose root files -- the
+    existing `scripts/checks/`, `scripts/executor/`, `scripts/verifiers/` packages prove the pattern.
+
+    - Governs NEW files now: do not add a third `scripts/<prefix>_*.py` sibling at the root -- create
+      `scripts/<prefix>/` and place it there.
+    - Existing un-nested families (`ci_rca_*`, `session_*`, `sync_*`, `roadmap`/`plan_*`, `llm_*`,
+      `ops_*`) are grandfathered; they migrate under the RS-01 subpackaging plans (rec-164), one
+      family per PR with a same-commit reference rewrite. Do not migrate them ad hoc.
+
+    ## Invocation
+    Always invoke `bin/venv-python` (never bare `python`/`python3`) -- the wrapper auto-detects the
+    platform and resolves the correct venv binary. Each Bash tool call is independent; do not rely on
+    `source .venv/bin/activate`.
+
+    ## Adding a validate.py check
+    CI checks are registered, not hand-wired into `scripts/validate.py`. Add the module under
+    `scripts/checks/<domain>/`, decorate it `@register(...)`, and insert its name in the ordered tier
+    sequence(s) in `scripts/checks/registry.py`. `scripts/validate.py` is the single source of truth
+    for CI gates (AGENTS.md merge protocol) -- never add a CI check without adding it here first.
+    --->8---
+  - |
+    Create config/CLAUDE.md with exactly this body:
+    ---8<--- config/CLAUDE.md
+    # config/ - directory-scoped rules
+
+    Loaded automatically when Claude reads or edits files in this directory. Universal rules in repo-root `CLAUDE.md` still apply.
+
+    ## Three-zone layout (T-1.7)
+    `config/` splits into three zones by who loads a file and whether it ships in a Lambda zip:
+
+    - Root (shared): `config.yaml` (active, gitignored copy/symlink), `config.company.yaml`,
+      `config.personal.yaml`, `config.yaml.example` -- runtime config loaded by `src.common.config`.
+      BUNDLED into Lambda zips.
+    - `lambda/<name>/`: per-Lambda runtime payloads, bundled into `<name>.zip` by
+      `scripts/build_lambda.py`. BUNDLED (that Lambda only).
+    - `agent/<consumer>/`: agent-consumed config (DQ rules, executor prompts, IAM runner manifest,
+      verification registry, cost-reconciliation baselines). NOT bundled into any Lambda zip -- only
+      Claude Code agents and CI scripts read it.
+
+    ## Invariant: config/agent/ is never Lambda-bundled
+    `build_lambda.py` bundles ONLY the shared root config and the artifact's `config/lambda/<name>/`
+    payload (per-Lambda manifest, Decision 79 / CD.24). `config/agent/**` is out of every zip. Editing
+    a file here changes agent/CI behaviour, not deployed Lambda behaviour -- and a Lambda-bundling plan
+    must NOT assume `config/agent/` files reach the function. (This is why `config/agent/` does not
+    trigger the Lambda Deployment Assessment in `/plan`.)
+
+    ## READMEs are portal projections (CD.23)
+    `config/README.md` and `config/agent/README.md` are curated portal projections (CD.23): the
+    authoritative placement/bundling rules live in THIS file, and if a README conflicts with it the
+    canonical CLAUDE.md wins. Do not restate the zone or bundling rules in a README -- point at
+    `config/CLAUDE.md` instead (two synced surfaces is drift by design).
+    --->8---
+  - |
+    Create docs/CLAUDE.md with exactly this body:
+    ---8<--- docs/CLAUDE.md
+    # docs/ - directory-scoped rules
+
+    Loaded automatically when Claude reads or edits files in this directory. Universal rules in repo-root `CLAUDE.md` still apply.
+
+    ## docs/ root allowlist (RS-03)
+    The `docs/` root (depth-1 files) holds ONLY canonical governance surfaces; every other class lives
+    in a subtree. A new file at the docs root fails `validate_placement` unless it is an allowlisted
+    governance file or a grandfathered retiring-set member. The machine-readable allowlist is the
+    `docs_root_allowlist:` key in `docs/contracts/file-router.yaml` (the single source of truth the
+    check reads) -- register a genuinely-new governance surface there, never by loosening the check.
+
+    Allowed governance root files: `ARCHITECTURE.md`, `ARCHITECTURE-WORKFLOW.md`, `CHANGELOG.md`,
+    `CLAUDE.md` (this file), `GETTING_STARTED.md`, `PROJECT_CONTEXT.md`, and the roadmaps
+    (`ROADMAP-PLATFORM.yaml`, `ROADMAP-PRODUCT.md`, `ROADMAP-PRODUCT.yaml`, `ROADMAP-SEMANTO.yaml`).
+
+    Grandfathered retiring sets (allowed now, retire on their own schedule -- do not add to them):
+    `INTENT-*.md` (owner T5.5; existence separately gated by `validate_intent_doc_freeze` via
+    `docs/intent-migration/MANIFEST.yaml`), `DECISIONS.md` / `DECISIONS_ARCHIVE.md` (owner T1.5),
+    `SESSION_LOG.md` / `SESSION_LOG_ARCHIVE.md` (owner T2.26 / T-1.9).
+
+    ## Class -> home map
+    Every non-governance doc class has a subtree home; put new files there, not at the root:
+
+    | Class | Home |
+    |---|---|
+    | Plan documents (`PLAN-{slug}.yaml`) | `docs/plans/` |
+    | Machine-readable contracts | `docs/contracts/` |
+    | Audit prompts (`AUDIT-{slug}.md`) | `docs/audit-prompts/` |
+    | REPORT-ONLY deliverables + spike notes | `docs/plans/reports/` |
+    | Data-quality docs | `docs/dq/` |
+    | Operational runbooks | `docs/runbooks/` |
+    | INTENT-migration manifest | `docs/intent-migration/` |
+
+    Audit OUTPUTS live in `audits/`, not under `docs/`. The discovery index is
+    `docs/contracts/file-router.yaml`.
+
+    ## Plans lifecycle (RS-07)
+    `docs/plans/` root holds only ACTIVE plans (not yet merged-and-verified). Completed and
+    deprecated-format plans move under `docs/plans/archive/` (in-tree history, out of the hot glob
+    path) -- keeps the active-set glob cheap without deleting Decision 85 history. The archive sweep
+    itself is RS-07; `docs/plans/archive/` is created on first archival.
+    --->8---
+  - |
+    Modify config/agent/README.md -- REPLACE its entire body with this CD.23 pointer stub:
+    ---8<--- config/agent/README.md
+    # config/agent/
+
+    Agent-consumed config (DQ rules, executor prompts, IAM runner manifest, verification registry,
+    cost-reconciliation baselines). NOT bundled into any Lambda zip.
+
+    Placement and bundling rules are authoritative in `config/CLAUDE.md` (auto-loads when you edit this
+    tree). This README is a CD.23 portal projection; see `config/CLAUDE.md` for the three-zone layout
+    and the never-Lambda-bundled invariant.
+    --->8---
+  - |
+    Modify config/README.md -- replace ONLY the current three-zone block (lines 3-7, from
+    "This directory is split into three zones:" through the "agent/<consumer>/ ... read from here."
+    bullet) with this pointer; leave "## Configuration Files" onward UNCHANGED:
+    OLD (delete these lines):
+      This directory is split into three zones:
+
+      - **Root (shared):** `config.yaml`, `config.yaml.example`, `config.company.yaml`, `config.personal.yaml` -- runtime config loaded by `src.common.config`. Bundled into Lambda zips.
+      - **`lambda/<name>/`:** Per-Lambda runtime payloads. Bundled into `<name>.zip` by `scripts/build_lambda.py`. Initially empty placeholders for `data-pipeline` and `ops-compaction`.
+      - **`agent/<consumer>/`:** Agent-consumed config (DQ rules, executor prompts, copilot registry, IAM manifest). NOT bundled into any Lambda zip. Only Claude Code agents and CI scripts read from here.
+    NEW (insert in their place):
+      This directory splits into three zones (root shared / `lambda/<name>/` / `agent/<consumer>/`). The
+      authoritative zone layout and the "config/agent/ is never Lambda-bundled" invariant live in
+      `config/CLAUDE.md` (auto-loads when you edit this tree). This README is a CD.23 portal projection
+      for human config reference; it does not restate the placement/bundling rules.
+  - |
+    Modify docs/contracts/file-router.yaml -- APPEND this sibling top-level key AFTER the entire
+    `routes:` list (same indentation level as `routes:`/`schema_version:`), NOT as a route:
+    ---8<--- append to docs/contracts/file-router.yaml
+    # docs/-root placement allowlist (RS-03). A sibling top-level key (reserved by this file's header),
+    # NOT a route. scripts/checks/hygiene/validate_placement.py reads this and fails the build on any
+    # NEW depth-1 file under docs/ that is neither an allowed governance surface nor a grandfathered
+    # retiring-set member. Subdirectories (class homes) are not policed here. True at merge: every
+    # current docs/-root file is covered.
+    docs_root_allowlist:
+      # Canonical governance surfaces sanctioned directly under docs/ (exact filename match).
+      # CLAUDE.md is the docs/ directory-rules file added by this phase (RS-05) -- it is a governance
+      # surface and must be listed so the check does not flag the file that introduced the check.
+      allowed_files:
+        - ARCHITECTURE.md
+        - ARCHITECTURE-WORKFLOW.md
+        - CHANGELOG.md
+        - CLAUDE.md
+        - GETTING_STARTED.md
+        - PROJECT_CONTEXT.md
+        - ROADMAP-PLATFORM.yaml
+        - ROADMAP-PRODUCT.md
+        - ROADMAP-PRODUCT.yaml
+        - ROADMAP-SEMANTO.yaml
+      # Retiring sets grandfathered pending their owners (fnmatch globs). Each retires on its own
+      # schedule; remove its entry when the owner completes. INTENT-*.md existence is separately
+      # gated by validate_intent_doc_freeze via docs/intent-migration/MANIFEST.yaml.
+      grandfathered_globs:
+        - "INTENT-*.md"            # owner T5.5 (intent-migration waves)
+        - "DECISIONS.md"           # owner T1.5
+        - "DECISIONS_ARCHIVE.md"   # owner T1.5
+        - "SESSION_LOG.md"         # owner T2.26 / T-1.9
+        - "SESSION_LOG_ARCHIVE.md" # owner T2.26 / T-1.9
+    --->8---
+  - |
+    Modify scripts/checks/hygiene/validate_placement.py -- purely additive:
+    (a) add `import fnmatch` in the stdlib import block (near `from pathlib import Path`).
+    (b) add two module-level helpers (place after _dead_targets_for_route, before validate_placement):
+
+    def _load_docs_root_allowlist(path: Path) -> tuple[set[str] | None, list[str], str | None]:
+        """Parse the optional `docs_root_allowlist` sibling key from the router file.
+
+        Returns (allowed_files, grandfathered_globs, error):
+          - (None, [], None)   -> key ABSENT: rule not configured; caller skips the docs-root scan.
+          - (set, list, None)  -> key present and well-formed: caller runs the scan.
+          - (None, [], "msg")  -> key present but malformed: caller appends the failure.
+        Never raises.
+        """
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            return None, [], f"could not read/parse {path}: {exc}"
+        if not isinstance(data, dict) or "docs_root_allowlist" not in data:
+            return None, [], None
+        block = data["docs_root_allowlist"]
+        if not isinstance(block, dict):
+            return None, [], "docs_root_allowlist is not a mapping"
+        allowed = block.get("allowed_files", [])
+        globs = block.get("grandfathered_globs", [])
+        if not isinstance(allowed, list) or any(not isinstance(x, str) or not x for x in allowed):
+            return None, [], "docs_root_allowlist.allowed_files must be a list of non-empty strings"
+        if not isinstance(globs, list) or any(not isinstance(x, str) or not x for x in globs):
+            return None, [], "docs_root_allowlist.grandfathered_globs must be a list of non-empty strings"
+        return set(allowed), list(globs), None
+
+
+    def _docs_root_stray_files(tracked: set[str], allowed: set[str], globs: list[str]) -> list[str]:
+        """Depth-1 tracked files under docs/ that are neither allowlisted nor grandfathered."""
+        strays: list[str] = []
+        for path_str in sorted(tracked):
+            if not path_str.startswith("docs/"):
+                continue
+            rest = path_str[len("docs/") :]
+            if not rest or "/" in rest:
+                continue
+            if rest in allowed or any(fnmatch.fnmatch(rest, g) for g in globs):
+                continue
+            strays.append(path_str)
+        return strays
+
+    (c) in validate_placement, AFTER the existing link-validity block (reuse the `tracked` snapshot
+    already computed at ~line 130), append:
+
+        print("\n=== Docs-root allowlist check (RS-03) ===")
+        allowed, globs, allow_err = _load_docs_root_allowlist(path)
+        if allow_err is not None:
+            failed.append(f"Docs-root allowlist: {allow_err}")
+        elif allowed is None:
+            print("  SKIP: no docs_root_allowlist key configured.")
+        else:
+            strays = _docs_root_stray_files(tracked, allowed, globs)
+            if strays:
+                failed.append("Docs-root allowlist: out-of-class docs-root file(s) (RS-03): " + ", ".join(strays))
+            else:
+                print(f"  PASS: docs/ root within allowlist ({len(allowed)} allowed, {len(globs)} grandfathered).")
+
+    Do NOT modify _load_router or any existing helper -- the change is a second, independent block.
+  - |
+    Add unit tests to tests/test_validate.py (class TestValidatePlacement) for 100% new-code
+    coverage. Cover every new branch:
+    - Direct _load_docs_root_allowlist: (i) absent key -> (None, [], None); (ii) well-formed ->
+      (set, list, None); (iii) block not a mapping -> error; (iv) allowed_files not a list / has a
+      non-string -> error; (v) grandfathered_globs not a list / has a non-string -> error; (vi)
+      unparseable file -> "could not read/parse" error; (vii) top-level non-dict (e.g. a YAML list)
+      -> (None, [], None) skip.
+    - Direct _docs_root_stray_files: mixed input (an allowed file, a grandfathered INTENT-*.md, a
+      docs/<subdir>/file.md, and a stray) -> returns ONLY the stray; all-covered -> [].
+    - Integration via validate_placement(failed, router_path=..., mocking `scripts.checks._common.run`
+      with _mock_ls_files): (a) happy -- router with docs_root_allowlist + snapshot of
+      docs/ARCHITECTURE.md + docs/INTENT-x.md + docs/contracts/file-router.yaml -> failed empty,
+      prints PASS; (b) stray -- snapshot adds docs/STRAY.md -> one failure containing "docs/STRAY.md"
+      and "RS-03"; (c) back-compat -- router WITHOUT the key + snapshot with docs/STRAY.md -> no
+      docs-root failure (SKIP), link-validity still runs; (d) malformed -- docs_root_allowlist: "x"
+      (a string) -> one failure containing the malformed message; (e) docs/CLAUDE.md regression --
+      allowed_files includes CLAUDE.md + snapshot has docs/CLAUDE.md -> not flagged.
+    Run `bin/venv-python -m pytest tests/test_validate.py::TestValidatePlacement --cov=scripts.checks.hygiene.validate_placement --cov-report=term-missing -q` and add tests until no new line is missing.
+  - "Execute the Verification Plan -- run each step (1-10) in order; loop until all pass. This is a docs/config/check change with no deploy phase (compute_affected_artifacts == {}). On any failure, forward-fix on-branch (Decision 55); never disable a check."
+  - "Report: the 3 CLAUDE.md files created + their invariants, the 2 READMEs reduced to CD.23 projections, the docs_root_allowlist block added (10 allowed_files incl CLAUDE.md + 5 grandfathered globs), the validate_placement extension + new tests (coverage %), and the full VP results (each step verdict)."
+work_areas: []
+rollback: >-
+  All changes are additive files + surgical text edits + one additive check block on the branch;
+  revert with `git checkout -- .` before commit, or `git revert <sha>` after. No infrastructure, no
+  deploy, no data migration, no Lambda artifact touched (compute_affected_artifacts == {}) -- rollback
+  is a plain git operation with zero external side effects.
