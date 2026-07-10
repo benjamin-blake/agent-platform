@@ -7,8 +7,10 @@
 > per the PIVOT TRANSCRIPT architectural reset. This legacy markdown
 > is retained for one transition cycle as a recovery artefact and will
 > be removed in a follow-up commit per Section 10 gate #4 of the audit.
-> Conversion audit report: [`docs/audit-reports/AUDIT-product-roadmap-yaml-conversion.yaml`](./audit-reports/AUDIT-product-roadmap-yaml-conversion.yaml).
-> Platform gaps surfaced during conversion: [`docs/audit-reports/PRODUCT-ROADMAP-PLATFORM-GAPS.yaml`](./audit-reports/PRODUCT-ROADMAP-PLATFORM-GAPS.yaml).
+> This conversion was driven by the product-roadmap-YAML audit prompt
+> ([`docs/audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md`](./audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md)).
+> Its originally-planned conversion-report and platform-gaps YAML deliverables were never committed
+> under those names; historical roadmap-audit outputs are archived under [`audits/legacy/`](../audits/legacy/).
 
 ---
 
