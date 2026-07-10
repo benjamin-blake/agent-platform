@@ -1687,7 +1687,10 @@ class TestCiRcaSchemaEnforcement:
 
         # Patch CATALOG_ALIAS to 'memory' so reconcile_table_columns resolves table_fq
         # as 'memory.ops_recommendations_*' -- valid in a plain DuckDB in-memory connection.
-        with patch("src.common.ducklake_runtime.CATALOG_ALIAS", "memory"):
+        # reconcile_table_columns moved to ducklake_tables (PLAN-sloc-ducklake-layer); it imports
+        # CATALOG_ALIAS directly from there, so the patch target must move with it -- a facade-namespace
+        # patch would silently no-op (the moved function no longer reads rt.CATALOG_ALIAS).
+        with patch("src.common.ducklake_tables.CATALOG_ALIAS", "memory"):
             result1 = rt.reconcile_table_columns(con, table="ops_recommendations")
             result2 = rt.reconcile_table_columns(con, table="ops_recommendations")
 

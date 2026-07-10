@@ -1,51 +1,54 @@
-# complexity-waiver: decision-43
-"""DuckLake operational-lakehouse runtime (T2.17 / CD.33, Decision 81).
+"""DuckLake operational-lakehouse runtime facade (T2.17 / CD.33, Decision 81).
 
-Single ATTACH/connection authority plus the CD.33 write/read primitives shared by the
-ducklake_writer and ducklake_reader Lambdas and the Neon smoke test. There is exactly ONE
-ATTACH implementation: the dev/smoke path installs extensions over the network, the Lambda
-path loads them from a baked layer (extension_directory + autoload/autoinstall off +
-custom_extension_repository fail-closed). An `extension_directory` argument selects the mode.
+Single ATTACH/connection authority: this module owns the warm-connection cache and the one
+ATTACH implementation shared by the ducklake_writer/ducklake_reader Lambdas and the Neon smoke
+test (dev/smoke installs extensions over the network; the Lambda path loads them from a baked
+layer; `extension_directory` selects the mode).
 
 Design invariants (CD.33):
   - Idempotent append: the history table is keyed by a monotonic ULID minted ONCE per write,
     OUTSIDE the OCC-retry loop, and reused on every retry. MERGE-on-ULID insert-if-not-matched
     de-duplicates, so a retried write never double-appends (no engine PK; the ULID is a logical
     key enforced by MERGE).
-  - SCD2 derivations minted once: `created_timestamp` is stamped at first insert and CARRIED
-    unchanged on update (never re-stamped); `last_updated_timestamp` is minted once with the
-    ULID and is stable across retries.
   - Schema gate + OCC exhaustion LOUD-FAIL (Decision 55): a rejected field or an exhausted
     retry budget raises; there is never a silent drop or an Athena fallback.
   - Version lockstep (OQ.12): DuckDB is pinned to PINNED_DUCKDB_VERSION; a runtime assert fails
-    loudly on mismatch. A bump follows the clone-rehearsal policy in the catalog-operations
-    runbook.
+    loudly on mismatch.
 
-Field semantics (input vs derived, derivation rules, partition transforms) are sourced from
-config/lambda/ducklake/field_semantics.yaml -- the single contract the schema gate, the
-derivation engine, and the tests all read.
-
-The pure schema layer (spec/SQL builders/gate) lives in ducklake_scd2_schema; this module
-owns the execution layer (connection, OCC transaction, reads, metrics). Dependency is strictly
-one-directional: runtime imports schema, never the reverse.
+Split invariant (PLAN-sloc-ducklake-layer): the write/table-DDL/read/metrics primitives now live
+in ducklake_writes / ducklake_tables / ducklake_reads / ducklake_metrics; this module re-exports
+every symbol so `from src.common.ducklake_runtime import X`, `rt.X`, and
+`patch("src.common.ducklake_runtime.X")` call sites keep binding to real module attributes at the
+original path. The pure schema layer (spec/SQL builders/gate) lives in ducklake_scd2_schema, whose
+re-export block below is unchanged. Dependency is strictly one-directional: this facade imports
+the sub-modules; none of them import it back (Decision 80 acyclic-import discipline).
 """
 
 from __future__ import annotations
 
-import random
-import re
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from src.common import ducklake_spike
+from src.common.ducklake_metrics import (  # noqa: F401 -- re-exported facade surface (PLAN-sloc-ducklake-layer)
+    CLOUDWATCH_NAMESPACE,
+    emit_metric,
+    make_metric_sink,
+)
+from src.common.ducklake_reads import (  # noqa: F401 -- re-exported facade surface (PLAN-sloc-ducklake-layer)
+    assert_read_only_sql,
+    named_read,
+    query_current,
+    read_current,
+    read_history,
+)
 from src.common.ducklake_scd2_schema import (
     _DEFAULT_FIELD_SEMANTICS_PATH,  # noqa: F401 -- re-exported for backward compat
     _FIELD_SEMANTICS_ENV,  # noqa: F401 -- re-exported for backward compat
     _PY_TYPE_FOR_SQL,  # noqa: F401 -- re-exported for backward compat
     CATALOG_ALIAS,
-    NAMED_READS,
+    NAMED_READS,  # noqa: F401 -- re-exported; own use (named_read) moved to ducklake_reads
     NAMED_READS_VERSION,  # noqa: F401 -- re-exported for the reader handler response envelope
     SMOKE_CURRENT_TABLE,  # noqa: F401 -- re-exported for backward compat
     SMOKE_HISTORY_TABLE,  # noqa: F401 -- re-exported for backward compat
@@ -54,34 +57,55 @@ from src.common.ducklake_scd2_schema import (
     AppendOnlyUpdateError,  # noqa: F401 -- re-exported for clients catching write-once violations
     DuckLakeRuntimeError,
     NamedRead,  # noqa: F401 -- re-exported for tests/clients introspecting the registry
-    ReferentialError,
+    ReferentialError,  # noqa: F401 -- re-exported; own use (write_scd2) moved to ducklake_writes
     ScdTableSpec,  # noqa: F401 -- re-exported for backward compat
-    SchemaGateError,
+    SchemaGateError,  # noqa: F401 -- re-exported; own use (write_scd2/file_scd2) moved to ducklake_writes
     StatusTransitionError,  # noqa: F401 -- re-exported for clients catching illegal status reactivation
-    WriteIdentity,
-    WriteResult,
+    WriteIdentity,  # noqa: F401 -- re-exported; own use (write_scd2/file_scd2) moved to ducklake_writes
+    WriteResult,  # noqa: F401 -- re-exported; own use (write_scd2/file_scd2) moved to ducklake_writes
     WriteVerb,  # noqa: F401 -- re-exported for tests/clients introspecting the write-verb registry
-    _build_merge_current_sql,
-    _build_merge_history_sql,
-    _build_select_existing_created_sql,
-    _column_ddl,
+    _build_merge_current_sql,  # noqa: F401 -- re-exported; own use (write_scd2/file_scd2) moved to ducklake_writes
+    _build_merge_history_sql,  # noqa: F401 -- re-exported; own use (write_scd2/file_scd2) moved to ducklake_writes
+    _build_select_existing_created_sql,  # noqa: F401 -- re-exported; own use (write_scd2) moved to ducklake_writes
+    _column_ddl,  # noqa: F401 -- re-exported; own use (create_scd2_tables) moved to ducklake_tables
     _field_semantics_path,  # noqa: F401 -- re-exported for backward compat
     _load_field_semantics_cached,  # noqa: F401 -- re-exported for backward compat
     _order_columns,  # noqa: F401 -- re-exported for backward compat
-    _write_params,
-    check_append_only_guard,
-    check_rec_status_transition,
+    _write_params,  # noqa: F401 -- re-exported; own use (write_scd2/file_scd2) moved to ducklake_writes
+    check_append_only_guard,  # noqa: F401 -- re-exported; own use (write_scd2) moved to ducklake_writes
+    check_rec_status_transition,  # noqa: F401 -- re-exported; own use (write_scd2) moved to ducklake_writes
     describe_named_reads,  # noqa: F401 -- re-exported for the reader handler's `describe` action
     describe_write_verbs,  # noqa: F401 -- re-exported for the writer handler's `describe` action
-    load_field_semantics,
+    load_field_semantics,  # noqa: F401 -- re-exported; own use (write_scd2/file_scd2) moved to ducklake_writes
     ops_table_names,  # noqa: F401 -- re-exported for backward compat
-    resolve_table_spec,
-    schema_gate,
+    resolve_table_spec,  # noqa: F401 -- re-exported; own use moved to ducklake_writes/tables/reads
+    schema_gate,  # noqa: F401 -- re-exported; own use (write_scd2/file_scd2) moved to ducklake_writes
 )
+from src.common.ducklake_tables import create_scd2_tables, reconcile_table_columns  # noqa: F401 -- re-exported facade surface
 from src.common.ducklake_version import pinned_duckdb_version as _pinned_duckdb_version
+from src.common.ducklake_writes import (  # noqa: F401 -- re-exported facade surface (PLAN-sloc-ducklake-layer)
+    CHURN_WRITERS,
+    CHURN_WRITES_PER_WRITER,
+    COMMIT_LATENCY_BUDGET_MS,
+    ENTITY_COUNTERS_TABLE,
+    OCC_COLLISION_RATE_BUDGET,
+    OCC_MAX_BACKOFF_S,
+    OCCRetryExhaustedError,
+    _advance_entity_counter,
+    _allocate_entity_id,
+    _emit_write_metrics,
+    _occ_backoff,
+    _safe_rollback,
+    bootstrap_entity_counter,
+    ensure_entity_counters_table,
+    file_scd2,
+    is_occ_collision,
+    mint_write_identity,
+    write_scd2,
+)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants -- connection authority
 # ---------------------------------------------------------------------------
 
 _PINNED_DUCKDB_VERSION: str | None = None  # resolved lazily via module __getattr__ -> _pinned_duckdb_version()
@@ -111,33 +135,6 @@ BAKED_EXTENSIONS: tuple[tuple[str, str], ...] = (
 # Default location DuckDB looks for baked extensions inside the Lambda (the layer unpacks to /opt).
 LAMBDA_EXTENSION_DIRECTORY = "/opt/duckdb_extensions"
 
-# OCC retry budget (CD.33): bounded application-level retry with backoff + jitter, loud-fail on
-# exhaustion. NOT a knob to loosen so a gate passes (Decision 55).
-OCC_MAX_ATTEMPTS = 5
-OCC_BASE_BACKOFF_S = 0.05
-OCC_MAX_BACKOFF_S = 1.0
-
-# Substrings of a Postgres/DuckLake error that indicate an optimistic-concurrency / serialization
-# collision (the expected, retryable contention signal) rather than a hard failure.
-_OCC_COLLISION_MARKERS = (
-    "could not serialize",
-    "deadlock detected",
-    "concurrent update",
-    "conflict",
-    "transaction conflict",
-    "write-write",
-)
-
-# CD.33 churn gate budget (single source -- rec-2091; ducklake_writer and smoke test import from here).
-# Values are CD.33 / Decision 55 / Decision 81 invariants -- never relax without a Decision superseding CD.33.
-COMMIT_LATENCY_BUDGET_MS = 2000.0  # p95 commit latency ceiling (in-Lambda, DIRECT endpoint)
-OCC_COLLISION_RATE_BUDGET = 0.20  # max fraction of churn writers that hit an OCC collision
-CHURN_WRITERS = 4  # concurrent invocation fan-out for EC8 (Decision 82: N steered 8->4; budget VALUES above unchanged)
-CHURN_WRITES_PER_WRITER = 5  # writes per writer per churn iteration
-
-# CloudWatch metric namespace for OCC-retry + commit-latency emission (EC9).
-CLOUDWATCH_NAMESPACE = "DuckLakeWriter"
-
 
 def __getattr__(name: str):
     """PEP 562 lazy module attribute: expose PINNED_DUCKDB_VERSION without import-time I/O."""
@@ -147,33 +144,12 @@ def __getattr__(name: str):
 
 
 # ---------------------------------------------------------------------------
-# Exceptions -- loud-fail conditions specific to the execution layer
+# Exceptions -- loud-fail conditions specific to the connection layer
 # ---------------------------------------------------------------------------
 
 
 class VersionMismatchError(DuckLakeRuntimeError):
     """Raised when the live DuckDB version differs from the pinned lockstep version (OQ.12)."""
-
-
-class OCCRetryExhaustedError(DuckLakeRuntimeError):
-    """Raised when the bounded OCC-retry budget is exhausted (CD.33). Stop-and-RCA, never relax."""
-
-
-# ---------------------------------------------------------------------------
-# Write identity (minted once, outside the OCC-retry loop)
-# ---------------------------------------------------------------------------
-
-
-def mint_write_identity(*, now: datetime | None = None) -> WriteIdentity:
-    """Mint the ULID + timestamp ONCE for a write op. Call OUTSIDE the OCC-retry loop (CD.33).
-
-    The ULID embeds the same instant as `timestamp` (ULID.from_datetime), so the history PK and
-    the SCD2 ordering key are coherent. On retry the SAME WriteIdentity is reused -- never re-minted.
-    """
-    from ulid import ULID  # noqa: PLC0415
-
-    moment = now or datetime.now(timezone.utc)
-    return WriteIdentity(ulid=str(ULID.from_datetime(moment)), timestamp=moment)
 
 
 # ---------------------------------------------------------------------------
@@ -462,658 +438,3 @@ def get_warm_connection(
         _warm_connection["key"] = key
         # reopened=True means a previously-cached (dead/stale) connection was replaced (not a cold start).
         return con, {"reused": False, "reopened": had_cached, "connect_ms": round(connect_ms, 2)}
-
-
-# ---------------------------------------------------------------------------
-# Table DDL -- CREATE + partition transforms BEFORE first write (post-ALTER-only, M-5)
-# ---------------------------------------------------------------------------
-
-
-def create_scd2_tables(con: Any, *, table: str | None = None, force_recreate: bool = False) -> None:
-    """Create the history + current tables for *table* and partition them BEFORE first write.
-
-    `table=None` is the smoke pair (T2.17); a name selects an ops_tables entry (T2.19). The column
-    list, the merge-key bucket, and the day(created_timestamp) history partition all come from the
-    resolved spec, so the DDL never drifts from the gate.
-
-    Partition transforms are post-ALTER-only (CD.33 M-5): they MUST be applied before any row lands.
-    `force_recreate=True` drops both tables first -- the backfill's resurrection-loop guard: a
-    re-run DROPs + recreates rather than appending onto a half-populated catalog. Re-ALTER on an
-    already-partitioned table is idempotent in DuckLake v1.0, so the non-force path converges too.
-    """
-    spec = resolve_table_spec(table)
-    history = f"{CATALOG_ALIAS}.{spec.history_table}"
-    columns = _column_ddl(spec)
-
-    if spec.write_mode == "append_only":
-        if force_recreate:
-            con.execute(f"DROP TABLE IF EXISTS {history}")
-        con.execute(f"CREATE TABLE IF NOT EXISTS {history} ({columns})")
-        con.execute(f"ALTER TABLE {history} SET PARTITIONED BY ({spec.partition_history})")
-        return
-
-    current = f"{CATALOG_ALIAS}.{spec.current_table}"
-    if force_recreate:
-        con.execute(f"DROP TABLE IF EXISTS {history}")
-        con.execute(f"DROP TABLE IF EXISTS {current}")
-
-    con.execute(f"CREATE TABLE IF NOT EXISTS {history} ({columns})")
-    con.execute(f"CREATE TABLE IF NOT EXISTS {current} ({columns})")
-
-    # Partition transforms BEFORE first write: history by day(created_timestamp) for date-range
-    # pruning; current by bucket(N, merge_key) to bound the single-key lookup/MERGE scan footprint.
-    con.execute(f"ALTER TABLE {history} SET PARTITIONED BY ({spec.partition_history})")
-    con.execute(f"ALTER TABLE {current} SET PARTITIONED BY ({spec.partition_current})")
-
-
-def reconcile_table_columns(con: Any, *, table: str) -> dict[str, list[str]]:
-    """Add any spec columns missing from the physical history+current tables (idempotent via introspection).
-
-    Reads the column spec from the field_semantics.yaml contract via resolve_table_spec, introspects
-    the physical tables using DuckDB information_schema, and issues ALTER TABLE ADD COLUMN for each
-    spec column absent from the live table. Idempotency is guaranteed by the pre-check (not SQL IF NOT
-    EXISTS -- there is no ADD COLUMN IF NOT EXISTS precedent in DuckLake v1.0). Never DROPs.
-
-    Args:
-        con: Open DuckDB connection with the production catalog attached.
-        table: ops_* table logical name (e.g. 'ops_recommendations').
-
-    Returns:
-        Dict with 'added_history' and 'added_current' lists of column names added per table.
-    """
-    spec = resolve_table_spec(table)
-    history_fq = f"{CATALOG_ALIAS}.{spec.history_table}"
-
-    def _physical_columns(table_fq: str) -> set[str]:
-        rows = con.execute(
-            f"SELECT column_name FROM information_schema.columns "
-            f"WHERE table_catalog = '{CATALOG_ALIAS}' "
-            f"AND table_name = '{table_fq.split('.')[-1]}' "
-            f"ORDER BY ordinal_position"
-        ).fetchall()
-        if not rows:
-            rows = con.execute(f"PRAGMA table_info('{table_fq}')").fetchall()
-            return {r[1] for r in rows}
-        return {r[0] for r in rows}
-
-    added_history: list[str] = []
-    added_current: list[str] = []
-
-    tables_to_reconcile: list[tuple[str, list[str]]] = [(history_fq, added_history)]
-    if spec.write_mode != "append_only":
-        current_fq = f"{CATALOG_ALIAS}.{spec.current_table}"
-        tables_to_reconcile.append((current_fq, added_current))
-
-    for table_fq, added_list in tables_to_reconcile:
-        existing = _physical_columns(table_fq)
-        for col_name, col_spec in spec.fields.items():
-            if col_name in existing:
-                continue
-            sql_type = col_spec.get("sql_type", "VARCHAR")
-            nullable = col_spec.get("nullable", True)
-            null_clause = "" if nullable else " NOT NULL"
-            con.execute(f"ALTER TABLE {table_fq} ADD COLUMN {col_name} {sql_type}{null_clause}")
-            added_list.append(col_name)
-
-    return {"added_history": added_history, "added_current": added_current}
-
-
-# ---------------------------------------------------------------------------
-# The shared write primitive -- history MERGE-on-ULID + current write-through, bounded OCC retry
-# ---------------------------------------------------------------------------
-
-
-def is_occ_collision(exc: Exception) -> bool:
-    """True if *exc* looks like an optimistic-concurrency / serialization collision (retryable)."""
-    msg = str(exc).lower()
-    return any(marker in msg for marker in _OCC_COLLISION_MARKERS)
-
-
-def _occ_backoff(attempt: int, *, sleep: Callable[[float], None] = time.sleep) -> None:
-    """Sleep with exponential backoff + full jitter before the next OCC retry."""
-    ceiling = min(OCC_MAX_BACKOFF_S, OCC_BASE_BACKOFF_S * (2 ** (attempt - 1)))
-    sleep(random.uniform(0.0, ceiling))
-
-
-def write_scd2(
-    con: Any,
-    record: dict[str, Any],
-    *,
-    table: str | None = None,
-    identity: WriteIdentity | None = None,
-    semantics: dict[str, Any] | None = None,
-    require_exists: bool = False,
-    created_override: datetime | None = None,
-    max_attempts: int = OCC_MAX_ATTEMPTS,
-    metric_sink: Optional[Callable[[str, float], None]] = None,
-    sleep: Callable[[float], None] = time.sleep,
-) -> WriteResult:
-    """Write one SCD2 record: history MERGE-on-ULID append + current write-through, one transaction.
-
-    `table=None` writes the smoke pair (T2.17); a name selects an ops_tables entry (T2.19). The
-    merge key, column order, and MERGE SQL are resolved from the spec, so this single primitive
-    drives every governance table.
-
-    Idempotency (CD.33 D-2): the ULID + timestamp are minted ONCE here, OUTSIDE the retry loop, and
-    reused on every attempt. MERGE-on-ULID de-duplicates the history append, so a retried write
-    never double-appends. `created_timestamp` is carried unchanged from the existing current row on
-    update, and minted (= identity.timestamp) on first insert -- never re-stamped.
-
-    Referential gate (CD.33 cl.8 / D-5): with `require_exists=True` (the update path), the
-    in-transaction existing-row lookup must be non-empty -- an absent merge key raises ReferentialError
-    BEFORE any MERGE, replacing the prior permissive upsert-on-absent.
-
-    Status-DAG gate (Decision 103 / T1.16 c3): when *table* declares a DAG (STATUS_TRANSITIONS) and
-    `require_exists=True`, the SAME existing-row fetch above also reads the current `status` (no
-    second Neon round-trip) and calls check_rec_status_transition before the MERGE -- a resolved rec
-    (closed/declined/superseded) silently reactivated to `open` raises StatusTransitionError. This
-    check is OUTSIDE the OCC-collision retry path (Decision 82 / Decision 88): it is terminal, never
-    retried, mirroring ReferentialError handling.
-
-    `created_override` (operational backfill/re-seed path ONLY): when set AND the row is a fresh
-    insert, it supplies the historical `created_timestamp` instead of `identity.timestamp`, so a
-    migration/re-seed preserves each rec's ORIGINAL created time (Decision-64 anchor) while
-    `identity.timestamp` carries the original last_updated. It has NO effect on the agent write path
-    (always None there). The maintenance `seed_ops_recommendations` action that used this was removed
-    at the 2026-06-09 recs sign-off; the parameter is retained for any future break-glass re-seed.
-
-    Concurrency (CD.33): a serialization collision is retried with bounded backoff+jitter up to
-    `max_attempts`; exhaustion raises OCCRetryExhaustedError (loud-fail, Decision 55). A non-OCC
-    error propagates immediately -- never swallowed.
-
-    Emits OccRetryCount + CommitLatencyMs via `metric_sink` (EC9) when provided.
-    """
-    semantics = semantics if semantics is not None else load_field_semantics()
-    schema_gate(record, semantics, table=table)  # loud-fail before any catalog work
-
-    spec = resolve_table_spec(table, semantics)
-    check_append_only_guard(spec, require_exists)  # loud-fail before any catalog work (Decision 70)
-    has_status_dag = table in STATUS_TRANSITIONS
-    merge_history_sql = _build_merge_history_sql(spec)
-    merge_current_sql = None if spec.write_mode == "append_only" else _build_merge_current_sql(spec)
-    select_existing_sql = (
-        None if spec.write_mode == "append_only" else _build_select_existing_created_sql(spec, include_status=has_status_dag)
-    )
-
-    identity = identity if identity is not None else mint_write_identity()
-    key = record[spec.merge_key]
-
-    occ_retries = 0
-    start = time.perf_counter()
-    attempt = 0
-    created_ts: datetime = identity.timestamp
-
-    while True:
-        attempt += 1
-        try:
-            con.execute("BEGIN TRANSACTION")
-            if spec.write_mode == "append_only":
-                created_ts = created_override if created_override is not None else identity.timestamp
-            else:
-                existing = con.execute(select_existing_sql, [key]).fetchall()
-                if require_exists and not existing:
-                    raise ReferentialError(
-                        f"update of absent {spec.merge_key}={key!r} in {spec.current_table}: the record does "
-                        "not exist (CD.33 cl.8 / D-5). An absent rec loud-fails -- it is not silently created."
-                    )
-                if require_exists and has_status_dag and existing:
-                    check_rec_status_transition(table, existing[0][1], record.get("status"))
-                created_ts = (
-                    existing[0][0] if existing else (created_override if created_override is not None else identity.timestamp)
-                )
-            params = _write_params(spec, record, identity, created_ts)
-            con.execute(merge_history_sql, params)
-            if merge_current_sql is not None:
-                con.execute(merge_current_sql, params)
-            _advance_entity_counter(con, spec, key)
-            con.execute("COMMIT")
-            break
-        except (ReferentialError, AppendOnlyUpdateError, StatusTransitionError):
-            _safe_rollback(con)
-            raise  # terminal failures, never retried
-        except Exception as exc:  # noqa: BLE001 -- classify, then retry-or-raise
-            _safe_rollback(con)
-            if is_occ_collision(exc):
-                if attempt < max_attempts:
-                    occ_retries += 1
-                    _occ_backoff(attempt, sleep=sleep)
-                    continue
-                commit_ms = (time.perf_counter() - start) * 1000.0
-                _emit_write_metrics(metric_sink, occ_retries, commit_ms)
-                raise OCCRetryExhaustedError(
-                    f"OCC retry budget exhausted after {attempt} attempts for {spec.merge_key}={key!r} "
-                    f"(ulid={identity.ulid}). Stop and RCA the contention (Decision 55) -- do NOT "
-                    "relax the budget."
-                ) from exc
-            raise  # non-OCC hard failure: loud-fail immediately
-
-    commit_ms = (time.perf_counter() - start) * 1000.0
-    _emit_write_metrics(metric_sink, occ_retries, commit_ms)
-    return WriteResult(
-        ulid=identity.ulid,
-        rec_id=key,
-        occ_retries=occ_retries,
-        commit_ms=commit_ms,
-        created_timestamp=created_ts,
-        last_updated_timestamp=identity.timestamp,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Writer-owned entity-id allocation (Decision 84 I-2)
-# ---------------------------------------------------------------------------
-
-# Plain (non-SCD2) DuckLake bookkeeping table. The counter row is the keyspace serialization
-# point: a concurrent file_scd2 pair both UPDATE the same row, which is a guaranteed write-write
-# catalog conflict -- one commits, the other OCC-retries and re-allocates. Internal to the writer;
-# never exposed through the read boundary.
-ENTITY_COUNTERS_TABLE = "ops_entity_counters"
-
-
-def ensure_entity_counters_table(con: Any) -> None:
-    """Idempotently create the entity-counters bookkeeping table."""
-    con.execute(
-        f"CREATE TABLE IF NOT EXISTS {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} "
-        "(counter_name VARCHAR NOT NULL, current_value BIGINT NOT NULL)"
-    )
-
-
-def bootstrap_entity_counter(con: Any, spec: Any) -> int:
-    """Serially (re)seed the counter row for *spec* from the history-table numeric max.
-
-    MUST run as a one-time serial bootstrap (create_ops_tables), never on the allocation hot
-    path: a concurrent self-seed INSERT race under snapshot isolation creates duplicate counter
-    rows that each transaction increments privately -- observed live 2026-06-11 as four
-    concurrent file_ops all allocating the same id. DELETE + single INSERT here is idempotent
-    and also repairs that duplicate-row state. Returns the seeded value.
-    """
-    if not spec.entity_id_prefix or spec.id_keyspace != "writer":
-        raise DuckLakeRuntimeError(
-            f"table {spec.table!r} has no writer-owned keyspace (id_keyspace={spec.id_keyspace!r}): "
-            "it has no allocation counter to seed"
-        )
-    prefix = spec.entity_id_prefix
-    ensure_entity_counters_table(con)
-    con.execute("BEGIN TRANSACTION")
-    try:
-        seed_row = con.execute(
-            f"SELECT coalesce(max(CAST(regexp_extract({spec.merge_key}, '^{prefix}([0-9]+)$', 1) AS BIGINT)), 0) "
-            f"FROM {CATALOG_ALIAS}.{spec.history_table} "
-            f"WHERE {spec.merge_key} LIKE '{prefix}%' AND regexp_matches({spec.merge_key}, '^{prefix}[0-9]+$')"
-        ).fetchone()
-        seed = int(seed_row[0]) if seed_row and seed_row[0] is not None else 0
-        con.execute(f"DELETE FROM {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} WHERE counter_name = ?", [spec.table])
-        con.execute(f"INSERT INTO {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} VALUES (?, ?)", [spec.table, seed])
-        con.execute("COMMIT")
-    except Exception:
-        _safe_rollback(con)
-        raise
-    return seed
-
-
-def _allocate_entity_id(con: Any, spec: Any) -> str:
-    """Allocate the next <prefix>NNN id for *spec* INSIDE the caller's open transaction.
-
-    Requires the counter row to exist (bootstrap_entity_counter): every allocating transaction
-    then UPDATEs the SAME shared row, which is the write-write conflict DuckLake's OCC detects --
-    one committer wins, the rest retry and re-read. A missing or duplicated counter row is a
-    terminal loud-fail (never self-seeded here; see bootstrap_entity_counter for why).
-    """
-    prefix = spec.entity_id_prefix
-    if not prefix or spec.id_keyspace != "writer":
-        raise DuckLakeRuntimeError(
-            f"table {spec.table!r} has no writer-owned keyspace (id_keyspace={spec.id_keyspace!r}): "
-            "file_ops allocation is not enabled for it (Decision 84 I-2)"
-        )
-    counter = f"{spec.table}"
-    rows = con.execute(
-        f"SELECT current_value FROM {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} WHERE counter_name = ?", [counter]
-    ).fetchall()
-    if len(rows) != 1:
-        raise DuckLakeRuntimeError(
-            f"entity counter for {counter!r} has {len(rows)} rows (expected exactly 1): "
-            "run create_ops_tables to bootstrap/repair the counter (Decision 84 I-2). "
-            "Allocation never self-seeds -- the concurrent-seed race mints duplicate ids."
-        )
-    # DuckLake does not support UPDATE ... RETURNING; the UPDATE is the write-write conflict
-    # point and the follow-up SELECT reads our own uncommitted increment inside the transaction.
-    con.execute(
-        f"UPDATE {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} SET current_value = current_value + 1 WHERE counter_name = ?",
-        [counter],
-    )
-    allocated = con.execute(
-        f"SELECT current_value FROM {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} WHERE counter_name = ?",
-        [counter],
-    ).fetchone()
-    n = int(allocated[0])
-    return f"{prefix}{n:03d}"
-
-
-def _advance_entity_counter(con: Any, spec: Any, key: Any) -> None:
-    """Advance the allocation counter to cover a caller-keyed canonical id, in the open transaction.
-
-    write_ops accepts caller-keyed <prefix>NNN ids (backfill; pre-merge main clients on the old
-    allocator). Without this, any such id above the counter strands file_ops on the terminal
-    "counter behind table max" guard until an operator re-bootstraps. No-op when the table has no
-    writer-owned keyspace, the key is non-canonical, or the counter row is absent (not bootstrapped).
-    """
-    if spec.id_keyspace != "writer" or not spec.entity_id_prefix:
-        return
-    m = re.fullmatch(re.escape(spec.entity_id_prefix) + r"([0-9]+)", str(key))
-    if not m:
-        return
-    con.execute(
-        f"UPDATE {CATALOG_ALIAS}.{ENTITY_COUNTERS_TABLE} SET current_value = GREATEST(current_value, ?) "
-        "WHERE counter_name = ?",
-        [int(m.group(1)), spec.table],
-    )
-
-
-def file_scd2(
-    con: Any,
-    record: dict[str, Any],
-    *,
-    table: str,
-    identity: WriteIdentity | None = None,
-    semantics: dict[str, Any] | None = None,
-    max_attempts: int = OCC_MAX_ATTEMPTS,
-    metric_sink: Optional[Callable[[str, float], None]] = None,
-    sleep: Callable[[float], None] = time.sleep,
-) -> WriteResult:
-    """Create one record, allocating its merge key INSIDE the write transaction (Decision 84 I-2).
-
-    The record arrives WITHOUT the merge key; allocation, the require-absent check, and both MERGEs
-    commit atomically. An OCC retry re-runs the whole transaction including allocation, so the
-    retried attempt picks up a fresh max -- the counter-row UPDATE is the serialization point.
-
-    Invocation idempotency (response-lost retry): `identity` is minted by the CALLER per logical
-    file operation and replayed unchanged on retry. The in-transaction replay check (history ULID
-    lookup) returns the originally allocated id instead of allocating anew, so a client retry after
-    a lost response never double-files.
-    """
-    semantics = semantics if semantics is not None else load_field_semantics()
-    spec = resolve_table_spec(table, semantics)
-    if not spec.entity_id_prefix or spec.id_keyspace != "writer":
-        raise DuckLakeRuntimeError(
-            f"table {table!r} has no writer-owned keyspace (id_keyspace={spec.id_keyspace!r}): "
-            "file_ops allocation is not enabled for it (Decision 84 I-2)"
-        )
-    if spec.merge_key in record:
-        raise SchemaGateError(f"file operation must not supply {spec.merge_key!r}: the writer allocates it (Decision 84 I-2)")
-    # Fail fast on every OTHER contract violation before touching the catalog: gate a copy with a
-    # syntactically-valid placeholder key (the real key does not exist yet).
-    schema_gate({**record, spec.merge_key: f"{spec.entity_id_prefix or 'x-'}0"}, semantics, table=table)
-
-    merge_history_sql = _build_merge_history_sql(spec)
-    merge_current_sql = _build_merge_current_sql(spec)
-    select_existing_sql = _build_select_existing_created_sql(spec)
-    identity = identity if identity is not None else mint_write_identity()
-
-    occ_retries = 0
-    start = time.perf_counter()
-    attempt = 0
-
-    while True:
-        attempt += 1
-        try:
-            con.execute("BEGIN TRANSACTION")
-            # Replay check: a retried invocation carries the same ULID; return the original allocation.
-            replay = con.execute(
-                f"SELECT {spec.merge_key}, created_timestamp FROM {CATALOG_ALIAS}.{spec.history_table} WHERE ulid = ?",
-                [identity.ulid],
-            ).fetchall()
-            if replay:
-                con.execute("COMMIT")
-                commit_ms = (time.perf_counter() - start) * 1000.0
-                _emit_write_metrics(metric_sink, occ_retries, commit_ms)
-                return WriteResult(
-                    ulid=identity.ulid,
-                    rec_id=replay[0][0],
-                    occ_retries=occ_retries,
-                    commit_ms=commit_ms,
-                    created_timestamp=replay[0][1],
-                    last_updated_timestamp=identity.timestamp,
-                )
-            key = _allocate_entity_id(con, spec)
-            existing = con.execute(select_existing_sql, [key]).fetchall()
-            if existing:
-                raise DuckLakeRuntimeError(
-                    f"allocated {spec.merge_key}={key!r} already exists in {spec.current_table}: "
-                    "counter behind table max -- stop and RCA (Decision 55), do not retry past it"
-                )
-            params = _write_params(spec, {**record, spec.merge_key: key}, identity, identity.timestamp)
-            con.execute(merge_history_sql, params)
-            con.execute(merge_current_sql, params)
-            con.execute("COMMIT")
-            commit_ms = (time.perf_counter() - start) * 1000.0
-            _emit_write_metrics(metric_sink, occ_retries, commit_ms)
-            return WriteResult(
-                ulid=identity.ulid,
-                rec_id=key,
-                occ_retries=occ_retries,
-                commit_ms=commit_ms,
-                created_timestamp=identity.timestamp,
-                last_updated_timestamp=identity.timestamp,
-            )
-        except DuckLakeRuntimeError:
-            _safe_rollback(con)
-            raise  # contract/keyspace failures are terminal, never retried
-        except Exception as exc:  # noqa: BLE001 -- classify, then retry-or-raise
-            _safe_rollback(con)
-            if is_occ_collision(exc):
-                if attempt < max_attempts:
-                    occ_retries += 1
-                    _occ_backoff(attempt, sleep=sleep)
-                    continue
-                commit_ms = (time.perf_counter() - start) * 1000.0
-                _emit_write_metrics(metric_sink, occ_retries, commit_ms)
-                raise OCCRetryExhaustedError(
-                    f"OCC retry budget exhausted after {attempt} attempts for file_ops on {table} "
-                    f"(ulid={identity.ulid}). Stop and RCA the contention (Decision 55)."
-                ) from exc
-            raise
-
-
-def _safe_rollback(con: Any) -> None:
-    """Roll back the current transaction, swallowing a 'no active transaction' error only."""
-    try:
-        con.execute("ROLLBACK")
-    except Exception:  # noqa: BLE001 -- rollback failure must not mask the original error
-        pass
-
-
-def _emit_write_metrics(metric_sink: Optional[Callable[[str, float], None]], occ_retries: int, commit_ms: float) -> None:
-    """Emit the OccRetryCount + CommitLatencyMs metrics through the sink, if provided."""
-    if metric_sink is None:
-        return
-    metric_sink("OccRetryCount", float(occ_retries))
-    metric_sink("CommitLatencyMs", commit_ms)
-
-
-# ---------------------------------------------------------------------------
-# Read primitive
-# ---------------------------------------------------------------------------
-
-
-def read_current(
-    con: Any,
-    *,
-    table: str | None = None,
-    rec_id: str | None = None,
-    key: str | None = None,
-    key_column: str | None = None,
-    limit: int | None = None,
-) -> list[dict[str, Any]]:
-    """Return rows from the current write-through projection (latest version per merge key).
-
-    `table=None` reads the smoke current table (T2.17); a name selects an ops_tables entry (T2.19).
-    `key` (or the back-compat `rec_id` alias) filters to a single value; `key_column` names the
-    filtered column and is VALIDATED against the spec (defaults to the merge key). The structural
-    (column, value) pair replaces SQL-fragment filters at this boundary (rec-2170: a value bound
-    against the wrong column returned a silent false zero). `limit` bounds the row count.
-    """
-    spec = resolve_table_spec(table)
-    if spec.current_table is None:
-        raise DuckLakeRuntimeError(
-            f"table {spec.table!r} is append_only: read_current is not supported "
-            "(write_mode=append_only has no current write-through projection; "
-            "read from the history table via read_history() instead)"
-        )
-    cols = ", ".join(c for c, _ in spec.ordered_columns)
-    sql = f"SELECT {cols} FROM {CATALOG_ALIAS}.{spec.current_table}"
-    filter_value = key if key is not None else rec_id
-    filter_column = key_column if key_column is not None else spec.merge_key
-    if filter_column not in spec.fields:
-        raise DuckLakeRuntimeError(
-            f"unknown filter column {filter_column!r} for {spec.current_table}: not in the field-semantics contract"
-        )
-    params: list[Any] = []
-    if filter_value is not None:
-        sql += f" WHERE {filter_column} = ?"
-        params.append(filter_value)
-    sql += f" ORDER BY {spec.merge_key}"
-    if limit is not None:
-        sql += f" LIMIT {int(limit)}"
-    cursor = con.execute(sql, params) if params else con.execute(sql)
-    col_names = [desc[0] for desc in cursor.description]
-    return [dict(zip(col_names, row)) for row in cursor.fetchall()]
-
-
-def read_history(
-    con: Any, *, table: str | None = None, key: str | None = None, limit: int | None = None
-) -> list[dict[str, Any]]:
-    """Return append-history rows for *table* (optionally a single merge key), newest-first."""
-    spec = resolve_table_spec(table)
-    cols = ", ".join(c for c, _ in spec.ordered_columns)
-    sql = f"SELECT {cols} FROM {CATALOG_ALIAS}.{spec.history_table}"
-    params: list[Any] = []
-    if key is not None:
-        sql += f" WHERE {spec.merge_key} = ?"
-        params.append(key)
-    sql += " ORDER BY last_updated_timestamp DESC, ulid DESC"
-    if limit is not None:
-        sql += f" LIMIT {int(limit)}"
-    cursor = con.execute(sql, params) if params else con.execute(sql)
-    col_names = [desc[0] for desc in cursor.description]
-    return [dict(zip(col_names, row)) for row in cursor.fetchall()]
-
-
-def assert_read_only_sql(sql: str) -> None:
-    """Loud-fail unless *sql* is a read-only statement (SELECT/WITH only).
-
-    The reader holds the full Neon catalog credential; S3-read-only IAM blocks Parquet writes but NOT
-    Postgres catalog DDL (DROP/ALTER TABLE on the DuckLake metadata). This verb guard is the
-    application-layer half of the closed read boundary (OQ.7): a non-SELECT statement never reaches
-    the catalog. Reject anything whose first keyword is not SELECT or WITH (CTE) -- this also blocks
-    a multi-statement payload (the leading verb of a `SELECT 1; DROP TABLE x` is SELECT, but DuckDB
-    rejects multi-statement in one execute; the guard plus single-statement execution close it).
-    """
-    if not re.match(r"^\s*(?:SELECT|WITH)\b", sql, re.IGNORECASE):
-        raise SchemaGateError(
-            "read-only boundary: only SELECT/WITH statements may execute on the reader path "
-            f"(got {sql.strip()[:60]!r}). Catalog DDL/DML is denied at the closed boundary (OQ.7)."
-        )
-    if ";" in sql.rstrip().rstrip(";"):
-        raise SchemaGateError("read-only boundary: multi-statement SQL is rejected on the reader path (OQ.7).")
-
-
-def named_read(con: Any, *, verb: str, params: dict[str, Any] | None = None, limit: int | None = None) -> list[dict[str, Any]]:
-    """Execute a pre-established read verb from the NAMED_READS registry (Decision 84 I-3).
-
-    The SQL is server-side registry content; the caller supplies only the verb name and named
-    bind params. Param presence is validated against the verb's declared param list; `{tbl}` and
-    `{hist}` resolve to the verb's table current/history pair. Loud-fail on an unknown verb or a
-    missing/extra param.
-
-    `limit` (T1.16 c1): a server-side integer-cast trailing LIMIT appended to the rendered SQL, for
-    `paginable` verbs only -- no caller SQL crosses the boundary (Decision 84 I-3). Loud-fail if
-    `limit` is supplied for a non-paginable verb (its SQL has no total-order guarantee for a
-    caller-visible bound).
-    """
-    entry = NAMED_READS.get(verb)
-    if entry is None:
-        raise DuckLakeRuntimeError(f"unknown read verb {verb!r}: expected one of {sorted(NAMED_READS)}")
-    supplied = dict(params or {})
-    if set(supplied) != set(entry.params):
-        raise DuckLakeRuntimeError(f"read verb {verb!r} requires params {list(entry.params)}; got {sorted(supplied)}")
-    if limit is not None and not entry.paginable:
-        raise DuckLakeRuntimeError(f"read verb {verb!r} is not paginable: `limit` is not accepted")
-    spec = resolve_table_spec(entry.table)
-    final_sql = entry.sql.replace("{tbl}", f"{CATALOG_ALIAS}.{spec.current_table}").replace(
-        "{hist}", f"{CATALOG_ALIAS}.{spec.history_table}"
-    )
-    if limit is not None:
-        final_sql += f" LIMIT {int(limit)}"
-    bound = [supplied[name] for name in entry.params]
-    cursor = con.execute(final_sql, bound) if bound else con.execute(final_sql)
-    col_names = [desc[0] for desc in cursor.description]
-    return [dict(zip(col_names, row)) for row in cursor.fetchall()]
-
-
-def query_current(con: Any, *, table: str, sql: str, params: list[Any] | tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    """Run a read-only *sql* over the current projection of *table*. Use `{tbl}` for the table ref.
-
-    Mirrors the Reader.query semantics: the caller supplies a SELECT referencing `{tbl}`; `?` binds
-    params. The reader Lambda exposes this so the portal/sync read paths can push predicates down.
-    A read-only verb guard (assert_read_only_sql) rejects any non-SELECT/WITH statement BEFORE it
-    reaches the catalog -- catalog DDL is not blocked by the S3-read-only IAM, so the guard is the
-    application-layer half of the closed read boundary (OQ.7 / CD.33 clause 6).
-    """
-    assert_read_only_sql(sql)
-    spec = resolve_table_spec(table)
-    if spec.current_table is None:
-        raise DuckLakeRuntimeError(
-            f"table {spec.table!r} is append_only: query_current is not supported "
-            "(write_mode=append_only has no current write-through projection)"
-        )
-    final_sql = sql.replace("{tbl}", f"{CATALOG_ALIAS}.{spec.current_table}")
-    cursor = con.execute(final_sql, list(params)) if params else con.execute(final_sql)
-    col_names = [desc[0] for desc in cursor.description]
-    return [dict(zip(col_names, row)) for row in cursor.fetchall()]
-
-
-# ---------------------------------------------------------------------------
-# CloudWatch metric emission (EC9)
-# ---------------------------------------------------------------------------
-
-
-def emit_metric(
-    name: str,
-    value: float,
-    *,
-    namespace: str = CLOUDWATCH_NAMESPACE,
-    unit: str = "None",
-    profile: str | None = None,
-    client: Any = None,
-) -> None:
-    """Emit a single CloudWatch metric datum. Best-effort: a metrics failure must not fail a write.
-
-    Pass `client` to inject a CloudWatch client (tests / a shared client). In the Lambda the ambient
-    execution-role credentials are used (no profile).
-    """
-    try:
-        if client is None:
-            import boto3  # noqa: PLC0415
-
-            from scripts.aws_profile import resolve_aws_profile  # noqa: PLC0415
-
-            session = boto3.Session(profile_name=resolve_aws_profile(profile))
-            client = session.client("cloudwatch")
-        client.put_metric_data(
-            Namespace=namespace,
-            MetricData=[{"MetricName": name, "Value": float(value), "Unit": unit}],
-        )
-    except Exception:  # noqa: BLE001 -- metrics are observability, never a write-blocking failure
-        pass
-
-
-def make_metric_sink(
-    *, namespace: str = CLOUDWATCH_NAMESPACE, client: Any = None, profile: str | None = None
-) -> Callable[[str, float], None]:
-    """Build a metric_sink(name, value) closure for write_scd2 that emits to CloudWatch."""
-
-    def _sink(name: str, value: float) -> None:
-        unit = "Milliseconds" if name.endswith("Ms") else "Count"
-        emit_metric(name, value, namespace=namespace, unit=unit, client=client, profile=profile)
-
-    return _sink

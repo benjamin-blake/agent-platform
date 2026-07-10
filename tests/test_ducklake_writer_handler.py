@@ -11,6 +11,7 @@ import pytest
 import src.lambdas.ducklake_writer.handler as h
 from src.common import ducklake_runtime as rt
 from src.common.ducklake_version import pinned_duckdb_version
+from src.lambdas.ducklake_writer import smoke_actions
 
 pytestmark = pytest.mark.unit
 
@@ -183,8 +184,8 @@ def test_handler_partition_probe(monkeypatch):
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: None)
     monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: _result())
     # _count_files returns 4/8 total; _count_files_for_predicate returns smaller via the WHERE-listing
-    monkeypatch.setattr(h, "_count_files", lambda c, t: 4 if "history" in t else 8)
-    monkeypatch.setattr(h, "_count_files_for_predicate", lambda c, t, p: 1)
+    monkeypatch.setattr(smoke_actions, "_count_files", lambda c, t: 4 if "history" in t else 8)
+    monkeypatch.setattr(smoke_actions, "_count_files_for_predicate", lambda c, t, p: 1)
     r = h.handler({"action": "partition_probe"})
     body = json.loads(r["body"])
     assert body["history_pruned"] is True
@@ -198,9 +199,9 @@ def test_handler_inlining_probe(monkeypatch):
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: None)
     monkeypatch.setattr(rt, "write_scd2", lambda c, rec, **kw: _result())
     monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
-    monkeypatch.setattr(h, "_count_files", lambda c, t: 2)
-    monkeypatch.setattr(h, "_count_inlined_rows", lambda c, t: 0)
-    monkeypatch.setattr(h, "_concurrency_probe", lambda w: True)
+    monkeypatch.setattr(smoke_actions, "_count_files", lambda c, t: 2)
+    monkeypatch.setattr(smoke_actions, "_count_inlined_rows", lambda c, t: 0)
+    monkeypatch.setattr(smoke_actions, "_concurrency_probe", lambda w: True)
     r = h.handler({"action": "inlining_probe"})
     body = json.loads(r["body"])
     assert body["inlined_rows"] == 0
@@ -250,11 +251,11 @@ def _churn_result(**kw) -> dict:
 
 def test_handler_churn(monkeypatch):
     monkeypatch.setattr(rt, "fetch_dsn", lambda: {"host": "h"})
-    monkeypatch.setattr(h, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
+    monkeypatch.setattr(smoke_actions, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
     monkeypatch.setattr(rt, "open_connection", lambda **kw: FakeCon())
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: None)
     monkeypatch.setattr(rt, "make_metric_sink", lambda **kw: lambda n, v: None)
-    monkeypatch.setattr(h, "_churn_one_writer", lambda i, dsn, creds: _churn_result())
+    monkeypatch.setattr(smoke_actions, "_churn_one_writer", lambda i, dsn, creds: _churn_result())
     r = h.handler({"action": "churn", "writers": 4})
     body = json.loads(r["body"])
     assert body["endpoint"] == "direct"
@@ -276,8 +277,8 @@ def test_handler_churn_single_normal(monkeypatch):
     """action_churn_single (normal, no setup) calls _churn_one_single_write and returns attribution."""
     seen_ids: list[int] = []
     monkeypatch.setattr(rt, "fetch_dsn", lambda: {"host": "h"})
-    monkeypatch.setattr(h, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
-    monkeypatch.setattr(h, "_churn_one_single_write", lambda i, dsn, creds: seen_ids.append(i) or _churn_result())
+    monkeypatch.setattr(smoke_actions, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
+    monkeypatch.setattr(smoke_actions, "_churn_one_single_write", lambda i, dsn, creds: seen_ids.append(i) or _churn_result())
     r = h.handler({"action": "churn_single", "writer_id": 3})
     body = json.loads(r["body"])
     assert r["statusCode"] == 200
@@ -320,7 +321,7 @@ def test_handler_churn_single_setup(monkeypatch):
     """action_churn_single with setup=True pre-creates tables and returns {"ok":true,"setup":true}."""
     con = FakeCon()
     monkeypatch.setattr(rt, "fetch_dsn", lambda: {"host": "h"})
-    monkeypatch.setattr(h, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
+    monkeypatch.setattr(smoke_actions, "_frozen_creds", lambda: ("ak", "sk", None, "eu-west-2"))  # pragma: allowlist secret
     monkeypatch.setattr(rt, "open_connection", lambda **kw: con)
     create_calls: list[bool] = []
     monkeypatch.setattr(rt, "create_scd2_tables", lambda c, force_recreate=False: create_calls.append(force_recreate))
@@ -576,19 +577,19 @@ def test_p95():
 
 def test_concurrency_probe_success(monkeypatch):
     monkeypatch.setattr(rt, "fetch_dsn", lambda: {"host": "h"})
-    monkeypatch.setattr(h, "_frozen_creds", lambda: ("ak", "sk", None, "r"))  # pragma: allowlist secret
-    monkeypatch.setattr(h, "_churn_one_writer", lambda i, d, c: {"latency_ms": 1.0, "collided": False})
+    monkeypatch.setattr(smoke_actions, "_frozen_creds", lambda: ("ak", "sk", None, "r"))  # pragma: allowlist secret
+    monkeypatch.setattr(smoke_actions, "_churn_one_writer", lambda i, d, c: {"latency_ms": 1.0, "collided": False})
     assert h._concurrency_probe(2) is True
 
 
 def test_concurrency_probe_runtime_error_is_handled(monkeypatch):
     monkeypatch.setattr(rt, "fetch_dsn", lambda: {"host": "h"})
-    monkeypatch.setattr(h, "_frozen_creds", lambda: ("ak", "sk", None, "r"))  # pragma: allowlist secret
+    monkeypatch.setattr(smoke_actions, "_frozen_creds", lambda: ("ak", "sk", None, "r"))  # pragma: allowlist secret
 
     def _raise(i, d, c):
         raise rt.OCCRetryExhaustedError("x")
 
-    monkeypatch.setattr(h, "_churn_one_writer", _raise)
+    monkeypatch.setattr(smoke_actions, "_churn_one_writer", _raise)
     assert h._concurrency_probe(2) is True
 
 
