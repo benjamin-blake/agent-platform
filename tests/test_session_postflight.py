@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.postflight import _common
+
 # Load the module under test
 _MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session_postflight.py"
 _spec = importlib.util.spec_from_file_location("session_postflight", _MODULE_PATH)
@@ -61,7 +63,7 @@ class TestValidateMode:
         result.returncode = 0
         result.stdout = "Validation passed"
         result.stderr = ""
-        with patch("session_postflight._run", return_value=result):
+        with patch("scripts.postflight._common._run", return_value=result):
             rc = _postflight.run_validate()
         assert rc == 0
 
@@ -70,14 +72,14 @@ class TestValidateMode:
         result.returncode = 1
         result.stdout = "ERROR: something failed"
         result.stderr = ""
-        with patch("session_postflight._run", return_value=result):
+        with patch("scripts.postflight._common._run", return_value=result):
             rc = _postflight.run_validate()
         assert rc == 1
 
 
 class TestPreCommitSanity:
     def test_main_branch_returns_fail(self, capsys: pytest.CaptureFixture) -> None:
-        with patch("session_postflight._current_branch", return_value="main"):
+        with patch("scripts.postflight._common._current_branch", return_value="main"):
             rc = _postflight.run_pre_commit_sanity()
         captured = capsys.readouterr()
         data = json.loads(captured.out)
@@ -93,10 +95,10 @@ class TestPreCommitSanity:
         )
         plan_file.write_text(scope_content, encoding="utf-8")
         with (
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight.find_plan_file", return_value=plan_file),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common.find_plan_file", return_value=plan_file),
             patch("session_postflight._get_changed_files", return_value=["scripts/foo.py", "scripts/unplanned.py"]),
-            patch("session_postflight._run", return_value=MagicMock(returncode=0, stdout="", stderr="")),
+            patch("scripts.postflight._common._run", return_value=MagicMock(returncode=0, stdout="", stderr="")),
         ):
             rc = _postflight.run_pre_commit_sanity()
         captured = capsys.readouterr()
@@ -114,10 +116,10 @@ class TestPreCommitSanity:
         )
         plan_file.write_text(scope_content, encoding="utf-8")
         with (
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight.find_plan_file", return_value=plan_file),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common.find_plan_file", return_value=plan_file),
             patch("session_postflight._get_changed_files", return_value=["scripts/foo.py"]),
-            patch("session_postflight._run", return_value=MagicMock(returncode=0, stdout="", stderr="")),
+            patch("scripts.postflight._common._run", return_value=MagicMock(returncode=0, stdout="", stderr="")),
         ):
             rc = _postflight.run_pre_commit_sanity()
         captured = capsys.readouterr()
@@ -132,7 +134,7 @@ class TestCommitRetry:
         result.returncode = 0
         result.stdout = "1 file changed"
         result.stderr = ""
-        with patch("session_postflight._run", return_value=result):
+        with patch("scripts.postflight._common._run", return_value=result):
             rc = _postflight.run_commit("feat: test commit")
         assert rc == 0
 
@@ -157,7 +159,7 @@ class TestCommitRetry:
                 result.stdout = ""
             return result
 
-        with patch("session_postflight._run", side_effect=mock_run):
+        with patch("scripts.postflight._common._run", side_effect=mock_run):
             rc = _postflight.run_commit("feat: retry test")
         assert rc == 0
         assert call_count == 3
@@ -170,7 +172,7 @@ class TestCommitRetry:
             result.stderr = ""
             return result
 
-        with patch("session_postflight._run", side_effect=mock_run):
+        with patch("scripts.postflight._common._run", side_effect=mock_run):
             rc = _postflight.run_commit("feat: always fail")
         assert rc == 1
 
@@ -188,9 +190,9 @@ class TestPushUpstreamDetection:
             return result
 
         with (
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight.find_plan_file", return_value=None),
-            patch("session_postflight._run", side_effect=mock_run),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common.find_plan_file", return_value=None),
+            patch("scripts.postflight._common._run", side_effect=mock_run),
             patch("session_postflight.time.sleep", return_value=None),
             patch("session_postflight.time.time", side_effect=[0, 1000]),  # instant timeout
         ):
@@ -217,9 +219,9 @@ class TestCIPollingTimeout:
             return result
 
         with (
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight.find_plan_file", return_value=None),
-            patch("session_postflight._run", side_effect=mock_run),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common.find_plan_file", return_value=None),
+            patch("scripts.postflight._common._run", side_effect=mock_run),
             patch("session_postflight.time.sleep", return_value=None),
             patch("session_postflight.time.time", side_effect=mock_time),
         ):
@@ -256,12 +258,12 @@ class TestCIPollingTimeout:
             return result
 
         with (
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight.find_plan_file", return_value=None),
-            patch("session_postflight._run", side_effect=mock_run),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common.find_plan_file", return_value=None),
+            patch("scripts.postflight._common._run", side_effect=mock_run),
             patch("session_postflight.time.sleep", return_value=None),
             patch("session_postflight.time.time", return_value=0),
-            patch("session_postflight.clear_checkpoint") as mock_clear,
+            patch("scripts.postflight._common.clear_checkpoint") as mock_clear,
         ):
             rc = _postflight.run_push()
 
@@ -296,12 +298,12 @@ class TestCIPollingTimeout:
             return result
 
         with (
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight.find_plan_file", return_value=None),
-            patch("session_postflight._run", side_effect=mock_run),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common.find_plan_file", return_value=None),
+            patch("scripts.postflight._common._run", side_effect=mock_run),
             patch("session_postflight.time.sleep", return_value=None),
             patch("session_postflight.time.time", return_value=0),
-            patch("session_postflight.clear_checkpoint") as mock_clear,
+            patch("scripts.postflight._common.clear_checkpoint") as mock_clear,
         ):
             rc = _postflight.run_push()
 
@@ -348,12 +350,12 @@ class TestCIPollingTimeout:
             return result
 
         with (
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight.find_plan_file", return_value=None),
-            patch("session_postflight._run", side_effect=mock_run),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common.find_plan_file", return_value=None),
+            patch("scripts.postflight._common._run", side_effect=mock_run),
             patch("session_postflight.time.sleep", return_value=None),
             patch("session_postflight.time.time", return_value=0),
-            patch("session_postflight.clear_checkpoint"),
+            patch("scripts.postflight._common.clear_checkpoint"),
         ):
             rc = _postflight.run_push()
 
@@ -368,8 +370,8 @@ class TestMetricsMode:
         mock_result.stdout = "metrics output"
         mock_result.stderr = ""
         with (
-            patch("session_postflight._run", return_value=mock_result),
-            patch("session_postflight.prune_telemetry_logs", return_value={"pruned": [], "skipped": []}),
+            patch("scripts.postflight._common._run", return_value=mock_result),
+            patch("scripts.postflight.housekeeping.prune_telemetry_logs", return_value={"pruned": [], "skipped": []}),
         ):
             rc = _postflight.run_metrics()
         captured = capsys.readouterr()
@@ -400,9 +402,9 @@ class TestCloseMode:
         sanity_result = self._mock_sanity_result("PASS")
 
         with (
-            patch("session_postflight.find_plan_file", return_value=plan),
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight._run", side_effect=[diff_result, sanity_result]),
+            patch("scripts.postflight._common.find_plan_file", return_value=plan),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common._run", side_effect=[diff_result, sanity_result]),
         ):
             rc = _postflight.run_close()
 
@@ -420,9 +422,9 @@ class TestCloseMode:
         sanity_result = self._mock_sanity_result("PASS")
 
         with (
-            patch("session_postflight.find_plan_file", return_value=plan),
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight._run", side_effect=[diff_result, sanity_result]),
+            patch("scripts.postflight._common.find_plan_file", return_value=plan),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common._run", side_effect=[diff_result, sanity_result]),
         ):
             _postflight.run_close()
 
@@ -438,9 +440,9 @@ class TestCloseMode:
         sanity_result = self._mock_sanity_result("PASS")
 
         with (
-            patch("session_postflight.find_plan_file", return_value=plan),
-            patch("session_postflight._run", side_effect=[diff_result, sanity_result]),
-            patch("session_postflight._current_branch", return_value="agent/my-feature"),
+            patch("scripts.postflight._common.find_plan_file", return_value=plan),
+            patch("scripts.postflight._common._run", side_effect=[diff_result, sanity_result]),
+            patch("scripts.postflight._common._current_branch", return_value="agent/my-feature"),
         ):
             _postflight.run_close()
 
@@ -457,9 +459,9 @@ class TestCloseMode:
         sanity_result = self._mock_sanity_result("PASS")
 
         with (
-            patch("session_postflight.find_plan_file", return_value=None),
-            patch("session_postflight._current_branch", return_value="agent/test"),
-            patch("session_postflight._run", side_effect=[diff_result, sanity_result]),
+            patch("scripts.postflight._common.find_plan_file", return_value=None),
+            patch("scripts.postflight._common._current_branch", return_value="agent/test"),
+            patch("scripts.postflight._common._run", side_effect=[diff_result, sanity_result]),
         ):
             _postflight.run_close()
 
@@ -500,12 +502,12 @@ class TestAutoMode:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", side_effect=fake_close),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.postflight.remote.run_push", side_effect=fake_push),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
-            patch("session_postflight._stage_document_derived_tables"),
+            patch("scripts.postflight.housekeeping._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test", 5, 1)
 
@@ -562,12 +564,12 @@ class TestAutoMode:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", side_effect=fake_close),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.postflight.remote.run_push", side_effect=fake_push),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
-            patch("session_postflight._stage_document_derived_tables"),
+            patch("scripts.postflight.housekeeping._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test")
 
@@ -591,12 +593,12 @@ class TestAutoMode:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", side_effect=fake_close),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=1),  # failure
+            patch("scripts.postflight.remote.run_push", side_effect=fake_push),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=1),  # failure
             patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
-            patch("session_postflight._stage_document_derived_tables"),
+            patch("scripts.postflight.housekeeping._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test")
 
@@ -632,12 +634,12 @@ class TestAutoMode:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", side_effect=fake_close),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.postflight.remote.run_push", side_effect=fake_push),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", return_value={"pulled": {"ops_recommendations": 3}}) as mock_sync,
-            patch("session_postflight._stage_document_derived_tables"),
+            patch("scripts.postflight.housekeeping._stage_document_derived_tables"),
         ):
             rc = _postflight.run_auto("feat: test")
 
@@ -683,12 +685,12 @@ class TestRetiredDrainBlocks:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", side_effect=fake_close),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.postflight.remote.run_push", side_effect=fake_push),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
-            patch("session_postflight._stage_document_derived_tables"),
+            patch("scripts.postflight.housekeeping._stage_document_derived_tables"),
             patch("subprocess.run") as mock_subprocess,
         ):
             _postflight.run_auto("feat: test")
@@ -745,12 +747,12 @@ class TestStageDocumentDerivedTables:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", side_effect=fake_close),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.postflight.remote.run_push", side_effect=fake_push),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", return_value={"pulled": {}}),
-            patch("session_postflight._stage_document_derived_tables") as mock_stage,
+            patch("scripts.postflight.housekeeping._stage_document_derived_tables") as mock_stage,
         ):
             rc = _postflight.run_auto("feat: test")
 
@@ -769,8 +771,8 @@ class TestPruneTelemetryLogs:
         new_line = json.dumps({"date": "2099-12-31", "msg": "new"})
         (logs / ".test-log.jsonl").write_text(f"{old_line}\n{new_line}\n", encoding="utf-8")
         with (
-            patch.object(_postflight, "LOGS_DIR", logs),
-            patch.object(_postflight, "ARCHIVE_DIR", archive),
+            patch.object(_common, "LOGS_DIR", logs),
+            patch.object(_common, "ARCHIVE_DIR", archive),
         ):
             result = _postflight.prune_telemetry_logs(max_age_days=90)
         assert ".test-log.jsonl" in result["pruned"]
@@ -791,15 +793,15 @@ class TestPruneTelemetryLogs:
             encoding="utf-8",
         )
         with (
-            patch.object(_postflight, "LOGS_DIR", logs),
-            patch.object(_postflight, "ARCHIVE_DIR", logs / "archive"),
+            patch.object(_common, "LOGS_DIR", logs),
+            patch.object(_common, "ARCHIVE_DIR", logs / "archive"),
         ):
             result = _postflight.prune_telemetry_logs(max_age_days=90)
         assert ".keep.jsonl" in result["skipped"]
 
     def test_prune_handles_no_logs_dir(self, tmp_path: Path) -> None:
         missing = tmp_path / "nope"
-        with patch.object(_postflight, "LOGS_DIR", missing):
+        with patch.object(_common, "LOGS_DIR", missing):
             result = _postflight.prune_telemetry_logs(max_age_days=30)
         assert result == {"pruned": [], "skipped": []}
 
@@ -811,8 +813,8 @@ class TestPruneTelemetryLogs:
         new = json.dumps({"timestamp": "2099-06-15T12:00:00Z", "v": 2})
         (logs / ".ts-log.jsonl").write_text(f"{old}\n{new}\n", encoding="utf-8")
         with (
-            patch.object(_postflight, "LOGS_DIR", logs),
-            patch.object(_postflight, "ARCHIVE_DIR", archive),
+            patch.object(_common, "LOGS_DIR", logs),
+            patch.object(_common, "ARCHIVE_DIR", archive),
         ):
             result = _postflight.prune_telemetry_logs(max_age_days=90)
         assert ".ts-log.jsonl" in result["pruned"]
@@ -825,8 +827,8 @@ class TestPruneTelemetryLogs:
         old = json.dumps({"date": "2020-01-01", "x": 1})
         (logs / ".bad.jsonl").write_text(f"{bad_line}\n{old}\n", encoding="utf-8")
         with (
-            patch.object(_postflight, "LOGS_DIR", logs),
-            patch.object(_postflight, "ARCHIVE_DIR", archive),
+            patch.object(_common, "LOGS_DIR", logs),
+            patch.object(_common, "ARCHIVE_DIR", archive),
         ):
             result = _postflight.prune_telemetry_logs(max_age_days=90)
         assert ".bad.jsonl" in result["pruned"]
@@ -834,7 +836,7 @@ class TestPruneTelemetryLogs:
         assert "NOT JSON" in remaining
 
     def test_load_max_age_days_default(self) -> None:
-        with patch.object(_postflight, "ROOT", Path("/nonexistent")):
+        with patch.object(_common, "ROOT", Path("/nonexistent")):
             val = _postflight._load_max_age_days()
         assert val == _postflight.DEFAULT_MAX_AGE_DAYS
 
@@ -846,7 +848,7 @@ class TestPruneTelemetryLogs:
             "telemetry:\n  max_age_days: 45\n",
             encoding="utf-8",
         )
-        with patch.object(_postflight, "ROOT", tmp_path):
+        with patch.object(_common, "ROOT", tmp_path):
             val = _postflight._load_max_age_days()
         assert val == 45
 
@@ -857,11 +859,11 @@ class TestPruneTelemetryLogs:
         mock_result.stderr = ""
         with (
             patch(
-                "session_postflight._run",
+                "scripts.postflight._common._run",
                 return_value=mock_result,
             ),
             patch(
-                "session_postflight.prune_telemetry_logs",
+                "scripts.postflight.housekeeping.prune_telemetry_logs",
                 return_value={
                     "pruned": ["a.jsonl"],
                     "skipped": [],
@@ -891,10 +893,10 @@ class TestRunAutoCompactAll:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", return_value=0),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", return_value=0),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.postflight.remote.run_push", return_value=0),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", mock_sync),
         ):
             _postflight.run_auto("feat: test")
@@ -912,10 +914,10 @@ class TestRunAutoCompactAll:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", return_value=0),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.postflight.remote.run_push", side_effect=fake_push),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", side_effect=RuntimeError("sync failed!")),
         ):
             rc = _postflight.run_auto("feat: test")
@@ -933,10 +935,10 @@ class TestRunAutoCompactAll:
         with (
             patch("session_postflight.run_validate", return_value=0),
             patch("session_postflight.run_close", return_value=0),
-            patch("session_postflight.run_metrics", return_value=0),
+            patch("scripts.postflight.housekeeping.run_metrics", return_value=0),
             patch("session_postflight.run_commit", return_value=0),
-            patch("session_postflight.run_push", side_effect=fake_push),
-            patch("session_postflight.run_log_housekeeping", return_value=0),
+            patch("scripts.postflight.remote.run_push", side_effect=fake_push),
+            patch("scripts.postflight.housekeeping.run_log_housekeeping", return_value=0),
             patch("scripts.ops_data_portal.sync", side_effect=ImportError("ops_data_portal not found")),
         ):
             rc = _postflight.run_auto("feat: test")
@@ -972,7 +974,7 @@ class TestCloseTelemetrySession:
         original = sys.modules.get("scripts.executor.telemetry")
         sys.modules["scripts.executor.telemetry"] = mock_tel
         try:
-            with patch("session_postflight.TELEMETRY_ACTIVE_SESSION_FILE", state_file):
+            with patch("scripts.postflight._common.TELEMETRY_ACTIVE_SESSION_FILE", state_file):
                 _postflight.close_telemetry_session(outcome="success", files_changed=3)
         finally:
             if original is not None:
@@ -989,7 +991,7 @@ class TestCloseTelemetrySession:
     def test_missing_state_file_does_not_crash(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """When state file is absent, logs a warning and returns without error."""
         missing = tmp_path / ".telemetry-active-session.json"
-        with patch("session_postflight.TELEMETRY_ACTIVE_SESSION_FILE", missing):
+        with patch("scripts.postflight._common.TELEMETRY_ACTIVE_SESSION_FILE", missing):
             _postflight.close_telemetry_session(outcome="success")
 
         captured = capsys.readouterr()
