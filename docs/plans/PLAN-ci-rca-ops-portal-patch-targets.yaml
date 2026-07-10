@@ -1,0 +1,208 @@
+schema_version: 2
+slug: ci-rca-ops-portal-patch-targets
+intent: >-
+  Resolve the main-validate CI failure in
+  tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table
+  by updating the stale mock targets left behind by the Decision 124 ops_data_portal
+  facade split, then add a presubmit guard so future facade-to-submodule moves cannot
+  silently leave tests patching a no-op re-export namespace.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-ops-portal-patch-targets.yaml
+phase: >-
+  Platform reliability / CI merge-gate integrity. No tier_item: this is a ci_rca
+  forward-fix soft-warn exception scoped to the unresolved critical CI-RCA rec.
+scope:
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Repoint the failing file_decision _skip_sync test from the scripts.ops_data_portal
+      facade namespace to the scripts.ops_portal.decisions namespace where the moved
+      caller resolves _ducklake_write, DECISIONS_JSONL, _load_write_time_validators,
+      and the cache-refresh dependency at call time. Replace the stale _sync_table
+      assertion with an assertion that _refresh_cache_after_write receives
+      append_only=True.
+  - file: scripts/checks/ci_guards/validate_ops_portal_patch_targets.py
+    action: Create
+    purpose: >-
+      Add a static validation check that rejects patch("scripts.ops_data_portal.<sym>")
+      for symbols whose driving caller has moved to scripts.ops_portal.<module> and must
+      be patched in that implementation namespace instead.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Register the new CI guard in the authoritative validate.py check surface so the
+      failure class is enforced in presubmit instead of relying on post-merge CI.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Cover the new guard with positive and negative fixtures: stale facade patch target
+      is rejected; facade-resident callers and correctly targeted ops_portal patches pass.
+  - file: tests/CLAUDE.md
+    action: Modify
+    purpose: >-
+      If present and applicable, codify the namespace-migration testing discipline so
+      future refactors patch the namespace where the moved caller resolves dependencies.
+bundled_recommendations:
+  - rec-2637
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The specific failing pytest node passes without attempting real DuckLake writer URL
+    resolution or any non-local socket connection.
+  - >-
+    The updated test proves _skip_sync=True on file_decision flows to
+    _refresh_cache_after_write(..., append_only=True), not merely that retired
+    _sync_table is not called.
+  - >-
+    A new validation guard fails on tests that patch scripts.ops_data_portal symbols for
+    moved ops_portal callers where the patch cannot intercept the runtime dependency.
+  - >-
+    The guard allows legitimate facade-resident patches documented by the Decision 124
+    facade contract and does not require broad rewrites of tests that still patch active
+    facade globals.
+  - >-
+    rec-2637 remains the only bundled recommendation and can be closed by the merge
+    trailer after the implementation lands.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Reproduce the current CI failure before editing.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table -q
+    expected: >-
+      Fails before the fix with RuntimeError from scripts/ops_portal/writer_transport.py
+      because the stale facade _ducklake_write patch does not intercept file_decision.
+    fix_if: >-
+      If it already passes, inspect the test and rec-2637 for an upstream fix before
+      editing; do not implement a duplicate fix.
+    hermetic: true
+  - step: 2
+    phase: pre-deploy
+    action: Verify the targeted CI failure is fixed.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table -q
+    expected: 1 passed; no real DuckLake writer URL resolution appears in logs.
+    fix_if: >-
+      If the test still reaches writer_transport._resolve_writer_url, the patch target is
+      still wrong; patch scripts.ops_portal.decisions._ducklake_write, not the facade.
+    hermetic: true
+  - step: 3
+    phase: pre-deploy
+    action: Run the surrounding ops portal test file for collateral regressions.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -q
+    expected: All tests in tests/test_ops_data_portal.py pass.
+    fix_if: >-
+      Any failure means the namespace-migration change affected another test; diagnose
+      the exact caller namespace rather than broadening mocks or skipping tests.
+    hermetic: true
+  - step: 4
+    phase: pre-deploy
+    action: Verify the new stale-patch-target guard catches the failure pattern.
+    command: >-
+      bin/venv-python -m pytest tests/test_validate.py -k ops_portal_patch_targets -q
+    expected: >-
+      Guard tests pass, including a fixture with patch("scripts.ops_data_portal._ducklake_write")
+      for a moved file_decision caller and a fixture with the corrected
+      patch("scripts.ops_portal.decisions._ducklake_write") target.
+    fix_if: >-
+      If the stale fixture is accepted, the guard is vacuous. If legitimate facade patches
+      are rejected, refine the moved-caller mapping instead of banning all facade patches.
+    hermetic: true
+  - step: 5
+    phase: pre-deploy
+    action: Run the authoritative fast presubmit gate.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Fast presubmit passes and includes the new stale-patch-target guard.
+    fix_if: >-
+      Any failure must be fixed in the owning file; do not bypass with --ignore-budget
+      unless the only problem is a documented local timing budget limitation.
+    hermetic: true
+  - step: 6
+    phase: pre-deploy
+    action: Confirm rec-2637 is still the CI-RCA blocker this plan closes.
+    command: >-
+      bin/venv-python - <<'PY'
+      import json
+      rows=[json.loads(line) for line in open('logs/.recommendations-log.jsonl', encoding='utf-8') if line.strip()]
+      rec=next(row for row in rows if row.get('id')=='rec-2637')
+      print(rec['id'], rec['status'], rec['source'], rec['file'])
+      PY
+    expected: Prints rec-2637 open ci_rca tests/test_ops_data_portal.py.
+    fix_if: >-
+      If the rec is already closed or points elsewhere, stop and rescope before using a
+      Resolves trailer.
+    hermetic: true
+constraints:
+  - >-
+    Root-cause fix only. Do not silence the failure by setting DUCKLAKE_WRITER_URL,
+    allowing sockets, skipping the test, or weakening the writer failure.
+  - >-
+    Patch at the namespace where the caller resolves the dependency. For file_decision,
+    that is scripts.ops_portal.decisions, not scripts.ops_data_portal.
+  - >-
+    Preserve legitimate Decision 124 facade behavior: tests for facade-resident callers may
+    continue patching scripts.ops_data_portal globals.
+  - >-
+    No broad source refactor beyond the minimal guard registration and failing-test fix.
+  - >-
+    No rescue agents or workaround loops. On unrecoverable verification failure, stop and RCA.
+context:
+  - >-
+    Preflight on branch work surfaced rec-2637 as the only unresolved CI-RCA hard block:
+    "test_file_decision_skip_sync mock targets stale re-export namespace after ops_portal split".
+  - >-
+    Local reproduction confirms the failure: the test patches scripts.ops_data_portal._ducklake_write,
+    imports file_decision, then the implementation calls scripts.ops_portal.decisions._ducklake_write
+    and reaches writer_transport._resolve_writer_url, which raises because no DuckLake writer URL
+    is available in hermetic pytest.
+  - >-
+    tests/test_ops_data_portal.py already documents the Decision 124 namespace-migration rule:
+    facade-resident callers patch the facade; moved callers patch their implementation submodule.
+    The failing test violates that local rule.
+  - >-
+    The stale _sync_table assertion is also semantically obsolete: per-write cache refresh moved
+    to _refresh_cache_after_write(..., append_only=_skip_sync), while _sync_table is now the
+    explicit full-table reconciliation primitive.
+  - >-
+    Decision-scout gate: NO_FLAGS by inspection of the local planning constraints. Related
+    decisions: Decision 55 (forward-fix, no workaround loops), Decision 73 (presubmit as
+    authoritative pre-merge gate), Decision 84 (DuckLake writer is sole ops backend),
+    Decision 124 (ops_data_portal facade split).
+  - >-
+    Plan-critique gate: self-critique completed inline. Main risks addressed: guard false
+    positives on legitimate facade patches, vacuous prevention if the guard only checks this
+    exact test, and accidental network-dependent test behavior.
+pre_implementation_checklist:
+  - Branch confirmed not main before edits.
+  - Session preflight run and rec-2637 confirmed as the unresolved CI-RCA hard block.
+  - Failing pytest node reproduced locally before writing the plan.
+  - Affected caller namespace identified as scripts.ops_portal.decisions.
+  - Acceptance criteria are deterministic and hermetic.
+execution_steps:
+  - >-
+    Update tests/test_ops_data_portal.py::TestMigrationParams::test_file_decision_skip_sync_suppresses_sync_table
+    to patch scripts.ops_portal.decisions._ducklake_write, DECISIONS_JSONL,
+    _load_write_time_validators, and _refresh_cache_after_write. Assert the refresh call
+    receives append_only=True for _skip_sync=True.
+  - >-
+    Implement scripts/checks/ci_guards/validate_ops_portal_patch_targets.py as a narrow
+    AST/static-text guard driven by an explicit moved-caller mapping. The first mapping must
+    cover file_decision/update_decision/backfill_decisions_from_md -> scripts.ops_portal.decisions;
+    include enough structure to add maintenance_ops/risk_scoring/write_validators mappings later
+    without changing the validator contract.
+  - >-
+    Register the guard in scripts.validate --pre so the class is caught before merge.
+  - >-
+    Add tests for the guard in tests/test_validate.py using temporary files or helper fixtures
+    rather than mutating production tests during the test run.
+  - >-
+    If tests/CLAUDE.md exists in scope, add a concise machine-readable note for the
+    namespace-migration discipline; otherwise rely on the existing module docstring and validator.
+  - >-
+    Run Verification Plan steps 2-6 after implementation. Include "Resolves: rec-2637" in the
+    squash-merge PR body or use the ops portal fallback if the trailer automation fails.
+rollback: >-
+  Revert the implementation commit. The functional fix is test-only plus a validate.py guard;
+  rollback restores prior behavior but reopens rec-2637 and the post-merge CI failure, so rollback
+  should be followed by a new CI-RCA plan rather than leaving main red.
