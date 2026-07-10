@@ -2,6 +2,110 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 124: Ratify extending the Decision 80 pt 3 / Decision 104 facade-decomposition pattern to the ops-data layer (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-10
+**Warehouse ID:** dec-124 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+scripts/ops_data_portal.py is the Single Portal write gateway and had accreted the entire
+source=ci_rca structured-context subsystem, the DuckLake writer transport, risk scoring,
+write-time validators, decision CRUD, maintenance verbs, and a 277-SLOC argparse CLI -- 1774
+SLOC (budget 1800, 26 headroom, Decision 102). One-concern-per-module extraction behind a
+behaviour-preserving facade is the structural fix, exactly as ratified for validate.py
+(Decision 80 pt 3 / Decision 104).
+
+**Decision:**
+Ratifies the facade-decomposition pattern for the ops-data layer, mirroring Decision 104 with
+one addition -- a patch-interception hybrid:
+- scripts/ops_data_portal.py collapses to a thin facade (383 SLOC) that KEEPS DEFINED the
+  patch-epicentre (file_rec, update_rec, propose_or_close_rec, _fetch_rec_from_reader, sync,
+  get_ci_rca_strict_mode) so the majority of existing test patch sites need zero change; it
+  imports every test-patched private dependency into its own namespace so
+  `patch("scripts.ops_data_portal.<sym>")` keeps intercepting for facade-resident callers; and
+  it re-exports every public symbol plus the 6 imported-name traps (subprocess, ET,
+  DECISIONS_JSONL, RECS_JSONL, Recommendation, validate_source) and the
+  _fetch_decision_from_athena back-compat alias.
+- Ten new scripts/ops_portal/*.py modules, one concern each: _common (shared ROOT/profile/
+  region primitives, Decision 104 precedent), ci_rca_schema (CiRcaContext/CiRcaEvidenceDispute
+  models + shape validators), ci_rca_runtime (write-time cross-check + back-validation,
+  carries the decision-43 waiver), writer_transport (DuckLake writer SigV4 transport),
+  risk_scoring (risk/automatable derivation), write_validators (write-time content checks),
+  cache (local read-cache refresh), decisions (ops_decisions CRUD + DECISIONS.md ETL),
+  maintenance_ops (selftests, bulk-enqueue, postmortem maintenance), cli (argparse surface,
+  carries the decision-43 waiver).
+- Patch-interception hybrid (the addition Decision 104 did not need, since validate.py's
+  extracted checks are called only through the registry dispatch loop): a private symbol
+  moved to a submodule is patch-reachable at one of two namespaces depending on the calling
+  context -- (a) via the facade, when the driving caller is one of the six facade-resident
+  functions (which read the symbol as their own module global, since it was imported into the
+  facade namespace); or (b) via the submodule that holds its own bare-imported copy, when the
+  driving caller has ALSO moved to a submodule (e.g. file_decision/update_decision/
+  backfill_decisions_from_md moved to decisions.py, so tests patching _ducklake_write/
+  DECISIONS_JSONL/_load_write_time_validators/_fetch_decision_from_reader while driving those
+  three functions target scripts.ops_portal.decisions.<sym>, not the facade). Cross-module
+  calls FROM a submodule TO a facade-resident function (file_rec/update_rec/
+  _fetch_rec_from_reader/get_ci_rca_strict_mode) use a function-local deferred import inside
+  the calling function, both to avoid a module-load cycle and so a facade-level patch of that
+  target is picked up at call time.
+- Coverage-gate mapping is DELIBERATELY NOT extended: scripts/test_coverage_checker.py's
+  map_source_to_test leaves scripts/ops_portal/** unmapped (returns None -> skipped), identical
+  to how scripts/executor/** and scripts/verifiers/** are already treated. The per-file 100%
+  gate is full-tier + diff-gated only (registry.py's full_sequence(), not pre_sequence()), and
+  on main post-merge the merge-base diff is empty so it no-ops; extending the mapping would
+  create an unsatisfiable full-tier requirement, since the CI-RCA subsystem's tests are spread
+  across ~10 files (test_ops_data_portal.py plus test_ci_rca_*.py / _decisions / _validators)
+  and no single test file covers a whole portal region -- consolidating those is a test
+  reorganisation outside a behaviour-preserving code move. Deferred, not resolved.
+- check_source_registry.py (scripts/checks/ops_governance/) is extended to also scan
+  scripts/ops_portal/*.py for hardcoded source string literals, so the two literals that moved
+  out of the facade (ci_rca_warn_period_audit -> ci_rca_runtime.py, manual ->
+  maintenance_ops.py) stay validated against source_registry.yaml.
+- .importlinter's no-cycles-ops-data-portal-executor contract gains scripts.ops_portal as a
+  layer strictly between scripts.ops_data_portal and scripts.executor, with three new
+  ignore_imports entries (scripts.ops_portal.maintenance_ops / ci_rca_runtime / cli ->
+  scripts.ops_data_portal) mirroring the existing scripts.executor.jsonl_store carve-out --
+  the deferred-import mechanism above is invisible to import-linter's static layers check, so
+  each submodule making such a call must be named explicitly.
+- Decision 123 / T1.5 / CD.10 coordination: this mechanical, behaviour-preserving facade split
+  is NOT in conflict with Decision 123's revival of the stashed agent/ops-decisions-phase-2 WIP
+  inside T1.5. T1.5 is strategic=true and status=not_started, frozen by Decision 67 (STRATEGIC
+  suspended) -- not imminent. The facade preserves the exact agent surface
+  (scripts.ops_data_portal.file_rec/update_rec/file_decision), so the stashed WIP's
+  ops_decisions semantic-definition content and T1.5's eventual import-site sweep (to agent_sdk
+  verbs, CD.10) rebase onto the new scripts/ops_portal/ layout rather than the 1774-SLOC
+  monolith -- a better base, not wasted investment.
+
+**Rationale:**
+The patch-interception hybrid is the load-bearing difference from Decision 104's registry-
+dispatch design: ops_data_portal.py's public functions are called directly by ~130 test call
+sites and by every other module in the repo that files or updates a recommendation, so a
+functions-only re-export (missing the 6 imported-name traps, or missing a re-import of every
+test-patched private dependency) would silently break `patch("scripts.ops_data_portal.<sym>")`
+at whichever of the two namespaces the calling code actually resolves it from -- a class of bug
+the interception audit in this decomposition surfaced concretely (a facade-level patch of
+_resolve_writer_url does not affect _ducklake_write's own resolution, since both live in
+writer_transport.py; a facade-level patch of ROOT does not affect the CI-RCA evidence-bundle
+loader, since it lives in ci_rca_schema.py). Naming the calling module's own namespace as the
+patch target, rather than the symbol's origin module, is what test_ops_data_portal_decisions.py
+and the equivalent sites in test_ops_data_portal.py now do.
+
+**Related:** Decision 104 (direct precedent -- facade re-exports of public + test-patched
+private symbols, coverage-gate mapping choice), Decision 102 (SLOC ratchet; --update-sloc-
+budgets re-point, applied to every new scripts/ops_portal/** module), Decision 80 (tool-free
+decomposition direction; pt 2 governs the .importlinter layer this extends), Decision 43
+(500-SLOC + CC<=20; the decision-43 waiver travels into cli.py and ci_rca_runtime.py), Decision
+86 (no new standing prose-architecture doc -- this Decision is the sole record of the
+patch-interception-hybrid rationale), Decision 91 (verb routing preserved unchanged), Decision
+103 (propose_or_close_rec home -- stays in the facade), Decision 66 (get_rec_write_guidance
+callable before file_rec -- preserved in cli.py's --guidance branch), Decision 70 (purge stays
+private; no public delete_rec introduced), Decision 84/55 (read-cache-only + loud-fail
+preserved unchanged), Decision 123 / CD.18 / T1.5 / CD.10 (coordination note above -- this
+facade is the intermediate the eventual import-site sweep rebases onto).
+
+---
+
 ## Decision 123: Ratify CD.18 -- revive the stashed agent/ops-decisions-phase-2 WIP into T1.5's Phase-2 decomposition (Decided)
 
 **Status:** Decided

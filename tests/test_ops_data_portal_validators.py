@@ -92,15 +92,20 @@ def test_compute_automatable_boundary_file():
 
 
 def test_compute_automatable_high_risk_score():
-    """R > maturity_ceiling returns False."""
-    with patch("scripts.ops_data_portal._compute_risk_score", return_value=999.0):
+    """R > maturity_ceiling returns False.
+
+    compute_automatable moved to scripts/ops_portal/risk_scoring.py, which calls
+    _compute_risk_score as its own module-local sibling -- the patch target is that
+    module, not the facade re-export (Decision 124 namespace migration).
+    """
+    with patch("scripts.ops_portal.risk_scoring._compute_risk_score", return_value=999.0):
         result = compute_automatable("scripts/some_new_module.py", "M")
     assert result is False
 
 
 def test_compute_automatable_valid():
     """Normal file with R <= maturity_ceiling returns True."""
-    with patch("scripts.ops_data_portal._compute_risk_score", return_value=0.5):
+    with patch("scripts.ops_portal.risk_scoring._compute_risk_score", return_value=0.5):
         result = compute_automatable("scripts/some_new_module.py", "XS")
     assert result is True
 
