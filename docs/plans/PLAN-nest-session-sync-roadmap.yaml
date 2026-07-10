@@ -652,7 +652,7 @@ context:
     (reference session_preflight/platform_roadmap descriptively, not as path pins), Decision 55 (no-shim
     same-commit forward-fix consistent), Decision 101 (public-repo boundary -- all ~75 touched files are
     engineering; compliant).
-  - "gates: decision-scout=FLAGS_FOUND (1 WARN, Decision 79, resolved via version.yaml carve-out); plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND (1 WARN, Decision 79, resolved via version.yaml carve-out); plan-critique=PROCEED after 2 round(s)"
   - >-
     CRITICAL FINDING (design) -- ROOT move-sensitivity: 8 of the 12 modules compute repo root as
     Path(__file__)...parent.parent, correct only at flat depth. Nested one level deeper (scripts/<pkg>/<name>.py)
@@ -728,18 +728,20 @@ context:
     -- this plan realizes three of them in one commit (necessary because session.preflight cross-imports both the
     sync and roadmap families; splitting would create broken intermediate states).
   - >-
-    Branch claude/repo-restructure-audit-hm1gti REBASED onto current origin/main 5bfa1fe (branched at f119383/P4a;
-    #538 [Decision 125, lambda-deploy-channel-defaults] landed 1 commit ahead during planning and was rebased in).
-    Main Divergence Assessment: #538 touched 3 files IN this plan's scope -- AGENTS.md,
-    .claude/skills/planning/SKILL.md, config/agent/verification_registry/registry.yaml -- but the overlap is BENIGN:
-    Decision 125 added lambda-deploy-channel content in DIFFERENT sections than this plan's moving-module rewrite
-    targets and introduced NO new moving-module references; the global re.sub sweep is robust to the resulting line
-    shifts and does NOT touch the 2 new Decision-125 existence guards (agents-md-lambda-deploy-channel-rule-present
-    greps `deploy channel (Decision 125)`; planning-skill-lambda-deploy-channel-guidance-present greps `Deploy
-    channel by artifact class (Decision 125)` -- neither pattern contains a scripts. token, so the sweep cannot
-    break them). Re-verified post-rebase: the sweep still catches every moving-module ref in the 3 changed files
-    (AGENTS.md:129 sync_ops; SKILL.md:37/179 sync_ops + 394/397/447 plan_document; registry.yaml:138 plan_document
-    + 264/270/276/282 session_preflight). open_recommendations surfaced (none bundled per orchestrator constraint).
+    Main Divergence Assessment (base-agnostic -- main advances continuously; final alignment is deferred to the
+    commit-flow auto-rebase, orchestrator-owned). This plan was authored/rebased on the P4a lineage (branched at
+    f119383) and rebased once onto origin/main at 5bfa1fe, which absorbed #538 (Decision 125,
+    lambda-deploy-channel-defaults): a BENIGN overlap touching 3 in-scope files -- AGENTS.md,
+    .claude/skills/planning/SKILL.md, config/agent/verification_registry/registry.yaml -- with NO new moving-module
+    references and in DIFFERENT sections than this plan's rewrite targets; the global re.sub sweep is robust to the
+    line shifts and does NOT touch the 2 Decision-125 existence guards (patterns `deploy channel (Decision 125)` /
+    `Deploy channel by artifact class (Decision 125)` contain no scripts. token, so the sweep cannot break them).
+    Main has SINCE advanced past 5bfa1fe (e.g. #537 landed, independently assessed BENIGN: zero moving-module
+    references, zero new existence guards, all touched in-scope files remain sweep-covered) and will keep moving.
+    This plan deliberately pins NO exact base: any residual divergence at merge time is absorbed by the mandatory
+    commit-flow auto-rebase (AGENTS.md Git-ops) FOLLOWED BY VP step 3's post-rebase reference sweep, which re-runs
+    the global re.sub against whatever main is at that time and fails loudly on any missed reference. No scope file
+    carries a semantic conflict with any landed commit. open_recommendations surfaced (none bundled per orchestrator constraint).
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/repo-restructure-audit-hm1gti)
   - AGENTS.md + scripts/CLAUDE.md (root-vs-subpackage rule; session_*/sync_*/roadmap grandfathered families) + tests/CLAUDE.md (namespace-migration discipline; single import block; @patch retargeting) read
