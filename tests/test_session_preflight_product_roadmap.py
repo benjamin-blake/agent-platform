@@ -168,15 +168,15 @@ class TestPreflightProductRoadmapBlock:
         reader_stub.named.return_value = []
 
         with (
-            patch("session_preflight.check_venv", return_value=True),
-            patch("session_preflight.get_git_status", return_value=("agent/test", False, [])),
-            patch("session_preflight.check_terraform_pending", return_value=False),
-            patch("session_preflight.check_credentials", return_value="ok"),
-            patch("session_preflight.parse_last_session", return_value=""),
-            patch("session_preflight.count_recommendations", return_value=(0, 0, 0, [])),
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache.count_recommendations", return_value=(0, 0, 0, [])),
             patch("session_preflight._sync_ops_pull", return_value={}),
             patch(
-                "session_preflight.read_context_files",
+                "scripts.preflight.context_docs.read_context_files",
                 return_value={
                     "roadmap_phase": "",
                     "open_decisions_count": 0,
@@ -186,11 +186,11 @@ class TestPreflightProductRoadmapBlock:
                 },
             ),
             patch(
-                "session_preflight.check_telemetry_health",
+                "scripts.preflight.context_docs.check_telemetry_health",
                 return_value={"overall": "ok", "checks": [], "friction_patterns": []},
             ),
-            patch("session_preflight._check_ci_rca_liveness", return_value=None),
-            patch("session_preflight._make_reader", return_value=reader_stub),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight._common._make_reader", return_value=reader_stub),
             patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}),
             patch("session_preflight.platform_roadmap.compute_state_dict", return_value={}),
             patch("session_preflight.product_roadmap_module.compute_state_dict", return_value=_product_state),
