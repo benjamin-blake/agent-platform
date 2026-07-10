@@ -555,9 +555,7 @@ class TestMultiFailureEnumeration:
         shas = [b["sha256"] for b in bundles]
         assert len(set(shas)) == 2
 
-    def test_multi_failure_shared_workflow_run_id(
-        self, multi_failure_log_file, multi_failure_jobs_file, multi_taxonomy_file
-    ):
+    def test_multi_failure_shared_workflow_run_id(self, multi_failure_log_file, multi_failure_jobs_file, multi_taxonomy_file):
         with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
