@@ -51,10 +51,10 @@ def _looks_like_no_changes(text: str) -> bool:
     prose responses that contain any of the _NO_STEPS_KEYWORDS phrases.
     """
     stripped = text.strip()
-    # Prescribed short token — exact match (case-insensitive)
+    # Prescribed short token -- exact match (case-insensitive)
     if stripped.upper() == "ALREADY_IMPLEMENTED":
         return True
-    # Prose response — keyword scan on longer text to avoid false positives
+    # Prose response -- keyword scan on longer text to avoid false positives
     # from file content that happens to contain the words (min 30 chars)
     lower = stripped.lower()
     return len(stripped) > 30 and any(kw in lower for kw in _NO_STEPS_KEYWORDS)
@@ -303,7 +303,7 @@ def generate_initial_plan(
     if not steps:
         if _looks_like_no_changes(plan_text):
             logger.warning(
-                "[PLAN] No steps parsed — model indicates no changes needed. Response preview:\n%s",
+                "[PLAN] No steps parsed -- model indicates no changes needed. Response preview:\n%s",
                 plan_text[:300],
             )
             return _pl.ExecutionPlan(
@@ -351,7 +351,7 @@ def generate_initial_plan(
         if acceptance_preview:
             logger.info("[PLAN]            acceptance=%s", acceptance_preview)
         else:
-            logger.warning("[PLAN]            acceptance=(EMPTY — step will not be verified)")
+            logger.warning("[PLAN]            acceptance=(EMPTY -- step will not be verified)")
 
     if _pl.os.getenv("PLAN_SESSION_RESUME", "true").lower() not in ("false", "0"):
         plan.planning_session_id = result.session_id or ""
@@ -532,7 +532,7 @@ def refine_plan(plan: "ExecutionPlan", critique: dict, rec: dict) -> "ExecutionP
     if not new_steps:
         if _looks_like_no_changes(new_plan_text):
             logger.warning(
-                "[REFINE] No steps parsed — model indicates no changes needed during refine. Response preview:\n%s",
+                "[REFINE] No steps parsed -- model indicates no changes needed during refine. Response preview:\n%s",
                 new_plan_text[:300],
             )
             plan.status = "superseded"
