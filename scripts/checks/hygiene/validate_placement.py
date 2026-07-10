@@ -18,30 +18,36 @@ from scripts.checks import _common, registry
 _DEFAULT_ROUTER_PATH = _common.ROOT / "docs" / "contracts" / "file-router.yaml"
 
 
-def _load_router(path: Path) -> tuple[dict | None, str | None]:
-    """Load and structurally validate the router's top-level shape.
+def _load_router(path: Path) -> list | str:
+    """Load the router and validate its top-level shape.
 
-    Returns (data, None) on success, or (None, error-message) on a missing file,
-    unparseable YAML, a non-mapping top level, or a missing/empty/non-list `routes`.
+    Returns the non-empty `routes` list on success, or an error-message string on a missing
+    file, unparseable YAML, a non-mapping top level, or a missing/empty/non-list `routes`.
+    The list-vs-str return is a discriminated union the caller narrows by isinstance -- this
+    keeps the module raise-free (no assert) while still satisfying the type checker.
     """
     if not path.is_file():
-        return None, f"{path} does not exist"
+        return f"{path} does not exist"
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        return None, f"could not read/parse {path}: {exc}"
+        return f"could not read/parse {path}: {exc}"
     if not isinstance(data, dict):
-        return None, f"{path} is not a YAML mapping"
+        return f"{path} is not a YAML mapping"
     routes = data.get("routes")
     if not isinstance(routes, list) or not routes:
-        return None, f"{path} 'routes' is missing or not a non-empty list"
-    return data, None
+        return f"{path} 'routes' is missing or not a non-empty list"
+    return routes
 
 
 def _validate_routes_shape(routes: list) -> tuple[list[dict], list[str], set[str]]:
     """Iterate the routes LIST (never rely on mapping-key uniqueness -- yaml.safe_load
     would silently collapse duplicate mapping keys, making a duplicate-topic gate
     unconstructable). Returns (valid_routes, malformed messages, duplicate topics).
+
+    A route survives to `valid` only if its topic is a non-empty str AND every element of its
+    targets is a non-empty str -- so the dead-target scan below never calls a str method on a
+    non-str element (e.g. a `targets: [42]` typo a future relocation edit could introduce).
     """
     malformed: list[str] = []
     seen: set[str] = set()
@@ -58,6 +64,10 @@ def _validate_routes_shape(routes: list) -> tuple[list[dict], list[str], set[str
             continue
         if not isinstance(targets, list) or not targets:
             malformed.append(f"route {topic!r} missing a non-empty 'targets' list")
+            continue
+        bad_targets = [t for t in targets if not isinstance(t, str) or not t]
+        if bad_targets:
+            malformed.append(f"route {topic!r}: non-string/empty target(s): {bad_targets!r}")
             continue
         if topic in seen:
             duplicates.add(topic)
@@ -81,7 +91,8 @@ def _snapshot_tracked_paths() -> set[str]:
 def _dead_targets_for_route(route: dict, tracked: set[str]) -> list[str]:
     """A runtime row's target need only have its parent dir tracked (the file itself may
     be gitignored); a non-runtime row's target must itself be a tracked file, or a tracked
-    directory (some snapshot path starts with target.rstrip('/') + '/').
+    directory (some snapshot path starts with target.rstrip('/') + '/'). Every target is a
+    non-empty str here (guaranteed by _validate_routes_shape).
     """
     topic = route["topic"]
     is_runtime = bool(route.get("runtime", False))
@@ -109,12 +120,12 @@ def validate_placement(failed: list[str], router_path: Path | None = None) -> No
     print("\n=== File router placement check (RS-04) ===")
     path = router_path if router_path is not None else _DEFAULT_ROUTER_PATH
 
-    data, load_error = _load_router(path)
-    if load_error is not None:
-        failed.append(f"File router placement: {load_error}")
+    loaded = _load_router(path)
+    if isinstance(loaded, str):
+        failed.append(f"File router placement: {loaded}")
         return
 
-    valid_routes, malformed, duplicate_topics = _validate_routes_shape(data["routes"])
+    valid_routes, malformed, duplicate_topics = _validate_routes_shape(loaded)
 
     tracked = _snapshot_tracked_paths()
     dead_targets: list[str] = []

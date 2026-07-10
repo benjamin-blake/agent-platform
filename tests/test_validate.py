@@ -487,6 +487,61 @@ class TestValidatePlacement:
         assert len(failed) == 1
         assert "dead target" in failed[0]
 
+    def test_non_string_target_int_fails_without_raising(self, tmp_path: Path) -> None:
+        """A non-string (int) element in a targets list is a malformed row, NOT an
+        AttributeError -- honours the module's never-raise import-safety contract. A bare
+        globals()[name](failed) dispatch in validate.py has no try/except, so a raise here
+        would crash the entire validate run and silently skip every later check."""
+        router = self._router(
+            tmp_path,
+            "schema_version: 1\nroutes:\n  - topic: bad-int\n    targets: [42]\n",
+        )
+        with patch("scripts.checks._common.run", side_effect=self._mock_ls_files(["docs/ARCHITECTURE.md"])):
+            failed: list[str] = []
+            self.validate_placement(failed, router_path=router)
+        assert len(failed) == 1
+        assert "malformed route" in failed[0]
+        assert "non-string/empty target" in failed[0]
+
+    def test_null_target_fails_without_raising(self, tmp_path: Path) -> None:
+        """A null (None) element in a targets list is a malformed row, not a crash."""
+        router = self._router(
+            tmp_path,
+            "schema_version: 1\nroutes:\n  - topic: bad-null\n    targets: [null]\n",
+        )
+        with patch("scripts.checks._common.run", side_effect=self._mock_ls_files(["docs/ARCHITECTURE.md"])):
+            failed: list[str] = []
+            self.validate_placement(failed, router_path=router)
+        assert len(failed) == 1
+        assert "malformed route" in failed[0]
+        assert "non-string/empty target" in failed[0]
+
+    def test_nested_list_target_fails_without_raising(self, tmp_path: Path) -> None:
+        """A nested-list element in a targets list is a malformed row, not a crash."""
+        router = self._router(
+            tmp_path,
+            "schema_version: 1\nroutes:\n  - topic: bad-nested\n    targets: [[docs/ARCHITECTURE.md]]\n",
+        )
+        with patch("scripts.checks._common.run", side_effect=self._mock_ls_files(["docs/ARCHITECTURE.md"])):
+            failed: list[str] = []
+            self.validate_placement(failed, router_path=router)
+        assert len(failed) == 1
+        assert "malformed route" in failed[0]
+        assert "non-string/empty target" in failed[0]
+
+    def test_runtime_target_without_slash_passes(self, tmp_path: Path) -> None:
+        """A runtime:true target with no '/' (repo-root-relative, parent == '') passes when
+        the tracked snapshot is non-empty -- every path starts with the empty prefix. Covers
+        the else-branch of the runtime parent-dir computation."""
+        router = self._router(
+            tmp_path,
+            "schema_version: 1\nroutes:\n  - topic: root-cache\n    targets: [.rootcache.json]\n    runtime: true\n",
+        )
+        with patch("scripts.checks._common.run", side_effect=self._mock_ls_files(["docs/ARCHITECTURE.md"])):
+            failed: list[str] = []
+            self.validate_placement(failed, router_path=router)
+        assert failed == []
+
 
 class TestValidateTestCoverage:
     """Tests for validate_test_coverage()."""
