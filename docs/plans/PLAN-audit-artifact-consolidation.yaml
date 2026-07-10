@@ -1,0 +1,250 @@
+schema_version: 1
+slug: "audit-artifact-consolidation"
+intent: >-
+  Consolidate the repository's scattered legacy audit artifacts and unowned docs-root stray files
+  (loose AUDIT-*, REPORT-*, and a ducklake spike-note) into their single canonical class homes via
+  pure git mv plus a live-surface reference sweep, and register those homes in the machine-checked
+  file-router discovery registry -- shrinking placement-by-accident so the agent-first repository
+  stays navigable (NS.4). Implements repository-structure audit findings RS-02 and RS-03.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-audit-artifact-consolidation.yaml
+phase: >-
+  Repository-structure restructure Phase P2 (audit findings RS-02 + RS-03, medium, from
+  audits/repository-structure-cb02572.yaml). Depends on P1 (RS-04) file-router registry, merged at
+  fcb137c. Platform axis; RS-02/RS-03 are novel unowned findings (dedup_hit_count 0) with no owning
+  tier_item. Class-home routing per Decision 86.
+scope:
+  - file: docs/audit-reports/PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml
+    action: Delete
+    purpose: git mv to audits/legacy/PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml (inert pre-convention audit output)
+  - file: audits/legacy/PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml
+    action: Create
+    purpose: Receives the moved 2026-06-09 platform-roadmap audit output
+  - file: docs/audit-reports/wave-1-outputs/
+    action: Delete
+    purpose: git mv the 7-file dir to audits/legacy/wave-1-outputs/ (A1, A2, B, C, D, E, F)
+  - file: audits/legacy/wave-1-outputs/
+    action: Create
+    purpose: Receives the 7 wave-1 audit output files as a unit
+  - file: docs/AUDIT-test-hermeticity.yaml
+    action: Delete
+    purpose: git mv to audits/legacy/AUDIT-test-hermeticity.yaml (audit-output-class file stray at docs root)
+  - file: audits/legacy/AUDIT-test-hermeticity.yaml
+    action: Create
+    purpose: Receives the moved hermeticity audit output
+  - file: docs/AUDIT-PROMPT-platform-roadmap-audit.md
+    action: Delete
+    purpose: git mv to docs/audit-prompts/ (compose-time prompt joins the prompt home; filename preserved)
+  - file: docs/audit-prompts/AUDIT-PROMPT-platform-roadmap-audit.md
+    action: Create
+    purpose: Receives the moved platform-roadmap audit prompt
+  - file: docs/AUDIT-PROMPT-product-roadmap-yaml.md
+    action: Delete
+    purpose: git mv to docs/audit-prompts/ (compose-time prompt joins the prompt home; filename preserved)
+  - file: docs/audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md
+    action: Create
+    purpose: Receives the moved product-roadmap-yaml audit prompt
+  - file: docs/REPORT-ducklake-catalog-neon-migration.md
+    action: Delete
+    purpose: git mv to docs/plans/reports/ (Decision 86 REPORT-ONLY plan-deliverable class home)
+  - file: docs/plans/reports/REPORT-ducklake-catalog-neon-migration.md
+    action: Create
+    purpose: Receives the moved RDS->Neon migration REPORT deliverable
+  - file: docs/ducklake-spike-findings.md
+    action: Delete
+    purpose: git mv to docs/plans/reports/ (spike-note is a REPORT-ONLY plan deliverable per Decision 86)
+  - file: docs/plans/reports/ducklake-spike-findings.md
+    action: Create
+    purpose: Receives the moved ducklake spike-findings deliverable
+  - file: docs/ROADMAP-PRODUCT.md
+    action: Modify
+    purpose: >-
+      Banner (lines 10-11): replace the two dead docs/audit-reports/ pointers (which name files never
+      committed) with an honest reworded pointer to the moved audit prompt (docs/audit-prompts/
+      AUDIT-PROMPT-product-roadmap-yaml.md) and audits/legacy/. Verbatim replacement text in execution_steps.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Rewrite the 4 live 'docs/REPORT-ducklake-catalog-neon-migration.md' path references to
+      'docs/plans/reports/REPORT-ducklake-catalog-neon-migration.md' (CD.31 amendment ~L1512, CD.33
+      amendment ~L1644, CD.34 detail ~L1683, phase detail ~L5308). Leave the pathless AUDIT-test-hermeticity.yaml
+      basename in the dated ledger note (~L6878) untouched (append-only history).
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Append 4 additive discovery rows registering the consolidated homes (audit-outputs -> audits/;
+      audit-outputs-legacy -> audits/legacy/; audit-prompts -> docs/audit-prompts/; report-deliverables ->
+      docs/plans/reports/). No existing row references any moved path. Verbatim YAML block in execution_steps.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    All 13 stray files are relocated to their class homes (audits/legacy/ receives 9: the 2026-06-09
+    audit + wave-1-outputs/ x7 + AUDIT-test-hermeticity.yaml; docs/audit-prompts/ receives the 2
+    AUDIT-PROMPT-*.md; docs/plans/reports/ receives REPORT-ducklake-catalog-neon-migration.md +
+    ducklake-spike-findings.md), and docs/audit-reports/ no longer exists in the tree.
+  - >-
+    The docs/ root (depth-1) holds no AUDIT-*, REPORT-*, or spike-note files (RS-02/RS-03 acceptance).
+  - >-
+    Exactly one top-level directory (audits/) contains audit outputs (RS-02 acceptance).
+  - >-
+    validate_placement passes: every docs/contracts/file-router.yaml target -- including the 4 new
+    rows -- resolves to a tracked file/dir; zero dead targets, no duplicate topics, no malformed rows.
+  - >-
+    docs/ROADMAP-PRODUCT.md no longer references the never-committed
+    AUDIT-product-roadmap-yaml-conversion.yaml / PRODUCT-ROADMAP-PLATFORM-GAPS.yaml paths; its banner
+    points at the moved audit prompt and audits/legacy/.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml has zero remaining 'docs/REPORT-ducklake-...' (docs-root) references and
+    4 'docs/plans/reports/REPORT-ducklake-...' references.
+  - >-
+    validate.py --pre passes green (the authoritative pre-merge gate).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm all moved files are present at their new homes and absent at the old docs paths, and the wave dir carries all 7 files.
+    command: >-
+      test -f audits/legacy/PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml && test "$(git ls-files audits/legacy/wave-1-outputs | wc -l)" -eq 7 && test -f audits/legacy/AUDIT-test-hermeticity.yaml && test -f docs/audit-prompts/AUDIT-PROMPT-platform-roadmap-audit.md && test -f docs/audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md && test -f docs/plans/reports/REPORT-ducklake-catalog-neon-migration.md && test -f docs/plans/reports/ducklake-spike-findings.md && test ! -e docs/AUDIT-test-hermeticity.yaml && test ! -e docs/REPORT-ducklake-catalog-neon-migration.md && test ! -e docs/ducklake-spike-findings.md && echo MOVES_OK
+    expected: Prints MOVES_OK (all new paths exist with 7 wave files; all old docs-root paths gone).
+    fix_if: A missing new path or lingering old path means a git mv was skipped or mis-targeted; re-run the specific move.
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the old docs/audit-reports/ home holds zero tracked files and its emptied directory node has been removed.
+    command: test "$(git ls-files docs/audit-reports/ | wc -l)" -eq 0 && test ! -e docs/audit-reports && echo AUDIT_REPORTS_REMOVED
+    expected: Prints AUDIT_REPORTS_REMOVED (zero tracked files under the old home; the empty dir node is gone).
+    fix_if: If git still tracks files under docs/audit-reports/, a move was missed -- git mv it into audits/legacy/. If zero files are tracked but the path still exists (git leaves the emptied dir node on disk after git mv), run `rm -rf docs/audit-reports` to clear it.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the docs/ root (depth-1) holds no AUDIT-*, REPORT-*, or spike-note files.
+    command: >-
+      git ls-files docs/ | grep -E '^docs/[^/]+$' | grep -E 'docs/(AUDIT-|REPORT-|ducklake-spike-findings)' || echo DOCS_ROOT_CLEAN
+    expected: Prints DOCS_ROOT_CLEAN with no preceding file lines.
+    fix_if: Any printed path is an unmoved stray at docs root; git mv it into its class home.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: Run the file-router link-validity (placement) check directly; every target incl. the 4 new rows must resolve.
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_placement import validate_placement; f=[]; validate_placement(f); print('PLACEMENT_OK' if not f else 'PLACEMENT_FAIL: '+'; '.join(f))"
+    expected: Prints PLACEMENT_OK.
+    fix_if: PLACEMENT_FAIL lists a dead target/duplicate topic/malformed row; correct the offending file-router row (targets must resolve post-move; topics unique).
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the ROADMAP-PLATFORM.yaml REPORT-ducklake reference sweep is complete.
+    command: >-
+      test "$(grep -c 'docs/REPORT-ducklake-catalog-neon-migration.md' docs/ROADMAP-PLATFORM.yaml)" -eq 0 && test "$(grep -c 'docs/plans/reports/REPORT-ducklake-catalog-neon-migration.md' docs/ROADMAP-PLATFORM.yaml)" -eq 4 && echo ROADMAP_REFS_OK
+    expected: Prints ROADMAP_REFS_OK (0 old docs-root refs; 4 new docs/plans/reports/ refs).
+    fix_if: A nonzero old count or a new count != 4 means an occurrence was missed or double-edited; re-scan the 4 anchor sites.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the ROADMAP-PRODUCT.md banner no longer cites the never-committed paths and points at the moved locations.
+    command: >-
+      ! grep -qE 'AUDIT-product-roadmap-yaml-conversion|PRODUCT-ROADMAP-PLATFORM-GAPS' docs/ROADMAP-PRODUCT.md && grep -q 'audits/legacy/' docs/ROADMAP-PRODUCT.md && grep -q 'audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md' docs/ROADMAP-PRODUCT.md && echo BANNER_FIXED
+    expected: Prints BANNER_FIXED.
+    fix_if: If a dead path remains or a new pointer is missing, re-apply the verbatim banner replacement from execution_steps.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the 4 additive discovery rows exist and are unique in file-router.yaml.
+    command: >-
+      test "$(grep -cE '^[[:space:]]+- topic: (audit-outputs|audit-outputs-legacy|audit-prompts|report-deliverables)$' docs/contracts/file-router.yaml)" -eq 4 && echo ROUTER_ROWS_OK
+    expected: Prints ROUTER_ROWS_OK (exactly 4 new topic rows).
+    fix_if: A count != 4 means a row is missing or a topic name is misspelled/duplicated; add/correct the row.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the new docs/plans/reports/ home is inert to plan tooling -- it holds no PLAN-*.yaml, so the non-recursive validate_plan_documents glob and find_plan.py slug resolution ignore it (Decision 85).
+    command: test -z "$(ls docs/plans/reports/PLAN-*.yaml 2>/dev/null)" && test -f docs/plans/reports/REPORT-ducklake-catalog-neon-migration.md && test -f docs/plans/reports/ducklake-spike-findings.md && echo REPORTS_HOME_INERT
+    expected: Prints REPORTS_HOME_INERT (no PLAN-*.yaml under reports/; both report deliverables present).
+    fix_if: If a PLAN-*.yaml appears under reports/, it was misplaced -- reports/ holds only REPORT-*.md and spike notes; move any plan doc back to docs/plans/.
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: Validate this PLAN document against the PlanDocument schema.
+    command: bin/venv-python -m scripts.plan_document docs/plans/PLAN-audit-artifact-consolidation.yaml
+    expected: Reports the plan validates against the PlanDocument schema (no errors).
+    fix_if: A schema error names the offending field; correct it (extra keys forbidden).
+  - step: 10
+    phase: pre-deploy
+    hermetic: false
+    action: Run the authoritative fast presubmit tier over the whole change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exits 0 (all checks pass, including validate_placement and validate_plan_documents).
+    fix_if: A named check fails; diagnose and fix on-branch (do not disable checks). If validate_plan_documents flags a stray under docs/plans/reports/, confirm it is not a PLAN-*.yaml (only PLAN-*.yaml are schema-governed).
+constraints:
+  - IMPLEMENTATION plan type; no recommendations bundled (orchestrator constraint; STRATEGIC suspended per Decision 67).
+  - Pure git mv + live-surface reference sweep + additive file-router rows; NO behavioral/source code changes.
+  - >-
+    Leave append-only history untouched: docs/plans/ historical PLAN-*.md/.yaml, logs/, audits/ outputs
+    (including the moved files' own internal text), SESSION_LOG*, DECISIONS_ARCHIVE.md, dated
+    ledger/progress notes, and ROADMAP-PRODUCT.yaml frozen audit-lineage provenance comments.
+  - >-
+    Do NOT modify src/common/ducklake_spike.py -- it is Lambda-packaged into 6 active artifacts
+    (data-pipeline, ducklake_catalog_dr, ducklake_maintenance, ducklake_reader, ducklake_writer,
+    ops-compaction); a one-line comment change would force 6 build/deploy/smoke cycles, disproportionate
+    to a pure-move plan. Its comment reference to the moved spike file is a documented residual.
+  - Preserve the two AUDIT-PROMPT-*.md filenames on move (pure git mv into docs/audit-prompts/); do NOT rename to the home's AUDIT-{slug}.md convention.
+  - No rescue agents or workaround loops (Decision 55). Forward-fix on-branch only.
+  - Never edit or commit on main; work on the harness claude/ branch only (AGENTS.md Git-ops).
+  - No emojis; ASCII hyphens only; public-repo content boundary (Decision 101) -- moved files are already-public audit/report artifacts, nothing confidential is introduced.
+context:
+  - "Decision-scout verdict + CITE list: NO_FLAGS (84/84 decisions triaged). CITE: Decision 86 (INTENT prose retired / class-home routing -- governs REPORT-ONLY -> docs/plans/reports/ and discovery-semantics -> file-router.yaml); Decision 104 (validate.py check registry -- the validate_placement gate governs the 4 additive file-router rows). Supporting (scout-verified clean): Decision 48 (V1 tier -- docs/config only, no runtime/manifest effect); Decision 79/CD.24 (manifests bundle src/common/ducklake_spike.py, NOT the moved docs/ducklake-spike-findings.md -- no deploy gate); Decision 85 (PlanDocument enforced only on docs/plans/PLAN-*.yaml; the new docs/plans/reports/*.md are not plan docs); Decision 86 clause 2 (the two relocated docs are REPORT-ONLY-class plan deliverables, not forbidden standing prose-architecture); Decision 107 (ratifies CD.34 -- provenance of the REPORT file only, not its location); Decision 101 (git mv introduces no new publication -- already public); Decisions 110/114 (ROADMAP-PLATFORM.yaml path-string edits stay schema-valid, well under the line guard)."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round(s)"
+  - "ci_rca HARD BLOCK deferred by human directive (relayed by orchestrator): preflight surfaced rec-2637 [Critical] (test_file_decision_skip_sync mock targets stale re-export namespace after ops_portal split). That CI failure is under separate investigation on branch codex/investigate-ci-failure-root-cause; it is NOT part of P2 scope and does not block this docs-consolidation plan."
+  - "Banner fix rationale (item 4): docs/ROADMAP-PRODUCT.md banner (L10-11) cited docs/audit-reports/AUDIT-product-roadmap-yaml-conversion.yaml and docs/audit-reports/PRODUCT-ROADMAP-PLATFORM-GAPS.yaml. git log --all --diff-filter=A confirms NEITHER was ever committed -- they were only SPEC'd output paths in docs/AUDIT-PROMPT-product-roadmap-yaml.md Sections 5.2/5.3; the audit that actually populated docs/audit-reports/ was the SEPARATE 2026-06-09 platform audit. The banner is repointed to the two REAL/moved locations (the moved prompt docs/audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md + audits/legacy/) with an honest note that the planned deliverables were never committed. This is an 'annotated retirement' (repo norm), not a naive path swap."
+  - "file-router premise correction (P1 learning #3): the merged registry at fcb137c has ZERO rows targeting any moved/deleted audit path (grep-verified over file-router.yaml) -- the legacy audit scatter was never indexed (that is exactly why RS-02/RS-03 are separate 'unowned' findings). So NO existing rows required updating. The router work is ADDITIVE: 4 new discovery rows register the consolidated homes, realizing RS-04's discovery-index intent. All 4 topics are unique (no existing audit/report topic); all 4 targets resolve post-move, keeping validate_placement green."
+  - "Reference sweep completeness: live docs/REPORT-ducklake path refs exist ONLY in docs/ROADMAP-PLATFORM.yaml (4 sites: CD.31 amendment L1512, CD.33 amendment L1644, CD.34 detail L1683, phase detail L5308) -- all rewritten. docs/DECISIONS.md, docs/DECISIONS_ARCHIVE.md, and docs/contracts/ have ZERO references (grep-verified); the 'Decision 84/CD.34 cite the REPORT' provenance lives entirely in ROADMAP-PLATFORM.yaml (CD.34 is a candidate_decision there). All other references are append-only history and are left untouched."
+  - "Documented residuals (intentional, none is a live navigation dead-link): (a) src/common/ducklake_spike.py:17 code comment names docs/ducklake-spike-findings.md -- left (Lambda-packaged x6). (b) tests/test_ducklake_spike.py:441 comment names the basename ducklake-spike-findings.md (pathless, not a dead link). (c) docs/ROADMAP-PRODUCT.yaml provenance comments (L110 AUDIT-PROMPT-*, L348/L4298/L4519 wave-1-outputs) are frozen audit-lineage citations, 2 of 3 already dead pre-move, and outside the orchestrator's enumerated sweep surfaces -- left. (d) docs/ROADMAP-PLATFORM.yaml:6878 dated ledger note names AUDIT-test-hermeticity.yaml (pathless basename in append-only ledger) -- left. (e) existing docs/audit-prompts/*.md that reference the two moved loose AUDIT-PROMPT-*.md by their old docs/ path (e.g. AUDIT-platform-first-sequencing.md) are frozen compose-time artifacts outside the enumerated sweep surfaces -- left."
+  - "RS-03 allowlist ENFORCEMENT (a docs-root allowlist in the placement registry) is deferred to a future placement-registry phase. This plan achieves RS-03's acceptance by MOVING the strays out of docs root and registering the homes, not by adding allowlist-enforcement code -- consistent with the pure git mv + reference sweep scope."
+  - "Depends on P1 (RS-04) file-router registry merged at fcb137c (docs/contracts/file-router.yaml top-level {schema_version, routes:[...]}; scripts/checks/hygiene/validate_placement.py enforces link-validity in both presubmit tiers). Branch claude/repo-restructure-audit-hm1gti at origin/main fcb137c; clean tree at planning time (no rebase needed)."
+  - "docs/plans/reports/ is safe as the REPORT home: validate_plan_documents.py globs docs/plans/PLAN-*.yaml NON-recursively (no subdir descent, PLAN-*.yaml only), and find_plan.py resolves by exact branch slug -- neither is affected by a reports/ subdir holding REPORT-*.md and a spike note."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/repo-restructure-audit-hm1gti)
+  - docs/PROJECT_CONTEXT.md read
+  - Audit findings RS-02/RS-03 + proposed_target_tree nodes read from audits/repository-structure-cb02572.yaml
+  - All 13 stray files located; all live reference sites enumerated (ROADMAP-PLATFORM.yaml x4 + ROADMAP-PRODUCT.md banner); DECISIONS/contracts confirmed ref-free
+  - file-router.yaml P1 registry read; the 4 new topics confirmed unique; targets confirmed to resolve post-move
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "Create the target home dirs so git mv has valid destinations: mkdir -p audits/legacy docs/plans/reports (docs/audit-prompts/ already exists)."
+  - "git mv the 3 legacy-output groups into audits/legacy/: (a) git mv docs/audit-reports/PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml audits/legacy/PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml ; (b) git mv docs/audit-reports/wave-1-outputs audits/legacy/wave-1-outputs (moves all 7 files A1,A2,B,C,D,E,F as a unit) ; (c) git mv docs/AUDIT-test-hermeticity.yaml audits/legacy/AUDIT-test-hermeticity.yaml . THEN remove the emptied directory node: git does not track empty dirs, so the now-untracked docs/audit-reports/ path lingers on disk after the git mv moves -- once its tracked contents are moved, run `rm -rf docs/audit-reports` so the old home is gone from the working tree (this is what VP step 2 verifies)."
+  - "git mv the 2 loose audit prompts into docs/audit-prompts/ (preserve filenames): git mv docs/AUDIT-PROMPT-platform-roadmap-audit.md docs/audit-prompts/AUDIT-PROMPT-platform-roadmap-audit.md ; git mv docs/AUDIT-PROMPT-product-roadmap-yaml.md docs/audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md ."
+  - "git mv the 2 REPORT-ONLY deliverables into docs/plans/reports/: git mv docs/REPORT-ducklake-catalog-neon-migration.md docs/plans/reports/REPORT-ducklake-catalog-neon-migration.md ; git mv docs/ducklake-spike-findings.md docs/plans/reports/ducklake-spike-findings.md ."
+  - "Reference sweep -- docs/ROADMAP-PLATFORM.yaml: rewrite ALL 4 occurrences of the string 'docs/REPORT-ducklake-catalog-neon-migration.md' to 'docs/plans/reports/REPORT-ducklake-catalog-neon-migration.md'. Anchor sites: CD.31 amendment text (~L1512), CD.33 amendment text (~L1644), CD.34 detail 'Authored by ...' (~L1683), and the phase/tier detail 'Authored by ...' (~L5308). Leave the pathless 'AUDIT-test-hermeticity.yaml' basename in the dated ledger note (~L6878) untouched (append-only)."
+  - |
+    Reference sweep -- docs/ROADMAP-PRODUCT.md banner: replace lines 10-11 verbatim.
+    OLD (delete both lines):
+    > Conversion audit report: [`docs/audit-reports/AUDIT-product-roadmap-yaml-conversion.yaml`](./audit-reports/AUDIT-product-roadmap-yaml-conversion.yaml).
+    > Platform gaps surfaced during conversion: [`docs/audit-reports/PRODUCT-ROADMAP-PLATFORM-GAPS.yaml`](./audit-reports/PRODUCT-ROADMAP-PLATFORM-GAPS.yaml).
+    NEW (insert in their place):
+    > This conversion was driven by the product-roadmap-YAML audit prompt
+    > ([`docs/audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md`](./audit-prompts/AUDIT-PROMPT-product-roadmap-yaml.md)).
+    > Its originally-planned conversion-report and platform-gaps YAML deliverables were never committed
+    > under those names; historical roadmap-audit outputs are archived under [`audits/legacy/`](../audits/legacy/).
+  - |
+    Router registration -- docs/contracts/file-router.yaml: append these 4 rows to the end of the `routes:` list (2-space indent, matching existing rows; all topics are new/unique; all targets resolve after the moves above):
+      - topic: audit-outputs
+        targets: [audits/]
+        description: "Audit outputs (results): current-convention <slug>-<sha>.{yaml,md} pairs. One canonical audit-output home (RS-02)."
+      - topic: audit-outputs-legacy
+        targets: [audits/legacy/]
+        description: "Inert pre-convention audit outputs (PLATFORM-ROADMAP-AUDIT-2026-06-09.yaml, wave-1-outputs/, AUDIT-test-hermeticity.yaml); consolidated from docs/audit-reports/ and the docs root (RS-02)."
+      - topic: audit-prompts
+        targets: [docs/audit-prompts/]
+        description: "Audit prompts (compose-time inputs): AUDIT-{slug}.md briefs authored by the /audit workflow."
+      - topic: report-deliverables
+        targets: [docs/plans/reports/]
+        description: "REPORT-ONLY plan deliverables (Decision 86 class home): REPORT-*.md and spike-finding notes referenced from their PLAN-*.yaml (RS-03)."
+  - "Execute the Verification Plan -- run each step in order; loop until all pass. Docs-only V1, so there is no deploy phase. On any failure, forward-fix on-branch (Decision 55); never disable a check."
+  - "Report: files moved (13), reference sites swept (ROADMAP-PLATFORM.yaml x4 + the banner), the 4 file-router rows added, and the full verification results (each VP step verdict)."
+work_areas: []
+rollback: >-
+  All changes are pure git mv + text edits on the branch; revert with `git checkout -- .` before commit,
+  or `git revert <sha>` after. No infrastructure, no deploy, no data migration -- rollback is a plain
+  git operation with zero external side effects.
