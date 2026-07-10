@@ -947,6 +947,83 @@ class TestComputeFollowonState:
 
 
 # ---------------------------------------------------------------------------
+# TestComputeFollowonStateMalformedPlanShapes -- closes coverage gaps in the
+# per-plan-file skip branches of compute_followon_state. Distinct from
+# test_malformed_plan_skipped above (which exercises the OUTER yaml.safe_load
+# exception path, e.g. genuine YAML syntax errors): these exercise
+# successfully-PARSED-but-wrong-shaped YAML, which the outer except never sees.
+# ---------------------------------------------------------------------------
+
+
+class TestComputeFollowonStateMalformedPlanShapes:
+    def _make_doc(self, items: list[dict]) -> RoadmapDocument:
+        d = copy.deepcopy(_BASE_DOC)
+        d["tier_items"] = items
+        return RoadmapDocument.model_validate(d)
+
+    def _in_progress_item(self, item_id: str, criteria: list[dict]) -> dict:
+        item = _item(item_id, status="in_progress")
+        item["exit_criteria"] = criteria
+        return item
+
+    def test_plan_yaml_top_level_not_dict_skipped(self, tmp_path: Path) -> None:
+        # Valid YAML that parses to a list (not a dict) at the top level.
+        doc = self._make_doc([self._in_progress_item("A", [{"id": "c1", "text": "x", "status": "open"}])])
+        (tmp_path / "PLAN-list-toplevel.yaml").write_text("- a\n- b\n")
+        result = compute_followon_state(doc, tmp_path)
+        assert result["A"]["needs_followon_plan"] is True
+
+    def test_closes_criteria_not_a_list_skipped(self, tmp_path: Path) -> None:
+        # closes_criteria present but not list-shaped (a bare scalar string).
+        doc = self._make_doc([self._in_progress_item("A", [{"id": "c1", "text": "x", "status": "open"}])])
+        (tmp_path / "PLAN-bad-closes.yaml").write_text("closes_criteria: not-a-list-value\n")
+        result = compute_followon_state(doc, tmp_path)
+        assert result["A"]["needs_followon_plan"] is True
+
+    def test_closes_criteria_entry_malformed_skipped(self, tmp_path: Path) -> None:
+        # One entry is a non-str (int); the other is a str missing the
+        # required ':' item_id/crit_id separator. Both hit the same continue.
+        doc = self._make_doc([self._in_progress_item("A", [{"id": "c1", "text": "x", "status": "open"}])])
+        (tmp_path / "PLAN-bad-entries.yaml").write_text("closes_criteria:\n  - 123\n  - malformed-ref-without-colon\n")
+        result = compute_followon_state(doc, tmp_path)
+        assert result["A"]["needs_followon_plan"] is True
+
+
+# ---------------------------------------------------------------------------
+# TestComputeStateDictDecisionTsEdgeCases -- closes coverage gaps in the
+# latest_decision_ts branch of compute_state_dict: naive-datetime tzinfo
+# backfill, and the outer except-guard for a wholly unparseable timestamp.
+# Distinct from TestStaleCacheNote above, whose fixtures always pass an
+# explicit UTC offset ("+00:00"), so decision_dt.tzinfo is never None there.
+# ---------------------------------------------------------------------------
+
+
+class TestComputeStateDictDecisionTsEdgeCases:
+    def _write_yaml(self) -> Path:
+        return _write_fixture_yaml([_item("T0.1")])
+
+    def test_naive_decision_ts_backfilled_to_utc(self) -> None:
+        path = self._write_yaml()
+        try:
+            # No UTC offset -- datetime.fromisoformat produces a naive datetime,
+            # exercising the tzinfo-is-None backfill branch before comparison.
+            result = compute_state_dict(path, latest_decision_ts="2020-01-01T00:00:00")
+            assert "stale_cache_note" in result, f"expected stale_cache_note; got keys: {list(result)}"
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_invalid_decision_ts_format_silently_ignored(self) -> None:
+        path = self._write_yaml()
+        try:
+            # Not parseable by datetime.fromisoformat at all -- caught by the
+            # outer except-guard; function must not raise and must omit the note.
+            result = compute_state_dict(path, latest_decision_ts="not-a-real-timestamp")
+            assert "stale_cache_note" not in result
+        finally:
+            path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
 # TestCompletionBlockedOnCd -- T-1.20:c6
 # ---------------------------------------------------------------------------
 

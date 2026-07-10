@@ -645,3 +645,41 @@ class TestOpenQuestionKnownGapLifecycle:
         assert len(non_open_kg) == 4
         for entry in (*non_open_oq, *non_open_kg):
             assert entry.resolution_ref, f"{entry.id} has non-open status but no resolution_ref"
+
+
+# ---------------------------------------------------------------------------
+# TestModelsCoverageTopUp -- closes per-file coverage gaps identified by code
+# review after the platform_roadmap decomposition (coverage partition risk,
+# rec-2633). test_cd_bad_gate_ref_raises and test_gate_rule_rejected_in_model
+# now live in test_platform_roadmap_gate_rules.py (their natural home post-
+# decomposition), which orphaned models.py's own _validate_graph raise-branch
+# coverage from THIS suite's run. These are fresh, independently-written cases
+# for the same raise sites -- not moved from the gate_rules suite.
+# ---------------------------------------------------------------------------
+
+
+class TestModelsCoverageTopUp:
+    def test_cd_gate_ref_does_not_resolve_raises(self) -> None:
+        # _validate_graph check (d): candidate_decisions[].gates entries must
+        # resolve to a known tier_item id or tier shortcut.
+        d = _doc(candidate_decisions=[{"id": "CD.X", "title": "T", "gates": ["T999.0"]}])
+        with pytest.raises(Exception, match="does not resolve"):
+            RoadmapDocument.model_validate(d)
+
+    def test_cross_tier_gate_bad_rule_raises(self) -> None:
+        # _validate_graph check (e): cross_tier_gates[].rule must validate
+        # against the gate_helpers grammar; GateRuleParser's ValueError is
+        # caught and re-raised with CrossTierGate context.
+        d = _doc(cross_tier_gates=[{"id": "G.X", "name": "test", "rule": "bogus_helper(T0.1)", "rationale": "test"}])
+        with pytest.raises(Exception, match="CrossTierGate 'G.X'"):
+            RoadmapDocument.model_validate(d)
+
+    def test_exit_criteria_non_list_input_short_circuits_normalizer(self) -> None:
+        # _normalize_exit_criteria's mode="before" guard ("if not isinstance(v,
+        # list): return v") returns non-list input unchanged; pydantic's own
+        # list-type check then rejects it downstream -- proving the guard
+        # clause itself executed rather than the per-item string-promotion loop.
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="valid list"):
+            TierItem(id="X", tier="T0", name="t", exit_criteria=42)  # type: ignore[arg-type]

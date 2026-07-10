@@ -93,3 +93,16 @@ class TestCliMain:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert captured.out.strip() == "PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema."
+
+    @pytest.mark.filterwarnings("ignore:.*found in sys.modules.*:RuntimeWarning")
+    def test_runpy_main_prints_fail_and_exits_one(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        # Nonexistent path -> load() raises FileNotFoundError -> the CLI's
+        # broad except prints "FAIL: {exc}" and exits 1.
+        monkeypatch.setattr(sys, "argv", ["platform_roadmap", "/nonexistent/path/ROADMAP-BOGUS.yaml"])
+        with pytest.raises(SystemExit) as exc_info:
+            runpy.run_module("scripts.platform_roadmap", run_name="__main__")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert captured.out.startswith("FAIL:")

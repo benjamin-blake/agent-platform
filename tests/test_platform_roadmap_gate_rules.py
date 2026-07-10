@@ -275,3 +275,141 @@ class TestGateRuleEvaluator:
         ev = GateRuleEvaluator(_state_from_doc(doc))
         verdict, _ = ev.evaluate('T999.1.status == "complete"')
         assert verdict == "deferred"
+
+
+# ---------------------------------------------------------------------------
+# TestGateRuleEvaluatorCoverageTopUp -- closes per-file coverage gaps identified
+# by code review after the platform_roadmap decomposition (coverage partition
+# risk, rec-2633). Each case below exercises a distinct branch not reached by
+# any test above.
+# ---------------------------------------------------------------------------
+
+
+class TestGateRuleEvaluatorCoverageTopUp:
+    def test_paren_grouping_at_top_level(self) -> None:
+        # Generic parenthesized-subexpression grouping in _parse_atom (LPAREN
+        # branch), distinct from paren-as-function-arg (GateRuleParser only
+        # tokenises calls; it never routes through this evaluator branch).
+        doc = _doc(tier_items=[{**_item("T0.1"), "status": "complete"}])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('(T0.1.status == "complete")')
+        assert verdict == "pass"
+        assert "complete" in reason
+
+    def test_and_both_pass_merges_with_and_reason(self) -> None:
+        # _parse_and Kleene merge: pass AND pass -> pass, reason "(r) and (r2)".
+        doc = _doc(
+            tier_items=[
+                {**_item("T0.1"), "status": "complete"},
+                {**_item("T0.2"), "status": "complete"},
+            ]
+        )
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('T0.1.status == "complete" and T0.2.status == "complete"')
+        assert verdict == "pass"
+        assert " and " in reason
+
+    def test_and_non_fail_non_both_pass_is_deferred(self) -> None:
+        # _parse_and Kleene merge: pass AND deferred -> neither fail-short-circuit
+        # nor both-pass -> falls through to the deferred merge branch.
+        doc = _doc(tier_items=[{**_item("T0.1"), "status": "complete"}])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, _ = ev.evaluate('T0.1.status == "complete" and T0.1.latest_run.verdict == "PASS"')
+        assert verdict == "deferred"
+
+    def test_or_both_fail_merges_with_or_reason(self) -> None:
+        # _parse_or Kleene merge: fail OR fail -> fail, reason "(r) or (r2)".
+        doc = _doc(tier_items=[_item("T0.1")])  # not_started
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('T0.1.status == "complete" or T0.1.status == "in_progress"')
+        assert verdict == "fail"
+        assert " or " in reason
+
+    def test_or_non_pass_non_both_fail_is_deferred(self) -> None:
+        # _parse_or Kleene merge: fail OR deferred -> neither pass-short-circuit
+        # nor both-fail -> falls through to the deferred merge branch.
+        doc = _doc(tier_items=[_item("T0.1")])  # not_started
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, _ = ev.evaluate('T0.1.status == "complete" or T0.1.latest_run.verdict == "PASS"')
+        assert verdict == "deferred"
+
+    def test_empty_rule_returns_fail(self) -> None:
+        # _parse_atom: pos >= len(tokens) / EOF-at-pos-0 -> "empty expression".
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("")
+        assert verdict == "fail"
+        assert "empty expression" in reason
+
+    def test_bare_name_without_comparison_is_deferred(self) -> None:
+        # A NAME token with no following '==' falls through to the trailing
+        # "unresolvable" deferred return (distinct from the field-cmp path).
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("T0.1")
+        assert verdict == "deferred"
+        assert "unresolvable" in reason
+
+    def test_unexpected_leading_token_is_fail(self) -> None:
+        # A STRING token used as a bare atom is neither LPAREN nor NAME.
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('"just_a_string"')
+        assert verdict == "fail"
+        assert "unexpected token" in reason
+
+    def test_grace_period_elapsed_invalid_days_arg_fails(self) -> None:
+        doc = _doc(tier_items=[{**_item("T0.1"), "status": "complete", "completed_at": "1970-01-01"}])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('grace_period_elapsed(T0.1, "notanumber")')
+        assert verdict == "fail"
+        assert "invalid days arg" in reason
+
+    def test_grace_period_elapsed_unknown_item_fails(self) -> None:
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("grace_period_elapsed(T999.0, 30)")
+        assert verdict == "fail"
+        assert "not found" in reason
+
+    def test_grace_period_elapsed_unparseable_completed_at_deferred(self) -> None:
+        doc = _doc(tier_items=[{**_item("T0.1"), "status": "complete", "completed_at": "not-a-real-date"}])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("grace_period_elapsed(T0.1, 30)")
+        assert verdict == "deferred"
+        assert "cannot parse completed_at" in reason
+
+    def test_unknown_helper_function_is_fail(self) -> None:
+        # Distinct from test_unknown_helper_raises (GateRuleParser.validate, a
+        # static pre-check): GateRuleEvaluator._eval_function has its own
+        # unknown-helper fallback, reachable because the evaluator never
+        # requires GateRuleParser to have run first.
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate("bogus_fn(T0.1)")
+        assert verdict == "fail"
+        assert "unknown helper" in reason
+
+    def test_field_cmp_item_removed_after_evaluator_init_deferred(self) -> None:
+        # _resolve_field_path resolves against _sorted_ids (captured once at
+        # __init__ time); if the backing item is later removed from _by_id,
+        # the lookup in _eval_field_cmp fails even though the path resolves
+        # syntactically -- a narrow but real mutation-ordering edge case.
+        doc = _doc(tier_items=[_item("T0.1")])
+        state = _state_from_doc(doc)
+        ev = GateRuleEvaluator(state)
+        del state._by_id["T0.1"]
+        verdict, reason = ev.evaluate('T0.1.status == "complete"')
+        assert verdict == "deferred"
+        assert "not found" in reason
+
+    def test_bare_known_id_without_field_is_deferred(self) -> None:
+        # path resolves to a known id with an empty field suffix (path ==
+        # known_id exactly, no trailing ".field") -- _resolve_field_path
+        # returns (known_id, ""), and the empty-field guard in _eval_field_cmp
+        # then defers.
+        doc = _doc(tier_items=[_item("T0.1")])
+        ev = GateRuleEvaluator(_state_from_doc(doc))
+        verdict, reason = ev.evaluate('T0.1 == "complete"')
+        assert verdict == "deferred"
+        assert "cannot resolve" in reason
