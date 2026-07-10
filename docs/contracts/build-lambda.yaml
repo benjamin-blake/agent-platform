@@ -77,3 +77,22 @@ cli_flags:
 
 verified_against:
   - "scripts/build_lambda.py (LAMBDA_SIZE_LIMIT_BYTES, _LAMBDA_FUNCTION_NAMES, _OPS_COMPACTION_FUNCTION_NAME, _OPS_COMPACTION_ZIP_KEY, _DUCKLAKE_FUNCTION_ZIP_KEYS, DUCKLAKE_LAYER_NAMES, build_parser() flags)"
+
+# Deploy CHANNEL per build-artifact class (Decision 125). Pointer-only: the authoritative
+# apply-model / guard classification lives SOLELY in docs/contracts/environment-taxonomy.md
+# section 5 (Decision 92 point 5 sole-SoT) -- this section names which channel-class each
+# artifact belongs to, it does not restate the classification itself.
+deploy_channels:
+  ducklake_functions:  # ducklake_function_zip_keys targets above
+    root: terraform/personal
+    channel_class: terraform_personal_filemd5_coupled  # interim; target = decoupled (Decision 125)
+    see: docs/contracts/environment-taxonomy.md#5-lambda-codeinfra-decoupling-principle-personal-account-lambdas
+    break_glass_only: "bin/venv-python -m scripts.build_lambda --ducklake-only --deploy"
+  prod_functions:  # data-pipeline.zip targets above
+    root: null  # not terraform/personal-managed
+    channel_class: decoupled_build_pipeline
+    see: src/data/handlers/CLAUDE.md
+  ops_compaction:
+    root: null
+    channel_class: decoupled_build_pipeline
+    see: src/data/handlers/CLAUDE.md

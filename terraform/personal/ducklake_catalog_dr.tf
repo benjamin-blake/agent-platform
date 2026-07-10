@@ -18,6 +18,14 @@
 #   1. build_lambda --ducklake-only       (upload catalog-dr zip + pgclient layer to S3)
 #   2. terraform plan -> human review -> terraform apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (update the DR function code pointer from S3)
+#
+# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): the aws_lambda_function
+# resource below still sets source_code_hash=try(filemd5(zip),null) with no ignore_changes
+# lifecycle block -- INTERIM state, not the target. Target: lifecycle { ignore_changes =
+# [source_code_hash] } + a dedicated governed code-deploy CD channel. Physical decoupling is a
+# sequenced follow-on (P2), blocked on clearing a pending out-of-budget IAM delta in this root
+# module. Until P2 lands, step 3 above is the interim mechanism; per Decision 125 it is demoted to
+# break-glass status once the governed CD channel exists.
 
 locals {
   ducklake_catalog_dr_function = "agent-platform-ducklake-catalog-dr"

@@ -22,6 +22,14 @@
 #   2. terraform plan -> human review -> terraform apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (update the 3 function code pointers from S3)
 #
+# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): the aws_lambda_function
+# resource below still sets source_code_hash=try(filemd5(zip),null) with no ignore_changes
+# lifecycle block -- INTERIM state, not the target. Target: lifecycle { ignore_changes =
+# [source_code_hash] } + a dedicated governed code-deploy CD channel. Physical decoupling is a
+# sequenced follow-on (P2), blocked on clearing a pending out-of-budget IAM delta in this root
+# module. Until P2 lands, step 3 above is the interim mechanism; per Decision 125 it is demoted to
+# break-glass status once the governed CD channel exists.
+#
 # FP-B (2026-06-07): shared SNS topic (sns_alerts.tf) created and wired as the alarm_actions
 # target for BOTH this circuit-breaker alarm AND the CD.34 catalog-DR freshness alarm.
 # Also added: hot_merge EventBridge rule/target/permission + env-tunable breaker thresholds.
