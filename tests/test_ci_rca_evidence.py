@@ -505,36 +505,64 @@ class TestMultiFailureEnumeration:
         )
         return p
 
-    def test_multi_failure_enumeration_yields_n_bundles(self, multi_failure_log_file, multi_taxonomy_file):
+    @pytest.fixture
+    def multi_failure_jobs_file(self, tmp_path):
+        """Genuine multi-category evidence: two DISTINCT GitHub Actions steps both reporting
+        conclusion=failure -- jobs-JSON is the only reliable multi-failure enumeration signal
+        (log-text substring matches alone no longer fan out; see TestBundleEmissionFanOut)."""
+        p = tmp_path / "multi_failure_jobs.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "jobs": [
+                        {
+                            "name": "validate",
+                            "steps": [
+                                {"name": "validate_sloc_limits", "conclusion": "failure"},
+                                {"name": "validate_iam_runner_policy", "conclusion": "failure"},
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+        return p
+
+    def test_multi_failure_enumeration_yields_n_bundles(
+        self, multi_failure_log_file, multi_failure_jobs_file, multi_taxonomy_file
+    ):
         with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=multi_failure_log_file,
                     workflow_name="CI",
                     workflow_run_id=42,
+                    jobs_file=multi_failure_jobs_file,
                     taxonomy_path=multi_taxonomy_file,
                 )
         assert len(bundles) == 2
 
-    def test_multi_failure_distinct_sha256(self, multi_failure_log_file, multi_taxonomy_file):
+    def test_multi_failure_distinct_sha256(self, multi_failure_log_file, multi_failure_jobs_file, multi_taxonomy_file):
         with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=multi_failure_log_file,
                     workflow_name="CI",
                     workflow_run_id=42,
+                    jobs_file=multi_failure_jobs_file,
                     taxonomy_path=multi_taxonomy_file,
                 )
         shas = [b["sha256"] for b in bundles]
         assert len(set(shas)) == 2
 
-    def test_multi_failure_shared_workflow_run_id(self, multi_failure_log_file, multi_taxonomy_file):
+    def test_multi_failure_shared_workflow_run_id(self, multi_failure_log_file, multi_failure_jobs_file, multi_taxonomy_file):
         with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
                     log_file=multi_failure_log_file,
                     workflow_name="CI",
                     workflow_run_id=42,
+                    jobs_file=multi_failure_jobs_file,
                     taxonomy_path=multi_taxonomy_file,
                 )
         assert all(b["workflow_run_id"] == 42 for b in bundles)
@@ -625,10 +653,30 @@ class TestFingerprint:
             "validate_sloc_limits FAILED -- scripts/foo.py is 631 SLOC\n"
             "validate_iam_runner_policy FAILED -- missing iam:PutRolePolicy\n"
         )
+        jobs_path = tmp_path / "multi_jobs.json"
+        jobs_path.write_text(
+            json.dumps(
+                {
+                    "jobs": [
+                        {
+                            "name": "validate",
+                            "steps": [
+                                {"name": "validate_sloc_limits", "conclusion": "failure"},
+                                {"name": "validate_iam_runner_policy", "conclusion": "failure"},
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
         with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
             with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
                 bundles = generate_bundles(
-                    log_file=log_path, workflow_name="CI", workflow_run_id=42, taxonomy_path=taxonomy_path
+                    log_file=log_path,
+                    workflow_name="CI",
+                    workflow_run_id=42,
+                    jobs_file=jobs_path,
+                    taxonomy_path=taxonomy_path,
                 )
         fingerprints = [b["fingerprint"] for b in bundles]
         assert len(set(fingerprints)) == 2
@@ -802,3 +850,40 @@ class TestPreRuntimeStamp:
         b = bundles[0]
         assert "undetermined-headroom" in b["earliest_viable_gate_rationale"]
         assert b["pre_runtime_seconds"] is None
+
+
+MULTI_FUNC_TAXONOMY = {
+    "schema_version": 1,
+    "taxonomy_version": 1,
+    "function_to_category": {
+        "validate_sloc_limits": "sloc_violation",
+        "validate_iam_runner_policy": "iam_gap",
+    },
+    "log_pattern_to_category": [],
+    "workflow_to_tier": {"CI": "CI"},
+}
+
+
+class TestBundleEmissionFanOut:
+    """generate_bundles() end-to-end regression test (2026-07 incident): a single failing check
+    must not fan out into multiple bundles just because its FULL job log mentions other,
+    unrelated validate_* function names from checks that ran and passed earlier in the same job.
+    Genuine multi-category preservation is covered by TestMultiFailureEnumeration /
+    TestFingerprint.test_multi_failure_distinct_fingerprints (jobs-JSON-driven)."""
+
+    def test_single_failing_check_emits_exactly_one_bundle(self, tmp_path):
+        taxonomy_file = tmp_path / "taxonomy.yaml"
+        taxonomy_file.write_text(yaml.dump(MULTI_FUNC_TAXONOMY))
+        log_file = tmp_path / "ci-failed.log"
+        log_file.write_text(
+            "Running validate_iam_runner_policy... PASS\nvalidate_sloc_limits FAILED -- scripts/foo.py is 631 SLOC\n"
+        )
+        with patch("scripts.ci_rca.tier_map.probe_runtime", return_value=("median=50ms", 0.05)):
+            with patch("scripts.ci_rca.tier_map.build_tier_membership", return_value={}):
+                bundles = generate_bundles(
+                    log_file=log_file,
+                    workflow_name="CI",
+                    workflow_run_id=1,
+                    taxonomy_path=taxonomy_file,
+                )
+        assert len(bundles) == 1

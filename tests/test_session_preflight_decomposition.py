@@ -65,6 +65,10 @@ _spec.loader.exec_module(_preflight)  # type: ignore[union-attr]
 
 # Frozen BEFORE any code movement (plan execution_steps[0]): the pre-refactor main()'s report
 # dict literal (37 keys) + 7 post-assignment keys. See PLAN-sloc-session-preflight.yaml.
+# Updated deliberately for genuine new report fields since (e.g. dedup_effectiveness_gauge /
+# dedup_effectiveness_escalation, PLAN-ci-rca-dedup-fire-and-selftest WS5) -- this constant is a
+# drift guard against SILENT schema changes, not a permanent ban on adding fields; bump it (and
+# the count assertion below) in the same commit as a deliberate report-key addition.
 FROZEN_REPORT_KEYS = frozenset(
     {
         "venv_ok",
@@ -94,6 +98,8 @@ FROZEN_REPORT_KEYS = frozenset(
         "ci_rca_probe_health_escalation",
         "ci_rca_telemetry",
         "ci_rca_back_validation",
+        "dedup_effectiveness_gauge",
+        "dedup_effectiveness_escalation",
         "recent_main_commits",
         "friction_patterns",
         "log_sync_result",
@@ -114,7 +120,7 @@ FROZEN_REPORT_KEYS = frozenset(
         "endstate_drift",
     }
 )
-assert len(FROZEN_REPORT_KEYS) == 44, "frozen report key list itself drifted -- fix the constant, not the assertion"
+assert len(FROZEN_REPORT_KEYS) == 46, "frozen report key list itself drifted -- fix the constant, not the assertion"
 
 # Frozen export list: every public function + every test-referenced private symbol from the
 # pre-refactor module (facade-resident + all 9 domain modules + _common + the two back-compat
@@ -362,12 +368,12 @@ def _run_stubbed_main(
 
 
 class TestReportSchemaFreeze:
-    """A stubbed main() run's report top-level key set equals the frozen 44-key list."""
+    """A stubbed main() run's report top-level key set equals the frozen 46-key list."""
 
-    def test_report_key_set_matches_frozen_44(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    def test_report_key_set_matches_frozen_46(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         _, report, _ = _run_stubbed_main(tmp_path, capsys)
         assert set(report.keys()) == FROZEN_REPORT_KEYS
-        assert len(report.keys()) == 44
+        assert len(report.keys()) == 46
 
 
 class TestFacadeCompleteness:

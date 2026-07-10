@@ -109,7 +109,19 @@ def classify_failures(
     jobs: list[dict] | None = None,
     path: Path | None = None,
 ) -> list[tuple[str, str, str]]:
-    """Enumerate all distinct failed checks. jobs-JSON step names take priority over log text."""
+    """Enumerate all distinct failed checks. jobs-JSON step names take priority over log text.
+
+    Genuinely-distinct failures are enumerated ONLY from jobs-JSON failed step names (each
+    failed step is a real, independently-reported GitHub Actions failure). When jobs data
+    yields no failed-step matches (jobs absent, or none of the failed steps resolve via
+    step_map/func_map), fall back to a SINGLE classify_failure() call over the log text --
+    do NOT enumerate every function_to_category substring hit across the whole log. The fetched
+    log is the FULL job log (gh run view --log-failed), which routinely mentions many unrelated
+    validate_* function names from checks that ran and passed earlier in the same job; treating
+    each substring hit as a distinct failure caused a spurious multi-category bundle fan-out
+    that defeated the fingerprint dedup guard (2026-07 incident: one real failure fanned into 6
+    bundles, one of which was a novel fingerprint that tripped the then-all-or-nothing guard).
+    """
     taxonomy = _cached_taxonomy(path)
     func_map: dict[str, str] = taxonomy.get("function_to_category") or {}
     step_map: dict[str, str] = taxonomy.get("step_name_to_category") or {}
@@ -117,7 +129,7 @@ def classify_failures(
     results: list[tuple[str, str, str]] = []
     seen_checks: set[str] = set()
 
-    # Priority 1+2: jobs JSON failed step names
+    # Priority 1+2: jobs JSON failed step names -- the only reliable multi-failure enumeration.
     if jobs:
         for job in jobs:
             for step in job.get("steps", []):
@@ -131,12 +143,8 @@ def classify_failures(
                             results.append((func_map[step_name], step_name, "function_to_category"))
                             seen_checks.add(step_name)
 
-    # Priority 3: function_to_category on log text (only if jobs didn't already cover)
-    for func_name, category in func_map.items():
-        if func_name in log_text and func_name not in seen_checks:
-            results.append((category, func_name, "function_to_category"))
-            seen_checks.add(func_name)
-
+    # Fallback: jobs data classified nothing -- single priority-ordered classification over the
+    # log text (same logic classify_failure() already uses for the singular case).
     if not results:
         results.append(classify_failure(log_text, jobs, path))
 

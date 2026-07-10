@@ -264,33 +264,20 @@ jobs:
         # same-commit reruns and the terraform-apply-sandbox red-record anchor, which this
         # cross-commit layer does not). Only runs the reader lookup when the commit-status
         # layer did not already skip the agent.
+        #
+        # Per-bundle decision (not all-or-nothing): delegates to scripts.ci_rca.dedup so the
+        # decision logic is unit-tested (tests/test_ci_rca_dedup.py) rather than living in this
+        # shell. A matched-open bundle is skipped+bumped independently of any co-occurring novel
+        # bundle; a genuinely-novel fingerprint always runs the agent (Decision 55).
         if: steps.dedup.outputs.already_filed != 'true'
         run: |
-          DEDUPED="false"
+          FORCE_FLAG=""
           if [ "${{ github.event.inputs.force_rca }}" = "true" ]; then
-            echo "force_rca=true; bypassing fingerprint dedup."
-          elif ls /tmp/ci-rca-bundles/*.json > /dev/null 2>&1; then
-            DEDUPED="true"
-            for f in /tmp/ci-rca-bundles/*.json; do
-              FP=$(.venv/bin/python -c "import json,pathlib; print(json.loads(pathlib.Path('$f').read_text(encoding='utf-8')).get('fingerprint',''))" 2>/dev/null || echo "")
-              if [ -z "$FP" ]; then
-                DEDUPED="false"
-                echo "Bundle $f has no fingerprint; running agent."
-                break
-              fi
-              REC_ID=$(bin/venv-python -m scripts.ops_data_portal --find-open-ci-rca-rec --fingerprint "$FP" 2>/dev/null || echo "")
-              if [ -z "$REC_ID" ]; then
-                DEDUPED="false"
-                echo "Fingerprint ${FP} has no open match; running agent."
-                break
-              fi
-              echo "Fingerprint ${FP} matches open ${REC_ID}; bumping occurrence."
-              bin/venv-python -m scripts.ops_data_portal --bump-ci-rca-occurrence "$REC_ID" || true
-            done
-            if [ "$DEDUPED" = "true" ]; then
-              echo "Fingerprint dedup: all bundle(s) matched an open rec; skipping agent."
-            fi
+            FORCE_FLAG="--force-rca"
           fi
+          OUTPUT=$(bin/venv-python -m scripts.ci_rca.dedup --bundles-dir /tmp/ci-rca-bundles ${FORCE_FLAG})
+          echo "$OUTPUT"
+          DEDUPED=$(echo "$OUTPUT" | grep '^deduped=' | tail -1 | cut -d= -f2)
           echo "deduped=${DEDUPED}" >> "$GITHUB_OUTPUT"
 
       - name: Run ci-rca agent
