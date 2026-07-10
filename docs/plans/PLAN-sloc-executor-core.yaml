@@ -1,0 +1,245 @@
+schema_version: 1
+slug: "sloc-executor-core"
+intent: >-
+  Decompose scripts/execute_recommendation.py (2862 SLOC) into a thin CLI facade plus cohesion-seam helper
+  modules and a phase-decomposed orchestrator so every executor file drops to <=500 SLOC, removing the
+  largest per-implement SLOC-budget entry and advancing the rec-2414 breakdown program without changing any
+  executor behaviour or the `python -m scripts.execute_recommendation` entry-point contract.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-executor-core.yaml
+phase: >-
+  Platform hardening / SLOC-governance during the executor freeze. Executes the rec-2414 umbrella
+  breakdown program (Decision 102 ratchet, Decision 43 cap) using the ratified PLAN-validate-decomposition
+  facade mechanism (Decision 104/80). The highest-risk of the four executor-decomposition plans (it
+  phase-decomposes the 1767-SLOC / CC-169 _execute_recommendation_inner); sequence it LAST, after the
+  other three prove the facade mechanism. Platform-internal tooling; no product-roadmap phase.
+scope:
+  - file: scripts/execute_recommendation.py
+    action: Modify
+    purpose: >-
+      Collapse to a thin CLI facade (<=500 SLOC, target ~320) retaining main() (CC<=20; remove the
+      decision-43 waiver header once _execute_recommendation_inner and print_session_status move out and the
+      CC gate stays green), the module docstring, ALL current module-scope imports (json, logging, os,
+      subprocess, sys, datetime, Path, the execution_state / executor-submodule / llm_utils import blocks),
+      and FACADE RE-EXPORTS of every extracted symbol AND every test-patched private symbol so the 592
+      patch sites on the scripts.execute_recommendation namespace and all from-import sites keep resolving.
+      Preserve the existing re-exports from acceptance_lint, batch, and the executor submodules. The
+      `python -m scripts.execute_recommendation` entry point, argparse flags, exit codes, and printed labels
+      stay byte-stable. ZERO-MIGRATION INTERCEPTION RULE (uniform across the four executor plans): every
+      relocated body references every routed-name via a function-local facade alias (import
+      scripts.execute_recommendation as _er; _er.finalize(...), _er.subprocess.run(...), _er.sys.stdin,
+      _er.Path(...)), so all symbol AND stdlib-namespace patches keep intercepting with ZERO test migration.
+  - file: scripts/executor/run_summary.py
+    action: Create
+    purpose: >-
+      owner=platform. Run/failure summary artifacts: write_run_summary, _capture_executor_telemetry,
+      FailureSummary (TypedDict), _get_git_diff_stat, _infer_failure_class, _latest_transcript_path,
+      emit_failure_summary (~200 SLOC; CC<=20, no waiver). Bodies route subprocess/Path/os via _er.
+  - file: scripts/executor/session_status.py
+    action: Create
+    purpose: >-
+      owner=platform. Session dashboard: print_session_status (CC 25 -> module carries the decision-43
+      waiver header) (~110 SLOC). Body routes subprocess/Path via _er.
+  - file: scripts/executor/branch_lifecycle.py
+    action: Create
+    purpose: >-
+      owner=platform. Eligibility + branch lifecycle + retry cleanup: _discard_commit_range_files,
+      _seed_gemini_session, _is_checkpoint_branch_merged, is_eligible, _is_poisoned_rec, _check_jsonl_clean,
+      ensure_feature_branch, prune_merged_agent_branches, create_hotfix_branch, file_hotfix_rec, clean_slate
+      (~450 SLOC; CC<=20). Bodies route subprocess/Path/load_checkpoint/clear_checkpoint/load_recommendation/
+      load_all_recommendations/_reset_rec_status via _er; the function-local `from scripts.ops_data_portal
+      import file_rec / find_open_postmortem_for` and `from scripts.llm_client import llm_call` imports stay
+      lazy exactly as today (their patch sites live on those source namespaces). If it exceeds 500 during
+      extraction, split eligibility (is_eligible, _is_poisoned_rec) into scripts/executor/branch_eligibility.py.
+  - file: scripts/executor/run.py
+    action: Create
+    purpose: >-
+      owner=platform. Orchestrator core: execute_recommendation() (the LLMResponseError/timeout wrapper),
+      the _execute_recommendation_inner SKELETON (phase sequencing only -- delegates each phase to a
+      run_phase_* module), a RunState dataclass threading the shared locals (steps_completed, total_steps,
+      failure_step/reason, plan, branch, rec, rec_id, acceptance_cmd, verification_cmd, resume_from_step,
+      checkpoint, skip flags, _pf_validation), a _fail_and_close() helper centralising the repeated failure
+      bookkeeping, and the validation-quarantine helpers (_extract_validation_failed_checks,
+      _extract_failed_pytest_nodes, _get_quarantined_validation_failures, _POSTFLIGHT_VALIDATION_QUARANTINE)
+      (~440 SLOC; skeleton carries the decision-43 waiver header). If run.py exceeds 500, move RunState +
+      _fail_and_close + quarantine helpers into scripts/executor/run_state.py.
+  - file: scripts/executor/run_phase_preflight.py
+    action: Create
+    purpose: >-
+      owner=platform. PHASE 1 preflight (read-only gates + acceptance-lint/feasibility + poisoned-rec +
+      checkpoint/resume-postflight/auto-resume dispatch + side-effecting clean_slate/branch setup +
+      commits-ahead skip) and the fast-mode prebuilt-plan parse (~420 SLOC; carries the waiver header).
+      Routes every collaborator + subprocess/sys via _er.
+  - file: scripts/executor/run_phase_plan.py
+    action: Create
+    purpose: >-
+      owner=platform. PHASE 2 plan generation (warm-session seed, escalation retry, token budget,
+      acceptance-challenge, no-changes-needed close) and PHASE 3 critique loop (~210 SLOC; waiver header).
+      Routes via _er; the function-local `from scripts.model_registry import resolve_provider` stays lazy as today.
+  - file: scripts/executor/run_phase_impl.py
+    action: Create
+    purpose: >-
+      owner=platform. PHASE 4 implementation loop (per-step implement_step, step-failure revert, commit_step,
+      per-step telemetry, checkpointing) (~145 SLOC; waiver header if CC>20). Routes via _er.
+  - file: scripts/executor/run_phase_postflight.py
+    action: Create
+    purpose: >-
+      owner=platform. PHASE 5 postflight non-validation legs: scope-drift check, code-review-gate retry loop,
+      post-validation acceptance check, behavioural verification, finalize() call, and success/failure
+      bookkeeping (~240 SLOC; waiver header). Routes via _er.
+  - file: scripts/executor/run_phase_validate.py
+    action: Create
+    purpose: >-
+      owner=platform. PHASE 5 postflight local validation leg: the validate.py subprocess run, the doc-only
+      `--scope prompts` fallback, timeout handling, the baseline-red quarantine path, and SKIP_LOCAL_VALIDATE
+      bypass (~350 SLOC; carries the waiver header -- deeply nested). Routes subprocess/sys/os/kill_process_tree via _er.
+  - file: .importlinter
+    action: Modify
+    purpose: >-
+      Extend the no-cycles-ops-data-portal-executor contract's ignore_imports with the new deferred-import
+      edges this plan creates, mirroring the existing batch/__init__ Strangler-Fig entries: one line per new
+      module that function-locally imports the facade (scripts.executor.run, run_phase_preflight,
+      run_phase_plan, run_phase_impl, run_phase_postflight, run_phase_validate, run_summary, session_status,
+      branch_lifecycle -> scripts.execute_recommendation) PLUS scripts.executor.branch_lifecycle ->
+      scripts.ops_data_portal (file_hotfix_rec/_is_poisoned_rec keep their lazy portal imports, an edge that
+      today originates from execute_recommendation.py which is outside the executor package). import-linter
+      parses function-scope imports (the existing ignore entries exist precisely for that reason). No change
+      to the execute_recommendation-above-batch contract (its layers do not include the new modules; the
+      batch facade gains no new edge).
+  - file: tests/test_execute_recommendation.py
+    action: Modify
+    purpose: >-
+      ZERO patch-target migration expected -- the routing rule preserves all 588 sites in this file (plus 4
+      elsewhere). The suite is the frozen behavioural-equivalence oracle: it must pass unchanged in assertion
+      semantics; only import-line touch-ups are permitted. No new test file is required (map_source_to_test
+      returns None for scripts/executor/**).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Re-point via `validate --update-sloc-budgets` after the split (Decision 102): execute_recommendation.py
+      drops out of the registry at <=500 SLOC. Assert via grep (not full-file diff) that the
+      scripts/execute_recommendation.py key is removed and no new executor-core module key is seeded. Never hand-edit.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - The full existing tests/test_execute_recommendation.py suite (6683 lines) passes unchanged in assertion semantics with ZERO patch-target migration -- this end-to-end suite exercising all five phases across every branch with mocked collaborators is the behavioural-equivalence oracle for the phase-decomposition.
+  - Every public symbol AND every test-patched private symbol formerly defined in execute_recommendation.py is reachable both as scripts.execute_recommendation.<name> (getattr) and via `from scripts.execute_recommendation import <name>` (facade re-export), including the test from-import sites (_append_step_telemetry, _execute_recommendation_inner, _fix_ci_failure, _get_ci_failure_details, ensure_feature_branch, execute_compound, finalize, load_cluster) and all previously re-exported acceptance_lint/plan/postflight/step_runner/batch/telemetry symbols.
+  - Mock interception is preserved by construction -- relocated bodies reference every routed-name via _er (grep-verified closure), tests contain ZERO patches on the new module namespaces (grep-verified), and the dotted stdlib patches (subprocess.run 70, subprocess.Popen 17, sys.argv 2, sys.stdin 1) plus all bare-name collaborator patches intercept through the _er routing.
+  - scripts/execute_recommendation.py drops to <=500 SLOC (target ~320); no new scripts/executor/run*.py, run_summary.py, session_status.py, or branch_lifecycle.py module exceeds 500 SLOC or CC 20 without the decision-43 waiver header; validate_cc_limits passes over the new tree.
+  - config/sloc_budgets.yaml loses its scripts/execute_recommendation.py entry and gains NO new executor-core module entry (grep-verified; other entries may shift from sibling plans).
+  - The entry-point contract is byte-stable -- `python -m scripts.execute_recommendation` with --session-status, --next-batch, --batch, --compound, --single, and the single-rec flags dispatches identically, with unchanged argparse help text, exit codes, and printed phase labels.
+  - No extracted function DEFINITION remains in the execute_recommendation.py facade except main(); import-linter contracts pass with the new ignore lines under no-cycles-ops-data-portal-executor (including branch_lifecycle -> ops_data_portal) and no other .importlinter change from this plan.
+  - Production importers resolve without edits -- scripts/executor/batch.py's lazy imports of is_eligible/_check_jsonl_clean/_discard_commit_range_files/execute_recommendation from scripts.execute_recommendation, and scripts/executor/__init__.py's execute_recommendation wrapper, keep resolving through the retained facade re-exports.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: The full execute_recommendation suite passes unchanged with zero patch migration (behavioural-equivalence oracle for the phase-decomposition).
+    command: bin/venv-python -m pytest tests/test_execute_recommendation.py -m "not integration" -q
+    expected: All pass; no collection errors; exit 0.
+    fix_if: "A patch on scripts.execute_recommendation.<X> no-ops means a relocated body referenced X (or subprocess/sys/Path) directly instead of through _er; a control-flow assertion fails means the RunState threading or a phase early-return/bookkeeping sequence diverged from the original inner-function flow. Fix the body, never the test."
+  - step: 2
+    phase: pre-deploy
+    action: Facade completeness -- every public + test-patched private symbol is importable from the facade (stable invariant, holds pre- and post-implementation).
+    command: PY=$(test -x .venv/bin/python && echo .venv/bin/python || echo python); $PY -c "import scripts.execute_recommendation as p; syms='execute_recommendation _execute_recommendation_inner main write_run_summary _capture_executor_telemetry emit_failure_summary print_session_status is_eligible _is_poisoned_rec _check_jsonl_clean ensure_feature_branch prune_merged_agent_branches create_hotfix_branch file_hotfix_rec clean_slate _discard_commit_range_files _seed_gemini_session _is_checkpoint_branch_merged _handle_failure _scope_drift_check _commits_ahead_of_main finalize implement_step generate_initial_plan critique_plan run_acceptance run_verification lint_acceptance_command validate_acceptance_feasibility select_next_batch execute_batch execute_compound load_cluster RECS_JSONL'.split(); missing=[s for s in syms if not hasattr(p,s)]; print('missing', missing); raise SystemExit(1 if missing else 0)"
+    expected: The printed missing list is empty; exit 0.
+    fix_if: "A symbol is missing means its re-export was omitted; add the from-module import to the facade."
+    hermetic: true
+  - step: 3
+    phase: pre-deploy
+    action: Grep-closure (Decision 104 discipline, inverted for zero-migration) -- tests carry NO patches on the new module namespaces AND the new modules carry NO module-scope import of a routed-name.
+    command: "! grep -rnE \"patch\\((['\\\"])scripts\\.executor\\.(run|run_phase_|run_state|run_summary|session_status|branch_lifecycle|branch_eligibility)\" tests/ && ! grep -nE '^\\s*(import (subprocess|sys)\\b|from pathlib import|from scripts\\.execution_state import|from scripts\\.executor\\.(jsonl_store|plan|postflight|step_runner|telemetry|acceptance_lint|batch) import|from scripts\\.llm_utils import)' scripts/executor/run.py scripts/executor/run_phase_preflight.py scripts/executor/run_phase_plan.py scripts/executor/run_phase_impl.py scripts/executor/run_phase_postflight.py scripts/executor/run_phase_validate.py scripts/executor/run_summary.py scripts/executor/session_status.py scripts/executor/branch_lifecycle.py && echo CLOSURE_OK"
+    expected: Both greps find nothing; prints CLOSURE_OK; exit 0.
+    fix_if: "A test patches a new module namespace means an unauthorised migration happened -- revert it and fix the body routing; a new module imports a routed-name at module scope means the routing rule was violated -- replace with _er.<name> (run.py may import LLMResponseError function-locally for its except clause; the grep matches only module scope at line start)."
+  - step: 4
+    phase: pre-deploy
+    action: Entry-point contract is byte-stable -- the CLI dispatches read-only modes identically.
+    command: bin/venv-python -m scripts.execute_recommendation --session-status; echo "status-exit=$?"; bin/venv-python -m scripts.execute_recommendation --next-batch --limit 1 >/dev/null; echo "nextbatch-exit=$?"
+    expected: --session-status prints the dashboard and exits 0; --next-batch prints JSON and exits 0. Neither tracebacks.
+    fix_if: "An entry point tracebacks or changes exit code means main() lost a dispatch branch or a re-export it depends on (print_session_status, select_next_batch)."
+  - step: 5
+    phase: pre-deploy
+    action: SLOC re-point -- execute_recommendation.py drops below 500, no new module over budget, budget entry removed with no new seed.
+    command: bin/venv-python -m scripts.validate --update-sloc-budgets && ! grep -qE '^\s*scripts/execute_recommendation\.py:' config/sloc_budgets.yaml && ! grep -qE '^\s*scripts/executor/(run|run_phase_preflight|run_phase_plan|run_phase_impl|run_phase_postflight|run_phase_validate|run_summary|session_status|branch_lifecycle|branch_eligibility|run_state)\.py:' config/sloc_budgets.yaml && bin/venv-python -c "import pathlib; mods=['scripts/execute_recommendation.py','scripts/executor/run.py','scripts/executor/run_phase_preflight.py','scripts/executor/run_phase_plan.py','scripts/executor/run_phase_impl.py','scripts/executor/run_phase_postflight.py','scripts/executor/run_phase_validate.py','scripts/executor/run_summary.py','scripts/executor/session_status.py','scripts/executor/branch_lifecycle.py']; over=[m for m in mods if pathlib.Path(m).exists() and len([l for l in pathlib.Path(m).read_text().splitlines() if l.strip() and not l.strip().startswith('#')])>500]; print('over', over); raise SystemExit(1 if over else 0)"
+    expected: execute_recommendation.py key removed; no executor-core module key seeded; the printed over list is empty; exit 0.
+    fix_if: "A module key was seeded means it exceeds 500 SLOC; split it finer (run_state.py or branch_eligibility.py) and re-run."
+  - step: 6
+    phase: pre-deploy
+    action: CC gate passes -- phase/cluster modules over CC 20 carry the decision-43 waiver header.
+    command: bin/venv-python -c "from scripts.validate import validate_cc_limits; f=[]; validate_cc_limits(f); print('cc', f); raise SystemExit(1 if f else 0)"
+    expected: The CC gate reports no failures; exit 0 (session_status.py carries the waiver for print_session_status CC25; run.py and the run_phase_* modules carry it for their high-CC phase bodies).
+    fix_if: "A module reddens the CC gate -> add a decision-43 complexity-waiver header within its first 10 lines."
+  - step: 7
+    phase: pre-deploy
+    action: Stale-definition sweep -- no extracted def remains in the facade except main.
+    command: grep -nE '^def (write_run_summary|emit_failure_summary|print_session_status|is_eligible|ensure_feature_branch|clean_slate|prune_merged_agent_branches|_execute_recommendation_inner|_seed_gemini_session|_check_jsonl_clean|_discard_commit_range_files|_is_poisoned_rec|_is_checkpoint_branch_merged|create_hotfix_branch|file_hotfix_rec|_capture_executor_telemetry|_get_git_diff_stat|_infer_failure_class|_latest_transcript_path|_extract_validation_failed_checks|_extract_failed_pytest_nodes|_get_quarantined_validation_failures)\b' scripts/execute_recommendation.py; test $? -eq 1
+    expected: grep finds no matches (exit 1, so the test asserts closure); only main() + re-exports remain in the facade.
+    fix_if: "A def still lives in the facade -> move its body to the correct module and leave only the re-export."
+  - step: 8
+    phase: pre-deploy
+    action: import-linter contracts pass with the new ignore lines (including the required branch_lifecycle -> ops_data_portal entry).
+    command: bin/venv-python -c "from scripts import import_governance as g; ok,out=g.run_import_contracts(); print(out); raise SystemExit(0 if ok else 1)" && grep -q "scripts.executor.branch_lifecycle -> scripts.ops_data_portal" .importlinter
+    expected: All import contracts pass and .importlinter carries the branch_lifecycle -> ops_data_portal ignore; exit 0.
+    fix_if: "The ops-data-portal contract reddens naming a new module means its ignore line is missing -- add it under no-cycles-ops-data-portal-executor mirroring the existing batch entries; never fix by inlining the portal import at module scope."
+  - step: 9
+    phase: pre-deploy
+    action: Executor-boundary matcher stays green for the new modules -- recs targeting them remain automatable:false.
+    command: bin/venv-python -c "from scripts.validate import validate_executor_boundary; f=[]; validate_executor_boundary(f); print('boundary', f); import scripts.checks.executor.validate_executor_boundary as m; pats=m._EXECUTOR_BOUNDARY_PATTERNS; assert 'scripts/executor/' in pats, pats; raise SystemExit(1 if f else 0)"
+    expected: The boundary check reports no failures and the substring pattern scripts/executor/ classifies the new modules as boundary files; exit 0.
+    fix_if: "The boundary check reddens on a pre-existing open rec (not this plan's change) -> triage separately; capabilities.yaml is NOT edited by this plan."
+  - step: 10
+    phase: pre-deploy
+    action: Fast presubmit tier is green over the change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0.
+    fix_if: "A gate reddens -> address per its message; never bypass with --ignore-budget for a real SLOC/CC regression."
+constraints:
+  - Behaviour preservation is absolute -- no feature work, no bug fixes, no signature changes beyond movement. The phase-decomposition must preserve the exact ordered phase sequencing, every early-return-on-failure, every print/telemetry call, and the return value across all branches. The existing 6683-line suite must pass with unchanged assertion semantics. Out-of-scope findings become notes here, never inline fixes.
+  - Decision 104/80 facade mechanism, ZERO-MIGRATION variant -- scripts.execute_recommendation stays a thin CLI facade re-exporting every symbol; ALL relocated bodies resolve collaborator calls AND stdlib namespaces (subprocess, sys, Path, os where patched) through the _er facade alias at call time, preserving all 592 patch sites with ZERO test migration. The grep-closure VP step enforces both directions.
+  - Entry-point stability -- `python -m scripts.execute_recommendation`, the argparse flag set, exit codes, and printed phase labels stay byte-stable; main() remains in the facade.
+  - Decision 102 -- budgets ratchet DOWN only; re-point exclusively via `validate --update-sloc-budgets`, never a hand-edit; grep-verify key removal + no new seed (do NOT assert full-file equality -- sibling plans co-mutate config/sloc_budgets.yaml).
+  - Decision 43 -- CC<=20 per function; the decision-43 waiver header travels with any module hosting a function over CC 20 (session_status for print_session_status CC25; the run_phase_* modules and run.py for their phase bodies). Remove the facade's waiver only if main() keeps the CC gate green.
+  - Decision 117 -- executor self-modification boundary -- capabilities.yaml SSOT; its substring pattern scripts/executor/ classifies every new scripts/executor/ module as a boundary file and execute_recommendation.py matches its own pattern, so config/agent/executor/capabilities.yaml is NOT edited (verified by VP step 9).
+  - Decision 67 -- executor freeze (STRATEGIC clause) -- this is an IMPLEMENTATION plan; behaviour-preserving executor-machinery maintenance is routed through /plan -> /implement, permitted during the freeze.
+  - Decision 55 -- no rescue agents or workaround loops. On an unrecoverable equivalence/interception failure, stop and RCA; never paper over a broken phase-extraction with a skip or a suppressed assertion.
+  - Multi-plan coordination -- one of ~16 SLOC-decomposition plans (4 executor) on branch claude/sloc-violations-refactor-p5svnl; sequence this plan LAST among the four; touch ONLY execute_recommendation.py, the new scripts/executor/ modules, .importlinter (the new ignore lines), and tests/test_execute_recommendation.py import touch-ups; config/sloc_budgets.yaml is regenerated and a conflict there is resolved by re-running the regen command.
+  - Hermetic VP discipline (fleet rule) -- exactly ONE hermetic step (step 2, a stable invariant true pre- and post-implementation) using the portable PY idiom because CI's pr-validate job has no .venv; all other steps are hermetic false.
+  - AGENTS.md code style -- Python 3.12+, type hints, ruff line length 127, no emojis, ASCII hyphens, default no comments.
+  - Public-repo boundary (Decision 101) -- no AWS account IDs/ARNs/secrets/internal hostnames introduced.
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE/RELATED flags, no BLOCK). CITE: Decision 102, Decision 104, Decision 80, Decision 43, Decision 117, Decision 67."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s) (round 1 flagged the unassessed .importlinter constraint on the new deferred imports -- now scoped with explicit ignore-line entries and a contract assessment; the patch inventory was re-derived mechanically)"
+  - "HIGH-RISK + DEAD-WORK FLAG (Decision 75 frame-lock, conscious choice recorded): this is the riskiest of the four executor plans. It phase-decomposes the 1767-SLOC / CC-169 _execute_recommendation_inner -- an extract-method refactor threading ~15 shared locals through a RunState object while preserving ~15 repeated early-return failure-bookkeeping sequences and the exact phase order. The roadmap direction (CD.27 pending, T5.6 deferred_post_mvp) RETIRES this orchestration SHELL (it does not harvest it) once the Step Functions + Durable-Function-Lambda substrate lands. Unlike the helper clusters (run_summary/branch_lifecycle) and the other three plans -- which are T5.6-HARVEST-bound reusable logic -- the orchestrator shell is T5.6-RETIRE-bound, so its decomposition has the highest dead-work exposure. It is justified ONLY as freeze-window SLOC-governance (Decision 102/43 mandate; rec-2414 scopes it; removes the single largest 2862-SLOC registry entry) realized over the multi-month/many-tier-wave freeze (CD.17), NOT as substrate-rewrite prep. ORCHESTRATOR DECISION: sequence this plan LAST; if the risk/reward is judged unfavourable at /implement time, the alternative is to land only the low-risk cluster extractions and accept execute_recommendation.py as a documented ratchet exception (registered at reduced SLOC) until T5.6 retires it -- but that alternative does NOT satisfy the <=500 goal for this file."
+  - "MECHANICAL PATCH INVENTORY (regex sweep over tests/**, both quote styles + patch.object + from-imports; not from memory): scripts.execute_recommendation string-patch sites total 592 (588 in test_execute_recommendation.py) -- subprocess.run 70, load_recommendation 49, load_checkpoint 40, ensure_feature_branch 36, write_run_summary 29, clear_checkpoint 28, update_recommendation_status 20, save_plan 19, implement_step 18, generate_initial_plan 17, commit_step 17, _append_step_telemetry 17, _scope_drift_check 17, finalize 17, subprocess.Popen 17, save_checkpoint 16, _commits_ahead_of_main 15, get_latest_plan 15, _code_review_gate 14, prune_merged_agent_branches 13, clean_slate 13, _capture_executor_telemetry 9, execute_recommendation 7, _handle_failure 6, validate_acceptance_feasibility 6, critique_plan 5, _reset_rec_status 5, run_acceptance 5, _is_checkpoint_branch_merged 4, lint_acceptance_command 4, open_session 4, close_session 4, open_phase 4, close_phase 4, emit_process_event 4, emit_failure_summary 4, is_eligible 3, RECS_JSONL 2, sys.argv 2, plus 15 singleton targets (incl. sys.stdin, Path, kill_process_tree, _fix_code_review_findings, _check_jsonl_clean, run_verification, _seed_gemini_session, escalate_planning_model, select_next_batch, check_recursion_guard, check_process_killswitch, _assign_job_object, _latest_transcript_path). From-imports in tests: _append_step_telemetry, _execute_recommendation_inner, _fix_ci_failure, _get_ci_failure_details, ensure_feature_branch, execute_compound, finalize, load_cluster. No patch.object module-alias sites on execute_recommendation."
+  - "ROUTED-NAME INVENTORY / interception design (the linchpin): ALL relocated bodies do a function-local `import scripts.execute_recommendation as _er` and reference every inventoried name via _er -- collaborators (load_recommendation, load_checkpoint, save_checkpoint, clear_checkpoint, ensure_feature_branch, write_run_summary, emit_failure_summary, _handle_failure, _scope_drift_check, _commits_ahead_of_main, _code_review_gate, finalize, implement_step, commit_step, _append_step_telemetry, generate_initial_plan, critique_plan, refine_plan, save_plan, get_latest_plan, run_acceptance, run_verification, get_last_acceptance_output, open_/close_session, open_/close_phase, emit_process_event, update_recommendation_status, _reset_rec_status, clean_slate, prune_merged_agent_branches, _capture_executor_telemetry, is_eligible, _is_poisoned_rec, lint_acceptance_command, validate_acceptance_feasibility, _checkout_main_safely, kill_process_tree, MODEL_EXECUTION) AND stdlib namespaces (subprocess, sys, Path, os where patched). Dotted-through stdlib patches (subprocess.run/.Popen, sys.argv/.stdin) patch the shared module objects and are location-independent, but the uniform routing also preserves any whole-module namespace patch. This mirrors Decision 104's _common-routing and shifts residual risk to RunState-threading correctness, which the 6683-line equivalence oracle catches."
+  - "Flag folded (Decision 48 verification tier): verified V2 -- compute_affected_artifacts over execute_recommendation.py + the new module paths returns {} (no active Lambda artifact); no V3 steps required."
+  - "rec-2414 (open umbrella, file=config/sloc_budgets.yaml, automatable:false) is CITED as the parent program; this plan removes the largest (2862) of the 5 executor registry entries and is NOT bundled. rec-443 (Create executor/telemetry.py naming _capture_executor_telemetry/write_run_summary/print_session_status) names three functions this plan relocates (to run_summary.py and session_status.py, not telemetry.py); its acceptance is test-based (not location-based) and likely already passes -- flagged for a separate status audit, NOT bundled."
+  - "Importer topology (recon-verified): the ONLY production importers of scripts.execute_recommendation are scripts/executor/batch.py (lazy: is_eligible, execute_recommendation, _check_jsonl_clean, _discard_commit_range_files) and scripts/executor/__init__.py (lazy wrapper) -- both resolve through the retained facade re-exports. No src/, config/, or .github importers. CLI references (config/agent/executor/prompts/README.md, .claude/agents/scheduled/rec-curator.md, .github/prompts/scheduled/rec-curator.prompt.md) invoke `python -m scripts.execute_recommendation` and stay valid because main() is retained. .github/instructions/executor-*.instructions.md applyTo globs pin the file -- unaffected (retained as facade)."
+  - ".importlinter assessment (explicit, per critique): import-linter parses function-scope imports -- the existing ignore entries (scripts.executor.batch -> scripts.execute_recommendation, scripts.executor -> scripts.execute_recommendation, scripts.executor.jsonl_store -> scripts.ops_data_portal) exist precisely because deferred imports are analyzed. This plan's new modules create (a) nine scripts.executor.<new> -> scripts.execute_recommendation deferred edges (the _er routing) and (b) one scripts.executor.branch_lifecycle -> scripts.ops_data_portal deferred edge (file_hotfix_rec/_is_poisoned_rec lazy portal imports, which TODAY originate from execute_recommendation.py outside the executor package and therefore cross no contract). All are added as ignore_imports under no-cycles-ops-data-portal-executor, mirroring the documented Strangler-Fig scaffolding pattern. The execute_recommendation-above-batch contract needs no change (its layers list only execute_recommendation and scripts.executor.batch; the batch facade gains no new edge from this plan). VP step 8 asserts contracts pass plus the presence of the required branch_lifecycle line."
+  - "Coverage-gate: scripts/test_coverage_checker.map_source_to_test returns None for scripts/executor/**/*.py, so no NEW test file is required and no per-file coverage floor is enforced on the new modules; the relocated bodies stay covered by tests/test_execute_recommendation.py through the facade imports and _er routing."
+  - "Cross-plan sequencing: independent of Plans 1-3 at the import level (all cross-file references go through FACADE paths, unchanged everywhere). batch.py's lazy imports keep resolving through this plan's retained facade re-exports regardless of order -- but sequence this plan LAST for risk reasons (prove the mechanism on postflight/step_runner/plan+batch first). .importlinter is co-mutated by Plans 1 and 3 (different contracts/lines); a conflict is a trivial union of ignore lines."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/sloc-violations-refactor-p5svnl)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (102, 104, 80, 43, 117, 67; and 48/75 flags folded)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Baseline captured -- the current tests/test_execute_recommendation.py suite passes BEFORE any code movement (the behavioural-equivalence oracle for the phase-decomposition)
+  - The other three executor decomposition plans have landed (recommended sequencing) so the facade mechanism is proven before the highest-risk file
+execution_steps:
+  - "Capture baseline FIRST -- run the full tests/test_execute_recommendation.py suite green on the pre-refactor tree; that green run is the behavioural-equivalence oracle for the phase-decomposition."
+  - "Extract the low-risk helper clusters first: create scripts/executor/run_summary.py, session_status.py (decision-43 waiver header for print_session_status), and branch_lifecycle.py; move each body verbatim EXCEPT rewriting every routed-name reference to _er resolved function-locally; add facade re-exports; run the suite green after each cluster to isolate regressions."
+  - "Create scripts/executor/run.py with the RunState dataclass, _fail_and_close() bookkeeping helper, the validation-quarantine helpers, execute_recommendation(), and the _execute_recommendation_inner skeleton; then extract run_phase_preflight.py, run_phase_plan.py, run_phase_impl.py, run_phase_postflight.py, run_phase_validate.py one phase at a time, running the suite green after EACH phase extraction (structural-integrity-before-logic protocol). Each phase function takes/returns RunState and references collaborators + subprocess/sys via _er; carry the waiver header on any module over CC 20."
+  - "Collapse scripts/execute_recommendation.py to the facade: keep main() + docstring + module-scope imports; re-export execute_recommendation and _execute_recommendation_inner from run.py and every moved symbol from its new module; preserve the existing acceptance_lint/batch re-export blocks; remove the facade's decision-43 waiver header only if the CC gate stays green with just main()."
+  - "Add the new ignore lines to .importlinter's no-cycles-ops-data-portal-executor contract (nine <new-module> -> scripts.execute_recommendation entries + scripts.executor.branch_lifecycle -> scripts.ops_data_portal), mirroring the existing batch entries."
+  - "Confirm zero patch migration (the _er routing preserves all 592 sites); apply only import-line touch-ups in tests/test_execute_recommendation.py if a symbol relocated."
+  - "Run `validate --update-sloc-budgets`, then grep-confirm the execute_recommendation.py key is dropped and no executor-core module key was seeded."
+  - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55); never suppress a failing equivalence assertion."
+  - "Report -- what was extracted, the equivalence-oracle result, final execute_recommendation.py SLOC, CC/coverage/boundary status, the .importlinter diff, and confirmation that no patch migration was required."
+work_areas: []
+rollback: >-
+  Pure refactor on a feature branch; if the equivalence oracle (the 6683-line suite) cannot be made green,
+  abandon the change (no merge) -- nothing is deployed. Extract cluster-by-cluster and phase-by-phase with a
+  green suite after each step so a regression is isolated to the last extraction. If merged and a regression
+  surfaces, revert the squash commit -- the facade + clusters + phases + .importlinter lines + any test
+  import touch-ups land atomically in one PR.
