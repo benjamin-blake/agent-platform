@@ -1,16 +1,16 @@
 # complexity-waiver: decision-43
-"""Recommendation executor — thin CLI entrypoint.
+"""Recommendation executor - thin CLI entrypoint.
 
 The implementation logic is split across scripts/executor/ submodules:
-  errors           — Structured error types and enums
-  jsonl_store      — Unified JSONL read/write
-  plan             — Plan generation, critique, parsing
-  step_runner      — Step implementation and acceptance verification
-  postflight       — Finalisation, CI wait, merge, cleanup
-  ci_triage        — Deterministic CI failure classification
-  run_summary      — Run/failure summary artifacts (write_run_summary, emit_failure_summary)
-  session_status   — Session dashboard and rec eligibility (print_session_status, is_eligible)
-  branch_lifecycle — Feature/hotfix branch lifecycle and retry cleanup (ensure_feature_branch, clean_slate)
+  errors           - Structured error types and enums
+  jsonl_store      - Unified JSONL read/write
+  plan             - Plan generation, critique, parsing
+  step_runner      - Step implementation and acceptance verification
+  postflight       - Finalisation, CI wait, merge, cleanup
+  ci_triage        - Deterministic CI failure classification
+  run_summary      - Run/failure summary artifacts (write_run_summary, emit_failure_summary)
+  session_status   - Session dashboard and rec eligibility (print_session_status, is_eligible)
+  branch_lifecycle - Feature/hotfix branch lifecycle and retry cleanup (ensure_feature_branch, clean_slate)
 
 This file retains orchestration-level logic only:
   execute_recommendation(), _execute_recommendation_inner(),
