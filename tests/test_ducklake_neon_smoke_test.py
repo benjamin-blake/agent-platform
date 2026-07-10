@@ -8,12 +8,24 @@ logic, not the live endpoint.
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 import types
 
 import pytest
 
 import scripts.ducklake_neon_smoke_test as smoke
+from scripts.ducklake_smoke import (
+    canary,
+    core,
+    direct_gates,
+    lambda_ec_gates,
+    lambda_maintenance_gates,
+    lambda_ops_gates,
+)
 from src.common.ducklake_version import pinned_duckdb_version
+
+_PACKAGE_SUBMODULES = (core, direct_gates, lambda_ec_gates, lambda_maintenance_gates, lambda_ops_gates, canary)
 
 _DSN = {
     "host": "ep-test-123.eu-west-2.aws.neon.tech",
@@ -170,15 +182,15 @@ def test_open_attached_real_attach_composition(monkeypatch):
 
 def test_attach_roundtrip_with_explicit_dsn(monkeypatch):
     con = FakeCon(fetch_results=[(1,)])
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None: con)
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None: con)
     assert smoke.attach_roundtrip(dsn=_DSN) == 1
     assert con.closed is True
 
 
 def test_attach_roundtrip_fetches_dsn_when_absent(monkeypatch):
     con = FakeCon(fetch_results=[(1,)])
-    monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: _DSN)
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None: con)
+    monkeypatch.setattr(core, "fetch_dsn", lambda profile=None: _DSN)
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None: con)
     assert smoke.attach_roundtrip() == 1
 
 
@@ -194,7 +206,7 @@ def test_is_occ_collision_true_and_false():
 
 def test_single_writer_commit_clean(monkeypatch):
     con = FakeCon()
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None, _creds=None: con)
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None, _creds=None: con)
     out = smoke._single_writer_commit(0, _DSN)
     assert out["collided"] is False
     assert con.closed is True
@@ -203,7 +215,7 @@ def test_single_writer_commit_clean(monkeypatch):
 
 def test_single_writer_commit_counts_occ_collision(monkeypatch):
     con = FakeCon(raise_on={"INSERT": Exception("could not serialize access due to concurrent update")})
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None, _creds=None: con)
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None, _creds=None: con)
     out = smoke._single_writer_commit(1, _DSN)
     assert out["collided"] is True
     assert con.closed is True
@@ -211,7 +223,7 @@ def test_single_writer_commit_counts_occ_collision(monkeypatch):
 
 def test_single_writer_commit_reraises_non_occ(monkeypatch):
     con = FakeCon(raise_on={"INSERT": ValueError("hard failure -- not a collision")})
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None, _creds=None: con)
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None, _creds=None: con)
     with pytest.raises(ValueError, match="hard failure"):
         smoke._single_writer_commit(2, _DSN)
     assert con.closed is True
@@ -279,7 +291,7 @@ def _stub_churn_gate_prelude(monkeypatch):
     spawning the 8 concurrent workers (STS-contention fix). Tests mock both to keep the unit
     test offline.
     """
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None, _creds=None: FakeCon())
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None, _creds=None: FakeCon())
 
     class _FrozenCreds:
         access_key = "ak"  # pragma: allowlist secret
@@ -304,7 +316,7 @@ def test_churn_gate_pass_returns_metrics(monkeypatch):
     monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(
-        smoke,
+        direct_gates,
         "_run_churn_burst",
         lambda dsn, profile=None, _creds=None: [{"latency_ms": 5.0, "collided": False} for _ in range(8)],
     )
@@ -315,9 +327,9 @@ def test_churn_gate_pass_returns_metrics(monkeypatch):
 def test_churn_gate_fetches_dsn_when_absent(monkeypatch):
     monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     _stub_churn_gate_prelude(monkeypatch)
-    monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: _DSN)
+    monkeypatch.setattr(core, "fetch_dsn", lambda profile=None: _DSN)
     monkeypatch.setattr(
-        smoke, "_run_churn_burst", lambda dsn, profile=None, _creds=None: [{"latency_ms": 5.0, "collided": False}]
+        direct_gates, "_run_churn_burst", lambda dsn, profile=None, _creds=None: [{"latency_ms": 5.0, "collided": False}]
     )
     assert smoke.churn_gate()["collision_rate"] == 0.0
 
@@ -326,7 +338,7 @@ def test_churn_gate_loud_fails(monkeypatch):
     monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(
-        smoke,
+        direct_gates,
         "_run_churn_burst",
         lambda dsn, profile=None, _creds=None: [{"latency_ms": 1.0, "collided": True} for _ in range(8)],
     )
@@ -373,25 +385,25 @@ def test_run_passes_text_flags(monkeypatch):
 
 
 def test_consistent_pg_dump_success(monkeypatch):
-    monkeypatch.setattr(smoke, "_run", lambda cmd: _completed(0))
+    monkeypatch.setattr(direct_gates, "_run", lambda cmd: _completed(0))
     assert (
         smoke._consistent_pg_dump(_DSN, engine_tag=f"duckdb-{pinned_duckdb_version()}", dump_path="/tmp/x.sql") == "/tmp/x.sql"
     )
 
 
 def test_consistent_pg_dump_loud_fails(monkeypatch):
-    monkeypatch.setattr(smoke, "_run", lambda cmd: _completed(1, stderr="permission denied"))
+    monkeypatch.setattr(direct_gates, "_run", lambda cmd: _completed(1, stderr="permission denied"))
     with pytest.raises(smoke.SmokeTestFailure, match="pg_dump"):
         smoke._consistent_pg_dump(_DSN, engine_tag="t", dump_path="/tmp/x.sql")
 
 
 def test_restore_dump_success(monkeypatch):
-    monkeypatch.setattr(smoke, "_run", lambda cmd: _completed(0))
+    monkeypatch.setattr(direct_gates, "_run", lambda cmd: _completed(0))
     smoke._restore_dump("/tmp/x.sql", _DSN)  # no raise
 
 
 def test_restore_dump_loud_fails(monkeypatch):
-    monkeypatch.setattr(smoke, "_run", lambda cmd: _completed(2, stderr="syntax error"))
+    monkeypatch.setattr(direct_gates, "_run", lambda cmd: _completed(2, stderr="syntax error"))
     with pytest.raises(smoke.SmokeTestFailure, match="psql restore"):
         smoke._restore_dump("/tmp/x.sql", _DSN)
 
@@ -403,7 +415,7 @@ def test_restore_dump_loud_fails(monkeypatch):
 
 def test_write_probe_creates_and_inserts(monkeypatch):
     con = FakeCon()
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None: con)
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None: con)
     smoke._write_probe(_DSN, "tok-abc")
     assert any("CREATE TABLE" in s and "restore_probe" in s for s in con.executed)
     assert any("INSERT" in s and "tok-abc" in s for s in con.executed)
@@ -412,14 +424,14 @@ def test_write_probe_creates_and_inserts(monkeypatch):
 
 def test_verify_probe_found(monkeypatch):
     con = FakeCon(fetch_results=[("tok-abc",)])
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None: con)
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None: con)
     assert smoke._verify_probe(_DSN, "tok-abc") is True
     assert con.closed is True
 
 
 def test_verify_probe_missing(monkeypatch):
     con = FakeCon(fetch_results=[])
-    monkeypatch.setattr(smoke, "_open_attached", lambda dsn, profile=None: con)
+    monkeypatch.setattr(direct_gates, "_open_attached", lambda dsn, profile=None: con)
     assert smoke._verify_probe(_DSN, "tok-abc") is False
 
 
@@ -437,32 +449,32 @@ def test_derive_scratch_dsn_suffixes_dbname():
 
 def test_restore_drill_success_explicit_dsns(monkeypatch):
     monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
-    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
-    monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
-    monkeypatch.setattr(smoke, "_restore_dump", lambda dump_path, scratch: None)
-    monkeypatch.setattr(smoke, "_verify_probe", lambda scratch, probe, profile=None: True)
+    monkeypatch.setattr(direct_gates, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
+    monkeypatch.setattr(direct_gates, "_write_probe", lambda dsn, probe, profile=None: None)
+    monkeypatch.setattr(direct_gates, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
+    monkeypatch.setattr(direct_gates, "_restore_dump", lambda dump_path, scratch: None)
+    monkeypatch.setattr(direct_gates, "_verify_probe", lambda scratch, probe, profile=None: True)
     assert smoke.restore_drill(dsn=_DSN, scratch_dsn=smoke._derive_scratch_dsn(_DSN)) is True
 
 
 def test_restore_drill_defaults_dsn_and_scratch(monkeypatch):
     monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
-    monkeypatch.setattr(smoke, "fetch_dsn", lambda profile=None: _DSN)
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
-    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
-    monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
-    monkeypatch.setattr(smoke, "_restore_dump", lambda dump_path, scratch: None)
-    monkeypatch.setattr(smoke, "_verify_probe", lambda scratch, probe, profile=None: True)
+    monkeypatch.setattr(core, "fetch_dsn", lambda profile=None: _DSN)
+    monkeypatch.setattr(direct_gates, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
+    monkeypatch.setattr(direct_gates, "_write_probe", lambda dsn, probe, profile=None: None)
+    monkeypatch.setattr(direct_gates, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
+    monkeypatch.setattr(direct_gates, "_restore_dump", lambda dump_path, scratch: None)
+    monkeypatch.setattr(direct_gates, "_verify_probe", lambda scratch, probe, profile=None: True)
     assert smoke.restore_drill() is True
 
 
 def test_restore_drill_loud_fails_on_lost_probe(monkeypatch):
     monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
-    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
-    monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
-    monkeypatch.setattr(smoke, "_restore_dump", lambda dump_path, scratch: None)
-    monkeypatch.setattr(smoke, "_verify_probe", lambda scratch, probe, profile=None: False)
+    monkeypatch.setattr(direct_gates, "_engine_tag", lambda: f"duckdb-{pinned_duckdb_version()}")
+    monkeypatch.setattr(direct_gates, "_write_probe", lambda dsn, probe, profile=None: None)
+    monkeypatch.setattr(direct_gates, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
+    monkeypatch.setattr(direct_gates, "_restore_dump", lambda dump_path, scratch: None)
+    monkeypatch.setattr(direct_gates, "_verify_probe", lambda scratch, probe, profile=None: False)
     with pytest.raises(smoke.SmokeTestFailure, match="read-your-write probe missing"):
         smoke.restore_drill(dsn=_DSN)
 
@@ -593,8 +605,8 @@ def test_ok_json_status_mismatch_raises():
 
 
 def _patch_gate(monkeypatch, payload, status=200):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
-    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(status, payload))
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_sigv4_invoke", lambda url, p, **kw: _Resp(status, payload))
 
 
 def test_lambda_attach_ok(monkeypatch, capsys):
@@ -611,15 +623,15 @@ def test_lambda_attach_wrong_version_fails(monkeypatch):
 
 
 def test_lambda_ingress_ok(monkeypatch, capsys):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://w")
-    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200 if kw.get("sign", True) else 403))
+    monkeypatch.setattr(core, "_function_url", lambda role: "https://w")
+    monkeypatch.setattr(core, "_sigv4_invoke", lambda url, p, **kw: _Resp(200 if kw.get("sign", True) else 403))
     smoke.lambda_ingress()
     assert "INGRESS OK unsigned=403 signed=200" in capsys.readouterr().out
 
 
 def test_lambda_ingress_fails_when_unsigned_allowed(monkeypatch):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://w")
-    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200))  # unsigned also 200
+    monkeypatch.setattr(core, "_function_url", lambda role: "https://w")
+    monkeypatch.setattr(core, "_sigv4_invoke", lambda url, p, **kw: _Resp(200))  # unsigned also 200
     with pytest.raises(smoke.SmokeTestFailure, match="INGRESS FAIL"):
         smoke.lambda_ingress()
 
@@ -713,7 +725,7 @@ def _patch_fanout_churn(monkeypatch, per_invocation_body=None):
 
     Handles three payload types: attach_check (pre-warm), churn_single setup=True, churn_single normal.
     """
-    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://writer")
+    monkeypatch.setattr(core, "_function_url", lambda role: "https://writer")
     body = per_invocation_body or _churn_single_body()
 
     def fake_invoke(url, payload, **kw):
@@ -723,7 +735,7 @@ def _patch_fanout_churn(monkeypatch, per_invocation_body=None):
             return _Resp(200, {"ok": True, "setup": True})
         return _Resp(200, body)
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
 
 
 def test_lambda_churn_fanout_ok(monkeypatch, capsys):
@@ -738,7 +750,7 @@ def test_lambda_churn_fanout_ok(monkeypatch, capsys):
 def test_lambda_churn_fanout_n_concurrent_calls(monkeypatch):
     """CHURN_WRITERS pre-warm + 1 setup + CHURN_WRITERS fan-out calls are issued in order."""
     call_payloads: list[dict] = []
-    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://writer")
+    monkeypatch.setattr(core, "_function_url", lambda role: "https://writer")
 
     def fake_invoke(url, payload, **kw):
         call_payloads.append(dict(payload))
@@ -748,7 +760,7 @@ def test_lambda_churn_fanout_n_concurrent_calls(monkeypatch):
             return _Resp(200, {"ok": True, "setup": True})
         return _Resp(200, _churn_single_body())
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
     smoke.lambda_churn()
     prewarm_calls = [p for p in call_payloads if p.get("action") == "attach_check"]
     setup_calls = [p for p in call_payloads if p.get("setup")]
@@ -772,7 +784,7 @@ def test_lambda_churn_fanout_aggregation_breakdown(monkeypatch, capsys):
 
 def test_lambda_churn_fanout_collision_rate_loudfail(monkeypatch):
     """Collision rate over budget triggers SmokeTestFailure."""
-    monkeypatch.setattr(smoke, "_function_url", lambda role: "https://writer")
+    monkeypatch.setattr(core, "_function_url", lambda role: "https://writer")
     idx = [0]
 
     def fake_invoke(url, payload, **kw):
@@ -784,7 +796,7 @@ def test_lambda_churn_fanout_collision_rate_loudfail(monkeypatch):
         idx[0] += 1
         return _Resp(200, _churn_single_body(collided=collided))
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
     with pytest.raises(smoke.SmokeTestFailure, match="CHURN FAIL"):
         smoke.lambda_churn()
 
@@ -848,14 +860,14 @@ def test_main_lambda_churn_incontainer_dispatch(monkeypatch, capsys):
 
 
 def test_lambda_reader_ok(monkeypatch, capsys):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
 
     def fake_invoke(url, payload, **kw):
         if payload["action"] == "read_current":
             return _Resp(200, {"row_count": 3})
         return _Resp(200, {"write_denied": True})
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
     smoke.lambda_reader()
     assert "READER OK rows=3 write_denied=true" in capsys.readouterr().out
 
@@ -881,8 +893,8 @@ def _warm_reuse_invoker():
 
 
 def test_lambda_warm_reuse_ok(monkeypatch, capsys):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
-    monkeypatch.setattr(smoke, "_sigv4_invoke", _warm_reuse_invoker())
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_sigv4_invoke", _warm_reuse_invoker())
     smoke.lambda_warm_reuse(json_output=True)
     out = capsys.readouterr().out
     result = json.loads(out)
@@ -893,8 +905,8 @@ def test_lambda_warm_reuse_ok(monkeypatch, capsys):
 
 
 def test_lambda_warm_reuse_writer_ok(monkeypatch, capsys):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
-    monkeypatch.setattr(smoke, "_sigv4_invoke", _warm_reuse_invoker())
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_sigv4_invoke", _warm_reuse_invoker())
     smoke.lambda_warm_reuse_writer(json_output=True)
     result = json.loads(capsys.readouterr().out)
     assert result["role"] == "writer"
@@ -904,41 +916,41 @@ def test_lambda_warm_reuse_writer_ok(monkeypatch, capsys):
 
 def test_lambda_warm_reuse_fails_when_no_reuse(monkeypatch):
     """If reuse is never observed (connect_reused stays False), the gate loud-fails."""
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
 
     def never_reused(url, payload, **kw):
         if payload["action"] == "attach_check":
             return _Resp(200, {"ok": True, "connect_ms": 80.0, "connect_reused": False})
         return _Resp(200, {"ok": True})
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", never_reused)
+    monkeypatch.setattr(core, "_sigv4_invoke", never_reused)
     with pytest.raises(smoke.SmokeTestFailure, match="warm reuse not observed"):
         smoke.lambda_warm_reuse()
 
 
 def test_lambda_reader_boundary_broken_fails(monkeypatch):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
 
     def fake_invoke(url, payload, **kw):
         if payload["action"] == "read_current":
             return _Resp(200, {"row_count": 3})
         return _Resp(200, {"write_denied": False})  # boundary broken
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
     with pytest.raises(smoke.SmokeTestFailure, match="READER FAIL"):
         smoke.lambda_reader()
 
 
 def test_lambda_maintenance_merge_ok(monkeypatch, capsys):
     """VP9: maintenance merge with force_recreate_tables=True; asserts files_after_merge <= files_before."""
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
     invoked = {}
 
     def fake_invoke(url, payload, **kw):
         invoked["payload"] = payload
         return _Resp(200, {"ok": True, "files_before": 3, "files_after_merge": 2, "elapsed_ms": 45.0})
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
     smoke.lambda_maintenance_merge()
     out = capsys.readouterr().out
     assert "MAINTENANCE_MERGE OK files_before=3 files_after_merge=2" in out
@@ -947,9 +959,9 @@ def test_lambda_maintenance_merge_ok(monkeypatch, capsys):
 
 def test_lambda_maintenance_merge_empty_smoke_catalog_ok(monkeypatch, capsys):
     """VP9: works on a fresh environment where smoke tables were just created (files_before=0)."""
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
     monkeypatch.setattr(
-        smoke,
+        core,
         "_sigv4_invoke",
         lambda url, payload, **kw: _Resp(200, {"ok": True, "files_before": 0, "files_after_merge": 0, "elapsed_ms": 12.0}),
     )
@@ -959,9 +971,9 @@ def test_lambda_maintenance_merge_empty_smoke_catalog_ok(monkeypatch, capsys):
 
 def test_lambda_maintenance_merge_files_grew_fails(monkeypatch):
     """VP9: loud-fail when files_after_merge > files_before (merge expanded the catalog)."""
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
     monkeypatch.setattr(
-        smoke,
+        core,
         "_sigv4_invoke",
         lambda url, payload, **kw: _Resp(200, {"ok": True, "files_before": 2, "files_after_merge": 5}),
     )
@@ -971,9 +983,9 @@ def test_lambda_maintenance_merge_files_grew_fails(monkeypatch):
 
 def test_lambda_maintenance_merge_not_ok_fails(monkeypatch):
     """VP9: loud-fail when maintenance returns ok=False."""
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
     monkeypatch.setattr(
-        smoke,
+        core,
         "_sigv4_invoke",
         lambda url, payload, **kw: _Resp(200, {"ok": False, "error": "catalog error"}),
     )
@@ -1002,7 +1014,7 @@ def test_main_lambda_gate_loud_fail_returns_1(monkeypatch, capsys):
 
 
 def test_ops_read_your_write_ok(monkeypatch, capsys):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
     state = {"status": "open"}
     written = {}
 
@@ -1020,7 +1032,7 @@ def test_ops_read_your_write_ok(monkeypatch, capsys):
             return _Resp(200, {"row_count": 1, "rows": [{"status": state["status"]}]})
         return _Resp(200, {})
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
     smoke.ops_read_your_write()
     assert "OPS_RYW OK" in capsys.readouterr().out
     # The probe row persists (writer has no delete verb); it must carry the DQ NOT-NULL columns
@@ -1030,7 +1042,7 @@ def test_ops_read_your_write_ok(monkeypatch, capsys):
 
 
 def test_ops_read_your_write_absent_not_409_fails(monkeypatch):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
     state = {"status": "open"}
 
     def fake_invoke(url, payload, **kw):
@@ -1044,13 +1056,13 @@ def test_ops_read_your_write_absent_not_409_fails(monkeypatch):
             return _Resp(200, {"ok": True})  # absent update wrongly succeeds -> boundary broken
         return _Resp(200, {"ok": True})
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", fake_invoke)
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
     with pytest.raises(smoke.SmokeTestFailure, match="expected 409"):
         smoke.ops_read_your_write()
 
 
 def test_ops_churn_regate_delegates(monkeypatch, capsys):
-    monkeypatch.setattr(smoke, "lambda_churn", lambda profile=None, region="eu-west-2": None)
+    monkeypatch.setattr(lambda_ec_gates, "lambda_churn", lambda profile=None, region="eu-west-2": None)
     smoke.ops_churn_regate()
     assert "OPS_CHURN_REGATE OK" in capsys.readouterr().out
 
@@ -1058,9 +1070,9 @@ def test_ops_churn_regate_delegates(monkeypatch, capsys):
 def test_catalog_restore_drill_ok(monkeypatch, capsys):
     # T2.19: catalog_restore_drill now INVOKES the maintenance restore_drill action over 443 (the
     # pg_dump/pg_restore runs inside AWS -- no Neon 5432 from CC-web). Mock the URL + the invoke.
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
     monkeypatch.setattr(
-        smoke,
+        core,
         "_sigv4_invoke",
         lambda url, p, **kw: _Resp(200, {"ok": True, "restored": True, "probe_id": "drill-probe", "pg_version": "16"}),
     )
@@ -1069,8 +1081,8 @@ def test_catalog_restore_drill_ok(monkeypatch, capsys):
 
 
 def test_catalog_restore_drill_probe_lost_fails(monkeypatch):
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
-    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True, "restored": False}))
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True, "restored": False}))
     with pytest.raises(smoke.SmokeTestFailure, match="did not restore"):
         smoke.catalog_restore_drill()
 
@@ -1092,7 +1104,7 @@ def test_churn_gate_proceeds_with_direct_gate_env(monkeypatch):
     monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
     _stub_churn_gate_prelude(monkeypatch)
     monkeypatch.setattr(
-        smoke,
+        direct_gates,
         "_run_churn_burst",
         lambda dsn, profile=None, _creds=None: [{"latency_ms": 1.0, "collided": False}],
     )
@@ -1110,11 +1122,11 @@ def test_restore_drill_refused_without_direct_gate_env(monkeypatch):
 def test_restore_drill_proceeds_with_direct_gate_env(monkeypatch):
     """restore_drill does NOT raise the guard error when DUCKLAKE_ALLOW_DIRECT_GATE=1 is set."""
     monkeypatch.setenv("DUCKLAKE_ALLOW_DIRECT_GATE", "1")
-    monkeypatch.setattr(smoke, "_engine_tag", lambda: "duckdb-test")
-    monkeypatch.setattr(smoke, "_write_probe", lambda dsn, probe, profile=None: None)
-    monkeypatch.setattr(smoke, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
-    monkeypatch.setattr(smoke, "_restore_dump", lambda dump_path, scratch: None)
-    monkeypatch.setattr(smoke, "_verify_probe", lambda scratch, probe, profile=None: True)
+    monkeypatch.setattr(direct_gates, "_engine_tag", lambda: "duckdb-test")
+    monkeypatch.setattr(direct_gates, "_write_probe", lambda dsn, probe, profile=None: None)
+    monkeypatch.setattr(direct_gates, "_consistent_pg_dump", lambda dsn, engine_tag, dump_path: dump_path)
+    monkeypatch.setattr(direct_gates, "_restore_dump", lambda dump_path, scratch: None)
+    monkeypatch.setattr(direct_gates, "_verify_probe", lambda scratch, probe, profile=None: True)
     result = smoke.restore_drill(dsn=_DSN, scratch_dsn=smoke._derive_scratch_dsn(_DSN))
     assert result is True
 
@@ -1136,10 +1148,12 @@ def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, ryw_ok=True):
         "ducklake-extensions-layer": "arn:fake:2",
         "ducklake-pgclient-layer": "arn:fake:3",
     }
-    monkeypatch.setattr(smoke, "_publish_candidate_layers", lambda **kw: _fake_arns)
-    monkeypatch.setattr(smoke, "_get_function_role_arn", lambda fn, **kw: "arn:aws:iam::ACCOUNT_ID_PLACEHOLDER:role/fake-role")
-    monkeypatch.setattr(smoke, "_canary_create_function", lambda fn, **kw: None)
-    monkeypatch.setattr(smoke, "_canary_delete_function", lambda fn, **kw: True)
+    monkeypatch.setattr(canary, "_publish_candidate_layers", lambda **kw: _fake_arns)
+    monkeypatch.setattr(
+        canary, "_get_function_role_arn", lambda fn, **kw: "arn:aws:iam::ACCOUNT_ID_PLACEHOLDER:role/fake-role"
+    )
+    monkeypatch.setattr(canary, "_canary_create_function", lambda fn, **kw: None)
+    monkeypatch.setattr(canary, "_canary_delete_function", lambda fn, **kw: True)
 
     monkeypatch.setattr(smoke.neon_api, "fetch_api_key", lambda profile=None: "fake-api-key")
     monkeypatch.setattr(smoke.neon_api, "resolve_project_id", lambda api_key, name="ducklake-catalog": _FAKE_PROJECT_ID)
@@ -1168,10 +1182,10 @@ def _stub_canary_rehearsal(monkeypatch, *, clone_ok=True, ryw_ok=True):
             return {"ok": True, "meta_schema": "ducklake_ops", "branch_host": payload.get("branch_host"), "cloned": True}
         return {}
 
-    monkeypatch.setattr(smoke, "_lambda_invoke_cli", _fake_invoke)
+    monkeypatch.setattr(canary, "_lambda_invoke_cli", _fake_invoke)
 
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}.lambda-url")
-    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True}))
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}.lambda-url")
+    monkeypatch.setattr(core, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True}))
 
     monkeypatch.setattr(smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
 
@@ -1248,12 +1262,12 @@ def test_canary_rehearsal_functions_torn_down_on_error(monkeypatch):
     """Ephemeral Lambda functions are deleted even when a gate fails (finally block)."""
     deleted = []
     _td_arns = {"ducklake-deps-layer": "arn:1", "ducklake-extensions-layer": "arn:2", "ducklake-pgclient-layer": "arn:3"}
-    monkeypatch.setattr(smoke, "_publish_candidate_layers", lambda **kw: _td_arns)
-    monkeypatch.setattr(smoke, "_get_function_role_arn", lambda fn, **kw: "arn:role")
-    monkeypatch.setattr(smoke, "_canary_create_function", lambda fn, **kw: None)
-    monkeypatch.setattr(smoke, "_canary_delete_function", lambda fn, **kw: deleted.append(fn) or True)
-    monkeypatch.setattr(smoke, "_function_url", lambda role: f"https://{role}")
-    monkeypatch.setattr(smoke, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True}))
+    monkeypatch.setattr(canary, "_publish_candidate_layers", lambda **kw: _td_arns)
+    monkeypatch.setattr(canary, "_get_function_role_arn", lambda fn, **kw: "arn:role")
+    monkeypatch.setattr(canary, "_canary_create_function", lambda fn, **kw: None)
+    monkeypatch.setattr(canary, "_canary_delete_function", lambda fn, **kw: deleted.append(fn) or True)
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True}))
     monkeypatch.setattr(smoke.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(smoke.neon_api, "fetch_api_key", lambda profile=None: "fake-api-key")
     monkeypatch.setattr(smoke.neon_api, "resolve_project_id", lambda api_key, name="ducklake-catalog": _FAKE_PROJECT_ID)
@@ -1269,7 +1283,7 @@ def test_canary_rehearsal_functions_torn_down_on_error(monkeypatch):
             raise smoke.SmokeTestFailure("attach failed")
         return {}
 
-    monkeypatch.setattr(smoke, "_lambda_invoke_cli", _raise_on_attach)
+    monkeypatch.setattr(canary, "_lambda_invoke_cli", _raise_on_attach)
 
     with pytest.raises(smoke.SmokeTestFailure, match="attach failed"):
         smoke.canary_rehearsal()
@@ -1308,7 +1322,7 @@ def test_canary_rehearsal_scratch_meta_teardown_false_on_sigv4_error(monkeypatch
     def _raise_sigv4(url, payload, **kw):
         raise RuntimeError("connection refused")
 
-    monkeypatch.setattr(smoke, "_sigv4_invoke", _raise_sigv4)
+    monkeypatch.setattr(core, "_sigv4_invoke", _raise_sigv4)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -1341,7 +1355,7 @@ def test_canary_rehearsal_branch_host_passed_to_clone(monkeypatch):
             return {"ok": True, "meta_schema": "ducklake_ops", "branch_host": payload.get("branch_host"), "cloned": True}
         return {}
 
-    monkeypatch.setattr(smoke, "_lambda_invoke_cli", _capture_invoke)
+    monkeypatch.setattr(canary, "_lambda_invoke_cli", _capture_invoke)
 
     smoke.canary_rehearsal()
 
@@ -1441,3 +1455,100 @@ def test_wait_function_active_loud_fails_on_waiter_error(monkeypatch):
     )
     with pytest.raises(smoke.SmokeTestFailure, match="wait function-active-v2"):
         smoke._wait_function_active("fn", profile=None, region="eu-west-2")
+
+
+# ---------------------------------------------------------------------------
+# Facade completeness + module-object interception (Decision 104 convention)
+# ---------------------------------------------------------------------------
+
+
+def test_facade_reexports_identity_equal_to_owning_submodule():
+    """Every smoke.<name> this suite references resolves on the facade and is identity-equal to
+    the owning scripts.ducklake_smoke submodule's attribute.
+
+    Membership is derived from THIS FILE's own source (re-scanned each run), not a hardcoded list
+    (tests/CLAUDE.md, growth-safe): a future test that adds a new `smoke.<name>` reference is
+    automatically covered next run. A shallow `hasattr(smoke, name)` check would pass even if the
+    facade re-exported a STALE/separate copy (e.g. captured before a submodule reload); the
+    identity (`is`) check is what actually proves a moved body and its test double share one
+    binding -- the failure mode VP step 1's fix_if calls out (silent no-op mock).
+    """
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    referenced = sorted(set(re.findall(r"smoke\.([A-Za-z_][A-Za-z0-9_]*)", src)))
+    assert referenced, "no smoke.<name> references found -- regex or fixture broken"
+    checked = 0
+    for name in referenced:
+        assert hasattr(smoke, name), f"facade is missing re-export: smoke.{name}"
+        facade_val = getattr(smoke, name)
+        for owner in _PACKAGE_SUBMODULES:
+            if hasattr(owner, name):
+                assert getattr(owner, name) is facade_val, (
+                    f"smoke.{name} is not identity-equal to {owner.__name__}.{name} -- "
+                    "facade re-export is a stale/separate copy"
+                )
+                checked += 1
+    assert checked > 0
+
+
+def test_core_sigv4_invoke_interception_lambda_ec_gates_family(monkeypatch, capsys):
+    """Module-object interception: patching core._sigv4_invoke/_function_url (not smoke.*) intercepts
+    a lambda_ec_gates gate, proving the Decision 104 convention actually wires through core.<name>."""
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+
+    def fake_invoke(url, payload, **kw):
+        if payload["action"] == "read_current":
+            return _Resp(200, {"row_count": 1})
+        return _Resp(200, {"write_denied": True})
+
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
+    smoke.lambda_reader()
+    assert "READER OK rows=1 write_denied=true" in capsys.readouterr().out
+
+
+def test_core_sigv4_invoke_interception_lambda_maintenance_gates_family(monkeypatch, capsys):
+    """Module-object interception: patching core._sigv4_invoke intercepts a lambda_maintenance_gates gate."""
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(
+        core, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True, "files_before": 1, "files_after_merge": 1})
+    )
+    smoke.lambda_maintenance_merge()
+    assert "MAINTENANCE_MERGE OK" in capsys.readouterr().out
+
+
+def test_core_sigv4_invoke_interception_lambda_ops_gates_family(monkeypatch, capsys):
+    """Module-object interception: patching core._sigv4_invoke intercepts a lambda_ops_gates gate."""
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+    monkeypatch.setattr(core, "_sigv4_invoke", lambda url, p, **kw: _Resp(200, {"ok": True, "phase_reached": "done"}))
+    smoke.connect_probe()
+    out = capsys.readouterr().out
+    assert "CONNECT_PROBE reader=" in out
+    assert "CONNECT_PROBE writer=" in out
+
+
+def test_core_sigv4_invoke_interception_canary_family(monkeypatch):
+    """Module-object interception: patching core._sigv4_invoke intercepts canary_rehearsal's
+    finally-block cleanup call (the one core._sigv4_invoke site in the canary family)."""
+    _stub_canary_rehearsal(monkeypatch)
+    calls = []
+
+    def _raise_sigv4(url, payload, **kw):
+        calls.append(payload)
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(core, "_sigv4_invoke", _raise_sigv4)
+    smoke.canary_rehearsal(json_output=True)
+    assert calls, "core._sigv4_invoke was never called -- interception did not occur"
+
+
+def test_lambda_ec_gates_lambda_churn_interception_via_ops_churn_regate(monkeypatch, capsys):
+    """Module-object interception: patching lambda_ec_gates.lambda_churn (not smoke.lambda_churn)
+    intercepts ops_churn_regate's cross-module delegation call."""
+    called = {}
+
+    def fake_lambda_churn(*, profile=None, region="eu-west-2"):
+        called["invoked"] = (profile, region)
+
+    monkeypatch.setattr(lambda_ec_gates, "lambda_churn", fake_lambda_churn)
+    smoke.ops_churn_regate(profile="agent_platform", region="eu-west-2")
+    assert called["invoked"] == ("agent_platform", "eu-west-2")
+    assert "OPS_CHURN_REGATE OK" in capsys.readouterr().out
