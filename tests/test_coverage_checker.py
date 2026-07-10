@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 _SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "test_coverage_checker.py"
 _spec = importlib.util.spec_from_file_location("test_coverage_checker", _SCRIPT_PATH)
 _checker = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
@@ -146,6 +148,43 @@ class TestMapSourceToTest:
         result = map_source_to_test(source)
         assert result is not None
         assert result == ROOT / "tests" / "test_checks_registry.py"
+
+    @pytest.mark.parametrize(
+        "stem",
+        ["ducklake_writes", "ducklake_tables", "ducklake_reads", "ducklake_metrics"],
+    )
+    def test_maps_ducklake_runtime_split_modules_to_test_ducklake_runtime(self, stem: str) -> None:
+        """The four ducklake_runtime split-out src/common modules map to tests/test_ducklake_runtime.py
+        (PLAN-sloc-ducklake-layer), mirroring the Decision 104 scripts/checks/** precedent."""
+        source = ROOT / "src" / "common" / f"{stem}.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_ducklake_runtime.py"
+
+    def test_maps_ducklake_writer_smoke_actions_to_test_ducklake_writer_handler(self) -> None:
+        """src/lambdas/ducklake_writer/smoke_actions.py maps to tests/test_ducklake_writer_handler.py
+        (split-out from handler.py, PLAN-sloc-ducklake-layer)."""
+        source = ROOT / "src" / "lambdas" / "ducklake_writer" / "smoke_actions.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_ducklake_writer_handler.py"
+
+    def test_ducklake_writer_handler_py_unchanged_by_split(self) -> None:
+        """src/lambdas/ducklake_writer/handler.py keeps mapping to the pre-existing tests/test_handler.py
+        shim (stem-based fallback, shared by every src/lambdas/*/handler.py) -- the smoke_actions.py
+        special-case explicitly excludes stem=='handler', so this plan's edit does not disturb it."""
+        source = ROOT / "src" / "lambdas" / "ducklake_writer" / "handler.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_handler.py"
+
+    def test_other_lambda_dirs_non_handler_stem_unaffected(self) -> None:
+        """A non-ducklake_writer lambda dir keeps the plain stem-based mapping (special-case is scoped
+        to src/lambdas/ducklake_writer/ only)."""
+        source = ROOT / "src" / "lambdas" / "ducklake_reader" / "handler.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_handler.py"
 
 
 class TestCheckTestFileExists:

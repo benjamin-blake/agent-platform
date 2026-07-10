@@ -48,6 +48,16 @@ def extract_definitions(file_path: Path) -> list[str]:
 # individual check's tests in tests/test_validate.py.
 _CHECKS_REGISTRY_MECHANISM_FILES = {"_common.py", "registry.py"}
 
+# The four ducklake_runtime split-out modules (PLAN-sloc-ducklake-layer) route to the
+# pre-decomposition monolith's test file, mirroring the Decision 104 scripts/checks/** precedent:
+# they are the write/table-DDL/read/metrics behavior oracle, exercised via the facade re-export.
+_DUCKLAKE_RUNTIME_SPLIT_MODULES = {
+    "ducklake_writes.py",
+    "ducklake_tables.py",
+    "ducklake_reads.py",
+    "ducklake_metrics.py",
+}
+
 
 def map_source_to_test(source_path: Path) -> Path | None:
     """Map a source file path to its expected test file path.
@@ -57,6 +67,10 @@ def map_source_to_test(source_path: Path) -> Path | None:
     scripts/checks/**/*.py -> tests/test_validate.py  (every extracted check's tests live there,
                               colocated with the pre-decomposition monolith's test file -- Decision 104),
                               except registry.py/_common.py which map to tests/test_checks_registry.py.
+    src/common/ducklake_{writes,tables,reads,metrics}.py -> tests/test_ducklake_runtime.py (split-out
+                              from ducklake_runtime.py, PLAN-sloc-ducklake-layer, same Decision 104 precedent).
+    src/lambdas/ducklake_writer/<non-handler>.py -> tests/test_ducklake_writer_handler.py (e.g.
+                              smoke_actions.py, split-out from handler.py, same precedent).
 
     Returns None for paths not under src/ or scripts/.
     """
@@ -69,7 +83,17 @@ def map_source_to_test(source_path: Path) -> Path | None:
     if not parts:
         return None
 
-    if parts[0] == "src" and len(parts) >= 2:
+    if parts[0] == "src" and len(parts) >= 3 and parts[1] == "common" and rel.name in _DUCKLAKE_RUNTIME_SPLIT_MODULES:
+        return ROOT / "tests" / "test_ducklake_runtime.py"
+    elif (
+        parts[0] == "src"
+        and len(parts) >= 4
+        and parts[1] == "lambdas"
+        and parts[2] == "ducklake_writer"
+        and rel.stem != "handler"
+    ):
+        return ROOT / "tests" / "test_ducklake_writer_handler.py"
+    elif parts[0] == "src" and len(parts) >= 2:
         stem = rel.stem
         return ROOT / "tests" / f"test_{stem}.py"
     elif parts[0] == "scripts" and len(parts) >= 2 and parts[1] == "checks":
