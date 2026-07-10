@@ -405,10 +405,11 @@ def _print_ci_rca_back_validation_report(result: dict) -> None:
 
 def bump_ci_rca_occurrence(rec_id: str, profile: Optional[str] = None) -> int:
     """Increment occurrence_count / stamp last_seen on an existing source=ci_rca rec's
-    context_v2_json (CIRCA-03(b)).
+    context_v2_json (CIRCA-03(b)/(c)).
 
-    Called ONLY by the workflow's fp_dedup step after a live fingerprint match -- the
-    write-time backstop (file_rec) returns the existing id on a hit WITHOUT bumping, per plan.
+    Called by BOTH the workflow's fp_dedup step (scripts.ci_rca.dedup, per-bundle) after a live
+    fingerprint match, AND the write-time backstop (file_rec in ops_data_portal.py) on a
+    fingerprint hit -- both dedup paths now record recurrence through this same helper.
 
     Returns the new occurrence_count (starts at 2 -- the original filing was occurrence 1).
     """

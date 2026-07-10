@@ -77,13 +77,20 @@ from scripts.preflight.ci_rca_gauges import (  # noqa: F401
     _CI_RCA_TELEMETRY_WINDOW_DAYS,
     _CI_RCA_WARN_REJECT_ALERT_THRESHOLD,
     _CI_RCA_WARN_REJECT_PROMOTION_THRESHOLD,
+    DEDUP_EFFECTIVENESS_MIN_SAMPLE,
+    DEDUP_EFFECTIVENESS_THRESHOLD,
     _compute_ci_rca_abstention,
     _compute_ci_rca_telemetry,
+    _compute_dedup_effectiveness,
     _derive_ci_rca_back_validation,
     _escalate_ci_rca_probe_health,
+    _escalate_dedup_effectiveness,
+    escalate_dedup_effectiveness,
+    find_open_dedup_effectiveness_rec,
     print_ci_rca_abstention_gauge,
     print_ci_rca_back_validation,
     print_ci_rca_telemetry,
+    print_dedup_effectiveness_gauge,
 )
 from scripts.preflight.ci_rca_signals import (  # noqa: F401
     _CONVERGENCE_RCA_GAP_GRACE_MINUTES,
@@ -307,6 +314,12 @@ def main(roadmap_detail: str = "slim") -> int:
     ci_rca_gauges.print_ci_rca_telemetry(ci_rca_telemetry)
     ci_rca_gauges.print_ci_rca_back_validation(ci_rca_back_validation)
 
+    dedup_effectiveness_gauge = ci_rca_gauges._compute_dedup_effectiveness(recs_rows_cache)
+    dedup_effectiveness_escalation = ci_rca_gauges._escalate_dedup_effectiveness(
+        creds_status, recs_rows_cache, dedup_effectiveness_gauge
+    )
+    ci_rca_gauges.print_dedup_effectiveness_gauge(dedup_effectiveness_gauge)
+
     priority_queue.print_priority_queue(priority_queue_items)
     env_git._print_recent_main_commits(recent_main_commits)
 
@@ -367,6 +380,8 @@ def main(roadmap_detail: str = "slim") -> int:
         "ci_rca_probe_health_escalation": ci_rca_probe_health_escalation,
         "ci_rca_telemetry": ci_rca_telemetry,
         "ci_rca_back_validation": ci_rca_back_validation,
+        "dedup_effectiveness_gauge": dedup_effectiveness_gauge,
+        "dedup_effectiveness_escalation": dedup_effectiveness_escalation,
         "recent_main_commits": recent_main_commits,
         "friction_patterns": telemetry_health.get("friction_patterns", []),
         "log_sync_result": log_sync_result,

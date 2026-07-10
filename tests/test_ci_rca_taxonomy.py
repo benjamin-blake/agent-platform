@@ -184,14 +184,37 @@ class TestClassifyFailures:
         assert check == "validate_sloc_limits"
         assert src == "function_to_category"
 
-    def test_multiple_matches_returns_list_of_n(self, tmp_path):
+    def test_multiple_log_text_mentions_no_longer_fan_out(self, tmp_path):
+        """Regression test (2026-07 incident): a single failing check's FULL job log routinely
+        mentions other, unrelated validate_* function names (checks that ran and passed earlier
+        in the same job). Without jobs-JSON failed-step data, multiple log-text substring hits
+        must NOT be treated as multiple distinct failures -- exactly one bundle is emitted via
+        the single priority-ordered classify_failure() fallback."""
         p = _write_taxonomy(tmp_path, MULTI_TAXONOMY)
         log = "validate_sloc_limits FAILED\nvalidate_iam_runner_policy FAILED\n"
         results = classify_failures(log, path=p)
+        assert len(results) == 1
+
+    def test_genuine_multi_category_failure_via_jobs_json_retained(self, tmp_path):
+        """A REAL multi-category failure -- two distinct GitHub Actions steps both reporting
+        conclusion=failure -- still emits its distinct bundles (Decision 55: never drop a real
+        multi-category failure)."""
+        p = _write_taxonomy(tmp_path, MULTI_TAXONOMY)
+        jobs = [
+            {
+                "name": "validate",
+                "steps": [
+                    {"name": "validate_sloc_limits", "conclusion": "failure"},
+                    {"name": "validate_iam_runner_policy", "conclusion": "failure"},
+                ],
+            }
+        ]
+        results = classify_failures("irrelevant log text", jobs=jobs, path=p)
         assert len(results) == 2
         checks = {r[1] for r in results}
-        assert "validate_sloc_limits" in checks
-        assert "validate_iam_runner_policy" in checks
+        assert checks == {"validate_sloc_limits", "validate_iam_runner_policy"}
+        cats = {r[0] for r in results}
+        assert cats == {"sloc_violation", "iam_policy_gap"}
 
     def test_no_match_returns_taxonomy_fallback(self, tmp_path):
         p = _write_taxonomy(tmp_path, MINIMAL_TAXONOMY)

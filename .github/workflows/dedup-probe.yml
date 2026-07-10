@@ -1,0 +1,178 @@
+name: dedup-probe
+
+# Standing CI-RCA fingerprint-dedup live-probe (WS4, mirrors ghas-probe.yml / ULF-01).
+#
+# Injects a synthetic, clearly-marked recurring source=ci_rca failure through
+# scripts.ci_rca.dedup.decide() -- the SAME function .github/workflows/ci-rca.yml's fp_dedup
+# step calls -- and asserts the SECOND call against the same fingerprint dedupes (skips) and
+# bumps occurrence_count. Proves the dedup mechanism works against the LIVE DuckLake
+# reader/writer, not just against mocked boundaries in tests/test_ci_rca_dedup.py (2026-07
+# incident: the mechanism silently regressed and a human had to notice by inspection; a prior
+# incident filed ~23 duplicate recs for one issue before any safeguard existed).
+#
+# Design invariants (Decision 55 / Decision 62 / Decision 83):
+#   - LOUD-FAIL, not skip: any assertion failure, or any inability to reach the DuckLake
+#     reader/writer (credentials, network, reader outage), exits non-zero -- a probe that
+#     silently stops working must never read as "dedup verified" (the ci_rca_liveness_alert
+#     precedent: a broken mechanism must never read healthy just because nothing crashed loudly).
+#   - Single probe implementation: calls scripts.ci_rca.dedup.decide() directly -- never
+#     reimplements the lookup/bump logic (mirrors ghas-probe's single-_probe()-implementation
+#     invariant).
+#   - Self-cleaning: the synthetic rec it files is closed in a `finally` block covering both the
+#     success and failure paths, so the probe never accumulates junk recs in the warehouse. A
+#     defensive pre-clean also closes any leftover synthetic rec from a prior run that crashed
+#     before reaching its own cleanup, so every run starts from a known state.
+#   - Never a required/gating check (Decision 83): schedule + workflow_dispatch only, no
+#     workflow_run trigger, no PR status context.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Activate venv
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Configure AWS credentials (OIDC -- branch role)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
+      - name: Run dedup live-probe (loud-fail)
+        run: |
+          cat > /tmp/dedup_probe.py <<'PY'
+          import hashlib
+          import json
+          import sys
+
+          from scripts.ci_rca.dedup import decide
+          from scripts.ops_data_portal import _fetch_rec_from_reader, file_rec, update_rec
+          from scripts.ops_portal.ci_rca_runtime import find_open_ci_rca_rec_by_fingerprint
+
+          FINGERPRINT = hashlib.sha256(b"dedup-probe-synthetic-marker").hexdigest()
+          MARKER_FILE = "scripts/ci_rca/dedup.py"
+
+
+          def log(msg: str) -> None:
+              print(f"[dedup-probe] {msg}")
+
+
+          def fail(msg: str) -> None:
+              log(f"FAIL: {msg}")
+              sys.exit(1)
+
+
+          def close_rec(rec_id: str, resolution: str) -> None:
+              update_rec(rec_id, {"status": "closed", "resolution": resolution})
+
+
+          # Defensive pre-clean: close any leftover OPEN synthetic rec from a prior run that crashed
+          # before reaching its own cleanup, so this run starts from a known-clean state.
+          leftover = find_open_ci_rca_rec_by_fingerprint(FINGERPRINT)
+          if leftover:
+              log(f"pre-clean: closing leftover synthetic rec {leftover}")
+              close_rec(leftover, "dedup-probe.yml pre-run cleanup of a leftover synthetic rec")
+
+          # Call 1: nothing filed yet for this fingerprint -- must be novel (run_agent=True).
+          result1 = decide([FINGERPRINT])
+          if result1.deduped:
+              fail("first call against a fresh fingerprint was deduped -- expected novel/run_agent=True")
+          log("call 1 (novel) OK: run_agent=True as expected")
+
+          context_v2_json = {
+              "schema_version": 1,
+              "proximate_cause": (
+                  "Synthetic self-test failure injected by .github/workflows/dedup-probe.yml (WS4) to "
+                  "verify the fingerprint dedup guard matches and bumps occurrence_count on a recurring "
+                  "fingerprint instead of filing a duplicate recommendation."
+              ),
+              "why_chain": [
+                  "This is a synthetic probe rec, not a real CI failure -- no actual root cause exists.",
+                  "It exists solely to exercise scripts.ci_rca.dedup.decide() against the live DuckLake reader and writer.",
+                  "The scope of this rec is a fixed invariant enforcement self-test at scripts/ci_rca/dedup.py:1, not a real gap.",
+              ],
+              "detection_gap": {
+                  "earliest_viable_gate": "undetermined",
+                  "actual_gate_that_caught_it": "unknown",
+                  "gap_explanation": (
+                      "Not a real detection gap -- synthetic probe rec for dedup self-test purposes only. "
+                      "File:line citation for schema validation: scripts/ci_rca/dedup.py:1."
+                  ),
+              },
+              "recurrence_class": "novel",
+              "corrective_action": (
+                  "No corrective action -- this is a synthetic self-test rec closed automatically at the "
+                  "end of the dedup-probe.yml run regardless of pass or fail."
+              ),
+              "preventive_action": (
+                  "No preventive action -- this rec exists only to prove the fingerprint dedup guard "
+                  "(scripts.ci_rca.dedup) matches and bumps occurrence_count on a recurring fingerprint."
+              ),
+              "rca_confidence": "undetermined",
+              "fingerprint": FINGERPRINT,
+          }
+
+          rec_id = file_rec(
+              {
+                  "title": "[dedup-probe] synthetic recurring failure self-test",
+                  "file": MARKER_FILE,
+                  "status": "open",
+                  "source": "ci_rca",
+                  "priority": "Low",
+                  "effort": "XS",
+                  "risk": "low",
+                  "verification_tier": "V1",
+                  "context": "Synthetic self-test rec filed by dedup-probe.yml; closed automatically at end of run.",
+                  "acceptance": "N/A -- synthetic probe rec, closed automatically by dedup-probe.yml.",
+              },
+              context_v2_json=context_v2_json,
+          )
+          log(f"filed synthetic rec {rec_id}")
+
+          try:
+              result2 = decide([FINGERPRINT])
+              if not result2.deduped:
+                  fail("second call against the SAME fingerprint was NOT deduped -- dedup guard is broken")
+              matched_id = result2.verdicts[0].matched_rec_id
+              if matched_id != rec_id:
+                  fail(f"second call matched {matched_id!r}, expected the freshly-filed {rec_id!r}")
+              log("call 2 (matched+bumped) OK: run_agent=False, matched the freshly-filed rec")
+
+              after = _fetch_rec_from_reader(rec_id)
+              ctx = json.loads((after or {}).get("context_v2_json") or "{}")
+              if ctx.get("occurrence_count") != 2:
+                  fail(f"occurrence_count after bump is {ctx.get('occurrence_count')!r}, expected 2")
+              if not ctx.get("last_seen"):
+                  fail("last_seen was not stamped by the bump")
+              log(f"occurrence_count bumped to {ctx.get('occurrence_count')} and last_seen stamped -- dedup mechanism verified live")
+          finally:
+              close_rec(rec_id, "dedup-probe.yml synthetic self-test cleanup")
+              log(f"cleaned up synthetic rec {rec_id}")
+
+          log("PASS: dedup mechanism verified against the live DuckLake reader/writer")
+
+          PY
+          .venv/bin/python /tmp/dedup_probe.py

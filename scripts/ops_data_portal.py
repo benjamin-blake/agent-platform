@@ -274,17 +274,20 @@ def file_rec(
         # CIRCA-03(c): write-time dedup backstop -- the cross-run race guard. Runs AFTER the
         # cross-check spine so context_v2_json.fingerprint (stamped from the verified bundle
         # above) is available. A hit means this fingerprint's root cause already has an OPEN
-        # rec, so this call returns the existing id instead of inserting a duplicate; it does
-        # NOT bump occurrence_count/last_seen -- only the workflow's fp_dedup update_rec path
-        # bumps those (this backstop stays side-effect-free beyond skipping the insert).
-        # force_rca (CI dedup-bypass env, Decision 74) skips this guard entirely.
+        # rec, so this call bumps occurrence_count/last_seen on the existing rec (via
+        # bump_ci_rca_occurrence) and returns its id instead of inserting a duplicate -- both
+        # the workflow's fp_dedup path (scripts.ci_rca.dedup) and this backstop now record
+        # recurrence through the same helper. force_rca (CI dedup-bypass env, Decision 74)
+        # skips this guard entirely.
         if os.environ.get("CI_RCA_FORCE_RCA", "").strip().lower() not in ("1", "true"):
             fingerprint = context_v2_json.get("fingerprint")
             if fingerprint:
                 existing_id = find_open_ci_rca_rec_by_fingerprint(fingerprint, profile=profile)
                 if existing_id:
+                    bump_ci_rca_occurrence(existing_id, profile=profile)
                     logger.info(
-                        "[CI_RCA_DEDUP] fingerprint=%s matches open %s; skipping insert (write-time backstop).",
+                        "[CI_RCA_DEDUP] fingerprint=%s matches open %s; skipping insert, bumped occurrence "
+                        "(write-time backstop).",
                         fingerprint,
                         existing_id,
                     )

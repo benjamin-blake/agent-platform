@@ -2383,12 +2383,14 @@ class TestCiRcaFingerprintDedup:
         with (
             patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint", return_value="rec-999") as mock_find,
+            patch.object(p, "bump_ci_rca_occurrence") as mock_bump,
             patch.object(p, "_ducklake_write") as mock_write,
         ):
             result = p.file_rec(dict(fields), context_v2_json=ctx)
 
         assert result == "rec-999"
         mock_find.assert_called_once_with(self._FINGERPRINT, profile=None)
+        mock_bump.assert_called_once_with("rec-999", profile=None)
         mock_write.assert_not_called()
 
     def test_file_rec_backstop_inserts_on_fingerprint_miss(self, tmp_path: Path, monkeypatch):
@@ -2435,8 +2437,16 @@ class TestCiRcaFingerprintDedup:
         assert result == "rec-801"
         mock_find.assert_not_called()
 
-    def test_file_rec_backstop_does_not_bump_occurrence(self, tmp_path: Path, monkeypatch):
-        """The write-time backstop returns the existing id but never calls update_rec (no bump)."""
+    def test_file_rec_backstop_bumps_occurrence(self, tmp_path: Path, monkeypatch):
+        """The write-time backstop returns the existing id AND bumps occurrence_count/last_seen
+        via bump_ci_rca_occurrence -- CIRCA-03(c): both dedup paths now record recurrence.
+
+        file_rec is facade-resident (Decision 124 case (a)): patch bump_ci_rca_occurrence's
+        transitive deps (_fetch_rec_from_reader / update_rec) at the FACADE scripts.ops_data_portal
+        namespace -- bump_ci_rca_occurrence does a deferred `from scripts.ops_data_portal import
+        _fetch_rec_from_reader, update_rec` at call time, so patching at scripts.ops_portal.ci_rca_runtime
+        would not intercept it.
+        """
         import scripts.ops_data_portal as p
 
         monkeypatch.delenv("CI_RCA_FORCE_RCA", raising=False)
@@ -2444,15 +2454,23 @@ class TestCiRcaFingerprintDedup:
         ctx = self._ctx_v2()
         ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
         fields = {**_VALID_FIELDS, "source": "ci_rca"}
+        existing_ctx = json.dumps({"fingerprint": self._FINGERPRINT, "occurrence_count": 1})
 
         with (
             patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint", return_value="rec-999"),
-            patch.object(p, "update_rec") as mock_update,
+            patch.object(p, "_fetch_rec_from_reader", return_value={"id": "rec-999", "context_v2_json": existing_ctx}),
+            patch.object(p, "update_rec", return_value=True) as mock_update,
         ):
-            p.file_rec(dict(fields), context_v2_json=ctx)
+            result = p.file_rec(dict(fields), context_v2_json=ctx)
 
-        mock_update.assert_not_called()
+        assert result == "rec-999"
+        mock_update.assert_called_once()
+        call_args, call_kwargs = mock_update.call_args
+        assert call_args[0] == "rec-999"
+        updated_ctx = json.loads(call_args[1]["context_v2_json"])
+        assert updated_ctx["occurrence_count"] == 2
+        assert "last_seen" in updated_ctx
 
     # -- schema: portal-derived fields live in context_v2_json, not a new column --------------
 
