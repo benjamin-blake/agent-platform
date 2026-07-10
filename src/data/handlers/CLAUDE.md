@@ -5,6 +5,15 @@ Loaded automatically when Claude reads or edits files in this directory. Univers
 ## Lambda packaging contract
 Files here are bundled into Lambda zip artefacts via `scripts/build_lambda.py`. Plans modifying any handler must include the build, deploy, and post-deploy verification sequence — not just code edits. The dispatcher and findings-processor are the two Lambda functions whose code is updated.
 
+**Deploy channel class (Decision 125):** the dispatcher and findings-processor are NOT
+`terraform/personal`-managed — they are the DECOUPLED `build_lambda --deploy` targets below, distinct
+from the four `terraform/personal`-managed DuckLake Lambdas (`ducklake_writer`/`ducklake_reader`/
+`ducklake_maintenance`/`ducklake_catalog_dr`, under `src/lambdas/`), which are currently
+code/infra-COUPLED via `source_code_hash=try(filemd5(zip),null)` with no `ignore_changes` lifecycle.
+Do not conflate the two classes: the local `--deploy` step below is routine for this directory's
+targets, but is break-glass-only for the DuckLake class — see `src/lambdas/CLAUDE.md` and
+`docs/contracts/environment-taxonomy.md` section 5.
+
 ### Required steps for Lambda-touching plans
 1. **Build**: `bin/venv-python -m scripts.build_lambda`
 2. **Deploy**: `bin/venv-python -m scripts.build_lambda --deploy` uploads to S3 and updates Lambda function code.

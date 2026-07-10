@@ -122,15 +122,26 @@ the multi-account posture CDP.7 retired. SIT and PROD are reserved vocabulary an
 infrastructure; only sandbox is live today, single-account. The contract names the trigger so the
 train can be stood up later without re-litigating the taxonomy.
 
-## 5. Lambda code/infra decoupling principle (future personal-account Lambdas)
+## 5. Lambda code/infra decoupling principle (personal-account Lambdas)
 
 When personal-account Lambdas are introduced under `terraform/personal/`, decouple code deploys
 from infra applies: set `lifecycle { ignore_changes = [source_code_hash] }` (or the equivalent
 filename/handler attributes) on the `aws_lambda_function` resource so that a code-only redeploy
 does not surface as a Terraform diff on the guarded auto-apply path. Code ships via the build
 pipeline; infra ships via Terraform. Keeping them decoupled means the deterministic apply guard
-sees only genuine infra changes, not routine code-hash churn. (No such Lambda exists today;
-recorded here so the first one follows the principle.)
+sees only genuine infra changes, not routine code-hash churn.
+
+**Conformance status (Decision 125):** the four DuckLake Lambdas (writer, reader, maintenance,
+catalog-dr; T2.17/T2.18, Decision 81/82) are the first personal-account Lambdas and are currently
+COUPLED, not conformant: every `aws_lambda_function` resource in `terraform/personal/
+ducklake_lambdas.tf`, `ducklake_catalog_dr.tf`, and `ducklake_maintenance.tf` still sets
+`source_code_hash = try(filemd5(zip), null)` with no `ignore_changes` lifecycle block. Decision 125
+ratifies conformance to this principle as direction (target channel = a dedicated code-deploy CD
+path; local `build_lambda --ducklake-only --deploy` demoted to break-glass) without performing the
+physical decoupling, which is sequenced as a follow-on (blocked on clearing a pending out-of-budget
+IAM delta that would otherwise route the decoupling change's own apply). This file remains the sole
+SoT for the apply-model / guard classification -- the interim/target state recorded above extends
+that SoT, it does not compete with it.
 
 ## 6. Provider lock file consideration (apply-path supply chain)
 

@@ -2,6 +2,78 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 125: Ratify decoupling DuckLake Lambda code deploys from terraform/personal infra apply (environment-taxonomy.md section 5 conformance) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-10
+**Warehouse ID:** dec-125 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+`docs/contracts/environment-taxonomy.md` section 5 already prescribed, as a load-bearing rule,
+decoupling personal-account Lambda code deploys from `terraform/personal` infra applies (`lifecycle
+{ ignore_changes = [source_code_hash] }`, code via a build pipeline, infra via Terraform) -- but
+recorded "(No such Lambda exists today; recorded here so the first one follows the principle.)". The
+four DuckLake Lambdas (writer, reader, maintenance, catalog-dr; T2.17/T2.18, Decision 81/82) are that
+first case, and they never followed it: `source_code_hash = try(filemd5(zip), null)` on every
+`aws_lambda_function` resource still couples code to infra apply. The concrete cost of the gap
+surfaced as routing/stranding evidence: a code-only wave-3 change was routed (and then stranded) by
+an unrelated out-of-budget IAM delta (`github_ci_drift` policy UPDATE) in the same
+`terraform/personal` root module -- `workflow_dispatch` has no gated-apply path (gated-apply is
+push-only), so nothing applied and the four functions still run pre-wave-3 code as of this Decision.
+Agents also default to the local `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy`
+break-glass step as if it were the routine channel, because no ambient (Layer 1) signal names a
+governed CD path to check first.
+
+**Decision:**
+Ratifies conformance direction, not the physical decoupling itself (sequenced as follow-on P2, see
+below):
+1. The DuckLake Lambdas are recorded as the first personal-account Lambdas under section 5's
+   principle -- the stale "no such Lambda exists today" premise is corrected in the same PR that
+   ratifies this Decision.
+2. Target channel: a dedicated, governed code-deploy CD path (extending `.github/workflows/deploy.yml`
+   if it already deploys Lambda code by the time P2 lands, else a new workflow) is the CHANNEL for
+   DuckLake Lambda code deploys going forward. `environment-taxonomy.md` section 5 remains the SOLE
+   SoT for the apply-model / guard classification (Decision 92 point 5); this Decision does not
+   restate or amend that classification, only ratifies conformance to it.
+3. Local `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` is demoted to a
+   break-glass / admin-IAM-path step only (i.e., used only when the governed CD channel cannot run,
+   mirroring the existing `agent_platform_admin` human-gated IAM-apply precedent) -- not the default
+   agent action for a routine code-only change.
+4. Ambient heuristic: when a production action (e.g. a Lambda code deploy) is auto-denied or has no
+   obvious in-session path, grep `.github/workflows/` for a governed CD path before falling back to a
+   local permission grant or a local deploy command.
+5. Interim state (until P2 lands): the four DuckLake Lambdas remain coupled
+   (`source_code_hash=try(filemd5(zip),null)`); this is recorded as a known, tracked gap, not silently
+   accepted as permanent.
+
+**Reversal conditions:** revisit this Decision if (a) the DuckLake Lambdas are retired or replaced by
+a mechanism that makes per-function code/infra decoupling moot (e.g. a container-image deploy model
+where the image digest itself is the infra-tracked artifact), or (b) `environment-taxonomy.md` section
+5's decoupling principle is itself superseded by a future Decision -- in either case this Decision's
+ratification becomes vacuous and should be marked superseded rather than silently ignored.
+
+**Rationale:**
+Decoupling code from infra apply is industry-standard practice for exactly the reason the routing/
+stranding incident demonstrated concretely: coupling means a routine code-only change can be silently
+blocked by an unrelated infra-apply gate (here, an IAM guard routing decision) with no independent
+channel to land the code anyway. Ratifying conformance as a numbered Decision (rather than leaving it
+as an unenforced contract note) makes the correction citable per the Decision 86 rationale-routing
+rule -- the "why we're fixing this now" lives here, the "what the target architecture is" stays in
+`environment-taxonomy.md` section 5 (unchanged, extended only with the conformance note), and the
+physical implementation is tracked as an explicit follow-on so this Decision does not overstate what
+landed in the ratifying PR (comment-only `.tf` edits; zero resource/lifecycle/IAM delta).
+
+**Related:** Decision 92 point 5 (apply-model / guard classification -- sole SoT, unmodified by this
+Decision), Decision 77 (sandbox auto-apply + deterministic guard, the mechanism section 5's decoupling
+protects), Decision 79 (per-Lambda packaging manifests + deploy/verify gating -- the build/deploy
+mechanics this Decision's target channel extends), Decision 119 (CI-delegation for `terraform/personal`
+-- the target channel's plan/apply steps stay CI-delegated, not local), Decision 86 (no new standing
+prose-architecture doc; this Decision is the rationale record, `environment-taxonomy.md` stays the
+sole classification SoT), Decision 55 / Decision 72 (RCA-first; the physical decoupling and the
+masked-drift observability gap are follow-on recs, never inline-patched here).
+
+---
+
 ## Decision 124: Ratify extending the Decision 80 pt 3 / Decision 104 facade-decomposition pattern to the ops-data layer (Decided)
 
 **Status:** Decided

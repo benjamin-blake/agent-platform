@@ -18,6 +18,16 @@
 #   2. terraform -chdir=terraform/personal plan  -> present to human -> apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (updates the two functions' code from S3)
 #
+# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): the two
+# aws_lambda_function resources below still set source_code_hash=try(filemd5(zip),null) with no
+# ignore_changes lifecycle block, so a code-only redeploy surfaces as a Terraform diff on this
+# apply path -- INTERIM state, not the target. Target: lifecycle { ignore_changes =
+# [source_code_hash] } + a dedicated governed code-deploy CD channel, so routine code changes stop
+# routing through this IAM-gated apply path. Physical decoupling is a sequenced follow-on (P2),
+# blocked on clearing a pending out-of-budget IAM delta in this root module. Until P2 lands, step 3
+# above (`build_lambda --ducklake-only --deploy`) is the interim mechanism; per Decision 125 it is
+# demoted to break-glass status once the governed CD channel exists.
+#
 # SINGLE-PORTAL NOTE (Decision 78/81): at T2.19 these Function URLs become the CLOSED ops boundary --
 # the writer is the sole ops_* write authority, the reader the sole read authority. ops_data_portal
 # transits them unconditionally (sole backend, Decision 84 I-1); the caller surface is unchanged. This
