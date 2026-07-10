@@ -1220,17 +1220,18 @@ class TestMigrationParams:
             assert file_rec(dict(thin), _migration_int_id=701, _migration_mode=True, _skip_sync=True) == "rec-701"
 
     def test_file_decision_skip_sync_suppresses_sync_table(self, tmp_path: Path) -> None:
-        """_skip_sync=True on file_decision defers the per-row flush."""
+        """_skip_sync=True on file_decision flows to _refresh_cache_after_write(append_only=True)."""
         with (
-            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
-            patch("scripts.ops_data_portal.DECISIONS_JSONL", tmp_path / "dec.jsonl"),
-            patch("scripts.ops_data_portal._load_write_time_validators", return_value=[]),
-            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", tmp_path / "dec.jsonl"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._refresh_cache_after_write") as mock_refresh,
         ):
             from scripts.ops_data_portal import file_decision
 
             file_decision({"title": "d", "status": "open", "decision_id": 77}, _skip_sync=True)
-            mock_sync.assert_not_called()
+            mock_refresh.assert_called_once()
+            assert mock_refresh.call_args.kwargs.get("append_only") is True
 
 
 class TestFetchRecFromReader:
