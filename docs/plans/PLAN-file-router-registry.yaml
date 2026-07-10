@@ -1,0 +1,329 @@
+schema_version: 1
+slug: "file-router-registry"
+intent: >-
+  Convert the hand-maintained prose File Router into a machine-checked registry
+  (docs/contracts/file-router.yaml) with a CI link-validity gate, so the agent-first
+  repo's discovery layer stops drifting and every later restructure relocation becomes
+  a one-line, CI-verified row edit -- the enabling move toward a self-describing tree.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-file-router-registry.yaml
+phase: >-
+  Platform / repository-structure restructure P1 (audit finding RS-04, high, from
+  audits/repository-structure-cb02572.yaml). External-checklist property EC6 (machine-readable
+  discovery index kept in sync). No owning tier_item -- audit roadmap_crossref classification is
+  novel (item_ids: []); subsumes rec-2406.
+scope:
+  - file: docs/contracts/file-router.yaml
+    action: Create
+    purpose: >-
+      Machine-readable discovery/ownership index converted from the prose File Router table.
+      Top-level mapping schema_version + routes, where routes is a LIST of route objects
+      {topic, targets, description?, runtime?} (NOT a mapping keyed by topic). NO contract:/class:
+      block so it is a discovery index, not a CD.25 ritual contract. Row shape designed so a
+      relocation is a one-line targets edit.
+  - file: scripts/checks/hygiene/validate_placement.py
+    action: Create
+    purpose: >-
+      Registered validate.py check (Decision 104). Link validity: every non-runtime file-router
+      target must resolve to a git-tracked file or directory; runtime read-cache rows assert their
+      parent dir is tracked; duplicate topics and malformed rows fail. No behaviour added to ci.yml.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Insert _c("validate_placement") into pre_sequence() and full_sequence() immediately after
+      validate_contract_drift in each, wiring the check into both presubmit tiers.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the facade re-export `from scripts.checks.hygiene.validate_placement import
+      validate_placement  # noqa: F401,E402` in the hygiene import block (alphabetical, between
+      validate_cli_tools_in_prompts and validate_subprocess_encoding). Required by the Decision 104
+      dispatch: main() resolves each check via getattr(validate_module, name), so the name must be an
+      attribute of the validate module. This is NOT tier membership/order (that lives in registry.py).
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Update FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE to include ("check","validate_placement")
+      at the same position as registry.py so the frozen-baseline equivalence tests stay in lockstep.
+      (TestFacadeCompleteness auto-derives from the registry and will assert the facade re-export.)
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Unit tests for validate_placement (the scripts/checks/**->tests/test_validate.py mapping):
+      happy path (zero dead targets), dead-target failure, runtime-row parent-dir handling,
+      duplicate-topic failure, and malformed/missing-file handling; 100% coverage of the new module.
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Replace the prose File Router table (the "## File Router" section) with a one-line pointer to
+      docs/contracts/file-router.yaml, keeping a single discoverable entry point (Decision 86:
+      machine semantics to contracts/, prose surface becomes a pointer).
+  - file: config/agent/README.md
+    action: Modify
+    purpose: >-
+      Fix same-class drift: drop the dead copilot/ subtree line; add the live verification_registry/
+      subtree and cost_reconciliation.yaml file so the README matches the real config/agent/ tree.
+bundled_recommendations:
+  - rec-2406
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/contracts/file-router.yaml exists as a top-level YAML mapping (schema_version: 1 + routes:)
+    with NO contract:/class: block, converted from the docs/PROJECT_CONTEXT.md File Router table;
+    routes is a LIST of route objects, each with a unique topic field and a non-empty targets list.
+  - >-
+    scripts/checks/hygiene/validate_placement.py is registered via the scripts/checks registry in
+    BOTH the --pre and full sequences and is reachable as validate.validate_placement and via
+    `from scripts.validate import validate_placement`; .github/workflows/ci.yml is not modified.
+  - >-
+    The check fails (appends to failed) when any non-runtime file-router target is not a git-tracked
+    path, and passes with zero dead targets on the repo at merge (RS-04 acceptance).
+  - >-
+    The four dead rows are dropped (GEMINI.md, docs/AGENT_WORKFLOW.md, scripts/bedrock_client.py,
+    scripts/migrate_recommendations.py); the plan-artefact row targets docs/plans/ with a
+    description naming PLAN-{slug}.yaml per Decision 85 (no PLAN-{slug}.md); the Lambda-handlers row
+    targets both src/lambdas/ and src/data/handlers/.
+  - >-
+    docs/PROJECT_CONTEXT.md no longer contains the multi-row prose File Router table and instead
+    points at docs/contracts/file-router.yaml.
+  - >-
+    config/agent/README.md contains no copilot/ line and does list verification_registry/ and
+    cost_reconciliation.yaml.
+  - >-
+    bin/venv-python -m scripts.validate --pre passes (the new check runs, and validate_contract_drift
+    classifies file-router.yaml as a non-ritual doc and does not fail on it).
+  - >-
+    tests/test_validate.py::TestValidatePlacement and tests/test_checks_registry.py pass.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Link-validity happy path -- run the new check directly against the converted repo; it must
+      report zero dead targets (the RS-04 acceptance core).
+    command: bin/venv-python -c "from scripts.checks.hygiene.validate_placement import validate_placement; f=[]; validate_placement(f); print('DEAD_TARGETS' if f else 'ZERO_DEAD_TARGETS'); import sys; sys.exit(1 if f else 0)"
+    expected: Prints ZERO_DEAD_TARGETS and exits 0.
+    fix_if: >-
+      Non-zero exit / DEAD_TARGETS printed means a router target does not resolve to a tracked path
+      -- drop or correct that row (or mark a genuine runtime cache runtime:true) until zero.
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Discrimination proof -- run the check's unit tests, which assert it FAILS on a bogus target,
+      handles runtime rows, rejects duplicate topics, and passes on a clean fixture (proves the gate
+      is not a no-op).
+    command: bin/venv-python -m pytest tests/test_validate.py::TestValidatePlacement -q
+    expected: All TestValidatePlacement tests pass.
+    fix_if: >-
+      A failing case means the link-validity logic is wrong (e.g. directory targets or runtime
+      parent-dir handling); fix validate_placement.py and re-run.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Registry wiring + frozen baseline -- confirm validate_placement is in both sequences, the
+      facade re-export resolves both ways, and the frozen-baseline tuples match.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q
+    expected: All test_checks_registry tests pass (facade completeness + frozen-baseline equivalence).
+    fix_if: >-
+      A frozen-baseline mismatch means registry.py and the FROZEN_*_SEQUENCE tuples diverged; a
+      facade-completeness failure means the validate.py import is missing. Reconcile position/import.
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Full --pre integration -- run the authoritative fast tier end to end; the new check runs and
+      the CD.25 contract-drift gate scans file-router.yaml as a non-ritual doc without failing.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exits 0; output includes the placement-check section and "Contract drift gate (CD.25) ... PASS".
+    fix_if: >-
+      If contract-drift fails on file-router.yaml, the file gained a contract:/class: block or is not
+      a top-level mapping -- remove the ritual shape. Any other check failure: fix per its message.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Drift fixes landed -- assert the four dead targets and the stale .md pointer are absent from the
+      registry, both Lambda homes and docs/plans/ are present, and config/agent/README.md is corrected.
+    command: bash -c 'F=docs/contracts/file-router.yaml; R=config/agent/README.md; ! grep -qE "GEMINI\.md|AGENT_WORKFLOW\.md|bedrock_client\.py|migrate_recommendations\.py|PLAN-\{slug\}\.md" "$F" && grep -q "src/lambdas/" "$F" && grep -q "src/data/handlers/" "$F" && grep -q "docs/plans/" "$F" && ! grep -q copilot "$R" && grep -q verification_registry "$R" && grep -q "cost_reconciliation.yaml" "$R" && echo DRIFT_FIXED'
+    expected: Prints DRIFT_FIXED.
+    fix_if: >-
+      No DRIFT_FIXED means a drift fix is incomplete (a dead/stale token still present, a required
+      target missing, or the README not corrected); fix the offending file.
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      PROJECT_CONTEXT table replaced by pointer -- confirm the prose table header is gone and a
+      pointer to the registry remains.
+    command: bash -c 'grep -q "docs/contracts/file-router.yaml" docs/PROJECT_CONTEXT.md && ! grep -q "| Topic | Look here |" docs/PROJECT_CONTEXT.md && echo POINTER_OK'
+    expected: Prints POINTER_OK.
+    fix_if: >-
+      Missing pointer or the old table header still present -- finish replacing the "## File Router"
+      section with the one-line pointer.
+    hermetic: false
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Rec closure (bundled rec-2406) -- after the orchestrator squash-merges with a "Resolves:
+      rec-2406" trailer (rec-autoclose.yml), confirm the rec is closed in the synced read cache.
+    command: |-
+      bash -c 'bin/venv-python -m scripts.ops_data_portal --sync && grep rec-2406 logs/.recommendations-log.jsonl | grep -q closed && echo REC_CLOSED'
+    expected: Prints REC_CLOSED (or the rec shows status closed after sync).
+    fix_if: >-
+      If still open, apply the fallback: bin/venv-python -m scripts.ops_data_portal --update-rec
+      rec-2406 --status closed --resolution "Subsumed by file-router.yaml conversion (RS-04)".
+    hermetic: false
+constraints:
+  - >-
+    IMPLEMENTATION plan type only -- STRATEGIC plans are suspended during the executor freeze
+    (Decision 67 / AGENTS.md Temporary Operational Constraints).
+  - >-
+    file-router.yaml is a discovery index, NOT a CD.25 / Decision 118 Class A/B/C ritual contract: it
+    MUST carry no top-level contract:/class: block (that is what makes validate_contract_drift and the
+    scripts/contracts.py loader skip it -- precedent: telemetry-lexicon.yaml, read-engine.yaml,
+    storage-substrate.yaml). No ratification ritual, amendment log, or status lifecycle.
+  - >-
+    validate.py is the single source of truth for checks (Decision 104 / Decision 73 / AGENTS.md merge
+    protocol): register the check via scripts/checks + registry.py and add the facade re-export in
+    validate.py ONLY; do NOT add anything to .github/workflows/ci.yml.
+  - >-
+    validate_placement.py must stay <=500 SLOC and cyclomatic complexity <=20 (Decision 102 ratchet)
+    and be fast enough for the --pre tier (Decision 73): a single `git ls-files` snapshot, pure
+    set/prefix logic, no network or AWS calls.
+  - >-
+    Only modify the eight files in scope. Route machine field-semantics to docs/contracts/ as YAML and
+    keep the prose surface a pointer (Decision 86); create no new standing prose-architecture doc.
+  - >-
+    Public repository (Decision 101): the registry indexes repo-relative paths only -- never embed
+    account IDs, ARNs, secrets, internal hostnames, or trading alpha in rows or descriptions.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    The squash-merge commit body must carry "Resolves: rec-2406" so rec-autoclose.yml closes the
+    bundled rec (orchestrator-owned merge step).
+context:
+  - >-
+    Enabling move for audit repository-structure-cb02572 (finding RS-04, the sole high). Every later
+    relocation phase (P2-P6) updates one file-router.yaml row and relies on validate_placement to
+    catch missed references, converting the target-tree work from risky to routine.
+  - >-
+    Drift verified against the tree at this commit (origin/main cb02572 base): GEMINI.md,
+    docs/AGENT_WORKFLOW.md, scripts/bedrock_client.py are untracked (audit-confirmed); AND
+    scripts/migrate_recommendations.py is also deleted/untracked (a 4th dead row the audit did not
+    enumerate -- the new check catches it). Stale rows: plan-artefact says PLAN-{slug}.md (Decision 85
+    is .yaml); Lambda-handlers omits the CD.24/Decision 79-canonical src/lambdas/ home (which exists
+    with per-slug dirs ducklake_reader/writer/maintenance/catalog_dr + manifest-only data-pipeline/,
+    ops-compaction/).
+  - >-
+    Four warehouse read-caches are referenced but deliberately gitignored/untracked
+    (logs/.recommendations-log.jsonl, .decisions-index.jsonl, .execution-state.json,
+    .north-star-log.jsonl; note .north-star-log.jsonl is untracked-but-not-in-.gitignore). They are
+    NOT dead pointers -- mark them runtime:true so link-validity checks the tracked parent dir, not
+    the runtime file. A `git ls-files` snapshot excludes gitignored files, so an unflagged runtime
+    row would false-fail (Decision 84: local caches are read projections of the warehouse).
+  - >-
+    config/agent/ real tree: README.md, cost_reconciliation.yaml, data_quality/, executor/, validate/,
+    verification_registry/. README names a dead copilot/ (not tracked; not referenced by
+    scripts/model_registry.py) and omits verification_registry/ + cost_reconciliation.yaml.
+  - >-
+    Check-wiring facts: check module lives at scripts/checks/hygiene/, decorated
+    @registry.register("validate_placement", owner="platform"), signature
+    def validate_placement(failed: list[str], router_path: Path | None = None) -> None; reference
+    _common.ROOT/_common.run via the module object (patch-interception, Decision 104). Tests for any
+    scripts/checks/**/*.py map to tests/test_validate.py (scripts/test_coverage_checker.py:57-59);
+    registry.py/_common.py map to test_checks_registry.py. Insert the sequence entry after
+    validate_contract_drift in pre_sequence() (near registry.py:99) and full_sequence() (near
+    registry.py:175) and mirror it in FROZEN_PRE_SEQUENCE / FROZEN_FULL_SEQUENCE.
+  - >-
+    Facade nuance for the reviewer: registry.py's docstring says "adding a check touches only this
+    package, never scripts/validate.py" -- that scopes to tier membership/order (now owned by
+    registry.py's sequences), NOT the facade import block. The getattr(validate_module, name) dispatch
+    still requires `from scripts.checks... import validate_placement` in validate.py, and
+    tests/test_checks_registry.py::TestFacadeCompleteness asserts it -- so editing validate.py for the
+    re-export is required and correct, not a violation.
+  - >-
+    Integration risks cleared: validate_contract_drift skips any docs/contracts/*.yaml lacking a
+    contract:/class: block (validate_contract_drift.py:68-72) but still requires a parseable top-level
+    mapping; scripts/contracts.py load_all_contracts likewise skips via data.get("contract");
+    validate_intent_doc_freeze only scans docs/**/INTENT-*.md and excludes contracts/;
+    validate_claude_md_pointer_invariant only checks root CLAUDE.md; no check asserts the prose table's
+    presence in PROJECT_CONTEXT.md.
+  - >-
+    file-router.yaml row schema (design for one-line relocation): routes is a LIST of route objects
+    (NOT a mapping keyed by topic -- a topic-keyed mapping lets yaml.safe_load SILENTLY collapse
+    duplicate topics last-wins, dropping a discovery row and making the duplicate-topic gate
+    unconstructable). Each route object: topic (a unique kebab-case string FIELD), targets (flow-style
+    list of >=1 repo-relative paths; directories end with '/'), description (optional one-liner),
+    runtime (optional bool, default false). The top-level mapping is extensible so later phases can add
+    sibling placement-registry keys (docs-root allowlist, scripts-root allowlist) without a schema break.
+  - >-
+    Verification tier V2 (Decision 48): pure-Python check with 100% unit coverage; git is local and
+    deterministic; no handlers, no terraform, and no active Lambda-manifest-packaged file in scope
+    (config/agent/ is not Lambda-packaged; src/lambdas/ appears only as a router target string, not an
+    edited manifest/handler), so no V3 deploy/smoke-test per Decision 79/CD.24/CD.16.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (0 contradictions; 83 of 83 decisions triaged). CITE: Decision 104, Decision 86, Decision 118/CD.25, Decision 85, Decision 79/CD.24/CD.16, Decision 84, Decision 48, Decision 73, Decision 102, Decision 101, Decision 67, Decision 55, Decision 61 (T2.26/T4.12 handler-home retirement owners)."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 2 round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant records triaged via the decision-scout gate (not full-file read)
+  - All eight files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Understood: validate.py is the SoT (no ci.yml edit); file-router.yaml stays non-ritual (no
+    contract:/class:); the facade re-export in validate.py is required; tests for the new check go in
+    tests/test_validate.py
+execution_steps:
+  - >-
+    Create docs/contracts/file-router.yaml: top-level mapping schema_version: 1 + routes:, where
+    routes is a LIST of route objects {topic, targets, description?, runtime?} (NOT a topic-keyed
+    mapping). Convert every live File Router row from docs/PROJECT_CONTEXT.md into a route object. DROP
+    the 4 dead rows (GEMINI.md, docs/AGENT_WORKFLOW.md, scripts/bedrock_client.py,
+    scripts/migrate_recommendations.py). CORRECT the plan-artefact row (targets: [docs/plans/],
+    description names PLAN-{slug}.yaml per Decision 85) and the Lambda-handlers row (targets:
+    [src/lambdas/, src/data/handlers/]). Mark the 4 warehouse read-caches runtime: true. Add a header
+    comment stating the relocation contract and the non-ritual (no contract:/class:) invariant -- but
+    do NOT write the literal dropped-target filenames (GEMINI/AGENT_WORKFLOW/bedrock_client/
+    migrate_recommendations) anywhere in the file, since VP step 5 greps for their ABSENCE.
+  - >-
+    Create scripts/checks/hygiene/validate_placement.py: @registry.register("validate_placement",
+    owner="platform"); def validate_placement(failed, router_path=None). Load router_path (default
+    _common.ROOT/docs/contracts/file-router.yaml); on missing file or malformed shape (not a mapping,
+    routes absent or not-a-list, a route missing topic/targets) append a clear failure and return
+    (never raise -- import-safety). Snapshot tracked paths once via _common.run(["git","ls-files"],
+    capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT) -- mirror
+    _common.get_changed_files (_common.py:36); WITHOUT capture_output/text the snapshot is empty and
+    every directory target reads as dead. ITERATE the routes LIST tracking seen topics to detect
+    duplicates (do NOT rely on mapping-key uniqueness -- yaml.safe_load collapses duplicate mapping
+    keys silently). For each route target: if route runtime is true assert the parent dir is tracked,
+    else assert the target is a tracked file (in snapshot) or a tracked directory (some snapshot path
+    startswith target.rstrip('/')+'/'); collect every dead target and duplicate topic; append one
+    failure listing them if any, else print a PASS line. Keep <=500 SLOC, CC<=20.
+  - >-
+    Wire the check in: add the facade re-export in scripts/validate.py (hygiene block, alphabetical,
+    between validate_cli_tools_in_prompts and validate_subprocess_encoding); insert
+    _c("validate_placement") after validate_contract_drift in BOTH pre_sequence() and full_sequence()
+    in scripts/checks/registry.py; mirror ("check","validate_placement") at the identical position in
+    FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE in tests/test_checks_registry.py.
+  - >-
+    Add tests/test_validate.py::TestValidatePlacement covering: happy path (temp router + fake
+    ls-files -> no failure), dead-target (bogus path -> failure), runtime-row (gitignored file whose
+    parent dir is tracked -> no failure; bogus parent -> failure), duplicate-topic (two route objects
+    in the routes list sharing a topic) -> failure, and malformed/missing file (not a mapping, routes
+    not-a-list, route missing topic/targets) -> failure. Patch scripts.checks._common.run / .ROOT for
+    isolation. Achieve 100% coverage of validate_placement.py.
+  - >-
+    Replace the "## File Router" table in docs/PROJECT_CONTEXT.md with a one-line pointer to
+    docs/contracts/file-router.yaml. Fix config/agent/README.md: remove the copilot/ line, add
+    verification_registry/ and cost_reconciliation.yaml with accurate one-line descriptions.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on any failure fix within scope
+    and re-run. Steps 1-6 are pre-deploy and must pass before handoff; step 7 (rec closure) is
+    post-merge and orchestrator-owned.
+  - "Report: what was implemented, verification results, and any residual notes."
+work_areas: []
+rollback: >-
+  All changes are additive or pointer-substitutions on a feature branch; revert the branch commits.
+  No infra, no data writes, no Lambda deploy -- nothing to unwind beyond git.
