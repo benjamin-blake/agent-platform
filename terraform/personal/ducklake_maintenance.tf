@@ -22,13 +22,12 @@
 #   2. terraform plan -> human review -> terraform apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (update the 3 function code pointers from S3)
 #
-# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): the aws_lambda_function
-# resource below still sets source_code_hash=try(filemd5(zip),null) with no ignore_changes
-# lifecycle block -- INTERIM state, not the target. Target: lifecycle { ignore_changes =
-# [source_code_hash] } + a dedicated governed code-deploy CD channel. Physical decoupling is a
-# sequenced follow-on (P2), blocked on clearing a pending out-of-budget IAM delta in this root
-# module. Until P2 lands, step 3 above is the interim mechanism; per Decision 125 it is demoted to
-# break-glass status once the governed CD channel exists.
+# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): RESOLVED. The
+# aws_lambda_function resource below now carries a lifecycle block ignoring source_code_hash
+# changes, so code-only redeploys no longer surface as a Terraform diff on this apply path. Code
+# deploys now go via step 3 above (`build_lambda --ducklake-only --deploy`) -- knowingly-interim
+# break-glass status (Decision 125 pt 2-5) pending the governed code-deploy CD channel (rec-2646
+# residual scope).
 #
 # FP-B (2026-06-07): shared SNS topic (sns_alerts.tf) created and wired as the alarm_actions
 # target for BOTH this circuit-breaker alarm AND the CD.34 catalog-DR freshness alarm.
@@ -190,6 +189,13 @@ resource "aws_lambda_function" "ducklake_maintenance" {
   tags = {
     Name    = "DuckLake Maintenance"
     Purpose = "T2.18 ducklake_maintenance singleton"
+  }
+
+  # Decision 125 physical decoupling: code deploys go via build_lambda --ducklake-only --deploy
+  # (update-function-code), not terraform. Without this, every rebuild's non-reproducible zip bytes
+  # trip a Terraform diff on this IAM-gated apply path (rec-2646/rec-2654).
+  lifecycle {
+    ignore_changes = [source_code_hash]
   }
 }
 

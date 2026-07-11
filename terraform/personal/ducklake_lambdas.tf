@@ -18,27 +18,17 @@
 #   2. terraform -chdir=terraform/personal plan  -> present to human -> apply via agent_platform_admin
 #   3. build_lambda --ducklake-only --deploy  (updates the two functions' code from S3)
 #
-# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): the two
-# aws_lambda_function resources below still set source_code_hash=try(filemd5(zip),null) with no
-# ignore_changes lifecycle block, so a code-only redeploy surfaces as a Terraform diff on this
-# apply path -- INTERIM state, not the target. Target: lifecycle { ignore_changes =
-# [source_code_hash] } + a dedicated governed code-deploy CD channel, so routine code changes stop
-# routing through this IAM-gated apply path. Physical decoupling is a sequenced follow-on (P2),
-# blocked on clearing a pending out-of-budget IAM delta in this root module. Until P2 lands, step 3
-# above (`build_lambda --ducklake-only --deploy`) is the interim mechanism; per Decision 125 it is
-# demoted to break-glass status once the governed CD channel exists.
+# CODE/INFRA COUPLING (Decision 125, environment-taxonomy.md section 5): RESOLVED. The two
+# aws_lambda_function resources below now carry a lifecycle block ignoring source_code_hash
+# changes, so a code-only redeploy no longer surfaces as a Terraform diff on this IAM-gated apply
+# path. Code deploys now go via `build_lambda --ducklake-only --deploy` (update-function-code,
+# independent of terraform) -- knowingly-interim break-glass status (Decision 125 pt 2-5) pending
+# the governed code-deploy CD channel (tracked as rec-2646's residual scope / A2/B1 follow-on).
 #
 # SINGLE-PORTAL NOTE (Decision 78/81): at T2.19 these Function URLs become the CLOSED ops boundary --
 # the writer is the sole ops_* write authority, the reader the sole read authority. ops_data_portal
 # transits them unconditionally (sole backend, Decision 84 I-1); the caller surface is unchanged. This
 # apply widens both roles to the production ducklake/ data path + flips DUCKLAKE_DATA_PATH smoke->prod.
-#
-# 2026-07-10 recovery note (rec-2646/rec-2647/rec-2652): this file's CODE/INFRA COUPLING comment above
-# is not theoretical -- it caused a live gated-apply failure the same day (non-reproducible package
-# rebuild -> phantom aws_lambda_layer_version.ducklake_deps replace -> guard BLOCKED -> workflow_dispatch
-# has no gated-apply path, since that job only wires on push). This comment-only commit exists solely to
-# route a push event through CD so the pending gated-apply approval can clear the resulting red
-# convergence record; it is not a substitute for the P2 physical decoupling tracked in rec-2646.
 
 locals {
   ducklake_smoke_data_path   = "s3://${aws_s3_bucket.data_lake.bucket}/ducklake-neon-smoke/"
@@ -274,6 +264,13 @@ resource "aws_lambda_function" "ducklake_writer" {
     aws_cloudwatch_log_group.ducklake_writer,
   ]
 
+  # Decision 125 physical decoupling: code deploys go via build_lambda --ducklake-only --deploy
+  # (update-function-code), not terraform. Without this, every rebuild's non-reproducible zip bytes
+  # trip a Terraform diff on this IAM-gated apply path (rec-2646/rec-2654).
+  lifecycle {
+    ignore_changes = [source_code_hash]
+  }
+
   tags = {
     Name    = "DuckLake Writer"
     Purpose = "T2.17 ducklake_writer runtime"
@@ -311,6 +308,13 @@ resource "aws_lambda_function" "ducklake_reader" {
     aws_iam_role_policy.ducklake_reader,
     aws_cloudwatch_log_group.ducklake_reader,
   ]
+
+  # Decision 125 physical decoupling: code deploys go via build_lambda --ducklake-only --deploy
+  # (update-function-code), not terraform. Without this, every rebuild's non-reproducible zip bytes
+  # trip a Terraform diff on this IAM-gated apply path (rec-2646/rec-2654).
+  lifecycle {
+    ignore_changes = [source_code_hash]
+  }
 
   tags = {
     Name    = "DuckLake Reader"

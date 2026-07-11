@@ -924,6 +924,48 @@ jobs:
           done
           set -e
 
+      - name: Build DuckLake lambda packages (rebuild before apply, PLAN-ducklake-source-hash-decouple)
+        id: build_ducklake
+        # Mirrors apply-sandbox's "Build DuckLake lambda packages" step (L269): lambda-packages/ is
+        # gitignored, so filemd5() in the terraform config silently resolves to null on a CI checkout
+        # and terraform never detects layer/function content changes without a rebuild here. Forward
+        # -looking defense-in-depth for a FUTURE gated-apply-routed change touching the layer
+        # aws_lambda_layer_version source_code_hash values (function-level source_code_hash is now
+        # ignore_changes-decoupled; layers are not). This job is push-only (job-level if:
+        # github.event_name == 'push'), so the assert always runs: the plan.bin about to be applied
+        # was reviewed against the PR job's uploaded S3 objects -- assert the freshly rebuilt zips are
+        # byte-identical to those objects BEFORE re-uploading. A mismatch means the applied layer
+        # content would skew from the reviewed plan and must fail closed rather than silently apply
+        # divergent bytes (Decision 77 no-TOCTOU).
+        if: success()
+        env:
+          BUCKET: agent-platform-data-lake
+        run: |
+          set -euo pipefail
+          # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
+          # import-time deps directly, mirroring ci.yml's "Install validate.py import-time deps".
+          pip install pyyaml pydantic
+          python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
+          NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
+          echo "Gated-apply is push-only: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded S3 objects (Decision 77 no-TOCTOU)."
+          for name in $NAMES; do
+            local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
+            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing S3 object found (PR job did not upload it); failing closed (Decision 77 no-TOCTOU)." >&2
+              exit 1
+            fi
+            remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
+            if [ "$local_md5" != "$remote_md5" ]; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: local=${local_md5} remote=${remote_md5}; applied layer content would skew from the reviewed plan.bin. Failing closed (Decision 77 no-TOCTOU)." >&2
+              exit 1
+            fi
+          done
+          echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded artifacts."
+          echo "Uploading DuckLake zips to s3://${BUCKET}/lambda-packages/..."
+          for name in $NAMES; do
+            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
+          done
+
       - name: Fetch saved plan from S3 (gated-apply path, T2.22)
         id: fetch_plan
         # Resolve the PR head SHA from the merge commit and fetch plan.bin from S3.
