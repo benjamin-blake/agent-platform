@@ -57,21 +57,21 @@ acceptance_criteria:
 verification_plan:
   - step: 1
     phase: pre-deploy
-    hermetic: true
+    hermetic: false
     action: "Assert ignore_changes=[source_code_hash] is present on exactly the four function resources (and not over-applied to layers)."
     command: "[ \"$(grep -rho 'ignore_changes = \\[source_code_hash\\]' terraform/personal/ducklake_lambdas.tf terraform/personal/ducklake_maintenance.tf terraform/personal/ducklake_catalog_dr.tf | wc -l)\" -eq 4 ]"
     expected: "Exit 0: exactly 4 matches (writer, reader, maintenance, catalog_dr)."
     fix_if: "Count != 4 means a function was missed (fewer) or ignore_changes was wrongly added to a layer version (more)."
   - step: 2
     phase: pre-deploy
-    hermetic: true
+    hermetic: false
     action: "Assert the gated-apply job builds the DuckLake packages before apply."
     command: "bin/venv-python -c \"import yaml; wf=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml')); steps=wf['jobs']['gated-apply']['steps']; assert any('build_lambda' in (s.get('run') or '') and '--ducklake' in (s.get('run') or '') for s in steps), 'gated-apply missing ducklake build step'; print('OK')\""
     expected: "Prints OK: the gated-apply job has a step invoking build_lambda --ducklake-only."
     fix_if: "AssertionError -- the build step was added to the wrong job or omitted."
   - step: 3
     phase: pre-deploy
-    hermetic: true
+    hermetic: false
     action: "Assert the gated-apply build step retains the Decision 77 no-TOCTOU byte-identity assert (does not blindly rebuild-and-upload divergent bytes)."
     command: "bin/venv-python -c \"import yaml; wf=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml')); s=[x for x in wf['jobs']['gated-apply']['steps'] if 'build_lambda' in (x.get('run') or '')][0]; r=s['run']; assert 'byte-identical' in r and 'no-TOCTOU' in r, 'gated-apply build step missing Decision 77 byte-identity assert'; print('OK')\""
     expected: "Prints OK: the gated-apply build step asserts byte-identity vs the PR-uploaded S3 objects."
@@ -120,6 +120,7 @@ context:
   - "Decision 99: the ducklake-version-lockstep gate reads terraform/personal/ducklake_lambdas.tf and the source_code_hash surfaces -- edit around them so that gate stays green."
   - "Related-Work (HARD BLOCK satisfied): scope includes terraform/personal/ducklake_lambdas.tf, exactly rec-2654's source_file (same-file condition); also same failure category (terraform apply failure)."
   - "Branch was 0 commits behind origin/main at planning time (main_freshness ok); no scope-file divergence."
+  - "VP steps 1-3 are hermetic: false (excluded from validate_vp_replay / VF-01): they assert the fix is present (ignore_changes / gated-apply build step) and use bin/venv-python, so they cannot pass on this plan-only PR tree (implementation lands in /implement) and cannot run in the venv-less fast-tier pr-validate replay env. They run as normal VP steps during /implement. No hermetic pre-deploy step is possible for this plan (all pre-deploy checks assert not-yet-present state)."
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
