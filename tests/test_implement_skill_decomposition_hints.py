@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts.platform_roadmap import RoadmapDocument, load
 from scripts.prompt_compliance import parse_invariants
+from scripts.roadmap.platform_roadmap import RoadmapDocument, load
 
 # ---------------------------------------------------------------------------
 # Module-level constants

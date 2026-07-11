@@ -4,7 +4,7 @@ SOLE source of shared constants, the subprocess/git helpers, and the find_plan_f
 clear_checkpoint re-imports used by every session_postflight domain module and by the facade
 itself. Every body -- facade-resident and moved -- resolves these as _common.<name> at call time
 so one patch target (scripts.postflight._common.<name>) intercepts everywhere. No dependency on
-scripts.session_postflight (no import cycle).
+scripts.session.postflight (no import cycle).
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ _PRUNE_SKIP_NAMES = frozenset(
 logger = logging.getLogger(__name__)
 
 from scripts.execution_state import clear_checkpoint  # noqa: E402, F401
-from scripts.find_plan import find_plan_file  # noqa: E402, F401
+from scripts.roadmap.find_plan import find_plan_file  # noqa: E402, F401
 
 
 def _run(cmd: list[str], cwd: Path | None = None, capture: bool = True) -> subprocess.CompletedProcess:

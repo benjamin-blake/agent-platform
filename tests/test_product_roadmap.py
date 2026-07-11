@@ -1,4 +1,4 @@
-"""Tests for scripts/product_roadmap.py covering schema validation, graph checks, and cross-roadmap resolution."""
+"""Tests for scripts/roadmap/product_roadmap.py covering schema validation, graph checks, and cross-roadmap resolution."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts.platform_roadmap import RoadmapDocument as PlatformDoc
-from scripts.product_roadmap import (
+from scripts.roadmap.platform_roadmap import RoadmapDocument as PlatformDoc
+from scripts.roadmap.product_roadmap import (
     GateRuleParser,
     ProductRoadmapDocument,
     load,
@@ -476,25 +476,25 @@ class TestFivePropertyEnforcement:
 
     def test_waiver_missing_reason_raises(self) -> None:
         with pytest.raises(Exception):
-            from scripts.product_roadmap import FivePropertyWaiver
+            from scripts.roadmap.product_roadmap import FivePropertyWaiver
 
             FivePropertyWaiver.model_validate({"will_attest_when": "before status == in_progress"})
 
     def test_waiver_missing_will_attest_when_raises(self) -> None:
         with pytest.raises(Exception):
-            from scripts.product_roadmap import FivePropertyWaiver
+            from scripts.roadmap.product_roadmap import FivePropertyWaiver
 
             FivePropertyWaiver.model_validate({"reason": "test reason"})
 
     def test_waiver_empty_reason_raises(self) -> None:
         with pytest.raises(Exception, match="reason"):
-            from scripts.product_roadmap import FivePropertyWaiver
+            from scripts.roadmap.product_roadmap import FivePropertyWaiver
 
             FivePropertyWaiver.model_validate({"reason": "  ", "will_attest_when": "before status == in_progress"})
 
     def test_waiver_empty_will_attest_when_raises(self) -> None:
         with pytest.raises(Exception, match="will_attest_when"):
-            from scripts.product_roadmap import FivePropertyWaiver
+            from scripts.roadmap.product_roadmap import FivePropertyWaiver
 
             FivePropertyWaiver.model_validate({"reason": "test reason", "will_attest_when": ""})
 
@@ -563,7 +563,7 @@ class TestKnownPlatformGaps:
 class TestReverseIndex:
     @classmethod
     def _load_fixture_pair(cls):
-        from scripts.product_roadmap import ProductRoadmapState
+        from scripts.roadmap.product_roadmap import ProductRoadmapState
 
         doc = load(
             FIXTURES / "minimal_product.yaml",
@@ -602,7 +602,7 @@ _LIVE_PLATFORM = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
 class TestLiveYAML:
     @classmethod
     def _state(cls):
-        from scripts.product_roadmap import ProductRoadmapState
+        from scripts.roadmap.product_roadmap import ProductRoadmapState
 
         return ProductRoadmapState(load(_LIVE_PRODUCT, platform_path=_LIVE_PLATFORM))
 

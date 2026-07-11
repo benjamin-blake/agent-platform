@@ -20,7 +20,7 @@ import yaml
 
 from scripts.s3_log_store import append_jsonl
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.WARNING)
 JSONL_LOG = ROOT / "logs" / ".plan-audit-log.jsonl"
@@ -28,14 +28,14 @@ RECS_LOG = ROOT / "logs" / ".recommendations-log.jsonl"
 
 # Import find_plan_file from the canonical module
 sys.path.insert(0, str(ROOT))
-from scripts.find_plan import find_plan_file  # noqa: E402
+from scripts.roadmap.find_plan import find_plan_file  # noqa: E402
 
 
 def parse_scope(plan_path: Path) -> dict[str, str]:
     """Extract planned file paths and actions from a plan file.
 
     PLAN-*.yaml is the canonical format (scope[].file / scope[].action per
-    scripts/plan_document.py). The markdown Scope-table path is deprecated
+    scripts/roadmap/plan_document.py). The markdown Scope-table path is deprecated
     (T1.11 / CD.22), warns on use, and is removed after one release cycle.
     """
     if plan_path.suffix == ".yaml":

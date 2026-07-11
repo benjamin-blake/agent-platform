@@ -15,7 +15,7 @@ Perform a full repository code review and return a structured findings report to
 ## Step 0: Load Plan Context
 
 Find and read the plan file for the current branch:
-1. Run `bin/venv-python -m scripts.find_plan` to get the plan file path.
+1. Run `bin/venv-python -m scripts.roadmap.find_plan` to get the plan file path.
 2. If the output is `NOT_FOUND`, proceed without plan context (note this in the report).
 3. Otherwise read the plan file at the output path.
 
@@ -39,10 +39,10 @@ Perform a focused code review of the current branch changes. Build the review sc
 
 ## Review Process
 
-1. **Read the anchoring docs** — the plan file (via `bin/venv-python -m scripts.find_plan`), `docs/PROJECT_CONTEXT.md`, and only the docs directly referenced by the changed files. Do not bulk-read the roadmaps or other large docs unless a changed file references them.
+1. **Read the anchoring docs** — the plan file (via `bin/venv-python -m scripts.roadmap.find_plan`), `docs/PROJECT_CONTEXT.md`, and only the docs directly referenced by the changed files. Do not bulk-read the roadmaps or other large docs unless a changed file references them.
 2. **Build the review file list** using a scoped approach — do not read the entire repository blindly:
    a. Run `git diff --name-only origin/main` to get the list of changed files.
-   b. Read the plan file (via `bin/venv-python -m scripts.find_plan`) and parse its Scope table for planned files.
+   b. Read the plan file (via `bin/venv-python -m scripts.roadmap.find_plan`) and parse its Scope table for planned files.
    c. For each Python file in the changed + planned sets, run `bin/venv-python -m scripts.extract_imports <file>` to collect `src.*` direct imports.
    d. The review scope is: **changed files + planned files + files that correspond to the direct imports collected in step (c)**. Resolve import module paths to file paths using the project file layout (e.g., `src.common.config` → `src/common/config.py`).
    e. Skip entire directories (e.g., `src/data/handlers/`) unless specific files in them appear in the scope above.

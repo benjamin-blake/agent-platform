@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.platform_roadmap import (
+from scripts.roadmap.platform_roadmap import (
     ExitCriterion,
     KnownGap,
     OpenQuestion,
@@ -16,7 +16,7 @@ from scripts.platform_roadmap import (
     TierItem,
     load,
 )
-from scripts.session_preflight import _slim_roadmap_state
+from scripts.session.preflight import _slim_roadmap_state
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for session timing and test_functions_added in scripts/session_metrics.py."""
+"""Unit tests for session timing and test_functions_added in scripts/session/metrics.py."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Load the module under test
-_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session_metrics.py"
+_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session" / "metrics.py"
 _spec = importlib.util.spec_from_file_location("session_metrics", _MODULE_PATH)
 assert _spec and _spec.loader
 _metrics = importlib.util.module_from_spec(_spec)

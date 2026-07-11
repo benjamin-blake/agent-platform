@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/session_preflight.py."""
+"""Unit tests for scripts/session/preflight.py."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from scripts.preflight import _common
 boto3 = pytest.importorskip("boto3")
 
 # Load the module under test
-_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session_preflight.py"
+_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session" / "preflight.py"
 _spec = importlib.util.spec_from_file_location("session_preflight", _MODULE_PATH)
 assert _spec and _spec.loader
 _preflight = importlib.util.module_from_spec(_spec)
@@ -68,8 +68,8 @@ def _disable_reader_and_git_fetch(request: pytest.FixtureRequest):
 
     with ExitStack() as stack:
         stack.enter_context(patch("scripts.preflight._common._make_reader", return_value=reader_stub))
-        stack.enter_context(patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}))
-        stack.enter_context(patch("scripts.sync_ops.warm_sync", return_value=warm_sync_stub))
+        stack.enter_context(patch("scripts.sync.ops.sync", return_value={"drained": {}, "pulled": {}}))
+        stack.enter_context(patch("scripts.sync.ops.warm_sync", return_value=warm_sync_stub))
         stack.enter_context(patch("session_preflight._sync_ops_pull", return_value={}))
         if class_name != "TestCheckMainFreshness":
             stack.enter_context(patch("scripts.preflight.env_git.check_main_freshness", return_value=freshness_stub))
@@ -533,7 +533,7 @@ class TestJsonOutputSchema:
             patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
             patch("scripts.preflight.recs_cache.count_recommendations", return_value=(3, 0, 0, [])),
             patch(
-                "scripts.sync_ops.warm_sync",
+                "scripts.sync.ops.warm_sync",
                 return_value={
                     "drained": {},
                     "pulled": {"ops_recommendations": 5},
@@ -1614,7 +1614,7 @@ class TestAbstentionGauge:
             patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
             patch("scripts.preflight.priority_queue.read_priority_queue", return_value=[]),
             patch("session_preflight._sync_ops_pull", return_value={}),
-            patch("scripts.sync_ops.warm_sync", return_value=warm_sync_stub),
+            patch("scripts.sync.ops.warm_sync", return_value=warm_sync_stub),
             patch(
                 "scripts.preflight.context_docs.read_context_files",
                 return_value={
@@ -1678,7 +1678,7 @@ class TestCredentialsOrderingInMain:
     """Verify that the credential check runs before ops sync in main()."""
 
     def test_credentials_startup_precedes_sync(self, tmp_path: Path) -> None:
-        """_handle_credentials_startup is called before scripts.sync_ops.warm_sync in main()."""
+        """_handle_credentials_startup is called before scripts.sync.ops.warm_sync in main()."""
         call_order: list[str] = []
 
         def _track_creds(status: str) -> str:
@@ -1708,7 +1708,7 @@ class TestCredentialsOrderingInMain:
             patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
             patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
             patch("scripts.preflight.aws_infra._handle_credentials_startup", side_effect=_track_creds),
-            patch("scripts.sync_ops.warm_sync", side_effect=_track_sync),
+            patch("scripts.sync.ops.warm_sync", side_effect=_track_sync),
             patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
             patch("scripts.preflight.recs_cache.count_recommendations", return_value=(0, 0, 0, [])),
             patch("scripts.preflight.priority_queue.read_priority_queue", return_value=[]),
@@ -2230,20 +2230,23 @@ class TestCiRcaCorrelation:
         assert result["likely_resolved"] == []
 
     def test_basename_only_rec_matches_full_path_with_same_basename(self) -> None:
-        # "session_preflight.py" (basename) must match "scripts/session_preflight.py".
-        rec = self._make_rec("rec-2195c", file="session_preflight.py", created="2026-06-10T10:00:00Z")
+        # "preflight.py" (basename) must match "scripts/session/preflight.py". (Pre-RS-01, this
+        # fixture used the flat "session_preflight.py" basename; the RS-01 session_* rename strips
+        # the family prefix, so the file's basename is now "preflight.py", not "session_preflight.py"
+        # -- a stale pre-move basename would no longer basename-match the post-move nested path.)
+        rec = self._make_rec("rec-2195c", file="preflight.py", created="2026-06-10T10:00:00Z")
         commit = self._make_commit(
-            "ddd3333", "2026-06-11T10:00:00+00:00", "fix: preflight update", files=["scripts/session_preflight.py"]
+            "ddd3333", "2026-06-11T10:00:00+00:00", "fix: preflight update", files=["scripts/session/preflight.py"]
         )
         result = _preflight.correlate_ci_rca_with_main([rec], [commit])
         assert result["likely_resolved"] == [rec]
         assert result["unresolved"] == []
 
     def test_full_path_exact_match_correlated(self) -> None:
-        # "scripts/session_preflight.py" must match "scripts/session_preflight.py" exactly.
-        rec = self._make_rec("rec-2195d", file="scripts/session_preflight.py", created="2026-06-10T10:00:00Z")
+        # "scripts/session/preflight.py" must match "scripts/session/preflight.py" exactly.
+        rec = self._make_rec("rec-2195d", file="scripts/session/preflight.py", created="2026-06-10T10:00:00Z")
         commit = self._make_commit(
-            "eee4444", "2026-06-11T10:00:00+00:00", "fix: preflight update", files=["scripts/session_preflight.py"]
+            "eee4444", "2026-06-11T10:00:00+00:00", "fix: preflight update", files=["scripts/session/preflight.py"]
         )
         result = _preflight.correlate_ci_rca_with_main([rec], [commit])
         assert result["likely_resolved"] == [rec]
@@ -2538,7 +2541,7 @@ class TestSyncCollapse:
         return patches
 
     def test_sync_called_exactly_once(self, tmp_path: Path) -> None:
-        """scripts.sync_ops.warm_sync is called once (creds ok); recommendation_sync comes from 'pulled'."""
+        """scripts.sync.ops.warm_sync is called once (creds ok); recommendation_sync comes from 'pulled'."""
         sync_call_count: list[int] = []
 
         def tracking_sync(profile: str = "agent_platform") -> dict:
@@ -2555,7 +2558,7 @@ class TestSyncCollapse:
         with ExitStack() as stack:
             for p in self._full_main_ctx(tmp_path):
                 stack.enter_context(p)
-            stack.enter_context(patch("scripts.sync_ops.warm_sync", side_effect=tracking_sync))
+            stack.enter_context(patch("scripts.sync.ops.warm_sync", side_effect=tracking_sync))
             _preflight.main()
 
         assert len(sync_call_count) == 1, f"warm_sync called {len(sync_call_count)} times; expected exactly 1"
@@ -2685,7 +2688,7 @@ class TestVerbDedup:
         }
         with (
             patch("scripts.preflight._common._make_reader", return_value=counting_reader),
-            patch("scripts.sync_ops.warm_sync", return_value=warm_sync_rows),
+            patch("scripts.sync.ops.warm_sync", return_value=warm_sync_rows),
             patch("scripts.preflight.env_git.check_venv", return_value=True),
             patch("scripts.preflight.env_git.get_git_status", return_value=("agent/test", False, [])),
             patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),

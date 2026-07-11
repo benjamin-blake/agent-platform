@@ -106,7 +106,7 @@ def find_plan_file() -> Path | None:
     return legacy if legacy.exists() else None
 ```
 
-**Implemented in:** `scripts/plan_audit.py::find_plan_file()`, `code-review.agent.md` Step 0, `scope-guard.agent.md` Step 1, `implement.prompt.md` Step 1.
+**Implemented in:** `scripts/roadmap/plan_audit.py::find_plan_file()`, `code-review.agent.md` Step 0, `scope-guard.agent.md` Step 1, `implement.prompt.md` Step 1.
 
 ### Handling Merge Conflicts (Tiered Auto-Resolution)
 
@@ -161,14 +161,14 @@ When GitHub Actions detects a CI failure that `validate.py` missed locally:
 
 Three deterministic Python scripts provide model-free audit data:
 
-**`scripts/plan_audit.py`** — Drift Detection
+**`scripts/roadmap/plan_audit.py`** — Drift Detection
 - Parses PLAN.md `## Scope` table: extracts file paths and actions
 - Runs `git diff --name-only origin/main` to get actual changed files
 - Compares planned vs actual (unplanned files, missing files, action mismatches)
 - Output: `Planned: X | Changed: X | Unplanned: X | Missing: X` with warnings
 - Exit code: Always 0 (informational)
 
-**`scripts/session_metrics.py`** — Quantitative Change Report
+**`scripts/session/metrics.py`** — Quantitative Change Report
 - Collects `git diff --stat origin/main` (files changed, lines added/removed)
 - Collects pytest results (total tests, passed, failed, test functions added)
 - Collects coverage report (current coverage % across src/)
@@ -366,7 +366,7 @@ Human/Agent → ops_data_portal.py → DynamoDB (ID Authority)
 
 ### Bidirectional Sync
 
-`scripts/sync_ops.py` provides bidirectional sync between local JSONL caches and Athena/Iceberg:
+`scripts/sync/ops.py` provides bidirectional sync between local JSONL caches and Athena/Iceberg:
 - `pull()` — refresh local cache from Athena (used at session start)
 - Stale outbox entries (>24h) flagged by `validate.py`
 
@@ -518,7 +518,7 @@ grep -rE '\b[A-Z_]+\.md\b' README.md .github/prompts/*.prompt.md .github/agents/
 
 ### Canonical Path Discovery Functions
 
-For prompts/agents that need to locate optional files, use a canonical discovery function in the codebase (`scripts/plan_audit.py::find_plan_file()`) rather than hardcoding multiple fallbacks in multiple places.
+For prompts/agents that need to locate optional files, use a canonical discovery function in the codebase (`scripts/roadmap/plan_audit.py::find_plan_file()`) rather than hardcoding multiple fallbacks in multiple places.
 
 ---
 

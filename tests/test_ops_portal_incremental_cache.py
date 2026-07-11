@@ -15,14 +15,14 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts import sync_ops
 from scripts.ops_data_portal import file_rec, update_rec
+from scripts.sync import ops as sync_ops
 
 _VALID_FIELDS = {
     "title": "Incremental cache test recommendation",
     "file": "scripts/ops_data_portal.py",
     "context": "A sufficiently long context string so the write-time content validators are satisfied here.",
-    "acceptance": "grep -q upsert_cache_row scripts/sync_ops.py",
+    "acceptance": "grep -q upsert_cache_row scripts/sync/ops.py",
     "effort": "XS",
     "priority": "Low",
     "source": "planning",
@@ -79,8 +79,8 @@ class TestFileRecIncrementalCache:
         with (
             patch("scripts.ops_data_portal._ducklake_write", return_value=writer_response),
             patch("scripts.ops_data_portal.RECS_JSONL", cache),
-            patch("scripts.sync_ops._pull_single_table") as mock_pull,
-            patch("scripts.sync_ops._pull_via_reader") as mock_reader_pull,
+            patch("scripts.sync.ops._pull_single_table") as mock_pull,
+            patch("scripts.sync.ops._pull_via_reader") as mock_reader_pull,
         ):
             rec_id = file_rec(dict(_VALID_FIELDS))
 
@@ -104,7 +104,7 @@ class TestUpdateRecIncrementalCache:
             patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True, "ulid": "ulid-test-rec042"}),
             patch("scripts.ops_data_portal.RECS_JSONL", cache),
-            patch("scripts.sync_ops._pull_single_table") as mock_pull,
+            patch("scripts.sync.ops._pull_single_table") as mock_pull,
         ):
             assert update_rec("rec-042", {"status": "closed"}) is True
 
@@ -126,7 +126,7 @@ class TestUpdateRecIncrementalCache:
             patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_write,
             patch("scripts.ops_data_portal.RECS_JSONL", cache),
-            patch("scripts.sync_ops._pull_single_table"),
+            patch("scripts.sync.ops._pull_single_table"),
         ):
             update_rec("rec-042", {"status": "closed"})
 

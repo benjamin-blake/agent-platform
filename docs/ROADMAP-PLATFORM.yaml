@@ -1,7 +1,7 @@
 # docs/ROADMAP-PLATFORM.yaml
 #
 # Canonical platform roadmap. Agent-first artefact. Consumed by
-# scripts/session_preflight.py (platform_roadmap state computation),
+# scripts/session/preflight.py (platform_roadmap state computation),
 # .claude/skills/planning/SKILL.md (eligibility check at intent clarification),
 # .claude/commands/plan.md (orientation surface),
 # scripts/validate.py (RoadmapDocument Pydantic schema check).
@@ -943,7 +943,7 @@ candidate_decisions:
       T0.12.5/.6/.7). Exemption ends at CD.25 ratification for the CD.25-scoped subset; the
       legacy CD.1-scoped subset still terminates at CD.1 ratification.
 
-      Enforcement (round-2 C5 + round-3 H2/H3/M3): T-1.12 lands (a) scripts/platform_roadmap.py
+      Enforcement (round-2 C5 + round-3 H2/H3/M3): T-1.12 lands (a) scripts/roadmap/platform_roadmap.py
       schema extension for bootstrap_completion_exempt, decomposition_hints, decision_required_before
       on TierItem and bootstrap_allowance on CandidateDecision plus extra="forbid" on both
       classes; (b) scripts/contracts.py Pydantic schema + $ref resolver; (c) scripts/validate.py
@@ -951,7 +951,7 @@ candidate_decisions:
       diff without change_class amendment_log entry; duplicate inline definitions of $ref-referenced
       fields; $ref pointing at non-existent files or chain-depth > 1; status transitions violating
       the state machine; amendment_log entries with change_class outside the closed vocabulary);
-      (d) scripts/session_preflight.py hook that surfaces v0-provisional contracts whose
+      (d) scripts/session/preflight.py hook that surfaces v0-provisional contracts whose
       re-ratification trigger conditions are met. Without T-1.12 the ritual is voluntary; T-1.12
       lands enforcement.
     gates:
@@ -975,7 +975,7 @@ candidate_decisions:
       Ritual realized and enforced: T-1.11 landed docs/INTENT-pre-codegen-contract-ratification.md
       (complete 2026-05-20); T-1.12 landed the enforcement machinery (complete 2026-06-18) --
       scripts/contracts.py loader + $ref resolver, scripts/validate.py validate_contract_drift CI gate
-      (both --pre and full tiers, CD.25 categories 1-8), scripts/session_preflight.py v0-provisional
+      (both --pre and full tiers, CD.25 categories 1-8), scripts/session/preflight.py v0-provisional
       re-ratification scan, and the implement-skill decomposition-hints exemption inheritance. The drift
       gate passes over 16 ritual contracts (Class A data schemas + the three Class B DuckLake Lambda
       verb contracts at provisional_v0 + Class C cross-system invariants). CD.16 precondition satisfied
@@ -1956,7 +1956,7 @@ tier_items:
       # Lambda-packaged code (load-bearing — resolves at runtime inside scheduled_agent dispatcher)
       - src/data/handlers/scheduled_agent_handler.py
       # Scripts that read the roadmap directly
-      - scripts/session_preflight.py    # ROADMAP_FILE constant + roadmap_phase extraction
+      - scripts/session/preflight.py    # ROADMAP_FILE constant + roadmap_phase extraction
       - scripts/build_lambda.py    # Lambda packaging copy
       # Slash commands and skills (round-1 adversarial finding)
       - .claude/commands/plan.md
@@ -1995,7 +1995,7 @@ tier_items:
       - docs/INTENT-ci-cd-architecture.md
     exit_criteria:
       - "grep -rn 'docs/ROADMAP\\.md' --exclude-dir=.git --exclude-dir=docs/plans/briefings --exclude=SESSION_LOG_ARCHIVE.md --exclude-dir=docs/plans --exclude-dir=logs --exclude=ROADMAP-PLATFORM.yaml returns zero hits (historical PLAN-*.md files and append-only logs retain original references -- committed history; this item's own name/intent self-references excluded. 2026-06-09 audit F-032: criterion amended to exclude logs/ + self-references which the original pattern caught; note docs/PROJECT_CONTEXT.md:17 carries a bare 'ROADMAP.md' narrative reference the pattern never covered -- swept opportunistically, not a reopen)"
-      - "scripts/session_preflight.py preflight report shows roadmap_phase resolvable (not 'unknown')"
+      - "scripts/session/preflight.py preflight report shows roadmap_phase resolvable (not 'unknown')"
       - "Plan-critique skill loads its context files without 'file not found' warnings"
       - "scheduled_agent_handler.py Lambda packaging copies the renamed file successfully; deployed Lambda finds context at runtime"
       - "Per-call-site semantic disambiguation documented: rec-curator-style consumers wanting product phases resolve to ROADMAP-PRODUCT.md; planning/critique consumers wanting platform sequencing resolve to ROADMAP-PLATFORM.yaml"
@@ -2084,7 +2084,7 @@ tier_items:
     intent: Parse YAML, compute next_eligible / in_progress / blocked / strategic_pending from depends_on graph (resolving tier-name shortcuts per agent_instructions).
     depends_on: [T-1.0]
     files_in_scope:
-      - scripts/session_preflight.py
+      - scripts/session/preflight.py
     exit_criteria:
       - "logs/.preflight-report.json contains platform_roadmap key with next_eligible[] + strategic_pending[] (the deliberately slim projection per session_preflight._slim_roadmap_state; in_progress/blocked/active_tier are computed by compute_state_dict; full-state surfacing + blocked-on-CD + gate_evaluations implemented in T-1.20 and available via --roadmap-detail full used by /orient)"
       - "Stale-cache detection: if YAML mtime newer than ops_decisions latest decision, surface 'roadmap edits awaiting ratification' note"
@@ -2104,9 +2104,9 @@ tier_items:
     depends_on: []    # foundational; landed first within T-1
     files_in_scope:
       - scripts/validate.py
-      - scripts/platform_roadmap.py    # new — Pydantic model + loader
+      - scripts/roadmap/platform_roadmap.py    # new — Pydantic model + loader
     exit_criteria:
-      - "scripts/platform_roadmap.RoadmapDocument validates the YAML"
+      - "scripts/roadmap/platform_roadmap.RoadmapDocument validates the YAML"
       - "validate.py presubmit fails if YAML structure or id-uniqueness or dependency-cycle invariants break"
       - "Unit tests cover: malformed YAML rejection, dangling depends_on, duplicate ids, cycle detection, gate-rule grammar (unknown helper functions rejected), filed_via union validation"
       - "Gate-rule evaluator unit-tested against the documented mini-grammar (item lookups + helpers grace_period_elapsed / tier_complete / all_in_tier_with_status / item_field_eq, per document.gate_helpers table)"
@@ -2193,7 +2193,7 @@ tier_items:
     files_in_scope:
       - scripts/build_lambda.py    # delete the two copytrees; walk per-Lambda manifests instead
       - scripts/validate.py    # add bundle-completeness check + LAMBDA_FILE_PATTERNS derivation from manifests
-      - scripts/lambda_manifest.py    # new -- LambdaManifest Pydantic model + loader (parallel to scripts/platform_roadmap.py)
+      - scripts/lambda_manifest.py    # new -- LambdaManifest Pydantic model + loader (parallel to scripts/roadmap/platform_roadmap.py)
       - src/lambdas/    # each existing Lambda gets a manifest.yaml in this tier item
       - .claude/skills/planning/SKILL.md    # Lambda Deployment Assessment rule updated per CD.24 discipline point
     exit_criteria:
@@ -2312,7 +2312,7 @@ tier_items:
       on T0.13 / T0.7a/b/c / T1.1 / T1.3 / T1.4 / T3.1 / T3.2; expands the
       bootstrap COMPLETION exemption set with per-item bootstrap_completion_exempt
       flag and adds the CD.25-scoped termination clause.
-      (b) Amend scripts/platform_roadmap.py (the T-1.5 RoadmapDocument schema):
+      (b) Amend scripts/roadmap/platform_roadmap.py (the T-1.5 RoadmapDocument schema):
           (i)   ADD TierItem.bootstrap_completion_exempt: bool field.
           (ii)  ADD TierItem.decomposition_hints: dict | None field.
           (iii) ADD TierItem.decision_required_before: list[str] | None field.
@@ -2327,7 +2327,7 @@ tier_items:
       successor IMPLEMENTATION plan.]
       (e) Land scripts/validate.py CI drift gate per the CD.25 enforcement clause.
       [DEFERRED from this plan; successor IMPLEMENTATION plan.]
-      (f) Land scripts/session_preflight.py hook that surfaces v0-provisional
+      (f) Land scripts/session/preflight.py hook that surfaces v0-provisional
       contracts whose re-ratification triggers fire. [DEFERRED from this plan;
       successor IMPLEMENTATION plan.]
       (g) Amend .claude/skills/implement/SKILL.md to teach the bookkeeping rule to
@@ -2343,10 +2343,10 @@ tier_items:
     decomposition_hints:
       split_by: subsystem
       atomic_plans:
-        - "PLAN-cd25-platform-gap-sequencing -- roadmap edits + scripts/platform_roadmap.py schema amendment (subset a + b + GAP-t-1-12 absorption)"
+        - "PLAN-cd25-platform-gap-sequencing -- roadmap edits + scripts/roadmap/platform_roadmap.py schema amendment (subset a + b + GAP-t-1-12 absorption)"
         - "PLAN-contracts-schema-and-loader -- scripts/contracts.py Pydantic schema + $ref resolver + tests (subset d)"
         - "PLAN-contracts-ci-drift-gate -- scripts/validate.py CI drift gate covering CD.25 enforcement clause (subset e)"
-        - "PLAN-contracts-preflight-hook -- scripts/session_preflight.py v0-provisional re-ratification trigger hook (subset f)"
+        - "PLAN-contracts-preflight-hook -- scripts/session/preflight.py v0-provisional re-ratification trigger hook (subset f)"
         - "PLAN-implement-skill-decomposition-hints -- .claude/skills/implement/SKILL.md amendment for decomposition_hints inheritance (subset g)"
       rationale: |
         Sub-plan (a)+(b) lands schemas + roadmap data; subsets (c)/(d)/(e)/(f) land
@@ -2355,9 +2355,9 @@ tier_items:
     files_in_scope:
       - docs/ROADMAP-PLATFORM.yaml
       - docs/ROADMAP-PRODUCT.yaml
-      - scripts/platform_roadmap.py
+      - scripts/roadmap/platform_roadmap.py
       - scripts/validate.py
-      - scripts/session_preflight.py
+      - scripts/session/preflight.py
       - scripts/contracts.py
       - tests/test_contracts.py
       - tests/test_platform_roadmap.py
@@ -2365,11 +2365,11 @@ tier_items:
       - .claude/skills/implement/SKILL.md
     exit_criteria:
       - "CD.25 + all proposed tier_items present in ROADMAP-PLATFORM.yaml"
-      - "scripts/platform_roadmap.py: TierItem has bootstrap_completion_exempt + decomposition_hints + decision_required_before fields; CandidateDecision has bootstrap_allowance field; both classes flipped to extra='forbid'; unknown-field YAML payloads now FAIL at load (covered by test)"
+      - "scripts/roadmap/platform_roadmap.py: TierItem has bootstrap_completion_exempt + decomposition_hints + decision_required_before fields; CandidateDecision has bootstrap_allowance field; both classes flipped to extra='forbid'; unknown-field YAML payloads now FAIL at load (covered by test)"
       - "bootstrap COMPLETION exemption set expanded to include T-1.11..T-1.19, T0.12.5/.6/.7 with the CD.25-scoped termination clause (Part 8C of INTENT-pre-codegen-contract-ratification.md)"
       - "scripts/contracts.py Pydantic loader rejects malformed contract YAMLs in unit tests"
       - "scripts/validate.py CI drift gate runs at presubmit and full tiers; rejects bad contracts in CI"
-      - "scripts/session_preflight.py surfaces v0-provisional contracts whose triggers are met"
+      - "scripts/session/preflight.py surfaces v0-provisional contracts whose triggers are met"
       - "Bookkeeping rule in .claude/skills/implement/SKILL.md amended to read decomposition_hints on parent tier_items and inherit exemption status to atomic child plans at filing time"
     related_candidate_decisions: [CD.25]
     related_intents: [pre-codegen-contract-ratification]
@@ -2399,10 +2399,10 @@ tier_items:
         ritual contracts via per-file load_contract so unparseable YAML is surfaced, not
         swallowed by load_all_contracts; Pass 2 diff-aware vs the merge-base) registered
         in BOTH the --pre and full tiers, covering CD.25 categories 1-8.
-        scripts/session_preflight.py gains _scan_provisional_contracts, emitting
+        scripts/session/preflight.py gains _scan_provisional_contracts, emitting
         report["provisional_contracts_due"] with an injectable metrics provider. Satisfies
         exit criteria "scripts/validate.py CI drift gate runs at presubmit and full tiers"
-        and "scripts/session_preflight.py surfaces v0-provisional contracts whose triggers
+        and "scripts/session/preflight.py surfaces v0-provisional contracts whose triggers
         are met". Only subset (g) (implement/SKILL.md decomposition_hints inheritance,
         PLAN-implement-skill-decomposition-hints) remains; T-1.12 stays in_progress.
       - 2026-06-18: PLAN-implement-skill-decomposition-hints lands subset (g) --
@@ -2666,8 +2666,8 @@ tier_items:
       equivalent.
     depends_on: []
     files_in_scope:
-      - scripts/platform_roadmap.py
-      - scripts/session_preflight.py
+      - scripts/roadmap/platform_roadmap.py
+      - scripts/session/preflight.py
       - .claude/commands/orient.md
       - .claude/skills/orient/SKILL.md
       - docs/ROADMAP-PLATFORM.yaml    # agent_instructions consumer-contract text kept in lockstep
@@ -2800,9 +2800,9 @@ tier_items:
     files_in_scope:
       - .claude/skills/orient/SKILL.md
       - .claude/commands/orient.md
-      - scripts/platform_roadmap.py
-      - scripts/session_preflight.py
-      - scripts/plan_document.py
+      - scripts/roadmap/platform_roadmap.py
+      - scripts/session/preflight.py
+      - scripts/roadmap/plan_document.py
       - scripts/validate.py
       - .claude/skills/planning/SKILL.md
       - .claude/skills/implement/SKILL.md
@@ -2856,7 +2856,7 @@ tier_items:
     depends_on: []
     files_in_scope:
       - .claude/settings.json
-      - scripts/session_preflight.py
+      - scripts/session/preflight.py
       - CLAUDE.md
       - .claude/statusline.py
       - bin/venv-python    # new — wrapper script picking .venv/bin/python vs .venv/Scripts/python.exe
@@ -3224,7 +3224,7 @@ tier_items:
     intent: Generalise the SSO recovery (use --use-device-code when no browser), venv path resolution (defer to bin/venv-python), and any other Windows-VM-shaped logic.
     depends_on: [T0.1]
     files_in_scope:
-      - scripts/session_preflight.py
+      - scripts/session/preflight.py
     exit_criteria:
       - "Preflight succeeds in fresh Linux container session with same context payload as Windows VM"
       - "Device-code SSO triggered headlessly when interactive browser unavailable"
@@ -3541,7 +3541,7 @@ tier_items:
       - "grep -rn '\\.venv/Scripts' --exclude-dir=.git returns zero hits (or only in archival comments explicitly marked as such)"
       - "grep -rn 'python\\.exe' --exclude-dir=.git returns zero hits except in comments documenting the historical Windows policy"
       - "CLAUDE.md 'Shell invocations on Windows' section reframed as 'Shell invocations' with OS-detection guidance -- no Windows-prescriptive policy"
-      - "scripts/session_preflight.py, scripts/validate.py, and full pytest suite run green in a fresh Linux container session with no Windows-specific shims"
+      - "scripts/session/preflight.py, scripts/validate.py, and full pytest suite run green in a fresh Linux container session with no Windows-specific shims"
       - "Codespaces .devcontainer/devcontainer.json built from current main reaches a state where bin/venv-python (T0.1 wrapper) runs preflight without error"
       - "Agent instruction files (.claude/, .agents/, .github/) reviewed and any Windows-only prescriptions reframed or removed"
     related_candidate_decisions: [CD.2]
@@ -3710,8 +3710,8 @@ tier_items:
       - scripts/execute_recommendation.py
       - scripts/executor/jsonl_store.py
       - scripts/run_scheduled_agent.py
-      - scripts/session_postflight.py
-      - scripts/session_preflight.py
+      - scripts/session/postflight.py
+      - scripts/session/preflight.py
       - scripts/validate.py
       # Verified test importers (6) — must migrate test fixtures alongside production code
       - tests/test_ops_data_portal.py
@@ -3940,7 +3940,7 @@ tier_items:
       principle (CD.13).
     depends_on: [T-1.2, T-1.5]    # T-1.2 also modifies .claude/skills/planning/SKILL.md; serialise to prevent overwrite conflict
     files_in_scope:
-      - scripts/plan_document.py    # new -- Pydantic PlanDocument model + loader
+      - scripts/roadmap/plan_document.py    # new -- Pydantic PlanDocument model + loader
       - scripts/validate.py    # add PlanDocument schema check for docs/plans/PLAN-*.yaml
       - .claude/skills/planning/SKILL.md
       - .claude/skills/implement/SKILL.md
@@ -3950,7 +3950,7 @@ tier_items:
       - .agents/skills/plan-critique/SKILL.md
       - docs/plans/    # active PLAN-*.md files ported in-place to PLAN-*.yaml; historical files remain
     exit_criteria:
-      - "scripts/plan_document.PlanDocument validates a ported PLAN-*.yaml"
+      - "scripts/roadmap/plan_document.PlanDocument validates a ported PLAN-*.yaml"
       - "validate.py presubmit fails on malformed PLAN-*.yaml (id-uniqueness, dangling references, schema drift)"
       - "Active in-flight PLAN-*.md files converted to PLAN-*.yaml -- list captured in the plan implementing T1.11"
       - "Planning, implement, and plan-critique skills updated to read PLAN-*.yaml; the old .md path emits a deprecation warning for one release cycle then is removed"
@@ -5017,7 +5017,7 @@ tier_items:
     exit_criteria:
       - "T0.2's Dockerfile (or equivalent) confirmed as the canonical image definition; T2.11a does not duplicate it"
       - ".devcontainer/devcontainer.json references the canonical image and wires the venv via bin/venv-python (T0.1 wrapper)"
-      - "Codespace booted from main reaches a state where scripts/session_preflight.py runs without error"
+      - "Codespace booted from main reaches a state where scripts/session/preflight.py runs without error"
       - "No .venv/Scripts or python.exe references remain in the devcontainer config (T0.14 complete is a precondition)"
     related_candidate_decisions: [CD.2, CD.20]
     effort: XS
@@ -5572,7 +5572,7 @@ tier_items:
           ducklake backend a DuckLakeReader failure loud-fails (or skips with a warning) instead of silently
           falling back to the stale Athena ops_recommendations_current view; the Athena fallback is reachable
           ONLY under OPS_STORAGE_BACKEND=iceberg (designed rollback). Evidence at audit time:
-          scripts/sync_ops.py _pull_single_table and _rebuild_local_cache fell back unconditionally
+          scripts/sync/ops.py _pull_single_table and _rebuild_local_cache fell back unconditionally
         status: open
       - id: c10
         text: >-
@@ -6180,8 +6180,8 @@ tier_items:
       - src/lambdas/ducklake_writer/handler.py
       - src/lambdas/ducklake_maintenance/handler.py
       - scripts/ops_data_portal.py
-      - scripts/session_preflight.py
-      - scripts/sync_ops.py
+      - scripts/session/preflight.py
+      - scripts/sync/ops.py
     exit_criteria:
       - id: c1
         text: >-
@@ -6537,7 +6537,7 @@ tier_items:
     files_in_scope:
       - scripts/convergence_health.py
       - .github/workflows/convergence-health.yml
-      - scripts/session_preflight.py
+      - scripts/session/preflight.py
       - .claude/skills/orient/SKILL.md
       - config/agent/data_quality/source_registry.yaml
       - docs/ROADMAP-PLATFORM.yaml
@@ -6615,7 +6615,7 @@ tier_items:
       - scripts/ops_writer.py           # OpsWriter.emit -> writer-boundary; staging outbox retire
       - src/data/handlers/agent_telemetry.py    # repoint to writer-boundary
       - config/lambda/ducklake/field_semantics.yaml    # four telemetry table entries
-      - scripts/session_preflight.py    # health check re-enable against reader
+      - scripts/session/preflight.py    # health check re-enable against reader
       - scripts/telemetry_schemas.py    # retain as DDL reference; may retire post-rebuild
       - docs/contracts/storage-substrate.yaml    # telemetry_tables disposition update
     exit_criteria:
@@ -6958,7 +6958,7 @@ tier_items:
     files_in_scope:
       - scripts/rec_relevance.py    # new -- deterministic-first relevance evaluator
       - docs/contracts/recommendation-relevance.yaml    # new -- named projection contract (NOT Class A ops_recommendations columns)
-      - scripts/session_preflight.py    # generalise correlate_ci_rca_with_main beyond ci_rca; surface a relevance / likely-resolved triage list from the read-cache
+      - scripts/session/preflight.py    # generalise correlate_ci_rca_with_main beyond ci_rca; surface a relevance / likely-resolved triage list from the read-cache
       - scripts/ops_data_portal.py    # close_proposed lifecycle support (no schema change)
       - .claude/skills/planning/SKILL.md    # rec-side freshness gate at /plan (analogue of T-1.21)
       - .claude/skills/implement/SKILL.md    # re-check a bundled rec's relevance before implementing it
@@ -7343,7 +7343,7 @@ tier_items:
       instead of a closed enum, so a typo like phase: "pre-merge" is silently accepted instead of rejected.
     depends_on: []
     files_in_scope:
-      - scripts/plan_document.py    # phase enum hardening (pre-deploy | post-deploy)
+      - scripts/roadmap/plan_document.py    # phase enum hardening (pre-deploy | post-deploy)
       - scripts/checks/roadmap/validate_plan_documents.py
       - scripts/checks/roadmap/validate_tier_floor.py    # new -- deterministic V-tier floor check
       - scripts/validate.py
@@ -7473,7 +7473,7 @@ tier_items:
       - docs/contracts/telemetry_observations.yaml    # turn-grain field additions
       - docs/contracts/telemetry_transcripts.yaml    # turn-grain field additions
       - docs/SESSION_LOG.md    # retirement -> docs/SESSION_LOG_ARCHIVE.md
-      - scripts/session_preflight.py    # reader rewire (recent_sessions via query-Lambda verb)
+      - scripts/session/preflight.py    # reader rewire (recent_sessions via query-Lambda verb)
     exit_criteria:
       - id: c1
         text: >-

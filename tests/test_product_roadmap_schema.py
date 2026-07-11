@@ -1,11 +1,11 @@
-"""Tests for scripts/product_roadmap_schema.py -- 100% line coverage target."""
+"""Tests for scripts/roadmap/product_roadmap_schema.py -- 100% line coverage target."""
 
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
-from scripts.product_roadmap_schema import (
+from scripts.roadmap.product_roadmap_schema import (
     CandidateDecision,
     ContractGate,
     CrossTierGate,

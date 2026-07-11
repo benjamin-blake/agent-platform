@@ -3,11 +3,11 @@
 PLAN-sloc-session-postflight).
 
 Freezes the pre-refactor entry contracts so the movement-only decomposition of
-scripts/session_postflight.py into scripts/postflight/ cannot silently change behaviour:
+scripts/session/postflight.py into scripts/postflight/ cannot silently change behaviour:
 
 1. Facade completeness -- every name on the frozen export list (every public function + every
    test-referenced private symbol) is getattr-able on the facade AND importable via
-   `from scripts.session_postflight import <name>`.
+   `from scripts.session.postflight import <name>`.
 2. Mock interception -- patching scripts.postflight._common._run intercepts through a moved body
    (remote.run_push) AND through a facade-resident body (run_commit); patching
    scripts.postflight._common.LOGS_DIR intercepts through a moved body
@@ -19,9 +19,9 @@ scripts/session_postflight.py into scripts/postflight/ cannot silently change be
 4. Argparse flag-surface freeze via --help (all 13 flags).
 5. Behavioural self-reinvocation contract -- patches scripts.postflight._common._run, calls
    run_close(), and asserts the recorded argv is exactly
-   [PYTHON, "scripts/session_postflight.py", "--pre-commit-sanity"]. This is deliberately
+   [PYTHON, "scripts/session/postflight.py", "--pre-commit-sanity"]. This is deliberately
    behavioural rather than textual: a plain source-grep for the callsite (VP step 5) would also
-   match the module docstring's "python scripts/session_postflight.py ..." usage lines if not
+   match the module docstring's "python scripts/session/postflight.py ..." usage lines if not
    carefully anchored; observing the actual recorded subprocess argv has no such ambiguity.
 """
 
@@ -46,7 +46,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # pattern): does not clobber sys.modules["session_postflight"], which test_session_postflight.py
 # registers -- collocating both in one process would make one suite's string-target patches
 # resolve to the other's module object depending on collection/test order (pytest-randomly).
-_MODULE_PATH = ROOT / "scripts" / "session_postflight.py"
+_MODULE_PATH = ROOT / "scripts" / "session" / "postflight.py"
 _spec = importlib.util.spec_from_file_location("session_postflight_decomposition_mod", _MODULE_PATH)
 assert _spec and _spec.loader
 _postflight = importlib.util.module_from_spec(_spec)
@@ -115,18 +115,18 @@ _MOVED_SYMBOLS = FROZEN_EXPORTS - {
 
 class TestFacadeCompleteness:
     """Every name on the frozen export list is getattr-able on the module AND importable via
-    `from scripts.session_postflight import <name>`."""
+    `from scripts.session.postflight import <name>`."""
 
     @pytest.mark.parametrize("name", sorted(FROZEN_EXPORTS))
     def test_getattr_on_private_handle(self, name: str) -> None:
         assert hasattr(_postflight, name), f"{name} missing from the facade module namespace"
 
     def test_every_frozen_export_resolves_via_standard_import(self) -> None:
-        # Equivalent to `from scripts.session_postflight import <name>` for each name: Python's
+        # Equivalent to `from scripts.session.postflight import <name>` for each name: Python's
         # import system resolves a plain-attribute `from X import Y` as getattr(import(X), Y).
-        mod = importlib.import_module("scripts.session_postflight")
+        mod = importlib.import_module("scripts.session.postflight")
         missing = [n for n in sorted(FROZEN_EXPORTS) if not hasattr(mod, n)]
-        assert not missing, f"names not resolvable via `from scripts.session_postflight import <name>`: {missing}"
+        assert not missing, f"names not resolvable via `from scripts.session.postflight import <name>`: {missing}"
 
 
 class TestMockInterceptionThroughFacade:
@@ -204,7 +204,7 @@ class TestArgparseFlagSurfaceFrozen:
 
     def test_help_lists_all_thirteen_flags(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "scripts.session_postflight", "--help"],
+            [sys.executable, "-m", "scripts.session.postflight", "--help"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -232,7 +232,7 @@ class TestArgparseFlagSurfaceFrozen:
 
 
 class TestSelfReinvocationBehavioural:
-    """run_close's self-reinvocation (`_run([PYTHON, "scripts/session_postflight.py",
+    """run_close's self-reinvocation (`_run([PYTHON, "scripts/session/postflight.py",
     "--pre-commit-sanity"])`) is proven BEHAVIOURALLY here, not just by source grep (VP step 5) --
     a bare textual grep for the argv fragments would also match the module docstring's usage
     lines; recording the actual subprocess argv at call time has no such false-positive risk.
@@ -261,6 +261,6 @@ class TestSelfReinvocationBehavioural:
             rc = _postflight.run_close()
 
         assert rc == 0
-        reinvocations = [c for c in recorded if len(c) >= 2 and c[1] == "scripts/session_postflight.py"]
+        reinvocations = [c for c in recorded if len(c) >= 2 and c[1] == "scripts/session/postflight.py"]
         assert len(reinvocations) == 1, f"expected exactly one self-reinvocation call, got {recorded}"
-        assert reinvocations[0] == [_common.PYTHON, "scripts/session_postflight.py", "--pre-commit-sanity"]
+        assert reinvocations[0] == [_common.PYTHON, "scripts/session/postflight.py", "--pre-commit-sanity"]

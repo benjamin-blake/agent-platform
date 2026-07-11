@@ -6,7 +6,7 @@ PLAN-{slug}.yaml file, falls back to the deprecated PLAN-{slug}.md / legacy PLAN
 or returns None if no plan exists.
 
 Usage:
-    bin/venv-python scripts/find_plan.py [docs/plans/PLAN-slug.yaml]
+    bin/venv-python scripts/roadmap/find_plan.py [docs/plans/PLAN-slug.yaml]
     # Prints the plan file path, or NOT_FOUND if no plan exists.
     # Always exits 0.
     # With an explicit path: returns that path if it exists, NOT_FOUND otherwise (no fallback).
@@ -19,12 +19,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 logger = logging.getLogger(__name__)
 
 _MD_DEPRECATION = (
     "Resolved a markdown plan (%s). PLAN-*.md is deprecated (T1.11 / CD.22): author new plans as "
-    "PLAN-{slug}.yaml validated by scripts/plan_document.py. The .md path is removed after one release cycle."
+    "PLAN-{slug}.yaml validated by scripts/roadmap/plan_document.py. The .md path is removed after one release cycle."
 )
 
 

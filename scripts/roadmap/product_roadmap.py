@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-from scripts.product_roadmap_schema import (  # noqa: F401
+from scripts.roadmap.product_roadmap_schema import (  # noqa: F401
     CandidateDecision,
     ContractGate,
     CrossTierGate,
@@ -293,7 +293,7 @@ def load(path: str | Path, platform_path: str | Path | None = None) -> ProductRo
     platform_doc = None
     if platform_path is not None:
         try:
-            from scripts.platform_roadmap import load as load_platform  # noqa: PLC0415
+            from scripts.roadmap.platform_roadmap import load as load_platform  # noqa: PLC0415
 
             platform_doc = load_platform(platform_path)
         except Exception as exc:  # noqa: BLE001

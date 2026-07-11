@@ -35,7 +35,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).parent.parent
+_REPO_ROOT = Path(__file__).parent.parent.parent
 _LOGS_DIR = _REPO_ROOT / "logs"
 _OUTBOX_DIR = _LOGS_DIR / ".ops-outbox"
 

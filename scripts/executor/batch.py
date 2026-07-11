@@ -225,7 +225,7 @@ def execute_batch(
             print(f"[BATCH] {rec_id}: FAILED -- continuing to next eligible rec")
 
         try:
-            from scripts.sync_ops import drain as drain_outbox  # noqa: PLC0415
+            from scripts.sync.ops import drain as drain_outbox  # noqa: PLC0415
 
             drain_outbox()
         except Exception:  # noqa: BLE001

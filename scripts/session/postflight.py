@@ -9,22 +9,22 @@ Modes:
     --pre-commit-sanity  Check branch, scope, orphaned TODOs; output JSON
     --commit "message"   Run git add + commit with pre-commit retry (max 3)
     --push               Push, create PR, poll CI, auto-merge; output JSON
-    --metrics            Run session_metrics.py + plan_audit.py; return combined output
+    --metrics            Run session/metrics.py + roadmap/plan_audit.py; return combined output
     --close              Intent verification + SESSION_LOG entry + pre-commit sanity; output JSON
     --log-housekeeping   Commit and push uncommitted JSONL log files
     --close-session      Finalise the active telemetry session opened by --open-session
     --auto "message"     Full session close in one command: validate -> close -> metrics -> commit -> push -> log-housekeeping
 
 Usage:
-    python scripts/session_postflight.py --validate
-    python scripts/session_postflight.py --pre-commit-sanity
-    python scripts/session_postflight.py --commit "feat: implement something"
-    python scripts/session_postflight.py --push
-    python scripts/session_postflight.py --metrics
-    python scripts/session_postflight.py --close
-    python scripts/session_postflight.py --log-housekeeping
-    python scripts/session_postflight.py --close-session --outcome success
-    python scripts/session_postflight.py --auto "feat: implement something" --steps-total 10 --steps-friction 2
+    python scripts/session/postflight.py --validate
+    python scripts/session/postflight.py --pre-commit-sanity
+    python scripts/session/postflight.py --commit "feat: implement something"
+    python scripts/session/postflight.py --push
+    python scripts/session/postflight.py --metrics
+    python scripts/session/postflight.py --close
+    python scripts/session/postflight.py --log-housekeeping
+    python scripts/session/postflight.py --close-session --outcome success
+    python scripts/session/postflight.py --auto "feat: implement something" --steps-total 10 --steps-friction 2
 """
 
 from __future__ import annotations
@@ -35,20 +35,20 @@ import json
 import re
 import subprocess  # noqa: F401  (kept: facade byte-stable namespace surface, mirrors decision-80/104 precedent)
 import sys
-import time  # noqa: F401  (kept so session_postflight.time.{sleep,time} navigation patches still resolve)
+import time  # noqa: F401  (kept so session.postflight.time.{sleep,time} navigation patches still resolve)
 from pathlib import Path
 
 # Bootstrap the repo root onto sys.path BEFORE importing the scripts.postflight package: run_close
-# self-reinvokes this file by FILE PATH (`scripts/session_postflight.py --pre-commit-sanity`, not
-# `-m scripts.session_postflight`), and a direct file-path invocation puts sys.path[0] at this
+# self-reinvokes this file by FILE PATH (`scripts/session/postflight.py --pre-commit-sanity`, not
+# `-m scripts.session.postflight`), and a direct file-path invocation puts sys.path[0] at this
 # file's own directory (scripts/), not the repo root -- without this, `from scripts.postflight
 # import ...` would fail with ModuleNotFoundError under that invocation mode.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.postflight import _common, housekeeping, remote  # noqa: E402
 
 # Facade re-exports (Decision 80/104 pattern): every public function and every test-referenced
-# private symbol from the pre-decomposition module, so `from scripts.session_postflight import X`
+# private symbol from the pre-decomposition module, so `from scripts.session.postflight import X`
 # and getattr(session_postflight, X) keep resolving. Consolidated in ONE block per source module
 # (tests/CLAUDE.md -- ruff format silently drops symbols from a second block of the same module's
 # imports).
@@ -247,7 +247,7 @@ def run_close() -> int:
     )
 
     # ── 3. Pre-commit sanity ───────────────────────────────────────────────────
-    sanity_result = _common._run([_common.PYTHON, "scripts/session_postflight.py", "--pre-commit-sanity"])
+    sanity_result = _common._run([_common.PYTHON, "scripts/session/postflight.py", "--pre-commit-sanity"])
     sanity_status = "FAIL"
     if sanity_result.returncode == 0:
         try:

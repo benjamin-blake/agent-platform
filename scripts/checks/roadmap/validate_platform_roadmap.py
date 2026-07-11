@@ -53,7 +53,7 @@ def validate_platform_roadmap(failed: list[str]) -> None:
     try:
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from scripts.platform_roadmap import ExitCriterion, load  # noqa: PLC0415
+        from scripts.roadmap.platform_roadmap import ExitCriterion, load  # noqa: PLC0415
 
         doc = load(roadmap_path)
         issues: list[str] = []

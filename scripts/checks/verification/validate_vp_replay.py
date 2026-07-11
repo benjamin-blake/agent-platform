@@ -19,7 +19,7 @@ Steps that are not (pre-deploy AND hermetic) are printed as EXCLUDED with an exp
 no-op PASS. A PLAN-*.yaml that fails PlanDocument content validation (schema_version/YAML/field
 errors) is skipped with a note -- schema validity is validate_plan_documents' concern, not
 replayed here (avoids double-reporting the same defect under two check names). An ``ImportError``
-loading ``scripts.plan_document`` itself is a distinct, infrastructural failure -- it is NOT
+loading ``scripts.roadmap.plan_document`` itself is a distinct, infrastructural failure -- it is NOT
 downgraded to a skip; it reddens this check directly (mirrors the ImportError/content-error split
 in ``validate_plan_documents.py``, Decision 55 fail-loud).
 
@@ -55,7 +55,7 @@ def _plan_paths_from_changed(changed_files: list[str]) -> list[str]:
 
 
 def _load_plan(rel_path: str, root: Path):
-    """Load a PlanDocument via scripts.plan_document.load(), injecting repo root onto sys.path."""
+    """Load a PlanDocument via scripts.roadmap.plan_document.load(), injecting repo root onto sys.path."""
     root_str = str(root)
     import sys as _sys  # noqa: PLC0415
 
@@ -63,7 +63,7 @@ def _load_plan(rel_path: str, root: Path):
     if injected:
         _sys.path.insert(0, root_str)
     try:
-        from scripts.plan_document import load  # noqa: PLC0415
+        from scripts.roadmap.plan_document import load  # noqa: PLC0415
 
         return load(root / rel_path)
     finally:
@@ -167,7 +167,7 @@ def validate_vp_replay(failed: list[str], changed_files: list[str] | None = None
         try:
             doc = _load_plan(plan_rel, root)
         except ImportError as exc:
-            failed.append(f"vp-replay {plan_rel}: could not import scripts.plan_document: {exc}")
+            failed.append(f"vp-replay {plan_rel}: could not import scripts.roadmap.plan_document: {exc}")
             continue
         except Exception as exc:  # noqa: BLE001 -- schema validity is validate_plan_documents' concern
             print(f"  SKIP: {plan_rel}: load error ({exc}) -- not double-reported here")

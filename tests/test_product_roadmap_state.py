@@ -1,11 +1,11 @@
-"""Tests for ProductRoadmapState helpers in scripts/product_roadmap.py."""
+"""Tests for ProductRoadmapState helpers in scripts/roadmap/product_roadmap.py."""
 
 from __future__ import annotations
 
 import copy
 from pathlib import Path
 
-from scripts.product_roadmap import (
+from scripts.roadmap.product_roadmap import (
     ProductRoadmapDocument,
     ProductRoadmapState,
     load,

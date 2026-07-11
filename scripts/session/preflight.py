@@ -8,7 +8,7 @@ logs/.preflight-report.json for use by plan.prompt.md. Exits 1 on critical failu
 0 otherwise.
 
 Usage:
-    bin/venv-python -m scripts.session_preflight
+    bin/venv-python -m scripts.session.preflight
 """
 
 from __future__ import annotations
@@ -22,8 +22,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts import platform_roadmap
-from scripts import product_roadmap as product_roadmap_module
 from scripts.preflight import (
     _common,
     alerts,
@@ -38,7 +36,7 @@ from scripts.preflight import (
 )
 
 # Facade re-exports (Decision 80/104 pattern): every public function and every test-referenced
-# private symbol from the pre-decomposition module, so `from scripts.session_preflight import X`
+# private symbol from the pre-decomposition module, so `from scripts.session.preflight import X`
 # and getattr(session_preflight, X) keep resolving. Consolidated in ONE block (tests/CLAUDE.md --
 # ruff format silently drops symbols from a second block of the same module's imports).
 from scripts.preflight._common import (  # noqa: F401
@@ -151,7 +149,9 @@ from scripts.preflight.recs_cache import (  # noqa: F401
     _tally_rec_counts,
     count_recommendations,
 )
-from scripts.sync_ops import _rebuild_local_cache as _sync_ops_pull  # noqa: F401  (kept for back-compat test patch targets)
+from scripts.roadmap import platform_roadmap
+from scripts.roadmap import product_roadmap as product_roadmap_module
+from scripts.sync.ops import _rebuild_local_cache as _sync_ops_pull  # noqa: F401  (kept for back-compat test patch targets)
 from src.common.iceberg_reader import DuckDBIcebergReader as _DuckDBIcebergReader  # noqa: F401  (kept for back-compat refs)
 
 PREFLIGHT_REPORT = _common.ROOT / "logs" / ".preflight-report.json"
@@ -219,7 +219,7 @@ def main(roadmap_detail: str = "slim") -> int:
     warm_rows: dict[str, list[dict] | None] = {}
     warm_reader_ok: dict[str, bool] = {}
     try:
-        from scripts.sync_ops import outbox_summary  # noqa: PLC0415
+        from scripts.sync.ops import outbox_summary  # noqa: PLC0415
 
         outbox = outbox_summary()
         if outbox:
@@ -230,7 +230,7 @@ def main(roadmap_detail: str = "slim") -> int:
 
     if creds_status == "ok":
         try:
-            from scripts.sync_ops import warm_sync  # noqa: PLC0415
+            from scripts.sync.ops import warm_sync  # noqa: PLC0415
 
             warm = warm_sync()
             recommendation_sync = warm.get("pulled", {})  # type: ignore[assignment]

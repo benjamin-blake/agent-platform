@@ -11,11 +11,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scripts.product_roadmap import compute_state_dict
+from scripts.roadmap.product_roadmap import compute_state_dict
 
 # Load session_preflight once; reuse the already-loaded module when the full suite runs.
 if "session_preflight" not in sys.modules:
-    _MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session_preflight.py"
+    _MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session" / "preflight.py"
     _spec = importlib.util.spec_from_file_location("session_preflight", _MODULE_PATH)
     assert _spec and _spec.loader
     _preflight = importlib.util.module_from_spec(_spec)
@@ -191,7 +191,7 @@ class TestPreflightProductRoadmapBlock:
             ),
             patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
             patch("scripts.preflight._common._make_reader", return_value=reader_stub),
-            patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}),
+            patch("scripts.sync.ops.sync", return_value={"drained": {}, "pulled": {}}),
             patch("session_preflight.platform_roadmap.compute_state_dict", return_value={}),
             patch("session_preflight.product_roadmap_module.compute_state_dict", return_value=_product_state),
             patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
@@ -206,7 +206,7 @@ class TestPreflightProductRoadmapBlock:
             "product_roadmap in the preflight report is intentionally slimmed via "
             "_slim_roadmap_state. The full compute_state_dict shape (in_progress, "
             "blocked, active_layer, *_consumers) is still produced by "
-            "scripts.product_roadmap.compute_state_dict for direct callers, but is "
+            "scripts.roadmap.product_roadmap.compute_state_dict for direct callers, but is "
             "not stored in the report -- it cost ~4k tokens per session that no "
             "workflow consumed. If you need the full state, call compute_state_dict() directly."
         )

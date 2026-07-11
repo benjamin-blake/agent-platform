@@ -56,7 +56,7 @@ def validate_candidate_decision_ratification(failed: list[str]) -> None:
     if injected:
         sys.path.insert(0, root_str)
     try:
-        from scripts.platform_roadmap import load  # noqa: PLC0415
+        from scripts.roadmap.platform_roadmap import load  # noqa: PLC0415
 
         doc = load(roadmap_path)
     except Exception as exc:  # noqa: BLE001

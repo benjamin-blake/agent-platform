@@ -11,7 +11,7 @@ argument-hint: [docs/plans/PLAN-slug.yaml]
 
 ## Step 1: Run Preflight
 ```bash
-bin/venv-python -m scripts.session_preflight
+bin/venv-python -m scripts.session.preflight
 ```
 stdout is a one-line summary; Read logs/.preflight-report.json for the full constraint surface.
 
@@ -19,7 +19,7 @@ Preflight runs `git fetch origin main` and emits `main_freshness` (status, commi
 
 After preflight completes successfully, open a telemetry session:
 ```bash
-bin/venv-python -m scripts.session_preflight --open-session --workflow implement
+bin/venv-python -m scripts.session.preflight --open-session --workflow implement
 ```
 Save the printed UUID for the `session_postflight --close-session` call in Step 9.
 
@@ -37,11 +37,11 @@ If the result is `main`, STOP.
 
 The plan path is provided as `$ARGUMENTS` from the `/plan` handoff (e.g. `docs/plans/PLAN-web-workflow-migration.yaml`). If an argument was given, resolve it:
 ```bash
-bin/venv-python scripts/find_plan.py <path-from-arguments>
+bin/venv-python scripts/roadmap/find_plan.py <path-from-arguments>
 ```
 If no argument was given, fall back to auto-discovery:
 ```bash
-bin/venv-python scripts/find_plan.py
+bin/venv-python scripts/roadmap/find_plan.py
 ```
 If either command prints `NOT_FOUND`, list `docs/plans/PLAN-*.yaml` and ask the human which plan to implement.
 
@@ -99,7 +99,7 @@ If the friction was a recurring gap or unrecoverable failure, you MUST invoke th
 
 Friction logs will be committed to the current branch and pushed automatically via the `session_postflight.py` flow during Step 7, or you can flush them manually:
 ```bash
-bin/venv-python -m scripts.session_postflight --log-housekeeping
+bin/venv-python -m scripts.session.postflight --log-housekeeping
 ```
 
 ## Step 9: Report and Close Session
@@ -109,6 +109,6 @@ Output the final report:
 
 Finally, close the telemetry session:
 ```bash
-bin/venv-python -m scripts.session_postflight --close-session --outcome success
+bin/venv-python -m scripts.session.postflight --close-session --outcome success
 ```
 Use `--outcome failure` if the session ended with unresolved errors. Use `--outcome cancelled` if abandoned.

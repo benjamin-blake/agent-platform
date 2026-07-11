@@ -118,7 +118,7 @@ A 1.5.4 engine successfully reads a 1.5.3-authored catalog clone (no on-disk mig
 ```yaml
 version_bump_surfaces:
   - config/lambda/ducklake/version.yaml          # SOLE EDITABLE -- change ONLY this value
-  - requirements.txt                              # DERIVED -- sync via scripts/sync_ducklake_version.py
+  - requirements.txt                              # DERIVED -- sync via scripts/sync/ducklake_version.py
   - s3://agent-platform-data-lake/ducklake-extensions/<new-version>/  # re-seeded baked extensions
   # (src/common/ducklake_runtime.py and scripts/build_lambda.py derive via pinned_duckdb_version() --
   #  no edits needed when version.yaml is the sole change point)
@@ -141,7 +141,7 @@ is a structural block, not a transient network error.
 ### Clone-rehearsal gate (mandatory before any production bump)
 
 1. **Pin candidate.** Edit `duckdb_version` in `config/lambda/ducklake/version.yaml` on a branch.
-   Run `bin/venv-python -m scripts.sync_ducklake_version` to sync `requirements.txt`.
+   Run `bin/venv-python -m scripts.sync.ducklake_version` to sync `requirements.txt`.
    Run `bin/venv-python -m scripts.validate --pre` to confirm the ducklake-version-lockstep gate passes.
 2. **Re-seed extensions.** Fetch `ducklake`/`httpfs`/`postgres_scanner` for `vX.Y.Z/linux_amd64` and upload to
    `s3://agent-platform-data-lake/ducklake-extensions/vX.Y.Z/` (the build's S3 fallback). Confirm the local

@@ -142,7 +142,7 @@ def validate_paths(paths: list[Path]) -> list[tuple[Path, str]]:
 
 
 def main(argv: list[str] | None = None, plans_root: Path | None = None) -> int:
-    root = plans_root if plans_root is not None else Path(__file__).resolve().parent.parent / "docs" / "plans"
+    root = plans_root if plans_root is not None else Path(__file__).resolve().parent.parent.parent / "docs" / "plans"
     parser = argparse.ArgumentParser(description="Plan document validator (PLAN-*.yaml)")
     parser.add_argument(
         "paths",

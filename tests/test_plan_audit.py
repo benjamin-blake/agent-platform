@@ -1,4 +1,4 @@
-"""Tests for scripts/plan_audit.py -- plan file detection, scope audit, and PR URL audit."""
+"""Tests for scripts/roadmap/plan_audit.py -- plan file detection, scope audit, and PR URL audit."""
 
 import importlib.util
 import json
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "plan_audit.py"
+_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "roadmap" / "plan_audit.py"
 _spec = importlib.util.spec_from_file_location("plan_audit", _SCRIPT_PATH)
 _plan_audit = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(_plan_audit)  # type: ignore[union-attr]

@@ -26,7 +26,7 @@ steps (8-9) may run on whatever the session reverted to. If the human directs yo
 another model, note it in the Step 5 presentation and the Step 9 message.*
 
 ```bash
-bin/venv-python -m scripts.session_preflight
+bin/venv-python -m scripts.session.preflight
 ```
 
 Read `logs/.preflight-report.json` (branch, creds, and cache freshness feed recon; the
@@ -39,7 +39,7 @@ Then open a telemetry session (the state file `logs/.telemetry-active-session.js
 session id; Step 9's close reads it):
 
 ```bash
-bin/venv-python -m scripts.session_preflight --open-session --workflow audit
+bin/venv-python -m scripts.session.preflight --open-session --workflow audit
 ```
 
 ## Step 2: Confirm Harness Branch
@@ -163,7 +163,7 @@ human review. Summary: {one line on what the audit will assess}.
 Close the telemetry session:
 
 ```bash
-bin/venv-python -m scripts.session_postflight --close-session --outcome success
+bin/venv-python -m scripts.session.postflight --close-session --outcome success
 ```
 
 Use `--outcome cancelled` if the prompt was not written or the session was abandoned.

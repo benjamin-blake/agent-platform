@@ -80,7 +80,7 @@ This provides a single queryable timeline of all work across all workflows. The 
 export S3_LOG_BUCKET=agent-platform-agent-logs  # enables OpsWriter write-through to Iceberg
 ```
 
-Add this to your `~/.bashrc` or `~/.bash_profile` (or set via the CC-web Setup script field). Without it, `OpsWriter.write()` silently no-ops locally and ops tables will not receive data from local sessions. The preflight check (`bin/venv-python -m scripts.session_preflight`) warns when this is unset.
+Add this to your `~/.bashrc` or `~/.bash_profile` (or set via the CC-web Setup script field). Without it, `OpsWriter.write()` silently no-ops locally and ops tables will not receive data from local sessions. The preflight check (`bin/venv-python -m scripts.session.preflight`) warns when this is unset.
 
 ---
 

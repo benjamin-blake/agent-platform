@@ -35,7 +35,7 @@ def validate_product_roadmap(failed: list[str]) -> None:
     try:
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from scripts.product_roadmap import load  # noqa: PLC0415
+        from scripts.roadmap.product_roadmap import load  # noqa: PLC0415
 
         load(product_path, platform_path=platform_path)
         print("  PASS: product roadmap schema validation passed.")

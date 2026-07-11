@@ -357,7 +357,7 @@ def migrate(
     """Execute (or dry-run) the ops migration. Returns a process exit code."""
     import boto3  # noqa: PLC0415
 
-    from scripts.sync_ops import _coerce_ops_decisions_row, _coerce_ops_rec_row  # noqa: PLC0415
+    from scripts.sync.ops import _coerce_ops_decisions_row, _coerce_ops_rec_row  # noqa: PLC0415
 
     # DEST resolution is constant + env driven (Decision 69): the portal reads the personal
     # account from the FLIPPED module constants and AWS_PROFILE. Set both explicitly.
@@ -484,7 +484,7 @@ def migrate(
     sync()
 
     # --- COUNTER RESEED (HARD gate, Decision 50): monotonic, above migrated max ---
-    from scripts.sync_recommendations import reseed_decisions_counter, reseed_recommendations_counter  # noqa: PLC0415
+    from scripts.sync.recommendations import reseed_decisions_counter, reseed_recommendations_counter  # noqa: PLC0415
 
     rec_target = max_rec_int + _COUNTER_MARGIN
     dec_target = max_dec_int + _COUNTER_MARGIN

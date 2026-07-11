@@ -176,8 +176,8 @@ def _run(
         stack.enter_context(patch("scripts.ops_data_portal.file_rec", file_rec))
         stack.enter_context(patch("scripts.ops_data_portal.file_decision", file_decision))
         stack.enter_context(patch("scripts.ops_data_portal.sync", sync))
-        stack.enter_context(patch("scripts.sync_recommendations.reseed_recommendations_counter"))
-        stack.enter_context(patch("scripts.sync_recommendations.reseed_decisions_counter"))
+        stack.enter_context(patch("scripts.sync.recommendations.reseed_recommendations_counter"))
+        stack.enter_context(patch("scripts.sync.recommendations.reseed_decisions_counter"))
         if summary_path is not None:
             stack.enter_context(patch("scripts.migrate_ops_data._SUMMARY_PATH", summary_path))
         code = mod.migrate(
@@ -309,8 +309,8 @@ def test_source_workgroup_threaded(tmp_path: Path) -> None:
         stack.enter_context(patch("scripts.ops_data_portal.file_rec", file_rec))
         stack.enter_context(patch("scripts.ops_data_portal.file_decision", file_decision))
         stack.enter_context(patch("scripts.ops_data_portal.sync", MagicMock(return_value={})))
-        stack.enter_context(patch("scripts.sync_recommendations.reseed_recommendations_counter"))
-        stack.enter_context(patch("scripts.sync_recommendations.reseed_decisions_counter"))
+        stack.enter_context(patch("scripts.sync.recommendations.reseed_recommendations_counter"))
+        stack.enter_context(patch("scripts.sync.recommendations.reseed_decisions_counter"))
         stack.enter_context(patch("scripts.migrate_ops_data._SUMMARY_PATH", tmp_path / "s.json"))
         code = mod.migrate(
             profile_source="company-aws-profile",

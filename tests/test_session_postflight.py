@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/session_postflight.py."""
+"""Unit tests for scripts/session/postflight.py."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import pytest
 from scripts.postflight import _common
 
 # Load the module under test
-_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session_postflight.py"
+_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session" / "postflight.py"
 _spec = importlib.util.spec_from_file_location("session_postflight", _MODULE_PATH)
 assert _spec and _spec.loader
 _postflight = importlib.util.module_from_spec(_spec)
@@ -27,11 +27,11 @@ def _mock_sync_ops_postflight():
     """Prevent real AWS calls from sync_ops inside run_auto() tests.
 
     Step 8 of run_auto calls scripts.ops_data_portal.sync(), which pulls each table via
-    scripts.sync_ops._pull_single_table -- stub the pull so no test reaches the network.
+    scripts.sync.ops._pull_single_table -- stub the pull so no test reaches the network.
     """
     with (
-        patch("scripts.sync_ops.sync", return_value={"drained": {}, "pulled": {}}),
-        patch("scripts.sync_ops._pull_single_table", return_value=0),
+        patch("scripts.sync.ops.sync", return_value={"drained": {}, "pulled": {}}),
+        patch("scripts.sync.ops._pull_single_table", return_value=0),
     ):
         yield
 

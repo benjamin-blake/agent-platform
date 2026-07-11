@@ -80,7 +80,7 @@ def _fetch_decision_from_reader(decision_id: str, profile: Optional[str] = None)
     if not re.fullmatch(r"dec-\d+", decision_id):
         raise ValueError(f"_fetch_decision_from_reader: invalid decision_id: {decision_id!r}")
 
-    from scripts.sync_ops import _coerce_ops_decisions_row  # noqa: PLC0415
+    from scripts.sync.ops import _coerce_ops_decisions_row  # noqa: PLC0415
     from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
     rows = make_reader(profile=profile).named("decision_by_id", id=decision_id)
@@ -139,7 +139,7 @@ def backfill_decisions_from_md(profile: Optional[str] = None) -> dict:
         {"written": N, "failed": M, "skipped": K}
     """
     from scripts.decisions_md import parse_decisions_md  # noqa: PLC0415
-    from scripts.sync_ops import _coerce_athena_array  # noqa: PLC0415
+    from scripts.sync.ops import _coerce_athena_array  # noqa: PLC0415
 
     written = failed = skipped = 0
     for entry in parse_decisions_md():

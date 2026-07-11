@@ -358,7 +358,7 @@ def _fetch_rec_from_reader(rec_id: str, profile: Optional[str] = None) -> Option
     if not re.fullmatch(r"rec-\d+", rec_id):
         raise ValueError(f"_fetch_rec_from_reader: invalid rec_id: {rec_id!r}")
 
-    from scripts.sync_ops import _coerce_ops_rec_row  # noqa: PLC0415
+    from scripts.sync.ops import _coerce_ops_rec_row  # noqa: PLC0415
     from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
     rows = make_reader(profile=profile).named("rec_by_id", id=rec_id)
@@ -464,7 +464,7 @@ def sync(tables: Optional[list] = None) -> dict:
     Raises:
         RuntimeError: If the reader boundary is unreachable.
     """
-    from scripts.sync_ops import _pull_single_table  # noqa: PLC0415
+    from scripts.sync.ops import _pull_single_table  # noqa: PLC0415
 
     ops_tables = tables or ["ops_recommendations", "ops_decisions", "ops_priority_queue"]
 

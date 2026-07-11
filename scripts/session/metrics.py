@@ -15,7 +15,7 @@ from pathlib import Path
 from scripts.s3_log_store import append_jsonl as s3_append_jsonl
 from scripts.s3_log_store import get_backend
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 PYTHON = sys.executable
 METRICS_LOG = ROOT / "logs" / ".session-metrics-log.jsonl"
 PREFLIGHT_REPORT = ROOT / "logs" / ".preflight-report.json"
