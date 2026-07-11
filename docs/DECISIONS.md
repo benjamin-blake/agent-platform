@@ -2,6 +2,117 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 126: Two-verb deployment model + heal button + operator-only admin tier (completing CD.35) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-11
+**Warehouse ID:** dec-126 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The CD.35 apply pipeline (Decisions 77/92/119/120, T2.20-T2.25/T2.35) is control-theoretically
+sound -- no-TOCTOU plan/apply identity, a fail-closed guard with an authority budget, anti-masking
+convergence -- but the target deployment MODEL was never written down as a single citable surface.
+It is smeared across 6+ documents (AGENTS.md, terraform/CLAUDE.md, environment-taxonomy.md,
+build-lambda.yaml, PROJECT_CONTEXT.md, DECISIONS.md itself), two of which went stale after #544
+(environment-taxonomy.md section 5 and build-lambda.yaml still described the four DuckLake
+functions as coupled after the decoupling landed), and the best-documented path through that smear
+is the local-apply escape hatch (Decision 120), because it is the one path with no missing verb to
+route around. The concrete failure mode this produces: an agent facing "I need to deploy code" or
+"the pipeline is red" has no ambient, authoritative answer for what to do, and improvises toward
+whichever surface it happened to read -- which is disproportionately the escape hatch, not because
+it is the sanctioned path but because it is the most visible one. rec-2646 demonstrated the
+governed-channel scope evaporating when its rec closed on grep-acceptance alone, with no roadmap
+tracker to catch the loss (the failure mode this Decision's tier_items are designed not to repeat).
+
+**Decision:**
+1. **The model.** Agents have exactly three intents, each with exactly one trigger:
+   - **provision** (infra changes): edit `terraform/**`, open a PR; CI plans and applies (Decision
+     77/92/119). No agent self-directs a `terraform apply` for this intent -- CI applies it.
+   - **deploy code**: the governed code-deploy channel (T2.38 for the four DuckLake Lambdas).
+     Terraform is not involved -- code ships via a build/deploy pipeline scoped to
+     `UpdateFunctionCode`-equivalent permissions only.
+   - **reconcile** (the pipeline is red or drifted): one input-free Reconcile action (T2.37) that
+     reads the red commit from the convergence record and re-applies it -- no operator-supplied SHA,
+     no manual triage step for the common case.
+   Plus an **operator-only admin tier**: bootstrap root and `agent_platform_admin` IAM/trust/destroy
+   changes are human-only -- an agent's only move there is to file a rec describing what's needed
+   and why. The Decision 120 local-apply escape hatch is a narrower carve-out within this same
+   tier: a human-gated interactive loop where an agent may execute `terraform apply` only after a
+   human has reviewed the plan and explicitly directed it -- never self-directed, never the default
+   path for any of the three intents above.
+2. **Invariants:**
+   - Agents never self-direct a `terraform apply`; operators may always invoke it directly, and an
+     agent may execute it only within the human-gated break-glass admin tier below (Decision 120
+     restored this for IAM/trust/destroy changes that guard-BLOCK the CD pipeline and for
+     hand-applied recovery; Decision 98 admin-create; Decision 77 bootstrap -- none of that is
+     revoked by this Decision).
+   - The escape hatch's danger is that it is AMBIENT (the best-documented, most-reached-for path),
+     not that it exists. The fix is demotion and eventual quarantine to an operator-only runbook,
+     never deletion of the operator's only working recovery mechanism.
+   - The heal button (T2.37) MUST land and be verified BEFORE the escape hatch is quarantined
+     (T2.41) -- removing the only working recovery path before its replacement is proven turns the
+     next incident into a hard outage. T2.41 `depends_on: [T2.37]` in the roadmap encodes this.
+   - `docs/contracts/deploy-paths.yaml` is a navigation index pointing to
+     `environment-taxonomy.md` for apply-model / guard-classification rules (Decision 92 point 5
+     sole-SoT); it is never a second source of truth for those rules (Decision 86 no-drift).
+3. **Amends Decision 125 point 5.** Point 5 recorded the four DuckLake Lambdas (writer, reader,
+   maintenance, catalog-dr) as an interim-COUPLED, not-yet-conformant state pending a follow-on.
+   #544 (commit 32a00616) landed that follow-on: every `aws_lambda_function` resource in
+   `terraform/personal/ducklake_lambdas.tf`, `ducklake_catalog_dr.tf`, and `ducklake_maintenance.tf`
+   now carries `lifecycle { ignore_changes = [source_code_hash] }`. The interim-COUPLED framing in
+   Decision 125 point 5 is superseded by this realized state; `environment-taxonomy.md` section 5
+   and `build-lambda.yaml`'s `channel_class` are corrected to DECOUPLED in the same PR that ratifies
+   this Decision. The governed code-deploy CHANNEL Decision 125 point 2 named as the target is still
+   pending -- that is T2.38, not yet realized by #544's physical decoupling alone.
+4. **Amends Decision 120.** The local-apply escape hatch Decision 120 restored (the ADMIN
+   container's interactive human-gated apply loop, `terraform/CLAUDE.md` "Interactive loop
+   fallback") will be quarantined out of the ambient dev-loop doc into a dedicated operator-only
+   runbook once the heal button (T2.37) lands and is verified -- tracked by T2.41
+   (`depends_on: [T2.37]`). Decision 120's restoration itself is not reversed; only its
+   documentation surface moves from ambient to a runbook reachable via `deploy-paths.yaml`'s
+   `admin_out_of_band` pointer.
+5. **Sequencing / roadmap.** Six new tier_items carry the engineering this Decision's foundation
+   points at: T2.37 (heal button: input-free Reconcile), T2.38 (governed code-deploy channel +
+   deployment record for the four DuckLake functions, realizing Decision 125's deploy verb), T2.39
+   (take the non-deterministic LLM plan-review subagent out of the red-latch path -- forward-fix for
+   rec-2658), T2.40 (this Decision's own navigability + SoT-integrity foundation -- deploy-paths.yaml,
+   the AGENTS.md ambient rule, the terraform/CLAUDE.md decision table, the conformance staleness
+   guard -- closed by the same plan that authors this Decision), T2.41 (escape-hatch quarantine,
+   `depends_on: [T2.37]`, amends Decision 120), T2.42 (terraform-path hardening: layer replace
+   policy, committed lock file, content-addressed zips, deduped build-step bash).
+
+**Reversal conditions:** re-evaluate the bespoke two-verb/heal-button pipeline against a managed
+reconciler (e.g. a hosted GitOps/Terraform-Cloud-class product) if the bespoke pipeline proves
+unmaintainable at this scale -- any such re-evaluation must be scoped against the Decision 101
+confidential-data boundary (personal AWS account credentials/ARNs never leave the gitignored/
+Secrets-Manager surface) before a managed third party is considered.
+
+**Rationale:**
+A Fable (frontier) design review of the CD.35 pipeline concluded the control theory is
+frontier-grade -- the gaps are recovery ergonomics, the missing deploy verb, and documentation
+topology, not the apply architecture itself. This Decision records the target model once, in one
+citable place, so the follow-on engineering (T2.37-T2.42) has a fixed point to build toward instead
+of each landing its own ad hoc framing. Per Decision 86, rationale lives here; forward intent lives
+in the tier_items; field semantics live in the `deploy-paths.yaml` machine-readable contract -- no
+new standing prose-architecture doc is created. This is a fresh forward-direction Decision, not a
+candidate CD, because the model it records is not yet realized end-to-end (Decision 87 precedent:
+the CD->Decision lane, Decision 105, is for ratifying already-realized CDs, which this is not).
+
+**Related:** Decision 125 (amended point 5, above), Decision 120 (amended, above), Decision 92 point
+5 (apply-model / guard classification -- sole SoT, unmodified by this Decision), Decision 86
+(rationale-routing / no new prose-architecture doc), Decision 98 (admin-create provisioning),
+Decision 77 (bootstrap + sandbox auto-apply + deterministic guard), Decision 55 (RCA-first; no
+inline-patching of the ci-rca recs this Decision defers -- rec-2658 forward-fixed by T2.39),
+Decision 104 (the conformance staleness guard registers via the check registry), Decision 105 (the
+candidate-decision ratification lane -- not used here; see Rationale), Decision 79 (per-Lambda
+build/deploy/smoke-test gating that T2.38's governed channel extends), Decision 101 (public-content
+boundary -- `deploy-paths.yaml` names roles by logical name only, no account IDs/ARNs/ExternalIds),
+Decision 118 (free-form registry precedent for a non-ritual contract -- `deploy-paths.yaml` carries
+no `contract:`/`class:` block), Decision 72 (architectural-review vehicle for a recurring ci-rca
+class -- this Decision is that vehicle for rec-2658).
+
+---
+
 ## Decision 125: Ratify decoupling DuckLake Lambda code deploys from terraform/personal infra apply (environment-taxonomy.md section 5 conformance) (Decided)
 
 **Status:** Decided

@@ -131,17 +131,18 @@ does not surface as a Terraform diff on the guarded auto-apply path. Code ships 
 pipeline; infra ships via Terraform. Keeping them decoupled means the deterministic apply guard
 sees only genuine infra changes, not routine code-hash churn.
 
-**Conformance status (Decision 125):** the four DuckLake Lambdas (writer, reader, maintenance,
-catalog-dr; T2.17/T2.18, Decision 81/82) are the first personal-account Lambdas and are currently
-COUPLED, not conformant: every `aws_lambda_function` resource in `terraform/personal/
-ducklake_lambdas.tf`, `ducklake_catalog_dr.tf`, and `ducklake_maintenance.tf` still sets
-`source_code_hash = try(filemd5(zip), null)` with no `ignore_changes` lifecycle block. Decision 125
-ratifies conformance to this principle as direction (target channel = a dedicated code-deploy CD
-path; local `build_lambda --ducklake-only --deploy` demoted to break-glass) without performing the
-physical decoupling, which is sequenced as a follow-on (blocked on clearing a pending out-of-budget
-IAM delta that would otherwise route the decoupling change's own apply). This file remains the sole
-SoT for the apply-model / guard classification -- the interim/target state recorded above extends
-that SoT, it does not compete with it.
+**Conformance status (Decision 125/126, #544):** the four DuckLake Lambdas (writer, reader,
+maintenance, catalog-dr; T2.17/T2.18, Decision 81/82) are the first personal-account Lambdas and
+are now DECOUPLED, conformant: every `aws_lambda_function` resource in `terraform/personal/
+ducklake_lambdas.tf`, `ducklake_catalog_dr.tf`, and `ducklake_maintenance.tf` carries a
+`lifecycle { ignore_changes = [source_code_hash] }` block as of #544 (commit 32a00616), so a
+code-only redeploy no longer surfaces as a Terraform diff on the guarded auto-apply path. Layers
+(`ducklake-deps-layer`, `ducklake-extensions-layer`, `ducklake-pgclient-layer`) remain coupled --
+layer replacement is not yet decoupled (tracked by T2.42). The governed code-deploy channel for
+the four functions (target channel = a dedicated code-deploy CD path) is still pending (T2.38);
+local `build_lambda --ducklake-only --deploy` remains the interim break-glass path. This file
+remains the sole SoT for the apply-model / guard classification -- the interim/target state
+recorded above extends that SoT, it does not compete with it.
 
 ## 6. Provider lock file consideration (apply-path supply chain)
 

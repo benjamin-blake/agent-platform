@@ -33,8 +33,8 @@ locally on `INSTALL_TERRAFORM=1` containers, resolving `config/terraform/cc-web.
 `TF_CLI_CONFIG_FILE` -- gated on a successful, non-empty sync (an empty/stale sync leaves
 `TF_CLI_CONFIG_FILE` unset rather than exporting a config that excludes `kislerdm/*` from `direct`
 with nothing in the mirror to serve). With that mirror synced, local `terraform init` of
-`terraform/personal` succeeds with no github.com fetch (see the Interactive loop fallback section
-below for when this is used).
+`terraform/personal` succeeds with no github.com fetch (see the "Operator-only / break-glass
+(Decision 120)" section below for when this is used).
 
 This RELAXES but does NOT REMOVE the CI-delegation: routine (non-admin) `terraform validate`/`plan`/`apply`
 for `terraform/personal` remain CI-mediated and authoritative regardless of any given container's
@@ -63,18 +63,28 @@ are recoverable from the **remote Terraform state in S3**, which IS the source o
 - **Never paste these values into chat, a PR, or any committed file** -- the ExternalIds are AssumeRole
   trust secrets and the account id is shape-blocked by the pre-commit `never-commit` hook.
 
-**Apply posture:** see `docs/contracts/environment-taxonomy.md` Axis A + Guard classification subsection
-for the authoritative in-budget/out-of-budget classification (T2.25 / Decision 92 point 5). Short form:
+**Deployment model (Decision 126):** the PR -> CI apply pipeline below is the default, ambient
+path. Local/manual apply is operator-only break-glass, not a routine agent action -- see
+"Operator-only / break-glass" below. Full intent -> trigger -> recovery wayfinding:
+`docs/contracts/deploy-paths.yaml`. Guard classification (what auto-applies vs what blocks) is
+authoritative SOLELY in `docs/contracts/environment-taxonomy.md` Axis A + Guard classification
+(T2.25 / Decision 92 point 5) -- the table below names the channel, it does not restate that
+classification.
 
-- Guard-PASS (non-IAM or in-budget IAM) changes auto-apply via CD (`terraform-apply-sandbox.yml`).
-  The CC-web agent presents the plan on PRs via the speculative-plan comment; at merge the SAME
-  reviewed plan.bin is applied (no re-plan, T2.21).
-- Out-of-budget IAM, trust diffs, destroys (guard exits 2): the `gated-apply` job blocks on the
-  `tf-gated-apply` GitHub Environment reviewer (benjamin-blake approves in GitHub Actions), then applies
-  the same reviewed plan.bin in CD -- never from a laptop. Recovery from a failed gated apply is the
-  `workflow_dispatch` acknowledge-and-retry path after reviewing the `ci-rca` rec.
-- Bootstrap root (`terraform/bootstrap/`) is admin-only out-of-band (agent_platform_admin), NEVER auto-applies.
-  The bootstrap root owns `github_ci_apply`'s own IAM + authority budget (T2.23/T2.25).
+| Want | Do | If blocked |
+|---|---|---|
+| Apply a guard-PASS (non-IAM or in-budget IAM) `terraform/personal` change | Open a PR; CD (`terraform-apply-sandbox.yml`) plans on the PR and applies the SAME reviewed plan.bin at merge (T2.21, no re-plan) | N/A -- this is the primary path |
+| Apply an out-of-budget IAM / trust / destroy `terraform/personal` change | Open a PR; CD routes to the `tf-gated-apply` GitHub Environment | Approve in GitHub Actions (benjamin-blake); CD applies the same reviewed plan.bin -- never from a laptop |
+| Recover from a red convergence record (failed/refused apply, or drift) | Run `terraform-apply-sandbox` via `workflow_dispatch` acknowledge-and-retry (names the red commit / open rec id) AFTER the `ci-rca` rec is reviewed (Decision 55/72) | Nothing auto-remediates; T2.37 (Reconcile, not yet landed) will be the lower-friction path |
+| Apply `terraform/` (legacy hashicorp/*-only roots) or `terraform/github` | Same PR -> CD path where a workflow exists | See "Operator-only / break-glass" below |
+| Apply `terraform/bootstrap`, or apply `terraform/personal` by hand (bootstrap, reversing a manual admin change, or a guard-BLOCKed case with no CD path yet) | Operator action only | See "Operator-only / break-glass" below |
+
+**Agents never run terraform apply as a self-directed, routine action; operators may always invoke it directly. The sole agent exception is the human-gated break-glass admin tier below -- an agent may execute `terraform apply` there only after a human has reviewed the plan and explicitly directed it (Decision 126).**
+
+**Sticky + observed (CD.35 / T2.20 Wave 1):** the apply job reads a durable convergence record as
+a precondition and refuses on red (never overwrites on refusal), writes the record green/red
+(always-run) after apply, and apply failures wire into `ci-rca` -- a later green run can no longer
+mask an earlier apply failure. See "Convergence anchor" below for the full mechanism.
 
 **Concurrency tradeoff (correct-by-design):** a gated-apply job pending human approval holds the
 `terraform-apply-sandbox` concurrency group (`cancel-in-progress: false`), so later auto-applies queue
@@ -82,21 +92,30 @@ behind it. This is intentional: serialisation prevents the saved plan.bin from g
 pending window, and applies must serialise on shared tfstate regardless. Expected cost is low (near-zero
 gated frequency). If an approval is abandoned, reject it in the GitHub Actions UI to release the queue.
 
-**Interactive loop fallback:** if you want to apply any change by hand (e.g. during bootstrap or to
-reverse a manual admin change), the CC-web agent supports the iterative loop: `terraform plan` ->
-PRESENT -> human accepts -> agent runs `terraform apply`. Do not apply without presenting the plan and
-getting acceptance first (Decision 77). **This loop requires local `terraform init` to have succeeded.**
-The loop is always valid for roots using only `hashicorp/*` providers (`terraform/`, `terraform/github`,
-`terraform/bootstrap`), which init fine with no proxy dependency. For `terraform/personal`
-(third-party `kislerdm/neon` provider): a stock CC-web session still CANNOT locally init it (Decision
-119, direct github.com fetch 403s) -- use the CI-mediated speculative-plan + apply-the-saved-plan
-pipeline instead for routine changes. On an ADMIN container with the S3 filesystem_mirror synced
-(Decision 120 -- `bin/setup-cloud-env.sh` ran with `INSTALL_TERRAFORM=1` and the sync succeeded, so
-`TF_CLI_CONFIG_FILE` is set), local init DOES succeed and this interactive loop IS available for
-`terraform/personal` -- this is the sanctioned path for the guard-BLOCK / out-of-budget-IAM cases the
-CD pipeline cannot apply (Decision 94 escape hatch). Recover the four no-default tfvars from remote
-state / Secrets Manager as described above regardless of which init path was used; never paste their
-values into chat, a PR, or any committed file.
+### Operator-only / break-glass (Decision 120)
+
+NOT the default agent path. Retained -- not deleted -- for bootstrap, reversing a manual admin
+change, and the guard-BLOCK / out-of-budget-IAM cases the CD pipeline cannot yet apply on its own
+(Decision 94 escape hatch). Its danger is that it is ambient, not that it exists (Decision 126);
+it is sequenced for quarantine into a dedicated operator runbook once the T2.37 heal button
+(Reconcile) lands and is verified -- T2.41 `depends_on: [T2.37]`, do not remove this path before
+its replacement works.
+
+If a human operator wants to apply any change by hand: the CC-web agent supports the iterative
+loop `terraform plan` -> PRESENT -> human accepts -> agent runs `terraform apply`. Never apply
+without presenting the plan and getting acceptance first (Decision 77). **This loop requires
+local `terraform init` to have succeeded.**
+- Valid with no proxy dependency for `hashicorp/*`-only roots (`terraform/`, `terraform/github`,
+  `terraform/bootstrap`) -- local `terraform init` succeeds unconditionally.
+- For `terraform/personal` (third-party `kislerdm/neon` provider): a stock CC-web session CANNOT
+  locally init it (Decision 119, direct github.com fetch 403s) -- use the CI-mediated
+  speculative-plan + apply-the-saved-plan pipeline instead for routine changes. On an ADMIN
+  container with the S3 filesystem_mirror synced (Decision 120 -- `bin/setup-cloud-env.sh` ran
+  with `INSTALL_TERRAFORM=1` and the sync succeeded, so `TF_CLI_CONFIG_FILE` is set), local init
+  DOES succeed and this loop IS available for `terraform/personal`.
+- Recover the four no-default tfvars from remote state / Secrets Manager as described above
+  regardless of which init path was used; never paste their values into chat, a PR, or any
+  committed file.
 
 **Apply posture (record-backed sandbox CD, CD.35 / T2.20 Wave 1):** sandbox CD auto-apply
 (`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching `terraform/personal/**` auto-applies
@@ -105,12 +124,7 @@ behind the guard + subagent plan review). It sources all no-default root-module 
 grant fetches the secret body to `terraform.personal.tfvars`, which is passed to `terraform plan` via
 `-var-file`. New no-default variables only require updating that secret -- no per-variable workflow edit.
 `TF_VAR_aws_profile=""` is the sole remaining env override (blanks the named-profile default so the OIDC
-credential env vars take effect). Wave 1 made the apply outcome **sticky and observed**: the apply
-job reads a durable convergence record as a precondition and refuses on red, writes the record green/red
-(always-run) after apply, and apply failures wire into `ci-rca` -- so a later green run can no longer mask
-an earlier apply failure. The interactive human-gated loop above remains the path for **IAM/trust/destroy**
-changes (out-of-budget IAM / trust / destroy -- the guard exits 2 and routes to gated-apply) and is still valid for any change you want to
-apply by hand. Routine (guard-PASS, non-IAM) changes are designed to ride the record-backed pipeline.
+credential env vars take effect).
 
 ### Speculative plan + apply-the-saved-plan (CD.35 / T2.21 Wave 2)
 

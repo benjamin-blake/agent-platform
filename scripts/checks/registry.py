@@ -99,6 +99,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_contract_drift"),
         _c("validate_placement"),
         _c("validate_field_semantics_drift"),
+        _c("validate_deploy_channel_conformance"),
         _c("validate_ci_rca_taxonomy"),
         _c("validate_ops_portal_patch_targets"),
         _c("validate_claude_p_retry_wrapper"),
