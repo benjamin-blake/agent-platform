@@ -101,23 +101,23 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     hermetic: false
-    action: "The staleness guard passes on the now-consistent repo (docs agree with the shipped ignore_changes blocks)."
-    command: "bin/venv-python -m scripts.checks.ops_governance.validate_deploy_channel_conformance; echo EXIT=$?"
-    expected: "EXIT=0 -- channel_class and taxonomy coupling statements agree with terraform/personal ignore_changes reality."
-    fix_if: "Nonzero -- environment-taxonomy.md section 5 or build-lambda.yaml channel_class still describe the functions as coupled; fix the stale text."
+    action: "The staleness guard passes on the now-consistent repo (docs agree with the shipped ignore_changes blocks). Direct function call -- the check follows the (failed: list[str]) -> None convention and has no __main__, so -m would be vacuous."
+    command: "bin/venv-python -c \"from scripts.checks.ops_governance.validate_deploy_channel_conformance import validate_deploy_channel_conformance as v; f=[]; v(f); assert not f, f; print('CONFORMANCE_OK')\""
+    expected: "Prints CONFORMANCE_OK -- channel_class and taxonomy coupling statements agree with terraform/personal ignore_changes reality (non-vacuity of the guard itself is proven by step 1)."
+    fix_if: "AssertionError with a failure list -- environment-taxonomy.md section 5 or build-lambda.yaml channel_class still describe the functions as coupled; fix the stale text."
   - step: 3
     phase: pre-deploy
     hermetic: false
-    action: "New tier_items are referentially valid (ids, depends_on, decision refs) -- especially T2.41 depends_on T2.37."
-    command: "bin/venv-python -m scripts.checks.roadmap.validate_platform_roadmap; echo EXIT=$?"
-    expected: "EXIT=0 -- T2.37-T2.42 well-formed; T2.41->T2.37 sequencing edge resolves."
-    fix_if: "Nonzero -- a tier_item id collision, dangling depends_on, or bad decision reference; correct per the validator message."
+    action: "New tier_items are referentially valid (ids, depends_on, decision refs) -- especially T2.41 depends_on T2.37. Direct function call: validate_platform_roadmap has no __main__ and is NOT in the --pre tier, so -m and step 7 would both miss it."
+    command: "bin/venv-python -c \"from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap as v; f=[]; v(f); assert not f, f; print('ROADMAP_OK')\""
+    expected: "Prints ROADMAP_OK -- T2.37-T2.42 well-formed; T2.41->T2.37 sequencing edge resolves; failure list empty."
+    fix_if: "AssertionError with a failure list -- a tier_item id collision, dangling depends_on, or bad decision reference; correct per the message."
   - step: 4
     phase: pre-deploy
     hermetic: false
-    action: "deploy-paths.yaml is registered and correctly placed, and is a POINTER (not a restatement): it references environment-taxonomy.md and does not contain a guard-classification table of its own."
-    command: "bin/venv-python -m scripts.checks.misc.validate_placement 2>/dev/null; grep -q 'environment-taxonomy' docs/contracts/deploy-paths.yaml && ! grep -qiE 'in_budget|out_of_budget|guard.*exit [0-2]' docs/contracts/deploy-paths.yaml && echo POINTER_OK"
-    expected: "Placement passes; prints POINTER_OK (references the taxonomy, restates no guard-classification internals)."
+    action: "deploy-paths.yaml is a POINTER (not a restatement): it references environment-taxonomy.md and contains no guard-classification table of its own. (Placement/registration is verified authoritatively by validate_placement inside step 7 --pre.)"
+    command: "grep -q 'environment-taxonomy' docs/contracts/deploy-paths.yaml && ! grep -qiE 'in_budget|out_of_budget|guard.*exit [0-2]' docs/contracts/deploy-paths.yaml && echo POINTER_OK"
+    expected: "Prints POINTER_OK (references the taxonomy, restates no guard-classification internals)."
     fix_if: "Missing reference or a duplicated guard-classification table -- reframe as a pointer to the sole-SoT (Decision 92 pt5)."
   - step: 5
     phase: pre-deploy
@@ -143,8 +143,8 @@ verification_plan:
   - step: 8
     phase: post-deploy
     hermetic: false
-    action: "Decision 126 is ETL'd into ops_decisions (not warehouse-only), amending 125 pt5 + 120."
-    command: "bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.decisions-index.jsonl').read_text().splitlines() if l.strip()]; assert any(str(r.get('decision_id'))=='126' or 'Decision 126' in str(r.get('title','')) for r in rows), 'Decision 126 not in ops_decisions'; print('Decision 126 ETL OK')\""
+    action: "Decision 126 is ETL'd into ops_decisions (not warehouse-only), amending 125 pt5 + 120. Read-back via the sanctioned sync surface (not the raw pull CLI, per the Single Portal Invariant)."
+    command: "bin/venv-python -m scripts.sync.ops sync >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.decisions-index.jsonl').read_text().splitlines() if l.strip()]; assert any(str(r.get('decision_id'))=='126' or 'Decision 126' in str(r.get('title','')) for r in rows), 'Decision 126 not in ops_decisions'; print('Decision 126 ETL OK')\""
     expected: "Prints Decision 126 ETL OK."
     fix_if: "Missing -- run ops_data_portal --backfill-decisions-md so DECISIONS.md ETLs into ops_decisions (Decision 105)."
 constraints:
@@ -159,7 +159,7 @@ constraints:
   - "No rescue agents or workaround loops (Decision 55); ci-rca recs are routed to tier_items for forward-fix, never inline-patched here (Decision 72)."
 context:
   - "decision-scout=FLAGS_FOUND; CITE (verbatim): Decision 77, Decision 92, Decision 125, Decision 86, Decision 98, Decision 120, Decision 55, Decision 104, Decision 105, Decision 79 (+ Decision 87 instrument precedent, Decision 118 free-form-contract, Decision 101 public-boundary)"
-  - "gates: decision-scout=FLAGS_FOUND (4 flags, all resolved in-plan: deploy-paths.yaml reframed as a pointer index; Decision 126 amends 125 pt5; invariant worded agents-never/operators-may citing 120; Decision authored in DECISIONS.md + ETL per 105); plan-critique=PENDING"
+  - "gates: decision-scout=FLAGS_FOUND (4 flags, all resolved in-plan: deploy-paths.yaml reframed as a pointer index; Decision 126 amends 125 pt5; invariant worded agents-never/operators-may citing 120; Decision authored in DECISIONS.md + ETL per 105); plan-critique=PROCEED after 1 REVISE round (fixed 4 vacuous/mis-pathed VP commands: roadmap + conformance validators now called directly via the failed-list convention, placement de-duped to step 7, step-8 read-back uses the sanctioned sync surface)"
   - "Grounded in a Fable (frontier) design review: the pipeline's control-theory (no-TOCTOU plan/apply identity, fail-closed guard + authority budget, anti-masking convergence) is frontier-grade; the gaps are RECOVERY ERGONOMICS, the missing DEPLOY VERB, and DOCUMENTATION TOPOLOGY (the model is smeared across 6+ surfaces, 2 stale after #544, and the escape hatch is the best-documented path). This plan lands the navigability + SoT-integrity foundation; T2.37-T2.42 carry the engineering."
   - "Scope decision (human-confirmed): option A -- design foundation only (Decision + tier_items + navigation contract + SoT fixes), NOT a mega-plan that also builds the heal button. The user additionally required the directional changes be persisted in the platform roadmap (tier_items) so they survive rec churn -- this directly fixes the rec-2646 failure mode (governed-channel scope evaporated when the rec closed with only the grep-acceptance met)."
   - "Sequencing invariant (Fable): the heal button (T2.37) must land and be verified BEFORE the escape hatch is quarantined (T2.41). Decision 126 records this ordering; T2.41 depends_on T2.37 and amends Decision 120."
@@ -183,7 +183,7 @@ execution_steps:
   - "docs/contracts/environment-taxonomy.md: update section 5 -- the four DuckLake functions are DECOUPLED (ignore_changes=[source_code_hash]) as of #544; layers remain coupled."
   - "docs/contracts/build-lambda.yaml: update the ducklake functions' channel_class/annotation to reflect infra-diff decoupling done; governed code-deploy channel pending (T2.38); break-glass interim."
   - "terraform/CLAUDE.md: rewrite the local-apply section as a <=30-line decision table (want X -> do Y; if blocked -> Z), PR->CI default primary; move the Interactive loop fallback into an explicit 'operator-only / break-glass (Decision 120)' subsection, retained but non-primary; link deploy-paths.yaml."
-  - "scripts/checks/ops_governance/validate_deploy_channel_conformance.py (new): parse terraform/personal for aws_lambda_function ignore_changes=[source_code_hash] presence per function; parse build-lambda.yaml channel_class + environment-taxonomy.md coupling statements; fail if they disagree. Register per Decision 104 (check registry), NOT in validate.py body. Add tests/checks/test_validate_deploy_channel_conformance.py with a mismatch fixture (asserts fail) and a matching fixture (asserts pass)."
+  - "scripts/checks/ops_governance/validate_deploy_channel_conformance.py (new): define validate_deploy_channel_conformance(failed: list[str]) -> None following the repo check convention (append error strings to `failed`, no __main__, no raise-on-import). It parses terraform/personal for aws_lambda_function ignore_changes=[source_code_hash] presence per function, parses build-lambda.yaml channel_class + environment-taxonomy.md coupling statements, and appends a failure if they disagree. Register per Decision 104 (check registry) in the PRE sequence so validate --pre runs it; NOT in the validate.py body. Add tests/checks/test_validate_deploy_channel_conformance.py with a mismatch fixture (asserts the failure list is non-empty) and a matching fixture (asserts it is empty)."
   - "Execute the Verification Plan: run pre-deploy steps 1-7; loop until pass. After merge, run the Decision-126 ETL and post-deploy step 8. On failure, stop and RCA (Decision 55) -- do not inline-patch any ci-rca rec."
   - "Report: Decision 126 text + ETL result, the six tier_items added, deploy-paths.yaml, the SoT fixes, the conformance guard + test results, and validate --pre outcome."
 work_areas: []
