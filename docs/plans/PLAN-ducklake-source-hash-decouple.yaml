@@ -38,6 +38,7 @@ scope:
       (matching the job's if:) and MUST include the Decision 77 no-TOCTOU byte-identity assert.
 bundled_recommendations:
   - rec-2654
+  - rec-2646
 infrastructure_dependencies:
   - "terraform/personal is applied via the CD.35 Wave 2 / T2.21 speculative-plan pipeline: PR-time speculative-plan (github_ci_plan OIDC) saves plan.bin to S3; merge-time apply-sandbox applies it verbatim (Decision 77 no-TOCTOU)."
   - "The guard classifies the diff (docs/contracts/environment-taxonomy.md section 5 / Axis A is the sole SoT): in-budget/non-IAM auto-applies in apply-sandbox; IAM/trust/destroy routes to the gated-apply job (environment: tf-gated-apply, human approval)."
@@ -47,8 +48,9 @@ acceptance_criteria:
   - "All four DuckLake Lambda FUNCTION resources (ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr) carry a lifecycle block with ignore_changes = [source_code_hash]; exactly four such lines exist across the three tf files (no aws_lambda_layer_version resource gains one)."
   - "The gated-apply job in terraform-apply-sandbox.yml contains a step that runs build_lambda --ducklake-only before the plan.bin fetch/apply, including the Decision 77 byte-identity assert."
   - "The terraform-validate check and the speculative-plan job pass on the PR (authoritative verifiers per Decision 119)."
+  - "Before merge: the PR's speculative-plan predicted guard verdict is auto-apply/PASS (NOT gated/BLOCKED), confirming no pending out-of-budget IAM delta routes this apply to the push-only gated-apply job (else the workflow_dispatch reconcile would deadlock -- rec-2647)."
   - "After merge and the workflow_dispatch acknowledge-and-retry reconcile, the convergence record reads status=green."
-  - "rec-2654 is closed via the Resolves: trailer."
+  - "rec-2654 and rec-2646 are closed via the Resolves: trailer."
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -81,30 +83,35 @@ verification_plan:
   - step: 5
     phase: post-deploy
     hermetic: false
-    action: "End-to-end proof: after merge + workflow_dispatch acknowledge-and-retry reconcile, the convergence record is green (the fresh re-plan applied cleanly with ignore_changes in place -- no source_code_hash inconsistency)."
+    action: "End-to-end proof of the PRIMARY fix (function ignore_changes decoupling): after merge + workflow_dispatch acknowledge-and-retry reconcile, the convergence record is green (the fresh re-plan applied cleanly with ignore_changes in place -- no source_code_hash inconsistency). NOTE: this exercises the auto-apply/dispatch path, NOT the gated-apply path -- this non-IAM change guard-PASSes and never routes to gated-apply, so the gated-apply build-step hardening (VP2/VP3) is verified structurally only, not behaviourally, by this plan."
     command: "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c \"import sys,json; d=json.load(sys.stdin); assert d['status']=='green', d; print('convergence green at', d['commit_sha'])\""
     expected: "status=green printed with the reconcile commit sha."
-    fix_if: "status still red -- inspect the reconcile run logs; a fresh source_code_hash inconsistency would mean ignore_changes did not take effect."
+    fix_if: "status still red -- inspect the reconcile run logs; if the guard routed to gated-apply the dispatch deadlocked (rec-2647), meaning a pending IAM delta was present and the pre-merge verdict gate was skipped."
   - step: 6
     phase: post-deploy
     hermetic: false
-    action: "Confirm rec-2654 closed after the Resolves: trailer autoclose + ops sync."
-    command: "bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib; r=next(x for x in (json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()) if x.get('id')=='rec-2654'); assert r['status']=='closed', r['status']; print('rec-2654 closed')\""
-    expected: "Prints rec-2654 closed."
-    fix_if: "Status still open -- rec-autoclose did not fire; close manually via ops_data_portal --update-rec rec-2654 --status closed."
+    action: "Confirm rec-2654 AND rec-2646 closed after the Resolves: trailer autoclose + ops sync."
+    command: "bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib,sys; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; idx={x['id']:x['status'] for x in rows}; bad=[r for r in ['rec-2654','rec-2646'] if idx.get(r)!='closed']; print('closed:', [r for r in ['rec-2654','rec-2646'] if idx.get(r)=='closed']); sys.exit(1) if bad else print('all bundled recs closed')\""
+    expected: "Prints rec-2654 closed and rec-2646 closed."
+    fix_if: "Either still open -- rec-autoclose did not fire; close manually via ops_data_portal --update-rec <id> --status closed."
 constraints:
   - "Only modify the four files listed in scope."
   - "Do NOT add ignore_changes to any aws_lambda_layer_version resource -- layer versions are immutable and must stay terraform-managed; only the four aws_lambda_function resources are decoupled."
   - "The gated-apply build step MUST mirror the apply-sandbox step's Decision 77 no-TOCTOU byte-identity assert (verify rebuilt zips are byte-identical to the PR-uploaded S3 objects before upload/apply); it runs push-only, matching the gated-apply job's existing if: condition."
   - "Preserve the Decision 77 no-re-plan discipline: gated-apply still applies plan.bin verbatim; the build step only makes filemd5() inputs consistent, it must not re-plan."
   - "terraform validate/plan are CI-delegated (Decision 119): do not attempt local terraform init/validate/plan for terraform/personal."
+  - "Sequencing gate (rec-2646 -> rec-2647 dependency): do NOT merge-then-dispatch-reconcile until the PR's speculative-plan predicted verdict confirms this apply does NOT route to gated-apply. workflow_dispatch has no gated-apply path (rec-2647), so a routed dispatch reconcile deadlocks. If the predicted verdict is gated/BLOCKED (a pending out-of-budget IAM delta such as github_ci_drift), STOP and escalate: clear the IAM delta via the agent_platform_admin human-gated path first (or fix rec-2647), then reconcile."
   - "No rescue agents or workaround loops (Decision 55); RCA-first forward fix (Decision 72)."
   - "ruff formatting, line length 127, no emojis; terraform fmt-clean."
 context:
   - "decision-scout=FLAGS_FOUND; CITE (verbatim): Decision 125, Decision 92, Decision 77, Decision 119, Decision 55"
-  - "gates: decision-scout=FLAGS_FOUND (1 NOTE, deferred-with-note); plan-critique=PENDING"
-  - "Decision 125 deferral (pt 2-5): after ignore_changes, terraform no longer deploys DuckLake Lambda code. The governed code-deploy CD channel Decision 125 names does not yet exist -- until it lands, the break-glass `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` (update_lambda_functions / update-function-code, independent of terraform) is the knowingly-interim code-deploy channel for the four functions. A pending pre-wave-3 code deploy must be driven manually via that break-glass path post-merge. This fulfills Decision 125's ratified direction; the governed channel is a tracked follow-on."
-  - "Broader architecture follow-on (A2/B1): the two-verbs-and-heal deployment model (provision via PR / deploy via pipeline / one-button reconcile), the governed code-deploy channel, and quarantining the local-apply escape hatch (terraform/CLAUDE.md) are a separate design Decision to be drafted next. This plan is step 1 (decoupling) and is safe to ship standalone."
+  - "gates: decision-scout=FLAGS_FOUND (1 NOTE, deferred-with-note); plan-critique=PROCEED after 1 REVISE round (bundled rec-2646, added rec-2647 sequencing gate, corrected stale wave-3/reproducibility findings, downgraded VP5 framing)"
+  - "Decision 125 deferral (pt 2-5): after ignore_changes, terraform no longer deploys DuckLake Lambda code. The governed code-deploy CD channel Decision 125 names does not yet exist -- until it lands, the break-glass `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` (update_lambda_functions / update-function-code, independent of terraform) is the knowingly-interim code-deploy channel for the four functions. This fulfills Decision 125's ratified direction; the governed channel is a tracked follow-on (folded into the A2/B1 architecture design below, and into rec-2646's residual scope)."
+  - "Wave-3 code is NOT stranded: rec-2649 (closed) confirms all four DuckLake functions were redeployed to current wave-3 code on 2026-07-10T22:48:26Z (get-function CodeSha256 verified) during the rec-2652 local admin recovery. So this plan does not leave the functions on stale code; only FUTURE code deploys route through the break-glass path above until the governed channel lands."
+  - "rec-2646 (Medium, open) is this plan's tracking rec (acceptance: grep -q ignore_changes on the three tf files) -- bundled and closed here. Its residual scope (the governed code-deploy CD channel) is re-homed to the A2/B1 architecture follow-on, not lost. rec-2646 records a block on clearing the pending github_ci_drift out-of-budget IAM delta (P3b); the pre-merge speculative-plan verdict gate confirms that delta is already applied (converged via the 2026-07-10 admin apply) so this apply does not route to gated-apply."
+  - "rec-2647 (Medium, open) is NOT fixed here (out of A2 scope) but is NAVIGATED: workflow_dispatch lacks a gated-apply path, so a routed dispatch reconcile deadlocks. The pre-merge verdict gate ensures this apply is non-routed before we rely on the dispatch reconcile. Giving workflow_dispatch a gated-apply route (rec-2647) is part of the A2/B1 follow-on and would make recovery robust regardless of IAM routing."
+  - "Build reproducibility holds: apply-sandbox's byte-identity assert (rec-2512, L269) PASSED on #538's push (the failure was isolated to the gated-apply job, which has needs: apply-sandbox == success), so the DuckLake zips rebuild byte-identically across jobs -- the gated-apply build step's byte-identity assert will not silently become a new failure mode."
+  - "Broader architecture follow-on (A2/B1): the two-verbs-and-heal deployment model (provision via PR / deploy via pipeline / one-button reconcile), the governed code-deploy channel (rec-2646 residual), the workflow_dispatch gated-apply route (rec-2647), and quarantining the local-apply escape hatch (terraform/CLAUDE.md) are a separate design Decision to be drafted next. This plan is step 1 (decoupling) and is safe to ship standalone."
   - "CI is currently RED: convergence record anchored to commit 5bfa1fee1e26441b0b025c53e3e3ad33bd530e13 (run 29124975133) since 2026-07-10T21:47:26Z. Infra is already converged (zero drift) via an out-of-band local admin apply (rec-2652, closed); the S3 record was never greened. #540's comment-only push to clear it was REFUSED (a red record clears only via workflow_dispatch ack, never a push). After this fix merges, green via workflow_dispatch acknowledge_red_commit=rec-2654 (or the red SHA), which re-plans fresh with ignore_changes in place."
   - "Decision 79: the changed files are .tf lifecycle blocks and a .yml workflow step, NOT Lambda-packaged source -- compute_affected_artifacts returns empty, so no per-Lambda build/deploy/smoke-test step is required in this plan."
   - "Decision 99: the ducklake-version-lockstep gate reads terraform/personal/ducklake_lambdas.tf and the source_code_hash surfaces -- edit around them so that gate stays green."
@@ -121,7 +128,9 @@ execution_steps:
   - "terraform/personal/ducklake_maintenance.tf: add the same lifecycle { ignore_changes = [source_code_hash] } to aws_lambda_function.ducklake_maintenance; refresh its INTERIM comment."
   - "terraform/personal/ducklake_catalog_dr.tf: add the same lifecycle { ignore_changes = [source_code_hash] } to aws_lambda_function.ducklake_catalog_dr; refresh its INTERIM comment. Do NOT touch the aws_lambda_layer_version resources in these files."
   - ".github/workflows/terraform-apply-sandbox.yml: in the gated-apply job, after Terraform init and before 'Fetch saved plan from S3 (gated-apply path, T2.22)', add a 'Build DuckLake lambda packages' step that mirrors the apply-sandbox step at L269 -- pip install pyyaml pydantic; build_lambda --ducklake-only --skip-upload; assert the seven rebuilt zips are byte-identical to the PR-uploaded S3 objects (Decision 77 no-TOCTOU, failing closed on mismatch); then upload. The gated-apply job is push-only, so the assert always runs."
-  - "Execute Verification Plan -- run each pre-deploy step; loop until pass. After the PR merges, run the workflow_dispatch acknowledge-and-retry reconcile (acknowledge_red_commit=rec-2654) and run the post-deploy steps. On an unrecoverable V3 failure, stop and RCA (Decision 55) -- do not hand-apply locally."
+  - "Run the pre-deploy VP steps; loop until pass. Open the PR and let speculative-plan run."
+  - "PRE-MERGE SEQUENCING GATE (rec-2646->rec-2647): read the PR's speculative-plan predicted guard verdict (posted as a PR comment). If it is auto-apply/PASS (no out-of-budget IAM routing), proceed to merge. If it is gated/BLOCKED, STOP -- the workflow_dispatch reconcile would deadlock (rec-2647, gated-apply is push-only); escalate to clear the pending IAM delta via the agent_platform_admin human-gated path (or fix rec-2647) before reconciling."
+  - "After merge, run the workflow_dispatch acknowledge-and-retry reconcile (acknowledge_red_commit=rec-2654, or the red SHA 5bfa1fee) to green the convergence record with the ignore_changes in place. Then run the post-deploy VP steps. On an unrecoverable V3 failure, stop and RCA (Decision 55) -- do not hand-apply locally."
   - "Report: what was implemented, terraform-validate + speculative-plan verdicts on the PR, the reconcile run outcome, convergence-green confirmation, and rec-2654 closure."
 rollback: >-
   Revert the four-file diff. ignore_changes is a terraform meta-argument with no state mutation, so
