@@ -27,20 +27,24 @@ tracker to catch the loss (the failure mode this Decision's tier_items are desig
 **Decision:**
 1. **The model.** Agents have exactly three intents, each with exactly one trigger:
    - **provision** (infra changes): edit `terraform/**`, open a PR; CI plans and applies (Decision
-     77/92/119). No agent runs `terraform apply` anywhere, on any container, at any privilege tier.
+     77/92/119). No agent self-directs a `terraform apply` for this intent -- CI applies it.
    - **deploy code**: the governed code-deploy channel (T2.38 for the four DuckLake Lambdas).
      Terraform is not involved -- code ships via a build/deploy pipeline scoped to
      `UpdateFunctionCode`-equivalent permissions only.
    - **reconcile** (the pipeline is red or drifted): one input-free Reconcile action (T2.37) that
      reads the red commit from the convergence record and re-applies it -- no operator-supplied SHA,
      no manual triage step for the common case.
-   Plus an **operator-only admin tier** (bootstrap root, `agent_platform_admin` IAM/trust/destroy
-   changes, the Decision 120 local-apply escape hatch) whose only AGENT move, ever, is to file a rec
-   describing what's needed and why -- the admin tier is a human action space, not an agent one.
+   Plus an **operator-only admin tier**: bootstrap root and `agent_platform_admin` IAM/trust/destroy
+   changes are human-only -- an agent's only move there is to file a rec describing what's needed
+   and why. The Decision 120 local-apply escape hatch is a narrower carve-out within this same
+   tier: a human-gated interactive loop where an agent may execute `terraform apply` only after a
+   human has reviewed the plan and explicitly directed it -- never self-directed, never the default
+   path for any of the three intents above.
 2. **Invariants:**
-   - Agents never run `terraform apply` anywhere; operators may, via the break-glass admin tier
-     (Decision 120 restored this for IAM/trust/destroy changes that guard-BLOCK the CD pipeline and
-     for hand-applied recovery; Decision 98 admin-create; Decision 77 bootstrap -- none of that is
+   - Agents never self-direct a `terraform apply`; operators may always invoke it directly, and an
+     agent may execute it only within the human-gated break-glass admin tier below (Decision 120
+     restored this for IAM/trust/destroy changes that guard-BLOCK the CD pipeline and for
+     hand-applied recovery; Decision 98 admin-create; Decision 77 bootstrap -- none of that is
      revoked by this Decision).
    - The escape hatch's danger is that it is AMBIENT (the best-documented, most-reached-for path),
      not that it exists. The fix is demotion and eventual quarantine to an operator-only runbook,
