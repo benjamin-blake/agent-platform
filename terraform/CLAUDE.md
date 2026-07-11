@@ -79,7 +79,7 @@ classification.
 | Apply `terraform/` (legacy hashicorp/*-only roots) or `terraform/github` | Same PR -> CD path where a workflow exists | See "Operator-only / break-glass" below |
 | Apply `terraform/bootstrap`, or apply `terraform/personal` by hand (bootstrap, reversing a manual admin change, or a guard-BLOCKed case with no CD path yet) | Operator action only | See "Operator-only / break-glass" below |
 
-**Agents never run terraform apply anywhere; operators may, via the break-glass admin tier below (Decision 126).**
+**Agents never run terraform apply as a self-directed, routine action; operators may always invoke it directly. The sole agent exception is the human-gated break-glass admin tier below -- an agent may execute `terraform apply` there only after a human has reviewed the plan and explicitly directed it (Decision 126).**
 
 **Sticky + observed (CD.35 / T2.20 Wave 1):** the apply job reads a durable convergence record as
 a precondition and refuses on red (never overwrites on refusal), writes the record green/red
