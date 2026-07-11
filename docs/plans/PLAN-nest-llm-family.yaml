@@ -1,0 +1,758 @@
+schema_version: 1
+slug: "nest-llm-family"
+intent: >-
+  Nest the scripts/ "llm" prefix family (llm_client, llm_utils, model_registry, github_models_client)
+  from the scripts/ root into a scripts/llm/ subpackage via git mv + a single same-commit repo-wide
+  reference rewrite with no import shims, update both Lambda manifests that bundle these modules, and
+  finish the scripts-root placement rule so "scripts/ root = entry points + declared singles" becomes
+  machine-enforced. Final phase (3 of 3) of audit finding RS-01: closes the scripts/ root
+  predictability gap so agents locate LLM code by home, not by scanning flat filenames, and closes the
+  owning rec-164.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-nest-llm-family.yaml
+phase: >-
+  Repository-structure restructure Phase P4c (audit finding RS-01 [medium], phase 3 of 3, from
+  audits/repository-structure-cb02572.yaml RS-01 + proposed_target_tree scripts/llm/ node +
+  surface_dispositions.S2). Runs AFTER P1 (RS-04 file-router.yaml + validate_placement link-validity),
+  P2/P3 (RS-02/03/05 consolidation + scripts/CLAUDE.md), P4a (scripts/ci_rca/), and P4b
+  (scripts/session/, scripts/sync/, scripts/roadmap/) -- all merged at origin/main 0eb9cae. Platform
+  axis; RS-01 is planned-insufficient via open rec-164, which CLOSES at this phase. V3 (two ACTIVE
+  Lambda artifacts bundle the moved modules). IMPLEMENTATION type (STRATEGIC frozen + >5-file heuristic
+  suspended, Decision 67 -- authored as one larger IMPLEMENTATION plan).
+scope:
+  # ---- llm family moves: STRIP prefix (client, utils) / KEEP name (model_registry, github_models_client)
+  - file: scripts/llm_client.py
+    action: Delete
+    purpose: >-
+      git mv to scripts/llm/client.py. Bundled in data-pipeline + ops-compaction manifests. Module-scope
+      import of llm_utils; deferred imports of model_registry + executor.telemetry. NO Path(__file__) anchor
+      (uses cwd-relative Path("logs/debug")). Executor-boundary file (Decision 117).
+  - file: scripts/llm/client.py
+    action: Create
+    purpose: >-
+      Receives llm_client via git mv. Rewrite module-scope `from scripts.llm_utils import LLMResponseError`
+      -> `from scripts.llm.utils import LLMResponseError`; deferred `from scripts.model_registry import
+      resolve_provider` -> `from scripts.llm.model_registry import resolve_provider`; docstring usage
+      `from scripts.llm_client import llm_call` -> `from scripts.llm.client import llm_call`. NO ROOT/anchor
+      edit (Path("logs/debug") is cwd-relative, not __file__-anchored).
+  - file: scripts/llm_utils.py
+    action: Delete
+    purpose: git mv to scripts/llm/utils.py. No intra-family import; no Path anchor. Executor-boundary file (Decision 117).
+  - file: scripts/llm/utils.py
+    action: Create
+    purpose: >-
+      Receives llm_utils via git mv (pure move; no reference or anchor edit -- it imports nothing from the
+      family and uses only f-string "logs/debug/..." paths). The copilot_wrapper docstring provenance line is
+      historical and LEFT as-is.
+  - file: scripts/model_registry.py
+    action: Delete
+    purpose: git mv to scripts/llm/model_registry.py (name KEPT). NOT bundled in any manifest. No intra-family import; cwd-relative _CONFIG_PATH.
+  - file: scripts/llm/model_registry.py
+    action: Create
+    purpose: >-
+      Receives model_registry via git mv (name kept). Rewrite the docstring usage `from scripts.model_registry
+      import ...` -> `from scripts.llm.model_registry import ...`. NO anchor edit: _CONFIG_PATH =
+      Path("docs/contracts/inference-provider.yaml") is cwd-relative, not __file__-anchored -- do NOT add one.
+  - file: scripts/github_models_client.py
+    action: Delete
+    purpose: git mv to scripts/llm/github_models_client.py (name KEPT). Bundled in data-pipeline + ops-compaction manifests. No intra-family import; no Path anchor.
+  - file: scripts/llm/github_models_client.py
+    action: Create
+    purpose: Receives github_models_client via git mv (name kept). Rewrite the docstring usage `from scripts.github_models_client import chat_completion` -> `from scripts.llm.github_models_client import chat_completion`.
+  - file: scripts/llm/__init__.py
+    action: Create
+    purpose: Package marker with a one-line docstring so scripts.llm is importable ("""scripts.llm -- provider-agnostic LLM client/routing subpackage (RS-01 / rec-164 Phase A).""").
+  # ---- non-moving importers (anchored reference rewrite; files stay put)
+  - file: scripts/executor/model_routing.py
+    action: Modify
+    purpose: Rewrite bare `from scripts import model_registry` -> `from scripts.llm import model_registry` (name kept -> NO alias; a redundant `as model_registry` would trip ruff PLC0414).
+  - file: scripts/executor/postflight.py
+    action: Modify
+    purpose: >-
+      Rewrite bare `from scripts import model_registry  # noqa: F401` -> `from scripts.llm import model_registry
+      # noqa: F401` (keep the noqa comment).
+  - file: scripts/executor/plan.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> import/reference surfaced by the anchored sweep -> nested form.
+  - file: scripts/executor/plan_generation.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: scripts/executor/step_runner.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: scripts/executor/batch_compound.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: scripts/executor/branch_lifecycle.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: scripts/executor/formatters.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: scripts/execute_recommendation.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: scripts/delegate_runner.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: scripts/classify_risk.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: scripts/agent_development/run_skill.py
+    action: Modify
+    purpose: Rewrite the dotted scripts.<llm module> reference surfaced by the sweep -> nested form.
+  - file: src/data/handlers/scheduled_agent_handler.py
+    action: Modify
+    purpose: Rewrite the function-local (deferred) `from scripts.github_models_client import chat_completion` -> `from scripts.llm.github_models_client import chat_completion`.
+  - file: src/data/handlers/findings_processor_handler.py
+    action: Modify
+    purpose: Rewrite the function-local (deferred) `from scripts.github_models_client import chat_completion` -> `from scripts.llm.github_models_client import chat_completion`.
+  # ---- Lambda manifests (MANDATORY same-commit: CD.24 bundle-completeness fails on dead includes)
+  - file: src/lambdas/data-pipeline/manifest.yaml
+    action: Modify
+    purpose: >-
+      Rewrite the 3 includes lines scripts/github_models_client.py -> scripts/llm/github_models_client.py,
+      scripts/llm_client.py -> scripts/llm/client.py, scripts/llm_utils.py -> scripts/llm/utils.py, AND add
+      scripts/llm/__init__.py to includes (matches the existing scripts/__init__.py precedent so the zip is a
+      regular package, not a namespace fallback -- 4 llm include entries total). Do NOT add model_registry (not
+      bundled -- deferred import; compute_affected_artifacts([model_registry])==[]).
+  - file: src/lambdas/ops-compaction/manifest.yaml
+    action: Modify
+    purpose: Rewrite the same 3 include lines to the new scripts/llm/ paths AND add scripts/llm/__init__.py (identical 4-entry set to data-pipeline). model_registry stays absent.
+  # ---- executor self-modification boundary SSOT (Decision 117) -- moved files are boundary files
+  - file: config/agent/executor/capabilities.yaml
+    action: Modify
+    purpose: >-
+      Repoint the two boundary_patterns entries `llm_client.py` -> `scripts/llm/client.py` and `llm_utils.py`
+      -> `scripts/llm/utils.py` (validate_executor_boundary matches by SUBSTRING; bare client.py/utils.py would
+      be dangerously over-broad, so use the path-qualified form). Leave tool_runtime.py, run_scheduled_agent.py,
+      build_lambda.py and the tests/test_llm_client / tests/test_llm_utils patterns UNCHANGED (those test
+      filenames are kept).
+  - file: scripts/classify_automatable.py
+    action: Modify
+    purpose: >-
+      DECISION 117 LOCKSTEP (decision-scout WARN): this file hardcodes a DUPLICATE boundary list (_BOUNDARY_PATTERNS,
+      lines ~35-36) with bare "llm_client.py"/"llm_utils.py" and the same substring matcher (_is_boundary_file). Repoint
+      those two entries to "scripts/llm/client.py"/"scripts/llm/utils.py" IN LOCKSTEP with capabilities.yaml (Decision
+      117's reversal condition guards exactly this drift). Leave its tests/test_llm_client / tests/test_llm_utils entries
+      (test filenames kept). Verify tests/test_classify_automatable.py still passes (update only if it asserts a
+      moved-module boundary path).
+  - file: scripts/build_lambda_config.py
+    action: Modify
+    purpose: >-
+      Update the _LAMBDA_SCRIPTS backward-compat list (lines ~100-102): bare github_models_client.py / llm_client.py /
+      llm_utils.py -> the scripts-relative nested forms llm/github_models_client.py / llm/client.py / llm/utils.py. This
+      list is "retained for backward compatibility" (NOT the bundle SoT -- manifests drive bundling per CD.24) but is
+      re-exported by build_lambda.py and asserted by tests, so keep it accurate. Bare-string edit (not the anchored sweep).
+  - file: tests/test_build_lambda_config.py
+    action: Modify
+    purpose: >-
+      Update the _LAMBDA_SCRIPTS membership assertions (lines ~50, 54): "llm_client.py" -> "llm/client.py", "llm_utils.py"
+      -> "llm/utils.py" (and github_models_client if asserted) to match the repointed list. Leave the tool_runtime.py /
+      bedrock-absent assertions untouched.
+  # ---- machine-readable discovery index + scripts-root allowlist (finish the RS-01/RS-05 rule)
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      (a) Rewrite the 4 rows whose targets go dead: llm-client -> scripts/llm/client.py, llm-utilities ->
+      scripts/llm/utils.py, model-registry -> scripts/llm/model_registry.py, github-models-client ->
+      scripts/llm/github_models_client.py. (b) APPEND an llm-code route -> [scripts/llm/]. (c) ADD a new
+      top-level scripts_root_allowlist sibling key (modeled on docs_root_allowlist): allowed_files enumerating
+      every post-move depth-1 scripts/ file (entry points + singles + CLAUDE.md + __init__.py, generated by
+      `git ls-files scripts | awk -F/ 'NF==2'` minus the ops pair), and grandfathered_globs listing exactly
+      ops_data_portal.py and ops_writer.py with a comment pointing at owner T-1.24.
+  - file: scripts/checks/hygiene/validate_placement.py
+    action: Modify
+    purpose: >-
+      Add a scripts-root allowlist block mirroring the existing docs-root allowlist: a
+      _load_scripts_root_allowlist(path) loader reading the scripts_root_allowlist key (same tolerant shape as
+      _load_docs_root_allowlist), a _scripts_root_stray_files(tracked, allowed, globs) helper (same logic as
+      _docs_root_stray_files but prefix "scripts/"), and a third print/scan block inside validate_placement()
+      that appends a failure for any depth-1 scripts/ file not allowlisted-or-grandfathered. Import-safe; never
+      raises. Absent key -> SKIP (backward-compatible).
+  # ---- coverage-map + test renames (existence-only coverage for scripts/)
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      (a) Add "llm": "test_llm_" to _NESTED_SUBPACKAGE_TEST_PREFIX (so scripts/llm/client.py->test_llm_client.py,
+      utils->test_llm_utils.py, model_registry->test_llm_model_registry.py, github_models_client->
+      test_llm_github_models_client.py) and update the docstring mapping list -- keep the whitelist explicit (no
+      general len==3 rule). (b) Rewrite the deferred import at line ~206 `from scripts.llm_utils import
+      kill_process_tree` -> `from scripts.llm.utils import kill_process_tree`.
+  - file: tests/test_model_registry.py
+    action: Delete
+    purpose: git mv to tests/test_llm_model_registry.py (so the "test_llm_" prefix map resolves; model_registry keeps its stem).
+  - file: tests/test_llm_model_registry.py
+    action: Create
+    purpose: Receives test_model_registry via git mv. Rewrite all `scripts.model_registry` imports + @patch("scripts.model_registry...") string targets -> scripts.llm.model_registry. Keep imports in ONE block (tests/CLAUDE.md).
+  - file: tests/test_github_models_client.py
+    action: Delete
+    purpose: git mv to tests/test_llm_github_models_client.py (so the "test_llm_" prefix map resolves; github_models_client keeps its stem).
+  - file: tests/test_llm_github_models_client.py
+    action: Create
+    purpose: Receives test_github_models_client via git mv. Rewrite `scripts.github_models_client` imports/@patch -> scripts.llm.github_models_client. One import block.
+  - file: tests/test_llm_client.py
+    action: Modify
+    purpose: Rewrite `scripts.llm_client` imports + @patch("scripts.llm_client...") + any `scripts.llm_utils`/`scripts.model_registry` @patch targets -> nested forms. Filename kept (maps via "test_llm_" prefix). One import block.
+  - file: tests/test_llm_utils.py
+    action: Modify
+    purpose: Rewrite `scripts.llm_utils` imports + @patch targets -> scripts.llm.utils. Filename kept. One import block.
+  - file: tests/test_execute_recommendation.py
+    action: Modify
+    purpose: Rewrite any scripts.<llm module> import/@patch target surfaced by the sweep -> nested form.
+  - file: tests/test_executor_model_routing.py
+    action: Modify
+    purpose: Rewrite scripts.model_registry import/@patch targets -> scripts.llm.model_registry.
+  - file: tests/test_executor_plan.py
+    action: Modify
+    purpose: Rewrite any scripts.<llm module> @patch/import target surfaced by the sweep -> nested form.
+  - file: tests/test_executor_step_runner.py
+    action: Modify
+    purpose: Rewrite any scripts.<llm module> @patch/import target surfaced by the sweep -> nested form.
+  - file: tests/test_scheduled_agent_handler.py
+    action: Modify
+    purpose: Rewrite the scripts.github_models_client @patch/import target -> scripts.llm.github_models_client.
+  - file: tests/test_findings_processor_handler.py
+    action: Modify
+    purpose: Rewrite the scripts.github_models_client @patch/import target -> scripts.llm.github_models_client.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add scripts-root allowlist test coverage mirroring the existing docs-root allowlist tests
+      (well-formed allowlist passes; a synthetic un-allowlisted depth-1 scripts/ file fails; a grandfathered
+      ops entry passes; absent key SKIPs). Derive assertions growth-safe (no hardcoded exact root-file count --
+      tests/CLAUDE.md test-count-coupling rule).
+  # ---- live governance / contract surfaces (swept per live-surface policy; historical excluded)
+  - file: config/README.md
+    action: Modify
+    purpose: Rewrite the `scripts/model_registry.py` "Used by" reference (line ~339) -> scripts/llm/model_registry.py (CD.23 portal projection; live surface).
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Rewrite the executor self-modification boundary list (line ~167) scripts/llm_client.py -> scripts/llm/client.py,
+      scripts/llm_utils.py -> scripts/llm/utils.py (keep tests/test_llm_client*/test_llm_utils* globs -- filenames
+      unchanged), and the model_registry.py reference (line ~237) -> scripts/llm/model_registry.py. Allowlisted
+      governance doc; live surface.
+  - file: docs/ARCHITECTURE-WORKFLOW.md
+    action: Modify
+    purpose: Rewrite the live path refs scripts/llm_client.py (line ~410) and scripts/model_registry.py (line ~419) -> nested forms (allowlisted governance doc; live surface).
+  - file: docs/contracts/inference-provider.yaml
+    action: Modify
+    purpose: >-
+      Rewrite the ~6 live module/entrypoint refs (scripts/llm_client._gemini_call, scripts.llm_client.llm_call
+      -> scripts.model_registry.resolve_provider, scripts/github_models_client.chat_completion(),
+      scripts/model_registry.py, and the model_routing consumer comment) -> nested forms. Non-ritual contract
+      (CD.25 drift gate skips it); model_registry reads only its model_routing: block (unaffected).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      (a) Cosmetic sweep of the ~13 live path refs (files_in_scope + prose) scripts/llm_client.py /
+      scripts/model_registry.py / scripts/llm_utils.py -> nested forms (live-surface policy; not existence-gated
+      per validate_platform_roadmap -- P4b precedent). Leave since-deleted copilot_wrapper.py refs untouched.
+      (b) AUTHOR a new tier_item T-1.24 owning the deferred scripts/ops/ move (see the tier-item block in
+      execution_steps).
+  - file: scripts/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Update the family map: remove ci_rca_*/session_*/sync_*/roadmap/plan_*/llm_* from the "grandfathered
+      un-nested families" line (all now nested) leaving ONLY ops_* grandfathered (owner T-1.24); add a compact
+      family map (scripts/ci_rca/, scripts/session/, scripts/sync/, scripts/roadmap/, scripts/llm/, and the
+      pending scripts/ops/) and state that the root allowlist (scripts_root_allowlist in file-router.yaml,
+      enforced by validate_placement) now makes "root = entry points + declared singles" machine-checked.
+bundled_recommendations: [rec-164]
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The four llm modules live under scripts/llm/ with an __init__.py and NONE remain directly under scripts/:
+    scripts/llm/client.py (from llm_client), scripts/llm/utils.py (from llm_utils), scripts/llm/model_registry.py
+    (name kept), scripts/llm/github_models_client.py (name kept). Prefix rule applied per-name: client/utils STRIP
+    the llm_ prefix, model_registry/github_models_client KEEP their names.
+  - >-
+    No >=3-file prefix family from the audit's RS-01 set remains directly under scripts/ EXCEPT the deferred ops
+    pair (ops_data_portal.py, ops_writer.py). Zero flat llm references remain in LIVE surfaces: a git grep for
+    scripts[./](llm_client|llm_utils|model_registry|github_models_client) and `from scripts import model_registry`,
+    excluding docs/plans/, audits/, logs/, docs/DECISIONS*.md, docs/CHANGELOG.md, docs/SESSION_LOG*.md,
+    docs/INTENT-*.md, and the EXECUTED docs/audit-prompts/*.md, returns nothing.
+  - >-
+    Both Lambda manifests (data-pipeline, ops-compaction) name the moved modules at their new paths in includes
+    (scripts/llm/{github_models_client,client,utils}.py + scripts/llm/__init__.py); model_registry is NOT added. compute_affected_artifacts
+    over the ACTUAL changed files returns {data-pipeline, ops-compaction}; the CD.24 bundle-completeness check
+    (validate_lambda_bundle_completeness) is green (both handlers import from the staged tree).
+  - >-
+    Both ACTIVE artifacts are rebuilt, deployed via the routine decoupled_build_pipeline channel (local
+    `build_lambda --deploy`, agent_platform profile), and smoke-tested post-deploy: the dispatcher smoke
+    (run_scheduled_agent --smoke-test doc-freshness) passes and the ops-compaction function code is confirmed
+    updated -- no runtime ImportError referencing scripts.llm.
+  - >-
+    The executor boundary invariant is preserved: capabilities.yaml boundary_patterns match the NEW paths so an
+    open automatable rec targeting scripts/llm/client.py or scripts/llm/utils.py is still flagged by
+    validate_executor_boundary.
+  - >-
+    validate_placement is green: the 4 rewritten router rows + the new llm-code route resolve to tracked paths,
+    and the new scripts_root_allowlist covers EVERY post-move depth-1 scripts/ file with zero strays (ops pair
+    grandfathered). scripts/CLAUDE.md family map reflects reality (only ops_ grandfathered).
+  - >-
+    map_source_to_test resolves each moved module to its (renamed) test file: scripts/llm/client.py->
+    test_llm_client.py, utils->test_llm_utils.py, model_registry->test_llm_model_registry.py, github_models_client->
+    test_llm_github_models_client.py. FULL validate (not --pre) and FULL pytest are both green (import-linter,
+    validate_placement, coverage checker, bundle-completeness, executor-boundary all pass).
+  - >-
+      rec-164 CLOSES at this phase via bundled_recommendations [rec-164] plus a "Resolves rec-164" squash-merge
+      trailer (rec-autoclose.yml); a new tier_item T-1.24 owns the deferred scripts/ops/ move.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: Validate this PLAN document against the PlanDocument schema.
+    command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-nest-llm-family.yaml
+    expected: Reports the plan validates against the PlanDocument schema (no errors).
+    fix_if: A schema error names the offending field; correct it (extra keys forbidden; every VP step needs a non-empty command; unique step ids).
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the 4 modules moved into scripts/llm/ with an __init__.py and no flat original remains directly under scripts/.
+    command: >-
+      set -e; for p in client utils model_registry github_models_client; do test -f "scripts/llm/$p.py" || { echo "MISSING scripts/llm/$p.py"; exit 1; }; done; test -f scripts/llm/__init__.py || { echo "MISSING __init__"; exit 1; }; for old in llm_client llm_utils model_registry github_models_client; do test ! -e "scripts/$old.py" || { echo "STILL FLAT scripts/$old.py"; exit 1; }; done; echo MOVED_OK
+    expected: Prints MOVED_OK (4 modules under scripts/llm/, __init__.py present, zero flat originals).
+    fix_if: A MISSING/STILL FLAT line names the offender; complete the git mv (or add the __init__.py) and re-run.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: Stale-reference sweep (Closure Obligation) -- zero flat llm references (dotted, path, or from-scripts-import) survive in LIVE surfaces; append-only/grandfathered history is intentionally excluded.
+    command: >-
+      ALT="github_models_client|model_registry|llm_client|llm_utils"; MATCHES=$(git grep -nE "scripts[./]($ALT)\b|from scripts import ($ALT)\b" -- ':(exclude)docs/plans/*' ':(exclude)audits/*' ':(exclude)logs/*' ':(exclude)docs/DECISIONS.md' ':(exclude)docs/DECISIONS_ARCHIVE.md' ':(exclude)docs/CHANGELOG.md' ':(exclude)docs/SESSION_LOG*.md' ':(exclude)docs/INTENT-*.md' ':(exclude)docs/audit-prompts/*' || true); if [ -z "$MATCHES" ]; then echo SWEEP_CLEAN; else echo "STALE_REFS:"; echo "$MATCHES"; fi
+    expected: Prints SWEEP_CLEAN.
+    fix_if: STALE_REFS lists file:line -- apply the anchored rewrite to that live file (unless it is genuinely append-only history, in which case widen the exclude pathspec, not the rewrite).
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: Import + cwd-anchor smoke -- the 4 nested modules import, the intra-family imports resolve, and NO __file__ depth fix was wrongly introduced (all paths are cwd-relative).
+    command: >-
+      bin/venv-python -c "import scripts.llm.client as c, scripts.llm.utils as u, scripts.llm.model_registry as mr, scripts.llm.github_models_client as g; from pathlib import Path; import inspect; assert u.LLMResponseError is c.LLMResponseError, 'intra-family utils import broken'; src=inspect.getsource(mr); assert 'Path(__file__)' not in src, 'do NOT add a __file__ anchor to model_registry'; src2=inspect.getsource(c); assert 'Path(__file__)' not in src2, 'do NOT add a __file__ anchor to client'; print('IMPORTS_OK')"
+    expected: Prints IMPORTS_OK (all four import; client re-exports utils.LLMResponseError; no __file__ anchor was added).
+    fix_if: An ImportError/ModuleNotFoundError means a cross-module import (client->utils, client->model_registry) was not repointed; an AssertionError about __file__ means an anchor was wrongly added -- remove it (these modules are cwd-relative).
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: Executor-boundary preservation + Decision 117 lockstep -- both the capabilities.yaml SSOT AND the classify_automatable.py duplicate list carry the NEW path-qualified llm patterns (so validate_executor_boundary still flags a rec targeting scripts/llm/client.py, and the two lists have not drifted).
+    command: >-
+      bin/venv-python -c "from scripts.checks.executor.validate_executor_boundary import _load_boundary_patterns; from scripts.classify_automatable import _BOUNDARY_PATTERNS as cap2; pats=_load_boundary_patterns(); assert 'scripts/llm/client.py' in pats and 'scripts/llm/utils.py' in pats, ('capabilities.yaml not repointed: '+repr([p for p in pats if 'llm' in p or 'client' in p or 'utils' in p])); assert 'llm_client.py' not in pats and 'llm_utils.py' not in pats, 'stale bare pattern in capabilities.yaml'; assert 'scripts/llm/client.py' in cap2 and 'scripts/llm/utils.py' in cap2, 'classify_automatable duplicate list not repointed (Decision 117 drift)'; assert 'llm_client.py' not in cap2 and 'llm_utils.py' not in cap2, 'stale bare pattern in classify_automatable'; print('BOUNDARY_OK')"
+    expected: Prints BOUNDARY_OK (BOTH capabilities.yaml boundary_patterns and classify_automatable._BOUNDARY_PATTERNS list scripts/llm/client.py + scripts/llm/utils.py, no stale bare llm_client.py/llm_utils.py in either -- Decision 117 lockstep held).
+    fix_if: AssertionError -- repoint the named list to the path-qualified nested forms; keep capabilities.yaml and classify_automatable.py IN LOCKSTEP (Decision 117 reversal condition), substring-matcher so bare client.py/utils.py is too broad.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: Coverage-map preservation -- map_source_to_test resolves the 4 nested modules to their (renamed) test files.
+    command: >-
+      bin/venv-python -c "from scripts.test_coverage_checker import map_source_to_test as m; from pathlib import Path; import sys; cases={'scripts/llm/client.py':'tests/test_llm_client.py','scripts/llm/utils.py':'tests/test_llm_utils.py','scripts/llm/model_registry.py':'tests/test_llm_model_registry.py','scripts/llm/github_models_client.py':'tests/test_llm_github_models_client.py'}; bad=[s for s,t in cases.items() if not str(m(Path(s))).replace(chr(92),'/').endswith(t) or not (Path(t).exists())]; print('MAP_OK' if not bad else 'MAP_FAIL: '+str(bad)); sys.exit(0 if not bad else 1)"
+    expected: Prints MAP_OK (all 4 modules map to an existing test file; the 2 renamed tests exist).
+    fix_if: >-
+      MAP_FAIL lists offenders; add the "llm" -> "test_llm_" entry to _NESTED_SUBPACKAGE_TEST_PREFIX and/or complete
+      the git mv of test_model_registry.py -> test_llm_model_registry.py and test_github_models_client.py ->
+      test_llm_github_models_client.py.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: Discovery-index + scripts-root allowlist -- validate_placement is green (4 rewritten rows + llm-code route resolve; scripts_root_allowlist covers every post-move depth-1 scripts/ file with zero stray; ops pair grandfathered).
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_placement import validate_placement as v; f=[]; v(f); print('PLACEMENT_OK' if not f else 'PLACEMENT_FAIL: '+'; '.join(f))"; echo '--- allowlist truth (every root file allowlisted-or-grandfathered) ---'; bin/venv-python -c "import yaml,subprocess; d=yaml.safe_load(open('docs/contracts/file-router.yaml')); a=set(d['scripts_root_allowlist']['allowed_files']); g=d['scripts_root_allowlist']['grandfathered_globs']; import fnmatch; root=[l.split('/',1)[1] for l in subprocess.run(['git','ls-files','scripts'],capture_output=True,text=True).stdout.splitlines() if l.count('/')==1]; stray=[f for f in root if f not in a and not any(fnmatch.fnmatch(f,x) for x in g)]; print('ALLOWLIST_TRUE' if not stray else 'STRAY: '+str(stray))"
+    expected: Prints PLACEMENT_OK and ALLOWLIST_TRUE (no dead target, no duplicate topic, no scripts-root stray; ops_data_portal.py/ops_writer.py match the grandfathered globs).
+    fix_if: PLACEMENT_FAIL/STRAY names the issue -- a dead target means a router row still points flat; a stray means a current root file is missing from allowed_files (regenerate via `git ls-files scripts | awk -F/ 'NF==2'` minus the ops pair); a duplicate topic means llm-code collides.
+  - step: 8
+    phase: pre-deploy
+    hermetic: false
+    action: Lambda affected-set + bundle completeness -- compute_affected_artifacts over the ACTUAL changed files is exactly {data-pipeline, ops-compaction}, both manifests point at the new paths, and CD.24 bundle-completeness passes (handlers import from the staged tree).
+    command: >-
+      bin/venv-python -c "import subprocess; from scripts.lambda_manifest import compute_affected_artifacts as c; changed=[l for l in subprocess.run(['git','diff','--name-only','origin/main'],capture_output=True,text=True).stdout.splitlines() if l.strip()]; r=sorted(c(changed)); print('AFFECTED='+str(r)); assert r==['data-pipeline','ops-compaction'], r; print('AFFECTED_OK')"; bin/venv-python -c "from scripts.lambda_manifest import cmd_check_bundles; import sys; sys.exit(cmd_check_bundles(None))" && echo BUNDLE_COMPLETE_OK
+    expected: Prints AFFECTED=['data-pipeline', 'ops-compaction'], AFFECTED_OK, and BUNDLE_COMPLETE_OK (both active zips stage; every handler imports resolve from the staged tree with the new includes).
+    fix_if: >-
+      A different affected set means a manifest include path is wrong or model_registry was added; a
+      bundle-completeness failure names the unresolved handler import -- fix the include paths in both manifests to
+      scripts/llm/{github_models_client,client,utils}.py (+ scripts/llm/__init__.py).
+  - step: 9
+    phase: pre-deploy
+    hermetic: false
+    action: Authoritative gate 1 -- FULL validate (not --pre). Runs import-linter, validate_placement, validate_executor_boundary, validate_lambda_bundle_completeness, the coverage checker, prompt-compliance, validate_platform_roadmap (new T-1.24 item), and the whole registered sequence.
+    command: bin/venv-python -m scripts.validate
+    expected: Exits 0 -- all checks pass, including bundle-completeness, placement, executor-boundary, and the roadmap schema check on the added T-1.24 tier_item.
+    fix_if: A named check fails; forward-fix on-branch (Decision 55 -- never disable a check). A roadmap failure means the T-1.24 item has a malformed field / dangling depends_on; a placement failure means a router row or the scripts_root_allowlist is incomplete.
+  - step: 10
+    phase: pre-deploy
+    hermetic: false
+    action: Authoritative gate 2 -- FULL pytest across the whole suite (catches any missed @patch target or import in cross-cutting tests, plus the 2 renamed test files and the new scripts-root allowlist tests).
+    command: bin/venv-python -m pytest -q
+    expected: The full suite passes (0 failures), including tests/test_llm_model_registry.py, tests/test_llm_github_models_client.py, and the scripts-root allowlist tests in tests/test_validate.py.
+    fix_if: A failure names the test/module; finish the anchored rewrite (imports + every @patch string) in that test file, or fix the renamed-test import block (tests/CLAUDE.md single-block rule).
+  - step: 11
+    phase: post-deploy
+    hermetic: false
+    action: >-
+      Build + deploy BOTH affected ACTIVE artifacts via the routine decoupled_build_pipeline channel (Decision 125:
+      data-pipeline + ops-compaction are NOT terraform/personal-managed -- build-lambda.yaml deploy_channels gives them
+      NO break_glass_only field, only ducklake_functions has it -- so local --deploy is ROUTINE, not break-glass;
+      agent_platform profile is live). The `--profile agent_platform` flag is REQUIRED: the prod deploy path uses
+      args.profile verbatim with NO env fallback (build_lambda.py:176 default = company-aws-profile, the WRONG account).
+    command: bin/venv-python -m scripts.build_lambda --deploy --profile agent_platform
+    expected: >-
+      Builds data-pipeline.zip + ops-compaction.zip under the 262MB ceiling, uploads to S3, and updates function
+      code for agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor, and
+      agent-platform-ops-compaction. Exit 0.
+    fix_if: >-
+      FIRST check the profile: a "profile not found" / a misleading "S3 bucket does not exist" at validate_bucket_exists
+      means --profile agent_platform was omitted and it defaulted to the unreachable company-aws-profile (WRONG account) --
+      re-run WITH `--profile agent_platform`. A genuine AccessDenied means the agent_platform chain is not live (re-run
+      `aws sts get-caller-identity --profile agent_platform`). A build size failure means an unintended include. This is
+      the routine channel -- do NOT route to the DuckLake break-glass path.
+  - step: 12
+    phase: post-deploy
+    hermetic: false
+    action: >-
+      data-pipeline smoke -- deploy-invoke-verify the dispatcher end-to-end (exercises the deployed data-pipeline
+      zip's module graph with the new scripts/llm/ layout). AWS_PROFILE=agent_platform is REQUIRED: run_scheduled_agent
+      (lines ~216/320) reads AWS_PROFILE env-only with NO --profile flag, otherwise defaults to the unreachable
+      company-aws-profile.
+    command: AWS_PROFILE=agent_platform bin/venv-python -m scripts.run_scheduled_agent --smoke-test doc-freshness
+    expected: >-
+      Smoke returns 0 -- the dispatcher (re)deploys, invokes with {"force_agent":"doc-freshness"}, and a fresh agent-log
+      S3 object appears within the window (no runtime ImportError referencing scripts.llm). NOTE: this exercises the moved
+      scripts.llm.github_models_client path ONLY if doc-freshness routes through GitHub Models (per schedule.yaml provider);
+      if it routes to gemini, moved-module import resolution rests on the pre-deploy bundle-completeness gate (step 8) +
+      FULL pytest (step 10). Either way the dispatcher's full deployed graph loading with the new layout is proven.
+    fix_if: A non-zero smoke means the deployed zip's import graph broke -- confirm both manifests' includes point at scripts/llm/* (step 8) and that the deferred handler import was rewritten; rebuild+redeploy and re-run WITH AWS_PROFILE=agent_platform.
+  - step: 13
+    phase: post-deploy
+    hermetic: false
+    action: >-
+      ops-compaction smoke -- confirm the ops-compaction function code was refreshed to the new zip (its handler
+      imports scripts.ops_writer, not the llm modules, so import-resolution for it is proven by the pre-deploy
+      bundle-completeness gate; this step confirms the deploy landed).
+    command: aws lambda get-function --function-name agent-platform-ops-compaction --profile agent_platform --region eu-west-2 --query 'Configuration.LastModified' --output text
+    expected: Prints a LastModified timestamp within minutes of the step-11 deploy (ops-compaction.zip code updated). Combined with the step-8 bundle-completeness pass, this establishes the ops-compaction handler imports from the new tree.
+    fix_if: A stale LastModified means the ops-compaction deploy did not land -- re-run step 11 and confirm the deploy log names agent-platform-ops-compaction.
+  - step: 14
+    phase: post-deploy
+    hermetic: false
+    action: >-
+      rec-164 closure verification (orchestrator-run, POST-MERGE). The squash-merge body carries `Resolves: rec-164`
+      (driven by bundled_recommendations), which rec-autoclose.yml consumes to flip rec-164 to closed. After merge,
+      sync the read cache and confirm.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && grep -E '"id": ?"rec-164"' logs/.recommendations-log.jsonl | grep -o '"status": ?"[a-z]*"'
+    expected: >-
+      After the merge, rec-164 shows "status":"closed". (Pre-merge this step confirms rec-164 is still open and the
+      trailer is specified; closure is a merge-time action owned by the orchestrator.)
+    fix_if: If rec-164 is still open post-merge, the trailer was missing/malformed -- apply the fallback `bin/venv-python -m scripts.ops_data_portal --update-rec rec-164 --status closed --resolution "superseded by the audit target tree; RS-01 families nested; ops/ deferred to T-1.24"`.
+constraints:
+  - IMPLEMENTATION plan type; no NEW recommendations bundled or filed beyond closing rec-164 (orchestrator constraint; STRATEGIC + >5-file heuristic suspended per Decision 67 -- authored as one larger IMPLEMENTATION plan).
+  - >-
+    No import shims, re-export stubs, or compatibility deferred-imports (audit Q6; the import-linter contracts exist
+    precisely to prevent that pattern). The move is a hard same-commit cutover.
+  - >-
+    Per-name rename mapping (NOT a single family-prefix substitution): llm_client->llm.client and llm_utils->llm.utils
+    STRIP the llm_ prefix; model_registry->llm.model_registry and github_models_client->llm.github_models_client KEEP
+    their names. Build the sweep as a re.sub over an explicit per-name mapping (dotted `scripts.NAME`, path
+    `scripts/NAME.py`, and `from scripts import model_registry`), names sorted longest-first, each pattern \b-anchored.
+    There are NO model_registry_*/llm_client_* siblings to protect (unlike P4b's platform_roadmap_*), so \b-anchoring
+    is sufficient; model_registry must not partial-match model_routing (\b + distinct chars protect it).
+  - >-
+    NO ROOT/__file__ depth fix: all four modules are cwd-relative (client uses Path("logs/debug"); model_registry uses
+    Path("docs/contracts/inference-provider.yaml"); utils/github_models_client have no Path anchor). Do NOT add a
+    parent.parent.parent adjustment -- that would BREAK them. This is the key delta from P4b (which had 8 anchored modules).
+  - >-
+    Lambda V3 same-commit invariant: BOTH src/lambdas/data-pipeline/manifest.yaml and src/lambdas/ops-compaction/
+    manifest.yaml includes: lists must be repointed to scripts/llm/{github_models_client,client,utils}.py in the SAME
+    commit as the git mv, or CD.24 bundle-completeness (full tier) fails on missing includes. model_registry is NOT
+    bundled (deferred import) -- do NOT add it. compute_affected_artifacts over the actual diff must equal
+    {data-pipeline, ops-compaction}.
+  - >-
+    Deploy channel = decoupled_build_pipeline (Decision 125 / build-lambda.yaml deploy_channels [NO break_glass_only
+    field for prod_functions/ops_compaction] / src/data/handlers/CLAUDE.md ["routine for this directory's targets"]):
+    routine local `bin/venv-python -m scripts.build_lambda --deploy --profile agent_platform` (one invocation deploys
+    both data-pipeline and ops-compaction), agent_platform profile live -- NO human authorization / break-glass required
+    by the class SoT. This is DISTINCT from the four terraform/personal-managed DuckLake Lambdas (filemd5-coupled,
+    break-glass-only). No governed post-merge CD deploys these two artifacts (deploy.yml disabled; terraform-apply-sandbox
+    is --ducklake-only), so build+deploy+smoke run in-implement (post-approval). `--profile agent_platform` (deploy) and
+    `AWS_PROFILE=agent_platform` (smoke) are MANDATORY -- omitting them defaults to the unreachable company-aws-profile.
+  - >-
+    Executor self-modification boundary (Decision 117/44): llm_client.py and llm_utils.py are boundary files. Repoint
+    config/agent/executor/capabilities.yaml boundary_patterns to path-qualified scripts/llm/client.py and
+    scripts/llm/utils.py (SUBSTRING matcher -- bare client.py/utils.py would over-match) and sweep the
+    docs/PROJECT_CONTEXT.md boundary-list prose. Keep the tests/test_llm_client / tests/test_llm_utils patterns (those
+    filenames are unchanged).
+  - >-
+    Finish the scripts-root rule: add the scripts_root_allowlist sibling key to docs/contracts/file-router.yaml
+    (allowed_files = every post-move depth-1 scripts/ file incl. CLAUDE.md + __init__.py; grandfathered_globs =
+    ops_data_portal.py + ops_writer.py, owner T-1.24) and the parallel check block in validate_placement.py. The
+    allowlist must be TRUE at merge (enumerate `git ls-files scripts | awk -F/ 'NF==2'` after the move; VP step 7 asserts it).
+  - >-
+    DO-NOT-TOUCH: do NOT modify scripts/verifiers/outbox_health.py in this PR (deferred code-review finding; the
+    orchestrator handles its covers-repoint as a standalone fix). This is naturally satisfied -- outbox_health.py
+    references no llm module and is not in this diff. (Note: ops_data_portal.py also imports no llm module and is NOT
+    in this diff, contrary to the orchestration hint -- so no CD.29 same-PR guard interaction arises.)
+  - >-
+    Sweep LIVE surfaces only. Append-only/grandfathered history LEFT untouched: docs/plans/ (PLAN-*, archive/,
+    reports/), audits/ (incl. audits/repository-structure-cb02572.yaml), logs/, docs/DECISIONS*.md, docs/CHANGELOG.md,
+    docs/SESSION_LOG*.md, grandfathered docs/INTENT-*.md, and the EXECUTED docs/audit-prompts/*.md. Live surfaces that
+    ARE swept: config/README.md, docs/PROJECT_CONTEXT.md, docs/ARCHITECTURE-WORKFLOW.md, docs/contracts/
+    inference-provider.yaml, the 3 ROADMAP-*.yaml files (cosmetic), and the file-router rows.
+  - >-
+    Test files: rename ONLY the two whose stems no longer match a uniform test_llm_ prefix (test_model_registry.py ->
+    test_llm_model_registry.py; test_github_models_client.py -> test_llm_github_models_client.py); keep
+    test_llm_client.py / test_llm_utils.py. Rewrite each touched test's imports + every @patch("scripts.<module>...")
+    string target. Keep each module's imports in ONE block (tests/CLAUDE.md -- ruff format drops symbols from a second
+    same-module block). Run `ruff check --fix` after the sweep (F401/PLC0414).
+  - Gates are FULL validate (not --pre) AND FULL pytest, both green, PLUS the V3 build/deploy/smoke steps, before the orchestrator pushes.
+  - No emojis; ASCII hyphens only; ruff line length 127; type hints; async for I/O (AGENTS.md style).
+  - "Public-repo content boundary (Decision 101): every touched file is engineering code/config/docs -- no account IDs, ARNs, ExternalIds, credentials, or trading alpha."
+  - No rescue agents or workaround loops (Decision 55). Forward-fix on-branch only. Never edit or commit on main; work on the harness claude/ branch (AGENTS.md Git-ops). The orchestrator owns push/PR/CI/merge.
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (85 of 85 decisions triaged). CITE:
+    Decision 79 (+CD.16/CD.24 per-Lambda manifests + bundle-completeness + build/deploy/smoke gating -> both manifests
+    updated same-commit; model_registry correctly absent), Decision 125 (lambda-deploy-channel-defaults -> both artifacts
+    are decoupled_build_pipeline, routine local --deploy, no governed post-merge CD -> in-implement deploy), Decision 48
+    (V3 tier bar: behavioral deploy-invoke-verify), Decision 86 (contract homes -> ops/ move to T-1.24 tier_item,
+    scripts_root_allowlist to file-router.yaml; no new prose doc), Decision 85 (PlanDocument schema + bundled_recommendations
+    drives rec-autoclose), Decision 55 (no shims -> same-commit sweep must be exhaustive; see flag resolution), Decision 67
+    (STRATEGIC freeze -> one IMPLEMENTATION plan), Decision 104 (validate.py check registry -> extend the existing
+    validate_placement check + test_coverage_checker map; no new registry entry), Decision 117 (executor boundary SSOT,
+    supersedes 44 -> capabilities.yaml + classify_automatable.py lockstep). RELATED: Decision 84 (DuckLake sole ops backend
+    -> rec-164 closes via the portal Resolves trailer, not a JSONL edit; ops pair grandfathered/deferred), Decision 124
+    (nested-subpackage coverage precedent -> the llm test map), Decisions 116/121/122 (LLM provider routing -- moved modules
+    referenced by current path in roadmap files_in_scope + inference-provider.yaml; path-anchored sweep catches them,
+    DECISIONS.md prose grandfathered), Decision 103 (rec-164 "superseded" verdict is orchestrator-confirmed via squash-merge,
+    not autonomous), Decisions 93/114 (T-1.24 must satisfy the platform_roadmap model_validator + 10k-line ceiling; T-1.24
+    depends_on:[] so no depend-on-deferred issue), Decision 101 (public-repo boundary -- all touched files engineering).
+    Decision 44 is SUPERSEDED by 117 (cite 117).
+  - >-
+    Flag resolution (2 flags, both RESOLVED in-plan; orchestrator holds delegated Step-6b authority): (1) Decision 117
+    WARN [RESOLVED] -- scripts/classify_automatable.py hardcodes a DUPLICATE boundary list (lines 35-36: bare
+    "llm_client.py"/"llm_utils.py") separate from capabilities.yaml; Decision 117's reversal condition literally guards
+    this drift. Added scripts/classify_automatable.py to scope and repoint its two entries in LOCKSTEP with capabilities.yaml
+    (both substring-match, so path-qualified scripts/llm/client.py + scripts/llm/utils.py). (2) Decision 55 NOTE [RESOLVED]
+    -- no shim => the same-commit sweep must be exhaustive; the scout's broader bare-string grep found two more hardcoded
+    lists my scripts.-prefixed grep missed: build_lambda_config.py _LAMBDA_SCRIPTS (bare github_models_client.py/llm_client.py/
+    llm_utils.py -- "retained for backward compat", not the bundle SoT which is manifest-driven) and its test
+    tests/test_build_lambda_config.py; both added to scope. These three lists use BARE basenames so they need a separate
+    by-hand rewrite (NOT the anchored scripts.NAME/scripts/NAME.py patterns) -- see the sweep constraint + VP step 5.
+  - "gates: decision-scout=FLAGS_FOUND (2 flags, both resolved in-plan: Decision 117 classify_automatable lockstep + Decision 55 bare-string list completeness); plan-critique=PROCEED after 2 round(s)"
+  - >-
+    CRITICAL FINDING (Lambda V3, key delta from P4a/P4b): llm_client/llm_utils/github_models_client are bundled in
+    BOTH data-pipeline and ops-compaction manifests (both status: active), so compute_affected_artifacts=={data-pipeline,
+    ops-compaction} and this is V3. model_registry is NOT bundled (deferred `from scripts.model_registry import
+    resolve_provider` inside llm_client._resolve_provider; Lambda handlers never call that path -- they route by the
+    schedule.yaml provider field), verified by compute_affected_artifacts([model_registry])==[]. The handler imports of
+    github_models_client are function-local (scheduled_agent_handler.py:235, findings_processor_handler.py:118); the
+    CD.24 bundle-completeness check imports handler MODULES from the staged tree, so consistent manifest+import rewrites
+    keep it green. ops_compaction_handler imports scripts.ops_writer (not the llm modules), so its post-deploy smoke is a
+    deploy-freshness confirm, with import-resolution proven by the pre-deploy bundle-completeness gate.
+  - >-
+    CRITICAL FINDING (deploy channel, Decision 125 -- DEFINITIVELY PINNED): data-pipeline + ops-compaction are the
+    decoupled_build_pipeline class. THREE authoritative sources agree local `build_lambda --deploy` is ROUTINE (NOT
+    break-glass) for THIS class: (1) docs/contracts/build-lambda.yaml deploy_channels gives prod_functions + ops_compaction
+    channel_class=decoupled_build_pipeline, root: null, and NO break_glass_only field -- only ducklake_functions carries
+    break_glass_only ("--ducklake-only --deploy"); (2) src/data/handlers/CLAUDE.md: "the local --deploy step below is
+    routine for this directory's targets, but is break-glass-only for the DuckLake class"; (3) the planning skill Decision
+    125 section: local build_lambda --deploy "remains the routine deploy step ... Decision 125's channel gating does not
+    apply to them". GOVERNED CD PATH: NONE exists for these two artifacts and none is required -- every .github/workflow
+    was checked: deploy.yml is DISABLED (workflow_dispatch skeleton, "until staging/prod environments exist", no lambda
+    code deploy); terraform-apply-sandbox.yml runs ONLY `--ducklake-only` (the DuckLake class); no other workflow touches
+    lambda code. THEREFORE: deploy+smoke run in-implement via the ROUTINE channel, agent_platform live -> NO human
+    deploy-authorization required by the class SoT. The AGENTS.md general "local --deploy is break-glass" phrasing is
+    resolved by the class-specific deploy_channels SoT (break-glass applies ONLY to terraform_personal_filemd5_coupled).
+    `--profile agent_platform` is MANDATORY on both the deploy (build_lambda.py:176, args.profile verbatim) and the smoke
+    (AWS_PROFILE env, run_scheduled_agent ~216/320) -- omitting it defaults to the unreachable company-aws-profile.
+  - >-
+    CRITICAL FINDING (executor boundary, Decision 117 -- NOT faced by P4a/P4b): scripts/llm_client.py + scripts/llm_utils.py
+    are executor self-modification boundary files. config/agent/executor/capabilities.yaml boundary_patterns lists bare
+    `llm_client.py`/`llm_utils.py`; validate_executor_boundary matches by SUBSTRING (`if pat in file_field`). After the
+    rename to client.py/utils.py the bare patterns stop matching the new path, and bare client.py/utils.py would be
+    dangerously over-broad (cf. the test_session_preflight.py:2215 substring-boundary warning), so the patterns MUST become
+    path-qualified scripts/llm/client.py + scripts/llm/utils.py. No test/consumer hardcodes these patterns
+    (test_validate.py:2575 guards only the T-1.7 config-split zones). VP step 5 asserts the repoint.
+  - >-
+    CRITICAL FINDING (naming heterogeneity): the llm family is MIXED -- two modules STRIP the prefix (client, utils) and
+    two KEEP their names (model_registry, github_models_client). No single test prefix reproduces all four existing test
+    names, so map with "llm": "test_llm_" and RENAME the two mismatched tests (test_model_registry ->
+    test_llm_model_registry, test_github_models_client -> test_llm_github_models_client) while keeping test_llm_client /
+    test_llm_utils. Coverage is EXISTENCE-only for scripts/ (pyproject source=['src']; P4b-verified), so the only coverage
+    requirement is that map_source_to_test resolves to an existing test file.
+  - >-
+    NO ROOT anchor fix: all four modules use cwd-relative paths (client: Path("logs/debug"); model_registry: Path(
+    "docs/contracts/inference-provider.yaml"); utils/github_models_client: none). Unlike P4b's 8 __file__-anchored
+    modules, there is NO parent.parent->parent.parent edit here; adding one would BREAK them. VP step 4 asserts no __file__
+    anchor was introduced.
+  - >-
+    Scoping note (surfaced to orchestrator as a judgment): the acceptance "no >=3-file prefix family remains except the
+    ops pair" is interpreted against the audit's ENUMERATED RS-01 six-family set (ci_rca/session/sync/roadmap/llm/ops).
+    Three OTHER multi-file clusters at scripts/ root -- build_lambda_* (config/deploy/packaging), data_quality_*
+    (compile/execute/models), platform_roadmap_* (gate_rules/models/state) -- are ALL new since the audit commit cb02572
+    and are entry-point-anchored helper clusters (build_lambda.py + data_quality_runner.py are declared entry points),
+    NOT RS-01 peer-families. The enumerated scripts_root_allowlist (consistent with P3's docs_root_allowlist) lists them
+    as declared root members; a future consolidation may nest them but they are out of P4c scope and out of rec-164's
+    territory. This keeps "root = entry points + declared singles" true for the RS-01 set while the allowlist prevents
+    NEW accretion (a new unlisted root file fails validate_placement).
+  - >-
+    rec-164 closure: bundled_recommendations:[rec-164] drives a `Resolves: rec-164` squash-merge trailer (rec-autoclose.yml,
+    Decision 70/103) -- resolution text: "superseded by the audit target tree; RS-01 families nested per the phase plans;
+    ops/ deferred to tier_item T-1.24". Closure is a merge-time action owned by the orchestrator (VP step 14). rec-164
+    remains OPEN pre-merge; the plan's VP steps 2-10 ARE rec-164's substantive acceptance (RS-01 completion).
+  - >-
+    Deferred ops/ owner: a new tier_item T-1.24 (the T-1 repo-structure/hygiene tier -- cf. T-1.7 config split, T-1.8
+    manifests, T-1.13..17 contract conversions) owns the scripts/ops/ move (ops_data_portal.py + ops_writer.py; 27+
+    external refs incl. AGENTS.md, rec-autoclose.yml, executor prompts, Lambda manifests -- the highest-fan-out family,
+    deferred per the audit Q6 sequencing). This gives the deferral a roadmap owner instead of leaving it to a rec.
+  - >-
+    ci_rca HARD BLOCK deferral: preflight at 0eb9cae reports ci_rca_unresolved_recs == [rec-2655 (verification-graduation
+    test_selector gate, file scripts/verification_checks.py), rec-2653 (pytest-xdist collection-mismatch flake, file
+    scripts/checks/_scaffolding.py)] plus likely-resolved rec-2654 (gated-apply DuckLake source_code_hash, terraform/
+    personal). NONE satisfies a Related-Work condition for this llm-nesting phase (different files, different failure
+    categories: test_selector gate / xdist flake / terraform apply vs. package relocation). DEFERRED per the orchestrator
+    directive: human investigating on branch codex/investigate-ci-failure-root-cause; distinct from the llm CODE family
+    this phase moves. Recorded per the Related-Work/deferral discipline (planning skill HARD BLOCK rule).
+  - >-
+    Main Divergence Assessment: preflight reports main=(0 behind, 0 ahead) at 0eb9cae -- branch is level with origin/main,
+    no overlap risk at planning time. Final alignment is the orchestrator-owned commit-flow auto-rebase (AGENTS.md
+    Git-ops), FOLLOWED BY VP step 3's post-rebase reference sweep which re-runs the anchored grep against whatever main is
+    at merge time and fails loudly on any missed reference. This plan pins no exact base.
+  - >-
+    Budget note: the diff is ~45-50 files (4 moves + ~15 importer rewrites + ~10 tests + manifests + contracts + roadmap).
+    Smaller than P4b (98 files, which breached the 5-min fast-tier budget) but the pr-validate --pre pytest_diff phase
+    could approach the cap given ~10 changed test files. If a fast-tier budget breach occurs, it is the same class as the
+    P4b breach and the orchestrator handles it via admin-merge (the authoritative gates here are FULL validate + FULL
+    pytest + V3 deploy/smoke, all run on-branch, not --pre).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/repo-restructure-audit-hm1gti, at origin/main 0eb9cae)
+  - AGENTS.md (Lambda-deploy sections, Decision 79/125) + scripts/CLAUDE.md + tests/CLAUDE.md (namespace-migration; single import block; @patch retargeting; test-count-coupling) + src/data/handlers/CLAUDE.md + src/lambdas/CLAUDE.md read
+  - Audit RS-01 + proposed_target_tree scripts/llm/ node + surface_dispositions.S2 + Q6 hazard sequencing read from audits/repository-structure-cb02572.yaml
+  - P4b precedent read (docs/plans/PLAN-nest-session-sync-roadmap.yaml -- the git mv + anchored-sweep + coverage-map + file-router pattern; note the V3 + boundary + no-anchor deltas here)
+  - All 4 moving modules read; intra-family imports (client->utils module-scope, client->model_registry deferred), the 2 bare `from scripts import model_registry` sites, the deferred handler imports, and the cwd-relative (no __file__) property enumerated
+  - docs/contracts/build-lambda.yaml deploy_channels + docs/contracts/environment-taxonomy.md section 5 read; deploy channel confirmed decoupled_build_pipeline (routine local --deploy, no break-glass)
+  - Lambda affected-set verified (compute_affected_artifacts == {data-pipeline, ops-compaction}; model_registry not bundled); capabilities.yaml boundary_patterns + validate_executor_boundary substring matcher read
+  - >-
+      Reference surface enumerated at 0eb9cae (LIVE) -- ~15 scripts/ + src/ importers, 2 manifests, capabilities.yaml,
+      config/README.md, docs/PROJECT_CONTEXT.md, docs/ARCHITECTURE-WORKFLOW.md, docs/contracts/file-router.yaml +
+      inference-provider.yaml, docs/ROADMAP-PLATFORM.yaml, scripts/CLAUDE.md, ~10 test files (2 renamed);
+      append-only/grandfathered history classified and LEFT
+  - Coverage confirmed EXISTENCE-only for scripts/ (source=['src']); only map_source_to_test resolution matters -> the llm -> test_llm_ prefix entry + 2 test renames
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - |
+    Create the package marker (coverage-excluded):
+      scripts/llm/__init__.py -> """scripts.llm -- provider-agnostic LLM client/routing subpackage (RS-01 / rec-164 Phase A)."""
+  - |
+    Move the 4 modules with git mv (preserves history):
+      git mv scripts/llm_client.py scripts/llm/client.py
+      git mv scripts/llm_utils.py scripts/llm/utils.py
+      git mv scripts/model_registry.py scripts/llm/model_registry.py
+      git mv scripts/github_models_client.py scripts/llm/github_models_client.py
+    And the 2 test renames:
+      git mv tests/test_model_registry.py tests/test_llm_model_registry.py
+      git mv tests/test_github_models_client.py tests/test_llm_github_models_client.py
+  - |
+    Apply the anchored reference rewrite via a Python re.sub sweep (NOT plain sed -- needs \b + per-name mapping).
+    RENAME = {llm_client: llm.client, llm_utils: llm.utils, model_registry: llm.model_registry,
+              github_models_client: llm.github_models_client}. NAMES joined by | sorted longest-first
+      (github_models_client|model_registry|llm_client|llm_utils). Apply THREE \b-anchored patterns over the EXPLICIT
+      live-file list (the Scope Modify/Create rows -- moved modules at NEW paths, non-moving importers, 2 manifests,
+      capabilities.yaml, config/README.md, docs/PROJECT_CONTEXT.md, docs/ARCHITECTURE-WORKFLOW.md, docs/contracts/
+      {file-router,inference-provider}.yaml, docs/ROADMAP-PLATFORM.yaml, scripts/CLAUDE.md, and the ~10 test files)
+      and NO other file:
+        1. r"\bscripts\.(NAMES)\b"           -> "scripts." + RENAME[name]   (dotted import / -m / from-import target / @patch string)
+        2. r"\bscripts/(NAMES)\.py\b"         -> "scripts/" + RENAME[name].replace(".","/") + ".py"   (path form)
+        3. r"\bfrom scripts import (model_registry)\b" -> "from scripts.llm import model_registry"  (name kept -> NO alias)
+    After the sweep run `ruff check --fix` on edited Python to catch F401/PLC0414.
+  - |
+    Update the two Lambda manifests (SAME commit -- CD.24). In BOTH src/lambdas/data-pipeline/manifest.yaml and
+    src/lambdas/ops-compaction/manifest.yaml rewrite the 3 include lines AND add the package marker:
+      scripts/github_models_client.py -> scripts/llm/github_models_client.py
+      scripts/llm_client.py           -> scripts/llm/client.py
+      scripts/llm_utils.py            -> scripts/llm/utils.py
+      + add:  scripts/llm/__init__.py   (regular-package parity with scripts/__init__.py; recommended by plan-critique)
+    Do NOT add model_registry (not bundled). (The pattern-2 path sweep covers the 3 renames if the manifests are in the
+    file list; add __init__.py by hand; verify exactly these 4 llm entries per manifest and model_registry not introduced.)
+  - |
+    Repoint the THREE bare-basename lists BY HAND (NOT via the anchored scripts.NAME/scripts/NAME.py sweep -- these use
+    bare "llm_client.py"-style strings). Keep capabilities.yaml + classify_automatable.py in LOCKSTEP (Decision 117):
+      (a) config/agent/executor/capabilities.yaml boundary_patterns:  - llm_client.py -> - scripts/llm/client.py ;
+          - llm_utils.py -> - scripts/llm/utils.py  (path-qualified -- validate_executor_boundary substring-matches).
+      (b) scripts/classify_automatable.py _BOUNDARY_PATTERNS: "llm_client.py" -> "scripts/llm/client.py" ;
+          "llm_utils.py" -> "scripts/llm/utils.py"  (same substring matcher; Decision 117 duplicate-list lockstep).
+      (c) scripts/build_lambda_config.py _LAMBDA_SCRIPTS (scripts-relative bare names): "github_models_client.py" ->
+          "llm/github_models_client.py"; "llm_client.py" -> "llm/client.py"; "llm_utils.py" -> "llm/utils.py"; then
+          update tests/test_build_lambda_config.py membership assertions to match.
+    Leave tool_runtime.py / run_scheduled_agent.py / build_lambda.py and the tests/test_llm_client / tests/test_llm_utils
+    patterns unchanged in (a) and (b).
+  - |
+    Extend scripts/test_coverage_checker.py: add "llm": "test_llm_" to _NESTED_SUBPACKAGE_TEST_PREFIX and the docstring
+    mapping list (whitelisted; no general len==3 rule). The line-206 `from scripts.llm_utils import kill_process_tree`
+    is rewritten by the sweep to scripts.llm.utils.
+  - |
+    Finish the scripts-root rule in docs/contracts/file-router.yaml:
+      (a) rewrite the 4 llm rows to scripts/llm/{client,utils,model_registry,github_models_client}.py;
+      (b) append: - {topic: llm-code, targets: [scripts/llm/], description: "LLM client/routing subpackage: client,
+          utils, model_registry, github_models_client (4 modules moved from scripts/ root, RS-01 / rec-164 Phase A)."};
+      (c) add a top-level scripts_root_allowlist key modeled on docs_root_allowlist:
+            scripts_root_allowlist:
+              allowed_files:   # every post-move depth-1 scripts/ file (generate: git ls-files scripts | awk -F/ 'NF==2', minus the ops pair)
+                - CLAUDE.md
+                - __init__.py
+                - ...            # all current root .py incl. build_lambda*, data_quality_*, platform_roadmap_* helper clusters
+              grandfathered_globs:
+                - "ops_data_portal.py"   # RS-01 ops family; deferred to T-1.24 -> scripts/ops/
+                - "ops_writer.py"        # RS-01 ops family; deferred to T-1.24 -> scripts/ops/
+    Then extend scripts/checks/hygiene/validate_placement.py with _load_scripts_root_allowlist + _scripts_root_stray_files
+    + a third scan block (mirror the docs-root pair; prefix "scripts/"; import-safe; absent key -> SKIP).
+  - |
+    Author tier_item T-1.24 in docs/ROADMAP-PLATFORM.yaml (append to tier_items), e.g.:
+      - id: T-1.24
+        tier: T-1
+        name: "Nest the scripts/ops family into scripts/ops/ (RS-01 phase deferred)"
+        status: not_started
+        effort: M
+        related_candidate_decisions: []
+        intent: >-
+          Final RS-01 subpackaging move, deliberately deferred (audit Q6 sequencing): relocate the ops-portal family
+          scripts/ops_data_portal.py + scripts/ops_writer.py into scripts/ops/ (data_portal.py + writer.py, or names
+          kept) via git mv + same-commit reference rewrite. HIGHEST fan-out of the six families: 27+ external refs incl.
+          AGENTS.md (Single-Portal invariant), .github/workflows/rec-autoclose.yml, executor prompts, and the
+          data-pipeline + ops-compaction Lambda manifests (ops_writer.py is bundled -> V3). Deferred until the placement
+          check is live and the other five families proved the anchored-rewrite pattern (RS-01 phases P4a/P4b/P4c). No
+          import shims (Decision 55). Grandfathered in the scripts_root_allowlist until this lands.
+        depends_on: []
+        files_in_scope:
+          - scripts/ops_data_portal.py
+          - scripts/ops_writer.py
+        exit_criteria:
+          - id: c1
+            text: scripts/ops_data_portal.py and scripts/ops_writer.py relocated under scripts/ops/ with an __init__.py; no flat original remains; same-commit reference rewrite across all 27+ external refs (AGENTS.md, rec-autoclose.yml, executor prompts, both Lambda manifests) with no import shims.
+            status: open
+          - id: c2
+            text: The scripts_root_allowlist grandfathered_globs entries for ops_data_portal.py/ops_writer.py are removed (the ops pair is now nested); validate_placement green; the Single-Portal invariant preserved (all writes still transit the portal surface, path only rewritten).
+            status: open
+          - id: c3
+            text: V3 gates green -- ops_writer.py is bundled in both manifests, so compute_affected_artifacts=={data-pipeline, ops-compaction}; both manifests updated same-commit, bundle-completeness green, both artifacts rebuilt+deployed+smoke-tested.
+            status: open
+    Verify the added item passes validate_platform_roadmap (no duplicate id, no dangling depends_on).
+  - |
+    Update scripts/CLAUDE.md family map: change the "Existing un-nested families" line to leave ONLY `ops_*`
+    grandfathered (owner T-1.24); add a compact map of nested homes (scripts/ci_rca/, scripts/session/, scripts/sync/,
+    scripts/roadmap/, scripts/llm/) and state that scripts_root_allowlist (file-router.yaml, enforced by
+    validate_placement) now makes "root = entry points + declared singles" machine-checked.
+  - |
+    Add scripts-root allowlist test coverage in tests/test_validate.py mirroring the docs-root allowlist tests
+    (well-formed passes; synthetic un-allowlisted depth-1 scripts/ file fails; grandfathered ops entry passes; absent
+    key SKIPs). Derive assertions growth-safe (no hardcoded root-file count).
+  - "Stage everything with `git add -A` (git mv already staged the moves) so validate_placement's `git ls-files` snapshot sees scripts/llm/ tracked and the scripts_root_allowlist scan sees the real post-move root."
+  - "Execute the Verification Plan steps 1-14 in order; loop pre-deploy steps 1-10 until green. Gates 9 (FULL validate) + 10 (FULL pytest) are authoritative pre-deploy; steps 11-13 are the V3 build/deploy/smoke (agent_platform live, routine channel); step 14 (rec-164 closure) is orchestrator-run post-merge. On any failure forward-fix on-branch (Decision 55); never disable a check or add a shim."
+  - "Report: the 4 modules moved into scripts/llm/ + __init__.py, the anchored rewrite (files touched), the 2 manifest updates, the capabilities.yaml boundary repoint, the coverage-map + 2 test renames, the file-router 4-row rewrite + llm-code route + scripts_root_allowlist, the T-1.24 tier_item, scripts/CLAUDE.md family map, compute_affected_artifacts=={data-pipeline, ops-compaction}, the full VP results (incl. FULL validate + FULL pytest + build/deploy/smoke), and that rec-164 is set to close via the Resolves trailer."
+work_areas: []
+rollback: >-
+  All changes are git mv + surgical text edits + one new __init__.py + additive coverage-map/allowlist/roadmap entries +
+  file-router edits, all on the branch; revert with `git checkout -- . && git clean -fd scripts/llm` before commit, or
+  `git revert <sha>` after. The Lambda deploy (step 11) is a code-only redeploy of behavior-identical artifacts on the
+  routine channel; to roll back a deploy, `build_lambda --deploy` from origin/main (or the prior zip) re-pushes the old
+  layout. No infrastructure/IAM/data-migration change. rec-164 closure is via the merge trailer (not applied until
+  merge), so pre-merge rollback needs no rec-state change; if already closed, reopen via `ops_data_portal --update-rec
+  rec-164 --status open`.
