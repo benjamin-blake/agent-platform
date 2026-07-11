@@ -112,12 +112,14 @@ scope:
   - file: src/lambdas/data-pipeline/manifest.yaml
     action: Modify
     purpose: >-
-      Rewrite the 3 includes: lines scripts/github_models_client.py -> scripts/llm/github_models_client.py,
-      scripts/llm_client.py -> scripts/llm/client.py, scripts/llm_utils.py -> scripts/llm/utils.py. Do NOT
-      add model_registry (it is not bundled -- deferred import; compute_affected_artifacts([model_registry])==[]).
+      Rewrite the 3 includes lines scripts/github_models_client.py -> scripts/llm/github_models_client.py,
+      scripts/llm_client.py -> scripts/llm/client.py, scripts/llm_utils.py -> scripts/llm/utils.py, AND add
+      scripts/llm/__init__.py to includes (matches the existing scripts/__init__.py precedent so the zip is a
+      regular package, not a namespace fallback -- 4 llm include entries total). Do NOT add model_registry (not
+      bundled -- deferred import; compute_affected_artifacts([model_registry])==[]).
   - file: src/lambdas/ops-compaction/manifest.yaml
     action: Modify
-    purpose: Rewrite the same 3 include lines to the new scripts/llm/ paths (identical set to data-pipeline). model_registry stays absent.
+    purpose: Rewrite the same 3 include lines to the new scripts/llm/ paths AND add scripts/llm/__init__.py (identical 4-entry set to data-pipeline). model_registry stays absent.
   # ---- executor self-modification boundary SSOT (Decision 117) -- moved files are boundary files
   - file: config/agent/executor/capabilities.yaml
     action: Modify
@@ -273,8 +275,8 @@ acceptance_criteria:
     excluding docs/plans/, audits/, logs/, docs/DECISIONS*.md, docs/CHANGELOG.md, docs/SESSION_LOG*.md,
     docs/INTENT-*.md, and the EXECUTED docs/audit-prompts/*.md, returns nothing.
   - >-
-    Both Lambda manifests (data-pipeline, ops-compaction) name the moved modules at their new paths in includes:
-    (scripts/llm/{github_models_client,client,utils}.py); model_registry is NOT added. compute_affected_artifacts
+    Both Lambda manifests (data-pipeline, ops-compaction) name the moved modules at their new paths in includes
+    (scripts/llm/{github_models_client,client,utils}.py + scripts/llm/__init__.py); model_registry is NOT added. compute_affected_artifacts
     over the ACTUAL changed files returns {data-pipeline, ops-compaction}; the CD.24 bundle-completeness check
     (validate_lambda_bundle_completeness) is green (both handlers import from the staged tree).
   - >-
@@ -367,7 +369,7 @@ verification_plan:
     fix_if: >-
       A different affected set means a manifest include path is wrong or model_registry was added; a
       bundle-completeness failure names the unresolved handler import -- fix the include paths in both manifests to
-      scripts/llm/{github_models_client,client,utils}.py.
+      scripts/llm/{github_models_client,client,utils}.py (+ scripts/llm/__init__.py).
   - step: 9
     phase: pre-deploy
     hermetic: false
@@ -387,26 +389,37 @@ verification_plan:
     hermetic: false
     action: >-
       Build + deploy BOTH affected ACTIVE artifacts via the routine decoupled_build_pipeline channel (Decision 125:
-      data-pipeline + ops-compaction are NOT terraform/personal-managed, so local --deploy is routine, NOT
-      break-glass; agent_platform profile is live). Requires the agent_platform assume-role chain.
-    command: bin/venv-python -m scripts.build_lambda --deploy
+      data-pipeline + ops-compaction are NOT terraform/personal-managed -- build-lambda.yaml deploy_channels gives them
+      NO break_glass_only field, only ducklake_functions has it -- so local --deploy is ROUTINE, not break-glass;
+      agent_platform profile is live). The `--profile agent_platform` flag is REQUIRED: the prod deploy path uses
+      args.profile verbatim with NO env fallback (build_lambda.py:176 default = company-aws-profile, the WRONG account).
+    command: bin/venv-python -m scripts.build_lambda --deploy --profile agent_platform
     expected: >-
       Builds data-pipeline.zip + ops-compaction.zip under the 262MB ceiling, uploads to S3, and updates function
       code for agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor, and
       agent-platform-ops-compaction. Exit 0.
     fix_if: >-
-      A build size failure means an unintended include; a deploy AccessDenied means the agent_platform chain is not
-      live (re-run `aws sts get-caller-identity --profile agent_platform`). This is the routine channel -- do NOT
-      route to the DuckLake break-glass path.
+      FIRST check the profile: a "profile not found" / a misleading "S3 bucket does not exist" at validate_bucket_exists
+      means --profile agent_platform was omitted and it defaulted to the unreachable company-aws-profile (WRONG account) --
+      re-run WITH `--profile agent_platform`. A genuine AccessDenied means the agent_platform chain is not live (re-run
+      `aws sts get-caller-identity --profile agent_platform`). A build size failure means an unintended include. This is
+      the routine channel -- do NOT route to the DuckLake break-glass path.
   - step: 12
     phase: post-deploy
     hermetic: false
     action: >-
       data-pipeline smoke -- deploy-invoke-verify the dispatcher end-to-end (exercises the deployed data-pipeline
-      zip's module graph with the new scripts/llm/ layout, including the deferred github_models import path).
-    command: bin/venv-python -m scripts.run_scheduled_agent --smoke-test doc-freshness
-    expected: Smoke returns 0 -- the dispatcher (re)deploys, invokes with {"force_agent":"doc-freshness"}, and a fresh agent-log S3 object appears within the window (no runtime ImportError referencing scripts.llm).
-    fix_if: A non-zero smoke means the deployed zip's import graph broke -- confirm both manifests' includes point at scripts/llm/* (step 8) and that the deferred handler import was rewritten; rebuild+redeploy and re-run.
+      zip's module graph with the new scripts/llm/ layout). AWS_PROFILE=agent_platform is REQUIRED: run_scheduled_agent
+      (lines ~216/320) reads AWS_PROFILE env-only with NO --profile flag, otherwise defaults to the unreachable
+      company-aws-profile.
+    command: AWS_PROFILE=agent_platform bin/venv-python -m scripts.run_scheduled_agent --smoke-test doc-freshness
+    expected: >-
+      Smoke returns 0 -- the dispatcher (re)deploys, invokes with {"force_agent":"doc-freshness"}, and a fresh agent-log
+      S3 object appears within the window (no runtime ImportError referencing scripts.llm). NOTE: this exercises the moved
+      scripts.llm.github_models_client path ONLY if doc-freshness routes through GitHub Models (per schedule.yaml provider);
+      if it routes to gemini, moved-module import resolution rests on the pre-deploy bundle-completeness gate (step 8) +
+      FULL pytest (step 10). Either way the dispatcher's full deployed graph loading with the new layout is proven.
+    fix_if: A non-zero smoke means the deployed zip's import graph broke -- confirm both manifests' includes point at scripts/llm/* (step 8) and that the deferred handler import was rewritten; rebuild+redeploy and re-run WITH AWS_PROFILE=agent_platform.
   - step: 13
     phase: post-deploy
     hermetic: false
@@ -453,11 +466,14 @@ constraints:
     bundled (deferred import) -- do NOT add it. compute_affected_artifacts over the actual diff must equal
     {data-pipeline, ops-compaction}.
   - >-
-    Deploy channel = decoupled_build_pipeline (Decision 125 / build-lambda.yaml deploy_channels / src/data/handlers/
-    CLAUDE.md): routine local `bin/venv-python -m scripts.build_lambda --deploy` (one invocation deploys both
-    data-pipeline and ops-compaction), agent_platform profile live -- NO human authorization / break-glass required.
-    This is DISTINCT from the four terraform/personal-managed DuckLake Lambdas (filemd5-coupled, break-glass-only). No
-    governed post-merge CD deploys these two artifacts, so build+deploy+smoke run in-implement (post-approval).
+    Deploy channel = decoupled_build_pipeline (Decision 125 / build-lambda.yaml deploy_channels [NO break_glass_only
+    field for prod_functions/ops_compaction] / src/data/handlers/CLAUDE.md ["routine for this directory's targets"]):
+    routine local `bin/venv-python -m scripts.build_lambda --deploy --profile agent_platform` (one invocation deploys
+    both data-pipeline and ops-compaction), agent_platform profile live -- NO human authorization / break-glass required
+    by the class SoT. This is DISTINCT from the four terraform/personal-managed DuckLake Lambdas (filemd5-coupled,
+    break-glass-only). No governed post-merge CD deploys these two artifacts (deploy.yml disabled; terraform-apply-sandbox
+    is --ducklake-only), so build+deploy+smoke run in-implement (post-approval). `--profile agent_platform` (deploy) and
+    `AWS_PROFILE=agent_platform` (smoke) are MANDATORY -- omitting them defaults to the unreachable company-aws-profile.
   - >-
     Executor self-modification boundary (Decision 117/44): llm_client.py and llm_utils.py are boundary files. Repoint
     config/agent/executor/capabilities.yaml boundary_patterns to path-qualified scripts/llm/client.py and
@@ -520,7 +536,7 @@ context:
     llm_utils.py -- "retained for backward compat", not the bundle SoT which is manifest-driven) and its test
     tests/test_build_lambda_config.py; both added to scope. These three lists use BARE basenames so they need a separate
     by-hand rewrite (NOT the anchored scripts.NAME/scripts/NAME.py patterns) -- see the sweep constraint + VP step 5.
-  - "gates: decision-scout=FLAGS_FOUND (2 flags, both resolved in-plan: Decision 117 classify_automatable lockstep + Decision 55 bare-string list completeness); plan-critique=<PENDING>"
+  - "gates: decision-scout=FLAGS_FOUND (2 flags, both resolved in-plan: Decision 117 classify_automatable lockstep + Decision 55 bare-string list completeness); plan-critique=PROCEED after 2 round(s)"
   - >-
     CRITICAL FINDING (Lambda V3, key delta from P4a/P4b): llm_client/llm_utils/github_models_client are bundled in
     BOTH data-pipeline and ops-compaction manifests (both status: active), so compute_affected_artifacts=={data-pipeline,
@@ -532,13 +548,21 @@ context:
     keep it green. ops_compaction_handler imports scripts.ops_writer (not the llm modules), so its post-deploy smoke is a
     deploy-freshness confirm, with import-resolution proven by the pre-deploy bundle-completeness gate.
   - >-
-    CRITICAL FINDING (deploy channel, Decision 125): data-pipeline + ops-compaction are the decoupled_build_pipeline
-    class (root: null, NOT terraform/personal-managed) per docs/contracts/build-lambda.yaml deploy_channels and
-    src/data/handlers/CLAUDE.md. Routine deploy = local `build_lambda --deploy` (one call deploys both), agent_platform
-    live this session -> NO human auth / break-glass. This is DISTINCT from the four terraform/personal filemd5-coupled
-    DuckLake Lambdas. No .github/workflows/*.yml runs build_lambda --deploy for these two artifacts (only
-    terraform-apply-sandbox.yml, and only --ducklake-only), so there is NO governed post-merge CD -- deploy+smoke are
-    in-implement.
+    CRITICAL FINDING (deploy channel, Decision 125 -- DEFINITIVELY PINNED): data-pipeline + ops-compaction are the
+    decoupled_build_pipeline class. THREE authoritative sources agree local `build_lambda --deploy` is ROUTINE (NOT
+    break-glass) for THIS class: (1) docs/contracts/build-lambda.yaml deploy_channels gives prod_functions + ops_compaction
+    channel_class=decoupled_build_pipeline, root: null, and NO break_glass_only field -- only ducklake_functions carries
+    break_glass_only ("--ducklake-only --deploy"); (2) src/data/handlers/CLAUDE.md: "the local --deploy step below is
+    routine for this directory's targets, but is break-glass-only for the DuckLake class"; (3) the planning skill Decision
+    125 section: local build_lambda --deploy "remains the routine deploy step ... Decision 125's channel gating does not
+    apply to them". GOVERNED CD PATH: NONE exists for these two artifacts and none is required -- every .github/workflow
+    was checked: deploy.yml is DISABLED (workflow_dispatch skeleton, "until staging/prod environments exist", no lambda
+    code deploy); terraform-apply-sandbox.yml runs ONLY `--ducklake-only` (the DuckLake class); no other workflow touches
+    lambda code. THEREFORE: deploy+smoke run in-implement via the ROUTINE channel, agent_platform live -> NO human
+    deploy-authorization required by the class SoT. The AGENTS.md general "local --deploy is break-glass" phrasing is
+    resolved by the class-specific deploy_channels SoT (break-glass applies ONLY to terraform_personal_filemd5_coupled).
+    `--profile agent_platform` is MANDATORY on both the deploy (build_lambda.py:176, args.profile verbatim) and the smoke
+    (AWS_PROFILE env, run_scheduled_agent ~216/320) -- omitting it defaults to the unreachable company-aws-profile.
   - >-
     CRITICAL FINDING (executor boundary, Decision 117 -- NOT faced by P4a/P4b): scripts/llm_client.py + scripts/llm_utils.py
     are executor self-modification boundary files. config/agent/executor/capabilities.yaml boundary_patterns lists bare
@@ -641,12 +665,13 @@ execution_steps:
     After the sweep run `ruff check --fix` on edited Python to catch F401/PLC0414.
   - |
     Update the two Lambda manifests (SAME commit -- CD.24). In BOTH src/lambdas/data-pipeline/manifest.yaml and
-    src/lambdas/ops-compaction/manifest.yaml rewrite the 3 includes: lines:
+    src/lambdas/ops-compaction/manifest.yaml rewrite the 3 include lines AND add the package marker:
       scripts/github_models_client.py -> scripts/llm/github_models_client.py
       scripts/llm_client.py           -> scripts/llm/client.py
       scripts/llm_utils.py            -> scripts/llm/utils.py
-    Do NOT add model_registry (not bundled). (The pattern-2 path sweep covers these if the manifests are in the file list;
-    verify by hand that exactly these 3 lines changed in each manifest and model_registry was not introduced.)
+      + add:  scripts/llm/__init__.py   (regular-package parity with scripts/__init__.py; recommended by plan-critique)
+    Do NOT add model_registry (not bundled). (The pattern-2 path sweep covers the 3 renames if the manifests are in the
+    file list; add __init__.py by hand; verify exactly these 4 llm entries per manifest and model_registry not introduced.)
   - |
     Repoint the THREE bare-basename lists BY HAND (NOT via the anchored scripts.NAME/scripts/NAME.py sweep -- these use
     bare "llm_client.py"-style strings). Keep capabilities.yaml + classify_automatable.py in LOCKSTEP (Decision 117):
