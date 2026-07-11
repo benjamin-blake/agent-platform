@@ -1,0 +1,129 @@
+schema_version: 1
+slug: ducklake-source-hash-decouple
+intent: >-
+  Eliminate the recurring terraform/personal CD failure class (ci-rca rec-2654, Critical) by
+  physically decoupling DuckLake Lambda code from the applied Terraform diff and hardening the
+  gated-apply job, so a merge to main can no longer wedge the convergence record. This is step 1
+  of the "agents write Terraform, CI runs Terraform" deployment model (A2/B1).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ducklake-source-hash-decouple.yaml
+phase: >-
+  Platform CI/CD hardening -- realizes ratified Decision 125 (DuckLake Lambda code/infra
+  decoupling); down-payment on the bespoke terraform-apply pipeline finish (A2/B1).
+scope:
+  - file: terraform/personal/ducklake_lambdas.tf
+    action: Modify
+    purpose: >-
+      Add lifecycle { ignore_changes = [source_code_hash] } to aws_lambda_function.ducklake_writer
+      and aws_lambda_function.ducklake_reader; refresh the INTERIM comment block (L22-25) to reflect
+      that the decoupling has landed.
+  - file: terraform/personal/ducklake_maintenance.tf
+    action: Modify
+    purpose: >-
+      Add lifecycle { ignore_changes = [source_code_hash] } to aws_lambda_function.ducklake_maintenance;
+      refresh the INTERIM comment block.
+  - file: terraform/personal/ducklake_catalog_dr.tf
+    action: Modify
+    purpose: >-
+      Add lifecycle { ignore_changes = [source_code_hash] } to aws_lambda_function.ducklake_catalog_dr;
+      refresh the INTERIM comment block.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Add a "Build DuckLake lambda packages" step to the gated-apply job (mirroring the apply-sandbox
+      step at L269), so the gated-apply runner has byte-consistent zips before apply. Defense in depth
+      and, critically, keeps the aws_lambda_layer_version source_code_hash values (NOT covered by
+      ignore_changes-on-functions) consistent with the reviewed plan.bin. The step runs push-only
+      (matching the job's if:) and MUST include the Decision 77 no-TOCTOU byte-identity assert.
+bundled_recommendations:
+  - rec-2654
+infrastructure_dependencies:
+  - "terraform/personal is applied via the CD.35 Wave 2 / T2.21 speculative-plan pipeline: PR-time speculative-plan (github_ci_plan OIDC) saves plan.bin to S3; merge-time apply-sandbox applies it verbatim (Decision 77 no-TOCTOU)."
+  - "The guard classifies the diff (docs/contracts/environment-taxonomy.md section 5 / Axis A is the sole SoT): in-budget/non-IAM auto-applies in apply-sandbox; IAM/trust/destroy routes to the gated-apply job (environment: tf-gated-apply, human approval)."
+  - "Convergence record s3://agent-platform-data-lake/convergence/personal/sandbox.json: a red record is the sole server-side hard block and clears ONLY via the workflow_dispatch acknowledge-and-retry path (Decision 92 pt 2)."
+  - "Local terraform init/validate/plan for terraform/personal is egress-blocked (Neon provider checksum fetch, Decision 119): terraform validate/plan are CI-delegated; local VP is grep-only + terraform fmt -check."
+acceptance_criteria:
+  - "All four DuckLake Lambda FUNCTION resources (ducklake_writer, ducklake_reader, ducklake_maintenance, ducklake_catalog_dr) carry a lifecycle block with ignore_changes = [source_code_hash]; exactly four such lines exist across the three tf files (no aws_lambda_layer_version resource gains one)."
+  - "The gated-apply job in terraform-apply-sandbox.yml contains a step that runs build_lambda --ducklake-only before the plan.bin fetch/apply, including the Decision 77 byte-identity assert."
+  - "The terraform-validate check and the speculative-plan job pass on the PR (authoritative verifiers per Decision 119)."
+  - "After merge and the workflow_dispatch acknowledge-and-retry reconcile, the convergence record reads status=green."
+  - "rec-2654 is closed via the Resolves: trailer."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: true
+    action: "Assert ignore_changes=[source_code_hash] is present on exactly the four function resources (and not over-applied to layers)."
+    command: "[ \"$(grep -rho 'ignore_changes = \\[source_code_hash\\]' terraform/personal/ducklake_lambdas.tf terraform/personal/ducklake_maintenance.tf terraform/personal/ducklake_catalog_dr.tf | wc -l)\" -eq 4 ]"
+    expected: "Exit 0: exactly 4 matches (writer, reader, maintenance, catalog_dr)."
+    fix_if: "Count != 4 means a function was missed (fewer) or ignore_changes was wrongly added to a layer version (more)."
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    action: "Assert the gated-apply job builds the DuckLake packages before apply."
+    command: "bin/venv-python -c \"import yaml; wf=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml')); steps=wf['jobs']['gated-apply']['steps']; assert any('build_lambda' in (s.get('run') or '') and '--ducklake' in (s.get('run') or '') for s in steps), 'gated-apply missing ducklake build step'; print('OK')\""
+    expected: "Prints OK: the gated-apply job has a step invoking build_lambda --ducklake-only."
+    fix_if: "AssertionError -- the build step was added to the wrong job or omitted."
+  - step: 3
+    phase: pre-deploy
+    hermetic: true
+    action: "Assert the gated-apply build step retains the Decision 77 no-TOCTOU byte-identity assert (does not blindly rebuild-and-upload divergent bytes)."
+    command: "bin/venv-python -c \"import yaml; wf=yaml.safe_load(open('.github/workflows/terraform-apply-sandbox.yml')); s=[x for x in wf['jobs']['gated-apply']['steps'] if 'build_lambda' in (x.get('run') or '')][0]; r=s['run']; assert 'byte-identical' in r and 'no-TOCTOU' in r, 'gated-apply build step missing Decision 77 byte-identity assert'; print('OK')\""
+    expected: "Prints OK: the gated-apply build step asserts byte-identity vs the PR-uploaded S3 objects."
+    fix_if: "AssertionError -- the step uploads freshly-built zips without the identity guard, risking apply of divergent bytes."
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: "terraform fmt -check on terraform/personal (fmt needs no provider init; skipped if terraform absent in the runner)."
+    command: "command -v terraform >/dev/null && terraform fmt -check -diff terraform/personal || echo 'terraform absent -- fmt skipped'"
+    expected: "No fmt diff on the three edited files (exit 0), or a skip notice if terraform is unavailable."
+    fix_if: "fmt reports a diff -- run terraform fmt terraform/personal to normalize the lifecycle blocks."
+  - step: 5
+    phase: post-deploy
+    hermetic: false
+    action: "End-to-end proof: after merge + workflow_dispatch acknowledge-and-retry reconcile, the convergence record is green (the fresh re-plan applied cleanly with ignore_changes in place -- no source_code_hash inconsistency)."
+    command: "aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | bin/venv-python -c \"import sys,json; d=json.load(sys.stdin); assert d['status']=='green', d; print('convergence green at', d['commit_sha'])\""
+    expected: "status=green printed with the reconcile commit sha."
+    fix_if: "status still red -- inspect the reconcile run logs; a fresh source_code_hash inconsistency would mean ignore_changes did not take effect."
+  - step: 6
+    phase: post-deploy
+    hermetic: false
+    action: "Confirm rec-2654 closed after the Resolves: trailer autoclose + ops sync."
+    command: "bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib; r=next(x for x in (json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()) if x.get('id')=='rec-2654'); assert r['status']=='closed', r['status']; print('rec-2654 closed')\""
+    expected: "Prints rec-2654 closed."
+    fix_if: "Status still open -- rec-autoclose did not fire; close manually via ops_data_portal --update-rec rec-2654 --status closed."
+constraints:
+  - "Only modify the four files listed in scope."
+  - "Do NOT add ignore_changes to any aws_lambda_layer_version resource -- layer versions are immutable and must stay terraform-managed; only the four aws_lambda_function resources are decoupled."
+  - "The gated-apply build step MUST mirror the apply-sandbox step's Decision 77 no-TOCTOU byte-identity assert (verify rebuilt zips are byte-identical to the PR-uploaded S3 objects before upload/apply); it runs push-only, matching the gated-apply job's existing if: condition."
+  - "Preserve the Decision 77 no-re-plan discipline: gated-apply still applies plan.bin verbatim; the build step only makes filemd5() inputs consistent, it must not re-plan."
+  - "terraform validate/plan are CI-delegated (Decision 119): do not attempt local terraform init/validate/plan for terraform/personal."
+  - "No rescue agents or workaround loops (Decision 55); RCA-first forward fix (Decision 72)."
+  - "ruff formatting, line length 127, no emojis; terraform fmt-clean."
+context:
+  - "decision-scout=FLAGS_FOUND; CITE (verbatim): Decision 125, Decision 92, Decision 77, Decision 119, Decision 55"
+  - "gates: decision-scout=FLAGS_FOUND (1 NOTE, deferred-with-note); plan-critique=PENDING"
+  - "Decision 125 deferral (pt 2-5): after ignore_changes, terraform no longer deploys DuckLake Lambda code. The governed code-deploy CD channel Decision 125 names does not yet exist -- until it lands, the break-glass `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` (update_lambda_functions / update-function-code, independent of terraform) is the knowingly-interim code-deploy channel for the four functions. A pending pre-wave-3 code deploy must be driven manually via that break-glass path post-merge. This fulfills Decision 125's ratified direction; the governed channel is a tracked follow-on."
+  - "Broader architecture follow-on (A2/B1): the two-verbs-and-heal deployment model (provision via PR / deploy via pipeline / one-button reconcile), the governed code-deploy channel, and quarantining the local-apply escape hatch (terraform/CLAUDE.md) are a separate design Decision to be drafted next. This plan is step 1 (decoupling) and is safe to ship standalone."
+  - "CI is currently RED: convergence record anchored to commit 5bfa1fee1e26441b0b025c53e3e3ad33bd530e13 (run 29124975133) since 2026-07-10T21:47:26Z. Infra is already converged (zero drift) via an out-of-band local admin apply (rec-2652, closed); the S3 record was never greened. #540's comment-only push to clear it was REFUSED (a red record clears only via workflow_dispatch ack, never a push). After this fix merges, green via workflow_dispatch acknowledge_red_commit=rec-2654 (or the red SHA), which re-plans fresh with ignore_changes in place."
+  - "Decision 79: the changed files are .tf lifecycle blocks and a .yml workflow step, NOT Lambda-packaged source -- compute_affected_artifacts returns empty, so no per-Lambda build/deploy/smoke-test step is required in this plan."
+  - "Decision 99: the ducklake-version-lockstep gate reads terraform/personal/ducklake_lambdas.tf and the source_code_hash surfaces -- edit around them so that gate stays green."
+  - "Related-Work (HARD BLOCK satisfied): scope includes terraform/personal/ducklake_lambdas.tf, exactly rec-2654's source_file (same-file condition); also same failure category (terraform apply failure)."
+  - "Branch was 0 commits behind origin/main at planning time (main_freshness ok); no scope-file divergence."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant decisions triaged via decision-scout (125, 92, 77, 119, 55)
+  - All four files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "terraform/personal/ducklake_lambdas.tf: inside resource aws_lambda_function.ducklake_writer add a lifecycle block { ignore_changes = [source_code_hash] }; do the same inside aws_lambda_function.ducklake_reader. Update the INTERIM comment block (L22-25) to state the decoupling has landed (ignore_changes present) and that code deploys now go via build_lambda --deploy (break-glass) pending the governed CD channel."
+  - "terraform/personal/ducklake_maintenance.tf: add the same lifecycle { ignore_changes = [source_code_hash] } to aws_lambda_function.ducklake_maintenance; refresh its INTERIM comment."
+  - "terraform/personal/ducklake_catalog_dr.tf: add the same lifecycle { ignore_changes = [source_code_hash] } to aws_lambda_function.ducklake_catalog_dr; refresh its INTERIM comment. Do NOT touch the aws_lambda_layer_version resources in these files."
+  - ".github/workflows/terraform-apply-sandbox.yml: in the gated-apply job, after Terraform init and before 'Fetch saved plan from S3 (gated-apply path, T2.22)', add a 'Build DuckLake lambda packages' step that mirrors the apply-sandbox step at L269 -- pip install pyyaml pydantic; build_lambda --ducklake-only --skip-upload; assert the seven rebuilt zips are byte-identical to the PR-uploaded S3 objects (Decision 77 no-TOCTOU, failing closed on mismatch); then upload. The gated-apply job is push-only, so the assert always runs."
+  - "Execute Verification Plan -- run each pre-deploy step; loop until pass. After the PR merges, run the workflow_dispatch acknowledge-and-retry reconcile (acknowledge_red_commit=rec-2654) and run the post-deploy steps. On an unrecoverable V3 failure, stop and RCA (Decision 55) -- do not hand-apply locally."
+  - "Report: what was implemented, terraform-validate + speculative-plan verdicts on the PR, the reconcile run outcome, convergence-green confirmation, and rec-2654 closure."
+rollback: >-
+  Revert the four-file diff. ignore_changes is a terraform meta-argument with no state mutation, so
+  removing it simply restores the coupled (interim) behaviour; the workflow build step is additive.
+  No data migration or destroy is involved.
