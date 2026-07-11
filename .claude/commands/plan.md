@@ -14,14 +14,14 @@ model: opus[1m]
 *Note: This workflow runs on Claude Opus 1M (opus[1m]). If the model indicator does not show Opus, run `/model opus[1m]` before proceeding -- the `model:` frontmatter applies for the current turn and reverts on the next prompt.*
 
 ```bash
-bin/venv-python -m scripts.session_preflight
+bin/venv-python -m scripts.session.preflight
 ```
 
 stdout is a one-line summary; Read logs/.preflight-report.json for the full constraint surface.
 
 Preflight runs `git fetch origin main` and emits `main_freshness` (status, commits_behind, commits_ahead, main_files_changed_since_branch). Do NOT manually `git pull --rebase origin main` here -- that's a destructive operation on a feature branch and should only happen via the Step 4 Main Divergence Assessment after Scope is known and the human has chosen to rebase.
 
-The report is slim by design: `platform_roadmap` and `product_roadmap` carry only `next_eligible` + `strategic_pending`, and `non_automatable_details` is dropped (Decision 73 suspends per-rec review). If you need the dropped detail, call the underlying module directly (e.g., `bin/venv-python -m scripts.platform_roadmap`).
+The report is slim by design: `platform_roadmap` and `product_roadmap` carry only `next_eligible` + `strategic_pending`, and `non_automatable_details` is dropped (Decision 73 suspends per-rec review). If you need the dropped detail, call the underlying module directly (e.g., `bin/venv-python -m scripts.roadmap.platform_roadmap`).
 
 Apply the exact condition-based responses (for `venv_ok`, `creds_status`, uncommitted changes, `main_freshness`, non-automatable recs, `data_quality`, etc.) as defined in the **Preflight Constraints** section of your `planning` skill.
 
@@ -29,7 +29,7 @@ The report includes `telemetry_health` (pipeline operational health) and `data_q
 
 After preflight completes successfully, open a telemetry session:
 ```bash
-bin/venv-python -m scripts.session_preflight --open-session --workflow plan
+bin/venv-python -m scripts.session.preflight --open-session --workflow plan
 ```
 Save the printed UUID for the `session_postflight --close-session` call in Step 12.
 
@@ -124,7 +124,7 @@ Emit the Plan-Type-specific confirmation message from the planning skill's Confi
 
 Finally, close the telemetry session:
 ```bash
-bin/venv-python -m scripts.session_postflight --close-session --outcome success
+bin/venv-python -m scripts.session.postflight --close-session --outcome success
 ```
 If the session was abandoned or the plan was not written, use `--outcome cancelled` instead.
 

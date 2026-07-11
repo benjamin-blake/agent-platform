@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""D4 cache-serving unit tests for scripts/session_preflight.py (neon-egress-reduction).
+"""D4 cache-serving unit tests for scripts/session/preflight.py (neon-egress-reduction).
 
 Two properties (VP step 1):
 
@@ -36,7 +36,7 @@ from src.common.ducklake_scd2_schema import NAMED_READS
 # ...), patch.object(_common, ...), etc.) -- the same canonical target regardless of which alias this
 # file imports the facade under. Only the facade-resident PREFLIGHT_REPORT still patches via
 # patch.object(_preflight, ...), collision-free regardless of test ordering (pytest-randomly).
-_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session_preflight.py"
+_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "session" / "preflight.py"
 _spec = importlib.util.spec_from_file_location("session_preflight_cache_serving_mod", _MODULE_PATH)
 assert _spec and _spec.loader
 _preflight = importlib.util.module_from_spec(_spec)
@@ -372,7 +372,7 @@ class TestPhaseBAbsenceOfReaderCalls:
         }
         with (
             patch.object(_common, "_make_reader", return_value=reader),
-            patch("scripts.sync_ops.warm_sync", return_value=warm),
+            patch("scripts.sync.ops.warm_sync", return_value=warm),
             patch.object(env_git, "check_venv", return_value=True),
             patch.object(env_git, "get_git_status", return_value=("agent/test", False, [])),
             patch.object(env_git, "check_main_freshness", return_value=freshness),

@@ -119,7 +119,7 @@ Follow these steps in order. Do not run `session_postflight.py` until steps 1-4 
 3. Append session entry to `docs/SESSION_LOG.md` using `replace_string_in_file`.
 4. Run retro-lite: `python -m scripts.run_retro_lite --append '<JSON>'`.
 5. Commit and push session artifacts: `git add docs/CHANGELOG.md docs/SESSION_LOG.md logs/.execution-step-telemetry.jsonl logs/.retro-lite-log.jsonl logs/runs/ && git commit -m "docs: session log for <date>" && git push`.
-6. (Optional) `python scripts/session_postflight.py --auto "<message>" --steps-total N --steps-friction M`. This script may create a new branch -- if it does, return to `main` afterwards with `git checkout main && git pull`.
+6. (Optional) `python scripts/session/postflight.py --auto "<message>" --steps-total N --steps-friction M`. This script may create a new branch -- if it does, return to `main` afterwards with `git checkout main && git pull`.
 
 ---
 

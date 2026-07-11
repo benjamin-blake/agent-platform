@@ -1,4 +1,4 @@
-"""Tests for scripts/plan_document.py covering the T1.11 exit criteria."""
+"""Tests for scripts/roadmap/plan_document.py covering the T1.11 exit criteria."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from scripts.plan_document import PlanDocument, load, main, validate_paths
+from scripts.roadmap.plan_document import PlanDocument, load, main, validate_paths
 from scripts.validate import validate_plan_documents
 
 FIXTURES = Path(__file__).parent / "fixtures" / "plan_documents"

@@ -1,4 +1,4 @@
-"""Tests for scripts/sync_recommendations.py."""
+"""Tests for scripts/sync/recommendations.py."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "sync_recommendations.py"
+_MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "sync" / "recommendations.py"
 _spec = importlib.util.spec_from_file_location("sync_recommendations", _MODULE_PATH)
 assert _spec and _spec.loader
 _sync = importlib.util.module_from_spec(_spec)

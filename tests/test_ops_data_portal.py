@@ -1091,7 +1091,7 @@ class TestPipelineConsolidation:
             patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=existing),
             patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True, "ulid": "ulid-test-0001"}),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
-            patch("scripts.sync_ops._pull_single_table") as mock_pull,
+            patch("scripts.sync.ops._pull_single_table") as mock_pull,
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import update_rec
@@ -1111,7 +1111,7 @@ class TestPipelineConsolidation:
         with (
             patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700", "ulid": "ulid-test-0001"}),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
-            patch("scripts.sync_ops._pull_single_table") as mock_pull,
+            patch("scripts.sync.ops._pull_single_table") as mock_pull,
             patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
         ):
             from scripts.ops_data_portal import file_rec
@@ -1125,7 +1125,7 @@ class TestPipelineConsolidation:
 
     def test_sync_returns_pull_only_report(self) -> None:
         """sync() returns {'pulled': ...} only -- no drain/compact/view-refresh keys (Decision 84 I-4)."""
-        with patch("scripts.sync_ops._pull_single_table", return_value=10):
+        with patch("scripts.sync.ops._pull_single_table", return_value=10):
             from scripts.ops_data_portal import sync
 
             result = sync(["ops_recommendations"])
@@ -1135,7 +1135,7 @@ class TestPipelineConsolidation:
     def test_sync_defaults_to_all_migrated_tables(self) -> None:
         """sync() with no args pulls recs, decisions, and the priority queue."""
         pulled: list[str] = []
-        with patch("scripts.sync_ops._pull_single_table", side_effect=lambda t: pulled.append(t) or 1):
+        with patch("scripts.sync.ops._pull_single_table", side_effect=lambda t: pulled.append(t) or 1):
             from scripts.ops_data_portal import sync
 
             result = sync()
@@ -1184,7 +1184,7 @@ class TestMigrationParams:
             patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
             patch("scripts.ops_data_portal._sync_table") as mock_sync,
             patch("scripts.ops_portal.cache._append_to_local_jsonl") as mock_append,
-            patch("scripts.sync_ops.upsert_cache_row") as mock_upsert,
+            patch("scripts.sync.ops.upsert_cache_row") as mock_upsert,
         ):
             from scripts.ops_data_portal import file_rec
 
@@ -1460,7 +1460,7 @@ class TestSyncTable:
         import scripts.ops_data_portal as p
 
         calls: list[str] = []
-        monkeypatch.setattr("scripts.sync_ops._pull_single_table", lambda t: calls.append(t) or 0)
+        monkeypatch.setattr("scripts.sync.ops._pull_single_table", lambda t: calls.append(t) or 0)
         p._sync_table("ops_recommendations")
         p._sync_table("ops_decisions")
         assert calls == ["ops_recommendations", "ops_decisions"]
@@ -1519,7 +1519,7 @@ _CI_RCA_FIELDS = {
 _VALID_CONTEXT_V2 = {
     "schema_version": 1,
     "proximate_cause": (
-        "validate_sloc_limits() raised: scripts/product_roadmap.py is 810 SLOC, exceeds 500 limit "
+        "validate_sloc_limits() raised: scripts/roadmap/product_roadmap.py is 810 SLOC, exceeds 500 limit "
         "(Decision 43, no complexity-waiver header found in first 10 lines)."
     ),
     "why_chain": [
@@ -1741,8 +1741,8 @@ class TestCiRcaSchemaEnforcement:
                     "--title",
                     "validate_sloc_limits missed in pre tier",
                     "--context",
-                    "validate_sloc_limits() raised on scripts/product_roadmap.py: 810 SLOC exceeds 500 limit. "
-                    "CI step 'validate' failed; resource: scripts/product_roadmap.py.",
+                    "validate_sloc_limits() raised on scripts/roadmap/product_roadmap.py: 810 SLOC exceeds 500 limit. "
+                    "CI step 'validate' failed; resource: scripts/roadmap/product_roadmap.py.",
                     "--acceptance",
                     "grep -q validate_sloc_limits scripts/validate.py",
                     "--context-v2-json",
@@ -2407,7 +2407,7 @@ class TestCiRcaFingerprintDedup:
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint", return_value=None) as mock_find,
             patch.object(p, "_ducklake_write", return_value={"key": "rec-800"}) as mock_write,
             patch.object(p, "RECS_JSONL", tmp_path / "recs.jsonl"),
-            patch("scripts.sync_ops.upsert_cache_row"),
+            patch("scripts.sync.ops.upsert_cache_row"),
         ):
             result = p.file_rec(dict(fields), context_v2_json=ctx)
 
@@ -2430,7 +2430,7 @@ class TestCiRcaFingerprintDedup:
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint") as mock_find,
             patch.object(p, "_ducklake_write", return_value={"key": "rec-801"}),
             patch.object(p, "RECS_JSONL", tmp_path / "recs.jsonl"),
-            patch("scripts.sync_ops.upsert_cache_row"),
+            patch("scripts.sync.ops.upsert_cache_row"),
         ):
             result = p.file_rec(dict(fields), context_v2_json=ctx)
 

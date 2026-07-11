@@ -26,13 +26,13 @@ def validate_ducklake_version_lockstep(failed: list[str]) -> None:
 
         # (a) requirements.txt floor check
         try:
-            import scripts.sync_ducklake_version as _sdv  # noqa: PLC0415
+            import scripts.sync.ducklake_version as _sdv  # noqa: PLC0415
 
             ok = _sdv.sync(check_only=True, requirements_path=_common.ROOT / "requirements.txt")
             if not ok:
                 failed.append(
                     "ducklake-version-lockstep: requirements.txt duckdb floor drifts from "
-                    "config/lambda/ducklake/version.yaml -- run: bin/venv-python -m scripts.sync_ducklake_version"
+                    "config/lambda/ducklake/version.yaml -- run: bin/venv-python -m scripts.sync.ducklake_version"
                 )
                 print("  FAIL: requirements.txt duckdb floor drifts from the SSOT.")
             else:

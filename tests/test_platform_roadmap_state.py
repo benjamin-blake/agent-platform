@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.platform_roadmap import (
+from scripts.roadmap.platform_roadmap import (
     PlatformRoadmapState,
     RoadmapDocument,
     compute_followon_state,

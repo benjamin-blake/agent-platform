@@ -2360,10 +2360,11 @@ class TestValidateRecWritePaths:
         assert failed == []
 
     def test_allows_whitelist_sync_recommendations(self, tmp_path: Path, capsys) -> None:
-        """sync_recommendations.py is whitelisted and does not trigger the rule."""
+        """scripts/sync/recommendations.py is whitelisted and does not trigger the rule."""
         scripts_dir = tmp_path / "scripts"
-        scripts_dir.mkdir()
-        sync_file = scripts_dir / "sync_recommendations.py"
+        sync_dir = scripts_dir / "sync"
+        sync_dir.mkdir(parents=True)
+        sync_file = sync_dir / "recommendations.py"
         sync_file.write_text(
             'with open(_LOCAL_RECS_FILE, "w", encoding="utf-8") as fh: fh.write("x")\n',
             encoding="utf-8",
@@ -2541,7 +2542,7 @@ class TestValidateExecutorBoundary:
         import copy
 
         rec = copy.deepcopy(self._VALID_REC)
-        rec["file"] = "scripts/session_postflight.py"
+        rec["file"] = "scripts/session/postflight.py"
         rec["acceptance"] = "`python -m pytest tests/test_session_postflight.py -x -q`"
         self._write_jsonl(tmp_path, [rec])
         with patch("scripts.checks._common.ROOT", tmp_path):
@@ -4290,7 +4291,7 @@ class TestPreModePytestSelection:
             return _pre_mock_run(cmd, **kwargs)
 
         with (
-            patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py", "scripts/sync_ops.py"]),
+            patch("scripts.checks._common.get_changed_files", return_value=["scripts/validate.py", "scripts/sync/ops.py"]),
             patch("scripts.checks._common.run", side_effect=tracking_run),
             patch("validate.validate_iam_runner_policy"),
             patch("validate.validate_prompt_files"),
@@ -5942,7 +5943,7 @@ class TestDucklakeVersionLockstepGate:
 
     def test_passes_on_coherent_tree(self, tmp_path: Path) -> None:
         """Gate passes when requirements.txt is in sync and no literal in derive surfaces."""
-        import scripts.sync_ducklake_version as _sdv_inner  # noqa: PLC0415
+        import scripts.sync.ducklake_version as _sdv_inner  # noqa: PLC0415
 
         # coherent requirements.txt
         req = tmp_path / "requirements.txt"
@@ -5966,7 +5967,7 @@ class TestDucklakeVersionLockstepGate:
             encoding="utf-8",
         )
 
-        import scripts.sync_ducklake_version as sdv  # noqa: PLC0415
+        import scripts.sync.ducklake_version as sdv  # noqa: PLC0415
 
         failed: list[str] = []
         with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
@@ -5987,7 +5988,7 @@ class TestDucklakeVersionLockstepGate:
         scripts.mkdir()
         (scripts / "build_lambda.py").write_text("# no literal\n", encoding="utf-8")
 
-        import scripts.sync_ducklake_version as sdv  # noqa: PLC0415
+        import scripts.sync.ducklake_version as sdv  # noqa: PLC0415
 
         failed: list[str] = []
         with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
@@ -5997,7 +5998,7 @@ class TestDucklakeVersionLockstepGate:
 
     def test_fails_when_literal_in_derive_surface(self, tmp_path: Path) -> None:
         """Gate fails when a raw PINNED_DUCKDB_VERSION = '...' literal is in a derive surface."""
-        import scripts.sync_ducklake_version as _sdv_inner  # noqa: PLC0415
+        import scripts.sync.ducklake_version as _sdv_inner  # noqa: PLC0415
 
         req = tmp_path / "requirements.txt"
         req.write_text(_sdv_inner._expected_floor_line("1.5.4") + "\n", encoding="utf-8")
@@ -6011,7 +6012,7 @@ class TestDucklakeVersionLockstepGate:
         scripts.mkdir()
         (scripts / "build_lambda.py").write_text("# no literal\n", encoding="utf-8")
 
-        import scripts.sync_ducklake_version as sdv  # noqa: PLC0415
+        import scripts.sync.ducklake_version as sdv  # noqa: PLC0415
 
         failed: list[str] = []
         with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
@@ -7577,7 +7578,7 @@ class TestValidateVpReplay:
         assert "SKIP" in out and "load error" in out
 
     def test_vp_replay_import_error_reddens_distinctly_from_content_error(self, tmp_path: Path) -> None:
-        """A broken scripts.plan_document import is an infra failure -- it must redden failed[],
+        """A broken scripts.roadmap.plan_document import is an infra failure -- it must redden failed[],
         not be downgraded to a silent SKIP alongside routine content-validation errors."""
         rel = _write_vp_replay_plan(
             tmp_path,
@@ -7595,7 +7596,7 @@ class TestValidateVpReplay:
             ],
         )
         failed: list[str] = []
-        with patch("scripts.plan_document.load", side_effect=ImportError("broken plan_document")):
+        with patch("scripts.roadmap.plan_document.load", side_effect=ImportError("broken plan_document")):
             validate_vp_replay(failed, changed_files=[rel], root=tmp_path)
         assert any("vp-replay" in f and "could not import" in f for f in failed)
 

@@ -32,7 +32,7 @@ def validate_plan_documents(failed: list[str], plans_dir: Path | None = None) ->
     if injected:
         sys.path.insert(0, root_str)
     try:
-        from scripts.plan_document import validate_paths  # noqa: PLC0415
+        from scripts.roadmap.plan_document import validate_paths  # noqa: PLC0415
 
         failures = validate_paths(plan_paths)
         for path, error in failures:

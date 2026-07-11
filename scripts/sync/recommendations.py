@@ -28,7 +28,7 @@ from scripts.aws_profile import resolve_aws_profile
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _LOCAL_RECS_FILE = _REPO_ROOT / "logs" / ".recommendations-log.jsonl"
 _DYNAMODB_TABLE = "agent-platform-counters"
 _AWS_REGION = "eu-west-2"

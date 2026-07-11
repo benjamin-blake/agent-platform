@@ -17,17 +17,17 @@ def validate_rec_write_paths(failed: list[str]) -> None:
 
     Whitelisted files (permitted to write directly):
       - scripts/ops_data_portal.py  (the portal itself)
-      - scripts/sync_recommendations.py  (cache overwrite by design)
+      - scripts/sync/recommendations.py  (cache overwrite by design)
     """
     print("\n=== Rec JSONL write-path enforcement ===")
     scripts_dir = _common.ROOT / "scripts"
     personal_dir = _common.ROOT / "personal_scripts"
     _WHITELIST = {
         scripts_dir / "ops_data_portal.py",
-        scripts_dir / "sync_recommendations.py",
-        scripts_dir / "sync_ops.py",
+        scripts_dir / "sync" / "recommendations.py",
+        scripts_dir / "sync" / "ops.py",
         scripts_dir / "s3_log_store.py",
-        scripts_dir / "session_postflight.py",
+        scripts_dir / "session" / "postflight.py",
     }
     # Patterns that indicate a direct JSONL write or routing bypass
     _PATTERNS = [

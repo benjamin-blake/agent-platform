@@ -13,7 +13,7 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from scripts.session_preflight import _scan_provisional_contracts
+from scripts.session.preflight import _scan_provisional_contracts
 
 
 def _write(directory: Path, name: str, text: str) -> None:

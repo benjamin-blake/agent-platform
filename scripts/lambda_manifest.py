@@ -1,7 +1,7 @@
 # complexity-waiver: decision-43
 """Pydantic schema for src/lambdas/<name>/manifest.yaml, staging, and CLI.
 
-Parallel to scripts/platform_roadmap.py. Owns all manifest logic (schema,
+Parallel to scripts/roadmap/platform_roadmap.py. Owns all manifest logic (schema,
 bundle-staging, py_compile-equivalent import check, LAMBDA_FILE_PATTERNS
 derivation) so validate.py stays thin (Decision 43 SLOC governance).
 """

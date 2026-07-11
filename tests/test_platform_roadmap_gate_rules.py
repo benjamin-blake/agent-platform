@@ -6,7 +6,7 @@ import copy
 
 import pytest
 
-from scripts.platform_roadmap import (
+from scripts.roadmap.platform_roadmap import (
     _GATE_HELPERS,
     GateRuleEvaluator,
     GateRuleParser,

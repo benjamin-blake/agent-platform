@@ -4,7 +4,7 @@
 correlate_recs_with_commits carries the Decision 43 CC waiver (31 branches): a single
 per-rec classification pass over commits with several independent short-circuit signals
 (id-mention, file-path match, closed-sibling cluster) -- this is the same waiver the
-pre-decomposition scripts/session_preflight.py carried at file top for this function.
+pre-decomposition scripts/session/preflight.py carried at file top for this function.
 """
 
 from __future__ import annotations

@@ -318,9 +318,9 @@ Setting this variable eliminates the need for git write access in scheduled work
 
 **Affected scripts:**
 - `scripts/s3_log_store.py` — unified read/write module (the source of truth)
-- `scripts/session_metrics.py`, `scripts/run_scheduled_agent.py`, `scripts/plan_audit.py`
+- `scripts/session/metrics.py`, `scripts/run_scheduled_agent.py`, `scripts/roadmap/plan_audit.py`
 - `scripts/north_star_tracker.py`, `scripts/executor/step_runner.py`
-- `scripts/prompt_compliance.py`, `scripts/validate.py`, `scripts/session_preflight.py`
+- `scripts/prompt_compliance.py`, `scripts/validate.py`, `scripts/session/preflight.py`
 
 **Example (GitHub Actions):**
 ```yaml

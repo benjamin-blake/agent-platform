@@ -1,4 +1,4 @@
-"""Tests for scripts/platform_roadmap.py: facade re-export completeness and CLI entrypoint."""
+"""Tests for scripts/roadmap/platform_roadmap.py: facade re-export completeness and CLI entrypoint."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 import pytest
 
-import scripts.platform_roadmap as facade
 import scripts.platform_roadmap_gate_rules as gate_rules
 import scripts.platform_roadmap_models as models
 import scripts.platform_roadmap_state as state
+import scripts.roadmap.platform_roadmap as facade
 
 # ---------------------------------------------------------------------------
 # TestFacadeReexports -- every public symbol + _GATE_HELPERS is importable from the
@@ -59,7 +59,7 @@ class TestFacadeReexports:
 
 
 # ---------------------------------------------------------------------------
-# TestComputeStateDictPatchInterception -- proves patch("scripts.platform_roadmap.
+# TestComputeStateDictPatchInterception -- proves patch("scripts.roadmap.platform_roadmap.
 # compute_state_dict") is observed via facade attribute access: the mechanism the sole
 # external patch site (tests/test_session_preflight_product_roadmap.py:195,
 # patch("session_preflight.platform_roadmap.compute_state_dict")) depends on.
@@ -69,7 +69,7 @@ class TestFacadeReexports:
 class TestComputeStateDictPatchInterception:
     def test_patched_facade_attribute_is_observed_via_module_access(self) -> None:
         sentinel = {"patched": True}
-        with patch("scripts.platform_roadmap.compute_state_dict", return_value=sentinel):
+        with patch("scripts.roadmap.platform_roadmap.compute_state_dict", return_value=sentinel):
             result = facade.compute_state_dict("dummy/path.yaml")
         assert result == sentinel
 
@@ -80,7 +80,7 @@ class TestComputeStateDictPatchInterception:
 
 
 class TestCliMain:
-    # This module imports scripts.platform_roadmap at the top (for the re-export identity
+    # This module imports scripts.roadmap.platform_roadmap at the top (for the re-export identity
     # tests above), so it is already in sys.modules by the time runpy re-executes it below --
     # the standard, benign runpy caveat for this pattern (docs.python.org/3/library/runpy.html).
     @pytest.mark.filterwarnings("ignore:.*found in sys.modules.*:RuntimeWarning")
@@ -89,7 +89,7 @@ class TestCliMain:
     ) -> None:
         monkeypatch.setattr(sys, "argv", ["platform_roadmap", "docs/ROADMAP-PLATFORM.yaml"])
         with pytest.raises(SystemExit) as exc_info:
-            runpy.run_module("scripts.platform_roadmap", run_name="__main__")
+            runpy.run_module("scripts.roadmap.platform_roadmap", run_name="__main__")
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert captured.out.strip() == "PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema."
@@ -102,7 +102,7 @@ class TestCliMain:
         # broad except prints "FAIL: {exc}" and exits 1.
         monkeypatch.setattr(sys, "argv", ["platform_roadmap", "/nonexistent/path/ROADMAP-BOGUS.yaml"])
         with pytest.raises(SystemExit) as exc_info:
-            runpy.run_module("scripts.platform_roadmap", run_name="__main__")
+            runpy.run_module("scripts.roadmap.platform_roadmap", run_name="__main__")
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert captured.out.startswith("FAIL:")

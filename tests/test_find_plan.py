@@ -1,4 +1,4 @@
-"""Tests for scripts/find_plan.py -- plan file resolution logic."""
+"""Tests for scripts/roadmap/find_plan.py -- plan file resolution logic."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "find_plan.py"
+_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "roadmap" / "find_plan.py"
 _spec = importlib.util.spec_from_file_location("find_plan", _SCRIPT_PATH)
 _find_plan = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(_find_plan)  # type: ignore[union-attr]

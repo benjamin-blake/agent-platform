@@ -239,4 +239,4 @@ else
     log "WARNING: .venv/bin/pre-commit missing (requirements-dev.txt not installed?); skipping hook cache."
 fi
 
-log "Done. Verify with: bin/venv-python -m scripts.session_preflight"
+log "Done. Verify with: bin/venv-python -m scripts.session.preflight"

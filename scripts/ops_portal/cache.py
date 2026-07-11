@@ -28,7 +28,7 @@ def _sync_table(table: str) -> None:
     post-loop sync and the `sync()` fallback. The per-write path no longer calls it -- it uses
     _refresh_cache_after_write (incremental upsert, no reader round-trip; neon-egress-reduction D4).
     """
-    from scripts.sync_ops import _pull_single_table  # noqa: PLC0415
+    from scripts.sync.ops import _pull_single_table  # noqa: PLC0415
 
     _pull_single_table(table)
 
@@ -68,7 +68,7 @@ def _refresh_cache_after_write(
         _append_to_local_jsonl(jsonl_path, record)
         return
 
-    from scripts.sync_ops import upsert_cache_row  # noqa: PLC0415
+    from scripts.sync.ops import upsert_cache_row  # noqa: PLC0415
 
     upsert_cache_row(table, record, path=jsonl_path)
 

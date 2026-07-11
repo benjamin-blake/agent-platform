@@ -17,14 +17,14 @@ def validate_decisions_local_writes(failed: list[str]) -> None:
 
     Whitelisted files (permitted to write directly):
       - scripts/ops_data_portal.py  (write-through cache update)
-      - scripts/sync_ops.py         (cache rebuild from the DuckLake reader)
+      - scripts/sync/ops.py         (cache rebuild from the DuckLake reader)
     """
     print("\n=== Decisions JSONL write-path enforcement ===")
     scripts_dir = _common.ROOT / "scripts"
     personal_dir = _common.ROOT / "personal_scripts"
     _WHITELIST = {
         scripts_dir / "ops_data_portal.py",
-        scripts_dir / "sync_ops.py",
+        scripts_dir / "sync" / "ops.py",
     }
     _PATTERNS = [
         re.compile(r'\.decisions-index\.jsonl.*open\(.*["\'][aw]["\']', re.DOTALL),

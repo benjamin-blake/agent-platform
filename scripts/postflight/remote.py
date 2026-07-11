@@ -1,7 +1,7 @@
 # complexity-waiver: decision-43
 """Remote push/PR/CI concern: push, create PR, poll CI, squash-merge.
 
-Moved verbatim from scripts/session_postflight.py (SLOC decomposition, PLAN-sloc-session-postflight).
+Moved verbatim from scripts/session/postflight.py (SLOC decomposition, PLAN-sloc-session-postflight).
 This is the executor-era gh-CLI automation surface, distinct from the CC-web MCP merge flow used by
 the /implement Git-ops procedure; the legacy poll loop moves as-is, not redesigned.
 """

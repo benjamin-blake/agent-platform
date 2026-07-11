@@ -65,7 +65,7 @@ class TestIsBoundaryFile:
         assert _is_boundary_file("scripts/executor/step_runner.py") is True
 
     def test_non_boundary(self) -> None:
-        assert _is_boundary_file("scripts/session_preflight.py") is False
+        assert _is_boundary_file("scripts/session/preflight.py") is False
 
 
 class TestRun:

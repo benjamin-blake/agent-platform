@@ -1,7 +1,7 @@
 """Shared primitives for the scripts/preflight package.
 
 SOLE source of shared constants, path primitives, and reader/timestamp helpers used by every
-session_preflight domain module. No dependency on scripts.session_preflight (no import cycle).
+session_preflight domain module. No dependency on scripts.session.preflight (no import cycle).
 """
 
 from __future__ import annotations

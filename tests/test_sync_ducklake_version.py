@@ -1,8 +1,8 @@
-"""Tests for scripts/sync_ducklake_version -- 100% coverage."""
+"""Tests for scripts/sync/ducklake_version -- 100% coverage."""
 
 from __future__ import annotations
 
-import scripts.sync_ducklake_version as sdv
+import scripts.sync.ducklake_version as sdv
 
 _PIN = "1.5.4"
 
@@ -41,7 +41,7 @@ def test_get_pinned_version_raises_when_spec_none(monkeypatch):
 def test_expected_floor_line_format():
     line = sdv._expected_floor_line("1.5.4")
     assert line.startswith("duckdb>=1.5.4")
-    assert "sync_ducklake_version" in line
+    assert "scripts/sync/ducklake_version.py" in line
     assert "version.yaml" in line
 
 

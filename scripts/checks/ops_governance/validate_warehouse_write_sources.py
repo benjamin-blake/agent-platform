@@ -33,8 +33,8 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
 
     _WHITELIST = {
         scripts_dir / "ops_data_portal.py",
-        scripts_dir / "session_postflight.py",
-        scripts_dir / "sync_ops.py",
+        scripts_dir / "session" / "postflight.py",
+        scripts_dir / "sync" / "ops.py",
         scripts_dir / "ops_writer.py",
         scripts_dir / "s3_log_store.py",
         scripts_dir / "executor" / "plan.py",

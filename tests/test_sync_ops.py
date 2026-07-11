@@ -1,4 +1,4 @@
-"""Tests for scripts/sync_ops.py."""
+"""Tests for scripts/sync/ops.py."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch
 class TestDrain:
     def test_drain_empty_outbox_returns_empty_dict(self, tmp_path):
         """drain() returns {} when outbox dir does not exist."""
-        with patch("scripts.sync_ops._OUTBOX_DIR", tmp_path / "nonexistent"):
-            from scripts.sync_ops import drain
+        with patch("scripts.sync.ops._OUTBOX_DIR", tmp_path / "nonexistent"):
+            from scripts.sync.ops import drain
 
             result = drain()
         assert result == {}
@@ -31,8 +31,8 @@ class TestDrain:
         mock_writer_instance = MagicMock()
         mock_writer_cls = MagicMock(return_value=mock_writer_instance)
 
-        with patch("scripts.sync_ops._OUTBOX_DIR", tmp_path):
-            from scripts import sync_ops
+        with patch("scripts.sync.ops._OUTBOX_DIR", tmp_path):
+            from scripts.sync import ops as sync_ops
 
             # patch lazy import inside drain
             with patch.dict("sys.modules", {"scripts.ops_writer": MagicMock(OpsWriter=mock_writer_cls)}):
@@ -60,13 +60,13 @@ class TestDrain:
                 mock_writer_instance.write(table, e)
 
         with (
-            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
+            patch("scripts.sync.ops._OUTBOX_DIR", tmp_path),
             patch.dict(
                 "sys.modules",
                 {"scripts.ops_writer": MagicMock(OpsWriter=_FakeOpsWriter)},
             ),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             result = sync_ops.drain()
 
@@ -90,13 +90,13 @@ class TestDrain:
                 raise RuntimeError("S3 failure")
 
         with (
-            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
+            patch("scripts.sync.ops._OUTBOX_DIR", tmp_path),
             patch.dict(
                 "sys.modules",
                 {"scripts.ops_writer": MagicMock(OpsWriter=_FailingOpsWriter)},
             ),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             result = sync_ops.drain()
 
@@ -117,8 +117,8 @@ class TestPull:
         Decision 84 I-1: _rebuild_local_cache() loops _TABLE_TO_LOCAL via the reader-only
         _pull_single_table; a failure warns loudly and leaves the cache untouched.
         """
-        with patch("scripts.sync_ops._pull_via_reader", return_value=None):
-            from scripts.sync_ops import _rebuild_local_cache
+        with patch("scripts.sync.ops._pull_via_reader", return_value=None):
+            from scripts.sync.ops import _rebuild_local_cache
 
             result = _rebuild_local_cache()
         assert result == {"ops_recommendations": 0, "ops_decisions": 0, "ops_priority_queue": 0}
@@ -139,11 +139,11 @@ class TestPull:
         ]
 
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
-            patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
+            patch("scripts.sync.ops._pull_via_reader", return_value=reader_data),
+            patch("scripts.sync.ops._LOGS_DIR", tmp_path),
+            patch("scripts.sync.ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             result = sync_ops._rebuild_local_cache()
 
@@ -158,11 +158,11 @@ class TestPull:
         local_file.write_text(json.dumps({"id": "rec-stale", "status": "open"}) + "\n", encoding="utf-8")
 
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=None),
-            patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
+            patch("scripts.sync.ops._pull_via_reader", return_value=None),
+            patch("scripts.sync.ops._LOGS_DIR", tmp_path),
+            patch("scripts.sync.ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             count = sync_ops._pull_single_table("ops_recommendations")
 
@@ -179,17 +179,17 @@ class TestPull:
             return [{"rec_id": "rec-001", "rank": "1"}]
 
         with (
-            patch("scripts.sync_ops._pull_via_reader", side_effect=_per_table),
-            patch("scripts.sync_ops._LOGS_DIR", tmp_path),
+            patch("scripts.sync.ops._pull_via_reader", side_effect=_per_table),
+            patch("scripts.sync.ops._LOGS_DIR", tmp_path),
             patch(
-                "scripts.sync_ops._TABLE_TO_LOCAL",
+                "scripts.sync.ops._TABLE_TO_LOCAL",
                 {
                     "ops_recommendations": ".recommendations-log.jsonl",
                     "ops_priority_queue": "priority-queue/.priority-queue.jsonl",
                 },
             ),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             result = sync_ops._rebuild_local_cache()
 
@@ -212,11 +212,11 @@ class TestPull:
             }
         ]
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
-            patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
+            patch("scripts.sync.ops._pull_via_reader", return_value=reader_data),
+            patch("scripts.sync.ops._LOGS_DIR", tmp_path),
+            patch("scripts.sync.ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             sync_ops._rebuild_local_cache()
         saved = json.loads(local_file.read_text(encoding="utf-8").strip())
@@ -240,11 +240,11 @@ class TestPull:
             }
         ]
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
-            patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
+            patch("scripts.sync.ops._pull_via_reader", return_value=reader_data),
+            patch("scripts.sync.ops._LOGS_DIR", tmp_path),
+            patch("scripts.sync.ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             sync_ops._rebuild_local_cache()
 
@@ -261,12 +261,12 @@ class TestPull:
         reader_data = [{"id": "rec-hollow", "title": "", "source": ""}]
 
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
-            patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._SYNC_REJECTS_LOG", reject_log),
-            patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
+            patch("scripts.sync.ops._pull_via_reader", return_value=reader_data),
+            patch("scripts.sync.ops._LOGS_DIR", tmp_path),
+            patch("scripts.sync.ops._SYNC_REJECTS_LOG", reject_log),
+            patch("scripts.sync.ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recommendations-log.jsonl"}),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             result = sync_ops._rebuild_local_cache()
 
@@ -281,15 +281,15 @@ class TestPull:
 
     def test_pull_single_table_unknown_table_returns_zero(self):
         """_pull_single_table() warns and returns 0 for a table with no local mapping."""
-        with patch("scripts.sync_ops._pull_via_reader") as mock_pull:
-            from scripts.sync_ops import _pull_single_table
+        with patch("scripts.sync.ops._pull_via_reader") as mock_pull:
+            from scripts.sync.ops import _pull_single_table
 
             assert _pull_single_table("telemetry_sessions") == 0
         mock_pull.assert_not_called()
 
     def test_coerce_rows_list_handles_reader_typed_values(self) -> None:
         """_coerce_rows_list() tolerates already-typed values from the reader."""
-        from scripts.sync_ops import _coerce_rows_list
+        from scripts.sync.ops import _coerce_rows_list
 
         reader_row = {
             "id": "rec-001",
@@ -310,8 +310,8 @@ class TestPull:
     def test_write_rows_to_local_creates_jsonl(self, tmp_path) -> None:
         """_write_rows_to_local() writes rows as JSONL and returns count."""
         rows = [{"id": "rec-001", "status": "open"}, {"id": "rec-002", "status": "closed"}]
-        with patch("scripts.sync_ops._LOGS_DIR", tmp_path):
-            from scripts import sync_ops
+        with patch("scripts.sync.ops._LOGS_DIR", tmp_path):
+            from scripts.sync import ops as sync_ops
 
             count = sync_ops._write_rows_to_local("ops_recommendations", rows, ".recs.jsonl")
 
@@ -325,7 +325,7 @@ class TestPull:
         reader = MagicMock()
         reader.current_state.side_effect = RuntimeError("reader down")
         with patch("src.common.iceberg_reader.make_reader", return_value=reader):
-            from scripts.sync_ops import _pull_via_reader
+            from scripts.sync.ops import _pull_via_reader
 
             result = _pull_via_reader("ops_recommendations")
         assert result is None
@@ -335,7 +335,7 @@ class TestPull:
         reader = MagicMock()
         reader.current_state.return_value = [{"id": "rec-1"}]
         with patch("src.common.iceberg_reader.make_reader", return_value=reader) as mock_make:
-            from scripts.sync_ops import _pull_via_reader
+            from scripts.sync.ops import _pull_via_reader
 
             result = _pull_via_reader("ops_decisions")
 
@@ -356,11 +356,11 @@ class TestPull:
             }
         ]
         with (
-            patch("scripts.sync_ops._pull_via_reader", return_value=reader_data),
-            patch("scripts.sync_ops._LOGS_DIR", tmp_path),
-            patch("scripts.sync_ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recs.jsonl"}),
+            patch("scripts.sync.ops._pull_via_reader", return_value=reader_data),
+            patch("scripts.sync.ops._LOGS_DIR", tmp_path),
+            patch("scripts.sync.ops._TABLE_TO_LOCAL", {"ops_recommendations": ".recs.jsonl"}),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             count = sync_ops._pull_single_table("ops_recommendations")
 
@@ -378,10 +378,10 @@ class TestSync:
     def test_sync_calls_drain_then_pull(self):
         """sync() calls drain() then _rebuild_local_cache() and returns combined result."""
         with (
-            patch("scripts.sync_ops.drain", return_value={"ops_recommendations": 2}) as mock_drain,
-            patch("scripts.sync_ops._rebuild_local_cache", return_value={"ops_recommendations": 50}) as mock_rebuild,
+            patch("scripts.sync.ops.drain", return_value={"ops_recommendations": 2}) as mock_drain,
+            patch("scripts.sync.ops._rebuild_local_cache", return_value={"ops_recommendations": 50}) as mock_rebuild,
         ):
-            from scripts.sync_ops import sync
+            from scripts.sync.ops import sync
 
             result = sync(profile="test-profile")
 
@@ -403,10 +403,10 @@ class TestSync:
             return {}
 
         with (
-            patch("scripts.sync_ops.drain", side_effect=fake_drain),
-            patch("scripts.sync_ops._rebuild_local_cache", side_effect=fake_rebuild),
+            patch("scripts.sync.ops.drain", side_effect=fake_drain),
+            patch("scripts.sync.ops._rebuild_local_cache", side_effect=fake_rebuild),
         ):
-            from scripts.sync_ops import sync
+            from scripts.sync.ops import sync
 
             sync()
 
@@ -421,8 +421,8 @@ class TestSync:
 class TestOutboxSummary:
     def test_no_outbox_returns_empty(self, tmp_path):
         """outbox_summary() returns {} when outbox dir does not exist."""
-        with patch("scripts.sync_ops._OUTBOX_DIR", tmp_path / "nonexistent"):
-            from scripts.sync_ops import outbox_summary
+        with patch("scripts.sync.ops._OUTBOX_DIR", tmp_path / "nonexistent"):
+            from scripts.sync.ops import outbox_summary
 
             result = outbox_summary()
         assert result == {}
@@ -435,8 +435,8 @@ class TestOutboxSummary:
         (tmp_path / "ops_execution_plans").mkdir()
         (tmp_path / "ops_execution_plans" / "plan.jsonl").write_text("{}", encoding="utf-8")
 
-        with patch("scripts.sync_ops._OUTBOX_DIR", tmp_path):
-            from scripts.sync_ops import outbox_summary
+        with patch("scripts.sync.ops._OUTBOX_DIR", tmp_path):
+            from scripts.sync.ops import outbox_summary
 
             result = outbox_summary()
 
@@ -448,8 +448,8 @@ class TestOutboxSummary:
         (tmp_path / "ops_recommendations").mkdir()
         # No files in dir
 
-        with patch("scripts.sync_ops._OUTBOX_DIR", tmp_path):
-            from scripts.sync_ops import outbox_summary
+        with patch("scripts.sync.ops._OUTBOX_DIR", tmp_path):
+            from scripts.sync.ops import outbox_summary
 
             result = outbox_summary()
 
@@ -468,7 +468,7 @@ class TestMain:
         import sys
 
         result = subprocess.run(
-            [sys.executable, "-m", "scripts.sync_ops", "--help"],
+            [sys.executable, "-m", "scripts.sync.ops", "--help"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -482,7 +482,7 @@ class TestMain:
 
         import pytest
 
-        import scripts.sync_ops as _sync_ops
+        import scripts.sync.ops as _sync_ops
 
         old_argv = sys.argv
         sys.argv = ["sync_ops", "drain"]
@@ -520,21 +520,21 @@ class TestTelemetryMappings:
 
     def test_telemetry_tables_absent_from_maps(self):
         """No telemetry table is mapped (they are not migrated to the personal account)."""
-        from scripts.sync_ops import _TABLE_TO_LOCAL
+        from scripts.sync.ops import _TABLE_TO_LOCAL
 
         for table in self._TELEMETRY_TABLES:
             assert table not in _TABLE_TO_LOCAL, f"{table} should be removed from _TABLE_TO_LOCAL"
 
     def test_non_migrated_ops_tables_absent(self):
         """ops_session_log and ops_execution_plans are not migrated and must be absent."""
-        from scripts.sync_ops import _TABLE_TO_LOCAL
+        from scripts.sync.ops import _TABLE_TO_LOCAL
 
         for table in self._REMOVED_OPS_TABLES:
             assert table not in _TABLE_TO_LOCAL
 
     def test_migrated_ops_tables_present(self):
         """All three migrated tables are cached locally; the Athena view map is deleted (Decision 84 I-1)."""
-        import scripts.sync_ops as sync_ops
+        import scripts.sync.ops as sync_ops
 
         assert set(sync_ops._TABLE_TO_LOCAL) == {"ops_recommendations", "ops_decisions", "ops_priority_queue"}
         assert sync_ops._DUCKLAKE_MIGRATED_TABLES == frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
@@ -564,13 +564,13 @@ class TestTelemetryMappings:
                 mock_writer_instance.write(table, e)
 
         with (
-            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
+            patch("scripts.sync.ops._OUTBOX_DIR", tmp_path),
             patch.dict(
                 "sys.modules",
                 {"scripts.ops_writer": MagicMock(OpsWriter=_FakeOpsWriter)},
             ),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             result = sync_ops.drain()
 
@@ -587,7 +587,7 @@ class TestTelemetryMappings:
 class TestCoerceOpsRecRow:
     def test_coerces_bracket_array_fields_to_list(self):
         """Athena bracket-array strings are split into Python lists."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         row = {"id": "rec-001", "dependencies": "[dep-001, dep-002]", "tags": "[alpha, beta]", "execution_steps": "3"}
         result = _coerce_ops_rec_row(row)
@@ -597,7 +597,7 @@ class TestCoerceOpsRecRow:
 
     def test_coerces_empty_bracket_to_empty_list(self):
         """An empty bracket string '[]' becomes an empty Python list."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         row = {"id": "rec-001", "dependencies": "[]", "tags": "[]", "execution_steps": ""}
         result = _coerce_ops_rec_row(row)
@@ -607,7 +607,7 @@ class TestCoerceOpsRecRow:
 
     def test_coerces_null_varchar_to_empty_list(self):
         """A null VarChar '' for array fields becomes an empty list."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         row = {"id": "rec-001", "dependencies": "", "tags": ""}
         result = _coerce_ops_rec_row(row)
@@ -616,7 +616,7 @@ class TestCoerceOpsRecRow:
 
     def test_coerces_execution_steps_integer_string(self):
         """A numeric string for execution_steps becomes an int."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         row = {"id": "rec-001", "execution_steps": "5"}
         result = _coerce_ops_rec_row(row)
@@ -624,7 +624,7 @@ class TestCoerceOpsRecRow:
 
     def test_passes_through_int_execution_steps_unchanged(self):
         """An already-int execution_steps value is not modified."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         row = {"id": "rec-001", "execution_steps": 7}
         result = _coerce_ops_rec_row(row)
@@ -632,7 +632,7 @@ class TestCoerceOpsRecRow:
 
     def test_handles_missing_fields_gracefully(self):
         """Rows without array/int fields get safe defaults, no KeyError."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         row = {"id": "rec-001", "status": "open"}
         result = _coerce_ops_rec_row(row)
@@ -642,7 +642,7 @@ class TestCoerceOpsRecRow:
 
     def test_coerces_automatable_empty_string_to_none(self):
         """Athena NULL for automatable arrives as '' and must become None."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         row = {"id": "rec-001", "automatable": ""}
         result = _coerce_ops_rec_row(row)
@@ -650,14 +650,14 @@ class TestCoerceOpsRecRow:
 
     def test_coerces_automatable_true_string_to_bool(self):
         """Athena boolean strings 'true'/'false' become Python booleans."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         assert _coerce_ops_rec_row({"id": "rec-001", "automatable": "true"})["automatable"] is True
         assert _coerce_ops_rec_row({"id": "rec-001", "automatable": "false"})["automatable"] is False
 
     def test_passes_through_bool_automatable_unchanged(self):
         """An already-bool automatable value is not modified."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         assert _coerce_ops_rec_row({"id": "rec-001", "automatable": True})["automatable"] is True
         assert _coerce_ops_rec_row({"id": "rec-001", "automatable": False})["automatable"] is False
@@ -671,49 +671,49 @@ class TestCoerceOpsRecRow:
 class TestCoerceAthenaArray:
     def test_bracket_string_parses_to_list(self):
         """'[a, b]' parses to ['a', 'b']."""
-        from scripts.sync_ops import _coerce_athena_array
+        from scripts.sync.ops import _coerce_athena_array
 
         assert _coerce_athena_array("[a, b]") == ["a", "b"]
 
     def test_empty_bracket_returns_empty_list(self):
         """'[]' returns []."""
-        from scripts.sync_ops import _coerce_athena_array
+        from scripts.sync.ops import _coerce_athena_array
 
         assert _coerce_athena_array("[]") == []
 
     def test_empty_string_returns_empty_list(self):
         """Athena NULL ('')  returns []."""
-        from scripts.sync_ops import _coerce_athena_array
+        from scripts.sync.ops import _coerce_athena_array
 
         assert _coerce_athena_array("") == []
 
     def test_none_value_returns_empty_list(self):
         """None input returns []."""
-        from scripts.sync_ops import _coerce_athena_array
+        from scripts.sync.ops import _coerce_athena_array
 
         assert _coerce_athena_array(None) == []
 
     def test_scalar_string_wraps_in_list(self):
         """A plain string without brackets becomes a one-element list."""
-        from scripts.sync_ops import _coerce_athena_array
+        from scripts.sync.ops import _coerce_athena_array
 
         assert _coerce_athena_array("rec-001") == ["rec-001"]
 
     def test_int_elem_type_coerces_elements(self):
         """elem_type=int converts each element."""
-        from scripts.sync_ops import _coerce_athena_array
+        from scripts.sync.ops import _coerce_athena_array
 
         assert _coerce_athena_array("[1, 2, 3]", elem_type=int) == [1, 2, 3]
 
     def test_int_elem_type_invalid_element_skipped(self):
         """Invalid elements for the given elem_type are silently skipped."""
-        from scripts.sync_ops import _coerce_athena_array
+        from scripts.sync.ops import _coerce_athena_array
 
         assert _coerce_athena_array("[1, notanint, 3]", elem_type=int) == [1, 3]
 
     def test_scalar_int_elem_type_wraps(self):
         """A plain '5' with elem_type=int returns [5]."""
-        from scripts.sync_ops import _coerce_athena_array
+        from scripts.sync.ops import _coerce_athena_array
 
         assert _coerce_athena_array("5", elem_type=int) == [5]
 
@@ -725,7 +725,7 @@ class TestCoerceAthenaArray:
 
 class TestCoerceOpsPriorityQueueRow:
     def test_coerces_rank_string_to_int(self):
-        from scripts.sync_ops import _coerce_ops_priority_queue_row
+        from scripts.sync.ops import _coerce_ops_priority_queue_row
 
         row = {"rank": "3", "compound_with": "[]", "gates": "[]"}
         result = _coerce_ops_priority_queue_row(row)
@@ -734,7 +734,7 @@ class TestCoerceOpsPriorityQueueRow:
         assert result["gates"] == []
 
     def test_coerces_array_fields(self):
-        from scripts.sync_ops import _coerce_ops_priority_queue_row
+        from scripts.sync.ops import _coerce_ops_priority_queue_row
 
         row = {"rank": "1", "compound_with": "[rec-002, rec-003]", "gates": "[gate-a]"}
         result = _coerce_ops_priority_queue_row(row)
@@ -742,7 +742,7 @@ class TestCoerceOpsPriorityQueueRow:
         assert result["gates"] == ["gate-a"]
 
     def test_null_rank_becomes_none(self):
-        from scripts.sync_ops import _coerce_ops_priority_queue_row
+        from scripts.sync.ops import _coerce_ops_priority_queue_row
 
         row = {"rank": ""}
         result = _coerce_ops_priority_queue_row(row)
@@ -756,7 +756,7 @@ class TestCoerceOpsPriorityQueueRow:
 
 class TestCoerceOpsDecisionsRow:
     def test_coerces_decision_id_string_to_int(self):
-        from scripts.sync_ops import _coerce_ops_decisions_row
+        from scripts.sync.ops import _coerce_ops_decisions_row
 
         row = {"decision_id": "42", "related_decisions": "[]"}
         result = _coerce_ops_decisions_row(row)
@@ -764,14 +764,14 @@ class TestCoerceOpsDecisionsRow:
         assert result["related_decisions"] == []
 
     def test_coerces_related_decisions_array_to_int_list(self):
-        from scripts.sync_ops import _coerce_ops_decisions_row
+        from scripts.sync.ops import _coerce_ops_decisions_row
 
         row = {"decision_id": "1", "related_decisions": "[2, 3, 4]"}
         result = _coerce_ops_decisions_row(row)
         assert result["related_decisions"] == [2, 3, 4]
 
     def test_null_decision_id_becomes_none(self):
-        from scripts.sync_ops import _coerce_ops_decisions_row
+        from scripts.sync.ops import _coerce_ops_decisions_row
 
         row = {"decision_id": ""}
         result = _coerce_ops_decisions_row(row)
@@ -779,7 +779,7 @@ class TestCoerceOpsDecisionsRow:
 
     def test_populates_id_from_decision_id_when_absent(self):
         """When id is absent, populates it as dec-NNN from decision_id (D11)."""
-        from scripts.sync_ops import _coerce_ops_decisions_row
+        from scripts.sync.ops import _coerce_ops_decisions_row
 
         row = {"decision_id": "37"}
         result = _coerce_ops_decisions_row(row)
@@ -790,10 +790,10 @@ class TestCoerceOpsDecisionsRow:
         """Mismatched id/decision_id calls _write_decisions_sync_reject (D11)."""
         from unittest.mock import patch
 
-        from scripts.sync_ops import _coerce_ops_decisions_row
+        from scripts.sync.ops import _coerce_ops_decisions_row
 
         row = {"id": "dec-010", "decision_id": "99"}
-        with patch("scripts.sync_ops._write_decisions_sync_reject") as mock_reject:
+        with patch("scripts.sync.ops._write_decisions_sync_reject") as mock_reject:
             _coerce_ops_decisions_row(row)
         mock_reject.assert_called_once()
         reason = mock_reject.call_args[0][1]
@@ -803,10 +803,10 @@ class TestCoerceOpsDecisionsRow:
         """Matched id/decision_id does not call _write_decisions_sync_reject (D11)."""
         from unittest.mock import patch
 
-        from scripts.sync_ops import _coerce_ops_decisions_row
+        from scripts.sync.ops import _coerce_ops_decisions_row
 
         row = {"id": "dec-042", "decision_id": "42"}
-        with patch("scripts.sync_ops._write_decisions_sync_reject") as mock_reject:
+        with patch("scripts.sync.ops._write_decisions_sync_reject") as mock_reject:
             _coerce_ops_decisions_row(row)
         mock_reject.assert_not_called()
 
@@ -818,7 +818,7 @@ class TestCoerceOpsDecisionsRow:
 
 class TestCoerceOpsSessionLogRow:
     def test_coerces_array_fields(self):
-        from scripts.sync_ops import _coerce_ops_session_log_row
+        from scripts.sync.ops import _coerce_ops_session_log_row
 
         row = {"recs_attempted": "[rec-001, rec-002]", "recs_closed": "[rec-001]", "duration_minutes": "45"}
         result = _coerce_ops_session_log_row(row)
@@ -827,14 +827,14 @@ class TestCoerceOpsSessionLogRow:
         assert result["duration_minutes"] == 45
 
     def test_null_duration_becomes_none(self):
-        from scripts.sync_ops import _coerce_ops_session_log_row
+        from scripts.sync.ops import _coerce_ops_session_log_row
 
         row = {"duration_minutes": ""}
         result = _coerce_ops_session_log_row(row)
         assert result["duration_minutes"] is None
 
     def test_empty_array_fields_return_empty_list(self):
-        from scripts.sync_ops import _coerce_ops_session_log_row
+        from scripts.sync.ops import _coerce_ops_session_log_row
 
         row = {"recs_attempted": "", "recs_closed": "[]"}
         result = _coerce_ops_session_log_row(row)
@@ -849,10 +849,10 @@ class TestPipelineConsolidation:
         """_coerce_ops_rec_row returns None and writes a reject log for dec-* prefixed IDs."""
         from unittest.mock import patch
 
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         row = {"id": "dec-42", "title": "Test", "source": "manual", "effort": "S", "priority": "Low"}
-        with patch("scripts.sync_ops._write_sync_reject") as mock_reject:
+        with patch("scripts.sync.ops._write_sync_reject") as mock_reject:
             result = _coerce_ops_rec_row(row)
 
         assert result is None
@@ -863,7 +863,7 @@ class TestPipelineConsolidation:
 
     def test_coerce_ops_rec_row_accepts_valid_prefixes(self):
         """_coerce_ops_rec_row returns the row for rec-, agent-, and test- prefixes."""
-        from scripts.sync_ops import _coerce_ops_rec_row
+        from scripts.sync.ops import _coerce_ops_rec_row
 
         for valid_id in ("rec-001", "agent-abc", "test-xyz"):
             row = {"id": valid_id, "dependencies": "", "tags": "", "execution_steps": "", "automatable": ""}
@@ -872,12 +872,12 @@ class TestPipelineConsolidation:
             assert result["id"] == valid_id
 
     def test_drain_cli_removed(self):
-        """Running `python -m scripts.sync_ops drain` exits non-zero (subcommand removed)."""
+        """Running `python -m scripts.sync.ops drain` exits non-zero (subcommand removed)."""
         import subprocess
         import sys
 
         result = subprocess.run(
-            [sys.executable, "-m", "scripts.sync_ops", "drain"],
+            [sys.executable, "-m", "scripts.sync.ops", "drain"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -887,12 +887,12 @@ class TestPipelineConsolidation:
         assert result.returncode != 0
 
     def test_pull_cli_removed(self):
-        """Running `python -m scripts.sync_ops pull` exits non-zero (subcommand removed)."""
+        """Running `python -m scripts.sync.ops pull` exits non-zero (subcommand removed)."""
         import subprocess
         import sys
 
         result = subprocess.run(
-            [sys.executable, "-m", "scripts.sync_ops", "pull"],
+            [sys.executable, "-m", "scripts.sync.ops", "pull"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -904,7 +904,7 @@ class TestPipelineConsolidation:
 
 def test_coerce_athena_array_handles_native_list():
     """DuckLake reader returns native lists; the coercion returns them element-typed (not re-parsed)."""
-    from scripts.sync_ops import _coerce_athena_array
+    from scripts.sync.ops import _coerce_athena_array
 
     assert _coerce_athena_array(["rec-1", "rec-2"]) == ["rec-1", "rec-2"]
     assert _coerce_athena_array([1, 2, 3], elem_type=int) == [1, 2, 3]
@@ -939,13 +939,13 @@ class TestDrainSkipsRecsOutbox:
                 write_calls.append((table, e))
 
         with (
-            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
+            patch("scripts.sync.ops._OUTBOX_DIR", tmp_path),
             patch.dict(
                 "sys.modules",
                 {"scripts.ops_writer": MagicMock(OpsWriter=_FakeOpsWriter)},
             ),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             result = sync_ops.drain()
 
@@ -982,14 +982,14 @@ class TestDrainSkipsRecsOutbox:
                 write_calls.append((table, e))
 
         with (
-            patch("scripts.sync_ops._OUTBOX_DIR", tmp_path),
+            patch("scripts.sync.ops._OUTBOX_DIR", tmp_path),
             patch.dict(
                 "sys.modules",
                 {"scripts.ops_writer": MagicMock(OpsWriter=_FakeOpsWriter)},
             ),
-            caplog.at_level(logging.WARNING, logger="scripts.sync_ops"),
+            caplog.at_level(logging.WARNING, logger="scripts.sync.ops"),
         ):
-            from scripts import sync_ops
+            from scripts.sync import ops as sync_ops
 
             result = sync_ops.drain()
 
@@ -1009,7 +1009,7 @@ class TestDrainSkipsRecsOutbox:
 class TestUpsertCacheRow:
     def test_devnull_sentinel_returns_zero_no_tmp_written(self) -> None:
         """upsert_cache_row with path=Path(os.devnull) returns 0 and writes no .tmp file."""
-        from scripts import sync_ops
+        from scripts.sync import ops as sync_ops
 
         result = sync_ops.upsert_cache_row("ops_recommendations", {"id": "rec-9999", "title": "t"}, path=Path(os.devnull))
         assert result == 0
@@ -1017,7 +1017,7 @@ class TestUpsertCacheRow:
 
     def test_real_path_writes_cache_row(self, tmp_path: Path) -> None:
         """upsert_cache_row with a real path writes the row and returns row count."""
-        from scripts import sync_ops
+        from scripts.sync import ops as sync_ops
 
         cache_file = tmp_path / "recs.jsonl"
         result = sync_ops.upsert_cache_row("ops_recommendations", {"id": "rec-0001", "title": "hello"}, path=cache_file)

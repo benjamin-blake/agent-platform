@@ -2,14 +2,14 @@
 """Equivalence suite for the session_preflight facade/package decomposition (T-sloc).
 
 Freezes the pre-refactor entry contracts so the movement-only decomposition of
-scripts/session_preflight.py into scripts/preflight/ cannot silently change behaviour:
+scripts/session/preflight.py into scripts/preflight/ cannot silently change behaviour:
 
 1. Report-schema freeze -- a stubbed main() run's report top-level key set equals the frozen
    44-key list captured from the pre-refactor code (dict literal + 7 post-assignments).
 2. Facade completeness -- every name on the frozen export list (every public function + every
    test-referenced private symbol, including the back-compat _sync_ops_pull and
    _DuckDBIcebergReader re-imports) is getattr-able on the facade AND importable via
-   `from scripts.session_preflight import <name>`.
+   `from scripts.session.preflight import <name>`.
 3. Mock interception -- patching scripts.preflight._common._make_reader and one home-module
    function per domain intercepts through moved bodies invoked via the facade.
 4. Full residual-site closure -- scans the sibling test files for any old-namespace reference to
@@ -56,7 +56,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # pattern): does not clobber sys.modules["session_preflight"], which test_session_preflight.py
 # registers -- collocating both in one process would make one suite's string-target patches
 # resolve to the other's module object depending on collection/test order (pytest-randomly).
-_MODULE_PATH = ROOT / "scripts" / "session_preflight.py"
+_MODULE_PATH = ROOT / "scripts" / "session" / "preflight.py"
 _spec = importlib.util.spec_from_file_location("session_preflight_decomposition_mod", _MODULE_PATH)
 assert _spec and _spec.loader
 _preflight = importlib.util.module_from_spec(_spec)
@@ -333,7 +333,7 @@ def _stubbed_main_env(report_path: Path, overrides: dict[tuple[object, str], obj
 
     overrides keys are (module_object, attr_name) pairs matching a row in _base_stub_specs; any
     key not present in the base spec list is patched in addition to the base set (used for
-    scripts.sync_ops.warm_sync, which is not a moved symbol and is patched by string target).
+    scripts.sync.ops.warm_sync, which is not a moved symbol and is patched by string target).
     """
     overrides = overrides or {}
     specs = list(_base_stub_specs(report_path))
@@ -346,7 +346,7 @@ def _stubbed_main_env(report_path: Path, overrides: dict[tuple[object, str], obj
     extra = [(t, a, v) for (t, a), v in overrides.items() if (t, a) not in consumed]
 
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("scripts.sync_ops.warm_sync", return_value=_warm_sync_stub()))
+        stack.enter_context(patch("scripts.sync.ops.warm_sync", return_value=_warm_sync_stub()))
         for target, attr, value in specs + extra:
             if (target, attr) in _DIRECT_VALUE_ATTRS:
                 stack.enter_context(patch.object(target, attr, value))
@@ -378,18 +378,18 @@ class TestReportSchemaFreeze:
 
 class TestFacadeCompleteness:
     """Every name on the frozen export list is getattr-able on the module AND importable via
-    `from scripts.session_preflight import <name>`."""
+    `from scripts.session.preflight import <name>`."""
 
     @pytest.mark.parametrize("name", sorted(FROZEN_EXPORTS))
     def test_getattr_on_private_handle(self, name: str) -> None:
         assert hasattr(_preflight, name), f"{name} missing from the facade module namespace"
 
     def test_every_frozen_export_resolves_via_standard_import(self) -> None:
-        # Equivalent to `from scripts.session_preflight import <name>` for each name: Python's
+        # Equivalent to `from scripts.session.preflight import <name>` for each name: Python's
         # import system resolves a plain-attribute `from X import Y` as getattr(import(X), Y).
-        mod = importlib.import_module("scripts.session_preflight")
+        mod = importlib.import_module("scripts.session.preflight")
         missing = [n for n in sorted(FROZEN_EXPORTS) if not hasattr(mod, n)]
-        assert not missing, f"names not resolvable via `from scripts.session_preflight import <name>`: {missing}"
+        assert not missing, f"names not resolvable via `from scripts.session.preflight import <name>`: {missing}"
 
 
 class TestMockInterceptionThroughFacade:
@@ -495,7 +495,7 @@ class TestArgparseFlagSurfaceFrozen:
 
     def test_help_lists_all_five_flags(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "scripts.session_preflight", "--help"],
+            [sys.executable, "-m", "scripts.session.preflight", "--help"],
             capture_output=True,
             text=True,
             encoding="utf-8",

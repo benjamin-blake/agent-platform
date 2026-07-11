@@ -25,7 +25,7 @@ def validate_outbox_staleness(failed: list[str]) -> None:
             if age_hours > 24:
                 stale_count += 1
     if stale_count > 0:
-        msg = f"  WARNING: {stale_count} outbox entries older than 24h -- run: python -m scripts.sync_ops sync"
+        msg = f"  WARNING: {stale_count} outbox entries older than 24h -- run: python -m scripts.sync.ops sync"
         print(msg)
         # Warning only, not a hard failure (SSO may be legitimately unavailable).
     else:

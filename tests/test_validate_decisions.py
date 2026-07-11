@@ -64,10 +64,11 @@ class TestValidateDecisionsLocalWrites:
         assert failed == []
 
     def test_allows_whitelist_sync_ops(self, tmp_path: Path, capsys) -> None:
-        """sync_ops.py is whitelisted and does not trigger the rule."""
+        """scripts/sync/ops.py is whitelisted and does not trigger the rule."""
         scripts_dir = tmp_path / "scripts"
-        scripts_dir.mkdir()
-        (scripts_dir / "sync_ops.py").write_text(
+        sync_dir = scripts_dir / "sync"
+        sync_dir.mkdir(parents=True)
+        (sync_dir / "ops.py").write_text(
             'with DECISIONS_JSONL.open("a", encoding="utf-8") as f: f.write("x")\n',
             encoding="utf-8",
         )

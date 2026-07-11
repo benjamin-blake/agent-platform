@@ -1,6 +1,6 @@
 """Session-close housekeeping: telemetry close, log pruning, metrics, log-housekeeping commit/push.
 
-Moved verbatim from scripts/session_postflight.py (SLOC decomposition, PLAN-sloc-session-postflight).
+Moved verbatim from scripts/session/postflight.py (SLOC decomposition, PLAN-sloc-session-postflight).
 Shared primitives resolve via scripts.postflight._common so the facade's single canonical patch
 target still intercepts through these moved bodies.
 """
@@ -182,11 +182,11 @@ def prune_telemetry_logs(
 
 def run_metrics(steps_total: int = 0, steps_friction: int = 0) -> int:
     """Run session_metrics.py, plan_audit.py, and telemetry pruning."""
-    metrics_cmd = [_common.PYTHON, "scripts/session_metrics.py"]
+    metrics_cmd = [_common.PYTHON, "scripts/session/metrics.py"]
     if steps_total or steps_friction:
         metrics_cmd += ["--steps-total", str(steps_total), "--steps-friction", str(steps_friction)]
     metrics_result = _common._run(metrics_cmd)
-    audit_result = _common._run([_common.PYTHON, "scripts/plan_audit.py"])
+    audit_result = _common._run([_common.PYTHON, "scripts/roadmap/plan_audit.py"])
 
     prune_result = prune_telemetry_logs()
 

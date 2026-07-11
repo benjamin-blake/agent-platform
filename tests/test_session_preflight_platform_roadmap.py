@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts.platform_roadmap import compute_state_dict, load
-from scripts.session_preflight import _slim_roadmap_state
+from scripts.roadmap.platform_roadmap import compute_state_dict, load
+from scripts.session.preflight import _slim_roadmap_state
 
 _LIVE_YAML = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
 _LIVE_PRODUCT_YAML = Path(__file__).parent.parent / "docs" / "ROADMAP-PRODUCT.yaml"
@@ -126,7 +126,7 @@ class TestProductRoadmapProjectionUnchanged:
     platform-only keys never crash and never appear spuriously."""
 
     def _product_state(self) -> dict:
-        from scripts import product_roadmap as product_roadmap_module
+        from scripts.roadmap import product_roadmap as product_roadmap_module
 
         return product_roadmap_module.compute_state_dict(_LIVE_PRODUCT_YAML, platform_yaml_path=_LIVE_YAML)
 
@@ -152,7 +152,7 @@ class TestFollowonFieldsInPreflight:
     """T-1.23: in_progress entries carry open_criteria_count/all_plans_actioned/needs_followon_plan."""
 
     def _full_state(self) -> dict:
-        from scripts.platform_roadmap import compute_state_dict
+        from scripts.roadmap.platform_roadmap import compute_state_dict
 
         return compute_state_dict(_LIVE_YAML)
 
@@ -199,7 +199,7 @@ class TestCompletionBlockedOnCdProjection:
     """T-1.20:c6 -- completion_blocked_on_cd field in full (/orient) projection."""
 
     def _full_state(self) -> dict:
-        from scripts.platform_roadmap import compute_state_dict
+        from scripts.roadmap.platform_roadmap import compute_state_dict
 
         return compute_state_dict(_LIVE_YAML)
 
