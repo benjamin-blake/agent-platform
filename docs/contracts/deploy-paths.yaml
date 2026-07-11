@@ -1,0 +1,49 @@
+# Deployment-model navigation index (Decision 126). NOT a Class A/B/C ritual contract -- no
+# top-level contract:/class: block, so the CD.25 drift gate (validate_contract_drift) skips this
+# file as a non-ritual doc (precedent: docs/contracts/file-router.yaml, telemetry-lexicon.yaml,
+# read-engine.yaml, storage-substrate.yaml; free-form registry per Decision 118).
+#
+# Purpose: for each of the three agent intents (provision / deploy_code / reconcile) plus the
+# operator-only admin tier, name the trigger, the actor role, and a recovery pointer. This file
+# owns ONLY intent -> trigger -> recovery wayfinding. It is a POINTER, not a second source of
+# truth: the apply-model / guard-classification rules (what blocks an apply, in-budget vs
+# out-of-budget IAM, guard exit codes) live SOLELY in docs/contracts/environment-taxonomy.md
+# (Decision 92 point 5 sole-SoT; Decision 86 no-drift) -- this file never restates them.
+#
+# Roles below are logical names only. No confidential AWS identifiers of any kind (account
+# numbers, resource names, cross-account trust tokens) appear in this file (Decision 101
+# public-content boundary) -- this repository is PUBLIC.
+schema_version: 1
+decision: Decision-126
+
+provision:
+  description: "Infra changes: anything under terraform/**."
+  trigger: "Open a PR touching terraform/**; CI plans and applies."
+  actor_role: agent
+  blocks_ref: "environment-taxonomy.md#5-lambda-codeinfra-decoupling-principle-personal-account-lambdas"
+  recovery: "If the guard blocks the change (IAM/trust/destroy or out-of-budget), see reconcile below; do not fall back to a local apply."
+  note: "Agents never run terraform apply anywhere, on any container, at any privilege tier."
+
+deploy_code:
+  description: "Code-only deploys for artifacts on a governed code-deploy channel (e.g. the four DuckLake Lambdas)."
+  trigger: "The governed code-deploy channel named in docs/contracts/build-lambda.yaml's deploy_channels. Terraform is not involved."
+  actor_role: agent
+  blocks_ref: "build-lambda.yaml#deploy_channels"
+  recovery: "Governed channel unavailable/not yet built for a given artifact: docs/contracts/build-lambda.yaml names the interim break_glass_only command for that artifact (operator-only, see admin_out_of_band below)."
+  status: "Governed channel for the four DuckLake functions is pending (tier_item T2.38); break-glass is the interim path."
+
+reconcile:
+  description: "The apply pipeline is red or the convergence record is drifted."
+  trigger: "One input-free Reconcile action (tier_item T2.37): reads the red commit from the convergence record and re-applies it. No operator-supplied SHA."
+  actor_role: agent
+  blocks_ref: "environment-taxonomy.md (guard classification determines whether Reconcile can auto-apply or must route to gated-apply)"
+  recovery: "If Reconcile itself cannot proceed (e.g. an out-of-budget IAM delta needs human approval), it routes to the existing gated-apply Environment; see admin_out_of_band for the human action."
+  status: "Tier_item T2.37, not yet landed. Until it lands, follow terraform/CLAUDE.md's operator-only / break-glass subsection."
+
+admin_out_of_band:
+  description: "Operator-only admin tier: bootstrap root, agent_platform_admin IAM/trust/destroy changes, and the Decision 120 local-apply escape hatch."
+  trigger: "A human operator acting outside CI, per terraform/CLAUDE.md's operator-only / break-glass subsection."
+  actor_role: operator
+  blocks_ref: "environment-taxonomy.md (guard classification); Decision 120 (the escape hatch this restored); Decision 98 (admin-create); Decision 77 (bootstrap)"
+  recovery: "The only agent move in this tier, ever, is to file a rec describing what's needed and why -- agents never invoke this tier directly."
+  status: "Currently documented ambiently in terraform/CLAUDE.md. Sequenced for quarantine into a dedicated operator runbook by tier_item T2.41, AFTER T2.37 (the heal button) lands and is verified -- do not quarantine before then (Fable ordering invariant, Decision 126)."

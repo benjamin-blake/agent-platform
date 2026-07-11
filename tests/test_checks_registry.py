@@ -60,6 +60,7 @@ FROZEN_PRE_SEQUENCE: tuple[tuple[str, str], ...] = (
     ("check", "validate_contract_drift"),
     ("check", "validate_placement"),
     ("check", "validate_field_semantics_drift"),
+    ("check", "validate_deploy_channel_conformance"),
     ("check", "validate_ci_rca_taxonomy"),
     ("check", "validate_ops_portal_patch_targets"),
     ("check", "validate_claude_p_retry_wrapper"),

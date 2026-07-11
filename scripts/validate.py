@@ -130,6 +130,9 @@ from scripts.checks.ops_governance.check_source_registry import check_source_reg
 from scripts.checks.ops_governance.validate_decisions_local_writes import (  # noqa: F401,E402
     validate_decisions_local_writes,
 )
+from scripts.checks.ops_governance.validate_deploy_channel_conformance import (  # noqa: F401,E402
+    validate_deploy_channel_conformance,
+)
 from scripts.checks.ops_governance.validate_dq_manifest_gate import validate_dq_manifest_gate  # noqa: F401,E402
 from scripts.checks.ops_governance.validate_field_semantics_drift import (  # noqa: F401,E402
     validate_field_semantics_drift,

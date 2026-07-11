@@ -6653,6 +6653,269 @@ tier_items:
     strategic: false
     status: not_started
 
+  - id: T2.37
+    tier: T2
+    name: "Recovery ergonomics: input-free Reconcile action (Decision 126)"
+    intent: |
+      Land the "heal button" half of the two-verb + heal-button + operator-only-admin-tier
+      deployment model (Decision 126). A single input-free Reconcile GitHub Actions
+      workflow_dispatch action reads the red commit directly from the T2.35 convergence
+      record (no operator-supplied SHA) and re-applies it, plus a workflow_dispatch
+      gated-apply route for the case that needs human IAM approval. Closes the rec-2647 /
+      rec-2523 deadlock class (an operator with no obvious next step when the record is red)
+      by subsuming the routed case within one run rather than requiring a separate manual
+      acknowledge-and-retry dispatch for the common path. Must land and be VP-verified BEFORE
+      T2.41 quarantines the local-apply escape hatch (Fable ordering invariant -- do not
+      remove the only working recovery path before its replacement works).
+    depends_on: []
+    files_in_scope:
+      - .github/workflows/terraform-apply-sandbox.yml
+      - .github/workflows/reconcile.yml
+      - scripts/convergence_health.py
+      - docs/contracts/deploy-paths.yaml
+    exit_criteria:
+      - id: c1
+        text: >-
+          A single input-free Reconcile GitHub Actions workflow_dispatch action exists that
+          reads the red commit directly from the convergence record (no operator-supplied SHA)
+          and re-applies it
+        status: open
+      - id: c2
+        text: >-
+          If an optional rec-id is supplied, the workflow validates it resolves to an OPEN rec
+          via the ops portal before proceeding; an invalid or closed rec-id fails the dispatch
+        status: open
+      - id: c3
+        text: >-
+          The routed gated-apply deadlock class (rec-2647 / rec-2523) is closed: Reconcile
+          subsumes the routed case within one run -- no separate manual acknowledge-and-retry
+          dispatch is required for the common red-then-recover path
+        status: open
+      - id: c4
+        text: >-
+          Convergence-health (T2.35) recognizes a Reconcile-triggered apply and does not
+          double-file a tf_convergence_stale rec for the same red episode
+        status: open
+    related_decisions: [126]
+    effort: L
+    strategic: false
+    status: not_started
+
+  - id: T2.38
+    tier: T2
+    name: "Governed code-deploy channel for the four DuckLake Lambdas (Decision 125/126)"
+    intent: |
+      Realize the Decision 125 deploy verb: a governed code-deploy channel for the four
+      DuckLake functions (writer, reader, maintenance, catalog-dr), now that #544 decoupled
+      their code from terraform/personal infra apply. Recaptures the governed-channel scope
+      lost when rec-2646 closed with only its grep-acceptance met, and closes the rec-2649
+      silent-stale-code observability gap. Terraform is not involved in this channel.
+    depends_on: []
+    files_in_scope:
+      - terraform/personal/oidc.tf
+      - .github/workflows/deploy-ducklake-lambdas.yml
+      - scripts/build_lambda.py
+      - docs/contracts/build-lambda.yaml
+      - docs/contracts/deploy-paths.yaml
+    exit_criteria:
+      - id: c1
+        text: >-
+          A scoped UpdateFunctionCode-only OIDC role (no terraform:apply, no other IAM/Lambda-
+          config permissions) exists for the four ducklake functions, distinct from the
+          terraform-apply CI roles
+        status: open
+      - id: c2
+        text: >-
+          build_lambda --ducklake-only --deploy runs through a governed CD path (a dedicated
+          GitHub Actions workflow), not only as a local break-glass invocation; the existing
+          --lambda-attach/--lambda-reader smoke gates run as part of that workflow before the
+          deploy is considered successful
+        status: open
+      - id: c3
+        text: >-
+          A deployment record (function name -> deployed CodeSha256 -> source git SHA) is
+          written on every governed deploy and is readable by convergence-health/drift tooling
+        status: open
+      - id: c4
+        text: >-
+          docs/contracts/build-lambda.yaml deploy_channels.ducklake_functions.break_glass_only
+          is documented as genuinely non-default once the governed channel exists; local
+          build_lambda --ducklake-only --deploy remains available but is no longer the only path
+        status: open
+    related_decisions: [125, 126]
+    effort: L
+    strategic: false
+    status: not_started
+
+  - id: T2.39
+    tier: T2
+    name: "Take the LLM plan-review subagent out of the red-latch path (Decision 126)"
+    intent: |
+      Forward-fix for rec-2658: the gated-apply plan-review subagent hitting max-turns=10
+      without emitting PROCEED must never be treated as an implicit REVISE, and reviewer
+      starvation must never itself write a red convergence record. Distinguishes "the plan is
+      bad" from "the reviewer ran out of turns" so the red-latch path only fires on a genuine
+      REVISE verdict.
+    depends_on: []
+    files_in_scope:
+      - .github/workflows/terraform-apply-sandbox.yml
+      - scripts/terraform_apply_guard.py
+    exit_criteria:
+      - id: c1
+        text: >-
+          The gated-apply plan-review subagent distinguishes "hit max-turns without a verdict"
+          from an explicit REVISE verdict -- a max-turns timeout is never recorded as an
+          implicit REVISE
+        status: open
+      - id: c2
+        text: >-
+          On a max-turns timeout, the workflow retries the review once with a larger turn
+          budget before falling back to any other handling
+        status: open
+      - id: c3
+        text: >-
+          Reviewer starvation (repeated max-turns even after retry) never writes a red
+          convergence record by itself -- it surfaces as a distinct, clearly-labelled state so
+          a human or ci-rca can distinguish "the plan is bad" from "the reviewer ran out of turns"
+        status: open
+      - id: c4
+        text: >-
+          rec-2658 (or its /plan-session successor) is closed by this item landing, forward-
+          fixing rather than inline-patching the recurring class (Decision 55)
+        status: open
+    related_decisions: [55, 126]
+    effort: M
+    strategic: false
+    status: not_started
+
+  - id: T2.40
+    tier: T2
+    name: "Deployment-model navigability + SoT integrity (Decision 126)"
+    intent: |
+      Foundation layer of the two-verb + heal-button + operator-only-admin-tier deployment
+      model: a machine-readable navigation index (deploy-paths.yaml), the ambient agent rule,
+      the demoted local-apply escape hatch, and the staleness guard that keeps
+      environment-taxonomy.md and build-lambda.yaml from silently re-drifting (the #544 drift
+      class). Fully realized by PLAN-deployment-model-foundation -- all criteria below are
+      closed in the same commit that creates this tier_item.
+    depends_on: []
+    files_in_scope:
+      - docs/contracts/deploy-paths.yaml
+      - docs/contracts/file-router.yaml
+      - AGENTS.md
+      - terraform/CLAUDE.md
+      - scripts/checks/ops_governance/validate_deploy_channel_conformance.py
+    exit_criteria:
+      - id: c1
+        text: >-
+          docs/contracts/deploy-paths.yaml exists as a navigation index registered in
+          file-router.yaml, pointing to environment-taxonomy.md for guard classification
+          rather than restating it
+        status: met
+        met_by: deployment-model-foundation
+      - id: c2
+        text: >-
+          AGENTS.md carries the 2-line ambient rule (agents never run terraform apply;
+          operators may via break-glass) and no longer claims a governed CD deploy channel exists
+        status: met
+        met_by: deployment-model-foundation
+      - id: c3
+        text: >-
+          terraform/CLAUDE.md's local-apply section is rewritten as a short decision table with
+          the PR->CI path primary and the escape hatch demoted to an explicit operator-only /
+          break-glass subsection (retained, not deleted, per Decision 120)
+        status: met
+        met_by: deployment-model-foundation
+      - id: c4
+        text: >-
+          The deploy-channel conformance staleness guard
+          (scripts/checks/ops_governance/validate_deploy_channel_conformance.py) is registered
+          in the --pre presubmit tier and passes against the current repo
+        status: met
+        met_by: deployment-model-foundation
+    related_decisions: [125, 126]
+    effort: M
+    strategic: false
+    status: complete
+    completed_at: "2026-07-11"
+
+  - id: T2.41
+    tier: T2
+    name: "Escape-hatch quarantine to an operator-only runbook (Decision 126, amends Decision 120)"
+    intent: |
+      Complete the demotion that T2.40 started: move the local-apply escape hatch out of
+      terraform/CLAUDE.md's ambient dev-loop doc entirely into a dedicated operator runbook,
+      reachable only via deploy-paths.yaml's admin_out_of_band pointer, not surfaced in the
+      default agent read path. Sequenced AFTER T2.37 (the heal button) lands and is verified --
+      removing the only working recovery path before its replacement works turns the next
+      incident into a hard outage (Fable ordering invariant, recorded in Decision 126).
+    depends_on: [T2.37]
+    files_in_scope:
+      - terraform/CLAUDE.md
+      - docs/runbooks/
+      - docs/contracts/deploy-paths.yaml
+      - docs/DECISIONS.md
+    exit_criteria:
+      - id: c1
+        text: >-
+          terraform/CLAUDE.md's operator-only / break-glass local-apply subsection is moved out
+          of the ambient dev-loop doc into a dedicated operator runbook under docs/runbooks/,
+          reachable only via deploy-paths.yaml's admin_out_of_band pointer
+        status: open
+      - id: c2
+        text: "Decision 120 is amended to record the quarantine and its date"
+        status: open
+      - id: c3
+        text: >-
+          This item does not start until T2.37 has landed and its Verification Plan has passed
+        status: open
+    related_decisions: [120, 126]
+    effort: S
+    strategic: false
+    status: not_started
+
+  - id: T2.42
+    tier: T2
+    name: "Terraform-path hardening: layer replace policy, lockfile, content-addressed zips (Decision 126)"
+    intent: |
+      Close the residual terraform/personal supply-chain and drift gaps surfaced by the Fable
+      review: an undocumented aws_lambda_layer_version replace policy, an uncommitted provider
+      lock file (environment-taxonomy.md section 6), a fixed (non-content-addressed) S3 key for
+      uploaded Lambda zips, and un-deduped/untested workflow bash for the build step (rec-2659).
+    depends_on: []
+    files_in_scope:
+      - terraform/personal/ducklake_lambdas.tf
+      - terraform/personal/.terraform.lock.hcl
+      - .github/workflows/terraform-apply-sandbox.yml
+      - scripts/build_lambda.py
+    exit_criteria:
+      - id: c1
+        text: >-
+          aws_lambda_layer_version resources have a documented replace policy (a guard
+          allowlist for create-before-destroy given the zips are now deterministic and
+          byte-asserted), OR layer publishing is folded into the T2.38 deploy verb so it no
+          longer needs a terraform apply at all
+        status: open
+      - id: c2
+        text: >-
+          terraform/personal/.terraform.lock.hcl is committed (un-ignored) so the apply runner
+          pins provider versions to a reviewed lock, per environment-taxonomy.md section 6
+        status: open
+      - id: c3
+        text: >-
+          Uploaded Lambda zips are content-addressed (per-PR/sha key) rather than a fixed S3
+          key, closing the stale-artifact-overwrite class
+        status: open
+      - id: c4
+        text: >-
+          Workflow bash for the build step is extracted to tested scripts and the duplicate
+          build-step invocation is de-duplicated (rec-2659)
+        status: open
+    related_decisions: [126]
+    effort: M
+    strategic: false
+    status: not_started
+
   # ----- T3: Trust loop closure -----
   - id: T3.1
     tier: T3
