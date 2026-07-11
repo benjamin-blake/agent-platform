@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from scripts.llm_utils import kill_process_tree
+from scripts.llm.utils import kill_process_tree
 
 logger = logging.getLogger(__name__)
 

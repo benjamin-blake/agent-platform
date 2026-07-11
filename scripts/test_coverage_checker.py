@@ -60,13 +60,17 @@ _DUCKLAKE_RUNTIME_SPLIT_MODULES = {
 
 # Nested scripts/ subpackages (RS-01 / rec-164): each len==3 module maps to a kept-in-place flat
 # test file. session_*/sync_* strip the family prefix (module stem alone re-prefixed here);
-# roadmap keeps full names (empty-suffix -> test_<stem>). Whitelisted to the four known subpackages
-# so a NEW scripts/<pkg>/ does not silently inherit a mapping (do not generalise to any len==3).
+# roadmap keeps full names (empty-suffix -> test_<stem>); llm is mixed (client/utils strip the
+# llm_ prefix, model_registry/github_models_client keep their names) but a single "test_llm_"
+# prefix reproduces all four via the two renamed tests (test_llm_model_registry.py,
+# test_llm_github_models_client.py). Whitelisted to the five known subpackages so a NEW
+# scripts/<pkg>/ does not silently inherit a mapping (do not generalise to any len==3).
 _NESTED_SUBPACKAGE_TEST_PREFIX = {
     "ci_rca": "test_ci_rca_",
     "session": "test_session_",
     "sync": "test_sync_",
     "roadmap": "test_",
+    "llm": "test_llm_",
 }
 
 
@@ -82,11 +86,15 @@ def map_source_to_test(source_path: Path) -> Path | None:
                               from ducklake_runtime.py, PLAN-sloc-ducklake-layer, same Decision 104 precedent).
     src/lambdas/ducklake_writer/<non-handler>.py -> tests/test_ducklake_writer_handler.py (e.g.
                               smoke_actions.py, split-out from handler.py, same precedent).
-    scripts/{ci_rca,session,sync,roadmap}/<name>.py -> the module's kept-in-place flat test
+    scripts/{ci_rca,session,sync,roadmap,llm}/<name>.py -> the module's kept-in-place flat test
                               (nested subpackages, RS-01 / rec-164): ci_rca/session/sync strip the
                               family prefix -> test_ci_rca_/test_session_/test_sync_<name>.py; roadmap
-                              keeps full names -> test_<name>.py. See _NESTED_SUBPACKAGE_TEST_PREFIX
-                              (whitelisted to these four; no general len==3 rule).
+                              keeps full names -> test_<name>.py; llm is mixed (client/utils strip the
+                              llm_ prefix, model_registry/github_models_client keep their names) but
+                              all four resolve via the single test_llm_ prefix -> test_llm_client.py,
+                              test_llm_utils.py, test_llm_model_registry.py,
+                              test_llm_github_models_client.py. See _NESTED_SUBPACKAGE_TEST_PREFIX
+                              (whitelisted to these five; no general len==3 rule).
 
     Returns None for paths not under src/ or scripts/.
     """
@@ -203,7 +211,7 @@ def check_per_file_coverage(source_files: list[Path]) -> list[str]:
                 proc.communicate(timeout=300)
             except subprocess.TimeoutExpired:
                 # Kill entire process tree to prevent orphan accumulation
-                from scripts.llm_utils import kill_process_tree
+                from scripts.llm.utils import kill_process_tree
 
                 kill_process_tree(proc.pid)
                 proc.wait()

@@ -82,10 +82,10 @@ routes:
     targets: [scripts/ops_data_portal.py]
     description: "Rec/Decision write portal (Single Portal Invariant)."
   - topic: llm-client
-    targets: [scripts/llm_client.py]
+    targets: [scripts/llm/client.py]
     description: "LLM client (LiteLLM / provider-agnostic)."
   - topic: llm-utilities
-    targets: [scripts/llm_utils.py]
+    targets: [scripts/llm/utils.py]
     description: "LLM utilities (parsing/errors)."
   - topic: tool-runtime
     targets: [scripts/tool_runtime.py]
@@ -94,7 +94,7 @@ routes:
     targets: [docs/contracts/inference-provider.yaml]
     description: "Model routing config (provider + tier mapping)."
   - topic: model-registry
-    targets: [scripts/model_registry.py]
+    targets: [scripts/llm/model_registry.py]
     description: "Model registry (resolver, escalation)."
   - topic: instruction-architecture-contract
     targets: [docs/contracts/instruction-architecture.yaml]
@@ -169,7 +169,7 @@ routes:
     targets: [src/data/handlers/findings_processor_handler.py]
     description: "Findings processor (Lambda)."
   - topic: github-models-client
-    targets: [scripts/github_models_client.py]
+    targets: [scripts/llm/github_models_client.py]
     description: "GitHub Models API client."
   - topic: scheduled-agent-local-runner
     targets: [scripts/run_scheduled_agent.py]
@@ -252,6 +252,9 @@ routes:
   - topic: roadmap-code
     targets: [scripts/roadmap/]
     description: "Roadmap + plan tooling subpackage: platform_roadmap, product_roadmap(_schema), plan_document, plan_audit, find_plan (6 modules moved from scripts/ root, names kept, RS-01 / rec-164 Phase A)."
+  - topic: llm-code
+    targets: [scripts/llm/]
+    description: "LLM client/routing subpackage: client, utils, model_registry, github_models_client (4 modules moved from scripts/ root, RS-01 / rec-164 Phase A -- client/utils stripped the llm_ prefix, model_registry/github_models_client kept their names)."
 
 # docs/-root placement allowlist (RS-03). A sibling top-level key (reserved by this file's header),
 # NOT a route. scripts/checks/hygiene/validate_placement.py reads this and fails the build on any
@@ -324,3 +327,76 @@ prose_allowlist:
     - "docs/INTENT-*.md"         # owner T5.5 (intent-migration waves)
     - docs/runbooks/ducklake-catalog-operations.md  # retiring class (Decision 127; docs/CLAUDE.md Class->home map)
     - ".claude/agents/scheduled/*.md"
+
+# scripts/-root placement allowlist (RS-01 completion, PLAN-nest-llm-family / rec-164 Phase A
+# final phase). A sibling top-level key (same shape as docs_root_allowlist above), NOT a route.
+# scripts/checks/hygiene/validate_placement.py reads this and fails the build on any NEW depth-1
+# file under scripts/ that is neither an allowed entry-point/single nor a grandfathered pending
+# family. Subdirectories (subpackage homes: scripts/checks/, scripts/executor/, scripts/verifiers/,
+# scripts/ci_rca/, scripts/session/, scripts/sync/, scripts/roadmap/, scripts/llm/, etc.) are not
+# policed here. True at merge: every current scripts/-root file is covered (generated via
+# `git ls-files scripts | awk -F/ 'NF==2'` minus the ops pair).
+scripts_root_allowlist:
+  # Every post-move depth-1 scripts/ file: entry points, declared singles, CLAUDE.md, __init__.py.
+  allowed_files:
+    - CLAUDE.md
+    - __init__.py
+    - agent_telemetry_writer.py
+    - aws_profile.py
+    - broker_secrets.py
+    - build_lambda.py
+    - build_lambda_config.py
+    - build_lambda_deploy.py
+    - build_lambda_packaging.py
+    - check_workflow_agent_safety.py
+    - classify_automatable.py
+    - classify_risk.py
+    - cleanup_ops_rec_orphans.py
+    - contracts.py
+    - contracts_enforcement.py
+    - contracts_schema.py
+    - convergence_health.py
+    - cost_reconciliation.py
+    - data_quality_compile.py
+    - data_quality_execute.py
+    - data_quality_models.py
+    - data_quality_runner.py
+    - dead_code_detector.py
+    - decisions_md.py
+    - delegate_runner.py
+    - dependency_graph.py
+    - ducklake_neon_smoke_test.py
+    - execute_recommendation.py
+    - execution_state.py
+    - extract_imports.py
+    - import_governance.py
+    - lambda_manifest.py
+    - list_customizations.py
+    - migrate_ops_data.py
+    - north_star_tracker.py
+    - platform_roadmap_gate_rules.py
+    - platform_roadmap_models.py
+    - platform_roadmap_state.py
+    - prompt_compliance.py
+    - purge_log_noise.py
+    - rec_relevance.py
+    - rec_trailer.py
+    - run_scheduled_agent.py
+    - s3_log_store.py
+    - schema_to_field_semantics.py
+    - schema_to_iceberg.py
+    - smoke_test_inference_credentials.py
+    - telemetry_schemas.py
+    - terraform_apply_guard.py
+    - test_coverage_checker.py
+    - tool_runtime.py
+    - validate.py
+    - validate_telemetry.py
+    - verification_checks.py
+    - verification_graduation.py
+    - verify_ci_workflow.py
+  # Grandfathered pending family (RS-01 highest fan-out; deferred sequencing, audit Q6).
+  # Removed once T-1.24 lands (scripts/ops_data_portal.py + scripts/ops_writer.py -> scripts/ops/).
+  grandfathered_globs:
+    - "ops_data_portal.py"   # RS-01 ops family; deferred to T-1.24 -> scripts/ops/
+    - "ops_writer.py"        # RS-01 ops family; deferred to T-1.24 -> scripts/ops/

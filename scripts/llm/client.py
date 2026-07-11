@@ -12,7 +12,7 @@ use this path -- they route by the ``provider`` field in ``schedule.yaml``.
 
 Usage
 -----
-from scripts.llm_client import llm_call, LLMResult
+from scripts.llm.client import llm_call, LLMResult
 
 result = llm_call("Summarise this module.", tools=False)
 print(result.content)
@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.llm_utils import LLMResponseError
+from scripts.llm.utils import LLMResponseError
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def _resolve_provider() -> str:
     for executor use.  Lambda handlers do not call this path (they route
     by the ``provider`` field in schedule.yaml).
     """
-    from scripts.model_registry import resolve_provider
+    from scripts.llm.model_registry import resolve_provider
 
     return resolve_provider()
 

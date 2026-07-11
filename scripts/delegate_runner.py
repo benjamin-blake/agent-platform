@@ -20,7 +20,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.llm_utils import kill_process_tree
+from scripts.llm.utils import kill_process_tree
 
 ROOT = Path(__file__).parent.parent
 TELEMETRY_LOG = ROOT / "logs" / ".delegate-telemetry.jsonl"

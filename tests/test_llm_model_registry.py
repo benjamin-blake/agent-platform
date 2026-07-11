@@ -1,4 +1,4 @@
-"""Tests for scripts.model_registry."""
+"""Tests for scripts.llm.model_registry."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-import scripts.model_registry as registry_mod
-from scripts.model_registry import (
+import scripts.llm.model_registry as registry_mod
+from scripts.llm.model_registry import (
     _get_floor_tier,
     _load_config,
     escalate_model,

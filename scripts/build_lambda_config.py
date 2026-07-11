@@ -97,9 +97,9 @@ DUCKLAKE_LAYER_NAMES = (
 _LAMBDA_SCRIPTS = [
     "__init__.py",
     "aws_profile.py",
-    "github_models_client.py",
-    "llm_client.py",
-    "llm_utils.py",
+    "llm/github_models_client.py",
+    "llm/client.py",
+    "llm/utils.py",
     "ops_writer.py",
     "run_scheduled_agent.py",
     "s3_log_store.py",

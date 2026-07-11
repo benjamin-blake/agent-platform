@@ -162,7 +162,7 @@ def execute_compound(
         get_implementation_model,
         implement_step,
     )
-    from scripts.llm_utils import LLMResponseError  # noqa: PLC0415
+    from scripts.llm.utils import LLMResponseError  # noqa: PLC0415
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 

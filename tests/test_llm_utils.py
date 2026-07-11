@@ -1,4 +1,4 @@
-"""Tests for scripts.llm_utils."""
+"""Tests for scripts.llm.utils."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.llm_utils import (
+from scripts.llm.utils import (
     LLMResponseError,
     _compute_prompt_hash,
     build_context_path,
@@ -50,18 +50,18 @@ class TestLLMResponseError:
 
 
 class TestKillProcessTree:
-    @patch("scripts.llm_utils.subprocess.run")
+    @patch("scripts.llm.utils.subprocess.run")
     def test_calls_taskkill_on_windows(self, mock_run: object) -> None:
-        with patch("scripts.llm_utils.sys.platform", "win32"):
+        with patch("scripts.llm.utils.sys.platform", "win32"):
             kill_process_tree(12345)
 
 
 class TestCheckProcessKillswitch:
-    @patch("scripts.llm_utils.count_python_processes", return_value=10)
+    @patch("scripts.llm.utils.count_python_processes", return_value=10)
     def test_no_exit_under_threshold(self, mock_count: object) -> None:
         check_process_killswitch("test")
 
-    @patch("scripts.llm_utils.count_python_processes", return_value=100)
+    @patch("scripts.llm.utils.count_python_processes", return_value=100)
     def test_exits_over_threshold(self, mock_count: object) -> None:
         with pytest.raises(SystemExit):
             check_process_killswitch("test")

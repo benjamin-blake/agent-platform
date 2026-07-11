@@ -1,4 +1,4 @@
-"""Tests for scripts.llm_client."""
+"""Tests for scripts.llm.client."""
 
 from __future__ import annotations
 
@@ -8,23 +8,23 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scripts.llm_client import (
+from scripts.llm.client import (
     LLMResult,
     _gemini_call,
     _resolve_provider,
     llm_call,
 )
-from scripts.llm_utils import LLMResponseError
+from scripts.llm.utils import LLMResponseError
 
 
 class TestImports:
     def test_import_llm_call(self) -> None:
-        from scripts.llm_client import llm_call  # noqa: F811
+        from scripts.llm.client import llm_call  # noqa: F811
 
         assert callable(llm_call)
 
     def test_import_llm_result(self) -> None:
-        from scripts.llm_client import LLMResult  # noqa: F811
+        from scripts.llm.client import LLMResult  # noqa: F811
 
         r = LLMResult(
             content="ok",
@@ -64,7 +64,7 @@ class TestResolveProvider:
 class TestLLMCall:
     """llm_call() assembly behaviour on the gemini transport."""
 
-    @patch("scripts.llm_client._gemini_call")
+    @patch("scripts.llm.client._gemini_call")
     def test_context_file_path_prepended(
         self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -85,7 +85,7 @@ class TestLLMCall:
         assert "CONTEXT DATA" in prompt_sent
         assert "my prompt" in prompt_sent
 
-    @patch("scripts.llm_client._gemini_call")
+    @patch("scripts.llm.client._gemini_call")
     def test_inline_instruction_prepended_with_at_refs_stripped(
         self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -449,7 +449,7 @@ class TestGeminiCall:
 class TestProviderRouting:
     """Tests that llm_call() routes to the correct transport based on LLM_PROVIDER."""
 
-    @patch("scripts.llm_client._gemini_call")
+    @patch("scripts.llm.client._gemini_call")
     def test_llm_provider_gemini_routes_to_gemini(self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LLM_PROVIDER", "gemini")
         mock_gemini.return_value = LLMResult(
@@ -465,7 +465,7 @@ class TestProviderRouting:
         mock_gemini.assert_called_once()
         assert result.content == "gemini response"
 
-    @patch("scripts.llm_client._gemini_call")
+    @patch("scripts.llm.client._gemini_call")
     def test_retired_bedrock_provider_routes_to_gemini(self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
         # bedrock left _VALID_PROVIDERS (CD.28): resolve_provider falls back
         # to gemini, so the call still routes to the gemini transport.
@@ -483,14 +483,14 @@ class TestProviderRouting:
         mock_gemini.assert_called_once()
         assert result.content == "fallback response"
 
-    @patch("scripts.llm_client._resolve_provider", return_value="litellm")
+    @patch("scripts.llm.client._resolve_provider", return_value="litellm")
     def test_non_gemini_provider_raises_retirement_error(self, mock_provider: MagicMock) -> None:
         # Unreachable via env config (resolve_provider falls back to gemini);
         # defense-in-depth until T4.2's LiteLLM transport lands.
         with pytest.raises(LLMResponseError, match="retired per CD.28"):
             llm_call("test prompt", tools=False)
 
-    @patch("scripts.llm_client._gemini_call")
+    @patch("scripts.llm.client._gemini_call")
     def test_compat_kwargs_accepted_and_ignored(self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
         # scripts/executor/plan.py passes excluded_tools=, run_skill.py passes
         # system_prompt= -- the signature must keep accepting both (their own
@@ -514,7 +514,7 @@ class TestProviderRouting:
         mock_gemini.assert_called_once()
         assert result.content == "ok"
 
-    @patch("scripts.llm_client._gemini_call")
+    @patch("scripts.llm.client._gemini_call")
     def test_no_llm_provider_defaults_to_gemini(self, mock_gemini: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LLM_PROVIDER", raising=False)
         mock_gemini.return_value = LLMResult(

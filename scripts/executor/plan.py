@@ -38,8 +38,8 @@ from scripts.executor.plan_parsing import (  # noqa: F401  (facade re-export)
     _validate_step_scope,
     parse_steps_from_plan,
 )
-from scripts.llm_client import llm_call  # noqa: F401  (re-exported; routed via _pl by plan_generation)
-from scripts.llm_utils import (  # noqa: F401  (re-exported for backward compat; consumed directly by plan_generation)
+from scripts.llm.client import llm_call  # noqa: F401  (re-exported; routed via _pl by plan_generation)
+from scripts.llm.utils import (  # noqa: F401  (re-exported for backward compat; consumed directly by plan_generation)
     _PLAN_EXCLUDED_TOOLS,
     MODEL_PLANNING,
     LLMResponseError,
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path("config/agent/executor/prompts")
 
-# _PLAN_EXCLUDED_TOOLS now imported from llm_utils
+# _PLAN_EXCLUDED_TOOLS now imported from scripts.llm.utils
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import scripts.executor.step_runner as sr_mod
-import scripts.model_registry as model_registry_mod
+import scripts.llm.model_registry as model_registry_mod
 from scripts.executor.step_runner import (
     _EXECUTOR_ACC_VARS,
     OPUS_FALLBACK,
@@ -1202,28 +1202,28 @@ class TestImplementationModelSelection:
 
     def test_xs_delegates_to_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-flash-preview") as mock_resolve:
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-flash-preview") as mock_resolve:
             result = get_implementation_model("XS")
         mock_resolve.assert_called_once_with("implementation", "XS", file_path="")
         assert result == "gemini-3-flash-preview"
 
     def test_l_delegates_to_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
             result = get_implementation_model("L")
         mock_resolve.assert_called_once_with("implementation", "L", file_path="")
         assert result == "gemini-3-pro-preview"
 
     def test_executor_file_passes_file_path_to_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
             result = get_implementation_model("XS", "scripts/executor/plan.py")
         mock_resolve.assert_called_once_with("implementation", "XS", file_path="scripts/executor/plan.py")
         assert result == "gemini-3-pro-preview"
 
     def test_validate_file_passes_file_path_to_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
             result = get_implementation_model("XS", "scripts/validate.py")
         mock_resolve.assert_called_once_with("implementation", "XS", file_path="scripts/validate.py")
         assert result == "gemini-3-pro-preview"
@@ -1235,7 +1235,7 @@ class TestImplementationModelSelection:
 
     def test_returns_none_for_auto_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        with patch("scripts.model_registry.resolve_model", return_value=None):
+        with patch("scripts.llm.model_registry.resolve_model", return_value=None):
             result = get_implementation_model("S")
         assert result is None
 
@@ -1300,7 +1300,7 @@ class TestImplementationModelSelection:
 
     def test_l_github_instructions_delegates_to_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
             result = get_implementation_model("L", ".github/instructions/executor-planning.instructions.md")
         mock_resolve.assert_called_once_with(
             "implementation",
@@ -1311,7 +1311,7 @@ class TestImplementationModelSelection:
 
     def test_xl_github_agents_delegates_to_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
             result = get_implementation_model("XL", ".github/agents/code-review.agent.md")
         mock_resolve.assert_called_once_with(
             "implementation",

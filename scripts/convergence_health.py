@@ -814,9 +814,9 @@ def detect_ducklake_code_drift(
 PROD_SOURCE_PATHSPECS: tuple[str, ...] = (
     "src/data/handlers",
     "scripts/aws_profile.py",
-    "scripts/github_models_client.py",
-    "scripts/llm_client.py",
-    "scripts/llm_utils.py",
+    "scripts/llm/github_models_client.py",
+    "scripts/llm/client.py",
+    "scripts/llm/utils.py",
     "scripts/ops_writer.py",
     "scripts/run_scheduled_agent.py",
     "scripts/s3_log_store.py",

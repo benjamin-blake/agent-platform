@@ -53,7 +53,7 @@ from scripts.execute_recommendation import (
     write_run_summary,
 )
 from scripts.executor.step_runner import StepOutcome
-from scripts.llm_utils import LLMResponseError
+from scripts.llm.utils import LLMResponseError
 
 
 class TestLoadPrompt:
@@ -4688,7 +4688,7 @@ class TestWarmBaseAndAutoResume:
         with ExitStack() as stack:
             mocks = self._common_patches(stack)
             mock_seed = stack.enter_context(patch("scripts.execute_recommendation._seed_gemini_session"))
-            stack.enter_context(patch("scripts.model_registry.resolve_provider", return_value="gemini"))
+            stack.enter_context(patch("scripts.llm.model_registry.resolve_provider", return_value="gemini"))
             mocks["gen"].return_value = self._approved_plan()
             mocks["critique"].return_value = {"verdict": "approved", "suggestions": [], "tokens_used": 10}
             mocks["impl"].return_value = (StepOutcome.SUCCESS, 0.01, "abc123def456", "ses-step")  # pragma: allowlist secret

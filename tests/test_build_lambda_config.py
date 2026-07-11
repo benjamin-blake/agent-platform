@@ -46,12 +46,12 @@ class TestLambdaScriptsAndSdkConfig:
     """Tests for _LAMBDA_SCRIPTS constants."""
 
     def test_llm_client_in_lambda_scripts(self):
-        """llm_client.py is listed in _LAMBDA_SCRIPTS."""
-        assert "llm_client.py" in _LAMBDA_SCRIPTS
+        """llm/client.py is listed in _LAMBDA_SCRIPTS."""
+        assert "llm/client.py" in _LAMBDA_SCRIPTS
 
     def test_llm_utils_in_lambda_scripts(self):
-        """llm_utils.py is listed in _LAMBDA_SCRIPTS."""
-        assert "llm_utils.py" in _LAMBDA_SCRIPTS
+        """llm/utils.py is listed in _LAMBDA_SCRIPTS."""
+        assert "llm/utils.py" in _LAMBDA_SCRIPTS
 
     def test_tool_runtime_in_lambda_scripts(self):
         """tool_runtime.py is listed in _LAMBDA_SCRIPTS."""

@@ -103,7 +103,7 @@ class TestInvokeGithubModels:
     def test_returns_content_on_success(self) -> None:
         fake_response = {"choices": [{"message": {"content": "some output"}}]}
         with patch(
-            "scripts.github_models_client.chat_completion",
+            "scripts.llm.github_models_client.chat_completion",
             return_value=fake_response,
         ):
             output, has_error, err_msg = _invoke_github_models("prompt", "gpt-4.1-mini", "ghp_test")
@@ -113,7 +113,7 @@ class TestInvokeGithubModels:
     def test_returns_error_on_api_error(self) -> None:
         fake_response = {"error": True, "message": "Rate limit"}
         with patch(
-            "scripts.github_models_client.chat_completion",
+            "scripts.llm.github_models_client.chat_completion",
             return_value=fake_response,
         ):
             output, has_error, err_msg = _invoke_github_models("prompt", "gpt-4.1-mini", "ghp_test")
@@ -124,7 +124,7 @@ class TestInvokeGithubModels:
     def test_returns_error_on_malformed_response(self) -> None:
         fake_response = {"choices": []}
         with patch(
-            "scripts.github_models_client.chat_completion",
+            "scripts.llm.github_models_client.chat_completion",
             return_value=fake_response,
         ):
             output, has_error, err_msg = _invoke_github_models("prompt", "gpt-4.1-mini", "ghp_test")
@@ -182,7 +182,7 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value=fake_response,
             ),
             patch(
@@ -225,7 +225,7 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value={"error": True, "message": "Rate limit"},
             ),
         ):
@@ -264,7 +264,7 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value=fake_response,
             ),
             patch(
@@ -295,7 +295,7 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 side_effect=mock_chat,
             ),
             patch(
@@ -326,7 +326,7 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value=fake_response,
             ) as mock_gh,
             patch(
@@ -364,7 +364,7 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value=fake_response,
             ) as mock_gh,
             patch(
@@ -396,7 +396,7 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value=fake_gh_response,
             ),
             patch(
@@ -428,7 +428,7 @@ class TestHandler:
                 return_value=True,
             ),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
             ) as mock_gh,
             patch(
                 "scripts.s3_log_store.write_timestamped_findings",
@@ -474,7 +474,7 @@ class TestRetiredProvider:
             patch.object(handler_mod, "_load_manifest", return_value=[agent]),
             patch.object(handler_mod, "_load_prompt", return_value="prompt"),
             patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
-            patch("scripts.github_models_client.chat_completion") as mock_gh,
+            patch("scripts.llm.github_models_client.chat_completion") as mock_gh,
         ):
             result = handler({}, None)
 
@@ -535,7 +535,7 @@ class TestHandlerTelemetry:
             patch.object(handler_mod, "_load_prompt", return_value="test prompt"),
             patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value=fake_response,
             ),
             patch(
@@ -573,7 +573,7 @@ class TestHandlerTelemetry:
             patch.object(handler_mod, "_load_prompt", return_value="test prompt"),
             patch("scripts.run_scheduled_agent.is_agent_due", return_value=True),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value={"error": True, "message": "API timeout"},
             ),
             patch(

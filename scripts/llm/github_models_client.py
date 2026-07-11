@@ -5,7 +5,7 @@ OpenAI-format endpoint at https://models.github.ai/inference/chat/completions.
 
 Usage
 -----
-from scripts.github_models_client import chat_completion
+from scripts.llm.github_models_client import chat_completion
 
 response = chat_completion(
     prompt="Analyse this code for smells.",
