@@ -1,0 +1,193 @@
+schema_version: 1
+slug: deployment-model-foundation
+intent: >-
+  Durably persist the target Terraform deployment model -- "two verbs (provision/deploy) + a heal
+  button + an operator-only admin tier" -- as a Decision plus roadmap tier_items and a machine-readable
+  navigation contract, so agents stop improvising the local-apply escape hatch and the authoritative
+  docs stop contradicting shipped code. Foundation only; the heavy engineering lands as sequenced
+  follow-on tier_items.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-deployment-model-foundation.yaml
+phase: >-
+  Platform CI/CD -- completes the CD.35 substrate (T2.20-T2.25/T2.35, all shipped) with the recovery
+  ergonomics, deploy verb, and agent-navigability layer that incident iteration (rec-2512 -> rec-2652
+  -> rec-2654 -> #544; rec-2647; rec-2658) revealed as the remaining gaps.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Author Decision 126 (the two-verb + heal-button + operator-only-admin-tier deployment model, its
+      invariants, and the sequenced follow-on roadmap). Explicitly amends Decision 125 pt5 (records #544
+      as realizing the four-Lambda decoupling) and Decision 120 (the local-apply escape hatch will be
+      quarantined once the heal button lands, via T2.41). DECISIONS.md is the numbering authority + ETL
+      source (Decision 105); ETL to ops_decisions is an execution step, never a warehouse-only write.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add durable forward-intent tier_items T2.37-T2.42 (recovery ergonomics/heal button; governed
+      deploy channel + deployment record; LLM-reviewer-out-of-red-latch; navigability + SoT integrity;
+      escape-hatch quarantine sequenced after the heal button; terraform-path hardening). These are the
+      durable trackers so scope cannot evaporate on a rec close (the rec-2646 failure mode).
+  - file: docs/contracts/deploy-paths.yaml
+    action: Create
+    purpose: >-
+      A machine-readable NAVIGATION INDEX: for each agent intent (provision / deploy code / reconcile)
+      and the operator-only admin tier -> trigger, actor role, POINTER to environment-taxonomy.md for
+      the authoritative "what blocks it" (guard classification), and recovery pointer. It owns only the
+      intent->trigger->recovery wayfinding; it does NOT restate the apply-model/guard rules (Decision 92
+      pt5 sole-SoT; Decision 86 no-drift). Free-form registry, no ritual contract block (Decision 118).
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: Register docs/contracts/deploy-paths.yaml in the discovery index so agents find it.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add the 2-line ambient rule: infra = PR to terraform/**, CI applies; code = the deploy workflow;
+      red/drift = run Reconcile. "Agents never run terraform apply anywhere; operators may via the
+      break-glass admin tier." Interim-honest -- points at deploy-paths.yaml. Fix the stale AGENTS.md
+      Safety claim that "the governed CD path is the default deploy channel" (the channel is not built;
+      break-glass build_lambda --deploy is the interim path, tracked by T2.38).
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      Fix stale section 5: the four DuckLake Lambdas are DECOUPLED (ignore_changes = [source_code_hash])
+      as of #544, not "COUPLED ... no ignore_changes lifecycle block".
+  - file: docs/contracts/build-lambda.yaml
+    action: Modify
+    purpose: >-
+      Fix stale deploy_channels: the four ducklake functions are no longer channel_class
+      terraform_personal_filemd5_coupled for the infra-diff purpose (decoupled via ignore_changes);
+      record that the governed code-deploy channel remains pending (T2.38) and break-glass is interim.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Rewrite the local-apply section as a short decision table that makes the PR->CI default path
+      primary and ambient, and DEMOTES the "Interactive loop fallback" escape hatch to a clearly-labelled
+      operator-only / break-glass subsection (retained, not deleted -- cite Decision 120). Point at
+      deploy-paths.yaml. Full move-to-runbook quarantine is T2.41, sequenced AFTER the heal button.
+  - file: scripts/checks/ops_governance/validate_deploy_channel_conformance.py
+    action: Create
+    purpose: >-
+      New validate.py check (registered per Decision 104, NOT added to the validate.py body): assert
+      docs/contracts/build-lambda.yaml channel_class and environment-taxonomy.md coupling statements agree
+      with the actual presence/absence of lifecycle ignore_changes=[source_code_hash] blocks in
+      terraform/personal, so the SoT cannot silently rot again (the #544 drift class).
+  - file: tests/checks/test_validate_deploy_channel_conformance.py
+    action: Create
+    purpose: >-
+      Unit test that feeds a canned mismatch (channel_class says coupled while ignore_changes present, and
+      vice versa) and asserts the check FAILS, plus a matching-state fixture asserting it PASSES -- proves
+      the guard is behavioural, not vacuous.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - "No infra apply in this plan (docs/contracts/roadmap/check only). The tier_items it creates (T2.37-T2.42) own the actual pipeline/workflow/IAM changes and their own V3 verification in follow-on plans."
+acceptance_criteria:
+  - "Decision 126 exists in docs/DECISIONS.md, explicitly amends Decision 125 pt5 and Decision 120, and is ETL'd into ops_decisions (not warehouse-only)."
+  - "docs/ROADMAP-PLATFORM.yaml carries tier_items T2.37-T2.42; validate_platform_roadmap passes (referential integrity, including T2.41 depends_on T2.37 sequencing)."
+  - "docs/contracts/deploy-paths.yaml exists as a navigation index that POINTS to environment-taxonomy.md for guard classification and does NOT restate it; it is registered in file-router.yaml and passes validate_placement; it contains no AWS account IDs/ARNs/ExternalIds (Decision 101)."
+  - "AGENTS.md carries the 2-line ambient rule ('agents never / operators may') and no longer claims a governed CD deploy channel exists."
+  - "environment-taxonomy.md section 5 and build-lambda.yaml channel_class no longer describe the four DuckLake functions as coupled/no-ignore_changes."
+  - "scripts/checks/ops_governance/validate_deploy_channel_conformance.py exists, is registered per Decision 104, and its unit test proves it FAILS on a channel_class<->ignore_changes mismatch and PASSES on the current consistent repo."
+  - "bin/venv-python -m scripts.validate --pre exits 0."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: "The staleness guard is behavioural: its unit test catches a canned channel_class<->ignore_changes mismatch (proves it is not vacuous)."
+    command: "bin/venv-python -m pytest tests/checks/test_validate_deploy_channel_conformance.py -q"
+    expected: "All tests pass, including the mismatch fixture asserting the check returns failure and the matching fixture asserting pass."
+    fix_if: "If the mismatch fixture does not make the check fail, the guard is structural-only and must actually parse ignore_changes presence vs channel_class."
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: "The staleness guard passes on the now-consistent repo (docs agree with the shipped ignore_changes blocks). Direct function call -- the check follows the (failed: list[str]) -> None convention and has no __main__, so -m would be vacuous."
+    command: "bin/venv-python -c \"from scripts.checks.ops_governance.validate_deploy_channel_conformance import validate_deploy_channel_conformance as v; f=[]; v(f); assert not f, f; print('CONFORMANCE_OK')\""
+    expected: "Prints CONFORMANCE_OK -- channel_class and taxonomy coupling statements agree with terraform/personal ignore_changes reality (non-vacuity of the guard itself is proven by step 1)."
+    fix_if: "AssertionError with a failure list -- environment-taxonomy.md section 5 or build-lambda.yaml channel_class still describe the functions as coupled; fix the stale text."
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: "New tier_items are referentially valid (ids, depends_on, decision refs) -- especially T2.41 depends_on T2.37. Direct function call: validate_platform_roadmap has no __main__ and is NOT in the --pre tier, so -m and step 7 would both miss it."
+    command: "bin/venv-python -c \"from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap as v; f=[]; v(f); assert not f, f; print('ROADMAP_OK')\""
+    expected: "Prints ROADMAP_OK -- T2.37-T2.42 well-formed; T2.41->T2.37 sequencing edge resolves; failure list empty."
+    fix_if: "AssertionError with a failure list -- a tier_item id collision, dangling depends_on, or bad decision reference; correct per the message."
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: "deploy-paths.yaml is a POINTER (not a restatement): it references environment-taxonomy.md and contains no guard-classification table of its own. (Placement/registration is verified authoritatively by validate_placement inside step 7 --pre.)"
+    command: "grep -q 'environment-taxonomy' docs/contracts/deploy-paths.yaml && ! grep -qiE 'in_budget|out_of_budget|guard.*exit [0-2]' docs/contracts/deploy-paths.yaml && echo POINTER_OK"
+    expected: "Prints POINTER_OK (references the taxonomy, restates no guard-classification internals)."
+    fix_if: "Missing reference or a duplicated guard-classification table -- reframe as a pointer to the sole-SoT (Decision 92 pt5)."
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: "Public-boundary: deploy-paths.yaml names roles but no confidential identifiers (Decision 101)."
+    command: "! grep -nE '[0-9]{12}|arn:aws:|ExternalId' docs/contracts/deploy-paths.yaml && echo BOUNDARY_OK"
+    expected: "Prints BOUNDARY_OK -- no 12-digit account ids, ARNs, or ExternalIds."
+    fix_if: "A match -- remove the confidential identifier; reference roles by logical name only."
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: "Ambient rule + demoted escape hatch + fixed stale claims are present in the instruction surfaces."
+    command: "grep -qiE 'agents never run terraform apply' AGENTS.md && grep -qiE 'operator|break-glass' terraform/CLAUDE.md && ! grep -qiE 'governed CD path .*is the default deploy channel' AGENTS.md && echo SURFACES_OK"
+    expected: "Prints SURFACES_OK."
+    fix_if: "A grep fails -- the ambient rule, the demoted-hatch labelling, or the stale-claim removal is missing."
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: "Authoritative gate: the full fast-tier presubmit passes with all edits in place."
+    command: "bin/venv-python -m scripts.validate --pre; echo EXIT=$?"
+    expected: "EXIT=0."
+    fix_if: "Any check fails -- address per its message; validate.py is the single source of truth."
+  - step: 8
+    phase: post-deploy
+    hermetic: false
+    action: "Decision 126 is ETL'd into ops_decisions (not warehouse-only), amending 125 pt5 + 120. Read-back via the sanctioned sync surface (not the raw pull CLI, per the Single Portal Invariant)."
+    command: "bin/venv-python -m scripts.sync.ops sync >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.decisions-index.jsonl').read_text().splitlines() if l.strip()]; assert any(str(r.get('decision_id'))=='126' or 'Decision 126' in str(r.get('title','')) for r in rows), 'Decision 126 not in ops_decisions'; print('Decision 126 ETL OK')\""
+    expected: "Prints Decision 126 ETL OK."
+    fix_if: "Missing -- run ops_data_portal --backfill-decisions-md so DECISIONS.md ETLs into ops_decisions (Decision 105)."
+constraints:
+  - "Only modify the files listed in scope."
+  - "deploy-paths.yaml is a NAVIGATION INDEX, not a restatement of environment-taxonomy.md's apply-model/guard-classification content (Decision 92 pt5 sole-SoT; Decision 86 no-drift). It points; it does not duplicate."
+  - "The ambient invariant is 'agents never run terraform apply; operators MAY via the break-glass admin tier' -- do NOT state a universal ban. Operator/admin/bootstrap local apply is deliberately active (Decision 120 restored it; Decision 98 admin-create; Decision 77 bootstrap)."
+  - "Do NOT quarantine or delete the escape hatch in this plan -- only DEMOTE it in terraform/CLAUDE.md. The full move-to-runbook quarantine is T2.41, sequenced AFTER the heal button (T2.37) lands and is verified (Fable ordering invariant; removing the only working recovery path before its replacement works turns the next incident into a hard outage)."
+  - "Author Decision 126 in DECISIONS.md, then ETL via ops_data_portal (Decision 105); never a warehouse-only --file-decision write. Re-check the current max '## Decision NNN' header at implement time -- a concurrent PR may claim 126 (numbering race)."
+  - "The new check lands in scripts/checks/ops_governance/ and registers via the check registry (Decision 104); do NOT add it to the validate.py body."
+  - "Decision 86: rationale -> Decision 126; forward intent -> tier_items T2.37-T2.42; field semantics -> the deploy-paths.yaml machine-readable contract. No new standing prose-architecture doc under docs/."
+  - "No emojis; ruff formatting; line length 127; plain ASCII hyphens."
+  - "No rescue agents or workaround loops (Decision 55); ci-rca recs are routed to tier_items for forward-fix, never inline-patched here (Decision 72)."
+context:
+  - "decision-scout=FLAGS_FOUND; CITE (verbatim): Decision 77, Decision 92, Decision 125, Decision 86, Decision 98, Decision 120, Decision 55, Decision 104, Decision 105, Decision 79 (+ Decision 87 instrument precedent, Decision 118 free-form-contract, Decision 101 public-boundary)"
+  - "gates: decision-scout=FLAGS_FOUND (4 flags, all resolved in-plan: deploy-paths.yaml reframed as a pointer index; Decision 126 amends 125 pt5; invariant worded agents-never/operators-may citing 120; Decision authored in DECISIONS.md + ETL per 105); plan-critique=PROCEED after 1 REVISE round (fixed 4 vacuous/mis-pathed VP commands: roadmap + conformance validators now called directly via the failed-list convention, placement de-duped to step 7, step-8 read-back uses the sanctioned sync surface)"
+  - "Grounded in a Fable (frontier) design review: the pipeline's control-theory (no-TOCTOU plan/apply identity, fail-closed guard + authority budget, anti-masking convergence) is frontier-grade; the gaps are RECOVERY ERGONOMICS, the missing DEPLOY VERB, and DOCUMENTATION TOPOLOGY (the model is smeared across 6+ surfaces, 2 stale after #544, and the escape hatch is the best-documented path). This plan lands the navigability + SoT-integrity foundation; T2.37-T2.42 carry the engineering."
+  - "Scope decision (human-confirmed): option A -- design foundation only (Decision + tier_items + navigation contract + SoT fixes), NOT a mega-plan that also builds the heal button. The user additionally required the directional changes be persisted in the platform roadmap (tier_items) so they survive rec churn -- this directly fixes the rec-2646 failure mode (governed-channel scope evaporated when the rec closed with only the grep-acceptance met)."
+  - "Sequencing invariant (Fable): the heal button (T2.37) must land and be verified BEFORE the escape hatch is quarantined (T2.41). Decision 126 records this ordering; T2.41 depends_on T2.37 and amends Decision 120."
+  - "CI-RCA HARD BLOCK -- deferral rationale: open ci-rca recs are rec-2658 (terraform-apply-sandbox.yml plan-review subagent max-turns), rec-2655 and rec-2653 (verification-infra flakes). This plan does not edit those files, so no same-file/same-decision/same-category Related-Work condition is met. Deferral: this IS the architectural-review vehicle (Decision 72) for the deployment-pipeline ci-rca surface -- rec-2658 is forward-fixed by new tier_item T2.39 (take the non-deterministic reviewer out of the red-latch path) rather than inline-patched (Decision 55). rec-2655/rec-2653 are verification-infra flakes outside this deployment-model scope, tracked separately for a future /plan. No inline patching of any ci-rca rec occurs here."
+  - "rec-2646 residual recovery: the governed code-deploy channel (lost when rec-2646 closed with only its grep-acceptance met) is recaptured as tier_item T2.38; the .tf comments pointing at the closed rec are corrected via build-lambda.yaml/taxonomy edits and Decision 126."
+  - "Instrument choice: a fresh forward-direction Decision 126 (not a candidate CD.41) is idiomatic (Decision 87 precedent); the CD->Decision lane (Decision 105) is for ratifying already-realized CDs, which this is not."
+  - "Branch was reset to origin/main after the #544 implementation merged (prior branch history is in the #542/#544 squashes); 0 commits behind main at planning time."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - Relevant decisions triaged via decision-scout (77, 92, 125, 86, 98, 120, 55, 104, 105, 79, 87, 118, 101)
+  - All nine scope files located/creatable and readable
+  - Acceptance criteria understood and verifiable
+  - Fable frontier review + flag resolutions incorporated
+execution_steps:
+  - "docs/DECISIONS.md: author Decision 126 'Two-verb deployment model + heal button + operator-only admin tier (completing CD.35)'. Body: (a) the model -- agents have exactly three intents (provision = edit terraform/** + open PR, CI applies; deploy code = the governed code-deploy channel, terraform not involved; reconcile = one input-free Reconcile action healing a red/drifted convergence record) and an operator-only admin tier (bootstrap/admin-create/break-glass local apply) whose only agent move is 'file a rec'; (b) invariants -- 'agents never run terraform apply anywhere; operators may via break-glass'; 'the escape hatch's danger is that it is ambient, not that it exists'; 'the heal button must land and be verified before the escape hatch is quarantined'; 'deploy-paths.yaml is a navigation index pointing to environment-taxonomy.md, never a second SoT'; (c) AMENDS Decision 125 pt5 -- record #544 (commit 32a0061) as realizing the four-Lambda source_code_hash decoupling, so the interim-COUPLED framing is superseded; (d) AMENDS Decision 120 -- the restored local-apply escape hatch will be quarantined to an operator-only runbook once the heal button (T2.37) lands, tracked by T2.41; (e) sequencing/roadmap: T2.37 heal button -> T2.41 quarantine; T2.38 deploy verb + deployment record; T2.39 reviewer-out-of-latch; T2.40 navigability (this plan); T2.42 terraform-path hardening; (f) reversal conditions -- if the bespoke pipeline proves unmaintainable at this scale, re-evaluate a managed reconciler against the Decision 101 confidential-data boundary. Re-check the max Decision header first (numbering race). Then ETL: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md."
+  - "docs/ROADMAP-PLATFORM.yaml: add tier_items T2.37-T2.42, each with id/title/intent/status(not_started)/exit_criteria/related_decisions(126)/depends_on. T2.37 Recovery ergonomics: input-free Reconcile (reads red commit from the convergence record; validate any optional rec-id against an OPEN rec) + a workflow_dispatch gated-apply route (closes the rec-2647 / rec-2523 deadlock class; reconcile subsumes the routed case within one run). T2.38 Governed code-deploy channel for the four DuckLake functions (scoped UpdateFunctionCode OIDC + build_lambda --ducklake-only + existing --lambda-attach/--lambda-reader smoke gates + a deployment record function->CodeSha256->git-SHA that convergence-health/drift can check) -- realizes Decision 125 deploy verb, closes the rec-2649 silent-stale-code observability gap. T2.39 Take the non-deterministic LLM plan-review subagent out of the red-latch path (distinguish max-turns from REVISE; retry-with-larger-budget; reviewer starvation never writes red) -- forward-fix for rec-2658. T2.40 Deployment-model navigability + SoT integrity (deploy-paths.yaml index, AGENTS.md ambient rule, terraform/CLAUDE.md decision table, the conformance staleness guard) -- foundational criteria closed by THIS plan; mark those met at /implement bookkeeping. T2.41 Escape-hatch quarantine to an operator-only runbook (depends_on: [T2.37]; amends Decision 120). T2.42 Terraform-path hardening: layer-version replace policy (guard allowlist for aws_lambda_layer_version create-before-destroy now that zips are deterministic + byte-asserted, OR fold layers into the deploy verb), commit terraform/personal/.terraform.lock.hcl, content-address the uploaded zips (per-PR/sha key), extract workflow bash to tested scripts + dedupe the build step (rec-2659)."
+  - "docs/contracts/deploy-paths.yaml (new): author the navigation index -- top-level keys per intent (provision, deploy_code, reconcile, admin_out_of_band) each with {trigger, actor_role, blocks_ref: 'environment-taxonomy.md#section-5', recovery}. Roles by logical name only (no account ids/ARNs/ExternalIds). Add a header comment stating it is a wayfinding index and environment-taxonomy.md is the sole SoT for apply-model/guard rules. No contract:/class: ritual block (free-form registry, Decision 118)."
+  - "docs/contracts/file-router.yaml: register deploy-paths.yaml under the contracts class so validate_placement passes and agents discover it."
+  - "AGENTS.md: add the 2-line ambient rule near the Safety/Git-ops section; correct the stale 'governed CD path is the default deploy channel' claim to name break-glass build_lambda --deploy as the interim path pending T2.38."
+  - "docs/contracts/environment-taxonomy.md: update section 5 -- the four DuckLake functions are DECOUPLED (ignore_changes=[source_code_hash]) as of #544; layers remain coupled."
+  - "docs/contracts/build-lambda.yaml: update the ducklake functions' channel_class/annotation to reflect infra-diff decoupling done; governed code-deploy channel pending (T2.38); break-glass interim."
+  - "terraform/CLAUDE.md: rewrite the local-apply section as a <=30-line decision table (want X -> do Y; if blocked -> Z), PR->CI default primary; move the Interactive loop fallback into an explicit 'operator-only / break-glass (Decision 120)' subsection, retained but non-primary; link deploy-paths.yaml."
+  - "scripts/checks/ops_governance/validate_deploy_channel_conformance.py (new): define validate_deploy_channel_conformance(failed: list[str]) -> None following the repo check convention (append error strings to `failed`, no __main__, no raise-on-import). It parses terraform/personal for aws_lambda_function ignore_changes=[source_code_hash] presence per function, parses build-lambda.yaml channel_class + environment-taxonomy.md coupling statements, and appends a failure if they disagree. Register per Decision 104 (check registry) in the PRE sequence so validate --pre runs it; NOT in the validate.py body. Add tests/checks/test_validate_deploy_channel_conformance.py with a mismatch fixture (asserts the failure list is non-empty) and a matching fixture (asserts it is empty)."
+  - "Execute the Verification Plan: run pre-deploy steps 1-7; loop until pass. After merge, run the Decision-126 ETL and post-deploy step 8. On failure, stop and RCA (Decision 55) -- do not inline-patch any ci-rca rec."
+  - "Report: Decision 126 text + ETL result, the six tier_items added, deploy-paths.yaml, the SoT fixes, the conformance guard + test results, and validate --pre outcome."
+work_areas: []
+rollback: >-
+  All changes are additive docs/contracts/roadmap edits plus one new (registered) check + test; revert
+  the diff to restore prior state. Decision 126 is retracted by a follow-up superseding Decision entry
+  (DECISIONS.md is append-with-supersession, not delete) + re-backfill. No infra, state, or data mutation.
