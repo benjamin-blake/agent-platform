@@ -33,8 +33,8 @@ locally on `INSTALL_TERRAFORM=1` containers, resolving `config/terraform/cc-web.
 `TF_CLI_CONFIG_FILE` -- gated on a successful, non-empty sync (an empty/stale sync leaves
 `TF_CLI_CONFIG_FILE` unset rather than exporting a config that excludes `kislerdm/*` from `direct`
 with nothing in the mirror to serve). With that mirror synced, local `terraform init` of
-`terraform/personal` succeeds with no github.com fetch (see the Interactive loop fallback section
-below for when this is used).
+`terraform/personal` succeeds with no github.com fetch (see the "Operator-only / break-glass
+(Decision 120)" section below for when this is used).
 
 This RELAXES but does NOT REMOVE the CI-delegation: routine (non-admin) `terraform validate`/`plan`/`apply`
 for `terraform/personal` remain CI-mediated and authoritative regardless of any given container's
