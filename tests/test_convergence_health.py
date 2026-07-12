@@ -11,6 +11,14 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+# boto3 is imported at MODULE scope even though the tests reference it only via
+# patch("boto3.Session") strings. This makes the file's heavy-dep requirement visible to the
+# fast tier's cheap `--collect-only` pass so pr-validate defers it PROACTIVELY to the full
+# post-merge tier, instead of catching it REACTIVELY -- which re-runs the entire changed-test set
+# a second time after a runtime ModuleNotFoundError and roughly doubles the pytest cost. boto3 is
+# deliberately excluded from requirements-fast.txt; the full tier runs this file. See
+# scripts/checks/_scaffolding.py::partition_changed_tests_by_collectability.
+import boto3  # noqa: F401
 import pytest
 
 import scripts.convergence_health as ch
