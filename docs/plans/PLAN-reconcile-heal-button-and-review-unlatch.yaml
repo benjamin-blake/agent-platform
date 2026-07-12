@@ -18,9 +18,12 @@ scope:
     purpose: >-
       Input-free workflow_dispatch Reconcile action. Reads the red commit directly from the
       convergence record (no operator-supplied SHA), re-runs the deterministic guard, and re-applies
-      the guard-PASS case; the guard-BLOCK (out-of-budget IAM/trust/destroy) case routes through the
-      tf-gated-apply Environment within the SAME run (subsumes the rec-2647/rec-2523 dispatch-vs-push
-      deadlock). Optional rec-id input is validated OPEN via the ops portal before proceeding.
+      the guard-PASS case in its apply job. The guard-BLOCK (out-of-budget IAM/trust/destroy) case is
+      handled by reconcile.yml's OWN gated-apply job that declares environment: tf-gated-apply (it does
+      NOT re-enter the sandbox gated-apply job, which is push-only at terraform-apply-sandbox.yml:860);
+      the two jobs live in this one dispatch, so the routed case is subsumed within the same run
+      (closes the rec-2647/rec-2523 dispatch-vs-push deadlock). Optional rec-id input is validated OPEN
+      via the ops portal before proceeding.
   - file: .github/workflows/terraform-apply-sandbox.yml
     action: Modify
     purpose: >-
@@ -30,7 +33,8 @@ scope:
       no-verdict/max-turns outcome. (b) Record-write step: gate the red convergence-record write
       behind a REVIEW_STARVED marker so reviewer starvation blocks auto-apply and files a rec but
       never latches the record red; an explicit REVISE and any genuine apply failure still fail
-      closed + red. (c) Make the routed guard-BLOCK case reachable by the Reconcile path.
+      closed + red. Routing for the Reconcile guard-BLOCK case lives in reconcile.yml's own
+      gated-apply job, so this file's routed (push-triggered) gated-apply path is left unchanged.
   - file: scripts/ci/review_verdict.py
     action: Create
     purpose: >-
@@ -53,8 +57,11 @@ scope:
   - file: scripts/convergence_health.py
     action: Modify
     purpose: >-
-      Recognize a Reconcile-triggered apply episode and do not double-file a tf_convergence_stale rec
-      for the same red episode the Reconcile run is clearing (T2.37 c4).
+      Recognize an in-flight Reconcile episode and do not double-file a tf_convergence_stale rec for
+      the red episode the Reconcile run is clearing (T2.37 c4). The record schema is unchanged, so the
+      signal is an in-progress/recent reconcile.yml Actions run for the red commit, queried via the
+      module's existing GitHub-Actions helper pattern (as used by find_stuck_gated_approvals /
+      diagnose_stuck_approvals); when present, suppress the stale-rec file.
   - file: docs/contracts/deploy-paths.yaml
     action: Modify
     purpose: >-
@@ -111,12 +118,14 @@ acceptance_criteria:
     the ops portal before proceeding; an invalid or non-open rec-id fails the dispatch (T2.37 c2).
   - >-
     A guard-BLOCK (out-of-budget IAM/trust/destroy) commit is recoverable via a single Reconcile
-    dispatch: Reconcile re-runs the guard and routes the blocked re-apply through the tf-gated-apply
-    Environment in the same run -- it does NOT auto-apply the gated change, and it does NOT require a
-    separate manual acknowledge-and-retry (T2.37 c3; closes rec-2647/rec-2523).
+    dispatch: Reconcile re-runs the guard and routes the blocked re-apply through reconcile.yml's own
+    job declaring environment: tf-gated-apply in the same run -- it does NOT auto-apply the gated
+    change, does NOT re-enter the push-only sandbox gated-apply job, and does NOT require a separate
+    manual acknowledge-and-retry (T2.37 c3; closes rec-2647/rec-2523).
   - >-
     convergence_health does not double-file a tf_convergence_stale rec for a red episode that a
-    Reconcile run is clearing (T2.37 c4).
+    Reconcile run is clearing -- detected via an in-progress/recent reconcile.yml Actions run for the
+    red commit (T2.37 c4).
   - >-
     review_verdict classifies a max-turns/no-verdict/API-exhausted reviewer outcome as STARVED,
     distinct from an explicit REVISE; STARVED is never treated as an implicit REVISE (T2.39 c1).
@@ -225,6 +234,19 @@ verification_plan:
       (Red-path recovery is exercised the next time a genuine red episode occurs; do not manufacture a
       red record to test it.)
     hermetic: false
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Confirm rec-2658 is closed by the Resolves trailer (rec-autoclose.yml) after the squash-merge
+      (closure obligation 12k for a rec-resolving plan).
+    command: "bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c \"import json; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip()]; r=next(x for x in rows if x.get('id')=='rec-2658'); print(r['status']); assert r['status']=='closed', 'rec-2658 not closed'\""
+    expected: rec-2658 shows status=closed after the read-cache is synced from the warehouse.
+    fix_if: >-
+      rec-2658 is still open post-merge -- the Resolves: rec-2658 trailer was missing from the
+      squash-merge body or rec-autoclose.yml did not fire; close it via
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-2658 --status closed
+      --resolution "..." (Decision 70 fallback).
+    hermetic: false
 constraints:
   - >-
     Fail-closed is preserved: nothing auto-applies without an explicit PROCEED token OR explicit human
@@ -273,7 +295,7 @@ context:
     [NOTE 55/92/94] REVIEW_STARVED proven disjoint from REVISE and real failure -- acceptance
     criterion 7 + VP step 3; [NOTE 48/84/103] rec-2658 acceptance edited via the portal with a
     behavioural (not grep-ceiling) check -- acceptance criterion 9.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE->PROCEED after 1 round (added rec-2658 closure VP step 10; pinned c3 own-gated-apply-job mechanism; named c4 in-flight-reconcile signal; noted claude_p_retry.sh interaction)"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -285,9 +307,10 @@ execution_steps:
   - "Add --digest mode to scripts/terraform_apply_guard.py reusing evaluate_plan()'s resource_changes traversal; bounded, size-capped with truncation marker, ARN/account-id redacted. Add tests in tests/test_terraform_apply_guard.py."
   - "Create scripts/ci/review_verdict.py: pure JSON-in -> {PROCEED|REVISE|STARVED} classifier with a mutually-exclusive partition. Add tests/test_review_verdict.py."
   - "Create scripts/ci/reconcile_target.py: read convergence record -> red commit SHA or clean no-op; validate optional rec-id OPEN via the ducklake_reader portal boundary. Add tests/test_reconcile_target.py."
-  - "Create .github/workflows/reconcile.yml: input-free workflow_dispatch; call reconcile_target for the red commit; re-run the deterministic guard; re-apply guard-PASS in-run and route guard-BLOCK through the tf-gated-apply Environment; optional rec-id validated OPEN first."
+  - "Create .github/workflows/reconcile.yml: input-free workflow_dispatch; call reconcile_target for the red commit (green/absent -> clean no-op); re-run the deterministic guard; re-apply guard-PASS in its apply job and route guard-BLOCK through a second job in the SAME workflow declaring environment: tf-gated-apply (not the push-only sandbox job); optional rec-id validated OPEN first. Rework scripts/terraform_apply_guard.py main() arg parsing (currently rejects arg count != 1) to add the --digest flag."
   - "Modify .github/workflows/terraform-apply-sandbox.yml review step: pipe guard --digest on stdin, --allowedTools Read, --output-format json, small budget; classify via review_verdict; retry once at the SAME budget on STARVED. Modify the record-write step: gate the red write behind a REVIEW_STARVED marker (starvation blocks + files rec, never red); keep REVISE and real failures red. Make the routed case reachable by Reconcile."
-  - "Modify scripts/convergence_health.py to recognize a Reconcile-triggered episode and not double-file tf_convergence_stale. Add the test in tests/test_convergence_health.py."
+  - "Modify scripts/convergence_health.py to recognize an in-flight Reconcile episode (in-progress/recent reconcile.yml Actions run for the red commit, via the existing GH-Actions helper pattern) and not double-file tf_convergence_stale. Add the test in tests/test_convergence_health.py."
+  - "Confirm the interaction with scripts/ci/claude_p_retry.sh: the transient-API-error wrapper is RETAINED around the reviewer; the new SAME-budget STARVED retry is a distinct verdict-driven concern layered on top (no double-retry, no dropped transient-retry)."
   - "Flip docs/contracts/deploy-paths.yaml reconcile: status to landed (field edit only). Reword T2.39 c2 and add the T2.39 soft-coordination note in docs/ROADMAP-PLATFORM.yaml (no status flips)."
   - "Update rec-2658 acceptance via the ops portal to the behavioural (classification + not-latch-red) assertion; the squash-merge body carries 'Resolves: rec-2658'."
   - "Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55). Post-deploy step 9 is a manual, non-gating live no-op smoke run after merge."
