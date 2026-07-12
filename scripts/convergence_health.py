@@ -226,6 +226,63 @@ def find_stuck_gated_approvals(
     return []
 
 
+def find_reconcile_runs_since(
+    gh_caller: Optional[Callable[[str], Any]] = None,
+    owner: str = "benjamin-blake",
+    repo: str = "agent-platform",
+    per_page: int = 10,
+) -> list[dict[str, Any]]:
+    """Query recent .github/workflows/reconcile.yml Actions runs (any status), newest first.
+
+    T2.37 c4: this is the signal used to detect an in-flight/recent Reconcile episode so the
+    stale-rec escalation below does not double-file. gh_caller is injected for testability, same
+    pattern as find_stuck_gated_approvals / diagnose_stuck_approvals. Returns [] on any error, a
+    None caller result, or a missing GH_TOKEN/GITHUB_TOKEN -- graceful degradation, since this
+    signal only ever SUPPRESSES a file action, it never itself triggers escalation.
+    """
+    import os  # noqa: PLC0415
+
+    token = os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+    caller = gh_caller or _make_github_caller(token)
+
+    try:
+        url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/reconcile.yml/runs?per_page={per_page}"
+        data = caller(url)
+        if not data:
+            return []
+        return data.get("workflow_runs", []) or []
+    except Exception:  # noqa: BLE001
+        pass
+    return []
+
+
+def has_in_flight_reconcile_for_episode(
+    runs: list[dict[str, Any]],
+    red_since: datetime,
+    now: Optional[datetime] = None,
+) -> bool:
+    """True iff any reconcile.yml run's created_at falls within [red_since, now].
+
+    That window IS "in-flight/recent... within the current red episode window" (T2.37 c4): a
+    Reconcile dispatch that started (or already completed) after this episode went red is
+    evidence the episode is already being worked, regardless of whether that run is still
+    running right now. Deliberately NOT matched by head_sha equality -- a workflow_dispatch run's
+    head_sha is the branch tip at dispatch time and will not reliably equal the red commit once
+    later commits merge onto main. Pure / injectable: `runs` is normally
+    find_reconcile_runs_since()'s output, but tests pass a literal list directly.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    for run in runs:
+        created_at_str = run.get("created_at", "")
+        if not created_at_str:
+            continue
+        created_at = _parse_utc(created_at_str)
+        if red_since <= created_at <= now:
+            return True
+    return False
+
+
 def diagnose_stuck_approvals(
     gh_caller: Optional[Callable[[str], Any]] = None,
     owner: str = "benjamin-blake",
@@ -397,6 +454,7 @@ def escalate(
     open_recs: Optional[list[dict[str, Any]]] = None,
     threshold_hours: float = RED_AGE_THRESHOLD_HOURS,
     profile: Optional[str] = None,
+    reconcile_in_flight: bool = False,
 ) -> dict[str, Any]:
     """Idempotent escalation: file/update/close exactly one tf_convergence_stale rec per episode.
 
@@ -408,9 +466,14 @@ def escalate(
                        via the DuckLake reader open_recs named verb (not the JSONL cache).
         threshold_hours: Red-age threshold triggering escalation.
         profile:       AWS profile for the reader / portal.
+        reconcile_in_flight: T2.37 c4 -- True when a reconcile.yml Actions run has already
+                       started (or completed) during the current red episode (see
+                       has_in_flight_reconcile_for_episode). Suppresses ONLY a fresh "file"
+                       action -- an already-open rec still updates/closes normally, since
+                       refreshing an existing rec's context is not a double-file.
 
     Returns:
-        {"action": "file"|"update"|"close"|"none"|"skipped", "rec_id": str|None}
+        {"action": "file"|"update"|"close"|"none"|"skipped"|"skipped_reconcile_in_flight", "rec_id": str|None}
     """
     if open_recs is None:
         open_recs = _fetch_open_recs(profile=profile)
@@ -420,6 +483,13 @@ def escalate(
     over_threshold = verdict.status == "red" and (verdict.red_age_hours >= threshold_hours or bool(verdict.stuck_approvals))
 
     action = escalation_action(over_threshold=over_threshold, open_rec_exists=open_rec_exists)
+
+    if action == "file" and reconcile_in_flight:
+        # T2.37 c4: a Reconcile dispatch already started (or completed) during this red episode --
+        # do not double-file a NEW tf_convergence_stale rec for the episode Reconcile is already
+        # clearing. The episode either resolves (record returns green, no rec ever needed) or the
+        # reconcile run itself fails, and the next sensor tick re-evaluates from a clean slate.
+        return {"action": "skipped_reconcile_in_flight", "rec_id": None}
 
     if action == "none":
         return {"action": "none", "rec_id": None}
@@ -507,7 +577,14 @@ def main(profile: Optional[str] = None) -> int:
         print(f"[convergence_health] diagnose_stuck_approvals: {diagnose_out}")
         return 0  # read-only; do not escalate
 
-    result = escalate(verdict, profile=profile)
+    reconcile_in_flight = False
+    if record is not None and record.get("status") == "red":
+        # T2.37 c4: only worth the extra API call when there is a red episode to potentially
+        # double-file against.
+        reconcile_runs = find_reconcile_runs_since()
+        reconcile_in_flight = has_in_flight_reconcile_for_episode(reconcile_runs, red_since=derive_red_since(record))
+
+    result = escalate(verdict, profile=profile, reconcile_in_flight=reconcile_in_flight)
     print(f"[convergence_health] escalation result: {result}")
     return 0
 

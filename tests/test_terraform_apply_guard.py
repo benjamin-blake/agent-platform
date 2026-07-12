@@ -13,7 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from scripts.terraform_apply_guard import _classify_iam_change, _normalise_policy, _trust_changed, evaluate_plan, main
+from scripts.terraform_apply_guard import (
+    _classify_iam_change,
+    _normalise_policy,
+    _trust_changed,
+    build_digest,
+    evaluate_plan,
+    main,
+)
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "terraform_apply_guard"
 _REAL_CLEAN_CREATE = _FIXTURES / "clean_create_real.json"
@@ -347,3 +354,110 @@ def test_in_budget_fixture_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     # Unset any override so the default budget path (the real authority_budget.json) is used.
     monkeypatch.delenv("TF_AUTHORITY_BUDGET", raising=False)
     assert main([str(fixture)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# --digest mode (T2.39 / rec-2658 forward-fix): bounded, decision-relevant plan summary for the
+# subagent reviewer's stdin. VP steps 1-2.
+# ---------------------------------------------------------------------------
+
+
+def _digest_plan() -> dict:
+    return {
+        "resource_changes": [
+            _rc("aws_s3_bucket", ["create"], after={"bucket": "new-bucket"}),
+            _rc(
+                "aws_iam_role_policy",
+                ["update"],
+                before={"role": "agent-platform-github-ci-branch", "policy": "{}"},
+                after={"role": "agent-platform-github-ci-branch", "policy": '{"Version":"2012-10-17"}'},
+                address="aws_iam_role_policy.ci_branch_inline",
+            ),
+            _rc("aws_dynamodb_table", ["delete", "create"], address="aws_dynamodb_table.replaced"),
+        ]
+    }
+
+
+def test_digest_lists_resource_changes_content() -> None:
+    digest = build_digest(_digest_plan())
+    assert "3 resource change(s)" in digest
+    assert "aws_s3_bucket.example (aws_s3_bucket) actions=['create'] changed_attrs=[bucket='new-bucket']" in digest
+    assert "aws_iam_role_policy.ci_branch_inline (aws_iam_role_policy) actions=['update'] changed_attrs=[policy=" in digest
+    assert "aws_dynamodb_table.replaced (aws_dynamodb_table) actions=['delete', 'create'] changed_attrs=[(none)]" in digest
+
+
+def test_digest_reuses_resource_changes_traversal_same_set_as_evaluate_plan() -> None:
+    plan = _digest_plan()
+    digest = build_digest(plan)
+    findings = evaluate_plan(plan)
+    # Every resource address that shows up in a guard finding also appears in the digest --
+    # the digest can never omit a resource the verdict was computed over.
+    for finding in findings:
+        assert finding["address"] in digest
+
+
+def test_digest_cli_flag_prints_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    path = _write(tmp_path, _digest_plan())
+    assert main(["--digest", path]) == 0
+    out = capsys.readouterr().out
+    assert "resource change(s)" in out
+
+
+def test_digest_flag_still_errors_on_malformed_json(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not valid json", encoding="utf-8")
+    assert main(["--digest", str(bad)]) == 1
+
+
+def test_digest_empty_plan() -> None:
+    digest = build_digest({})
+    assert "0 resource change(s)" in digest
+
+
+def test_digest_redacts_arn_and_account_id() -> None:
+    # ARN/account-id values land in the digest via the changed-attribute value snippet, so this
+    # exercises the real leak surface (Decision 101), not just the redaction helper standalone.
+    # Uses the AWS-managed AWSSDKPandas layer account (336392948345, public, not a secret -- the
+    # pre-commit never-commit hook's explicit allowlisted exemption) as the stand-in fake account
+    # id, so a genuinely fake-but-realistic 12-digit ARN doesn't itself trip that shape-based hook.
+    plan = {
+        "resource_changes": [
+            _rc(
+                "aws_iam_role_policy_attachment",
+                ["update"],
+                before={"policy_arn": "arn:aws:iam::336392948345:policy/OldPolicy"},
+                after={"policy_arn": "arn:aws:iam::336392948345:policy/NewPolicy", "account_note": "336392948345"},
+            )
+        ]
+    }
+    digest = build_digest(plan)
+    assert "336392948345" not in digest
+    assert "arn:aws:iam::336392948345" not in digest
+    assert "[ARN]" in digest
+    assert "[ACCOUNT_ID]" in digest
+
+    from scripts.terraform_apply_guard import _redact  # noqa: PLC0415
+
+    assert _redact("account=336392948345 arn=arn:aws:s3:::my-bucket/336392948345/x") == "account=[ACCOUNT_ID] arn=[ARN]"
+
+
+def test_digest_size_cap_truncates_with_marker() -> None:
+    # Many resources so the full digest exceeds a deliberately tiny cap.
+    plan = {
+        "resource_changes": [
+            _rc("aws_s3_bucket", ["update"], before={"tags": {}}, after={"tags": {"a": str(i)}}, address=f"aws_s3_bucket.b{i}")
+            for i in range(50)
+        ]
+    }
+    digest = build_digest(plan, size_cap=200)
+    assert len(digest.encode("utf-8")) <= 200 + 10  # marker itself is within the accounted budget
+    assert "DIGEST TRUNCATED" in digest
+    # Truncation happens at a line boundary -- no entry is cut mid-line.
+    for line in digest.split("\n... [DIGEST TRUNCATED")[0].splitlines():
+        if line.startswith("- "):
+            assert line.count("changed_attrs=[") == 1
+
+
+def test_digest_under_cap_no_truncation_marker() -> None:
+    digest = build_digest(_digest_plan(), size_cap=100_000)
+    assert "TRUNCATED" not in digest
