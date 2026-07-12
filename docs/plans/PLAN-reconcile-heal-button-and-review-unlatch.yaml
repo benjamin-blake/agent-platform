@@ -218,14 +218,14 @@ verification_plan:
     command: "bin/venv-python -c \"import yaml,sys; [yaml.safe_load(open(p)) for p in ['.github/workflows/reconcile.yml','.github/workflows/terraform-apply-sandbox.yml']]; print('workflows parse OK')\""
     expected: Both workflow YAML files parse without error.
     fix_if: A YAML syntax error or a malformed job/step block.
-    hermetic: true
+    hermetic: false
   - step: 7
     phase: pre-deploy
     action: Assert the review step no longer greps a 2>&1 file for the verdict and instead calls review_verdict on JSON.
     command: "bin/venv-python -c \"s=open('.github/workflows/terraform-apply-sandbox.yml').read(); assert 'grep -qx \\\"PROCEED\\\"' not in s, 'still grepping stdout for verdict'; assert 'review_verdict' in s, 'review_verdict helper not wired'; print('verdict wiring OK')\""
     expected: The legacy grep-for-PROCEED gate is gone; the review step invokes the review_verdict helper.
     fix_if: The workflow still classifies the verdict by grepping combined stdout/stderr (the rec-2658 conflation), or the helper is not wired in.
-    hermetic: true
+    hermetic: false
   - step: 8
     phase: pre-deploy
     action: Run the authoritative pre-merge gate.
