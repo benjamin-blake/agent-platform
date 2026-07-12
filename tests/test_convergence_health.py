@@ -11,6 +11,14 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+# boto3 is imported at MODULE scope even though the tests reference it only via
+# patch("boto3.Session") strings. This makes the file's heavy-dep requirement visible to the
+# fast tier's cheap `--collect-only` pass so pr-validate defers it PROACTIVELY to the full
+# post-merge tier, instead of catching it REACTIVELY -- which re-runs the entire changed-test set
+# a second time after a runtime ModuleNotFoundError and roughly doubles the pytest cost. boto3 is
+# deliberately excluded from requirements-fast.txt; the full tier runs this file. See
+# scripts/checks/_scaffolding.py::partition_changed_tests_by_collectability.
+import boto3  # noqa: F401
 import pytest
 
 import scripts.convergence_health as ch
@@ -25,7 +33,9 @@ from scripts.convergence_health import (
     escalation_action,
     filter_stuck_runs,
     find_open_convergence_stale_rec,
+    find_reconcile_runs_since,
     find_stuck_gated_approvals,
+    has_in_flight_reconcile_for_episode,
     main,
     read_convergence_record,
     red_age_hours,
@@ -350,6 +360,166 @@ class TestEscalate:
 
 
 # ---------------------------------------------------------------------------
+# escalate() reconcile_in_flight suppression (T2.37 c4)
+# ---------------------------------------------------------------------------
+
+
+class TestEscalateReconcileInFlight:
+    def _make_verdict(self, red_age: float = 10.0, status: str = "red") -> HealthVerdict:
+        return HealthVerdict(
+            status=status,
+            red_age_hours=red_age,
+            unapplied_backlog=0,
+            stuck_approvals=[],
+            severity="high" if red_age >= 6 else "low",
+        )
+
+    def test_does_not_double_file_when_reconcile_in_flight(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return "rec-999"
+
+        verdict = self._make_verdict(red_age=10.0)
+        result = escalate(verdict, portal_caller=_caller, open_recs=[], reconcile_in_flight=True)
+        assert result["action"] == "skipped_reconcile_in_flight"
+        assert result["rec_id"] is None
+        assert not calls, "must not file a rec while a Reconcile run is in-flight for this episode"
+
+    def test_files_normally_when_reconcile_not_in_flight(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return "rec-999"
+
+        verdict = self._make_verdict(red_age=10.0)
+        result = escalate(verdict, portal_caller=_caller, open_recs=[], reconcile_in_flight=False)
+        assert result["action"] == "file"
+        assert calls
+
+    def test_reconcile_in_flight_does_not_suppress_update_of_existing_rec(self) -> None:
+        # Suppression applies ONLY to a fresh "file" -- an already-open rec still updates (not a
+        # double-file; it's the same rec being refreshed).
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return None
+
+        existing = {"id": "rec-888", "source": "tf_convergence_stale", "status": "open"}
+        verdict = self._make_verdict(red_age=10.0)
+        result = escalate(verdict, portal_caller=_caller, open_recs=[existing], reconcile_in_flight=True)
+        assert result["action"] == "update"
+        assert result["rec_id"] == "rec-888"
+
+    def test_reconcile_in_flight_does_not_suppress_close(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return None
+
+        existing = {"id": "rec-777", "source": "tf_convergence_stale", "status": "open"}
+        verdict = self._make_verdict(red_age=2.0)
+        result = escalate(verdict, portal_caller=_caller, open_recs=[existing], reconcile_in_flight=True)
+        assert result["action"] == "close"
+
+    def test_reconcile_in_flight_irrelevant_when_under_threshold(self) -> None:
+        verdict = self._make_verdict(red_age=2.0)
+        result = escalate(verdict, portal_caller=lambda a, f: None, open_recs=[], reconcile_in_flight=True)
+        assert result["action"] == "none"
+
+
+# ---------------------------------------------------------------------------
+# find_reconcile_runs_since / has_in_flight_reconcile_for_episode (T2.37 c4)
+# ---------------------------------------------------------------------------
+
+
+class TestFindReconcileRunsSince:
+    def test_returns_workflow_runs_list(self) -> None:
+        mock_data = {
+            "workflow_runs": [
+                {"id": 1, "created_at": "2026-06-27T06:00:00Z"},
+                {"id": 2, "created_at": "2026-06-27T07:00:00Z"},
+            ]
+        }
+        result = find_reconcile_runs_since(gh_caller=lambda url: mock_data)
+        assert len(result) == 2
+        assert result[0]["id"] == 1
+
+    def test_url_targets_reconcile_workflow(self) -> None:
+        captured: list[str] = []
+
+        def _capture(url: str) -> Any:
+            captured.append(url)
+            return {"workflow_runs": []}
+
+        find_reconcile_runs_since(gh_caller=_capture)
+        assert captured
+        assert "reconcile.yml/runs" in captured[0]
+        # Deliberately no status= filter -- any status counts as "in-flight/recent" (T2.37 c4).
+        assert "status=" not in captured[0]
+
+    def test_returns_empty_when_caller_returns_none(self) -> None:
+        assert find_reconcile_runs_since(gh_caller=lambda url: None) == []
+
+    def test_swallows_caller_exception(self) -> None:
+        def _boom(url: str) -> Any:
+            raise RuntimeError("api down")
+
+        assert find_reconcile_runs_since(gh_caller=_boom) == []
+
+    def test_no_token_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        assert find_reconcile_runs_since() == []
+
+    def test_missing_workflow_runs_key_returns_empty(self) -> None:
+        assert find_reconcile_runs_since(gh_caller=lambda url: {}) == []
+
+
+class TestHasInFlightReconcileForEpisode:
+    def test_run_created_after_red_since_is_in_flight(self) -> None:
+        red_since = datetime(2026, 6, 27, 6, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 6, 27, 10, 0, tzinfo=timezone.utc)
+        runs = [{"id": 1, "created_at": "2026-06-27T07:00:00Z"}]
+        assert has_in_flight_reconcile_for_episode(runs, red_since=red_since, now=now) is True
+
+    def test_run_created_before_red_since_is_not_in_flight(self) -> None:
+        # A reconcile run from a PRIOR (already-resolved) episode must not suppress escalation
+        # for a NEW red episode -- not matched by head_sha, matched purely by the time window.
+        red_since = datetime(2026, 6, 27, 6, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 6, 27, 10, 0, tzinfo=timezone.utc)
+        runs = [{"id": 1, "created_at": "2026-06-26T23:00:00Z"}]
+        assert has_in_flight_reconcile_for_episode(runs, red_since=red_since, now=now) is False
+
+    def test_no_runs_is_not_in_flight(self) -> None:
+        red_since = datetime(2026, 6, 27, 6, 0, tzinfo=timezone.utc)
+        assert has_in_flight_reconcile_for_episode([], red_since=red_since) is False
+
+    def test_run_missing_created_at_is_skipped(self) -> None:
+        red_since = datetime(2026, 6, 27, 6, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 6, 27, 10, 0, tzinfo=timezone.utc)
+        runs = [{"id": 1}]
+        assert has_in_flight_reconcile_for_episode(runs, red_since=red_since, now=now) is False
+
+    def test_run_exactly_at_red_since_counts_as_in_flight(self) -> None:
+        red_since = datetime(2026, 6, 27, 6, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 6, 27, 10, 0, tzinfo=timezone.utc)
+        runs = [{"id": 1, "created_at": "2026-06-27T06:00:00Z"}]
+        assert has_in_flight_reconcile_for_episode(runs, red_since=red_since, now=now) is True
+
+    def test_defaults_now_to_current_time(self) -> None:
+        # now=None path -- exercised without mocking datetime.now; just assert it doesn't raise
+        # and a run from far in the past (well before "red_since") is correctly excluded.
+        red_since = datetime(2026, 6, 27, 6, 0, tzinfo=timezone.utc)
+        runs = [{"id": 1, "created_at": "2020-01-01T00:00:00Z"}]
+        assert has_in_flight_reconcile_for_episode(runs, red_since=red_since) is False
+
+
+# ---------------------------------------------------------------------------
 # read_convergence_record
 # ---------------------------------------------------------------------------
 
@@ -505,6 +675,7 @@ class TestMain:
             patch("boto3.Session"),
             patch("scripts.convergence_health.read_convergence_record", return_value={"status": "red"}),
             patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.find_reconcile_runs_since", return_value=[]),
             patch("scripts.convergence_health.assess_health", return_value=self._verdict("red")),
             patch(
                 "scripts.convergence_health.escalate",
@@ -519,6 +690,58 @@ class TestMain:
         with patch("boto3.Session", side_effect=RuntimeError("no creds")):
             rc = main()
         assert rc == 1
+
+    def test_main_red_status_checks_reconcile_in_flight_and_passes_through(self) -> None:
+        # A reconcile.yml run inside the episode window -> escalate() called with
+        # reconcile_in_flight=True.
+        with (
+            patch("boto3.Session"),
+            patch(
+                "scripts.convergence_health.read_convergence_record",
+                return_value={"status": "red", "timestamp": "2026-06-27T06:00:00Z"},
+            ),
+            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
+            patch(
+                "scripts.convergence_health.find_reconcile_runs_since",
+                return_value=[{"id": 1, "created_at": "2026-06-27T07:00:00Z"}],
+            ) as find_reconcile,
+            patch("scripts.convergence_health.assess_health", return_value=self._verdict("red")),
+            patch(
+                "scripts.convergence_health.escalate", return_value={"action": "skipped_reconcile_in_flight", "rec_id": None}
+            ) as esc,
+        ):
+            rc = main()
+        assert rc == 0
+        find_reconcile.assert_called_once()
+        assert esc.call_args.kwargs["reconcile_in_flight"] is True
+
+    def test_main_green_status_skips_reconcile_lookup_entirely(self) -> None:
+        # No red episode -> no reason to spend the extra GitHub API call.
+        with (
+            patch("boto3.Session"),
+            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.find_reconcile_runs_since") as find_reconcile,
+            patch("scripts.convergence_health.assess_health", return_value=self._verdict("green")),
+            patch("scripts.convergence_health.escalate", return_value={"action": "none", "rec_id": None}) as esc,
+        ):
+            rc = main()
+        assert rc == 0
+        find_reconcile.assert_not_called()
+        assert esc.call_args.kwargs["reconcile_in_flight"] is False
+
+    def test_main_absent_record_skips_reconcile_lookup(self) -> None:
+        with (
+            patch("boto3.Session"),
+            patch("scripts.convergence_health.read_convergence_record", return_value=None),
+            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.find_reconcile_runs_since") as find_reconcile,
+            patch("scripts.convergence_health.assess_health", return_value=self._verdict("unknown")),
+            patch("scripts.convergence_health.escalate", return_value={"action": "none", "rec_id": None}),
+        ):
+            rc = main()
+        assert rc == 0
+        find_reconcile.assert_not_called()
 
 
 class TestEscalateLiveFetchAndPortal:

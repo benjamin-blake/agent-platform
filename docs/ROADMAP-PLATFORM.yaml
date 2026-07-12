@@ -6679,23 +6679,27 @@ tier_items:
           A single input-free Reconcile GitHub Actions workflow_dispatch action exists that
           reads the red commit directly from the convergence record (no operator-supplied SHA)
           and re-applies it
-        status: open
+        status: met
+        met_by: reconcile-heal-button-and-review-unlatch
       - id: c2
         text: >-
           If an optional rec-id is supplied, the workflow validates it resolves to an OPEN rec
           via the ops portal before proceeding; an invalid or closed rec-id fails the dispatch
-        status: open
+        status: met
+        met_by: reconcile-heal-button-and-review-unlatch
       - id: c3
         text: >-
           The routed gated-apply deadlock class (rec-2647 / rec-2523) is closed: Reconcile
           subsumes the routed case within one run -- no separate manual acknowledge-and-retry
           dispatch is required for the common red-then-recover path
-        status: open
+        status: met
+        met_by: reconcile-heal-button-and-review-unlatch
       - id: c4
         text: >-
           Convergence-health (T2.35) recognizes a Reconcile-triggered apply and does not
           double-file a tf_convergence_stale rec for the same red episode
-        status: open
+        status: met
+        met_by: reconcile-heal-button-and-review-unlatch
     related_decisions: [126]
     effort: L
     strategic: false
@@ -6766,27 +6770,38 @@ tier_items:
           The gated-apply plan-review subagent distinguishes "hit max-turns without a verdict"
           from an explicit REVISE verdict -- a max-turns timeout is never recorded as an
           implicit REVISE
-        status: open
+        status: met
+        met_by: reconcile-heal-button-and-review-unlatch
       - id: c2
         text: >-
-          On a max-turns timeout, the workflow retries the review once with a larger turn
-          budget before falling back to any other handling
-        status: open
+          On a STARVED (no-verdict) outcome, the workflow retries the review once at the SAME
+          turn budget -- never a larger one -- before falling back to any other handling
+        status: met
+        met_by: reconcile-heal-button-and-review-unlatch
       - id: c3
         text: >-
           Reviewer starvation (repeated max-turns even after retry) never writes a red
           convergence record by itself -- it surfaces as a distinct, clearly-labelled state so
           a human or ci-rca can distinguish "the plan is bad" from "the reviewer ran out of turns"
-        status: open
+        status: met
+        met_by: reconcile-heal-button-and-review-unlatch
       - id: c4
         text: >-
           rec-2658 (or its /plan-session successor) is closed by this item landing, forward-
           fixing rather than inline-patching the recurring class (Decision 55)
-        status: open
+        status: met
+        met_by: reconcile-heal-button-and-review-unlatch
     related_decisions: [55, 126]
     effort: M
     strategic: false
     status: not_started
+    note: >-
+      Soft coordination with T2.37 (the Reconcile heal button), not a hard dependency:
+      depends_on stays [] because T2.39's not-latch-red fix REMOVES a starvation class from what
+      T2.37 must clear (T2.39 makes T2.37 easier, not vice versa). The only real coupling is a
+      merge-ordering hazard -- both items edit the record-write block of
+      .github/workflows/terraform-apply-sandbox.yml, so co-sequencing them in the same plan
+      avoids a two-branch collision on that shared block.
 
   - id: T2.40
     tier: T2

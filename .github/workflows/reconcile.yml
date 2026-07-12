@@ -1,0 +1,704 @@
+name: reconcile
+
+# Input-free workflow_dispatch "heal button" (Decision 126 / T2.37). Manually dispatched (an
+# operator, or a future CD.17-reversal executor) to self-heal a stuck sandbox convergence record
+# in ONE run: reads the red commit SHA directly from the durable convergence record via
+# scripts/ci/reconcile_target.py (no operator-supplied SHA), re-runs the SAME deterministic guard
+# terraform-apply-sandbox.yml uses, and re-applies the SAME plan.bin that was reviewed on the red
+# commit's originating PR (no re-plan -- Decision 77 no-TOCTOU: only the frozen plan ARTIFACT is
+# reused; the tooling that inspects it -- guard.py, review_verdict.py, this workflow file itself --
+# runs at whatever the dispatch ref currently is, same as the existing acknowledge-and-retry path).
+#
+# Guard-PASS -> the apply-reconcile job below re-applies directly, behind the SAME
+#               digest-fed subagent review gate as terraform-apply-sandbox.yml (T2.39): nothing
+#               auto-applies without an explicit PROCEED token (plan constraint).
+# Guard-BLOCK (out-of-budget IAM / trust / destroy) -> routed through THIS workflow's OWN
+#               gated-apply-reconcile job (environment: tf-gated-apply) in the SAME run -- NOT
+#               terraform-apply-sandbox.yml's gated-apply job, which is push-only
+#               (github.event_name == 'push') and therefore unreachable from a workflow_dispatch.
+#               Subsumes the routed case that previously stranded a dispatch-triggered
+#               acknowledge-and-retry (rec-2647/rec-2523 dispatch-vs-push deadlock, T2.37 c3).
+#
+# Green/absent convergence record -> clean no-op: resolve-target resolves nothing actionable, the
+# apply/gated-apply jobs are skipped entirely, and the record is never written (T2.37 c1).
+#
+# Optional rec_id input: purely a traceability link to an open rec tracking the episode. When
+# supplied, validated OPEN via the ops portal (ducklake_reader closed boundary, Decision 84) BEFORE
+# anything else runs; an invalid/non-open rec-id fails the dispatch closed (T2.37 c2). Reconcile
+# ALWAYS resolves the red commit from the convergence record itself, never from this input.
+#
+# Trust: resolve-target assumes agent-platform-github-ci-branch (read-only convergence record
+# access + the DuckLake reader/writer invoke rights the T2.34:c2 gate confirms it holds -- needed
+# for rec-id validation; github_ci_pr, which is otherwise read-only-first-choice, trusts only
+# pull_request/refs/pull/* and cannot be assumed from a workflow_dispatch on main). apply-reconcile
+# and gated-apply-reconcile assume agent-platform-github-ci-apply -- the SAME role
+# terraform-apply-sandbox.yml's apply-sandbox/gated-apply jobs use, trusted for both
+# ref:refs/heads/main (routine) and environment:tf-gated-apply (gated) subs. No new IAM surface:
+# every role this workflow assumes already exists (Decision 92/94; guard-BLOCKED IAM role CREATEs
+# are out of scope for this plan).
+
+on:
+  workflow_dispatch:
+    inputs:
+      rec_id:
+        description: >-
+          Optional: an open rec id (rec-NNNN) tracking the episode being reconciled. When
+          supplied, validated OPEN via the ops portal before anything else runs. Purely a
+          traceability link -- Reconcile always reads the red commit from the convergence record
+          itself, never from this input.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # SAME group as terraform-apply-sandbox.yml: both drive apply against the same shared tfstate
+  # and the same convergence record, so they must serialise against each other, not just against
+  # themselves (a pending gated-apply-reconcile approval correctly queues a later routine push
+  # behind it, and vice versa -- mirrors the existing gated-apply concurrency tradeoff).
+  group: terraform-apply-sandbox
+  cancel-in-progress: false
+
+env:
+  CONVERGENCE_BUCKET: agent-platform-data-lake
+  CONVERGENCE_KEY: convergence/personal/sandbox.json
+  WORKDIR: terraform/personal
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve job: validate the optional rec-id FIRST (fail closed before anything else runs), then
+  # read the convergence record and resolve the red commit SHA (or a clean no-op). No terraform /
+  # tfstate access needed here -- read-only convergence record + DuckLake reader invoke only.
+  # ---------------------------------------------------------------------------
+  resolve-target:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      actionable: ${{ steps.target.outputs.actionable }}
+      commit_sha: ${{ steps.target.outputs.commit_sha }}
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC -- branch role, convergence read + DuckLake reader invoke)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install reconcile_target's runtime deps
+        # This runner has no .venv (CC-web-only convention); install the minimal import-time deps
+        # scripts/ci/reconcile_target.py and its src.common.iceberg_reader chain need directly.
+        run: pip install boto3 requests
+
+      - name: Resolve reconcile target (optional rec-id OPEN validation + convergence record read)
+        id: target
+        # Validates --rec-id (if supplied) BEFORE the convergence record is even read (T2.37 c2:
+        # an invalid/non-open rec-id fails this step -- and therefore the whole dispatch -- closed).
+        # Emits GITHUB_OUTPUT-compatible `key=value` lines directly (scripts/ci/reconcile_target.py
+        # main()'s documented stdout contract).
+        env:
+          REC_ID: ${{ github.event.inputs.rec_id }}
+        run: |
+          set -euo pipefail
+          # Invoked as a MODULE (-m), not a file path: the optional --rec-id validation path
+          # does a deferred `from src.common.iceberg_reader import make_reader`, which only
+          # resolves when the repo root is on sys.path. `python3 scripts/ci/reconcile_target.py`
+          # puts scripts/ci/ on sys.path[0] instead (no repo root, no PYTHONPATH on the runner),
+          # so `src` would fail to import and every rec-id dispatch would fail closed. `-m` from
+          # the repo-root working directory (this step's default) puts the repo root on sys.path.
+          if [ -n "$REC_ID" ]; then
+            python3 -m scripts.ci.reconcile_target --rec-id "$REC_ID" --profile "" >> "$GITHUB_OUTPUT"
+          else
+            python3 -m scripts.ci.reconcile_target --profile "" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summarise
+        run: |
+          echo "actionable=${{ steps.target.outputs.actionable }}"
+          echo "commit_sha=${{ steps.target.outputs.commit_sha }}"
+          if [ "${{ steps.target.outputs.actionable }}" != "true" ]; then
+            echo "Nothing to reconcile -- clean no-op, no record write, no apply."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Apply-reconcile job: only runs when resolve-target found an actionable red commit. Re-runs the
+  # guard against the SAME plan.bin the red commit's originating PR captured, re-applies on
+  # guard-PASS behind the SAME digest-fed subagent review gate as terraform-apply-sandbox.yml
+  # (T2.39), and routes guard-BLOCK to gated-apply-reconcile below (never auto-applies it).
+  # ---------------------------------------------------------------------------
+  apply-reconcile:
+    needs: [resolve-target]
+    if: needs.resolve-target.result == 'success' && needs.resolve-target.outputs.actionable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      routed: ${{ steps.guard.outputs.routed }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write  # best-effort wake comment on the red commit's originating PR
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+      TF_VAR_aws_profile: ""
+      RED_SHA: ${{ needs.resolve-target.outputs.commit_sha }}
+
+    steps:
+      - name: Checkout the red commit
+        # Explicitly the RED commit (not the dispatch ref's tip): the DuckLake lambda-zip rebuild
+        # below must reproduce the EXACT bytes plan.bin was captured against (its filename/
+        # source_code_hash inputs are read from disk at apply time even though the diff itself is
+        # frozen), so the checked-out tree must match the commit that plan.bin was planned from.
+        # Any red commit Reconcile is ever dispatched against postdates this plan's merge (Reconcile
+        # cannot meaningfully run before it exists), so scripts/terraform_apply_guard.py --digest,
+        # scripts/ci/review_verdict.py, and scripts/ci/reconcile_target.py are always present here.
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RED_SHA }}
+
+      - name: Configure AWS credentials (OIDC -- apply role, main only)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-apply
+          aws-region: eu-west-2
+
+      - name: Read pinned Terraform version
+        id: tfver
+        run: echo "version=$(cat config/terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Re-verify the record is still red at the resolved commit (race guard)
+        id: recheck
+        # Reconcile's target was resolved in a separate job/step; re-check immediately before
+        # spending any apply-side work in case another run already cleared (or re-reded at a
+        # DIFFERENT commit) the record in between. Never overwrites anything itself -- read-only.
+        run: |
+          set -euo pipefail
+          pip install boto3 requests
+          OUT=$(python3 -m scripts.ci.reconcile_target --profile "")
+          echo "$OUT"
+          CURRENT_SHA=$(printf '%s\n' "$OUT" | sed -n 's/^commit_sha=//p')
+          ACTIONABLE=$(printf '%s\n' "$OUT" | sed -n 's/^actionable=//p')
+          if [ "$ACTIONABLE" != "true" ] || [ "$CURRENT_SHA" != "$RED_SHA" ]; then
+            echo "Record is no longer red at ${RED_SHA} (current: actionable=${ACTIONABLE} commit_sha=${CURRENT_SHA}) -- someone else already resolved this episode. Clean no-op, not touching the record." >&2
+            echo "still_actionable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "still_actionable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Convergence precondition (refuse on red record)
+        # Reconcile is a no-op when the record no longer matches what resolve-target saw (race
+        # guard above) -- this step converts that into a hard `if: success()` gate for every
+        # subsequent step, mirroring terraform-apply-sandbox.yml's own precondition contract.
+        if: steps.recheck.outputs.still_actionable != 'true'
+        run: |
+          echo "::notice::Reconcile no-op -- the episode this run targeted is no longer red at ${RED_SHA}."
+          exit 1
+
+      - name: Materialise tfvars from Secrets Manager
+        if: success()
+        run: |
+          set -euo pipefail
+          aws secretsmanager get-secret-value \
+            --secret-id agent-platform-terraform-personal-tfvars \
+            --query SecretString --output text \
+            > terraform/personal/terraform.personal.tfvars
+
+      - name: Mask secret-sourced tfvars values in logs
+        if: success()
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            key=${line%%=*}
+            value=${line#*=}
+            key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
+            case "$key" in
+              account_id|platform_dev_external_id|platform_admin_external_id)
+                if [ -n "$value" ]; then
+                  echo "::add-mask::${value}"
+                fi
+                ;;
+            esac
+          done < terraform/personal/terraform.personal.tfvars
+
+      - name: Assert tfvars file is non-empty (fail-closed)
+        if: success()
+        run: |
+          test -s terraform/personal/terraform.personal.tfvars || {
+            echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
+            exit 1
+          }
+
+      - name: Terraform init (S3 backend, sandbox)
+        if: success()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set +e
+          attempt=1
+          while [ "$attempt" -le 3 ]; do
+            out=$(terraform init -input=false -backend-config=backend-sandbox.hcl 2>&1)
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "$out"
+              break
+            fi
+            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
+              if [ "$attempt" -lt 3 ]; then
+                delay=$(( 2 ** attempt ))
+                echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
+                echo "$out" >&2
+                sleep "$delay"
+                attempt=$(( attempt + 1 ))
+                continue
+              fi
+            fi
+            echo "$out" >&2
+            set -e
+            exit "$rc"
+          done
+          set -e
+
+      - name: Build DuckLake lambda packages (rebuild + assert byte-identical, rec-2512 parity)
+        id: build_ducklake
+        # Rebuilds from the RED commit's checked-out tree (see the Checkout step above) and
+        # asserts byte-identical to whatever the red commit's originating PR uploaded. If a LATER
+        # commit has since changed DuckLake lambda source and successfully applied (overwriting
+        # these same S3 keys with newer content), this assert correctly FAILS CLOSED rather than
+        # silently applying content that no longer matches plan.bin's expectations -- the episode
+        # is genuinely stale and needs a fresh PR/plan, not a Reconcile of the old one.
+        if: success()
+        env:
+          BUCKET: agent-platform-data-lake
+        run: |
+          set -euo pipefail
+          pip install pyyaml pydantic
+          python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
+          NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
+          for name in $NAMES; do
+            local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
+            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing S3 object found; failing closed (Decision 77 no-TOCTOU)." >&2
+              exit 1
+            fi
+            remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
+            if [ "$local_md5" != "$remote_md5" ]; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: local=${local_md5} remote=${remote_md5}; the reconciled episode is stale relative to a later successful apply. Open a fresh PR instead of reconciling this one." >&2
+              exit 1
+            fi
+          done
+          echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded artifacts."
+          for name in $NAMES; do
+            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
+          done
+
+      - name: Fetch saved plan from S3 (no re-plan, T2.21 parity)
+        id: fetch_plan
+        # Resolves the red commit's originating PR head SHA and fetches the SAME plan.bin that PR's
+        # speculative-plan job captured -- never re-plans. Fails closed if no PR or no saved plan is
+        # found; recovery is the SAME workflow_dispatch acknowledge-and-retry path
+        # terraform-apply-sandbox.yml already exposes (which DOES re-plan, human-reviewed).
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euo pipefail
+          PR_HEAD_SHA=$(gh api "repos/${REPO}/commits/${RED_SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+          if [ -z "$PR_HEAD_SHA" ] || [ "$PR_HEAD_SHA" = "null" ]; then
+            echo "::error::No originating PR resolved for ${RED_SHA}; failing closed (no saved plan -- recovery is terraform-apply-sandbox.yml's workflow_dispatch acknowledge-and-retry, which re-plans)." >&2
+            exit 1
+          fi
+          PLAN_OBJ="s3://agent-platform-data-lake/tfplan/personal/${PR_HEAD_SHA}.bin"
+          echo "Fetching saved plan: ${PLAN_OBJ}"
+          if ! aws s3 ls "$PLAN_OBJ" > /dev/null 2>&1; then
+            echo "::error::Saved plan object not found at ${PLAN_OBJ}; failing closed (no re-plan fallback)." >&2
+            exit 1
+          fi
+          aws s3 cp "$PLAN_OBJ" plan.bin
+          terraform show -json plan.bin > plan.json
+          echo "pr_head_sha=${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Fetched and verified saved plan from ${PLAN_OBJ}"
+
+      - name: Deterministic apply guard (fail-closed)
+        id: guard
+        # SAME three-way exit code contract as terraform-apply-sandbox.yml's guard step: 0 = PASS
+        # (apply proceeds below), 2 = BLOCKED (routed=true, routes to gated-apply-reconcile, NOT a
+        # failure), 1 = internal error (fails closed, record write below sets red).
+        if: success()
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set +e
+          python ../../scripts/terraform_apply_guard.py plan.json
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "Guard BLOCKED (exit 2): out-of-budget IAM / trust diff / destroy; routing to gated-apply-reconcile." >&2
+            echo "routed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "Guard internal error (exit ${rc}); failing closed." >&2
+            exit 1
+          fi
+
+      - name: Subagent plan review (digest-fed, JSON-classified)
+        # IDENTICAL contract to terraform-apply-sandbox.yml's review step (T2.39): digest on
+        # stdin, --allowedTools Read, --output-format json classified via review_verdict.py, a
+        # STARVED verdict retries once at the SAME turn budget, and a still-STARVED outcome after
+        # the retry is surfaced via steps.review.outputs.outcome for the record-write step below
+        # to skip the red write on (Decision 55 anti-masking). Nothing auto-applies here without an
+        # explicit PROCEED -- Reconcile's own apply path preserves the same fail-closed contract as
+        # the routine push path (plan constraint: "nothing auto-applies without an explicit
+        # PROCEED token OR explicit human approval").
+        id: review
+        if: success() && steps.guard.outputs.routed != 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -uo pipefail
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+            echo "Subagent review unavailable (no token); failing closed." >&2
+            echo "outcome=starved" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if ! command -v claude &> /dev/null; then
+            sudo npm install -g @anthropic-ai/claude-code@2.1.148 --omit=dev --omit=optional && sudo npm cache clean --force
+          fi
+
+          if ! python3 ../../scripts/terraform_apply_guard.py --digest plan.json > plan_digest.txt; then
+            echo "Failed to build the guard digest; failing closed (infra failure, not a plan rejection)." >&2
+            echo "outcome=starved" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          MAX_TURNS=5
+          PROMPT="Review the terraform plan digest below for a Reconcile heal-button re-apply of a previously red sandbox commit (${RED_SHA}). It has already passed the deterministic guard (no destroy, no out-of-budget IAM/trust change; may include in-budget IAM inline-policy or attachment UPDATEs on managed boundary-carrying CI roles per T2.25). The full plan is at plan.json (Read tool) if you genuinely need more detail than the digest provides. Confirm the plan is a safe, expected sandbox infrastructure change. Reply with exactly the single token PROCEED on its own line if safe to auto-apply, or REVISE followed by the reason if not."
+
+          cat plan_digest.txt | ${GITHUB_WORKSPACE}/scripts/ci/claude_p_retry.sh review.json -- \
+            --output-format json --allowedTools "Read" --max-turns "$MAX_TURNS" "$PROMPT" || true
+          VERDICT=$(python3 ${GITHUB_WORKSPACE}/scripts/ci/review_verdict.py review.json)
+
+          if [ "$VERDICT" = "STARVED" ]; then
+            echo "Reviewer STARVED on first attempt; retrying once at the SAME turn budget (${MAX_TURNS} -- never larger, T2.39 c2)." >&2
+            cat plan_digest.txt | ${GITHUB_WORKSPACE}/scripts/ci/claude_p_retry.sh review_retry.json -- \
+              --output-format json --allowedTools "Read" --max-turns "$MAX_TURNS" "$PROMPT" || true
+            VERDICT=$(python3 ${GITHUB_WORKSPACE}/scripts/ci/review_verdict.py review_retry.json)
+          fi
+
+          echo "Reviewer verdict: ${VERDICT}"
+          case "$VERDICT" in
+            PROCEED)
+              echo "outcome=proceed" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            REVISE)
+              echo "Subagent returned REVISE; failing closed." >&2
+              echo "outcome=revise" >> "$GITHUB_OUTPUT"
+              exit 1
+              ;;
+            *)
+              echo "Subagent STARVED (max-turns/no-verdict/API-exhausted) after the same-budget retry; blocking apply WITHOUT latching the convergence record red." >&2
+              echo "outcome=starved" >> "$GITHUB_OUTPUT"
+              exit 1
+              ;;
+          esac
+
+      - name: Terraform apply (same plan file the guard inspected)
+        id: apply
+        if: success() && steps.guard.outputs.routed != 'true'
+        working-directory: ${{ env.WORKDIR }}
+        run: terraform apply -input=false -lock-timeout=120s plan.bin
+
+      - name: Write convergence record (always-run, red-on-failure)
+        id: record_write
+        # IDENTICAL contract to terraform-apply-sandbox.yml's record-write step: skips the S3
+        # write (does not overwrite) when this run was already a stale no-op (recheck), the guard
+        # routed, or the reviewer was STARVED. green iff apply succeeded; red on any genuine
+        # non-success (guard internal error / an explicit REVISE / apply failure).
+        if: always()
+        env:
+          STILL_ACTIONABLE: ${{ steps.recheck.outputs.still_actionable }}
+          ROUTED: ${{ steps.guard.outputs.routed }}
+          REVIEW_OUTCOME: ${{ steps.review.outputs.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          if [ "$STILL_ACTIONABLE" != "true" ]; then
+            echo "This run's target was already stale (race guard); NOT overwriting the convergence record."
+            exit 0
+          fi
+          if [ "$ROUTED" = "true" ]; then
+            echo "Guard routed to gated-apply-reconcile (IAM/trust/destroy diff): NOT overwriting convergence record (anti-masking, Decision 55)."
+            exit 0
+          fi
+          if [ "$REVIEW_OUTCOME" = "starved" ]; then
+            echo "Subagent reviewer STARVED (max-turns/no-verdict/API-exhausted after the same-budget retry): NOT overwriting the convergence record -- this is a reviewer-infra failure, not a plan rejection or a genuine apply failure (Decision 55 anti-masking, T2.39 c3). Re-dispatch Reconcile once the reviewer is healthy."
+            exit 0
+          fi
+          if [ "$APPLY_OUTCOME" = "success" ]; then
+            STATUS="green"
+          else
+            STATUS="red"
+          fi
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          PLAN_SHA=$(sha256sum "${WORKDIR}/plan.bin" | cut -d' ' -f1)
+          export STATUS TS RUN_ID RUN_URL PLAN_SHA
+          RECORD=$(python3 -c "import json,os; print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['RED_SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':os.environ['PLAN_SHA']}))")
+          printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
+          echo "Wrote convergence record: ${RECORD}"
+          READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+          READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
+          if [ "$READBACK_STATUS" != "$STATUS" ]; then
+            echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != intended '${STATUS}'; record may be corrupt."
+            exit 1
+          fi
+          echo "Convergence record read-back verified: status=${READBACK_STATUS}"
+
+      - name: Best-effort wake comment on the red commit's originating PR
+        if: always() && steps.recheck.outputs.still_actionable == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ROUTED: ${{ steps.guard.outputs.routed }}
+          REVIEW_OUTCOME: ${{ steps.review.outputs.outcome }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          PR_NUM=$(gh api "repos/${REPO}/commits/${RED_SHA}/pulls" --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
+            echo "No originating PR resolved for ${RED_SHA}; skipping wake comment."
+            exit 0
+          fi
+          if [ "$ROUTED" = "true" ]; then
+            MSG="Reconcile routed ${RED_SHA} to the tf-gated-apply job in reconcile.yml (out-of-budget IAM / trust / destroy diff). Pending reviewer approval in GitHub Actions -- the convergence record is unchanged until the gated apply completes."
+          elif [ "$REVIEW_OUTCOME" = "starved" ]; then
+            MSG="Reconcile's subagent reviewer was STARVED for ${RED_SHA} (max-turns/no-verdict after retry); apply was blocked and the convergence record was NOT touched. Re-dispatch Reconcile once the reviewer is healthy."
+          elif [ "$APPLY_OUTCOME" = "success" ]; then
+            MSG="Reconcile converged GREEN for ${RED_SHA}; convergence record updated."
+          else
+            MSG="Reconcile did NOT converge (RED) for ${RED_SHA}. Inspect this run's logs directly (ci-rca does not watch reconcile.yml)."
+          fi
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "$MSG" || true
+
+  # ---------------------------------------------------------------------------
+  # Gated-apply-reconcile job: only when apply-reconcile's guard routed (out-of-budget IAM / trust
+  # / destroy). Declares environment: tf-gated-apply so it does NOT start until a required
+  # reviewer approves in GitHub Actions -- the Environment is the authorization boundary (Decision
+  # 92), exactly as terraform-apply-sandbox.yml's own gated-apply job. Re-fetches plan.bin (no
+  # shared artifact between jobs -- matches how the existing gated-apply job independently
+  # re-fetches rather than depending on apply-sandbox's in-job copy); still the SAME plan.bin, no
+  # re-plan. Subsumes the previously-stranded dispatch-vs-push deadlock (T2.37 c3; rec-2647/rec-2523):
+  # this job -- not terraform-apply-sandbox.yml's push-only gated-apply -- is reachable from a
+  # workflow_dispatch run.
+  # ---------------------------------------------------------------------------
+  gated-apply-reconcile:
+    needs: [resolve-target, apply-reconcile]
+    if: always() && needs.apply-reconcile.result == 'success' && needs.apply-reconcile.outputs.routed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: tf-gated-apply
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+      TF_VAR_aws_profile: ""
+      RED_SHA: ${{ needs.resolve-target.outputs.commit_sha }}
+
+    steps:
+      - name: Checkout the red commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RED_SHA }}
+
+      - name: Configure AWS credentials (OIDC -- apply role, main only)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-apply
+          aws-region: eu-west-2
+
+      - name: Read pinned Terraform version
+        id: tfver
+        run: echo "version=$(cat config/terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Materialise tfvars from Secrets Manager
+        run: |
+          set -euo pipefail
+          aws secretsmanager get-secret-value \
+            --secret-id agent-platform-terraform-personal-tfvars \
+            --query SecretString --output text \
+            > terraform/personal/terraform.personal.tfvars
+
+      - name: Assert tfvars file is non-empty (fail-closed)
+        run: |
+          test -s terraform/personal/terraform.personal.tfvars || {
+            echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
+            exit 1
+          }
+
+      - name: Terraform init (S3 backend, sandbox)
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set +e
+          attempt=1
+          while [ "$attempt" -le 3 ]; do
+            out=$(terraform init -input=false -backend-config=backend-sandbox.hcl 2>&1)
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "$out"
+              break
+            fi
+            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
+              if [ "$attempt" -lt 3 ]; then
+                delay=$(( 2 ** attempt ))
+                echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
+                echo "$out" >&2
+                sleep "$delay"
+                attempt=$(( attempt + 1 ))
+                continue
+              fi
+            fi
+            echo "$out" >&2
+            set -e
+            exit "$rc"
+          done
+          set -e
+
+      - name: Build DuckLake lambda packages (rebuild + assert byte-identical)
+        env:
+          BUCKET: agent-platform-data-lake
+        run: |
+          set -euo pipefail
+          pip install pyyaml pydantic
+          python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
+          NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
+          for name in $NAMES; do
+            local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
+            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing S3 object found; failing closed (Decision 77 no-TOCTOU)." >&2
+              exit 1
+            fi
+            remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
+            if [ "$local_md5" != "$remote_md5" ]; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: local=${local_md5} remote=${remote_md5}; the reconciled episode is stale relative to a later successful apply." >&2
+              exit 1
+            fi
+          done
+          for name in $NAMES; do
+            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
+          done
+
+      - name: Fetch saved plan from S3 (gated -- no re-plan)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euo pipefail
+          PR_HEAD_SHA=$(gh api "repos/${REPO}/commits/${RED_SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+          if [ -z "$PR_HEAD_SHA" ] || [ "$PR_HEAD_SHA" = "null" ]; then
+            echo "::error::No originating PR resolved for ${RED_SHA}; failing closed." >&2
+            exit 1
+          fi
+          PLAN_OBJ="s3://agent-platform-data-lake/tfplan/personal/${PR_HEAD_SHA}.bin"
+          if ! aws s3 ls "$PLAN_OBJ" > /dev/null 2>&1; then
+            echo "::error::Saved plan object not found at ${PLAN_OBJ}; failing closed." >&2
+            exit 1
+          fi
+          aws s3 cp "$PLAN_OBJ" plan.bin
+          echo "Fetched saved plan from ${PLAN_OBJ}"
+
+      - name: Terraform apply (gated -- plan.bin verbatim, no re-plan)
+        id: apply
+        working-directory: ${{ env.WORKDIR }}
+        run: terraform apply -input=false -lock-timeout=120s plan.bin
+
+      - name: Write convergence record (always-run, red-on-failure)
+        id: record_write
+        # No precondition check here: the shared concurrency group (cancel-in-progress: false)
+        # serialises ALL applies against the same tfstate + record while this job holds the group
+        # pending approval -- the SAME implicit serialisation invariant terraform-apply-sandbox.yml's
+        # gated-apply job already relies on.
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          if [ "$APPLY_OUTCOME" = "success" ]; then
+            STATUS="green"
+          else
+            STATUS="red"
+          fi
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          PLAN_SHA=$(sha256sum "${WORKDIR}/plan.bin" | cut -d' ' -f1)
+          export STATUS TS RUN_ID RUN_URL PLAN_SHA
+          RECORD=$(python3 -c "import json,os; print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['RED_SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':os.environ['PLAN_SHA']}))")
+          printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
+          echo "Wrote convergence record: ${RECORD}"
+          READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+          READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
+          if [ "$READBACK_STATUS" != "$STATUS" ]; then
+            echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != intended '${STATUS}'; record may be corrupt."
+            exit 1
+          fi
+          echo "Convergence record read-back verified: status=${READBACK_STATUS}"
+
+      - name: Best-effort wake comment on the red commit's originating PR
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          PR_NUM=$(gh api "repos/${REPO}/commits/${RED_SHA}/pulls" --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
+            exit 0
+          fi
+          if [ "$APPLY_OUTCOME" = "success" ]; then
+            MSG="Reconcile's gated apply converged GREEN for ${RED_SHA} (IAM/trust/destroy change applied after reviewer approval); convergence record updated."
+          else
+            MSG="Reconcile's gated apply did NOT converge (RED) for ${RED_SHA}. Inspect this run's logs directly."
+          fi
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "$MSG" || true
