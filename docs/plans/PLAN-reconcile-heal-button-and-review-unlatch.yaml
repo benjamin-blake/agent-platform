@@ -38,10 +38,15 @@ scope:
   - file: scripts/ci/review_verdict.py
     action: Create
     purpose: >-
-      Testable verdict classifier consumed by the review step. Parses the claude -p JSON result and
-      returns exactly one mutually-exclusive class: PROCEED (apply-eligible), REVISE (fail closed +
-      red), or STARVED (max-turns/no-verdict/API-exhausted -> block + file rec, NOT red). Pure
-      function of its input so the partition is unit-provable.
+      Testable verdict classifier consumed by the review step. The retained scripts/ci/claude_p_retry.sh
+      wrapper merges stderr into the output file (2>&1), so review_verdict must ROBUSTLY EXTRACT the
+      claude result JSON object from possibly-stderr-interleaved output (e.g. locate the result object /
+      last well-formed JSON object rather than assuming a clean json.load of the whole file) -- a
+      max-turns/no-verdict run is exactly when stderr diagnostics appear, so a naive json.load would
+      break on the STARVED class this feature exists to detect. Returns exactly one mutually-exclusive
+      class: PROCEED (apply-eligible), REVISE (fail closed + red), or STARVED
+      (max-turns/no-verdict/API-exhausted -> block + file rec, NOT red). Pure function of its input so
+      the partition is unit-provable.
   - file: scripts/ci/reconcile_target.py
     action: Create
     purpose: >-
@@ -59,9 +64,11 @@ scope:
     purpose: >-
       Recognize an in-flight Reconcile episode and do not double-file a tf_convergence_stale rec for
       the red episode the Reconcile run is clearing (T2.37 c4). The record schema is unchanged, so the
-      signal is an in-progress/recent reconcile.yml Actions run for the red commit, queried via the
-      module's existing GitHub-Actions helper pattern (as used by find_stuck_gated_approvals /
-      diagnose_stuck_approvals); when present, suppress the stale-rec file.
+      signal is an in-flight/recent reconcile.yml Actions run within the current red episode window
+      (NOT matched by head_sha == red commit -- a workflow_dispatch run's head_sha is the branch tip at
+      dispatch time and will not reliably equal the red commit once later commits merged), queried via
+      the module's existing injected-gh_caller GitHub-Actions helper pattern (as used by
+      find_stuck_gated_approvals / diagnose_stuck_approvals); when present, suppress the stale-rec file.
   - file: docs/contracts/deploy-paths.yaml
     action: Modify
     purpose: >-
@@ -81,7 +88,11 @@ scope:
     purpose: Unit tests for the --digest mode (summary content, size cap + truncation marker, ARN/account-id redaction).
   - file: tests/test_review_verdict.py
     action: Create
-    purpose: Unit tests for review_verdict classification -- PROCEED/REVISE/STARVED partition and mutual exclusivity over canned JSON inputs.
+    purpose: >-
+      Unit tests for review_verdict classification -- PROCEED/REVISE/STARVED partition and mutual
+      exclusivity. MUST include cases where the JSON result is surrounded by leading/trailing stderr
+      noise (npm/CLI diagnostic lines), matching the real claude_p_retry.sh 2>&1-merged output shape,
+      not only clean pure-JSON inputs.
   - file: tests/test_reconcile_target.py
     action: Create
     purpose: Unit tests for reconcile_target -- red-commit extraction, green/absent no-op, and rec-id OPEN validation (injected reader).
@@ -124,8 +135,8 @@ acceptance_criteria:
     manual acknowledge-and-retry (T2.37 c3; closes rec-2647/rec-2523).
   - >-
     convergence_health does not double-file a tf_convergence_stale rec for a red episode that a
-    Reconcile run is clearing -- detected via an in-progress/recent reconcile.yml Actions run for the
-    red commit (T2.37 c4).
+    Reconcile run is clearing -- detected via an in-flight/recent reconcile.yml Actions run within the
+    red episode window (not by head_sha equality) (T2.37 c4).
   - >-
     review_verdict classifies a max-turns/no-verdict/API-exhausted reviewer outcome as STARVED,
     distinct from an explicit REVISE; STARVED is never treated as an implicit REVISE (T2.39 c1).
@@ -171,15 +182,17 @@ verification_plan:
     hermetic: false
   - step: 3
     phase: pre-deploy
-    action: Unit-test the review_verdict PROCEED/REVISE/STARVED partition and mutual exclusivity.
+    action: Unit-test the review_verdict PROCEED/REVISE/STARVED partition, mutual exclusivity, and robustness to stderr-interleaved input.
     command: "bin/venv-python -m pytest tests/test_review_verdict.py -v"
     expected: >-
-      Canned PROCEED json -> PROCEED (apply-eligible); 'REVISE <reason>' -> REVISE (red); a
-      claude error_max_turns / empty-result / API-exhausted json -> STARVED (block + file rec, not
-      red). Every input maps to exactly one class; no input maps to two.
+      PROCEED json -> PROCEED (apply-eligible); 'REVISE <reason>' -> REVISE (red); a claude
+      error_max_turns / empty-result / API-exhausted json -> STARVED (block + file rec, not red).
+      Classification holds even when the JSON is wrapped in leading/trailing stderr noise (the real
+      claude_p_retry.sh 2>&1 shape). Every input maps to exactly one class; no input maps to two.
     fix_if: >-
       A max-turns/no-verdict input classifies as PROCEED (fail-open -- unsafe) or as REVISE (masks a
-      reviewer-infra failure as a plan rejection), or the classes overlap.
+      reviewer-infra failure as a plan rejection); the classes overlap; or a stderr-wrapped result
+      throws instead of classifying (the contamination the 2>&1 merge introduces on the STARVED path).
     hermetic: false
   - step: 4
     phase: pre-deploy
@@ -295,7 +308,7 @@ context:
     [NOTE 55/92/94] REVIEW_STARVED proven disjoint from REVISE and real failure -- acceptance
     criterion 7 + VP step 3; [NOTE 48/84/103] rec-2658 acceptance edited via the portal with a
     behavioural (not grep-ceiling) check -- acceptance criterion 9.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE->PROCEED after 1 round (added rec-2658 closure VP step 10; pinned c3 own-gated-apply-job mechanism; named c4 in-flight-reconcile signal; noted claude_p_retry.sh interaction)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique after 2 rounds (R1: added rec-2658 closure VP step 10, pinned c3 own-gated-apply-job mechanism, named c4 in-flight-reconcile signal; R2: review_verdict robust extraction from stderr-interleaved claude_p_retry.sh 2>&1 output + stderr-noise test case, c4 predicate reworded to red-episode window not head_sha)"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -305,11 +318,11 @@ pre_implementation_checklist:
   - "Verify guard.py/convergence_health.py are NOT Lambda-packaged: bin/venv-python -c \"from scripts.lambda_manifest import compute_affected_artifacts; print(compute_affected_artifacts(['scripts/terraform_apply_guard.py','scripts/convergence_health.py']))\" (expect empty -> no deploy step, Decision 79)"
 execution_steps:
   - "Add --digest mode to scripts/terraform_apply_guard.py reusing evaluate_plan()'s resource_changes traversal; bounded, size-capped with truncation marker, ARN/account-id redacted. Add tests in tests/test_terraform_apply_guard.py."
-  - "Create scripts/ci/review_verdict.py: pure JSON-in -> {PROCEED|REVISE|STARVED} classifier with a mutually-exclusive partition. Add tests/test_review_verdict.py."
+  - "Create scripts/ci/review_verdict.py: {PROCEED|REVISE|STARVED} classifier with a mutually-exclusive partition, robustly extracting the claude result JSON from stderr-interleaved output (claude_p_retry.sh merges 2>&1). Add tests/test_review_verdict.py including a case with JSON surrounded by leading/trailing stderr noise."
   - "Create scripts/ci/reconcile_target.py: read convergence record -> red commit SHA or clean no-op; validate optional rec-id OPEN via the ducklake_reader portal boundary. Add tests/test_reconcile_target.py."
   - "Create .github/workflows/reconcile.yml: input-free workflow_dispatch; call reconcile_target for the red commit (green/absent -> clean no-op); re-run the deterministic guard; re-apply guard-PASS in its apply job and route guard-BLOCK through a second job in the SAME workflow declaring environment: tf-gated-apply (not the push-only sandbox job); optional rec-id validated OPEN first. Rework scripts/terraform_apply_guard.py main() arg parsing (currently rejects arg count != 1) to add the --digest flag."
   - "Modify .github/workflows/terraform-apply-sandbox.yml review step: pipe guard --digest on stdin, --allowedTools Read, --output-format json, small budget; classify via review_verdict; retry once at the SAME budget on STARVED. Modify the record-write step: gate the red write behind a REVIEW_STARVED marker (starvation blocks + files rec, never red); keep REVISE and real failures red. Make the routed case reachable by Reconcile."
-  - "Modify scripts/convergence_health.py to recognize an in-flight Reconcile episode (in-progress/recent reconcile.yml Actions run for the red commit, via the existing GH-Actions helper pattern) and not double-file tf_convergence_stale. Add the test in tests/test_convergence_health.py."
+  - "Modify scripts/convergence_health.py to recognize an in-flight Reconcile episode (in-flight/recent reconcile.yml Actions run within the red episode window -- not head_sha equality, via the existing injected-gh_caller helper pattern) and not double-file tf_convergence_stale. Add the test in tests/test_convergence_health.py."
   - "Confirm the interaction with scripts/ci/claude_p_retry.sh: the transient-API-error wrapper is RETAINED around the reviewer; the new SAME-budget STARVED retry is a distinct verdict-driven concern layered on top (no double-retry, no dropped transient-retry)."
   - "Flip docs/contracts/deploy-paths.yaml reconcile: status to landed (field edit only). Reword T2.39 c2 and add the T2.39 soft-coordination note in docs/ROADMAP-PLATFORM.yaml (no status flips)."
   - "Update rec-2658 acceptance via the ops portal to the behavioural (classification + not-latch-red) assertion; the squash-merge body carries 'Resolves: rec-2658'."
