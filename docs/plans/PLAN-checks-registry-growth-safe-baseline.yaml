@@ -1,0 +1,162 @@
+schema_version: 1
+slug: "checks-registry-growth-safe-baseline"
+intent: >-
+  Replace the brittle frozen ordered-tuple baselines in tests/test_checks_registry.py
+  with growth-safe invariants, closing ci_rca rec-2673 and eliminating the tier_misplaced
+  escape class where adding a check to scripts/checks/registry.py breaks post-merge CI.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-checks-registry-growth-safe-baseline.yaml
+phase: >-
+  Platform hardening / CI resilience -- forward-fix for ci_rca rec-2673 (Decision 55/72),
+  removing a recurring diff-aware-tier escape (Decision 73) in the Decision 104 check registry.
+scope:
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Delete FROZEN_PRE_SEQUENCE/FROZEN_FULL_SEQUENCE and the two byte-for-byte tuple
+      assertions; replace with a per-tier membership floor, a scaffold-anchor order
+      invariant, and growth-safety proof tests. Retain the existing growth-safe
+      structural tests. Add a Context/docstring note superseding Decision 104's
+      equivalence-oracle permanence.
+bundled_recommendations:
+  - rec-2673
+infrastructure_dependencies: []
+acceptance_criteria:
+  - FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE constants and the two byte-for-byte
+    tuple-equality assertions (test_pre_sequence_matches_frozen_baseline,
+    test_full_sequence_matches_frozen_baseline) are removed from tests/test_checks_registry.py.
+  - A per-tier membership floor (REQUIRED_PRE_CHECKS / REQUIRED_FULL_CHECKS frozensets,
+    seeded from the current complete per-tier check-name set) is asserted as a subset of
+    the actual check-name set of registry.pre_sequence()/full_sequence().
+  - A scaffold-anchor invariant asserts the scaffold-only subsequence of each tier equals
+    a frozen ordered tuple (the fixed structural skeleton).
+  - The pre-tier no-duplicate-checks test and the full-tier cli_tools-twice test are retained.
+  - Growth-safety is proven by tests that (a) show a simulated new check added to a
+    sequence still satisfies the floor, and (b) show removing a required check from a
+    simulated sequence fails the floor subset check.
+  - bin/venv-python -m pytest tests/test_checks_registry.py -q passes fully against the
+    current registry (which already wires validate_prose_allowlist), closing the CI red.
+  - No new exact-count (len(...) == <int>) assertion against a growing collection is
+    introduced (validate_test_count_coupling stays green).
+  - rec-2673 is closed via the Resolves trailer on the squash-merge commit.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Confirm the brittle frozen ordered-tuple constants are deleted.
+    command: 'test -z "$(grep -nE "FROZEN_PRE_SEQUENCE|FROZEN_FULL_SEQUENCE" tests/test_checks_registry.py)"'
+    expected: Command exits 0 (no matches) -- both constants and their references are gone.
+    fix_if: Any match remains -- a frozen ordered-tuple baseline or reference was left behind.
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: Run the full redesigned test module against the real registry (closes the CI red).
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q
+    expected: All tests pass, including the new membership-floor and scaffold-anchor invariants,
+      with validate_prose_allowlist present in both tiers.
+    fix_if: Any failure -- the floor set, scaffold anchor tuple, or a retained test is wrong,
+      or the redesign still couples to the growing check block.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: Prove the invariants have teeth -- additions pass, removals fail.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q -k "growth_safe or detects_removal"
+    expected: The growth-safety proof tests pass -- a simulated added check keeps the floor
+      satisfied, and a simulated removed required check trips the subset assertion.
+    fix_if: Either proof test is missing or does not assert the intended behaviour (a floor that
+      cannot detect removal is a no-op guard).
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: Guard against reintroducing the test-count-coupling anti-pattern in this file.
+    command: 'test -z "$(grep -nE "len\([^)]*\)[[:space:]]*==[[:space:]]*[0-9]+" tests/test_checks_registry.py)"'
+    expected: Command exits 0 (no matches) -- no new exact-count assertion against a growing
+      collection was introduced by the redesign.
+    fix_if: A len(...) == <int> assertion appears -- replace it with a subset floor, uniqueness,
+      or wiring-contract invariant per tests/CLAUDE.md.
+    hermetic: false
+  - step: 5
+    phase: post-deploy
+    action: Confirm rec-2673 actually closed after the Resolves-trailer autoclose (guards a
+      silent rec-autoclose.yml miss; best-effort autoclose is not self-verifying).
+    command: 'bin/venv-python -m scripts.ops_data_portal --sync && grep ''"id": "rec-2673"'' logs/.recommendations-log.jsonl | grep -q ''"status": "closed"'''
+    expected: The synced read cache shows rec-2673 with status closed.
+    fix_if: rec-2673 is still open after merge -- the Resolves trailer did not fire; close it
+      manually via bin/venv-python -m scripts.ops_data_portal --update-rec rec-2673 --status closed --resolution "...".
+    hermetic: false
+constraints:
+  - Only tests/test_checks_registry.py may be modified. scripts/checks/registry.py is correct
+    (validate_prose_allowlist is properly wired); do NOT edit the registry or re-freeze a tuple.
+  - No rescue agents or workaround loops (Decision 55). This is the forward-fix for rec-2673,
+    not an inline re-freeze of the stale baseline.
+  - Invariants MUST be computed from registry.pre_sequence()/full_sequence() directly. Do NOT
+    depend on registry.all_checks() (the decorator registry) -- it is import-order dependent
+    (returns empty in isolation) and would make the invariant fragile.
+  - The user chose the growth-safe-invariant route over the alternative coupled-test-selection
+    route; do NOT add a diff-aware tier selection rule in this plan.
+  - Do NOT assert an exact len(...) == N count against the check sequences (tests/CLAUDE.md
+    test-count-coupling rule). The scaffold-anchor tuple is exact-order over the FIXED scaffold
+    skeleton only, which is not a growing collection.
+context:
+  - "rec-2673 (source=ci_rca, Critical): CI run 29258685834 full tier failed at
+    tests/test_checks_registry.py:190,194 because #553 (Decision 127) added validate_prose_allowlist
+    to registry.py pre(:99)/full(:178) sequences without extending the frozen baselines. The
+    registry is correct; only the test baseline was stale."
+  - "Decision 104: introduced tests/test_checks_registry.py and its frozen byte-for-byte ordered
+    baselines as a one-time equivalence oracle proving the validate.py decomposition preserved the
+    check sequence. SUPERSESSION NOTE (must be recorded in the test module docstring/Context): this
+    plan supersedes the byte-for-byte permanence of that oracle with growth-safe invariants that
+    preserve the meaningful ordering guarantee via the scaffold-anchor tuple. The decomposition
+    mechanism (registry.py, _common.py, dispatch loop) is untouched; the oracle's one-time job is
+    done. No re-ratification is required for test maintenance -- this one-line citation suffices."
+  - "Decision 73: the two-tier diff-aware CI is the escape mechanism -- a registry-only PR never
+    selects tests/test_checks_registry.py in the --pre tier, so the stale-baseline break surfaces
+    only in the post-merge full tier. The growth-safe redesign removes the recurrence class."
+  - "Decision 72: rec-2673 was filed by the ci-rca RCA-as-plan-source flow; consuming it via /plan
+    (not inline patch) is the sanctioned channel."
+  - "Decision 127: validate_prose_allowlist (the triggering check) must remain present in the
+    REQUIRED_FULL_CHECKS / REQUIRED_PRE_CHECKS floors."
+  - "Decision 48: V2 tier is correct -- pure-Python test redesign, no external integration, no deploy."
+  - "Membership floor is seeded from the COMPLETE current per-tier check set (snapshot-with-
+    monotonic-growth pattern): additions pass unchanged; a removal edits the floor in the test file,
+    which the --pre diff-aware tier then selects, so removals stay gated at presubmit."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 104,
+    Decision 55, Decision 73. One WARN CONTRADICT on Decision 104's equivalence-oracle byte-for-byte
+    clause, resolved by the supersession Context note above (no pivot). RELATED: Decision 72,
+    Decision 127, Decision 48."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - Relevant decisions (104, 55, 73, 72, 127, 48) reviewed via decision-scout
+  - tests/test_checks_registry.py and scripts/checks/registry.py located and read
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "Edit tests/test_checks_registry.py: delete FROZEN_PRE_SEQUENCE and FROZEN_FULL_SEQUENCE
+    (lines ~42-156) and the two byte-for-byte assertions test_pre_sequence_matches_frozen_baseline
+    / test_full_sequence_matches_frozen_baseline."
+  - "Add REQUIRED_PRE_CHECKS and REQUIRED_FULL_CHECKS frozensets seeded from the current complete
+    per-tier check-name set (the 'check'-kind Step names of registry.pre_sequence()/full_sequence()
+    as they stand today, including validate_prose_allowlist). Add FROZEN_PRE_SCAFFOLDS /
+    FROZEN_FULL_SCAFFOLDS ordered tuples of the scaffold-kind names."
+  - "Replace the deleted tests with: test_pre_sequence_meets_required_floor and
+    test_full_sequence_meets_required_floor (assert REQUIRED_*_CHECKS <= actual check-name set);
+    test_pre_scaffold_anchor_order and test_full_scaffold_anchor_order (assert scaffold-only
+    subsequence == FROZEN_*_SCAFFOLDS)."
+  - "Add growth-safety proof tests: test_membership_floor_growth_safe_to_additions (build a
+    sequence = real sequence + a synthetic _c('validate_synthetic_new') step; assert the floor is
+    still a subset) and test_membership_floor_detects_removal (build a sequence with one required
+    check removed; assert the floor is NOT a subset, e.g. via assert not REQUIRED <= truncated)."
+  - "Retain test_pre_sequence_has_no_duplicate_checks and
+    test_full_sequence_cli_tools_in_prompts_appears_exactly_twice. Rename the container class
+    TestFrozenBaselineEquivalence -> TestSequenceInvariants and update the module docstring
+    'frozen pre-refactor baseline' text to the Decision 104 supersession note from Context."
+  - "Run ruff check --fix tests/test_checks_registry.py to drop any now-unused imports."
+  - "Execute Verification Plan -- run each step; loop until pass. This is V2; on failure, fix the
+    invariant definition, never re-freeze an ordered tuple (Decision 55)."
+  - "Report: what was implemented, verification results, and confirm rec-2673 is bundled for the
+    Resolves trailer."
+work_areas: []
+rollback: >-
+  Revert the single-file diff to tests/test_checks_registry.py; the registry is unchanged, so
+  reverting restores the prior (stale-prone) baselines with no production impact.
