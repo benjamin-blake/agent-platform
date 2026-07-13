@@ -1,9 +1,23 @@
 """Tests for the check registry (Decision 104): scripts/checks/registry.py + _common.py.
 
-Covers: full-trace equivalence against the frozen pre-refactor baseline, facade
+Covers: growth-safe sequence invariants (membership floor + scaffold-anchor order --
+see the PLAN-checks-registry-growth-safe-baseline supersession note below), facade
 completeness (every check/helper reachable via validate.<name> AND `from scripts.validate
 import <name>`), mock-interception preservation through moved bodies, owner-metadata
 correctness, the no-local-ROOT invariant, and rec-2420's lowering-test gap.
+
+SUPERSESSION NOTE (PLAN-checks-registry-growth-safe-baseline, closes rec-2673/rec-2674):
+Decision 104 introduced this module with byte-for-byte frozen ordered-tuple baselines
+(a pair of frozen per-tier sequence constants) as a one-time equivalence oracle proving the
+validate.py decomposition preserved the check sequence. That oracle's job is done and its
+byte-for-byte permanence is superseded here: every registry.py addition required a
+synchronous, coupled edit to this file, and the diff-aware --pre tier has no rule binding
+registry.py changes to this test file's selection, so the coupling silently escaped to the
+post-merge full tier twice (rec-2673, rec-2674). The invariants below replace exact
+ordered-tuple equality with (a) a per-tier required-check membership floor (a subset check,
+so new checks pass unchanged) and (b) a scaffold-anchor order invariant over the fixed,
+non-growing scaffold skeleton. The decomposition mechanism (registry.py, _common.py, the
+dispatch loop) is untouched; only this file's oracle shape changes.
 """
 
 from __future__ import annotations
@@ -33,126 +47,143 @@ else:
 from scripts.checks import _common, registry  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Frozen pre-refactor baseline (captured from the monolithic scripts/validate.py
-# BEFORE any code was moved -- see PLAN-validate-decomposition.yaml execution_steps
-# item 1). Structural (kind, name) tuples, not raw stdout: comparing print-text would
-# make this oracle fragile to cosmetic wording changes with zero behavioural meaning.
+# Growth-safe invariants (supersedes the Decision 104 frozen ordered-tuple baseline --
+# see the module docstring supersession note).
+#
+# REQUIRED_*_CHECKS are membership floors: every "check"-kind name known to be required
+# in that tier today. Asserted as a SUBSET of the actual sequence's check-name set, so a
+# new check added to the registry passes unchanged (Decision 55: no rescue loop needed),
+# while a required check's removal trips the subset assertion (see the growth-safety proof
+# tests below).
+#
+# FROZEN_*_SCAFFOLDS are exact ordered tuples over the "scaffold"-kind steps only -- a
+# fixed, non-growing structural skeleton (lint/precommit/mypy/pytest-diff/coverage/budget
+# for pre; lint/unit_tests/mypy_full/terraform/dependency_health/ensure_fresh_dq/precommit
+# for full). Exact order here is meaningful and does not grow as checks are added, so it is
+# not the test-count-coupling anti-pattern the membership floor replaces.
 # ---------------------------------------------------------------------------
 
-FROZEN_PRE_SEQUENCE: tuple[tuple[str, str], ...] = (
-    ("scaffold", "lint"),
-    ("scaffold", "precommit_changed"),
-    ("scaffold", "mypy_diff"),
-    ("scaffold", "pytest_diff"),
-    ("check", "validate_iam_runner_policy"),
-    ("check", "validate_prompt_files"),
-    ("check", "validate_cli_tools_in_prompts"),
-    ("check", "validate_workflow_agent_safety"),
-    ("check", "validate_product_roadmap"),
-    ("check", "validate_plan_documents"),
-    ("check", "validate_tier_floor"),
-    ("check", "validate_candidate_decision_ratification"),
-    ("check", "validate_cc_limits"),
-    ("check", "validate_sloc_limits"),
-    ("check", "validate_subprocess_encoding"),
-    ("check", "validate_test_count_coupling"),
-    ("check", "validate_intent_doc_freeze"),
-    ("check", "validate_contract_drift"),
-    ("check", "validate_placement"),
-    ("check", "validate_field_semantics_drift"),
-    ("check", "validate_deploy_channel_conformance"),
-    ("check", "validate_ci_rca_taxonomy"),
-    ("check", "validate_ops_portal_patch_targets"),
-    ("check", "validate_claude_p_retry_wrapper"),
-    ("check", "validate_authority_budget"),
-    ("check", "validate_invoke_implies_resolve"),
-    ("check", "validate_ci_workflow_guards"),
-    ("check", "validate_ducklake_version_lockstep"),
-    ("check", "validate_import_contracts"),
-    ("check", "validate_lockfile_sync"),
-    ("check", "validate_verifier_same_pr_guard"),
-    ("check", "validate_verification_registry"),
-    ("check", "validate_vp_replay"),
-    ("scaffold", "coverage_report"),
-    ("scaffold", "budget_assertion"),
+REQUIRED_PRE_CHECKS: frozenset[str] = frozenset(
+    {
+        "validate_iam_runner_policy",
+        "validate_prompt_files",
+        "validate_cli_tools_in_prompts",
+        "validate_workflow_agent_safety",
+        "validate_product_roadmap",
+        "validate_plan_documents",
+        "validate_tier_floor",
+        "validate_candidate_decision_ratification",
+        "validate_cc_limits",
+        "validate_sloc_limits",
+        "validate_subprocess_encoding",
+        "validate_test_count_coupling",
+        "validate_intent_doc_freeze",
+        "validate_prose_allowlist",
+        "validate_contract_drift",
+        "validate_placement",
+        "validate_field_semantics_drift",
+        "validate_deploy_channel_conformance",
+        "validate_ci_rca_taxonomy",
+        "validate_ops_portal_patch_targets",
+        "validate_claude_p_retry_wrapper",
+        "validate_authority_budget",
+        "validate_invoke_implies_resolve",
+        "validate_ci_workflow_guards",
+        "validate_ducklake_version_lockstep",
+        "validate_import_contracts",
+        "validate_lockfile_sync",
+        "validate_verifier_same_pr_guard",
+        "validate_verification_registry",
+        "validate_vp_replay",
+    }
 )
 
-FROZEN_FULL_SEQUENCE: tuple[tuple[str, str], ...] = (
-    # run_python_checks()
-    ("scaffold", "lint"),
-    ("check", "validate_subprocess_encoding"),
-    ("check", "validate_test_count_coupling"),
-    ("check", "validate_sys_executable"),
-    ("check", "validate_cli_tools_in_prompts"),
-    ("check", "validate_imports"),
-    ("check", "validate_recommendations_schema"),
-    ("check", "validate_outbox_staleness"),
-    ("check", "validate_executor_boundary"),
-    ("check", "validate_rec_write_paths"),
-    ("check", "validate_decisions_local_writes"),
-    ("check", "validate_warehouse_write_sources"),
-    ("check", "validate_broker_env_reads"),
-    ("check", "validate_invariants"),
-    ("check", "validate_ci_rca_trigger"),
-    ("check", "validate_ci_workflow_guards"),
-    ("check", "validate_claude_p_retry_wrapper"),
-    ("check", "validate_sloc_limits"),
-    ("check", "check_source_registry"),
-    ("check", "validate_platform_roadmap"),
-    ("check", "validate_candidate_decision_ratification"),
-    ("check", "validate_lambda_manifests"),
-    ("check", "validate_lambda_manifest_coverage"),
-    ("check", "validate_lambda_bundle_completeness"),
-    ("check", "validate_lambda_deploy_gating"),
-    ("check", "validate_product_roadmap"),
-    ("check", "validate_plan_documents"),
-    ("check", "validate_tier_floor"),
-    ("check", "validate_pydantic_yaml_drift"),
-    ("check", "_check_graduation_guard"),
-    ("check", "validate_dq_manifest_gate"),
-    ("check", "validate_test_coverage"),
-    ("check", "validate_no_underscore_instructions"),
-    ("check", "validate_claude_md_pointer_invariant"),
-    ("check", "validate_environment_taxonomy"),
-    ("check", "validate_complexity"),
-    ("check", "validate_scheduled_agent_logs"),
-    ("check", "validate_ghas_probe"),
-    ("check", "validate_hermeticity_flags"),
-    ("check", "validate_verifier_hermeticity"),
-    ("check", "validate_verifier_same_pr_guard"),
-    ("check", "validate_verification_registry"),
-    ("check", "validate_differential_gate_baseline"),
-    ("check", "validate_intent_doc_freeze"),
-    ("check", "validate_contract_drift"),
-    ("check", "validate_placement"),
-    ("check", "validate_portal_drift"),
-    ("check", "validate_rec_relevance_contract"),
-    ("check", "validate_field_semantics_drift"),
-    ("check", "validate_ci_rca_taxonomy"),
-    ("check", "validate_ops_portal_patch_targets"),
-    ("check", "validate_authority_budget"),
-    ("check", "validate_invoke_implies_resolve"),
-    ("check", "validate_ducklake_version_lockstep"),
-    ("check", "validate_import_contracts"),
-    ("check", "validate_lockfile_sync"),
-    ("check", "validate_dependency_graph_freshness"),
-    ("scaffold", "unit_tests"),
-    ("scaffold", "mypy_full"),
-    ("scaffold", "terraform_checks"),
-    ("check", "validate_iam_runner_policy"),
-    # run_dependency_checks() + validate_requirements
-    ("scaffold", "dependency_health"),
-    ("check", "validate_requirements"),
-    # prompts block
-    ("check", "validate_prompt_files"),
-    ("check", "validate_cli_tools_in_prompts"),
-    ("check", "validate_workflow_agent_safety"),
-    ("check", "validate_prompt_compliance"),
-    ("check", "validate_instruction_architecture_layers"),
-    # tail
-    ("scaffold", "ensure_fresh_dq"),
-    ("check", "validate_verification_harness"),
-    ("scaffold", "precommit_all_files"),
+FROZEN_PRE_SCAFFOLDS: tuple[str, ...] = (
+    "lint",
+    "precommit_changed",
+    "mypy_diff",
+    "pytest_diff",
+    "coverage_report",
+    "budget_assertion",
+)
+
+REQUIRED_FULL_CHECKS: frozenset[str] = frozenset(
+    {
+        "validate_subprocess_encoding",
+        "validate_test_count_coupling",
+        "validate_sys_executable",
+        "validate_cli_tools_in_prompts",
+        "validate_imports",
+        "validate_recommendations_schema",
+        "validate_outbox_staleness",
+        "validate_executor_boundary",
+        "validate_rec_write_paths",
+        "validate_decisions_local_writes",
+        "validate_warehouse_write_sources",
+        "validate_broker_env_reads",
+        "validate_invariants",
+        "validate_ci_rca_trigger",
+        "validate_ci_workflow_guards",
+        "validate_claude_p_retry_wrapper",
+        "validate_sloc_limits",
+        "check_source_registry",
+        "validate_platform_roadmap",
+        "validate_candidate_decision_ratification",
+        "validate_lambda_manifests",
+        "validate_lambda_manifest_coverage",
+        "validate_lambda_bundle_completeness",
+        "validate_lambda_deploy_gating",
+        "validate_product_roadmap",
+        "validate_plan_documents",
+        "validate_tier_floor",
+        "validate_pydantic_yaml_drift",
+        "_check_graduation_guard",
+        "validate_dq_manifest_gate",
+        "validate_test_coverage",
+        "validate_no_underscore_instructions",
+        "validate_claude_md_pointer_invariant",
+        "validate_environment_taxonomy",
+        "validate_complexity",
+        "validate_scheduled_agent_logs",
+        "validate_ghas_probe",
+        "validate_hermeticity_flags",
+        "validate_verifier_hermeticity",
+        "validate_verifier_same_pr_guard",
+        "validate_verification_registry",
+        "validate_differential_gate_baseline",
+        "validate_intent_doc_freeze",
+        "validate_prose_allowlist",
+        "validate_contract_drift",
+        "validate_placement",
+        "validate_portal_drift",
+        "validate_rec_relevance_contract",
+        "validate_field_semantics_drift",
+        "validate_ci_rca_taxonomy",
+        "validate_ops_portal_patch_targets",
+        "validate_authority_budget",
+        "validate_invoke_implies_resolve",
+        "validate_ducklake_version_lockstep",
+        "validate_import_contracts",
+        "validate_lockfile_sync",
+        "validate_dependency_graph_freshness",
+        "validate_iam_runner_policy",
+        "validate_requirements",
+        "validate_prompt_files",
+        "validate_workflow_agent_safety",
+        "validate_prompt_compliance",
+        "validate_instruction_architecture_layers",
+        "validate_verification_harness",
+    }
+)
+
+FROZEN_FULL_SCAFFOLDS: tuple[str, ...] = (
+    "lint",
+    "unit_tests",
+    "mypy_full",
+    "terraform_checks",
+    "dependency_health",
+    "ensure_fresh_dq",
+    "precommit_all_files",
 )
 
 # Every check name + every extracted private helper. Both must resolve via
@@ -182,16 +213,26 @@ OWNER_EXPECTATIONS: dict[str, tuple[str, bool]] = {
 }
 
 
-class TestFrozenBaselineEquivalence:
-    """VP step 2: full ordered per-tier trace equivalence (step kind+name, not raw stdout)."""
+class TestSequenceInvariants:
+    """Growth-safe successor to the Decision 104 frozen-baseline oracle (see module
+    docstring supersession note). A per-tier required-check membership floor plus a
+    scaffold-anchor order invariant, instead of exact ordered-tuple equality."""
 
-    def test_pre_sequence_matches_frozen_baseline(self) -> None:
-        actual = tuple((s.kind, s.name) for s in registry.pre_sequence())
-        assert actual == FROZEN_PRE_SEQUENCE
+    def test_pre_sequence_meets_required_floor(self) -> None:
+        actual = {s.name for s in registry.pre_sequence() if s.kind == "check"}
+        assert REQUIRED_PRE_CHECKS <= actual
 
-    def test_full_sequence_matches_frozen_baseline(self) -> None:
-        actual = tuple((s.kind, s.name) for s in registry.full_sequence())
-        assert actual == FROZEN_FULL_SEQUENCE
+    def test_full_sequence_meets_required_floor(self) -> None:
+        actual = {s.name for s in registry.full_sequence() if s.kind == "check"}
+        assert REQUIRED_FULL_CHECKS <= actual
+
+    def test_pre_scaffold_anchor_order(self) -> None:
+        actual = tuple(s.name for s in registry.pre_sequence() if s.kind == "scaffold")
+        assert actual == FROZEN_PRE_SCAFFOLDS
+
+    def test_full_scaffold_anchor_order(self) -> None:
+        actual = tuple(s.name for s in registry.full_sequence() if s.kind == "scaffold")
+        assert actual == FROZEN_FULL_SCAFFOLDS
 
     def test_pre_sequence_has_no_duplicate_checks(self) -> None:
         """Unlike full_sequence (validate_cli_tools_in_prompts legitimately runs twice),
@@ -204,6 +245,20 @@ class TestFrozenBaselineEquivalence:
         the prompts block."""
         names = [s.name for s in registry.full_sequence() if s.kind == "check"]
         assert names.count("validate_cli_tools_in_prompts") == 2
+
+    def test_membership_floor_growth_safe_to_additions(self) -> None:
+        """A new check added to the registry must not break the required-check floor."""
+        actual = {s.name for s in registry.full_sequence() if s.kind == "check"}
+        actual.add("validate_synthetic_new")
+        assert REQUIRED_FULL_CHECKS <= actual
+
+    def test_membership_floor_detects_removal(self) -> None:
+        """Removing a required check from the sequence must trip the floor -- proves the
+        floor has teeth and is not a no-op guard."""
+        actual = {s.name for s in registry.full_sequence() if s.kind == "check"}
+        removed_one = next(iter(REQUIRED_FULL_CHECKS))
+        actual.discard(removed_one)
+        assert not (REQUIRED_FULL_CHECKS <= actual)
 
 
 class TestFacadeCompleteness:
