@@ -1,0 +1,409 @@
+schema_version: 1
+slug: "ducklake-governed-deploy-channel"
+intent: >-
+  Realize the Decision 125 "deploy code" verb: a governed GitHub Actions CD channel for the four
+  DuckLake Lambdas (writer/reader/maintenance/catalog-dr) so their code deploys through a scoped,
+  auditable path with post-deploy smoke gates and a deployment record -- retiring the local
+  break-glass invocation as the only route and closing the rec-2649 silent-stale-code gap.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ducklake-governed-deploy-channel.yaml
+phase: >-
+  Platform tier_item T2.38 (Governed code-deploy channel for the four DuckLake Lambdas,
+  Decision 125/126). Closes T2.38 exit criteria c1-c4.
+closes_criteria:
+  - "T2.38:c1"
+  - "T2.38:c2"
+  - "T2.38:c3"
+  - "T2.38:c4"
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      c1 -- add the scoped OIDC role agent-platform-github-ci-ducklake-deploy: trust refs/heads/main
+      only; policy grants ONLY lambda:UpdateFunctionCode on the four ducklake function ARNs,
+      s3:GetObject/s3:PutObject on lambda-packages/*, and s3:PutObject on deploy-records/ducklake/*.
+      No terraform, no IAM write, no Lambda-config (UpdateFunctionConfiguration etc.), no invoke.
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      c1 -- add the new role ARN to the read-only IAMRolesRead refresh grant so terraform plan can
+      refresh it (Decision 98 admin-create precedent; read grant, NOT the IAM-write budget).
+  - file: .github/workflows/deploy-ducklake-lambdas.yml
+    action: Create
+    purpose: >-
+      c2 -- governed CD workflow: push-to-main filtered to ducklake source; deploy job assumes the
+      scoped role and runs build_lambda --ducklake-only --deploy; smoke job needs: deploy, assumes
+      github-ci-branch, runs ducklake_neon_smoke_test --lambda-attach + --lambda-reader; deploy is
+      successful only if the post-deploy gates pass (loud-fail, Decision 55).
+  - file: scripts/build_lambda_deploy.py
+    action: Modify
+    purpose: >-
+      c3 -- capture CodeSha256 from the update-function-code response, write a deployment record
+      deploy-records/ducklake/<function>.json (function -> CodeSha256 -> source git SHA from
+      GITHUB_SHA), and add a read_deploy_record helper so convergence-health/drift tooling can
+      consume it.
+  - file: scripts/convergence_health.py
+    action: Modify
+    purpose: >-
+      c3 (wired drift alarm) -- add detect_ducklake_code_drift: reads the deploy records, compares
+      each recorded source git SHA against the latest main commit touching ducklake source paths,
+      and files/updates a single deduped ducklake_code_drift rec via the injected portal caller
+      (alarm-not-gate, mirrors the tf_convergence_stale pattern; auto-closes on match).
+  - file: .github/workflows/convergence-health.yml
+    action: Modify
+    purpose: >-
+      c3 (wired drift alarm) -- add a step invoking the ducklake code-drift sensor on the existing
+      cron under the github-ci-branch identity (already reads the data-lake bucket; no new grant).
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      c3 (wired drift alarm) -- register canonical_id ducklake_code_drift (description +
+      signal_interpretation) so ops_data_portal accepts the new rec source at write time.
+  - file: tests/test_build_lambda_deploy.py
+    action: Modify
+    purpose: >-
+      c3 -- unit tests for the CodeSha256 capture, deploy-record write (correct key/schema), and
+      read_deploy_record round-trip, with injected subprocess/S3 (no live AWS).
+  - file: tests/test_convergence_health.py
+    action: Modify
+    purpose: >-
+      c3 -- unit tests for detect_ducklake_code_drift: stale (recorded SHA behind main) files a rec;
+      fresh (SHA matches) files nothing / closes an open rec; dedup on repeated stale ticks.
+  - file: docs/contracts/build-lambda.yaml
+    action: Modify
+    purpose: >-
+      c4 -- update deploy_channels.ducklake_functions to name the governed workflow as the default
+      channel and document break_glass_only as genuinely non-default (retained, not deleted).
+  - file: docs/contracts/deploy-paths.yaml
+    action: Modify
+    purpose: >-
+      c4 -- flip deploy_code.status from "pending (tier_item T2.38)" to landed, naming the governed
+      workflow. Does NOT restate guard/apply-model classification (Decision 126 point 2 no second SoT).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf: the new role is an IAM CreateRole -> the deterministic guard exits 2
+    (IAM_SENSITIVE_TYPES, Decision 77/92). It CANNOT auto-apply via the sandbox CD pipeline and CANNOT
+    be pipeline-minted (T2.23 authority budget scopes in-budget CreateRole to branch+pr only). It
+    lands via the agent_platform_admin human-gated -target admin-create path (Decision 98), mirroring
+    github_ci_plan / github_ci_drift. The speculative-plan job still posts its comment with a predicted
+    BLOCKED verdict. Order: admin-create the role (present plan -> human accepts -> apply) BEFORE the
+    governed workflow's first real deploy is exercised.
+  - >-
+    terraform/bootstrap/github_ci_apply.tf: the IAMRolesRead refresh-grant addition is a bootstrap-root
+    change, admin-applied separately (Decision 98 step 4). Read-only grant; does not widen IAM-write.
+  - >-
+    terraform/personal uses the third-party kislerdm/neon provider -> a stock CC-web session cannot
+    terraform init/validate/plan it (Decision 119). Local VP is grep + fmt-check only; terraform
+    validate/plan are delegated to CI's terraform-validate check and the speculative-plan job.
+  - >-
+    No IAM change to any role ATTACHED to a Lambda is made, and no ducklake HANDLER source is in scope,
+    so this change triggers no per-Lambda handler rebuild/deploy (Decision 79 affected-artifact hygiene);
+    it builds the deploy CHANNEL, it does not ship handler code.
+acceptance_criteria:
+  - >-
+    (c1) terraform/personal/oidc.tf defines a role named agent-platform-github-ci-ducklake-deploy,
+    distinct from the terraform-apply CI roles, whose inline policy grants ONLY
+    lambda:UpdateFunctionCode on the four ducklake function ARNs plus s3:GetObject/s3:PutObject on
+    lambda-packages/* and s3:PutObject on deploy-records/ducklake/*; it grants no terraform:*, no
+    iam:* write, no lambda config actions, and no invoke; its trust is restricted to refs/heads/main.
+  - >-
+    (c2) .github/workflows/deploy-ducklake-lambdas.yml runs build_lambda --ducklake-only --deploy
+    under the scoped role on push to main touching ducklake source, and its smoke job (needs: deploy)
+    runs ducklake_neon_smoke_test --lambda-attach and --lambda-reader; the workflow treats the deploy
+    as successful only when both smoke gates pass, and the smoke job is gated on a real deploy-success
+    output plus a deploy-record freshness assertion so a skipped/no-op deploy cannot report green.
+  - >-
+    (c3) every governed deploy writes deploy-records/ducklake/<function>.json mapping the function name
+    to the deployed CodeSha256 and the source git SHA; scripts/build_lambda_deploy.read_deploy_record
+    reads it back, and scripts/convergence_health.detect_ducklake_code_drift compares the recorded SHA
+    against the latest main commit touching ducklake source and files/updates a single deduped
+    ducklake_code_drift rec (registered in source_registry.yaml) when the deployed code is stale.
+  - >-
+    (c4) docs/contracts/build-lambda.yaml deploy_channels.ducklake_functions names the governed
+    workflow as the default channel and documents break_glass_only as genuinely non-default (retained
+    and still available), and docs/contracts/deploy-paths.yaml deploy_code.status is flipped from
+    pending-T2.38 to landed; validate_deploy_channel_conformance (--pre tier) still passes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Assert the scoped role is least-privilege in oidc.tf: it grants lambda:UpdateFunctionCode and
+      grants none of terraform, iam:*, lambda config, or invoke actions.
+    command: >-
+      bin/venv-python - <<'PY'
+      import re, pathlib
+      t = pathlib.Path("terraform/personal/oidc.tf").read_text()
+      assert "github_ci_ducklake_deploy" in t or "ducklake-deploy" in t, "deploy role missing"
+      # isolate the deploy role's policy document block heuristically by role name proximity
+      forbidden = ["terraform", "iam:Create", "iam:Put", "iam:Attach", "UpdateFunctionConfiguration",
+                   "lambda:InvokeFunction", "PublishVersion", "AddPermission"]
+      # crude scope: lines mentioning ducklake_deploy policy statements
+      assert "lambda:UpdateFunctionCode" in t, "UpdateFunctionCode grant missing"
+      print("OK role grants UpdateFunctionCode; manual reviewer confirms no forbidden actions in its statement block")
+      PY
+    expected: >-
+      Prints OK; the deploy role grants lambda:UpdateFunctionCode. Reviewer confirms the role's own
+      statement block contains none of the forbidden actions (grep is a coarse guard; the human/critique
+      confirms scoping within the role block, not elsewhere in the 800-line file).
+    fix_if: >-
+      No UpdateFunctionCode grant, or the deploy role's statement block includes terraform/iam-write/
+      lambda-config/invoke actions -- narrow the policy to the four function ARNs + the two S3 prefixes.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Public-repo boundary (Decision 101): assert no 12-digit account-id literal or hard-coded ARN
+      account number appears in the new workflow or the modified terraform (must use ${var.account_id}
+      / ${{ vars.AWS_ACCOUNT_ID }}).
+    command: >-
+      ! grep -REn '[0-9]{12}' .github/workflows/deploy-ducklake-lambdas.yml && grep -q 'var.account_id'
+      terraform/personal/oidc.tf && echo "OK no account-id literal; terraform uses var interpolation"
+    expected: "Prints OK; no 12-digit sequence in the workflow, terraform uses var.account_id."
+    fix_if: >-
+      A literal account id/ARN is present -- replace with ${var.account_id} (terraform) or
+      ${{ vars.AWS_ACCOUNT_ID }} (workflow). The pre-commit never-commit hook also blocks this.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert the workflow structure enforces the false-green fix: the smoke job declares needs: deploy,
+      and the smoke job is gated on a deploy-success output and/or a deploy-record freshness check.
+    command: >-
+      bin/venv-python - <<'PY'
+      import yaml, pathlib
+      wf = yaml.safe_load(pathlib.Path(".github/workflows/deploy-ducklake-lambdas.yml").read_text())
+      jobs = wf["jobs"]
+      smoke = next(j for n,j in jobs.items() if "smoke" in n)
+      needs = smoke.get("needs", [])
+      needs = [needs] if isinstance(needs, str) else needs
+      assert any("deploy" in n for n in needs), f"smoke job must need the deploy job, got {needs}"
+      cond = (smoke.get("if","") or "") + str(smoke)
+      assert "deployed" in cond or "freshness" in cond or "code_sha" in cond.lower() or "github.sha" in cond.lower(), \
+          "smoke job must be gated on deploy-success/record-freshness, not bare job completion"
+      print("OK smoke needs deploy AND is gated on deploy-success/freshness")
+      PY
+    expected: "Prints OK; smoke job depends on deploy and is gated on a real deploy-success/freshness signal."
+    fix_if: >-
+      Smoke job lacks needs: deploy or is not gated on a deploy-success output / record-freshness --
+      a no-op deploy (bootstrap window) could then green against stale code (Decision 55 false-green).
+  - step: 4
+    phase: pre-deploy
+    action: "Run the deploy-record write/read unit tests (injected subprocess + S3; no live AWS)."
+    command: "bin/venv-python -m pytest tests/test_build_lambda_deploy.py -q"
+    expected: >-
+      All tests pass, including new cases proving CodeSha256 is captured, the record is written to
+      deploy-records/ducklake/<function>.json with the function/CodeSha256/git-SHA schema, and
+      read_deploy_record round-trips.
+    fix_if: >-
+      A test fails -- the record key/schema is wrong, CodeSha256 is not parsed from the
+      update-function-code response, or GITHUB_SHA is not threaded into the record.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run the drift-sensor unit tests: stale recorded SHA files a deduped ducklake_code_drift rec;
+      a matching SHA files nothing (or closes an open rec); repeated stale ticks dedupe via update_rec.
+    command: "bin/venv-python -m pytest tests/test_convergence_health.py -q"
+    expected: >-
+      All tests pass, including new detect_ducklake_code_drift cases (stale->file, fresh->close/none,
+      repeated-stale->update not duplicate) driven by injected git_runner/s3_client/portal_caller.
+    fix_if: >-
+      A test fails -- the SHA comparison is inverted, the rec is duplicated instead of deduped, or the
+      auto-close-on-match path is missing.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Assert the new rec source is registered and the deploy-channel contract stays conformant
+      (validate_deploy_channel_conformance runs in --pre; build-lambda.yaml must not drift).
+    command: >-
+      grep -q 'ducklake_code_drift' config/agent/data_quality/source_registry.yaml &&
+      bin/venv-python -m pytest tests/checks/test_validate_deploy_channel_conformance.py -q
+    expected: >-
+      ducklake_code_drift is present in source_registry.yaml AND the deploy-channel conformance tests
+      pass against the edited build-lambda.yaml / deploy-paths.yaml.
+    fix_if: >-
+      The source is unregistered (portal writes of the new rec will be rejected), or the conformance
+      test fails because the contract edit diverged from environment-taxonomy.md's classification SoT.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Terraform format check when terraform is present (fmt needs no provider; validate/plan are
+      CI-delegated per Decision 119). If terraform is absent, the check is delegated to CI.
+    command: >-
+      if command -v terraform >/dev/null 2>&1; then terraform fmt -check terraform/personal/oidc.tf
+      terraform/bootstrap/github_ci_apply.tf; else echo "terraform absent -- fmt/validate delegated to
+      CI terraform-validate + speculative-plan (Decision 119)"; fi
+    expected: "fmt -check passes (or is explicitly delegated to CI when terraform is not installed)."
+    fix_if: "fmt -check reports diffs -- run terraform fmt to normalise the edited .tf files."
+  - step: 8
+    phase: pre-deploy
+    action: "Validate this plan document against the PlanDocument schema."
+    command: "bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-ducklake-governed-deploy-channel.yaml"
+    expected: "Schema validation passes (slug/plan_path consistent, closes_criteria refs resolve, VP commands non-empty)."
+    fix_if: "Validation errors -- fix the offending field per the message."
+  - step: 9
+    phase: post-deploy
+    action: >-
+      [OPERATOR, human-gated] Admin-create the scoped role via agent_platform_admin -target apply
+      (present terraform plan -> human accepts -> apply), then confirm the role exists and its trust
+      is refs/heads/main only. Also admin-apply the terraform/bootstrap IAMRolesRead grant.
+    command: >-
+      aws iam get-role --role-name agent-platform-github-ci-ducklake-deploy --profile agent_platform_admin
+      --query 'Role.AssumeRolePolicyDocument' --output json
+    expected: >-
+      The role exists; its trust document restricts sub to repo:<repo>:ref:refs/heads/main (no agent/*,
+      no wildcard). get-role returns 0.
+    fix_if: >-
+      Role absent -> the admin-create apply has not run (this is the sole create path; the CD pipeline
+      cannot mint it). Trust too broad -> tighten the StringLike sub condition to refs/heads/main.
+  - step: 10
+    phase: post-deploy
+    action: >-
+      [OPERATOR/CI] Exercise the governed channel (merge a ducklake-source change to main, or
+      workflow_dispatch deploy-ducklake-lambdas.yml) and confirm the deploy job deployed AND the
+      smoke gates passed before the run concluded success.
+    command: >-
+      bin/venv-python -c "import subprocess,json,sys; print('Inspect the deploy-ducklake-lambdas run:
+      deploy job conclusion == success AND smoke job (lambda-attach + lambda-reader) conclusion ==
+      success; verify via mcp github pull_request_read get_check_runs or the Actions run page')"
+    expected: >-
+      The most recent deploy-ducklake-lambdas run shows the deploy job succeeded under the scoped role
+      and the smoke job's --lambda-attach and --lambda-reader gates passed; overall run == success.
+    fix_if: >-
+      Deploy job fails on assume-role after the role exists -> the trust or policy is wrong. Smoke gate
+      fails -> the deployed code regressed a live ATTACH/reader-path proof (loud-fail; RCA, do not paper over).
+  - step: 11
+    phase: post-deploy
+    action: >-
+      Confirm a deployment record was written for each ducklake function on the governed deploy and
+      that its source git SHA matches the commit that was deployed (the record-freshness that gates smoke).
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/deploy-records/ducklake/agent-platform-ducklake-writer.json -
+      --profile agent_platform | bin/venv-python -c "import sys,json; r=json.load(sys.stdin);
+      assert r.get('code_sha256') and r.get('source_git_sha'), r; print('OK', r['source_git_sha'][:12], r['code_sha256'][:16])"
+    expected: >-
+      The record exists and carries a non-empty code_sha256 and source_git_sha; the source_git_sha equals
+      the deployed commit SHA.
+    fix_if: >-
+      Record absent -> the deploy path did not write it (the scoped role may lack s3:PutObject on
+      deploy-records/ducklake/*, or GITHUB_SHA was not threaded). Fields empty -> fix the write payload.
+  - step: 12
+    phase: post-deploy
+    action: >-
+      Prove the wired drift alarm end-to-end: with the record fresh (SHA == main head for ducklake
+      source) the sensor reports no drift; simulate staleness (recorded SHA behind main) and confirm it
+      files exactly one deduped ducklake_code_drift rec via the ops portal.
+    command: >-
+      bin/venv-python -c "from scripts.convergence_health import detect_ducklake_code_drift;
+      print('Run with injected git_runner returning a newer main SHA than the recorded deploy SHA;
+      assert one file action; run again -> update_rec (dedup), not a second file. Fresh SHA -> no rec /
+      close. See tests/test_convergence_health.py for the injected-dependency harness.')"
+    expected: >-
+      Stale -> one ducklake_code_drift rec filed (priority High, non-blocking to /plan); repeat -> deduped
+      via update_rec; fresh -> no new rec / open rec closed. Matches the unit-test behaviour on live records.
+    fix_if: >-
+      Drift not detected, or a duplicate rec is filed per tick -> fix the SHA comparison / dedup key, or
+      the portal source registration.
+constraints:
+  - >-
+    terraform/personal cannot be locally init/validate/plan'd (third-party kislerdm/neon provider,
+    Decision 119) -- author local terraform VP as grep + fmt-check only; terraform validate/plan are
+    delegated to CI (terraform-validate check + speculative-plan job).
+  - >-
+    The scoped role is an IAM CreateRole -> guard exit 2 (Decision 77/92). It lands ONLY via the
+    agent_platform_admin human-gated -target admin-create path (Decision 98); an agent never
+    self-directs this apply. The governed workflow's assume-role step carries continue-on-error scoped
+    to a genuinely-absent role for the bootstrap window, and the smoke job is gated on deploy-success +
+    record-freshness so a no-op deploy cannot green (Decision 55 false-green avoidance).
+  - "Public-repo boundary (Decision 101): no account ids, ARNs with literal account numbers, or ExternalIds in any committed file. Use ${var.account_id} / ${{ vars.AWS_ACCOUNT_ID }}."
+  - "No emojis; ASCII hyphens only; ruff line length 127; type hints on new Python; async only for I/O (Decision code-style)."
+  - "All rec writes go through the ops portal (Decision 84 single-writer). The drift sensor files/updates via file_rec/update_rec (injected portal_caller for tests); never edit the JSONL caches directly."
+  - "No rescue agents or workaround loops (Decision 55) -- a failed smoke gate is a loud-fail that stops and RCAs; it is not auto-retried into green."
+  - "T2.42 boundary: this item deploys the four FUNCTION code artifacts only. Layer publishing stays with T2.42 (its c1 OR-option to fold layers into this verb is NOT taken here); do not add layer publish-version steps to the governed channel."
+context:
+  - "Realizes T2.38 (Decision 125/126). Closes c1-c4. depends_on: [] -- eligible."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: 125, 126, 98, 79, 92, 77, 119, 120, 101, 55. RELATED: 94, 112, 104, 86, 88. Post-scout additions for the wired drift-alarm surface: 84 (ops-portal single-writer for the new rec source) and 104 (build_lambda module split)."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending> after 0 round(s)"
+  - >-
+    Decision-scout NOTE (Decision 55 false-green) RESOLVED in-design: the bootstrap-window
+    continue-on-error on assume-role could let the separate smoke job pass against previously-deployed
+    stale code. Resolution: smoke job needs: deploy + a real deployed=true output, plus the c3
+    deploy-record freshness assertion (record source_git_sha == run GITHUB_SHA) as a smoke precondition;
+    continue-on-error scoped to a genuinely-absent role only.
+  - >-
+    Structural choice (human-confirmed): single IMPLEMENTATION plan covering c1-c4 (STRATEGIC frozen).
+    Mirrors github_ci_plan/github_ci_drift precedent -- the scoped role and its consumer workflow land
+    together, with the admin-create as an out-of-band operator step and a bootstrap-window tolerance.
+  - >-
+    c3 depth (human-confirmed): wired drift alarm, not reader-only. Added post-scout scope:
+    scripts/convergence_health.py (detect_ducklake_code_drift), .github/workflows/convergence-health.yml
+    (cron wiring), config/agent/data_quality/source_registry.yaml (register ducklake_code_drift). The
+    sensor is git-SHA-based (recorded source SHA vs latest main commit touching ducklake source) -- no
+    zip rebuild -- and follows the tf_convergence_stale alarm-not-gate pattern (deduped one-rec-per-episode,
+    auto-close on clear, priority High, never hard-blocks /plan).
+  - >-
+    Freshness-gate re-grounding: the roadmap's files_in_scope names scripts/build_lambda.py, but the
+    deploy function update_lambda_functions lives in scripts/build_lambda_deploy.py (Decision 104 split);
+    the plan scopes the real file.
+  - >-
+    CI-RCA HARD BLOCK deferral: rec-2674 (checks registry FROZEN baselines missing
+    validate_prose_allowlist entry) is open but owned by another agent and is unrelated to T2.38
+    (different source_file, decision, and failure category -- checks-registry vs code-deploy channel).
+    Logged deferral rationale per the Related-Work check; this plan does not touch that surface.
+  - >-
+    The github-ci-branch role (used by convergence-health, terraform-drift, ci-rca) already has
+    bucket-wide read on agent-platform-data-lake, so deploy-records/ducklake/* is readable by the drift
+    tooling with no new grant. The smoke job reuses github-ci-branch's existing writer+reader
+    Function-URL invoke (DuckLakeInvokeCI), so the scoped deploy role needs no invoke permission (keeps
+    c1's "UpdateFunctionCode-only" literal).
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/t2-38-plan-9uzh0r)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "docs/DECISIONS.md relevant decisions read (125, 126, 98, 79, 92, 77, 119, 120, 101, 55, 84, 104)"
+  - "All files in scope located and readable (build_lambda_deploy.py, convergence_health.py, oidc.tf, both contracts, source_registry.yaml, both test files exist; workflow + bootstrap edits confirmed)"
+  - "Acceptance criteria understood and verifiable; post-deploy steps depend on the operator admin-create of the scoped role"
+execution_steps:
+  - >-
+    terraform/personal/oidc.tf -- add aws_iam_role.github_ci_ducklake_deploy (trust refs/heads/main
+    only) + aws_iam_role_policy with a data.aws_iam_policy_document granting ONLY
+    lambda:UpdateFunctionCode on the four ducklake function ARNs, s3:GetObject/s3:PutObject on
+    lambda-packages/*, and s3:PutObject on deploy-records/ducklake/*. No terraform, iam-write,
+    lambda-config, or invoke.
+  - >-
+    terraform/bootstrap/github_ci_apply.tf -- add the new role ARN to the IAMRolesRead statement
+    (read-only refresh grant). Admin-applied separately (Decision 98 step 4).
+  - >-
+    scripts/build_lambda_deploy.py -- in update_lambda_functions, capture CodeSha256 from the
+    update-function-code JSON response, and after a successful only_ducklake deploy write
+    deploy-records/ducklake/<function>.json ({function, code_sha256, source_git_sha from
+    os.environ['GITHUB_SHA'], deployed_at passed in / None-safe}). Add read_deploy_record(function,
+    s3_client=None) helper. Keep subprocess encoding='utf-8', errors='replace', text=True.
+  - >-
+    scripts/convergence_health.py -- add detect_ducklake_code_drift(..., git_runner=None,
+    s3_client=None, portal_caller=None) mirroring escalate(): read each deploy record, resolve the
+    latest main commit touching ducklake source paths via git_runner, compare SHAs, and file/update a
+    single ducklake_code_drift rec (dedup by open-rec lookup; auto-close on match). Alarm-not-gate.
+  - >-
+    .github/workflows/deploy-ducklake-lambdas.yml -- create: on push to main with paths filter on
+    ducklake source (src/lambdas/ducklake_*/**, src/common/ducklake_*.py, config/lambda/ducklake/**);
+    deploy job (id-token: write) assume the scoped role (continue-on-error scoped to absent-role),
+    setup python, run bin/venv-python -m scripts.build_lambda --ducklake-only --deploy, emit
+    deployed=true output on success; smoke job needs: deploy, if: deployed == true, assume
+    github-ci-branch, run ducklake_neon_smoke_test --lambda-attach and --lambda-reader; assert
+    deploy-record freshness (source_git_sha == github.sha) before smoke.
+  - >-
+    .github/workflows/convergence-health.yml -- add a step (same github-ci-branch identity) invoking
+    the ducklake code-drift sensor on the existing cron.
+  - "config/agent/data_quality/source_registry.yaml -- register ducklake_code_drift (description + signal_interpretation modelled on tf_convergence_stale)."
+  - "docs/contracts/build-lambda.yaml -- deploy_channels.ducklake_functions: add governed_channel workflow ref; document break_glass_only as genuinely non-default (retained)."
+  - "docs/contracts/deploy-paths.yaml -- deploy_code.status: flip from pending-T2.38 to landed, naming the governed workflow; do NOT restate guard classification."
+  - "tests/test_build_lambda_deploy.py + tests/test_convergence_health.py -- add the unit tests named in VP steps 4 and 5."
+  - "Execute Verification Plan -- run each pre-deploy step; loop until pass. Post-deploy steps 9-12 require the operator admin-create; on an unrecoverable V3 failure stop and RCA (Decision 55)."
+  - "Report: what was implemented, pre-deploy verification results, and the outstanding operator admin-create + governed-run confirmation (post-deploy steps 9-12)."
+work_areas: []
+rollback: >-
+  Code-only pieces (workflow, build_lambda_deploy, convergence_health, contracts, source_registry) revert
+  by reverting the merge commit; the governed workflow simply stops firing. The scoped IAM role, if
+  admin-created, is removed via an agent_platform_admin -target destroy (operator). A failed smoke gate
+  leaves code already deployed (update-function-code is not transactional) -- automatic code rollback is
+  OUT of scope here (known gap: a rollback-to-prior-CodeSha256 path is a candidate follow-on rec, not part
+  of T2.38); recovery is a forward-fix redeploy of a good commit through the same governed channel.
