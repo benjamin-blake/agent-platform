@@ -6729,19 +6729,22 @@ tier_items:
           A scoped UpdateFunctionCode-only OIDC role (no terraform:apply, no other IAM/Lambda-
           config permissions) exists for the four ducklake functions, distinct from the
           terraform-apply CI roles
-        status: open  # role DEFINED in oidc.tf; operational existence pending operator admin-create (Decision 98, VP step 9)
+        status: met
+        met_by: ducklake-governed-deploy-channel  # role admin-created + assumed by the deploy job in run 29289207218
       - id: c2
         text: >-
           build_lambda --ducklake-only --deploy runs through a governed CD path (a dedicated
           GitHub Actions workflow), not only as a local break-glass invocation; the existing
           --lambda-attach/--lambda-reader smoke gates run as part of that workflow before the
           deploy is considered successful
-        status: open  # workflow landed + structurally verified; first live governed run is V3, BLOCKED pending admin-create (VP steps 9-11)
+        status: met
+        met_by: ducklake-governed-deploy-channel  # governed workflow ran live (run 29289207218): deploy + --lambda-attach/--lambda-reader smoke gates green
       - id: c3
         text: >-
           A deployment record (function name -> deployed CodeSha256 -> source git SHA) is
           written on every governed deploy and is readable by convergence-health/drift tooling
-        status: open  # write/read code + drift sensor landed and unit-tested; live record proof is V3, BLOCKED pending first governed run (VP steps 10-11)
+        status: met
+        met_by: ducklake-governed-deploy-channel  # deploy records written + freshness-asserted (source_git_sha == github.sha) in the run 29289207218 smoke job
       - id: c4
         text: >-
           docs/contracts/build-lambda.yaml deploy_channels.ducklake_functions.break_glass_only
@@ -6752,7 +6755,8 @@ tier_items:
     related_decisions: [125, 126]
     effort: L
     strategic: false
-    status: in_progress
+    status: complete
+    completed_at: "2026-07-13"
     progress_note: |
       2026-07-13: governed code-deploy channel machinery shipped (PLAN-ducklake-governed-deploy-channel).
       Landed: scoped agent-platform-github-ci-ducklake-deploy role DEFINITION (UpdateFunctionCode-only,
@@ -6762,11 +6766,14 @@ tier_items:
       bootstrap-window assume-role tolerance scoped to DUCKLAKE_DEPLOY_ROLE_PROVISIONED, fails loud
       post-provisioning); deploy-record write/read (build_lambda_deploy) + wired ducklake_code_drift alarm
       (convergence_health + convergence-health.yml cron, source_registry). c4 (docs: break_glass_only
-      non-default) is met. REMAINING (operator-gated, V3 -- criteria c1-c3 flip to met on completion):
-      admin-create the scoped role via agent_platform_admin -target apply (Decision 98) + set repo var
-      DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true, then exercise the governed channel once (merge a ducklake-source
-      change or workflow_dispatch) and confirm the live CodeSha256 == deploy-record proof (VP steps 9-11).
-      QUALIFIES for status: complete once c1-c3 are met -- do NOT auto-complete (Status-Trusted-Never-Inferred).
+      non-default) is met. COMPLETED 2026-07-13 (operator-gated V3 closed): scoped role admin-created via
+      agent_platform_admin -target apply (Decision 98) with the bootstrap IAMRolesRead refresh grant; peer
+      CI-role read grants reconciled (rec-2688) and the smoke job Function-URL resolution fixed (rec-2689);
+      repo var DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true set (bootstrap-window tolerance closed -- assume-role now
+      fails loud). Governed channel exercised end-to-end in run 29289207218 (workflow_dispatch on main @ f43eaf8):
+      deploy job assumed the scoped role and shipped all four functions; smoke job asserted deploy-record
+      freshness (source_git_sha == github.sha for all four) and both --lambda-attach + --lambda-reader gates
+      passed. c1-c3 flipped to met; T2.38 complete.
 
   - id: T2.39
     tier: T2
