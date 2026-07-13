@@ -63,13 +63,27 @@ scope:
   - file: docs/contracts/file-router.yaml
     action: Modify
     purpose: >-
-      Shrink prose_allowlist.grandfathered_globs to remove every deleted/migrated entry (ratchet
-      rule: may only shrink). KEEP the deferred entries (docs/ROADMAP-PRODUCT.md,
-      docs/runbooks/ducklake-catalog-operations.md) and the post-MVP ledgers
-      (CHANGELOG/DECISIONS/DECISIONS_ARCHIVE/SESSION_LOG*/INTENT-*) and .claude/agents/scheduled/*.md.
-      Trim docs_root_allowlist.allowed_files: remove ARCHITECTURE.md, ARCHITECTURE-WORKFLOW.md,
+      THREE edits. (1) prose_allowlist.grandfathered_globs: shrink to remove every deleted/migrated
+      entry (ratchet rule: may only shrink). KEEP the deferred entries (docs/ROADMAP-PRODUCT.md,
+      docs/runbooks/ducklake-catalog-operations.md), the post-MVP ledgers
+      (CHANGELOG/DECISIONS/DECISIONS_ARCHIVE/SESSION_LOG*/INTENT-*), and .claude/agents/scheduled/*.md.
+      (2) docs_root_allowlist.allowed_files: remove ARCHITECTURE.md, ARCHITECTURE-WORKFLOW.md,
       GETTING_STARTED.md (deleted); leave ROADMAP-PRODUCT.md (deferred), PROJECT_CONTEXT.md,
-      CHANGELOG.md, CLAUDE.md, and the .yaml roadmaps.
+      CHANGELOG.md, CLAUDE.md, the .yaml roadmaps. (3) routes: block -- five entries target deleted
+      files and would fail validate_placement._dead_targets_for_route. REMOVE the three with no
+      replacement home (trading-system-design->ARCHITECTURE.md, dev-workflow-ci-telemetry->
+      ARCHITECTURE-WORKFLOW.md, setup-deploy-troubleshoot->GETTING_STARTED.md), and REPOINT the two
+      that have an authoritative CLAUDE.md home (config-reference->config/CLAUDE.md,
+      terraform-infra->terraform/CLAUDE.md).
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Fix the live DQ-remediation pointers (~lines 49-52): "Protocol and root cause taxonomy:
+      docs/dq/DQ_REMEDIATION_METHODOLOGY.md" and the "manifest and briefing" reference to
+      docs/dq/ops-recommendations-remediation-briefing.md both point at deleted files. Repoint to
+      the per-table DQ-manifest YAMLs (config/agent/data_quality/decisions/{table}.yaml) + ops.yaml
+      as the canonical field-semantic authority (Decision 65), or drop the dead pointers. This is
+      the ambient Layer-2 knowledge base -- a dangling ref here is high-visibility.
   - file: docs/CLAUDE.md
     action: Modify
     purpose: >-
@@ -94,7 +108,22 @@ scope:
     purpose: "Remove the docs/ARCHITECTURE.md / ARCHITECTURE-WORKFLOW.md / GETTING_STARTED.md lines from the doc-freshness target map (those docs are deleted); keep the prompt valid for the surfaces that remain."
 bundled_recommendations: []
 closes_criteria: []
-infrastructure_dependencies: []
+tier_waiver: >-
+  V2 retained despite one active-manifest Lambda-bundled asset in scope
+  (.github/prompts/scheduled/doc-freshness.prompt.md, bundled into the active data-pipeline
+  artifact). Justification (Decision 79 / planning-skill 12m deferral path): (a) the edit is
+  content-only (removes references to deleted docs from the freshness map), not a code/handler
+  change; (b) the Lambda scheduled agents are DISABLED (AGENTS.md runbook) -- there is no running
+  doc-freshness agent to break and no meaningful smoke-test target; (c) the change reaches the
+  deployed function only at the next data-pipeline build/deploy, which is owned by the DEFERRED
+  docs/ROADMAP-PRODUCT.md follow-on (it repoints the same handler + edits the same manifest and
+  will do the V3 build + deploy + run_scheduled_agent --smoke-test for the data-pipeline and
+  ops-compaction artifacts). B2 therefore performs no deploy; it is not silent on the impact.
+infrastructure_dependencies:
+  - >-
+    .github/prompts/scheduled/doc-freshness.prompt.md is bundled into the ACTIVE data-pipeline
+    Lambda artifact; its content edit here is deploy-deferred to the ROADMAP-PRODUCT.md follow-on
+    (see tier_waiver). No terraform and no Lambda deploy in this plan.
 acceptance_criteria:
   - >-
     All B2 deletion targets are removed from the tree: docs/ARCHITECTURE.md,
@@ -114,6 +143,13 @@ acceptance_criteria:
     both no longer list ARCHITECTURE.md / ARCHITECTURE-WORKFLOW.md / GETTING_STARTED.md; the docs/dq
     Class->home row is removed.
   - >-
+    The file-router.yaml routes: block has NO dead targets -- the three routes to deleted docs with no
+    replacement are removed, and config-reference / terraform-infra are repointed to config/CLAUDE.md /
+    terraform/CLAUDE.md; every remaining route target resolves to a tracked file or directory.
+  - >-
+    docs/PROJECT_CONTEXT.md no longer points at either deleted docs/dq/ file; the DQ-remediation
+    reference is repointed to the DQ-manifest YAMLs (Decision 65) or dropped.
+  - >-
     No live (non-ledger) inbound reference to any deleted surface remains in scripts/, src/, config/,
     or .github/prompts/. Append-only ledgers (CHANGELOG.md, DECISIONS.md, DECISIONS_ARCHIVE.md) retain
     their historical mentions unchanged -- those are records, not live links.
@@ -131,17 +167,17 @@ verification_plan:
     hermetic: false
   - step: 2
     phase: pre-deploy
-    action: The migrated folder CLAUDE.md files exist and carry the NEVER-auto-apply safety invariant.
-    command: "bin/venv-python -c \"import sys; b=open('terraform/bootstrap/CLAUDE.md').read().lower(); g=open('terraform/github/CLAUDE.md').read().lower(); ok=('never auto-apply' in b or 'never auto apply' in b) and ('never auto-apply' in g or 'never auto apply' in g); print('bootstrap+github CLAUDE.md carry NEVER-auto-apply:', ok); sys.exit(0 if ok else 1)\""
-    expected: "True -- both new CLAUDE.md files preserve the NEVER-auto-apply invariant from the deleted READMEs."
-    fix_if: "False -- the safety invariant was lost in migration; restore it (do not let the content simply vanish)."
+    action: The migrated folder CLAUDE.md files preserve the NEVER-auto-apply invariant AND the substantive operational runbook (not just the string).
+    command: "bin/venv-python -c \"import sys; b=open('terraform/bootstrap/CLAUDE.md').read().lower(); g=open('terraform/github/CLAUDE.md').read().lower(); b_ok=('never auto' in b) and ('agent_platform_admin' in b or 'prerequisite' in b or 'state' in b); g_ok=('never auto' in g) and ('reviewer' in g or 'lockout' in g or 'local' in g); print('bootstrap_ok=', b_ok, 'github_ok=', g_ok); sys.exit(0 if (b_ok and g_ok) else 1)\""
+    expected: "bootstrap_ok= True github_ok= True -- bootstrap CLAUDE.md keeps NEVER-auto-apply + the admin/prereq/state-migration runbook; github CLAUDE.md keeps NEVER-auto-apply + the reviewer-var / lockout-recovery / local-apply-only runbook."
+    fix_if: "Either False -- extract-and-retire was incomplete (Decision 86): the safety invariant and/or the operational runbook content was dropped instead of migrated; restore it."
     hermetic: false
   - step: 3
     phase: pre-deploy
     action: The prose_allowlist guard is GREEN after the deletions + grandfather shrink.
     command: "bin/venv-python -c \"from scripts.checks.hygiene.validate_prose_allowlist import validate_prose_allowlist; f=[]; validate_prose_allowlist(f); print('FAILURES:', f); import sys; sys.exit(1 if f else 0)\""
-    expected: "Exit 0, FAILURES: [] -- no tracked .md is unmatched, and the shrunk grandfather set has no orphaned globs pointing at deleted files."
-    fix_if: "Non-empty failures -- either a file was deleted but its grandfather glob remains stale, or a still-present file lost coverage; reconcile the grandfather set with the actual tree."
+    expected: "Exit 0, FAILURES: [] -- every tracked .md is still matched by allowed_globs or the shrunk grandfather set."
+    fix_if: "Non-empty failures -- a still-present .md lost coverage after the shrink; reconcile. (Deleted-entry removal from the grandfather set is verified separately in step 4 -- the guard flags unmatched FILES, not an empty glob.)"
     hermetic: false
   - step: 4
     phase: pre-deploy
@@ -159,19 +195,26 @@ verification_plan:
     hermetic: false
   - step: 6
     phase: pre-deploy
-    action: No LIVE inbound reference to any deleted surface remains (append-only ledgers excluded).
-    command: "bin/venv-python -c \"import subprocess,sys; pat='ARCHITECTURE.md|ARCHITECTURE-WORKFLOW|GETTING_STARTED|docs/dq/|DQ_REMEDIATION|ops-recommendations-remediation'; r=subprocess.run(['git','grep','-nE',pat,'--','scripts/','src/','config/','.github/prompts/'],capture_output=True,text=True); hits=[l for l in r.stdout.splitlines() if l.strip()]; print('live-refs:', len(hits)); [print(' ',h) for h in hits[:20]]; sys.exit(1 if hits else 0)\""
-    expected: "live-refs: 0 -- no dangling reference in code/live-config/live-prompts (ledger history in CHANGELOG/DECISIONS is intentionally untouched and out of this grep scope)."
-    fix_if: "Any live ref remains -- fix it (the doc-freshness prompt, the DQ manifest comments, the run_scheduled_agent/cleanup_ops_rec_orphans pointers)."
+    action: The file-router routes block has NO dead targets (every route target resolves to a tracked file or directory).
+    command: "bin/venv-python -c \"import yaml,subprocess,sys; d=yaml.safe_load(open('docs/contracts/file-router.yaml')); tracked=subprocess.run(['git','ls-files'],capture_output=True,text=True).stdout.split(); dead=[(r['topic'],t) for r in d['routes'] for t in r['targets'] if not any(f==t or f.startswith(t if t.endswith('/') else t+'/') for f in tracked)]; print('dead-route-targets:', dead); sys.exit(1 if dead else 0)\""
+    expected: "dead-route-targets: [] -- the 3 orphan routes were removed and config-reference/terraform-infra repoint to config/CLAUDE.md / terraform/CLAUDE.md (both tracked)."
+    fix_if: "A route still targets a deleted file -- remove the route (no replacement) or repoint it to the authoritative CLAUDE.md; validate_placement._dead_targets_for_route fails otherwise."
     hermetic: false
   - step: 7
+    phase: pre-deploy
+    action: No LIVE inbound reference to any deleted surface remains -- including the ambient docs/ knowledge base (append-only ledgers + dated records excluded).
+    command: "bin/venv-python -c \"import subprocess,sys; pat='ARCHITECTURE\\\\.md|ARCHITECTURE-WORKFLOW|GETTING_STARTED|docs/dq/|DQ_REMEDIATION|ops-recommendations-remediation'; r=subprocess.run(['git','grep','-nE',pat,'--','scripts/','src/','config/','.github/','docs/PROJECT_CONTEXT.md','docs/CLAUDE.md','docs/contracts/'],capture_output=True,text=True); hits=[l for l in r.stdout.splitlines() if l.strip()]; print('live-refs:', len(hits)); [print(' ',h) for h in hits[:25]]; sys.exit(1 if hits else 0)\""
+    expected: "live-refs: 0 -- no dangling reference in code, live config, .github/, or the ambient docs (PROJECT_CONTEXT.md / docs/CLAUDE.md / contracts). Ledger history (CHANGELOG.md, DECISIONS.md, DECISIONS_ARCHIVE.md) and dated records (docs/plans/, audits/) are intentionally out of scope -- historical records, not live links."
+    fix_if: "Any live ref remains -- fix it (PROJECT_CONTEXT.md line ~50, the doc-freshness prompt, the DQ manifest comments, the run_scheduled_agent / cleanup_ops_rec_orphans pointers)."
+    hermetic: false
+  - step: 8
     phase: pre-deploy
     action: The deferred entangled items are untouched.
     command: "bin/venv-python -c \"import subprocess,sys; tracked=set(subprocess.run(['git','ls-files'],capture_output=True,text=True).stdout.split()); need=['docs/ROADMAP-PRODUCT.md','docs/runbooks/ducklake-catalog-operations.md']; missing=[p for p in need if p not in tracked]; print('deferred-but-missing:', missing); sys.exit(1 if missing else 0)\""
     expected: "deferred-but-missing: [] -- ROADMAP-PRODUCT.md (Lambda-entangled) and the ducklake runbook are NOT deleted by this plan."
     fix_if: "Either is missing -- this plan over-reached; restore it (its removal/migration is a separate follow-on)."
     hermetic: false
-  - step: 8
+  - step: 9
     phase: pre-deploy
     action: The authoritative fast presubmit passes.
     command: "bin/venv-python -m scripts.validate --pre"
@@ -190,7 +233,7 @@ constraints:
 context:
   - "Plan B2 of the documentation-architecture track. B1 (Decision 127) merged as #552 (plan) + #553 (implementation): it established the sanctioned-prose taxonomy, the validate_prose_allowlist guard, and the full day-one grandfather set. This plan pulls the ratchet."
   - "Decision-scout verdict: FLAGS_FOUND (2 NOTEs, no BLOCK). CITE list (verbatim): Decision 127, Decision 86, Decision 65, Decision 79. RELATED: 111/CD.20, CD.23, 84, 76, 73, 108, 64."
-  - "gates: decision-scout=FLAGS_FOUND (1 round); plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND (1 round); plan-critique=REVISE round 1 -> revised. Round-1 findings addressed: (1) file-router routes: block dead-target removal/repoint added to scope+exec+VP step 6; (2) docs/PROJECT_CONTEXT.md:50 dangling DQ pointer added to scope + VP step 7 sweep broadened to docs/; (3) Lambda/tier -- tier_waiver added documenting V2 retention + deploy-deferral of the doc-freshness bundled asset to the ROADMAP-PRODUCT.md follow-on; (4) VP step 2 strengthened to verify the migrated operational runbooks, step 3 over-claim reworded."
   - "NOTE 1 resolution (Decision 86 no-drift): the docs/CLAUDE.md edit covers BOTH the Class->home docs/dq row AND the prose 'Allowed governance root files' sentence (strike ARCHITECTURE/ARCHITECTURE-WORKFLOW/GETTING_STARTED), keeping the human projection in sync with the file-router docs_root_allowlist machine SoT. Enforced by VP step 5."
   - "NOTE 2 resolution (Decision 64 provenance): DECISIONS.md line ~3057 cites the deleted DQ_REMEDIATION_METHODOLOGY.md as where the 2026-05-01 regime was formalised. This is fixed historical provenance in an append-only, grandfathered ledger -- left unchanged, not a live link. Decision 65 already names the doc legacy/not-maintained. No live guard/code reads it (VP step 6 confirms)."
   - "DEFERRED (kept grandfathered, each its own follow-on): (a) docs/ROADMAP-PRODUCT.md -- bundled into the ACTIVE data-pipeline Lambda manifest (src/lambdas/data-pipeline/manifest.yaml:45) and read at runtime by src/data/handlers/scheduled_agent_handler.py; removing it is a V3 Lambda-code change (handler repoint to ROADMAP-PRODUCT.yaml + manifest edit + build/deploy/smoke, Decision 79), not a doc deletion. (b) docs/runbooks/ducklake-catalog-operations.md -- 625-line operational doc with ~5 live inbound code refs; migrate to a docs/contracts/*.yaml procedure/registry with the reference rewrites in its own plan."
@@ -209,9 +252,9 @@ execution_steps:
   - "Migrate terraform/bootstrap/README.md -> new terraform/bootstrap/CLAUDE.md (directory-scoped agent rules; preserve the NEVER-auto-apply invariant + prerequisites + one-time bootstrap procedure), then git rm the README."
   - "Migrate terraform/github/README.md -> new terraform/github/CLAUDE.md (preserve NEVER-auto-apply + local-apply-only / reviewer-var guidance), then git rm the README."
   - "git rm the pure-prose deletions: docs/ARCHITECTURE.md, docs/ARCHITECTURE-WORKFLOW.md, docs/GETTING_STARTED.md, docs/dq/ (both files), config/README.md, the four config stub READMEs, terraform/README.md (confirm it holds no unique live content first)."
-  - "docs/contracts/file-router.yaml: shrink prose_allowlist.grandfathered_globs (remove all deleted/migrated entries; keep the deferred + ledger entries); trim docs_root_allowlist.allowed_files (remove ARCHITECTURE.md, ARCHITECTURE-WORKFLOW.md, GETTING_STARTED.md)."
+  - "docs/contracts/file-router.yaml: (1) shrink prose_allowlist.grandfathered_globs (remove all deleted/migrated entries; keep the deferred + ledger entries); (2) trim docs_root_allowlist.allowed_files (remove ARCHITECTURE.md, ARCHITECTURE-WORKFLOW.md, GETTING_STARTED.md); (3) fix the routes: block -- REMOVE trading-system-design, dev-workflow-ci-telemetry, setup-deploy-troubleshoot (targets deleted, no replacement) and REPOINT config-reference->config/CLAUDE.md, terraform-infra->terraform/CLAUDE.md."
   - "docs/CLAUDE.md: remove the docs/dq Class->home row AND strike ARCHITECTURE/ARCHITECTURE-WORKFLOW/GETTING_STARTED from the 'Allowed governance root files' prose sentence."
-  - "Fix inbound refs: scripts/run_scheduled_agent.py (drop the GETTING_STARTED pointer), scripts/cleanup_ops_rec_orphans.py (drop the docs/dq comment), config/agent/data_quality/decisions/ops_decisions.yaml + ops_recommendations.yaml (drop the docs/dq Protocol/Briefing pointer comments), .github/prompts/scheduled/doc-freshness.prompt.md (drop the deleted-doc lines from the freshness map)."
+  - "Fix inbound refs: docs/PROJECT_CONTEXT.md (repoint/drop the ~line-50 docs/dq DQ_REMEDIATION + briefing pointers to the DQ-manifest YAMLs, Decision 65), scripts/run_scheduled_agent.py (drop the GETTING_STARTED pointer), scripts/cleanup_ops_rec_orphans.py (drop the docs/dq comment), config/agent/data_quality/decisions/ops_decisions.yaml + ops_recommendations.yaml (drop the docs/dq Protocol/Briefing pointer comments), .github/prompts/scheduled/doc-freshness.prompt.md (drop the deleted-doc lines from the freshness map)."
   - "Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55)."
   - "Report: what was deleted/migrated, the guard-green confirmation, and that the two deferred items are untouched."
 work_areas: []
