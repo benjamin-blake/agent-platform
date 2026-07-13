@@ -150,10 +150,13 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
 
   statement {
     # IAM read-quartet the provider issues on each managed aws_iam_role during plan.
-    # Scoped to the four CI roles -- read-only (no PutRolePolicy / UpdateAssumeRolePolicy).
+    # Scoped to the managed CI roles -- read-only (no PutRolePolicy / UpdateAssumeRolePolicy).
     # Literal ARNs per the IAMPlatformRolesRead convention (refresh-read grants do not create
     # Terraform dependency edges onto the resources they read). Decision 35/98: enumerated,
-    # never a service or path wildcard on iam: read actions.
+    # never a service or path wildcard on iam: read actions. ducklake-deploy (T2.38) is listed
+    # so github_ci_plan/drift can refresh-read it once it enters terraform/personal state --
+    # the github_ci_plan/drift analogue of the bootstrap IAMRolesRead grant github_ci_apply gets
+    # (rec-2688; mirrors how github-ci-drift's own ARN was added here when T2.24 landed).
     sid    = "IAMCIRolesRead"
     effect = "Allow"
     actions = [
@@ -167,7 +170,8 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-pr",
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-apply",
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-plan",
-      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-drift"
+      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-drift",
+      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-ducklake-deploy"
     ]
   }
 
