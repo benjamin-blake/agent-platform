@@ -221,6 +221,8 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # (IAMRoleWriteBounded / IAMRoleCreateBounded) is unchanged -- in-budget role-create remains
         # gated to T2.25. New peer CI roles are admin-provisioned in terraform/personal and added
         # here as read-only grants; the pipeline does not mint them.
+        # T2.38 / Decision 98: github-ci-ducklake-deploy added the same way -- read-only refresh
+        # grant only, admin-created in terraform/personal/oidc.tf, no IAM-write budget change.
         Sid    = "IAMRolesRead"
         Effect = "Allow"
         Action = [
@@ -234,6 +236,7 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-pr",
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-plan",
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-drift",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-ducklake-deploy",
           "arn:aws:iam::${var.account_id}:role/PlatformDev",
           "arn:aws:iam::${var.account_id}:role/PlatformAdmin",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-catalog-dr",

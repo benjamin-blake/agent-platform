@@ -830,3 +830,115 @@ resource "aws_iam_role_policy" "github_ci_drift" {
   role   = aws_iam_role.github_ci_drift.id
   policy = data.aws_iam_policy_document.github_ci_drift.json
 }
+
+# ---------------------------------------------------------------------------
+# DuckLake deploy role (governed code-deploy channel, T2.38 / Decision 125/126):
+# refs/heads/main sub (push-triggered governed deploy workflow only).
+#
+# This role is IAM-SENSITIVE -- the deterministic guard (scripts/terraform_apply_guard.py)
+# BLOCKS its creation (exit 2) and it lands via the human-gated admin-create path (Decision 98),
+# mirroring github_ci_plan / github_ci_drift. The governed deploy workflow
+# (.github/workflows/deploy-ducklake-lambdas.yml) carries continue-on-error on the assume-role
+# step to cover the bootstrap window (no role exists until the admin-create apply lands;
+# pre-apply pushes no-op rather than erroring).
+#
+# Capability shape (deliberately narrow -- "UpdateFunctionCode-only" is the literal invariant):
+#   - lambda:UpdateFunctionCode on the four ducklake function ARNs ONLY. No
+#     UpdateFunctionConfiguration, no InvokeFunction*, no PublishVersion, no AddPermission, no
+#     other lambda: action.
+#   - S3: GetObject/PutObject on lambda-packages/* (build + upload the zips), PutObject on
+#     deploy-records/ducklake/* (c3 deploy-record write -- this role never reads its own records
+#     back; convergence-health/drift tooling reads via github_ci_branch's existing bucket-wide
+#     read grant), and GetObject on the two vendored build-input prefixes (ducklake-pgclient/*,
+#     ducklake-extensions/*) that `build_lambda --ducklake-only` reads at build time -- mirrors
+#     github_ci_plan's DucklakeBuildInputsRead precedent, needed because build+deploy share one
+#     identity here.
+#   - No terraform:*, no iam:* of any kind.
+#
+# Trust mirrors github_ci_branch/github_ci_drift: StringEquals aud + StringLike sub
+# refs/heads/main ONLY (no agent/*, no pull/*, no environment sub -- this role is never assumed
+# from a PR or a gated Environment).
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_role" "github_ci_ducklake_deploy" {
+  name        = "agent-platform-github-ci-ducklake-deploy"
+  description = "GitHub Actions governed DuckLake Lambda code deploy (T2.38 / Decision 125/126): refs/heads/main via OIDC"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github_actions.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
+          }
+        }
+      }
+    ]
+  })
+}
+
+data "aws_iam_policy_document" "github_ci_ducklake_deploy" {
+  statement {
+    # c1: the ONLY Lambda action this role grants -- UpdateFunctionCode on the four ducklake
+    # function ARNs. No lambda-config (UpdateFunctionConfiguration), no invoke, no
+    # publish-version/add-permission. Resource references (not literal ARNs): this role's whole
+    # purpose is deploying these functions' code, so a real Terraform dependency edge is correct
+    # here (unlike the refresh-read fragments above, which deliberately avoid one).
+    sid     = "DucklakeUpdateFunctionCode"
+    effect  = "Allow"
+    actions = ["lambda:UpdateFunctionCode"]
+    resources = [
+      aws_lambda_function.ducklake_writer.arn,
+      aws_lambda_function.ducklake_reader.arn,
+      aws_lambda_function.ducklake_maintenance.arn,
+      aws_lambda_function.ducklake_catalog_dr.arn,
+    ]
+  }
+
+  statement {
+    # Build + upload the four function zips (and three layer zips, when rebuilt) to
+    # lambda-packages/. Matches github_ci_plan's DucklakeLambdaPackagesWrite scope.
+    sid       = "DucklakeLambdaPackagesReadWrite"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.data_lake.arn}/lambda-packages/*"]
+  }
+
+  statement {
+    # c3: write the per-function deployment record (function -> CodeSha256 -> source git SHA).
+    sid       = "DeployRecordWrite"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.data_lake.arn}/deploy-records/ducklake/*"]
+  }
+
+  statement {
+    # Vendored build inputs `build_lambda --ducklake-only` reads at build time (pg_dump/pg_restore
+    # bundle + pinned DuckLake extensions). Read-only -- operator-seeded, never written by CI.
+    # Mirrors github_ci_plan's DucklakeBuildInputsRead: build+deploy share one identity here, so
+    # this role needs the same build-time reads plan does. Do NOT narrow S3 to lambda-packages/*
+    # only -- the first governed deploy would fail AccessDenied at build time.
+    sid     = "DucklakeBuildInputsRead"
+    effect  = "Allow"
+    actions = ["s3:GetObject"]
+    resources = [
+      "${aws_s3_bucket.data_lake.arn}/ducklake-pgclient/*",
+      "${aws_s3_bucket.data_lake.arn}/ducklake-extensions/*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "github_ci_ducklake_deploy" {
+  name   = "agent-platform-github-ci-ducklake-deploy"
+  role   = aws_iam_role.github_ci_ducklake_deploy.id
+  policy = data.aws_iam_policy_document.github_ci_ducklake_deploy.json
+}

@@ -22,6 +22,13 @@ name: convergence-health
 # That role already (a) reads the agent-platform-data-lake bucket so it can read
 # convergence/personal/sandbox.json with no new grant, and (b) invokes the
 # ducklake_writer Function URL so it can file recs via the ops portal.
+#
+# Also runs the T2.38 / Decision 125/126 DuckLake code-drift sensor on the same cron/identity:
+# compares each deploy-records/ducklake/<function>.json's recorded source_git_sha against the
+# latest main commit touching ducklake source and files/updates a single deduped
+# ducklake_code_drift rec when stale (alarm-not-gate, mirrors the tf_convergence_stale pattern).
+# The checkout below uses fetch-depth: 0 so the sensor can resolve real main git history -- a
+# default shallow checkout would make it silently report no-drift (Decision 55 false-negative).
 
 on:
   schedule:
@@ -56,6 +63,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # full history: the ducklake code-drift sensor resolves main git log
 
       - name: Configure AWS credentials (OIDC -- github_ci_branch role)
         uses: aws-actions/configure-aws-credentials@v6
@@ -81,3 +90,8 @@ jobs:
         run: |
           set -euo pipefail
           .venv/bin/python -m scripts.convergence_health
+
+      - name: Detect DuckLake code drift (T2.38 / Decision 125/126)
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m scripts.convergence_health --ducklake-drift

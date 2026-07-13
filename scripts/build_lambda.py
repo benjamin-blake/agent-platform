@@ -57,7 +57,9 @@ from scripts.build_lambda_config import (
 )
 from scripts.build_lambda_deploy import (
     _resolve_ducklake_profile,  # noqa: F401
+    _write_ducklake_deploy_record,  # noqa: F401
     publish_canary_layers,  # noqa: F401
+    read_deploy_record,  # noqa: F401
     resolve_bucket,  # noqa: F401
     update_lambda_functions,  # noqa: F401
     upload_to_s3,  # noqa: F401
