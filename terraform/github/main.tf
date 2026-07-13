@@ -4,9 +4,9 @@
 # terraform_apply_guard.py is AWS-IAM-only and cannot inspect github_* resource diffs.
 # A branch-protection change on that auto-apply path would apply ungated and could lock
 # out the push-to-main flow the workflow depends on. This module is human-gated LOCAL
-# apply only (see README.md). NEVER add terraform/github/** to any apply-workflow path.
+# apply only (see CLAUDE.md). NEVER add terraform/github/** to any apply-workflow path.
 #
-# Apply: see terraform/github/README.md. Export GITHUB_TOKEN from Secrets Manager,
+# Apply: see terraform/github/CLAUDE.md. Export GITHUB_TOKEN from Secrets Manager,
 # then: terraform -chdir=terraform/github init && plan && apply.
 
 terraform {

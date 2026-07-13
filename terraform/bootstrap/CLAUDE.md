@@ -1,4 +1,7 @@
-# terraform/bootstrap -- CI/CD bootstrap root (NEVER auto-apply, admin-only)
+# terraform/bootstrap -- directory-scoped rules
+
+Loaded automatically when Claude reads or edits files in this directory. Universal rules in
+repo-root `CLAUDE.md` and `terraform/CLAUDE.md` still apply.
 
 This module owns the `github_ci_apply` IAM role and its permissions boundary (authority budget),
 isolating the apply role's own IAM from `terraform/personal/` (CD.35 Wave 4 / T2.23). This breaks

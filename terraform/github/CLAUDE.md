@@ -1,4 +1,7 @@
-# terraform/github -- GitHub repository settings (human-gated, LOCAL apply only)
+# terraform/github -- directory-scoped rules
+
+Loaded automatically when Claude reads or edits files in this directory. Universal rules in
+repo-root `CLAUDE.md` and `terraform/CLAUDE.md` still apply.
 
 This module manages GitHub repository settings for `benjamin-blake/agent-platform` via the
 `integrations/github` Terraform provider: GitHub Advanced Security (secret scanning + push
