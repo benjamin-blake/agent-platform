@@ -905,6 +905,19 @@ data "aws_iam_policy_document" "github_ci_ducklake_deploy" {
   }
 
   statement {
+    # build_lambda's validate_bucket_exists runs `aws s3api head-bucket` before uploading (the
+    # --deploy path does NOT pass --skip-upload), and head-bucket requires bucket-level
+    # s3:ListBucket. github_ci_plan gets this via DataLakeBucketRead in ci_full_refresh_read; this
+    # role composes no shared fragment, so grant it explicitly. Bucket-level ONLY (resource is the
+    # bucket ARN, no /*): head-bucket needs the bucket resource, not object resources. Without it
+    # the first governed deploy fails closed with a misleading "bucket does not exist" (rc 1).
+    sid       = "DataLakeHeadBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.data_lake.arn]
+  }
+
+  statement {
     # Build + upload the four function zips (and three layer zips, when rebuilt) to
     # lambda-packages/. Matches github_ci_plan's DucklakeLambdaPackagesWrite scope.
     sid       = "DucklakeLambdaPackagesReadWrite"

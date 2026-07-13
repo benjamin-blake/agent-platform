@@ -124,8 +124,11 @@ jobs:
       - name: Install build_lambda runtime deps
         # This runner has no .venv (CC-web-only convention). build_lambda's manifest-driven
         # staging needs pyyaml (parse manifest.yaml) + pydantic (LambdaManifest schema);
-        # upload/deploy go through the AWS CLI via subprocess, not boto3 (mirrors reconcile.yml's
-        # identical `build_lambda --ducklake-only` precedent).
+        # upload/deploy go through the AWS CLI via subprocess, not boto3 (reconcile.yml installs
+        # the same pyyaml+pydantic for its `build_lambda --ducklake-only` build). NOTE: unlike
+        # reconcile.yml (which runs --skip-upload), THIS deploy uploads, so it also exercises
+        # validate_bucket_exists -> `aws s3api head-bucket` (needs the role's DataLakeHeadBucket
+        # s3:ListBucket grant) and update-function-code + the deploy-record write.
         if: steps.oidc_deploy.outcome == 'success'
         run: pip install pyyaml pydantic
 
