@@ -75,6 +75,15 @@ verification_plan:
     fix_if: A len(...) == <int> assertion appears -- replace it with a subset floor, uniqueness,
       or wiring-contract invariant per tests/CLAUDE.md.
     hermetic: true
+  - step: 5
+    phase: post-deploy
+    action: Confirm rec-2673 actually closed after the Resolves-trailer autoclose (guards a
+      silent rec-autoclose.yml miss; best-effort autoclose is not self-verifying).
+    command: 'bin/venv-python -m scripts.ops_data_portal --sync && grep ''"id": "rec-2673"'' logs/.recommendations-log.jsonl | grep -q ''"status": "closed"'''
+    expected: The synced read cache shows rec-2673 with status closed.
+    fix_if: rec-2673 is still open after merge -- the Resolves trailer did not fire; close it
+      manually via bin/venv-python -m scripts.ops_data_portal --update-rec rec-2673 --status closed --resolution "...".
+    hermetic: false
 constraints:
   - Only tests/test_checks_registry.py may be modified. scripts/checks/registry.py is correct
     (validate_prose_allowlist is properly wired); do NOT edit the registry or re-freeze a tuple.
