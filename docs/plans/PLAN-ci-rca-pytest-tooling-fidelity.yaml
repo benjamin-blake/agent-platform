@@ -1,0 +1,170 @@
+schema_version: 1
+slug: "ci-rca-pytest-tooling-fidelity"
+intent: >-
+  Close the two open ci_rca recs (rec-2653, rec-2655) by hardening the repo's pytest-invocation
+  tooling so tooling-layer test runs deterministically and faithfully mirror the authoritative
+  fast-tier (--pre) CI gate, removing both a false-positive flake and a false-negative admission bug.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-pytest-tooling-fidelity.yaml
+phase: >-
+  Platform hardening -- CI/verification tooling reliability. RCA-first forward-fix consumer of two
+  source=ci_rca recs (Decision 72 mechanism, Decision 55 doctrine). No tier_item; ci_rca exception category.
+scope:
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      rec-2653: pin a fixed-integer --randomly-seed in _PYTEST_FLAGS so all -n auto xdist workers
+      agree on collection order, overriding pyproject's --randomly-seed=last. The existing
+      _excluded_heavy_import_names / _excluded_and_absent helpers here are imported by the
+      run_differential fix (rec-2655) -- no change to them.
+  - file: scripts/verification_checks.py
+    action: Modify
+    purpose: >-
+      rec-2655 (minimal, faithful-diagnostic only): TestSelectorCheck.run() surfaces the FULL
+      combined stdout+stderr on a failing node instead of a stdout-or-stderr 500-char truncation,
+      so the graduation layer can classify the collection-error signature. NO status-vocabulary
+      change -- kernel keeps returning FAIL faithfully; CheckStatus stays closed (CD.29 discipline).
+  - file: scripts/verification_graduation.py
+    action: Modify
+    purpose: >-
+      rec-2655 (policy lives here, not in the kernel): add a skipped field to DifferentialOutcome;
+      in run_differential, when the live check does not PASS, detect the narrow co-occurrence
+      (module-level pytest.importorskip on an excluded + genuinely-absent heavy dep in the node's
+      file AND a "found no collectors" collection error in the live output) and return
+      admitted=False, skipped=True with a graceful reason. Every other non-PASS stays the existing
+      hard "does not pass on HEAD" failure (fail-closed).
+  - file: scripts/checks/verification/validate_verification_registry.py
+    action: Modify
+    purpose: >-
+      rec-2655: in the added-entry differential loop (_run_added_entry_differentials), treat a
+      skipped outcome as a non-fatal graceful skip (print, do not append to failed), consistent
+      with how _scaffolding.py defers importorskip-guarded files.
+  - file: tests/test_verification_checks.py
+    action: Modify
+    purpose: >-
+      rec-2655: unit test that TestSelectorCheck.run() returns the full combined output (both the
+      stdout summary and the stderr "found no collectors" line) in the FAIL CheckResult for an
+      uncollectable node -- the diagnostic the graduation layer relies on.
+  - file: tests/test_verification_graduation.py
+    action: Modify
+    purpose: >-
+      rec-2655: unit tests for the detection policy -- (a) a registry row whose node_id sits in a
+      module-level importorskip guard on an excluded-absent dep yields DifferentialOutcome(skipped=True,
+      admitted=False); (b) a genuinely failing node yields admitted=False, skipped=False (fail-closed);
+      (c) DifferentialOutcome carries the new skipped field with default False.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      rec-2653: assert _PYTEST_FLAGS pins a fixed integer --randomly-seed (never 'last') and a pytest
+      run using _PYTEST_FLAGS reports that exact seed. rec-2655: assert _run_added_entry_differentials
+      treats a skipped differential outcome as non-fatal (does not append to failed).
+bundled_recommendations:
+  - rec-2653
+  - rec-2655
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "rec-2653: _PYTEST_FLAGS carries a fixed integer --randomly-seed=<N> (not 'last'); a pytest run driven by _PYTEST_FLAGS reports 'Using --randomly-seed=<N>' with that exact pinned value."
+  - "rec-2655: run_differential returns DifferentialOutcome(admitted=False, skipped=True) for a registry row whose node_id lives in a module with a module-level pytest.importorskip on a deliberately-excluded, genuinely-absent heavy dependency plus a 'found no collectors' collection error."
+  - "rec-2655: run_differential still returns admitted=False, skipped=False (the existing hard-fail path) for a genuinely failing node -- no blanket non-PASS->skip (fail-closed preserved)."
+  - "rec-2655: validate_verification_registry's added-entry differential loop does not append to failed on a skipped outcome; TestSelectorCheck.run() surfaces the full combined output on failure. CheckStatus gains no new value."
+  - "Both recs close: bundled_recommendations resolved and confirmed absent from the open set after sync."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: "rec-2653: assert _PYTEST_FLAGS pins a concrete integer randomly-seed, not 'last' or a runtime-random value."
+    command: "bin/venv-python -c \"import re; from scripts.checks._scaffolding import _PYTEST_FLAGS; seeds=[f for f in _PYTEST_FLAGS if f.startswith('--randomly-seed')]; assert seeds and re.fullmatch(r'--randomly-seed=\\d+', seeds[0]), _PYTEST_FLAGS; print('OK pinned', seeds[0])\""
+    expected: "Prints 'OK pinned --randomly-seed=<N>' for a concrete integer N; assertion error if still 'last' or unset."
+    fix_if: "AssertionError or empty seeds list -- _PYTEST_FLAGS still relies on the addopts 'last' seed and has not been pinned."
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: "rec-2653: prove the pinned seed actually reaches pytest-randomly at runtime -- collect over a tiny subset using _PYTEST_FLAGS and confirm the reported seed equals the pinned value."
+    command: "bin/venv-python -c \"import re,subprocess; from scripts.checks._scaffolding import _PYTEST_FLAGS,_common; pin=[f for f in _PYTEST_FLAGS if f.startswith('--randomly-seed')][0].split('=')[1]; r=subprocess.run([_common.PYTHON,'-m','pytest','tests/test_validate.py','-o','addopts=','-p','no:cacheprovider',*_PYTEST_FLAGS,'--collect-only'],capture_output=True,text=True); out=r.stdout+r.stderr; m=re.search(r'randomly-seed[:= ]+(\\d+)',out); assert m and m.group(1)==pin, out[-600:]; print('OK runtime seed',m.group(1))\""
+    expected: "Prints 'OK runtime seed <N>' where N equals the pinned seed; confirms all workers resolve the same seed."
+    fix_if: "Reported seed differs from the pin or is absent -- the CLI override is not taking effect over addopts 'last'."
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: "rec-2655: kernel surfaces the full combined failure output (new test)."
+    command: "bin/venv-python -m pytest 'tests/test_verification_checks.py::test_test_selector_surfaces_full_failure_output' -q"
+    expected: "Test passes: a failing/uncollectable node's CheckResult (status FAIL) carries both stdout and stderr, including the 'found no collectors' line, not a stdout-only 500-char slice."
+    fix_if: "Test fails -- the graduation layer cannot see the collection-error signature and the classification below is unreachable."
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: "rec-2655: run_differential classifies an importorskip-guarded uncollectable node as skipped (new test)."
+    command: "bin/venv-python -m pytest 'tests/test_verification_graduation.py::test_importorskip_node_is_skipped_not_failed' -q"
+    expected: "Test passes: DifferentialOutcome.skipped is True and admitted is False for a node in a module-level importorskip guard on an excluded-absent dep + 'found no collectors' output."
+    fix_if: "Test fails with skipped False -- the narrow co-occurrence predicate is not detected; the false negative persists."
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: "rec-2655: fail-closed preserved -- a genuinely failing node is NOT skipped (new test)."
+    command: "bin/venv-python -m pytest 'tests/test_verification_graduation.py::test_genuine_failure_is_not_skipped' -q"
+    expected: "Test passes: a node that really fails (assert False) yields admitted=False, skipped=False (existing hard-fail path)."
+    fix_if: "Test fails -- the skip predicate is too broad and masks a real failure (Decision 55 / Decision 119 narrowness violation)."
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: "rec-2655: the registry differential loop treats a skipped outcome as non-fatal (new test)."
+    command: "bin/venv-python -m pytest 'tests/test_validate.py::test_registry_differential_skip_is_non_fatal' -q"
+    expected: "Test passes: _run_added_entry_differentials does not append to failed when the outcome is skipped."
+    fix_if: "Test fails -- a skipped node still reddens validate_verification_registry."
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: "Full changed-file suites are green (regression guard on the three edited test files and their targets)."
+    command: "bin/venv-python -m pytest tests/test_verification_checks.py tests/test_verification_graduation.py tests/test_validate.py -q"
+    expected: "All tests pass."
+    fix_if: "Any regression in the verification-checks, verification-graduation, or validate suites introduced by the edits."
+  - step: 8
+    phase: post-deploy
+    hermetic: false
+    action: "Confirm both bundled recs are closed after the Resolves trailer / autoclose runs."
+    command: "bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; bin/venv-python -c \"import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; openset={r['id'] for r in rows if r.get('id') in ('rec-2653','rec-2655') and r.get('status')=='open'}; assert not openset, openset; print('OK both closed')\""
+    expected: "Prints 'OK both closed' -- neither rec-2653 nor rec-2655 remains open."
+    fix_if: "Either rec still open -- the Resolves: trailer did not fire autoclose; run the ops_data_portal --update-rec fallback."
+constraints:
+  - "Decision 55 loud-failure doctrine: the rec-2655 skip predicate MUST be a narrow co-occurrence (module-level pytest.importorskip on an EXCLUDED + genuinely-absent heavy dep in the node's file AND a 'found no collectors' collection error in the live output), never a blanket 'non-PASS -> skip'. Any unmatched non-PASS stays the existing hard-fail path."
+  - "CD.29 closed-vocabulary discipline: do NOT add a value to the CheckStatus enum. The graceful-skip decision is a policy of the fast-tier differential gate, so it lives on DifferentialOutcome (verification_graduation.py), not on the kernel CheckResult. The kernel (TestSelectorCheck.run) is touched only to surface faithful full diagnostics, keeping its PASS/FAIL contract intact -- this avoids the enum ripple into is_admitted and _run_verifier_subprocess."
+  - "Reuse the existing _excluded_heavy_import_names / _excluded_and_absent helpers in scripts/checks/_scaffolding.py; do not hard-code a dependency list (rec-2485 acceptance). The import is scripts.verification_graduation -> scripts.checks._scaffolding (a layer above the kernel importing checks tooling); confirm at implement time this introduces no circular import."
+  - "rec-2653: pin the seed only in the xdist tooling path (_PYTEST_FLAGS). Do NOT change pyproject.toml addopts 'last' (preserves local-dev re-run ergonomics) and do NOT cap -n auto (worker count is not the defect; capping loses parallelism)."
+  - "validate.py is the single source of truth for CI gates; no new ci.yml checks are needed -- edits are to existing tooling. Place each new test in the file test_coverage_checker maps its source to (verification_checks->test_verification_checks, verification_graduation->test_verification_graduation, validate_verification_registry & _scaffolding->test_validate) so --check-tests/--check-coverage stay green."
+  - "No rescue agents or workaround loops (Decision 55). This is the sanctioned RCA-first forward-fix; never auto-revert."
+context:
+  - "Both recs are source=ci_rca, priority Medium, effort M, risk high. This /plan session is the RCA-first architectural review required before any forward-fix (Decision 55 / AGENTS.md merge protocol)."
+  - "rec-2653 root cause: --randomly-seed=last (pyproject addopts) resolves inconsistently across -n auto xdist workers on GH-hosted runners with a cold .pytest_cache -> 'Different tests were collected between gw1 and gwN'. Pinning a fixed integer seed makes all workers agree deterministically. VP step 2 proves the pin reaches pytest; the multi-worker agreement is the mechanism, not separately reproduced (a fixed integer seed is a sound deterministic fix regardless)."
+  - "rec-2655 root cause: run_differential (scripts/verification_graduation.py:190-203) treats any live CheckStatus != PASS as 'not admitted -- does not pass on HEAD'. A node inside a module-level pytest.importorskip('duckdb') guard (duckdb excluded from requirements-fast.txt) yields 'ERROR: found no collectors' (nonzero) under the pr-validate dep set instead of a graceful skip -> false negative. Fix classifies that narrow shape as skipped at the differential layer."
+  - "Design (critique round 1): the graceful-skip lives in run_differential + a new DifferentialOutcome.skipped field (mirroring the existing VerifierDifferentialOutcome.skipped), NOT as a new CheckStatus.SKIP in the kernel. The kernel TestSelectorCheck.run() change is limited to returning full combined stdout+stderr on failure so the layer above can classify. This keeps CheckStatus closed (no ripple into is_admitted at verification_checks.py:332 or _run_verifier_subprocess at verification_graduation.py:301-306)."
+  - "Registry consumer: scripts/checks/verification/validate_verification_registry.py _run_added_entry_differentials (lines ~62-72) is the added-entry loop that reddens on 'not admitted'; it must treat outcome.skipped as a non-fatal skip."
+  - "Decision 119 is the skip-predicate design precedent: the CC-web terraform-init proxy-403 graceful-skip is a narrow co-occurrence check, never a bare substring match, so it cannot mask a genuine failure. Model the importorskip skip predicate on it."
+  - "Preflight: branch 0 behind / 0 ahead of origin/main at planning time -- no Main Divergence Assessment overlap. Verb freeze active (Decision 67): plan is IMPLEMENTATION type; STRATEGIC suspended."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (1 NOTE, no BLOCK). CITE: Decision 55, Decision 72, Decision 73, Decision 104, Decision 67; Decision 119 as skip-predicate precedent. NOTE (Decision 55): keep the skip predicate narrow -- encoded as a constraint above. Design refinement in critique round 1 stays within these decisions (moves skip policy out of the CD.29 kernel; alignment unchanged/strengthened), so no scout re-dispatch required."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-recommendations-stltlz)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision-scout gate run (FLAGS_FOUND, no BLOCK); CITE decisions noted
+  - All files in scope located and readable (scaffolding, verification_checks, verification_graduation, validate_verification_registry, three test files)
+  - Source->test mappings confirmed via test_coverage_checker.map_source_to_test
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "scripts/checks/_scaffolding.py: add a fixed integer seed constant and append '--randomly-seed=<N>' to _PYTEST_FLAGS so the xdist tooling invocations override the addopts 'last'. Do not touch pyproject.toml or the -n auto count."
+  - "scripts/verification_checks.py: in TestSelectorCheck.run(), on a nonzero exit, set the FAIL CheckResult's actual (and/or message) to the full combined stdout+stderr (not the stdout-or-stderr 500-char slice) so the graduation layer can see the 'found no collectors' signature. Do NOT add a CheckStatus value; keep the PASS/FAIL contract."
+  - "scripts/verification_graduation.py: add 'skipped: bool = False' to DifferentialOutcome. In run_differential, before the existing 'live.status != CheckStatus.PASS -> not admitted' return, detect the narrow co-occurrence: resolve the node_id's file from the row, and if it carries a module-level pytest.importorskip on a dep in _excluded_heavy_import_names() that is genuinely absent (_excluded_and_absent) AND the live result's output shows a 'found no collectors' collection error, return DifferentialOutcome(admitted=False, skipped=True, reason='skipped -- node in importorskip-guarded fast-tier-excluded file'). Confirm no circular import from importing scripts.checks._scaffolding here."
+  - "scripts/checks/verification/validate_verification_registry.py: in the added-entry differential loop, when outcome.skipped is True, print a graceful skip line and continue instead of appending to failed."
+  - "tests/test_verification_checks.py: add test_test_selector_surfaces_full_failure_output -- an uncollectable/failing node returns a FAIL CheckResult whose output contains both the stdout summary and the stderr 'found no collectors' line."
+  - "tests/test_verification_graduation.py: add test_importorskip_node_is_skipped_not_failed, test_genuine_failure_is_not_skipped, and a DifferentialOutcome.skipped default-field assertion (monkeypatch _excluded_heavy_import_names to include a guaranteed-absent module and build a temp test file guarded by pytest.importorskip on it, with a registry row pointing at a node inside it)."
+  - "tests/test_validate.py: add test_pytest_flags_pin_fixed_seed (rec-2653) and test_registry_differential_skip_is_non_fatal (rec-2655) -- the latter feeding a skipped DifferentialOutcome through _run_added_entry_differentials and asserting failed stays empty."
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Commit with 'feat(ci-rca-pytest-tooling-fidelity): ...' and include 'Resolves: rec-2653, rec-2655' in the squash-merge body."
+  - "Report: what was implemented, verification results."
+work_areas: []
+rollback: >-
+  Each work-stream is independently revertable: revert the _scaffolding.py seed line to restore
+  prior xdist behavior (A), or revert the DifferentialOutcome.skipped wiring across
+  verification_graduation.py / validate_verification_registry.py (and the faithful-output line in
+  verification_checks.py) to restore the prior hard-fail-on-non-PASS differential behavior (B). No
+  data migration or infra state involved.
