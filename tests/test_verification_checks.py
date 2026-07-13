@@ -273,6 +273,25 @@ class TestTestSelectorCheck:
         assert TestSelectorCheck(name="x").slot == "test_selector"
 
 
+def test_test_selector_surfaces_full_failure_output() -> None:
+    """rec-2655: the FAIL CheckResult carries the full combined stdout+stderr, not a
+    stdout-or-stderr 500-char slice, so the graduation layer can see a "found no
+    collectors" collection-error signature even when both streams are non-empty."""
+    check = TestSelectorCheck(name="t", node_id="tests/test_ops_data_portal.py::Something::test_x")
+    with mock.patch(
+        "scripts.verification_checks.subprocess.run",
+        return_value=mock.Mock(
+            returncode=2,
+            stdout="collected 0 items / 1 error\n",
+            stderr="ERROR: found no collectors for tests/test_ops_data_portal.py::Something::test_x\n",
+        ),
+    ):
+        result = check.run()
+    assert result.status == CheckStatus.FAIL
+    assert "collected 0 items / 1 error" in result.actual
+    assert "found no collectors" in result.actual
+
+
 # ---------------------------------------------------------------------------
 # Slot 6: metric_under_threshold
 # ---------------------------------------------------------------------------

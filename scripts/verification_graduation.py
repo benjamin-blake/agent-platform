@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from scripts.checks._scaffolding import _excluded_and_absent, _excluded_heavy_import_names
 from scripts.checks.verification.validate_verifier_hermeticity import _verifier_is_non_hermetic
 from scripts.verification_checks import (
     CANONICAL_SLOTS,
@@ -185,6 +187,51 @@ def make_worktree_revert_runner(
 class DifferentialOutcome:
     admitted: bool
     reason: str
+    skipped: bool = False
+
+
+# rec-2655: a module-level guard has zero leading whitespace (indent 0) -- that's what
+# distinguishes it from a function/method-scope importorskip, which this predicate must not match.
+_MODULE_LEVEL_IMPORTORSKIP_RE = re.compile(r"^\w[\w.]*\s*=\s*pytest\.importorskip\(\s*['\"]([\w.]+)['\"]")
+
+
+def _module_level_importorskip_dep(file_path: Path) -> str | None:
+    """Return the dependency name of a module-level `pytest.importorskip(...)` guard in
+    `file_path`, or None if the file has no such guard (or cannot be read)."""
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        match = _MODULE_LEVEL_IMPORTORSKIP_RE.match(line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _differential_skip_reason(row: dict, live: CheckResult, repo_root: Path) -> str | None:
+    """rec-2655: detect the narrow co-occurrence that makes a non-PASS live result a graceful
+    skip rather than a genuine failure -- a test_selector row whose node_id lives in a file with
+    a module-level `pytest.importorskip` guard on a deliberately-excluded, genuinely-absent heavy
+    dependency, AND a "found no collectors" collection error in the live output. Returns the skip
+    reason, or None (fail-closed: every other non-PASS shape stays a hard failure)."""
+    if row.get("primitive_slot") != "test_selector":
+        return None
+    node_id = (row.get("check_spec") or {}).get("node_id", "")
+    file_part = node_id.split("::", 1)[0]
+    if not file_part:
+        return None
+    combined_output = f"{live.message or ''} {live.actual or ''}".lower()
+    if "found no collectors" not in combined_output:
+        return None
+    dep = _module_level_importorskip_dep(repo_root / file_part)
+    if dep is None:
+        return None
+    excluded = _excluded_heavy_import_names()
+    found = _excluded_and_absent(dep, excluded)
+    if found is None:
+        return None
+    return f"skipped -- node in importorskip-guarded fast-tier-excluded file ({found})"
 
 
 def run_differential(row: dict, repo_root: Path | None = None) -> DifferentialOutcome:
@@ -193,6 +240,9 @@ def run_differential(row: dict, repo_root: Path | None = None) -> DifferentialOu
     head_check = materialize_check_in_tree(row, root)
     live = head_check.run()
     if live.status != CheckStatus.PASS:
+        skip_reason = _differential_skip_reason(row, live, root)
+        if skip_reason is not None:
+            return DifferentialOutcome(admitted=False, skipped=True, reason=skip_reason)
         return DifferentialOutcome(
             admitted=False, reason=f"not admitted -- check does not pass on HEAD: {live.message or live.actual}"
         )

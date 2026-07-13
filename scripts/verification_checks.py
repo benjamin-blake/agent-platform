@@ -231,10 +231,14 @@ class TestSelectorCheck(BaseCheck):
         )
         if result.returncode == 0:
             return CheckResult(status=CheckStatus.PASS, actual=self.node_id)
+        # rec-2655: surface the FULL combined stdout+stderr (not a stdout-or-stderr 500-char
+        # slice) so the graduation layer can see a "found no collectors" collection-error
+        # signature that may otherwise land only in stderr while stdout is non-empty.
+        combined = (result.stdout or "") + (result.stderr or "")
         return CheckResult(
             status=CheckStatus.FAIL,
             message=f"pytest node failed: {self.node_id}",
-            actual=result.stdout[-500:] if result.stdout else result.stderr[-500:],
+            actual=combined,
         )
 
 
