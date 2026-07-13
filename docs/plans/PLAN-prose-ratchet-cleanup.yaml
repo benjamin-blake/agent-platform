@@ -78,12 +78,15 @@ scope:
   - file: docs/PROJECT_CONTEXT.md
     action: Modify
     purpose: >-
-      Fix the live DQ-remediation pointers (~lines 49-52): "Protocol and root cause taxonomy:
-      docs/dq/DQ_REMEDIATION_METHODOLOGY.md" and the "manifest and briefing" reference to
-      docs/dq/ops-recommendations-remediation-briefing.md both point at deleted files. Repoint to
-      the per-table DQ-manifest YAMLs (config/agent/data_quality/decisions/{table}.yaml) + ops.yaml
-      as the canonical field-semantic authority (Decision 65), or drop the dead pointers. This is
-      the ambient Layer-2 knowledge base -- a dangling ref here is high-visibility.
+      Fix the live DQ-remediation pointers (~lines 49-54): (a) "Protocol and root cause taxonomy:
+      docs/dq/DQ_REMEDIATION_METHODOLOGY.md" (line ~50) and the bullet referencing
+      docs/dq/ops-recommendations-remediation-briefing.md both point at deleted files; and (b) the
+      prose on line ~54 "Load the manifest AND BRIEFING at the start of any remediation session" --
+      strike "and briefing" (the briefing doc is deleted; no file path, so the sweep would miss it).
+      Repoint the manifest/protocol references to the per-table DQ-manifest YAMLs
+      (config/agent/data_quality/decisions/{table}.yaml) + ops.yaml as the canonical
+      field-semantic authority (Decision 65), or drop the dead pointers. Ambient Layer-2 KB --
+      a dangling ref here is high-visibility.
   - file: docs/CLAUDE.md
     action: Modify
     purpose: >-
@@ -119,6 +122,10 @@ tier_waiver: >-
   docs/ROADMAP-PRODUCT.md follow-on (it repoints the same handler + edits the same manifest and
   will do the V3 build + deploy + run_scheduled_agent --smoke-test for the data-pipeline and
   ops-compaction artifacts). B2 therefore performs no deploy; it is not silent on the impact.
+  CAVEAT: this deferral depends on the ROADMAP-PRODUCT.md follow-on actually being authored with a
+  data-pipeline deploy in scope. Until it exists as a tracked item, the repo-vs-deployed divergence
+  of doc-freshness.prompt.md is silent (benign while agents are disabled). The human should confirm
+  a tracked owner exists (file the follow-on plan/rec) so the deploy is not lost.
 infrastructure_dependencies:
   - >-
     .github/prompts/scheduled/doc-freshness.prompt.md is bundled into the ACTIVE data-pipeline
@@ -195,10 +202,10 @@ verification_plan:
     hermetic: false
   - step: 6
     phase: pre-deploy
-    action: The file-router routes block has NO dead targets (every route target resolves to a tracked file or directory).
-    command: "bin/venv-python -c \"import yaml,subprocess,sys; d=yaml.safe_load(open('docs/contracts/file-router.yaml')); tracked=subprocess.run(['git','ls-files'],capture_output=True,text=True).stdout.split(); dead=[(r['topic'],t) for r in d['routes'] for t in r['targets'] if not any(f==t or f.startswith(t if t.endswith('/') else t+'/') for f in tracked)]; print('dead-route-targets:', dead); sys.exit(1 if dead else 0)\""
-    expected: "dead-route-targets: [] -- the 3 orphan routes were removed and config-reference/terraform-infra repoint to config/CLAUDE.md / terraform/CLAUDE.md (both tracked)."
-    fix_if: "A route still targets a deleted file -- remove the route (no replacement) or repoint it to the authoritative CLAUDE.md; validate_placement._dead_targets_for_route fails otherwise."
+    action: No NON-RUNTIME file-router route targets a missing file (matches validate_placement._dead_targets_for_route, which special-cases runtime rows). Runtime rows (runtime:true; targets are gitignored logs/.*.jsonl read caches, untouched by this plan) are excluded -- they are validated by the real guard in step 9.
+    command: "bin/venv-python -c \"import yaml,subprocess,sys; d=yaml.safe_load(open('docs/contracts/file-router.yaml')); tracked=subprocess.run(['git','ls-files'],capture_output=True,text=True).stdout.split(); dead=[(r['topic'],t) for r in d['routes'] if not r.get('runtime', False) for t in r['targets'] if not any(f==t or f.startswith(t if t.endswith('/') else t+'/') for f in tracked)]; print('dead-nonruntime-route-targets:', dead); sys.exit(1 if dead else 0)\""
+    expected: "dead-nonruntime-route-targets: [] -- the 3 orphan routes were removed and config-reference/terraform-infra repoint to config/CLAUDE.md / terraform/CLAUDE.md (both tracked). Runtime rows are excluded (validated by validate_placement in step 9)."
+    fix_if: "A non-runtime route still targets a deleted file -- remove the route (no replacement) or repoint it to the authoritative CLAUDE.md. Do NOT add a runtime-row check here (their read-cache files are gitignored; the real guard checks the parent dir) -- exclude them as shown."
     hermetic: false
   - step: 7
     phase: pre-deploy
@@ -233,7 +240,7 @@ constraints:
 context:
   - "Plan B2 of the documentation-architecture track. B1 (Decision 127) merged as #552 (plan) + #553 (implementation): it established the sanctioned-prose taxonomy, the validate_prose_allowlist guard, and the full day-one grandfather set. This plan pulls the ratchet."
   - "Decision-scout verdict: FLAGS_FOUND (2 NOTEs, no BLOCK). CITE list (verbatim): Decision 127, Decision 86, Decision 65, Decision 79. RELATED: 111/CD.20, CD.23, 84, 76, 73, 108, 64."
-  - "gates: decision-scout=FLAGS_FOUND (1 round); plan-critique=REVISE round 1 -> revised. Round-1 findings addressed: (1) file-router routes: block dead-target removal/repoint added to scope+exec+VP step 6; (2) docs/PROJECT_CONTEXT.md:50 dangling DQ pointer added to scope + VP step 7 sweep broadened to docs/; (3) Lambda/tier -- tier_waiver added documenting V2 retention + deploy-deferral of the doc-freshness bundled asset to the ROADMAP-PRODUCT.md follow-on; (4) VP step 2 strengthened to verify the migrated operational runbooks, step 3 over-claim reworded."
+  - "gates: decision-scout=FLAGS_FOUND (1 round); plan-critique=REVISE x2 -> revised. Round 1: file-router routes dead-target handling, PROJECT_CONTEXT.md dangling ref, Lambda tier_waiver, VP step 2/3 hardening. Round 2 (blocking): VP step 6 re-implemented route-checking without validate_placement's runtime:true special-casing, producing 4 permanent false positives on gitignored logs/.*.jsonl read-cache routes -- fixed by excluding runtime rows (they are validated by the real guard in step 9). Round 2 (non-blocking, folded in): strike 'and briefing' from PROJECT_CONTEXT.md line ~54; tier_waiver notes the deferred-deploy follow-on needs a tracked owner."
   - "NOTE 1 resolution (Decision 86 no-drift): the docs/CLAUDE.md edit covers BOTH the Class->home docs/dq row AND the prose 'Allowed governance root files' sentence (strike ARCHITECTURE/ARCHITECTURE-WORKFLOW/GETTING_STARTED), keeping the human projection in sync with the file-router docs_root_allowlist machine SoT. Enforced by VP step 5."
   - "NOTE 2 resolution (Decision 64 provenance): DECISIONS.md line ~3057 cites the deleted DQ_REMEDIATION_METHODOLOGY.md as where the 2026-05-01 regime was formalised. This is fixed historical provenance in an append-only, grandfathered ledger -- left unchanged, not a live link. Decision 65 already names the doc legacy/not-maintained. No live guard/code reads it (VP step 6 confirms)."
   - "DEFERRED (kept grandfathered, each its own follow-on): (a) docs/ROADMAP-PRODUCT.md -- bundled into the ACTIVE data-pipeline Lambda manifest (src/lambdas/data-pipeline/manifest.yaml:45) and read at runtime by src/data/handlers/scheduled_agent_handler.py; removing it is a V3 Lambda-code change (handler repoint to ROADMAP-PRODUCT.yaml + manifest edit + build/deploy/smoke, Decision 79), not a doc deletion. (b) docs/runbooks/ducklake-catalog-operations.md -- 625-line operational doc with ~5 live inbound code refs; migrate to a docs/contracts/*.yaml procedure/registry with the reference rewrites in its own plan."
@@ -254,7 +261,7 @@ execution_steps:
   - "git rm the pure-prose deletions: docs/ARCHITECTURE.md, docs/ARCHITECTURE-WORKFLOW.md, docs/GETTING_STARTED.md, docs/dq/ (both files), config/README.md, the four config stub READMEs, terraform/README.md (confirm it holds no unique live content first)."
   - "docs/contracts/file-router.yaml: (1) shrink prose_allowlist.grandfathered_globs (remove all deleted/migrated entries; keep the deferred + ledger entries); (2) trim docs_root_allowlist.allowed_files (remove ARCHITECTURE.md, ARCHITECTURE-WORKFLOW.md, GETTING_STARTED.md); (3) fix the routes: block -- REMOVE trading-system-design, dev-workflow-ci-telemetry, setup-deploy-troubleshoot (targets deleted, no replacement) and REPOINT config-reference->config/CLAUDE.md, terraform-infra->terraform/CLAUDE.md."
   - "docs/CLAUDE.md: remove the docs/dq Class->home row AND strike ARCHITECTURE/ARCHITECTURE-WORKFLOW/GETTING_STARTED from the 'Allowed governance root files' prose sentence."
-  - "Fix inbound refs: docs/PROJECT_CONTEXT.md (repoint/drop the ~line-50 docs/dq DQ_REMEDIATION + briefing pointers to the DQ-manifest YAMLs, Decision 65), scripts/run_scheduled_agent.py (drop the GETTING_STARTED pointer), scripts/cleanup_ops_rec_orphans.py (drop the docs/dq comment), config/agent/data_quality/decisions/ops_decisions.yaml + ops_recommendations.yaml (drop the docs/dq Protocol/Briefing pointer comments), .github/prompts/scheduled/doc-freshness.prompt.md (drop the deleted-doc lines from the freshness map)."
+  - "Fix inbound refs: docs/PROJECT_CONTEXT.md (repoint/drop the ~line-50 docs/dq DQ_REMEDIATION + briefing pointers to the DQ-manifest YAMLs, Decision 65, AND strike 'and briefing' from the ~line-54 prose), scripts/run_scheduled_agent.py (drop the GETTING_STARTED pointer), scripts/cleanup_ops_rec_orphans.py (drop the docs/dq comment), config/agent/data_quality/decisions/ops_decisions.yaml + ops_recommendations.yaml (drop the docs/dq Protocol/Briefing pointer comments), .github/prompts/scheduled/doc-freshness.prompt.md (drop the deleted-doc lines from the freshness map)."
   - "Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55)."
   - "Report: what was deleted/migrated, the guard-green confirmation, and that the two deferred items are untouched."
 work_areas: []
