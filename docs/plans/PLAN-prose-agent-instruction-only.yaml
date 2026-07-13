@@ -1,0 +1,273 @@
+schema_version: 1
+slug: "prose-agent-instruction-only"
+intent: >-
+  Encode and enforce an agent-first documentation principle -- the only sanctioned prose
+  (markdown) in this repo is agent-instruction content; human-facing information is a query
+  result an agent produces on demand, never a stored artefact. This plan expands Decision 86
+  into an explicit sanctioned-prose taxonomy, quarantines the terraform operator break-glass
+  loop into a machine-parseable procedure block, re-grounds and closes tier_item T2.41, and
+  adds a lint guard that enforces a prose allowlist. It DELETES NOTHING (full day-one
+  grandfather set); a separate follow-on plan (B2) pulls the ratchet.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-prose-agent-instruction-only.yaml
+phase: >-
+  Platform tier_item T2.41 (Escape-hatch quarantine, Decision 126 -- re-grounded here from
+  "runbook" to a deploy-paths.yaml procedure block) + a new Decision (next free = 127,
+  re-check at implement time) expanding Decision 86. Deployment-strategy consolidation track.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Author the new Decision (next free number, likely 127 -- re-check the max "## Decision
+      NNN" header at implement time per the numbering-race rule) expanding Decision 86 into the
+      sanctioned-prose taxonomy. Amend Decision 120 (record the break-glass quarantine + date)
+      and Decision 126 point 4 (re-ground the quarantine target from "a runbook under
+      docs/runbooks/" to a procedure block in deploy-paths.yaml). Governance ledger, class (c).
+  - file: docs/contracts/deploy-paths.yaml
+    action: Modify
+    purpose: >-
+      Add a structured `procedure:` block under `admin_out_of_band` holding the operator
+      break-glass recovery steps moved out of terraform/CLAUDE.md. Widen the file's charter
+      comment from "intent -> trigger -> recovery wayfinding" to "... + the operator-tier
+      procedure". ALSO re-ground `admin_out_of_band.status` -- it currently says "Sequenced for
+      quarantine into a dedicated operator runbook by tier_item T2.41 ... do not quarantine
+      before then"; that is self-contradictory once the procedure lives in THIS file and T2.37
+      is complete, so restate it as "quarantined here (Decision 126 pt4 as amended); T2.37
+      landed/verified". MUST NOT restate apply-model / guard-classification rules -- those stay
+      pointed at environment-taxonomy.md (Decision 92 point 5 sole SoT; Decision 126 point 2).
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Shrink the "Operator-only / break-glass (Decision 120)" subsection to the invariant
+      ("agents never self-direct terraform apply; break-glass is human-gated operator-only")
+      plus a one-line pointer to deploy-paths.yaml#admin_out_of_band. RETAIN the Decision
+      119/120 mirror-init constraints that routine agents genuinely need (those are not
+      break-glass-only). De-ambients the escape-hatch procedure without deleting the recovery path.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground the WHOLE tier_item T2.41 block so no "runbook" wording survives: the item
+      `name` ("Escape-hatch quarantine to an operator-only runbook"), `intent` ("...into a
+      dedicated operator runbook..."), exit criterion c1, and the `docs/runbooks/`
+      files_in_scope entry all move to naming the deploy-paths.yaml procedure block. (Criterion/
+      status FLIPS are performed by the /implement bookkeeping walk on a verified VP pass, not
+      here -- this edit only re-grounds text + scope.)
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Add a `prose_allowlist:` sibling key (mirroring the existing `docs_root_allowlist:`
+      structure): `allowed_globs` = the permanent sanctioned-prose classes (include repo-root
+      permanent files as BARE filenames -- `CLAUDE.md`, `AGENTS.md`, `README.md`, `SECURITY.md`
+      -- so they classify as allowed even if the matcher would not expand `**/CLAUDE.md` to the
+      root); `grandfathered_globs` = every currently-tracked .md not matched by allowed_globs
+      (seeded deterministically so the guard is green on day one). Ratchet-only: the grandfather
+      set may only shrink.
+  - file: scripts/checks/hygiene/validate_prose_allowlist.py
+    action: Create
+    purpose: >-
+      New registered check. Enumerate `git ls-files '*.md'` (tracked-only), classify each path
+      against prose_allowlist.allowed_globs + grandfathered_globs loaded from file-router.yaml
+      (reuse the _load loader pattern from validate_placement.py), append a failure for any
+      unmatched path, fail-open with a warning if the key is absent/unreadable. Expose a
+      module-level `path_allowed(path, globs) -> bool` helper using a matcher that GENUINELY
+      honors recursive `**` across path separators (zero-or-more segments). Do NOT use bare
+      fnmatch.fnmatch (does not match `**/CLAUDE.md` against root `CLAUDE.md`) and do NOT use
+      bare pathlib.PurePath.match (in Python 3.12 it degrades `**` to a single segment, so
+      `.claude/skills/**/SKILL.md` fails to match `.claude/skills/planning/SKILL.md` -- silently
+      misfiling a permanent class into the ratchet-only grandfather set). Use fnmatch.translate
+      with `**`-preprocessing, a manual segment matcher, or 3.13 full_match. Both the check body
+      and VP step 3 call it, and the day-one grandfather seeding subtracts allowed matches under
+      the SAME matcher. Scope is DISTINCT from validate_intent_doc_freeze
+      (repo-wide tracked-.md allowlist vs INTENT-manifest freeze) -- the freeze guard is the
+      INTENT-subset primary owner; delineate in the docstring (AGENTS.md one-file-per-subject).
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register validate_prose_allowlist in both tier sequences adjacent to
+      validate_intent_doc_freeze (Decision 104 registry pattern; validate.py is the single SoT
+      for CI gates).
+  - file: docs/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Update the Class->home map: remove the "Operational runbooks | docs/runbooks/" row; add
+      "Operator procedures (agent-led) | `procedure:` blocks in docs/contracts/*.yaml". Note
+      docs/runbooks/ is now a RETIRING class.
+  - file: docs/contracts/instruction-architecture.yaml
+    action: Modify
+    purpose: >-
+      Add one anti_patterns row: "Human runbook / operator-prose doc -> procedure block in the
+      owning contract", consistent with the existing companion-doc anti-pattern row.
+  - file: tests/checks/test_validate_prose_allowlist.py
+    action: Create
+    purpose: >-
+      Unit test for the guard exercising real code paths: (a) an all-listed file set passes;
+      (b) an unlisted .md path is flagged as a failure; (c) a missing prose_allowlist key
+      fails-open with a warning and no failure. Uses an injected/fake file list + a temp
+      file-router fixture -- no network, no AWS.
+bundled_recommendations: []
+closes_criteria:
+  - "T2.41:c1"
+  - "T2.41:c2"
+  - "T2.41:c3"
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A new Decision (next free number) exists in docs/DECISIONS.md expanding Decision 86 into an
+    explicit sanctioned-prose taxonomy (classes a-e), stating that no document whose
+    audience-of-record is a human may be stored and that docs/runbooks/ is a retiring class.
+  - >-
+    Decision 120 is amended to record the break-glass quarantine and its date; Decision 126
+    point 4 is amended to name the deploy-paths.yaml procedure block as the quarantine target.
+  - >-
+    The operator break-glass recovery steps live as a structured `procedure:` block under
+    admin_out_of_band in deploy-paths.yaml and NO LONGER appear as a procedure in
+    terraform/CLAUDE.md (which retains only the invariant + a pointer + the mirror-init constraints).
+  - >-
+    The procedure block does NOT restate apply-model / guard-classification rules (no in-budget/
+    out-of-budget/exit-code language) -- those remain solely in environment-taxonomy.md.
+  - >-
+    file-router.yaml carries a prose_allowlist key and scripts/checks/hygiene/validate_prose_allowlist.py
+    is registered in both tiers; the guard passes green on the current tree (full grandfather set).
+  - >-
+    The guard fails when a tracked .md file matches neither allowed_globs nor grandfathered_globs
+    (proven by the unit test's negative case).
+  - >-
+    tier_item T2.41's whole block (name, intent, criterion c1, files_in_scope) is re-grounded to
+    name the deploy-paths.yaml procedure block with no "runbook" wording; deploy-paths.yaml's
+    admin_out_of_band.status no longer says "runbook"; docs/CLAUDE.md Class->home map no longer
+    sanctions docs/runbooks/.
+  - >-
+    validate_prose_allowlist and validate_intent_doc_freeze have clearly delineated
+    primary-owner-per-surface scopes (INTENT-doc existence gated by the freeze guard via its
+    manifest; the repo-wide tracked-.md allowlist owned by the new guard), documented in the
+    new guard's docstring. They may overlap on the docs/INTENT-*.md subset (redundant, not
+    conflicting); the docstring names the freeze guard as the INTENT-subset primary owner.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: The guard's unit test passes (positive, negative, and fail-open cases).
+    command: "bin/venv-python -m pytest tests/checks/test_validate_prose_allowlist.py -q"
+    expected: "All tests pass; the negative case asserts an unlisted .md path produces a failure entry."
+    fix_if: "A test fails -- the classify logic, glob matching, or fail-open branch is wrong."
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: The guard is GREEN on the current tree (every tracked .md is allowed or grandfathered).
+    command: "bin/venv-python -c \"from scripts.checks.hygiene.validate_prose_allowlist import validate_prose_allowlist; f=[]; validate_prose_allowlist(f); print('FAILURES:', f); import sys; sys.exit(1 if f else 0)\""
+    expected: "Exit 0, FAILURES: [] -- the day-one grandfather set covers every currently-tracked prose file."
+    fix_if: "Non-empty failures -- a tracked .md was missed; add it to grandfathered_globs (do NOT loosen allowed_globs)."
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: Permanent agent-instruction files classify as ALLOWED, not grandfathered -- both root bare-filename paths AND multi-segment ** paths. Step 2 will NOT catch a misfile here (the file stays covered via the grandfather set).
+    command: "bin/venv-python -c \"import yaml,sys; from scripts.checks.hygiene.validate_prose_allowlist import path_allowed; a=yaml.safe_load(open('docs/contracts/file-router.yaml'))['prose_allowlist']['allowed_globs']; probes=['CLAUDE.md','AGENTS.md','README.md','SECURITY.md','.claude/skills/planning/SKILL.md','.claude/commands/plan.md']; bad=[p for p in probes if not path_allowed(p,a)]; print('not-allowed:', bad); sys.exit(1 if bad else 0)\""
+    expected: "not-allowed: [] and exit 0 -- each root permanent file AND each multi-segment ** path (.claude/skills/planning/SKILL.md, .claude/commands/plan.md) resolves via allowed_globs."
+    fix_if: "A path is not-allowed -- the matcher does not honor recursive ** across separators (do NOT use bare pathlib.PurePath.match, which degrades ** to a single segment in 3.12); use fnmatch.translate with ** preprocessing or a manual segment matcher, and list root files as bare filenames."
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: The guard is registered in BOTH tier sequences.
+    command: "bin/venv-python -c \"from scripts.checks import registry as r; pre=[s.name for s in r.pre_sequence()]; full=[s.name for s in r.full_sequence()]; assert 'validate_prose_allowlist' in pre, 'missing from --pre'; assert 'validate_prose_allowlist' in full, 'missing from full'; print('registered in both tiers')\""
+    expected: "Prints 'registered in both tiers' with no AssertionError."
+    fix_if: "AssertionError -- the _c('validate_prose_allowlist') entry is missing from a tier sequence in registry.py."
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: terraform/CLAUDE.md drops the break-glass interactive-loop step-list but keeps the invariant, a deploy-paths.yaml pointer, and the mirror-init constraints.
+    command: "bin/venv-python -c \"import sys; raw=open('terraform/CLAUDE.md').read(); t=' '.join(raw.split()); removed = ('iterative loop' not in t) and ('human accepts' not in t); kept = ('deploy-paths.yaml' in raw) and ('mirror' in raw.lower()); print('removed_procedure=', removed, 'kept_pointer_and_mirror=', kept); sys.exit(0 if (removed and kept) else 1)\""
+    expected: "removed_procedure= True kept_pointer_and_mirror= True -- the interactive loop step-list is gone; the pointer + mirror-init constraint remain."
+    fix_if: "removed_procedure False -- the break-glass step-list was left behind (move it to deploy-paths.yaml); kept False -- the pointer or mirror-init constraint was over-removed."
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: deploy-paths.yaml has an admin_out_of_band.procedure block that does NOT restate guard-classification rules.
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/contracts/deploy-paths.yaml')); ab=d['admin_out_of_band']; p=ab.get('procedure'); assert p, 'no procedure block'; blob=str(p).lower(); assert not any(k in blob for k in ['in_budget','out-of-budget','out_of_budget','exit 2','exit code']), 'procedure restates guard-classification'; assert 'runbook' not in str(ab.get('status','')).lower(), 'admin_out_of_band.status still references a runbook'; print('procedure present; no guard-classification; status re-grounded')\""
+    expected: "Prints confirmation; procedure exists, contains no apply-model/guard-classification language, and admin_out_of_band.status no longer references a runbook."
+    fix_if: "AssertionError -- the procedure block is missing, leaked guard-classification rules (belong solely in environment-taxonomy.md), or the status line still says 'runbook' (self-contradictory once the procedure lives in this file)."
+    hermetic: false
+  - step: 7
+    phase: pre-deploy
+    action: file-router.yaml prose_allowlist parses and grandfathers the known retiring/ledger prose files.
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/contracts/file-router.yaml')); pa=d['prose_allowlist']; g=' '.join(pa['grandfathered_globs']); assert 'ducklake-catalog-operations' in g, 'runbook not grandfathered'; assert any('CLAUDE.md' in x for x in pa['allowed_globs']), 'CLAUDE.md not an allowed class'; print('prose_allowlist parses; allowed + grandfather sets present')\""
+    expected: "Prints confirmation; allowed_globs includes the CLAUDE.md class and grandfathered_globs includes the ducklake runbook."
+    fix_if: "KeyError/AssertionError -- the prose_allowlist key is malformed or missing required members."
+    hermetic: false
+  - step: 8
+    phase: pre-deploy
+    action: The new Decision is authored AND Decisions 120 + 126 are genuinely amended (block-scoped, non-vacuous assertions).
+    command: "bin/venv-python -c \"import re; t=open('docs/DECISIONS.md').read(); nums=[int(m) for m in re.findall(r'^## Decision (\\d+)', t, re.M)]; assert max(nums) >= 127, f'new Decision not authored (max={max(nums)})'; b120=re.search(r'(?ms)^## Decision 120\\b.*?(?=^## Decision |\\Z)', t).group(0); assert 'quarantin' in b120.lower(), 'Decision 120 block not amended with the quarantine record'; b126=re.search(r'(?ms)^## Decision 126\\b.*?(?=^## Decision |\\Z)', t).group(0); assert 'admin_out_of_band.procedure' in b126, 'Decision 126 pt4 not re-grounded to the admin_out_of_band.procedure target'; print('new Decision + 120 quarantine amendment + 126 procedure-block re-ground all verified')\""
+    expected: "Prints confirmation: a Decision >= 127 exists, the Decision 120 block now contains 'quarantin' (0 today -> non-vacuous), and the Decision 126 block now contains 'admin_out_of_band.procedure' (0 today -> non-vacuous)."
+    fix_if: "AssertionError -- the new Decision is missing, Decision 120 was not amended with the quarantine record, or Decision 126 point 4 was not re-grounded to name the admin_out_of_band.procedure target (re-check the max header number at implement time)."
+    hermetic: false
+  - step: 9
+    phase: pre-deploy
+    action: The entire T2.41 block (name, intent, criterion c1, files_in_scope) is re-grounded to name deploy-paths.yaml and carries NO "runbook"/"runbooks/" wording.
+    command: "bin/venv-python -c \"import sys; t=open('docs/ROADMAP-PLATFORM.yaml').read(); i=t.index('id: T2.41'); j=t.index('id: T2.42'); blk=t[i:j].lower(); ok = ('deploy-paths' in blk) and ('runbook' not in blk); print('T2.41 block clean of runbook wording:', ok); sys.exit(0 if ok else 1)\""
+    expected: "The whole T2.41 block names deploy-paths.yaml and the substring 'runbook' (singular or plural) is absent from name, intent, c1, and files_in_scope."
+    fix_if: "'runbook' still present in the T2.41 block -- re-ground the name + intent + c1 text AND clean the residual docs/runbooks/ files_in_scope entry."
+    hermetic: false
+  - step: 10
+    phase: pre-deploy
+    action: The authoritative fast presubmit passes with the new guard wired in.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "validate --pre exits 0; validate_prose_allowlist runs and passes; no other check regressed."
+    fix_if: "Any check fails -- diagnose the specific check (RCA-first, Decision 55); never disable a check to go green."
+    hermetic: false
+  - step: 11
+    phase: post-deploy
+    action: Reflect the new Decision + amendments into the ops_decisions warehouse table (Decision 84 authoring path).
+    command: "bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md"
+    expected: "Backfill succeeds; ops_decisions reflects the new Decision and the 120/126 amendments (DECISIONS.md is the SoT, warehouse is the projection)."
+    fix_if: "Portal write fails loudly -- restore connectivity (agent_platform profile) and re-run; there is no offline outbox (Decision 84 I-4)."
+    hermetic: false
+constraints:
+  - "Public repo (Decision 73/101): no AWS account IDs, ARNs, ExternalIds, or secrets in any edited file; the never-commit hook enforces shape patterns."
+  - "Decision 126 point 2 / Decision 92 point 5: the deploy-paths.yaml procedure block MUST NOT restate apply-model or guard-classification rules -- those stay solely in environment-taxonomy.md. The procedure carries operator-recovery STEPS only."
+  - "Decision 55: forward-fix only; no rescue/workaround loops; on an unrecoverable VP failure stop and RCA. Never disable or loosen a check to go green."
+  - "Decision 84: author the Decision by editing docs/DECISIONS.md (the canonical SoT) then run ops_data_portal --backfill-decisions-md; never write ops_decisions directly."
+  - "This plan DELETES NOTHING. Every currently-tracked prose file must be covered by allowed_globs or grandfathered_globs so the guard is green on day one; deletions/migrations are the follow-on B2 plan."
+  - "grandfathered set is ratchet-only: it may only shrink in later plans, never grow."
+  - "AGENTS.md one-file-per-subject: validate_prose_allowlist (repo-wide tracked-.md allowlist) and validate_intent_doc_freeze (INTENT-manifest freeze) must keep clearly delineated scopes -- do not merge or overlap them."
+  - "Only modify files in the Scope table."
+context:
+  - "Deployment-strategy consolidation track: this is Plan B1 (encode + enforce the prose principle). Plan A (T2.38 governed DuckLake code-deploy channel) ships separately; Plan B2 (ratchet: delete/migrate grandfathered prose) is the follow-on."
+  - "Decision-scout verdict: FLAGS_FOUND (WARN + NOTE on Decision 126; no BLOCK). CITE list (verbatim): Decision 86, Decision 126, Decision 120, Decision 101, Decision 111/CD.20, Decision 104, Decision 100. RELATED: 84, 118, 121, 115, 110, 73, 76/RS-03."
+  - "gates: decision-scout=FLAGS_FOUND (1 round); plan-critique=REVISE x3 -> human-approved (option A) after the round-3 fix. All findings were the same VP-command-vacuity class (steps 4/5/6/9/8, now exhausted and each grep-verified non-vacuous); all three reviews independently found the plan structurally sound (decision-aligned, correctly scoped, sequenced behind verified-complete T2.37, V2)."
+  - "WARN resolution (Decision 126 pt4/pt2): proceed via the explicit amendment to point 4; keep the procedure block strictly operator-recovery steps, not a second SoT for guard-classification (that stays at environment-taxonomy.md)."
+  - "NOTE resolution (Decision 126 sequencing): T2.41 depends_on T2.37, which landed and was marked complete (status: complete, completed_at 2026-07-12) after #548 and the #549 roadmap closeout. Status-Trusted-Never-Inferred: /implement flips to complete only on a verified VP pass, so T2.37 is verified. If the implementer cannot confirm this at execution time, land only the doc-move + guard and DEFER the T2.41 criterion closure."
+  - "Decision 101 clause (c): a marketing/ prose exception is a PERMANENT allowed class (not grandfathered), even though marketing/ does not exist on disk yet -- include marketing/**/*.md in allowed_globs so future marketing prose is pre-sanctioned."
+  - "DECISIONS.md and CHANGELOG.md are RETAINED as governance ledgers (class c) but are flagged post-MVP retirement targets (DECISIONS.md is still a working SoT; mechanically too costly to retire now) -- place them in grandfathered_globs with a post-MVP owner note, mirroring the existing docs_root_allowlist grandfather treatment."
+  - "docs/PROJECT_CONTEXT.md is a Layer-2 agent knowledge base (instruction-architecture): sanctioned as agent-instruction, keep it in allowed_globs."
+  - "docs/contracts/*.md (e.g. environment-taxonomy.md, delegate-cli.md) are contracts: allowed as class (b) even though .md; a later YAML conversion is optional hygiene, not this plan."
+  - "Numbering-race: re-check the max '## Decision NNN' header in DECISIONS.md at implement time -- a concurrent PR may claim 127."
+  - "Branch was 0 commits behind origin/main at planning time (preflight main=0 behind); no rebase deferral needed."
+  - "Closure obligation: this is a surface-retiring/re-grounding plan (docs/runbooks -> retiring; break-glass X->Y move). VP steps 5, 6, 9 are the stale-reference / migration-completeness sweep."
+  - "All VP steps are hermetic: false by design. In this repo's /plan workflow the plan document merges to main BEFORE implementation (a separate /implement PR), so the VP steps are forward-looking ACCEPTANCE checks the /implement agent runs against the implementation branch -- they cannot pass on the plan-only PR tree and must therefore be excluded from the VF-01 validate_vp_replay pass (which re-executes hermetic pre-deploy steps on the current tree). Marking them hermetic would (correctly) fail replay, since Decision 127 / the guard / the re-grounded T2.41 do not exist until implementation."
+  - "Coverage-mapping note (non-blocking): scripts/test_coverage_checker.py maps scripts/checks/**/*.py to tests/test_validate.py, but the new test lives at tests/checks/test_validate_prose_allowlist.py (precedent: validate_deploy_channel_conformance is tested only under tests/checks/). validate_test_coverage is full-tier + diff-aware so it won't block --pre or post-merge; the implementer should confirm coverage attribution for the new module or place the test where the mapping expects."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/... session branch)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "Re-checked the max '## Decision NNN' header in DECISIONS.md for the new number."
+  - "Confirmed T2.37 is complete + verified (roadmap status + #548/#549) before closing T2.41 criteria."
+  - "Read every file in the Scope table; located validate_placement.py as the loader pattern donor."
+  - "Acceptance criteria understood and verifiable."
+execution_steps:
+  - "docs/DECISIONS.md: author the new Decision (next free number) expanding Decision 86 into the sanctioned-prose taxonomy (classes a-e; no human-audience stored docs; docs/runbooks retiring; DECISIONS.md/CHANGELOG.md retained-but-post-MVP-retirement). The headline principle MUST explicitly carve out the Decision 101(c) marketing/ prose exception (marketing prose is one-way-downstream, never fed back to agents -- it is NOT agent-instruction, so the 'only prose is agent-instruction' framing must name it as a permanent sanctioned non-agent-instruction class, not re-state a rule 101(c) already qualified). Amend Decision 120 (add a dated quarantine record -- the block contains no 'quarantin' today, VP step 8 asserts it does after) and Decision 126 point 4 (re-ground the target with a dated amendment marker that names the literal `admin_out_of_band.procedure` block in deploy-paths.yaml -- that token is absent from DECISIONS.md today, VP step 8 asserts it appears in the Decision 126 block after)."
+  - "docs/contracts/deploy-paths.yaml: add the admin_out_of_band.procedure block (operator-recovery steps only, no guard-classification restatement); widen the charter comment."
+  - "terraform/CLAUDE.md: shrink the break-glass subsection to invariant + pointer; retain the Decision 119/120 mirror-init constraints."
+  - "docs/contracts/file-router.yaml: add prose_allowlist. allowed_globs = permanent classes incl. bare root filenames CLAUDE.md + AGENTS.md + README.md + SECURITY.md (bare, so root files classify without relying on **-expansion), plus **/CLAUDE.md, .claude/skills/**/SKILL.md, .claude/commands/**/*.md, config/agent/executor/prompts/**/*.md, .github/**/*.md, docs/contracts/**/*.md, docs/audit-prompts/**/*.md, audits/**/*.md, docs/plans/**/*.md, docs/PROJECT_CONTEXT.md, marketing/**/*.md. grandfathered_globs = seed by `git ls-files '*.md'` minus allowed_globs matches (under the SAME ** -honoring matcher the guard uses), each annotated with an owner/retirement note (per-dir READMEs, GETTING_STARTED/ARCHITECTURE(-WORKFLOW)/ROADMAP-PRODUCT.md, docs/dq/**, docs/runbooks/**, DECISIONS.md/DECISIONS_ARCHIVE.md/CHANGELOG.md/SESSION_LOG*.md)."
+  - "scripts/checks/hygiene/validate_prose_allowlist.py: implement the guard (git ls-files tracked-only, classify vs allowed+grandfathered, fail on unmatched, fail-open on missing key); delineate scope vs validate_intent_doc_freeze in the docstring."
+  - "scripts/checks/registry.py: register validate_prose_allowlist in both tier sequences adjacent to validate_intent_doc_freeze."
+  - "docs/CLAUDE.md: update the Class->home map (drop runbooks row, add operator-procedure-in-contract row; note docs/runbooks/ retiring)."
+  - "docs/contracts/instruction-architecture.yaml: add the human-runbook anti-pattern row."
+  - "docs/ROADMAP-PLATFORM.yaml: re-ground the WHOLE T2.41 block -- name, intent, exit criterion c1, and the residual docs/runbooks/ files_in_scope entry -- so no 'runbook' wording survives (target = deploy-paths.yaml procedure block). (Criterion/status FLIPS are done by /implement's bookkeeping walk on a verified VP pass, not here -- this edit only re-grounds text + scope.)"
+  - "tests/checks/test_validate_prose_allowlist.py: positive, negative, and fail-open cases (exercise path_allowed against a root bare filename too)."
+  - "Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: what was implemented, verification results, and confirmation that the guard is green with the full grandfather set."
+work_areas: []
+rollback: >-
+  All changes are additive or doc-relocations except the new guard registration. To roll back:
+  revert the commit; the guard deregisters with it and DECISIONS.md/deploy-paths.yaml/terraform
+  CLAUDE.md return to prior state. No data migration, no infra apply, so rollback is a clean
+  git revert.
