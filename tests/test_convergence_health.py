@@ -1217,6 +1217,19 @@ class TestDetectDucklakeCodeDrift:
         fr.assert_called_once()
         assert result == {"action": "file", "rec_id": "rec-live"}
 
+    def test_no_portal_caller_uses_real_update_rec_for_update(self) -> None:
+        # Stale record + already-open rec -> the update action's real (portal_caller=None)
+        # update_rec branch. Mirrors escalate()'s test_escalate_update_uses_real_portal_when_no_caller.
+        existing = {"id": "rec-210", "source": "ducklake_code_drift", "status": "open"}
+        with patch("scripts.ops_data_portal.update_rec") as ur:
+            result = detect_ducklake_code_drift(
+                git_runner=lambda argv: "SHA_NEW",
+                s3_client=_FakeDeployRecordsS3(default_sha="SHA_OLD"),
+                open_recs=[existing],
+            )
+        ur.assert_called_once()
+        assert result == {"action": "update", "rec_id": "rec-210"}
+
     def test_no_portal_caller_uses_real_update_rec_for_close(self) -> None:
         existing = {"id": "rec-200", "source": "ducklake_code_drift", "status": "open"}
         with patch("scripts.ops_data_portal.update_rec") as ur:

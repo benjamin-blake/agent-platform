@@ -20,7 +20,12 @@ name: deploy-ducklake-lambdas
 #   - This role is IAM-SENSITIVE and lands via the human-gated admin-create path (Decision 98) --
 #     it does NOT exist until an operator applies terraform/personal/oidc.tf under
 #     agent_platform_admin. continue-on-error on the assume-role step covers that bootstrap
-#     window: a pre-admin-create push no-ops (green, deployed=false) rather than erroring.
+#     window, but the tolerance is SCOPED (not blanket, Decision 55): it applies only while the
+#     operator-owned repo variable DUCKLAKE_DEPLOY_ROLE_PROVISIONED is not 'true'. The operator
+#     sets that variable to 'true' as part of the same admin-create step; from then on a failed
+#     assume-role (a trust/policy regression, throttling, expired federation) FAILS LOUD instead
+#     of reporting a silent green no-op deploy. Pre-admin-create pushes no-op (green,
+#     deployed=false); post-provisioning regressions are red.
 #   - Runs `build_lambda --ducklake-only --deploy`, which builds + uploads + deploys the four
 #     function zips and three layer zips, capturing each function's CodeSha256 and writing a
 #     deploy-records/ducklake/<function>.json record (function -> CodeSha256 -> source git SHA;
@@ -79,14 +84,36 @@ jobs:
       - name: Configure AWS credentials (OIDC -- github-ci-ducklake-deploy role, main only)
         # Bootstrap-window guard: before the admin-create apply creates
         # agent-platform-github-ci-ducklake-deploy, this assume-role fails. continue-on-error
-        # keeps the job from failing; subsequent steps gate on this step's outcome, so the job
-        # ends green-with-skipped (deployed unset) rather than hard-failing pre-admin-create.
+        # keeps the job from hard-failing so the "Classify assume-role outcome" step below can
+        # decide whether the failure is the EXPECTED bootstrap-window absence or a real regression.
+        # The tolerance is NOT blanket: it is scoped by DUCKLAKE_DEPLOY_ROLE_PROVISIONED (see below).
         id: oidc_deploy
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-ducklake-deploy
           aws-region: eu-west-2
+
+      - name: Classify assume-role outcome (scope the tolerance to the genuinely-absent role)
+        # Decision 55 false-green guard: continue-on-error above must NOT silently swallow a
+        # post-provisioning assume-role regression (a trust-policy edit, throttling, expired
+        # federation) as a green no-op deploy. The bootstrap-window tolerance is gated on the
+        # operator-owned repo variable DUCKLAKE_DEPLOY_ROLE_PROVISIONED, set to 'true' as part of
+        # the same Decision 98 admin-create step that creates the role (VP step 9):
+        #   - flag unset/not 'true' (pre-admin-create): a failed assume is the EXPECTED absent-role
+        #     bootstrap window -> warn loudly and no-op (deployed stays unset -> smoke skips).
+        #   - flag 'true' (role should exist): a failed assume is a REAL regression -> fail loud.
+        # A successful assume is always fine regardless of the flag.
+        if: steps.oidc_deploy.outcome != 'success'
+        env:
+          ROLE_PROVISIONED: ${{ vars.DUCKLAKE_DEPLOY_ROLE_PROVISIONED }}
+        run: |
+          set -euo pipefail
+          if [ "$ROLE_PROVISIONED" = "true" ]; then
+            echo "::error::assume-role failed but DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true -- the scoped role agent-platform-github-ci-ducklake-deploy is expected to exist, so this is a real regression (trust/policy/throttle/federation), NOT the bootstrap window. Failing loud (Decision 55) rather than reporting a silent green no-op deploy."
+            exit 1
+          fi
+          echo "::warning::assume-role failed and DUCKLAKE_DEPLOY_ROLE_PROVISIONED is not 'true' -- treating as the pre-admin-create bootstrap window (role genuinely absent, Decision 98). No deploy performed (deployed=false); the operator admin-creates the role and sets DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true to close this window."
 
       - name: Setup Python 3.12
         if: steps.oidc_deploy.outcome == 'success'
