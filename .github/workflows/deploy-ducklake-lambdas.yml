@@ -180,6 +180,27 @@ jobs:
             echo "OK ${fn} deploy record fresh: ${ACTUAL_SHA}"
           done
 
+      - name: Resolve DuckLake writer + reader Function URLs
+        # ducklake_neon_smoke_test._function_url resolves the Function URL from DUCKLAKE_{role}_URL
+        # env or `terraform output` only -- there is no AWS-API fallback, and this runner has no
+        # terraform-init'd checkout. Resolve both URLs via the AWS API (github_ci_branch holds
+        # lambda:GetFunctionUrlConfig via DuckLakeInvokeCI) and export them for the smoke steps.
+        # The URLs are masked (Decision 101: a Function URL is an attack-surface hostname; keep it
+        # out of public CI logs). AWS_IAM auth still requires SigV4, so the URL alone is not a
+        # credential -- masking is defence-in-depth. (rec-2689)
+        run: |
+          set -euo pipefail
+          for role in writer reader; do
+            URL=$(aws lambda get-function-url-config --function-name "agent-platform-ducklake-${role}" --region eu-west-2 --query FunctionUrl --output text)
+            if [ -z "$URL" ] || [ "$URL" = "None" ]; then
+              echo "::error::Could not resolve the ${role} Function URL via get-function-url-config." >&2
+              exit 1
+            fi
+            echo "::add-mask::${URL}"
+            echo "DUCKLAKE_${role^^}_URL=${URL}" >> "$GITHUB_ENV"
+            echo "Resolved DUCKLAKE_${role^^}_URL (masked)."
+          done
+
       - name: Setup Python 3.12
         uses: actions/setup-python@v6
         with:
