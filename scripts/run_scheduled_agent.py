@@ -280,7 +280,6 @@ def _smoke_test(agent_name: str) -> int:
          ``agents/<name>/`` with LastModified within 60 seconds.
 
     Delivery contracts:
-      - docs/GETTING_STARTED.md: dispatcher invoke shape and runner entrypoint
       - docs/contracts/inference-provider.yaml: post-deploy verification
       - scripts/build_lambda.py: supported deploy mechanism
 

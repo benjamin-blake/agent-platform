@@ -7,7 +7,7 @@
 #
 # NEVER auto-apply: this root must only be applied manually under agent_platform_admin (PlatformAdmin,
 # iam:*). Never add terraform/bootstrap/** to any apply-workflow path.
-# See terraform/bootstrap/README.md for the provisioning and ongoing apply runbook.
+# See terraform/bootstrap/CLAUDE.md for the provisioning and ongoing apply runbook.
 
 terraform {
   required_version = ">= 1.10"

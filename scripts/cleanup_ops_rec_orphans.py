@@ -9,7 +9,8 @@ Root cause analysis (RCA):
   one-liner for id IS NULL; the implementation commit (b6ba53b) contains no
   evidence it was executed. The ghost row (id=NULL) persists in the warehouse.
 - Root cause class: Class E -- post-deploy cleanup step not executed or not
-  asserted. See docs/dq/DQ_REMEDIATION_METHODOLOGY.md.
+  asserted. Root cause taxonomy lives in the DQ-manifest YAMLs
+  (config/agent/data_quality/decisions/{table}.yaml), Decision 65.
 
 This script closes the gap by treating DELETE + assertion as one atomic unit,
 preventing a recurrence where cleanup appears complete but the warehouse row

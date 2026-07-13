@@ -14,9 +14,6 @@ recently, indicating the docs may be out of date.
 
 2. For each doc file identified, check related source files. Use the following
    heuristic mapping:
-   - `docs/ARCHITECTURE.md` → `src/`, `terraform/`
-   - `docs/ARCHITECTURE-WORKFLOW.md` → `scripts/`, `.github/`
-   - `docs/GETTING_STARTED.md` → `setup.py`, `requirements.txt`, `.github/workflows/`
    - `docs/DECISIONS.md` → any decision-affecting code changes
    - `docs/ROADMAP-PRODUCT.md` → `docs/plans/`
    - `docs/ROADMAP-PLATFORM.yaml` → `docs/plans/`

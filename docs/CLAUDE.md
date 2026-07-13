@@ -9,9 +9,9 @@ governance file or a grandfathered retiring-set member. The machine-readable all
 `docs_root_allowlist:` key in `docs/contracts/file-router.yaml` (the single source of truth the
 check reads) -- register a genuinely-new governance surface there, never by loosening the check.
 
-Allowed governance root files: `ARCHITECTURE.md`, `ARCHITECTURE-WORKFLOW.md`, `CHANGELOG.md`,
-`CLAUDE.md` (this file), `GETTING_STARTED.md`, `PROJECT_CONTEXT.md`, and the roadmaps
-(`ROADMAP-PLATFORM.yaml`, `ROADMAP-PRODUCT.md`, `ROADMAP-PRODUCT.yaml`, `ROADMAP-SEMANTO.yaml`).
+Allowed governance root files: `CHANGELOG.md`, `CLAUDE.md` (this file), `PROJECT_CONTEXT.md`, and
+the roadmaps (`ROADMAP-PLATFORM.yaml`, `ROADMAP-PRODUCT.md`, `ROADMAP-PRODUCT.yaml`,
+`ROADMAP-SEMANTO.yaml`).
 
 Grandfathered retiring sets (allowed now, retire on their own schedule -- do not add to them):
 `INTENT-*.md` (owner T5.5; existence separately gated by `validate_intent_doc_freeze` via
@@ -27,7 +27,6 @@ Every non-governance doc class has a subtree home; put new files there, not at t
 | Machine-readable contracts | `docs/contracts/` |
 | Audit prompts (`AUDIT-{slug}.md`) | `docs/audit-prompts/` |
 | REPORT-ONLY deliverables + spike notes | `docs/plans/reports/` |
-| Data-quality docs | `docs/dq/` |
 | Operator procedures (agent-led) | `procedure:` blocks in `docs/contracts/*.yaml` |
 | INTENT-migration manifest | `docs/intent-migration/` |
 

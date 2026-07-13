@@ -21,8 +21,8 @@ a file here changes agent/CI behaviour, not deployed Lambda behaviour -- and a L
 must NOT assume `config/agent/` files reach the function. (This is why `config/agent/` does not
 trigger the Lambda Deployment Assessment in `/plan`.)
 
-## READMEs are portal projections (CD.23)
-`config/README.md` and `config/agent/README.md` are curated portal projections (CD.23): the
-authoritative placement/bundling rules live in THIS file, and if a README conflicts with it the
-canonical CLAUDE.md wins. Do not restate the zone or bundling rules in a README -- point at
-`config/CLAUDE.md` instead (two synced surfaces is drift by design).
+## Authoritative rules live here, not in a companion README (Decision 127)
+`config/README.md` and `config/agent/README.md` (retired per Decision 127 B2) were curated portal
+projections of the zone/bundling rules above (CD.23). A companion human-prose doc alongside a
+CLAUDE.md is the drift-by-design anti-pattern; this file is now the sole authority for
+`config/`'s placement and bundling rules -- do not reintroduce a README here to restate them.

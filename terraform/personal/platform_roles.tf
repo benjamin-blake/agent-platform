@@ -683,7 +683,7 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
 # ---------------------------------------------------------------------------
 # Bootstrap state backend (PLAN-terraform-cicd-bootstrap-root / T2.23): PlatformAdmin provisions and
 # uses the terraform/bootstrap root's S3 state backend. The bucket (agent-platform-bootstrap-tfstate)
-# is created out-of-band by the documented runbook (terraform/bootstrap/README.md) and is NOT a
+# is created out-of-band by the documented runbook (terraform/bootstrap/CLAUDE.md) and is NOT a
 # Terraform resource in any root -- codifying it would be circular (the bootstrap root's own state
 # lives in it). This is the admin provisioning path; it does NOT weaken the bootstrap isolation, which
 # fences the github_ci_apply CI role (the pipeline) out of bootstrap state. PlatformAdmin is the admin

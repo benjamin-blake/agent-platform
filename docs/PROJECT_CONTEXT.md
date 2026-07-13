@@ -46,12 +46,13 @@ DQ checks for all ops and telemetry tables are defined in `config/agent/data_qua
 and `config/agent/data_quality/telemetry.yaml`. The DQ runner is invoked by `scripts/validate.py`
 presubmit tier; results land in `logs/debug/dq-latest.json`.
 
-The remediation arc uses a shared protocol and per-table decision manifests:
-- Protocol and root cause taxonomy: `docs/dq/DQ_REMEDIATION_METHODOLOGY.md`
+The remediation arc uses per-table decision manifests as the canonical field-semantic authority
+(Decision 65):
+- Protocol and root cause taxonomy: `config/agent/data_quality/ops.yaml`
 - Per-table decision manifests: `config/agent/data_quality/decisions/{table}.yaml`
 
 Each manifest records root cause class, enforcement readiness, and human decision (pending /
-approved / deferred / declined) for every field. Load the manifest and briefing at the start
+approved / deferred / declined) for every field. Load the manifest at the start
 of any remediation session; walk only `human_decision: pending` fields one at a time.
 
 ### Field Architecture Decisions
