@@ -70,11 +70,15 @@ scope:
       against prose_allowlist.allowed_globs + grandfathered_globs loaded from file-router.yaml
       (reuse the _load loader pattern from validate_placement.py), append a failure for any
       unmatched path, fail-open with a warning if the key is absent/unreadable. Expose a
-      module-level `path_allowed(path, globs) -> bool` helper using a matcher that HONORS `**`
-      across path separators (pathlib.PurePath.match or an equivalent -- NOT bare
-      fnmatch.fnmatch, which does not match `**/CLAUDE.md` against the repo-root `CLAUDE.md`);
-      both the check body and VP step 3 call it, and the day-one grandfather seeding subtracts
-      allowed matches under the SAME matcher. Scope is DISTINCT from validate_intent_doc_freeze
+      module-level `path_allowed(path, globs) -> bool` helper using a matcher that GENUINELY
+      honors recursive `**` across path separators (zero-or-more segments). Do NOT use bare
+      fnmatch.fnmatch (does not match `**/CLAUDE.md` against root `CLAUDE.md`) and do NOT use
+      bare pathlib.PurePath.match (in Python 3.12 it degrades `**` to a single segment, so
+      `.claude/skills/**/SKILL.md` fails to match `.claude/skills/planning/SKILL.md` -- silently
+      misfiling a permanent class into the ratchet-only grandfather set). Use fnmatch.translate
+      with `**`-preprocessing, a manual segment matcher, or 3.13 full_match. Both the check body
+      and VP step 3 call it, and the day-one grandfather seeding subtracts allowed matches under
+      the SAME matcher. Scope is DISTINCT from validate_intent_doc_freeze
       (repo-wide tracked-.md allowlist vs INTENT-manifest freeze) -- the freeze guard is the
       INTENT-subset primary owner; delineate in the docstring (AGENTS.md one-file-per-subject).
   - file: scripts/checks/registry.py
@@ -156,10 +160,10 @@ verification_plan:
     hermetic: true
   - step: 3
     phase: pre-deploy
-    action: Root-level permanent agent-instruction files classify as ALLOWED, not grandfathered (matcher honors ** and bare filenames). Step 2 will NOT catch this -- the file stays covered via the grandfather set.
-    command: "bin/venv-python -c \"import yaml,sys; from scripts.checks.hygiene.validate_prose_allowlist import path_allowed; a=yaml.safe_load(open('docs/contracts/file-router.yaml'))['prose_allowlist']['allowed_globs']; bad=[p for p in ['CLAUDE.md','AGENTS.md','README.md','SECURITY.md'] if not path_allowed(p,a)]; print('not-allowed:', bad); sys.exit(1 if bad else 0)\""
-    expected: "not-allowed: [] and exit 0 -- each root permanent file resolves via allowed_globs."
-    fix_if: "A root file is not-allowed -- the matcher does not honor ** for root paths; list root files as bare filenames in allowed_globs and/or switch to PurePath.match."
+    action: Permanent agent-instruction files classify as ALLOWED, not grandfathered -- both root bare-filename paths AND multi-segment ** paths. Step 2 will NOT catch a misfile here (the file stays covered via the grandfather set).
+    command: "bin/venv-python -c \"import yaml,sys; from scripts.checks.hygiene.validate_prose_allowlist import path_allowed; a=yaml.safe_load(open('docs/contracts/file-router.yaml'))['prose_allowlist']['allowed_globs']; probes=['CLAUDE.md','AGENTS.md','README.md','SECURITY.md','.claude/skills/planning/SKILL.md','.claude/commands/plan.md']; bad=[p for p in probes if not path_allowed(p,a)]; print('not-allowed:', bad); sys.exit(1 if bad else 0)\""
+    expected: "not-allowed: [] and exit 0 -- each root permanent file AND each multi-segment ** path (.claude/skills/planning/SKILL.md, .claude/commands/plan.md) resolves via allowed_globs."
+    fix_if: "A path is not-allowed -- the matcher does not honor recursive ** across separators (do NOT use bare pathlib.PurePath.match, which degrades ** to a single segment in 3.12); use fnmatch.translate with ** preprocessing or a manual segment matcher, and list root files as bare filenames."
     hermetic: true
   - step: 4
     phase: pre-deploy
@@ -191,10 +195,10 @@ verification_plan:
     hermetic: true
   - step: 8
     phase: pre-deploy
-    action: The new Decision is authored and Decisions 120 + 126 are amended in DECISIONS.md.
-    command: "bin/venv-python -c \"t=open('docs/DECISIONS.md').read(); import re; nums=[int(m) for m in re.findall(r'^## Decision (\\d+)', t, re.M)]; assert max(nums) >= 127, f'new Decision not authored (max={max(nums)})'; assert 'quarantin' in t.lower(), 'quarantine amendment marker missing'; print('new Decision present + quarantine amendment recorded')\""
-    expected: "Prints confirmation; a Decision >= 127 exists and a quarantine amendment is recorded."
-    fix_if: "AssertionError -- the new Decision or the 120/126 amendment text is missing (re-check the max header number at implement time)."
+    action: The new Decision is authored AND Decisions 120 + 126 are genuinely amended (block-scoped, non-vacuous assertions).
+    command: "bin/venv-python -c \"import re; t=open('docs/DECISIONS.md').read(); nums=[int(m) for m in re.findall(r'^## Decision (\\d+)', t, re.M)]; assert max(nums) >= 127, f'new Decision not authored (max={max(nums)})'; b120=re.search(r'(?ms)^## Decision 120\\b.*?(?=^## Decision |\\Z)', t).group(0); assert 'quarantin' in b120.lower(), 'Decision 120 block not amended with the quarantine record'; b126=re.search(r'(?ms)^## Decision 126\\b.*?(?=^## Decision |\\Z)', t).group(0); assert 'admin_out_of_band.procedure' in b126, 'Decision 126 pt4 not re-grounded to the admin_out_of_band.procedure target'; print('new Decision + 120 quarantine amendment + 126 procedure-block re-ground all verified')\""
+    expected: "Prints confirmation: a Decision >= 127 exists, the Decision 120 block now contains 'quarantin' (0 today -> non-vacuous), and the Decision 126 block now contains 'admin_out_of_band.procedure' (0 today -> non-vacuous)."
+    fix_if: "AssertionError -- the new Decision is missing, Decision 120 was not amended with the quarantine record, or Decision 126 point 4 was not re-grounded to name the admin_out_of_band.procedure target (re-check the max header number at implement time)."
     hermetic: true
   - step: 9
     phase: pre-deploy
@@ -248,7 +252,7 @@ pre_implementation_checklist:
   - "Read every file in the Scope table; located validate_placement.py as the loader pattern donor."
   - "Acceptance criteria understood and verifiable."
 execution_steps:
-  - "docs/DECISIONS.md: author the new Decision (next free number) expanding Decision 86 into the sanctioned-prose taxonomy (classes a-e; no human-audience stored docs; docs/runbooks retiring; DECISIONS.md/CHANGELOG.md retained-but-post-MVP-retirement). The headline principle MUST explicitly carve out the Decision 101(c) marketing/ prose exception (marketing prose is one-way-downstream, never fed back to agents -- it is NOT agent-instruction, so the 'only prose is agent-instruction' framing must name it as a permanent sanctioned non-agent-instruction class, not re-state a rule 101(c) already qualified). Amend Decision 120 (quarantine + date) and Decision 126 point 4 (target = deploy-paths.yaml procedure block)."
+  - "docs/DECISIONS.md: author the new Decision (next free number) expanding Decision 86 into the sanctioned-prose taxonomy (classes a-e; no human-audience stored docs; docs/runbooks retiring; DECISIONS.md/CHANGELOG.md retained-but-post-MVP-retirement). The headline principle MUST explicitly carve out the Decision 101(c) marketing/ prose exception (marketing prose is one-way-downstream, never fed back to agents -- it is NOT agent-instruction, so the 'only prose is agent-instruction' framing must name it as a permanent sanctioned non-agent-instruction class, not re-state a rule 101(c) already qualified). Amend Decision 120 (add a dated quarantine record -- the block contains no 'quarantin' today, VP step 8 asserts it does after) and Decision 126 point 4 (re-ground the target with a dated amendment marker that names the literal `admin_out_of_band.procedure` block in deploy-paths.yaml -- that token is absent from DECISIONS.md today, VP step 8 asserts it appears in the Decision 126 block after)."
   - "docs/contracts/deploy-paths.yaml: add the admin_out_of_band.procedure block (operator-recovery steps only, no guard-classification restatement); widen the charter comment."
   - "terraform/CLAUDE.md: shrink the break-glass subsection to invariant + pointer; retain the Decision 119/120 mirror-init constraints."
   - "docs/contracts/file-router.yaml: add prose_allowlist. allowed_globs = permanent classes incl. bare root filenames CLAUDE.md + AGENTS.md + README.md + SECURITY.md (bare, so root files classify without relying on **-expansion), plus **/CLAUDE.md, .claude/skills/**/SKILL.md, .claude/commands/**/*.md, config/agent/executor/prompts/**/*.md, .github/**/*.md, docs/contracts/**/*.md, docs/audit-prompts/**/*.md, audits/**/*.md, docs/plans/**/*.md, docs/PROJECT_CONTEXT.md, marketing/**/*.md. grandfathered_globs = seed by `git ls-files '*.md'` minus allowed_globs matches (under the SAME ** -honoring matcher the guard uses), each annotated with an owner/retirement note (per-dir READMEs, GETTING_STARTED/ARCHITECTURE(-WORKFLOW)/ROADMAP-PRODUCT.md, docs/dq/**, docs/runbooks/**, DECISIONS.md/DECISIONS_ARCHIVE.md/CHANGELOG.md/SESSION_LOG*.md)."
