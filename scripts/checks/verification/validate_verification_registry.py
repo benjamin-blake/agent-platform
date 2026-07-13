@@ -66,7 +66,9 @@ def _run_added_entry_differentials(added: list[dict], failed: list[str]) -> None
         except _vg.GraduationError as exc:
             failed.append(f"verification-registry differential: check_id={cid}: error -- {exc}")
             continue
-        if not outcome.admitted:
+        if outcome.skipped:
+            print(f"    skipped (non-fatal): {cid} ({outcome.reason})")
+        elif not outcome.admitted:
             failed.append(f"verification-registry differential: check_id={cid}: not admitted -- {outcome.reason}")
         else:
             print(f"    admitted: {cid} ({outcome.reason})")

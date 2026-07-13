@@ -31,9 +31,13 @@ _GRADUATION_DEPS = (
     "scripts/verification_checks.py",
     "scripts/checks/__init__.py",
     "scripts/checks/_common.py",
+    "scripts/checks/_scaffolding.py",
+    "scripts/checks/_terraform.py",
     "scripts/checks/registry.py",
     "scripts/checks/verification/__init__.py",
     "scripts/checks/verification/validate_verifier_hermeticity.py",
+    "scripts/checks/iam_tf/__init__.py",
+    "scripts/checks/iam_tf/validate_terraform_try.py",
 )
 
 
@@ -238,6 +242,74 @@ class TestKernelDifferential:
         }
         with pytest.raises(vg.GraduationError, match="git worktree add failed"):
             vg.run_differential(row, repo_root=repo)
+
+
+# ---------------------------------------------------------------------------
+# rec-2655: importorskip-guarded skip predicate (narrow co-occurrence, fail-closed)
+# ---------------------------------------------------------------------------
+
+
+def _write_guarded_test_file(repo: Path, dep: str) -> str:
+    rel = "tests/test_guarded_fixture.py"
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"import pytest\n\nfoo = pytest.importorskip({dep!r})\n\n\ndef test_x() -> None:\n    assert True\n",
+        encoding="utf-8",
+    )
+    return rel
+
+
+def test_importorskip_node_is_skipped_not_failed(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    rel = _write_guarded_test_file(repo, "totally_fake_module_xyz")
+    row = {
+        "check_id": "guarded",
+        "primitive_slot": "test_selector",
+        "check_spec": {"node_id": f"{rel}::test_x"},
+    }
+    fail_result = vg.CheckResult(
+        status=CheckStatus.FAIL,
+        message="pytest node failed",
+        actual="collected 0 items / 1 error\nERROR: found no collectors for the given node_id\n",
+    )
+    with (
+        mock.patch.object(vg, "materialize_check_in_tree", return_value=mock.Mock(run=lambda: fail_result)),
+        mock.patch.object(vg, "_excluded_heavy_import_names", return_value={"totally_fake_module_xyz"}),
+    ):
+        outcome = vg.run_differential(row, repo_root=repo)
+    assert outcome.admitted is False
+    assert outcome.skipped is True
+    assert "importorskip-guarded" in outcome.reason
+
+
+def test_genuine_failure_is_not_skipped(tmp_path: Path) -> None:
+    """A node that really fails (no importorskip guard, no 'found no collectors' shape)
+    stays the existing hard-fail path -- the skip predicate must not mask it (Decision 55)."""
+    repo = tmp_path / "repo"
+    rel = _write_guarded_test_file(repo, "totally_fake_module_xyz")
+    row = {
+        "check_id": "genuine-fail",
+        "primitive_slot": "test_selector",
+        "check_spec": {"node_id": f"{rel}::test_x"},
+    }
+    fail_result = vg.CheckResult(
+        status=CheckStatus.FAIL,
+        message="pytest node failed",
+        actual="FAILED tests/test_guarded_fixture.py::test_x - AssertionError\n",
+    )
+    with (
+        mock.patch.object(vg, "materialize_check_in_tree", return_value=mock.Mock(run=lambda: fail_result)),
+        mock.patch.object(vg, "_excluded_heavy_import_names", return_value={"totally_fake_module_xyz"}),
+    ):
+        outcome = vg.run_differential(row, repo_root=repo)
+    assert outcome.admitted is False
+    assert outcome.skipped is False
+    assert "does not pass on HEAD" in outcome.reason
+
+
+def test_differential_outcome_skipped_defaults_false() -> None:
+    assert vg.DifferentialOutcome(admitted=True, reason="x").skipped is False
 
 
 # ---------------------------------------------------------------------------

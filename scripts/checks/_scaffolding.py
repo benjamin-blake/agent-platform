@@ -39,7 +39,22 @@ _DQ_FRESHNESS_SECONDS = 3600  # 1 hour
 # Parallelism + per-test timeout for both --pre pytest-diff invocations (primary and reactive
 # survivor re-run). Cap (60s) is comfortably above the slowest legitimate unit (~3s) and well
 # under the 300s fast-tier budget.
-_PYTEST_FLAGS = ["-n", "auto", "--timeout", "60", "--timeout-method=thread"]
+#
+# rec-2653: a fixed integer --randomly-seed overrides pyproject.toml's addopts
+# "--randomly-seed=last" for these xdist-parallel invocations only, so every -n auto worker
+# resolves the same collection order on a cold .pytest_cache. "last" resolves inconsistently
+# across workers on GH-hosted runners, producing "Different tests were collected between gw1
+# and gwN". pyproject.toml itself is untouched (local-dev re-run ergonomics), and -n auto is
+# untouched (worker count is not the defect).
+_PYTEST_RANDOMLY_SEED = 20260710
+_PYTEST_FLAGS = [
+    "-n",
+    "auto",
+    "--timeout",
+    "60",
+    "--timeout-method=thread",
+    f"--randomly-seed={_PYTEST_RANDOMLY_SEED}",
+]
 
 
 def run_precommit_checks(failed: list[str], *, all_files: bool, files: list[str] | None = None) -> None:

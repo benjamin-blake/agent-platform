@@ -7,6 +7,7 @@ and the _load_coverage_checker / _load_prompt_compliance helpers.
 import importlib.util
 import itertools
 import json
+import re
 import sys
 import urllib.error
 from contextlib import ExitStack
@@ -17,6 +18,7 @@ import pytest
 
 from scripts import verification_graduation
 from scripts.checks._scaffolding import (
+    _PYTEST_FLAGS,
     _excluded_heavy_import_names,
     _parse_requirement_dist_names,
     partition_changed_tests_by_collectability,
@@ -4054,6 +4056,44 @@ class TestPytestDiffParallelAndTimeout:
         assert failed == []
 
 
+class TestPytestFlagsPinnedSeed:
+    """rec-2653: _PYTEST_FLAGS pins a fixed integer --randomly-seed so all -n auto xdist
+    workers agree on collection order, instead of relying on pyproject.toml's addopts
+    '--randomly-seed=last' (which resolves inconsistently across workers on a cold cache)."""
+
+    def test_pytest_flags_pin_fixed_seed(self) -> None:
+        seeds = [f for f in _PYTEST_FLAGS if f.startswith("--randomly-seed")]
+        assert len(seeds) == 1, _PYTEST_FLAGS
+        assert re.fullmatch(r"--randomly-seed=\d+", seeds[0]), seeds[0]
+
+    def test_pinned_seed_reaches_pytest_at_runtime(self) -> None:
+        import subprocess
+        import sys
+
+        pin = [f for f in _PYTEST_FLAGS if f.startswith("--randomly-seed")][0].split("=")[1]
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/test_validate.py::TestPytestFlagsPinnedSeed::test_pytest_flags_pin_fixed_seed",
+                "-o",
+                "addopts=",
+                "-p",
+                "no:cacheprovider",
+                *_PYTEST_FLAGS,
+                "--collect-only",
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        combined = result.stdout + result.stderr
+        match = re.search(r"randomly-seed[:= ]+(\d+)", combined)
+        assert match and match.group(1) == pin, combined[-600:]
+
+
 @pytest.fixture
 def _neutralized_pre_registry():
     """Patch every check-kind step of pre_sequence() to a no-op on the `validate` namespace.
@@ -6498,6 +6538,43 @@ class TestVerificationRegistryDifferential:
         ):
             validate_verification_registry(failed)
         assert any("error --" in f for f in failed), failed
+
+
+def test_registry_differential_skip_is_non_fatal(tmp_path: Path) -> None:
+    """rec-2655: a skipped DifferentialOutcome (importorskip-guarded, fast-tier-excluded node)
+    does not append to failed -- distinct from a genuine not-admitted rejection."""
+    reg = tmp_path / "config" / "agent" / "verification_registry"
+    reg.mkdir(parents=True)
+    (reg / "registry.yaml").write_text(
+        (
+            "entries:\n"
+            "  - check_id: guarded\n"
+            "    primitive_slot: test_selector\n"
+            "    guard_target: scripts/foo.py\n"
+            "    plan_slug: my-plan\n"
+            "    graduated_at: '2026-07-04'\n"
+            "    check_spec: {node_id: 'tests/test_foo.py::test_x'}\n"
+        ),
+        encoding="utf-8",
+    )
+    failed: list[str] = []
+    with (
+        patch("scripts.checks._common.ROOT", tmp_path),
+        patch(
+            "scripts.checks.verification.validate_verification_registry._added_entries",
+            return_value=[{"check_id": "guarded"}],
+        ),
+        patch(
+            "scripts.verification_graduation.run_differential",
+            return_value=verification_graduation.DifferentialOutcome(
+                admitted=False,
+                skipped=True,
+                reason="skipped -- node in importorskip-guarded fast-tier-excluded file (duckdb)",
+            ),
+        ),
+    ):
+        validate_verification_registry(failed)
+    assert failed == []
 
 
 class TestEntriesAtRef:
