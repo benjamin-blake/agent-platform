@@ -4,11 +4,14 @@
 # read-engine.yaml, storage-substrate.yaml; free-form registry per Decision 118).
 #
 # Purpose: for each of the three agent intents (provision / deploy_code / reconcile) plus the
-# operator-only admin tier, name the trigger, the actor role, and a recovery pointer. This file
-# owns ONLY intent -> trigger -> recovery wayfinding. It is a POINTER, not a second source of
-# truth: the apply-model / guard-classification rules (what blocks an apply, in-budget vs
-# out-of-budget IAM, guard exit codes) live SOLELY in docs/contracts/environment-taxonomy.md
-# (Decision 92 point 5 sole-SoT; Decision 86 no-drift) -- this file never restates them.
+# operator-only admin tier, name the trigger, the actor role, and a recovery pointer -- PLUS
+# the operator-tier procedure (admin_out_of_band.procedure below): the quarantined break-glass
+# recovery steps, moved out of terraform/CLAUDE.md's ambient dev-loop doc per Decision 127 /
+# tier_item T2.41. It is a POINTER for the other tiers and a PROCEDURE for the operator tier --
+# never a second source of truth: the apply-model / guard-classification rules (what blocks an
+# apply, in-budget vs out-of-budget IAM, guard exit codes) live SOLELY in
+# docs/contracts/environment-taxonomy.md (Decision 92 point 5 sole-SoT; Decision 86 no-drift) --
+# this file never restates them, including inside admin_out_of_band.procedure.
 #
 # Roles below are logical names only. No confidential AWS identifiers of any kind (account
 # numbers, resource names, cross-account trust tokens) appear in this file (Decision 101
@@ -46,4 +49,16 @@ admin_out_of_band:
   actor_role: operator
   blocks_ref: "environment-taxonomy.md#2-the-two-axes (guard classification); Decision 120 (the escape hatch this restored); Decision 98 (admin-create); Decision 77 (bootstrap)"
   recovery: "For bootstrap root and agent_platform_admin IAM/trust/destroy changes, an agent's only move is to file a rec describing what's needed and why -- those are human-only. The Decision 120 break-glass local-apply loop is a narrower carve-out: an agent may execute terraform apply there only after a human has reviewed the plan and explicitly directed it -- never self-directed."
-  status: "Currently documented ambiently in terraform/CLAUDE.md. Sequenced for quarantine into a dedicated operator runbook by tier_item T2.41, AFTER T2.37 (the heal button) lands and is verified -- do not quarantine before then (Fable ordering invariant, Decision 126)."
+  status: "Quarantined here (Decision 126 point 4 as amended by Decision 127; tier_item T2.41). T2.37 (the heal button) landed and was verified before this quarantine, per the Fable ordering invariant (Decision 126)."
+  procedure:
+    description: >-
+      Operator-recovery steps for the human-gated interactive apply loop. Never self-directed
+      by an agent; usable only after a human has reviewed the plan and explicitly directed the
+      apply (Decision 77 / Decision 126). Carries recovery STEPS only -- apply-model / guard-
+      classification rules stay solely in environment-taxonomy.md (Decision 92 point 5).
+    steps:
+      - "A human operator who wants to apply a change by hand directs the CC-web agent through the loop: terraform plan -> PRESENT the plan output -> the human explicitly accepts -> the agent runs terraform apply. Never apply without presenting the plan and getting explicit acceptance first."
+      - "This loop requires local terraform init to have succeeded first."
+      - "hashicorp/*-only roots (terraform/, terraform/github, terraform/bootstrap): local terraform init succeeds unconditionally, no proxy dependency."
+      - "terraform/personal (third-party kislerdm/neon provider): a stock CC-web session cannot locally init it (Decision 119, direct github.com fetch 403s) -- use the CI-mediated speculative-plan + apply-the-saved-plan pipeline instead for routine changes. On an ADMIN container with the S3 filesystem_mirror synced (Decision 120 -- bin/setup-cloud-env.sh ran with INSTALL_TERRAFORM=1 and the sync succeeded, so TF_CLI_CONFIG_FILE is set), local init does succeed and this loop is available for terraform/personal."
+      - "Recover the four no-default tfvars (account_id, owner_email, platform_dev_external_id, platform_admin_external_id) from the remote Terraform state in S3 regardless of which init path was used (see terraform/CLAUDE.md's remote-state recovery description); never paste their values into chat, a PR, or any committed file."
