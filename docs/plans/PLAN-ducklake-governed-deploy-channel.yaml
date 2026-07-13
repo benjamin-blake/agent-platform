@@ -318,22 +318,29 @@ verification_plan:
     command: >-
       bin/venv-python - <<'PY'
       from scripts import convergence_health as ch
-      acts=[]
+      # Feed a deploy record via an injected s3_client stub (real post-deploy invocation passes a real
+      # boto3 client; here we stub it so the check is self-contained and files nothing).
+      class FakeS3:
+          def __init__(self, sha): self._sha = sha
+          def get_object(self, Bucket, Key):
+              import io, json
+              body = json.dumps({"code_sha256": "abc", "source_git_sha": self._sha}).encode()
+              return {"Body": io.BytesIO(body)}
+      acts = []
       def portal(action, fields): acts.append(action); return "rec-DRYRUN"
-      rec={"code_sha256":"abc","source_git_sha":"SHA_OLD"}
-      # inject a real s3 read of the live record if the helper supports it; else feed the record directly.
-      fresh=lambda argv: "SHA_OLD"   # git head == recorded -> no drift
-      stale=lambda argv: "SHA_NEW"   # git head ahead -> drift
-      ch.detect_ducklake_code_drift(git_runner=fresh, portal_caller=portal, s3_client=None)
-      assert acts==[], f"fresh must not file, got {acts}"
-      ch.detect_ducklake_code_drift(git_runner=stale, portal_caller=portal, s3_client=None)
-      assert acts.count("file")==1, f"stale must file exactly one, got {acts}"
+      # fresh: git head for ducklake source == recorded SHA -> no drift
+      ch.detect_ducklake_code_drift(git_runner=lambda a: "SHA_OLD", s3_client=FakeS3("SHA_OLD"), portal_caller=portal)
+      assert acts == [], f"fresh must not file, got {acts}"
+      # stale: git head ahead of recorded SHA -> exactly one file action
+      ch.detect_ducklake_code_drift(git_runner=lambda a: "SHA_NEW", s3_client=FakeS3("SHA_OLD"), portal_caller=portal)
+      assert acts.count("file") == 1, f"stale must file exactly one, got {acts}"
       print("OK fresh->no-file; stale->one file (dedup/close proven in tests/test_convergence_health.py)")
       PY
     expected: >-
       Fresh -> zero file actions; stale -> exactly one ducklake_code_drift file action (priority High,
       non-blocking to /plan). The repeat-> update_rec dedup and fresh-> close paths are asserted in
-      tests/test_convergence_health.py (step 5). No real rec is filed (dry-run portal_caller).
+      tests/test_convergence_health.py (step 5). No real rec is filed (dry-run portal_caller). The exact
+      injected-stub shape is aligned to the final detect_ducklake_code_drift signature at implement time.
     fix_if: >-
       Fresh files a rec (SHA comparison inverted), stale files zero or duplicates (dedup key wrong), or the
       signature does not accept injected git_runner/portal_caller/s3_client -- align it with escalate().
@@ -361,7 +368,7 @@ constraints:
 context:
   - "Realizes T2.38 (Decision 125/126). Closes c1-c4. depends_on: [] -- eligible."
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: 125, 126, 98, 79, 92, 77, 119, 120, 101, 55. RELATED: 94, 112, 104, 86, 88. Post-scout additions for the wired drift-alarm surface: 84 (ops-portal single-writer for the new rec source) and 104 (build_lambda module split)."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s) (round 1 REVISE -> 3 fixes: c1 build-input S3 reads, convergence-health fetch-depth 0, real VP steps 10/12)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 REVISE round (round 1 REVISE -> 3 fixes: c1 build-input S3 reads, convergence-health fetch-depth 0, real VP steps 10/12; round 2 PROCEED). Two round-2 non-blocking notes folded in: VP step 12 injected-record wiring, GITHUB_SHA None-safety on the break-glass write."
   - >-
     Decision-scout NOTE (Decision 55 false-green) RESOLVED in-design: the bootstrap-window
     continue-on-error on assume-role could let the separate smoke job pass against previously-deployed
@@ -415,8 +422,9 @@ execution_steps:
     scripts/build_lambda_deploy.py -- in update_lambda_functions, capture CodeSha256 from the
     update-function-code JSON response, and after a successful only_ducklake deploy write
     deploy-records/ducklake/<function>.json ({function, code_sha256, source_git_sha from
-    os.environ['GITHUB_SHA'], deployed_at passed in / None-safe}). Add read_deploy_record(function,
-    s3_client=None) helper. Keep subprocess encoding='utf-8', errors='replace', text=True.
+    os.environ.get('GITHUB_SHA') -- None-safe: the local break-glass path has no GITHUB_SHA, so record
+    null/absent rather than KeyError; deployed_at passed in / None-safe}). Add read_deploy_record(
+    function, s3_client=None) helper. Keep subprocess encoding='utf-8', errors='replace', text=True.
   - >-
     scripts/convergence_health.py -- add detect_ducklake_code_drift(..., git_runner=None,
     s3_client=None, portal_caller=None) mirroring escalate(): read each deploy record, resolve the
