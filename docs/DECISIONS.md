@@ -2,6 +2,87 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 127: Sanctioned-prose taxonomy -- the only prose stored in this repo is agent-instruction content (expands Decision 86) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-13
+**Warehouse ID:** dec-127 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 86 forbade new *standing prose-architecture / deliberation* documents and retired the
+INTENT-*.md corpus, but it never named the positive rule the repo actually needs: which prose is
+sanctioned at all, and why. Two concrete gaps followed. First, the Decision 120 break-glass
+recovery procedure lived ambiently inside `terraform/CLAUDE.md` -- a Layer-1 universal-rules
+surface every terraform-directory session loads -- rather than in a quarantined, on-demand
+location, exactly the ambient-visibility failure mode Decision 126 point 4 named and scheduled
+for quarantine (tier_item T2.41) once the T2.37 heal button landed. Second, no deterministic
+guard enforced ANY prose allowlist repo-wide (only the narrower `docs/`-root depth-1 allowlist
+and the INTENT-doc freeze existed), so new prose files could land anywhere with no gate.
+
+**Decision:**
+1. **The taxonomy.** The only prose (markdown) sanctioned for permanent storage in this repository
+   is content whose audience-of-record is an agent -- "agent-instruction" in the broadest sense.
+   No document whose audience-of-record is a human may be stored as a standing repository
+   artefact; a human-facing summary is a query result an agent produces on demand, never a
+   stored artefact (AGENTS.md Agent-First Repository, extended here from principle to enforced
+   taxonomy). The permanent classes are:
+   - (a) Universal/directory-scoped instruction files (`CLAUDE.md`, `AGENTS.md`, `**/CLAUDE.md`).
+   - (b) Machine-readable contracts and their prose companions where the contract format is
+     itself markdown (`docs/contracts/**/*.md`) -- these are agent-consumed field/procedure
+     semantics, not human narrative.
+   - (c) Workflow surfaces: slash commands (`.claude/commands/**/*.md`), skills
+     (`.claude/skills/**/SKILL.md`), executor role prompts
+     (`config/agent/executor/prompts/**/*.md`).
+   - (d) Planning/audit artefacts consumed by the workflows that produce and read them:
+     `docs/plans/**/*.md`, `docs/audit-prompts/**/*.md`, `audits/**/*.md`.
+   - (e) CI/repository-governance files under `.github/**/*.md` (issue templates, PR templates,
+     scheduled-agent prompts) and `docs/PROJECT_CONTEXT.md` (the Layer-2 agent knowledge base,
+     instruction-architecture.yaml).
+   Permanently and separately sanctioned as a NON-agent-instruction class: `marketing/**/*.md`
+   (Decision 101 point (c)'s carve-out). Marketing prose is one-way downstream -- authored for a
+   human audience outside the agent loop and never fed back into any agent's context -- so it is
+   not "prose whose audience-of-record is a human" in the sense this Decision forbids storing;
+   it is pre-sanctioned here even though `marketing/` does not exist on disk yet, so a future
+   marketing-content plan does not need to re-litigate this taxonomy.
+2. **`docs/runbooks/` is a retiring class.** Operator runbooks are human-audience prose by
+   construction. The existing `docs/runbooks/ducklake-catalog-operations.md` is grandfathered
+   (this Decision deletes nothing), but no new file may be added under `docs/runbooks/`; new
+   operator procedures are `procedure:` blocks in the owning `docs/contracts/*.yaml` file (see
+   point 3). `docs/CLAUDE.md`'s Class->home map is updated to drop the `docs/runbooks/` row.
+3. **Enforcement -- `prose_allowlist`.** `docs/contracts/file-router.yaml` gains a
+   `prose_allowlist` key (`allowed_globs` for the permanent classes above, `grandfathered_globs`
+   for every currently-tracked `.md` file not otherwise covered -- seeded day-one, ratchet-only,
+   may only shrink in a later plan, never grow). `scripts/checks/hygiene/validate_prose_allowlist.py`
+   enforces it in both `validate.py` tiers (Decision 104 registry pattern), fail-open if the key
+   is absent/unreadable. Its scope is repo-wide over every tracked `.md` file, distinct from (and
+   may overlap, never conflict with) `validate_intent_doc_freeze`'s narrower ownership of whether
+   a given `docs/INTENT-*.md` may still exist per the intent-migration manifest.
+4. **Instruction-architecture anti-pattern.** `docs/contracts/instruction-architecture.yaml`
+   gains an anti-pattern row: a human runbook / operator-prose doc belongs in a `procedure:`
+   block in the owning contract, not as a standing prose companion doc.
+
+**Rationale:**
+Per Decision 86, rationale lives here, forward intent lives in tier_items (T2.41, re-grounded by
+this Decision to no longer name a "runbook" target), and field/procedure semantics live in the
+machine-readable contract (`docs/contracts/deploy-paths.yaml`'s new `admin_out_of_band.procedure`
+block) -- no new standing prose-architecture doc is created by this Decision itself. This is a
+deliberate expansion of Decision 86 from a negative rule (no NEW standing prose docs) to a
+positive, enforced taxonomy (only agent-instruction prose is sanctioned at all), closing the gap
+that let the Decision 120 break-glass procedure sit ambiently in Layer 1 for as long as it did.
+
+**Reversal conditions:** none identified; a future plan (the B2 follow-on referenced in this
+Decision's implementing plan) may pull the `grandfathered_globs` ratchet as owners retire their
+classes, but that is additive tightening, not a reversal of the taxonomy itself.
+
+**Related:** Decision 86 (expanded here from a negative new-doc rule to a positive taxonomy),
+Decision 126 (point 4 amended below to name the `admin_out_of_band.procedure` target), Decision
+120 (amended below to record the quarantine and its date), Decision 101 (point (c) marketing/
+prose exception, carried forward as a permanent class here), Decision 104 (check-registry
+pattern the new guard follows), Decision 84 (this Decision is authored in DECISIONS.md then
+backfilled to `ops_decisions`, never written directly).
+
+---
+
 ## Decision 126: Two-verb deployment model + heal button + operator-only admin tier (completing CD.35) (Decided)
 
 **Status:** Decided
@@ -66,11 +147,15 @@ tracker to catch the loss (the failure mode this Decision's tier_items are desig
    pending -- that is T2.38, not yet realized by #544's physical decoupling alone.
 4. **Amends Decision 120.** The local-apply escape hatch Decision 120 restored (the ADMIN
    container's interactive human-gated apply loop, `terraform/CLAUDE.md` "Interactive loop
-   fallback") will be quarantined out of the ambient dev-loop doc into a dedicated operator-only
-   runbook once the heal button (T2.37) lands and is verified -- tracked by T2.41
-   (`depends_on: [T2.37]`). Decision 120's restoration itself is not reversed; only its
-   documentation surface moves from ambient to a runbook reachable via `deploy-paths.yaml`'s
-   `admin_out_of_band` pointer.
+   fallback") will be quarantined out of the ambient dev-loop doc once the heal button (T2.37)
+   lands and is verified -- tracked by T2.41 (`depends_on: [T2.37]`). Decision 120's restoration
+   itself is not reversed; only its documentation surface moves from ambient to a quarantined
+   location reachable via `deploy-paths.yaml`'s `admin_out_of_band` pointer.
+   **Amended 2026-07-13 by Decision 127:** the quarantine target is re-grounded from "a
+   dedicated operator-only runbook" to the structured `admin_out_of_band.procedure` block added
+   directly to `docs/contracts/deploy-paths.yaml` (Decision 127's sanctioned-prose taxonomy
+   retires `docs/runbooks/` as a growth class) -- T2.41 landed against this target, not a new
+   runbook file.
 5. **Sequencing / roadmap.** Six new tier_items carry the engineering this Decision's foundation
    points at: T2.37 (heal button: input-free Reconcile), T2.38 (governed code-deploy channel +
    deployment record for the four DuckLake functions, realizing Decision 125's deploy verb), T2.39
@@ -452,13 +537,22 @@ gate-on-non-empty-sync fails closed to the pre-mirror posture (`TF_CLI_CONFIG_FI
 Decision 119's CI-delegation guidance is the sole path again -- no code change is required to revert,
 only ceasing to seed the mirror.
 
+**Amended 2026-07-13 by Decision 127 (quarantine record):** the ADMIN container's interactive
+human-gated apply loop this Decision restored for `terraform/personal` (the "Operator-only /
+break-glass" subsection of `terraform/CLAUDE.md`) was quarantined out of that ambient Layer-1
+doc into `docs/contracts/deploy-paths.yaml`'s `admin_out_of_band.procedure` block on 2026-07-13,
+per the Decision 126 point 4 sequencing (T2.37 heal button landed and verified first, then T2.41
+quarantined this procedure). This Decision's restoration of the loop itself is unaffected --
+only its documentation surface moved.
+
 **Related:** Decision 119 (the constraint this realizes the reversal condition for), Decision 100
 (managed-service-native discipline -- native `terraform providers mirror`, not a hand-rolled script),
 Decision 86 (rationale lives in a numbered Decision, not a new prose doc), Decision 77 (present-before-apply;
 unchanged -- this Decision does not pre-authorize any apply), Decision 92 / Decision 94 (the gated-apply
 / admin-apply-as-escape-hatch framing this mechanism restores local init for), Decision 83 (the
 required terraform-validate CI job, unaffected), Decision 55 (honest convergence -- no force-write of
-any record; the mirror is purely an init-time enabler).
+any record; the mirror is purely an init-time enabler), Decision 127 (the quarantine + sanctioned-
+prose taxonomy recorded above).
 
 ---
 

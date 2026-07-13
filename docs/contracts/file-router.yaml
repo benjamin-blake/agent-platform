@@ -291,3 +291,64 @@ docs_root_allowlist:
     - "DECISIONS_ARCHIVE.md"   # owner T1.5
     - "SESSION_LOG.md"         # owner T2.26 / T-1.9
     - "SESSION_LOG_ARCHIVE.md" # owner T2.26 / T-1.9
+
+# Repo-wide sanctioned-prose allowlist (Decision 127 expanding Decision 86). A sibling top-level
+# key (reserved by this file's header), NOT a route. scripts/checks/hygiene/validate_prose_allowlist.py
+# reads this and fails the build on any git-tracked .md file matching neither allowed_globs nor
+# grandfathered_globs. Scope is DISTINCT from docs_root_allowlist above (docs/-root depth-1 files
+# only) and from validate_intent_doc_freeze (docs/INTENT-*.md existence, gated by the
+# intent-migration MANIFEST.yaml) -- this key governs every tracked .md file repo-wide.
+prose_allowlist:
+  # Permanent sanctioned-prose classes -- the only prose whose audience-of-record is an agent
+  # (Decision 127). Root-level permanent files are listed as BARE filenames (not **/CLAUDE.md-style)
+  # so they classify without relying on ** matching zero path segments -- belt-and-suspenders even
+  # though the matcher genuinely honors that case.
+  allowed_globs:
+    - CLAUDE.md
+    - AGENTS.md
+    - README.md
+    - SECURITY.md
+    - "**/CLAUDE.md"
+    - ".claude/skills/**/SKILL.md"
+    - ".claude/commands/**/*.md"
+    - "config/agent/executor/prompts/**/*.md"
+    - ".github/**/*.md"
+    - "docs/contracts/**/*.md"
+    - "docs/audit-prompts/**/*.md"
+    - "audits/**/*.md"
+    - "docs/plans/**/*.md"
+    - docs/PROJECT_CONTEXT.md
+    # Decision 101(c) permanent exception: marketing prose is one-way downstream (never fed back
+    # to agents), so it is a permanent sanctioned NON-agent-instruction class, not agent-instruction
+    # itself -- pre-sanctioned even though marketing/ does not exist on disk yet.
+    - "marketing/**/*.md"
+  # Ratchet-only (may only shrink in later plans, e.g. the B2 follow-on; never grows). Seeded
+  # deterministically to cover every currently-tracked .md not matched by allowed_globs above, so
+  # this guard is green on day one. Deletes nothing (full day-one grandfather set).
+  grandfathered_globs:
+    - docs/ARCHITECTURE.md
+    - docs/ARCHITECTURE-WORKFLOW.md
+    - docs/CHANGELOG.md          # governance ledger; post-MVP retirement target (mechanically too
+                                  # costly to retire now)
+    - docs/DECISIONS.md          # governance ledger; still a working SoT; post-MVP retirement target
+    - docs/DECISIONS_ARCHIVE.md
+    - docs/GETTING_STARTED.md
+    - docs/ROADMAP-PRODUCT.md
+    - docs/SESSION_LOG.md        # owner T2.26 / T-1.9
+    - docs/SESSION_LOG_ARCHIVE.md
+    - "docs/INTENT-*.md"         # owner T5.5 (intent-migration waves)
+    - "docs/dq/**/*.md"
+    - docs/runbooks/ducklake-catalog-operations.md  # retiring class (Decision 127; docs/CLAUDE.md Class->home map)
+    - ".claude/agents/scheduled/*.md"
+    # Package/module READMEs pending per-dir consolidation. Listed explicitly (not a "**/README.md"
+    # glob) so this set never overlaps allowed_globs' bare "README.md" (root) or
+    # "config/agent/executor/prompts/**/*.md" (that dir's own README) -- exact seeding per the
+    # ratchet rule, not a broader glob that could re-absorb an already-allowed path.
+    - config/README.md
+    - config/agent/README.md
+    - config/lambda/README.md
+    - config/lambda/data-pipeline/README.md
+    - config/lambda/ops-compaction/README.md
+    - terraform/README.md
+    - terraform/bootstrap/README.md
+    - terraform/github/README.md

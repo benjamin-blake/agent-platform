@@ -640,3 +640,54 @@ entries:
       pattern: Agents never run terraform apply
       operator: gte
       count: 1
+  - check_id: prose-allowlist-unit-tests
+    primitive_slot: test_selector
+    guard_target: scripts/checks/hygiene/validate_prose_allowlist.py
+    guard_symbol: validate_prose_allowlist
+    plan_slug: prose-agent-instruction-only
+    graduated_at: '2026-07-13'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/test_validate_prose_allowlist.py
+  - check_id: prose-allowlist-guard-passes-green
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/file-router.yaml
+    guard_symbol: null
+    plan_slug: prose-agent-instruction-only
+    graduated_at: '2026-07-13'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - python
+      - -c
+      - "from scripts.checks.hygiene.validate_prose_allowlist import validate_prose_allowlist\
+        \ as v\nf=[]\nv(f)\nassert not f, f\n"
+  - check_id: prose-allowlist-matcher-honors-recursive-double-star
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/hygiene/validate_prose_allowlist.py
+    guard_symbol: path_allowed
+    plan_slug: prose-agent-instruction-only
+    graduated_at: '2026-07-13'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - python
+      - -c
+      - "import yaml\nfrom scripts.checks.hygiene.validate_prose_allowlist import path_allowed\n\
+        a=yaml.safe_load(open('docs/contracts/file-router.yaml'))['prose_allowlist']['allowed_globs']\n\
+        probes=['CLAUDE.md','AGENTS.md','README.md','SECURITY.md','.claude/skills/planning/SKILL.md','.claude/commands/plan.md']\n\
+        bad=[p for p in probes if not path_allowed(p,a)]\nassert not bad, bad\n"
+  - check_id: prose-allowlist-registered-in-both-tiers
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/registry.py
+    guard_symbol: null
+    plan_slug: prose-agent-instruction-only
+    graduated_at: '2026-07-13'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - python
+      - -c
+      - "from scripts.checks import registry as r\npre=[s.name for s in r.pre_sequence()]\n\
+        full=[s.name for s in r.full_sequence()]\nassert 'validate_prose_allowlist' in pre\n\
+        assert 'validate_prose_allowlist' in full\n"

@@ -28,11 +28,15 @@ Every non-governance doc class has a subtree home; put new files there, not at t
 | Audit prompts (`AUDIT-{slug}.md`) | `docs/audit-prompts/` |
 | REPORT-ONLY deliverables + spike notes | `docs/plans/reports/` |
 | Data-quality docs | `docs/dq/` |
-| Operational runbooks | `docs/runbooks/` |
+| Operator procedures (agent-led) | `procedure:` blocks in `docs/contracts/*.yaml` |
 | INTENT-migration manifest | `docs/intent-migration/` |
 
 Audit OUTPUTS live in `audits/`, not under `docs/`. The discovery index is
 `docs/contracts/file-router.yaml`.
+
+`docs/runbooks/` is a RETIRING class (Decision 127): the existing
+`docs/runbooks/ducklake-catalog-operations.md` is grandfathered, but no new file may be added
+there -- new operator procedures are `procedure:` blocks in the owning contract, per the row above.
 
 ## Plans lifecycle (RS-07)
 `docs/plans/` root holds only ACTIVE plans (not yet merged-and-verified). Completed and

@@ -96,26 +96,12 @@ gated frequency). If an approval is abandoned, reject it in the GitHub Actions U
 
 NOT the default agent path. Retained -- not deleted -- for bootstrap, reversing a manual admin
 change, and the guard-BLOCK / out-of-budget-IAM cases the CD pipeline cannot yet apply on its own
-(Decision 94 escape hatch). Its danger is that it is ambient, not that it exists (Decision 126);
-it is sequenced for quarantine into a dedicated operator runbook once the T2.37 heal button
-(Reconcile) lands and is verified -- T2.41 `depends_on: [T2.37]`, do not remove this path before
-its replacement works.
-
-If a human operator wants to apply any change by hand: the CC-web agent supports the iterative
-loop `terraform plan` -> PRESENT -> human accepts -> agent runs `terraform apply`. Never apply
-without presenting the plan and getting acceptance first (Decision 77). **This loop requires
-local `terraform init` to have succeeded.**
-- Valid with no proxy dependency for `hashicorp/*`-only roots (`terraform/`, `terraform/github`,
-  `terraform/bootstrap`) -- local `terraform init` succeeds unconditionally.
-- For `terraform/personal` (third-party `kislerdm/neon` provider): a stock CC-web session CANNOT
-  locally init it (Decision 119, direct github.com fetch 403s) -- use the CI-mediated
-  speculative-plan + apply-the-saved-plan pipeline instead for routine changes. On an ADMIN
-  container with the S3 filesystem_mirror synced (Decision 120 -- `bin/setup-cloud-env.sh` ran
-  with `INSTALL_TERRAFORM=1` and the sync succeeded, so `TF_CLI_CONFIG_FILE` is set), local init
-  DOES succeed and this loop IS available for `terraform/personal`.
-- Recover the four no-default tfvars from remote state / Secrets Manager as described above
-  regardless of which init path was used; never paste their values into chat, a PR, or any
-  committed file.
+(Decision 94 escape hatch). Its danger is that it is ambient, not that it exists (Decision 126).
+Agents never self-direct a `terraform apply`; an agent may execute one here only after a human
+has reviewed the plan and explicitly directed it -- never self-directed, never the default path.
+The operator-recovery procedure itself is quarantined at
+`docs/contracts/deploy-paths.yaml#admin_out_of_band.procedure` (Decision 127 / tier_item T2.41)
+-- not surfaced here.
 
 **Apply posture (record-backed sandbox CD, CD.35 / T2.20 Wave 1):** sandbox CD auto-apply
 (`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching `terraform/personal/**` auto-applies
