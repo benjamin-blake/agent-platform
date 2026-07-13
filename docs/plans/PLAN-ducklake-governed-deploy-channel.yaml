@@ -21,9 +21,13 @@ scope:
     action: Modify
     purpose: >-
       c1 -- add the scoped OIDC role agent-platform-github-ci-ducklake-deploy: trust refs/heads/main
-      only; policy grants ONLY lambda:UpdateFunctionCode on the four ducklake function ARNs,
-      s3:GetObject/s3:PutObject on lambda-packages/*, and s3:PutObject on deploy-records/ducklake/*.
-      No terraform, no IAM write, no Lambda-config (UpdateFunctionConfiguration etc.), no invoke.
+      only. Lambda action surface is UpdateFunctionCode-only (lambda:UpdateFunctionCode on the four
+      ducklake function ARNs; no other lambda action, no lambda-config, no invoke). S3 grants:
+      s3:GetObject/s3:PutObject on lambda-packages/*, s3:PutObject on deploy-records/ducklake/*, and
+      s3:GetObject on ducklake-pgclient/* + ducklake-extensions/* (the operator-seeded vendored build
+      inputs build_lambda --ducklake-only reads at build time -- the existing DucklakeBuildInputsRead
+      precedent at oidc.tf DucklakeBuildInputsRead, needed because build+deploy share one identity).
+      No terraform, no IAM write.
   - file: terraform/bootstrap/github_ci_apply.tf
     action: Modify
     purpose: >-
@@ -54,7 +58,11 @@ scope:
     action: Modify
     purpose: >-
       c3 (wired drift alarm) -- add a step invoking the ducklake code-drift sensor on the existing
-      cron under the github-ci-branch identity (already reads the data-lake bucket; no new grant).
+      cron under the github-ci-branch identity (already reads the data-lake bucket; no new grant). The
+      checkout for the drift step MUST use fetch-depth: 0 (or a targeted history fetch) so the sensor
+      can resolve main history and compare the recorded deploy SHA against the latest ducklake-source
+      commit -- a default shallow (fetch-depth: 1) checkout would make the live sensor silently report
+      no-drift (Decision 55 false-negative) while injected unit tests still pass.
   - file: config/agent/data_quality/source_registry.yaml
     action: Modify
     purpose: >-
@@ -104,10 +112,12 @@ infrastructure_dependencies:
 acceptance_criteria:
   - >-
     (c1) terraform/personal/oidc.tf defines a role named agent-platform-github-ci-ducklake-deploy,
-    distinct from the terraform-apply CI roles, whose inline policy grants ONLY
-    lambda:UpdateFunctionCode on the four ducklake function ARNs plus s3:GetObject/s3:PutObject on
-    lambda-packages/* and s3:PutObject on deploy-records/ducklake/*; it grants no terraform:*, no
-    iam:* write, no lambda config actions, and no invoke; its trust is restricted to refs/heads/main.
+    distinct from the terraform-apply CI roles. Its Lambda action surface is UpdateFunctionCode-only
+    (lambda:UpdateFunctionCode on the four ducklake function ARNs; no other lambda action, no lambda
+    config, no invoke). Its S3 grants are s3:GetObject/s3:PutObject on lambda-packages/*, s3:PutObject
+    on deploy-records/ducklake/*, and s3:GetObject on ducklake-pgclient/* + ducklake-extensions/*
+    (vendored build inputs). It grants no terraform:* and no iam:* write; its trust is restricted to
+    refs/heads/main.
   - >-
     (c2) .github/workflows/deploy-ducklake-lambdas.yml runs build_lambda --ducklake-only --deploy
     under the scoped role on push to main touching ducklake source, and its smoke job (needs: deploy)
@@ -129,27 +139,27 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      Assert the scoped role is least-privilege in oidc.tf: it grants lambda:UpdateFunctionCode and
-      grants none of terraform, iam:*, lambda config, or invoke actions.
+      Assert the scoped role's Lambda action surface is UpdateFunctionCode-only (no lambda-config, no
+      invoke, no publish/add-permission) and it grants no terraform/iam-write. S3 build-input reads
+      (ducklake-pgclient/*, ducklake-extensions/*) and lambda-packages/deploy-records grants are allowed.
     command: >-
       bin/venv-python - <<'PY'
-      import re, pathlib
+      import pathlib
       t = pathlib.Path("terraform/personal/oidc.tf").read_text()
       assert "github_ci_ducklake_deploy" in t or "ducklake-deploy" in t, "deploy role missing"
-      # isolate the deploy role's policy document block heuristically by role name proximity
-      forbidden = ["terraform", "iam:Create", "iam:Put", "iam:Attach", "UpdateFunctionConfiguration",
-                   "lambda:InvokeFunction", "PublishVersion", "AddPermission"]
-      # crude scope: lines mentioning ducklake_deploy policy statements
       assert "lambda:UpdateFunctionCode" in t, "UpdateFunctionCode grant missing"
-      print("OK role grants UpdateFunctionCode; manual reviewer confirms no forbidden actions in its statement block")
+      print("OK role grants UpdateFunctionCode; reviewer confirms the role's OWN statement block has no "
+            "lambda-config/invoke/terraform/iam-write action (grep is coarse on an 800-line file)")
       PY
     expected: >-
-      Prints OK; the deploy role grants lambda:UpdateFunctionCode. Reviewer confirms the role's own
-      statement block contains none of the forbidden actions (grep is a coarse guard; the human/critique
-      confirms scoping within the role block, not elsewhere in the 800-line file).
+      Prints OK; the deploy role grants lambda:UpdateFunctionCode. Reviewer/critique confirms the role's
+      own statement block contains no lambda:UpdateFunctionConfiguration, lambda:InvokeFunction*,
+      PublishVersion, AddPermission, terraform, or iam-write action (coarse grep on an 800-line file; the
+      block-scoped confirmation is human/critique, not automated -- V3 pre-deploy limit under Decision 119).
     fix_if: >-
-      No UpdateFunctionCode grant, or the deploy role's statement block includes terraform/iam-write/
-      lambda-config/invoke actions -- narrow the policy to the four function ARNs + the two S3 prefixes.
+      No UpdateFunctionCode grant, or the deploy role's statement block includes lambda-config/invoke/
+      terraform/iam-write actions -- narrow the Lambda surface to UpdateFunctionCode on the four function
+      ARNs; S3 stays scoped to lambda-packages/*, deploy-records/ducklake/*, and the two build-input prefixes.
   - step: 2
     phase: pre-deploy
     action: >-
@@ -166,8 +176,9 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: >-
-      Assert the workflow structure enforces the false-green fix: the smoke job declares needs: deploy,
-      and the smoke job is gated on a deploy-success output and/or a deploy-record freshness check.
+      Assert (a) the deploy workflow enforces the false-green fix: the smoke job declares needs: deploy
+      and is gated on a deploy-success output and/or deploy-record freshness; and (b) the drift step's
+      checkout in convergence-health.yml uses fetch-depth: 0 so the live sensor sees real git history.
     command: >-
       bin/venv-python - <<'PY'
       import yaml, pathlib
@@ -180,12 +191,16 @@ verification_plan:
       cond = (smoke.get("if","") or "") + str(smoke)
       assert "deployed" in cond or "freshness" in cond or "code_sha" in cond.lower() or "github.sha" in cond.lower(), \
           "smoke job must be gated on deploy-success/record-freshness, not bare job completion"
-      print("OK smoke needs deploy AND is gated on deploy-success/freshness")
+      ch = pathlib.Path(".github/workflows/convergence-health.yml").read_text()
+      assert "fetch-depth: 0" in ch or "fetch-depth: '0'" in ch, \
+          "convergence-health.yml drift-step checkout must set fetch-depth: 0 (else live sensor false-negatives)"
+      print("OK smoke needs deploy + gated on deploy-success/freshness; drift checkout is full-depth")
       PY
-    expected: "Prints OK; smoke job depends on deploy and is gated on a real deploy-success/freshness signal."
+    expected: "Prints OK; smoke gated on a real deploy-success/freshness signal AND drift checkout is fetch-depth: 0."
     fix_if: >-
-      Smoke job lacks needs: deploy or is not gated on a deploy-success output / record-freshness --
-      a no-op deploy (bootstrap window) could then green against stale code (Decision 55 false-green).
+      Smoke lacks needs: deploy or the deploy-success/freshness gate (a no-op bootstrap deploy could green
+      against stale code, Decision 55 false-green); OR the drift checkout is shallow (live sensor would
+      silently report no-drift, Decision 55 false-negative).
   - step: 4
     phase: pre-deploy
     action: "Run the deploy-record write/read unit tests (injected subprocess + S3; no live AWS)."
@@ -258,19 +273,26 @@ verification_plan:
   - step: 10
     phase: post-deploy
     action: >-
-      [OPERATOR/CI] Exercise the governed channel (merge a ducklake-source change to main, or
-      workflow_dispatch deploy-ducklake-lambdas.yml) and confirm the deploy job deployed AND the
-      smoke gates passed before the run concluded success.
+      [OPERATOR/CI] After exercising the governed channel (merge a ducklake-source change to main, or
+      workflow_dispatch deploy-ducklake-lambdas.yml), assert the code actually deployed by cross-checking
+      the LIVE function CodeSha256 against the deploy record written by the same run (proves the deploy
+      happened AND the record reflects reality -- a no-op bootstrap deploy fails this).
     command: >-
-      bin/venv-python -c "import subprocess,json,sys; print('Inspect the deploy-ducklake-lambdas run:
-      deploy job conclusion == success AND smoke job (lambda-attach + lambda-reader) conclusion ==
-      success; verify via mcp github pull_request_read get_check_runs or the Actions run page')"
+      LIVE=$(aws lambda get-function --function-name agent-platform-ducklake-writer --profile agent_platform
+      --query 'Configuration.CodeSha256' --output text) &&
+      aws s3 cp s3://agent-platform-data-lake/deploy-records/ducklake/agent-platform-ducklake-writer.json -
+      --profile agent_platform | LIVE="$LIVE" bin/venv-python -c "import os,sys,json; r=json.load(sys.stdin);
+      assert r['code_sha256']==os.environ['LIVE'], f\"record {r['code_sha256']} != live {os.environ['LIVE']}\";
+      print('OK live CodeSha256 == deploy-record code_sha256', r['code_sha256'][:16])"
     expected: >-
-      The most recent deploy-ducklake-lambdas run shows the deploy job succeeded under the scoped role
-      and the smoke job's --lambda-attach and --lambda-reader gates passed; overall run == success.
+      The live writer CodeSha256 equals the deploy record's code_sha256 -- the governed run deployed the
+      code and recorded the true hash. (Also confirm via the Actions run that the smoke job's --lambda-attach
+      and --lambda-reader gates passed and the run concluded success.)
     fix_if: >-
-      Deploy job fails on assume-role after the role exists -> the trust or policy is wrong. Smoke gate
-      fails -> the deployed code regressed a live ATTACH/reader-path proof (loud-fail; RCA, do not paper over).
+      Mismatch or missing record -> the deploy did not run under the scoped role, the record write failed
+      (role may lack s3:PutObject on deploy-records/ducklake/*), or CodeSha256 was captured wrong. Deploy
+      job fails assume-role after the role exists -> trust/policy wrong. Smoke gate fails -> live ATTACH/
+      reader-path regression (loud-fail; RCA, do not paper over).
   - step: 11
     phase: post-deploy
     action: >-
@@ -289,20 +311,32 @@ verification_plan:
   - step: 12
     phase: post-deploy
     action: >-
-      Prove the wired drift alarm end-to-end: with the record fresh (SHA == main head for ducklake
-      source) the sensor reports no drift; simulate staleness (recorded SHA behind main) and confirm it
-      files exactly one deduped ducklake_code_drift rec via the ops portal.
+      Exercise the wired drift sensor against the LIVE deploy record with injected git_runner and a
+      dry-run portal_caller (records actions, files nothing): a fresh SHA (git head == recorded SHA)
+      yields no file action; a simulated stale SHA (git head ahead of the recorded SHA) yields exactly
+      one file action, and a repeat yields update (dedup), not a second file.
     command: >-
-      bin/venv-python -c "from scripts.convergence_health import detect_ducklake_code_drift;
-      print('Run with injected git_runner returning a newer main SHA than the recorded deploy SHA;
-      assert one file action; run again -> update_rec (dedup), not a second file. Fresh SHA -> no rec /
-      close. See tests/test_convergence_health.py for the injected-dependency harness.')"
+      bin/venv-python - <<'PY'
+      from scripts import convergence_health as ch
+      acts=[]
+      def portal(action, fields): acts.append(action); return "rec-DRYRUN"
+      rec={"code_sha256":"abc","source_git_sha":"SHA_OLD"}
+      # inject a real s3 read of the live record if the helper supports it; else feed the record directly.
+      fresh=lambda argv: "SHA_OLD"   # git head == recorded -> no drift
+      stale=lambda argv: "SHA_NEW"   # git head ahead -> drift
+      ch.detect_ducklake_code_drift(git_runner=fresh, portal_caller=portal, s3_client=None)
+      assert acts==[], f"fresh must not file, got {acts}"
+      ch.detect_ducklake_code_drift(git_runner=stale, portal_caller=portal, s3_client=None)
+      assert acts.count("file")==1, f"stale must file exactly one, got {acts}"
+      print("OK fresh->no-file; stale->one file (dedup/close proven in tests/test_convergence_health.py)")
+      PY
     expected: >-
-      Stale -> one ducklake_code_drift rec filed (priority High, non-blocking to /plan); repeat -> deduped
-      via update_rec; fresh -> no new rec / open rec closed. Matches the unit-test behaviour on live records.
+      Fresh -> zero file actions; stale -> exactly one ducklake_code_drift file action (priority High,
+      non-blocking to /plan). The repeat-> update_rec dedup and fresh-> close paths are asserted in
+      tests/test_convergence_health.py (step 5). No real rec is filed (dry-run portal_caller).
     fix_if: >-
-      Drift not detected, or a duplicate rec is filed per tick -> fix the SHA comparison / dedup key, or
-      the portal source registration.
+      Fresh files a rec (SHA comparison inverted), stale files zero or duplicates (dedup key wrong), or the
+      signature does not accept injected git_runner/portal_caller/s3_client -- align it with escalate().
 constraints:
   - >-
     terraform/personal cannot be locally init/validate/plan'd (third-party kislerdm/neon provider,
@@ -314,6 +348,11 @@ constraints:
     self-directs this apply. The governed workflow's assume-role step carries continue-on-error scoped
     to a genuinely-absent role for the bootstrap window, and the smoke job is gated on deploy-success +
     record-freshness so a no-op deploy cannot green (Decision 55 false-green avoidance).
+  - >-
+    The role's Lambda action surface is UpdateFunctionCode-only, but build+deploy share one identity, so
+    it also needs s3:GetObject on the vendored build inputs (ducklake-pgclient/*, ducklake-extensions/*)
+    that build_lambda --ducklake-only reads -- the existing DucklakeBuildInputsRead precedent. Do NOT
+    narrow S3 to lambda-packages/* only, or the first governed deploy fails AccessDenied at build time.
   - "Public-repo boundary (Decision 101): no account ids, ARNs with literal account numbers, or ExternalIds in any committed file. Use ${var.account_id} / ${{ vars.AWS_ACCOUNT_ID }}."
   - "No emojis; ASCII hyphens only; ruff line length 127; type hints on new Python; async only for I/O (Decision code-style)."
   - "All rec writes go through the ops portal (Decision 84 single-writer). The drift sensor files/updates via file_rec/update_rec (injected portal_caller for tests); never edit the JSONL caches directly."
@@ -322,7 +361,7 @@ constraints:
 context:
   - "Realizes T2.38 (Decision 125/126). Closes c1-c4. depends_on: [] -- eligible."
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: 125, 126, 98, 79, 92, 77, 119, 120, 101, 55. RELATED: 94, 112, 104, 86, 88. Post-scout additions for the wired drift-alarm surface: 84 (ops-portal single-writer for the new rec source) and 104 (build_lambda module split)."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending> after 0 round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s) (round 1 REVISE -> 3 fixes: c1 build-input S3 reads, convergence-health fetch-depth 0, real VP steps 10/12)"
   - >-
     Decision-scout NOTE (Decision 55 false-green) RESOLVED in-design: the bootstrap-window
     continue-on-error on assume-role could let the separate smoke job pass against previously-deployed
@@ -364,9 +403,10 @@ pre_implementation_checklist:
 execution_steps:
   - >-
     terraform/personal/oidc.tf -- add aws_iam_role.github_ci_ducklake_deploy (trust refs/heads/main
-    only) + aws_iam_role_policy with a data.aws_iam_policy_document granting ONLY
-    lambda:UpdateFunctionCode on the four ducklake function ARNs, s3:GetObject/s3:PutObject on
-    lambda-packages/*, and s3:PutObject on deploy-records/ducklake/*. No terraform, iam-write,
+    only) + aws_iam_role_policy with a data.aws_iam_policy_document: lambda:UpdateFunctionCode on the
+    four ducklake function ARNs (no other lambda action); s3:GetObject/s3:PutObject on lambda-packages/*;
+    s3:PutObject on deploy-records/ducklake/*; s3:GetObject on ducklake-pgclient/* + ducklake-extensions/*
+    (vendored build inputs -- mirror the DucklakeBuildInputsRead statement). No terraform, iam-write,
     lambda-config, or invoke.
   - >-
     terraform/bootstrap/github_ci_apply.tf -- add the new role ARN to the IAMRolesRead statement
@@ -392,7 +432,9 @@ execution_steps:
     deploy-record freshness (source_git_sha == github.sha) before smoke.
   - >-
     .github/workflows/convergence-health.yml -- add a step (same github-ci-branch identity) invoking
-    the ducklake code-drift sensor on the existing cron.
+    the ducklake code-drift sensor on the existing cron; set fetch-depth: 0 (or a targeted fetch) on
+    the checkout feeding the drift step so detect_ducklake_code_drift can resolve main git history
+    (default shallow checkout would false-negative per Decision 55).
   - "config/agent/data_quality/source_registry.yaml -- register ducklake_code_drift (description + signal_interpretation modelled on tf_convergence_stale)."
   - "docs/contracts/build-lambda.yaml -- deploy_channels.ducklake_functions: add governed_channel workflow ref; document break_glass_only as genuinely non-default (retained)."
   - "docs/contracts/deploy-paths.yaml -- deploy_code.status: flip from pending-T2.38 to landed, naming the governed workflow; do NOT restate guard classification."
