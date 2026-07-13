@@ -1,8 +1,17 @@
 """Tests for scripts/build_lambda_deploy.py (Decision 104 split of tests/test_build_lambda.py)."""
 
+import io
+import json
 import types
 from unittest.mock import MagicMock, patch
 
+# boto3 is imported at MODULE scope even though it is referenced only via read_deploy_record's
+# lazy fallback / patch("boto3.client") strings and local `from botocore.exceptions import
+# ClientError` imports below. This makes the file's heavy-dep requirement visible to the fast
+# tier's cheap `--collect-only` pass so pr-validate defers it PROACTIVELY to the full post-merge
+# tier, instead of catching it REACTIVELY -- mirrors tests/test_convergence_health.py's identical
+# marker (boto3 is deliberately excluded from requirements-fast.txt; the full tier runs this file).
+import boto3  # noqa: F401
 import pytest
 
 import scripts.build_lambda as bl
@@ -229,19 +238,35 @@ class TestUpdateLambdaFunctions:
 
 
 class TestUpdateLambdaFunctionsDucklakeOnly:
+    # only_ducklake=True call sequence per function (T2.38 c3): update-function-code, THEN
+    # (on success) the deploy-record S3 write -- 2 subprocess.run calls x 4 functions = 8 total.
+    # See docs/PROJECT_CONTEXT.md "postflight.py function mock exhaustion" gotcha: a new
+    # subprocess.run call added inside update_lambda_functions' only_ducklake branch means every
+    # side_effect list feeding it here must grow to match, or the extra call silently StopIterations.
+
+    def _update_response(self, code_sha256: str = "deadbeef"):
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": code_sha256}), stderr="")
+
+    def _write_response(self):
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
     def test_only_ducklake_updates_four_functions(self):
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
             mock_run.side_effect = [
-                types.SimpleNamespace(returncode=0),
-                types.SimpleNamespace(returncode=0),
-                types.SimpleNamespace(returncode=0),
-                types.SimpleNamespace(returncode=0),
+                self._update_response(),
+                self._write_response(),
+                self._update_response(),
+                self._write_response(),
+                self._update_response(),
+                self._write_response(),
+                self._update_response(),
+                self._write_response(),
             ]
             bd.update_lambda_functions("b", "p", "eu-west-2", only_ducklake=True)
-        assert mock_run.call_count == 4
+        assert mock_run.call_count == 8
         targeted = []
-        for c in mock_run.call_args_list:
-            cmd = c[0][0]
+        for idx in range(0, 8, 2):
+            cmd = mock_run.call_args_list[idx][0][0]
             targeted.append(cmd[cmd.index("--function-name") + 1])
         assert set(targeted) == {
             _DUCKLAKE_WRITER_FUNCTION,
@@ -249,6 +274,240 @@ class TestUpdateLambdaFunctionsDucklakeOnly:
             _DUCKLAKE_MAINTENANCE_FUNCTION,
             _DUCKLAKE_CATALOG_DR_FUNCTION,
         }
+
+    def test_only_ducklake_update_call_requests_json_output(self):
+        """The update-function-code call must request --output json (CodeSha256 capture, c3)."""
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                self._update_response(),
+                self._write_response(),
+                self._update_response(),
+                self._write_response(),
+                self._update_response(),
+                self._write_response(),
+                self._update_response(),
+                self._write_response(),
+            ]
+            bd.update_lambda_functions("b", "p", "eu-west-2", only_ducklake=True)
+        for idx in range(0, 8, 2):
+            cmd = mock_run.call_args_list[idx][0][0]
+            assert "--output" in cmd
+            assert cmd[cmd.index("--output") + 1] == "json"
+
+    def test_non_ducklake_path_does_not_write_deploy_records(self):
+        """The prod/ops_compaction path (only_ducklake=False, default) must never touch
+        deploy-records/ducklake/ -- exactly 3 subprocess calls, none of them `aws s3 cp`."""
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+                types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+                types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+            ]
+            bd.update_lambda_functions("b", "p", "eu-west-2")
+        assert mock_run.call_count == 3
+        for c in mock_run.call_args_list:
+            assert c[0][0][:3] != ["aws", "s3", "cp"]
+
+
+class TestWriteDucklakeDeployRecord:
+    """Unit tests for _write_ducklake_deploy_record (T2.38 c3: CodeSha256 capture + record write)."""
+
+    def _stdout(self, code_sha256: str = "sha-abc123") -> str:
+        return json.dumps({"CodeSha256": code_sha256, "FunctionName": "whatever"})
+
+    def test_writes_record_with_expected_schema(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_SHA", "deadbeefcafe")
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            captured["input"] = kw.get("input")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(
+                _DUCKLAKE_WRITER_FUNCTION, self._stdout("sha-writer"), "my-bucket", "p", "eu-west-2"
+            )
+
+        assert captured["cmd"][:3] == ["aws", "s3", "cp"]
+        assert captured["cmd"][3] == "-"
+        assert captured["cmd"][4] == f"s3://my-bucket/deploy-records/ducklake/{_DUCKLAKE_WRITER_FUNCTION}.json"
+        record = json.loads(captured["input"])
+        assert record["function"] == _DUCKLAKE_WRITER_FUNCTION
+        assert record["code_sha256"] == "sha-writer"
+        assert record["source_git_sha"] == "deadbeefcafe"
+        assert "deployed_at" in record and record["deployed_at"]
+
+    def test_key_is_per_function(self):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["dest"] = cmd[4]
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(_DUCKLAKE_READER_FUNCTION, self._stdout(), "bucket", "p", "eu-west-2")
+        assert captured["dest"] == f"s3://bucket/deploy-records/ducklake/{_DUCKLAKE_READER_FUNCTION}.json"
+
+    def test_source_git_sha_none_safe_when_github_sha_unset(self, monkeypatch):
+        """Local break-glass path (bin/venv-python -m scripts.build_lambda --ducklake-only
+        --deploy) has no GITHUB_SHA -- the record must carry source_git_sha=null, not KeyError."""
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["input"] = kw.get("input")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(_DUCKLAKE_MAINTENANCE_FUNCTION, self._stdout(), "bucket", "p", "eu-west-2")
+        record = json.loads(captured["input"])
+        assert record["source_git_sha"] is None
+
+    def test_content_type_json(self):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(_DUCKLAKE_CATALOG_DR_FUNCTION, self._stdout(), "bucket", "p", "eu-west-2")
+        cmd = captured["cmd"]
+        assert "--content-type" in cmd
+        assert cmd[cmd.index("--content-type") + 1] == "application/json"
+
+    def test_exits_on_unparseable_json_response(self):
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            with pytest.raises(SystemExit) as exc_info:
+                bd._write_ducklake_deploy_record(_DUCKLAKE_WRITER_FUNCTION, "not-json-at-all", "bucket", "p", "eu-west-2")
+            assert exc_info.value.code == 1
+        mock_run.assert_not_called()
+
+    def test_exits_when_codesha256_key_missing(self):
+        with pytest.raises(SystemExit) as exc_info:
+            bd._write_ducklake_deploy_record(
+                _DUCKLAKE_WRITER_FUNCTION, json.dumps({"FunctionName": "x"}), "bucket", "p", "eu-west-2"
+            )
+        assert exc_info.value.code == 1
+
+    def test_exits_on_s3_write_failure(self):
+        fail = types.SimpleNamespace(returncode=1, stdout="", stderr="AccessDenied")
+        with patch("scripts.build_lambda.subprocess.run", return_value=fail):
+            with pytest.raises(SystemExit) as exc_info:
+                bd._write_ducklake_deploy_record(_DUCKLAKE_WRITER_FUNCTION, self._stdout(), "bucket", "p", "eu-west-2")
+            assert exc_info.value.code == 1
+
+    def test_profile_and_region_forwarded(self):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(
+                _DUCKLAKE_WRITER_FUNCTION, self._stdout(), "bucket", "agent_platform", "us-west-2"
+            )
+        cmd = captured["cmd"]
+        assert "--region" in cmd and cmd[cmd.index("--region") + 1] == "us-west-2"
+        assert "--profile" in cmd and cmd[cmd.index("--profile") + 1] == "agent_platform"
+
+    def test_profileless_omits_profile_flag(self):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(_DUCKLAKE_WRITER_FUNCTION, self._stdout(), "bucket", "", "eu-west-2")
+        assert "--profile" not in captured["cmd"]
+
+
+class TestReadDeployRecord:
+    """Unit tests for read_deploy_record (T2.38 c3 read-back helper; injected S3, no live AWS)."""
+
+    def test_returns_parsed_json(self):
+        payload = json.dumps(
+            {"function": _DUCKLAKE_WRITER_FUNCTION, "code_sha256": "abc123", "source_git_sha": "sha1", "deployed_at": "x"}
+        ).encode()
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": io.BytesIO(payload)}
+
+        result = bd.read_deploy_record(_DUCKLAKE_WRITER_FUNCTION, s3_client=mock_s3)
+
+        assert result == {
+            "function": _DUCKLAKE_WRITER_FUNCTION,
+            "code_sha256": "abc123",
+            "source_git_sha": "sha1",
+            "deployed_at": "x",
+        }
+        mock_s3.get_object.assert_called_once_with(
+            Bucket="agent-platform-data-lake",
+            Key=f"deploy-records/ducklake/{_DUCKLAKE_WRITER_FUNCTION}.json",
+        )
+
+    def test_custom_bucket_honoured(self):
+        payload = json.dumps({"code_sha256": "x"}).encode()
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": io.BytesIO(payload)}
+        bd.read_deploy_record(_DUCKLAKE_READER_FUNCTION, s3_client=mock_s3, bucket="other-bucket")
+        mock_s3.get_object.assert_called_once_with(
+            Bucket="other-bucket",
+            Key=f"deploy-records/ducklake/{_DUCKLAKE_READER_FUNCTION}.json",
+        )
+
+    def test_returns_none_on_no_such_key(self):
+        from botocore.exceptions import ClientError
+
+        error = ClientError({"Error": {"Code": "NoSuchKey", "Message": "not found"}}, "GetObject")
+        mock_s3 = MagicMock()
+        mock_s3.get_object.side_effect = error
+        assert bd.read_deploy_record(_DUCKLAKE_WRITER_FUNCTION, s3_client=mock_s3) is None
+
+    def test_reraises_non_nosuchkey_error(self):
+        from botocore.exceptions import ClientError
+
+        err = ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject")
+        mock_s3 = MagicMock()
+        mock_s3.get_object.side_effect = err
+        with pytest.raises(ClientError):
+            bd.read_deploy_record(_DUCKLAKE_WRITER_FUNCTION, s3_client=mock_s3)
+
+    def test_lazy_creates_boto3_client_when_none(self):
+        with patch("boto3.client") as mock_client:
+            mock_client.return_value.get_object.side_effect = RuntimeError("NoSuchKey")
+            bd.read_deploy_record(_DUCKLAKE_WRITER_FUNCTION)
+        mock_client.assert_called_once_with("s3")
+
+    def test_round_trip_write_then_read(self, monkeypatch):
+        """The record _write_ducklake_deploy_record writes is exactly what read_deploy_record
+        parses back -- proves schema symmetry end-to-end (minus the live S3 transport)."""
+        monkeypatch.setenv("GITHUB_SHA", "roundtrip-sha")
+        written = {}
+
+        def fake_run(cmd, **kw):
+            written["input"] = kw.get("input")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(
+                _DUCKLAKE_MAINTENANCE_FUNCTION,
+                json.dumps({"CodeSha256": "sha-m"}),
+                "roundtrip-bucket",
+                "p",
+                "eu-west-2",
+            )
+
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": io.BytesIO(written["input"].encode())}
+        record = bd.read_deploy_record(_DUCKLAKE_MAINTENANCE_FUNCTION, s3_client=mock_s3, bucket="roundtrip-bucket")
+
+        assert record["function"] == _DUCKLAKE_MAINTENANCE_FUNCTION
+        assert record["code_sha256"] == "sha-m"
+        assert record["source_git_sha"] == "roundtrip-sha"
+        assert "deployed_at" in record
 
 
 class TestResolveDucklakeProfile:
@@ -436,8 +695,10 @@ class TestProfilelessArgv:
         assert "--profile" not in argv
 
     def test_update_lambda_functions_omits_profile_when_empty(self):
+        # Shared return_value covers BOTH the update-function-code call and (only_ducklake=True)
+        # the deploy-record s3-cp write call, so it must carry a parseable CodeSha256 stdout.
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
-            mock_run.return_value = types.SimpleNamespace(returncode=0, stderr="")
+            mock_run.return_value = types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": "sha"}), stderr="")
             bd.update_lambda_functions("bucket", "", "eu-west-2", only_ducklake=True)
         assert mock_run.call_args_list
         for call in mock_run.call_args_list:
@@ -445,7 +706,7 @@ class TestProfilelessArgv:
 
     def test_update_lambda_functions_includes_profile_when_set(self):
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
-            mock_run.return_value = types.SimpleNamespace(returncode=0, stderr="")
+            mock_run.return_value = types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": "sha"}), stderr="")
             bd.update_lambda_functions("bucket", "agent_platform", "eu-west-2", only_ducklake=True)
         assert mock_run.call_args_list
         for call in mock_run.call_args_list:

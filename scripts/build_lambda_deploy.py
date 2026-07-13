@@ -8,9 +8,13 @@ scripts/build_lambda.py for the CLI facade that re-exports this module's public 
 test-patched symbols.
 """
 
+import json
+import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Optional
 
 from scripts.build_lambda_config import (
     ROOT,
@@ -20,6 +24,8 @@ from scripts.build_lambda_config import (
     _build_ops_compaction,
     _build_prod_function_names,
 )
+
+_DEPLOY_RECORD_BUCKET = "agent-platform-data-lake"
 
 
 def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str) -> None:
@@ -49,8 +55,10 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
     ``ops-compaction.zip`` (no pip dependencies) to stay under the 262 MB
     combined-with-layers size limit imposed by the attached AWSSDKPandas layer.
 
-    ``only_ducklake`` scopes the deploy to the two DuckLake functions (T2.17), leaving the prod
-    functions untouched (Decision 79 affected-artifact hygiene).
+    ``only_ducklake`` scopes the deploy to the four DuckLake functions (T2.17/T2.18), leaving the
+    prod functions untouched (Decision 79 affected-artifact hygiene). On that path, each
+    successful update also captures CodeSha256 from the response and writes a T2.38 deployment
+    record (see ``_write_ducklake_deploy_record`` / ``read_deploy_record``).
 
     Ref: AWS CLI ``lambda update-function-code`` requires
     --function-name, --s3-bucket, --s3-key; optional --region and
@@ -58,8 +66,8 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
     the inference-client packaging requirements.
     """
     if only_ducklake:
-        # Scope the deploy to the two DuckLake functions ONLY: data-pipeline + ops-compaction are
-        # NOT redeployed by a T2.17 deploy (Decision 79 affected-artifact hygiene).
+        # Scope the deploy to the four DuckLake functions ONLY: data-pipeline + ops-compaction are
+        # NOT redeployed by a T2.17/T2.18 deploy (Decision 79 affected-artifact hygiene).
         function_zip_map = dict(_build_ducklake_function_zip_keys())
     else:
         function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _build_prod_function_names()}
@@ -81,6 +89,8 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
                 s3_key,
                 "--region",
                 region,
+                "--output",
+                "json",
                 *_aws_profile_args(profile),
             ],
             capture_output=True,
@@ -94,6 +104,94 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
                 print(f"  {result.stderr.strip()}")
             sys.exit(1)
         print(f"  OK {fn_name} updated")
+
+        if only_ducklake:
+            _write_ducklake_deploy_record(fn_name, result.stdout, bucket, profile, region)
+
+
+def _write_ducklake_deploy_record(
+    function: str,
+    update_function_code_stdout: str,
+    bucket: str,
+    profile: str,
+    region: str,
+) -> None:
+    """Capture CodeSha256 from the update-function-code JSON response and write the T2.38 record.
+
+    Writes ``deploy-records/ducklake/<function>.json``: ``{function, code_sha256,
+    source_git_sha, deployed_at}``. ``source_git_sha`` reads ``os.environ.get("GITHUB_SHA")`` --
+    None-safe: the local break-glass path (``bin/venv-python -m scripts.build_lambda
+    --ducklake-only --deploy``) has no ``GITHUB_SHA``, so the record carries
+    ``source_git_sha: null`` rather than raising. Read back via ``read_deploy_record`` (consumed
+    by ``scripts.convergence_health.detect_ducklake_code_drift``).
+    """
+    try:
+        code_sha256 = json.loads(update_function_code_stdout)["CodeSha256"]
+    except (json.JSONDecodeError, TypeError, KeyError) as exc:
+        print(f"  ERROR: could not parse CodeSha256 from update-function-code response for {function}: {exc}")
+        sys.exit(1)
+
+    record = {
+        "function": function,
+        "code_sha256": code_sha256,
+        "source_git_sha": os.environ.get("GITHUB_SHA"),
+        "deployed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    key = f"deploy-records/ducklake/{function}.json"
+    result = subprocess.run(
+        [
+            "aws",
+            "s3",
+            "cp",
+            "-",
+            f"s3://{bucket}/{key}",
+            "--region",
+            region,
+            "--content-type",
+            "application/json",
+            *_aws_profile_args(profile),
+        ],
+        input=json.dumps(record),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        print(f"  ERROR: Failed to write deploy record for {function} (exit {result.returncode})")
+        if result.stderr:
+            print(f"  {result.stderr.strip()}")
+        sys.exit(1)
+    print(f"  OK deploy record written: {key}")
+
+
+def read_deploy_record(
+    function: str,
+    s3_client: Any = None,
+    bucket: str = _DEPLOY_RECORD_BUCKET,
+) -> Optional[dict[str, Any]]:
+    """Read ``deploy-records/ducklake/<function>.json``. Returns None if the record is absent.
+
+    ``s3_client`` is injected for testability (a boto3-like client exposing
+    ``get_object(Bucket, Key) -> {"Body": <stream>}``), mirroring
+    ``scripts.convergence_health.read_convergence_record``. When None, a boto3 client is created
+    lazily (never at import time, per the repo's import-safety rule).
+    """
+    if s3_client is None:
+        import boto3  # noqa: PLC0415
+
+        s3_client = boto3.client("s3")
+
+    key = f"deploy-records/ducklake/{function}.json"
+    try:
+        response = s3_client.get_object(Bucket=bucket, Key=key)
+        body = response["Body"].read()
+        return json.loads(body)
+    except Exception as exc:  # noqa: BLE001
+        exc_str = str(exc) + type(exc).__name__
+        if any(marker in exc_str for marker in ("NoSuchKey", "404", "NoSuchBucket")):
+            return None
+        raise
 
 
 def resolve_bucket(profile: str) -> str:

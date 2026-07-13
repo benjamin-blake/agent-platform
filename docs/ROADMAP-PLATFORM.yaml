@@ -6719,7 +6719,8 @@ tier_items:
     files_in_scope:
       - terraform/personal/oidc.tf
       - .github/workflows/deploy-ducklake-lambdas.yml
-      - scripts/build_lambda.py
+      - scripts/build_lambda_deploy.py  # was scripts/build_lambda.py -- Decision 104 split; the deploy fn (update_lambda_functions / _write_ducklake_deploy_record) lives here
+      - scripts/convergence_health.py  # c3 wired drift alarm (detect_ducklake_code_drift)
       - docs/contracts/build-lambda.yaml
       - docs/contracts/deploy-paths.yaml
     exit_criteria:
@@ -6728,29 +6729,44 @@ tier_items:
           A scoped UpdateFunctionCode-only OIDC role (no terraform:apply, no other IAM/Lambda-
           config permissions) exists for the four ducklake functions, distinct from the
           terraform-apply CI roles
-        status: open
+        status: open  # role DEFINED in oidc.tf; operational existence pending operator admin-create (Decision 98, VP step 9)
       - id: c2
         text: >-
           build_lambda --ducklake-only --deploy runs through a governed CD path (a dedicated
           GitHub Actions workflow), not only as a local break-glass invocation; the existing
           --lambda-attach/--lambda-reader smoke gates run as part of that workflow before the
           deploy is considered successful
-        status: open
+        status: open  # workflow landed + structurally verified; first live governed run is V3, BLOCKED pending admin-create (VP steps 9-11)
       - id: c3
         text: >-
           A deployment record (function name -> deployed CodeSha256 -> source git SHA) is
           written on every governed deploy and is readable by convergence-health/drift tooling
-        status: open
+        status: open  # write/read code + drift sensor landed and unit-tested; live record proof is V3, BLOCKED pending first governed run (VP steps 10-11)
       - id: c4
         text: >-
           docs/contracts/build-lambda.yaml deploy_channels.ducklake_functions.break_glass_only
           is documented as genuinely non-default once the governed channel exists; local
           build_lambda --ducklake-only --deploy remains available but is no longer the only path
-        status: open
+        status: met
+        met_by: ducklake-governed-deploy-channel
     related_decisions: [125, 126]
     effort: L
     strategic: false
-    status: not_started
+    status: in_progress
+    progress_note: |
+      2026-07-13: governed code-deploy channel machinery shipped (PLAN-ducklake-governed-deploy-channel).
+      Landed: scoped agent-platform-github-ci-ducklake-deploy role DEFINITION (UpdateFunctionCode-only,
+      refs/heads/main trust, s3:ListBucket for head-bucket) in oidc.tf + bootstrap IAMRolesRead refresh
+      grant; the governed workflow .github/workflows/deploy-ducklake-lambdas.yml (scoped-role deploy +
+      needs:deploy smoke gate on --lambda-attach/--lambda-reader, gated on deploy-record freshness;
+      bootstrap-window assume-role tolerance scoped to DUCKLAKE_DEPLOY_ROLE_PROVISIONED, fails loud
+      post-provisioning); deploy-record write/read (build_lambda_deploy) + wired ducklake_code_drift alarm
+      (convergence_health + convergence-health.yml cron, source_registry). c4 (docs: break_glass_only
+      non-default) is met. REMAINING (operator-gated, V3 -- criteria c1-c3 flip to met on completion):
+      admin-create the scoped role via agent_platform_admin -target apply (Decision 98) + set repo var
+      DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true, then exercise the governed channel once (merge a ducklake-source
+      change or workflow_dispatch) and confirm the live CodeSha256 == deploy-record proof (VP steps 9-11).
+      QUALIFIES for status: complete once c1-c3 are met -- do NOT auto-complete (Status-Trusted-Never-Inferred).
 
   - id: T2.39
     tier: T2

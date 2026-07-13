@@ -1,0 +1,198 @@
+name: deploy-ducklake-lambdas
+
+# Governed code-deploy channel for the four DuckLake Lambdas (T2.38 / Decision 125/126).
+#
+# Realizes the Decision 125 "deploy code" verb: writer/reader/maintenance/catalog-dr code ships
+# through this scoped, auditable path with post-deploy smoke gates and a deployment record --
+# retiring the local `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` break-glass
+# invocation as the ONLY route (it remains available as a genuinely non-default fallback; see
+# docs/contracts/build-lambda.yaml deploy_channels.ducklake_functions).
+#
+# Terraform is NOT involved in this channel (Decision 126 point 1): code ships via this
+# build/deploy pipeline scoped to UpdateFunctionCode-equivalent permissions only.
+#
+# Triggers on push to main touching ducklake source, and on workflow_dispatch (operator-triggered
+# redeploy / recovery, e.g. after a stale-code drift alarm).
+#
+# deploy job:
+#   - Assumes agent-platform-github-ci-ducklake-deploy (T2.38 scoped role: UpdateFunctionCode-only
+#     on the four ducklake function ARNs; no lambda-config, no invoke, no terraform, no iam-write).
+#   - This role is IAM-SENSITIVE and lands via the human-gated admin-create path (Decision 98) --
+#     it does NOT exist until an operator applies terraform/personal/oidc.tf under
+#     agent_platform_admin. continue-on-error on the assume-role step covers that bootstrap
+#     window, but the tolerance is SCOPED (not blanket, Decision 55): it applies only while the
+#     operator-owned repo variable DUCKLAKE_DEPLOY_ROLE_PROVISIONED is not 'true'. The operator
+#     sets that variable to 'true' as part of the same admin-create step; from then on a failed
+#     assume-role (a trust/policy regression, throttling, expired federation) FAILS LOUD instead
+#     of reporting a silent green no-op deploy. Pre-admin-create pushes no-op (green,
+#     deployed=false); post-provisioning regressions are red.
+#   - Runs `build_lambda --ducklake-only --deploy`, which builds + uploads + deploys the four
+#     function zips and three layer zips, capturing each function's CodeSha256 and writing a
+#     deploy-records/ducklake/<function>.json record (function -> CodeSha256 -> source git SHA;
+#     c3). Emits deployed=true only on a genuine successful deploy.
+#
+# smoke job (needs: deploy; Decision 55 false-green avoidance):
+#   - Runs ONLY when deploy actually shipped code (needs.deploy.outputs.deployed == 'true') --
+#     never on a bootstrap-window no-op.
+#   - Asserts deploy-record freshness (source_git_sha == github.sha) for all four functions
+#     BEFORE running the smoke gates -- a stale or partially-written record fails closed instead
+#     of letting a skipped/no-op deploy report smoke-green.
+#   - Assumes agent-platform-github-ci-branch (reuses its existing DuckLakeInvokeCI writer+reader
+#     Function-URL invoke grant -- the scoped deploy role above needs no invoke permission, which
+#     keeps c1's "UpdateFunctionCode-only" literal).
+#   - Runs ducklake_neon_smoke_test --lambda-attach (EC1 in-Lambda ATTACH proof) and
+#     --lambda-reader (EC1/boundary closed reader path). A failed gate is a loud-fail (Decision
+#     55): stop and RCA, never auto-retry into green.
+#
+# T2.42 boundary: this workflow deploys the four FUNCTION code artifacts only. Layer version
+# publishing stays with T2.42 -- no publish-version step is added here.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/lambdas/ducklake_*/**'
+      - 'src/common/ducklake_*.py'
+      - 'config/lambda/ducklake/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialise governed deploys -- two concurrent update-function-code runs against the same
+  # functions would race. cancel-in-progress: false so an in-flight deploy always completes.
+  group: deploy-ducklake-lambdas
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      deployed: ${{ steps.deploy_code.outputs.deployed }}
+    permissions:
+      id-token: write  # OIDC token minting for assume-role
+      contents: read
+
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC -- github-ci-ducklake-deploy role, main only)
+        # Bootstrap-window guard: before the admin-create apply creates
+        # agent-platform-github-ci-ducklake-deploy, this assume-role fails. continue-on-error
+        # keeps the job from hard-failing so the "Classify assume-role outcome" step below can
+        # decide whether the failure is the EXPECTED bootstrap-window absence or a real regression.
+        # The tolerance is NOT blanket: it is scoped by DUCKLAKE_DEPLOY_ROLE_PROVISIONED (see below).
+        id: oidc_deploy
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-ducklake-deploy
+          aws-region: eu-west-2
+
+      - name: Classify assume-role outcome (scope the tolerance to the genuinely-absent role)
+        # Decision 55 false-green guard: continue-on-error above must NOT silently swallow a
+        # post-provisioning assume-role regression (a trust-policy edit, throttling, expired
+        # federation) as a green no-op deploy. The bootstrap-window tolerance is gated on the
+        # operator-owned repo variable DUCKLAKE_DEPLOY_ROLE_PROVISIONED, set to 'true' as part of
+        # the same Decision 98 admin-create step that creates the role (VP step 9):
+        #   - flag unset/not 'true' (pre-admin-create): a failed assume is the EXPECTED absent-role
+        #     bootstrap window -> warn loudly and no-op (deployed stays unset -> smoke skips).
+        #   - flag 'true' (role should exist): a failed assume is a REAL regression -> fail loud.
+        # A successful assume is always fine regardless of the flag.
+        if: steps.oidc_deploy.outcome != 'success'
+        env:
+          ROLE_PROVISIONED: ${{ vars.DUCKLAKE_DEPLOY_ROLE_PROVISIONED }}
+        run: |
+          set -euo pipefail
+          if [ "$ROLE_PROVISIONED" = "true" ]; then
+            echo "::error::assume-role failed but DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true -- the scoped role agent-platform-github-ci-ducklake-deploy is expected to exist, so this is a real regression (trust/policy/throttle/federation), NOT the bootstrap window. Failing loud (Decision 55) rather than reporting a silent green no-op deploy."
+            exit 1
+          fi
+          echo "::warning::assume-role failed and DUCKLAKE_DEPLOY_ROLE_PROVISIONED is not 'true' -- treating as the pre-admin-create bootstrap window (role genuinely absent, Decision 98). No deploy performed (deployed=false); the operator admin-creates the role and sets DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true to close this window."
+
+      - name: Setup Python 3.12
+        if: steps.oidc_deploy.outcome == 'success'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install build_lambda runtime deps
+        # This runner has no .venv (CC-web-only convention). build_lambda's manifest-driven
+        # staging needs pyyaml (parse manifest.yaml) + pydantic (LambdaManifest schema);
+        # upload/deploy go through the AWS CLI via subprocess, not boto3 (reconcile.yml installs
+        # the same pyyaml+pydantic for its `build_lambda --ducklake-only` build). NOTE: unlike
+        # reconcile.yml (which runs --skip-upload), THIS deploy uploads, so it also exercises
+        # validate_bucket_exists -> `aws s3api head-bucket` (needs the role's DataLakeHeadBucket
+        # s3:ListBucket grant) and update-function-code + the deploy-record write.
+        if: steps.oidc_deploy.outcome == 'success'
+        run: pip install pyyaml pydantic
+
+      - name: Build + upload + deploy DuckLake Lambda code
+        id: deploy_code
+        if: steps.oidc_deploy.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python -m scripts.build_lambda --ducklake-only --deploy --profile "" --bucket agent-platform-data-lake
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+
+  smoke:
+    needs: deploy
+    if: needs.deploy.outputs.deployed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write  # OIDC token minting for assume-role
+      contents: read
+
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC -- github_ci_branch role, DuckLake writer+reader invoke)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
+      - name: Assert deploy-record freshness (source_git_sha == github.sha)
+        # False-green guard (Decision 55): a skipped/partial/stale deploy must not let the smoke
+        # gates report green against previously-deployed code. Reads each of the four deploy
+        # records this run's deploy job wrote and asserts source_git_sha matches the commit that
+        # triggered this workflow run.
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for fn in agent-platform-ducklake-writer agent-platform-ducklake-reader agent-platform-ducklake-maintenance agent-platform-ducklake-catalog-dr; do
+            RECORD=$(aws s3 cp "s3://agent-platform-data-lake/deploy-records/ducklake/${fn}.json" - --region eu-west-2)
+            ACTUAL_SHA=$(printf '%s' "$RECORD" | python3 -c "import json,sys; print(json.load(sys.stdin).get('source_git_sha') or '')")
+            if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::DEPLOY_RECORD_STALE ${fn}: source_git_sha=${ACTUAL_SHA} != github.sha=${EXPECTED_SHA} -- a stale or skipped deploy cannot report smoke-green (Decision 55 false-green guard)." >&2
+              exit 1
+            fi
+            echo "OK ${fn} deploy record fresh: ${ACTUAL_SHA}"
+          done
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies (venv)
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Smoke test -- lambda-attach (EC1 in-Lambda ATTACH proof)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-attach
+
+      - name: Smoke test -- lambda-reader (EC1/boundary closed reader path)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-reader
