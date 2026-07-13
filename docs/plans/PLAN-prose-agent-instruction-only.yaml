@@ -30,7 +30,11 @@ scope:
       Add a structured `procedure:` block under `admin_out_of_band` holding the operator
       break-glass recovery steps moved out of terraform/CLAUDE.md. Widen the file's charter
       comment from "intent -> trigger -> recovery wayfinding" to "... + the operator-tier
-      procedure". MUST NOT restate apply-model / guard-classification rules -- those stay
+      procedure". ALSO re-ground `admin_out_of_band.status` -- it currently says "Sequenced for
+      quarantine into a dedicated operator runbook by tier_item T2.41 ... do not quarantine
+      before then"; that is self-contradictory once the procedure lives in THIS file and T2.37
+      is complete, so restate it as "quarantined here (Decision 126 pt4 as amended); T2.37
+      landed/verified". MUST NOT restate apply-model / guard-classification rules -- those stay
       pointed at environment-taxonomy.md (Decision 92 point 5 sole SoT; Decision 126 point 2).
   - file: terraform/CLAUDE.md
     action: Modify
@@ -43,10 +47,12 @@ scope:
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
-      Re-ground tier_item T2.41's exit criterion c1 text: quarantine target is the
-      deploy-paths.yaml procedure block, not "a dedicated operator runbook under docs/runbooks/".
-      (Criterion/status FLIPS are performed by the /implement bookkeeping walk on a verified VP
-      pass, not here -- this edit only re-grounds the criterion text.)
+      Re-ground the WHOLE tier_item T2.41 block so no "runbook" wording survives: the item
+      `name` ("Escape-hatch quarantine to an operator-only runbook"), `intent` ("...into a
+      dedicated operator runbook..."), exit criterion c1, and the `docs/runbooks/`
+      files_in_scope entry all move to naming the deploy-paths.yaml procedure block. (Criterion/
+      status FLIPS are performed by the /implement bookkeeping walk on a verified VP pass, not
+      here -- this edit only re-grounds text + scope.)
   - file: docs/contracts/file-router.yaml
     action: Modify
     purpose: >-
@@ -123,8 +129,10 @@ acceptance_criteria:
     The guard fails when a tracked .md file matches neither allowed_globs nor grandfathered_globs
     (proven by the unit test's negative case).
   - >-
-    tier_item T2.41's criterion c1 text is re-grounded to name the deploy-paths.yaml procedure
-    block (not docs/runbooks/); docs/CLAUDE.md Class->home map no longer sanctions docs/runbooks/.
+    tier_item T2.41's whole block (name, intent, criterion c1, files_in_scope) is re-grounded to
+    name the deploy-paths.yaml procedure block with no "runbook" wording; deploy-paths.yaml's
+    admin_out_of_band.status no longer says "runbook"; docs/CLAUDE.md Class->home map no longer
+    sanctions docs/runbooks/.
   - >-
     validate_prose_allowlist and validate_intent_doc_freeze have clearly delineated
     primary-owner-per-surface scopes (INTENT-doc existence gated by the freeze guard via its
@@ -163,16 +171,16 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: terraform/CLAUDE.md drops the break-glass interactive-loop step-list but keeps the invariant, a deploy-paths.yaml pointer, and the mirror-init constraints.
-    command: "bin/venv-python -c \"import sys; t=open('terraform/CLAUDE.md').read(); removed = ('iterative loop' not in t) and ('human accepts' not in t); kept = ('deploy-paths.yaml' in t) and ('mirror' in t.lower()); print('removed_procedure=', removed, 'kept_pointer_and_mirror=', kept); sys.exit(0 if (removed and kept) else 1)\""
+    command: "bin/venv-python -c \"import sys; raw=open('terraform/CLAUDE.md').read(); t=' '.join(raw.split()); removed = ('iterative loop' not in t) and ('human accepts' not in t); kept = ('deploy-paths.yaml' in raw) and ('mirror' in raw.lower()); print('removed_procedure=', removed, 'kept_pointer_and_mirror=', kept); sys.exit(0 if (removed and kept) else 1)\""
     expected: "removed_procedure= True kept_pointer_and_mirror= True -- the interactive loop step-list is gone; the pointer + mirror-init constraint remain."
     fix_if: "removed_procedure False -- the break-glass step-list was left behind (move it to deploy-paths.yaml); kept False -- the pointer or mirror-init constraint was over-removed."
     hermetic: true
   - step: 6
     phase: pre-deploy
     action: deploy-paths.yaml has an admin_out_of_band.procedure block that does NOT restate guard-classification rules.
-    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/contracts/deploy-paths.yaml')); p=d['admin_out_of_band'].get('procedure'); assert p, 'no procedure block'; blob=str(p).lower(); assert not any(k in blob for k in ['in_budget','out-of-budget','out_of_budget','exit 2','exit code']), 'procedure restates guard-classification'; print('procedure present, no guard-classification restatement')\""
-    expected: "Prints confirmation; procedure exists and contains no apply-model/guard-classification language."
-    fix_if: "AssertionError -- either the procedure block is missing or it leaked guard-classification rules that belong solely in environment-taxonomy.md."
+    command: "bin/venv-python -c \"import yaml; d=yaml.safe_load(open('docs/contracts/deploy-paths.yaml')); ab=d['admin_out_of_band']; p=ab.get('procedure'); assert p, 'no procedure block'; blob=str(p).lower(); assert not any(k in blob for k in ['in_budget','out-of-budget','out_of_budget','exit 2','exit code']), 'procedure restates guard-classification'; assert 'runbook' not in str(ab.get('status','')).lower(), 'admin_out_of_band.status still references a runbook'; print('procedure present; no guard-classification; status re-grounded')\""
+    expected: "Prints confirmation; procedure exists, contains no apply-model/guard-classification language, and admin_out_of_band.status no longer references a runbook."
+    fix_if: "AssertionError -- the procedure block is missing, leaked guard-classification rules (belong solely in environment-taxonomy.md), or the status line still says 'runbook' (self-contradictory once the procedure lives in this file)."
     hermetic: true
   - step: 7
     phase: pre-deploy
@@ -190,10 +198,10 @@ verification_plan:
     hermetic: true
   - step: 9
     phase: pre-deploy
-    action: T2.41 criterion c1 AND files_in_scope are re-grounded to name deploy-paths.yaml, not docs/runbooks/.
-    command: "bin/venv-python -c \"import re,sys; t=open('docs/ROADMAP-PLATFORM.yaml').read(); i=t.index('id: T2.41'); j=t.index('id: T2.42'); blk=t[i:j]; ok = ('deploy-paths' in blk) and ('runbooks/' not in blk); print('T2.41 block clean of runbooks/:', ok); sys.exit(0 if ok else 1)\""
-    expected: "The whole T2.41 block (c1 text + files_in_scope) names deploy-paths.yaml and no longer references docs/runbooks/."
-    fix_if: "runbooks/ still present in the T2.41 block -- re-ground c1 text AND clean the residual files_in_scope entry."
+    action: The entire T2.41 block (name, intent, criterion c1, files_in_scope) is re-grounded to name deploy-paths.yaml and carries NO "runbook"/"runbooks/" wording.
+    command: "bin/venv-python -c \"import sys; t=open('docs/ROADMAP-PLATFORM.yaml').read(); i=t.index('id: T2.41'); j=t.index('id: T2.42'); blk=t[i:j].lower(); ok = ('deploy-paths' in blk) and ('runbook' not in blk); print('T2.41 block clean of runbook wording:', ok); sys.exit(0 if ok else 1)\""
+    expected: "The whole T2.41 block names deploy-paths.yaml and the substring 'runbook' (singular or plural) is absent from name, intent, c1, and files_in_scope."
+    fix_if: "'runbook' still present in the T2.41 block -- re-ground the name + intent + c1 text AND clean the residual docs/runbooks/ files_in_scope entry."
     hermetic: true
   - step: 10
     phase: pre-deploy
@@ -230,7 +238,8 @@ context:
   - "docs/contracts/*.md (e.g. environment-taxonomy.md, delegate-cli.md) are contracts: allowed as class (b) even though .md; a later YAML conversion is optional hygiene, not this plan."
   - "Numbering-race: re-check the max '## Decision NNN' header in DECISIONS.md at implement time -- a concurrent PR may claim 127."
   - "Branch was 0 commits behind origin/main at planning time (preflight main=0 behind); no rebase deferral needed."
-  - "Closure obligation: this is a surface-retiring/re-grounding plan (docs/runbooks -> retiring; break-glass X->Y move). VP steps 4-8 are the stale-reference / migration-completeness sweep."
+  - "Closure obligation: this is a surface-retiring/re-grounding plan (docs/runbooks -> retiring; break-glass X->Y move). VP steps 5, 6, 9 are the stale-reference / migration-completeness sweep."
+  - "Coverage-mapping note (non-blocking): scripts/test_coverage_checker.py maps scripts/checks/**/*.py to tests/test_validate.py, but the new test lives at tests/checks/test_validate_prose_allowlist.py (precedent: validate_deploy_channel_conformance is tested only under tests/checks/). validate_test_coverage is full-tier + diff-aware so it won't block --pre or post-merge; the implementer should confirm coverage attribution for the new module or place the test where the mapping expects."
 pre_implementation_checklist:
   - "Branch confirmed not on main (claude/... session branch)."
   - "docs/PROJECT_CONTEXT.md read."
@@ -247,7 +256,7 @@ execution_steps:
   - "scripts/checks/registry.py: register validate_prose_allowlist in both tier sequences adjacent to validate_intent_doc_freeze."
   - "docs/CLAUDE.md: update the Class->home map (drop runbooks row, add operator-procedure-in-contract row; note docs/runbooks/ retiring)."
   - "docs/contracts/instruction-architecture.yaml: add the human-runbook anti-pattern row."
-  - "docs/ROADMAP-PLATFORM.yaml: re-ground T2.41 exit criterion c1 text (target = deploy-paths.yaml procedure block, not docs/runbooks/) AND clean the residual docs/runbooks/ entry from T2.41 files_in_scope in the same edit. (Criterion/status FLIPS are done by /implement's bookkeeping walk on a verified VP pass, not here -- this edit only re-grounds text.)"
+  - "docs/ROADMAP-PLATFORM.yaml: re-ground the WHOLE T2.41 block -- name, intent, exit criterion c1, and the residual docs/runbooks/ files_in_scope entry -- so no 'runbook' wording survives (target = deploy-paths.yaml procedure block). (Criterion/status FLIPS are done by /implement's bookkeeping walk on a verified VP pass, not here -- this edit only re-grounds text + scope.)"
   - "tests/checks/test_validate_prose_allowlist.py: positive, negative, and fail-open cases (exercise path_allowed against a root bare filename too)."
   - "Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55)."
   - "Report: what was implemented, verification results, and confirmation that the guard is green with the full grandfather set."
