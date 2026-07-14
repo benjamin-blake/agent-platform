@@ -6,6 +6,7 @@ All tests inject finder/bumper callables -- no live DuckLake reader or portal wr
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -287,6 +288,30 @@ class TestDefaultDriftRecFinder:
         reader.current_state.return_value = [{"id": "rec-1", "status": "closed", "context": f"run {url}"}]
         with patch("src.common.iceberg_reader.make_reader", return_value=reader):
             assert _default_drift_rec_finder(url) is None
+
+    def test_reader_unreachable_fails_open(self, caplog):
+        """A transient DuckLake reader outage must not crash the ci-rca.yml Dedup guard step --
+        fails open (returns None) so the refusal files as the fallback red-surface, mirroring
+        find_open_ci_rca_rec_by_fingerprint's contract (ci_rca_runtime.py)."""
+        from scripts.ci_rca.convergence_dedup import _default_drift_rec_finder
+
+        reader = MagicMock()
+        reader.current_state.side_effect = RuntimeError("ducklake_reader 'read_ops_current' failed (HTTP 503): ...")
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
+            with caplog.at_level(logging.WARNING):
+                result = _default_drift_rec_finder("https://x/runs/999")
+        assert result is None
+        assert any("reader unreachable" in rec.message.lower() for rec in caplog.records)
+
+    def test_unexpected_reader_error_raises(self):
+        """Any OTHER exception is NOT reader-unreachable and must propagate (Decision 55)."""
+        from scripts.ci_rca.convergence_dedup import _default_drift_rec_finder
+
+        reader = MagicMock()
+        reader.current_state.side_effect = RuntimeError("boom -- unrelated to connectivity")
+        with patch("src.common.iceberg_reader.make_reader", return_value=reader):
+            with pytest.raises(RuntimeError, match="boom"):
+                _default_drift_rec_finder("https://x/runs/999")
 
 
 class TestDefaultCommitStatusChecker:

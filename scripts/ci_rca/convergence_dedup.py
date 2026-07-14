@@ -95,10 +95,29 @@ def _default_drift_rec_finder(drift_run_url: str, profile: Optional[str] = None)
     Reads transit the closed DuckLake reader via a single-key structural row_filter
     (source = 'tf_drift') -- Decision 84 I-3, no caller SQL. The status=open filter and the
     URL-embed match are applied in-process on the returned rows.
+
+    Fails OPEN (returns None + a loud log) ONLY when the reader itself is unreachable
+    (connectivity failure / Neon scale-to-zero exhausting retries) -- mirrors
+    find_open_ci_rca_rec_by_fingerprint's fail-open contract (ci_rca_runtime.py) so a transient
+    warehouse blip degrades to "refusal files as the fallback red-surface" instead of aborting
+    the whole ci-rca.yml Dedup guard step. Any other exception raises (Decision 55).
     """
+    from scripts.ops_portal.ci_rca_runtime import _is_reader_unreachable_error  # noqa: PLC0415
     from src.common.iceberg_reader import make_reader  # noqa: PLC0415
 
-    rows = make_reader(profile=profile).current_state("ops_recommendations", row_filter="source = 'tf_drift'") or []
+    try:
+        rows = make_reader(profile=profile).current_state("ops_recommendations", row_filter="source = 'tf_drift'") or []
+    except Exception as exc:  # noqa: BLE001
+        if _is_reader_unreachable_error(exc):
+            logger.warning(
+                "[CI_RCA_DEDUP] DuckLake reader unreachable while searching for tf_drift cause rec "
+                "(drift_run_url=%s); failing open (dedup skipped, refusal files as fallback): %s",
+                drift_run_url,
+                exc,
+            )
+            return None
+        raise
+
     for row in rows:
         if row.get("status") != "open":
             continue
