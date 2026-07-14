@@ -20,8 +20,10 @@ scope:
     action: Create
     purpose: >-
       Behaviour-preserving facade. Re-exports the FULL public surface plus every test-patched
-      private symbol (_fetch_open_recs, _make_github_caller, _parse_utc) and every name imported
-      by scripts/preflight/aws_infra.py, so `from scripts.convergence_health import X` and existing
+      private symbol (_fetch_open_recs, _make_github_caller, _parse_utc), the module-level constants
+      tests read via `ch.` (_TITLE_*, _RESOLUTION_*, STALE_GREEN_BACKLOG_THRESHOLD_HOURS,
+      PROD_SOURCE_PATHSPECS, DUCKLAKE_SOURCE_PATHSPECS), and every name imported by
+      scripts/preflight/aws_infra.py, so `from scripts.convergence_health import X` and existing
       patch sites keep resolving (Decision 124 patch-interception lesson).
   - file: scripts/convergence_health/__main__.py
     action: Create
@@ -245,11 +247,12 @@ constraints:
   - No `-k` selectors and no `python -c` in rec acceptance commands; use `pytest <file>::<Class>` after a grep existence check (tests/CLAUDE.md).
   - Any assertion over pre_sequence()/all_checks() must be growth-safe (membership/uniqueness), never an exact `len == N` (tests/CLAUDE.md count-coupling; rec-2572..2576).
   - Preserve Decision 43 cyclomatic-complexity waiver comments if any submodule needs one for validate_cc_limits (the CC row is unchanged by this plan).
+  - "__main__.py's `if __name__ == \"__main__\":` dispatch carries `# pragma: no cover` (matching scripts/ci/reconcile_target.py) so the full-tier per-file 100% coverage gate stays green post-merge -- it is not caught by --pre (VP step 12)."
   - No rescue agents or workaround loops (Decision 55); on an unrecoverable failure, stop and RCA rather than patching around it.
   - This plan does NOT close rec-2414 (only convergence_health.py is decomposed; execute_recommendation.py and ops_writer.py remain registered) -- note partial progress, do not add it to bundled_recommendations.
 context:
   - "Decision-scout verdict: NO_FLAGS (87 of 87 triaged). CITE: Decision 43, Decision 102, Decision 104, Decision 124, Decision 80, Decision 84. RELATED: Decision 86, Decision 127, Decision 48, Decision 79, Decision 126, Decision 105."
-  - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 2 round(s)"
   - "convergence_health.py was created at 401 SLOC (#516) and grew to 817 via three manual budget raises: 600 (#559/T2.38), 800 (#565/T2.43), 817 (#566/T2.35) -- each justified by module cohesion. This plan reverses the accretion and closes the loophole that let it happen unnoticed."
   - "The 500-SLOC limit is load-bearing for model portability: Opus tolerates large files, but lower-tier models (Sonnet/Gemini/Deepseek) degrade on comprehension. A budget raise silently trades that away, which is why raises must become loud, deliberate, and Decision-cited rather than a frictionless one-line YAML edit."
   - "This repo is governance-as-code with full agent self-service; the guardrails are code-enforced (fail-loud CI + doctrine), NOT a human approval gate. The only human gate anywhere is the terraform IAM/trust/destroy break-glass tier (Decision 126)."
