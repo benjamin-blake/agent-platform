@@ -56,7 +56,7 @@ _MINIMAL_CONFIG = {
                     {"pattern": "scripts/validate.py", "min_tier": "pro"},
                     {"pattern": "config/prompts/", "min_tier": "pro"},
                     {"pattern": ".github/prompts/", "min_tier": "pro"},
-                    {"pattern": ".github/instructions/", "min_tier": "pro"},
+                    {"pattern": "config/agent/executor/instructions/", "min_tier": "pro"},
                     {"pattern": ".github/agents/", "min_tier": "pro"},
                 ],
             },
@@ -228,10 +228,12 @@ class TestResolveModelImplementation:
         result = resolve_model("implementation", "M", file_path=".github/prompts/implement.prompt.md")
         assert result == "gemini-3-pro-preview"
 
-    def test_github_instructions_floor_escalates_to_pro(self, monkeypatch: pytest.MonkeyPatch, mock_config: None) -> None:
+    def test_executor_instructions_floor_escalates_to_pro(self, monkeypatch: pytest.MonkeyPatch, mock_config: None) -> None:
         monkeypatch.delenv("LLM_PROVIDER", raising=False)
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
-        result = resolve_model("implementation", "S", file_path=".github/instructions/executor-review.instructions.md")
+        result = resolve_model(
+            "implementation", "S", file_path="config/agent/executor/instructions/executor-review.instructions.md"
+        )
         assert result == "gemini-3-pro-preview"
 
     def test_regular_file_no_floor(self, monkeypatch: pytest.MonkeyPatch, mock_config: None) -> None:

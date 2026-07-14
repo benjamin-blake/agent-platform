@@ -4,8 +4,9 @@ This directory contains **prompt templates** used by `scripts/execute_recommenda
 Templates contain `{placeholder}` variables that are filled at runtime with recommendation
 data, file contents, and plan text. They serve as the **user message** in each CLI call.
 
-**Stable rules and constraints** live in `.github/instructions/executor-*.instructions.md`
-and are auto-loaded by the CLI as system context. Do not duplicate rules here.
+**Stable rules and constraints** live in `config/agent/executor/instructions/executor-*.instructions.md`.
+The executor CLI is frozen pending Decision 67 reversal; auto-loading these as system context is the
+intended/historical mechanism, not a currently-live one. Do not duplicate rules here.
 
 ## Intended Workflow
 

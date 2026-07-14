@@ -3272,7 +3272,7 @@ The executor generates code via LLM calls to implement recommendations. When the
 | `scripts/execute_recommendation.py` | `/plan` -> `/implement` | The orchestrator itself |
 | `scripts/executor/*.py` | `/plan` -> `/implement` | Executor submodules |
 | `config/agent/executor/prompts/*.prompt.md` | `/plan` -> `/implement` | Executor prompts |
-| `.github/instructions/executor-*.instructions.md` | `/plan` -> `/implement` | Supervisor/executor instructions |
+| `config/agent/executor/instructions/executor-*.instructions.md` | `/plan` -> `/implement` | Supervisor/executor instructions |
 | `.github/prompts/develop-executor.prompt.md` | `/plan` -> `/implement` | Supervisor prompt |
 | `scripts/copilot_wrapper.py` | `/plan` -> `/implement` | LLM interface layer |
 | `tests/test_execute_recommendation.py` | `/plan` -> `/implement` | Executor test infrastructure |
