@@ -1,0 +1,332 @@
+schema_version: 1
+slug: "plans-archive-handler-test-map"
+intent: >-
+  Close the repository-structure restructure (phase P6, final) by adopting an archive-on-supersession
+  lifecycle for docs/plans/ so the active-plan glob stays cheap (RS-07), and by making the
+  test-coverage mapping derivable for colliding handler.py basenames so every lambda handler maps to
+  its real, distinct test home and the coverage shim retires (RS-08).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-plans-archive-handler-test-map.yaml
+phase: >-
+  Repository-structure restructure, phase P6 (FINAL) -- audit findings RS-07 (relocate) + RS-08
+  (enforce) from audits/repository-structure-cb02572.yaml. Closes the P1-P6 restructure arc
+  (P1 RS-04, P2 RS-02/03, P3 RS-05, P4a/b/c RS-01, P5 RS-06). Both findings are LOW; both novel
+  per the audit roadmap_crossref (no owning tier_item).
+scope:
+  - file: "docs/plans/PLAN-*.md"
+    action: Delete
+    purpose: >-
+      RS-07: git mv all 195 depth-1 deprecated-format PLAN-*.md plans to docs/plans/archive/. Pure
+      rename, NO content edits (Decision 85 history preserved in-tree). Archival criterion is
+      deterministic and machine-checkable: a depth-1 docs/plans/ file is archived iff its extension
+      is .md (deprecated per Decision 85's one-way .yaml migration -> definitionally pre-standard /
+      superseded; active work is authored as .yaml). Verified: all 195 depth-1 .md are PLAN-*.md
+      (no strays); reference sweep found zero live-surface references to any docs/plans/*.md path.
+  - file: "docs/plans/archive/"
+    action: Create
+    purpose: >-
+      RS-07: new in-tree archive subtree (does not exist yet) receiving the 195 moved .md plans. No
+      file-router edit needed -- prose_allowlist.allowed_globs already carries docs/plans/**/*.md
+      (recursive ** matcher covers docs/plans/archive/*.md); docs_root_allowlist checks depth-1 docs/
+      only (archive/ is depth-3); the route target docs/plans/ is a directory that stays tracked.
+  - file: docs/CLAUDE.md
+    action: Modify
+    purpose: >-
+      RS-07: reconcile and expand the existing "Plans lifecycle (RS-07)" stub (added P3). State the
+      deterministic archival criterion, record that the first .md sweep landed here (no longer
+      "created on first archival"), and state the lagged completed-.yaml sweep policy. No duplication
+      -- edit the existing section in place. docs/CLAUDE.md is an allowlisted governance root file.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      RS-08: generalize the existing src/lambdas/ducklake_writer branch of map_source_to_test into a
+      parent-qualified rule -- src/lambdas/<slug>/*.py -> tests/test_{slug}_handler.py. This maps all
+      four handler.py files (catalog_dr, maintenance, reader, writer) plus ducklake_writer/smoke_actions.py
+      to distinct real homes. Modifying (not adding) the existing branch keeps map_source_to_test at
+      19 branches (verified), under the Decision 43 CC ceiling of 20 -- a NEW elif would push it to 21.
+      Update the function docstring accordingly. NO complexity-waiver.
+  - file: tests/test_ducklake_catalog_dr_handler.py
+    action: Create
+    purpose: >-
+      RS-08: the genuine parent-qualified test home for src/lambdas/ducklake_catalog_dr/handler.py,
+      which currently has NO real test (its coverage is masked only by the shim; test_catalog_dr.py
+      tests src/common/catalog_dr.py, not the handler). Import src.lambdas.ducklake_catalog_dr.handler
+      and exercise its real paths (missing-bucket 500, success 200 with mocked rt.fetch_dsn +
+      catalog_dr.run_catalog_dump, CatalogDrError->500, DuckLakeRuntimeError->500, and _parse_event
+      body-str/body-dict/direct). Mirror the existing test_ducklake_maintenance_handler.py style. This
+      is a real test suite, NOT an empty shim-by-another-name.
+  - file: tests/test_handler.py
+    action: Delete
+    purpose: >-
+      RS-08: retire the coverage shim. Safe -- after the map generalization no source maps to it, and
+      no code imports it (only tests/test_coverage_checker.py assertions reference the name, updated below).
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      RS-08: update the two tests that assert handler.py -> tests/test_handler.py
+      (test_ducklake_writer_handler_py_unchanged_by_split, test_other_lambda_dirs_non_handler_stem_unaffected,
+      ~lines 172-187) to assert the new parent-qualified mapping, and add a test asserting all four
+      src/lambdas/*/handler.py plus ducklake_writer/smoke_actions.py resolve to distinct EXISTING
+      tests/test_{slug}_handler.py homes (and none to test_handler.py). Keeps 100% coverage of the
+      generalized branch.
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    RS-07: docs/plans/ root contains no depth-1 .md plan file --
+    `git ls-files 'docs/plans/' | awk -F/ 'NF==3 && /\.md$/'` returns empty, and
+    `git ls-files 'docs/plans/archive/*.md' | wc -l` returns 195.
+  - >-
+    RS-07: docs/CLAUDE.md "Plans lifecycle (RS-07)" section states the deterministic .md-extension
+    archival criterion and no longer says the archive is merely "created on first archival".
+  - >-
+    RS-07: validate_prose_allowlist and validate_placement stay green after the move with NO edit to
+    docs/contracts/file-router.yaml (the existing docs/plans/**/*.md glob already covers archive/).
+  - >-
+    RS-08: map_source_to_test returns a UNIQUE, EXISTING test path for every src/lambdas/*/handler.py
+    -- catalog_dr/maintenance/reader/writer each resolve to tests/test_<slug>_handler.py, all present.
+  - >-
+    RS-08: tests/test_handler.py is deleted and no source path maps to it.
+  - >-
+    RS-08: tests/test_ducklake_catalog_dr_handler.py exists, imports
+    src.lambdas.ducklake_catalog_dr.handler, and passes pytest (real handler coverage, not an empty shim).
+  - >-
+    RS-08: validate_cc_limits stays green -- map_source_to_test remains <= 20 cyclomatic branches
+    (was 19; the generalized rule adds no branch) with no complexity-waiver.
+  - >-
+    Both the fast (`--pre`) and full validate tiers pass, and the `--pre` tier stays within the
+    5-minute budget despite the 195-file rename.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      RS-08 mapping contract -- assert each of the four src/lambdas/*/handler.py resolves to a
+      distinct EXISTING tests/test_<slug>_handler.py, none resolves to the deleted shim, and
+      ducklake_writer/smoke_actions.py still resolves to test_ducklake_writer_handler.py.
+    command: >-
+      bin/venv-python -c "import sys; sys.path.insert(0,'scripts'); from pathlib import Path; from
+      test_coverage_checker import map_source_to_test as m, ROOT; slugs=['ducklake_catalog_dr','ducklake_maintenance','ducklake_reader','ducklake_writer'];
+      res={s: m(ROOT/'src'/'lambdas'/s/'handler.py') for s in slugs};
+      assert all(res[s]==ROOT/'tests'/f'test_{s}_handler.py' for s in slugs), res;
+      assert all(res[s].exists() for s in slugs), 'missing test home';
+      assert len({str(v) for v in res.values()})==4, 'not distinct';
+      assert all(v!=ROOT/'tests'/'test_handler.py' for v in res.values()), 'still maps to shim';
+      assert m(ROOT/'src'/'lambdas'/'ducklake_writer'/'smoke_actions.py')==ROOT/'tests'/'test_ducklake_writer_handler.py';
+      print('RS08_MAP_OK')"
+    expected: "Prints RS08_MAP_OK; no AssertionError."
+    fix_if: >-
+      A slug resolves to test_handler.py, to a non-existent path, or the four are not distinct ->
+      the generalized src/lambdas branch is wrong or catalog_dr's test file was not created.
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      RS-08 existence via the checker CLI -- the exact acceptance-command form: --check-tests over
+      the four handlers reports all have test files.
+    command: >-
+      bin/venv-python scripts/test_coverage_checker.py --check-tests --files
+      src/lambdas/ducklake_catalog_dr/handler.py src/lambdas/ducklake_maintenance/handler.py
+      src/lambdas/ducklake_reader/handler.py src/lambdas/ducklake_writer/handler.py
+    expected: "Exit 0; prints that all 4 source files have test files (0 missing)."
+    fix_if: "Any handler reports a missing test file -> its parent-qualified home does not exist."
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: "RS-08 shim retired -- tests/test_handler.py no longer exists."
+    command: "test ! -e tests/test_handler.py && echo SHIM_GONE"
+    expected: "Prints SHIM_GONE."
+    fix_if: "The file still exists -> the delete step was skipped."
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      RS-08 catalog_dr test is REAL (imports the handler) and passes -- guards against a
+      shim-by-another-name.
+    command: >-
+      grep -q "import src.lambdas.ducklake_catalog_dr.handler" tests/test_ducklake_catalog_dr_handler.py
+      && bin/venv-python -m pytest tests/test_ducklake_catalog_dr_handler.py -q
+    expected: "grep matches; pytest reports all tests passed."
+    fix_if: >-
+      grep fails (test does not exercise the handler) or pytest fails -> write genuine handler tests
+      covering the four response paths.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: "RS-08 the checker's own updated tests pass (handler-mapping assertions refreshed)."
+    command: "bin/venv-python -m pytest tests/test_coverage_checker.py -q"
+    expected: "All tests pass, including the refreshed parent-qualified mapping assertions."
+    fix_if: "A stale assertion still expects handler.py -> test_handler.py -> update it."
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      RS-08 CC ceiling -- recompute map_source_to_test's cyclomatic branch count the same way
+      validate_cc_limits does and assert it stays <= 20.
+    command: >-
+      bin/venv-python -c "import ast; b=(ast.If,ast.For,ast.While,ast.Try,ast.ExceptHandler,ast.With,ast.BoolOp);
+      t=ast.parse(open('scripts/test_coverage_checker.py').read());
+      n=[x for x in ast.walk(t) if isinstance(x,(ast.FunctionDef,ast.AsyncFunctionDef)) and x.name=='map_source_to_test'][0];
+      c=sum(1 for s in ast.walk(n) if isinstance(s,b)); print('CC',c); assert c<=20, c"
+    expected: "Prints a CC value <= 20 (expected 19); no AssertionError."
+    fix_if: "CC > 20 -> the rule was added as a new elif; fold it into the existing branch instead of adding one."
+    hermetic: false
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      RS-07 archival landed -- no depth-1 .md at docs/plans/ root, 195 under archive/, and the
+      docs/CLAUDE.md lifecycle note reconciled.
+    command: >-
+      test -z "$(git ls-files 'docs/plans/' | awk -F/ 'NF==3 && /\.md$/')" && echo NO_ROOT_MD;
+      test "$(git ls-files 'docs/plans/archive/*.md' | wc -l | tr -d ' ')" = "195" && echo ARCHIVE_195;
+      grep -q "archived iff" docs/CLAUDE.md && echo LIFECYCLE_NOTE_OK
+    expected: "Prints NO_ROOT_MD, ARCHIVE_195, and LIFECYCLE_NOTE_OK."
+    fix_if: >-
+      A .md remains at root, the archive count != 195, or the note was not reconciled -> complete the
+      git mv sweep / edit docs/CLAUDE.md.
+    hermetic: false
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      RS-07 hygiene + budget -- run the fast tier end to end. Proves prose_allowlist + placement stay
+      green with no file-router edit, the plan document validates, and the 195-file rename stays under
+      the Decision 60/73 fast-tier budget (Decision 73 redefined --pre onto the 5-min fast tier + its enforced budget_assertion, the final --pre step).
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0; no prose_allowlist/placement/cc failures; budget_assertion does not report a breach."
+    fix_if: >-
+      prose_allowlist/placement fails -> a moved path is uncovered (unexpected; investigate the glob).
+      Budget breached -> split the .md sweep into 2-3 PRs by slug range (e.g. A-M / N-Z), landing the
+      RS-08 changes in the first; the plan is one document, the implementation may stage across PRs.
+    hermetic: false
+constraints:
+  - "No rescue agents or workaround loops (Decision 55); on unrecoverable failure, stop and RCA."
+  - "Only files listed in scope may be modified."
+  - >-
+    RS-08: add the parent-qualified rule by GENERALIZING the existing src/lambdas/ducklake_writer
+    branch (no new elif) so map_source_to_test stays <= 20 branches (Decision 43). Do NOT add a
+    complexity-waiver, and do NOT use a per-slug dict/table (the transform is uniform).
+  - >-
+    RS-08: tests/test_ducklake_catalog_dr_handler.py must genuinely import and exercise the handler
+    -- an empty or import-only file recreates the shim under a new name and is rejected.
+  - >-
+    RS-07: pure `git mv` for the 195 .md files -- no content edits, no deletion (Decision 85 keeps
+    plan history in-tree).
+  - >-
+    RS-07: do NOT edit docs/contracts/file-router.yaml -- the existing docs/plans/**/*.md prose glob
+    already covers docs/plans/archive/ (verified); adding entries is needless churn.
+  - "Single IMPLEMENTATION plan (STRATEGIC suspended, Decision 67); >5-file heuristic suspended."
+  - "Work on the harness claude/... branch; never edit or commit on main."
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (88/88 triaged; no BLOCK/WARN
+    contradictions; 1 NOTE resolved -- cite Decision 73 alongside 60 for the --pre budget). CITE: Decision 85
+    (.md archive-not-delete honored: files stay in-tree + history), Decision 127 (docs/plans/**/*.md prose glob
+    already covers archive/ -- no file-router edit), Decision 43 (CC<=20; generalize the existing branch, no new
+    elif), Decision 104 (map_source_to_test coverage-gate extension precedent), Decision 60 + Decision 73 (the
+    5-min --pre fast-tier budget + enforced budget_assertion), Decision 67 (IMPLEMENTATION type), Decision 55
+    (loud-fail). RELATED: 87, 86, 48, 79, 124, 84, 128 (SLOC-budget: the test_coverage_checker edit is
+    SLOC-neutral/negative, no raise-marker).
+  - >-
+    gates: decision-scout=FLAGS_FOUND (1 NOTE resolved: Decision 73 added to the budget citation); plan-critique=PROCEED
+    (0 Critical/High; map-generalization proven safe via full src/lambdas .py enumeration + CC=19 recompute against
+    validate_cc_limits; archive covered by the existing docs/plans/**/*.md prose glob; the one Medium was these gate
+    placeholders, now filled). Implement-time notes: widen the pre-move reference sweep to tests/ + README.md (harmless
+    pre-existing prose refs); confirm the test_coverage_checker edit stays under its config/sloc_budgets.yaml budget (Decision 128).
+  - >-
+    CI-RCA deferral (satisfies the Related-Work HARD BLOCK): the one unresolved source=ci_rca rec,
+    rec-2690 (apply-sandbox refuses on CONVERGENCE_RED; source_file .github/workflows/terraform-apply-sandbox.yml),
+    is DISJOINT from this plan's surfaces (docs/plans/*.md, scripts/test_coverage_checker.py, tests/,
+    docs/CLAUDE.md). It is being investigated separately on branch codex/investigate-ci-failure-root-cause
+    (architect). No file / Decision / failure-category overlap; deferred with rationale per directive.
+  - >-
+    Audit-count discrepancy (VERIFIED): the audit (RS-08) and its summary say "six" src/lambdas/*/handler.py;
+    the current tree has FOUR (ducklake_catalog_dr, ducklake_maintenance, ducklake_reader, ducklake_writer).
+    data-pipeline and ops-compaction under src/lambdas/ are manifest-only (no handler.py) and bridge to
+    src/data/handlers/*_handler.py, whose basenames are DISTINCT (discovery_handler, write_handler, ...),
+    so they are not part of the handler.py collision family. The plan targets the actual four.
+  - >-
+    catalog_dr test-home finding (VERIFIED): only three of four handlers had real parent-qualified
+    tests (maintenance/reader/writer, each `import src.lambdas.<slug>.handler as h`). catalog_dr's
+    handler had NO real test -- its coverage was masked solely by the shim; tests/test_catalog_dr.py
+    tests src/common/catalog_dr.py (the common module), not the lambda handler. This plan creates the
+    missing genuine home. Effort is re-rated XS (audit) -> S because of the new real test suite.
+  - >-
+    RS-08 design choice (frontier best practice): generalize the existing ducklake_writer-specific
+    branch to `src/lambdas/<slug>/*.py -> tests/test_{slug}_handler.py` rather than add a new branch.
+    Verified map_source_to_test currently has 19/20 cyclomatic branches; a new elif -> 21 (Decision 43
+    violation); the generalization modifies the existing branch's condition and adds no branch (stays
+    19). It also self-extends correctly -- a future lambda's tests SHOULD live at test_<slug>_handler.py,
+    so inheritance is the desired behavior (unlike the scripts/ nested-subpackage whitelist).
+  - >-
+    RS-07 budget assessment (VERIFIED): the 195-file .md rename triggers NONE of the per-file .py-move
+    machinery (test_coverage_checker per-file pytest coverage, import-linter, mypy_diff, ruff) that made
+    the prior ~98-file P4 subpackaging phase expensive -- .md renames produce no source diff. The only
+    variable cost is precommit_changed over the renamed files; validate_prose_allowlist and
+    validate_placement are cheap fixed-cost full-scans (git ls-files + regex/set ops, independent of
+    diff size). Expected well under the 5-minute --pre budget; VP step 8 verifies empirically with a
+    documented batching fallback.
+  - >-
+    file-router already covers the archive (VERIFIED): docs/contracts/file-router.yaml
+    prose_allowlist.allowed_globs line 311 `docs/plans/**/*.md` uses the recursive-** matcher
+    (validate_prose_allowlist._glob_to_regex) which matches docs/plans/archive/*.md; docs_root_allowlist
+    scans depth-1 docs/ files only (archive/ is depth-3); the route `targets: [docs/plans/]` is a
+    directory that remains tracked after the move. No router edit required.
+  - >-
+    find_plan.py resolves exact current-branch slugs (scripts/roadmap/find_plan.py:65-73) and never
+    globs the corpus, so archived historical .md are never resolution targets; only agent/ branches are
+    resolved (executor frozen, Decision 67) -- CC-web claude/ branches fall through. Reference sweep
+    across scripts/, src/, .github/, docs/contracts/ found ZERO references to any docs/plans/*.md path.
+  - >-
+    Same-PR guard (CD.29): validate_verifier_same_pr_guard AST-scans scripts/verifiers/*.py only;
+    scripts/test_coverage_checker.py is not a verifier, so editing it alongside the tests it maps is
+    permitted (VERIFIED).
+  - >-
+    No validate check parses .md plans: validate_plan_documents globs PLAN-*.yaml (non-recursive) and
+    explicitly excludes historical PLAN-*.md; validate_platform_roadmap / validate_tier_floor /
+    validate_vp_replay all glob PLAN-*.yaml only. Moving .md is invisible to them.
+  - >-
+    Audit provenance: RS-07 (relocate, S5 dispositions) + RS-08 (enforce, S4 disposition) from
+    audits/repository-structure-cb02572.yaml. This P6 closes the restructure (P1 RS-04, P2 RS-02/03,
+    P3 RS-05, P4a/b/c RS-01, P5 RS-06 -- all merged).
+pre_implementation_checklist:
+  - "Branch confirmed not on main (harness claude/... branch)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "DECISIONS.md read (85 plan-format, 43 CC limit, 127 prose allowlist, 104 check registry, 55 no-workaround)"
+  - "All files in scope located and readable; the four src/lambdas/*/handler.py and three existing handler tests confirmed"
+  - "Re-run the docs/plans/*.md live-reference sweep at implement time before the git mv; abort-and-surface if any live reference appears"
+  - "Acceptance criteria understood and independently verifiable"
+execution_steps:
+  - >-
+    RS-08 first (small, self-contained): in scripts/test_coverage_checker.py, generalize the existing
+    `elif parts[0]=="src" and len(parts)>=4 and parts[1]=="lambdas" and parts[2]=="ducklake_writer" and
+    rel.stem!="handler"` branch into `elif parts[0]=="src" and len(parts)>=4 and parts[1]=="lambdas":
+    return ROOT/"tests"/f"test_{parts[2]}_handler.py"`. Update the map_source_to_test docstring to
+    describe the parent-qualified rule and drop the ducklake_writer-only wording.
+  - >-
+    Create tests/test_ducklake_catalog_dr_handler.py: `import src.lambdas.ducklake_catalog_dr.handler as h`
+    and test _parse_event (body-str / body-dict / direct dict), _response, and handler() for
+    missing-bucket->500, success->200 (mock h.rt.fetch_dsn and h.catalog_dr.run_catalog_dump),
+    CatalogDrError->500, and DuckLakeRuntimeError->500. Mirror tests/test_ducklake_maintenance_handler.py
+    conventions (pytestmark unit, monkeypatch/patch.object on h.*). Aim for 100% coverage of the handler.
+  - "Delete tests/test_handler.py (the shim)."
+  - >-
+    Update tests/test_coverage_checker.py: rewrite test_ducklake_writer_handler_py_unchanged_by_split and
+    test_other_lambda_dirs_non_handler_stem_unaffected to assert handler.py -> test_<slug>_handler.py;
+    add a test asserting all four handlers + ducklake_writer/smoke_actions.py map to distinct existing
+    parent-qualified homes and none to test_handler.py.
+  - >-
+    RS-07: re-run the live-reference sweep (grep docs/plans/*.md paths across scripts/, src/, .github/,
+    docs/contracts/, docs prose); if clean, `git mv` all 195 depth-1 docs/plans/PLAN-*.md into
+    docs/plans/archive/ (create the directory). Pure renames, no content edits.
+  - >-
+    RS-07: reconcile the docs/CLAUDE.md "Plans lifecycle (RS-07)" section -- state the deterministic
+    .md-extension archival criterion, record that the first sweep (195 files) landed here, note the
+    lagged completed-.yaml sweep policy, and that prose_allowlist already covers the archive subtree.
+    Edit the existing section in place (no duplication).
+  - "Execute the Verification Plan -- run each step; loop until all pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: what was implemented (RS-07 file count moved, RS-08 map rule + catalog_dr test), and verification results."
+rollback: >-
+  Fully reversible via `git revert` of the squash-merge commit: the 195 .md moves are pure renames
+  (revert restores them at root), the map generalization is a single-function edit, and the shim
+  delete + catalog_dr test create revert cleanly. No data or infra state involved.
