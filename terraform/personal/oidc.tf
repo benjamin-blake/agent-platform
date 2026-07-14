@@ -90,7 +90,9 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "s3:GetBucketCORS",
       "s3:GetBucketWebsite",
       "s3:GetBucketAcl",
-      "s3:GetBucketOwnershipControls"
+      "s3:GetBucketOwnershipControls",
+      # T2.43 gap: aws_s3_bucket_notification.data_lake_prod_triggers refresh-reads this.
+      "s3:GetBucketNotification"
     ]
     resources = [
       aws_s3_bucket.data_lake.arn,
@@ -194,7 +196,13 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-catalog-dr",
       "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-writer",
       "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-reader",
-      "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance"
+      "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance",
+      # T2.43 gap (same class as rec-2688 for ducklake-deploy): these three prod-class execution
+      # roles must be refresh-readable by github_ci_plan/drift once they enter terraform/personal
+      # state, or every subsequent plan against this module fails closed with AccessDenied.
+      "arn:aws:iam::${var.account_id}:role/agent-platform-scheduled-agent-dispatcher",
+      "arn:aws:iam::${var.account_id}:role/agent-platform-findings-processor",
+      "arn:aws:iam::${var.account_id}:role/agent-platform-ops-compaction"
     ]
   }
 
@@ -241,7 +249,9 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
       "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
       "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
-      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops"
+      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
+      # T2.43 gap: the dispatcher's (disabled) hourly schedule rule.
+      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-hourly-scheduled-agents"
     ]
   }
 
@@ -300,6 +310,16 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
     effect    = "Allow"
     actions   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
     resources = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:ducklake-neon-catalog-dsn-*"]
+  }
+
+  statement {
+    # T2.43 gap: the scheduled-agent-dispatcher / findings-processor GitHub PAT secret --
+    # read-only; the value is set out-of-band (Decision 37), this apply role owns the secret's
+    # lifecycle only.
+    sid       = "SecretsManagerGithubPatRead"
+    effect    = "Allow"
+    actions   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+    resources = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-github-pat-*"]
   }
 
   statement {

@@ -138,7 +138,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "s3:GetBucketCORS",
           "s3:GetBucketWebsite",
           "s3:GetBucketAcl",
-          "s3:GetBucketOwnershipControls"
+          "s3:GetBucketOwnershipControls",
+          # T2.43 gap: aws_s3_bucket_notification.data_lake_prod_triggers refresh-reads this.
+          "s3:GetBucketNotification"
         ]
         Resource = [
           "arn:aws:s3:::agent-platform-data-lake",

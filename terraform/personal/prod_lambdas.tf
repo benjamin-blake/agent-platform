@@ -34,7 +34,6 @@
 
 locals {
   prod_source_hash           = try(filemd5("${path.module}/../../lambda-packages/data-pipeline.zip"), null)
-  prod_deps_layer_hash       = try(filemd5("${path.module}/../../lambda-packages/data-pipeline-deps-layer.zip"), null)
   ops_compaction_source_hash = try(filemd5("${path.module}/../../lambda-packages/ops-compaction.zip"), null)
 
   scheduled_agent_dispatcher_function = "agent-platform-scheduled-agent-dispatcher"
@@ -69,19 +68,15 @@ resource "aws_secretsmanager_secret" "github_pat" {
 }
 
 # ---------------------------------------------------------------------------
-# Layer: data-pipeline dependencies (PROD_DEPS in scripts/build_lambda_config.py -- yfinance,
-# pyyaml, boto3, etc.). Zip uploaded to S3 by `build_lambda` BEFORE the apply; source_code_hash is
-# try()-wrapped so a plan without the local zip (e.g. CI validate) does not fail.
+# NOTE (T2.43 apply-time correction): no shared dependencies layer is attached to the
+# dispatcher/findings-processor functions. The full PROD_DEPS-based data-pipeline-deps-layer
+# (numpy/pandas/pyarrow/scikit-learn/yfinance/etc., built for the future-state fetch/feature/
+# write/discovery handlers) was found at the first real apply to exceed the Lambda 262 MB
+# unzipped-layer ceiling (PublishLayerVersion InvalidParameterValueException) -- and these two
+# functions don't need any of it regardless (verified against handler source: the only
+# third-party import is pyyaml). pyyaml is bundled directly into data-pipeline.zip via
+# src/lambdas/data-pipeline/manifest.yaml's pip_packages instead.
 # ---------------------------------------------------------------------------
-
-resource "aws_lambda_layer_version" "data_pipeline_deps" {
-  layer_name          = "data-pipeline-deps"
-  description         = "data-pipeline prod dependencies (yfinance, pyyaml, boto3, etc.) -- T2.43"
-  s3_bucket           = aws_s3_bucket.data_lake.id
-  s3_key              = "lambda-packages/data-pipeline-deps-layer.zip"
-  compatible_runtimes = ["python3.12"]
-  source_code_hash    = local.prod_deps_layer_hash
-}
 
 # ---------------------------------------------------------------------------
 # CloudWatch log groups (pre-created so each execution role can be scoped to its own ARN).
@@ -329,8 +324,6 @@ resource "aws_lambda_function" "scheduled_agent_dispatcher" {
   s3_key           = "lambda-packages/data-pipeline.zip"
   source_code_hash = local.prod_source_hash
 
-  layers = [aws_lambda_layer_version.data_pipeline_deps.arn]
-
   environment {
     variables = {
       GITHUB_PAT_SECRET_ARN    = aws_secretsmanager_secret.github_pat.arn
@@ -352,7 +345,7 @@ resource "aws_lambda_function" "scheduled_agent_dispatcher" {
 
   tags = {
     Name    = "Scheduled Agent Dispatcher"
-    Purpose = "T2.43 scheduled-agent-dispatcher runtime (schedule disabled)"
+    Purpose = "T2.43 scheduled-agent-dispatcher runtime - schedule disabled"
   }
 }
 
@@ -369,8 +362,6 @@ resource "aws_lambda_function" "findings_processor" {
   s3_bucket        = aws_s3_bucket.data_lake.id
   s3_key           = "lambda-packages/data-pipeline.zip"
   source_code_hash = local.prod_source_hash
-
-  layers = [aws_lambda_layer_version.data_pipeline_deps.arn]
 
   environment {
     variables = {
@@ -430,7 +421,7 @@ resource "aws_lambda_function" "ops_compaction" {
 
   tags = {
     Name    = "Ops Compaction"
-    Purpose = "T2.43 ops-compaction runtime (T2.26 retirement pending)"
+    Purpose = "T2.43 ops-compaction runtime - T2.26 retirement pending"
   }
 }
 
