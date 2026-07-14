@@ -1,0 +1,407 @@
+schema_version: 1
+slug: "consolidate-executor-instructions"
+intent: >-
+  Consolidate the six live executor instruction files out of .github/instructions/ into
+  config/agent/executor/instructions/ (co-located with their paired Layer-5 executor prompts),
+  fix the canonical instruction-architecture contract to match reality, delete one orphaned
+  reference doc, and update every live consumer (the model-routing floor, the sanctioned-prose
+  allowlist, the executor-boundary docs, and three tests). Gives the "executor instruction"
+  artifact class exactly one home so an agent trusting the declared architecture reaches it,
+  closing audit finding RS-06.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-consolidate-executor-instructions.yaml
+phase: >-
+  Repository-structure restructure Phase P5 (audit finding RS-06 [medium, S7], from
+  audits/repository-structure-cb02572.yaml RS-06 + surface_dispositions.S7 + proposed_target_tree
+  config/agent/executor/instructions/ node). Runs AFTER P1 (RS-04 file-router.yaml +
+  validate_placement), P2/P3 (RS-02/03/05 consolidation + scripts/config/docs CLAUDE.md), and
+  P4a/b/c (RS-01 scripts subpackaging) -- all merged at origin/main; this branch is 0 behind main.
+  P6 (RS-07 plans archive + RS-08 test-map collision) follows. Platform axis; RS-06 is novel
+  (roadmap_crossref item_ids [rec-270], classification novel). IMPLEMENTATION type (STRATEGIC
+  frozen + >5-file complexity heuristic suspended, Decision 67 -- authored as one IMPLEMENTATION
+  plan).
+scope:
+  # ---- six executor instruction files: pure git mv (content byte-identical; applyTo preserved) ----
+  - file: .github/instructions/executor-critique.instructions.md
+    action: Delete
+    purpose: >-
+      git mv to config/agent/executor/instructions/executor-critique.instructions.md. Pure move,
+      content byte-identical. applyTo frontmatter targets scripts/executor/plan.py +
+      config/agent/executor/prompts/critique* -- UNCHANGED by the move, so it stays valid pairing
+      metadata; do NOT edit it. Executor-boundary file; covered post-move by the capabilities.yaml
+      substring pattern 'executor-critique' (Decision 117).
+  - file: config/agent/executor/instructions/executor-critique.instructions.md
+    action: Create
+    purpose: Receives executor-critique.instructions.md via git mv (byte-identical). No content edit.
+  - file: .github/instructions/executor-implement.instructions.md
+    action: Delete
+    purpose: >-
+      git mv to config/agent/executor/instructions/executor-implement.instructions.md. Pure move.
+      applyTo targets scripts/executor/step_runner.py + config/agent/executor/prompts/implement* --
+      unchanged. Boundary substring 'executor-implement'.
+  - file: config/agent/executor/instructions/executor-implement.instructions.md
+    action: Create
+    purpose: Receives executor-implement.instructions.md via git mv (byte-identical). No content edit.
+  - file: .github/instructions/executor-planning.instructions.md
+    action: Delete
+    purpose: >-
+      git mv to config/agent/executor/instructions/executor-planning.instructions.md. Pure move.
+      applyTo targets scripts/executor/plan.py + config/agent/executor/prompts/planning*,refine* --
+      unchanged. This is rec-270's target file (repointed as bookkeeping; see execution_steps).
+  - file: config/agent/executor/instructions/executor-planning.instructions.md
+    action: Create
+    purpose: Receives executor-planning.instructions.md via git mv (byte-identical). No content edit.
+  - file: .github/instructions/executor-review.instructions.md
+    action: Delete
+    purpose: >-
+      git mv to config/agent/executor/instructions/executor-review.instructions.md. Pure move.
+      applyTo targets scripts/executor/postflight.py + config/agent/executor/prompts/code-review* --
+      unchanged. Boundary substring 'executor-review'.
+  - file: config/agent/executor/instructions/executor-review.instructions.md
+    action: Create
+    purpose: Receives executor-review.instructions.md via git mv (byte-identical). No content edit.
+  - file: .github/instructions/executor-supervisor-rules.instructions.md
+    action: Delete
+    purpose: >-
+      git mv to config/agent/executor/instructions/executor-supervisor-rules.instructions.md. Pure
+      move. applyTo targets scripts/executor/*.py + config/agent/executor/prompts/*.prompt.md +
+      .github/prompts/develop-executor.prompt.md -- all unchanged. Boundary substring
+      'executor-supervisor'.
+  - file: config/agent/executor/instructions/executor-supervisor-rules.instructions.md
+    action: Create
+    purpose: Receives executor-supervisor-rules.instructions.md via git mv (byte-identical). No content edit.
+  - file: .github/instructions/executor-supervisor-workflow.instructions.md
+    action: Delete
+    purpose: >-
+      git mv to config/agent/executor/instructions/executor-supervisor-workflow.instructions.md.
+      Pure move. Same applyTo scope as supervisor-rules -- unchanged. Boundary substring
+      'executor-supervisor'.
+  - file: config/agent/executor/instructions/executor-supervisor-workflow.instructions.md
+    action: Create
+    purpose: Receives executor-supervisor-workflow.instructions.md via git mv (byte-identical). No content edit.
+  # ---- orphan deletion (empties .github/instructions/) ----
+  - file: .github/instructions/behavioral-invariants.md
+    action: Delete
+    purpose: >-
+      Orphaned human-prose reference doc; a final repo-wide consumer grep confirms zero live
+      consumers (only historical docs/plans + audit files reference it). The behavioural-invariant
+      SSOT is .claude/skills/*/SKILL.md per instruction-architecture.yaml behavioural_invariant_sources
+      (read by scripts/prompt_compliance.py), NOT this file. After this delete + the six moves,
+      .github/instructions/ is empty and is removed.
+  # ---- canonical contract fixes ----
+  - file: docs/contracts/instruction-architecture.yaml
+    action: Modify
+    purpose: >-
+      (1) Layer 5 content_locations (lines 64-73): add 'config/agent/executor/instructions/*.instructions.md'
+      beside the existing prompts glob so the declared architecture matches reality (RS-06 acceptance).
+      (2) legacy_surfaces_retired note (lines 112-122): remove the '.github/instructions/executor-*.instructions.md'
+      clause; correct the stale 'full directory deletion remains owned by T5.3' pointer (T5.3 completed
+      2026-06-29) -- the executor instructions are re-homed by THIS plan, and the surviving
+      .github/prompts/scheduled/ + .github/agents/ scheduled surfaces are owned by T4.12.
+  - file: docs/contracts/inference-provider.yaml
+    action: Modify
+    purpose: >-
+      model_routing.executor.roles.implementation.file_pattern_floors (line 238): change the pattern
+      '.github/instructions/' -> 'config/agent/executor/instructions/' (min_tier 'pro' preserved). This
+      is the ONLY in-repo path-keyed consumer of the old home; scripts/llm/model_registry.py resolve_model
+      matches floor dir-patterns via startswith, so the moved files keep their pro-tier floor. Executor
+      that reads this is frozen (Decision 67) -- no live runtime effect either way.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      prose_allowlist.allowed_globs: add 'config/agent/executor/instructions/**/*.md' beside the sibling
+      'config/agent/executor/prompts/**/*.md' entry. REQUIRED -- without it validate_prose_allowlist
+      (Decision 127) fails CI: the moved .instructions.md files currently classify via '.github/**/*.md'
+      and would match NO glob in the new home. Permanent sanctioned agent-instruction prose class (same
+      as the prompts), so allowed_globs (not the ratchet-only grandfathered_globs).
+  # ---- consumer updates ----
+  - file: config/agent/executor/prompts/README.md
+    action: Modify
+    purpose: >-
+      Split-rule note (lines 7-8): repoint '.github/instructions/executor-*.instructions.md' ->
+      'config/agent/executor/instructions/executor-*.instructions.md'; keep the stable-rules-vs-templates
+      distinction. Reflect that the executor CLI is frozen (Decision 67): describe the auto-load-as-system-
+      context behaviour as the intended/historical mechanism, not a currently-live one.
+  - file: tests/test_executor_plan.py
+    action: Modify
+    purpose: >-
+      TestCritiqueRejectsEmptyAcceptance.test_critique_rejects_empty_acceptance (line ~854) reads the REAL
+      file at '.github/instructions/executor-critique.instructions.md' -> repoint to
+      'config/agent/executor/instructions/executor-critique.instructions.md' (else FileNotFoundError).
+  - file: tests/test_executor_step_runner.py
+    action: Modify
+    purpose: >-
+      test_l_github_instructions_delegates_to_resolver (lines ~1304, 1308): repoint the
+      '.github/instructions/executor-planning.instructions.md' path in the get_implementation_model call
+      AND the assert_called_once_with(file_path=...) to the new home; rename the method to
+      test_l_executor_instructions_delegates_to_resolver for accuracy.
+  - file: tests/test_llm_model_registry.py
+    action: Modify
+    purpose: >-
+      (1) Inline mock_config fixture floor list (line ~59): change {'pattern': '.github/instructions/'} ->
+      {'pattern': 'config/agent/executor/instructions/'}. (2) test_github_instructions_floor_escalates_to_pro
+      (line ~230): repoint file_path to the new home and rename to
+      test_executor_instructions_floor_escalates_to_pro.
+  # ---- executor-boundary documentation consistency (SSOT capabilities.yaml intentionally untouched) ----
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Executor self-modification boundary list (line ~168): change '.github/instructions/executor-*.instructions.md'
+      -> 'config/agent/executor/instructions/executor-*.instructions.md' so the L2 knowledge base is not a
+      stale pointer (the exact RS-04 anti-pattern). capabilities.yaml stays the code-level SSOT (Decision 117);
+      this is its human/agent-readable mirror.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Executor-boundary reference table (line ~3199, in the boundary decision body): factual path correction
+      '.github/instructions/executor-*.instructions.md' -> 'config/agent/executor/instructions/executor-*.instructions.md'.
+      Not a decision change; keeps the boundary documented consistently across capabilities.yaml (SSOT),
+      PROJECT_CONTEXT.md, and the ledger. Does not touch any '## Decision NNN:' header, so the ops_decisions
+      rebuild is unaffected.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Exactly one directory contains executor instruction files: config/agent/executor/instructions/
+    holds all six executor-*.instructions.md (git-tracked), and .github/instructions/ no longer exists
+    (emptied by the six moves + the orphan delete).
+  - >-
+    docs/contracts/instruction-architecture.yaml Layer 5 content_locations lists
+    config/agent/executor/instructions/*.instructions.md.
+  - >-
+    validate_prose_allowlist passes with zero unclassified tracked .md files (the moved .instructions.md
+    files classify via the new allowed_glob).
+  - >-
+    The executor model-routing floor resolves a config/agent/executor/instructions/... path to the
+    pro tier, and the old '.github/instructions/' floor pattern is gone from inference-provider.yaml.
+  - >-
+    tests/test_executor_plan.py, tests/test_executor_step_runner.py, and tests/test_llm_model_registry.py
+    pass against the new paths, and bin/venv-python -m scripts.validate --pre is green (no regression in
+    the executor-boundary, instruction-architecture-layer, prose-allowlist, or placement checks).
+  - >-
+    .github/instructions/behavioral-invariants.md is deleted and no LIVE surface (config/, scripts/,
+    tests/, docs/contracts/, docs/PROJECT_CONTEXT.md, docs/DECISIONS.md) references .github/instructions/
+    (stale-reference sweep clean; historical records are intentionally retained).
+  - >-
+    rec-270's file field points at config/agent/executor/instructions/executor-planning.instructions.md
+    (bookkeeping; rec remains open as an out-of-scope content-dedup).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: Confirm the six files moved into the new home and .github/instructions/ is gone.
+    command: >-
+      bin/venv-python -c "import subprocess,os; t=subprocess.run(['git','ls-files','config/agent/executor/instructions'],capture_output=True,text=True).stdout.split(); i=[x for x in t if x.endswith('.instructions.md')]; assert len(i)==6, i; assert not os.path.exists('.github/instructions'), '.github/instructions still present'; print('OK: 6 instructions in new home, .github/instructions removed')"
+    expected: >-
+      Prints the success line confirming six instructions in the new home and .github/instructions
+      removed; exit 0.
+    fix_if: >-
+      Fewer than six .instructions.md tracked in config/agent/executor/instructions/, or .github/instructions/
+      still exists -- a git mv or the behavioral-invariants.md delete was missed.
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    action: Prove the sanctioned-prose gate passes (the moved .md files must be classified).
+    command: >-
+      bin/venv-python -c "from scripts.checks.hygiene.validate_prose_allowlist import validate_prose_allowlist; f=[]; validate_prose_allowlist(f); assert not f, f; print('prose allowlist PASS')"
+    expected: Prints "prose allowlist PASS" -- every tracked .md (incl. the six moved) is allowed or grandfathered.
+    fix_if: >-
+      Failure lists config/agent/executor/instructions/executor-*.instructions.md as unclassified -> the
+      'config/agent/executor/instructions/**/*.md' glob is missing from file-router.yaml prose_allowlist.allowed_globs.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    action: Prove the model-routing floor resolves the new-home path to the pro tier.
+    command: bin/venv-python -m pytest tests/test_llm_model_registry.py -q -k "instructions_floor"
+    expected: >-
+      The executor-instructions floor test passes -- resolve_model('implementation','S',
+      file_path='config/agent/executor/instructions/...') returns the pro-tier model.
+    fix_if: >-
+      KeyError/assertion -> the inference-provider.yaml floor pattern was not repointed, or the test's inline
+      mock floor pattern / file_path was not updated to config/agent/executor/instructions/.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    action: Run the three referencing tests end-to-end against the new paths.
+    command: bin/venv-python -m pytest tests/test_executor_plan.py tests/test_executor_step_runner.py tests/test_llm_model_registry.py -q
+    expected: >-
+      All pass -- test_executor_plan reads the moved critique file at its new path, step_runner delegates
+      with the new path, and the registry floor test is green.
+    fix_if: >-
+      FileNotFoundError (a test still points at .github/instructions/) or an assert on the delegated
+      file_path -> repoint the residual path/mismatch.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: Assert the contract Layer 5 content_locations lists the new instructions home.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/instruction-architecture.yaml')); l5=next(x for x in d['layers'] if x['layer']==5); assert any('config/agent/executor/instructions' in c for c in l5['content_locations']), l5['content_locations']; print('OK: L5 lists the instructions home')"
+    expected: >-
+      Prints the success line confirming Layer 5 content_locations lists the instructions home.
+    fix_if: >-
+      Assertion prints the L5 content_locations without the instructions glob -> add
+      'config/agent/executor/instructions/*.instructions.md' to Layer 5.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    action: Stale-reference sweep -- no LIVE surface still points at .github/instructions/ (Closure Obligation).
+    command: "! grep -rIn '\\.github/instructions/' config/ scripts/ tests/ docs/contracts/ docs/PROJECT_CONTEXT.md docs/DECISIONS.md"
+    expected: >-
+      grep finds no .github/instructions/ references in the live consumer surfaces (exit 1, negated to 0).
+      Historical records (CHANGELOG, SESSION_LOG_ARCHIVE, INTENT docs, docs/plans/, audits/, ROADMAP T0.14)
+      are intentionally out of the swept set and retain their references.
+    fix_if: >-
+      A hit remains in a live surface -> repoint it to config/agent/executor/instructions/ (or confirm the
+      line is a genuinely historical reference that belongs outside the swept live set).
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    action: Capstone -- the fast presubmit gate is green on the restructured tree.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      PASS -- lint/format plus the registered hygiene checks (prose allowlist, placement link-validity,
+      executor boundary, instruction-architecture layers) are green.
+    fix_if: >-
+      Any check fails -> address per its message; do not merge red. CI runs the full tier (adds full pytest);
+      if --pre passes but CI's full tier flags a check, forward-fix per the CI-RCA protocol.
+constraints:
+  - Only files listed in scope may be modified (AGENTS.md out-of-scope rule).
+  - >-
+    Preserve the applyTo frontmatter unchanged and do NOT edit instruction-file CONTENT -- the moves are
+    pure relocations. Editing content would stray into rec-270's content-dedup territory and break the
+    byte-identical-move guarantee.
+  - >-
+    No import shims / compatibility stubs (the moved files are markdown with no imports); no re-export
+    stubs at the old paths -- git mv only.
+  - >-
+    Do NOT edit historical/retiring records: docs/CHANGELOG.md, docs/SESSION_LOG_ARCHIVE.md,
+    docs/INTENT-recommendation-executor.md, and ROADMAP-PLATFORM.yaml T0.14 files_in_scope (a completed
+    item's historical scope). They legitimately retain .github/instructions/ references.
+  - >-
+    config/agent/executor/capabilities.yaml (the executor-boundary code-level SSOT, Decision 117) is
+    intentionally NOT edited: its substring patterns (executor-critique / executor-implement /
+    executor-planning / executor-review / executor-supervisor) already match the moved files, so boundary
+    coverage is preserved. Do not add a redundant pattern unless a test requires it.
+  - "rec-270 is NOT bundled: a relocation does not close a content-dedup rec (no closure claimed)."
+  - >-
+    Single Portal Invariant (Decision 84): never edit logs/.recommendations-log.jsonl or logs/.decisions-index.jsonl
+    directly. The rec-270 repoint goes through ops_data_portal update_rec; docs/DECISIONS.md (the canonical
+    human-edited source) is edited in-tree and resynced to ops_decisions via --backfill-decisions-md post-merge.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Implements audit finding RS-06 (medium, S7) from audits/repository-structure-cb02572.yaml -- phase P5
+    of the repository-structure restructure. P1 (RS-04), P2/P3 (RS-02/03/05), P4a/b/c (RS-01) merged at
+    origin/main; this branch is 0 commits behind main with no scope-file overlap since branch
+    (main_freshness clean).
+  - >-
+    applyTo mechanism (the key correctness question): moving the files changes NO live runtime behaviour.
+    Nothing in-repo parses the applyTo: frontmatter (repo-wide grep: only third-party pydantic/sympy match
+    'apply_to'). applyTo is a VS Code / GitHub Copilot editor convention (auto-apply instructions on matching
+    globs) consumed only by the external Copilot extension. The single in-repo consumer of the
+    .github/instructions/ PATH is the executor's model-routing floor (inference-provider.yaml, matched via
+    startswith by scripts/llm/model_registry.py) plus the executor self-modification boundary -- and the
+    executor is frozen (Decision 67). The live interactive surface (Claude Code) consumes L1/L3/L4, never
+    .github/instructions/** (instruction-architecture.yaml); the legacy gh-copilot CLI instruction file was
+    already deleted at T-1.13 (Decision 76). So Copilot auto-apply is already dead in the live workflow; the
+    move formally retires it.
+  - >-
+    FRONTIER DECISION (applyTo): preserve the applyTo frontmatter -- its glob targets (scripts/executor/*.py,
+    config/agent/executor/prompts/*) are unchanged by the move and remain valid machine-parseable pairing
+    metadata -- and repoint only the path-keyed routing floor. This deliberately retires the Copilot auto-apply
+    behaviour (documented here) while preserving the metadata, rather than stripping six files' content for no
+    functional gain (which would collide with rec-270).
+  - >-
+    Frontier-best-practice scope additions beyond the finding's named files (architect directive: resolve
+    ambiguity toward correctness): (a) docs/contracts/inference-provider.yaml -- the routing floor must move
+    with the files or it becomes a dead pattern and test_llm_model_registry fails; (b) docs/contracts/file-router.yaml
+    prose_allowlist -- REQUIRED or validate_prose_allowlist (Decision 127) fails CI on the moved .md;
+    (c) docs/PROJECT_CONTEXT.md + docs/DECISIONS.md boundary-doc path consistency (leaving a fresh stale
+    pointer is the exact RS-04 anti-pattern this audit fights).
+  - >-
+    Verification tier V2: config/agent/ is NOT Lambda-bundled (config/CLAUDE.md; Decision 79 / CD.24), so no
+    build/deploy/smoke steps. Every VP step is hermetic:false -- VF-01 validate_vp_replay re-runs
+    hermetic:true + pre-deploy steps against the plan-PR tree BEFORE implementation exists, and these steps
+    assert post-implementation state (files moved, paths updated), so they must be excluded from replay.
+  - >-
+    CI-RCA HARD BLOCK deferral: preflight surfaces one unresolved ci_rca rec, rec-2690 (Critical,
+    "apply-sandbox refuses on CONVERGENCE_RED at commit 50f3a90", file .github/workflows/terraform-apply-sandbox.yml).
+    It fails all three Related-Work conditions -- different file, different Decision, different failure category
+    (terraform-apply convergence vs a docs/config/test consolidation). DEFERRED: the CI-failure root cause is
+    being investigated separately on branch codex/investigate-ci-failure-root-cause; this RS-06 work neither
+    touches the apply-sandbox workflow nor the convergence path, so it cannot compound or mask that failure.
+  - >-
+    rec-270 (open, Medium, automatable:false, content-dedup between executor-planning.instructions.md and
+    planning.prompt.md) is NOT closed by this relocation and NOT bundled; its file field is repointed to the
+    new home as non-blocking bookkeeping (a relocation only moves the target, it does not deduplicate content).
+  - >-
+    Ownership: T5.3 completed 2026-06-29; the surviving .github scheduled surfaces (.github/prompts/scheduled/,
+    .github/agents/schedule.yaml) are owned by T4.12. This plan removes the executor-instructions portion of
+    the .github debt entirely (the directory is emptied), so there is no residual instructions/ scope to
+    assign to T4.12.
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND (87 of 87 decisions triaged). CITE (verbatim ids): Decision 117
+    (executor-boundary code-level SSOT = capabilities.yaml; its substring patterns preserve boundary coverage
+    post-move, so capabilities.yaml needs no edit), Decision 127 (sanctioned-prose allowlist -- the file-router.yaml
+    allowed_globs addition is REQUIRED), Decision 86 (agent-first collocation; no new standing prose doc created),
+    Decision 76 (the LIVE authority for .github/ legacy demotion -- cite 76, not the superseded Decision 58),
+    Decision 67 (executor freeze -> the inference-provider.yaml floor repoint has no live runtime impact),
+    Decision 79/CD.24 (config/agent not Lambda-bundled -> V2; verified no Lambda manifest names the instructions).
+  - >-
+    Decision-84 WARN (Single Portal Invariant) resolved in-plan without an approach change: rec-270's file-field
+    repoint is portal-only via ops_data_portal update_rec (NEVER a logs/.recommendations-log.jsonl cache edit), and
+    the docs/DECISIONS.md body path-correction is resynced to ops_decisions via a post-merge --backfill-decisions-md.
+    The scout confirmed editing DECISIONS.md's body is permitted (it is the canonical human-edited source of truth;
+    only the logs/*.jsonl caches are edit-forbidden) and that editing Decision 117's body does not trip
+    validate_candidate_decision_ratification (Decision 105 targets '## Decision NNN:' headers, not body tables).
+  - "gates: decision-scout=FLAGS_FOUND (1 WARN, resolved in-plan, 1 round); plan-critique=PROCEED (0 blocking findings; all load-bearing claims code-verified -- capabilities.yaml substring coverage, prose_allowlist CI-mandate, applyTo inert, consumer-sweep complete; non-blocking nits only)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/repo-restructure-audit-hm1gti)
+  - docs/PROJECT_CONTEXT.md read (executor self-modification boundary section)
+  - DECISIONS.md relevant sections read (executor-boundary table; Decisions 67, 86, 117, 127)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Re-run the behavioral-invariants.md consumer grep immediately before deletion (confirm still zero live consumers)
+execution_steps:
+  - >-
+    git mv the six .github/instructions/executor-*.instructions.md files into
+    config/agent/executor/instructions/ (content byte-identical; do NOT touch the applyTo frontmatter).
+    Confirm only behavioral-invariants.md remains under .github/instructions/.
+  - >-
+    Re-run the repo-wide consumer grep for behavioral-invariants.md; confirm zero live consumers; then
+    git rm .github/instructions/behavioral-invariants.md. Confirm .github/instructions/ is now empty/removed.
+  - >-
+    Edit docs/contracts/instruction-architecture.yaml: add the Layer 5 content_locations glob for the new
+    instructions home; fix the legacy_surfaces_retired note (drop the .github/instructions/executor-* clause;
+    T5.3 -> re-homed by this plan + T4.12 for the surviving scheduled surfaces).
+  - "Edit docs/contracts/inference-provider.yaml: repoint the model-routing floor pattern to config/agent/executor/instructions/."
+  - "Edit docs/contracts/file-router.yaml: add config/agent/executor/instructions/**/*.md to prose_allowlist.allowed_globs."
+  - "Edit config/agent/executor/prompts/README.md: repoint the split-rule note to the new home and reflect the Decision 67 freeze."
+  - >-
+    Update the three tests: repoint the path strings in test_executor_plan.py and test_executor_step_runner.py;
+    update the inline mock floor pattern and the floor-test path in test_llm_model_registry.py; rename the two
+    now-misnamed test methods (github_instructions -> executor_instructions).
+  - >-
+    Update docs/PROJECT_CONTEXT.md boundary-file list and the docs/DECISIONS.md boundary reference-table row
+    to the new instructions path (consistency; capabilities.yaml SSOT is intentionally left alone).
+  - >-
+    Bookkeeping (non-blocking, PORTAL-ONLY): repoint rec-270's file field to
+    config/agent/executor/instructions/executor-planning.instructions.md via ops_data_portal update_rec ONLY --
+    NEVER hand-edit logs/.recommendations-log.jsonl (Single Portal Invariant, Decision 84; validate.py fails CI on
+    a direct cache write). If update_rec does not support mutating the file field, surface it as a portal-verb gap
+    and leave rec-270's pointer as-is with a one-line note -- do NOT fall back to a cache edit. rec-270 stays open.
+  - >-
+    Post-merge bookkeeping (non-blocking): the step-8 docs/DECISIONS.md edit is a factual path correction to
+    Decision 117's illustrative boundary table (a minimal, surgical path swap -- not a decision amendment). After
+    merge, run bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md to resync the ops_decisions
+    projection (Decision 84). A harmless no-op if ops_decisions does not project the body table.
+  - >-
+    Execute the Verification Plan -- run each step; loop until all pass. This is a docs/config/test change
+    with no deployable runtime (config/agent/ is not Lambda-bundled), so there is no V3 deploy/smoke phase.
+  - "Report: what moved, which consumers were updated, verification results, and rec-270 repoint status."
+work_areas: []
+rollback: >-
+  git revert the squash-merge commit. Pure file moves plus doc/config/test edits with no data migration,
+  no deploy, and no Lambda bundling -- reverting atomically restores .github/instructions/ and the prior
+  contract/routing/boundary text.
