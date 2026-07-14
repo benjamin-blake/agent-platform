@@ -564,6 +564,11 @@ resource "aws_iam_role_policy" "platform_admin_datalake" {
           "s3:GetBucketObjectLockConfiguration",
           "s3:GetBucketCORS",
           "s3:GetBucketWebsite",
+          # T2.43 gap: aws_s3_bucket_notification.data_lake_prod_triggers is provisioned by
+          # PlatformAdmin directly (admin-apply), so the admin role itself needs the write action
+          # too, not just the CI roles' refresh-read grant.
+          "s3:GetBucketNotification",
+          "s3:PutBucketNotification",
         ]
         Resource = [aws_s3_bucket.data_lake.arn]
       },
