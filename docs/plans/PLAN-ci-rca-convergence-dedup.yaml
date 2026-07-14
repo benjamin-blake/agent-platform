@@ -18,10 +18,13 @@ scope:
     purpose: >-
       Add the three new categories (convergence_refused, convergence_read_error,
       subagent_starved) to the top-level failure_categories: list (validate_ci_rca_taxonomy
-      Check 2 fails --pre otherwise), plus step_name_to_category + log_pattern_to_category rules
-      so terraform-apply-sandbox failures classify distinctly instead of the degenerate
+      Check 2 fails --pre otherwise), plus log_pattern_to_category rules ONLY (NOT
+      step_name_to_category). All three CONVERGENCE_* markers are emitted by the single
+      'Convergence precondition' step and STARVED/REVISE share the review step, so a step-name
+      rule (classifier priority 1) would collapse them to one category and shadow the log
+      patterns; the distinctive per-failure log markers are what discriminate. Rules ordered
+      BEFORE the generic 'terraform.*Error -> environment' rule. Fixes the degenerate
       unknown/unknown that collapses every sandbox failure to one fingerprint (833c78f8...).
-      Log-pattern rules must be ordered BEFORE the generic 'terraform.*Error -> environment' rule.
   - file: scripts/ci_rca/taxonomy.py
     action: Modify
     purpose: >-
@@ -55,16 +58,29 @@ scope:
       recency window) and a SEPARATE single-writer reopen_ci_rca_rec(rec_id) that flips
       status=open and bumps occurrence exactly once. find_open_ci_rca_rec_by_fingerprint stays
       a pure read (no writes). Safe ONLY because the taxonomy fix makes fingerprints
-      discriminating. If the change would cross the 500-SLOC default (file at 430), extract the
+      discriminating. If the change would cross the 500-SLOC default (file at 431), extract the
       recurrence logic into scripts/ops_portal/ci_rca_recurrence.py (Decision 128 decompose).
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Wire the rec-2644 reopen at its authoritative write-time locus: file_rec's dedup backstop
+      (ops_data_portal.py:274-291) today calls find_open + bump then inserts on a miss. Route it
+      so that on a find_open MISS it consults find_recent_ci_rca_rec_by_fingerprint; a
+      recently-closed match calls reopen_ci_rca_rec ONCE (single bump) and returns instead of
+      inserting a duplicate. The open-match path keeps its single bump; the two paths stay
+      mutually exclusive (no double-count). File at 478 SLOC -- the addition is small; confirm it
+      stays under the 500 default, else decompose (Decision 128).
   - file: tests/test_ci_rca_taxonomy.py
     action: Modify
     purpose: >-
-      Assert the REAL emitted markers/step-names classify correctly: CONVERGENCE_RED ->
-      convergence_refused; CONVERGENCE_READ_ERROR/CONVERGENCE_PARSE_ERROR ->
-      convergence_read_error; REVIEW_STARVED / outcome=starved (step 'Subagent plan review
-      (digest-fed, JSON-classified)') -> subagent_starved. Assert _compute_fingerprint yields
-      three DISTINCT fingerprints for these categories (anti-masking).
+      Assert classification via the REAL runtime path -- feed jobs JSON containing the failed
+      'Convergence precondition (refuse on red record -- sole hard block)' / 'Subagent plan review
+      (digest-fed, JSON-classified)' step (unmapped, so classify_failures falls through to the log
+      fallback) plus a log carrying exactly one marker: CONVERGENCE_RED -> convergence_refused;
+      CONVERGENCE_READ_ERROR/PARSE_ERROR -> convergence_read_error; REVIEW_STARVED -> subagent_starved.
+      This exercises the jobs-present-but-step-unmapped shape (not a circular log-only test). Assert
+      _compute_fingerprint yields DISTINCT fingerprints across convergence_refused, subagent_starved,
+      and environment (anti-masking).
   - file: tests/test_ci_rca_dedup.py
     action: Modify
     purpose: >-
@@ -224,6 +240,18 @@ constraints:
     New categories (convergence_refused, convergence_read_error, subagent_starved) MUST be added to
     the top-level failure_categories: list or validate_ci_rca_taxonomy Check 2 fails --pre (Risk C).
   - >-
+    Classify the convergence/starved markers via ordered log_pattern_to_category ONLY -- never
+    step_name_to_category. classify_failure priority is step-name (1) > function (2) > log-pattern
+    (3), and all three CONVERGENCE_* markers come from the single 'Convergence precondition' step
+    while STARVED and a genuine REVISE share the review step -- so any step-name rule collapses
+    distinct markers into one category and shadows the log patterns (round-2 issue 1/3). Order the
+    convergence/starved log patterns BEFORE the generic terraform.*Error rule.
+  - >-
+    The rec-2644 reopen is wired at ONE write-time locus -- file_rec's dedup backstop in
+    scripts/ops_data_portal.py. dedup.decide() (scripts/ci_rca/dedup.py) is NOT modified (an
+    optional pre-agent short-circuit is out of scope); the backstop catches the closed-then-recur
+    case at filing time, so no duplicate is inserted even though the pre-agent path may run the agent.
+  - >-
     No self-directed terraform apply. Recovery transits the sanctioned workflows only: Reconcile
     (Decision 126 pt 1) then, on stale-plan fail-closed, the acknowledge-and-retry workflow_dispatch
     (fresh human-reviewed plan); an IAM/out-of-budget drift escalates to the human-gated apply loop.
@@ -269,8 +297,15 @@ context:
     (terraform-apply-sandbox.yml:494-495). This plan only classifies subagent_starved for dedup; it
     does not touch that latch path. STARVED's real markers are REVIEW_STARVED / outcome=starved (NOT
     'Reached max turns').
+  - >-
+    Classification strategy (round-2 issue 1/3): log_pattern_to_category ONLY, never
+    step_name_to_category -- the three CONVERGENCE_* markers share one step and STARVED/REVISE share
+    the review step, so step-name rules (classifier priority 1) shadow the log patterns. Tests feed
+    jobs JSON with the unmapped failed step so the real jobs-present/log-fallback path is exercised.
+    convergence_read_error is not required by criterion 1 (only convergence_refused/subagent_starved/
+    environment need distinct fingerprints) but is kept as a real distinct category via log fallback.
   - "Decision-scout verdict: FLAGS_FOUND (no BLOCK). CITE: Decision 92 (server-side convergence anchor / by-design refusal), Decision 72 + Decision 55 (apply failures wire into ci-rca; forward-fix not auto-revert), Decision 126 (Reconcile/acknowledge-and-retry for red/drift), Decision 84 (portal-only rec writes), Decision 73 (L5 hard-block justifies scoping this forward-fix under the block), CIRCA-03(a) grouping-fingerprint contract, CIRCA-09 (terraform-apply-sandbox is not_a_gate/unknown -- taxonomy classifies failure_category, not gate tier)."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE(round 1) -> revised (Risks A/B/C/D/E addressed)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE(rounds 1-2) -> revised (round 1: Risks A/B/C/D/E; round 2: log-pattern-only classification + file_rec reopen locus)"
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/ci-rca-apply-sandbox-convergence-jkpohb)
   - docs/PROJECT_CONTEXT.md read
@@ -280,15 +315,14 @@ pre_implementation_checklist:
 execution_steps:
   - >-
     config/ci_rca_taxonomy.yaml -- (a) add convergence_refused, convergence_read_error,
-    subagent_starved to the top-level failure_categories: list; (b) add step_name_to_category for
-    'Convergence precondition (refuse on red record -- sole hard block)' (convergence_refused) and
-    'Subagent plan review (digest-fed, JSON-classified)' (subagent_starved); (c) add
-    log_pattern_to_category for 'CONVERGENCE_RED' (convergence_refused), 'CONVERGENCE_(READ|PARSE)_ERROR'
-    (convergence_read_error), 'REVIEW_STARVED|outcome=starved' (subagent_starved) -- ordered BEFORE the
-    generic terraform.*Error rule.
+    subagent_starved to the top-level failure_categories: list; (b) add log_pattern_to_category ONLY,
+    ordered BEFORE the generic terraform.*Error rule: '\\bCONVERGENCE_RED\\b' (convergence_refused),
+    'CONVERGENCE_(READ|PARSE)_ERROR' (convergence_read_error), 'REVIEW_STARVED' (subagent_starved).
+    Do NOT add any step_name_to_category rule for the precondition or review steps (shadowing).
   - >-
-    scripts/ci_rca/taxonomy.py -- confirm classify_failures resolves the new rules (step-name priority);
-    adjust only if a marker still falls through to unknown.
+    scripts/ci_rca/taxonomy.py -- confirm the failed precondition/review step (unmapped in step/func
+    maps) falls through classify_failures to classify_failure's log-pattern path and resolves each
+    marker distinctly; adjust only if a marker still falls through to unknown.
   - >-
     scripts/ci_rca/convergence_dedup.py (new) -- find_open_convergence_cause_rec(record, *,
     drift_rec_finder, commit_status_checker): drift branch (record.drift_run_url present) returns the
@@ -304,9 +338,13 @@ execution_steps:
   - >-
     scripts/ops_portal/ci_rca_runtime.py -- keep find_open_ci_rca_rec_by_fingerprint read-only; add
     find_recent_ci_rca_rec_by_fingerprint (returns rec_id + was_closed within a bounded recency window)
-    and reopen_ci_rca_rec(rec_id) (status=open + single bump). Wire dedup.decide() to route: open-match
-    -> existing bumper; recently-closed-match -> reopen (once); mutually exclusive. Decompose to
+    and reopen_ci_rca_rec(rec_id) (status=open + single bump via update_rec). Decompose to
     ci_rca_recurrence.py if the file crosses 500 SLOC.
+  - >-
+    scripts/ops_data_portal.py -- in file_rec's write-time dedup backstop (:274-291), on a find_open
+    MISS consult find_recent_ci_rca_rec_by_fingerprint; a recently-closed match calls reopen_ci_rca_rec
+    ONCE and returns (no insert), the open-match path keeps its single bump -- mutually exclusive, no
+    double-count. Confirm the file stays < 500 SLOC.
   - >-
     Tests -- test_ci_rca_taxonomy.py (real-marker classification + fingerprint distinctness),
     test_ci_rca_dedup.py (cause-aware decision + single-bump routing), test_ops_data_portal.py
