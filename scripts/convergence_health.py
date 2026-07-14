@@ -25,6 +25,10 @@ CONVERGENCE_KEY = "convergence/personal/sandbox.json"
 
 RED_AGE_THRESHOLD_HOURS: float = 6.0
 STUCK_APPROVAL_THRESHOLD_HOURS: float = 6.0
+# Must exceed normal apply latency (an apply advances the record within minutes) so a healthy
+# in-flight merge can never false-positive; only a green record with a backlog persisting for
+# hours escalates.
+STALE_GREEN_BACKLOG_THRESHOLD_HOURS: float = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +43,7 @@ class HealthVerdict:
     unapplied_backlog: int
     stuck_approvals: list[dict[str, Any]] = field(default_factory=list)
     severity: str = "none"  # "none" | "low" | "high"
+    record_age_hours: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +88,21 @@ def red_age_hours(record: dict[str, Any], now: Optional[datetime] = None) -> flo
     if now is None:
         now = datetime.now(timezone.utc)
     since = derive_red_since(record)
+    delta = now - since
+    return max(0.0, delta.total_seconds() / 3600.0)
+
+
+def record_age_hours(record: dict[str, Any], now: Optional[datetime] = None) -> float:
+    """Return hours since the record's 'timestamp' field, regardless of status.
+
+    Unlike red_age_hours (red-episode-only, prefers drift_detected_at), this measures plain
+    record staleness -- how long since the record was last written. Used by the stale-green-
+    backlog trigger to distinguish a healthy in-flight merge (record just written, backlog
+    clears within minutes) from a persistently stale green record.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    since = _parse_utc(record.get("timestamp") or "")
     delta = now - since
     return max(0.0, delta.total_seconds() / 3600.0)
 
@@ -357,22 +377,29 @@ def assess_health(
             unapplied_backlog=0,
             stuck_approvals=[],
             severity="none",
+            record_age_hours=0.0,
         )
 
     status = record.get("status", "unknown")
     age = red_age_hours(record, now=now)
+    rec_age = record_age_hours(record, now=now)
     backlog = count_unapplied_tf_commits(
         record.get("commit_sha", ""),
         git_runner=git_runner,
     )
     approvals = stuck_approvals or []
+    stale_green_backlog = status == "green" and backlog > 0 and rec_age >= STALE_GREEN_BACKLOG_THRESHOLD_HOURS
 
-    if status != "red":
-        severity = "none"
-    elif age >= RED_AGE_THRESHOLD_HOURS or approvals:
+    if approvals:
+        # A stuck gated-apply approval escalates independent of the record's own status --
+        # a routed gated-apply deliberately leaves the record green while it waits.
+        severity = "high"
+    elif status == "red":
+        severity = "high" if age >= RED_AGE_THRESHOLD_HOURS else "low"
+    elif stale_green_backlog:
         severity = "high"
     else:
-        severity = "low"
+        severity = "none"
 
     return HealthVerdict(
         status=status,
@@ -380,6 +407,7 @@ def assess_health(
         unapplied_backlog=backlog,
         stuck_approvals=approvals,
         severity=severity,
+        record_age_hours=round(rec_age, 2),
     )
 
 
@@ -405,33 +433,92 @@ def _fetch_open_recs(profile: Optional[str] = None) -> list[dict[str, Any]]:
     return make_reader(profile=profile).named("open_recs") or []
 
 
-def _build_context(verdict: HealthVerdict) -> str:
-    parts = [
-        f"The sandbox convergence record has been red for {verdict.red_age_hours:.1f} hours.",
-    ]
-    if verdict.unapplied_backlog:
-        parts.append(
-            f"{verdict.unapplied_backlog} merged terraform/personal/ commit(s) are pending "
-            "application since the last green convergence commit."
-        )
+# Three mutually-branched escalation conditions (T2.35 hardening). A stuck gated-apply approval
+# takes priority in the title/context even when it co-occurs with a persistently-red record --
+# it is the more directly actionable signal (approve/cancel the run). stale_green_backlog and
+# persistently_red are mutually exclusive by construction (they require status=="green" and
+# status=="red" respectively).
+_TITLE_STUCK_APPROVAL = "Gated-apply approval stuck -- staleness escalation"
+_TITLE_STALE_GREEN_BACKLOG = "Sandbox convergence green with stale unapplied backlog -- staleness escalation"
+_TITLE_PERSISTENTLY_RED = "Sandbox convergence record persistently red -- staleness escalation"
+
+_RESOLUTION_STUCK_APPROVAL = "Gated-apply approval cleared (approved or cancelled); staleness episode resolved."
+_RESOLUTION_STALE_GREEN_BACKLOG = "Unapplied terraform/personal/ backlog drained; staleness episode resolved."
+_RESOLUTION_PERSISTENTLY_RED = "Convergence record returned to green; staleness episode resolved."
+
+
+def _condition_for_verdict(verdict: HealthVerdict) -> str:
+    """Classify which of the three escalation conditions this verdict represents."""
     if verdict.stuck_approvals:
-        parts.append(
+        return "stuck_approval"
+    if verdict.status == "green" and verdict.unapplied_backlog > 0:
+        return "stale_green_backlog"
+    return "persistently_red"
+
+
+def _condition_from_existing_rec(existing: dict[str, Any]) -> str:
+    """Recover the escalation condition an open rec was filed for, from its title.
+
+    Needed at close time: by definition every trigger has cleared (over_threshold is False),
+    so the current verdict can no longer tell us which condition the rec was tracking.
+    """
+    title = existing.get("title", "")
+    if title == _TITLE_STUCK_APPROVAL:
+        return "stuck_approval"
+    if title == _TITLE_STALE_GREEN_BACKLOG:
+        return "stale_green_backlog"
+    return "persistently_red"
+
+
+def _build_context(verdict: HealthVerdict, condition: str) -> str:
+    if condition == "stuck_approval":
+        parts = [
             f"{len(verdict.stuck_approvals)} terraform-apply-sandbox run(s) are waiting on "
-            "the tf-gated-apply Environment approval (stuck > threshold). Check GitHub "
-            "Actions -> Review pending deployments to approve or cancel."
+            "the tf-gated-apply Environment approval (stuck > threshold), independent of the "
+            f"convergence record's own status ({verdict.status})."
+        ]
+        parts.append(
+            "Resolve via: approve or cancel the pending gated-apply run in GitHub Actions -> "
+            "Review pending deployments. This rec closes automatically on the next sensor "
+            "tick once no stuck approvals remain."
         )
-    parts.append(
-        "Resolve via: (a) approve the pending gated-apply run in GitHub Actions, or "
-        "(b) run terraform-apply-sandbox workflow_dispatch with acknowledge_red_commit "
-        "naming the red commit SHA. This rec closes automatically on the next sensor "
-        "tick once the convergence record returns to green."
-    )
+    elif condition == "stale_green_backlog":
+        parts = [
+            f"The sandbox convergence record is green, but {verdict.unapplied_backlog} merged "
+            "terraform/personal/ commit(s) have been pending application for "
+            f"{verdict.record_age_hours:.1f} hours -- past the "
+            f"{STALE_GREEN_BACKLOG_THRESHOLD_HOURS:.1f}h stale-green-backlog threshold."
+        ]
+        parts.append(
+            "Resolve via: run terraform-apply-sandbox workflow_dispatch (or land a "
+            "terraform/personal/ change) to apply the pending backlog. This rec closes "
+            "automatically on the next sensor tick once the backlog drains."
+        )
+    else:
+        parts = [
+            f"The sandbox convergence record has been red for {verdict.red_age_hours:.1f} hours.",
+        ]
+        if verdict.unapplied_backlog:
+            parts.append(
+                f"{verdict.unapplied_backlog} merged terraform/personal/ commit(s) are pending "
+                "application since the last green convergence commit."
+            )
+        parts.append(
+            "Resolve via: (a) approve the pending gated-apply run in GitHub Actions, or "
+            "(b) run terraform-apply-sandbox workflow_dispatch with acknowledge_red_commit "
+            "naming the red commit SHA. This rec closes automatically on the next sensor "
+            "tick once the convergence record returns to green."
+        )
     return " ".join(parts)
 
 
-def _build_rec_fields(verdict: HealthVerdict) -> dict[str, Any]:
+def _build_rec_fields(verdict: HealthVerdict, condition: str) -> dict[str, Any]:
+    title = {
+        "stuck_approval": _TITLE_STUCK_APPROVAL,
+        "stale_green_backlog": _TITLE_STALE_GREEN_BACKLOG,
+    }.get(condition, _TITLE_PERSISTENTLY_RED)
     return {
-        "title": "Sandbox convergence record persistently red -- staleness escalation",
+        "title": title,
         "file": ".github/workflows/convergence-health.yml",
         "status": "open",
         "source": "tf_convergence_stale",
@@ -439,11 +526,11 @@ def _build_rec_fields(verdict: HealthVerdict) -> dict[str, Any]:
         "effort": "S",
         "risk": "medium",
         "verification_tier": "V2",
-        "context": _build_context(verdict),
+        "context": _build_context(verdict, condition),
         "acceptance": (
-            "terraform-apply-sandbox workflow_dispatch converges successfully (writes a green "
-            "convergence record) and this rec is closed via the standard portal path "
-            "(update_rec --status closed, or a Resolves: trailer when a fix PR lands)."
+            "the triggering condition clears (approvals resolved, backlog drained, or the "
+            "convergence record returns to green) and this rec is closed via the standard "
+            "portal path (update_rec --status closed, or a Resolves: trailer when a fix PR lands)."
         ),
     }
 
@@ -480,7 +567,15 @@ def escalate(
 
     existing = find_open_convergence_stale_rec(open_recs)
     open_rec_exists = existing is not None
-    over_threshold = verdict.status == "red" and (verdict.red_age_hours >= threshold_hours or bool(verdict.stuck_approvals))
+
+    stuck_approval_trigger = bool(verdict.stuck_approvals)
+    red_age_trigger = verdict.status == "red" and verdict.red_age_hours >= threshold_hours
+    stale_green_backlog_trigger = (
+        verdict.status == "green"
+        and verdict.unapplied_backlog > 0
+        and verdict.record_age_hours >= STALE_GREEN_BACKLOG_THRESHOLD_HOURS
+    )
+    over_threshold = stuck_approval_trigger or red_age_trigger or stale_green_backlog_trigger
 
     action = escalation_action(over_threshold=over_threshold, open_rec_exists=open_rec_exists)
 
@@ -495,7 +590,8 @@ def escalate(
         return {"action": "none", "rec_id": None}
 
     if action == "file":
-        fields = _build_rec_fields(verdict)
+        condition = _condition_for_verdict(verdict)
+        fields = _build_rec_fields(verdict, condition)
         if portal_caller is not None:
             rec_id = portal_caller("file", fields)
         else:
@@ -505,7 +601,8 @@ def escalate(
         return {"action": "file", "rec_id": rec_id}
 
     if action == "update" and existing is not None:
-        updates = {"context": _build_context(verdict)}
+        condition = _condition_for_verdict(verdict)
+        updates = {"context": _build_context(verdict, condition)}
         if portal_caller is not None:
             portal_caller("update", {"id": existing["id"], **updates})
         else:
@@ -515,9 +612,14 @@ def escalate(
         return {"action": "update", "rec_id": existing["id"]}
 
     if action == "close" and existing is not None:
+        condition = _condition_from_existing_rec(existing)
+        resolution = {
+            "stuck_approval": _RESOLUTION_STUCK_APPROVAL,
+            "stale_green_backlog": _RESOLUTION_STALE_GREEN_BACKLOG,
+        }.get(condition, _RESOLUTION_PERSISTENTLY_RED)
         updates = {
             "status": "closed",
-            "resolution": ("Convergence record returned to green; staleness episode resolved."),
+            "resolution": resolution,
         }
         if portal_caller is not None:
             portal_caller("close", {"id": existing["id"], **updates})

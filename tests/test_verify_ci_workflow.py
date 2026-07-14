@@ -15,6 +15,7 @@ from scripts.verify_ci_workflow import (
     _check_fetch_depth,
     _check_jobs_and_flags,
     _check_signal_green_needs,
+    _check_terraform_apply_concurrency,
     _check_validate_single_source,
 )
 
@@ -586,3 +587,110 @@ class TestCheckSignalGreenNeedsFailPath:
         with patch("scripts.verify_ci_workflow._load") as mock_load:
             mock_load.return_value = data
             _check_signal_green_needs()
+
+
+# ---------------------------------------------------------------------------
+# _check_terraform_apply_concurrency (T2.35 hardening -- event-keyed concurrency group)
+# ---------------------------------------------------------------------------
+
+_VALID_APPLY_CONCURRENCY_GROUP = (
+    "${{ github.event_name == 'pull_request' && format('terraform-apply-plan-pr-{0}', "
+    "github.event.pull_request.number) || 'terraform-apply-sandbox' }}"
+)
+
+_VALID_APPLY_CONCURRENCY_DATA: dict[str, Any] = {
+    "concurrency": {
+        "group": _VALID_APPLY_CONCURRENCY_GROUP,
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    }
+}
+
+_VALID_RECONCILE_CONCURRENCY_DATA: dict[str, Any] = {
+    "concurrency": {
+        "group": "terraform-apply-sandbox",
+        "cancel-in-progress": False,
+    }
+}
+
+
+def _mock_load_for(apply_data: dict[str, Any], reconcile_data: dict[str, Any]) -> Any:
+    return lambda p: reconcile_data if "reconcile" in p else apply_data
+
+
+class TestCheckTerraformApplyConcurrencyPassPath:
+    def test_passes_with_real_workflow_files(self) -> None:
+        _check_terraform_apply_concurrency()
+
+    def test_passes_with_valid_data(self) -> None:
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.side_effect = _mock_load_for(_VALID_APPLY_CONCURRENCY_DATA, _VALID_RECONCILE_CONCURRENCY_DATA)
+            _check_terraform_apply_concurrency()
+
+
+class TestCheckTerraformApplyConcurrencyFailPath:
+    def test_fails_on_non_conditional_shared_everything_group(self) -> None:
+        apply_data = {"concurrency": {"group": "terraform-apply-sandbox", "cancel-in-progress": False}}
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.side_effect = _mock_load_for(apply_data, _VALID_RECONCILE_CONCURRENCY_DATA)
+            with pytest.raises(AssertionError, match="not event-keyed"):
+                _check_terraform_apply_concurrency()
+
+    def test_fails_on_missing_per_pr_key(self) -> None:
+        apply_data = {
+            "concurrency": {
+                "group": (
+                    "${{ github.event_name == 'pull_request' && 'terraform-apply-sandbox' || 'terraform-apply-sandbox' }}"
+                ),
+                "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.side_effect = _mock_load_for(apply_data, _VALID_RECONCILE_CONCURRENCY_DATA)
+            with pytest.raises(AssertionError, match="per-PR format key"):
+                _check_terraform_apply_concurrency()
+
+    def test_fails_on_missing_shared_key(self) -> None:
+        apply_data = {
+            "concurrency": {
+                "group": (
+                    "${{ github.event_name == 'pull_request' && format('terraform-apply-plan-pr-{0}', "
+                    "github.event.pull_request.number) || 'some-other-key' }}"
+                ),
+                "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.side_effect = _mock_load_for(apply_data, _VALID_RECONCILE_CONCURRENCY_DATA)
+            with pytest.raises(AssertionError, match="shared push/dispatch key"):
+                _check_terraform_apply_concurrency()
+
+    def test_fails_when_cancel_in_progress_not_gated_on_pull_request(self) -> None:
+        apply_data = {
+            "concurrency": {
+                "group": _VALID_APPLY_CONCURRENCY_GROUP,
+                "cancel-in-progress": False,
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.side_effect = _mock_load_for(apply_data, _VALID_RECONCILE_CONCURRENCY_DATA)
+            with pytest.raises(AssertionError, match="not gated on pull_request"):
+                _check_terraform_apply_concurrency()
+
+    def test_fails_when_cancel_in_progress_unconditionally_true(self) -> None:
+        apply_data = {
+            "concurrency": {
+                "group": _VALID_APPLY_CONCURRENCY_GROUP,
+                "cancel-in-progress": True,
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.side_effect = _mock_load_for(apply_data, _VALID_RECONCILE_CONCURRENCY_DATA)
+            with pytest.raises(AssertionError, match="not gated on pull_request"):
+                _check_terraform_apply_concurrency()
+
+    def test_fails_when_reconcile_in_different_group(self) -> None:
+        reconcile_data = {"concurrency": {"group": "some-other-group", "cancel-in-progress": False}}
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.side_effect = _mock_load_for(_VALID_APPLY_CONCURRENCY_DATA, reconcile_data)
+            with pytest.raises(AssertionError, match="no longer shares"):
+                _check_terraform_apply_concurrency()

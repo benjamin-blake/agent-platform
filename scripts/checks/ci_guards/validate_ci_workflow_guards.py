@@ -29,6 +29,7 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             _check_fetch_depth,
             _check_jobs_and_flags,
             _check_signal_green_needs,
+            _check_terraform_apply_concurrency,
             _check_validate_single_source,
         )
 
@@ -40,6 +41,7 @@ def validate_ci_workflow_guards(failed: list[str]) -> None:
             ("apply-rca-fallback", _check_apply_rca_fallback),
             ("validate-single-source", _check_validate_single_source),
             ("signal-green-needs", _check_signal_green_needs),
+            ("terraform-apply-concurrency", _check_terraform_apply_concurrency),
         ]
         for label, fn in guards:
             try:
