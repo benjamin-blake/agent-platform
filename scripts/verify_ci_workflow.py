@@ -253,6 +253,50 @@ def _check_signal_green_needs() -> None:
     assert not missing, f"PR-gating job(s) missing from signal-green.needs: {missing}"
 
 
+def _check_terraform_apply_concurrency() -> None:
+    """T2.35 hardening: apply-sandbox's concurrency group must be event-keyed, and
+    reconcile.yml must keep sharing the push/dispatch key.
+
+    Regression this guards against: a config that would permit concurrent applies against
+    shared tfstate -- either within terraform-apply-sandbox.yml (a bare non-conditional group,
+    a missing per-PR key, or cancel-in-progress not gated on pull_request) or across it and
+    reconcile.yml (reconcile.yml drifting to a different push/dispatch group, silently
+    decoupling the two workflows' serialization).
+    """
+    apply_data = _load(".github/workflows/terraform-apply-sandbox.yml")
+    reconcile_data = _load(".github/workflows/reconcile.yml")
+
+    concurrency = apply_data.get("concurrency") or {}
+    group = str(concurrency.get("group", ""))
+    cancel_in_progress = str(concurrency.get("cancel-in-progress", ""))
+
+    assert "pull_request" in group, (
+        f"terraform-apply-sandbox.yml concurrency.group is not event-keyed on pull_request: {group!r}"
+    )
+    assert "format(" in group and "pull_request.number" in group, (
+        f"terraform-apply-sandbox.yml concurrency.group is missing a per-PR format key: {group!r}"
+    )
+    assert "terraform-apply-sandbox" in group, (
+        f"terraform-apply-sandbox.yml concurrency.group is missing the shared push/dispatch "
+        f"key 'terraform-apply-sandbox': {group!r}"
+    )
+
+    assert "pull_request" in cancel_in_progress, (
+        f"terraform-apply-sandbox.yml concurrency.cancel-in-progress is not gated on pull_request "
+        f"(a push/dispatch apply run could be cancelled): {cancel_in_progress!r}"
+    )
+    assert cancel_in_progress.strip() not in ("true", "${{ true }}"), (
+        f"terraform-apply-sandbox.yml concurrency.cancel-in-progress is unconditionally true: {cancel_in_progress!r}"
+    )
+
+    reconcile_concurrency = reconcile_data.get("concurrency") or {}
+    reconcile_group = str(reconcile_concurrency.get("group", ""))
+    assert reconcile_group == "terraform-apply-sandbox", (
+        f"reconcile.yml concurrency.group no longer shares the terraform-apply-sandbox push/dispatch "
+        f"key (cross-workflow apply serialization broken): {reconcile_group!r}"
+    )
+
+
 _COMMANDS = {
     "jobs-and-flags": _check_jobs_and_flags,
     "concurrency": _check_concurrency,
@@ -262,6 +306,7 @@ _COMMANDS = {
     "apply-rca-fallback": _check_apply_rca_fallback,
     "validate-single-source": _check_validate_single_source,
     "signal-green-needs": _check_signal_green_needs,
+    "terraform-apply-concurrency": _check_terraform_apply_concurrency,
 }
 
 

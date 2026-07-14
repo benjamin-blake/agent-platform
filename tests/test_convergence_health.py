@@ -251,6 +251,44 @@ class TestAssessHealth:
         v = assess_health(rec, git_runner=lambda cmd: git_output)
         assert v.unapplied_backlog == 3
 
+    def test_default_record_age_hours_is_zero_valued(self) -> None:
+        v = HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0)
+        assert v.record_age_hours == 0.0
+
+    def test_record_age_hours_computed_regardless_of_colour(self) -> None:
+        now = datetime(2026, 6, 27, 3, 0, tzinfo=timezone.utc)
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": ""}
+        v = assess_health(rec, git_runner=lambda cmd: "", now=now)
+        assert v.record_age_hours == pytest.approx(3.0, abs=0.01)
+
+    def test_high_severity_for_green_record_with_stuck_approvals(self) -> None:
+        """Acceptance criterion 1: severity 'high' for a GREEN record carrying stuck approvals
+        (regression from the prior 'none' -- a routed gated-apply deliberately leaves the record
+        green while it waits for a human reviewer)."""
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": ""}
+        stuck = [{"run_id": 1, "age_hours": 8.0, "url": "https://example.com"}]
+        v = assess_health(rec, stuck_approvals=stuck, git_runner=lambda cmd: "")
+        assert v.status == "green"
+        assert v.severity == "high"
+
+    def test_high_severity_for_stale_green_backlog_over_threshold(self) -> None:
+        now = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc)
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": "abc123"}
+        git_output = "commit1 msg\ncommit2 msg"
+        v = assess_health(rec, git_runner=lambda cmd: git_output, now=now)
+        assert v.unapplied_backlog == 2
+        assert v.record_age_hours >= ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS
+        assert v.severity == "high"
+
+    def test_none_severity_for_green_backlog_under_threshold(self) -> None:
+        now = datetime(2026, 6, 27, 0, 5, tzinfo=timezone.utc)
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": "abc123"}
+        git_output = "commit1 msg"
+        v = assess_health(rec, git_runner=lambda cmd: git_output, now=now)
+        assert v.unapplied_backlog == 1
+        assert v.record_age_hours < ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS
+        assert v.severity == "none"
+
 
 # ---------------------------------------------------------------------------
 # escalate (idempotent file / update / close -- mocked portal)
@@ -636,6 +674,144 @@ class TestEscalateGreenClosesOpenRec:
         assert result["action"] == "close"
         assert result["rec_id"] == "rec-555"
         assert calls[0][0] == "close"
+
+
+# ---------------------------------------------------------------------------
+# escalate() -- green + stuck-approval condition (T2.35 hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestEscalateGreenStuckApproval:
+    def _make_verdict(self) -> HealthVerdict:
+        return HealthVerdict(
+            status="green",
+            red_age_hours=0.0,
+            unapplied_backlog=0,
+            stuck_approvals=[{"run_id": 1, "age_hours": 8.0, "url": "https://example.com"}],
+            severity="high",
+        )
+
+    def test_files_rec_for_green_stuck_approval(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return "rec-701"
+
+        result = escalate(self._make_verdict(), portal_caller=_caller, open_recs=[])
+        assert result == {"action": "file", "rec_id": "rec-701"}
+        assert calls[0][0] == "file"
+        assert calls[0][1]["title"] == ch._TITLE_STUCK_APPROVAL
+        assert "waiting on" in calls[0][1]["context"]
+
+    def test_second_tick_updates_not_files(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return None
+
+        existing = {"id": "rec-702", "source": "tf_convergence_stale", "status": "open", "title": ch._TITLE_STUCK_APPROVAL}
+        result = escalate(self._make_verdict(), portal_caller=_caller, open_recs=[existing])
+        assert result == {"action": "update", "rec_id": "rec-702"}
+        assert len(calls) == 1
+        assert calls[0][0] == "update"
+
+    def test_clearing_approvals_closes_with_stuck_approval_resolution(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return None
+
+        existing = {"id": "rec-703", "source": "tf_convergence_stale", "status": "open", "title": ch._TITLE_STUCK_APPROVAL}
+        cleared_verdict = HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none")
+        result = escalate(cleared_verdict, portal_caller=_caller, open_recs=[existing])
+        assert result == {"action": "close", "rec_id": "rec-703"}
+        assert calls[0][1]["resolution"] == ch._RESOLUTION_STUCK_APPROVAL
+
+
+# ---------------------------------------------------------------------------
+# escalate() -- green + stale-backlog condition (T2.35 hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestEscalateGreenStaleBacklog:
+    def _make_verdict(self, record_age_hours: float) -> HealthVerdict:
+        return HealthVerdict(
+            status="green",
+            red_age_hours=0.0,
+            unapplied_backlog=2,
+            severity="high" if record_age_hours >= ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS else "none",
+            record_age_hours=record_age_hours,
+        )
+
+    def test_files_rec_at_or_over_threshold(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return "rec-801"
+
+        verdict = self._make_verdict(record_age_hours=ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS)
+        result = escalate(verdict, portal_caller=_caller, open_recs=[])
+        assert result == {"action": "file", "rec_id": "rec-801"}
+        assert calls[0][1]["title"] == ch._TITLE_STALE_GREEN_BACKLOG
+        assert "backlog" in calls[0][1]["context"]
+
+    def test_no_file_under_threshold(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return "rec-802"
+
+        verdict = self._make_verdict(record_age_hours=ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS - 0.5)
+        result = escalate(verdict, portal_caller=_caller, open_recs=[])
+        assert result == {"action": "none", "rec_id": None}
+        assert not calls
+
+    def test_second_tick_updates_not_files(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return None
+
+        existing = {
+            "id": "rec-803",
+            "source": "tf_convergence_stale",
+            "status": "open",
+            "title": ch._TITLE_STALE_GREEN_BACKLOG,
+        }
+        verdict = self._make_verdict(record_age_hours=ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS + 1.0)
+        result = escalate(verdict, portal_caller=_caller, open_recs=[existing])
+        assert result == {"action": "update", "rec_id": "rec-803"}
+        assert len(calls) == 1
+
+    def test_backlog_drained_closes_with_stale_backlog_resolution(self) -> None:
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _caller(action: str, fields: dict[str, Any]) -> Any:
+            calls.append((action, fields))
+            return None
+
+        existing = {
+            "id": "rec-804",
+            "source": "tf_convergence_stale",
+            "status": "open",
+            "title": ch._TITLE_STALE_GREEN_BACKLOG,
+        }
+        drained_verdict = HealthVerdict(
+            status="green",
+            red_age_hours=0.0,
+            unapplied_backlog=0,
+            severity="none",
+            record_age_hours=ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS + 5.0,
+        )
+        result = escalate(drained_verdict, portal_caller=_caller, open_recs=[existing])
+        assert result == {"action": "close", "rec_id": "rec-804"}
+        assert calls[0][1]["resolution"] == ch._RESOLUTION_STALE_GREEN_BACKLOG
 
 
 class TestFetchOpenRecs:

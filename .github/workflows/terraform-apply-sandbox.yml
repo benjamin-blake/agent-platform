@@ -60,10 +60,17 @@ permissions:
   contents: read
 
 concurrency:
-  # Serialise applies against shared S3 state; never cancel an in-flight apply. This group also
-  # closes the read-precondition -> apply -> write-record race between rapid merges (CD.35 5.5b).
-  group: terraform-apply-sandbox
-  cancel-in-progress: false
+  # Event-keyed (T2.35 hardening, incident #559/#560): pull_request runs get a per-PR key so a
+  # gated-apply approval held on one PR's run can no longer cancel a follow-on PR's saved
+  # speculative plan.bin. push/workflow_dispatch runs keep the EXISTING shared key (NOT renamed
+  # -- reconcile.yml deliberately joins it, Decision 77/92/94 no-TOCTOU cross-workflow
+  # serialization) with cancel-in-progress OFF, held for the whole run (apply-sandbox through the
+  # gated-apply approval wait) -- serialising applies against shared S3 state and closing the
+  # read-precondition -> apply -> write-record race between rapid merges (CD.35 5.5b).
+  group: >-
+    ${{ github.event_name == 'pull_request' && format('terraform-apply-plan-pr-{0}',
+    github.event.pull_request.number) || 'terraform-apply-sandbox' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # The convergence record lives in its OWN S3 prefix, OUTSIDE tfstate/ (CD.35 5.5c): the read-only
