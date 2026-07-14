@@ -6,7 +6,7 @@ the config file is missing.
 
 Usage
 -----
-from scripts.model_registry import resolve_model, resolve_provider, escalate_model
+from scripts.llm.model_registry import resolve_model, resolve_provider, escalate_model
 
 model_id = resolve_model("planning", "XS")     # "gemini-3-flash-preview" or None
 provider = resolve_provider()                   # "gemini" (default for executor)

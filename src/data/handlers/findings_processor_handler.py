@@ -115,7 +115,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         Summary dict with ``unified_count``, ``new_rec_count``,
         ``duplicate_count``.
     """
-    from scripts.github_models_client import chat_completion
+    from scripts.llm.github_models_client import chat_completion
     from scripts.s3_log_store import append_jsonl, overwrite_jsonl, read_all_agent_findings, read_jsonl
     from src.data.handlers.agent_telemetry import (
         close_invocation as _close_invocation,

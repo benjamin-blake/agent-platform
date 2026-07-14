@@ -152,6 +152,48 @@ def _docs_root_stray_files(tracked: set[str], allowed: set[str], globs: list[str
     return strays
 
 
+def _load_scripts_root_allowlist(path: Path) -> tuple[set[str] | None, list[str], str | None]:
+    """Parse the optional `scripts_root_allowlist` sibling key from the router file.
+
+    Same tolerant shape as `_load_docs_root_allowlist`: (allowed_files, grandfathered_globs, error).
+      - (None, [], None)   -> key ABSENT: rule not configured; caller skips the scripts-root scan.
+      - (set, list, None)  -> key present and well-formed: caller runs the scan.
+      - (None, [], "msg")  -> key present but malformed: caller appends the failure.
+    Never raises.
+    """
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return None, [], f"could not read/parse {path}: {exc}"
+    if not isinstance(data, dict) or "scripts_root_allowlist" not in data:
+        return None, [], None
+    block = data["scripts_root_allowlist"]
+    if not isinstance(block, dict):
+        return None, [], "scripts_root_allowlist is not a mapping"
+    allowed = block.get("allowed_files", [])
+    globs = block.get("grandfathered_globs", [])
+    if not isinstance(allowed, list) or any(not isinstance(x, str) or not x for x in allowed):
+        return None, [], "scripts_root_allowlist.allowed_files must be a list of non-empty strings"
+    if not isinstance(globs, list) or any(not isinstance(x, str) or not x for x in globs):
+        return None, [], "scripts_root_allowlist.grandfathered_globs must be a list of non-empty strings"
+    return set(allowed), list(globs), None
+
+
+def _scripts_root_stray_files(tracked: set[str], allowed: set[str], globs: list[str]) -> list[str]:
+    """Depth-1 tracked files under scripts/ that are neither allowlisted nor grandfathered."""
+    strays: list[str] = []
+    for path_str in sorted(tracked):
+        if not path_str.startswith("scripts/"):
+            continue
+        rest = path_str[len("scripts/") :]
+        if not rest or "/" in rest:
+            continue
+        if rest in allowed or any(fnmatch.fnmatch(rest, g) for g in globs):
+            continue
+        strays.append(path_str)
+    return strays
+
+
 @registry.register("validate_placement", owner="platform")
 def validate_placement(failed: list[str], router_path: Path | None = None) -> None:
     """Link-validity gate (RS-04): every docs/contracts/file-router.yaml target must
@@ -197,3 +239,17 @@ def validate_placement(failed: list[str], router_path: Path | None = None) -> No
             failed.append("Docs-root allowlist: out-of-class docs-root file(s) (RS-03): " + ", ".join(strays))
         else:
             print(f"  PASS: docs/ root within allowlist ({len(allowed)} allowed, {len(globs)} grandfathered).")
+
+    print("\n=== Scripts-root allowlist check (RS-01) ===")
+    scripts_allowed, scripts_globs, scripts_allow_err = _load_scripts_root_allowlist(path)
+    if scripts_allow_err is not None:
+        failed.append(f"Scripts-root allowlist: {scripts_allow_err}")
+    elif scripts_allowed is None:
+        print("  SKIP: no scripts_root_allowlist key configured.")
+    else:
+        scripts_strays = _scripts_root_stray_files(tracked, scripts_allowed, scripts_globs)
+        if scripts_strays:
+            failed.append("Scripts-root allowlist: out-of-class scripts-root file(s) (RS-01): " + ", ".join(scripts_strays))
+        else:
+            n_allowed, n_globs = len(scripts_allowed), len(scripts_globs)
+            print(f"  PASS: scripts/ root within allowlist ({n_allowed} allowed, {n_globs} grandfathered).")

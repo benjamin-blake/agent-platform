@@ -15,7 +15,7 @@ intercepting with zero migration -- in particular ensure_feature_branch's
 call into _check_jsonl_clean and clean_slate's calls into the checkpoint/
 recommendation collaborators route through the facade rather than a bare
 co-located reference. The function-local `from scripts.ops_data_portal import
-file_rec / find_open_postmortem_for` and `from scripts.llm_client import
+file_rec / find_open_postmortem_for` and `from scripts.llm.client import
 llm_call` imports stay lazy exactly as today -- their patch sites target
 those source namespaces directly, not the facade.
 """
@@ -102,7 +102,7 @@ def _seed_gemini_session() -> str:
         Gemini CLI session_id string from the ``init`` event, or ``""`` on
         failure (callers fall back to cold-start).
     """
-    from scripts.llm_client import llm_call
+    from scripts.llm.client import llm_call
 
     try:
         result = llm_call(

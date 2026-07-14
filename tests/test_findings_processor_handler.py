@@ -110,7 +110,7 @@ class TestHandlerStep2AgentComparison:
             patch("scripts.s3_log_store.append_jsonl", return_value=True),
             patch.object(proc_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(proc_mod, "_load_compare_prompt", return_value="compare prompt"),
-            patch("scripts.github_models_client.chat_completion", return_value=api_response),
+            patch("scripts.llm.github_models_client.chat_completion", return_value=api_response),
             patch("scripts.s3_log_store._LOGS_DIR", Path("/tmp/__nonexistent")),
             patch("builtins.open", MagicMock()),
         ):
@@ -130,7 +130,7 @@ class TestHandlerStep2AgentComparison:
             patch("scripts.s3_log_store.read_jsonl", return_value=existing),
             patch.object(proc_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(proc_mod, "_load_compare_prompt", return_value="compare prompt"),
-            patch("scripts.github_models_client.chat_completion", return_value=api_response),
+            patch("scripts.llm.github_models_client.chat_completion", return_value=api_response),
             patch("scripts.s3_log_store._LOGS_DIR", Path("/tmp/__nonexistent")),
             patch("builtins.open", MagicMock()),
         ):
@@ -167,7 +167,7 @@ class TestHandlerStep2AgentComparison:
             patch("scripts.s3_log_store.append_jsonl", side_effect=capture_append),
             patch.object(proc_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(proc_mod, "_load_compare_prompt", return_value="compare prompt"),
-            patch("scripts.github_models_client.chat_completion", return_value=api_response),
+            patch("scripts.llm.github_models_client.chat_completion", return_value=api_response),
             patch("scripts.s3_log_store._LOGS_DIR", Path("/tmp/__nonexistent")),
             patch("builtins.open", MagicMock()),
         ):
@@ -188,7 +188,7 @@ class TestHandlerStep2AgentComparison:
             patch("scripts.s3_log_store.read_jsonl", return_value=[]),
             patch.object(proc_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(proc_mod, "_load_compare_prompt", return_value="compare prompt"),
-            patch("scripts.github_models_client.chat_completion", return_value=api_response),
+            patch("scripts.llm.github_models_client.chat_completion", return_value=api_response),
             patch("scripts.s3_log_store._LOGS_DIR", Path("/tmp/__nonexistent")),
             patch("builtins.open", MagicMock()),
         ):
@@ -208,7 +208,7 @@ class TestHandlerStep2AgentComparison:
             patch("scripts.s3_log_store.read_jsonl", return_value=[]),
             patch.object(proc_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(proc_mod, "_load_compare_prompt", return_value="compare prompt"),
-            patch("scripts.github_models_client.chat_completion", return_value=api_response),
+            patch("scripts.llm.github_models_client.chat_completion", return_value=api_response),
             patch("scripts.s3_log_store._LOGS_DIR", Path("/tmp/__nonexistent")),
             patch("builtins.open", MagicMock()),
         ):
@@ -267,7 +267,7 @@ class TestHandlerPriorityQueueRouting:
             patch("scripts.s3_log_store.overwrite_jsonl", return_value=True),
             patch.object(proc_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(proc_mod, "_load_compare_prompt", return_value="compare prompt"),
-            patch("scripts.github_models_client.chat_completion", side_effect=capture_chat),
+            patch("scripts.llm.github_models_client.chat_completion", side_effect=capture_chat),
             patch("builtins.open", MagicMock()),
         ):
             result = handler({}, None)
@@ -317,7 +317,7 @@ class TestHandlerPriorityQueueRouting:
             patch("scripts.s3_log_store.overwrite_jsonl", return_value=True),
             patch.object(proc_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(proc_mod, "_load_compare_prompt", return_value="compare prompt"),
-            patch("scripts.github_models_client.chat_completion", return_value=api_response),
+            patch("scripts.llm.github_models_client.chat_completion", return_value=api_response),
             patch("builtins.open", MagicMock()),
         ):
             result = handler({}, None)
@@ -344,7 +344,7 @@ class TestHandlerTelemetry:
             patch.object(proc_mod, "_get_github_pat", return_value="ghp_test"),
             patch.object(proc_mod, "_load_compare_prompt", return_value="compare"),
             patch(
-                "scripts.github_models_client.chat_completion",
+                "scripts.llm.github_models_client.chat_completion",
                 return_value=self._make_comparison_response(),
             ),
             patch("builtins.open", MagicMock()),

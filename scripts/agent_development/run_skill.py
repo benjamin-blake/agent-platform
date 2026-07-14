@@ -36,7 +36,7 @@ def parse_required_context(skill_path: str | Path) -> list[str]:
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.llm_client import llm_call  # noqa: E402
+from scripts.llm.client import llm_call  # noqa: E402
 
 try:
     from scripts.executor.telemetry import close_phase, close_session, get_context, open_phase, open_session  # noqa: E402

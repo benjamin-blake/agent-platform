@@ -1,11 +1,11 @@
-"""Unit tests for scripts/github_models_client.py."""
+"""Unit tests for scripts/llm/github_models_client.py."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import scripts.github_models_client as client_mod
-from scripts.github_models_client import chat_completion
+import scripts.llm.github_models_client as client_mod
+from scripts.llm.github_models_client import chat_completion
 
 
 class TestChatCompletionSuccess:
@@ -64,7 +64,7 @@ class TestChatCompletionRateLimit:
             mock_requests.post.side_effect = [rate_limit_response, success_response]
             mock_requests.exceptions.Timeout = Exception
             mock_requests.exceptions.RequestException = Exception
-            with patch("scripts.github_models_client.time") as mock_time:
+            with patch("scripts.llm.github_models_client.time") as mock_time:
                 result = chat_completion("prompt", "gpt-4.1-mini", "key", max_retries=2, initial_backoff=0.01)
 
         assert result == {"choices": [{"message": {"content": "ok"}}]}
@@ -81,7 +81,7 @@ class TestChatCompletionRateLimit:
             mock_requests.post.return_value = rate_limit_response
             mock_requests.exceptions.Timeout = Exception
             mock_requests.exceptions.RequestException = Exception
-            with patch("scripts.github_models_client.time") as mock_time:
+            with patch("scripts.llm.github_models_client.time") as mock_time:
                 mock_time.sleep = MagicMock()
                 result = chat_completion("prompt", "gpt-4.1-mini", "key", max_retries=2, initial_backoff=0.01)
 
@@ -103,7 +103,7 @@ class TestChatCompletionRateLimit:
             mock_requests.post.side_effect = [rate_limit_response, success_response]
             mock_requests.exceptions.Timeout = Exception
             mock_requests.exceptions.RequestException = Exception
-            with patch("scripts.github_models_client.time") as mock_time:
+            with patch("scripts.llm.github_models_client.time") as mock_time:
                 chat_completion("p", "m", "k", max_retries=2, initial_backoff=0.01)
 
         # Should wait at least 5 seconds (from Retry-After header)

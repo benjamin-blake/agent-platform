@@ -24,7 +24,12 @@ from scripts.checks._scaffolding import (
     partition_changed_tests_by_collectability,
 )
 from scripts.checks.ci_guards.validate_ops_portal_patch_targets import _find_violations as _ops_portal_patch_violations
-from scripts.checks.hygiene.validate_placement import _docs_root_stray_files, _load_docs_root_allowlist
+from scripts.checks.hygiene.validate_placement import (
+    _docs_root_stray_files,
+    _load_docs_root_allowlist,
+    _load_scripts_root_allowlist,
+    _scripts_root_stray_files,
+)
 from scripts.checks.hygiene.validate_test_count_coupling import _find_violations
 from scripts.checks.misc.validate_ghas_probe import _run_cli as _ghas_run_cli
 
@@ -749,6 +754,137 @@ class TestValidatePlacement:
             "  grandfathered_globs: []\n",
         )
         tracked = ["docs/ARCHITECTURE.md", "docs/CLAUDE.md"]
+        with patch("scripts.checks._common.run", side_effect=self._mock_ls_files(tracked)):
+            failed: list[str] = []
+            self.validate_placement(failed, router_path=router)
+        assert failed == []
+
+    # -- Scripts-root allowlist (RS-01 completion) -- _load_scripts_root_allowlist direct unit tests --
+
+    load_scripts_root_allowlist = staticmethod(_load_scripts_root_allowlist)
+    scripts_root_stray_files = staticmethod(_scripts_root_stray_files)
+
+    def test_scripts_root_allowlist_absent_key_skips(self, tmp_path: Path) -> None:
+        """No scripts_root_allowlist key at all -> (None, [], None): the back-compat skip signal."""
+        router = self._router(tmp_path, "schema_version: 1\nroutes:\n  - topic: t\n    targets: [docs/ARCHITECTURE.md]\n")
+        allowed, globs, err = self.load_scripts_root_allowlist(router)
+        assert allowed is None
+        assert globs == []
+        assert err is None
+
+    def test_scripts_root_allowlist_well_formed(self, tmp_path: Path) -> None:
+        """A well-formed block parses to (set, list, None)."""
+        router = self._router(
+            tmp_path,
+            "scripts_root_allowlist:\n"
+            "  allowed_files: [validate.py, CLAUDE.md]\n"
+            "  grandfathered_globs: ['ops_data_portal.py']\n",
+        )
+        allowed, globs, err = self.load_scripts_root_allowlist(router)
+        assert allowed == {"validate.py", "CLAUDE.md"}
+        assert globs == ["ops_data_portal.py"]
+        assert err is None
+
+    def test_scripts_root_allowlist_block_not_a_mapping_fails(self, tmp_path: Path) -> None:
+        """scripts_root_allowlist present but not a mapping (e.g. a bare scalar) is malformed."""
+        router = self._router(tmp_path, "scripts_root_allowlist: not-a-mapping\n")
+        allowed, globs, err = self.load_scripts_root_allowlist(router)
+        assert allowed is None
+        assert globs == []
+        assert err is not None
+        assert "not a mapping" in err
+
+    def test_scripts_root_allowlist_allowed_files_not_a_list_fails(self, tmp_path: Path) -> None:
+        """allowed_files as a scalar (not a list) is malformed."""
+        router = self._router(tmp_path, "scripts_root_allowlist:\n  allowed_files: not-a-list\n")
+        allowed, globs, err = self.load_scripts_root_allowlist(router)
+        assert allowed is None
+        assert err is not None
+        assert "allowed_files" in err
+
+    def test_scripts_root_allowlist_globs_non_string_entry_fails(self, tmp_path: Path) -> None:
+        """A non-string (null) element in grandfathered_globs is malformed."""
+        router = self._router(
+            tmp_path,
+            "scripts_root_allowlist:\n  allowed_files: [validate.py]\n  grandfathered_globs: [null]\n",
+        )
+        allowed, globs, err = self.load_scripts_root_allowlist(router)
+        assert allowed is None
+        assert err is not None
+        assert "grandfathered_globs" in err
+
+    # -- Scripts-root allowlist (RS-01 completion) -- _scripts_root_stray_files direct unit tests --
+
+    def test_scripts_root_stray_files_mixed_returns_only_stray(self) -> None:
+        """A mix of an allowed file, a grandfathered ops_* entry, a non-scripts path, a nested
+        scripts/<subdir>/ file, and a genuine stray returns ONLY the stray."""
+        tracked = {
+            "scripts/validate.py",
+            "scripts/ops_data_portal.py",
+            "scripts/llm/client.py",
+            "src/lambdas/handler.py",
+            "scripts/STRAY.py",
+        }
+        strays = self.scripts_root_stray_files(tracked, {"validate.py"}, ["ops_data_portal.py", "ops_writer.py"])
+        assert strays == ["scripts/STRAY.py"]
+
+    def test_scripts_root_stray_files_all_covered_returns_empty(self) -> None:
+        """When every depth-1 scripts/ file is allowlisted or grandfathered, no strays."""
+        tracked = {"scripts/validate.py", "scripts/ops_data_portal.py", "scripts/llm/client.py"}
+        strays = self.scripts_root_stray_files(tracked, {"validate.py"}, ["ops_data_portal.py", "ops_writer.py"])
+        assert strays == []
+
+    # -- Scripts-root allowlist (RS-01 completion) -- integration via validate_placement() ---------
+
+    def test_scripts_root_allowlist_integration_happy_path(self, tmp_path: Path) -> None:
+        """A router with a well-formed scripts_root_allowlist and a fully-covered scripts/ root
+        snapshot passes with an empty failed list (both RS-04 and RS-01 blocks PASS)."""
+        router = self._router(
+            tmp_path,
+            "schema_version: 1\n"
+            "routes:\n"
+            "  - topic: file-target\n"
+            "    targets: [scripts/validate.py]\n"
+            "scripts_root_allowlist:\n"
+            "  allowed_files: [validate.py]\n"
+            "  grandfathered_globs: ['ops_data_portal.py', 'ops_writer.py']\n",
+        )
+        tracked = ["scripts/validate.py", "scripts/ops_data_portal.py", "scripts/ops_writer.py", "scripts/llm/client.py"]
+        with patch("scripts.checks._common.run", side_effect=self._mock_ls_files(tracked)):
+            failed: list[str] = []
+            self.validate_placement(failed, router_path=router)
+        assert failed == []
+
+    def test_scripts_root_allowlist_integration_stray_fails(self, tmp_path: Path) -> None:
+        """An out-of-class scripts-root file in the tracked snapshot fails with a message
+        naming the file and citing RS-01."""
+        router = self._router(
+            tmp_path,
+            "schema_version: 1\n"
+            "routes:\n"
+            "  - topic: file-target\n"
+            "    targets: [scripts/validate.py]\n"
+            "scripts_root_allowlist:\n"
+            "  allowed_files: [validate.py]\n"
+            "  grandfathered_globs: ['ops_data_portal.py']\n",
+        )
+        tracked = ["scripts/validate.py", "scripts/ops_data_portal.py", "scripts/STRAY.py"]
+        with patch("scripts.checks._common.run", side_effect=self._mock_ls_files(tracked)):
+            failed: list[str] = []
+            self.validate_placement(failed, router_path=router)
+        assert len(failed) == 1
+        assert "scripts/STRAY.py" in failed[0]
+        assert "RS-01" in failed[0]
+
+    def test_scripts_root_allowlist_backcompat_absent_key_no_stray_failure(self, tmp_path: Path) -> None:
+        """A router with NO scripts_root_allowlist key: the scripts-root scan SKIPs (no failure
+        for scripts/STRAY.py) while link-validity still runs and still passes -- proves the
+        additive change is back-compat with routers that predate this key."""
+        router = self._router(
+            tmp_path,
+            "schema_version: 1\nroutes:\n  - topic: file-target\n    targets: [scripts/validate.py]\n",
+        )
+        tracked = ["scripts/validate.py", "scripts/STRAY.py"]
         with patch("scripts.checks._common.run", side_effect=self._mock_ls_files(tracked)):
             failed: list[str] = []
             self.validate_placement(failed, router_path=router)

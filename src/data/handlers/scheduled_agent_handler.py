@@ -232,7 +232,7 @@ def _preload_rec_curator_context(prompt_text: str) -> str:
 
 def _invoke_github_models(prompt_text: str, model: str, pat: str) -> tuple[str, bool, str]:
     """Invoke GitHub Models API. Returns (output, error, message)."""
-    from scripts.github_models_client import chat_completion
+    from scripts.llm.github_models_client import chat_completion
 
     response = chat_completion(prompt=prompt_text, model=model, api_key=pat)
     if response.get("error"):

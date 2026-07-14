@@ -5,7 +5,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from scripts.llm_client import llm_call
+from scripts.llm.client import llm_call
 from scripts.s3_log_store import get_backend, read_jsonl
 
 logger = logging.getLogger(__name__)

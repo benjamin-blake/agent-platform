@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import scripts.executor.plan as plan_mod
-import scripts.model_registry as model_registry_mod
+import scripts.llm.model_registry as model_registry_mod
 from scripts.executor.plan import (
     ExecutionPlan,
     PlanStep,
@@ -29,7 +29,7 @@ from scripts.executor.plan import (
     refine_plan,
     save_plan,
 )
-from scripts.llm_client import LLMResult
+from scripts.llm.client import LLMResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -974,19 +974,19 @@ class TestModelSelection:
     """Tests for get_planning_model() and escalate_planning_model()."""
 
     def test_get_planning_model_delegates_to_resolver(self) -> None:
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-flash-preview") as mock_resolve:
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-flash-preview") as mock_resolve:
             result = get_planning_model("XS")
         mock_resolve.assert_called_once_with("planning", "XS")
         assert result == "gemini-3-flash-preview"
 
     def test_get_planning_model_l_delegates_to_resolver(self) -> None:
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
             result = get_planning_model("L")
         mock_resolve.assert_called_once_with("planning", "L")
         assert result == "gemini-3-pro-preview"
 
     def test_get_planning_model_returns_none_for_auto_mode(self) -> None:
-        with patch("scripts.model_registry.resolve_model", return_value=None):
+        with patch("scripts.llm.model_registry.resolve_model", return_value=None):
             result = get_planning_model("S")
         assert result is None
 
@@ -997,7 +997,7 @@ class TestModelSelection:
 
     def test_env_override_cleared_returns_resolver_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_PLANNING", raising=False)
-        with patch("scripts.model_registry.resolve_model", return_value="gemini-3-flash-preview"):
+        with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-flash-preview"):
             result = get_planning_model("XS")
         assert result == "gemini-3-flash-preview"
 

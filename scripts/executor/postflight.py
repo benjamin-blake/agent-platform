@@ -22,7 +22,6 @@ import time  # noqa: F401
 from datetime import datetime, timezone
 from typing import Optional
 
-from scripts import model_registry  # noqa: F401
 from scripts.execution_state import clear_checkpoint
 from scripts.executor.ci_triage import triage_ci_failure  # noqa: F401
 from scripts.executor.jsonl_store import _create_postmortem_recommendation, update_recommendation_status
@@ -51,8 +50,9 @@ from scripts.executor.postflight_gitops import (
     merge_pr,
 )
 from scripts.executor.telemetry import emit_process_event
-from scripts.llm_client import llm_call  # noqa: F401
-from scripts.llm_utils import MODEL_EXECUTION, build_context_path, kill_process_tree  # noqa: F401
+from scripts.llm import model_registry  # noqa: F401
+from scripts.llm.client import llm_call  # noqa: F401
+from scripts.llm.utils import MODEL_EXECUTION, build_context_path, kill_process_tree  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

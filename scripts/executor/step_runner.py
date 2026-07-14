@@ -29,8 +29,8 @@ from typing import Optional
 
 from scripts.executor.plan import load_prompt
 from scripts.executor.telemetry import emit_process_event, emit_step, emit_transcript
-from scripts.llm_client import llm_call
-from scripts.llm_utils import build_context_path, kill_process_tree
+from scripts.llm.client import llm_call
+from scripts.llm.utils import build_context_path, kill_process_tree
 from scripts.s3_log_store import append_jsonl, get_backend
 
 logger = logging.getLogger(__name__)

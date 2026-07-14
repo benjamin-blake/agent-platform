@@ -1210,9 +1210,9 @@ candidate_decisions:
 
         - PLAN-retire-bedrock-code-paths (priority high)
           Scope: delete scripts/bedrock_client.py (347 LoC); remove _bedrock_call + _get_bedrock_credentials
-          + _PRICING Bedrock entries from scripts/llm_client.py; remove _invoke_bedrock + Bedrock
+          + _PRICING Bedrock entries from scripts/llm/client.py; remove _invoke_bedrock + Bedrock
           dispatch branches from src/data/handlers/scheduled_agent_handler.py; sweep Bedrock provider
-          defaults / pricing tables from scripts/model_registry.py, scripts/copilot_wrapper.py, and
+          defaults / pricing tables from scripts/llm/model_registry.py, scripts/copilot_wrapper.py, and
           scripts/copilot_multipliers_refresher.py (each contains residual Bedrock references that
           must be co-retired); remove bedrock:Invoke* grants from terraform/lambda_tooling_iam.tf
           (the lines around 118-126 at the time of this CD) and from docs/runbooks/policies/
@@ -1221,7 +1221,7 @@ candidate_decisions:
           the bedrock_via_chain entry); update Bedrock-referencing test files in lockstep with
           the production sweep -- tests/test_llm_client.py, tests/test_verify_platform_account.py,
           tests/test_build_lambda.py, tests/test_scheduled_agent_handler.py.
-          Gating: touches Lambda-packaged code (scheduled_agent_handler.py, llm_client.py) -- CD.16
+          Gating: touches Lambda-packaged code (scheduled_agent_handler.py, scripts/llm/client.py) -- CD.16
           per-Lambda gating applies (build + deploy + smoke-test per touched Lambda; deploy is no
           longer frozen per Decision 79; the dispatcher's smoke-test stays deferred until T4.3).
           Other files (bedrock_client.py deletion, terraform IAM, verifier) are non-Lambda
@@ -1305,7 +1305,7 @@ candidate_decisions:
     filed_via: ops_decisions:dec-122
     supersedes_decisions: [40, "CD.7"]
     discipline_points:
-      - LiteLLM is the only Layer-1 inference protocol surface. Direct provider-SDK imports are forbidden in the executor and in scripts/llm_client.py.
+      - LiteLLM is the only Layer-1 inference protocol surface. Direct provider-SDK imports are forbidden in the executor and in scripts/llm/client.py.
       - Tier 2 Anthropic-direct credential is validated at every harness cold start, regardless of which tier the executor routes to for the next call. Warm-fetched escape hatch is non-negotiable. Validation contract -- key-shape probe + usage-API query (Anthropic /v1/organizations/usage) with >10% remaining pool assertion; fall back to minimal billable token probe if usage-API unavailable. Implementation lands in `PLAN-llm-client-litellm-transport` precursor plan under T4.2.
       - Tier 1 DeepSeek-direct credential rotation cadence -- quarterly, calendar-reminded, via Secrets Manager versioning. Same pattern as Anthropic-direct.
       - Cost-monitoring follow-on -- file rec for org-billed Anthropic API key once executor volume sustains > 70% of Max x5 programmatic pool over a 30-day window.
@@ -2472,7 +2472,7 @@ tier_items:
     files_in_scope:
       - docs/contracts/inference-provider.yaml
       - docs/contracts/inference-provider.md
-      - scripts/model_registry.py
+      - scripts/llm/model_registry.py
       - config/agent/copilot/model_routing.yaml
     exit_criteria:
       - "inference-provider.yaml exists at contract_version: 1, status: ratified"
@@ -2552,14 +2552,14 @@ tier_items:
       (commit 6a2f7c0, "retire Copilot-SDK residue"), and the .md's cited replacement
       scripts/bedrock_client.py never existed (bedrock retired per CD.28; Gemini is
       the sole valid provider -- model_registry._VALID_PROVIDERS = frozenset(["gemini"])).
-      scripts/llm_utils.py never parsed CLI JSON output -- only process-safety helpers
+      scripts/llm/utils.py never parsed CLI JSON output -- only process-safety helpers
       were relocated there; the parser stayed in copilot_wrapper.py until its deletion.
-      The live CLI-JSON parser today is scripts/llm_client.py:_gemini_call (a different
+      The live CLI-JSON parser today is scripts/llm/client.py:_gemini_call (a different
       vendor schema, out of this item's scope). Disposition chosen by human: retire
       per Known Gap #7's "keep as markdown / retire, unenforced" outcome.
     depends_on: [T-1.12]
     files_in_scope:
-      - scripts/llm_client.py
+      - scripts/llm/client.py
     exit_criteria:
       - "docs/contracts/cli-json-output.md deleted; no live code/config reference to it or to parse_jsonl_output remains"
       - "Explicit exemption documented (Known Gap #7 'retire, unenforced' branch) rather than a YAML conversion"
@@ -2847,6 +2847,48 @@ tier_items:
           touched items, closes_criteria resolution); docs/contracts/exit-criteria-ledger.yaml exists.
         status: met
         met_by: exit-criteria-ledger-orient-followon
+
+  - id: T-1.24
+    tier: T-1
+    name: "Nest the scripts/ops family into scripts/ops/ (RS-01 phase deferred)"
+    status: not_started
+    effort: M
+    related_candidate_decisions: []
+    intent: >-
+      Final RS-01 subpackaging move, deliberately deferred (audit Q6 sequencing): relocate the
+      ops-portal family scripts/ops_data_portal.py + scripts/ops_writer.py into scripts/ops/
+      (data_portal.py + writer.py, or names kept) via git mv + same-commit reference rewrite.
+      HIGHEST fan-out of the six families: 27+ external refs incl. AGENTS.md (Single-Portal
+      invariant), .github/workflows/rec-autoclose.yml, executor prompts, and the data-pipeline +
+      ops-compaction Lambda manifests (ops_writer.py is bundled -> V3). Deferred until the
+      placement check is live and the other five families proved the anchored-rewrite pattern
+      (RS-01 phases P4a/P4b/P4c). No import shims (Decision 55). Grandfathered in the
+      scripts_root_allowlist until this lands.
+    depends_on: []
+    files_in_scope:
+      - scripts/ops_data_portal.py
+      - scripts/ops_writer.py
+    exit_criteria:
+      - id: c1
+        text: >-
+          scripts/ops_data_portal.py and scripts/ops_writer.py relocated under scripts/ops/ with
+          an __init__.py; no flat original remains; same-commit reference rewrite across all 27+
+          external refs (AGENTS.md, rec-autoclose.yml, executor prompts, both Lambda manifests)
+          with no import shims.
+        status: open
+      - id: c2
+        text: >-
+          The scripts_root_allowlist grandfathered_globs entries for ops_data_portal.py/
+          ops_writer.py are removed (the ops pair is now nested); validate_placement green; the
+          Single-Portal invariant preserved (all writes still transit the portal surface, path
+          only rewritten).
+        status: open
+      - id: c3
+        text: >-
+          V3 gates green -- ops_writer.py is bundled in both manifests, so
+          compute_affected_artifacts=={data-pipeline, ops-compaction}; both manifests updated
+          same-commit, bundle-completeness green, both artifacts rebuilt+deployed+smoke-tested.
+        status: open
 
   # ----- T0: Bootstrap (surface + account + minimum tooling) -----
   - id: T0.1
@@ -4622,9 +4664,9 @@ tier_items:
       dispatch active, and the contract's stated provider default disagrees with the code default).
       Scope = CD.28's PLAN-retire-bedrock-code-paths + PLAN-update-inference-provider-contract
       (and the PLAN-retire-copilot-sdk subset where reachable): delete scripts/bedrock_client.py;
-      remove _bedrock_call/_get_bedrock_credentials/_PRICING bedrock entries from scripts/llm_client.py;
+      remove _bedrock_call/_get_bedrock_credentials/_PRICING bedrock entries from scripts/llm/client.py;
       remove _invoke_bedrock dispatch from src/data/handlers/scheduled_agent_handler.py; sweep
-      residual Bedrock references in scripts/model_registry.py, copilot_wrapper.py,
+      residual Bedrock references in scripts/llm/model_registry.py, copilot_wrapper.py,
       copilot_multipliers_refresher.py; remove bedrock:Invoke* from the retired-work-root
       terraform/lambda_tooling_iam.tf and docs/runbooks/policies/platform-dev-daily-ops.json
       (the live personal-account PlatformDev policy is already bedrock-free -- permission-closed);
@@ -4638,9 +4680,9 @@ tier_items:
     depends_on: []
     files_in_scope:
       - scripts/bedrock_client.py    # deleted
-      - scripts/llm_client.py
+      - scripts/llm/client.py
       - src/data/handlers/scheduled_agent_handler.py    # Lambda-packaged: CD.16 per-Lambda build+deploy+smoke-test applies (Decision 79); dispatcher smoke-test deferred until T4.3
-      - scripts/model_registry.py
+      - scripts/llm/model_registry.py
       - scripts/copilot_wrapper.py
       - scripts/copilot_multipliers_refresher.py
       - terraform/lambda_tooling_iam.tf    # retired work-root: bedrock:Invoke* grant removed (dead_but_provisioned closure)
@@ -8016,7 +8058,7 @@ tier_items:
       - src/lambdas/decision_scout/     # new -- Durable Function persona
       - src/lambdas/implement_agent/    # new -- Durable Function persona
       - src/lambdas/code_reviewer/      # new -- Durable Function persona
-      - scripts/llm_client.py           # rewrite to LiteLLM transport; remove Bedrock + Gemini-CLI paths
+      - scripts/llm/client.py           # rewrite to LiteLLM transport; remove Bedrock + Gemini-CLI paths
       - config/agent/executor/prompts/  # per-persona prompt templates (one per Durable Function)
     exit_criteria:
       - "Each persona Lambda Durable Function deployed; checkpoint-replay verified: a forced timeout mid-persona-loop resumes from last completed tool call on next invocation without re-issuing completed LLM calls"
@@ -8042,7 +8084,7 @@ tier_items:
     decomposition_hints:
       split_by: per_persona
       atomic_plans:
-        - "PLAN-llm-client-litellm-transport -- scripts/llm_client.py rewrite to LiteLLM; remove Bedrock + Gemini-CLI; tier routing wired to CD.28 model registry (precursor; lands before persona plans)"
+        - "PLAN-llm-client-litellm-transport -- scripts/llm/client.py rewrite to LiteLLM; remove Bedrock + Gemini-CLI; tier routing wired to CD.28 model registry (precursor; lands before persona plans)"
         - "PLAN-persona-plan-agent -- plan_agent Durable Function"
         - "PLAN-persona-plan-critic -- plan_critic Durable Function"
         - "PLAN-persona-decision-scout -- decision_scout Durable Function"

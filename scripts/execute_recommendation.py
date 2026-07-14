@@ -113,7 +113,7 @@ from scripts.executor.telemetry import (
     open_phase,
     open_session,
 )
-from scripts.llm_utils import (
+from scripts.llm.utils import (
     MODEL_EXECUTION,
     LLMResponseError,
     _assign_job_object,
@@ -845,7 +845,7 @@ def _execute_recommendation_inner(
             _effort = rec.get("effort", "").upper()
             _resume_enabled = os.getenv("PLAN_SESSION_RESUME", "true").lower() not in ("false", "0")
             _base_session_id: str = ""
-            from scripts.model_registry import resolve_provider
+            from scripts.llm.model_registry import resolve_provider
 
             if _resume_enabled and resolve_provider() == "gemini" and _effort not in ("XS", "S"):
                 _base_session_id = _seed_gemini_session()

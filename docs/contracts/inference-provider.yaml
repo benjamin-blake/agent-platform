@@ -53,12 +53,12 @@ tier_model:  # CD.28 committed architecture
       state: Deferred
   note: >-
     LiteLLM is the only Layer-1 inference protocol surface under CD.28. Direct provider-SDK
-    imports are forbidden in the executor and in scripts/llm_client.py.
+    imports are forbidden in the executor and in scripts/llm/client.py.
 
 operative_state:  # until T4.2 lands
   executor_pipeline:
     provider: gemini-cli
-    entrypoint: "scripts/llm_client._gemini_call"
+    entrypoint: "scripts/llm/client._gemini_call"
     models: "Gemini 3 models via local CLI headless mode"
     decision: Decision-53
   scheduled_agents:
@@ -91,7 +91,7 @@ retired_providers:
 
 provider_defaults:  # contract = code; MUST stay in sync with it
   executor_path:
-    entrypoint: "scripts.llm_client.llm_call -> scripts.model_registry.resolve_provider"
+    entrypoint: "scripts.llm.client.llm_call -> scripts.llm.model_registry.resolve_provider"
     default: gemini
     valid_providers: [gemini]  # bedrock retired per CD.28
     fallback_behavior: >-
@@ -125,7 +125,7 @@ provider_field_schema:
       client: "RETIRED -- raises RetiredProviderError"
       where_valid: "Not valid anywhere; retired alongside copilot-sdk per Decision 116."
     - value: github-models
-      client: "scripts/github_models_client.chat_completion()"
+      client: "scripts/llm/github_models_client.chat_completion()"
       where_valid: "Local only -- MUST NOT be used in Lambda; the absent-field default."
     - value: litellm
       client: "T4.2 transport (not yet built)"
@@ -156,7 +156,7 @@ model_id_formats:
       - {code: 42, meaning: bad_input}
       - {code: 53, meaning: turn_limit_exceeded, retryable: true}
     version_requirement: "Preview (0.40.0+) required for Gemini 3 models. Install: npm install -g @google/gemini-cli@preview"
-    routing: "docs/contracts/inference-provider.yaml (model_routing:) -> scripts/model_registry.py -> scripts/llm_client._gemini_call()"
+    routing: "docs/contracts/inference-provider.yaml (model_routing:) -> scripts/llm/model_registry.py -> scripts/llm/client._gemini_call()"
     cost: "Free tier (personal Google Pro plan). The gemini transport reports cost_usd=0.0."
   litellm_tier_models:  # committed -- lands at T4.2
     tier_1:
@@ -195,10 +195,10 @@ plan_compliance_checklist:
   - "No provider: bedrock anywhere; no scripts.bedrock_client imports (git grep -l -E \"bedrock_client|_bedrock_call|_invoke_bedrock\" -- scripts/ src/ returns nothing)"
   - "New schedule.yaml entries are not added while scheduled agents are disabled; provider migration is owned by PLAN-resolve-scheduled-agent-provider"
   - "Executor call sites go through llm_call() -- no direct provider-SDK imports (CD.28 discipline point)"
-  - "Stated provider defaults in this contract match scripts/model_registry.py and scheduled_agent_handler.py (provider_defaults section)"
+  - "Stated provider defaults in this contract match scripts/llm/model_registry.py and scheduled_agent_handler.py (provider_defaults section)"
   - "Lambda-packaged changes follow CD.16/Decision 79 per-Lambda build + deploy + smoke-test gating (dispatcher smoke deferred until T4.3)"
 
-model_routing:  # machine-consumed by scripts/model_registry.py; verbatim from the retired
+model_routing:  # machine-consumed by scripts/llm/model_registry.py; verbatim from the retired
                 # standalone routing config minus the CD.28-retired bedrock provider block
   providers:
     gemini:

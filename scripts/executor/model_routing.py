@@ -7,7 +7,7 @@ escalate_implementation_model.
 
 import logging
 
-from scripts import model_registry
+from scripts.llm import model_registry
 
 logger = logging.getLogger(__name__)
 

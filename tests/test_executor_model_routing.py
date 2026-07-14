@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import scripts.model_registry as model_registry_mod
+import scripts.llm.model_registry as model_registry_mod
 from scripts.executor.model_routing import (
     _IMPL_FAILURE_COUNT,
     _PLANNING_FAILURE_COUNT,
@@ -18,17 +18,17 @@ from scripts.executor.model_routing import (
 class TestGetPlanningModel:
     """Tests for get_planning_model()."""
 
-    @patch("scripts.model_registry.resolve_model", return_value=None)
+    @patch("scripts.llm.model_registry.resolve_model", return_value=None)
     def test_returns_none_for_auto_mode(self, mock_resolve: object) -> None:
         result = get_planning_model("XS")
         assert result is None
 
-    @patch("scripts.model_registry.resolve_model", return_value="gemini-3-flash-preview")
+    @patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-flash-preview")
     def test_returns_model_for_effort(self, mock_resolve: object) -> None:
         result = get_planning_model("S")
         assert result == "gemini-3-flash-preview"
 
-    @patch("scripts.model_registry.resolve_model", return_value="gemini-3-pro-preview")
+    @patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview")
     def test_returns_pro_for_large_effort(self, mock_resolve: object) -> None:
         result = get_planning_model("L")
         assert result == "gemini-3-pro-preview"
@@ -79,17 +79,17 @@ class TestEscalatePlanningModel:
 class TestGetImplementationModel:
     """Tests for get_implementation_model()."""
 
-    @patch("scripts.model_registry.resolve_model", return_value="gemini-3-flash-preview")
+    @patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-flash-preview")
     def test_returns_model(self, mock_resolve: object) -> None:
         result = get_implementation_model("XS")
         assert result == "gemini-3-flash-preview"
 
-    @patch("scripts.model_registry.resolve_model", return_value="gemini-3-pro-preview")
+    @patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview")
     def test_file_floor_override(self, mock_resolve: object) -> None:
         result = get_implementation_model("XS", "scripts/executor/plan.py")
         assert result == "gemini-3-pro-preview"
 
-    @patch("scripts.model_registry.resolve_model", return_value=None)
+    @patch("scripts.llm.model_registry.resolve_model", return_value=None)
     def test_returns_none_for_auto(self, mock_resolve: object) -> None:
         result = get_implementation_model("XS")
         assert result is None
