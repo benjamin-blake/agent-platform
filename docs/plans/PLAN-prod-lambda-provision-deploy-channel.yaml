@@ -1,0 +1,472 @@
+schema_version: 1
+slug: "prod-lambda-provision-deploy-channel"
+intent: >-
+  Give the data-pipeline and ops-compaction Lambda artifacts a working, governed code-deploy path
+  by provisioning their three functions (decoupled from infra apply) and adding a scoped-role
+  governed deploy channel mirroring T2.38 -- closing the deploy-infrastructure gap that currently
+  blocks every Lambda-touching change to these artifacts (including the merged P4c refactor) and
+  keeping the platform's ship loop unblocked.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-prod-lambda-provision-deploy-channel.yaml
+phase: >-
+  Platform tier T2 -- new tier_item T2.43 (provision + govern the decoupled_build_pipeline Lambda
+  class). Unblocks PLAN-nest-llm-family (P4c) V3 build->deploy->smoke acceptance for data-pipeline
+  and ops-compaction. Extends the Decision 125/126 deployment redesign that T2.38 realized for the
+  four DuckLake functions only.
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add tier_item T2.43 (governed code-deploy channel + provisioning for the
+      decoupled_build_pipeline Lambdas) with exit_criteria mapping 1:1 to this plan's acceptance.
+  - file: terraform/personal/prod_lambdas.tf
+    action: Create
+    purpose: >-
+      Provision agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor, and
+      agent-platform-ops-compaction in the personal account -- each with lifecycle {
+      ignore_changes = [source_code_hash] } (Decision 125 / taxonomy section 5), a per-function
+      execution IAM role + inline policy, a CloudWatch log group, layer attachment, env, and its
+      trigger (EventBridge for the dispatcher; S3 notification for findings-processor/ops-compaction).
+      Ported from the retired terraform/scheduled_agents.tf and adapted to the personal-module idiom
+      (var.account_id, default provider, agent-platform-data-lake bucket, personal secrets). The
+      dispatcher's EventBridge rule is provisioned with state = "DISABLED" and env
+      SCHEDULED_AGENTS_ENABLED = "false" (Decision 61/37/116) -- provisioning must NOT re-enable the
+      scheduled agents.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add a scoped UpdateFunctionCode-only OIDC role (agent-platform-github-ci-prod-deploy) scoped
+      to exactly the three prod function ARNs (no other lambda action, no terraform, no iam), trust
+      mirroring the T2.38 ducklake-deploy role (refs/heads/main, no Environment sub -- Decision 94);
+      add the three prod function ARNs to the LambdaRead refresh-read fragment and the new deploy
+      role ARN to IAMCIRolesRead so github_ci_plan/drift can refresh-read it.
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Add the new prod-deploy role ARN and the three prod execution-role ARNs to the bootstrap
+      IAMRolesRead refresh grant (read-only; mirrors the T2.38 rec-2688 reconcile), so github_ci_apply
+      can refresh-read them without widening any write budget.
+  - file: .github/workflows/deploy-prod-lambdas.yml
+    action: Create
+    purpose: >-
+      Governed code-deploy channel for the prod class (mirror deploy-ducklake-lambdas.yml): a deploy
+      job that assumes the scoped role on push-to-main (prod source paths) + workflow_dispatch, runs
+      build_lambda --deploy, and writes per-function deploy records; a needs:deploy smoke job that
+      runs only on a genuine deploy, asserts deploy-record freshness (source_git_sha == github.sha),
+      and invokes each function asserting observable output. Scoped continue-on-error assume-role
+      tolerance gated on repo var PROD_DEPLOY_ROLE_PROVISIONED (Decision 55 false-green guard).
+  - file: scripts/build_lambda_deploy.py
+    action: Modify
+    purpose: >-
+      Write a per-function deploy record on the prod --deploy path (S3 deploy-records/prod/<fn>.json;
+      Decision 84 S3 pattern, not an ops-table write), None-safe on GITHUB_SHA for the local
+      break-glass path -- generalising the existing _write_ducklake_deploy_record rather than
+      duplicating it. Also generalise read_deploy_record (which lives HERE, currently hardcoding the
+      deploy-records/ducklake/<fn>.json key) to read the prod key, so the prod drift sensor can read it.
+  - file: scripts/convergence_health.py
+    action: Modify
+    purpose: >-
+      Add detect_prod_code_drift (alarm-only; Decision 55 -- never auto-remediate) mirroring
+      detect_ducklake_code_drift, with a PROD_SOURCE_PATHSPECS set derived from the deploy workflow's
+      paths filter (single source to avoid the rec-2686 divergence class); add a main_prod_drift()
+      entry + a --prod-drift argv flag (mirroring --ducklake-drift) so the sensor has a caller; it
+      consumes the generalised read_deploy_record (which lives in build_lambda_deploy.py -- generalised
+      there, not here).
+  - file: .github/workflows/convergence-health.yml
+    action: Modify
+    purpose: >-
+      Add a `python -m scripts.convergence_health --prod-drift` step alongside the existing
+      --ducklake-drift step (same github_ci_branch identity, which already holds bucket-wide data-lake
+      read -- no new IAM), so the new prod drift sensor actually fires on the hourly cron instead of
+      shipping as dead code.
+  - file: docs/contracts/build-lambda.yaml
+    action: Modify
+    purpose: >-
+      Populate deploy_channels.prod_functions and .ops_compaction with governed_channel (the new
+      workflow) and break_glass_only (the admin-profile local invocation) -- the fields the redesign
+      left empty for this class.
+  - file: docs/contracts/deploy-paths.yaml
+    action: Modify
+    purpose: >-
+      Extend deploy_code to record the second governed channel (prod class) and its status; pointer
+      only -- never restates the apply-model/guard classification (Decision 86/92 point 5).
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      Extend section 5's conformance status to cover the prod class (now provisioned decoupled +
+      governed); this file stays the sole SoT for the apply-model/guard classification.
+  - file: src/data/handlers/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Name the governed workflow as the routine deploy channel for these targets and demote local
+      build_lambda --deploy to admin break-glass; correct the profile guidance (agent_platform /
+      PlatformDev cannot UpdateFunctionCode).
+  - file: src/lambdas/CLAUDE.md
+    action: Modify
+    purpose: Update the cross-reference so the prod class points at its governed channel.
+  - file: scripts/checks/ops_governance/validate_deploy_channel_conformance.py
+    action: Modify
+    purpose: >-
+      Extend the EXISTING registered check (no new registration -- avoids check-registry churn) to
+      also validate the prod_functions/ops_compaction deploy_channels completeness (governed_channel
+      present) and the prod decoupling state, closing the ducklake-only blind spot that helped hide
+      this gap. Widen the current ducklake*.tf glob to also scan prod_lambdas.tf and handle a second
+      taxonomy conformance paragraph so the prod class does not trip the existing single-paragraph
+      "ambiguous DECOUPLED/COUPLED" guard.
+  - file: src/lambdas/data-pipeline/manifest.yaml
+    action: Modify
+    purpose: Reconcile notes to reflect the functions are now provisioned + governed-deployed.
+  - file: src/lambdas/ops-compaction/manifest.yaml
+    action: Modify
+    purpose: Reconcile notes to reflect ops-compaction is now provisioned + governed-deployed.
+  - file: tests/test_build_lambda_deploy.py
+    action: Modify
+    purpose: >-
+      Cover the prod deploy-record write/read path (function -> CodeSha256 -> source git SHA), and
+      REWRITE the existing test_non_ducklake_path_does_not_write_deploy_records -- it encodes the OLD
+      invariant (prod path writes no records / exactly 3 subprocess calls, no `aws s3 cp`), which the
+      prod deploy-record write inverts; rewrite it to assert the new behaviour, do not merely relax it.
+  - file: tests/test_convergence_health.py
+    action: Modify
+    purpose: Cover detect_prod_code_drift (records-absent bootstrap window vs stale drift).
+  - file: tests/checks/test_validate_deploy_channel_conformance.py
+    action: Modify
+    purpose: Cover the extended conformance check over the prod class.
+bundled_recommendations:
+  - rec-2157
+  - rec-2164
+infrastructure_dependencies:
+  - >-
+    IAM-sensitive (Decision 98/77/92 point 5): the three per-function execution roles AND the new
+    agent-platform-github-ci-prod-deploy OIDC role are new IAM/trust surface -- the deterministic
+    guard exits 2 (IAM_SENSITIVE), so the speculative-plan job predicts BLOCKED and these land via a
+    human-gated agent_platform_admin -target apply, NOT the auto-apply CD path. Present the plan to
+    the operator; the operator applies.
+  - >-
+    IAM precedence (terraform/CLAUDE.md): the terraform apply that provisions the functions + roles
+    MUST precede any Lambda code deploy; the governed workflow's assume-role only succeeds after the
+    scoped role exists (bootstrap-window tolerance gated on PROD_DEPLOY_ROLE_PROVISIONED).
+  - >-
+    Bootstrap refresh grant (Decision 98): after the admin-create, add the new deploy role ARN + the
+    three exec-role ARNs to IAMRolesRead in terraform/bootstrap/github_ci_apply.tf and admin-apply
+    that root separately (read-only; does not widen any write budget) -- mirrors the T2.38 rec-2688
+    reconcile.
+  - >-
+    Provider-init egress (Decision 119): terraform/personal uses the third-party kislerdm/neon
+    provider, so a stock CC-web session cannot local init/validate/plan it. Terraform validation is
+    CI-delegated: the required terraform-validate check and the speculative-plan job are the
+    authoritative verifiers; local VP is grep-only + terraform fmt -check.
+  - >-
+    Speculative-plan pipeline (CD.35 Wave 2 / T2.21): the PR gets a speculative plan + predicted
+    guard verdict (BLOCKED here, IAM-sensitive) and a saved plan.bin; at merge the reviewed plan is
+    applied with no re-plan. Because the guard BLOCKs, the actual apply is the admin-gated path.
+  - >-
+    Lambda decoupling (Decision 125 / taxonomy section 5): every provisioned aws_lambda_function
+    carries lifecycle { ignore_changes = [source_code_hash] } so code redeploys do not surface as a
+    terraform diff on the guarded auto-apply path.
+acceptance_criteria:
+  - >-
+    terraform/personal/prod_lambdas.tf defines all three functions (scheduled-agent-dispatcher,
+    findings-processor, ops-compaction), each with lifecycle ignore_changes=[source_code_hash], a
+    per-function execution role, a log group, and its trigger; terraform fmt -check passes and the
+    CI terraform-validate check is green.
+  - >-
+    A scoped OIDC role agent-platform-github-ci-prod-deploy exists in oidc.tf granting ONLY
+    lambda:UpdateFunctionCode on exactly the three prod function ARNs (no other lambda action, no
+    terraform, no iam), with trust scoped to refs/heads/main; its ARN and the three exec-role ARNs
+    are added to the bootstrap IAMRolesRead refresh grant.
+  - >-
+    .github/workflows/deploy-prod-lambdas.yml deploys the prod artifacts via the scoped role on
+    push-to-main (prod source paths) + workflow_dispatch, writes per-function deploy records, and
+    gates a needs:deploy smoke job that runs only when deployed==true, asserts deploy-record
+    freshness (source_git_sha==github.sha), and invokes each function asserting observable output.
+  - >-
+    build_lambda_deploy.py writes a per-function S3 deploy record on the prod --deploy path
+    (deploy-records/prod/<function>.json), None-safe on GITHUB_SHA for local break-glass; no
+    ops-table / OpsWriter write is introduced (Decision 84).
+  - >-
+    build-lambda.yaml deploy_channels.prod_functions and .ops_compaction carry governed_channel (the
+    new workflow) + break_glass_only; deploy-paths.yaml deploy_code documents the second governed
+    channel; environment-taxonomy.md section 5 conformance status covers the prod class.
+  - >-
+    validate_deploy_channel_conformance.py (same registered check -- no registry change) is extended
+    to validate the prod class and passes in the --pre tier.
+  - >-
+    Post-provision (operator/admin): aws lambda get-function succeeds for all three functions, the
+    governed workflow's smoke gate is green end-to-end, and rec-2157 + rec-2164 are closed via
+    ops_data_portal --update-rec AFTER the provisioning apply (not the merge-time Resolves trailer --
+    the functions only exist once the post-merge admin apply runs).
+  - >-
+    src/data/handlers/CLAUDE.md and src/lambdas/CLAUDE.md name the governed workflow as the routine
+    channel and demote local --deploy to admin break-glass; both manifests are reconciled to the
+    provisioned state.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Assert all three functions are declared decoupled in the new terraform file.
+    command: >-
+      bin/venv-python -c "import pathlib,re; t=pathlib.Path('terraform/personal/prod_lambdas.tf').read_text();
+      fns=['scheduled-agent-dispatcher','findings-processor','ops-compaction'];
+      assert all(f in t for f in fns), 'missing function';
+      assert len(re.findall(r'ignore_changes\s*=\s*\[[^\]]*source_code_hash', t))>=3, 'not all decoupled';
+      print('OK decoupled x3')"
+    expected: Prints "OK decoupled x3"; all three functions present with ignore_changes=[source_code_hash].
+    fix_if: A function name is absent or fewer than three ignore_changes blocks -- add the missing resource/lifecycle.
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: Assert the scoped prod-deploy OIDC role grants only UpdateFunctionCode on the three prod ARNs.
+    command: >-
+      bin/venv-python -c "import pathlib; t=pathlib.Path('terraform/personal/oidc.tf').read_text();
+      assert 'github_ci_prod_deploy' in t, 'role missing';
+      assert 'lambda:UpdateFunctionCode' in t, 'action missing';
+      assert 'lambda:CreateFunction' not in t.split('github_ci_prod_deploy')[-1][:2000], 'over-broad';
+      print('OK scoped role')"
+    expected: Prints "OK scoped role"; role present, UpdateFunctionCode granted, no broad Lambda admin actions in its policy.
+    fix_if: Role absent or policy over-broad -- scope to UpdateFunctionCode on the three ARNs only.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: Assert the governed workflow parses and carries the scoped role + smoke gate.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('.github/workflows/deploy-prod-lambdas.yml'));
+      j=d['jobs']; assert 'deploy' in j and 'smoke' in j, 'jobs missing';
+      assert j['smoke'].get('needs')=='deploy', 'smoke must need deploy';
+      import pathlib; t=pathlib.Path('.github/workflows/deploy-prod-lambdas.yml').read_text();
+      assert 'github-ci-prod-deploy' in t and 'workflow_dispatch' in t and 'build_lambda --deploy' in t;
+      print('OK workflow')"
+    expected: Prints "OK workflow"; deploy+smoke jobs, smoke needs deploy, scoped role + workflow_dispatch + deploy command present.
+    fix_if: Missing job/needs/role/trigger -- align the workflow with deploy-ducklake-lambdas.yml.
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: Assert build-lambda.yaml now names a governed_channel + break_glass_only for both prod classes.
+    command: >-
+      bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/build-lambda.yaml'))['deploy_channels'];
+      assert all(d[k].get('governed_channel') and d[k].get('break_glass_only') for k in ('prod_functions','ops_compaction')), 'missing governed_channel/break_glass_only';
+      print('OK channels documented')"
+    expected: Prints "OK channels documented"; both entries carry governed_channel and break_glass_only.
+    fix_if: A field is empty -- populate it with the new workflow path / admin-profile local invocation.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert the prod drift sensor is wired (workflow caller + CLI flag), then run the unit tests for
+      the prod deploy-record path, prod drift detection, and the extended conformance check.
+    command: >-
+      grep -q -- '--prod-drift' .github/workflows/convergence-health.yml
+      && grep -qE 'prod.drift|detect_prod_code_drift' scripts/convergence_health.py
+      && bin/venv-python -m pytest tests/test_build_lambda_deploy.py tests/test_convergence_health.py
+      tests/checks/test_validate_deploy_channel_conformance.py -q
+    expected: >-
+      convergence-health.yml invokes --prod-drift and the CLI dispatches to detect_prod_code_drift
+      (no dead code); all tests pass (green), including the rewritten prod deploy-record assertions.
+    fix_if: >-
+      Drift grep fails -- wire the --prod-drift step/flag. A test fails -- fix the implementation until
+      green; NOTE test_non_ducklake_path_does_not_write_deploy_records must be REWRITTEN (its old
+      no-records invariant is intentionally inverted), not weakened -- all other tests hold as-is.
+    hermetic: false
+  - step: 6
+    phase: pre-deploy
+    action: Build the two prod artifacts locally (no AWS) to confirm the moved P4c modules bundle and the build is unblocked.
+    command: bin/venv-python -m scripts.build_lambda --skip-upload
+    expected: data-pipeline.zip and ops-compaction.zip build successfully; exit 0 (confirms rec-2162 pin no longer blocks and scripts/llm nesting bundles).
+    fix_if: Build aborts on a yanked pin or missing module -- fix the manifest include/pin before proceeding.
+    hermetic: false
+  - step: 7
+    phase: pre-deploy
+    action: Run the fast presubmit gate (authoritative in PR CI) and terraform fmt on the changed roots.
+    command: >-
+      bin/venv-python -m scripts.validate --pre && (terraform fmt -check -recursive terraform/personal || echo 'fmt: run terraform fmt -recursive terraform/personal')
+    expected: >-
+      validate --pre is green (includes the extended conformance check and plan_document schema); terraform fmt reports
+      no diff. Authoritative terraform validate/plan is CI-delegated (terraform-validate check + speculative-plan job, Decision 119).
+    fix_if: A presubmit check fails -- address it; if fmt reports a diff, run terraform fmt -recursive terraform/personal.
+    hermetic: false
+  - step: 8
+    phase: post-deploy
+    action: >-
+      [operator, agent_platform_admin] After presenting the plan, admin-create the three functions +
+      exec roles + the scoped OIDC deploy role via a -target apply (guard BLOCKs auto-apply,
+      Decision 98/77), then confirm each function exists.
+    command: >-
+      for f in agent-platform-scheduled-agent-dispatcher agent-platform-findings-processor agent-platform-ops-compaction; do
+      aws lambda get-function --function-name "$f" --profile agent_platform_admin --region eu-west-2 --query 'Configuration.FunctionName' --output text; done
+    expected: Each function name prints (no ResourceNotFoundException) -- closes the rec-2164 ResourceNotFound evidence.
+    fix_if: get-function returns ResourceNotFound -- the admin apply did not provision it; re-run the -target apply.
+    hermetic: false
+  - step: 9
+    phase: post-deploy
+    action: >-
+      [operator] Set repo var PROD_DEPLOY_ROLE_PROVISIONED=true and run the governed workflow
+      (workflow_dispatch on main). Confirm the deploy actually shipped by asserting each function's
+      LIVE CodeSha256 equals the CodeSha256 in its deploy record.
+    command: >-
+      for f in agent-platform-scheduled-agent-dispatcher agent-platform-findings-processor agent-platform-ops-compaction; do
+      LIVE=$(aws lambda get-function --function-name "$f" --profile agent_platform_admin --region eu-west-2 --query Configuration.CodeSha256 --output text);
+      REC=$(aws s3 cp "s3://agent-platform-data-lake/deploy-records/prod/${f}.json" - --profile agent_platform_admin --region eu-west-2 | bin/venv-python -c "import json,sys;print(json.load(sys.stdin)['code_sha256'])");
+      [ "$LIVE" = "$REC" ] && echo "OK $f sha match" || { echo "MISMATCH $f live=$LIVE rec=$REC"; exit 1; }; done
+    expected: All three print "OK <fn> sha match" -- live function code equals the governed deploy's recorded CodeSha256.
+    fix_if: A MISMATCH (or assume-role failure while PROD_DEPLOY_ROLE_PROVISIONED=true) is a real regression -- RCA, do not silently retry (Decision 55).
+    hermetic: false
+  - step: 10
+    phase: post-deploy
+    action: >-
+      [operator, GitHub-REST-gated] Confirm the governed workflow's smoke job passed (per-function
+      observable output + deploy-record freshness) by asserting the latest run's smoke job conclusion.
+    command: >-
+      bin/venv-python -c "import urllib.request,json,os; o='benjamin-blake'; r='agent-platform'; h={'Authorization':f\"Bearer {os.environ['GITHUB_TOKEN']}\",'Accept':'application/vnd.github+json'};
+      run=json.load(urllib.request.urlopen(urllib.request.Request(f'https://api.github.com/repos/{o}/{r}/actions/workflows/deploy-prod-lambdas.yml/runs?per_page=1',headers=h)))['workflow_runs'][0];
+      jobs=json.load(urllib.request.urlopen(urllib.request.Request(f\"https://api.github.com/repos/{o}/{r}/actions/runs/{run['id']}/jobs\",headers=h)))['jobs'];
+      smoke=[j for j in jobs if j['name'].startswith('smoke')][0]; assert smoke['conclusion']=='success', smoke['conclusion']; print('OK smoke success')"
+    expected: Prints "OK smoke success" -- the smoke job of the latest deploy-prod-lambdas run concluded success.
+    fix_if: Smoke conclusion != success -- stop and RCA the failing function's invocation (Decision 55); never auto-retry into green.
+    hermetic: false
+  - step: 11
+    phase: post-deploy
+    action: Confirm the three prod deploy records were written to S3.
+    command: >-
+      aws s3 ls s3://agent-platform-data-lake/deploy-records/prod/ --profile agent_platform_admin --region eu-west-2
+    expected: Three records listed (scheduled-agent-dispatcher.json, findings-processor.json, ops-compaction.json).
+    fix_if: A record is missing -- the prod deploy-record write path did not fire; fix build_lambda_deploy.py.
+    hermetic: false
+  - step: 12
+    phase: post-deploy
+    action: >-
+      After provisioning (VP step 8), close the bundled recs via the ops portal, then confirm both
+      report closed in the refreshed cache.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-2157 --status closed --resolution "Provisioned in terraform/personal/prod_lambdas.tf; agent-platform-ops-compaction live (VP step 8)."
+      && bin/venv-python -m scripts.ops_data_portal --update-rec rec-2164 --status closed --resolution "All three prod functions provisioned + governed-deployed; get-function succeeds (VP step 8)."
+      && bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      st={r['id']:r['status'] for r in rows if r.get('id') in ('rec-2157','rec-2164')};
+      print(st); assert all(v=='closed' for v in st.values()), st"
+    expected: Both rec-2157 and rec-2164 report status closed.
+    fix_if: A rec is still open -- re-run the ops_data_portal --update-rec call; a write that cannot complete fails loudly at the call site (Decision 84), re-file after restoring connectivity.
+    hermetic: false
+constraints:
+  - No rescue agents or workaround loops (Decision 55); on an unrecoverable V3 failure, STOP and RCA -- never auto-revert or auto-retry into green.
+  - >-
+    Agents never self-direct terraform apply or the admin role-create; the function/role provisioning
+    apply is human-gated admin-tier (Decision 126/98/77). The governed workflow deploys CODE ONLY (no
+    terraform), mirroring the T2.38 model.
+  - >-
+    Public repo (Decision 101): construct every ARN via data.aws_caller_identity / var.account_id /
+    interpolation -- never a 12-digit literal; contracts name roles by logical name only. The
+    never-commit hook blocks account-id shapes.
+  - >-
+    terraform/personal third-party provider (Decision 119): terraform VP is grep-only + fmt -check;
+    validate/plan are CI-delegated (the required terraform-validate check + the speculative-plan job
+    are the authoritative verifiers). Never author a local terraform init/validate/plan step for
+    terraform/personal.
+  - "IAM precedence (terraform/CLAUDE.md): terraform apply (functions + roles) precedes any Lambda code deploy."
+  - "Lambda decoupling (Decision 125 / taxonomy section 5): every provisioned function carries lifecycle ignore_changes=[source_code_hash]."
+  - Deploy records via the S3 T2.38 pattern (Decision 84) -- never an ops-table / OpsWriter write.
+  - >-
+    OIDC trust (Decision 94): the deploy role trusts exactly the ref the workflow presents (mirror the
+    T2.38 ducklake-deploy role: refs/heads/main, no Environment sub).
+  - >-
+    EXTEND the existing validate_deploy_channel_conformance check (same registration) -- do NOT add a
+    new registered check (avoids check-registry churn and the frozen-baseline class of the open
+    ci-rca rec-2675).
+  - "No new standing prose-architecture docs (Decision 86/127): rationale -> Decisions, forward intent -> T2.43, channel semantics -> deploy-paths.yaml structured block."
+  - SLOC budgets (Decision 102/43) apply to the extended build_lambda_deploy.py / convergence_health.py / conformance check.
+context:
+  - >-
+    Root cause of the gap: the three prod functions are ABSENT from the personal account (open
+    rec-2164 / rec-2157; terraform/personal defines only the four DuckLake functions); there is no
+    governed channel for the decoupled_build_pipeline class (T2.38 governed the DuckLake class ONLY);
+    and PlatformDev / agent_platform never held lambda:UpdateFunctionCode (converged least-privilege,
+    NOT drift). The originating brief's "declared-vs-live IAM drift on platform_dev_runtime" is a
+    misattribution -- UpdateFunctionCode lives on platform_admin_ops (AdminOps/PlatformAdmin) and the
+    ducklake-deploy OIDC role, not on platform_dev_runtime.
+  - >-
+    How it was missed: the redesign (Decisions 125/126, T2.38) was framed around code/infra COUPLING,
+    which only the DuckLake class had; the already-decoupled prod class was left pointing at a
+    nonfunctional local route, its provisioning gap sat siloed in open recs, and the conformance guard
+    (validate_deploy_channel_conformance) stayed DuckLake-only -- so the empty prod channel spec tripped
+    no alarm. This plan closes all three (provision, govern, extend the guard).
+  - >-
+    Port reference: terraform/scheduled_agents.tf (retired work-account root, CD.21) has the three
+    functions + a shared exec role + EventBridge rules + the S3 findings notification -- adapt to the
+    personal-module idiom, do NOT copy work-account ARNs/vars.
+  - >-
+    Disposition (human-confirmed this session): provision ALL THREE functions despite findings-processor
+    being flagged for Phase-5 retirement (Decision 61) and ops-compaction for T2.26 retirement.
+    Provisioning does NOT re-enable the scheduled agents (they stay SCHEDULED_AGENTS_ENABLED=false;
+    Decision 61/37/116) -- that is a separate, later decision. The T2.26 / Phase-5 retirement paths can
+    cleanly remove what this plan adds via an agent_platform_admin -target destroy of prod_lambdas.tf's
+    resources (see rollback); provisioning-now does not obstruct those retirements.
+  - >-
+    rec-2162 (yanked github-copilot-sdk pin) appears ALREADY RESOLVED (data-pipeline manifest
+    pip_packages: []); confirm via scripts.rec_relevance at implement time and do NOT bundle it.
+  - >-
+    ci-rca DEFERRAL (Related-Work check): the open ci-rca rec-2675 (frozen check-registry baselines
+    miss validate_prose_allowlist -> canary FAIL) is UNRELATED to this plan -- it shares no scope file,
+    no Decision Record, and no failure category (this plan touches no check registry; it extends an
+    existing check, adding no registry entry). Deferred per human direction; not folded into this work.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (87 of 87 triaged). CITE: Decision 126, Decision 125, Decision 98, Decision 92, Decision 77, Decision 79, Decision 48, Decision 104, Decision 86."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/lambda-nested-scripts-deploy-s2qwwv)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via the decision-scout gate (CITE list captured)
+  - All files in scope located and readable; terraform/scheduled_agents.tf port reference read
+  - Acceptance criteria understood and verifiable; V3 post-deploy steps are operator/CI-gated
+execution_steps:
+  - >-
+    Add tier_item T2.43 to docs/ROADMAP-PLATFORM.yaml with exit_criteria mapping onto this plan's
+    acceptance_criteria (provision + governed channel + conformance-guard extension).
+  - >-
+    Create terraform/personal/prod_lambdas.tf: three aws_lambda_function resources (dispatcher,
+    findings-processor, ops-compaction), each with lifecycle ignore_changes=[source_code_hash], a
+    per-function execution role + least-privilege inline policy, a log group, layer attachment, env,
+    and its trigger (EventBridge for the dispatcher; S3 notification for findings-processor /
+    ops-compaction). Keep the EventBridge rule state=DISABLED and SCHEDULED_AGENTS_ENABLED=false (do
+    NOT re-enable the schedule). Adapt from terraform/scheduled_agents.tf; all ARNs via var.account_id
+    / data.aws_caller_identity -- no literals (Decision 101).
+  - >-
+    Modify terraform/personal/oidc.tf: add the agent-platform-github-ci-prod-deploy OIDC role
+    (UpdateFunctionCode-only on the three prod ARNs; S3 head-bucket + lambda-packages RW + deploy-record
+    write; refs/heads/main trust); add the three prod function ARNs to LambdaRead and the deploy role
+    ARN to IAMCIRolesRead.
+  - >-
+    Modify terraform/bootstrap/github_ci_apply.tf: add the deploy role ARN + three exec-role ARNs to
+    IAMRolesRead (read-only refresh grant).
+  - >-
+    Create .github/workflows/deploy-prod-lambdas.yml mirroring deploy-ducklake-lambdas.yml (scoped-role
+    deploy job + needs:deploy smoke job; PROD_DEPLOY_ROLE_PROVISIONED bootstrap tolerance; deploy-record
+    freshness assertion; per-function smoke invocation).
+  - >-
+    Modify scripts/build_lambda_deploy.py to write deploy-records/prod/<function>.json on the prod
+    --deploy path (generalise _write_ducklake_deploy_record; None-safe GITHUB_SHA).
+  - >-
+    Modify scripts/convergence_health.py to add detect_prod_code_drift (alarm-only) with
+    PROD_SOURCE_PATHSPECS derived from the workflow paths filter, a main_prod_drift() + --prod-drift
+    argv entry, and a generalised read_deploy_record (prod key); wire it by adding a --prod-drift step
+    to .github/workflows/convergence-health.yml so the sensor actually fires (no dead code).
+  - >-
+    Extend scripts/checks/ops_governance/validate_deploy_channel_conformance.py to validate the prod
+    class (governed_channel present + decoupling), keeping the SAME registration.
+  - >-
+    Update docs/contracts/build-lambda.yaml (prod deploy_channels), deploy-paths.yaml (deploy_code
+    second channel), environment-taxonomy.md section 5 (prod conformance), src/data/handlers/CLAUDE.md
+    + src/lambdas/CLAUDE.md (routine channel), and both manifests (reconcile notes).
+  - >-
+    Add/extend tests: tests/test_build_lambda_deploy.py (prod deploy record), tests/test_convergence_health.py
+    (prod drift), tests/checks/test_validate_deploy_channel_conformance.py (prod class).
+  - >-
+    Execute the Verification Plan -- run each step; loop pre-deploy steps until green. The post-deploy
+    steps (8-12) are operator/CI-gated: present the terraform plan to the operator for the admin-create
+    apply, then drive the governed workflow + smoke gate, then close rec-2157/rec-2164 via the ops
+    portal (VP step 12). On an unrecoverable V3 failure, STOP and RCA (Decision 55).
+  - "Report: what was implemented, pre-deploy verification results, and the operator-gated post-deploy status."
+work_areas: []
+rollback: >-
+  Changes are additive. To roll back before the code-deploy channel is exercised: revert the workflow,
+  contract, doc, and code commits; the new terraform resources (functions + roles) are removed via an
+  agent_platform_admin -target destroy of prod_lambdas.tf's resources and the github_ci_prod_deploy
+  role. Because the functions carry ignore_changes=[source_code_hash], a code-only rollback is a
+  re-deploy of the prior zip via the governed workflow (workflow_dispatch), not a terraform action.
