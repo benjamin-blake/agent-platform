@@ -48,7 +48,8 @@ assets:
   - config/config.yaml.example
 config:
   - config/lambda/data-pipeline/
-pip_packages: []
+pip_packages:
+  - pyyaml>=6.0
 runtime_config: []
 status: active
 notes: >-
@@ -58,3 +59,11 @@ notes: >-
   T2.43 (rec-2164): both functions are now PROVISIONED in terraform/personal/prod_lambdas.tf (the
   decoupled_build_pipeline class, decoupled from day one) and governed-deployed via
   .github/workflows/deploy-prod-lambdas.yml; the schedule stays disabled (Decision 61/37/116).
+  pip_packages carries only pyyaml (the sole third-party import scheduled_agent_handler /
+  findings_processor_handler / their direct script deps actually need -- verified against
+  source at T2.43 apply time) bundled directly into this zip. The full PROD_DEPS-based
+  data-pipeline-deps-layer.zip (numpy/pandas/pyarrow/scikit-learn/etc., built for the
+  future-state fetch/feature/write/discovery handlers) is NOT attached to these two functions:
+  its unzipped content exceeds the Lambda 262 MB layer ceiling (discovered at the first real
+  T2.43 apply -- PublishLayerVersion InvalidParameterValueException), and none of it is needed
+  here regardless.
