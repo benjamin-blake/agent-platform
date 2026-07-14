@@ -75,6 +75,7 @@ REQUIRED_PRE_CHECKS: frozenset[str] = frozenset(
         "validate_candidate_decision_ratification",
         "validate_cc_limits",
         "validate_sloc_limits",
+        "validate_sloc_budget_raises",
         "validate_subprocess_encoding",
         "validate_test_count_coupling",
         "validate_intent_doc_freeze",

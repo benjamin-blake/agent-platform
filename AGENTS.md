@@ -35,6 +35,12 @@ You are a Lead Software Developer writing production-quality Python. The user is
 - Windows subprocess: pass `encoding='utf-8', errors='replace'` with `text=True`. Use `sys.executable` — not the string `'python'` or `'pip'`.
 - Only modify files explicitly in scope. Out-of-scope bugs become recommendations via `scripts/ops_data_portal.py`, not inline fixes.
 
+## SLOC governance -- decompose by default, don't raise (Decision 128, amends Decision 102)
+- The 500-SLOC-per-file limit (`config/sloc_budgets.yaml`, `validate_sloc_limits`) is load-bearing for model portability: Opus tolerates large files, but lower-tier models (Sonnet/Gemini/Deepseek) degrade on comprehension. A budget raise silently trades that away.
+- **When a change pushes a file past its budget (or past 500 for an unregistered file), decompose it** into a facade package (Decision 80/104/124 pattern: `__init__.py` facade re-exporting the full public surface, cohesive submodules each under budget) -- this is the default response, not a raise.
+- A budget raise is a deliberate, reviewable exception: the entry line in `config/sloc_budgets.yaml` must carry an inline `# raise-approved: dec-NNN <reason>` marker naming a real `## Decision NNN:` header. `validate_sloc_budget_raises` (registered immediately after `validate_sloc_limits` in the `--pre` tier) fails the PR on any unmarked increase or new >500-SLOC registration; decreases and removals are always unrestricted.
+- `--update-sloc-budgets` never auto-seeds a newly-oversized, unregistered file -- decompose it, or register it deliberately with the marker.
+
 ## Branching — never edit or commit on `main`
 **Hard rule: do not run `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, or any `git commit` / `git push` command while the current branch is `main`.** If you're on main, the only allowed actions are read-only commands and creating a new branch. See `## Git-ops procedure` for the full branching topology.
 

@@ -2,6 +2,82 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 128: SLOC budget-raise guardrails -- decompose by default, raises must be loud and Decision-cited (amends Decision 102) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-14
+**Warehouse ID:** dec-128 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+`scripts/convergence_health.py` was created at 401 SLOC (#516) and grew to 817 via three manual
+budget raises -- 600 (#559/T2.38), 800 (#565/T2.43), 817 (#566/T2.35) -- each individually
+justified by module cohesion. Decision 102's ratchet enforced *downward* movement (a budget can
+never silently rise on its own) but placed no friction whatsoever on the *upward* edit: raising
+`config/sloc_budgets.yaml` was, and remained, a one-line YAML change with no gate, no required
+justification, and no visibility distinct from any other config edit. Three individually-
+reasonable raises accreted into an 817-SLOC file with no single moment where the accretion itself
+was surfaced for review. The 500-SLOC limit is load-bearing for model portability: Opus tolerates
+large files, but lower-tier models (Sonnet/Gemini/Deepseek) degrade on comprehension. A budget
+raise silently trades that away -- which is exactly why raises must become loud, deliberate, and
+Decision-cited rather than a frictionless one-line YAML edit.
+
+**Decision:**
+1. **Decompose by default.** When a change would push a scripts/ or src/ file past its SLOC
+   budget (or past 500 for a currently-unregistered file), the default response is to decompose
+   the file into a facade package (the Decision 80/104/124 pattern: an `__init__.py` facade
+   re-exporting the full public surface, cohesive submodules each under budget). A raise is a
+   deliberate, justified exception -- not the default path of least resistance.
+2. **Fail-loud raise gate.** A new check, `validate_sloc_budget_raises`
+   (`scripts/checks/sloc/validate_sloc_budget_raises.py`, registered in `pre_sequence()`
+   immediately after `validate_sloc_limits`), diffs `config/sloc_budgets.yaml` against
+   `origin/main` on every PR. It FAILS the PR on any budget INCREASE, or any NEW >500-SLOC
+   registration, unless the changed entry line carries an inline `# raise-approved: dec-NNN
+   <reason>` marker naming a real `## Decision NNN:` header in `docs/DECISIONS.md`. Decreases and
+   removals always pass (the ratchet-down direction is unrestricted, matching Decision 102). The
+   check parses the raw YAML text (not `yaml.safe_load`, which drops comments) so the marker
+   survives; its base-content reader is injectable for tests and SKIPs (non-failing, advisory
+   locally / authoritative in CI) when `origin/main` is unreachable, mirroring
+   `validate_vp_replay`.
+3. **Marker persistence is not required.** `_update_sloc_budgets` (the downward-only ratchet
+   regenerator) is not required to preserve inline `# raise-approved` comments across a
+   regeneration -- the raise is authorized at the diff-vs-base moment and, once merged, is
+   durably recorded in git history plus the cited Decision. This deliberately avoids building a
+   comment round-trip mechanism against `yaml.safe_dump`.
+4. **No auto-seed (B2 / rec-2418 family).** `_update_sloc_budgets` no longer seeds a newly-
+   oversized, currently-unregistered file at its current SLOC. Previously, running
+   `--update-sloc-budgets` would silently register any new >500-SLOC file, defeating the purpose
+   of a raise gate (an agent could regenerate its way around review). Now, a new oversized file
+   fails `validate_sloc_limits` until it is either decomposed below 500 SLOC or deliberately
+   registered with a `# raise-approved: dec-NNN` marker via a manual, reviewable edit.
+5. **YAML-safe serialization (rec-2422).** `_update_sloc_budgets` emits `config/sloc_budgets.yaml`
+   via `yaml.safe_dump` instead of raw f-string interpolation, so a future module path containing
+   YAML-special characters cannot produce invalid YAML.
+6. **Doctrine surfaces.** The decompose-don't-raise rule is added to `AGENTS.md` (a new SLOC-
+   governance subsection) and to the `planning`, `implement`, and `plan-critique` skills, so the
+   rule is visible at plan time, implement time, and critique time -- not just enforced after the
+   fact by CI.
+
+**Rationale:**
+Decision 102 solved the *unbounded* growth problem (a waiver alone no longer permits infinite
+SLOC) but left the *registration* mechanism itself frictionless, so the ratchet could still creep
+upward one deliberate-but-unreviewed raise at a time. This Decision closes that gap by making the
+upward edit as loud as a Decision citation, while leaving the downward ratchet exactly as free as
+before. Per Decision 86, rationale lives here; the fail-loud check and the no-auto-seed behaviour
+are the code-level enforcement; the doctrine text in AGENTS.md and the three skills is intent
+routing, not a new standing prose-architecture document.
+
+**Reversal conditions:** none identified. A future plan may relax the gate (e.g. widen the marker
+format) but that is an amendment, not a reversal of the decompose-by-default doctrine.
+
+**Related:** Decision 102 (amended here -- the raise-side gate this Decision adds), Decision 43
+(original SLOC/CC limits), Decision 104 (check-registry pattern the new guard follows; the facade-
+decomposition pattern this Decision's "decompose by default" doctrine reuses), Decision 80
+(validate.py decomposition precedent), Decision 124 (facade-decomposition pattern extended to the
+ops-data layer, same shape reused here for convergence_health.py), Decision 84 (this Decision is
+authored in DECISIONS.md then backfilled to `ops_decisions`, never written directly).
+
+---
+
 ## Decision 127: Sanctioned-prose taxonomy -- the only prose stored in this repo is agent-instruction content (expands Decision 86) (Decided)
 
 **Status:** Decided

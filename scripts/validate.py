@@ -180,6 +180,7 @@ from scripts.checks.sloc.sloc_limits import (  # noqa: E402
     _update_sloc_budgets,
     validate_sloc_limits,  # noqa: F401
 )
+from scripts.checks.sloc.validate_sloc_budget_raises import validate_sloc_budget_raises  # noqa: F401,E402
 from scripts.checks.verification.validate_differential_gate_baseline import (  # noqa: F401,E402
     validate_differential_gate_baseline,
 )
@@ -331,8 +332,11 @@ def main() -> None:
     parser.add_argument(
         "--update-sloc-budgets",
         action="store_true",
-        help="Regenerate config/sloc_budgets.yaml from the current tree (downward-only ratchet). "
-        "Lowers shrunk budgets, seeds newly-oversized files, drops files now <=500. Never raises an existing budget.",
+        help="Requires a feature branch (refused on main, like every validate.py invocation). "
+        "Regenerate config/sloc_budgets.yaml from the current tree (downward-only ratchet): "
+        "lowers shrunk budgets, drops files now <=500. Never raises an existing budget and never "
+        "seeds a newly-oversized file (Decision 128) -- decompose it, or register it manually with "
+        "a `# raise-approved: dec-NNN` marker.",
     )
     args = parser.parse_args()
 

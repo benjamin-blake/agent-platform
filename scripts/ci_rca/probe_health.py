@@ -5,7 +5,7 @@ Detects when the deterministic evidence probe is systematically abstaining
 across source=ci_rca recs and files a deduped source=ci_rca_probe_health rec so the
 self-improving loop cannot silently disable its own depth enforcement.
 
-Mirrors scripts/convergence_health.py's idempotent escalation pattern (file/update/close
+Mirrors scripts/convergence_health/escalate.py's idempotent escalation pattern (file/update/close
 exactly one rec per episode). Reads ONLY the warm recommendation cache injected by the
 caller (Decision 88 -- zero new reader egress); writes ONLY via scripts.ops_data_portal
 (Decision 84 -- the warm cache is a read source, never a write source). Unlike
