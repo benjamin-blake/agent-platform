@@ -65,7 +65,17 @@ scope:
     purpose: >-
       Add detect_prod_code_drift (alarm-only; Decision 55 -- never auto-remediate) mirroring
       detect_ducklake_code_drift, with a PROD_SOURCE_PATHSPECS set derived from the deploy workflow's
-      paths filter (single source to avoid the rec-2686 divergence class).
+      paths filter (single source to avoid the rec-2686 divergence class); add a main_prod_drift()
+      entry + a --prod-drift argv flag (mirroring --ducklake-drift) so the sensor has a caller; and
+      generalise read_deploy_record so it can read the deploy-records/prod/<fn>.json key (it currently
+      hardcodes the ducklake key).
+  - file: .github/workflows/convergence-health.yml
+    action: Modify
+    purpose: >-
+      Add a `python -m scripts.convergence_health --prod-drift` step alongside the existing
+      --ducklake-drift step (same github_ci_branch identity, which already holds bucket-wide data-lake
+      read -- no new IAM), so the new prod drift sensor actually fires on the hourly cron instead of
+      shipping as dead code.
   - file: docs/contracts/build-lambda.yaml
     action: Modify
     purpose: >-
@@ -106,7 +116,11 @@ scope:
     purpose: Reconcile notes to reflect ops-compaction is now provisioned + governed-deployed.
   - file: tests/test_build_lambda_deploy.py
     action: Modify
-    purpose: Cover the prod deploy-record write/read path (function -> CodeSha256 -> source git SHA).
+    purpose: >-
+      Cover the prod deploy-record write/read path (function -> CodeSha256 -> source git SHA), and
+      REWRITE the existing test_non_ducklake_path_does_not_write_deploy_records -- it encodes the OLD
+      invariant (prod path writes no records / exactly 3 subprocess calls, no `aws s3 cp`), which the
+      prod deploy-record write inverts; rewrite it to assert the new behaviour, do not merely relax it.
   - file: tests/test_convergence_health.py
     action: Modify
     purpose: Cover detect_prod_code_drift (records-absent bootstrap window vs stale drift).
@@ -174,8 +188,9 @@ acceptance_criteria:
     to validate the prod class and passes in the --pre tier.
   - >-
     Post-provision (operator/admin): aws lambda get-function succeeds for all three functions, the
-    governed workflow's smoke gate is green end-to-end, and rec-2157 + rec-2164 are closed via the
-    Resolves trailer.
+    governed workflow's smoke gate is green end-to-end, and rec-2157 + rec-2164 are closed via
+    ops_data_portal --update-rec AFTER the provisioning apply (not the merge-time Resolves trailer --
+    the functions only exist once the post-merge admin apply runs).
   - >-
     src/data/handlers/CLAUDE.md and src/lambdas/CLAUDE.md name the governed workflow as the routine
     channel and demote local --deploy to admin break-glass; both manifests are reconciled to the
@@ -231,12 +246,21 @@ verification_plan:
     hermetic: true
   - step: 5
     phase: pre-deploy
-    action: Run the unit tests for the prod deploy-record path, prod drift detection, and the extended conformance check.
+    action: >-
+      Assert the prod drift sensor is wired (workflow caller + CLI flag), then run the unit tests for
+      the prod deploy-record path, prod drift detection, and the extended conformance check.
     command: >-
-      bin/venv-python -m pytest tests/test_build_lambda_deploy.py tests/test_convergence_health.py
+      grep -q -- '--prod-drift' .github/workflows/convergence-health.yml
+      && grep -qE 'prod.drift|detect_prod_code_drift' scripts/convergence_health.py
+      && bin/venv-python -m pytest tests/test_build_lambda_deploy.py tests/test_convergence_health.py
       tests/checks/test_validate_deploy_channel_conformance.py -q
-    expected: All tests pass (green), including new prod-path assertions.
-    fix_if: A test fails -- fix the implementation (deploy record, drift, or conformance) until green; do not weaken the test.
+    expected: >-
+      convergence-health.yml invokes --prod-drift and the CLI dispatches to detect_prod_code_drift
+      (no dead code); all tests pass (green), including the rewritten prod deploy-record assertions.
+    fix_if: >-
+      Drift grep fails -- wire the --prod-drift step/flag. A test fails -- fix the implementation until
+      green; NOTE test_non_ducklake_path_does_not_write_deploy_records must be REWRITTEN (its old
+      no-records invariant is intentionally inverted), not weakened -- all other tests hold as-is.
     hermetic: false
   - step: 6
     phase: pre-deploy
@@ -270,23 +294,29 @@ verification_plan:
   - step: 9
     phase: post-deploy
     action: >-
-      [operator] Set repo var PROD_DEPLOY_ROLE_PROVISIONED=true, then run the governed workflow via
-      workflow_dispatch on main and confirm the deploy job shipped all three functions.
+      [operator] Set repo var PROD_DEPLOY_ROLE_PROVISIONED=true and run the governed workflow
+      (workflow_dispatch on main). Confirm the deploy actually shipped by asserting each function's
+      LIVE CodeSha256 equals the CodeSha256 in its deploy record.
     command: >-
-      Trigger .github/workflows/deploy-prod-lambdas.yml (workflow_dispatch, main) via the GitHub MCP
-      actions trigger; then inspect the run's deploy job conclusion (mcp__github__pull_request_read /
-      actions_get) -- deploy conclusion == success and deployed output == 'true'.
-    expected: Deploy job green; the scoped role assumed; all three functions updated (deployed=true).
-    fix_if: Assume-role fails while PROD_DEPLOY_ROLE_PROVISIONED=true -- real regression (trust/policy); RCA, do not silently retry (Decision 55).
+      for f in agent-platform-scheduled-agent-dispatcher agent-platform-findings-processor agent-platform-ops-compaction; do
+      LIVE=$(aws lambda get-function --function-name "$f" --profile agent_platform_admin --region eu-west-2 --query Configuration.CodeSha256 --output text);
+      REC=$(aws s3 cp "s3://agent-platform-data-lake/deploy-records/prod/${f}.json" - --profile agent_platform_admin --region eu-west-2 | bin/venv-python -c "import json,sys;print(json.load(sys.stdin)['code_sha256'])");
+      [ "$LIVE" = "$REC" ] && echo "OK $f sha match" || { echo "MISMATCH $f live=$LIVE rec=$REC"; exit 1; }; done
+    expected: All three print "OK <fn> sha match" -- live function code equals the governed deploy's recorded CodeSha256.
+    fix_if: A MISMATCH (or assume-role failure while PROD_DEPLOY_ROLE_PROVISIONED=true) is a real regression -- RCA, do not silently retry (Decision 55).
     hermetic: false
   - step: 10
     phase: post-deploy
-    action: Confirm the smoke gate ran and passed (deploy-record freshness + per-function observable output).
+    action: >-
+      [operator, GitHub-REST-gated] Confirm the governed workflow's smoke job passed (per-function
+      observable output + deploy-record freshness) by asserting the latest run's smoke job conclusion.
     command: >-
-      Inspect the governed workflow run's smoke job conclusion via the GitHub MCP; assert smoke ==
-      success and that it asserted source_git_sha == github.sha for all three functions.
-    expected: Smoke job green; deploy records fresh; each function returned expected observable output.
-    fix_if: Smoke fails -- stop and RCA the failing function's invocation (Decision 55); never auto-retry into green.
+      bin/venv-python -c "import urllib.request,json,os; o='benjamin-blake'; r='agent-platform'; h={'Authorization':f\"Bearer {os.environ['GITHUB_TOKEN']}\",'Accept':'application/vnd.github+json'};
+      run=json.load(urllib.request.urlopen(urllib.request.Request(f'https://api.github.com/repos/{o}/{r}/actions/workflows/deploy-prod-lambdas.yml/runs?per_page=1',headers=h)))['workflow_runs'][0];
+      jobs=json.load(urllib.request.urlopen(urllib.request.Request(f\"https://api.github.com/repos/{o}/{r}/actions/runs/{run['id']}/jobs\",headers=h)))['jobs'];
+      smoke=[j for j in jobs if j['name'].startswith('smoke')][0]; assert smoke['conclusion']=='success', smoke['conclusion']; print('OK smoke success')"
+    expected: Prints "OK smoke success" -- the smoke job of the latest deploy-prod-lambdas run concluded success.
+    fix_if: Smoke conclusion != success -- stop and RCA the failing function's invocation (Decision 55); never auto-retry into green.
     hermetic: false
   - step: 11
     phase: post-deploy
@@ -298,14 +328,18 @@ verification_plan:
     hermetic: false
   - step: 12
     phase: post-deploy
-    action: Confirm the bundled recs closed after the Resolves trailer merged.
+    action: >-
+      After provisioning (VP step 8), close the bundled recs via the ops portal, then confirm both
+      report closed in the refreshed cache.
     command: >-
-      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json,pathlib;
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-2157 --status closed --resolution "Provisioned in terraform/personal/prod_lambdas.tf; agent-platform-ops-compaction live (VP step 8)."
+      && bin/venv-python -m scripts.ops_data_portal --update-rec rec-2164 --status closed --resolution "All three prod functions provisioned + governed-deployed; get-function succeeds (VP step 8)."
+      && bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json,pathlib;
       rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
       st={r['id']:r['status'] for r in rows if r.get('id') in ('rec-2157','rec-2164')};
       print(st); assert all(v=='closed' for v in st.values()), st"
     expected: Both rec-2157 and rec-2164 report status closed.
-    fix_if: A rec is still open -- close via the Resolves trailer or ops_data_portal --update-rec.
+    fix_if: A rec is still open -- re-run the ops_data_portal --update-rec call; a write that cannot complete fails loudly at the call site (Decision 84), re-file after restoring connectivity.
     hermetic: false
 constraints:
   - No rescue agents or workaround loops (Decision 55); on an unrecoverable V3 failure, STOP and RCA -- never auto-revert or auto-retry into green.
@@ -357,7 +391,9 @@ context:
     Disposition (human-confirmed this session): provision ALL THREE functions despite findings-processor
     being flagged for Phase-5 retirement (Decision 61) and ops-compaction for T2.26 retirement.
     Provisioning does NOT re-enable the scheduled agents (they stay SCHEDULED_AGENTS_ENABLED=false;
-    Decision 61/37/116) -- that is a separate, later decision.
+    Decision 61/37/116) -- that is a separate, later decision. The T2.26 / Phase-5 retirement paths can
+    cleanly remove what this plan adds via an agent_platform_admin -target destroy of prod_lambdas.tf's
+    resources (see rollback); provisioning-now does not obstruct those retirements.
   - >-
     rec-2162 (yanked github-copilot-sdk pin) appears ALREADY RESOLVED (data-pipeline manifest
     pip_packages: []); confirm via scripts.rec_relevance at implement time and do NOT bundle it.
@@ -402,7 +438,9 @@ execution_steps:
     --deploy path (generalise _write_ducklake_deploy_record; None-safe GITHUB_SHA).
   - >-
     Modify scripts/convergence_health.py to add detect_prod_code_drift (alarm-only) with
-    PROD_SOURCE_PATHSPECS derived from the workflow paths filter.
+    PROD_SOURCE_PATHSPECS derived from the workflow paths filter, a main_prod_drift() + --prod-drift
+    argv entry, and a generalised read_deploy_record (prod key); wire it by adding a --prod-drift step
+    to .github/workflows/convergence-health.yml so the sensor actually fires (no dead code).
   - >-
     Extend scripts/checks/ops_governance/validate_deploy_channel_conformance.py to validate the prod
     class (governed_channel present + decoupling), keeping the SAME registration.
@@ -416,8 +454,8 @@ execution_steps:
   - >-
     Execute the Verification Plan -- run each step; loop pre-deploy steps until green. The post-deploy
     steps (8-12) are operator/CI-gated: present the terraform plan to the operator for the admin-create
-    apply, then drive the governed workflow + smoke gate. On an unrecoverable V3 failure, STOP and RCA
-    (Decision 55).
+    apply, then drive the governed workflow + smoke gate, then close rec-2157/rec-2164 via the ops
+    portal (VP step 12). On an unrecoverable V3 failure, STOP and RCA (Decision 55).
   - "Report: what was implemented, pre-deploy verification results, and the operator-gated post-deploy status."
 work_areas: []
 rollback: >-
