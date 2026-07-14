@@ -79,7 +79,7 @@ scope:
       'Convergence precondition (refuse on red record -- sole hard block)' / 'Subagent plan review
       (digest-fed, JSON-classified)' step (unmapped, so classify_failures falls through to the log
       fallback) plus a log carrying exactly one marker: CONVERGENCE_RED -> convergence_refused;
-      CONVERGENCE_READ_ERROR/PARSE_ERROR -> convergence_read_error; 'Reviewer verdict: STARVED' ->
+      CONVERGENCE_READ_ERROR/PARSE_ERROR -> convergence_read_error; 'Subagent STARVED' ->
       subagent_starved. This exercises the jobs-present-but-step-unmapped shape (not a circular test). Assert
       _compute_fingerprint yields DISTINCT fingerprints across convergence_refused, subagent_starved,
       and environment (anti-masking).
@@ -138,14 +138,14 @@ verification_plan:
       grep -q 'CONVERGENCE_RED' .github/workflows/terraform-apply-sandbox.yml &&
       grep -q 'CONVERGENCE_READ_ERROR' .github/workflows/terraform-apply-sandbox.yml &&
       grep -q 'CONVERGENCE_PARSE_ERROR' .github/workflows/terraform-apply-sandbox.yml &&
-      grep -q 'Reviewer verdict: STARVED' .github/workflows/terraform-apply-sandbox.yml &&
+      grep -q 'Subagent STARVED' .github/workflows/terraform-apply-sandbox.yml &&
       grep -q 'Convergence precondition (refuse on red record' .github/workflows/terraform-apply-sandbox.yml &&
       grep -q 'Subagent plan review (digest-fed, JSON-classified)' .github/workflows/terraform-apply-sandbox.yml
     expected: All greps hit -- the strings the taxonomy rules match are the strings the workflow emits.
     fix_if: A grep misses -- the taxonomy rule keys on a string the workflow does not emit; correct the rule.
   - step: 2
     phase: pre-deploy
-    hermetic: true
+    hermetic: false
     action: Taxonomy classifies the sandbox markers to distinct categories, and their fingerprints differ.
     command: bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py -k "convergence or starved or fingerprint" -q
     expected: >-
@@ -154,7 +154,7 @@ verification_plan:
     fix_if: A marker classifies to unknown, or any two categories share a fingerprint.
   - step: 3
     phase: pre-deploy
-    hermetic: true
+    hermetic: false
     action: >-
       Cause-aware convergence dedup DECISION resolves correctly (acceptance criterion 2): drift vs
       apply-failure-commit-status vs none.
@@ -165,7 +165,7 @@ verification_plan:
     fix_if: A drift-red or a status-anchored apply-failure-red still files a fresh refusal rec.
   - step: 4
     phase: pre-deploy
-    hermetic: true
+    hermetic: false
     action: >-
       Close-then-recur finder is read-only; the separate writer reopens a recently-closed match once,
       ignores stale ones, and does not double-bump (rec-2644).
@@ -298,10 +298,12 @@ context:
     T2.39 boundary (Decision 126 pt 5): T2.39 c3 already took STARVED out of the red-latch path
     (terraform-apply-sandbox.yml:494-495). This plan only classifies subagent_starved for dedup; it
     does not touch that latch path. STARVED's real FAILED-STEP-log marker (what `gh run view
-    --log-failed` returns, from the exit-1 'Subagent plan review' step) is 'Reviewer verdict: STARVED'
-    (terraform-apply-sandbox.yml:436) / 'Subagent STARVED' (:448) -- NOT REVIEW_STARVED (that lives in
-    a SUCCEEDED step, :495, excluded from --log-failed), NOT outcome=starved ($GITHUB_OUTPUT only), and
-    NOT 'Reached max turns'. REVISE emits 'Reviewer verdict: REVISE', so the STARVED marker does not alias.
+    --log-failed` returns, from the exit-1 'Subagent plan review' step) is the LITERAL 'Subagent STARVED'
+    (terraform-apply-sandbox.yml:448) -- at runtime the log ALSO shows 'Reviewer verdict: STARVED', but
+    the FILE holds 'Reviewer verdict: ${VERDICT}', so the static grounding grep keys on the literal
+    'Subagent STARVED'. NOT REVIEW_STARVED (that lives in a SUCCEEDED step, :495, excluded from
+    --log-failed), NOT outcome=starved ($GITHUB_OUTPUT only), NOT 'Reached max turns'. REVISE emits
+    'Subagent returned REVISE', so 'Subagent STARVED' does not alias.
   - >-
     Classification strategy (round-2 issue 1/3): log_pattern_to_category ONLY, never
     step_name_to_category -- the three CONVERGENCE_* markers share one step and STARVED/REVISE share
@@ -310,7 +312,7 @@ context:
     convergence_read_error is not required by criterion 1 (only convergence_refused/subagent_starved/
     environment need distinct fingerprints) but is kept as a real distinct category via log fallback.
   - "Decision-scout verdict: FLAGS_FOUND (no BLOCK). CITE: Decision 92 (server-side convergence anchor / by-design refusal), Decision 72 + Decision 55 (apply failures wire into ci-rca; forward-fix not auto-revert), Decision 126 (Reconcile/acknowledge-and-retry for red/drift), Decision 84 (portal-only rec writes), Decision 73 (L5 hard-block justifies scoping this forward-fix under the block), CIRCA-03(a) grouping-fingerprint contract, CIRCA-09 (terraform-apply-sandbox is not_a_gate/unknown -- taxonomy classifies failure_category, not gate tier)."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE(rounds 1-3) -> revised (r1: Risks A-E; r2: log-pattern-only classification + file_rec reopen locus; r3: subagent_starved marker re-grounded on the real exit-1 review-step log line 'Reviewer verdict: STARVED', + tf_drift no-bump note). Round-3 sole blocker was a mechanical marker-string fix; source-verified, not re-run."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE(rounds 1-3) -> revised (r1: Risks A-E; r2: log-pattern-only classification + file_rec reopen locus; r3: subagent_starved marker re-grounded on the real exit-1 review-step literal 'Subagent STARVED'; + tf_drift no-bump note). CI fix: VP steps 2-4 set hermetic:false (they exercise not-yet-created tests, so validate_vp_replay must not re-run them on the plan-PR tree); step 1 grounding grep keyed on the literal 'Subagent STARVED'."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/ci-rca-apply-sandbox-convergence-jkpohb)
   - docs/PROJECT_CONTEXT.md read
@@ -322,9 +324,9 @@ execution_steps:
     config/ci_rca_taxonomy.yaml -- (a) add convergence_refused, convergence_read_error,
     subagent_starved to the top-level failure_categories: list; (b) add log_pattern_to_category ONLY,
     ordered BEFORE the generic terraform.*Error rule: '\\bCONVERGENCE_RED\\b' (convergence_refused),
-    'CONVERGENCE_(READ|PARSE)_ERROR' (convergence_read_error), 'Reviewer verdict: STARVED'
-    (subagent_starved -- the real exit-1 review-step log marker, :436; NOT REVIEW_STARVED which is in a
-    succeeded step). Do NOT add any step_name_to_category rule for the precondition or review steps (shadowing).
+    'CONVERGENCE_(READ|PARSE)_ERROR' (convergence_read_error), 'Subagent STARVED'
+    (subagent_starved -- the real literal exit-1 review-step log marker, :448; NOT REVIEW_STARVED which is
+    in a succeeded step). Do NOT add any step_name_to_category rule for the precondition or review steps (shadowing).
   - >-
     scripts/ci_rca/taxonomy.py -- confirm the failed precondition/review step (unmapped in step/func
     maps) falls through classify_failures to classify_failure's log-pattern path and resolves each
