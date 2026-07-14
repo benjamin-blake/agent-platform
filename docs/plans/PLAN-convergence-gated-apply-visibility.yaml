@@ -1,0 +1,273 @@
+schema_version: 1
+slug: "convergence-gated-apply-visibility"
+intent: >-
+  Restore observability and recoverability of terraform convergence on main: make the
+  convergence-health sensor escalate a gated-apply stuck on a GREEN record (and a persistently
+  stale-green unapplied backlog), and stop the apply-workflow concurrency group from cancelling a
+  follow-on PR's saved plan -- so a non-converged main is alarmed and self-recoverable, not silent.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-convergence-gated-apply-visibility.yaml
+phase: >-
+  Platform T2.35 (convergence-health staleness sensor, CD.35 Wave 6) hardening; complements T2.22
+  (gated-apply) and T2.21 (speculative-plan). Phase 1 Core Infrastructure (complete) -- CI/CD governance.
+scope:
+  - file: scripts/convergence_health.py
+    action: Modify
+    purpose: >-
+      Escalate stuck gated-apply approvals independent of record status (green-but-stale included)
+      and add a stale-green unapplied-backlog trigger gated on a named STALE_GREEN_BACKLOG_THRESHOLD_HOURS
+      constant; branch the rec title/context text for the new conditions while reusing
+      source=tf_convergence_stale for idempotent file/update/close.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Make the existing WORKFLOW-LEVEL concurrency group event-keyed: a per-PR key
+      (terraform-apply-plan-pr-<number>, cancel-in-progress on) for pull_request runs, while KEEPING the
+      existing shared serialize-on-tfstate key (terraform-apply-sandbox, cancel-in-progress OFF) for push /
+      workflow_dispatch runs. This decouples the PR speculative-plan (so a held gated-apply can no longer
+      cancel a follow-on PR's saved plan.bin) while preserving the run-level atomic hold from apply-sandbox
+      through the gated-apply approval wait AND reconcile.yml's cross-workflow serialization on the same
+      shared key (Decision 77/92/94 no-TOCTOU serialization preserved). The shared key is NOT renamed --
+      reconcile.yml:56-61 joins it deliberately.
+  - file: scripts/verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      Add a durable _check_terraform_apply_concurrency guard (registered in _COMMANDS) that inspects BOTH
+      terraform-apply-sandbox.yml and reconcile.yml: asserts apply-sandbox's group is event-keyed
+      (PR-scoped for pull_request, the shared terraform-apply-sandbox key for push/dispatch) with
+      cancel-in-progress pull_request-gated, AND that reconcile.yml shares the same terraform-apply-sandbox
+      push/dispatch key -- so a config that would permit concurrent applies against shared tfstate (within
+      OR across the two apply-driving workflows) is caught in presubmit.
+  - file: scripts/checks/ci_guards/validate_ci_workflow_guards.py
+    action: Modify
+    purpose: Wire the new terraform-apply-concurrency guard into the presubmit ci-workflow guards gate.
+  - file: config/agent/data_quality/source_registry.yaml
+    action: Modify
+    purpose: >-
+      Update the tf_convergence_stale signal_interpretation prose so it covers the new stuck-approval
+      and stale-green-backlog close conditions (close-on-approvals-clear / backlog-drained), not only
+      close-when-record-returns-to-green.
+  - file: tests/test_convergence_health.py
+    action: Modify
+    purpose: >-
+      Cover green+stuck-approval escalation (file/update/close), green+stale-backlog escalation
+      (file, and no-file under the record-age gate), and the new record_age_hours computation; retain
+      the green+no-signal -> no-escalation case.
+  - file: tests/test_verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      Cover _check_terraform_apply_concurrency: pass on the valid event-keyed group; fail on a
+      non-conditional shared-everything group, on a missing per-PR key, and on cancel-in-progress not
+      being pull_request-gated (i.e. a push/dispatch run that could cancel an in-flight apply).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    assess_health() returns severity "high" for a GREEN record carrying non-empty stuck_approvals
+    (regression from the current "none"), and HealthVerdict carries a default-valued record_age_hours.
+  - >-
+    escalate() files exactly one tf_convergence_stale rec (action "file") for a green verdict with
+    stuck approvals and no open rec; a second tick updates (never double-files); clearing the approvals
+    closes the rec.
+  - >-
+    escalate() also files/updates/closes for a green record with unapplied_backlog > 0 whose
+    record_age_hours exceeds STALE_GREEN_BACKLOG_THRESHOLD_HOURS (a named constant set above normal
+    apply latency), reusing source=tf_convergence_stale (no new source literal); it does NOT file when
+    record_age_hours is under that gate.
+  - >-
+    The escalation rec's title/context distinguishes the stuck-approval and stale-green-backlog
+    conditions from the persistently-red condition.
+  - >-
+    terraform-apply-sandbox.yml's workflow-level concurrency group is event-keyed: a per-PR key for
+    pull_request runs and the existing shared terraform-apply-sandbox key for push/workflow_dispatch runs
+    (NOT renamed), with cancel-in-progress pull_request-gated (never true on the push/dispatch path).
+  - >-
+    scripts/verify_ci_workflow.py exposes _check_terraform_apply_concurrency (in _COMMANDS), wired
+    through validate_ci_workflow_guards.py, and it FAILS on a non-conditional shared-everything group,
+    a missing per-PR key, cancel-in-progress not gated on pull_request, OR reconcile.yml no longer
+    sharing the terraform-apply-sandbox push/dispatch key (any config that would permit concurrent
+    applies against shared tfstate within or across the two apply-driving workflows).
+  - >-
+    reconcile.yml continues to share the terraform-apply-sandbox push/dispatch serialization key with
+    terraform-apply-sandbox.yml (cross-workflow apply serialization preserved; reconcile.yml is not modified).
+  - "bin/venv-python -m scripts.validate --pre passes (100% new-code coverage; source-registry check green with no new source literal; ruff/format clean)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Sensor escalation behaviour -- stuck approvals and stale-green backlog escalate on a green record.
+    command: bin/venv-python -m pytest tests/test_convergence_health.py -q
+    expected: >-
+      All pass, including new green+stuck-approval (file/update/close), green+stale-backlog (file, and
+      no-file under the record-age gate), and record_age_hours cases; the pre-existing green + no-signal
+      case still yields no escalation.
+    fix_if: >-
+      escalate() over_threshold still requires status=='red', or assess_health leaves green severity
+      "none" when stuck_approvals is present, or the stale-backlog trigger fires without the
+      STALE_GREEN_BACKLOG_THRESHOLD_HOURS record-age gate.
+  - step: 2
+    phase: pre-deploy
+    action: Concurrency guard unit tests -- guard detects the event-keyed group and its regressions.
+    command: bin/venv-python -m pytest tests/test_verify_ci_workflow.py -q
+    expected: >-
+      All pass, including new _check_terraform_apply_concurrency cases (pass on the valid event-keyed
+      group; fail on a non-conditional shared-everything group, a missing per-PR key, and
+      cancel-in-progress not gated on pull_request).
+    fix_if: The guard passes when the concurrency group is a bare non-conditional literal, or when cancel-in-progress could be true on a push/dispatch apply run.
+  - step: 3
+    phase: pre-deploy
+    action: Durable guard runs green against the REAL committed workflow file.
+    command: bin/venv-python -m scripts.verify_ci_workflow terraform-apply-concurrency
+    expected: Prints "OK" and exits 0 -- the committed terraform-apply-sandbox.yml satisfies the event-keyed concurrency invariant.
+    fix_if: >-
+      Exits 1 (workflow group not event-keyed, per-PR key missing, shared push/dispatch key missing, or
+      cancel-in-progress not pull_request-gated).
+  - step: 4
+    phase: pre-deploy
+    action: Authoritative presubmit gate (coverage, ci-workflow guards, source-registry, ruff/format).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      PASS -- 100% new-code coverage on convergence_health.py and verify_ci_workflow.py; ci-workflow
+      guards gate green (incl. terraform-apply-concurrency); source-registry check green (no new source literal).
+    fix_if: Any FAIL -- e.g. a coverage gap on the new escalate()/assess_health() branches, or a new source literal tripping check_source_registry.
+constraints:
+  - >-
+    The new escalation triggers only file/update/close a rec via the ops portal (file_rec/update_rec);
+    they NEVER run terraform apply, dispatch the apply workflow, or write/clear the convergence record
+    (Decision 55 anti-masking; Decision 92 pt6 nothing auto-remediates).
+  - Reuse source="tf_convergence_stale"; introduce no new `source` literal (avoids the source-registry CI gate -- Decision 61/124).
+  - >-
+    Preserve no-TOCTOU apply serialization (Decision 77/92/94): push and workflow_dispatch runs keep the
+    EXISTING shared concurrency key terraform-apply-sandbox (which reconcile.yml also uses) with
+    cancel-in-progress OFF, holding the group across the whole run (apply-sandbox through the gated-apply
+    approval wait). Only pull_request runs are keyed separately (per-PR). Do NOT rename the shared key and
+    do NOT move concurrency to job level -- the workflow-level event-keyed group is what preserves the
+    run-level atomic hold and the cross-workflow serialization with reconcile.yml.
+  - Never add a CI check without wiring it into validate.py first -- the new guard registers via validate_ci_workflow_guards.py (scripts/CLAUDE.md; AGENTS.md merge protocol).
+  - 100% new-code test coverage for every modified source file (tests/CLAUDE.md coverage policy).
+  - Linux/bash only; invoke bin/venv-python (never bare python/python3).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    "Decision-scout verdict + CITE list: FLAGS_FOUND (1 NOTE, no BLOCK). CITE: Decision 94, Decision 92,
+    Decision 77, Decision 83, Decision 55, Decision 72. RELATED: Decision 126, Decision 119,
+    Decision 61/124, Decision 84, Decision 98. Decisions triaged: 87 of 87."
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=REVISE(1) -> REVISE(2) -> REVISE(3, surgical naming fix); human-accepted to merge at the 3-round cap (round 3 certified the design implementation-ready; sole blocker was a naming leftover, fixed)"
+  - >-
+    Incident: #559 (50f3a90, new ducklake-deploy IAM role) routed to gated-apply and waited ~12h on the
+    tf-gated-apply Environment; on approval it failed "Saved plan is stale" (an out-of-band admin apply
+    moved tfstate after the plan.bin was captured) -> red-latched the convergence record. #560 (95202f0)
+    had its PR speculative-plan cancelled by the shared workflow-level concurrency group -> no saved
+    plan.bin (9f116948 absent from S3) -> its merge-time apply would fail closed. The sensor never
+    escalated because escalate() gates over_threshold on status=='red' while a routed gated-apply
+    deliberately leaves the record GREEN; the record was stale-green at #556 with unapplied_backlog 2,
+    and stuck_approvals under-reported 0 in CC-web (no GH_TOKEN -> find_stuck_gated_approvals degraded to
+    []). The scheduled sensor (convergence-health.yml) DOES export GH_TOKEN, so the stuck-approval signal
+    is live in production; the CC-web degradation is preflight-only.
+  - >-
+    Concurrency mechanism (resolves plan-critique round-1 #1/#2 and round-2 cross-workflow finding in-plan):
+    the fix keeps the concurrency block at WORKFLOW level and only makes its key/flag event-conditional.
+    push and workflow_dispatch runs keep the EXISTING shared key terraform-apply-sandbox (cancel-in-progress
+    off) and hold it for the ENTIRE run -- identical to today's run-level atomic hold across apply-sandbox ->
+    gated-apply's approval wait (terraform-apply-sandbox.yml:886-890, 1063-1068). GitHub evaluates the
+    concurrency gate BEFORE the environment-approval gate, so a routed run claims the shared key then waits
+    for the reviewer, holding it through the window. Because the group is workflow-level there are no per-job
+    literals that could diverge (round-1 REVISE #1 structurally impossible) and no new apply->gated
+    interleaving window (round-1 REVISE #2). The shared key is NOT renamed: reconcile.yml (T2.37/Decision 126)
+    deliberately joins the SAME terraform-apply-sandbox group (reconcile.yml:56-61, 656-659) so its
+    recovery-apply serializes against push/dispatch applies on the shared tfstate + convergence record;
+    renaming would silently decouple the two workflows and reopen the cross-workflow apply race (round-2
+    finding). Only pull_request runs are keyed per-PR -- the exact decoupling that stops a held gated-apply
+    from cancelling a follow-on PR's speculative-plan. The durable guard asserts BOTH workflows share the
+    terraform-apply-sandbox push/dispatch key so a future edit cannot re-diverge them. terraform-drift.yml
+    intentionally uses a separate group and serializes with apply via the native S3 lock only
+    (terraform-drift.yml:30-31), so it is unaffected. A job-level split was considered and rejected for
+    breaking run-level atomicity.
+  - >-
+    Decision 48 NOTE (V2 tier consciously retained): terraform-apply-sandbox.yml is the apply pipeline
+    but is NOT a Decision 48 V3 trigger (no .tf resource or Lambda in scope); live apply is CI-delegated
+    (Decision 119). V2 cannot behaviourally exercise GitHub Actions concurrency semantics, so the durable
+    guard is the sole continuous enforcement -- hence the guard asserts the event-keyed structure incl.
+    the pull_request-gated cancel-in-progress, and its unit tests assert the concurrent-apply-permitting
+    regressions fail. Verification-reachability limit, not a tier error.
+  - >-
+    Decision 126 framing: this closes the green-but-STUCK blind spot that the red-commit-keyed Reconcile
+    / heal button cannot see -- the two escalation paths are complementary, not overlapping.
+  - >-
+    Accepted tradeoff (sole behavioural change): pull_request runs no longer serialize against push
+    applies. A speculative plan captured against tfstate that later moves (out-of-band admin apply, or a
+    push apply landing before merge) already fails closed at merge (stale plan -> red -> workflow_dispatch
+    acknowledge-and-retry) -- an EXISTING fail-closed-safe path, not a new one. The split only converts
+    the worse "follow-on PR has no saved plan at all -> guaranteed fail-closed" into that existing path.
+  - >-
+    Green-backlog threshold (plan-critique Risk 4): STALE_GREEN_BACKLOG_THRESHOLD_HOURS is an explicit
+    named constant set above normal apply latency (an apply advances the record within minutes), so a
+    healthy in-flight merge cannot false-positive; only a green record with an unapplied backlog
+    persisting for hours escalates.
+  - >-
+    HARD-BLOCK deferral (Related-Work check): one open ci-rca rec (rec-2675, tests/test_checks_registry.py,
+    frozen check-registry baselines miss validate_prose_allowlist -> canary FAIL) is UNRELATED to
+    convergence -- this plan shares neither its source_file nor its failure category (validate.py
+    check-registry baseline vs convergence sensor / CI concurrency). Deferred with rationale per the
+    Related-Work check. The forward_fix_recursion_alert on that file (count 3) is a separate concern for /orient.
+  - "Main divergence: branch 0 behind / 0 ahead origin/main at planning time (2026-07-14T09:34Z); no scope-file overlap with main_files_changed_since_branch."
+  - >-
+    Operational recovery is OUT of plan scope (human-only, cannot be done by an agent): run
+    terraform-apply-sandbox workflow_dispatch with acknowledge_red_commit=50f3a90 to clear the red latch
+    (re-plans fresh -> guard -> gated-apply -> approve). This plan only restores VISIBILITY and prevents recurrence.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md reviewed via the decision-scout gate (full-file read delegated to the subagent per skill design)
+  - All seven files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/convergence_health.py: add a default-valued record_age_hours field to HealthVerdict; compute
+    it in assess_health() from the record timestamp (regardless of colour); set severity to account for
+    non-empty stuck_approvals on ANY status (not only red). Define STALE_GREEN_BACKLOG_THRESHOLD_HOURS
+    as a module constant with a comment that it must exceed normal apply latency.
+  - >-
+    scripts/convergence_health.py: in escalate(), broaden over_threshold to fire on (a) non-empty
+    stuck_approvals regardless of status, (b) status red past the red-age threshold (unchanged), and
+    (c) status green with unapplied_backlog > 0 and record_age_hours >= STALE_GREEN_BACKLOG_THRESHOLD_HOURS.
+    Keep source=tf_convergence_stale; branch _build_context()/_build_rec_fields() title+context text AND
+    the close-resolution string (currently the hardcoded "Convergence record returned to green" at ~:518-520)
+    for the three conditions (stuck-approval closes on approvals-clear / stale-green-backlog closes on
+    backlog-drained / persistently-red closes on record-returns-to-green).
+  - >-
+    .github/workflows/terraform-apply-sandbox.yml: replace the static workflow-level concurrency group
+    with an event-keyed expression -- group = per-PR key
+    (format('terraform-apply-plan-pr-{0}', github.event.pull_request.number)) when
+    github.event_name == 'pull_request', else the EXISTING shared literal 'terraform-apply-sandbox'
+    (do NOT rename it -- reconcile.yml shares it); cancel-in-progress = (github.event_name == 'pull_request').
+    Do NOT add job-level concurrency and do NOT edit reconcile.yml.
+  - >-
+    scripts/verify_ci_workflow.py: add _check_terraform_apply_concurrency() that loads BOTH
+    terraform-apply-sandbox.yml and reconcile.yml; asserts apply-sandbox's top-level concurrency.group is
+    event-keyed (references pull_request, includes a per-PR format key AND the shared terraform-apply-sandbox
+    key), cancel-in-progress is gated on pull_request (not a bare true), AND reconcile.yml's concurrency.group
+    equals the shared terraform-apply-sandbox key; register it in _COMMANDS as "terraform-apply-concurrency".
+  - >-
+    scripts/checks/ci_guards/validate_ci_workflow_guards.py: import _check_terraform_apply_concurrency and
+    append ("terraform-apply-concurrency", _check_terraform_apply_concurrency) to the guards list.
+  - >-
+    config/agent/data_quality/source_registry.yaml: update the tf_convergence_stale entry's
+    signal_interpretation prose to cover the stuck-approval (closes when approvals clear) and
+    stale-green-backlog (closes when backlog drains) conditions alongside the existing
+    record-returns-to-green close.
+  - >-
+    tests/test_convergence_health.py: add cases for green+stuck-approval (file/update/close), green+stale-backlog
+    (file at/over the threshold, no-file under it) and record_age_hours; retain the green+no-signal -> none case.
+  - >-
+    tests/test_verify_ci_workflow.py: add tests for _check_terraform_apply_concurrency (pass on the valid
+    event-keyed group; fail on a bare non-conditional group, a missing per-PR key, cancel-in-progress not
+    gated on pull_request, and reconcile.yml in a DIFFERENT group than the shared terraform-apply-sandbox key).
+  - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: files changed, verification results, and explicit confirmation that no new source literal and no auto-apply/auto-clear path were introduced."
+work_areas: []
+rollback: >-
+  Revert the seven-file diff. The convergence-health sensor returns to red-only escalation and the workflow
+  to a single static concurrency group. No data migration or infra state to unwind -- the sensor only
+  files/updates recs (idempotent), and the workflow change is config-only (next scheduled sensor tick and
+  next PR pick up the revert).
