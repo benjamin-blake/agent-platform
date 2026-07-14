@@ -23,19 +23,22 @@ scope:
     action: Modify
     purpose: >-
       Make the existing WORKFLOW-LEVEL concurrency group event-keyed: a per-PR key
-      (terraform-apply-plan-pr-<number>, cancel-in-progress on) for pull_request runs, and the shared
-      serialize-on-tfstate key (terraform-apply-personal-state, cancel-in-progress OFF) for push /
-      workflow_dispatch runs. This decouples the PR speculative-plan (so a held gated-apply can no
-      longer cancel a follow-on PR's saved plan.bin) while preserving the run-level atomic hold from
-      apply-sandbox through the gated-apply approval wait (Decision 77 no-TOCTOU serialization preserved).
+      (terraform-apply-plan-pr-<number>, cancel-in-progress on) for pull_request runs, while KEEPING the
+      existing shared serialize-on-tfstate key (terraform-apply-sandbox, cancel-in-progress OFF) for push /
+      workflow_dispatch runs. This decouples the PR speculative-plan (so a held gated-apply can no longer
+      cancel a follow-on PR's saved plan.bin) while preserving the run-level atomic hold from apply-sandbox
+      through the gated-apply approval wait AND reconcile.yml's cross-workflow serialization on the same
+      shared key (Decision 77/92/94 no-TOCTOU serialization preserved). The shared key is NOT renamed --
+      reconcile.yml:56-61 joins it deliberately.
   - file: scripts/verify_ci_workflow.py
     action: Modify
     purpose: >-
-      Add a durable _check_terraform_apply_concurrency guard (registered in _COMMANDS) asserting the
-      workflow-level concurrency group is event-keyed (PR-scoped for pull_request, the shared
-      terraform-apply-personal-state key for push/dispatch) and that cancel-in-progress is
-      pull_request-gated (never true for push/dispatch) -- so a config that would permit concurrent
-      applies against shared tfstate is caught in presubmit.
+      Add a durable _check_terraform_apply_concurrency guard (registered in _COMMANDS) that inspects BOTH
+      terraform-apply-sandbox.yml and reconcile.yml: asserts apply-sandbox's group is event-keyed
+      (PR-scoped for pull_request, the shared terraform-apply-sandbox key for push/dispatch) with
+      cancel-in-progress pull_request-gated, AND that reconcile.yml shares the same terraform-apply-sandbox
+      push/dispatch key -- so a config that would permit concurrent applies against shared tfstate (within
+      OR across the two apply-driving workflows) is caught in presubmit.
   - file: scripts/checks/ci_guards/validate_ci_workflow_guards.py
     action: Modify
     purpose: Wire the new terraform-apply-concurrency guard into the presubmit ci-workflow guards gate.
@@ -77,14 +80,18 @@ acceptance_criteria:
     conditions from the persistently-red condition.
   - >-
     terraform-apply-sandbox.yml's workflow-level concurrency group is event-keyed: a per-PR key for
-    pull_request runs and the shared terraform-apply-personal-state key for push/workflow_dispatch runs,
-    with cancel-in-progress pull_request-gated (never true on the push/dispatch path).
+    pull_request runs and the existing shared terraform-apply-sandbox key for push/workflow_dispatch runs
+    (NOT renamed), with cancel-in-progress pull_request-gated (never true on the push/dispatch path).
   - >-
     scripts/verify_ci_workflow.py exposes _check_terraform_apply_concurrency (in _COMMANDS), wired
     through validate_ci_workflow_guards.py, and it FAILS on a non-conditional shared-everything group,
-    a missing per-PR key, or cancel-in-progress not gated on pull_request (any config that would let a
-    push/dispatch apply be cancelled or let PR and apply runs share the serialization key incorrectly).
-  - "bin/venv-python -m scripts.validate --pre passes (100% new-code coverage; source-registry unchanged; ruff/format clean)."
+    a missing per-PR key, cancel-in-progress not gated on pull_request, OR reconcile.yml no longer
+    sharing the terraform-apply-sandbox push/dispatch key (any config that would permit concurrent
+    applies against shared tfstate within or across the two apply-driving workflows).
+  - >-
+    reconcile.yml continues to share the terraform-apply-sandbox push/dispatch serialization key with
+    terraform-apply-sandbox.yml (cross-workflow apply serialization preserved; reconcile.yml is not modified).
+  - "bin/venv-python -m scripts.validate --pre passes (100% new-code coverage; source-registry check green with no new source literal; ruff/format clean)."
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -144,7 +151,7 @@ context:
     "Decision-scout verdict + CITE list: FLAGS_FOUND (1 NOTE, no BLOCK). CITE: Decision 94, Decision 92,
     Decision 77, Decision 83, Decision 55, Decision 72. RELATED: Decision 126, Decision 119,
     Decision 61/124, Decision 84, Decision 98. Decisions triaged: 87 of 87."
-  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=REVISE(round 1) -> PROCEED(round 2)"
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=REVISE(1) -> REVISE(2) -> PROCEED(3)"
   - >-
     Incident: #559 (50f3a90, new ducklake-deploy IAM role) routed to gated-apply and waited ~12h on the
     tf-gated-apply Environment; on approval it failed "Saved plan is stale" (an out-of-band admin apply
@@ -157,18 +164,24 @@ context:
     []). The scheduled sensor (convergence-health.yml) DOES export GH_TOKEN, so the stuck-approval signal
     is live in production; the CC-web degradation is preflight-only.
   - >-
-    Concurrency mechanism (resolves plan-critique REVISE #1/#2 in-plan, not deferred): the fix keeps the
-    concurrency block at WORKFLOW level and only makes its key/flag event-conditional. push and
-    workflow_dispatch runs share terraform-apply-personal-state (cancel-in-progress off) and hold it for
-    the ENTIRE run -- identical to today's run-level atomic hold across apply-sandbox -> gated-apply's
-    approval wait (relied on at terraform-apply-sandbox.yml:886-890 and 1063-1068). GitHub evaluates the
-    concurrency gate BEFORE the environment-approval gate, so a routed run claims the shared key and then
-    waits for the reviewer, holding the key through the window. Because the group is workflow-level there
-    are no per-job group literals that could diverge (REVISE #1 becomes structurally impossible), and no
-    new apply-sandbox->gated-apply interleaving window is introduced (REVISE #2). Only pull_request runs
-    are keyed per-PR, which is the exact decoupling that stops a held gated-apply from cancelling a
-    follow-on PR's speculative-plan. A job-level split was considered and rejected for breaking the
-    run-level atomicity.
+    Concurrency mechanism (resolves plan-critique round-1 #1/#2 and round-2 cross-workflow finding in-plan):
+    the fix keeps the concurrency block at WORKFLOW level and only makes its key/flag event-conditional.
+    push and workflow_dispatch runs keep the EXISTING shared key terraform-apply-sandbox (cancel-in-progress
+    off) and hold it for the ENTIRE run -- identical to today's run-level atomic hold across apply-sandbox ->
+    gated-apply's approval wait (terraform-apply-sandbox.yml:886-890, 1063-1068). GitHub evaluates the
+    concurrency gate BEFORE the environment-approval gate, so a routed run claims the shared key then waits
+    for the reviewer, holding it through the window. Because the group is workflow-level there are no per-job
+    literals that could diverge (round-1 REVISE #1 structurally impossible) and no new apply->gated
+    interleaving window (round-1 REVISE #2). The shared key is NOT renamed: reconcile.yml (T2.37/Decision 126)
+    deliberately joins the SAME terraform-apply-sandbox group (reconcile.yml:56-61, 656-659) so its
+    recovery-apply serializes against push/dispatch applies on the shared tfstate + convergence record;
+    renaming would silently decouple the two workflows and reopen the cross-workflow apply race (round-2
+    finding). Only pull_request runs are keyed per-PR -- the exact decoupling that stops a held gated-apply
+    from cancelling a follow-on PR's speculative-plan. The durable guard asserts BOTH workflows share the
+    terraform-apply-sandbox push/dispatch key so a future edit cannot re-diverge them. terraform-drift.yml
+    intentionally uses a separate group and serializes with apply via the native S3 lock only
+    (terraform-drift.yml:30-31), so it is unaffected. A job-level split was considered and rejected for
+    breaking run-level atomicity.
   - >-
     Decision 48 NOTE (V2 tier consciously retained): terraform-apply-sandbox.yml is the apply pipeline
     but is NOT a Decision 48 V3 trigger (no .tf resource or Lambda in scope); live apply is CI-delegated
@@ -223,13 +236,15 @@ execution_steps:
     .github/workflows/terraform-apply-sandbox.yml: replace the static workflow-level concurrency group
     with an event-keyed expression -- group = per-PR key
     (format('terraform-apply-plan-pr-{0}', github.event.pull_request.number)) when
-    github.event_name == 'pull_request', else the shared 'terraform-apply-personal-state'; and
-    cancel-in-progress = (github.event_name == 'pull_request'). Do NOT add job-level concurrency.
+    github.event_name == 'pull_request', else the EXISTING shared literal 'terraform-apply-sandbox'
+    (do NOT rename it -- reconcile.yml shares it); cancel-in-progress = (github.event_name == 'pull_request').
+    Do NOT add job-level concurrency and do NOT edit reconcile.yml.
   - >-
-    scripts/verify_ci_workflow.py: add _check_terraform_apply_concurrency() that loads the workflow,
-    asserts the top-level concurrency.group expression is event-keyed (references pull_request, includes
-    a per-PR format key AND the shared terraform-apply-personal-state key) and that cancel-in-progress is
-    gated on pull_request (not a bare true); register it in _COMMANDS as "terraform-apply-concurrency".
+    scripts/verify_ci_workflow.py: add _check_terraform_apply_concurrency() that loads BOTH
+    terraform-apply-sandbox.yml and reconcile.yml; asserts apply-sandbox's top-level concurrency.group is
+    event-keyed (references pull_request, includes a per-PR format key AND the shared terraform-apply-sandbox
+    key), cancel-in-progress is gated on pull_request (not a bare true), AND reconcile.yml's concurrency.group
+    equals the shared terraform-apply-sandbox key; register it in _COMMANDS as "terraform-apply-concurrency".
   - >-
     scripts/checks/ci_guards/validate_ci_workflow_guards.py: import _check_terraform_apply_concurrency and
     append ("terraform-apply-concurrency", _check_terraform_apply_concurrency) to the guards list.
@@ -243,8 +258,8 @@ execution_steps:
     (file at/over the threshold, no-file under it) and record_age_hours; retain the green+no-signal -> none case.
   - >-
     tests/test_verify_ci_workflow.py: add tests for _check_terraform_apply_concurrency (pass on the valid
-    event-keyed group; fail on a bare non-conditional group, a missing per-PR key, and cancel-in-progress
-    not gated on pull_request).
+    event-keyed group; fail on a bare non-conditional group, a missing per-PR key, cancel-in-progress not
+    gated on pull_request, and reconcile.yml in a DIFFERENT group than the shared terraform-apply-sandbox key).
   - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
   - "Report: files changed, verification results, and explicit confirmation that no new source literal and no auto-apply/auto-clear path were introduced."
 work_areas: []
