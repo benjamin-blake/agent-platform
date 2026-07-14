@@ -40,6 +40,15 @@ locals {
   scheduled_agent_dispatcher_function = "agent-platform-scheduled-agent-dispatcher"
   findings_processor_function         = "agent-platform-findings-processor"
   ops_compaction_function             = "agent-platform-ops-compaction"
+
+  # sensitive() keeps this 12-digit ARN out of cleartext terraform plan/show output. It is
+  # AWS's OWN publicly-documented Lambda-layer-hosting account (AWS Data Wrangler's managed
+  # layer, not this project's account -- Decision 101 is unaffected), but the speculative-plan
+  # CI job's redaction self-check fails closed on ANY undelimited 12-digit run regardless of
+  # whose account it is, and this literal is unavoidable input knowledge. Marking it sensitive
+  # is the HCL-level fix: terraform renders "(sensitive value)" for the affected attribute in
+  # every plan/show/apply invocation, not just a one-off workflow-script patch.
+  aws_sdk_pandas_layer_arn = sensitive("arn:aws:lambda:${var.aws_region}:336392948345:layer:AWSSDKPandas-Python312:22")
 }
 
 # ---------------------------------------------------------------------------
@@ -401,12 +410,8 @@ resource "aws_lambda_function" "ops_compaction" {
 
   # Only AWSSDKPandas is needed (provides awswrangler for Iceberg writes). The data-pipeline-deps
   # layer (yfinance/pyyaml) is omitted to keep the combined unzipped size under the 262 MB limit.
-  # This is AWS's own publicly-documented managed-layer account (not this project's account id --
-  # Decision 101 is unaffected); the literal is already committed at terraform/scheduled_agents.tf
-  # and terraform/data_pipeline.tf.
-  layers = [
-    "arn:aws:lambda:${var.aws_region}:336392948345:layer:AWSSDKPandas-Python312:22",
-  ]
+  # local.aws_sdk_pandas_layer_arn is sensitive()-wrapped -- see its definition above.
+  layers = [local.aws_sdk_pandas_layer_arn]
 
   environment {
     variables = {
