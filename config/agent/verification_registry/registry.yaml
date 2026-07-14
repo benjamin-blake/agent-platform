@@ -768,3 +768,56 @@ entries:
         - -m
         - scripts.verify_ci_workflow
         - terraform-apply-concurrency
+  - check_id: convergence-health-sloc-raise-gate-registered
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/registry.py
+    guard_symbol: validate_sloc_budget_raises
+    plan_slug: convergence-health-sloc-decompose-guardrails
+    graduated_at: '2026-07-14'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bin/venv-python
+        - -c
+        - |
+          from scripts.validate import validate_sloc_budget_raises
+          from scripts.checks.registry import pre_sequence
+          assert any(s.name == "validate_sloc_budget_raises" for s in pre_sequence())
+  - check_id: convergence-health-coverage-mapping-registered
+    primitive_slot: command_exit_zero
+    guard_target: scripts/test_coverage_checker.py
+    guard_symbol: map_source_to_test
+    plan_slug: convergence-health-sloc-decompose-guardrails
+    graduated_at: '2026-07-14'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+        - bin/venv-python
+        - -c
+        - |
+          from scripts.test_coverage_checker import map_source_to_test
+          from pathlib import Path
+          t = map_source_to_test(Path("scripts/convergence_health/record.py"))
+          assert t is not None and t.name == "test_convergence_health.py"
+  - check_id: convergence-health-py-budget-entry-removed
+    primitive_slot: grep_count
+    guard_target: config/sloc_budgets.yaml
+    guard_symbol: null
+    plan_slug: convergence-health-sloc-decompose-guardrails
+    graduated_at: '2026-07-14'
+    graduated_by: implement-agent
+    check_spec:
+      path: config/sloc_budgets.yaml
+      pattern: convergence_health
+      operator: eq
+      count: 0
+  - check_id: convergence-health-monolith-file-absent
+    primitive_slot: file_presence
+    guard_target: scripts/convergence_health.py
+    guard_symbol: null
+    plan_slug: convergence-health-sloc-decompose-guardrails
+    graduated_at: '2026-07-14'
+    graduated_by: implement-agent
+    check_spec:
+      path: scripts/convergence_health.py
+      mode: absent
