@@ -67,6 +67,8 @@ from scripts.ops_portal.ci_rca_runtime import (  # noqa: F401
     back_validate_ci_rca,
     bump_ci_rca_occurrence,
     find_open_ci_rca_rec_by_fingerprint,
+    find_recent_ci_rca_rec_by_fingerprint,
+    reopen_ci_rca_rec,
 )
 from scripts.ops_portal.ci_rca_schema import (  # noqa: F401
     _CI_RCA_VALID_MODES,
@@ -292,6 +294,25 @@ def file_rec(
                         existing_id,
                     )
                     return existing_id
+
+                # rec-2644 close-then-recur fix: no OPEN match, but a recently-CLOSED match means
+                # this is the same incident recurring, not a fresh episode. Reopen via the
+                # SEPARATE single-writer (reopen_ci_rca_rec) instead of inserting a duplicate --
+                # mutually exclusive with the open-match bump above, so occurrence never
+                # double-counts (Risk B). An out-of-window closed match (or no match at all)
+                # falls through to the normal insert path below.
+                recent = find_recent_ci_rca_rec_by_fingerprint(fingerprint, profile=profile)
+                if recent is not None:
+                    recent_id, was_closed = recent
+                    if was_closed:
+                        reopen_ci_rca_rec(recent_id, profile=profile)
+                        logger.info(
+                            "[CI_RCA_DEDUP] fingerprint=%s matches recently-closed %s; reopened + bumped "
+                            "occurrence once (write-time backstop, rec-2644).",
+                            fingerprint,
+                            recent_id,
+                        )
+                        return recent_id
 
     _derive_computed_fields(fields)
 
