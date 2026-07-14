@@ -223,6 +223,10 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # here as read-only grants; the pipeline does not mint them.
         # T2.38 / Decision 98: github-ci-ducklake-deploy added the same way -- read-only refresh
         # grant only, admin-created in terraform/personal/oidc.tf, no IAM-write budget change.
+        # T2.43 / Decision 98: github-ci-prod-deploy + the three prod execution roles
+        # (scheduled-agent-dispatcher, findings-processor, ops-compaction) added the same way --
+        # read-only refresh grant only, admin-created in terraform/personal/prod_lambdas.tf +
+        # oidc.tf, no IAM-write budget change (mirrors the T2.38 rec-2688 reconcile).
         Sid    = "IAMRolesRead"
         Effect = "Allow"
         Action = [
@@ -237,12 +241,16 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-plan",
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-drift",
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-ducklake-deploy",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-prod-deploy",
           "arn:aws:iam::${var.account_id}:role/PlatformDev",
           "arn:aws:iam::${var.account_id}:role/PlatformAdmin",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-catalog-dr",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-writer",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-reader",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-scheduled-agent-dispatcher",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-findings-processor",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ops-compaction",
         ]
       },
       {

@@ -28,12 +28,12 @@ provision:
   note: "Agents never run terraform apply as a self-directed, routine action -- the sole exception is the human-gated break-glass admin tier (see admin_out_of_band below)."
 
 deploy_code:
-  description: "Code-only deploys for artifacts on a governed code-deploy channel (e.g. the four DuckLake Lambdas)."
+  description: "Code-only deploys for artifacts on a governed code-deploy channel (e.g. the four DuckLake Lambdas, or the three prod-class Lambdas)."
   trigger: "The governed code-deploy channel named in docs/contracts/build-lambda.yaml's deploy_channels. Terraform is not involved."
   actor_role: agent
   blocks_ref: "build-lambda.yaml#deploy_channels"
   recovery: "Governed channel unavailable/not yet built for a given artifact: docs/contracts/build-lambda.yaml names the interim break_glass_only command for that artifact (operator-only, see admin_out_of_band below)."
-  status: "Landed (tier_item T2.38): .github/workflows/deploy-ducklake-lambdas.yml. Scoped role agent-platform-github-ci-ducklake-deploy is admin-create-pending (Decision 98); the workflow tolerates its bootstrap-window absence via a SCOPED continue-on-error (not blanket, Decision 55): the tolerance applies only while the operator-owned repo variable DUCKLAKE_DEPLOY_ROLE_PROVISIONED is not 'true'. The operator sets that variable to 'true' as part of the same admin-create step (apply terraform/personal/oidc.tf under agent_platform_admin); from then on a failed assume-role fails loud instead of a silent green no-op. break-glass remains available as a genuinely non-default fallback (see build-lambda.yaml#deploy_channels)."
+  status: "Two governed channels landed. (1) tier_item T2.38: .github/workflows/deploy-ducklake-lambdas.yml (four DuckLake Lambdas). Scoped role agent-platform-github-ci-ducklake-deploy is admin-create-pending (Decision 98); the workflow tolerates its bootstrap-window absence via a SCOPED continue-on-error (not blanket, Decision 55): the tolerance applies only while the operator-owned repo variable DUCKLAKE_DEPLOY_ROLE_PROVISIONED is not 'true'. The operator sets that variable to 'true' as part of the same admin-create step (apply terraform/personal/oidc.tf under agent_platform_admin); from then on a failed assume-role fails loud instead of a silent green no-op. (2) tier_item T2.43: .github/workflows/deploy-prod-lambdas.yml (the decoupled_build_pipeline class -- scheduled-agent-dispatcher, findings-processor, ops-compaction; also newly PROVISIONED by this tier_item, terraform/personal/prod_lambdas.tf). Scoped role agent-platform-github-ci-prod-deploy is admin-create-pending the same way, gated on the operator-owned repo variable PROD_DEPLOY_ROLE_PROVISIONED. break-glass remains available as a genuinely non-default fallback for both channels (see build-lambda.yaml#deploy_channels)."
 
 reconcile:
   description: "The apply pipeline is red or the convergence record is drifted."

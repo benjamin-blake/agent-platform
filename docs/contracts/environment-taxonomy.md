@@ -139,10 +139,21 @@ ducklake_lambdas.tf`, `ducklake_catalog_dr.tf`, and `ducklake_maintenance.tf` ca
 code-only redeploy no longer surfaces as a Terraform diff on the guarded auto-apply path. Layers
 (`ducklake-deps-layer`, `ducklake-extensions-layer`, `ducklake-pgclient-layer`) remain coupled --
 layer replacement is not yet decoupled (tracked by T2.42). The governed code-deploy channel for
-the four functions (target channel = a dedicated code-deploy CD path) is still pending (T2.38);
-local `build_lambda --ducklake-only --deploy` remains the interim break-glass path. This file
-remains the sole SoT for the apply-model / guard classification -- the interim/target state
+the four functions landed at T2.38: `.github/workflows/deploy-ducklake-lambdas.yml`; local
+`build_lambda --ducklake-only --deploy` is now a genuinely non-default break-glass fallback. This
+file remains the sole SoT for the apply-model / guard classification -- the interim/target state
 recorded above extends that SoT, it does not compete with it.
+
+**Conformance status (prod class, T2.43):** the three prod-class Lambdas (scheduled-agent-
+dispatcher, findings-processor, ops-compaction -- the `decoupled_build_pipeline` channel_class)
+were provisioned in `terraform/personal/prod_lambdas.tf` DECOUPLED from day one: every
+`aws_lambda_function` resource there carries a `lifecycle { ignore_changes = [source_code_hash] }`
+block from its first apply, unlike the DuckLake class above (which coupled first and decoupled
+later at #544). The governed code-deploy channel for the three functions landed in the same
+tier_item: `.github/workflows/deploy-prod-lambdas.yml`; local `build_lambda --deploy` is a
+genuinely non-default break-glass fallback (mirrors the DuckLake class's break-glass posture).
+This file remains the sole SoT for the apply-model / guard classification -- this paragraph
+extends that SoT for the prod class, it does not compete with it.
 
 ## 6. Provider lock file consideration (apply-path supply chain)
 

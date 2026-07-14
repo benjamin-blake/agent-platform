@@ -99,62 +99,60 @@ def test_validate_bucket_exists_call_args():
 
 
 class TestUpdateLambdaFunctions:
-    """Tests for the update_lambda_functions deploy path."""
+    """Tests for the update_lambda_functions deploy path (prod class: dispatcher,
+    findings-processor, ops-compaction).
 
-    # depth-first subprocess call tree for update_lambda_functions():
-    #   1. aws lambda update-function-code (dispatcher)      (subprocess.run)
-    #   2. aws lambda update-function-code (findings)        (subprocess.run)
-    #   3. aws lambda update-function-code (ops_compaction)  (subprocess.run)
-    # Total subprocess.run count: 3 -- side_effect list must have 3 entries
+    T2.43: the prod (only_ducklake=False) path now ALSO writes a deploy-records/prod/<fn>.json
+    record per function, mirroring the T2.38 ducklake path -- update-function-code THEN (on
+    success) the deploy-record S3 write: 2 subprocess.run calls x 3 functions = 6 total. See
+    TestUpdateLambdaFunctionsDucklakeOnly below for the ducklake-channel equivalent (unchanged
+    at 2 calls x 4 functions = 8 total).
+    """
 
-    def _make_success(self) -> MagicMock:
-        mock = MagicMock()
-        mock.returncode = 0
-        return mock
+    def _update_response(self, code_sha256: str = "deadbeef") -> types.SimpleNamespace:
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": code_sha256}), stderr="")
+
+    def _write_response(self) -> types.SimpleNamespace:
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def _side_effects(self, n: int = 3) -> list:
+        effects: list = []
+        for _ in range(n):
+            effects.append(self._update_response())
+            effects.append(self._write_response())
+        return effects
 
     def test_update_calls_all_functions(self):
-        """All three Lambda functions receive an update-function-code call."""
+        """All three Lambda functions receive an update-function-code call (+ a deploy-record write each)."""
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                self._make_success(),
-                self._make_success(),
-                self._make_success(),
-            ]
+            mock_run.side_effect = self._side_effects()
 
             bd.update_lambda_functions("my-bucket", "my-profile", "eu-west-2")
 
-            assert mock_run.call_count == 3
+            assert mock_run.call_count == 6
 
     def test_update_function_names(self):
-        """Each call targets the correct Lambda function name."""
+        """Each update-function-code call (even index) targets the correct Lambda function name."""
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                self._make_success(),
-                self._make_success(),
-                self._make_success(),
-            ]
+            mock_run.side_effect = self._side_effects()
 
             bd.update_lambda_functions("my-bucket", "my-profile", "eu-west-2")
 
             all_functions = list(_LAMBDA_FUNCTION_NAMES) + [_OPS_COMPACTION_FUNCTION_NAME]
             for idx, fn_name in enumerate(all_functions):
-                cmd = mock_run.call_args_list[idx][0][0]
+                cmd = mock_run.call_args_list[idx * 2][0][0]
                 fn_idx = cmd.index("--function-name")
                 assert cmd[fn_idx + 1] == fn_name
 
     def test_update_pipeline_functions_use_pipeline_zip(self):
         """Dispatcher and findings-processor use data-pipeline.zip."""
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                self._make_success(),
-                self._make_success(),
-                self._make_success(),
-            ]
+            mock_run.side_effect = self._side_effects()
 
             bd.update_lambda_functions("deploy-bucket", "prof", "eu-west-2")
 
             for idx in range(len(_LAMBDA_FUNCTION_NAMES)):
-                cmd = mock_run.call_args_list[idx][0][0]
+                cmd = mock_run.call_args_list[idx * 2][0][0]
                 bucket_idx = cmd.index("--s3-bucket")
                 assert cmd[bucket_idx + 1] == "deploy-bucket"
                 key_idx = cmd.index("--s3-key")
@@ -163,16 +161,12 @@ class TestUpdateLambdaFunctions:
     def test_update_ops_compaction_uses_minimal_zip(self):
         """ops_compaction Lambda uses the minimal ops-compaction.zip."""
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                self._make_success(),
-                self._make_success(),
-                self._make_success(),
-            ]
+            mock_run.side_effect = self._side_effects()
 
             bd.update_lambda_functions("deploy-bucket", "prof", "eu-west-2")
 
-            # ops_compaction is the last call (index = len(_LAMBDA_FUNCTION_NAMES))
-            ops_idx = len(_LAMBDA_FUNCTION_NAMES)
+            # ops_compaction is the last function; each prior function makes 2 calls.
+            ops_idx = len(_LAMBDA_FUNCTION_NAMES) * 2
             cmd = mock_run.call_args_list[ops_idx][0][0]
             fn_idx = cmd.index("--function-name")
             assert cmd[fn_idx + 1] == _OPS_COMPACTION_FUNCTION_NAME
@@ -180,13 +174,9 @@ class TestUpdateLambdaFunctions:
             assert cmd[key_idx + 1] == _OPS_COMPACTION_ZIP_KEY
 
     def test_update_region_and_profile(self):
-        """Region and profile are forwarded to the AWS CLI."""
+        """Region and profile are forwarded to the AWS CLI on every call (update + deploy-record write)."""
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                self._make_success(),
-                self._make_success(),
-                self._make_success(),
-            ]
+            mock_run.side_effect = self._side_effects()
 
             bd.update_lambda_functions("b", "company-aws-profile", "eu-west-2")
 
@@ -198,13 +188,9 @@ class TestUpdateLambdaFunctions:
                 assert cmd[profile_idx + 1] == "company-aws-profile"
 
     def test_update_subprocess_kwargs(self):
-        """Windows-safe subprocess kwargs are set."""
+        """Windows-safe subprocess kwargs are set on every call."""
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                self._make_success(),
-                self._make_success(),
-                self._make_success(),
-            ]
+            mock_run.side_effect = self._side_effects()
 
             bd.update_lambda_functions("b", "p", "eu-west-2")
 
@@ -235,6 +221,21 @@ class TestUpdateLambdaFunctions:
         assert "agent-platform-findings-processor" in _LAMBDA_FUNCTION_NAMES
         assert _OPS_COMPACTION_FUNCTION_NAME == "agent-platform-ops-compaction"
         assert _OPS_COMPACTION_ZIP_KEY == "lambda-packages/ops-compaction.zip"
+
+    def test_prod_path_writes_deploy_records_to_prod_prefix(self):
+        """T2.43: the prod path (only_ducklake=False, default) now writes deploy-records/prod/<fn>.json
+        for each of the three functions -- the OLD invariant (no records / exactly 3 subprocess
+        calls) is intentionally inverted (rec-2157/rec-2164 governed code-deploy channel)."""
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.side_effect = self._side_effects()
+            bd.update_lambda_functions("b", "p", "eu-west-2")
+
+        assert mock_run.call_count == 6
+        write_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][:3] == ["aws", "s3", "cp"]]
+        assert len(write_calls) == 3
+        all_functions = list(_LAMBDA_FUNCTION_NAMES) + [_OPS_COMPACTION_FUNCTION_NAME]
+        written_keys = {cmd[4] for cmd in write_calls}
+        assert written_keys == {f"s3://b/deploy-records/prod/{fn}.json" for fn in all_functions}
 
 
 class TestUpdateLambdaFunctionsDucklakeOnly:
@@ -294,19 +295,29 @@ class TestUpdateLambdaFunctionsDucklakeOnly:
             assert "--output" in cmd
             assert cmd[cmd.index("--output") + 1] == "json"
 
-    def test_non_ducklake_path_does_not_write_deploy_records(self):
-        """The prod/ops_compaction path (only_ducklake=False, default) must never touch
-        deploy-records/ducklake/ -- exactly 3 subprocess calls, none of them `aws s3 cp`."""
+    def test_non_ducklake_path_writes_deploy_records_to_prod_not_ducklake(self):
+        """T2.43 REWRITE (was test_non_ducklake_path_does_not_write_deploy_records): the OLD
+        invariant (prod path writes no records) is intentionally inverted now that the prod class
+        has its own governed deploy channel. The prod path writes deploy-records/prod/ -- it must
+        still never write deploy-records/ducklake/. See
+        TestUpdateLambdaFunctions.test_prod_path_writes_deploy_records_to_prod_prefix for full
+        coverage of the prod-path write behaviour; this test asserts the channel separation."""
         with patch("scripts.build_lambda.subprocess.run") as mock_run:
             mock_run.side_effect = [
+                types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": "s1"}), stderr=""),
                 types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+                types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": "s2"}), stderr=""),
                 types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+                types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": "s3"}), stderr=""),
                 types.SimpleNamespace(returncode=0, stdout="", stderr=""),
             ]
             bd.update_lambda_functions("b", "p", "eu-west-2")
-        assert mock_run.call_count == 3
-        for c in mock_run.call_args_list:
-            assert c[0][0][:3] != ["aws", "s3", "cp"]
+        assert mock_run.call_count == 6
+        write_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][:3] == ["aws", "s3", "cp"]]
+        assert len(write_calls) == 3
+        for cmd in write_calls:
+            assert cmd[4].startswith("s3://b/deploy-records/prod/")
+            assert "ducklake" not in cmd[4]
 
 
 class TestWriteDucklakeDeployRecord:
@@ -424,6 +435,41 @@ class TestWriteDucklakeDeployRecord:
             bd._write_ducklake_deploy_record(_DUCKLAKE_WRITER_FUNCTION, self._stdout(), "bucket", "", "eu-west-2")
         assert "--profile" not in captured["cmd"]
 
+    def test_default_channel_is_ducklake(self):
+        """Omitting channel writes deploy-records/ducklake/ (T2.38 original caller, unchanged)."""
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["dest"] = cmd[4]
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(_DUCKLAKE_WRITER_FUNCTION, self._stdout(), "bucket", "p", "eu-west-2")
+        assert captured["dest"] == f"s3://bucket/deploy-records/ducklake/{_DUCKLAKE_WRITER_FUNCTION}.json"
+
+    def test_prod_channel_writes_to_prod_prefix(self):
+        """T2.43: channel='prod' writes deploy-records/prod/<function>.json instead of ducklake/."""
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            captured["input"] = kw.get("input")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd._write_ducklake_deploy_record(
+                "agent-platform-scheduled-agent-dispatcher",
+                self._stdout("sha-prod"),
+                "my-bucket",
+                "p",
+                "eu-west-2",
+                channel="prod",
+            )
+        assert captured["cmd"][4] == "s3://my-bucket/deploy-records/prod/agent-platform-scheduled-agent-dispatcher.json"
+        record = json.loads(captured["input"])
+        assert record["function"] == "agent-platform-scheduled-agent-dispatcher"
+        assert record["code_sha256"] == "sha-prod"
+
 
 class TestReadDeployRecord:
     """Unit tests for read_deploy_record (T2.38 c3 read-back helper; injected S3, no live AWS)."""
@@ -456,6 +502,20 @@ class TestReadDeployRecord:
         mock_s3.get_object.assert_called_once_with(
             Bucket="other-bucket",
             Key=f"deploy-records/ducklake/{_DUCKLAKE_READER_FUNCTION}.json",
+        )
+
+    def test_prod_channel_reads_prod_prefix(self):
+        """T2.43: channel='prod' reads deploy-records/prod/<function>.json instead of ducklake/."""
+        payload = json.dumps({"function": "agent-platform-findings-processor", "code_sha256": "sha-p"}).encode()
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": io.BytesIO(payload)}
+        result = bd.read_deploy_record(
+            "agent-platform-findings-processor", s3_client=mock_s3, bucket="my-bucket", channel="prod"
+        )
+        assert result["code_sha256"] == "sha-p"
+        mock_s3.get_object.assert_called_once_with(
+            Bucket="my-bucket",
+            Key="deploy-records/prod/agent-platform-findings-processor.json",
         )
 
     def test_returns_none_on_no_such_key(self):

@@ -157,6 +157,7 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
     # so github_ci_plan/drift can refresh-read it once it enters terraform/personal state --
     # the github_ci_plan/drift analogue of the bootstrap IAMRolesRead grant github_ci_apply gets
     # (rec-2688; mirrors how github-ci-drift's own ARN was added here when T2.24 landed).
+    # prod-deploy (T2.43) is listed the same way for the same reason.
     sid    = "IAMCIRolesRead"
     effect = "Allow"
     actions = [
@@ -171,7 +172,8 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-apply",
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-plan",
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-drift",
-      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-ducklake-deploy"
+      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-ducklake-deploy",
+      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-prod-deploy"
     ]
   }
 
@@ -205,7 +207,8 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
   }
 
   statement {
-    # Lambda refresh-time reads. Literal ARNs (no Terraform dependency edges).
+    # Lambda refresh-time reads. Literal ARNs (no Terraform dependency edges). The three T2.43
+    # prod functions are listed the same way ducklake's were at T2.17/T2.38.
     sid     = "LambdaRead"
     effect  = "Allow"
     actions = ["lambda:Get*", "lambda:List*"]
@@ -219,7 +222,12 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
-      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance"
+      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
+      "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:data-pipeline-deps",
+      "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:data-pipeline-deps:*",
+      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-scheduled-agent-dispatcher",
+      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-findings-processor",
+      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ops-compaction"
     ]
   }
 
@@ -472,6 +480,21 @@ data "aws_iam_policy_document" "github_ci_branch" {
       "${aws_lambda_function.ducklake_writer.arn}:*",
       aws_lambda_function.ducklake_reader.arn,
       "${aws_lambda_function.ducklake_reader.arn}:*",
+    ]
+  }
+
+  statement {
+    # T2.43: the deploy-prod-lambdas.yml smoke job assumes this role to invoke each prod-class
+    # function and assert observable output (mirrors the ducklake smoke job reusing this role's
+    # DuckLakeInvokeCI grant above -- these three functions have no Function URL, so plain
+    # lambda:InvokeFunction is sufficient; no InvokeFunctionUrl/GetFunctionUrlConfig needed).
+    sid     = "ProdLambdaInvokeCI"
+    effect  = "Allow"
+    actions = ["lambda:InvokeFunction"]
+    resources = [
+      aws_lambda_function.scheduled_agent_dispatcher.arn,
+      aws_lambda_function.findings_processor.arn,
+      aws_lambda_function.ops_compaction.arn,
     ]
   }
 }
@@ -958,4 +981,111 @@ resource "aws_iam_role_policy" "github_ci_ducklake_deploy" {
   name   = "agent-platform-github-ci-ducklake-deploy"
   role   = aws_iam_role.github_ci_ducklake_deploy.id
   policy = data.aws_iam_policy_document.github_ci_ducklake_deploy.json
+}
+
+# ---------------------------------------------------------------------------
+# Prod-class deploy role (governed code-deploy channel, T2.43 / Decision 125/126):
+# refs/heads/main sub (push-triggered governed deploy workflow only). Mirrors
+# github_ci_ducklake_deploy exactly, scoped to the three T2.43 prod functions instead.
+#
+# This role is IAM-SENSITIVE -- the deterministic guard (scripts/terraform_apply_guard.py)
+# BLOCKS its creation (exit 2) and it lands via the human-gated admin-create path (Decision 98),
+# mirroring github_ci_plan / github_ci_drift / github_ci_ducklake_deploy. The governed deploy
+# workflow (.github/workflows/deploy-prod-lambdas.yml) carries continue-on-error on the assume-role
+# step to cover the bootstrap window (no role exists until the admin-create apply lands; pre-apply
+# pushes no-op rather than erroring).
+#
+# Capability shape (deliberately narrow -- "UpdateFunctionCode-only" is the literal invariant):
+#   - lambda:UpdateFunctionCode on the three prod function ARNs ONLY. No
+#     UpdateFunctionConfiguration, no InvokeFunction*, no PublishVersion, no AddPermission, no
+#     other lambda: action.
+#   - S3: GetObject/PutObject on lambda-packages/* (build + upload the zips) and PutObject on
+#     deploy-records/prod/* (deploy-record write -- this role never reads its own records back;
+#     convergence-health/drift tooling reads via github_ci_branch's existing bucket-wide read
+#     grant).
+#   - No terraform:*, no iam:* of any kind.
+#
+# Trust mirrors github_ci_branch/github_ci_drift/github_ci_ducklake_deploy: StringEquals aud +
+# StringLike sub refs/heads/main ONLY (no agent/*, no pull/*, no environment sub -- this role is
+# never assumed from a PR or a gated Environment).
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_role" "github_ci_prod_deploy" {
+  name        = "agent-platform-github-ci-prod-deploy"
+  description = "GitHub Actions governed prod-class Lambda code deploy (T2.43 / Decision 125/126): refs/heads/main via OIDC"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github_actions.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
+          }
+        }
+      }
+    ]
+  })
+}
+
+data "aws_iam_policy_document" "github_ci_prod_deploy" {
+  statement {
+    # The ONLY Lambda action this role grants -- UpdateFunctionCode on the three prod function
+    # ARNs. No lambda-config (UpdateFunctionConfiguration), no invoke, no publish-version/
+    # add-permission. Resource references (not literal ARNs): this role's whole purpose is
+    # deploying these functions' code, so a real Terraform dependency edge is correct here
+    # (unlike the refresh-read fragments above, which deliberately avoid one).
+    sid     = "ProdUpdateFunctionCode"
+    effect  = "Allow"
+    actions = ["lambda:UpdateFunctionCode"]
+    resources = [
+      aws_lambda_function.scheduled_agent_dispatcher.arn,
+      aws_lambda_function.findings_processor.arn,
+      aws_lambda_function.ops_compaction.arn,
+    ]
+  }
+
+  statement {
+    # build_lambda's validate_bucket_exists runs `aws s3api head-bucket` before uploading (the
+    # --deploy path does NOT pass --skip-upload), and head-bucket requires bucket-level
+    # s3:ListBucket. Bucket-level ONLY (resource is the bucket ARN, no /*): head-bucket needs the
+    # bucket resource, not object resources. Without it the first governed deploy fails closed
+    # with a misleading "bucket does not exist" (rc 1). Mirrors github_ci_ducklake_deploy's
+    # DataLakeHeadBucket.
+    sid       = "DataLakeHeadBucket"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.data_lake.arn]
+  }
+
+  statement {
+    # Build + upload the three function zips (and the data-pipeline-deps layer zip, when rebuilt)
+    # to lambda-packages/. Matches github_ci_ducklake_deploy's DucklakeLambdaPackagesReadWrite scope.
+    sid       = "ProdLambdaPackagesReadWrite"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.data_lake.arn}/lambda-packages/*"]
+  }
+
+  statement {
+    # Write the per-function deployment record (function -> CodeSha256 -> source git SHA).
+    sid       = "DeployRecordWrite"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.data_lake.arn}/deploy-records/prod/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "github_ci_prod_deploy" {
+  name   = "agent-platform-github-ci-prod-deploy"
+  role   = aws_iam_role.github_ci_prod_deploy.id
+  policy = data.aws_iam_policy_document.github_ci_prod_deploy.json
 }
