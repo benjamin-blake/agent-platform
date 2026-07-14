@@ -82,6 +82,9 @@ def map_source_to_test(source_path: Path) -> Path | None:
     scripts/checks/**/*.py -> tests/test_validate.py  (every extracted check's tests live there,
                               colocated with the pre-decomposition monolith's test file -- Decision 104),
                               except registry.py/_common.py which map to tests/test_checks_registry.py.
+    scripts/convergence_health/*.py -> tests/test_convergence_health.py (facade decomposition of
+                              the former single-file convergence_health monolith, same Decision 104
+                              colocation precedent -- PLAN-convergence-health-sloc-decompose-guardrails).
     src/common/ducklake_{writes,tables,reads,metrics}.py -> tests/test_ducklake_runtime.py (split-out
                               from ducklake_runtime.py, PLAN-sloc-ducklake-layer, same Decision 104 precedent).
     src/lambdas/ducklake_writer/<non-handler>.py -> tests/test_ducklake_writer_handler.py (e.g.
@@ -124,6 +127,8 @@ def map_source_to_test(source_path: Path) -> Path | None:
         if len(parts) >= 3 and parts[2] in _CHECKS_REGISTRY_MECHANISM_FILES:
             return ROOT / "tests" / "test_checks_registry.py"
         return ROOT / "tests" / "test_validate.py"
+    elif parts[0] == "scripts" and len(parts) == 3 and parts[1] == "convergence_health":
+        return ROOT / "tests" / "test_convergence_health.py"
     elif parts[0] == "scripts" and len(parts) == 3 and parts[1] in _NESTED_SUBPACKAGE_TEST_PREFIX:
         # Nested scripts/ subpackages (RS-01 / rec-164): ci_rca/session/sync strip the family
         # prefix, roadmap keeps full names -- each module keeps its flat test (see the prefix map).

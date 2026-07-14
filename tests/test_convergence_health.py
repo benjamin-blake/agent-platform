@@ -835,11 +835,11 @@ class TestFetchOpenRecs:
 class TestCountUnappliedTfCommitsDefaultRunner:
     def test_default_runner_counts_commit_lines(self) -> None:
         completed = MagicMock(returncode=0, stdout="abc123\ndef456\n")
-        with patch("scripts.convergence_health.subprocess.run", return_value=completed):
+        with patch("scripts.convergence_health.record.subprocess.run", return_value=completed):
             assert count_unapplied_tf_commits("sha0") == 2
 
     def test_default_runner_returns_zero_on_failure(self) -> None:
-        with patch("scripts.convergence_health.subprocess.run", side_effect=OSError("git missing")):
+        with patch("scripts.convergence_health.record.subprocess.run", side_effect=OSError("git missing")):
             assert count_unapplied_tf_commits("sha0") == 0
 
 
@@ -850,10 +850,10 @@ class TestMain:
     def test_main_happy_path_returns_zero(self) -> None:
         with (
             patch("boto3.Session"),
-            patch("scripts.convergence_health.read_convergence_record", return_value={}),
-            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
-            patch("scripts.convergence_health.assess_health", return_value=self._verdict("green")),
-            patch("scripts.convergence_health.escalate", return_value={"action": "none", "rec_id": None}) as esc,
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value={}),
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.__main__.assess_health", return_value=self._verdict("green")),
+            patch("scripts.convergence_health.__main__.escalate", return_value={"action": "none", "rec_id": None}) as esc,
         ):
             rc = main(profile="agent_platform")
         assert rc == 0
@@ -862,12 +862,12 @@ class TestMain:
     def test_main_red_path_escalates_and_returns_zero(self) -> None:
         with (
             patch("boto3.Session"),
-            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "red"}),
-            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
-            patch("scripts.convergence_health.find_reconcile_runs_since", return_value=[]),
-            patch("scripts.convergence_health.assess_health", return_value=self._verdict("red")),
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value={"status": "red"}),
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.__main__.find_reconcile_runs_since", return_value=[]),
+            patch("scripts.convergence_health.__main__.assess_health", return_value=self._verdict("red")),
             patch(
-                "scripts.convergence_health.escalate",
+                "scripts.convergence_health.__main__.escalate",
                 return_value={"action": "file", "rec_id": "rec-1"},
             ) as esc,
         ):
@@ -886,17 +886,18 @@ class TestMain:
         with (
             patch("boto3.Session"),
             patch(
-                "scripts.convergence_health.read_convergence_record",
+                "scripts.convergence_health.__main__.read_convergence_record",
                 return_value={"status": "red", "timestamp": "2026-06-27T06:00:00Z"},
             ),
-            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals", return_value=[]),
             patch(
-                "scripts.convergence_health.find_reconcile_runs_since",
+                "scripts.convergence_health.__main__.find_reconcile_runs_since",
                 return_value=[{"id": 1, "created_at": "2026-06-27T07:00:00Z"}],
             ) as find_reconcile,
-            patch("scripts.convergence_health.assess_health", return_value=self._verdict("red")),
+            patch("scripts.convergence_health.__main__.assess_health", return_value=self._verdict("red")),
             patch(
-                "scripts.convergence_health.escalate", return_value={"action": "skipped_reconcile_in_flight", "rec_id": None}
+                "scripts.convergence_health.__main__.escalate",
+                return_value={"action": "skipped_reconcile_in_flight", "rec_id": None},
             ) as esc,
         ):
             rc = main()
@@ -908,11 +909,11 @@ class TestMain:
         # No red episode -> no reason to spend the extra GitHub API call.
         with (
             patch("boto3.Session"),
-            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
-            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
-            patch("scripts.convergence_health.find_reconcile_runs_since") as find_reconcile,
-            patch("scripts.convergence_health.assess_health", return_value=self._verdict("green")),
-            patch("scripts.convergence_health.escalate", return_value={"action": "none", "rec_id": None}) as esc,
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.__main__.find_reconcile_runs_since") as find_reconcile,
+            patch("scripts.convergence_health.__main__.assess_health", return_value=self._verdict("green")),
+            patch("scripts.convergence_health.__main__.escalate", return_value={"action": "none", "rec_id": None}) as esc,
         ):
             rc = main()
         assert rc == 0
@@ -922,11 +923,11 @@ class TestMain:
     def test_main_absent_record_skips_reconcile_lookup(self) -> None:
         with (
             patch("boto3.Session"),
-            patch("scripts.convergence_health.read_convergence_record", return_value=None),
-            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]),
-            patch("scripts.convergence_health.find_reconcile_runs_since") as find_reconcile,
-            patch("scripts.convergence_health.assess_health", return_value=self._verdict("unknown")),
-            patch("scripts.convergence_health.escalate", return_value={"action": "none", "rec_id": None}),
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value=None),
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.__main__.find_reconcile_runs_since") as find_reconcile,
+            patch("scripts.convergence_health.__main__.assess_health", return_value=self._verdict("unknown")),
+            patch("scripts.convergence_health.__main__.escalate", return_value={"action": "none", "rec_id": None}),
         ):
             rc = main()
         assert rc == 0
@@ -941,7 +942,7 @@ class TestEscalateLiveFetchAndPortal:
 
     def test_escalate_fetches_open_recs_when_not_injected(self) -> None:
         with (
-            patch("scripts.convergence_health._fetch_open_recs", return_value=[]) as fetch,
+            patch("scripts.convergence_health.escalate._fetch_open_recs", return_value=[]) as fetch,
             patch("scripts.ops_data_portal.file_rec", return_value="rec-live") as fr,
         ):
             result = escalate(self._verdict())
@@ -1129,13 +1130,13 @@ class TestMainDiagnoseMode:
         monkeypatch.setenv("CONVERGENCE_HEALTH_DIAGNOSE", "1")
         with (
             patch("boto3.Session"),
-            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
-            patch("scripts.convergence_health.diagnose_stuck_approvals", return_value=[]),
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.__main__.diagnose_stuck_approvals", return_value=[]),
             patch(
-                "scripts.convergence_health.assess_health",
+                "scripts.convergence_health.__main__.assess_health",
                 return_value=HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none"),
             ),
-            patch("scripts.convergence_health.escalate") as esc,
+            patch("scripts.convergence_health.__main__.escalate") as esc,
         ):
             rc = main()
         assert rc == 0
@@ -1145,14 +1146,14 @@ class TestMainDiagnoseMode:
         monkeypatch.setenv("CONVERGENCE_HEALTH_DIAGNOSE", "1")
         with (
             patch("boto3.Session"),
-            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
-            patch("scripts.convergence_health.diagnose_stuck_approvals", return_value=[]) as diag,
-            patch("scripts.convergence_health.find_stuck_gated_approvals") as find_stuck,
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.__main__.diagnose_stuck_approvals", return_value=[]) as diag,
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals") as find_stuck,
             patch(
-                "scripts.convergence_health.assess_health",
+                "scripts.convergence_health.__main__.assess_health",
                 return_value=HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none"),
             ),
-            patch("scripts.convergence_health.escalate"),
+            patch("scripts.convergence_health.__main__.escalate"),
         ):
             main()
         diag.assert_called_once()
@@ -1162,14 +1163,14 @@ class TestMainDiagnoseMode:
         monkeypatch.delenv("CONVERGENCE_HEALTH_DIAGNOSE", raising=False)
         with (
             patch("boto3.Session"),
-            patch("scripts.convergence_health.read_convergence_record", return_value={"status": "green"}),
-            patch("scripts.convergence_health.find_stuck_gated_approvals", return_value=[]) as find_stuck,
-            patch("scripts.convergence_health.diagnose_stuck_approvals") as diag,
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals", return_value=[]) as find_stuck,
+            patch("scripts.convergence_health.__main__.diagnose_stuck_approvals") as diag,
             patch(
-                "scripts.convergence_health.assess_health",
+                "scripts.convergence_health.__main__.assess_health",
                 return_value=HealthVerdict(status="green", red_age_hours=0.0, unapplied_backlog=0, severity="none"),
             ),
-            patch("scripts.convergence_health.escalate", return_value={"action": "none", "rec_id": None}),
+            patch("scripts.convergence_health.__main__.escalate", return_value={"action": "none", "rec_id": None}),
         ):
             rc = main()
         assert rc == 0
@@ -1371,7 +1372,7 @@ class TestDetectDucklakeCodeDrift:
         assert _DUCKLAKE_WRITER_FUNCTION in captured["context"]
 
     def test_open_recs_none_fetches_live_open_recs(self) -> None:
-        with patch("scripts.convergence_health._fetch_open_recs", return_value=[]) as fetch:
+        with patch("scripts.convergence_health.code_drift._fetch_open_recs", return_value=[]) as fetch:
             result = detect_ducklake_code_drift(
                 git_runner=lambda argv: "SHA_OLD",
                 s3_client=_FakeDeployRecordsS3(default_sha="SHA_OLD"),
@@ -1428,7 +1429,7 @@ class TestDetectDucklakeCodeDrift:
 
     def test_default_git_runner_invokes_subprocess(self) -> None:
         completed = MagicMock(returncode=0, stdout="SHA_FROM_SUBPROCESS\n")
-        with patch("scripts.convergence_health.subprocess.run", return_value=completed) as run:
+        with patch("scripts.convergence_health.code_drift.subprocess.run", return_value=completed) as run:
             result = detect_ducklake_code_drift(
                 s3_client=_FakeDeployRecordsS3(default_sha="SHA_FROM_SUBPROCESS"),
                 portal_caller=lambda a, f: "rec-x",
@@ -1441,7 +1442,7 @@ class TestDetectDucklakeCodeDrift:
 class TestMainDucklakeDrift:
     def test_happy_path_returns_zero(self) -> None:
         with patch(
-            "scripts.convergence_health.detect_ducklake_code_drift",
+            "scripts.convergence_health.__main__.detect_ducklake_code_drift",
             return_value={"action": "none", "rec_id": None},
         ) as detect:
             rc = main_ducklake_drift(profile="agent_platform")
@@ -1450,7 +1451,7 @@ class TestMainDucklakeDrift:
 
     def test_exception_returns_one(self) -> None:
         with patch(
-            "scripts.convergence_health.detect_ducklake_code_drift",
+            "scripts.convergence_health.__main__.detect_ducklake_code_drift",
             side_effect=RuntimeError("boom"),
         ):
             rc = main_ducklake_drift()
@@ -1621,7 +1622,7 @@ class TestDetectProdCodeDrift:
         assert "agent-platform-scheduled-agent-dispatcher" in captured["context"]
 
     def test_open_recs_none_fetches_live_open_recs(self) -> None:
-        with patch("scripts.convergence_health._fetch_open_recs", return_value=[]) as fetch:
+        with patch("scripts.convergence_health.code_drift._fetch_open_recs", return_value=[]) as fetch:
             result = detect_prod_code_drift(
                 git_runner=lambda argv: "SHA_OLD",
                 s3_client=_FakeDeployRecordsS3(default_sha="SHA_OLD"),
@@ -1676,7 +1677,7 @@ class TestDetectProdCodeDrift:
 
     def test_default_git_runner_invokes_subprocess(self) -> None:
         completed = MagicMock(returncode=0, stdout="SHA_FROM_SUBPROCESS\n")
-        with patch("scripts.convergence_health.subprocess.run", return_value=completed) as run:
+        with patch("scripts.convergence_health.code_drift.subprocess.run", return_value=completed) as run:
             result = detect_prod_code_drift(
                 s3_client=_FakeDeployRecordsS3(default_sha="SHA_FROM_SUBPROCESS"),
                 portal_caller=lambda a, f: "rec-x",
@@ -1689,7 +1690,7 @@ class TestDetectProdCodeDrift:
 class TestMainProdDrift:
     def test_happy_path_returns_zero(self) -> None:
         with patch(
-            "scripts.convergence_health.detect_prod_code_drift",
+            "scripts.convergence_health.__main__.detect_prod_code_drift",
             return_value={"action": "none", "rec_id": None},
         ) as detect:
             rc = main_prod_drift(profile="agent_platform")
@@ -1698,7 +1699,7 @@ class TestMainProdDrift:
 
     def test_exception_returns_one(self) -> None:
         with patch(
-            "scripts.convergence_health.detect_prod_code_drift",
+            "scripts.convergence_health.__main__.detect_prod_code_drift",
             side_effect=RuntimeError("boom"),
         ):
             rc = main_prod_drift()

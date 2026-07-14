@@ -93,6 +93,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_candidate_decision_ratification"),
         _c("validate_cc_limits"),
         _c("validate_sloc_limits"),
+        _c("validate_sloc_budget_raises"),
         _c("validate_subprocess_encoding"),
         _c("validate_test_count_coupling"),
         _c("validate_intent_doc_freeze"),

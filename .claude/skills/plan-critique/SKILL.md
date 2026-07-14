@@ -66,6 +66,8 @@ Trigger condition 2 -- **Surface-retiring plan**: the plan's `scope` includes a 
 
 12m. **Tier fitness check:** `verification_tier` must satisfy the planning skill's Verification Tier Guidelines, narrowed by an intentional refinement (Decision 48/79) so comment-only `.tf` or docstring-only Python edits are not force-escalated: a **resource-affecting** `.tf` scope file (not comment-only) OR an **active-manifest** Lambda scope file (`status: active` in its manifest -- Decision 79; `status: stub` does not trigger this) => `V3`; any Python source scope file => `>= V2`. A lower declared tier than the qualifying scope requires => recommend REVISE citing the specific scope file and the tier it demands.
 
+12n. **SLOC decompose-by-default check (Decision 128):** For each `scripts/` or `src/` scope file with `action: Modify` (or `Create`), check whether the plan's own description of the change would push the file past its `config/sloc_budgets.yaml` budget (or past 500 SLOC if currently unregistered). If so, the plan MUST include a decomposition step (a facade package, Decision 80/104/124 pattern) OR an explicit, justified budget-raise step carrying a `# raise-approved: dec-NNN` marker citation. A plan that grows a scope file past its budget with neither => recommend REVISE: "Scope file [path] crosses its SLOC budget with no decomposition step and no raise-approved Decision citation -- decompose by default (Decision 128)."
+
 ### Phase 2b: Frame Challenge (MANDATORY)
 
 Phase 2 checks the plan's *details* against the existing frame. This phase challenges the *frame itself*. See Decision 75 (Frame-Lock Anti-Pattern in Architectural Planning) for the failure mode this phase is designed to catch.

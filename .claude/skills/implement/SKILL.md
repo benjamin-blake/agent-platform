@@ -24,6 +24,16 @@ review_as_scope: true            # Critical/High findings from code-review MUST 
 auto_review_and_commit: true     # Proactively trigger review and commit once VP passes -- do not wait for human
 ```
 
+## SLOC decompose-by-default (Decision 128, amends Decision 102)
+When an implementation step pushes a scripts/ or src/ file past its `config/sloc_budgets.yaml`
+budget (or past 500 SLOC if currently unregistered), decompose the file into a facade package
+(Decision 80/104/124 pattern -- `__init__.py` facade re-exporting the full public surface,
+cohesive submodules each under budget) rather than raising the budget. A raise is a deliberate,
+Decision-cited exception (an inline `# raise-approved: dec-NNN <reason>` marker on the entry,
+enforced by `validate_sloc_budget_raises` in the `--pre` tier) -- not the default response to
+hitting the ceiling. Do not reach for `--update-sloc-budgets` to silently register a new
+oversized file; it no longer auto-seeds one (Decision 128 / B2).
+
 ## Preflight Constraints (Workflow Step 1)
 When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`venv_ok: false`** -- Auto-activate venv and rerun preflight. If still false, STOP.

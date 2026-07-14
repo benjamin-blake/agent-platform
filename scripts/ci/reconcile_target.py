@@ -12,7 +12,7 @@ Two responsibilities, both required before Reconcile proceeds:
      (T2.37 c2; Decision 84 Single Portal Invariant -- no caller SQL, never the local JSONL cache).
 
 All external dependencies (S3 client, the ducklake reader) are injected so unit tests exercise
-this module without live AWS -- mirrors the injection pattern in scripts/convergence_health.py.
+this module without live AWS -- mirrors the injection pattern in scripts/convergence_health/.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def read_convergence_record(
 ) -> Optional[dict[str, Any]]:
     """Read the convergence record from S3; return None on NoSuchKey / missing object.
 
-    Same record and pass-on-absent semantics as scripts/convergence_health.py's
+    Same record and pass-on-absent semantics as scripts/convergence_health/record.py's
     read_convergence_record -- duplicated rather than imported so this module has no import-time
     coupling to convergence_health (each stays independently testable and deployable).
     """

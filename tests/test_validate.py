@@ -91,6 +91,7 @@ validate_rec_relevance_contract = _validate.validate_rec_relevance_contract
 _extract_verifier_covers = _validate._extract_verifier_covers
 _load_sloc_budgets = _validate._load_sloc_budgets
 _update_sloc_budgets = _validate._update_sloc_budgets
+validate_sloc_budget_raises = _validate.validate_sloc_budget_raises
 validate_dependency_graph_freshness = _validate.validate_dependency_graph_freshness
 validate_import_contracts = _validate.validate_import_contracts
 validate_lockfile_sync = _validate.validate_lockfile_sync
@@ -2207,8 +2208,11 @@ class TestValidateSlocLimits:
 
         assert result["scripts/growing.py"] == 580
 
-    def test_update_sloc_budgets_seeds_new_oversized(self, tmp_path: Path) -> None:
-        """_update_sloc_budgets seeds a newly-oversized file at its current SLOC."""
+    def test_update_sloc_budgets_does_not_seed_new_oversized(self, tmp_path: Path) -> None:
+        """_update_sloc_budgets does NOT auto-seed a newly-oversized, unregistered file (B2 /
+        Decision 128) -- forces a deliberate raise-approved registration or a decompose instead
+        of a frictionless one-command auto-seed. validate_sloc_limits then fails the file until
+        it is registered."""
         scripts_dir = tmp_path / "scripts"
         scripts_dir.mkdir()
         config_dir = tmp_path / "config"
@@ -2219,9 +2223,11 @@ class TestValidateSlocLimits:
         with patch("scripts.checks._common.ROOT", tmp_path):
             _update_sloc_budgets()
             result = _load_sloc_budgets()
+            failed: list[str] = []
+            validate_sloc_limits(failed)
 
-        assert "scripts/new_big.py" in result
-        assert result["scripts/new_big.py"] == 620
+        assert "scripts/new_big.py" not in result
+        assert len(failed) == 1
 
     def test_update_sloc_budgets_drops_shrunken_file(self, tmp_path: Path) -> None:
         """_update_sloc_budgets drops a file that shrank to <=500 SLOC."""
@@ -2237,6 +2243,135 @@ class TestValidateSlocLimits:
             result = _load_sloc_budgets()
 
         assert "scripts/shrunken.py" not in result
+
+    def test_update_sloc_budgets_idempotent(self, tmp_path: Path) -> None:
+        """rec-2419: running --update-sloc-budgets twice leaves config/sloc_budgets.yaml
+        byte-identical the second time (steady-state idempotency)."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (scripts_dir / "steady.py").write_text("x = 1\n" * 550, encoding="utf-8")
+        self._write_budget(tmp_path, {"scripts/steady.py": 600})
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            _update_sloc_budgets()
+            first_pass = (tmp_path / "config" / "sloc_budgets.yaml").read_text(encoding="utf-8")
+            _update_sloc_budgets()
+            second_pass = (tmp_path / "config" / "sloc_budgets.yaml").read_text(encoding="utf-8")
+
+        assert first_pass == second_pass
+
+
+class TestValidateSlocBudgetRaises:
+    """Tests for validate_sloc_budget_raises() -- Decision 128 SLOC budget-raise guardrail."""
+
+    def _write_current(self, tmp_path: Path, body: str) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "sloc_budgets.yaml").write_text(body, encoding="utf-8")
+
+    def _write_decisions(self, tmp_path: Path, decision_numbers: list[int]) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(exist_ok=True)
+        text = "\n".join(f"## Decision {n}: Some title (Decided)\n" for n in decision_numbers)
+        (docs_dir / "DECISIONS.md").write_text(text, encoding="utf-8")
+
+    def test_fails_on_unmarked_increase(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets:\n  scripts/heavy.py: 800\n")
+        self._write_decisions(tmp_path, [])
+        base_reader = lambda rel: "budgets:\n  scripts/heavy.py: 600\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert len(failed) == 1
+        assert "SLOC budget-raise" in failed[0]
+
+    def test_passes_with_valid_marker_and_valid_decision(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets:\n  scripts/heavy.py: 800  # raise-approved: dec-102 module cohesion\n")
+        self._write_decisions(tmp_path, [102])
+        base_reader = lambda rel: "budgets:\n  scripts/heavy.py: 600\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert failed == []
+
+    def test_fails_when_marker_cites_nonexistent_decision(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets:\n  scripts/heavy.py: 800  # raise-approved: dec-999 bogus\n")
+        self._write_decisions(tmp_path, [102])
+        base_reader = lambda rel: "budgets:\n  scripts/heavy.py: 600\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert len(failed) == 1
+
+    def test_fails_new_registration_without_marker(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets:\n  scripts/new_big.py: 550\n")
+        self._write_decisions(tmp_path, [])
+        base_reader = lambda rel: "budgets: {}\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert len(failed) == 1
+
+    def test_passes_new_registration_with_valid_marker(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets:\n  scripts/new_big.py: 550  # raise-approved: dec-102 new module\n")
+        self._write_decisions(tmp_path, [102])
+        base_reader = lambda rel: "budgets: {}\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert failed == []
+
+    def test_passes_on_decrease(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets:\n  scripts/heavy.py: 600\n")
+        self._write_decisions(tmp_path, [])
+        base_reader = lambda rel: "budgets:\n  scripts/heavy.py: 800\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert failed == []
+
+    def test_passes_on_removal(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets: {}\n")
+        self._write_decisions(tmp_path, [])
+        base_reader = lambda rel: "budgets:\n  scripts/heavy.py: 800\n"  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert failed == []
+
+    def test_skips_when_base_unreachable(self, tmp_path: Path) -> None:
+        self._write_current(tmp_path, "budgets:\n  scripts/heavy.py: 800\n")
+        self._write_decisions(tmp_path, [])
+        base_reader = lambda rel: None  # noqa: E731
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=base_reader)
+
+        assert failed == []
+
+    def test_no_current_budgets_file_is_a_noop(self, tmp_path: Path) -> None:
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_budget_raises(failed, base_reader=lambda rel: "budgets: {}\n")
+
+        assert failed == []
 
 
 class TestValidateCcLimits:

@@ -260,6 +260,7 @@ When a plan creates or modifies documentation artefacts, apply these rules:
 - If STRATEGIC (only valid when freeze is lifted), Work Areas must have precise lists, clear order, and concrete names.
 - If IMPLEMENTATION (and complex), execution steps must have explicit pre/post-conditions.
 - **Presentation Rule:** The classification MUST be presented to the human and confirmed, not assumed.
+- **SLOC decompose-by-default (Decision 128):** when a scope file's projected change would cross its `config/sloc_budgets.yaml` budget (or past 500 SLOC if currently unregistered), plan the crossing as a decomposition step (facade package, Decision 80/104/124 pattern), not a budget raise. A raise is a deliberate, Decision-cited exception -- do not default to it, and do not plan a bare `--update-sloc-budgets` re-seed as the fix (Decision 128 / B2: it no longer auto-seeds new oversized files).
 
 
 ## Main Divergence Assessment (Workflow Step 4)
