@@ -1,0 +1,1076 @@
+audit:
+  meta:
+    audited_commit: 1f4fd38
+    base_branch: main
+    model: GPT-5.5 (GPT-5.6 Sol/GPT-5.5 Pro not exposed by harness)
+    methodology_version: 1
+    scope_surfaces:
+    - docs/contracts/deploy-paths.yaml
+    - docs/contracts/environment-taxonomy.md
+    - docs/contracts/build-lambda.yaml
+    - terraform/CLAUDE.md
+    - .github/workflows/terraform-apply-sandbox.yml
+    - .github/workflows/reconcile.yml
+    - .github/workflows/deploy-ducklake-lambdas.yml
+    - .github/workflows/deploy-prod-lambdas.yml
+    - scripts/terraform_apply_guard.py
+    - terraform/bootstrap/authority_budget.json
+    - scripts/ci/reconcile_target.py
+    - scripts/preflight/aws_infra.py
+    - scripts/verify_ci_workflow.py
+    - docs/DECISIONS.md
+    - docs/DECISIONS_ARCHIVE.md
+    - docs/ROADMAP-PLATFORM.yaml
+    - logs/.recommendations-log.jsonl
+    degraded_dedup: false
+    contract_notes: origin/main unavailable; audited HEAD. Branch creation to audit/terraform-deployment-strategy-1f4fd38 succeeded. validate --pre failed only in repository-level/differential verification paths caused by origin/main being unavailable (git worktree add invalid reference) plus pre-existing HEAD admission command failures; YAML parse of the deliverable passed.
+    stale_anchors: []
+  question_answers:
+  - q: Q1
+    verdict: mostly_agent_first
+    basis:
+    - TDS-01
+    - TDS-03
+    prose: Routine sandbox infra, code deploy, and reconcile paths are agent-owned through PRs, governed workflows, deterministic
+      guards, deploy records, and convergence state. The remaining gaps are not missing control but routing/readability duplication.
+  - q: Q2
+    verdict: well_timed
+    basis:
+    - TDS-03
+    prose: 'Current human gates are largely property-matched: bootstrap/admin trust expansion, out-of-budget IAM/trust/destroy,
+      and future SIT/PROD remain human-gated; sandbox in-budget IAM and code deploys are agent-routable.'
+  - q: Q3
+    verdict: moderate_simplification_potential
+    basis:
+    - TDS-01
+    - TDS-03
+    prose: The biggest opportunities are converting channel prose into typed registry fields and collapsing recovery routing
+      around Reconcile, not adding gates.
+  - q: Q4
+    verdict: acceptable
+    basis:
+    - TDS-01
+    - TDS-02
+    - TDS-03
+    prose: The system has strong contracts, but deploy status, stale lock-file prose, and overlapping recovery comments still
+      force avoidable rediscovery.
+  - q: Q5
+    verdict: strong
+    basis:
+    - TDS-02
+    prose: The external checklist is mostly met; the only miss candidate, supply-chain pinning, is actually present in the
+      repository, with stale prose remaining.
+    external_checklist:
+    - property: plan_apply_identity
+      rating: met
+      evidence: 'Saved plan is fetched on push and apply consumes plan.bin without re-plan: .github/workflows/terraform-apply-sandbox.yml:319-346,454-462.'
+    - property: least_privilege
+      rating: met
+      evidence: 'Deploy roles are scoped to update code only and smoke uses separate invoke role: .github/workflows/deploy-prod-lambdas.yml:21-45.'
+    - property: infra_code_deploy_separation
+      rating: met
+      evidence: 'Code deploy registry and workflows separate Lambda code from Terraform: docs/contracts/build-lambda.yaml:85-103.'
+    - property: auditable_trust_expanding_approvals
+      rating: met
+      evidence: 'Out-of-budget IAM/trust/destroy routes to tf-gated-apply Environment: docs/contracts/environment-taxonomy.md:42-57.'
+    - property: deterministic_policy_gates
+      rating: met
+      evidence: 'Guard classifications are explicit and script-backed: docs/contracts/environment-taxonomy.md:59-75; scripts/terraform_apply_guard.py:160-168.'
+    - property: no_silent_green_noop_deploys
+      rating: met
+      evidence: 'Deploy workflows gate smoke on deployed=true and verify deploy-record freshness: .github/workflows/deploy-prod-lambdas.yml:156-194.'
+    - property: drift_detection
+      rating: partial
+      evidence: 'Preflight reads convergence health and reconcile repairs red records, but broader stale-code drift alarm
+        routing remains workflow_dispatch/operator-triggered: scripts/preflight/aws_infra.py:86-152; .github/workflows/deploy-prod-lambdas.yml:17-19.'
+    - property: recovery_runbooks
+      rating: met
+      evidence: 'deploy-paths.yaml names provision/deploy/reconcile/admin recovery pointers and reconcile is landed: docs/contracts/deploy-paths.yaml:22-51.'
+    - property: environment_separation_proportional_to_risk
+      rating: met
+      evidence: 'Only sandbox is live; SIT/PROD are future dedicated accounts tied to product risk trigger: docs/contracts/environment-taxonomy.md:32-37,113-123.'
+    - property: infra_supply_chain_pinning
+      rating: met
+      evidence: 'Terraform version is pinned by config and personal lock file is unignored/committed: .github/workflows/terraform-apply-sandbox.yml:121-129;
+        .gitignore:62-67; terraform/personal/.terraform.lock.hcl.'
+  - q: Q6
+    verdict: simplify_incrementally
+    basis:
+    - TDS-01
+    - TDS-02
+    - TDS-03
+    prose: Simplify by extraction and pointer cleanup now; defer major architecture replacement unless the bespoke pipeline
+      proves costly.
+  - q: Q7
+    prose: The audit evidence supports safe simplification, not a platform-environment promotion decision.
+    answers:
+    - question: What does the requester likely want decided?
+      answer: Whether agents can own today's sandbox deploy loop without more human approval. The evidence supports yes, with
+        small simplifications rather than new gates.
+      basis:
+      - TDS-01
+      - TDS-03
+    - question: What can the evidence not support yet?
+      answer: It cannot decide the future SIT/PROD approval model beyond preserving the current deferred trigger, because
+        those accounts and real-capital risks are not live.
+      basis: []
+    - question: Which control-theory question should be asked next?
+      answer: Whether every red state has exactly one typed retry owner and one convergence/deploy record source of truth;
+        TDS-03 shows recovery verbs are close but not fully single-surface.
+      basis:
+      - TDS-03
+  per_surface_assessment:
+  - surface: docs/contracts/deploy-paths.yaml
+    maturity: solid
+    strengths: Central intent router cleanly separates provision, deploy_code, reconcile, and operator-only admin paths.
+    top_gaps:
+    - TDS-01
+  - surface: docs/contracts/environment-taxonomy.md
+    maturity: strong
+    strengths: Canonical apply model and guard classification with proportional sandbox vs future SIT/PROD separation.
+    top_gaps:
+    - TDS-02
+  - surface: docs/contracts/build-lambda.yaml
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: terraform/CLAUDE.md
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: .github/workflows/terraform-apply-sandbox.yml
+    maturity: solid
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps:
+    - TDS-03
+  - surface: .github/workflows/reconcile.yml
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: .github/workflows/deploy-ducklake-lambdas.yml
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: .github/workflows/deploy-prod-lambdas.yml
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: scripts/terraform_apply_guard.py
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: terraform/bootstrap/authority_budget.json
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: scripts/ci/reconcile_target.py
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: scripts/preflight/aws_infra.py
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: scripts/verify_ci_workflow.py
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: docs/DECISIONS.md
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: docs/DECISIONS_ARCHIVE.md
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: docs/ROADMAP-PLATFORM.yaml
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  - surface: logs/.recommendations-log.jsonl
+    maturity: frontier
+    strengths: Agent-routable or authoritative support surface with deterministic checks, typed pointers, or rationale for
+      a current gate.
+    top_gaps: []
+  rubric_ratings:
+  - surface: docs/contracts/deploy-paths.yaml
+    dimension: VD1
+    rating: strong
+    evidence: docs/contracts/deploy-paths.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/deploy-paths.yaml
+    dimension: VD2
+    rating: strong
+    evidence: docs/contracts/deploy-paths.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/deploy-paths.yaml
+    dimension: VD3
+    rating: strong
+    evidence: docs/contracts/deploy-paths.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/deploy-paths.yaml
+    dimension: VD4
+    rating: adequate
+    evidence: docs/contracts/deploy-paths.yaml:30-36
+    note: Strong routing, but deploy_code.status should be typed rather than prose.
+  - surface: docs/contracts/deploy-paths.yaml
+    dimension: VD5
+    rating: strong
+    evidence: docs/contracts/deploy-paths.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/deploy-paths.yaml
+    dimension: VD6
+    rating: strong
+    evidence: docs/contracts/deploy-paths.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/deploy-paths.yaml
+    dimension: VD7
+    rating: adequate
+    evidence: docs/contracts/deploy-paths.yaml:30-36
+    note: Strong routing, but deploy_code.status should be typed rather than prose.
+  - surface: docs/contracts/environment-taxonomy.md
+    dimension: VD1
+    rating: strong
+    evidence: docs/contracts/environment-taxonomy.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/environment-taxonomy.md
+    dimension: VD2
+    rating: strong
+    evidence: docs/contracts/environment-taxonomy.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/environment-taxonomy.md
+    dimension: VD3
+    rating: strong
+    evidence: docs/contracts/environment-taxonomy.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/environment-taxonomy.md
+    dimension: VD4
+    rating: adequate
+    evidence: docs/contracts/environment-taxonomy.md:158-166; .gitignore:62-67
+    note: Canonical, but provider lock section is stale.
+  - surface: docs/contracts/environment-taxonomy.md
+    dimension: VD5
+    rating: strong
+    evidence: docs/contracts/environment-taxonomy.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/environment-taxonomy.md
+    dimension: VD6
+    rating: strong
+    evidence: docs/contracts/environment-taxonomy.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/environment-taxonomy.md
+    dimension: VD7
+    rating: strong
+    evidence: docs/contracts/environment-taxonomy.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/build-lambda.yaml
+    dimension: VD1
+    rating: strong
+    evidence: docs/contracts/build-lambda.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/build-lambda.yaml
+    dimension: VD2
+    rating: strong
+    evidence: docs/contracts/build-lambda.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/build-lambda.yaml
+    dimension: VD3
+    rating: strong
+    evidence: docs/contracts/build-lambda.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/build-lambda.yaml
+    dimension: VD4
+    rating: strong
+    evidence: docs/contracts/build-lambda.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/build-lambda.yaml
+    dimension: VD5
+    rating: strong
+    evidence: docs/contracts/build-lambda.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/build-lambda.yaml
+    dimension: VD6
+    rating: strong
+    evidence: docs/contracts/build-lambda.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/contracts/build-lambda.yaml
+    dimension: VD7
+    rating: strong
+    evidence: docs/contracts/build-lambda.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/CLAUDE.md
+    dimension: VD1
+    rating: strong
+    evidence: terraform/CLAUDE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/CLAUDE.md
+    dimension: VD2
+    rating: strong
+    evidence: terraform/CLAUDE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/CLAUDE.md
+    dimension: VD3
+    rating: strong
+    evidence: terraform/CLAUDE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/CLAUDE.md
+    dimension: VD4
+    rating: strong
+    evidence: terraform/CLAUDE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/CLAUDE.md
+    dimension: VD5
+    rating: strong
+    evidence: terraform/CLAUDE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/CLAUDE.md
+    dimension: VD6
+    rating: strong
+    evidence: terraform/CLAUDE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/CLAUDE.md
+    dimension: VD7
+    rating: strong
+    evidence: terraform/CLAUDE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/terraform-apply-sandbox.yml
+    dimension: VD1
+    rating: strong
+    evidence: .github/workflows/terraform-apply-sandbox.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/terraform-apply-sandbox.yml
+    dimension: VD2
+    rating: strong
+    evidence: .github/workflows/terraform-apply-sandbox.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/terraform-apply-sandbox.yml
+    dimension: VD3
+    rating: strong
+    evidence: .github/workflows/terraform-apply-sandbox.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/terraform-apply-sandbox.yml
+    dimension: VD4
+    rating: strong
+    evidence: .github/workflows/terraform-apply-sandbox.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/terraform-apply-sandbox.yml
+    dimension: VD5
+    rating: adequate
+    evidence: .github/workflows/terraform-apply-sandbox.yml:49-57; .github/workflows/reconcile.yml:1-28
+    note: Robust controls, but legacy acknowledge-and-retry overlaps with Reconcile.
+  - surface: .github/workflows/terraform-apply-sandbox.yml
+    dimension: VD6
+    rating: strong
+    evidence: .github/workflows/terraform-apply-sandbox.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/terraform-apply-sandbox.yml
+    dimension: VD7
+    rating: adequate
+    evidence: .github/workflows/terraform-apply-sandbox.yml:49-57; .github/workflows/reconcile.yml:1-28
+    note: Robust controls, but legacy acknowledge-and-retry overlaps with Reconcile.
+  - surface: .github/workflows/reconcile.yml
+    dimension: VD1
+    rating: strong
+    evidence: .github/workflows/reconcile.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/reconcile.yml
+    dimension: VD2
+    rating: strong
+    evidence: .github/workflows/reconcile.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/reconcile.yml
+    dimension: VD3
+    rating: strong
+    evidence: .github/workflows/reconcile.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/reconcile.yml
+    dimension: VD4
+    rating: strong
+    evidence: .github/workflows/reconcile.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/reconcile.yml
+    dimension: VD5
+    rating: strong
+    evidence: .github/workflows/reconcile.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/reconcile.yml
+    dimension: VD6
+    rating: strong
+    evidence: .github/workflows/reconcile.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/reconcile.yml
+    dimension: VD7
+    rating: strong
+    evidence: .github/workflows/reconcile.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-ducklake-lambdas.yml
+    dimension: VD1
+    rating: strong
+    evidence: .github/workflows/deploy-ducklake-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-ducklake-lambdas.yml
+    dimension: VD2
+    rating: strong
+    evidence: .github/workflows/deploy-ducklake-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-ducklake-lambdas.yml
+    dimension: VD3
+    rating: strong
+    evidence: .github/workflows/deploy-ducklake-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-ducklake-lambdas.yml
+    dimension: VD4
+    rating: strong
+    evidence: .github/workflows/deploy-ducklake-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-ducklake-lambdas.yml
+    dimension: VD5
+    rating: strong
+    evidence: .github/workflows/deploy-ducklake-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-ducklake-lambdas.yml
+    dimension: VD6
+    rating: strong
+    evidence: .github/workflows/deploy-ducklake-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-ducklake-lambdas.yml
+    dimension: VD7
+    rating: strong
+    evidence: .github/workflows/deploy-ducklake-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-prod-lambdas.yml
+    dimension: VD1
+    rating: strong
+    evidence: .github/workflows/deploy-prod-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-prod-lambdas.yml
+    dimension: VD2
+    rating: strong
+    evidence: .github/workflows/deploy-prod-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-prod-lambdas.yml
+    dimension: VD3
+    rating: strong
+    evidence: .github/workflows/deploy-prod-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-prod-lambdas.yml
+    dimension: VD4
+    rating: strong
+    evidence: .github/workflows/deploy-prod-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-prod-lambdas.yml
+    dimension: VD5
+    rating: strong
+    evidence: .github/workflows/deploy-prod-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-prod-lambdas.yml
+    dimension: VD6
+    rating: strong
+    evidence: .github/workflows/deploy-prod-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: .github/workflows/deploy-prod-lambdas.yml
+    dimension: VD7
+    rating: strong
+    evidence: .github/workflows/deploy-prod-lambdas.yml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/terraform_apply_guard.py
+    dimension: VD1
+    rating: strong
+    evidence: scripts/terraform_apply_guard.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/terraform_apply_guard.py
+    dimension: VD2
+    rating: strong
+    evidence: scripts/terraform_apply_guard.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/terraform_apply_guard.py
+    dimension: VD3
+    rating: strong
+    evidence: scripts/terraform_apply_guard.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/terraform_apply_guard.py
+    dimension: VD4
+    rating: strong
+    evidence: scripts/terraform_apply_guard.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/terraform_apply_guard.py
+    dimension: VD5
+    rating: strong
+    evidence: scripts/terraform_apply_guard.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/terraform_apply_guard.py
+    dimension: VD6
+    rating: strong
+    evidence: scripts/terraform_apply_guard.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/terraform_apply_guard.py
+    dimension: VD7
+    rating: strong
+    evidence: scripts/terraform_apply_guard.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/bootstrap/authority_budget.json
+    dimension: VD1
+    rating: strong
+    evidence: terraform/bootstrap/authority_budget.json:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/bootstrap/authority_budget.json
+    dimension: VD2
+    rating: strong
+    evidence: terraform/bootstrap/authority_budget.json:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/bootstrap/authority_budget.json
+    dimension: VD3
+    rating: strong
+    evidence: terraform/bootstrap/authority_budget.json:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/bootstrap/authority_budget.json
+    dimension: VD4
+    rating: strong
+    evidence: terraform/bootstrap/authority_budget.json:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/bootstrap/authority_budget.json
+    dimension: VD5
+    rating: strong
+    evidence: terraform/bootstrap/authority_budget.json:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/bootstrap/authority_budget.json
+    dimension: VD6
+    rating: strong
+    evidence: terraform/bootstrap/authority_budget.json:1
+    note: Evidence supports the dimension for this surface.
+  - surface: terraform/bootstrap/authority_budget.json
+    dimension: VD7
+    rating: strong
+    evidence: terraform/bootstrap/authority_budget.json:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/ci/reconcile_target.py
+    dimension: VD1
+    rating: strong
+    evidence: scripts/ci/reconcile_target.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/ci/reconcile_target.py
+    dimension: VD2
+    rating: strong
+    evidence: scripts/ci/reconcile_target.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/ci/reconcile_target.py
+    dimension: VD3
+    rating: strong
+    evidence: scripts/ci/reconcile_target.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/ci/reconcile_target.py
+    dimension: VD4
+    rating: strong
+    evidence: scripts/ci/reconcile_target.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/ci/reconcile_target.py
+    dimension: VD5
+    rating: strong
+    evidence: scripts/ci/reconcile_target.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/ci/reconcile_target.py
+    dimension: VD6
+    rating: strong
+    evidence: scripts/ci/reconcile_target.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/ci/reconcile_target.py
+    dimension: VD7
+    rating: strong
+    evidence: scripts/ci/reconcile_target.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/preflight/aws_infra.py
+    dimension: VD1
+    rating: strong
+    evidence: scripts/preflight/aws_infra.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/preflight/aws_infra.py
+    dimension: VD2
+    rating: strong
+    evidence: scripts/preflight/aws_infra.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/preflight/aws_infra.py
+    dimension: VD3
+    rating: strong
+    evidence: scripts/preflight/aws_infra.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/preflight/aws_infra.py
+    dimension: VD4
+    rating: strong
+    evidence: scripts/preflight/aws_infra.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/preflight/aws_infra.py
+    dimension: VD5
+    rating: strong
+    evidence: scripts/preflight/aws_infra.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/preflight/aws_infra.py
+    dimension: VD6
+    rating: strong
+    evidence: scripts/preflight/aws_infra.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/preflight/aws_infra.py
+    dimension: VD7
+    rating: strong
+    evidence: scripts/preflight/aws_infra.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/verify_ci_workflow.py
+    dimension: VD1
+    rating: strong
+    evidence: scripts/verify_ci_workflow.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/verify_ci_workflow.py
+    dimension: VD2
+    rating: strong
+    evidence: scripts/verify_ci_workflow.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/verify_ci_workflow.py
+    dimension: VD3
+    rating: strong
+    evidence: scripts/verify_ci_workflow.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/verify_ci_workflow.py
+    dimension: VD4
+    rating: strong
+    evidence: scripts/verify_ci_workflow.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/verify_ci_workflow.py
+    dimension: VD5
+    rating: strong
+    evidence: scripts/verify_ci_workflow.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/verify_ci_workflow.py
+    dimension: VD6
+    rating: strong
+    evidence: scripts/verify_ci_workflow.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: scripts/verify_ci_workflow.py
+    dimension: VD7
+    rating: strong
+    evidence: scripts/verify_ci_workflow.py:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS.md
+    dimension: VD1
+    rating: strong
+    evidence: docs/DECISIONS.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS.md
+    dimension: VD2
+    rating: strong
+    evidence: docs/DECISIONS.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS.md
+    dimension: VD3
+    rating: strong
+    evidence: docs/DECISIONS.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS.md
+    dimension: VD4
+    rating: strong
+    evidence: docs/DECISIONS.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS.md
+    dimension: VD5
+    rating: strong
+    evidence: docs/DECISIONS.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS.md
+    dimension: VD6
+    rating: strong
+    evidence: docs/DECISIONS.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS.md
+    dimension: VD7
+    rating: strong
+    evidence: docs/DECISIONS.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS_ARCHIVE.md
+    dimension: VD1
+    rating: n/a
+    evidence: docs/DECISIONS_ARCHIVE.md:1
+    note: Dedup/rationale surface, not an execution control.
+  - surface: docs/DECISIONS_ARCHIVE.md
+    dimension: VD2
+    rating: strong
+    evidence: docs/DECISIONS_ARCHIVE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS_ARCHIVE.md
+    dimension: VD3
+    rating: strong
+    evidence: docs/DECISIONS_ARCHIVE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS_ARCHIVE.md
+    dimension: VD4
+    rating: strong
+    evidence: docs/DECISIONS_ARCHIVE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS_ARCHIVE.md
+    dimension: VD5
+    rating: n/a
+    evidence: docs/DECISIONS_ARCHIVE.md:1
+    note: Dedup/rationale surface, not an execution control.
+  - surface: docs/DECISIONS_ARCHIVE.md
+    dimension: VD6
+    rating: strong
+    evidence: docs/DECISIONS_ARCHIVE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/DECISIONS_ARCHIVE.md
+    dimension: VD7
+    rating: strong
+    evidence: docs/DECISIONS_ARCHIVE.md:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/ROADMAP-PLATFORM.yaml
+    dimension: VD1
+    rating: strong
+    evidence: docs/ROADMAP-PLATFORM.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/ROADMAP-PLATFORM.yaml
+    dimension: VD2
+    rating: strong
+    evidence: docs/ROADMAP-PLATFORM.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/ROADMAP-PLATFORM.yaml
+    dimension: VD3
+    rating: strong
+    evidence: docs/ROADMAP-PLATFORM.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/ROADMAP-PLATFORM.yaml
+    dimension: VD4
+    rating: strong
+    evidence: docs/ROADMAP-PLATFORM.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/ROADMAP-PLATFORM.yaml
+    dimension: VD5
+    rating: strong
+    evidence: docs/ROADMAP-PLATFORM.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/ROADMAP-PLATFORM.yaml
+    dimension: VD6
+    rating: strong
+    evidence: docs/ROADMAP-PLATFORM.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: docs/ROADMAP-PLATFORM.yaml
+    dimension: VD7
+    rating: strong
+    evidence: docs/ROADMAP-PLATFORM.yaml:1
+    note: Evidence supports the dimension for this surface.
+  - surface: logs/.recommendations-log.jsonl
+    dimension: VD1
+    rating: n/a
+    evidence: logs/.recommendations-log.jsonl:1
+    note: Dedup/rationale surface, not an execution control.
+  - surface: logs/.recommendations-log.jsonl
+    dimension: VD2
+    rating: strong
+    evidence: logs/.recommendations-log.jsonl:1
+    note: Evidence supports the dimension for this surface.
+  - surface: logs/.recommendations-log.jsonl
+    dimension: VD3
+    rating: strong
+    evidence: logs/.recommendations-log.jsonl:1
+    note: Evidence supports the dimension for this surface.
+  - surface: logs/.recommendations-log.jsonl
+    dimension: VD4
+    rating: strong
+    evidence: logs/.recommendations-log.jsonl:1
+    note: Evidence supports the dimension for this surface.
+  - surface: logs/.recommendations-log.jsonl
+    dimension: VD5
+    rating: n/a
+    evidence: logs/.recommendations-log.jsonl:1
+    note: Dedup/rationale surface, not an execution control.
+  - surface: logs/.recommendations-log.jsonl
+    dimension: VD6
+    rating: strong
+    evidence: logs/.recommendations-log.jsonl:1
+    note: Evidence supports the dimension for this surface.
+  - surface: logs/.recommendations-log.jsonl
+    dimension: VD7
+    rating: strong
+    evidence: logs/.recommendations-log.jsonl:1
+    note: Evidence supports the dimension for this surface.
+  human_gate_inventory:
+  - gate: tf-gated-apply Environment approval
+    surface: docs/contracts/environment-taxonomy.md
+    current_risk_property: Out-of-budget IAM, trust-policy diffs, destroy/replace, and non-create Neon changes.
+    deterministic_control_considered: terraform_apply_guard observes plan JSON and routes exit 2 before apply.
+    verdict: current_required
+    rationale: The deterministic guard detects the risk but does not authorize trust expansion; human approval is property-matched
+      for current sandbox trust/destroy cases.
+    basis: []
+  - gate: bootstrap/admin out-of-band apply
+    surface: docs/contracts/deploy-paths.yaml
+    current_risk_property: Creation or mutation of the CI apply authority and admin trust boundary.
+    deterministic_control_considered: Authority budget and guard govern routine apply role scope but cannot safely self-amend
+      the bootstrap authority.
+    verdict: current_required
+    rationale: Human-only bootstrap is correctly quarantined from routine agent action.
+    basis: []
+  - gate: SIT/PROD manual apply and second approver
+    surface: docs/contracts/environment-taxonomy.md
+    current_risk_property: Future dedicated accounts and real-capital environment exposure.
+    deterministic_control_considered: Sandbox guard and convergence controls do not model future real-capital blast radius.
+    verdict: future_required
+    rationale: Correctly deferred; absence of live SIT/PROD is not a current defect.
+    basis: []
+  - gate: Deploy-role provisioned repo variables set by operator
+    surface: .github/workflows/deploy-prod-lambdas.yml
+    current_risk_property: Bootstrap-window no-op vs post-provisioning assume-role regression.
+    deterministic_control_considered: Workflow classifies assume-role failure by operator-owned variable and deploy-record
+      freshness blocks smoke false green.
+    verdict: current_required
+    rationale: This is a temporary admin-create seam; once roles exist, failures become loud.
+    basis:
+    - TDS-01
+  - gate: acknowledge_red_commit manual dispatch input
+    surface: .github/workflows/terraform-apply-sandbox.yml
+    current_risk_property: Clearing a red convergence latch after review.
+    deterministic_control_considered: reconcile.yml reads the red commit from the convergence record and validates optional
+      rec id.
+    verdict: convert_to_agent_owned
+    rationale: Reconcile property-matches the recovery target without operator-supplied SHA, so the legacy input should be
+      non-default or retired.
+    basis:
+    - TDS-03
+  simplification_moves:
+  - id: MOVE-01
+    title: Normalize deploy channel state into build-lambda.yaml
+    target_surface: docs/contracts/build-lambda.yaml
+    move_type: convert_to_contract
+    agent_control_gain: Cold agents can answer deploy path, bootstrap-window, smoke, and fallback questions without parsing
+      prose.
+    safety_property_preserved: Existing workflows still enforce scoped roles, deployed=true, and deploy-record freshness.
+    effort: S
+    depends_on:
+    - TDS-01
+    basis:
+    - TDS-01
+  - id: MOVE-02
+    title: Make Reconcile the single routine red-record recovery verb
+    target_surface: .github/workflows/terraform-apply-sandbox.yml
+    move_type: merge
+    agent_control_gain: Agents route red convergence records through one input-free workflow.
+    safety_property_preserved: Guard, saved plan, subagent review, and convergence writes remain unchanged.
+    effort: S
+    depends_on:
+    - TDS-03
+    basis:
+    - TDS-03
+  - id: MOVE-03
+    title: Correct landed provider-lock wording
+    target_surface: docs/contracts/environment-taxonomy.md
+    move_type: clarify_pointer
+    agent_control_gain: Avoids rediscovering already-landed supply-chain pinning work.
+    safety_property_preserved: Committed lock file remains the control.
+    effort: XS
+    depends_on:
+    - TDS-02
+    basis:
+    - TDS-02
+  findings:
+  - id: TDS-01
+    surface: docs/contracts/deploy-paths.yaml
+    question: Q4
+    dimension: VD4
+    title: Deploy-code status is a narrative blob instead of typed channel state
+    evidence: docs/contracts/deploy-paths.yaml:30-36; docs/contracts/build-lambda.yaml:85-103; .github/workflows/deploy-ducklake-lambdas.yml:17-32;
+      .github/workflows/deploy-prod-lambdas.yml:21-36
+    evidence_kind: static
+    current_behavior: The routing contract correctly names deploy_code as agent-owned and points at build-lambda.yaml, but
+      its status field embeds both governed channels, bootstrap role state, repo-variable closure, and break-glass fallback
+      semantics in one long prose scalar. The same facts are partly structured in build-lambda.yaml and partly executable
+      in two workflows.
+    ideal_behavior: A cold agent should read one small typed deploy-channel registry with per-channel fields for governed
+      workflow, role-provisioned variable, bootstrap-window behavior, smoke gate, deploy record, and break-glass fallback.
+      Prose should be rationale or a pointer.
+    gap: The current shape is safe, but it requires natural-language extraction to answer whether a deploy path is routine,
+      bootstrap-window no-op, or break-glass.
+    compensating_controls_considered: The workflows enforce no silent green deployed=true and freshness checks, so this is
+      not a wrong-deploy safety gap. The gap is machine readability and maintenance load.
+    change_type: convert_to_contract
+    proposed_change: Move the deploy-code status details into structured fields under build-lambda.yaml deploy_channels, then
+      reduce deploy-paths.yaml deploy_code.status to a pointer.
+    acceptance: build-lambda.yaml exposes role_provisioned_var, bootstrap_absent_role_behavior, smoke_gate, deploy_record_prefix,
+      governed_channel, and break_glass_only for each channel; deploy-paths.yaml has no long channel-specific status prose;
+      validate parses the new fields.
+    severity: medium
+    severity_rationale: Redundancy and narrative extraction reduce agent operability but executable deploy workflows still
+      preserve safety.
+    confidence: CONFIRMED
+    roadmap_crossref:
+      classification: novel
+      item_ids: []
+      dedup_search_terms:
+      - deploy_code status build-lambda deploy_channels bootstrap window role provisioned variable
+      - T2.38 T2.43 governed code deploy channel structured registry
+      - deploy-record freshness deploy channel roadmap
+      dedup_hit_count: 3
+      note: T2.38/T2.43 built the channels and T2.41 quarantined break-glass, but no sampled item owns normalising channel
+        state into a typed registry.
+    effort: S
+    depends_on: []
+    sequencing:
+      safe_to_queue_now: true
+      blocked_behind: []
+      note: Pure contract/check extraction.
+  - id: TDS-02
+    surface: docs/contracts/environment-taxonomy.md
+    question: Q5
+    dimension: VD4
+    title: Provider lock-file section is stale after the personal lock-file exception landed
+    evidence: docs/contracts/environment-taxonomy.md:158-166; .gitignore:62-67; terraform/personal/.terraform.lock.hcl
+    evidence_kind: static
+    current_behavior: The environment taxonomy still says .gitignore currently ignores terraform/**/.terraform.lock.hcl and
+      recommends committing terraform/personal/.terraform.lock.hcl. The repository now un-ignores terraform/personal/.terraform.lock.hcl
+      and the file exists.
+    ideal_behavior: 'The contract should state the current control: the personal provider lock file is committed and the apply
+      runner uses reviewed provider versions. Any remaining recommendation should be framed as maintenance, not missing supply-chain
+      pinning.'
+    gap: A cold agent could incorrectly rediscover supply-chain pinning as unbuilt work, even though the concrete control
+      is present.
+    compensating_controls_considered: The committed lock file and .gitignore exception property-match the supply-chain risk,
+      so the original C6 defect is dismissed; only stale contract text remains.
+    change_type: clarify
+    proposed_change: Update section 6 to record the lock-file control as landed and keep only any real follow-on maintenance
+      invariant.
+    acceptance: Section 6 no longer says terraform/personal lock is ignored or merely recommended; it cites the committed
+      exception and lock file as current behavior.
+    severity: low
+    severity_rationale: This is a stale pointer/discoverability issue; the underlying supply-chain control is already in place.
+    confidence: CONFIRMED
+    roadmap_crossref:
+      classification: novel
+      item_ids: []
+      dedup_search_terms:
+      - terraform personal .terraform.lock.hcl ignored recommended committed lock file
+      - T2.16b CD.34 provider lock file
+      - environment-taxonomy provider lock file consideration
+      dedup_hit_count: 2
+      note: Existing items/decisions appear to cover landing the lock file, not cleaning up this stale sentence.
+    effort: XS
+    depends_on: []
+    sequencing:
+      safe_to_queue_now: true
+      blocked_behind: []
+      note: Documentation correction only.
+  - id: TDS-03
+    surface: .github/workflows/terraform-apply-sandbox.yml
+    question: Q6
+    dimension: VD5
+    title: Legacy acknowledge-and-retry dispatch overlaps the input-free Reconcile recovery path
+    evidence: .github/workflows/terraform-apply-sandbox.yml:49-57; .github/workflows/terraform-apply-sandbox.yml:185-195;
+      .github/workflows/reconcile.yml:1-28; scripts/ci/reconcile_target.py:69-84
+    evidence_kind: static
+    current_behavior: The landed Reconcile workflow is input-free for the target SHA and reads the red commit from the convergence
+      record, but terraform-apply-sandbox still exposes workflow_dispatch acknowledge_red_commit accepting a red SHA or rec
+      id.
+    ideal_behavior: One recovery verb should be the routine red-record path. If acknowledge-and-retry remains as a break-glass
+      or compatibility escape hatch, the contract should label it as such and point agents to Reconcile by default.
+    gap: Two dispatch surfaces encode similar recovery semantics; one is input-free and agent-routable, the other asks for
+      human/operator-supplied identity data. That increases interpretation load and risks agents selecting the older path.
+    compensating_controls_considered: Both paths fail closed and still run the guard, so this is not an unsafe apply gap.
+      The weakness is duplicated recovery routing and extra human-supplied input in the agent-facing workflow surface.
+    change_type: unify
+    proposed_change: Make Reconcile the single documented routine red-record recovery path; either remove acknowledge_red_commit
+      or relabel it as admin/break-glass compatibility with a validation check that deploy-paths.yaml does not route agents
+      to it.
+    acceptance: deploy-paths.yaml and workflow comments route routine red/drift recovery only to reconcile.yml; any remaining
+      terraform-apply-sandbox workflow_dispatch input is documented as non-default and covered by a structural verifier.
+    severity: medium
+    severity_rationale: The duplicate path materially reduces recovery simplicity but deterministic guard and convergence
+      controls prevent wrong trusted applies.
+    confidence: CONFIRMED
+    roadmap_crossref:
+      classification: planned-insufficient
+      item_ids:
+      - T2.37
+      - T2.41
+      dedup_search_terms:
+      - T2.37 reconcile acknowledge_red_commit workflow_dispatch
+      - red convergence record heal button input-free reconcile
+      - Decision 126 acknowledge and retry
+      dedup_hit_count: 4
+      note: T2.37 built the heal button and T2.41 quarantined break-glass, but the older acknowledge-and-retry input remains
+        exposed in the apply workflow.
+    effort: S
+    depends_on: []
+    sequencing:
+      safe_to_queue_now: true
+      blocked_behind: []
+      note: Can be queued as a routing simplification after confirming no active runbook depends on the old input.
+  rejected_candidates:
+  - candidate: C1
+    why_dismissed: Partially confirmed as TDS-01/TDS-03 rather than a broad structural defect.
+    compensating_control: deploy-paths.yaml centralizes top-level intents and workflows enforce the safety properties.
+    control_property_match: The router names actor/trigger/recovery at docs/contracts/deploy-paths.yaml:22-51, and workflows
+      fail closed on deploy/apply; these would fail if paths were absent.
+    decision_or_item_id: TDS-01; TDS-03
+  - candidate: C2
+    why_dismissed: Mostly not a defect. Current human gates protect trust expansion, destroy, bootstrap authority, or future
+      environments.
+    compensating_control: Guard classification plus tf-gated-apply Environment approval.
+    control_property_match: The guard observes plan JSON classifications at docs/contracts/environment-taxonomy.md:59-75 and
+      routes the same saved plan to approval before apply at lines 42-57.
+    decision_or_item_id: Decision 77; Decision 92
+  - candidate: C3
+    why_dismissed: Not a defect. Admin out-of-band is quarantined in deploy-paths.yaml, not ambient Terraform guidance.
+    compensating_control: Decision 127 contract procedure placement.
+    control_property_match: docs/contracts/deploy-paths.yaml:46-64 labels actor_role operator and says agents only file recs
+      or execute after explicit human direction.
+    decision_or_item_id: Decision 127; T2.41
+  - candidate: C4
+    why_dismissed: 'Partially confirmed as TDS-03: Reconcile is built and input-free, but an overlapping older dispatch path
+      remains.'
+    compensating_control: reconcile.yml resolve-target reads convergence record itself.
+    control_property_match: scripts/ci/reconcile_target.py:69-84 maps red record to commit and green/absent to no-op; it would
+      fail if operator SHA input were required.
+    decision_or_item_id: TDS-03
+  - candidate: C5
+    why_dismissed: Not a defect. Bootstrap-window deploy role absence is explicitly scoped and cannot report deployed=true
+      or smoke-green.
+    compensating_control: role-provisioned variable classification plus deploy-record freshness.
+    control_property_match: .github/workflows/deploy-prod-lambdas.yml:111-130 fails loud after provisioning and lines 156-194
+      run smoke only after deployed=true and fresh records.
+    decision_or_item_id: Decision 98; T2.43
+  - candidate: C6
+    why_dismissed: Underlying supply-chain defect is fully covered; only stale prose remains as TDS-02.
+    compensating_control: gitignore exception plus committed terraform/personal lock file.
+    control_property_match: .gitignore:62-67 unignores terraform/personal/.terraform.lock.hcl, and the file exists; provider
+      version drift would show as a lock-file diff.
+    decision_or_item_id: TDS-02
+  - candidate: C7
+    why_dismissed: Confirmed only in bounded spots, not as a system-wide drift failure.
+    compensating_control: Decision 86/127 no-prose and contract drift gates.
+    control_property_match: validate --pre passed sanctioned-prose, contract drift, deploy-channel conformance, and authority-budget
+      drift gates in this audit run.
+    decision_or_item_id: TDS-01; TDS-02
+  - candidate: C8
+    why_dismissed: Largely accepted. The strategy is mostly agent-first; recommended work is extraction/pointer simplification.
+    compensating_control: agent-owned provision/deploy/reconcile roles in deploy-paths.yaml.
+    control_property_match: docs/contracts/deploy-paths.yaml:22-43 assigns provision, deploy_code, and reconcile to agent
+      actor_role.
+    decision_or_item_id: Decision 126
+  summary:
+    total_findings: 3
+    novel_count: 2
+    planned_insufficient_count: 1
+    planned_unbuilt_count: 0
+    top_improvements:
+    - TDS-01
+    - TDS-03
+    - TDS-02
+    highest_leverage_change: TDS-01
+    maturity_overall: frontier
