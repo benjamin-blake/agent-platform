@@ -53,6 +53,12 @@ scope:
   - file: scripts/test_coverage_checker.py
     action: Modify
     purpose: Add a map_source_to_test rule mapping scripts/convergence_health/*.py -> tests/test_convergence_health.py (Decision 104 colocation precedent; no rule exists for this new package today).
+  - file: scripts/ci/reconcile_target.py
+    action: Modify
+    purpose: Repoint two comment cross-references (lines 15, 54) from the literal `scripts/convergence_health.py` file path to the package `scripts/convergence_health/` so no dangling file-path reference survives the decomposition. Comment-only; no logic change.
+  - file: scripts/ci_rca/probe_health.py
+    action: Modify
+    purpose: Repoint one comment cross-reference (line 8) from `scripts/convergence_health.py` to the package `scripts/convergence_health/`. Comment-only; no logic change.
   - file: tests/test_convergence_health.py
     action: Modify
     purpose: >-
@@ -72,8 +78,8 @@ scope:
     purpose: >-
       B2 -- _update_sloc_budgets no longer auto-seeds NEW oversized files at current SLOC (a new >500
       unregistered file fails validate_sloc_limits, forcing decompose-or-deliberate-register).
-      Preserve inline `# raise-approved: dec-NNN` markers on regeneration. rec-2422 -- emit YAML via
-      yaml.safe_dump instead of raw f-strings so future special-char module paths stay valid.
+      rec-2422 -- emit YAML via yaml.safe_dump instead of raw f-strings so future special-char module
+      paths stay valid.
   - file: scripts/checks/registry.py
     action: Modify
     purpose: Register validate_sloc_budget_raises in pre_sequence() immediately after validate_sloc_limits.
@@ -102,7 +108,7 @@ scope:
       not a CD ratification (Decision 105). Number re-checked at implement time (Decision 84).
   - file: AGENTS.md
     action: Modify
-    purpose: Add the decompose-don't-raise rule to the SLOC governance guidance (agent-facing doctrine surface, Decision 86/127).
+    purpose: Add a new SLOC-governance subsection carrying the decompose-don't-raise rule (AGENTS.md has no existing SLOC section -- this creates one; agent-facing doctrine surface, Decision 86/127).
   - file: .claude/skills/planning/SKILL.md
     action: Modify
     purpose: Complexity Assessment gains a SLOC-decompose-by-default note -- crossing 500 SLOC is planned as decomposition, not a budget raise.
@@ -123,7 +129,7 @@ acceptance_criteria:
   - All existing convergence_health tests pass unchanged in behaviour (only patch targets rewritten).
   - The `scripts/convergence_health.py` entry is gone from config/sloc_budgets.yaml and validate_sloc_limits passes.
   - "validate_sloc_budget_raises is registered in pre_sequence(), fails an unauthorized budget increase / new >500 registration, and passes a raise carrying a valid `# raise-approved: dec-NNN` marker, a decrease, or a removal."
-  - _update_sloc_budgets no longer auto-seeds a new oversized file (a new >500 unregistered file fails validate_sloc_limits), preserves inline raise-approved markers, and emits YAML via yaml.safe_dump.
+  - _update_sloc_budgets no longer auto-seeds a new oversized file (a new >500 unregistered file fails validate_sloc_limits) and emits YAML via yaml.safe_dump (rec-2422).
   - Decision 128 is present and well-formed and records the guardrails + the model-portability rationale + decompose-by-default doctrine.
   - "AGENTS.md and the planning/implement/plan-critique skills carry the decompose-don't-raise rule."
   - "`bin/venv-python -m scripts.validate --pre` exits 0 on the branch."
@@ -155,13 +161,17 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: Every package submodule is within the SLOC limit.
-    command: >-
-      bin/venv-python -c "import pathlib;
-      f=[p for p in pathlib.Path('scripts/convergence_health').glob('*.py')];
-      over=[(p.name, sum(1 for l in p.read_text().splitlines() if l.strip() and not l.strip().startswith('#'))) for p in f];
-      bad=[x for x in over if x[1]>500];
-      print('OVER:', bad) or (_ for _ in ()).throw(SystemExit(1)) if bad else print('all <=500', over)"
-    expected: Prints "all <=500" with per-file counts; no file over 500.
+    command: |-
+      bin/venv-python -c "
+      import pathlib, sys
+      counts = {p.name: sum(1 for l in p.read_text().splitlines() if l.strip() and not l.strip().startswith('#')) for p in sorted(pathlib.Path('scripts/convergence_health').glob('*.py'))}
+      over = {n: c for n, c in counts.items() if c > 500}
+      print('SLOC per submodule:', counts)
+      if over:
+          print('OVER 500:', over); sys.exit(1)
+      print('all submodules <= 500')
+      "
+    expected: Prints per-submodule SLOC then "all submodules <= 500"; no file over 500.
     fix_if: A submodule is >500 -> split its concern further before proceeding.
   - step: 5
     phase: pre-deploy
@@ -208,10 +218,10 @@ verification_plan:
     fix_if: Missing -> add the Decision / doctrine text (re-check the next free Decision number at implement time).
   - step: 11
     phase: pre-deploy
-    action: Old single-file surface is fully retired (stale-reference sweep).
-    command: bash -c 'test ! -f scripts/convergence_health.py && test -d scripts/convergence_health && ! grep -rn "scripts/convergence_health\.py" scripts/ src/ tests/ .github/ config/ docs/plans/ 2>/dev/null | grep -v "PLAN-convergence-health-sloc-decompose-guardrails" && echo "retired"'
-    expected: The .py file is gone, the package dir exists, and nothing references the old file path. Prints "retired".
-    fix_if: A stale path reference remains -> repoint it at the package (module import `scripts.convergence_health` still works).
+    action: Old single-file surface is fully retired (stale-reference sweep, executable/code scope only).
+    command: bash -c 'test ! -f scripts/convergence_health.py && test -d scripts/convergence_health && ! grep -rn "scripts/convergence_health\.py" scripts/ src/ tests/ .github/ config/ 2>/dev/null && echo "retired"'
+    expected: The .py file is gone, the package dir exists, and no code/config file references the old `.py` file path (docs/plans/ history is intentionally excluded -- those are immutable records). Prints "retired".
+    fix_if: A stale `.py`-path reference remains in code/config -> repoint it at the package `scripts/convergence_health/` (the module import `scripts.convergence_health` still works unchanged).
   - step: 12
     phase: pre-deploy
     action: The authoritative fast presubmit is green on the branch.
@@ -230,6 +240,7 @@ constraints:
   - No new standing prose doc (Decision 86/127) -- doctrine into AGENTS.md + the three skills; rationale into Decision 128; validate_prose_allowlist / intent-doc-freeze would reject a new docs/ file.
   - Decision numbering re-checked at implement time (a concurrent PR may claim 128); backfill via `ops_data_portal --backfill-decisions-md` post-merge, never client-side numbering, never a direct ops_decisions write (Decision 84).
   - "The raise-approved marker is an inline comment on the budget entry line: `path: N  # raise-approved: dec-NNN <reason>`; the check parses raw YAML text (safe_load drops comments) and validates dec-NNN resolves to a `## Decision NNN:` header."
+  - "Marker persistence is NOT a requirement: validate_sloc_budget_raises authorizes a raise at the diff-vs-base moment, and once merged the raise is durably recorded in git history + the cited Decision. _update_sloc_budgets (ratchet-DOWN only, never raises) therefore need not preserve inline markers -- this deliberately avoids the yaml.safe_dump-drops-comments conflict; do NOT add a comment round-trip mechanism."
   - "validate_sloc_budget_raises gates only INCREASES and new >500 registrations; decreases and removals always pass (ratchet-down direction). Its base reader is injectable and SKIPs (non-failing) when origin/main is unreachable -- advisory locally, authoritative in CI (mirrors validate_vp_replay)."
   - No `-k` selectors and no `python -c` in rec acceptance commands; use `pytest <file>::<Class>` after a grep existence check (tests/CLAUDE.md).
   - Any assertion over pre_sequence()/all_checks() must be growth-safe (membership/uniqueness), never an exact `len == N` (tests/CLAUDE.md count-coupling; rec-2572..2576).
@@ -249,15 +260,15 @@ pre_implementation_checklist:
   - Branch confirmed not on main (claude/convergence-health-sloc-exemption-220nn1)
   - docs/PROJECT_CONTEXT.md read
   - Decision 43/102/104/124/80/84 read (scout CITE list)
-  - All 22 scope files located and readable
+  - All 24 scope files located and readable
   - Acceptance criteria understood and verifiable
   - "Enumerated every patch() target in tests/test_convergence_health.py before moving code"
 execution_steps:
   - "Phase 1 (decompose): create scripts/convergence_health/ with record.py, approvals.py, assess.py, escalate.py, code_drift.py, __main__.py, and a facade __init__.py that re-exports the full public surface + every test-patched private symbol + every aws_infra import. Move code verbatim (behaviour-preserving); wire intra-package imports for shared helpers (escalation_action from assess; _fetch_open_recs from escalate; _parse_utc from record). Delete scripts/convergence_health.py."
-  - "Phase 1 (tests): enumerate every patch()/patch.object target in tests/test_convergence_health.py and rewrite each to the submodule where the name is looked up (e.g. scripts.convergence_health.escalate._fetch_open_recs, scripts.convergence_health.record.subprocess, scripts.convergence_health.__main__.read_convergence_record). Run tests/test_convergence_health.py -> 0 failures."
+  - "Phase 1 (tests): enumerate every patch()/patch.object target in tests/test_convergence_health.py and rewrite each to the submodule where the name is looked up (e.g. scripts.convergence_health.escalate._fetch_open_recs, scripts.convergence_health.record.subprocess, scripts.convergence_health.__main__.read_convergence_record). NOTE: the example list is non-exhaustive -- _fetch_open_recs and subprocess each have a SECOND patch site in the detect_ducklake/detect_prod tests that resolves to scripts.convergence_health.code_drift (not escalate/record); map each site to its actual caller module. VP step 3 (full 139-test run) is the loud gate on any mis-pointed target. Run tests/test_convergence_health.py -> 0 failures."
   - "Phase 1 (registry/config): remove the convergence_health.py entry from config/sloc_budgets.yaml; add the scripts/convergence_health/*.py -> tests/test_convergence_health.py mapping to scripts/test_coverage_checker.py."
   - "Phase 2 (raise gate): write scripts/checks/sloc/validate_sloc_budget_raises.py (diff vs origin/main via an injectable base reader; fail on increase / new >500 without a valid `# raise-approved: dec-NNN` marker; skip when no base). Register it in registry.py pre_sequence() after validate_sloc_limits; facade-re-export it from validate.py."
-  - "Phase 2 (ratchet hardening): modify scripts/checks/sloc/sloc_limits.py so _update_sloc_budgets no longer auto-seeds new oversized files, preserves inline raise-approved markers, and writes YAML via yaml.safe_dump (rec-2422). Update the --update-sloc-budgets argparse help in validate.py to note a feature branch is required (rec-2421)."
+  - "Phase 2 (ratchet hardening): modify scripts/checks/sloc/sloc_limits.py so _update_sloc_budgets no longer auto-seeds new oversized files and writes YAML via yaml.safe_dump (rec-2422). Update the --update-sloc-budgets argparse help in validate.py to note a feature branch is required (rec-2421)."
   - "Phase 2 (tests): add TestValidateSlocBudgetRaises to tests/test_validate.py; invert test_update_sloc_budgets_seeds_new_oversized to assert no-auto-seed; add test_update_sloc_budgets_idempotent (rec-2419); adjust tests/test_checks_registry.py growth-safely for the new registered check."
   - "Phase 3 (doctrine): add Decision 128 (amends Decision 102) to docs/DECISIONS.md with the guardrails, the `# raise-approved` mechanism, and the model-portability rationale (re-check the free number first). Add the decompose-don't-raise rule to AGENTS.md and the planning/implement/plan-critique skills."
   - "Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55). Post-merge: run `ops_data_portal --backfill-decisions-md` to sync Decision 128, and confirm rec-2419/2421/2422 auto-closed via the Resolves trailer."
