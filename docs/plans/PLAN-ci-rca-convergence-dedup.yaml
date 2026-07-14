@@ -1,0 +1,328 @@
+schema_version: 1
+slug: "ci-rca-convergence-dedup"
+intent: >-
+  Stop the CI-RCA duplication treadmill on the terraform-apply-sandbox CONVERGENCE_RED
+  channel by giving its failures a real taxonomy (distinct fingerprints), collapsing a
+  by-design refusal into its upstream cause-rec via backed match keys, and fixing the
+  general close-then-recur blind spot (rec-2644) -- then close the open recs and drive the
+  convergence record back to green via the sanctioned recovery ladder.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-rca-convergence-dedup.yaml
+phase: >-
+  Platform reliability -- CI-RCA dedup hardening (audit ci-rca-system-a49db8f Q2; resolves
+  ci_rca rec-2690, the L5 HARD BLOCK). Boundary with T2.39 (STARVED cause fix, c3 landed) held.
+scope:
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      Add the three new categories (convergence_refused, convergence_read_error,
+      subagent_starved) to the top-level failure_categories: list (validate_ci_rca_taxonomy
+      Check 2 fails --pre otherwise), plus step_name_to_category + log_pattern_to_category rules
+      so terraform-apply-sandbox failures classify distinctly instead of the degenerate
+      unknown/unknown that collapses every sandbox failure to one fingerprint (833c78f8...).
+      Log-pattern rules must be ordered BEFORE the generic 'terraform.*Error -> environment' rule.
+  - file: scripts/ci_rca/taxonomy.py
+    action: Modify
+    purpose: >-
+      Ensure classify_failures/classify_failure resolve the new rules with jobs-JSON step-name
+      priority over log patterns. Likely additive/no-op (step_name_to_category is priority-1);
+      in scope so the classification is provably exercised, not assumed.
+  - file: scripts/ci_rca/convergence_dedup.py
+    action: Create
+    purpose: >-
+      Pure, unit-testable helper find_open_convergence_cause_rec(record, *, drift_rec_finder,
+      commit_status_checker) using ONLY backed keys. Drift-red (record has drift_run_url):
+      return the open source=tf_drift rec whose context embeds record.drift_run_url. Apply-
+      failure-red (no drift markers): return a sentinel when a non-convergence ci-rca commit-
+      status context already exists on record.commit_sha (the real anchor primitive the ci-rca
+      Dedup guard already posts, ci-rca.yml:363-367). Returns None when neither holds (the
+      refusal then files as the fallback red-surface). Ships a thin CLI entrypoint so the
+      ci-rca.yml shell is invocation-only. No caller SQL (Decision 84 named-verb path).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      In the 'Dedup guard' step, when WORKFLOW_SLUG=terraform-apply-sandbox and the emitted
+      categories include convergence_refused, invoke convergence_dedup's CLI (passing the
+      convergence record + the existing gh commit-status access); on a cause-rec/cause-context
+      hit set already_filed=true (skip the agent) and bump the cause-rec occurrence exactly
+      once. All other paths and the CD.35 precondition gate stay untouched.
+  - file: scripts/ops_portal/ci_rca_runtime.py
+    action: Modify
+    purpose: >-
+      rec-2644 close-then-recur fix, keeping the finder READ-ONLY. Add closed-match visibility
+      (find_recent_ci_rca_rec_by_fingerprint returning rec_id + was_closed within a bounded
+      recency window) and a SEPARATE single-writer reopen_ci_rca_rec(rec_id) that flips
+      status=open and bumps occurrence exactly once. find_open_ci_rca_rec_by_fingerprint stays
+      a pure read (no writes). Safe ONLY because the taxonomy fix makes fingerprints
+      discriminating. If the change would cross the 500-SLOC default (file at 430), extract the
+      recurrence logic into scripts/ops_portal/ci_rca_recurrence.py (Decision 128 decompose).
+  - file: tests/test_ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      Assert the REAL emitted markers/step-names classify correctly: CONVERGENCE_RED ->
+      convergence_refused; CONVERGENCE_READ_ERROR/CONVERGENCE_PARSE_ERROR ->
+      convergence_read_error; REVIEW_STARVED / outcome=starved (step 'Subagent plan review
+      (digest-fed, JSON-classified)') -> subagent_starved. Assert _compute_fingerprint yields
+      three DISTINCT fingerprints for these categories (anti-masking).
+  - file: tests/test_ci_rca_dedup.py
+    action: Modify
+    purpose: >-
+      Cover find_open_convergence_cause_rec and the dedup DECISION (acceptance criterion 2):
+      drift-red with an open tf_drift rec (matched by drift_run_url) -> already_filed;
+      apply-failure-red with a pre-existing non-convergence ci-rca commit-status on
+      record.commit_sha -> already_filed; neither -> None (refusal files). Assert the single-bump
+      routing (open -> bumper; recently-closed -> reopen; mutually exclusive, never both).
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Extend the existing close-then-recur cases (test_ops_data_portal.py:2282-2288 asserts a
+      CLOSED match is skipped for the OPEN one -- keep that) with rec-2644 coverage: a
+      recently-closed matching rec is surfaced (was_closed=True) and reopened+bumped ONCE by the
+      writer, a rec closed OUTSIDE the window is NOT revived, and the write-time backstop bump
+      tests (2374-2430) still pass (no double-count).
+bundled_recommendations:
+  - rec-2690
+  - rec-2644
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A terraform-apply-sandbox CONVERGENCE_RED refusal classifies to failure_category
+    'convergence_refused' (not 'unknown'), and _compute_fingerprint for convergence_refused,
+    subagent_starved, and the apply-failure category (environment) are three distinct values --
+    verified against the REAL markers emitted by terraform-apply-sandbox.yml.
+  - >-
+    The ci-rca 'Dedup guard' sets already_filed=true and files NO new standalone ci_rca rec when
+    a convergence_refused refusal has a resolvable cause: a drift-red with an open tf_drift rec
+    (matched by drift_run_url) OR an apply-failure-red with a pre-existing non-convergence ci-rca
+    commit-status on record.commit_sha. Verified by a dedup-decision test AND the shell-wiring
+    grounding step.
+  - >-
+    find_open_ci_rca_rec_by_fingerprint stays read-only; a separate reopen writer reopens+bumps a
+    recently-closed matching rec EXACTLY ONCE (rec-2644), does NOT revive a rec closed outside the
+    window, and introduces no double-count with the file_rec write-time backstop.
+  - >-
+    rec-2690 and rec-2644 are status=closed in the warehouse (via the code PR Resolves trailer),
+    verified after `sync.ops pull`.
+  - >-
+    The recovery ladder is driven for the ed22aa46 drift-red: on success the record status != 'red'
+    and rec-2695 is closed; if the out-of-band drift requires a human-gated fresh-plan apply
+    (IAM/out-of-budget or a stale saved plan), the plan STOPs with the diagnosis and rec-2695
+    remains open pending that human action (documented, not a plan failure).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      The taxonomy rules are GROUNDED in the workflow's real emitted strings (non-circular): the
+      markers/step-names the rules key on actually appear in terraform-apply-sandbox.yml.
+    command: >-
+      grep -q 'CONVERGENCE_RED' .github/workflows/terraform-apply-sandbox.yml &&
+      grep -q 'CONVERGENCE_READ_ERROR' .github/workflows/terraform-apply-sandbox.yml &&
+      grep -q 'CONVERGENCE_PARSE_ERROR' .github/workflows/terraform-apply-sandbox.yml &&
+      grep -q 'REVIEW_STARVED\|outcome=starved' .github/workflows/terraform-apply-sandbox.yml &&
+      grep -q 'Convergence precondition (refuse on red record' .github/workflows/terraform-apply-sandbox.yml &&
+      grep -q 'Subagent plan review (digest-fed, JSON-classified)' .github/workflows/terraform-apply-sandbox.yml
+    expected: All greps hit -- the strings the taxonomy rules match are the strings the workflow emits.
+    fix_if: A grep misses -- the taxonomy rule keys on a string the workflow does not emit; correct the rule.
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    action: Taxonomy classifies the sandbox markers to distinct categories, and their fingerprints differ.
+    command: bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py -k "convergence or starved or fingerprint" -q
+    expected: >-
+      Markers map to convergence_refused / convergence_read_error / subagent_starved; three distinct
+      _compute_fingerprint values (833c78f8 degeneracy gone).
+    fix_if: A marker classifies to unknown, or any two categories share a fingerprint.
+  - step: 3
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Cause-aware convergence dedup DECISION resolves correctly (acceptance criterion 2): drift vs
+      apply-failure-commit-status vs none.
+    command: bin/venv-python -m pytest tests/test_ci_rca_dedup.py -k "convergence or cause" -q
+    expected: >-
+      Drift-red matches tf_drift by drift_run_url -> already_filed; apply-failure-red with a prior
+      non-convergence ci-rca status on record.commit_sha -> already_filed; neither -> None.
+    fix_if: A drift-red or a status-anchored apply-failure-red still files a fresh refusal rec.
+  - step: 4
+    phase: pre-deploy
+    hermetic: true
+    action: >-
+      Close-then-recur finder is read-only; the separate writer reopens a recently-closed match once,
+      ignores stale ones, and does not double-bump (rec-2644).
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -k "close_then_recur or fingerprint_bump" -q
+    expected: >-
+      Recently-closed match surfaced (was_closed=True) and reopened+bumped once; out-of-window rec not
+      revived; existing open-match and backstop-bump tests still pass.
+    fix_if: A closed match returns None (duplicate filed), an ancient rec is revived, or occurrence double-counts.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: Full fast-tier presubmit passes (schema, placement, validate_ci_rca_taxonomy, dedup, all checks).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: PASS.
+    fix_if: >-
+      Any registered check fails -- notably validate_ci_rca_taxonomy if a new category is absent from
+      failure_categories:. Fix before pushing.
+  - step: 6
+    phase: post-deploy
+    hermetic: false
+    action: After the code PR merges, confirm rec-2690 and rec-2644 are closed in the warehouse.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; bin/venv-python -c "import json,pathlib;
+      rows={json.loads(l)['id']: json.loads(l)['status'] for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()};
+      assert rows.get('rec-2690')=='closed', rows.get('rec-2690');
+      assert rows.get('rec-2644')=='closed', rows.get('rec-2644'); print('rec-2690 + rec-2644 closed')"
+    expected: Prints 'rec-2690 + rec-2644 closed'.
+    fix_if: Either rec still open -- Resolves trailer/rec-autoclose did not fire; close via ops_data_portal --update-rec.
+  - step: 7
+    phase: post-deploy
+    hermetic: false
+    action: >-
+      Drive the recovery ladder for the ed22aa46 drift-red (Decision 126). (1) Dispatch reconcile.yml
+      (rec_id=rec-2695) via mcp__github__actions_run_trigger. If it fails closed on a stale saved
+      plan.bin (expected for out-of-band drift -- Reconcile re-applies the saved plan, never re-plans),
+      (2) dispatch terraform-apply-sandbox.yml acknowledge-and-retry (acknowledge_red_commit=ed22aa46...)
+      which RE-PLANS FRESH and auto-applies if the diff is in-budget/non-IAM. If the drift needs an
+      IAM/out-of-budget human-gated apply, (3) STOP and escalate with the diagnosis. Then read the record.
+    command: aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | jq -e '.status != "red"'
+    expected: jq exit 0 (status != red) once a recovery dispatch greens the record; apply-sandbox stops refusing.
+    fix_if: >-
+      Record still red after (1) and (2) -- the drift needs a human-gated fresh-plan apply; STOP, post the
+      diagnosis, and leave rec-2695 open pending human action (documented outcome, not a plan failure).
+  - step: 8
+    phase: post-deploy
+    hermetic: false
+    action: If (and only if) step 7 greened the record, close rec-2695 (tf_drift cause).
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | jq -e '.status != "red"'
+      && bin/venv-python -m scripts.ops_data_portal --update-rec rec-2695 --status closed
+      --resolution "Drift reconciled; convergence record status!=red." && bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1
+    expected: rec-2695 closed via the portal when the record is green; skipped (left open) when step 7 escalated.
+    fix_if: Record is green but the portal write fails -- confirm the agent_platform assume-role chain, then re-file.
+constraints:
+  - >-
+    Do NOT modify the CD.35 convergence precondition gate
+    (.github/workflows/terraform-apply-sandbox.yml 'Convergence precondition' step, lines 136-195).
+    The refusal is by-design and must NOT be suppressed (Decision 92 pt 2). This plan changes only
+    how ci-rca RECCS/DEDUPES the refusal, never the server-side hard block.
+  - >-
+    find_open_ci_rca_rec_by_fingerprint stays a READ path (ci_rca_runtime.py:66-67 'a read cache is
+    never a dedup source'). The close-then-recur reopen lives in a SEPARATE single-writer with a
+    single-bump contract: on a recently-closed match the dedup path reopens ONCE and does not also
+    call the open-match bumper; file_rec's write-time backstop never fires on the reopen path (no
+    new filing). No double-count (Risk B).
+  - >-
+    convergence_dedup matches ONLY backed keys: tf_drift rec by record.drift_run_url, and apply-
+    failure by a non-convergence ci-rca commit-status on record.commit_sha. It must NOT match a
+    'commit_sha in rec context' field -- ci_rca recs carry no commit field (CiRcaContext,
+    ci_rca_schema.py). After the taxonomy fix the refusal and apply-failure have DIFFERENT category
+    status-contexts, so this cross-category commit-status check is what re-links them (Risk A).
+  - >-
+    New categories (convergence_refused, convergence_read_error, subagent_starved) MUST be added to
+    the top-level failure_categories: list or validate_ci_rca_taxonomy Check 2 fails --pre (Risk C).
+  - >-
+    No self-directed terraform apply. Recovery transits the sanctioned workflows only: Reconcile
+    (Decision 126 pt 1) then, on stale-plan fail-closed, the acknowledge-and-retry workflow_dispatch
+    (fresh human-reviewed plan); an IAM/out-of-budget drift escalates to the human-gated apply loop.
+  - >-
+    All rec state changes transit the ops portal (file_rec/update_rec / Resolves trailer). Never Edit
+    logs/.recommendations-log.jsonl -- it is a read cache (Decision 84 / Single Portal Invariant).
+  - >-
+    Do NOT touch the STARVED red-latch path -- owned by T2.39 (c3 already landed: STARVED no longer
+    reds the record, terraform-apply-sandbox.yml:494-495). This plan only CLASSIFIES subagent_starved.
+  - Keep scripts/ops_portal/ci_rca_runtime.py under its 500-SLOC default; decompose if crossed (Decision 128).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Root cause: the grouping fingerprint = sha256(workflow_slug \0 failed_check \0 failure_category)
+    (scripts/ci_rca/evidence.py:_compute_fingerprint). config/ci_rca_taxonomy.yaml has no rule for
+    terraform-apply-sandbox, so every unclassified sandbox failure -> unknown/unknown -> ONE
+    degenerate fingerprint (833c78f8...). rec-2658 (STARVED) and rec-2690 (CONVERGENCE_RED) share it.
+    find_open_ci_rca_rec_by_fingerprint matches OPEN recs only, so once the prior rec closes the next
+    episode files fresh (churn, rec-2644); while open, distinct failures mask each other. A
+    CONVERGENCE_RED refusal is also a downstream symptom whose cause-rec may be a tf_drift rec
+    (rec-2695) invisible to the ci_rca fingerprint + per-category commit-status anchor.
+  - >-
+    Forward-fix for audit ci-rca-system-a49db8f finding Q2 ("recurrence is neither prevented nor
+    deduplicated at write time"), scoped to the convergence channel. The audit's proposed key
+    (slug, category, first-red commit) is itself degenerate here until the taxonomy fix lands --
+    taxonomy is the prerequisite, and is also the safety prerequisite for the rec-2644 reopen.
+  - >-
+    6th instance of the pattern (rec-2222/2236/2238/2240/2243 -> 2690). rec-2690's 50f3a90 red is
+    already cleared; the record is currently red at ed22aa46 from out-of-band drift (T2.24), tracked
+    by rec-2695. rec-2690 closes as the forward-fixed/superseded symptom; rec-2695 closes only if the
+    recovery ladder greens the record.
+  - >-
+    rec-2695 is NOT in the code PR Resolves trailer -- its acceptance is a green record, contingent on
+    step 7. Reconcile fetches the SAVED plan.bin from the red commit's PR and never re-plans; an
+    out-of-band drift-red (commit_sha = last green commit, no PR-captured correcting plan) will likely
+    fail Reconcile's byte-identical assert, so the acknowledge-and-retry fresh-replan is the real
+    green path, and an IAM/out-of-budget drift needs a human-gated apply (Risk E, scoped honestly).
+  - >-
+    rec-2591 (evidence-gated Haiku dedup judge on residual fingerprint collision) remains DEFERRED per
+    its own trigger. Out of scope here.
+  - >-
+    T2.39 boundary (Decision 126 pt 5): T2.39 c3 already took STARVED out of the red-latch path
+    (terraform-apply-sandbox.yml:494-495). This plan only classifies subagent_starved for dedup; it
+    does not touch that latch path. STARVED's real markers are REVIEW_STARVED / outcome=starved (NOT
+    'Reached max turns').
+  - "Decision-scout verdict: FLAGS_FOUND (no BLOCK). CITE: Decision 92 (server-side convergence anchor / by-design refusal), Decision 72 + Decision 55 (apply failures wire into ci-rca; forward-fix not auto-revert), Decision 126 (Reconcile/acknowledge-and-retry for red/drift), Decision 84 (portal-only rec writes), Decision 73 (L5 hard-block justifies scoping this forward-fix under the block), CIRCA-03(a) grouping-fingerprint contract, CIRCA-09 (terraform-apply-sandbox is not_a_gate/unknown -- taxonomy classifies failure_category, not gate tier)."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE(round 1) -> revised (Risks A/B/C/D/E addressed)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-apply-sandbox-convergence-jkpohb)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via decision-scout gate (FLAGS_FOUND, no BLOCK)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    config/ci_rca_taxonomy.yaml -- (a) add convergence_refused, convergence_read_error,
+    subagent_starved to the top-level failure_categories: list; (b) add step_name_to_category for
+    'Convergence precondition (refuse on red record -- sole hard block)' (convergence_refused) and
+    'Subagent plan review (digest-fed, JSON-classified)' (subagent_starved); (c) add
+    log_pattern_to_category for 'CONVERGENCE_RED' (convergence_refused), 'CONVERGENCE_(READ|PARSE)_ERROR'
+    (convergence_read_error), 'REVIEW_STARVED|outcome=starved' (subagent_starved) -- ordered BEFORE the
+    generic terraform.*Error rule.
+  - >-
+    scripts/ci_rca/taxonomy.py -- confirm classify_failures resolves the new rules (step-name priority);
+    adjust only if a marker still falls through to unknown.
+  - >-
+    scripts/ci_rca/convergence_dedup.py (new) -- find_open_convergence_cause_rec(record, *,
+    drift_rec_finder, commit_status_checker): drift branch (record.drift_run_url present) returns the
+    open tf_drift rec embedding that url; else apply-failure branch returns a hit when
+    commit_status_checker(record.commit_sha) reports a non-convergence_refused ci-rca/terraform-apply-
+    sandbox/* success context; else None. Pure + injected lookups. Add a thin CLI entrypoint (reads
+    record JSON on stdin/path, prints already_filed + cause_rec) for ci-rca.yml to call.
+  - >-
+    .github/workflows/ci-rca.yml -- in the 'Dedup guard', when slug=terraform-apply-sandbox and
+    categories include convergence_refused, call the convergence_dedup CLI (feeding it the record and
+    using gh for the commit-status check); on a hit set already_filed=true and bump the cause-rec once.
+    Thin shell -- all decision logic lives in the tested helper.
+  - >-
+    scripts/ops_portal/ci_rca_runtime.py -- keep find_open_ci_rca_rec_by_fingerprint read-only; add
+    find_recent_ci_rca_rec_by_fingerprint (returns rec_id + was_closed within a bounded recency window)
+    and reopen_ci_rca_rec(rec_id) (status=open + single bump). Wire dedup.decide() to route: open-match
+    -> existing bumper; recently-closed-match -> reopen (once); mutually exclusive. Decompose to
+    ci_rca_recurrence.py if the file crosses 500 SLOC.
+  - >-
+    Tests -- test_ci_rca_taxonomy.py (real-marker classification + fingerprint distinctness),
+    test_ci_rca_dedup.py (cause-aware decision + single-bump routing), test_ops_data_portal.py
+    (close_then_recur reopen-once + out-of-window negative + no backstop double-count).
+  - >-
+    Execute VP steps 1-5 (pre-deploy); loop until pass. Then push, open PR, and on green CI squash-merge
+    with body 'Resolves: rec-2690, rec-2644'.
+  - >-
+    Post-merge: VP step 6 (confirm rec-2690/rec-2644 closed); VP step 7 (recovery ladder: Reconcile ->
+    acknowledge-and-retry -> escalate; on unrecoverable/human-gated drift STOP and RCA, Decision 55);
+    VP step 8 (close rec-2695 iff the record greened).
+  - "Report: what was implemented, verification results, the final convergence record status, and (if escalated) the drift diagnosis and the human-gated apply needed."
+work_areas: []
+rollback: >-
+  Code changes are additive and revertable by reverting the merge commit (taxonomy rules + registered
+  categories, the new convergence_dedup helper, the read-only-finder + separate reopen writer, and the
+  ci-rca.yml dedup branch). Reverting touches no convergence record or rec state. The recovery-ladder
+  dispatches and rec closes are forward-only operational actions; a wrongly-reconciled record is
+  re-reddened only by a genuine apply failure or drift, never by reverting this plan.
