@@ -851,7 +851,9 @@ class TestCritiqueRejectsEmptyAcceptance:
     def test_critique_rejects_empty_acceptance(self) -> None:
         import pathlib
 
-        instructions_text = pathlib.Path(".github/instructions/executor-critique.instructions.md").read_text(encoding="utf-8")
+        instructions_text = pathlib.Path("config/agent/executor/instructions/executor-critique.instructions.md").read_text(
+            encoding="utf-8"
+        )
         assert "Empty acceptance commands are forbidden" in instructions_text
 
 

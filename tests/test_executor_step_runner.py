@@ -1298,14 +1298,14 @@ class TestImplementationModelSelection:
         mock_esc.assert_called_once_with("implementation", "flash")
         assert result == "gemini-3-pro-preview"
 
-    def test_l_github_instructions_delegates_to_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_l_executor_instructions_delegates_to_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COPILOT_MODEL_EXECUTION", raising=False)
         with patch("scripts.llm.model_registry.resolve_model", return_value="gemini-3-pro-preview") as mock_resolve:
-            result = get_implementation_model("L", ".github/instructions/executor-planning.instructions.md")
+            result = get_implementation_model("L", "config/agent/executor/instructions/executor-planning.instructions.md")
         mock_resolve.assert_called_once_with(
             "implementation",
             "L",
-            file_path=".github/instructions/executor-planning.instructions.md",
+            file_path="config/agent/executor/instructions/executor-planning.instructions.md",
         )
         assert result == "gemini-3-pro-preview"
 
