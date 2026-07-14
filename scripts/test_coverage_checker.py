@@ -87,8 +87,14 @@ def map_source_to_test(source_path: Path) -> Path | None:
                               colocation precedent -- PLAN-convergence-health-sloc-decompose-guardrails).
     src/common/ducklake_{writes,tables,reads,metrics}.py -> tests/test_ducklake_runtime.py (split-out
                               from ducklake_runtime.py, PLAN-sloc-ducklake-layer, same Decision 104 precedent).
-    src/lambdas/ducklake_writer/<non-handler>.py -> tests/test_ducklake_writer_handler.py (e.g.
-                              smoke_actions.py, split-out from handler.py, same precedent).
+    src/lambdas/<slug>/*.py -> tests/test_{slug}_handler.py (parent-qualified rule, RS-08): every
+                              file under a src/lambdas/<slug>/ directory -- handler.py plus any
+                              split-out sibling (e.g. ducklake_writer/smoke_actions.py) -- maps to
+                              that lambda's single test home, keyed off the parent slug rather than
+                              the file's own stem. Generalizes the former ducklake_writer-only
+                              special case so every src/lambdas/*/handler.py resolves to its own
+                              distinct, real test home instead of colliding on the stem-based
+                              tests/test_handler.py fallback (retired).
     scripts/{ci_rca,session,sync,roadmap,llm}/<name>.py -> the module's kept-in-place flat test
                               (nested subpackages, RS-01 / rec-164): ci_rca/session/sync strip the
                               family prefix -> test_ci_rca_/test_session_/test_sync_<name>.py; roadmap
@@ -112,14 +118,8 @@ def map_source_to_test(source_path: Path) -> Path | None:
 
     if parts[0] == "src" and len(parts) >= 3 and parts[1] == "common" and rel.name in _DUCKLAKE_RUNTIME_SPLIT_MODULES:
         return ROOT / "tests" / "test_ducklake_runtime.py"
-    elif (
-        parts[0] == "src"
-        and len(parts) >= 4
-        and parts[1] == "lambdas"
-        and parts[2] == "ducklake_writer"
-        and rel.stem != "handler"
-    ):
-        return ROOT / "tests" / "test_ducklake_writer_handler.py"
+    elif parts[0] == "src" and len(parts) >= 4 and parts[1] == "lambdas":
+        return ROOT / "tests" / f"test_{parts[2]}_handler.py"
     elif parts[0] == "src" and len(parts) >= 2:
         stem = rel.stem
         return ROOT / "tests" / f"test_{stem}.py"
