@@ -169,22 +169,49 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "test_ducklake_writer_handler.py"
 
-    def test_ducklake_writer_handler_py_unchanged_by_split(self) -> None:
-        """src/lambdas/ducklake_writer/handler.py keeps mapping to the pre-existing tests/test_handler.py
-        shim (stem-based fallback, shared by every src/lambdas/*/handler.py) -- the smoke_actions.py
-        special-case explicitly excludes stem=='handler', so this plan's edit does not disturb it."""
+    def test_ducklake_writer_handler_py_maps_to_parent_qualified_test(self) -> None:
+        """src/lambdas/ducklake_writer/handler.py maps to tests/test_ducklake_writer_handler.py under
+        the RS-08 parent-qualified rule -- keyed off the parent lambda-slug directory rather than the
+        handler.py stem, so it no longer collides with the other lambdas' handler.py files on the
+        retired tests/test_handler.py shim."""
         source = ROOT / "src" / "lambdas" / "ducklake_writer" / "handler.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_handler.py"
+        assert result == ROOT / "tests" / "test_ducklake_writer_handler.py"
 
-    def test_other_lambda_dirs_non_handler_stem_unaffected(self) -> None:
-        """A non-ducklake_writer lambda dir keeps the plain stem-based mapping (special-case is scoped
-        to src/lambdas/ducklake_writer/ only)."""
+    def test_other_lambda_dirs_get_their_own_parent_qualified_test(self) -> None:
+        """A non-ducklake_writer lambda dir resolves to its OWN distinct test home -- the RS-08
+        parent-qualified rule applies uniformly to every src/lambdas/<slug>/ directory, not just
+        ducklake_writer (the pre-generalization special case)."""
         source = ROOT / "src" / "lambdas" / "ducklake_reader" / "handler.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_handler.py"
+        assert result == ROOT / "tests" / "test_ducklake_reader_handler.py"
+
+    def test_all_lambda_handlers_map_to_distinct_existing_parent_qualified_tests(self) -> None:
+        """RS-08: every src/lambdas/*/handler.py resolves to a distinct, EXISTING
+        tests/test_{slug}_handler.py home; smoke_actions.py shares ducklake_writer's home; none
+        collides on the retired tests/test_handler.py shim (deleted by this plan)."""
+        # Derive the slug set from disk (growth-safe: a future lambda is covered automatically, and
+        # one added without a parent-qualified test home fails result.exists() below). Do NOT hardcode
+        # a list of a collection that grows by addition -- tests/CLAUDE.md test-count-coupling rule.
+        handler_paths = sorted((ROOT / "src" / "lambdas").glob("*/handler.py"))
+        assert handler_paths, "no src/lambdas/*/handler.py found -- glob is wrong"
+        handler_results = {p.parent.name: map_source_to_test(p) for p in handler_paths}
+
+        for slug, result in handler_results.items():
+            assert result == ROOT / "tests" / f"test_{slug}_handler.py", (slug, result)
+            assert result.exists(), f"missing test home for {slug}: {result}"
+
+        # Every handler's home is distinct from every other handler's home (no collision).
+        assert len({str(r) for r in handler_results.values()}) == len(handler_results)
+
+        # None resolves to the retired shim.
+        assert all(r != ROOT / "tests" / "test_handler.py" for r in handler_results.values())
+
+        # smoke_actions.py (split-out from ducklake_writer/handler.py) shares that lambda's home.
+        smoke_actions_result = map_source_to_test(ROOT / "src" / "lambdas" / "ducklake_writer" / "smoke_actions.py")
+        assert smoke_actions_result == handler_results["ducklake_writer"]
 
 
 class TestCheckTestFileExists:
