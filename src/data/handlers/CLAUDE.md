@@ -3,20 +3,32 @@
 Loaded automatically when Claude reads or edits files in this directory. Universal rules in repo-root `CLAUDE.md` still apply.
 
 ## Lambda packaging contract
-Files here are bundled into Lambda zip artefacts via `scripts/build_lambda.py`. Plans modifying any handler must include the build, deploy, and post-deploy verification sequence — not just code edits. The dispatcher and findings-processor are the two Lambda functions whose code is updated.
+Files here are bundled into Lambda zip artefacts via `scripts/build_lambda.py`. Plans modifying any handler must include the build, deploy, and post-deploy verification sequence — not just code edits. The dispatcher, findings-processor, and ops-compaction are the three Lambda functions whose code is updated (see `src/lambdas/ops-compaction/manifest.yaml` for the third target).
 
-**Deploy channel class (Decision 125):** the dispatcher and findings-processor are NOT
-`terraform/personal`-managed — they are the DECOUPLED `build_lambda --deploy` targets below, distinct
-from the four `terraform/personal`-managed DuckLake Lambdas (`ducklake_writer`/`ducklake_reader`/
-`ducklake_maintenance`/`ducklake_catalog_dr`, under `src/lambdas/`), which are currently
-code/infra-COUPLED via `source_code_hash=try(filemd5(zip),null)` with no `ignore_changes` lifecycle.
-Do not conflate the two classes: the local `--deploy` step below is routine for this directory's
-targets, but is break-glass-only for the DuckLake class — see `src/lambdas/CLAUDE.md` and
+**Deploy channel class (Decision 125/126, T2.43):** the dispatcher, findings-processor, and
+ops-compaction are `terraform/personal`-managed (`terraform/personal/prod_lambdas.tf`, the
+`decoupled_build_pipeline` class) but code/infra-DECOUPLED from day one via
+`lifecycle { ignore_changes = [source_code_hash] }` — distinct from the four
+`terraform/personal`-managed DuckLake Lambdas (`ducklake_writer`/`ducklake_reader`/
+`ducklake_maintenance`/`ducklake_catalog_dr`, under `src/lambdas/`), which decoupled later (#544)
+after an initial coupled period. Do not conflate the two classes — see `src/lambdas/CLAUDE.md` and
 `docs/contracts/environment-taxonomy.md` section 5.
+
+**Routine deploy channel is now `.github/workflows/deploy-prod-lambdas.yml` (T2.43)** — push-to-main
+touching this directory's source paths, or `workflow_dispatch`. It assumes the scoped
+`agent-platform-github-ci-prod-deploy` OIDC role (UpdateFunctionCode-only on the three functions;
+no invoke, no terraform, no iam) and runs `build_lambda --deploy`, then smoke-invokes all three
+functions. The local `bin/venv-python -m scripts.build_lambda --deploy` invocation below is now
+**admin break-glass only** (mirrors the DuckLake class's break-glass posture) — it remains available
+as a genuinely non-default fallback (see `docs/contracts/build-lambda.yaml` deploy_channels), not the
+routine agent path. **Profile correction:** `agent_platform` (PlatformDev, the routine dev/runtime
+profile) does NOT hold `lambda:UpdateFunctionCode` on these functions — that capability lives on
+`agent_platform_admin` (PlatformAdmin) and the scoped `agent-platform-github-ci-prod-deploy` OIDC
+role only. A break-glass local deploy must use `--profile agent_platform_admin`.
 
 ### Required steps for Lambda-touching plans
 1. **Build**: `bin/venv-python -m scripts.build_lambda`
-2. **Deploy**: `bin/venv-python -m scripts.build_lambda --deploy` uploads to S3 and updates Lambda function code.
+2. **Deploy**: routine path is the governed workflow above. Break-glass (admin only): `bin/venv-python -m scripts.build_lambda --deploy --profile agent_platform_admin` uploads to S3 and updates Lambda function code.
 3. **Smoke-test (post-deploy)**: `bin/venv-python -m scripts.run_scheduled_agent --smoke-test NAME` when the runner exposes it (grep for `_smoke_test` or `--smoke-test`). Otherwise an explicit `--trigger-lambda NAME` invocation with expected observable output.
 
 If any of these are missing from a plan that touches handlers here, the plan is incomplete — flag it during `/plan` Step 4 (Lambda Deployment Assessment).

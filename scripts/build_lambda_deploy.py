@@ -56,9 +56,10 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
     combined-with-layers size limit imposed by the attached AWSSDKPandas layer.
 
     ``only_ducklake`` scopes the deploy to the four DuckLake functions (T2.17/T2.18), leaving the
-    prod functions untouched (Decision 79 affected-artifact hygiene). On that path, each
-    successful update also captures CodeSha256 from the response and writes a T2.38 deployment
-    record (see ``_write_ducklake_deploy_record`` / ``read_deploy_record``).
+    prod functions untouched (Decision 79 affected-artifact hygiene). Both paths capture
+    CodeSha256 from each successful update and write a per-function deployment record (see
+    ``_write_ducklake_deploy_record`` / ``read_deploy_record``): ``deploy-records/ducklake/*``
+    for the DuckLake path, ``deploy-records/prod/*`` for the prod path (T2.43).
 
     Ref: AWS CLI ``lambda update-function-code`` requires
     --function-name, --s3-bucket, --s3-key; optional --region and
@@ -69,10 +70,12 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
         # Scope the deploy to the four DuckLake functions ONLY: data-pipeline + ops-compaction are
         # NOT redeployed by a T2.17/T2.18 deploy (Decision 79 affected-artifact hygiene).
         function_zip_map = dict(_build_ducklake_function_zip_keys())
+        channel = "ducklake"
     else:
         function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _build_prod_function_names()}
         ops = _build_ops_compaction()
         function_zip_map[ops["function"]] = ops["zip_key"]
+        channel = "prod"
 
     for fn_name, s3_key in function_zip_map.items():
         print(f"  Updating {fn_name}...")
@@ -105,8 +108,7 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
             sys.exit(1)
         print(f"  OK {fn_name} updated")
 
-        if only_ducklake:
-            _write_ducklake_deploy_record(fn_name, result.stdout, bucket, profile, region)
+        _write_ducklake_deploy_record(fn_name, result.stdout, bucket, profile, region, channel=channel)
 
 
 def _write_ducklake_deploy_record(
@@ -115,15 +117,19 @@ def _write_ducklake_deploy_record(
     bucket: str,
     profile: str,
     region: str,
+    channel: str = "ducklake",
 ) -> None:
-    """Capture CodeSha256 from the update-function-code JSON response and write the T2.38 record.
+    """Capture CodeSha256 from the update-function-code JSON response and write a deploy record.
 
-    Writes ``deploy-records/ducklake/<function>.json``: ``{function, code_sha256,
-    source_git_sha, deployed_at}``. ``source_git_sha`` reads ``os.environ.get("GITHUB_SHA")`` --
-    None-safe: the local break-glass path (``bin/venv-python -m scripts.build_lambda
-    --ducklake-only --deploy``) has no ``GITHUB_SHA``, so the record carries
-    ``source_git_sha: null`` rather than raising. Read back via ``read_deploy_record`` (consumed
-    by ``scripts.convergence_health.detect_ducklake_code_drift``).
+    Writes ``deploy-records/<channel>/<function>.json``: ``{function, code_sha256,
+    source_git_sha, deployed_at}``. ``channel`` defaults to ``"ducklake"`` (the T2.38 original
+    caller); the prod class (T2.43) passes ``channel="prod"`` -- same schema, different S3
+    prefix, generalising this function rather than duplicating it. ``source_git_sha`` reads
+    ``os.environ.get("GITHUB_SHA")`` -- None-safe: a local break-glass path (``bin/venv-python -m
+    scripts.build_lambda [--ducklake-only] --deploy``) has no ``GITHUB_SHA``, so the record
+    carries ``source_git_sha: null`` rather than raising. Read back via ``read_deploy_record``
+    (consumed by ``scripts.convergence_health.detect_ducklake_code_drift`` /
+    ``detect_prod_code_drift``).
     """
     try:
         code_sha256 = json.loads(update_function_code_stdout)["CodeSha256"]
@@ -137,7 +143,7 @@ def _write_ducklake_deploy_record(
         "source_git_sha": os.environ.get("GITHUB_SHA"),
         "deployed_at": datetime.now(timezone.utc).isoformat(),
     }
-    key = f"deploy-records/ducklake/{function}.json"
+    key = f"deploy-records/{channel}/{function}.json"
     result = subprocess.run(
         [
             "aws",
@@ -169,20 +175,23 @@ def read_deploy_record(
     function: str,
     s3_client: Any = None,
     bucket: str = _DEPLOY_RECORD_BUCKET,
+    channel: str = "ducklake",
 ) -> Optional[dict[str, Any]]:
-    """Read ``deploy-records/ducklake/<function>.json``. Returns None if the record is absent.
+    """Read ``deploy-records/<channel>/<function>.json``. Returns None if the record is absent.
 
-    ``s3_client`` is injected for testability (a boto3-like client exposing
-    ``get_object(Bucket, Key) -> {"Body": <stream>}``), mirroring
-    ``scripts.convergence_health.read_convergence_record``. When None, a boto3 client is created
-    lazily (never at import time, per the repo's import-safety rule).
+    ``channel`` defaults to ``"ducklake"`` (the T2.38 original caller); the prod class (T2.43)
+    passes ``channel="prod"`` so ``scripts.convergence_health.detect_prod_code_drift`` can read
+    its deploy records through the same generalised accessor. ``s3_client`` is injected for
+    testability (a boto3-like client exposing ``get_object(Bucket, Key) -> {"Body": <stream>}``),
+    mirroring ``scripts.convergence_health.read_convergence_record``. When None, a boto3 client is
+    created lazily (never at import time, per the repo's import-safety rule).
     """
     if s3_client is None:
         import boto3  # noqa: PLC0415
 
         s3_client = boto3.client("s3")
 
-    key = f"deploy-records/ducklake/{function}.json"
+    key = f"deploy-records/{channel}/{function}.json"
     try:
         response = s3_client.get_object(Bucket=bucket, Key=key)
         body = response["Body"].read()

@@ -29,6 +29,11 @@ name: convergence-health
 # ducklake_code_drift rec when stale (alarm-not-gate, mirrors the tf_convergence_stale pattern).
 # The checkout below uses fetch-depth: 0 so the sensor can resolve real main git history -- a
 # default shallow checkout would make it silently report no-drift (Decision 55 false-negative).
+#
+# Also runs the T2.43 / Decision 125/126 prod-class code-drift sensor the same way, comparing
+# deploy-records/prod/<function>.json against the latest main commit touching prod source
+# (scripts.convergence_health.PROD_SOURCE_PATHSPECS) and filing/updating/closing a single deduped
+# prod_code_drift rec when stale.
 
 on:
   schedule:
@@ -95,3 +100,8 @@ jobs:
         run: |
           set -euo pipefail
           .venv/bin/python -m scripts.convergence_health --ducklake-drift
+
+      - name: Detect prod-class code drift (T2.43 / Decision 125/126)
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m scripts.convergence_health --prod-drift

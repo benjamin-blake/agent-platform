@@ -6966,6 +6966,71 @@ tier_items:
     strategic: false
     status: not_started
 
+  - id: T2.43
+    tier: T2
+    name: "Provision + govern the decoupled_build_pipeline Lambda class (Decision 125/126)"
+    intent: |
+      Close the deploy-infrastructure gap that blocked every Lambda-touching change to the
+      data-pipeline and ops-compaction artifacts (rec-2157/rec-2164; including the merged P4c
+      refactor): provision the three prod-class functions (scheduled-agent-dispatcher,
+      findings-processor, ops-compaction) in terraform/personal, decoupled from day one, and add
+      a governed code-deploy channel mirroring T2.38's DuckLake-class precedent. Extends the
+      Decision 125/126 deployment redesign that T2.38 realized for the four DuckLake functions
+      only. Provisioning does NOT re-enable the scheduled agents (Decision 61/37/116).
+    depends_on: []
+    files_in_scope:
+      - terraform/personal/prod_lambdas.tf
+      - terraform/personal/oidc.tf
+      - .github/workflows/deploy-prod-lambdas.yml
+      - scripts/build_lambda_deploy.py  # generalised _write_ducklake_deploy_record / read_deploy_record with a channel param
+      - scripts/convergence_health.py  # detect_prod_code_drift
+      - docs/contracts/build-lambda.yaml
+      - docs/contracts/deploy-paths.yaml
+    exit_criteria:
+      - id: c1
+        text: >-
+          terraform/personal/prod_lambdas.tf provisions all three functions
+          (scheduled-agent-dispatcher, findings-processor, ops-compaction), each decoupled
+          (ignore_changes=[source_code_hash]) from its first apply, with a per-function execution
+          role and its trigger
+        status: open
+      - id: c2
+        text: >-
+          A scoped UpdateFunctionCode-only OIDC role (agent-platform-github-ci-prod-deploy) exists
+          for the three prod functions, distinct from the terraform-apply CI roles and from the
+          T2.38 ducklake-deploy role
+        status: open
+      - id: c3
+        text: >-
+          build_lambda --deploy runs through a governed CD path
+          (.github/workflows/deploy-prod-lambdas.yml), not only as a local break-glass invocation;
+          a per-function smoke invocation runs as part of that workflow before the deploy is
+          considered successful
+        status: open
+      - id: c4
+        text: >-
+          A deployment record (function name -> deployed CodeSha256 -> source git SHA) is written
+          on every governed deploy (deploy-records/prod/<function>.json) and is readable by
+          convergence-health/drift tooling (detect_prod_code_drift)
+        status: open
+      - id: c5
+        text: >-
+          docs/contracts/build-lambda.yaml deploy_channels.prod_functions / .ops_compaction carry
+          governed_channel + break_glass_only; environment-taxonomy.md section 5 covers the prod
+          class's conformance status; validate_deploy_channel_conformance.py validates the prod
+          class (same registration, no registry churn)
+        status: open
+      - id: c6
+        text: >-
+          [operator-gated] the three functions exist live (aws lambda get-function succeeds), the
+          governed workflow's smoke gate is green end-to-end, and rec-2157 + rec-2164 are closed
+          via the ops portal
+        status: open
+    related_decisions: [125, 126, 61]
+    effort: L
+    strategic: false
+    status: not_started
+
   # ----- T3: Trust loop closure -----
   - id: T3.1
     tier: T3
