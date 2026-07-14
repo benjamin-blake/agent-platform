@@ -29,7 +29,10 @@ scope:
       execution IAM role + inline policy, a CloudWatch log group, layer attachment, env, and its
       trigger (EventBridge for the dispatcher; S3 notification for findings-processor/ops-compaction).
       Ported from the retired terraform/scheduled_agents.tf and adapted to the personal-module idiom
-      (var.account_id, default provider, agent-platform-data-lake bucket, personal secrets).
+      (var.account_id, default provider, agent-platform-data-lake bucket, personal secrets). The
+      dispatcher's EventBridge rule is provisioned with state = "DISABLED" and env
+      SCHEDULED_AGENTS_ENABLED = "false" (Decision 61/37/116) -- provisioning must NOT re-enable the
+      scheduled agents.
   - file: terraform/personal/oidc.tf
     action: Modify
     purpose: >-
@@ -59,16 +62,17 @@ scope:
       Write a per-function deploy record on the prod --deploy path (S3 deploy-records/prod/<fn>.json;
       Decision 84 S3 pattern, not an ops-table write), None-safe on GITHUB_SHA for the local
       break-glass path -- generalising the existing _write_ducklake_deploy_record rather than
-      duplicating it.
+      duplicating it. Also generalise read_deploy_record (which lives HERE, currently hardcoding the
+      deploy-records/ducklake/<fn>.json key) to read the prod key, so the prod drift sensor can read it.
   - file: scripts/convergence_health.py
     action: Modify
     purpose: >-
       Add detect_prod_code_drift (alarm-only; Decision 55 -- never auto-remediate) mirroring
       detect_ducklake_code_drift, with a PROD_SOURCE_PATHSPECS set derived from the deploy workflow's
       paths filter (single source to avoid the rec-2686 divergence class); add a main_prod_drift()
-      entry + a --prod-drift argv flag (mirroring --ducklake-drift) so the sensor has a caller; and
-      generalise read_deploy_record so it can read the deploy-records/prod/<fn>.json key (it currently
-      hardcodes the ducklake key).
+      entry + a --prod-drift argv flag (mirroring --ducklake-drift) so the sensor has a caller; it
+      consumes the generalised read_deploy_record (which lives in build_lambda_deploy.py -- generalised
+      there, not here).
   - file: .github/workflows/convergence-health.yml
     action: Modify
     purpose: >-
@@ -107,7 +111,9 @@ scope:
       Extend the EXISTING registered check (no new registration -- avoids check-registry churn) to
       also validate the prod_functions/ops_compaction deploy_channels completeness (governed_channel
       present) and the prod decoupling state, closing the ducklake-only blind spot that helped hide
-      this gap.
+      this gap. Widen the current ducklake*.tf glob to also scan prod_lambdas.tf and handle a second
+      taxonomy conformance paragraph so the prod class does not trip the existing single-paragraph
+      "ambiguous DECOUPLED/COUPLED" guard.
   - file: src/lambdas/data-pipeline/manifest.yaml
     action: Modify
     purpose: Reconcile notes to reflect the functions are now provisioned + governed-deployed.
@@ -238,8 +244,7 @@ verification_plan:
     action: Assert build-lambda.yaml now names a governed_channel + break_glass_only for both prod classes.
     command: >-
       bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/contracts/build-lambda.yaml'))['deploy_channels'];
-      for k in ('prod_functions','ops_compaction'):
-       assert d[k].get('governed_channel') and d[k].get('break_glass_only'), k;
+      assert all(d[k].get('governed_channel') and d[k].get('break_glass_only') for k in ('prod_functions','ops_compaction')), 'missing governed_channel/break_glass_only';
       print('OK channels documented')"
     expected: Prints "OK channels documented"; both entries carry governed_channel and break_glass_only.
     fix_if: A field is empty -- populate it with the new workflow path / admin-profile local invocation.
@@ -419,8 +424,9 @@ execution_steps:
     findings-processor, ops-compaction), each with lifecycle ignore_changes=[source_code_hash], a
     per-function execution role + least-privilege inline policy, a log group, layer attachment, env,
     and its trigger (EventBridge for the dispatcher; S3 notification for findings-processor /
-    ops-compaction). Adapt from terraform/scheduled_agents.tf; all ARNs via var.account_id /
-    data.aws_caller_identity -- no literals (Decision 101).
+    ops-compaction). Keep the EventBridge rule state=DISABLED and SCHEDULED_AGENTS_ENABLED=false (do
+    NOT re-enable the schedule). Adapt from terraform/scheduled_agents.tf; all ARNs via var.account_id
+    / data.aws_caller_identity -- no literals (Decision 101).
   - >-
     Modify terraform/personal/oidc.tf: add the agent-platform-github-ci-prod-deploy OIDC role
     (UpdateFunctionCode-only on the three prod ARNs; S3 head-bucket + lambda-packages RW + deploy-record
