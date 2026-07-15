@@ -20,7 +20,10 @@ scope:
       Add a single scan helper (e.g. iter_gated_py_files() -> Iterator[Path]) that walks from repo
       root over **/*.py, skips __init__.py, and excludes any path whose parts intersect the exemption
       set. Extend _SLOC_EXCLUDE_DIRS with ".git" and "personal_scripts". This one helper is the sole
-      scan definition consumed by all three gate functions, so the scan roots can never drift apart.
+      scan definition consumed by the three SLOC/CC gate functions (validate_sloc_limits,
+      _update_sloc_budgets, validate_cc_limits), so their scan roots can never drift apart. The
+      separate advisory validate_complexity (complexity.py -- package-relative outlier statistics that
+      never fail the build) is intentionally left on its own scan and is out of scope.
   - file: scripts/checks/sloc/sloc_limits.py
     action: Modify
     purpose: >-
@@ -69,7 +72,7 @@ bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
   - "validate_sloc_limits and validate_cc_limits scan every repo directory via a single shared iter_gated_py_files() helper, excluding only the vendored/generated set (pip, lambda-packages, docker, terraform, .venv, node_modules, .git, personal_scripts) and __init__.py."
-  - "validate_sloc_limits, _update_sloc_budgets, and validate_cc_limits all consume that one shared scan helper -- there is no second hardcoded scan-root list that could drift (a divergence would make a future --update-sloc-budgets silently drop the tests/ entries)."
+  - "The three SLOC/CC gate functions (validate_sloc_limits, _update_sloc_budgets, validate_cc_limits) all consume that one shared scan helper -- there is no second hardcoded scan-root list among them that could drift (a divergence would make a future --update-sloc-budgets silently drop the tests/ entries). This invariant is scoped to those three gate functions; the separate advisory validate_complexity (complexity.py) keeps its own scan and is intentionally NOT migrated."
   - "config/sloc_budgets.yaml registers every tests/ file currently over 500 SLOC (24 at planning time), each entry line carrying a `# raise-approved: dec-130 ...` marker; no oversized tests/ file is left unregistered."
   - "validate_sloc_budget_raises passes: every new tests/ registration carries a raise-approved marker citing dec-130, and the `## Decision 130:` header exists in docs/DECISIONS.md."
   - "validate_cc_limits produces zero violations across tests/ (no immediate CI reddening from the CC extension)."
@@ -122,7 +125,8 @@ constraints:
 context:
   - "Exempt-by-omission finding: validate_sloc_limits (scripts/checks/sloc/sloc_limits.py:94) and validate_cc_limits (cc_limits.py:17) scan only (scripts, src). tests/ is NOT on the deliberate exemption list (_SLOC_EXCLUDE_DIRS in _shared.py:11 = pip/lambda-packages/docker/terraform/.venv/node_modules -- all vendored); it was simply never handed to the scanner. Decision 43 declared the limits apply 'across all repository code'. 24 tests/ files exceed 500 SLOC; the two largest files in the entire repo are tests -- tests/test_validate.py (7196) and tests/test_execute_recommendation.py (5812)."
   - "Decision-scout verdict + CITE list (verbatim): FLAGS_FOUND (one NOTE on Decision 128 decompose-by-default, no BLOCK). CITE: Decision 43, Decision 102, Decision 128, Decision 104, Decision 84, Decision 86. RELATED: Decision 80, Decision 124, Decision 48, Decision 60, Decision 55/72, Decision 44/117, Decision 67, Decisions 73/83/101."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round (one non-blocking precision nit applied: acceptance criterion #2 scoped to the three SLOC/CC gate functions, excluding the advisory complexity.py::validate_complexity)."
+  - "Out of scope by design: scripts/checks/sloc/complexity.py::validate_complexity is a FOURTH scan loop (its own scripts+src walk, own exclude set) but is advisory-only (package-relative outlier statistics, never appends to failed) -- not a hard-limit gate. Extending it to whole-repo/tests is semantically inapt (package-relative stats over tests/) and unnecessary for the model-comprehension goal, so it is deliberately left unchanged."
   - "NOTE resolution (bounded exception, from the scout): Decision 128 point 4 explicitly provides the raise-approved marker path for pre-existing debt, so grandfathering is sanctioned, not a violation. Three conditions are baked in: (1) Decision 130 frames the tests/ registrations as a ONE-TIME grandfather of pre-existing debt, not a precedent for future test growth; (2) rec-2709 (the decomposition forward-fix) is filed this session, not silently deferred; (3) Decision 130's header lands in-PR so the markers validate."
   - "rec-2709 (filed this session; source=planning, effort L, priority Low) is the decomposition-program consumer: mirror-structure test packages (tests/<pkg>/test_<module>.py), invert the Decision 104 colocation rule in map_source_to_test to a mirror-rule + retiring grandfather-table, add a no-cross-test-import AST guard and a per-package conftest hierarchy, decompose in waves ordered by size (test_validate.py first). This plan does NOT resolve rec-2709 (bundled_recommendations empty) -- it creates the grandfather registry rec-2709 consumes. Directly mirrors the Decision 102 -> rec-2414 pattern."
   - "HARD BLOCK deferral (open ci-rca rec-2707): rec-2707 is a missing-mock failure in tests/test_ops_data_portal.py -- a different failure category and file scope from this SLOC-governance work, and it is actively owned by another agent via docs/plans/PLAN-ci-rca-test-mock.yaml (not on this branch). This plan satisfies none of the three Related-Work conditions (same-file / same-Decision / same-category) and claims none; the deferral is logged here per the Step 8 Related-Work check and the preflight ci_rca_unresolved_recs HARD BLOCK."
