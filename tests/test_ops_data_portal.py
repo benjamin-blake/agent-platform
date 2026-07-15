@@ -2233,6 +2233,36 @@ class TestCiRcaFingerprintDedup:
 
     _FINGERPRINT = "a" * 64
 
+    @pytest.fixture(autouse=True)
+    def _guard_live_reader(self):
+        """Class-scoped backstop: any dedup-path test that forgets to mock
+        find_open_ci_rca_rec_by_fingerprint / find_recent_ci_rca_rec_by_fingerprint would
+        otherwise fall through to a live src.common.iceberg_reader.make_reader() call. On this
+        container that call SUCCEEDS (working assume-role creds) and silently masks the leak;
+        on the GitHub-hosted CI runner (no ~/.aws profile) it raises ProfileNotFound instead.
+        Fail the same way everywhere: turn any un-mocked call into a deterministic
+        AssertionError naming the missing mock (rec-2707)."""
+
+        def _unmocked_make_reader(*args, **kwargs):
+            raise AssertionError(
+                "src.common.iceberg_reader.make_reader() called without a mock -- add "
+                "patch.object(p, 'find_open_ci_rca_rec_by_fingerprint', ...) and/or "
+                "patch.object(p, 'find_recent_ci_rca_rec_by_fingerprint', ...) to this test's "
+                "with-block (rec-2707)."
+            )
+
+        with patch("src.common.iceberg_reader.make_reader", side_effect=_unmocked_make_reader):
+            yield
+
+    def test_guard_blocks_unmocked_reader(self):
+        """Self-verifying meta-test: proves _guard_live_reader is active and targets the right
+        dotted path -- an un-mocked src.common.iceberg_reader.make_reader() call must raise
+        AssertionError, not silently succeed."""
+        import src.common.iceberg_reader as iceberg_reader
+
+        with pytest.raises(AssertionError):
+            iceberg_reader.make_reader()
+
     def _make_bundle(self, tmp_path, **overrides):
         import hashlib as _hashlib
         import json as _json
@@ -2406,6 +2436,7 @@ class TestCiRcaFingerprintDedup:
         with (
             patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint", return_value=None) as mock_find,
+            patch.object(p, "find_recent_ci_rca_rec_by_fingerprint", return_value=None),
             patch.object(p, "_ducklake_write", return_value={"key": "rec-800"}) as mock_write,
             patch.object(p, "RECS_JSONL", tmp_path / "recs.jsonl"),
             patch("scripts.sync.ops.upsert_cache_row"),
