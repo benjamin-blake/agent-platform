@@ -1,0 +1,176 @@
+schema_version: 1
+slug: "ci-rca-test-mock"
+intent: >-
+  Resolve ci_rca rec-2707 by closing an environment-dependent test-isolation gap in the
+  CI-RCA dedup suite, keeping the two-tier presubmit gate a trustworthy signal so autonomous
+  merges stay safe.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-test-mock.yaml
+phase: >-
+  Platform reliability / CI-RCA forward-fix -- resolves ci_rca rec-2707 (no tier_item; ci_rca
+  soft-warn category). Keeps the two-tier presubmit gate a trustworthy autonomous-merge signal.
+scope:
+  - file: tests/test_ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Add the missing find_recent_ci_rca_rec_by_fingerprint mock to
+      test_file_rec_backstop_inserts_on_fingerprint_miss (corrective); add a class-scoped
+      autouse make_reader guard to TestCiRcaFingerprintDedup that turns any future dedup-path
+      reader leak into a deterministic AssertionError (preventive); add a self-verifying
+      meta-test proving the guard is wired.
+bundled_recommendations:
+  - rec-2707
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The full TestCiRcaFingerprintDedup class passes with the autouse make_reader guard active:
+    bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaFingerprintDedup -x -q
+    exits 0 (a leak would raise AssertionError, not pass).
+  - >-
+    test_file_rec_backstop_inserts_on_fingerprint_miss no longer constructs a live DuckLake
+    reader -- its with-block patches find_recent_ci_rca_rec_by_fingerprint at the
+    scripts.ops_data_portal facade namespace (Decision 124), matching the sibling rec-2644 tests.
+  - >-
+    The preventive guard is proven active (not a silent no-op): test_guard_blocks_unmocked_reader
+    asserts an un-mocked src.common.iceberg_reader.make_reader() call raises AssertionError.
+  - >-
+    No sibling or cross-class regression: bin/venv-python -m pytest tests/test_ops_data_portal.py
+    passes in full.
+  - >-
+    rec-2707 transitions to closed on merge via the Resolves: rec-2707 squash-commit trailer
+    (rec-autoclose.yml).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Structural: confirm the preventive guard fixture and its self-verifying meta-test both
+      landed in the test file.
+    command: grep -q _guard_live_reader tests/test_ops_data_portal.py && grep -q test_guard_blocks_unmocked_reader tests/test_ops_data_portal.py
+    expected: exit 0 -- both the autouse guard fixture and the meta-test are present.
+    fix_if: exit 1 -- the guard fixture or meta-test was not added; add it to TestCiRcaFingerprintDedup.
+    hermetic: false
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the guard is wired to the right namespace and actually fires on an un-mocked reader
+      call (guards against a no-op patch on the wrong target).
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaFingerprintDedup::test_guard_blocks_unmocked_reader -x -q
+    expected: 1 passed -- calling src.common.iceberg_reader.make_reader() un-mocked raises AssertionError.
+    fix_if: >-
+      Fails/errors -- the guard patches the wrong dotted path or the fixture is not autouse; the
+      deferred `from src.common.iceberg_reader import make_reader` in ci_rca_runtime resolves the
+      attribute at call time, so the patch must target src.common.iceberg_reader.make_reader.
+    hermetic: false
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Behavioral discriminator: run the whole dedup class under the active guard. This is the
+      real proof on THIS container -- a plain pytest run is green-both-ways here because the
+      assume-role creds let the live reader succeed (~15s round-trip); the guard converts any
+      leak into a fast AssertionError instead.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py::TestCiRcaFingerprintDedup -x -q
+    expected: >-
+      all tests pass quickly (no ~15s live-reader round-trips) -- the insert-on-miss test no
+      longer leaks and the guard does not break the ~20 sibling tests that self-patch make_reader.
+    fix_if: >-
+      test_file_rec_backstop_inserts_on_fingerprint_miss fails with AssertionError (corrective
+      mock missing) OR a sibling fails (guard fired on a test that should self-patch make_reader --
+      that test needs its own explicit reader mock).
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: Cross-class regression check -- the class-scoped autouse guard must not affect other classes in the file.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal.py -q
+    expected: entire test_ops_data_portal.py file passes.
+    fix_if: a test outside TestCiRcaFingerprintDedup fails -- an autouse fixture leaked beyond its class scope; keep the fixture a method on TestCiRcaFingerprintDedup only.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run the authoritative fast presubmit gate (diff-aware --pre selects the changed test file
+      plus hygiene checks incl. test-count-coupling).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: PASS -- no hygiene/coupling regression introduced by the new fixture and meta-test.
+    fix_if: a --pre check reddens (e.g. test-count-coupling on a hardcoded len assert) -- fix per the failing check's guidance; do not waive.
+    hermetic: false
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Closure verification -- after merge to main, sync the read cache and confirm rec-2707 is
+      closed by the Resolves: trailer.
+    command: "bin/venv-python -m scripts.sync.ops pull && grep '\"id\": \"rec-2707\"' logs/.recommendations-log.jsonl | grep -q '\"status\": \"closed\"'"
+    expected: exit 0 -- rec-2707 status is closed in the refreshed cache.
+    fix_if: >-
+      rec-2707 still open -- the Resolves: rec-2707 trailer was omitted from the squash-merge body;
+      close manually via bin/venv-python -m scripts.ops_data_portal --update-rec rec-2707 --status
+      closed --resolution "...".
+    hermetic: false
+constraints:
+  - No rescue agents or workaround loops (Decision 55) -- this is the reviewed forward-fix of a source=ci_rca rec (Decision 72).
+  - >-
+    Test-only change. Do NOT modify scripts/ops_data_portal.py or scripts/ops_portal/ci_rca_runtime.py --
+    the production dedup logic is correct; the defect is purely test isolation.
+  - >-
+    Patch dedup helpers (find_open / find_recent_ci_rca_rec_by_fingerprint) at the
+    scripts.ops_data_portal FACADE namespace (Decision 124), matching the sibling rec-2644 tests
+    at lines ~2748-2817 -- not at scripts.ops_portal.ci_rca_runtime.
+  - >-
+    The make_reader guard MUST be class-scoped (autouse fixture method on TestCiRcaFingerprintDedup
+    only). Do not make it session/global -- many tests elsewhere legitimately construct or patch
+    make_reader and a global guard would break them.
+  - Only modify tests/test_ops_data_portal.py (single-file scope).
+context:
+  - >-
+    Root cause: file-drift. file_rec's dedup path (scripts/ops_data_portal.py:304) gained the
+    find_recent_ci_rca_rec_by_fingerprint call site (rec-2644 close-then-recur) AFTER
+    test_file_rec_backstop_inserts_on_fingerprint_miss was written; the sibling rec-2644 tests
+    already mock it, this older test was never updated.
+  - >-
+    Environment-dependent green (escape_mode=tier_misplaced): dev / CC-web containers have working
+    agent_platform assume-role creds, so the un-mocked live reader SUCCEEDS here (test passes in
+    ~15s); the GitHub-hosted CI runner authenticates via OIDC with no ~/.aws profile, so
+    boto3.Session(profile_name='agent_platform') raises ProfileNotFound. The autouse guard makes
+    the leak deterministic on any machine, which is also what makes the corrective fix verifiable
+    locally (a plain pytest run is otherwise green-both-ways on this container).
+  - >-
+    Back-validation (candidate, NOT confirmed regression per Decision 55): rec-2707 recurs on
+    tests/test_ops_data_portal.py where prior rec-2643 proposed a validate.py check flagging STALE
+    (non-resolving) unittest.mock.patch targets. That check would NOT have caught this -- the
+    patched target here resolves fine; the defect is a MISSING mock for a resolvable helper, a
+    different mechanism. File-only match; treat as coincidental, not a preventive-action failure.
+  - >-
+    tests/ is exempt from SLOC governance (Decision 128/102 scope = scripts/ + src/); the file is
+    2779 SLOC unregistered with green CI, so the additions trigger no decompose-or-raise obligation.
+  - >-
+    Closure obligation (rec-resolving plan): rec-2707 declared in bundled_recommendations; VP step 6
+    verifies closure post-merge. The Resolves: rec-2707 trailer must appear in the squash-merge body.
+  - "Decision-scout verdict: NO_FLAGS (triaged 89 of 89). CITE: dec-55, dec-72, dec-48, dec-124. RELATED: dec-73, dec-84."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-rca-test-mock-x5xvh0)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via decision-scout gate (NO_FLAGS, 89 of 89)
+  - tests/test_ops_data_portal.py located and readable; TestCiRcaFingerprintDedup structure understood
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Corrective: in test_file_rec_backstop_inserts_on_fingerprint_miss (tests/test_ops_data_portal.py,
+    currently ~lines 2406-2412), add
+    `patch.object(p, "find_recent_ci_rca_rec_by_fingerprint", return_value=None)` to the with-block
+    (facade namespace, mirroring the sibling test at ~line 2779).
+  - >-
+    Preventive: add a class-scoped `@pytest.fixture(autouse=True)` method (e.g. `_guard_live_reader`)
+    to TestCiRcaFingerprintDedup that patches src.common.iceberg_reader.make_reader with a side_effect
+    raising AssertionError naming the missing dedup-path mock, then `yield` inside the patch context.
+  - >-
+    Preventive self-check: add `test_guard_blocks_unmocked_reader` to the class -- import
+    src.common.iceberg_reader and assert `pytest.raises(AssertionError)` when calling its make_reader()
+    un-mocked, proving the guard is active and correctly targeted.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
+  - "Commit with `feat(ci-rca-test-mock): ...`; include `Resolves: rec-2707` in the squash-merge body."
+  - "Report: what was implemented, verification results, and rec-2707 closure status."
+work_areas: []
+rollback: >-
+  Revert the single commit to tests/test_ops_data_portal.py. No production/source or infrastructure
+  state changes, so the revert fully restores prior test-suite behaviour.
