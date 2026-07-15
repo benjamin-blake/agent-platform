@@ -466,3 +466,13 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
 
     if not any(f.startswith(key) for f in failed):
         print(f"  PASS: all {checked} grant-requiring resources are refresh-read-covered in apply/plan/drift.")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # Standalone entry point so `python -m scripts.checks.iam_tf.validate_ci_refresh_read_coverage`
+    # actually exercises the check (exit 1 on any finding), mirroring validate_ghas_probe's runner.
+    _failed: list[str] = []
+    validate_ci_refresh_read_coverage(_failed)
+    for _f in _failed:
+        print(f"  - {_f}")
+    raise SystemExit(1 if _failed else 0)
