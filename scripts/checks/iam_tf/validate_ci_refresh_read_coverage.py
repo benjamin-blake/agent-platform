@@ -250,18 +250,39 @@ def _resolve_value(raw: str | None, locals_map: dict, attr_index: dict, _depth: 
 
 
 def _literal_or_prefix_match(name: str, raw: str, literal_only: bool = False) -> bool:
-    """Does `name` match a literal ARN entry, or (unless literal_only) an agent-platform-*-style prefix?"""
+    """Does `name` match an ARN entry in `raw` -- as a boundary-anchored `/`- or `:`-delimited
+    segment, or (unless literal_only) via an `agent-platform-*`-style prefix or a Secrets-Manager
+    `<name>-*` suffix?
+
+    Boundary-anchored throughout (H-finding, code-review 2026-07-15): a raw `name in entry`
+    substring test let a short enumerated role name (agent-platform-github-ci-pr) spuriously match
+    a longer enumerated ARN (.../agent-platform-github-ci-prod-deploy), silently defeating the
+    enumerated-IAM fail-loud invariant this verifier exists to guarantee (Decision 35/98/55). The
+    exact match now requires `name` to be a whole segment; the prefix/suffix matches require a
+    real separator at the name boundary.
+    """
     name_clean = name.strip("/")
     for entry in _vir._QUOTED_RE.findall(raw):
         if entry == "*":
             continue  # the bare-wildcard case is handled by the caller's wildcard branch
-        if name in entry or (name_clean and name_clean in entry):
+        # Exact: `name` (or its slash-stripped form) is a whole `:`/`/`-delimited segment of the ARN.
+        segments = re.split(r"[:/]", entry)
+        if name in segments or (name_clean and name_clean in segments):
             return True
-        if not literal_only and "*" in entry:
-            prefix = entry.split("*")[0].rstrip("/:")
-            tail = re.split(r"[:/]", prefix)[-1] if prefix else ""
-            if tail and (name.lstrip("/").startswith(tail) or name.startswith(tail)):
-                return True
+        if literal_only or "*" not in entry:
+            continue
+        tail = re.split(r"[:/]", entry.split("*", 1)[0].rstrip("/:"))[-1]
+        if not tail:
+            continue
+        # Broadening: the resource name falls under a static account-scoped prefix
+        # (function:agent-platform-* covers agent-platform-ducklake-writer; parameter/agent-platform/*
+        # covers /agent-platform/ducklake/reader_url).
+        if name.lstrip("/").startswith(tail):
+            return True
+        # Secrets-Manager suffix: the enumerated ARN is exactly `<name><sep>*` (the wildcard stands
+        # in for SM's random 6-char suffix), so `tail` is precisely the full name plus one separator.
+        if len(tail) == len(name) + 1 and tail.startswith(name) and tail[len(name)] in "-/:":
+            return True
     return False
 
 

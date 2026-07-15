@@ -8286,6 +8286,32 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         raw = '"arn:aws:lambda:eu-west-2:1234567890:function:other-prefix-*"'
         assert _literal_or_prefix_match("agent-platform-new-fn", raw) is False
 
+    def test_literal_or_prefix_match_enumerated_iam_substring_collision_rejected(self) -> None:
+        """H-finding (code-review 2026-07-15): a short enumerated role name that is a substring
+        PREFIX of a longer, unrelated enumerated ARN must NOT be reported as covered -- the match
+        is `/`/`:`-segment boundary-anchored, not raw substring containment (Decision 35/98/55)."""
+        raw = '"arn:aws:iam::1234567890:role/agent-platform-github-ci-prod-deploy"'
+        # 'agent-platform-github-ci-pr' is a literal substring of '...-prod-deploy' but NOT a
+        # whole ARN segment -- must be rejected under the enumerated-IAM (literal_only) path.
+        assert _literal_or_prefix_match("agent-platform-github-ci-pr", raw, literal_only=True) is False
+        # ...while the correctly-enumerated exact ARN still matches.
+        exact = '"arn:aws:iam::1234567890:role/agent-platform-github-ci-pr"'
+        assert _literal_or_prefix_match("agent-platform-github-ci-pr", exact, literal_only=True) is True
+
+    def test_literal_or_prefix_match_secrets_manager_suffix(self) -> None:
+        """A Secrets-Manager `<name>-*` ARN (the `*` stands in for SM's random 6-char suffix)
+        covers the resource named `<name>` -- the suffix direction, boundary-anchored so a
+        shorter unrelated name does not match a longer secret stub."""
+        raw = '"arn:aws:secretsmanager:eu-west-2:1234567890:secret:agent-platform-github-pat-*"'
+        assert _literal_or_prefix_match("agent-platform-github-pat", raw) is True
+        # A shorter unrelated name must NOT match the longer secret stub (strict `<name><sep>` shape).
+        assert _literal_or_prefix_match("agent-platform-github", raw) is False
+
+    def test_literal_or_prefix_match_empty_stub_wildcard_skipped(self) -> None:
+        """A wildcard entry whose pre-`*` part collapses to nothing after stripping separators
+        (e.g. a bare `/*`) yields no stub -- it is skipped, never a spurious prefix match."""
+        assert _literal_or_prefix_match("agent-platform-anything", '"/*"') is False
+
     def test_action_matches_wildcard_pattern_matches_literal_action(self) -> None:
         assert _action_matches(("secretsmanager:Describe*",), ["secretsmanager:DescribeSecret"]) is True
 
@@ -8510,6 +8536,77 @@ resource "aws_iam_role" "orphan_role" {
             assert "aws_iam_role" in f
             assert "orphan_role" in f
             assert "is not refresh-read-covered" in f
+
+    def test_iam_role_substring_collision_fails_loud_end_to_end(self, tmp_path: Path) -> None:
+        """H-finding regression guard (code-review 2026-07-15): an aws_iam_role whose name is a
+        literal substring-PREFIX of a longer enumerated ARN -- but is NOT itself enumerated -- must
+        FAIL loud. Before the boundary-anchoring fix it silently PASSED, defeating the enumerated-IAM
+        invariant this verifier exists to guarantee (Decision 35/98/55)."""
+        # The three role policies enumerate `agent-platform-known-fn-role` (a longer name).
+        iam_grant = "arn:aws:iam::1234567890:role/agent-platform-known-fn-role"  # pragma: allowlist secret
+        bootstrap_body = f"""
+resource "aws_iam_role_policy" "github_ci_apply" {{
+  name = "test-apply"
+  role = "test-apply-role"
+
+  policy = jsonencode({{
+    Version = "2012-10-17"
+    Statement = [
+      {{
+        Sid    = "IAMRolesRead"
+        Effect = "Allow"
+        Action = ["iam:GetRole"]
+        Resource = ["{iam_grant}"]
+      }}
+    ]
+  }})
+}}
+"""
+        oidc_body = f"""
+data "aws_iam_policy_document" "ci_full_refresh_read" {{
+  statement {{
+    sid       = "IAMCIRolesRead"
+    effect    = "Allow"
+    actions   = ["iam:GetRole"]
+    resources = ["{iam_grant}"]
+  }}
+}}
+
+resource "aws_iam_role_policy" "github_ci_plan" {{
+  name   = "test-plan"
+  role   = "test-plan-role"
+  policy = data.aws_iam_policy_document.github_ci_plan.json
+}}
+
+data "aws_iam_policy_document" "github_ci_plan" {{
+  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
+}}
+
+resource "aws_iam_role_policy" "github_ci_drift" {{
+  name   = "test-drift"
+  role   = "test-drift-role"
+  policy = data.aws_iam_policy_document.github_ci_drift.json
+}}
+
+data "aws_iam_policy_document" "github_ci_drift" {{
+  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
+}}
+"""
+        # The resource role `agent-platform-known-fn` is a substring prefix of the enumerated
+        # `agent-platform-known-fn-role`, but is NOT itself enumerated -- must fail in all 3 roles.
+        resources_body = """
+resource "aws_iam_role" "collide_role" {
+  name = "agent-platform-known-fn"
+}
+"""
+        _write_ci_refresh_read_fixture(
+            tmp_path, bootstrap_body=bootstrap_body, oidc_body=oidc_body, resources_body=resources_body
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_ci_refresh_read_coverage(failed)
+        collide_findings = [f for f in failed if "collide_role" in f]
+        assert len(collide_findings) == 3, failed  # apply, plan, drift -- not silently covered
 
     def test_oidc_provider_url_resolves_to_host(self, tmp_path: Path) -> None:
         """aws_iam_openid_connect_provider's `url` attribute is resolved and the scheme stripped
