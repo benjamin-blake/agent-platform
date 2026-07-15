@@ -1,0 +1,205 @@
+schema_version: 1
+slug: "sloc-whole-repo-coverage"
+intent: >-
+  Close a coverage gap in structural-size governance: extend validate_sloc_limits and
+  validate_cc_limits from the scripts/+src/-only scan to a whole-repo walk with a vendored-dir
+  exemption list, so no hand-authored directory is silently ungated. Grandfather the 24 pre-existing
+  oversized tests/ files via one-time Decision-130 raise-approved budget markers, capping growth
+  while a follow-on rec (rec-2709) decomposes them.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-whole-repo-coverage.yaml
+phase: >-
+  Platform / Directed Growth Governance (Decisions 43/102/128). Additive governance hardening on the
+  SLOC/CC gate; no ROADMAP tier_item closure. Deferred test decomposition tracked as rec-2709 (filed
+  this planning session), not a roadmap edit.
+scope:
+  - file: scripts/checks/sloc/_shared.py
+    action: Modify
+    purpose: >-
+      Add a single scan helper (e.g. iter_gated_py_files() -> Iterator[Path]) that walks from repo
+      root over **/*.py, skips __init__.py, and excludes any path whose parts intersect the exemption
+      set. Extend _SLOC_EXCLUDE_DIRS with ".git" and "personal_scripts". This one helper is the sole
+      scan definition consumed by the three SLOC/CC gate functions (validate_sloc_limits,
+      _update_sloc_budgets, validate_cc_limits), so their scan roots can never drift apart. The
+      separate advisory validate_complexity (complexity.py -- package-relative outlier statistics that
+      never fail the build) is intentionally left on its own scan and is out of scope.
+  - file: scripts/checks/sloc/sloc_limits.py
+    action: Modify
+    purpose: >-
+      Rewrite validate_sloc_limits AND _update_sloc_budgets to consume iter_gated_py_files() instead
+      of the hardcoded (scripts, src) loop. Ratchet/advisory/error semantics unchanged. Update the
+      module docstring and the _update_sloc_budgets header-comment lines from "scripts/ or src/" to
+      whole-repo wording. _update_sloc_budgets is updated for future-regen correctness but is NOT
+      invoked in this plan (see constraints).
+  - file: scripts/checks/sloc/cc_limits.py
+    action: Modify
+    purpose: >-
+      Rewrite validate_cc_limits to consume iter_gated_py_files(); CC now covers tests/. Verified
+      zero-cost (Fable advisory: 0 violations across 170 test files / 6369 functions, max 12 branches
+      vs the 20 limit). No other behaviour change; the shared waiver comment still waives CC.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Keep the existing 2 source entries. HAND-AUTHOR one entry per oversized tests/ file (24 at
+      planning time), each line carrying an inline `# raise-approved: dec-130 one-time grandfather of
+      pre-existing tests/ SLOC debt (coverage-gap fix)` marker citing Decision 130. Update the header
+      comment block to whole-repo scope. Do NOT generate via --update-sloc-budgets (it strips the
+      markers and cannot seed new oversized files post-Decision-128).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add a 2-3 line PYTEST_CURRENT_TEST reentrancy check alongside the existing _VALIDATE_DEPTH guard
+      in main(): if os.environ.get("PYTEST_CURRENT_TEST") is set, print a skip line and sys.exit(0).
+      Cheap defence against the pytest -> validate.py recursion the repo previously hit, hardening the
+      guard before the follow-on reorganises the test tree.
+  - file: tests/test_validate.py
+    action: Modify
+    purpose: >-
+      Add unit tests: (a) an oversized unregistered tests/ file fails validate_sloc_limits; (b) a
+      registered tests/ file at/under budget passes; (c) the exemption set is honoured (a file under an
+      excluded dir is not gated); (d) all three gate functions consume the same iter_gated_py_files;
+      (e) validate_cc_limits flags a >20-branch function inside a tests/ file. New tests live here per
+      the current Decision-104 colocation mapping; the file's post-edit SLOC is captured in its
+      hand-authored budget entry.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 130 recording the whole-repo coverage extension and the one-time tests/ grandfather.
+      Its `## Decision 130:` header MUST land in this same PR, or validate_sloc_budget_raises fails on
+      markers citing a non-existent header. After editing, sync via `ops_data_portal --backfill-decisions-md`.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "validate_sloc_limits and validate_cc_limits scan every repo directory via a single shared iter_gated_py_files() helper, excluding only the vendored/generated set (pip, lambda-packages, docker, terraform, .venv, node_modules, .git, personal_scripts) and __init__.py."
+  - "The three SLOC/CC gate functions (validate_sloc_limits, _update_sloc_budgets, validate_cc_limits) all consume that one shared scan helper -- there is no second hardcoded scan-root list among them that could drift (a divergence would make a future --update-sloc-budgets silently drop the tests/ entries). This invariant is scoped to those three gate functions; the separate advisory validate_complexity (complexity.py) keeps its own scan and is intentionally NOT migrated."
+  - "config/sloc_budgets.yaml registers every tests/ file currently over 500 SLOC (24 at planning time), each entry line carrying a `# raise-approved: dec-130 ...` marker; no oversized tests/ file is left unregistered."
+  - "validate_sloc_budget_raises passes: every new tests/ registration carries a raise-approved marker citing dec-130, and the `## Decision 130:` header exists in docs/DECISIONS.md."
+  - "validate_cc_limits produces zero violations across tests/ (no immediate CI reddening from the CC extension)."
+  - "scripts/validate.py exits early (skips) when PYTEST_CURRENT_TEST is set, in addition to the existing _VALIDATE_DEPTH >= 1 guard."
+  - "Decision 130 exists in docs/DECISIONS.md, frames the tests/ grandfather as a one-time exception (not a precedent for future test growth), references Decision 43, and is synced to ops_decisions via --backfill-decisions-md."
+  - "bin/venv-python -m scripts.validate --pre passes (SLOC + CC + raise-gate green) within the fast-tier budget."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: New whole-repo-scan unit tests pass.
+    command: bin/venv-python -m pytest tests/test_validate.py -q
+    expected: "Exit 0; the new cases (oversized-unregistered-tests-file fails, exemption honoured, shared-scan consistency, CC flags a branchy test function) all pass."
+    fix_if: "A test fails; read the assertion and fix the gate/helper within scope."
+  - step: 2
+    phase: pre-deploy
+    action: Every oversized tests/ file is registered with a dec-130 raise-approved marker.
+    command: grep -cE "^[[:space:]]*tests/test_[^:]+:[[:space:]]*[0-9]+[[:space:]]+#[[:space:]]*raise-approved:[[:space:]]*dec-130" config/sloc_budgets.yaml
+    expected: "Prints N, where N equals the number of tests/ files currently over 500 SLOC (24 at planning time). Every such file is registered AND markered."
+    fix_if: "Count is below the number of oversized tests/ files; a file is missing its entry or its marker -- add it. Recompute the oversized set with the gate's own SLOC definition (non-blank, non-# lines)."
+  - step: 3
+    phase: pre-deploy
+    action: Growth beyond budget on a registered tests/ file is rejected (proves the ratchet enforces on tests/; gate is full-tree so it trips regardless of git-diff state). Probe appends to a registered file then reverts.
+    command: 'printf ''\n\ndef _sloc_probe():\n    return True\n'' >> tests/test_lambda_manifest.py; bin/venv-python -m scripts.validate --pre; RC=$?; git checkout -- tests/test_lambda_manifest.py; test $RC -ne 0 && echo GROWTH_REJECTED'
+    expected: "Prints GROWTH_REJECTED -- validate --pre exits non-zero when a registered tests/ file grows past its budget. The probe is reverted by git checkout."
+    fix_if: "validate --pre still passes after the append; the gate is not enforcing current<=budget on tests/. Verify iter_gated_py_files yields tests/ paths and validate_sloc_limits reads the budget."
+  - step: 4
+    phase: pre-deploy
+    action: Decision 130 is present and references Decision 43.
+    command: grep -q "^## Decision 130" docs/DECISIONS.md && grep -q "Decision 43" docs/DECISIONS.md && echo DECISION_OK
+    expected: "Prints DECISION_OK."
+    fix_if: "Decision 130 heading missing or does not reference Decision 43; add/repair the entry (the markers in config/sloc_budgets.yaml depend on this header existing)."
+  - step: 5
+    phase: pre-deploy
+    action: Authoritative fast-tier presubmit passes on a clean tree -- SLOC gate, CC gate (now covering tests with zero violations), and the raise-gate (markers valid vs Decision 130) all green within budget.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exit 0 -- SLOC/CC/raise-gate green; fast-tier budget respected; no other regression."
+    fix_if: "A check fails; read the failing check and fix within scope. If the raise-gate fails, confirm the dec-130 header landed and the markers are on the entry lines (never run --update-sloc-budgets, which strips them)."
+constraints:
+  - "Do NOT run `validate --update-sloc-budgets` at any point in this plan. Post-Decision-128 it never seeds newly-oversized files, AND it regenerates config/sloc_budgets.yaml via yaml.safe_dump, which STRIPS the inline `# raise-approved` markers -- making validate_sloc_budget_raises see 24 unmarked new registrations vs origin/main and FAIL. The 24 entries are hand-authored. _update_sloc_budgets code is still updated to the shared whole-repo scan so a FUTURE (post-merge) regen preserves tests/ entries instead of dropping them, but it is not invoked here."
+  - "Do NOT decompose, split, or refactor any test file. Scope is the gate coverage + the shared scan + the grandfather registry + the guard + tests + Decision 130. The decomposition program is rec-2709 (filed this session)."
+  - "Do NOT change map_source_to_test or the Decision 104 test-colocation mapping. New gate tests go in tests/test_validate.py per the current mapping. The mapping inversion is deferred to rec-2709."
+  - "The whole-repo scan excludes ONLY vendored/generated dirs (pip, lambda-packages, docker, terraform, .venv, node_modules, .git, personal_scripts) plus __init__.py. No hand-authored directory (tests/, .claude/, bin/, config/, setup.py) is exempt -- that is the entire point of the change."
+  - "Decision 130's `## Decision 130:` header MUST land in the same PR as the markers (single-PR invariant, Decision 128)."
+  - "config/sloc_budgets.yaml stays checked-in config, outside the warehouse-SoT invariant (Decision 84); it is pure file-path -> int + marker-comment data."
+  - "PUBLIC repo (Decisions 73/83/101): no AWS account IDs/ARNs/ExternalIds/secrets/alpha/internal hostnames in any artefact. This plan introduces only structural-governance code and a Decision."
+  - "validate.py stays the single source of truth (no ci.yml edit); the SLOC/CC/raise gates already run in --pre and full tiers."
+  - "test_execute_recommendation.py and test_executor_*.py are executor-boundary files (Decision 44/117): registering them in config via the /plan->/implement route is permitted, but their DEFERRED decomposition (rec-2709) must also stay on /plan->/implement, never the frozen executor."
+  - "Large test DATA (parametrize tables) belongs as .json/.yaml/.sql under tests/fixtures/ (existing repo pattern), never a Python data module registered with a marker."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - "Exempt-by-omission finding: validate_sloc_limits (scripts/checks/sloc/sloc_limits.py:94) and validate_cc_limits (cc_limits.py:17) scan only (scripts, src). tests/ is NOT on the deliberate exemption list (_SLOC_EXCLUDE_DIRS in _shared.py:11 = pip/lambda-packages/docker/terraform/.venv/node_modules -- all vendored); it was simply never handed to the scanner. Decision 43 declared the limits apply 'across all repository code'. 24 tests/ files exceed 500 SLOC; the two largest files in the entire repo are tests -- tests/test_validate.py (7196) and tests/test_execute_recommendation.py (5812)."
+  - "Decision-scout verdict + CITE list (verbatim): FLAGS_FOUND (one NOTE on Decision 128 decompose-by-default, no BLOCK). CITE: Decision 43, Decision 102, Decision 128, Decision 104, Decision 84, Decision 86. RELATED: Decision 80, Decision 124, Decision 48, Decision 60, Decision 55/72, Decision 44/117, Decision 67, Decisions 73/83/101."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round (one non-blocking precision nit applied: acceptance criterion #2 scoped to the three SLOC/CC gate functions, excluding the advisory complexity.py::validate_complexity)."
+  - "Out of scope by design: scripts/checks/sloc/complexity.py::validate_complexity is a FOURTH scan loop (its own scripts+src walk, own exclude set) but is advisory-only (package-relative outlier statistics, never appends to failed) -- not a hard-limit gate. Extending it to whole-repo/tests is semantically inapt (package-relative stats over tests/) and unnecessary for the model-comprehension goal, so it is deliberately left unchanged."
+  - "NOTE resolution (bounded exception, from the scout): Decision 128 point 4 explicitly provides the raise-approved marker path for pre-existing debt, so grandfathering is sanctioned, not a violation. Three conditions are baked in: (1) Decision 130 frames the tests/ registrations as a ONE-TIME grandfather of pre-existing debt, not a precedent for future test growth; (2) rec-2709 (the decomposition forward-fix) is filed this session, not silently deferred; (3) Decision 130's header lands in-PR so the markers validate."
+  - "rec-2709 (filed this session; source=planning, effort L, priority Low) is the decomposition-program consumer: mirror-structure test packages (tests/<pkg>/test_<module>.py), invert the Decision 104 colocation rule in map_source_to_test to a mirror-rule + retiring grandfather-table, add a no-cross-test-import AST guard and a per-package conftest hierarchy, decompose in waves ordered by size (test_validate.py first). This plan does NOT resolve rec-2709 (bundled_recommendations empty) -- it creates the grandfather registry rec-2709 consumes. Directly mirrors the Decision 102 -> rec-2414 pattern."
+  - "HARD BLOCK deferral (open ci-rca rec-2707): rec-2707 is a missing-mock failure in tests/test_ops_data_portal.py -- a different failure category and file scope from this SLOC-governance work, and it is actively owned by another agent via docs/plans/PLAN-ci-rca-test-mock.yaml (not on this branch). This plan satisfies none of the three Related-Work conditions (same-file / same-Decision / same-category) and claims none; the deferral is logged here per the Step 8 Related-Work check and the preflight ci_rca_unresolved_recs HARD BLOCK."
+  - "Decision-128 marker + comment-stripping gotcha: yaml.safe_dump (used by _update_sloc_budgets) and yaml.safe_load (used by _load_sloc_budgets) both drop inline comments, so the raise-approved markers survive only as hand-authored text in this PR. validate_sloc_budget_raises parses the RAW yaml text and only gates NEW/increased entries -- so markers are needed only in the introducing PR (they may be stripped by a later regen once the entries exist on main). This is why --update-sloc-budgets must not run in this plan."
+  - "Fable subagent (claude-fable-5) advisory informed this plan: CC extension is empirically zero-cost (ran the production CC logic over all 170 test files: 0 violations, max 12 branches); the mirror-package decomposition structure and map_source_to_test inversion are routed to rec-2709; the PYTEST_CURRENT_TEST guard is included now as cheap recursion insurance ahead of the reorg."
+  - "V2 tier (Decision 48): pure Python source under test (tests/test_validate.py) plus non-handler YAML config. config/ and scripts/checks are not in any src/lambdas manifest -> no Lambda Deployment Assessment. No .tf in scope -> no Infrastructure Assessment. The broadened whole-repo walk (adds ~170 test files to the SLOC/CC scan) is cheap line-splitting + ast.parse and stays within the --pre 5-minute budget (Decision 60)."
+  - "Branch was 0 commits behind origin/main at planning time; no scope-file overlap with main divergence."
+  - "Design coupling (load-bearing): the SLOC and CC gates run FULL-TREE, not diff-aware, in BOTH --pre and full tiers. The growth-rejection probe (VP step 3) relies on this -- it trips even though the grown file is reverted before commit. Keep the gates full-tree; do not make them diff-scoped."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scope confirmed via decision-scout gate (FLAGS_FOUND -- one NOTE resolved in-plan, no BLOCK)
+  - scripts/checks/sloc/_shared.py, sloc_limits.py, cc_limits.py located and read
+  - scripts/checks/sloc/validate_sloc_budget_raises.py located and read (raise-approved marker mechanism + comment-stripping behaviour understood)
+  - config/sloc_budgets.yaml current state read (2 source entries, no markers)
+  - tests/test_validate.py TestValidateSlocLimits located and read
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    In scripts/checks/sloc/_shared.py, add `iter_gated_py_files() -> Iterator[Path]` that walks
+    _common.ROOT for **/*.py, skips any file named __init__.py, and skips any path with a part in the
+    exemption set. Extend _SLOC_EXCLUDE_DIRS to add ".git" and "personal_scripts" (keep the existing
+    six). Leave _SLOC_LIMIT / _CC_LIMIT / _WAIVER_PATTERN / _BRANCH_TYPES unchanged.
+  - >-
+    In scripts/checks/sloc/sloc_limits.py, replace the `for search_dir in (scripts, src)` loops in
+    BOTH validate_sloc_limits and _update_sloc_budgets with iteration over iter_gated_py_files().
+    Preserve the relative-path computation, SLOC definition (non-blank, non-# lines), budget/advisory/
+    error logic, and the downward-only ratchet. Update the module docstring and the _update_sloc_budgets
+    header-comment lines from "scripts/ or src/" to whole-repo wording.
+  - >-
+    In scripts/checks/sloc/cc_limits.py, replace the `for search_dir in (scripts, src)` loop in
+    validate_cc_limits with iteration over iter_gated_py_files(). No other behaviour change.
+  - >-
+    In scripts/validate.py main(), directly after the _VALIDATE_DEPTH guard, add: if
+    os.environ.get("PYTEST_CURRENT_TEST"): print("[SKIP] validate.py invoked from within a pytest run
+    (PYTEST_CURRENT_TEST set). Exiting."); sys.exit(0). Keep the existing _VALIDATE_DEPTH logic intact.
+  - >-
+    Compute the current SLOC (gate definition) of every tests/ file over 500 and HAND-AUTHOR
+    config/sloc_budgets.yaml: retain the two existing source entries, then add one line per oversized
+    tests/ file as `  tests/<name>.py: <sloc>  # raise-approved: dec-130 one-time grandfather of
+    pre-existing tests/ SLOC debt (coverage-gap fix)`. Seed each budget at the file's CURRENT SLOC
+    (after any test edits from the next step are final). Update the header comment block to whole-repo
+    wording. Never run --update-sloc-budgets (it strips the markers).
+  - >-
+    Add unit tests to tests/test_validate.py: (a) an oversized (>500) tests/ file with no budget entry
+    -> validate_sloc_limits appends to failed; (b) a registered tests/ file at/under budget -> failed
+    empty; (c) a file under an excluded dir (e.g. .venv/foo.py) is not gated; (d) validate_sloc_limits,
+    _update_sloc_budgets and validate_cc_limits all consume iter_gated_py_files (monkeypatch it and
+    assert each sees the same membership); (e) validate_cc_limits flags a function with >20 branches in
+    a tests/ file. Use the existing tmp_path/monkeypatch patterns. Then finalise the config entry for
+    tests/test_validate.py at its post-edit SLOC (step 5 ordering).
+  - >-
+    Add Decision 130 to docs/DECISIONS.md (insert above Decision 129, newest-first). Title e.g.
+    "Decision 130: Structural-size governance covers the whole repo -- one-time grandfather of tests/
+    debt (completes Decision 43; amends Decisions 102/128 scan scope)". State: the SLOC/CC gates now
+    scan every repo directory except a vendored exemption set (closing the scripts/+src/-only gap
+    against Decision 43's 'all repository code' intent); the 24 pre-existing oversized tests/ files are
+    grandfathered ONE-TIME via raise-approved dec-130 markers and this is NOT a precedent for future
+    test growth; CC extended to tests (verified zero violations); the actual decomposition and the
+    map_source_to_test / Decision-104 colocation inversion are DEFERRED to rec-2709. Mark status
+    Decided / July 2026. Related: Decision 43, 102, 128, 104, 84, 86.
+  - >-
+    Sync the decision to the warehouse: bin/venv-python -m scripts.ops_data_portal
+    --backfill-decisions-md (idempotent ETL, DECISIONS.md -> ops_decisions). If creds/network are
+    unavailable, note it in the PR body for a follow-up backfill; do not hand-edit the ops cache.
+  - >-
+    Execute Verification Plan steps 1-5; loop until all pass. On any failure, fix within scope and
+    re-run. Do NOT run --update-sloc-budgets at any point.
+  - "Report: the shared-scan hoist, the 24 markered budget entries, Decision 130 text, the PYTEST_CURRENT_TEST guard, the new tests, and each VP step result."
+work_areas: []
+rollback: >-
+  Revert the four scripts/ files to restore the (scripts, src) scan and drop the PYTEST_CURRENT_TEST
+  guard; remove the 24 tests/ entries and the header change from config/sloc_budgets.yaml; revert the
+  tests/test_validate.py additions; remove Decision 130 from docs/DECISIONS.md and re-run
+  --backfill-decisions-md; close rec-2709 as declined if the extension is abandoned. No deployed
+  artefact, no infra, no CI job added -- removal is clean and total.
