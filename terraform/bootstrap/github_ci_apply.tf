@@ -387,6 +387,18 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         ]
       },
       {
+        # T2.43 gap (Decision 129 / rec-2702): the scheduled-agent-dispatcher / findings-processor
+        # GitHub PAT secret -- read-only; the value is set out-of-band (Decision 37), this apply
+        # role owns the secret's lifecycle only. Mirrors oidc.tf's SecretsManagerGithubPatRead
+        # (github_ci_plan/drift already had this grant; only this cross-tier bootstrap copy lagged).
+        Sid    = "SecretsManagerGithubPatRead"
+        Effect = "Allow"
+        Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-github-pat-*",
+        ]
+      },
+      {
         # Per-service read-wildcard closure: logs:Describe*/List* on * closes the iterative-discovery
         # anti-pattern for CloudWatch Logs refresh reads. Resource: "*" required (logs:DescribeLogGroups
         # has no resource-level scoping).
@@ -398,7 +410,11 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       {
         # Per-service read-wildcard closure: lambda:Get*/List* covers the full refresh-read set
         # incl. GetFunctionConcurrency / GetRuntimeManagementConfig. Do not prune.
-        # Literal ARNs: a refresh-read grant should not create a Terraform dependency edge.
+        # Resource axis (Decision 129 / T2.43 rec-2702 anti-recurrence): the function
+        # ARN is broadened from four enumerated ducklake-* entries to the account-wide
+        # function:agent-platform-* prefix so a future agent-platform-* Lambda auto-covers without
+        # a bootstrap out-of-band grant edit. Layer ARNs stay enumerated -- layers are named
+        # ducklake-*/data-pipeline-*, not agent-platform-*, so a prefix would not help there.
         Sid    = "LambdaRead"
         Effect = "Allow"
         Action = ["lambda:Get*", "lambda:List*"]
@@ -409,10 +425,7 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps:*",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions:*",
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-*",
         ]
       },
       {
@@ -434,16 +447,14 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       {
         # Refresh-time reads the provider issues on aws_cloudwatch_event_rule every plan.
         # Per-service read-wildcard closure: events:Describe*/List* closes the anti-pattern.
-        # Literal ARNs: merge-ops is not yet in state; a resource reference would force its creation.
+        # Resource axis (Decision 129 / T2.43 rec-2702 anti-recurrence): broadened from five
+        # enumerated ducklake-* rule ARNs to the account-wide rule/agent-platform-* prefix so a
+        # future agent-platform-* EventBridge rule auto-covers without a bootstrap grant edit.
         Sid    = "EventBridgeRead"
         Effect = "Allow"
         Action = ["events:Describe*", "events:List*"]
         Resource = [
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-*",
         ]
       },
       {
