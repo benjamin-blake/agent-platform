@@ -9,7 +9,8 @@ plan_type: IMPLEMENTATION
 verification_tier: V3
 plan_path: docs/plans/PLAN-ci-apply-grant-coupling.yaml
 phase: >-
-  Platform / CD.35 convergence substrate + apply-role governance (T2.43 completion). Ratifies a new
+  Platform / CD.35 convergence substrate + apply-role governance (defect-fix on already-complete
+  T2.43 work; NOT completion of an in_progress item). Ratifies a new
   numbered Decision for resource-axis data-plane read broadening; adds a pre-merge grant-coverage
   verifier (verifier-harness family, cf. T2.34/Decision 104 CI-role IAM DRY invariants).
 scope:
@@ -19,7 +20,7 @@ scope:
       Phase 1 (immediate unblock + Lever A for the apply role). Broaden LambdaRead Resource from the
       four enumerated ducklake function ARNs to the prefix function:agent-platform-* (keep the
       ducklake layer ARNs enumerated -- layers are named ducklake-*/data-pipeline-*, not
-      agent-platform-*); broaden EventBridgeRead Resource to rule:agent-platform-*; add a new
+      agent-platform-*); broaden EventBridgeRead Resource to rule/agent-platform-*; add a new
       enumerated SecretsManagerGithubPatRead Sid (secretsmanager:Describe*/Get* on the
       agent-platform-github-pat-* Secrets Manager name, mirroring oidc.tf line 315-323). Secrets stay enumerated
       (mixed naming + they read the underlying key material -- highest sensitivity). No boundary edit: the
@@ -30,20 +31,28 @@ scope:
     purpose: >-
       Phase 2 (Lever A for the sibling plan/drift roles). Mirror the broadening in the
       github_ci_plan/drift shared read policy: LambdaRead functions -> function:agent-platform-*,
-      EventBridgeRead -> rule:agent-platform-*. These roles are already enumerated-correct for
+      EventBridgeRead -> rule/agent-platform-*. These roles are already enumerated-correct for
       CURRENT resources, but broadening closes THEIR resource axis so a future function/rule
       auto-covers end-to-end (else drift/speculative-plan re-breaks on the next new resource). Keeps
       all three roles' data-plane read surface identical (the parity the coverage verifier relies on).
   - file: scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py
     action: Create
     purpose: >-
-      Lever B (detection + ordering). New verifier asserting every grant-requiring resource in
-      terraform/personal/*.tf is refresh-read-covered in ALL THREE plan-capable role policies
-      (github_ci_apply in terraform/bootstrap; github_ci_plan + github_ci_drift in
-      terraform/personal/oidc.tf). Regex/text-based (hcl2 is unavailable in this env; mirrors the
-      pure-text approach of validate_authority_budget). A resource of a type NOT in the coverage map
-      FAILS LOUD ("unmapped resource type -- add a coverage rule or confirm no refresh-read grant is
-      needed"), never silently passes. Must stay < 500 SLOC (Decision 128 -- decompose if it grows,
+      Lever B (detection + ordering). New verifier asserting every grant-requiring resource across
+      the WHOLE terraform/personal module (all *.tf, not just prod_lambdas.tf) is refresh-read-covered
+      in ALL THREE plan-capable role policies (github_ci_apply in terraform/bootstrap; github_ci_plan +
+      github_ci_drift in terraform/personal/oidc.tf). The coverage map must classify EVERY resource
+      type present in the module into one of: (i) needs an independent refresh-read grant (e.g.
+      aws_lambda_function, aws_cloudwatch_event_rule, aws_secretsmanager_secret) -> assert covered;
+      (ii) covered transitively by a parent's grant (e.g. aws_lambda_permission via lambda:GetPolicy,
+      aws_cloudwatch_event_target via events:List*, aws_iam_role_policy via the role's iam: read) ->
+      no independent assertion; (iii) enumerated-iam: path (aws_iam_role) -> assert the role ARN is in
+      the enumerated IAMRolesRead/IAMCIRolesRead lists, NEVER a wildcard (Decision 35/98). A resource of
+      a type NOT in the map FAILS LOUD ("unmapped resource type -- add a coverage rule"), never silently
+      passes. Detection scans oidc.tf HOLISTICALLY (not per-role-block): plan/drift get LambdaRead/
+      EventBridgeRead from the shared ci_full_refresh_read data source, not inline in the role blocks.
+      Regex/text-based (hcl2 is unavailable in this env; mirrors the pure-text approach of
+      validate_authority_budget). Must stay < 500 SLOC (Decision 128 -- decompose if it grows,
       do not register a budget raise).
   - file: scripts/checks/registry.py
     action: Modify
@@ -87,7 +96,7 @@ infrastructure_dependencies:
   - "No Lambda deploy: oidc.tf/bootstrap .tf are not Lambda-packaged; the three prod Lambdas are refresh-READ only (not modified). No build/deploy/smoke-test step applies (Decision 79/CD.16)."
 acceptance_criteria:
   - "The sandbox convergence record is no longer red: `aws s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile agent_platform | jq -e '.status != \"red\"'` exits 0 (rec-2702 acceptance)."
-  - "github_ci_apply's inline policy (terraform/bootstrap/github_ci_apply.tf) refresh-read-covers the three T2.43 prod resources: LambdaRead includes function:agent-platform-* , EventBridgeRead includes rule:agent-platform-* , and a SecretsManagerGithubPatRead Sid covers the agent-platform-github-pat-* Secrets Manager name."
+  - "github_ci_apply's inline policy (terraform/bootstrap/github_ci_apply.tf) refresh-read-covers the three T2.43 prod resources: LambdaRead includes function:agent-platform-* , EventBridgeRead includes rule/agent-platform-* , and a SecretsManagerGithubPatRead Sid covers the agent-platform-github-pat-* Secrets Manager name."
   - "github_ci_plan/drift (terraform/personal/oidc.tf) LambdaRead/EventBridgeRead use the same agent-platform-* prefixes, keeping all three roles' data-plane read surface identical."
   - "validate_ci_refresh_read_coverage exists, is registered in pre_sequence() and full_sequence(), passes on the real tree, and FAILS (with a resource-naming message) on a synthetic uncovered-resource fixture and on an unmapped resource type."
   - "A new numbered Decision ratifies data-plane resource-axis read broadening with explicit reversal conditions and cites Decision 92 pt5 + 98 pt2; it is backfilled to ops_decisions."
@@ -96,14 +105,14 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: "Assert the Phase 1 bootstrap grants are present (broadened lambda/events prefixes + the new github-pat read Sid)."
-    command: "grep -Eq 'function:agent-platform-\\*' terraform/bootstrap/github_ci_apply.tf && grep -Eq 'rule:agent-platform-\\*' terraform/bootstrap/github_ci_apply.tf && grep -q 'SecretsManagerGithubPatRead' terraform/bootstrap/github_ci_apply.tf && grep -q 'agent-platform-github-pat-' terraform/bootstrap/github_ci_apply.tf && echo PASS"
+    command: "grep -Eq 'function:agent-platform-\\*' terraform/bootstrap/github_ci_apply.tf && grep -Eq 'rule/agent-platform-\\*' terraform/bootstrap/github_ci_apply.tf && grep -q 'SecretsManagerGithubPatRead' terraform/bootstrap/github_ci_apply.tf && grep -q 'agent-platform-github-pat-' terraform/bootstrap/github_ci_apply.tf && echo PASS"
     expected: "Prints PASS -- LambdaRead prefix, EventBridgeRead prefix, and the enumerated github-pat read Sid all present in the apply-role policy."
     fix_if: "Any grep misses -> the broadening/add was incomplete; re-edit the corresponding Sid."
     hermetic: true
   - step: 2
     phase: pre-deploy
     action: "Assert the Phase 2 oidc.tf plan/drift read policy mirrors the broadening (parity)."
-    command: "grep -Eq 'function:agent-platform-\\*' terraform/personal/oidc.tf && grep -Eq 'rule:agent-platform-\\*' terraform/personal/oidc.tf && echo PASS"
+    command: "grep -Eq 'function:agent-platform-\\*' terraform/personal/oidc.tf && grep -Eq 'rule/agent-platform-\\*' terraform/personal/oidc.tf && echo PASS"
     expected: "Prints PASS -- github_ci_plan/drift LambdaRead/EventBridgeRead use the same agent-platform-* prefixes."
     fix_if: "Missing -> plan/drift would re-break on the next new function/rule; add the prefixes."
     hermetic: true
@@ -152,14 +161,14 @@ verification_plan:
   - step: 9
     phase: post-deploy
     action: "Verify a fresh terraform plan under the least-privilege apply identity converges with NO AccessDenied refresh errors (CI/admin-run per Decision 119/120 -- NOT a stock CC-web local plan)."
-    command: "# CI/admin: terraform -chdir=terraform/personal plan -detailed-exitcode (under github_ci_apply OIDC identity via workflow_dispatch, or agent_platform_admin on a mirror-synced container)"
+    command: "terraform -chdir=terraform/personal plan -detailed-exitcode -var-file=terraform.personal.tfvars 2>&1 | tee /tmp/apply-identity-plan.log; test $(grep -c AccessDenied /tmp/apply-identity-plan.log) -eq 0   # OPERATOR/CI: run under the github_ci_apply OIDC identity (terraform-apply-sandbox workflow_dispatch dry-plan) or agent_platform_admin on a mirror-synced container -- NOT a stock CC-web session (Decision 119/120)"
     expected: "Plan completes; exit code 0 (converged) or 2 (in-sync but pending non-IAM diff); ZERO AccessDeniedException in the refresh walk on the prod-lambda/secret/rule resources."
     fix_if: "A new AccessDenied surfaces on a different resource -> the cascade is not fully closed; add that grant to bootstrap (and the coverage map) and re-apply before dispatching."
     hermetic: false
   - step: 10
     phase: post-deploy
     action: "OPERATOR: clear the red latch via the dispatch-ack unlatch (the ONLY way to clear red; gated on the reviewed rec-2702 per Decision 55/72)."
-    command: "# GitHub MCP actions trigger: terraform-apply-sandbox workflow_dispatch, acknowledge_red_commit=4ab9c3af (or rec-2702)"
+    command: "gh workflow run terraform-apply-sandbox.yml --ref main -f acknowledge_red_commit=4ab9c3af   # OPERATOR: executed via the GitHub MCP actions_run_trigger in this harness (no local gh); dispatch only AFTER the reviewed rec-2702 (Decision 55/72)"
     expected: "The dispatched run re-plans fresh, applies, and writes the convergence record status=green for the acknowledged commit."
     fix_if: "The dispatch run fails at plan (AccessDenied) -> return to step 8/9; fails at apply (guard/gated) -> follow the tf-gated-apply approval."
     hermetic: false
@@ -194,7 +203,7 @@ context:
   - "rec-2702 (open, Critical, source=implement-agent) is the current red; it was filed BY HAND because the ci-rca auto-file was suppressed by the pre-existing dedup bug (rec-2699/2700/2701). rec-2702's `file` field mis-points at terraform/personal/oidc.tf -- the actual fix is terraform/bootstrap/github_ci_apply.tf (oidc.tf is already correct)."
   - "Naming-convention basis for Lever A: lambda functions are uniformly agent-platform-* and events rules are uniformly agent-platform-* (verified) -> a per-service prefix cleanly auto-covers future resources. Layers (ducklake-*/data-pipeline-*) and secrets (agent-platform-* AND ducklake-neon-catalog-dsn-*/neon-api-key-*) are mixed-named and stay enumerated; secrets additionally read VALUES, so Lever B (detection) handles them."
   - "Decision-scout verdict: FLAGS_FOUND (no BLOCK). CITE list (verbatim): Decision 98, Decision 77, Decision 55, Decision 72, Decision 104, Decision 101, Decision 84, Decision 35. RELATED: Decision 94, Decision 119, Decision 120, Decision 86. NOTE flags: Decision 92 (narrow/earned posture vs broadening -> resolved by citing 92 pt5 + 98 pt2 that reads are outside the write budget AND landing a ratifying Decision with reversal conditions) and Decision 128 (SLOC -> verifier stays < 500, no budget registration)."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE(round 1: rule/ ARN separator fix, literal VP 9/10 commands, whole-module coverage-map spec, file_rec write-gap step) -> re-critiquing"
   - "Decision 98 is the governing precedent (admin-create + read-only bootstrap refresh grant; read grants do not widen the IAM-write budget); this plan EXTENDS its shape from IAMRolesRead (iam:) to data-plane Sids (lambda/events) and adds the missing pre-merge coverage gate Decision 98's reactive procedure lacked."
   - "The coverage verifier makes the ci-rca-didn't-fire question moot for this class: if the gap is caught pre-merge there is no red and no ci-rca is needed."
 pre_implementation_checklist:
@@ -207,11 +216,12 @@ pre_implementation_checklist:
   - Operator availability confirmed for the human-gated bootstrap admin-apply + dispatch-ack (Phase 1 cannot complete agent-only)
 execution_steps:
   - "Phase 1 -- terraform/bootstrap/github_ci_apply.tf: in LambdaRead, replace the four enumerated function:agent-platform-ducklake-* ARNs with the single prefix arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-* (retain the three ducklake layer ARNs + their :* variants). In EventBridgeRead, replace the five enumerated ducklake rule ARNs with arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-*. Add a new SecretsManagerGithubPatRead Sid (secretsmanager:Describe*/Get* on arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-github-pat-*) mirroring oidc.tf lines 315-323. Do NOT edit the boundary/authority-budget statements."  # pragma: allowlist secret
-  - "Phase 2 -- terraform/personal/oidc.tf: in the github_ci_plan/drift shared read policy, replace the enumerated LambdaRead function ARNs with function:agent-platform-* and the EventBridgeRead rule ARNs with rule:agent-platform-* (retain layer ARNs; the SecretsManagerGithubPatRead Sid already exists). Result: all three roles' data-plane read surface is identical."
-  - "Create scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py: parse terraform/personal/*.tf for managed resources of grant-requiring types (aws_lambda_function, aws_cloudwatch_event_rule, aws_secretsmanager_secret, aws_sns_topic, aws_dynamodb_table, aws_lambda_layer_version, ... -- a maintained coverage map keyed by tf type -> (service, read-Sid name(s), arn-name extractor)); extract each resource's name; load the three role policies (bootstrap inline policy + oidc.tf plan/drift statements); assert each resource name is matched by a literal ARN or an agent-platform-* prefix in the corresponding service read Sid in EACH role. Emit a precise finding (resource, role, Sid, file) per gap; FAIL LOUD on any resource of an UNMAPPED type. Return findings list / non-zero on any. Keep < 500 SLOC."
+  - "Phase 2 -- terraform/personal/oidc.tf: in the github_ci_plan/drift shared read policy, replace the enumerated LambdaRead function ARNs with function:agent-platform-* and the EventBridgeRead rule ARNs with rule/agent-platform-* (retain layer ARNs; the SecretsManagerGithubPatRead Sid already exists). Result: all three roles' data-plane read surface is identical."
+  - "Create scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py: parse ALL of terraform/personal/*.tf (the whole module, not just prod_lambdas.tf) for managed resources. Maintain a coverage map keyed by tf resource type that classifies EVERY type present into (i) needs-independent-grant (aws_lambda_function, aws_cloudwatch_event_rule, aws_secretsmanager_secret, aws_sns_topic, aws_dynamodb_table, aws_lambda_layer_version, ...) -> (service, read-Sid name(s), arn-name extractor); (ii) covered-transitively (aws_lambda_permission, aws_cloudwatch_event_target, aws_iam_role_policy, aws_lambda_function_url, aws_cloudwatch_log_group where a *-scoped read already covers it, ...) -> no independent assertion; (iii) enumerated-iam (aws_iam_role) -> must appear literally in IAMRolesRead/IAMCIRolesRead, never a wildcard (Decision 35/98). For (i) types, extract the resource name and assert it is matched by a literal ARN OR an agent-platform-* prefix in the corresponding service read Sid in EACH of the three roles. Load the three policies: github_ci_apply inline policy from terraform/bootstrap/github_ci_apply.tf, and the github_ci_plan/drift grants from terraform/personal/oidc.tf scanned HOLISTICALLY (the LambdaRead/EventBridgeRead statements live in the shared ci_full_refresh_read data source, NOT inline in each role block). Emit a precise finding (resource, role, Sid, file) per gap; FAIL LOUD on any resource of an UNMAPPED type ('add a coverage rule'). Return findings list / non-zero on any. Keep < 500 SLOC (decompose into a helpers submodule if it grows -- no budget raise)."
   - "Register the check: @register('validate_ci_refresh_read_coverage', owner='platform') in the module; import it in scripts/validate.py (mirror line 108); add _c('validate_ci_refresh_read_coverage') to registry.py pre_sequence() and full_sequence() near validate_authority_budget/validate_invoke_implies_resolve."
   - "Create tests/test_validate_ci_refresh_read_coverage.py: (a) real-tree pass; (b) synthetic tmp fixture with an uncovered aws_lambda_function and an uncovered aws_secretsmanager_secret -> assert FAIL naming the resource+role+Sid; (c) fixture with an unmapped resource type -> assert FAIL. 100% coverage of the new module."
   - "Author the numbered Decision in docs/DECISIONS.md (re-check the current max ## Decision N header first): title names data-plane resource-axis read broadening; body cites Decision 92 pt5 + 98 pt2 (reads outside the IAM-write budget), records validate_ci_refresh_read_coverage as the compensating pre-merge detection control, and states explicit REVERSAL CONDITIONS (re-narrow to enumerated ARNs if a non-agent-platform-* resource of these services is introduced, or on any incident showing prefix over-grant). Backfill via ops_data_portal --backfill-decisions-md at /implement time."
+  - "File the follow-on WRITE-grant-gap rec via the ops portal (Precision Context Injection: call get_rec_write_guidance() first, then file_rec): github_ci_apply lacks write grants (lambda:UpdateFunctionConfiguration / events:PutRule+TagResource / secretsmanager:UpdateSecret+TagResource) on the three prod resources, so a guard-PASS config-only PR to prod_lambdas.tf would fail at auto-apply. source per harness AGENT_TYPE, priority=Medium, automatable=false, file=terraform/bootstrap/github_ci_apply.tf. This is a latent gap, out of scope for the reads unblock -- filing it ensures it is not lost."
   - "Execute the Verification Plan: run all pre-deploy hermetic steps (1-6) + fmt (7) to green on the branch; PR the Phase 1 bootstrap file change; on merge, the OPERATOR admin-applies terraform/bootstrap (step 8), verifies convergence (step 9), and dispatch-acks to green (steps 10-11). Then PR Phase 2 (oidc.tf + verifier + tests + Decision); the coverage check gates it; merge routes oidc.tf via gated-apply. Close rec-2702 (step 12)."
   - "On any unrecoverable V3 apply failure (a NEW AccessDenied cascade round, a guard BLOCK, a stale-plan refusal): STOP and RCA (Decision 55) -- add the surfaced grant to bootstrap AND the coverage map, do not inline-patch around the guard or hand-edit the convergence record."
   - "Report: the grants broadened/added, the convergence record status, the verifier's real-tree + negative-fixture results, the Decision number filed, and rec-2702 closure."
