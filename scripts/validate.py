@@ -175,6 +175,7 @@ from scripts.checks.sloc._shared import (  # noqa: E402
     _SLOC_EXCLUDE_DIRS,  # noqa: F401
     _SLOC_LIMIT,  # noqa: F401
     _WAIVER_PATTERN,  # noqa: F401
+    iter_gated_py_files,  # noqa: F401
 )
 from scripts.checks.sloc.cc_limits import validate_cc_limits  # noqa: F401,E402
 from scripts.checks.sloc.complexity import validate_complexity  # noqa: F401,E402
@@ -301,6 +302,10 @@ def main() -> None:
         print(f"[SKIP] validate.py recursion detected (depth={depth}). Exiting.")
         sys.exit(0)
     os.environ["_VALIDATE_DEPTH"] = str(depth + 1)
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        print("[SKIP] validate.py invoked from within a pytest run (PYTEST_CURRENT_TEST set). Exiting.")
+        sys.exit(0)
 
     parser = argparse.ArgumentParser(description="Local CI validation. Run before every commit.")
     parser.add_argument(
