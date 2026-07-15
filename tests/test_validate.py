@@ -3973,6 +3973,73 @@ class TestFastTierCollectability:
         assert runnable == ["tests/test_some_heavy_dep_file.py"]
         assert deferred == []
 
+    def test_collect_only_passes_rs_flag(self) -> None:
+        """`-rs` must be in the --collect-only invocation -- without it, a module-level
+        pytest.importorskip's skip reason (which carries the 'No module named' signature) never
+        appears in captured output, and the file is misrouted to runnable (rec-2707 CI follow-up)."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            result.returncode = 0
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run) as mock_common_run:
+            partition_changed_tests_by_collectability(["tests/test_something.py"])
+
+        collect_only_cmd = mock_common_run.call_args[0][0]
+        assert "-rs" in collect_only_cmd
+
+    def test_module_level_importorskip_defers_not_runnable(self) -> None:
+        """A module-level `pytest.importorskip("duckdb")` guard makes --collect-only exit 5
+        (NO_TESTS_COLLECTED, a graceful skip -- not a collection error) with the skip reason
+        only visible via -rs. This must defer, not route to runnable (rec-2707 CI follow-up:
+        tests/test_ops_data_portal.py hit this when it was the sole changed test file -- the
+        real run then collected 0 distributable items under -n auto and reddened the gate)."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 5
+            result.stderr = ""
+            result.stdout = (
+                "collected 0 items / 1 skipped\n\n"
+                "=========================== short test summary info ============================\n"
+                "SKIPPED [1] tests/test_ops_data_portal.py:33: could not import 'duckdb': "
+                "No module named 'duckdb'\n"
+                "========================= no tests collected in 0.06s ==========================\n"
+            )
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability(["tests/test_ops_data_portal.py"])
+
+        assert runnable == []
+        assert deferred == [("tests/test_ops_data_portal.py", "duckdb")]
+
+    def test_module_level_importorskip_gate_not_reddened_end_to_end(self) -> None:
+        """End-to-end: run_pytest_diff must not append 'Tests (pytest)' to failed when the sole
+        changed file defers on a module-level importorskip (rec-2707 CI follow-up)."""
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 5
+            result.stderr = ""
+            result.stdout = "SKIPPED [1] tests/test_ops_data_portal.py:33: could not import 'duckdb': No module named 'duckdb'"
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_ops_data_portal.py"], failed)
+
+        assert failed == []
+
     def test_iceberg_reader_defers_when_pyarrow_absent(self) -> None:
         """Real-file proof: the actual PR #405 offending file (tests/test_iceberg_reader.py, which
         imports pyarrow at module scope) lands in `deferred`, not `failed`, when pyarrow is simulated

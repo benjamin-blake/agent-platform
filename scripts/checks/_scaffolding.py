@@ -432,6 +432,16 @@ def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple
     error with no "No module named" line at all -- routes to `runnable`, so the subsequent real
     pytest run reproduces and reddens the genuine failure with full diagnostics (fail-closed).
 
+    `-rs` (show skip reasons) is required here: a module-level `pytest.importorskip("duckdb")`
+    guard (e.g. tests/test_ops_data_portal.py) makes `--collect-only` exit 5 (NO_TESTS_COLLECTED)
+    with "collected 0 items / 1 skipped" -- a graceful skip, not a collection error -- and without
+    `-rs` the "could not import 'duckdb': No module named 'duckdb'" reason text never appears in
+    stdout, so this genuinely-absent-heavy-dep shape is invisible to the regex below and the file
+    is misrouted to `runnable`. When such a file is the ONLY entry in `changed_tests`, the
+    subsequent real run in `run_pytest_diff` collects 0 distributable items under `-n auto` and
+    exits nonzero, reddening the fast-tier gate on a dependency that was deliberately excluded
+    from it (rec-2707 CI follow-up).
+
     A heavy dependency imported LAZILY (function scope, not module scope) is invisible to
     `--collect-only` and is no longer proactively probed here -- `run_pytest_diff` catches that
     shape reactively, only if and after the combined run fails (see `_runtime_heavy_dep_defer_reason`).
@@ -441,7 +451,7 @@ def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple
     deferred: list[tuple[str, str]] = []
     for test_file in changed_tests:
         result = _common.run(
-            [_common.PYTHON, "-m", "pytest", "--collect-only", "-q", test_file, "-m", "not integration"],
+            [_common.PYTHON, "-m", "pytest", "--collect-only", "-q", "-rs", test_file, "-m", "not integration"],
             capture_output=True,
             text=True,
             encoding="utf-8",
