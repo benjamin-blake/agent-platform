@@ -108,42 +108,42 @@ verification_plan:
     command: "grep -Eq 'function:agent-platform-\\*' terraform/bootstrap/github_ci_apply.tf && grep -Eq 'rule/agent-platform-\\*' terraform/bootstrap/github_ci_apply.tf && grep -q 'SecretsManagerGithubPatRead' terraform/bootstrap/github_ci_apply.tf && grep -q 'agent-platform-github-pat-' terraform/bootstrap/github_ci_apply.tf && echo PASS"
     expected: "Prints PASS -- LambdaRead prefix, EventBridgeRead prefix, and the enumerated github-pat read Sid all present in the apply-role policy."
     fix_if: "Any grep misses -> the broadening/add was incomplete; re-edit the corresponding Sid."
-    hermetic: true
+    hermetic: false
   - step: 2
     phase: pre-deploy
     action: "Assert the Phase 2 oidc.tf plan/drift read policy mirrors the broadening (parity)."
     command: "grep -Eq 'function:agent-platform-\\*' terraform/personal/oidc.tf && grep -Eq 'rule/agent-platform-\\*' terraform/personal/oidc.tf && echo PASS"
     expected: "Prints PASS -- github_ci_plan/drift LambdaRead/EventBridgeRead use the same agent-platform-* prefixes."
     fix_if: "Missing -> plan/drift would re-break on the next new function/rule; add the prefixes."
-    hermetic: true
+    hermetic: false
   - step: 3
     phase: pre-deploy
     action: "Run the new coverage verifier against the real tree -- every managed terraform/personal resource is covered in all three roles."
     command: "bin/venv-python -m scripts.checks.iam_tf.validate_ci_refresh_read_coverage"
     expected: "Exit 0, no uncovered-resource or unmapped-type findings."
     fix_if: "A finding names an uncovered resource/role/Sid -> add the grant (or a coverage-map rule for a new resource type) and re-run."
-    hermetic: true
+    hermetic: false
   - step: 4
     phase: pre-deploy
     action: "Prove the verifier CATCHES a gap and an unmapped type (negative proof) via its unit tests -- the whole point is pre-merge detection."
     command: "bin/venv-python -m pytest tests/test_validate_ci_refresh_read_coverage.py -q"
     expected: "All tests pass, including the synthetic uncovered-resource case and the unmapped-type case both asserting a FAIL with a precise message."
     fix_if: "The gap/unmapped fixtures do not fail the verifier -> the check is too weak; tighten the coverage assertion."
-    hermetic: true
+    hermetic: false
   - step: 5
     phase: pre-deploy
     action: "Confirm the check is wired into the presubmit sequences and importable (single-source-of-truth in validate.py, not CI-only)."
     command: "grep -q 'validate_ci_refresh_read_coverage' scripts/validate.py && grep -c 'validate_ci_refresh_read_coverage' scripts/checks/registry.py | grep -qxE '[2-9]' && echo PASS"
     expected: "Prints PASS -- imported in validate.py and referenced at least twice in registry.py (pre_sequence + full_sequence)."
     fix_if: "Not registered in both sequences or not imported -> add the missing registration/import."
-    hermetic: true
+    hermetic: false
   - step: 6
     phase: pre-deploy
     action: "Confirm the ratifying Decision is authored with reversal conditions and the required citations."
     command: "bin/venv-python -c \"import re,sys; t=open('docs/DECISIONS.md').read(); m=re.search(r'## Decision \\d+:[^\\n]*read broadening', t, re.I); blk=t[m.start():m.start()+2500] if m else ''; ok=m and re.search(r'[Rr]eversal', blk) and 'Decision 92' in blk and 'Decision 98' in blk; print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)\""
     expected: "Prints PASS -- the Decision exists, names reversal conditions, and cites Decision 92 + 98."
     fix_if: "FAIL -> the Decision is missing the reversal clause or the 92/98 citations; add them."
-    hermetic: true
+    hermetic: false
   - step: 7
     phase: pre-deploy
     action: "Terraform formatting check on both changed .tf files (fmt needs no provider init; skip cleanly if terraform is absent -- CI terraform-validate is authoritative)."
@@ -207,6 +207,7 @@ context:
   - "Implementation reuse (from critique): the verifier's holistic oidc.tf scan can reuse validate_invoke_implies_resolve._resolve_statements (already resolves aws_iam_policy_document + source_policy_documents transitively); validate_authority_budget parses the bootstrap jsonencode HCL (capitalized keys) -- both live in scripts/checks/iam_tf/. Prod Lambda function names resolve via local.* (prod_lambdas.tf L39-41; literal agent-platform-* strings, so prefix-matching is tractable)."
   - "Decision 98 is the governing precedent (admin-create + read-only bootstrap refresh grant; read grants do not widen the IAM-write budget); this plan EXTENDS its shape from IAMRolesRead (iam:) to data-plane Sids (lambda/events) and adds the missing pre-merge coverage gate Decision 98's reactive procedure lacked."
   - "The coverage verifier makes the ci-rca-didn't-fire question moot for this class: if the gap is caught pre-merge there is no red and no ci-rca is needed."
+  - "VP steps are hermetic: false by design: this is a deferred-implementation plan, so every pre-deploy step verifies FUTURE implementation state (broadened grants, the new verifier, the Decision) that does not exist on the plan-merge PR tree. Marking them hermetic would make validate_vp_replay (VF-01) re-execute them at plan-merge and fail (they grep for not-yet-added grants / invoke a not-yet-present venv). /implement executes them against the implemented tree."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/eloquent-wright-6cld3c)
   - docs/PROJECT_CONTEXT.md read
