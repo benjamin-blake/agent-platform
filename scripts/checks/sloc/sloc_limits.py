@@ -1,9 +1,9 @@
-"""Per-file SLOC budget ratchet (Decision 43/102)."""
+"""Whole-repo per-file SLOC budget ratchet (Decision 43/102/130)."""
 
 from __future__ import annotations
 
 from scripts.checks import _common, registry
-from scripts.checks.sloc._shared import _SLOC_EXCLUDE_DIRS, _SLOC_LIMIT, _WAIVER_PATTERN
+from scripts.checks.sloc._shared import _SLOC_LIMIT, _WAIVER_PATTERN, iter_gated_py_files
 
 
 def _load_sloc_budgets() -> dict[str, int]:
@@ -32,19 +32,12 @@ def _update_sloc_budgets() -> None:
     existing = _load_sloc_budgets()
     current_sloc: dict[str, int] = {}
 
-    for search_dir in (_common.ROOT / "scripts", _common.ROOT / "src"):
-        if not search_dir.exists():
-            continue
-        for py_file in sorted(search_dir.glob("**/*.py")):
-            if py_file.name == "__init__.py":
-                continue
-            if any(part in _SLOC_EXCLUDE_DIRS for part in py_file.parts):
-                continue
-            content = py_file.read_text(encoding="utf-8", errors="replace")
-            lines = content.splitlines()
-            sloc = len([ln for ln in lines if ln.strip() and not ln.strip().startswith("#")])
-            rel = str(py_file.relative_to(_common.ROOT)).replace("\\", "/")
-            current_sloc[rel] = sloc
+    for py_file in iter_gated_py_files():
+        content = py_file.read_text(encoding="utf-8", errors="replace")
+        lines = content.splitlines()
+        sloc = len([ln for ln in lines if ln.strip() and not ln.strip().startswith("#")])
+        rel = str(py_file.relative_to(_common.ROOT)).replace("\\", "/")
+        current_sloc[rel] = sloc
 
     new_budgets: dict[str, int] = {}
     for rel, budget in existing.items():
@@ -57,8 +50,9 @@ def _update_sloc_budgets() -> None:
     dropped = sorted(k for k in existing if k not in new_budgets)
 
     header_lines = [
-        "# SLOC budget registry (Decision 102, amends Decision 43; raise gate per Decision 128).",
-        "# Each entry pins a scripts/ or src/ Python file to its SLOC budget.",
+        "# SLOC budget registry (Decision 102, amends Decision 43; whole-repo per Decision 130;",
+        "# raise gate per Decision 128).",
+        "# Each entry pins a whole-repo Python file (any hand-authored directory) to its SLOC budget.",
         "# Budgets ratchet DOWN only: run `validate --update-sloc-budgets` to lower.",
         "# Raising a budget (or registering a NEW >500-SLOC file) requires a manual, reviewable",
         "# edit carrying an inline `# raise-approved: dec-NNN <reason>` marker -- enforced by",
@@ -85,52 +79,45 @@ def _update_sloc_budgets() -> None:
 
 @registry.register("validate_sloc_limits", owner="platform")
 def validate_sloc_limits(failed: list[str]) -> None:
-    """Enforce Decision 43/102: per-file SLOC budget ratchet for scripts/ and src/."""
+    """Enforce Decision 43/102/130: whole-repo per-file SLOC budget ratchet."""
     print("\n=== SLOC limits (Decision 43) ===")
     budgets = _load_sloc_budgets()
     errors: list[str] = []
     advisories: list[str] = []
 
-    for search_dir in (_common.ROOT / "scripts", _common.ROOT / "src"):
-        if not search_dir.exists():
-            continue
-        for py_file in sorted(search_dir.glob("**/*.py")):
-            if py_file.name == "__init__.py":
-                continue
-            if any(part in _SLOC_EXCLUDE_DIRS for part in py_file.parts):
-                continue
-            content = py_file.read_text(encoding="utf-8", errors="replace")
-            lines = content.splitlines()
-            sloc = len([ln for ln in lines if ln.strip() and not ln.strip().startswith("#")])
-            header = "\n".join(lines[:10])
-            has_waiver = bool(_WAIVER_PATTERN.search(header))
-            rel = str(py_file.relative_to(_common.ROOT)).replace("\\", "/")
+    for py_file in iter_gated_py_files():
+        content = py_file.read_text(encoding="utf-8", errors="replace")
+        lines = content.splitlines()
+        sloc = len([ln for ln in lines if ln.strip() and not ln.strip().startswith("#")])
+        header = "\n".join(lines[:10])
+        has_waiver = bool(_WAIVER_PATTERN.search(header))
+        rel = str(py_file.relative_to(_common.ROOT)).replace("\\", "/")
 
-            if sloc <= _SLOC_LIMIT:
-                if has_waiver:
-                    advisories.append(
-                        f"{rel}: stale SLOC waiver (<=500 SLOC); "
-                        "the comment may still be needed for the CC gate -- verify before removing."
-                    )
-                continue
-
-            if rel in budgets:
-                budget = budgets[rel]
-                if sloc > budget:
-                    errors.append(
-                        f"{rel}: {sloc} SLOC exceeds budget {budget}. "
-                        f"Reduce, or (with justification) raise the budget in config/sloc_budgets.yaml."
-                    )
-                elif sloc < budget:
-                    advisories.append(
-                        f"{rel}: {sloc} SLOC below budget {budget}; run `validate --update-sloc-budgets` to ratchet down."
-                    )
-            else:
-                errors.append(
-                    f"{rel}: {sloc} SLOC exceeds limit {_SLOC_LIMIT} and is not registered in config/sloc_budgets.yaml. "
-                    f"Reduce below {_SLOC_LIMIT}, or register via `validate --update-sloc-budgets`. "
-                    f"A bare '# complexity-waiver: decision-43' no longer authorises unbounded SLOC."
+        if sloc <= _SLOC_LIMIT:
+            if has_waiver:
+                advisories.append(
+                    f"{rel}: stale SLOC waiver (<=500 SLOC); "
+                    "the comment may still be needed for the CC gate -- verify before removing."
                 )
+            continue
+
+        if rel in budgets:
+            budget = budgets[rel]
+            if sloc > budget:
+                errors.append(
+                    f"{rel}: {sloc} SLOC exceeds budget {budget}. "
+                    f"Reduce, or (with justification) raise the budget in config/sloc_budgets.yaml."
+                )
+            elif sloc < budget:
+                advisories.append(
+                    f"{rel}: {sloc} SLOC below budget {budget}; run `validate --update-sloc-budgets` to ratchet down."
+                )
+        else:
+            errors.append(
+                f"{rel}: {sloc} SLOC exceeds limit {_SLOC_LIMIT} and is not registered in config/sloc_budgets.yaml. "
+                f"Reduce below {_SLOC_LIMIT}, or register via `validate --update-sloc-budgets`. "
+                f"A bare '# complexity-waiver: decision-43' no longer authorises unbounded SLOC."
+            )
 
     if advisories:
         print("SLOC advisories (non-blocking):")

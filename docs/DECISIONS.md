@@ -2,6 +2,67 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 130: Structural-size governance covers the whole repo -- one-time grandfather of tests/ debt (completes Decision 43; amends Decisions 102/128 scan scope) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-15
+**Warehouse ID:** dec-130 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+`validate_sloc_limits` and `validate_cc_limits` scanned only `scripts/` and `src/` -- `tests/` was
+never handed to the scanner (it is not on the deliberate vendored-exemption list). Decision 43
+declared the limits apply "across all repository code," so this was an exempt-by-omission gap, not
+a deliberate exclusion. 24 `tests/` files exceed the 500-SLOC limit at the time of this decision;
+the two largest files in the entire repository are tests (`tests/test_validate.py`,
+`tests/test_execute_recommendation.py`).
+
+**Decision:**
+1. **Whole-repo scan.** `validate_sloc_limits`, `_update_sloc_budgets`, and `validate_cc_limits` now
+   walk every repository directory via one shared helper (`iter_gated_py_files()` in
+   `scripts/checks/sloc/_shared.py`), excluding only a vendored/generated set (`pip`,
+   `lambda-packages`, `docker`, `terraform`, `.venv`, `node_modules`, `.git`, `personal_scripts`) and
+   `__init__.py`. No hand-authored directory (`tests/`, `.claude/`, `bin/`, `config/`, etc.) is
+   exempt. The three gate functions consuming one shared scan definition means they can no longer
+   silently drift apart (a divergence would make a future `--update-sloc-budgets` regen silently
+   drop entries for a directory only some of the functions scanned).
+2. **One-time grandfather of pre-existing tests/ debt.** The 24 tests/ files already over 500 SLOC
+   are registered in `config/sloc_budgets.yaml`, each carrying an inline
+   `# raise-approved: dec-130 ...` marker (the Decision 128 bounded-exception path for pre-existing
+   debt). This is a ONE-TIME grandfather, NOT a precedent for future test growth: any tests/ file
+   that grows past its registered budget still fails the gate (the ratchet is downward-only and
+   full-tree, not diff-scoped).
+3. **CC extended to tests/.** `validate_cc_limits` now also covers `tests/`; verified zero-cost at
+   decision time (0 violations across all test files under the existing 20-branch limit).
+4. **Cheap recursion-guard hardening.** `scripts/validate.py`'s `main()` now also exits early when
+   `PYTEST_CURRENT_TEST` is set (in addition to the existing `_VALIDATE_DEPTH` guard), ahead of the
+   test-tree reorganisation the follow-on decomposition work will perform.
+5. **Deferred to rec-2709.** The actual decomposition of the 24 grandfathered files, and the
+   inversion of `map_source_to_test` / the Decision 104 test-colocation rule to a mirror-package
+   structure, are explicitly OUT of scope here and tracked as rec-2709 (filed the same session as
+   this Decision).
+
+**Reversal conditions:** none anticipated; reverting would mean re-narrowing the scan back to
+`scripts/`+`src/`, which would reopen the exempt-by-omission gap this Decision closes. If a future
+vendored/generated directory needs exemption, add it to `_SLOC_EXCLUDE_DIRS` rather than reverting
+the whole-repo scan.
+
+**Rationale:**
+The SLOC/CC gates exist to protect model-portability of the comprehension surface (Sonnet/Gemini/
+Deepseek-tier models degrade on large files) -- that rationale applies to `tests/` exactly as much
+as to `scripts/`/`src/`. Grandfathering the 24 pre-existing files avoids a disruptive one-shot
+decomposition inside a governance-hardening PR (scope creep the plan explicitly avoided), while the
+raise-approved markers plus rec-2709 ensure the debt is tracked and bounded rather than silently
+re-exempted.
+
+**Related:** Decision 43 (original SLOC/CC limits; "all repository code" intent this completes),
+Decision 102 (SLOC budget ratchet, amended here to whole-repo scope), Decision 128 (raise-approved
+marker path this grandfather uses; decompose-by-default principle), Decision 104 (check-registry
+pattern; test-colocation mapping inversion deferred to rec-2709), Decision 84 (authored here,
+backfilled to `ops_decisions`, never written directly), Decision 86 (machine-parseable /
+agent-first repository principle this whole-repo coverage extends to test files).
+
+---
+
 ## Decision 129: Data-plane resource-axis read broadening for CI refresh-read grants, with a pre-merge coverage verifier (Decided)
 
 **Status:** Decided

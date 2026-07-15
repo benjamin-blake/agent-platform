@@ -104,6 +104,7 @@ _extract_verifier_covers = _validate._extract_verifier_covers
 _load_sloc_budgets = _validate._load_sloc_budgets
 _update_sloc_budgets = _validate._update_sloc_budgets
 validate_sloc_budget_raises = _validate.validate_sloc_budget_raises
+iter_gated_py_files = _validate.iter_gated_py_files
 validate_dependency_graph_freshness = _validate.validate_dependency_graph_freshness
 validate_import_contracts = _validate.validate_import_contracts
 validate_lockfile_sync = _validate.validate_lockfile_sync
@@ -2453,6 +2454,99 @@ class TestValidateCcLimits:
         assert failed == []
 
 
+class TestWholeRepoScanCoverage:
+    """Tests for the Decision 130 whole-repo scan extension (tests/ is now gated)."""
+
+    def _write_budget(self, tmp_path: Path, entries: dict[str, int]) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(exist_ok=True)
+        lines = ["budgets:"]
+        for k, v in entries.items():
+            lines.append(f"  {k}: {v}")
+        (config_dir / "sloc_budgets.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_oversized_unregistered_tests_file_fails(self, tmp_path: Path) -> None:
+        """A tests/ file over 500 SLOC with no budget entry fails validate_sloc_limits."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_big_thing.py").write_text("x = 1\n" * 501, encoding="utf-8")
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+
+        assert len(failed) == 1
+        assert "SLOC limits" in failed[0]
+
+    def test_registered_tests_file_at_budget_passes(self, tmp_path: Path) -> None:
+        """A tests/ file registered at/under its budget passes validate_sloc_limits."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_big_thing.py").write_text("x = 1\n" * 600, encoding="utf-8")
+        self._write_budget(tmp_path, {"tests/test_big_thing.py": 600})
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+
+        assert failed == []
+
+    def test_excluded_dir_is_not_gated(self, tmp_path: Path) -> None:
+        """A file under an excluded dir (e.g. .venv/) is never scanned, regardless of SLOC."""
+        venv_dir = tmp_path / ".venv" / "foo"
+        venv_dir.mkdir(parents=True)
+        (venv_dir / "vendored.py").write_text("x = 1\n" * 999, encoding="utf-8")
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+            gated = list(iter_gated_py_files())
+
+        assert failed == []
+        assert gated == []
+
+    def test_all_three_gate_functions_share_one_scan(self, tmp_path: Path) -> None:
+        """validate_sloc_limits, _update_sloc_budgets, and validate_cc_limits all consume the
+        same iter_gated_py_files() -- one mock patched into both consumer modules is seen
+        identically by all three, so the scan roots can never silently drift apart."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        only_file = tests_dir / "test_only.py"
+        only_file.write_text("x = 1\n" * 501, encoding="utf-8")
+        self._write_budget(tmp_path, {})
+
+        shared_mock = MagicMock(side_effect=lambda: iter([only_file]))
+
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch("scripts.checks.sloc.sloc_limits.iter_gated_py_files", shared_mock),
+            patch("scripts.checks.sloc.cc_limits.iter_gated_py_files", shared_mock),
+        ):
+            failed: list[str] = []
+            validate_sloc_limits(failed)
+            _update_sloc_budgets()
+            validate_cc_limits(failed)
+
+        assert shared_mock.call_count == 3  # validate_sloc_limits + _update_sloc_budgets + validate_cc_limits
+        assert len(failed) == 1  # only the unregistered oversized file, from validate_sloc_limits
+
+    def test_cc_limits_flags_branchy_function_in_tests_dir(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """validate_cc_limits now covers tests/: a >20-branch function there is flagged."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        branches = "\n".join(f"    if x == {i}: pass" for i in range(21))
+        (tests_dir / "test_branchy.py").write_text(f"def test_heavy_dispatch(x):\n{branches}\n", encoding="utf-8")
+
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            failed: list[str] = []
+            validate_cc_limits(failed)
+
+        assert len(failed) == 1
+        assert "Cyclomatic complexity" in failed[0]
+        captured = capsys.readouterr()
+        assert "test_heavy_dispatch" in captured.out
+
+
 class TestValidateComplexity:
     """Tests for validate_complexity()."""
 
@@ -4474,6 +4568,7 @@ class TestPreModeDiffAware:
     def test_passes_changed_py_files_to_ruff(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         captured_cmds: list[list[str]] = []
@@ -4503,6 +4598,7 @@ class TestPreModeDiffAware:
     def test_skips_lint_when_no_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         captured_cmds: list[list[str]] = []
@@ -4529,6 +4625,7 @@ class TestPreModeDiffAware:
     def test_skips_pytest_when_no_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         captured_cmds: list[list[str]] = []
@@ -4555,6 +4652,7 @@ class TestPreModeDiffAware:
     def test_invokes_pytest_with_explicit_files_when_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         captured_cmds: list[list[str]] = []
@@ -4584,6 +4682,7 @@ class TestPreModeDiffAware:
     def test_treats_pytest_exit_5_as_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         def exit5_run(cmd: list[str], **kwargs: object) -> MagicMock:
@@ -4620,6 +4719,7 @@ class TestPreModePytestSelection:
     def test_explicit_path_in_argv_no_picked(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         captured_cmds: list[list[str]] = []
@@ -4648,6 +4748,7 @@ class TestPreModePytestSelection:
     def test_exit_5_with_changed_tests_reddens_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         def exit5_run(cmd: list[str], **kwargs: object) -> MagicMock:
@@ -4673,6 +4774,7 @@ class TestPreModePytestSelection:
     def test_no_pytest_when_no_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         captured_cmds: list[list[str]] = []
@@ -4704,6 +4806,7 @@ class TestBudgetAssertion:
     def test_exits_1_on_budget_breach(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         with (
@@ -4725,6 +4828,7 @@ class TestBudgetAssertion:
     ) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         with (
@@ -4745,6 +4849,7 @@ class TestBudgetAssertion:
     def test_exits_0_within_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         with (
@@ -4771,6 +4876,7 @@ class TestBudgetAssertion:
         truthiness."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         clock = {"t": 0.0}
@@ -4803,6 +4909,7 @@ class TestBudgetAssertion:
         """Same correctness bar as above, applied to the printed console diagnostic."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         clock = {"t": 0.0}
@@ -4837,6 +4944,7 @@ class TestIgnoreBudgetFlag:
     def test_bypass_calls_bypass_rec_helper(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         with (
@@ -4857,6 +4965,7 @@ class TestIgnoreBudgetFlag:
     def test_bypass_reason_captured_when_provided(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget", "--ignore-budget-reason", "disk slow"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         with (
@@ -4877,6 +4986,7 @@ class TestIgnoreBudgetFlag:
     def test_bypass_reason_null_when_omitted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         with (
@@ -4898,6 +5008,7 @@ class TestIgnoreBudgetFlag:
         """Breach rec is NOT filed when --ignore-budget is set, even if elapsed > 300."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         with (
@@ -4925,6 +5036,7 @@ class TestIgnoreBudgetCIGuard:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.setenv("CI", "true")
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
 
         with pytest.raises(SystemExit) as exc_info:
             _validate.main()
@@ -4937,6 +5049,7 @@ class TestIgnoreBudgetCIGuard:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.setenv("CI", "true")
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
 
         with pytest.raises(SystemExit):
             _validate.main()
@@ -4948,6 +5061,7 @@ class TestIgnoreBudgetCIGuard:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre", "--ignore-budget"])
         monkeypatch.delenv("CI", raising=False)
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
 
         with (
             patch("scripts.checks._common.get_changed_files", return_value=[]),
@@ -5576,6 +5690,7 @@ class TestSlocLimitsInPreMode:
         """validate_sloc_limits must be invoked during --pre alongside validate_cc_limits."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         sloc_called = []
@@ -5602,6 +5717,7 @@ class TestSlocLimitsInPreMode:
         """validate_sloc_limits is called in the same --pre block as validate_cc_limits."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         call_order: list[str] = []
@@ -6420,6 +6536,7 @@ class TestPreModeChecks:
         """validate_subprocess_encoding must be invoked during --pre (tier-membership regression guard)."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         encoding_called = []
@@ -6459,6 +6576,7 @@ class TestPreModeRegistryIsolation:
         """
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
         monkeypatch.delenv("CI", raising=False)
 
         with (
