@@ -2,6 +2,64 @@
 
 Loaded automatically when Claude reads or edits files in this directory. Universal rules in repo-root `CLAUDE.md` still apply.
 
+## Test file placement — mirror convention (Decision 131, amends Decision 104)
+Source-to-test mapping is gated by a retiring grandfather-table in `scripts/test_coverage_checker.py`
+(`map_source_to_test`). While a home is still listed in `_RETIRING_GRANDFATHER_HOMES`, the
+pre-inversion Decision-104 colocation rule applies unchanged (e.g. every `scripts/checks/**/*.py`
+colocates its tests in `tests/test_validate.py`). Once a wave retires that home (deletes its one
+basename line from `_RETIRING_GRANDFATHER_HOMES`), every source path that used to colocate there
+instead resolves via the MIRROR convention:
+
+- Drop the leading `src`/`scripts` root segment, keep the remaining directory sub-path, and name
+  the test `test_<stem>.py` in that mirrored directory. Examples:
+  - `scripts/checks/hygiene/validate_prose_allowlist.py` -> `tests/checks/hygiene/test_validate_prose_allowlist.py`
+  - `scripts/executor/step_runner.py` -> `tests/executor/test_step_runner.py`
+  - `src/common/config.py` -> `tests/common/test_config.py`
+- A declared concern-split monolith (a single-file source with no per-submodule source to mirror
+  1:1) instead resolves to a test PACKAGE DIRECTORY, not a single file -- e.g.
+  `scripts/ops_writer.py` -> `tests/ops_writer/` (concern-split `test_*.py` modules inside), which
+  `check_test_file_exists` accepts once it exists with >=1 `test_*.py`.
+- A wave retires a home by deleting exactly its one basename line from `_RETIRING_GRANDFATHER_HOMES`
+  -- a low-conflict, one-line edit -- then creates the mirror test file(s)/package and deletes the
+  home's `config/sloc_budgets.yaml` entry.
+
+Every mirror test directory carries an `__init__.py` (prepend import mode; fully-qualified,
+collision-free module paths). Shared helpers live in `tests/fixtures/` (an importable package,
+exempt from the cross-test-import guard because its names never start with `test_`) or in conftest
+fixtures -- never imported from another `test_*` module. The existing `tests/test_verifiers/` lacks
+its `__init__.py` and will be normalized by its own wave, not this one.
+
+**Later-wave hand-offs (read before decomposing a roster home):**
+(a) Three roster homes -- `test_executor_step_runner.py`, `test_executor_plan.py`,
+`test_executor_postflight.py` -- have NO source path mapping to them (`scripts/executor/**` returns
+`None` in the grandfather helper, preserved per Decision 124). Their decomposition is a PURE
+test-file split + `config/sloc_budgets.yaml` entry deletion; deleting their
+`_RETIRING_GRANDFATHER_HOMES` line is a no-op (the mirror branch never fires, since the source still
+returns `None`). The "one-line retirement" is therefore NOT uniform across all 24 roster homes.
+(b) Drop-root is safe/chosen because it matches repo precedent (`tests/checks/`,
+`tests/test_verifiers/`) and is collision-free for the fixed 24-home roster (no `scripts/<x>/` vs
+`src/<x>/` subdirectory-name overlap exists). Known boundary: a future such collision would need a
+preserve-root exception for that pair -- out of scope now, flagged for the map's maintainer
+(`scripts/test_coverage_checker.py`).
+
+## No cross-test imports
+A test module must never import from another `test_*` module -- each mirror package must be
+self-contained. Shared helpers live in `conftest.py` fixtures or `tests/fixtures/` (an importable
+package whose names never start with `test_`, so both are exempt by construction). Enforced by
+`scripts/checks/hygiene/validate_no_cross_test_imports.py` (both `--pre` and full presubmit tiers).
+The one pre-existing violation at foundation time, `tests/test_verifier_harness.py` (a re-export
+shim of `tests/test_verifiers/test_harness.py`), is grandfathered in a documented
+`_GRANDFATHERED_CROSS_TEST_IMPORTS` allowlist until a later wave removes the shim.
+
+## Per-package conftest hierarchy
+The global recursion guards (`_VALIDATE_DEPTH`, `_COVERAGE_SUBPROCESS`, the `PYTEST_CURRENT_TEST`
+early-exit in `scripts/validate.py` `main()`) and socket guards (`--disable-socket` addopts + the
+`_allow_network_for_integration` autouse fixture) live SOLELY in the root `tests/conftest.py`.
+pytest merges conftests up the tree, so a sub-package `tests/<pkg>/conftest.py` (e.g.
+`tests/checks/conftest.py`, the foundation's example scaffold) layers UNDER the root automatically
+without redeclaring globals. Package-specific autouse fixtures migrate into the matching
+sub-conftest per-wave, alongside that package's test-file decomposition -- not all at once.
+
 ## Test isolation (CRITICAL)
 - Never spawn `pytest tests/` (full suite) from a script that any test imports. Recursion risk.
 - Three-layer defence is already in place: `_VALIDATE_DEPTH` env var in `validate.py`, `_COVERAGE_SUBPROCESS` env var, and `tests/conftest.py` sets both. Don't remove any layer without understanding the full chain.

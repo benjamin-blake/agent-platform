@@ -16,8 +16,11 @@ sys.modules["test_coverage_checker"] = _checker
 extract_definitions = _checker.extract_definitions
 map_source_to_test = _checker.map_source_to_test
 check_test_file_exists = _checker.check_test_file_exists
+check_per_file_coverage = _checker.check_per_file_coverage
 get_changed_source_files = _checker.get_changed_source_files
 ROOT = _checker.ROOT
+_ALL_MIRROR_TARGET_HOMES = _checker._ALL_MIRROR_TARGET_HOMES
+_RETIRING_GRANDFATHER_HOMES = _checker._RETIRING_GRANDFATHER_HOMES
 
 
 class TestExtractDefinitions:
@@ -332,3 +335,187 @@ class TestGetChangedSourceFiles:
             result = get_changed_source_files()
 
         assert any("pipeline.py" in str(p) for p in result)
+
+
+class TestGrandfatherRetiringTable:
+    """Behaviour-preservation invariant (Decision 131): day-one map_source_to_test is
+    byte-identical to the pre-inversion function -- the retiring grandfather-table gates the
+    mirror rule dormant until a wave explicitly retires one basename."""
+
+    def test_representative_paths_match_pre_inversion_homes(self) -> None:
+        """A representative real path set resolves to exactly the pre-inversion homes,
+        including the None returns for scripts/executor/** and scripts/ops_portal/**."""
+        cases: dict[Path, Path | None] = {
+            ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py": ROOT / "tests" / "test_validate.py",
+            ROOT / "scripts" / "validate.py": ROOT / "tests" / "test_validate.py",
+            ROOT / "src" / "common" / "config.py": ROOT / "tests" / "test_config.py",
+            ROOT / "scripts" / "executor" / "step_runner.py": None,
+            ROOT / "scripts" / "ops_portal" / "cli.py": None,
+            ROOT / "src" / "common" / "iceberg_reader.py": ROOT / "tests" / "test_iceberg_reader.py",
+        }
+        for source, expected in cases.items():
+            assert map_source_to_test(source) == expected, source
+
+    def test_retiring_equals_all_target_homes_on_day_one(self) -> None:
+        """The mirror branch is dormant: every roster target is still grandfathered."""
+        assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES
+
+    def test_roster_is_the_24_known_basenames(self) -> None:
+        """The fixed rec-2709 roster matches the 24 dec-130 config/sloc_budgets.yaml entries."""
+        expected = {
+            "test_build_lambda_deploy.py",
+            "test_ci_rca_evidence.py",
+            "test_contracts_enforcement.py",
+            "test_convergence_health.py",
+            "test_ducklake_maintenance_handler.py",
+            "test_ducklake_neon_smoke_test.py",
+            "test_ducklake_runtime.py",
+            "test_ducklake_writer_handler.py",
+            "test_execute_recommendation.py",
+            "test_executor_plan.py",
+            "test_executor_postflight.py",
+            "test_executor_step_runner.py",
+            "test_iceberg_reader.py",
+            "test_lambda_manifest.py",
+            "test_ops_data_portal.py",
+            "test_ops_writer.py",
+            "test_platform_roadmap_state.py",
+            "test_s3_log_store.py",
+            "test_scheduled_agent_handler.py",
+            "test_session_postflight.py",
+            "test_session_preflight.py",
+            "test_sync_ops.py",
+            "test_validate.py",
+            "test_verify_ci_workflow.py",
+        }
+        assert _ALL_MIRROR_TARGET_HOMES == expected
+        assert (
+            len(_ALL_MIRROR_TARGET_HOMES) == 24
+        )  # count-coupling-ok: fixed historical roster of the 24 rec-2709 targets, not a growing collection
+
+
+class TestMirrorRule:
+    """Once a wave retires a home (removes it from _RETIRING_GRANDFATHER_HOMES), sources that
+    grandfather to it resolve via the mirror rule instead."""
+
+    def test_package_source_resolves_to_mirror_path_once_retired(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        retired = _ALL_MIRROR_TARGET_HOMES - {"test_validate.py"}
+        monkeypatch.setattr(_checker, "_RETIRING_GRANDFATHER_HOMES", retired)
+
+        source = ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py"
+        result = map_source_to_test(source)
+
+        assert result == ROOT / "tests" / "checks" / "hygiene" / "test_validate_prose_allowlist.py"
+
+    def test_concern_split_monolith_resolves_to_test_package_directory_once_retired(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        retired = _ALL_MIRROR_TARGET_HOMES - {"test_ops_writer.py"}
+        monkeypatch.setattr(_checker, "_RETIRING_GRANDFATHER_HOMES", retired)
+
+        source = ROOT / "scripts" / "ops_writer.py"
+        result = map_source_to_test(source)
+
+        assert result == ROOT / "tests" / "ops_writer"
+
+    def test_nested_concern_split_monolith_keeps_subdir_once_retired(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """src/common/iceberg_reader.py (nested under common/) mirrors to tests/common/iceberg_reader/,
+        not tests/iceberg_reader/ -- the mirror-subpath is preserved for non-root sources."""
+        retired = _ALL_MIRROR_TARGET_HOMES - {"test_iceberg_reader.py"}
+        monkeypatch.setattr(_checker, "_RETIRING_GRANDFATHER_HOMES", retired)
+
+        source = ROOT / "src" / "common" / "iceberg_reader.py"
+        result = map_source_to_test(source)
+
+        assert result == ROOT / "tests" / "common" / "iceberg_reader"
+
+
+class TestCheckTestFileExistsDirectoryTarget:
+    """Tests for check_test_file_exists() with a concern-split test PACKAGE DIRECTORY target."""
+
+    def test_directory_target_passes_when_populated(self, tmp_path: Path) -> None:
+        test_dir = tmp_path / "tests" / "ops_writer"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_write_paths.py").write_text("# tests", encoding="utf-8")
+
+        with (
+            patch("test_coverage_checker.map_source_to_test", return_value=test_dir),
+            patch("test_coverage_checker.ROOT", tmp_path),
+        ):
+            ok, msg = check_test_file_exists(tmp_path / "scripts" / "ops_writer.py")
+
+        assert ok is True
+        assert "package" in msg
+
+    def test_directory_target_fails_when_empty(self, tmp_path: Path) -> None:
+        test_dir = tmp_path / "tests" / "ops_writer"
+        test_dir.mkdir(parents=True)  # exists, but no test_*.py yet
+
+        with (
+            patch("test_coverage_checker.map_source_to_test", return_value=test_dir),
+            patch("test_coverage_checker.ROOT", tmp_path),
+        ):
+            ok, msg = check_test_file_exists(tmp_path / "scripts" / "ops_writer.py")
+
+        assert ok is False
+        assert "missing test package" in msg
+
+    def test_directory_target_fails_when_absent(self, tmp_path: Path) -> None:
+        test_dir = tmp_path / "tests" / "ops_writer"  # never created
+
+        with (
+            patch("test_coverage_checker.map_source_to_test", return_value=test_dir),
+            patch("test_coverage_checker.ROOT", tmp_path),
+        ):
+            ok, msg = check_test_file_exists(tmp_path / "scripts" / "ops_writer.py")
+
+        assert ok is False
+        assert "missing test package" in msg
+
+
+class TestCheckPerFileCoverageDirectoryTarget:
+    """Drives the day-one-dormant directory branch of check_per_file_coverage: once a home
+    retires, its concern-split mirror target is a test PACKAGE DIRECTORY, and coverage must run
+    pytest against that directory rather than a single file. subprocess is mocked throughout."""
+
+    def test_runs_pytest_against_directory_target(self, tmp_path: Path) -> None:
+        source = tmp_path / "scripts" / "ops_writer.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("# source", encoding="utf-8")
+
+        test_dir = tmp_path / "tests" / "ops_writer"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_write_paths.py").write_text("# tests", encoding="utf-8")
+
+        with (
+            patch("test_coverage_checker.ROOT", tmp_path),
+            patch("test_coverage_checker.map_source_to_test", return_value=test_dir),
+            patch("test_coverage_checker.subprocess.Popen") as mock_popen,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.communicate.return_value = (None, None)
+            mock_popen.return_value.__enter__.return_value = mock_proc
+
+            errors = check_per_file_coverage([source])
+
+        assert errors == []
+        called_cmd = mock_popen.call_args.args[0]
+        assert "tests/ops_writer" in called_cmd
+
+    def test_skips_directory_target_with_no_test_files(self, tmp_path: Path) -> None:
+        source = tmp_path / "scripts" / "ops_writer.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("# source", encoding="utf-8")
+
+        test_dir = tmp_path / "tests" / "ops_writer"
+        test_dir.mkdir(parents=True)  # empty -- no test_*.py yet
+
+        with (
+            patch("test_coverage_checker.ROOT", tmp_path),
+            patch("test_coverage_checker.map_source_to_test", return_value=test_dir),
+            patch("test_coverage_checker.subprocess.Popen") as mock_popen,
+        ):
+            errors = check_per_file_coverage([source])
+
+        assert errors == []
+        mock_popen.assert_not_called()
