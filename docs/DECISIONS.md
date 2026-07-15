@@ -2,6 +2,73 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 129: Data-plane resource-axis read broadening for CI refresh-read grants, with a pre-merge coverage verifier (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-15
+**Warehouse ID:** dec-129 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+`github_ci_apply` refresh-reads the ENTIRE `terraform/personal` state on every plan, but its grants
+live out-of-band in `terraform/bootstrap/github_ci_apply.tf` (self-grant break, T2.23) and are
+enumerated per-ARN. A new resource always outruns the enumerated list by one PR/apply cycle -- this
+has recurred 15+ times in ~6 weeks (rec-1985..rec-2702). T2.43 added a GitHub PAT secret + 3 prod
+Lambdas + an hourly rule; `terraform/personal/oidc.tf`'s `github_ci_plan`/`github_ci_drift` grants
+were kept in sync, but the cross-tier bootstrap copy lagged, causing AccessDenied on refresh and a
+red sandbox convergence record (rec-2702). Pre-merge detection cannot catch this today: at PR time
+the new resource isn't yet in state, and the speculative-plan/local-replan identities are both
+broader than the least-privilege apply role -- so detection must be STATIC HCL coverage, not a plan.
+
+**Decision:**
+1. **Broaden the DATA-PLANE resource axis** to an account-wide `agent-platform-*` prefix for the
+   two uniformly-named services -- `LambdaRead` (`function:agent-platform-*`) and `EventBridgeRead`
+   (`rule/agent-platform-*`) -- in all three plan-capable role policies (`github_ci_apply` in
+   `terraform/bootstrap/`; `github_ci_plan`/`github_ci_drift`'s shared `ci_full_refresh_read` in
+   `terraform/personal/oidc.tf`). A future `agent-platform-*` function/rule auto-covers.
+2. **`iam:` reads and Secrets Manager stay enumerated** (Decision 35/98 -- mixed naming, and
+   secrets return VALUES). `terraform/bootstrap/github_ci_apply.tf` gains one enumerated Sid,
+   `SecretsManagerGithubPatRead`, closing the T2.43 cross-tier lag for that one secret.
+3. **Read-refresh grants sit outside the IAM-write authority budget** (Decision 92 point 5 /
+   Decision 98 point 2 -- reversal window kept below the 2500-char VP scan): pt5's in/out-of-budget
+   classification governs `aws_iam_role_policy` WRITE diffs on branch/pr; pt2 already established
+   a read-only grant addition (there, `IAMRolesRead`) does not touch that write budget. This is the
+   same shape generalized from `iam:` to `lambda:`/`events:`; `authority_budget.json`,
+   `IAMRoleWriteBounded`, `DenyIAMEscalation` are untouched.
+4. **New pre-merge coverage verifier** (`scripts.checks.iam_tf.validate_ci_refresh_read_coverage`,
+   `--pre` + full tiers): classifies every `terraform/personal` resource type into (i) needs an
+   independent refresh-read grant -- asserted covered (literal ARN / prefix / bare-or-interpolated
+   reference) in ALL THREE role policies; (ii) transitively covered by a parent/sibling grant; (iii)
+   `iam:` enumerated-only (never a wildcard, Decision 35/98); or (iv) not AWS-IAM-gated at all. An
+   unmapped type FAILS LOUD rather than silently passing.
+5. **Forward-fix, not occurrence-fix** (Decision 55/72): the three ad-hoc grants are not the
+   deliverable -- the prefix broadening (Lever A) + coverage verifier (Lever B) are.
+
+**Reversal conditions:** re-narrow `LambdaRead`/`EventBridgeRead` to enumerated literal ARNs if the
+account ever hosts a non-`agent-platform-*` Lambda function or EventBridge rule, or on any incident
+showing this prefix over-grants. `iam:` reads and Secrets Manager are out of scope and need no
+reversal.
+
+**Rationale:**
+Every managed Lambda function and EventBridge rule here is, verified, uniformly named
+`agent-platform-*` -- an account-scoped prefix (not a service-wide wildcard) safely auto-covers
+future resources of these two types. Layers/secrets are mixed-named, so they stay enumerated and
+rely on the coverage verifier (Lever B) instead of a prefix (Lever A); `iam:` reads are excluded on
+principle (Decision 35/98) regardless of naming uniformity. Lever A closes the RESOURCE axis for
+the two most-recurring types; Lever B closes detection for everything else, including a
+hypothetical future resource type this repo does not yet have -- and makes "why didn't ci-rca fire"
+moot for this class: a pre-merge catch means no red record and no ci-rca run.
+
+**Related:** Decision 92 (CD.35 authority-budget/ratchet; pt5 cited above), Decision 98 (admin-create
++ read-only bootstrap grant precedent this extends from `iam:` to `lambda:`/`events:`; pt2 cited
+above), Decision 35 (enumerated `iam:` reads, unchanged here), Decision 55/72 (RCA-first,
+forward-fix-the-generator), Decision 104 (check-registry pattern followed), Decision 128 (SLOC
+decompose-by-default -- verifier stays under budget, no raise registered), Decision 84 (authored
+here, backfilled to `ops_decisions`, never written directly), Decision 94 (github_ci_apply OIDC
+trust / gated-apply precedent), Decision 119/120 (provider-mirror egress -- the fresh-plan-converges
+verification here is CI/admin-run, not a local CC-web plan).
+
+---
+
 ## Decision 128: SLOC budget-raise guardrails -- decompose by default, raises must be loud and Decision-cited (amends Decision 102) (Decided)
 
 **Status:** Decided

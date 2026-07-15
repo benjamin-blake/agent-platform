@@ -215,8 +215,11 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
   }
 
   statement {
-    # Lambda refresh-time reads. Literal ARNs (no Terraform dependency edges). The three T2.43
-    # prod functions are listed the same way ducklake's were at T2.17/T2.38.
+    # Lambda refresh-time reads. Layer ARNs stay enumerated (mixed ducklake-*/data-pipeline-*
+    # naming); function ARNs use the account-wide function:agent-platform-* prefix (Decision 129 /
+    # T2.43 rec-2702 anti-recurrence) so a future agent-platform-* function auto-covers -- keeps
+    # this role's data-plane read surface identical to github_ci_apply's (the parity the
+    # validate_ci_refresh_read_coverage verifier relies on).
     sid     = "LambdaRead"
     effect  = "Allow"
     actions = ["lambda:Get*", "lambda:List*"]
@@ -227,31 +230,20 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps:*",
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions",
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions:*",
-      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
-      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
-      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
-      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:data-pipeline-deps",
       "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:data-pipeline-deps:*",
-      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-scheduled-agent-dispatcher",
-      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-findings-processor",
-      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ops-compaction"
+      "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-*",
     ]
   }
 
   statement {
-    # EventBridge refresh-time reads. Literal ARNs.
+    # EventBridge refresh-time reads. Broadened to the account-wide rule/agent-platform-* prefix
+    # (Decision 129 / T2.43 rec-2702 anti-recurrence) -- mirrors the LambdaRead broadening above.
     sid     = "EventBridgeRead"
     effect  = "Allow"
     actions = ["events:Describe*", "events:List*"]
     resources = [
-      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
-      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
-      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
-      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
-      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
-      # T2.43 gap: the dispatcher's (disabled) hourly schedule rule.
-      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-hourly-scheduled-agents"
+      "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-*",
     ]
   }
 
