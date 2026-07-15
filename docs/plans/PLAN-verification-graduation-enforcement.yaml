@@ -30,8 +30,15 @@ scope:
       the feat({slug}) commit subject(s) on git log origin/main..HEAD, load PLAN-{slug}.yaml, and
       assert every step declared graduate produced a matching NEW-in-diff registry row
       (plan_slug==slug AND check_id==graduation_check_id); waive/not-applicable require no row.
-      Fail-loud (Decision 55); advisory SKIP when origin/main is unreachable. Injection seams
-      (changed_files, root, plan loader, registry-baseline reader) for testability. Stays <500 SLOC.
+      Fail-loud (Decision 55) ONLY on genuine errors; advisory SKIP (never fail) when origin/main is
+      unreachable AND when a feat({slug}) subject names a plan whose PLAN-{slug}.yaml is absent
+      (legacy .md-era, archived, or typo'd slug) -- an unresolvable plan must not wedge a legitimate
+      PR. Plan-PR leg enforcement predicate (avoids tripping on pre-field historical plans): enforce
+      disposition-presence on a diff plan IFF it is net-new (git --diff-filter=A) OR it already
+      carries >=1 graduation disposition on any step; a merely-modified plan that declares zero
+      dispositions anywhere (a correction to a pre-field plan, or the lagged .yaml archival git-mv
+      sweep) is skipped. Injection seams (changed_files, root, plan loader, registry-baseline reader)
+      for testability. Stays <500 SLOC.
   - file: scripts/checks/registry.py
     action: Modify
     purpose: >-
@@ -76,8 +83,9 @@ scope:
     purpose: >-
       Author the numbered Decision (re-check the current max header first; 130 today -> 131 unless
       a concurrent PR raced it) recording the enforced-graduation CI gate, its trigger model
-      (plan-declared dispositions, no bug-fix inference), the waive escape hatch, and the
-      prevention-vs-retroactive rationale.
+      (plan-declared dispositions, no bug-fix inference), the waive escape hatch, the
+      prevention-vs-retroactive rationale, AND the two disclosed residual limitations (classification
+      seam + the feat({slug})-commit-omission false-negative).
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -100,9 +108,11 @@ scope:
     action: Create
     purpose: >-
       Behavioural tests via injection seams -- TestPlanPrLeg (new-in-diff plan missing a
-      disposition fails; dispositions present passes; historical plan not-in-diff untouched),
-      TestImplementPrLeg (graduate step with no matching new registry row fails; with the row
-      passes; flip-to-waive passes), TestWaiver (waive with reason needs no row). Stays <500 SLOC.
+      disposition fails; dispositions present passes; historical plan not-in-diff untouched; a
+      merely-modified pre-field plan with zero dispositions is skipped), TestImplementPrLeg
+      (graduate step with no matching new registry row fails; with the row passes; flip-to-waive
+      passes; an unresolvable feat({slug}) plan advisory-SKIPs, never fails), TestWaiver (waive with
+      reason needs no row). Stays <500 SLOC.
 bundled_recommendations: []
 closes_criteria: []
 infrastructure_dependencies: []
@@ -126,6 +136,10 @@ acceptance_criteria:
   - >-
     waive and not-applicable dispositions require no registry row; waive without a reason is
     rejected at schema level.
+  - >-
+    The check never wedges a legitimate PR: an unresolvable feat({slug}) plan (absent/renamed/.md
+    plan file) and an unreachable origin/main both advisory-SKIP; the plan-PR presence leg does not
+    fire on a merely-modified pre-field plan that declares zero dispositions.
   - >-
     The implement, planning, and plan-critique skills carry the mandatory-disposition,
     classification-guidance, and classification-honesty/waiver-review text respectively.
@@ -176,10 +190,11 @@ verification_plan:
       Implement-PR leg behaviour via injection seams -- a graduate step with no matching new
       registry row fails; with the row it passes; flip-to-waive passes.
     command: bin/venv-python -m pytest tests/checks/test_validate_graduation_completeness.py::TestImplementPrLeg -q
-    expected: "All pass -- missing-row case yields a non-empty failed[]; row-present and flip-to-waive cases yield empty failed[]."
+    expected: "All pass -- missing-row case yields a non-empty failed[]; row-present, flip-to-waive, AND unresolvable-slug (advisory-skip) cases yield empty failed[]."
     fix_if: >-
       A missing-row case not failing means the graduate<->registry-row matching (plan_slug +
-      graduation_check_id, new-in-diff) is wrong -- fix the implement-PR leg.
+      graduation_check_id, new-in-diff) is wrong; an unresolvable-slug case reddening failed[] means
+      the not-found path is fail-loud instead of advisory-skip -- fix the implement-PR leg.
     hermetic: false
   - step: 5
     phase: pre-deploy
@@ -233,11 +248,12 @@ constraints:
   - "Do NOT bundle or auto-close rec-2677 or PR #586's orphaned checks: those already-merged rows are backlog the FORWARD gate cannot reach -- they belong to the separate backlog-recovery follow-on, not this prevention plan."
 context:
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: Decision 55, Decision 73, Decision 76, Decision 83, Decision 84, Decision 85, Decision 86, Decision 104, Decision 128 (+ NOTE Decision 130). RELATED: Decision 48, Decision 87, Decision 90, Decision 115, Decision 67. Roadmap/audit refs (not in DECISIONS.md, grounded directly): CD.29, VF-05, VF-06, VF-11, tier_item T3.18."
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round (3 non-reshaping refinements folded in: unresolvable-plan advisory-skip + VP case; feat()-omission false-negative disclosed in Decision 131 + residual context; modify-pre-field-plan carve-out on the plan-PR presence leg)"
   - "Non-tautology property depends on the Decision 76/85 two-PR flow: the plan merges first, so at implement-PR CI time origin/main is the PRE-FIX baseline and run_differential(origin/main) is valid. Single-PR (plan+fix together) also works: the plan is new-in-diff and origin/main is still pre-fix. This is exactly why prevention succeeds where retroactive graduation of an already-merged fix (PR #586) is structurally tautological."
   - "T3.18 (complete) shipped the VF-05 graduation PRODUCER and the VF-06 differential-admission check (validate_verification_registry re-runs the real git-worktree differential for new-in-diff rows). This plan adds the missing OBLIGATION -- nothing currently forces a fix PR to add the rows, so a skip (the #586 incident) is invisible (no new entries == correctly-graduated-nothing to CI)."
   - "Bootstrap: this plan is authored before the graduation field exists, so its own VP steps carry no disposition, and it merges via the /plan PR before validate_graduation_completeness exists -- so it is never subject to the plan-PR presence leg. The implement session still graduates this plan's own kernel-expressible checks via the pre-existing VF-05 mechanism (hence config/agent/verification_registry/registry.yaml is in scope up-front)."
-  - "Residual limitation (stated honestly): the not-applicable vs graduate/waive CLASSIFICATION is the one non-deterministic seam -- 'is this shell command kernel-expressible?' is undecidable in general. The mandatory fresh-context plan-critique gate is the honesty check, applied AT PLAN TIME (before the fix exists, so no pressure to wave through a finished fix). A deterministic 'smell' backstop for obvious cases (bare pytest node / test -f marked not-applicable) is deferred to Phase 2."
+  - "Residual limitation A (classification seam): the not-applicable vs graduate/waive CLASSIFICATION is a non-deterministic seam -- 'is this shell command kernel-expressible?' is undecidable in general. The mandatory fresh-context plan-critique gate is the honesty check, applied AT PLAN TIME (before the fix exists, so no pressure to wave through a finished fix). A deterministic 'smell' backstop for obvious cases (bare pytest node / test -f marked not-applicable) is deferred to Phase 2."
+  - "Residual limitation B (trigger seam): the implement-PR obligation is resolved from the feat({slug}) commit subject, so it is only as strong as that commit-prefix convention -- a code PR that omits or varies the prefix escapes the PRODUCTION obligation (a false negative). This is the best available signal (diff-based plan resolution would be heuristic), and the plan-PR presence leg + the planning/plan-critique disposition-emission still bind the plan side. Must be disclosed explicitly in the Decision 131 text so the residual is on the record."
   - "Backlog recovery is a SEPARATE follow-on plan (fork B): PR #586's 4 orphaned checks (the guard meta-test in tests/test_ops_data_portal.py + three tests in tests/test_validate.py::TestFastTierCollectability) and rec-2677's 4 un-graduated checks-registry tests. Fable's retroactive fix_commit (differential 'before' leg against {fix_commit}^ instead of origin/main, with ancestor/covered-files/full-hash guards) is ONE option; a one-time manual graduation may be cheaper for a small backlog. The forward gate does NOT need fix_commit."
   - "Related open recs (note-only, NOT bundled; partially addressed because the pre-declared graduation_check_id makes registry rows an in-scope, up-front declared output): rec-2642, rec-2651, rec-2672, rec-2676 (registry.yaml edited outside declared plan scope). rec-2677 (under-graduation: 2 of 6 rows) is the motivating instance but its remediation is backlog, above."
   - "ci-rca: ci_rca_unresolved_recs empty at planning time (no hard block). rec-2710 (tests/test_ops_data_portal.py, 'unit test hits real AWS') is ci_rca_likely_resolved via PR #586 -- informational only."
@@ -251,7 +267,7 @@ pre_implementation_checklist:
   - "Confirmed: the graduation field is optional so historical PLAN-*.yaml are unaffected"
 execution_steps:
   - "Modify scripts/roadmap/plan_document.py: add optional graduation / graduation_check_id / graduation_waiver_reason to VerificationStep + a model_validator enforcing graduate=>check_id and waive=>reason; keep extra=\"forbid\" and the field optional."
-  - "Create scripts/checks/verification/validate_graduation_completeness.py: @register the diff-scoped check with injection seams; implement the plan-PR leg (dispositions present on new/modified plans) and the implement-PR leg (feat({slug}) resolution -> graduate steps matched to new-in-diff registry rows by plan_slug + check_id); fail-loud, advisory-SKIP when origin/main is unreachable; keep <500 SLOC."
+  - "Create scripts/checks/verification/validate_graduation_completeness.py: @register the diff-scoped check with injection seams; plan-PR leg enforces disposition-presence only when a diff plan is net-new (--diff-filter=A) OR already carries >=1 disposition (skips a merely-modified pre-field plan / the archival git-mv); implement-PR leg resolves feat({slug}) -> matches graduate steps to new-in-diff registry rows by plan_slug + check_id; advisory-SKIP (never fail) when origin/main is unreachable OR the feat({slug}) plan is unresolvable (absent/renamed/.md); fail-loud only on genuine errors; keep <500 SLOC."
   - "Modify scripts/checks/registry.py: insert validate_graduation_completeness into pre_sequence() and full_sequence()."
   - "Modify scripts/validate.py: add the facade re-export import for validate_graduation_completeness."
   - "Modify .claude/skills/implement/SKILL.md (VF-05 section): graduation is mandatory per declared graduate dispositions; use the declared graduation_check_id as the row check_id; flip a discovered-un-graduatable step to waive (with reason) in the same PR."
