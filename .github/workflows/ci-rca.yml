@@ -256,6 +256,40 @@ jobs:
             fi
           fi
 
+          # Cause-aware convergence dedup (PLAN-ci-rca-convergence-dedup): a CONVERGENCE_RED
+          # refusal is a downstream SYMPTOM, not its own root cause. When the per-category check
+          # above found no direct match for convergence_refused (a brand-new category has no
+          # prior status context), consult scripts.ci_rca.convergence_dedup for a backed cause:
+          # a drift-red matches the open tf_drift rec by drift_run_url; an apply-failure-red
+          # matches a pre-existing non-convergence ci-rca commit-status already posted on the
+          # SAME commit (ANCHOR_SHA already equals the red record's commit_sha for this
+          # workflow -- see "Resolve run metadata" above). All other paths (non-sandbox
+          # workflows, force_rca, non-convergence categories) are untouched.
+          if [ "$ALREADY_FILED" != "true" ] && [ "${{ github.event.inputs.force_rca }}" != "true" ] && \
+             [ "$WORKFLOW_SLUG" = "terraform-apply-sandbox" ] && \
+             echo "$CATEGORIES" | tr ',' '\n' | grep -qx "convergence_refused"; then
+            echo "convergence_refused present with no direct per-category match; checking cause-aware convergence dedup."
+            aws s3 cp "s3://agent-platform-data-lake/convergence/personal/sandbox.json" /tmp/convergence-record.json 2>/dev/null \
+              || echo '{}' > /tmp/convergence-record.json
+            gh api "repos/${{ github.repository }}/commits/${ANCHOR_SHA}/statuses" > /tmp/commit-statuses.json 2>/dev/null \
+              || echo '[]' > /tmp/commit-statuses.json
+            CONV_OUT=$(bin/venv-python -m scripts.ci_rca.convergence_dedup \
+              --record /tmp/convergence-record.json --commit-statuses /tmp/commit-statuses.json)
+            echo "$CONV_OUT"
+            CONV_FILED=$(echo "$CONV_OUT" | grep '^already_filed=' | cut -d= -f2)
+            if [ "$CONV_FILED" = "true" ]; then
+              ALREADY_FILED="true"
+              CAUSE_REC=$(echo "$CONV_OUT" | grep '^cause_rec=' | cut -d= -f2)
+              CAUSE_KIND=$(echo "$CONV_OUT" | grep '^cause_kind=' | cut -d= -f2)
+              echo "Convergence dedup: cause-rec ${CAUSE_REC} (kind=${CAUSE_KIND}) already covers this refusal; skipping agent."
+              # Bump ONLY a source=ci_rca cause-rec (context_v2_json carrier); a tf_drift
+              # cause-rec (rec-2695-style) gets the already_filed skip with no bump.
+              if [ "$CAUSE_KIND" = "ci_rca" ]; then
+                bin/venv-python -m scripts.ops_data_portal --bump-ci-rca-occurrence "$CAUSE_REC"
+              fi
+            fi
+          fi
+
           echo "already_filed=${ALREADY_FILED}" >> "$GITHUB_OUTPUT"
 
       - name: Fingerprint dedup guard (cross-commit root-cause grouping)
