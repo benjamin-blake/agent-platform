@@ -381,11 +381,19 @@ class TestNoLocalRootRecomputation:
 
     def test_zero_residual_bare_root_patch_sites_in_tests(self) -> None:
         """Grep-count closure: no test still patches validate.run/ROOT/get_changed_files
-        expecting it to intercept a moved check body (Decision 104 namespace migration)."""
+        expecting it to intercept a moved check body (Decision 104 namespace migration).
+
+        tests/test_validate.py was fully decomposed into per-check mirrors under
+        tests/checks/** plus the orchestrator residue under tests/validate/ (rec-2709
+        Wave 1) -- scan both trees for the same residual anti-pattern the monolith-era
+        check guarded against.
+        """
         import re
 
-        text = (ROOT / "tests" / "test_validate.py").read_text(encoding="utf-8")
-        residual = re.findall(r'patch\("validate\.(run|ROOT|get_changed_files)"', text)
+        residual: list[str] = []
+        for py_file in sorted((ROOT / "tests" / "checks").rglob("*.py")) + sorted((ROOT / "tests" / "validate").rglob("*.py")):
+            text = py_file.read_text(encoding="utf-8")
+            residual.extend(re.findall(r'patch\("validate\.(run|ROOT|get_changed_files)"', text))
         assert residual == [], f"Residual validate.{{run,ROOT,get_changed_files}} patch sites: {residual}"
 
 

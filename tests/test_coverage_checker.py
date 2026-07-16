@@ -95,11 +95,13 @@ class TestMapSourceToTest:
         assert result == ROOT / "tests" / "test_config.py"
 
     def test_maps_scripts_to_test(self) -> None:
-        """scripts/validate.py maps to tests/test_validate.py."""
+        """scripts/validate.py maps to the tests/validate/ concern-split package (rec-2709
+        Wave 1: "test_validate.py" retired from _RETIRING_GRANDFATHER_HOMES, and
+        scripts/validate.py is a declared _CONCERN_SPLIT_TEST_PACKAGES entry)."""
         source = ROOT / "scripts" / "validate.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_validate.py"
+        assert result == ROOT / "tests" / "validate"
 
     def test_returns_none_for_unmapped_path(self, tmp_path: Path) -> None:
         """Paths not under src/ or scripts/ return None."""
@@ -120,8 +122,9 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "test_pipeline.py"
 
-    def test_maps_scripts_checks_nested_module_to_test_validate(self) -> None:
-        """scripts/checks/<domain>/<module>.py maps to tests/test_validate.py (Decision 104).
+    def test_maps_scripts_checks_nested_module_to_mirror(self) -> None:
+        """scripts/checks/<domain>/<module>.py maps to its per-check mirror test
+        (tests/checks/<domain>/test_<module>.py) post rec-2709 Wave 1 retirement.
 
         Closes the coverage-gate hole: the pre-extension rule (len(parts) == 2) silently
         skipped every nested scripts/checks/** module.
@@ -129,14 +132,19 @@ class TestMapSourceToTest:
         source = ROOT / "scripts" / "checks" / "sloc" / "sloc_limits.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_validate.py"
+        assert result == ROOT / "tests" / "checks" / "sloc" / "test_sloc_limits.py"
 
-    def test_maps_scripts_checks_domain_helper_to_test_validate(self) -> None:
-        """A domain-package helper module (e.g. contracts/_shared.py) also maps to test_validate.py."""
+    def test_maps_scripts_checks_domain_helper_to_mirror(self) -> None:
+        """A domain-package helper module (e.g. contracts/_shared.py) mirrors to
+        tests/checks/<domain>/test__shared.py post rec-2709 Wave 1 (no test file actually
+        exists at that path -- contracts/_shared.py has no public defs -- this assertion is
+        about map_source_to_test's computed path, not file presence; see
+        PLAN-sloc-test-validate.yaml's LATENT OBLIGATIONS context note for the domain
+        _shared.py helpers)."""
         source = ROOT / "scripts" / "checks" / "contracts" / "_shared.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_validate.py"
+        assert result == ROOT / "tests" / "checks" / "contracts" / "test__shared.py"
 
     def test_maps_scripts_checks_registry_to_test_checks_registry(self) -> None:
         """scripts/checks/registry.py maps to tests/test_checks_registry.py, not test_validate.py."""
@@ -338,16 +346,26 @@ class TestGetChangedSourceFiles:
 
 
 class TestGrandfatherRetiringTable:
-    """Behaviour-preservation invariant (Decision 131): day-one map_source_to_test is
-    byte-identical to the pre-inversion function -- the retiring grandfather-table gates the
-    mirror rule dormant until a wave explicitly retires one basename."""
+    """Behaviour-preservation invariant (Decision 131): map_source_to_test resolves each
+    roster home via colocation while it is grandfathered, and via the mirror rule once a wave
+    retires it -- rec-2709 Wave 1 (PLAN-sloc-test-validate) retired the first of the 24,
+    "test_validate.py"."""
 
-    def test_representative_paths_match_pre_inversion_homes(self) -> None:
-        """A representative real path set resolves to exactly the pre-inversion homes,
-        including the None returns for scripts/executor/** and scripts/ops_portal/**."""
+    def test_representative_paths_resolve_under_current_retirement_state(self) -> None:
+        """A representative real path set resolves correctly under the CURRENT retirement
+        state: "test_validate.py" is retired (its sources now resolve via the mirror rule /
+        the scripts/validate.py concern-split package), the other 23 roster homes are still
+        grandfathered, and scripts/executor/** and scripts/ops_portal/** keep returning None
+        (Decision 124 -- unperturbed by the Wave 1 map edits)."""
         cases: dict[Path, Path | None] = {
-            ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py": ROOT / "tests" / "test_validate.py",
-            ROOT / "scripts" / "validate.py": ROOT / "tests" / "test_validate.py",
+            ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py": ROOT
+            / "tests"
+            / "checks"
+            / "hygiene"
+            / "test_validate_prose_allowlist.py",
+            ROOT / "scripts" / "validate.py": ROOT / "tests" / "validate",
+            ROOT / "scripts" / "checks" / "_scaffolding.py": ROOT / "tests" / "validate",
+            ROOT / "scripts" / "checks" / "_terraform.py": ROOT / "tests" / "validate",
             ROOT / "src" / "common" / "config.py": ROOT / "tests" / "test_config.py",
             ROOT / "scripts" / "executor" / "step_runner.py": None,
             ROOT / "scripts" / "ops_portal" / "cli.py": None,
@@ -356,12 +374,17 @@ class TestGrandfatherRetiringTable:
         for source, expected in cases.items():
             assert map_source_to_test(source) == expected, source
 
-    def test_retiring_equals_all_target_homes_on_day_one(self) -> None:
-        """The mirror branch is dormant: every roster target is still grandfathered."""
-        assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES
+    def test_retiring_is_all_target_homes_minus_test_validate(self) -> None:
+        """Exactly one basename has retired so far: "test_validate.py" (rec-2709 Wave 1). The
+        mirror branch is live for it and dormant for the other 23 roster targets."""
+        assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - {"test_validate.py"}
+        assert "test_validate.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == {"test_validate.py"}
 
     def test_roster_is_the_24_known_basenames(self) -> None:
-        """The fixed rec-2709 roster matches the 24 dec-130 config/sloc_budgets.yaml entries."""
+        """The fixed rec-2709 roster matches the 24 dec-130 config/sloc_budgets.yaml entries
+        (frozen membership -- retiring a home deletes it from _RETIRING_GRANDFATHER_HOMES only,
+        never from this frozenset)."""
         expected = {
             "test_build_lambda_deploy.py",
             "test_ci_rca_evidence.py",

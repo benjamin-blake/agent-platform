@@ -2,22 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
-_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "validate.py"
-
-if "validate" in sys.modules:
-    _validate = sys.modules["validate"]
-else:
-    _spec = importlib.util.spec_from_file_location("validate", _SCRIPT_PATH)
-    _validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-    _spec.loader.exec_module(_validate)  # type: ignore[union-attr]
-    sys.modules["validate"] = _validate
-
-validate_decisions_local_writes = _validate.validate_decisions_local_writes
+from scripts.checks.ops_governance.validate_decisions_local_writes import validate_decisions_local_writes
 
 
 class TestValidateDecisionsLocalWrites:

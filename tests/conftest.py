@@ -1,6 +1,7 @@
 """Shared pytest fixtures for the test suite."""
 
 import os
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
@@ -156,6 +157,32 @@ def _block_llm_cli_subprocess(request: pytest.FixtureRequest, monkeypatch: pytes
         return _orig_run(args, *a, **kw)
 
     monkeypatch.setattr(_sp, "run", _guarded_run)
+
+
+@pytest.fixture
+def _neutralized_pre_registry():
+    """Patch every check-kind step of pre_sequence() to a no-op on the `validate` namespace.
+
+    Applied via @pytest.mark.usefixtures to the classes whose tests call _validate.main()
+    in --pre mode, so those tests exercise only the scaffold machinery plus whichever
+    check(s) they explicitly patch themselves -- not the real check registry.
+    _dispatch_check resolves each check via globals()[name] on the `validate` module
+    (Decision 104), so patching "validate.<name>" intercepts it. A test's own explicit
+    `with patch("validate.<name>")` still wins for the duration of its body: it is
+    entered inside this fixture's ExitStack, so it becomes the innermost -- and active --
+    patch on that name.
+
+    Cross-tree fixture (rec-2709 Wave 1): consumed by tests/checks/roadmap/'s
+    TestGraduationGuard AND the tests/validate/ orchestrator classes, so it lives in the
+    root conftest rather than a package-scoped one.
+    """
+    from scripts.checks import registry as _registry  # noqa: PLC0415
+
+    with ExitStack() as stack:
+        for step in _registry.pre_sequence():
+            if step.kind == "check":
+                stack.enter_context(patch(f"validate.{step.name}"))
+        yield
 
 
 @pytest.fixture

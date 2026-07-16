@@ -48,6 +48,16 @@ def extract_definitions(file_path: Path) -> list[str]:
 # individual check's tests in tests/test_validate.py.
 _CHECKS_REGISTRY_MECHANISM_FILES = {"_common.py", "registry.py"}
 
+# scripts/checks/_scaffolding.py and _terraform.py are orchestration-internal helper modules --
+# not themselves registered checks -- whose tests have always lived alongside the orchestrator's
+# own tests (never with the per-check mirrors). Once "test_validate.py" retires from
+# _RETIRING_GRANDFATHER_HOMES (rec-2709 Wave 1), they route to the SAME tests/validate/
+# concern-split package scripts/validate.py itself resolves to (see the
+# "scripts/validate.py" entry in _CONCERN_SPLIT_TEST_PACKAGES below), rather than falling
+# through to the generic drop-root mirror rule (which would otherwise compute
+# tests/checks/test__scaffolding.py -- wrong; their real home is the orchestrator package).
+_ORCHESTRATION_SCAFFOLDING_FILES = {"_scaffolding.py", "_terraform.py"}
+
 # The four ducklake_runtime split-out modules (PLAN-sloc-ducklake-layer) route to the
 # pre-decomposition monolith's test file, mirroring the Decision 104 scripts/checks/** precedent:
 # they are the write/table-DDL/read/metrics behavior oracle, exercised via the facade re-export.
@@ -205,7 +215,6 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_session_postflight.py",
     "test_session_preflight.py",
     "test_sync_ops.py",
-    "test_validate.py",
     "test_verify_ci_workflow.py",
 }
 
@@ -228,6 +237,8 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/ducklake_neon_smoke_test.py",
         "src/common/iceberg_reader.py",
         "src/data/handlers/scheduled_agent_handler.py",
+        "scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py",
+        "scripts/validate.py",
     }
 )
 
@@ -293,11 +304,21 @@ def map_source_to_test(source_path: Path) -> Path | None:
     mirror branch ever fires for them; a source path with no grandfathered home never joins the
     roster.
 
-    Day one, _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES (every target is still
-    retiring), so the mirror branch below is never taken and every result is byte-identical to
-    the pre-inversion function (the TestMapSourceToTest / TestCheckTestFileExists oracle proves
-    this). A later wave retires exactly one basename per decomposition (a one-line,
-    low-merge-conflict edit to _RETIRING_GRANDFATHER_HOMES).
+    Day one, _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES (every target was still
+    retiring), so the mirror branch below was never taken and every result was byte-identical to
+    the pre-inversion function (the TestMapSourceToTest / TestCheckTestFileExists oracle proved
+    this on day one; see TestGrandfatherRetiringTable for the current, post-Wave-1 state). Each
+    wave retires exactly one basename (a one-line, low-merge-conflict edit to
+    _RETIRING_GRANDFATHER_HOMES) -- rec-2709 Wave 1 (PLAN-sloc-test-validate) retired
+    "test_validate.py", the first of the 24-home roster to flip: every scripts/checks/**/*.py
+    (and scripts/validate.py itself) now resolves via the mirror rule instead of colocating in
+    the now-deleted tests/test_validate.py.
+
+    scripts/checks/_scaffolding.py and _terraform.py are a special case within the retired
+    "test_validate.py" home: they are orchestration-internal helpers, not registered checks, so
+    once "test_validate.py" retires they route to the SAME tests/validate/ concern-split package
+    scripts/validate.py resolves to (not the generic per-file mirror target) -- see
+    _ORCHESTRATION_SCAFFOLDING_FILES.
 
     Returns None for paths not under src/ or scripts/, or with no grandfathered home.
     """
@@ -307,6 +328,13 @@ def map_source_to_test(source_path: Path) -> Path | None:
     if home.name in _RETIRING_GRANDFATHER_HOMES:
         return home
     if home.name in _ALL_MIRROR_TARGET_HOMES:
+        if home.name == "test_validate.py":
+            try:
+                rel_name = source_path.resolve().relative_to(ROOT).name
+            except ValueError:
+                rel_name = source_path.name
+            if rel_name in _ORCHESTRATION_SCAFFOLDING_FILES:
+                return ROOT / "tests" / "validate"
         return _mirror_source_to_test(source_path)
     return home
 
