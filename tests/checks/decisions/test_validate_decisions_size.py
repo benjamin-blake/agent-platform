@@ -1,5 +1,5 @@
 """Tests for validate_decisions_size(). Mirror of
-scripts/checks/decisions/validate_decisions_size.py (Decision 133 / Decision 114 parity)."""
+scripts/checks/decisions/validate_decisions_size.py (Decision 134 / Decision 114 parity)."""
 
 from pathlib import Path
 from unittest.mock import patch

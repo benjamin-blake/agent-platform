@@ -1,4 +1,4 @@
-"""DECISIONS.md / DECISIONS_ARCHIVE.md size governance (Decision 133; Decision-114 parity).
+"""DECISIONS.md / DECISIONS_ARCHIVE.md size governance (Decision 134; Decision-114 parity).
 
 Ratifies a conscious ceiling + deterministic guard for the decision log, mirroring
 scripts/checks/roadmap/validate_platform_roadmap.py's _roadmap_size_issues() precedent
@@ -45,17 +45,17 @@ def _decisions_size_issues(
     if live_bytes > live_max_bytes:
         issues.append(
             f"  FAIL: docs/DECISIONS.md is {live_bytes} bytes, exceeding the {live_max_bytes}-byte "
-            f"live ceiling (Decision 133) -- relief valves: {_RELIEF_VALVES}"
+            f"live ceiling (Decision 134) -- relief valves: {_RELIEF_VALVES}"
         )
     if live_h2_count > live_max_h2:
         issues.append(
             f"  FAIL: docs/DECISIONS.md has {live_h2_count} live '## Decision' headers, exceeding "
-            f"the {live_max_h2}-header ceiling (Decision 133) -- relief valves: {_RELIEF_VALVES}"
+            f"the {live_max_h2}-header ceiling (Decision 134) -- relief valves: {_RELIEF_VALVES}"
         )
     if combined_bytes > combined_max_bytes:
         issues.append(
             f"  FAIL: docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md combined are {combined_bytes} "
-            f"bytes, exceeding the {combined_max_bytes}-byte combined ceiling (Decision 133) -- "
+            f"bytes, exceeding the {combined_max_bytes}-byte combined ceiling (Decision 134) -- "
             f"relief valves: {_RELIEF_VALVES}"
         )
     return issues
@@ -63,7 +63,7 @@ def _decisions_size_issues(
 
 @registry.register("validate_decisions_size", owner="platform")
 def validate_decisions_size(failed: list[str]) -> None:
-    """Enforce the Decision 133 size ceiling on docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md.
+    """Enforce the Decision 134 size ceiling on docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md.
 
     Cheap stat + header count -- registered in BOTH the --pre and full validate tiers. Guards
     the decision-scout subagent's mandatory whole-live-file read every /plan: live bytes, live
