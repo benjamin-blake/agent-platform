@@ -246,3 +246,300 @@ class TestFetchDecisionFromReader:
 
         with pytest.raises(ValueError, match="invalid decision_id"):
             _fetch_decision_from_athena("not-a-decision")
+
+
+class TestFidelityHelpers:
+    """Direct unit coverage for the small helpers backfill_decisions_from_md composes."""
+
+    def test_load_fidelity_baseline_returns_empty_set_when_file_missing(self, tmp_path: Path) -> None:
+        from scripts.ops_portal.decisions import _load_fidelity_baseline
+
+        missing = tmp_path / "missing-baseline.yaml"
+        with patch("scripts.ops_portal.decisions._FIDELITY_BASELINE_PATH", missing):
+            assert _load_fidelity_baseline() == set()
+
+    def test_live_decision_ids_returns_empty_set_when_live_file_missing(self, tmp_path: Path) -> None:
+        from scripts.ops_portal.decisions import _live_decision_ids
+
+        missing_paths = [tmp_path / "DECISIONS.md"]
+        with patch("scripts.decisions_md._DECISIONS_MD_PATHS", missing_paths):
+            assert _live_decision_ids() == set()
+
+    def test_live_decision_ids_resolves_live_path_by_name_not_position(self, tmp_path: Path) -> None:
+        """_live_decision_ids selects DECISIONS.md by basename, not _DECISIONS_MD_PATHS[0]."""
+        from scripts.ops_portal.decisions import _live_decision_ids
+
+        live = tmp_path / "DECISIONS.md"
+        live.write_text("## Decision 7: Something\n\nBody.\n", encoding="utf-8")
+        # Live path is second in the list -- proves positional indexing is not being used.
+        reordered_paths = [tmp_path / "DECISIONS_ARCHIVE.md", live]
+        with patch("scripts.decisions_md._DECISIONS_MD_PATHS", reordered_paths):
+            assert _live_decision_ids() == {7}
+
+    def test_fidelity_issue_flags_non_iso_decided_date(self) -> None:
+        from scripts.ops_portal.decisions import _fidelity_issue
+
+        entry = {"decision_text": "a real body", "decided_date": "not a date"}
+        assert _fidelity_issue(entry) == "non_iso_decided_date"
+
+    def test_fidelity_issue_clean_entry_returns_none(self) -> None:
+        from scripts.ops_portal.decisions import _fidelity_issue
+
+        entry = {"decision_text": "a real body", "decided_date": "2026-01-01"}
+        assert _fidelity_issue(entry) is None
+
+
+class TestBackfillFidelityTripwire:
+    """PLAN-daf-etl-parity-fidelity / Decision 134 cl.4 (DAF-01): backfill_decisions_from_md's
+    per-run fidelity tripwire. Allowlist-diff against config/agent/data_quality/decisions/
+    fidelity_baseline.yaml -- fails loud on a NEW live-h2 regression, never on a baselined one.
+    """
+
+    _CLEAN_ENTRY = {
+        "decision_id": 1,
+        "title": "A clean entry",
+        "status": "Decided",
+        "decision_text": "This entry has a real decision body.",
+        "decided_date": "2026-01-01",
+        "content_hash": "c" * 64,
+        "raw_block": "## Decision 1: A clean entry (Decided)\n\n**Decision:** body.",
+    }
+
+    def test_fidelity_passes_against_the_real_checked_in_baseline(self, tmp_path: Path) -> None:
+        """The real corpus + the real baseline produces zero unbaselined regressions."""
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result["written"] > 0
+        assert result["failed"] == 0
+
+    def test_fidelity_new_unbaselined_regression_raises_loud(self, tmp_path: Path) -> None:
+        """A synthetic NEW live entry with an empty decision_text, absent from the baseline,
+        must fail the backfill loudly rather than silently counting as 'written'."""
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        regressed_entry = {
+            **self._CLEAN_ENTRY,
+            "decision_id": 99999,
+            "decision_text": "",  # the fidelity issue: empty on a live entry
+        }
+
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_portal.decisions._live_decision_ids", return_value={99999}),
+            patch("scripts.decisions_md.parse_decisions_md", return_value=[regressed_entry]),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            with pytest.raises(RuntimeError, match="fidelity tripwire"):
+                backfill_decisions_from_md()
+
+    def test_fidelity_baselined_entry_does_not_trip_the_tripwire(self, tmp_path: Path) -> None:
+        """dec-63 (a real baseline entry, pre-77-band terse style) has an empty decision_text
+        by construction -- it must not trip the tripwire even though it is 'live'."""
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        baselined_entry = {
+            **self._CLEAN_ENTRY,
+            "decision_id": 63,
+            "decision_text": "",
+        }
+
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_portal.decisions._live_decision_ids", return_value={63}),
+            patch("scripts.decisions_md.parse_decisions_md", return_value=[baselined_entry]),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result["written"] == 1
+        assert result["failed"] == 0
+
+    def test_fidelity_entry_with_no_valid_decision_id_is_skipped(self, tmp_path: Path) -> None:
+        """A parsed entry whose decision_id is absent or non-numeric counts as skipped, not
+        failed -- covers both the ValueError-on-int() branch and the n<=0 branch."""
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        unkeyed_entries = [
+            {**self._CLEAN_ENTRY, "decision_id": "not-a-number"},
+            {**self._CLEAN_ENTRY, "decision_id": 0},
+        ]
+
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write") as mock_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
+            patch("scripts.decisions_md.parse_decisions_md", return_value=unkeyed_entries),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result == {"written": 0, "failed": 0, "skipped": 2}
+        mock_write.assert_not_called()
+
+    def test_backfill_counts_writer_failure_as_failed_not_written(self, tmp_path: Path) -> None:
+        """A per-row writer exception is isolated -- counted as failed, does not abort the run."""
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        entry = {**self._CLEAN_ENTRY, "content_hash": "d" * 64}
+
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write", side_effect=RuntimeError("writer down")),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
+            patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result == {"written": 0, "failed": 1, "skipped": 0}
+
+
+class TestBackfillContentHashSkipGate:
+    """PLAN-daf-etl-parity-fidelity / Decision 134 cl.4 (DAF-01): the client-side content_hash
+    skip gate. Reads the current row's content_hash via _fetch_decision_from_reader to decide
+    whether a write is needed -- the write source stays DECISIONS.md (never a read cache)."""
+
+    _ENTRY = {
+        "decision_id": 1,
+        "title": "An entry",
+        "status": "Decided",
+        "decision_text": "Some decision body.",
+        "decided_date": "2026-01-01",
+        "raw_block": "## Decision 1: An entry (Decided)\n\n**Decision:** body.",
+    }
+
+    def test_content_hash_skip_gate_skips_when_hash_unchanged(self, tmp_path: Path) -> None:
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        entry = {**self._ENTRY, "content_hash": "same_hash" * 8}
+        existing_row = {"content_hash": "same_hash" * 8}
+
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write") as mock_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=existing_row),
+            patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
+            patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result == {"written": 0, "failed": 0, "skipped": 1}
+        mock_write.assert_not_called()
+
+    def test_content_hash_skip_gate_writes_when_hash_differs(self, tmp_path: Path) -> None:
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        entry = {**self._ENTRY, "content_hash": "new_hash_" * 7 + "abcdefg"}
+        existing_row = {"content_hash": "old_hash_" * 7 + "abcdefg"}
+
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}) as mock_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=existing_row),
+            patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
+            patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result == {"written": 1, "failed": 0, "skipped": 0}
+        mock_write.assert_called_once()
+
+    def test_content_hash_skip_gate_writes_when_no_existing_row(self, tmp_path: Path) -> None:
+        """A brand-new entry (not yet in the warehouse) always writes -- nothing to skip against."""
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        entry = {**self._ENTRY, "content_hash": "brand_new" * 7 + "abcdefg"}
+
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}) as mock_write,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
+            patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result == {"written": 1, "failed": 0, "skipped": 0}
+        mock_write.assert_called_once()
+
+
+@pytest.mark.integration
+class TestLiveReaderParity:
+    """Post-deploy anchor spot-check via the ducklake_reader boundary (VP step 11 of
+    PLAN-daf-etl-parity-fidelity). Marked integration (real AWS network + credentials
+    required) per the tests/test_iceberg_reader.py::TestWarehouseParity precedent.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_not_ready(self, _allow_network_for_integration: None) -> None:
+        """Skip when creds are unavailable, or the post-deploy schema migration (VP steps
+        8-10: deploy, reconcile_columns, backfill) has not landed against this warehouse yet.
+
+        Requests _allow_network_for_integration so the probe's own reader call runs only
+        after sockets are restored by that fixture.
+        """
+        from scripts.preflight.aws_infra import check_credentials
+
+        if check_credentials() != "ok":
+            pytest.skip("AWS credentials unavailable -- live reader parity needs the real ducklake_reader")
+
+        from scripts.ops_portal.decisions import _fetch_decision_from_reader
+
+        probe = _fetch_decision_from_reader("dec-084")
+        if probe is None or "raw_block" not in probe:
+            pytest.skip(
+                "ops_decisions has no raw_block column yet -- the post-deploy reconcile_columns "
+                "+ backfill sequence (PLAN-daf-etl-parity-fidelity VP steps 8-10) has not run "
+                "against this environment's warehouse"
+            )
+
+    def test_live_reader_parity_anchor_decisions_are_recoverable(self) -> None:
+        from scripts.ops_portal.decisions import _fetch_decision_from_reader
+
+        anchors: tuple[tuple[str, str], ...] = (
+            ("dec-084", "decision_text"),
+            ("dec-114", "reversal_conditions"),
+        )
+        for dec_id, field in anchors:
+            record = _fetch_decision_from_reader(dec_id)
+            assert record is not None, f"{dec_id} not found in ops_decisions"
+            assert record.get("raw_block"), f"{dec_id} raw_block empty in-table"
+            assert record.get(field), f"{dec_id}.{field} empty in-table"
+
+        dec_067 = _fetch_decision_from_reader("dec-067")
+        assert dec_067 is not None, "dec-067 not found in ops_decisions"
+        decided_date = dec_067.get("decided_date") or ""
+        assert decided_date == "" or decided_date[:4].isdigit()
