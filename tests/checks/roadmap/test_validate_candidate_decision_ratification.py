@@ -7,6 +7,7 @@ from scripts.checks.roadmap.validate_candidate_decision_ratification import (
     _dec_number,
     validate_candidate_decision_ratification,
 )
+from scripts.decisions_md import decision_header_numbers
 
 
 class TestCandidateDecisionRatification:
@@ -138,6 +139,62 @@ class TestCandidateDecisionRatification:
             decisions_md="## Decision 1: Something (Decided)\n",
             archive_md="## Decision 34: Unified Cross-Workflow Session Telemetry\n",
         )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == []
+
+
+class TestConsolidatedHeaderHelper:
+    """DAF-03 consolidation (PLAN-daf-authoring-grammar): the R1 guard's header-number scan now
+    delegates to scripts.decisions_md.decision_header_numbers(paths=...), rooted at the
+    (patchable) _common.ROOT -- never a no-arg call, which would silently read decisions_md's
+    own module-level repo root instead of a patched _common.ROOT and break every re-rooting
+    test in this file."""
+
+    def test_decision_header_numbers_called_with_explicit_rooted_paths(self, tmp_path: Path) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True)
+        (docs_dir / "ROADMAP-PLATFORM.yaml").write_text(
+            "document:\n  id: t\n  version: 1\n  status: draft\n  filed_via: pending_log_decision_lambda\n"
+            "candidate_decisions: []\n",
+            encoding="utf-8",
+        )
+        (docs_dir / "DECISIONS.md").write_text("## Decision 1: X (Decided)\n", encoding="utf-8")
+
+        with (
+            patch("scripts.checks._common.ROOT", tmp_path),
+            patch(
+                "scripts.checks.roadmap.validate_candidate_decision_ratification.decision_header_numbers",
+                wraps=decision_header_numbers,
+            ) as mock_header_numbers,
+        ):
+            failed: list[str] = []
+            validate_candidate_decision_ratification(failed)
+
+        mock_header_numbers.assert_called_once()
+        _, kwargs = mock_header_numbers.call_args
+        assert kwargs["paths"] == [tmp_path / "docs" / "DECISIONS.md", tmp_path / "docs" / "DECISIONS_ARCHIVE.md"]
+
+    def test_promoted_archive_decision_resolves_via_consolidated_helper(self, tmp_path: Path) -> None:
+        """Post-DPI-07-promote regression: a CD ratified against dec-52 (now '## Decision 52:'
+        h2 in the archive, was h3 pre-promote) resolves cleanly through the consolidated
+        decision_header_numbers() path -- the R1 guard's population includes it either way."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir(parents=True)
+        (docs_dir / "ROADMAP-PLATFORM.yaml").write_text(
+            "document:\n  id: t\n  version: 1\n  status: draft\n  filed_via: pending_log_decision_lambda\n"
+            "candidate_decisions:\n"
+            "  - id: CD.1\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-52\n    filed_via: ops_decisions:dec-52\n",
+            encoding="utf-8",
+        )
+        (docs_dir / "DECISIONS.md").write_text("", encoding="utf-8")
+        (docs_dir / "DECISIONS_ARCHIVE.md").write_text(
+            "## Decision 52: Bedrock Migration (Decided)\n\n**Status:** Decided -- April 2026\n",
+            encoding="utf-8",
+        )
+
         failed: list[str] = []
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_candidate_decision_ratification(failed)

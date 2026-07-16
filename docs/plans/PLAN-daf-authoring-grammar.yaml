@@ -155,7 +155,7 @@ verification_plan:
       test -f docs/contracts/decision-entry.yaml && grep -qF '**Superseded by: Decision N**'
       docs/contracts/decision-entry.yaml && ! grep -qE '^contract:' docs/contracts/decision-entry.yaml
     expected: >-
-      Exit 0: the file exists, contains the exact marker string, and has no top-level `contract:`
+      Exit 0: the file exists, contains the exact marker string, and has no top-level contract:
       key (so the CD.25 drift gate skips it).
     fix_if: >-
       Missing file, a different supersession spelling (would diverge from decisions_md._SUPERSEDED_BY_RE),
@@ -176,12 +176,16 @@ verification_plan:
       scripts/checks/roadmap/validate_candidate_decision_ratification.py && grep -qF 'decisions_md'
       scripts/checks/roadmap/validate_candidate_decision_ratification.py
     expected: >-
-      Exit 0: the contract exists, the `Decision (\d` regex substring is absent from the R1 guard,
+      Exit 0: the contract exists, the Decision (\d regex substring is absent from the R1 guard,
       and the guard references decisions_md.
     fix_if: >-
       The private _HEADER_RE was left in place, or the guard does not import/reference decisions_md.
     hermetic: true
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time DAF-03 acceptance landing check; durable regression coverage is VP step 3's parity
+      test (TestHeaderHelperParity), which would fail if the guard's shared-parser wiring ever
+      regressed.
   - step: 3
     phase: pre-deploy
     action: >-
@@ -232,7 +236,7 @@ verification_plan:
     phase: pre-deploy
     action: DPI-07 -- no h3 numbered decision headers remain in the archive.
     command: test "$(grep -c '^### Decision' docs/DECISIONS_ARCHIVE.md)" -eq 0
-    expected: Exit 0 -- zero `### Decision` headers in docs/DECISIONS_ARCHIVE.md.
+    expected: Exit 0 -- zero ### Decision headers in docs/DECISIONS_ARCHIVE.md.
     fix_if: A `### Decision` header remains (an h3 numbered decision the shared grammar forbids).
     hermetic: true
     graduation: graduate
@@ -314,7 +318,7 @@ context:
     also edits scripts/decisions_md.py -- RESOLVED, that sibling is Plan 2 and is already MERGED
     (PR #605 on main), so this plan EXTENDS the landed parser with shared helpers and does not
     rework it; there is no concurrent-authoring collision.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=overseer-run"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED (overseer-run, 0 revise rounds)"
   - >-
     Implements Decision 134 clause 3 (DAF-03 authoring-contract + single-shared-parser forward work);
     Decision 134 is the ratifying disposition Decision for the whole decisions-authoring-format audit.

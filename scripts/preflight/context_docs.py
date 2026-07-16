@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from scripts import decisions_md
 from scripts.preflight import _common
 
 
@@ -46,12 +47,14 @@ def read_context_files(open_recs_count: int | None = None) -> dict:
         if phase_matches:
             roadmap_phase = phase_matches[0].strip()
 
-    # open_decisions_count: count ## Decision headers not marked Decided/Resolved/Closed
+    # open_decisions_count: count decision headers not marked Decided/Resolved/Closed.
+    # Enumeration is the shared decisions_md.iter_decision_headings() grammar (DAF-03 /
+    # PLAN-daf-authoring-grammar) -- the local open/closed paren heuristic below is unchanged.
     open_decisions_count = 0
     if _common.DECISIONS_FILE.exists():
         content = _common.DECISIONS_FILE.read_text(encoding="utf-8")
-        decision_headers = re.findall(r"^## Decision \d+[^\n]*", content, re.MULTILINE)
-        for header in decision_headers:
+        for heading_match in decisions_md.iter_decision_headings(content):
+            header = heading_match.group(0)
             if not re.search(r"\(Decided\)|\(Resolved\)|\(Closed\)|\(Done\)", header, re.IGNORECASE):
                 open_decisions_count += 1
 

@@ -132,6 +132,7 @@ REQUIRED_FULL_CHECKS: frozenset[str] = frozenset(
         "validate_platform_roadmap",
         "validate_candidate_decision_ratification",
         "validate_decisions_size",
+        "validate_decision_entry_conformance",
         "validate_lambda_manifests",
         "validate_lambda_manifest_coverage",
         "validate_lambda_bundle_completeness",

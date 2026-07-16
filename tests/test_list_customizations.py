@@ -232,160 +232,25 @@ def test_main_default_output_location(tmp_path: Path, mod, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# build_decisions_index tests
+# --with-decisions / build_decisions_index retirement (DAF-03 / PLAN-daf-authoring-grammar)
 # ---------------------------------------------------------------------------
 
-DECISIONS_CONTENT = """\
-# Open Decisions
 
-## Decision 21: Per-Step Retro-Lite Retention (Decided)
-
-Some context.
-
-**Status:** Decided -- March 2026
-
----
-
-## Decision 22: Cron Review System Architecture (Decided)
-
-Some other context.
-
-**Status:** Decided -- March 2026
-
----
-
-## Python-Only Scripting (Decided)
-
-Context here.
-
-**Status:** Decided -- March 2026
-
----
-
-## Open Decisions
-
-This heading should be skipped.
-
-## Rejected Cron Suggestions
-
-This heading should also be skipped.
-"""
-
-
-def test_build_decisions_index_explicit_numbered_entries(mod, tmp_path):
-    decisions_path = tmp_path / "DECISIONS.md"
-    decisions_path.write_text(DECISIONS_CONTENT, encoding="utf-8")
-
-    index = mod.build_decisions_index(decisions_path)
-
-    # Should find Decision 21 and Decision 22 with explicit IDs
-    ids = [e["id"] for e in index]
-    assert "dec-021" in ids
-    assert "dec-022" in ids
-
-
-def test_build_decisions_index_explicit_ids_not_duplicated(mod, tmp_path):
-    decisions_path = tmp_path / "DECISIONS.md"
-    decisions_path.write_text(DECISIONS_CONTENT, encoding="utf-8")
-
-    index = mod.build_decisions_index(decisions_path)
-
-    ids = [e["id"] for e in index]
-    assert len(ids) == len(set(ids)), "Duplicate IDs found in decisions index"
-
-
-def test_build_decisions_index_skips_reserved_headings(mod, tmp_path):
-    decisions_path = tmp_path / "DECISIONS.md"
-    decisions_path.write_text(DECISIONS_CONTENT, encoding="utf-8")
-
-    index = mod.build_decisions_index(decisions_path)
-
-    titles = [e["title"] for e in index]
-    assert "Open Decisions" not in titles
-    assert "Rejected Cron Suggestions" not in titles
-
-
-def test_build_decisions_index_status_decided(mod, tmp_path):
-    decisions_path = tmp_path / "DECISIONS.md"
-    decisions_path.write_text(DECISIONS_CONTENT, encoding="utf-8")
-
-    index = mod.build_decisions_index(decisions_path)
-
-    for entry in index:
-        assert entry["status"] in ("Decided", "Open", "Unknown"), f"Unexpected status: {entry['status']}"
-
-    decided = [e for e in index if e["status"] == "Decided"]
-    assert len(decided) >= 2
-
-
-def test_build_decisions_index_keywords_extracted(mod, tmp_path):
-    decisions_path = tmp_path / "DECISIONS.md"
-    decisions_path.write_text(DECISIONS_CONTENT, encoding="utf-8")
-
-    index = mod.build_decisions_index(decisions_path)
-
-    for entry in index:
-        assert "keywords" in entry
-        assert isinstance(entry["keywords"], list)
-
-
-def test_build_decisions_index_missing_file_returns_empty(mod, tmp_path):
-    decisions_path = tmp_path / "DECISIONS.md"  # Does not exist
-
-    index = mod.build_decisions_index(decisions_path)
-
-    assert index == []
-
-
-def test_build_decisions_index_auto_numbering_avoids_explicit_ids(mod, tmp_path):
-    """Auto-numbered IDs must not collide with explicitly numbered decision IDs."""
-    content = """\
-# Open Decisions
-
-## Decision 21: Explicit Decision (Decided)
-
-**Status:** Decided -- March 2026
-
----
-
-## Some Un-numbered Decision (Decided)
-
-**Status:** Decided -- March 2026
-"""
-    decisions_path = tmp_path / "DECISIONS.md"
-    decisions_path.write_text(content, encoding="utf-8")
-
-    index = mod.build_decisions_index(decisions_path)
-
-    ids = [e["id"] for e in index]
-    assert len(ids) == len(set(ids)), "Auto-numbered ID collided with explicit dec-021"
-    assert "dec-021" in ids  # The explicit one is present
-
-
-def test_build_decisions_index_with_decisions_flag(mod, tmp_path, monkeypatch):
-    """--with-decisions flag writes .decisions-index.jsonl to repo root."""
-    import json as json_module
-
+def test_with_decisions_flag_no_longer_accepted(mod, tmp_path, monkeypatch):
+    """The dormant 4th DECISIONS.md parser is retired: --with-decisions is no longer a
+    recognized argument (argparse exits 2 on an unknown flag)."""
     github_dir = tmp_path / ".github"
     (github_dir / "prompts").mkdir(parents=True)
     (github_dir / "agents").mkdir(parents=True)
-    (tmp_path / "docs").mkdir(exist_ok=True)
-    (tmp_path / "logs").mkdir(exist_ok=True)
 
-    decisions_path = tmp_path / "docs" / "DECISIONS.md"
-    decisions_path.write_text(DECISIONS_CONTENT, encoding="utf-8")
-
-    manifest_output = tmp_path / "manifest.json"
-    monkeypatch.setattr(sys, "argv", ["list_customizations.py", "--output", str(manifest_output), "--with-decisions"])
-    with patch.object(mod, "REPO_ROOT", tmp_path), patch.object(mod, "GITHUB_DIR", github_dir):
+    monkeypatch.setattr(sys, "argv", ["list_customizations.py", "--with-decisions"])
+    with (
+        patch.object(mod, "REPO_ROOT", tmp_path),
+        patch.object(mod, "GITHUB_DIR", github_dir),
+        pytest.raises(SystemExit),
+    ):
         mod.main()
 
-    index_path = tmp_path / "logs" / ".decisions-index.jsonl"
-    assert index_path.exists()
 
-    lines = [line for line in index_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert len(lines) >= 2  # At least Decision 21 and Decision 22
-    first = json_module.loads(lines[0])
-    assert "id" in first
-    assert "title" in first
-    assert "status" in first
+def test_build_decisions_index_no_longer_defined(mod):
+    assert not hasattr(mod, "build_decisions_index")

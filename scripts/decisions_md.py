@@ -8,6 +8,13 @@ are typed extractions; the Decision-marker regex tolerates decorated markers (e.
 "**Decision (four invariants):**"); the related-decisions extractor accepts plural
 "Decisions 69/78" cites and dedupes; the decided_date Status-suffix fallback is restricted
 to ISO-shaped values.
+
+DAF-03 shared-parser consolidation (PLAN-daf-authoring-grammar, Decision 134 cl.3): adds
+iter_decision_headings() and decision_header_numbers() as the single public header-parsing
+surface every structural consumer imports (the R1 ratification guard, the preflight
+open-decisions counter, the forward conformance check) -- both built on the pre-existing
+_DECISION_HEADING_RE grammar, never a rework of parse_decisions_md or the byte-reconstruction
+invariant. See docs/contracts/decision-entry.yaml for the authoring grammar these enforce.
 """
 
 from __future__ import annotations
@@ -139,6 +146,38 @@ def _extract_superseded_by(text: str) -> str:
         return ""
     n = m.group(1) or m.group(2)
     return f"dec-{int(n):03d}"
+
+
+def iter_decision_headings(content: str) -> list[re.Match[str]]:
+    """Return every '## Decision N:' / '### Decision N:' heading match in content, in file order.
+
+    Thin public wrapper over the module's single _DECISION_HEADING_RE grammar -- the shared
+    header-parsing primitive every structural consumer (the R1 ratification guard, the
+    preflight open-decisions counter, the forward conformance check) imports instead of
+    hand-rolling its own regex (DAF-03 / Plan 3, PLAN-daf-authoring-grammar). Does not dedupe
+    or sort -- callers that need decision numbers only should use decision_header_numbers().
+    """
+    return list(_DECISION_HEADING_RE.finditer(content))
+
+
+def decision_header_numbers(paths: Optional[list[Path]] = None) -> set[int]:
+    """Return the set of decision numbers headed '## Decision N:' / '### Decision N:' across paths.
+
+    paths=None reads this module's own default targets (_DECISIONS_MD_PATHS, both DECISIONS.md
+    and DECISIONS_ARCHIVE.md under this module's repo root). Pass an explicit paths list when
+    the caller roots against a different base (e.g. a test's patched _common.ROOT) -- mirrors
+    the existing parse_decisions_md(paths=...) seam. A missing path is silently skipped, same
+    as parse_decisions_md.
+    """
+    if paths is None:
+        paths = _DECISIONS_MD_PATHS
+    numbers: set[int] = set()
+    for md_path in paths:
+        if not md_path.exists():
+            continue
+        content = md_path.read_text(encoding="utf-8", errors="replace")
+        numbers.update(int(m.group(1)) for m in iter_decision_headings(content))
+    return numbers
 
 
 def _iter_decision_sections(content: str) -> list[tuple[re.Match[str], str]]:

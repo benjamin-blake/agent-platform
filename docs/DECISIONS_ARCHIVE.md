@@ -1429,7 +1429,7 @@ Suggestions surfaced by the cron review system that were reviewed by a human and
 
 ---
 
-### Decision 54: Lambda Scheduled Agents Revert to Copilot SDK (Supersedes Decision 52 for Lambda)
+## Decision 54: Lambda Scheduled Agents Revert to Copilot SDK (Supersedes Decision 52 for Lambda)
 
 **Trigger:** Bedrock on-demand token quotas throttled to 0 on personal account. Company account Bedrock revoked by AI Steering Group. Gemini CLI is local-only and cannot run in Lambda. Data residency concerns prevent using Gemini API from company-adjacent infrastructure.
 
@@ -1450,7 +1450,7 @@ Suggestions surfaced by the cron review system that were reviewed by a human and
 
 ---
 
-### Decision 53: Gemini CLI as Executor Inference Provider (Partially Supersedes Decision 52)
+## Decision 53: Gemini CLI as Executor Inference Provider (Partially Supersedes Decision 52)
 
 **Trigger:** Bedrock on-demand token quotas (L-F1541587, L-C43703DE, L-3AE31EFC) throttled to 0 on personal account REDACTED-PERSONAL-ACCOUNT across all regions. Company account Bedrock access revoked by AI Steering Group pending governance review. Copilot CLI signups paused. Decision 52 Bedrock architecture cannot execute after only 1 successful call (666 input + 550 output tokens).
 
@@ -1478,7 +1478,7 @@ Suggestions surfaced by the cron review system that were reviewed by a human and
 
 ---
 
-### Decision 52: Bedrock Migration -- DeepSeek V3.2 Default (Supersedes Decisions 37, 40, 49)
+## Decision 52: Bedrock Migration -- DeepSeek V3.2 Default (Supersedes Decisions 37, 40, 49)
 
 **Trigger:** GitHub premium request restrictions eliminated the Copilot CLI as a viable inference backend. Gemini BYOK (Decision 49) violated UK data residency requirements for the company sandbox account.
 
