@@ -2,6 +2,60 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 133: Platform-first sequencing of build capacity (ratified with reversal conditions) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-16
+**Warehouse ID:** dec-133 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+All of the sole operator's build capacity flows to the platform plane under a "platform-first" directive that, until now, existed nowhere as a ratified decision. The audit `audits/platform-first-sequencing-f4dec93.yaml` (executive summary `audits/platform-first-sequencing-f4dec93.md`) census found 41 citations of the frame and ZERO ratify-class artifacts: the frame was cited as a given by Decision 93 ("per the platform-first directive", twice) and recorded only as a user steer in one plan's scoping fields (`docs/plans/PLAN-platform-mvp-boundary.yaml:17`, restated `:146`, ~2026-06-20). None of the live Decision headers ratified plane sequencing; no alternative was recorded as examined; the only end-condition language was circular ("until product work begins" / "revisited when the product roadmap is activated" / T2.6 "when product formula-discovery work begins"). This is the system's single most consequential standing allocation carried as an inherited premise while materially smaller choices (file formats, provider routing, size ceilings) carry full ratification + reversal machinery (SEQ-01).
+
+**Decision:**
+Ratify platform-first sequencing of build capacity as a CONSCIOUS, reversal-conditioned choice: while the platform-MVP boundary (Decision 93) is open, the sole operator's build capacity is sequenced to the platform plane rather than interleaved with a manual product/paper trading loop. This is a governance-record change ONLY -- it reallocates no build capacity, changes no code or infra, and leaves `docs/ROADMAP-PRODUCT.yaml` at `status: draft`. The allocation is held for a recorded reason (below), not by inheritance, and is bounded by the observable reversal/review conditions in the stanza below -- it is never silently renewed.
+
+**Frame provenance (conscious choice, not agent inertia):**
+The frame is a conscious human steer, dated ~2026-06-20 in `docs/plans/PLAN-platform-mvp-boundary.yaml:17` (restated `:146`) as "the user's 'complete the full platform first' directive", and cited-as-given in Decision 93 (the two "per the platform-first directive" lines). The pivot transcript settles the ARCHITECTURAL platform/product plane SEPARATION (contracts, sibling roadmaps, validation lenses) but never weighs build-capacity TIMING between the planes -- so the sequencing rationale was genuinely absent from the record, not merely unindexed. The stronger "frame-locked" reading (Decision 75) was examined and REJECTED: the operator consciously restated the steer in a dated artifact and the owned /audit chain re-asked the question, so Decision 75's "silently constrains, nobody re-asks" limb does not hold. This Decision is the Decision-75-mandated conversion of an inherited, cited-as-given premise into a conscious, reversal-conditioned choice.
+
+**Examined alternative (the interleaved manual/paper L1+L3 loop):**
+The alternative -- interleaving platform work with a manual paper-trading loop today -- is FEASIBLE (human operations bypass every absent code surface: the operator is the broker adapter, order lifecycle, and reconciliation loop, over a production-grade data plane) but HIGH-COST in the binding resource (the sole operator's attention). Costed in operator units (audit Q2): one-time setup ~20-40 hours (paper brokerage account, daily signal-extraction path, sizing rule, pre-registered promotion criteria, logging/reconciliation runbook); recurring ~2-5 hours/week of market-hours-coupled, interrupt-driven attention sustained >= 13 weeks; calendar >= one quarter before promotion-grade evidence. The load-bearing qualifier: an honest ALPHA-premise test needs a discovered-formula artifact, and the discovery substrate is parked (CD.3 pending, T2.6 deferred_post_mvp) -- without a formula artifact the loop exercises operations plumbing, not the edge.
+
+**Corrected value model (SEQ-03 -- telemetry category separation):**
+The interleave's strongest stated payoff -- "real trading telemetry feeding the T2.36/T3.x chain" -- is a CATEGORY ERROR. The Decision-95 telemetry chain (T2.36 relands the agent-telemetry write path; T3.20 captures agent turns) is the session-rooted AGENT trace/observation model; a manual paper loop does not feed the Decision-95 agent-telemetry chain (it emits none of it). Paper-trading data would land in PRODUCT tables (strategy_runs, tca_events, fills) that `current_state` lists as ABSENT (the Decision-78 / Decision-95-97 ops/telemetry vs product-table split makes this literal) -- so "real telemetry sooner" does not hold, and building those product tables early IS the resequencing decision, circularly. Net (audit Q3): on the corrected value model the interleave's headline payoff evaporates, the near-term platform critical path (T2.26 -> T2.36 -> T3.2 -> T3.3) is dual-use substrate the product's evaluation funnel needs later, and reversal stays operationally ~free -- so sequencing is favored, CONDITIONALLY on the triggers below. Full costing and category analysis: `audits/platform-first-sequencing-f4dec93.yaml` (Q2/Q3, findings SEQ-03/SEQ-04).
+
+**CD.3 / T2.6 disposition (SEQ-04 -- alpha-premise test path):**
+CD.3 (compute node for PySR formula discovery) is DEFERRED, gated on the named reversal conditions below -- specifically alpha-readiness (c) and platform-MVP close (a). No compute-node stand-up date is committed and no substitute discovery substrate is named; the PySR discovery substrate and T2.6 stay parked. CD.3's re-entry trigger BECOMES condition (c): a candidate PySR formula artifact passing the research bar. This de-circularizes the prior note (T2.6 reactivating "when product formula-discovery work begins", an event nothing defined): T2.6's reactivation clause and Decision 93's product-edge language are re-pointed at the named conditions in this same change. This keeps CD.3 DEFERRED (not ratified), so the Decision-105 candidate-decision ratified-shape / R1-R3 guard is not engaged.
+
+**Rationale:**
+The audit's core result is an asymmetry the ratify-with-conditions disposition uniquely banks: the frame is, on present evidence, the right allocation held for the wrong reason (by inheritance rather than by record). The affirmative case survives adversarial tracing (operator attention is the binding resource; the near-term platform critical path is dual-use; the interleave's payoffs shrink under scrutiny; reversal stays operationally free), AND the gap case survives (zero ratify-class artifacts, no trigger, a convention sitting unused -- 24 "Reversal conditions:" stanzas elsewhere (16 at the f4dec93 audit; the tree grew the convention since)). `resequence_interleaved` is rejected on the corrected value model; `ratify_as_is` is rejected because the bet compounds monthly against an untested load-bearing premise (NS-D); `insufficient_evidence` is rejected -- once the telemetry category error is removed the evidence discriminates. Filed as user-explicit ad-hoc governance (precedent: Decision 93 / PLAN-platform-mvp-boundary; a fresh forward Decision per the Decision 87 / Decision 126 pattern), not a new tier_item. Reversal is cheap by construction: the frame binds via one /orient scope line and ROADMAP-PRODUCT.yaml's `status: draft`, so nothing is foreclosed by sequencing longer.
+
+**Reversal conditions:**
+This sequencing is re-decided, never silently renewed, when any of the following fires: (a) the platform MVP (Decision 93 boundary) closes -- at which point a product-activation decision becomes mandatory, not optional; (b) the hard calendar review date 2026-09-30 is reached without the platform MVP having closed -- the sequencing is re-decided via /plan, not renewed by default; (c) alpha-readiness -- a candidate PySR formula artifact passing the research bar exists, collapsing the paper loop's marginal cost and re-opening the interleave question; or (d) sustained slip -- 3 consecutive orient/triage cycles show the platform-MVP date receding. Condition (b) is the top-level `review_by` in the stanza below (single source; a re-decision is a one-line diff); (a)/(c)/(d) are the enumerated conditions. On any trigger, re-decide via /plan and update or re-arm the stanza.
+
+```yaml reversal-conditions
+decision: 133
+review_by: 2026-09-30
+on_trigger: "re-decide sequencing via /plan; update or re-arm this stanza; never silently renew"
+conditions:
+  - id: platform-mvp-closes
+    kind: manual
+    description: "Platform MVP (Decision 93 boundary) closes -> a product-activation decision becomes mandatory, not optional"
+  - id: alpha-readiness
+    kind: repo_state
+    predicate: null   # manual until a formula-artifact predicate is registered (CD.3/T2.6 disposition)
+    params: {}
+    description: "a candidate PySR formula artifact passing the research bar exists -> paper-loop marginal cost collapses; re-open the interleave question"
+  - id: sustained-slip
+    kind: repo_state
+    predicate: null   # manual until orient/triage cycles snapshot the MVP date
+    params: {consecutive: 3}
+    description: "3 consecutive orient/triage cycles show the platform-MVP date receding"
+```
+
+**Related:** Decision 93 (Platform-MVP boundary + deferred_post_mvp lifecycle -- the frame this Decision reversal-conditions; its two "per the platform-first directive" lines are the annotation targets; also the user-explicit ad-hoc-governance filing precedent and the no-live-dep invariant the ROADMAP edits respect), Decision 75 (frame-lock anti-pattern -- this Decision is its mandated conscious-choice conversion), Decision 95 (session-rooted agent-telemetry trace/observation model -- the SEQ-03 category boundary), Decision 96 + Decision 97 (telemetry temporal + identity standards completing the Decision-95 trio), Decision 78 (DuckLake adoption / product-table vs ops-telemetry split that makes "absent PRODUCT tables" literal), Decision 105 (reversal-condition-drafting-as-a-plan-step convention; CD.3 stays DEFERRED so the ratified-CD guard is not engaged), Decision 84 (Single Portal Invariant / DECISIONS.md numbering authority + backfill ETL), Decision 86 (rationale routes into this Decision, not a new prose doc), Decision 67 (STRATEGIC-plan freeze / CD.17 -- plan_type is IMPLEMENTATION), Decision 87 + Decision 126 (fresh forward-Decision precedent), Decision 108 (reversal-conditions section precedent the machine-parseable stanza extends), Decision 40 (recorded-then-forgotten triggers -- the cautionary failure mode a follow-on condition-monitor prices), Decision 101 (platform-first external-brand posture -- same lineage).
+
+---
+
 ## Decision 132: Verification graduation is an enforced pre-merge obligation, not a skippable skill instruction (amends Decision 104; successor to T3.18/VF-05/VF-06) (Decided)
 
 **Status:** Decided
@@ -2153,11 +2207,11 @@ New platform work is MVP-critical by default; items leave MVP scope only by cons
 - No live platform item (status == not_started or in_progress) may depend_on a deferred_post_mvp item. The platform_roadmap.py model_validator enforces this at load time (fail loud at validation, never silently strand a dependent).
 
 **PLATFORM-INTERNAL scoping:**
-The no-live-dep restriction is enforced by platform_roadmap.py model_validator ONLY -- not added to product_roadmap.py. Cross-roadmap edges from ROADMAP-PRODUCT.yaml to deferred platform items (e.g. E.env.3 -> PLATFORM:T2.9) are permitted and remain dormant until product work begins, per the platform-first directive. These edges are revisited when the product roadmap is activated.
+The no-live-dep restriction is enforced by platform_roadmap.py model_validator ONLY -- not added to product_roadmap.py. Cross-roadmap edges from ROADMAP-PRODUCT.yaml to deferred platform items (e.g. E.env.3 -> PLATFORM:T2.9) are permitted and remain dormant until product work begins, per the platform-first directive [ratified with reversal conditions by Decision 133 (2026-07-16); the circular "until product work begins" / "product roadmap is activated" end-condition is superseded by Decision 133's named conditions]. These edges are revisited when the product roadmap is activated.
 
 **Items parked (deferred_post_mvp) at Decision 93 ratification:**
 - T2.8 (backup/DR posture for the personal account): clean leaf; hardening, not on the autonomous-loop critical path.
-- T2.9 (secrets rotation policy + automation): hardening; platform edge T2.14 corrected (see below); product edge E.env.3 left dormant per platform-first directive.
+- T2.9 (secrets rotation policy + automation): hardening; platform edge T2.14 corrected (see below); product edge E.env.3 left dormant per platform-first directive [ratified with reversal conditions by Decision 133].
 - T2.11a (Codespaces devcontainer substrate): public-surface polish; not in the autonomous-loop critical path.
 - T2.11b (public-portal artefacts): co-parked with T2.11a (depends_on T2.11a; same public-surface-polish category; downstream T2.12/T2.13 already complete so nothing live is stranded).
 
