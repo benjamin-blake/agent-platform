@@ -1,0 +1,384 @@
+"""Tests for the scripts/ops_data_portal.py write-path core: file_rec / update_rec,
+write_time validators, retired-surface guards, and the private migration params.
+
+Split out of the former tests/test_ops_data_portal.py monolith (rec-2709 Wave 3). Decision 124
+namespace migration: patches below target the facade (scripts.ops_data_portal) because the
+driving call (file_rec/update_rec) is facade-resident and resolves its dependencies as its own
+module globals (tests/CLAUDE.md namespace migration discipline).
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+duckdb = pytest.importorskip("duckdb")
+from pydantic import ValidationError  # noqa: E402
+
+from tests.fixtures.ops_portal_records import VALID_FIELDS as _VALID_FIELDS  # noqa: E402
+
+
+class TestFileRec:
+    """Tests for file_rec() -- writer-allocated IDs via the file_ops action."""
+
+    def test_file_rec_success_consumes_allocated_key(self, tmp_path: Path) -> None:
+        """file_rec() sends action=file_ops with an idempotency ULID and returns the writer-allocated id."""
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-2171"}) as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            result = file_rec(dict(_VALID_FIELDS))
+
+        assert result == "rec-2171"
+        mock_dl_write.assert_called_once()
+        call_table, call_rec = mock_dl_write.call_args[0]
+        assert call_table == "ops_recommendations"
+        assert call_rec["status"] == "open"
+        assert mock_dl_write.call_args.kwargs["action"] == "file_ops"
+        ulid = mock_dl_write.call_args.kwargs["idempotency_ulid"]
+        assert isinstance(ulid, str) and len(ulid) == 26  # ULID (time-ordered tiebreak for history reads)
+        # write-through: local JSONL has new entry carrying the allocated id
+        lines = recs_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["id"] == "rec-2171"
+
+    def test_file_rec_missing_allocated_key_raises(self, tmp_path: Path) -> None:
+        """file_rec() raises RuntimeError when the writer response carries no allocated key."""
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            with pytest.raises(RuntimeError, match="no allocated key"):
+                file_rec(dict(_VALID_FIELDS))
+
+    def test_file_rec_raises_loudly_on_writer_failure(self, tmp_path: Path) -> None:
+        """file_rec() propagates the writer failure -- there is no offline outbox / 'pending-' path."""
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+
+        with (
+            patch(
+                "scripts.ops_data_portal._ducklake_write",
+                side_effect=RuntimeError("ducklake_writer file_ops ops_recommendations failed (HTTP 500)"),
+            ),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            with pytest.raises(RuntimeError, match="ducklake_writer"):
+                file_rec(dict(_VALID_FIELDS))
+
+        assert not recs_file.exists()  # nothing was written through
+
+    def test_file_rec_invalid_schema(self) -> None:
+        """file_rec() raises when rec fields fail validation (write-time gate or Pydantic)."""
+        invalid_fields = dict(_VALID_FIELDS)
+        invalid_fields.pop("status")
+
+        from scripts.ops_data_portal import file_rec
+
+        with pytest.raises((ValidationError, ValueError)):
+            file_rec(invalid_fields)
+
+    def test_file_rec_date_added_if_missing(self, tmp_path: Path) -> None:
+        """file_rec() adds today's date to the record if not supplied."""
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-602"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            result = file_rec(dict(_VALID_FIELDS))
+
+        assert result == "rec-602"
+        entry = json.loads(recs_file.read_text(encoding="utf-8").strip().splitlines()[0])
+        assert entry.get("date") is not None  # date was added
+
+    def test_file_rec_rejects_unregistered_source(self, tmp_path: Path) -> None:
+        """file_rec() raises ValueError when source is not in the registry; no write is attempted."""
+        fields = dict(_VALID_FIELDS)
+        fields["source"] = "ghost-agent"
+
+        with (
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            with pytest.raises(ValueError, match="Unknown source 'ghost-agent'"):
+                file_rec(fields)
+
+        mock_dl_write.assert_not_called()
+
+    def test_file_rec_accepts_registered_source(self, tmp_path: Path) -> None:
+        """file_rec() succeeds when source is a registered canonical_id."""
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+        fields = dict(_VALID_FIELDS)
+        fields["source"] = "planning"
+
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-998"}),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            result = file_rec(fields)
+
+        assert result == "rec-998"
+
+
+class TestUpdateRec:
+    """Tests for update_rec()."""
+
+    def test_update_rec_success(self, tmp_path: Path) -> None:
+        """update_rec() reads via the reader, merges updates, writes update_ops, appends to local JSONL."""
+        existing = {**_VALID_FIELDS, "id": "rec-042", "date": "2026-01-01"}
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+        recs_file.write_text(json.dumps(existing) + "\n", encoding="utf-8")
+
+        with (
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import update_rec
+
+            result = update_rec("rec-042", {"status": "closed", "execution_result": "success"})
+
+        assert result is True
+        call_table, call_rec = mock_dl_write.call_args[0]
+        assert call_table == "ops_recommendations"
+        assert call_rec["status"] == "closed"
+        assert call_rec["execution_result"] == "success"
+        assert mock_dl_write.call_args.kwargs["action"] == "update_ops"
+        # write-through: the incremental upsert keeps ONE deduplicated row per id (D4), reflecting
+        # the update (was: append, which left the stale original behind until the next full sync).
+        lines = recs_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        cached = json.loads(lines[0])
+        assert cached["id"] == "rec-042" and cached["status"] == "closed"
+
+    def test_update_rec_invalid_status(self) -> None:
+        """update_rec() raises ValueError for invalid status values (before any read)."""
+        from scripts.ops_data_portal import update_rec
+
+        with pytest.raises(ValueError, match="Invalid status"):
+            update_rec("rec-042", {"status": "done"})
+
+    def test_update_rec_absent_rec_loud_fails(self, tmp_path: Path) -> None:
+        """update_rec() loud-fails on an absent rec (referential, CD.33 cl.8 / D-5).
+
+        An update of a record that does not exist in the current projection raises
+        RuntimeError and never silently creates a partial row.
+        """
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+        updates = {**_VALID_FIELDS, "id": "rec-042", "status": "closed"}
+
+        with (
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=None),
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import update_rec
+
+            with pytest.raises(RuntimeError, match="does not exist"):
+                update_rec("rec-042", updates)
+
+        # No write happened -- the absent rec was rejected before any write path.
+        mock_dl_write.assert_not_called()
+
+
+class TestRetiredSurfaces:
+    """Decision 84: the offline outbox, OpsWriter transport, and DynamoDB id allocation are gone."""
+
+    def test_outbox_and_legacy_symbols_absent(self) -> None:
+        """drain_pending / outbox dirs / _next_id / OpsWriter / backend flag no longer exist on the portal."""
+        import scripts.ops_data_portal as portal
+
+        for name in (
+            "drain_pending",
+            "drain_pending_decisions",
+            "_PENDING_OUTBOX",
+            "_DECISIONS_PENDING_OUTBOX",
+            "_next_id",
+            "OpsWriter",
+            "_ops_backend",
+            "_delete_postmortems_from_iceberg",
+            "_rewrite_jsonl_excluding_postmortems",
+        ):
+            assert not hasattr(portal, name), f"retired symbol still present: {name}"
+
+    def test_portal_exposes_no_import_bypass_write_surface(self) -> None:
+        """The ONLY ops write surface is file_rec/update_rec/file_decision/update_decision. No
+        import/bootstrap/bypass writer is exposed on the portal (Decision 81)."""
+        import scripts.ops_data_portal as portal
+
+        forbidden = [
+            n
+            for n in dir(portal)
+            if any(k in n.lower() for k in ("import_rec", "bootstrap", "bypass", "seed_rec", "raw_write", "import_ops"))
+        ]
+        assert forbidden == []
+
+
+class TestWriteTimeDispatch:
+    """Tests for _load_write_time_validators and _derive_computed_fields via file_rec."""
+
+    def test_write_time_validators_loaded(self) -> None:
+        """_load_write_time_validators returns >= 6 validators for ops_recommendations."""
+        from scripts.ops_data_portal import _load_write_time_validators, _write_time_validators_cache
+
+        _write_time_validators_cache.clear()
+        validators = _load_write_time_validators("ops_recommendations")
+        assert len(validators) >= 6, f"Expected >= 6 write_time validators, got {len(validators)}"
+        col_names = [col for col, _ in validators]
+        assert "title" in col_names
+        assert "status" in col_names
+        assert "effort" in col_names
+        assert "priority" in col_names
+
+    def test_write_time_rejects_null_required_field(self) -> None:
+        """file_rec() raises ValueError via write_time validators when a required field is null."""
+        from scripts.ops_data_portal import _write_time_validators_cache, file_rec
+
+        _write_time_validators_cache.clear()
+        fields = dict(_VALID_FIELDS)
+        fields["status"] = None  # status has write_time: true in ops.yaml
+
+        with pytest.raises(ValueError, match="status"):
+            file_rec(fields)
+
+    def test_file_rec_computes_automatable(self, tmp_path: Path) -> None:
+        """file_rec() derives and sets automatable for records that lack it."""
+        recs_file = tmp_path / "recs.jsonl"
+        fields_no_automatable = {k: v for k, v in _VALID_FIELDS.items() if k != "automatable"}
+
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-950"}) as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            patch("scripts.ops_portal.write_validators._write_time_validators_cache", {}),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            file_rec(fields_no_automatable)
+
+        _, written = mock_dl_write.call_args[0]
+        assert written.get("automatable") is not None, "automatable should be derived and non-null"
+
+    def test_file_rec_created_timestamp_full_precision(self, tmp_path: Path) -> None:
+        """file_rec() sets created_timestamp with a time component, not a date-only midnight fallback."""
+        recs_file = tmp_path / "recs.jsonl"
+        fields = dict(_VALID_FIELDS)
+        fields.pop("created_timestamp", None)
+
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-951"}) as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+            patch("scripts.ops_portal.write_validators._write_time_validators_cache", {}),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            file_rec(fields)
+
+        _, written = mock_dl_write.call_args[0]
+        ts = written.get("created_timestamp", "")
+        assert ts, "created_timestamp must be set"
+        assert "T" in ts, f"created_timestamp must contain a time component (got {ts!r})"
+        assert len(ts) > 10, f"created_timestamp must be a full ISO datetime, not date-only (got {ts!r})"
+
+
+class TestMigrationParams:
+    """Tests for the private migration params on file_rec / file_decision."""
+
+    def test_file_rec_migration_int_id_pads_and_uses_write_ops(self, tmp_path: Path) -> None:
+        """_migration_int_id preserves the historical id via a caller-keyed write_ops upsert."""
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+            patch("scripts.ops_data_portal._sync_table"),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            result = file_rec(dict(_VALID_FIELDS), _migration_int_id=5, _migration_mode=True, _skip_sync=True)
+
+        assert result == "rec-005"
+        _, call_rec = mock_dl_write.call_args[0]
+        assert call_rec["id"] == "rec-005"
+        assert mock_dl_write.call_args.kwargs["action"] == "write_ops"
+        assert "idempotency_ulid" not in mock_dl_write.call_args.kwargs
+
+    def test_file_rec_skip_sync_uses_append_not_upsert(self, tmp_path: Path) -> None:
+        """_skip_sync=True appends (bulk path; final sync reconciles); the default path upserts (D4)."""
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"key": "rec-700"}),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+            patch("scripts.ops_data_portal._sync_table") as mock_sync,
+            patch("scripts.ops_portal.cache._append_to_local_jsonl") as mock_append,
+            patch("scripts.sync.ops.upsert_cache_row") as mock_upsert,
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            # Bulk path: append only, no per-row upsert and never the full-table _sync_table.
+            file_rec(dict(_VALID_FIELDS), _skip_sync=True)
+            mock_append.assert_called_once()
+            mock_upsert.assert_not_called()
+            mock_sync.assert_not_called()
+
+            # Default path: incremental upsert, no append and no full-table _sync_table (D4).
+            mock_append.reset_mock()
+            file_rec(dict(_VALID_FIELDS))
+            mock_upsert.assert_called_once()
+            mock_append.assert_not_called()
+            mock_sync.assert_not_called()
+
+    def test_file_rec_migration_mode_bypasses_content_validators(self, tmp_path: Path) -> None:
+        """_migration_mode lets a historical row that fails content rules import; the schema still applies."""
+        thin = {**_VALID_FIELDS, "context": "too short", "acceptance": ""}
+
+        with (
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_data_portal.RECS_JSONL", tmp_path / "recs.jsonl"),
+            patch("scripts.ops_data_portal._sync_table"),
+        ):
+            from scripts.ops_data_portal import file_rec
+
+            # Without migration mode the short context is rejected.
+            with pytest.raises(ValueError, match="context"):
+                file_rec(dict(thin), _migration_int_id=701)
+
+            # With migration mode it imports.
+            assert file_rec(dict(thin), _migration_int_id=701, _migration_mode=True, _skip_sync=True) == "rec-701"
+
+    def test_file_decision_skip_sync_suppresses_sync_table(self, tmp_path: Path) -> None:
+        """_skip_sync=True on file_decision flows to _refresh_cache_after_write(append_only=True)."""
+        with (
+            patch("scripts.ops_portal.decisions._ducklake_write", return_value={"ok": True}),
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", tmp_path / "dec.jsonl"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._refresh_cache_after_write") as mock_refresh,
+        ):
+            from scripts.ops_data_portal import file_decision
+
+            file_decision({"title": "d", "status": "open", "decision_id": 77}, _skip_sync=True)
+            mock_refresh.assert_called_once()
+            assert mock_refresh.call_args.kwargs.get("append_only") is True
