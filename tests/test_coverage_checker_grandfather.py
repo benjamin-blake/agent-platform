@@ -16,35 +16,21 @@ check_per_file_coverage = checker.check_per_file_coverage
 
 
 class TestGrandfatherRetiringTable:
-    """Behaviour-preservation invariant (Decision 131): map_source_to_test resolves each
-    roster home via colocation while it is grandfathered, and via the mirror rule once a wave
-    retires it -- rec-2709 Wave 1 (PLAN-sloc-test-validate) retired the first of the 24,
-    "test_validate.py"; Wave 2 (PLAN-sloc-execute-recommendation) retired the second,
-    "test_execute_recommendation.py"; Wave 3 (PLAN-sloc-ops-data-portal-tests) retired the
-    third, "test_ops_data_portal.py"; Wave 4 (PLAN-sloc-session-preflight-tests) retired the
-    fourth, "test_session_preflight.py" (surgically -- its flat-file sibling
-    "test_session_postflight.py" stays grandfathered until its own later wave); Wave 5
-    (PLAN-sloc-executor-tests) retired the fifth, sixth, and seventh -- "test_executor_plan.py",
-    "test_executor_postflight.py", and "test_executor_step_runner.py" -- a PURE test-file split
-    with a no-op mapping consequence (their sources, scripts/executor/**, already returned None
-    per Decision 124, so the retirement is bookkeeping/tidiness only, not a mapping flip); Wave 6
-    retired the eighth, "test_convergence_health.py" -- a PACKAGE-MIRROR, not a concern-split;
-    Wave 7 (PLAN-sloc-ducklake-runtime-smoke-tests) retired the ninth and tenth,
-    "test_ducklake_runtime.py" (a MIRROR, with the _DUCKLAKE_RUNTIME_SPLIT_MODULES special-case
-    KEPT -- see test_maps_ducklake_runtime_split_modules_resolve_to_their_common_mirror) and
-    "test_ducklake_neon_smoke_test.py" (a CONCERN-SPLIT, already seeded in
-    _CONCERN_SPLIT_TEST_PACKAGES before this wave); Wave 10 (PLAN-sloc-sync-session-circa-tests)
-    retired the eleventh, twelfth, and thirteenth -- "test_sync_ops.py",
-    "test_session_postflight.py" (surgically -- its flat-file sibling "test_session_metrics.py"
-    stays grandfathered), and "test_ci_rca_evidence.py" -- all three CONCERN-SPLITs, newly seeded
-    in _CONCERN_SPLIT_TEST_PACKAGES this wave."""
+    """Wave-invariant retirement oracle (Decision 131). map_source_to_test resolves each roster
+    home via the pre-inversion colocation rule while it is grandfathered (its basename is in
+    _RETIRING_GRANDFATHER_HOMES) and via the mirror / concern-split rule once a wave retires it. A
+    wave retires a home by deleting its one basename line from _RETIRING_GRANDFATHER_HOMES AND
+    deleting its flat monolith tests/<home>. These tests derive the retirement state from the frozen
+    roster and the tests/ tree itself -- there is no per-wave minus_N literal to hand-edit -- so each
+    wave stays green by construction and none of them is a per-wave merge-conflict surface."""
 
-    def test_representative_paths_resolve_under_current_retirement_state(self) -> None:
-        """A representative path set resolves under the CURRENT retirement state: Waves 1-7 and
-        10's thirteen retired homes resolve via their mirror / concern-split / package-mirror,
-        the other 11 roster homes stay grandfathered, scripts/executor/** + scripts/ops_portal/**
-        keep returning None (Decision 124), and scripts/sync/recommendations.py + ci_rca/filing.py
-        are surgical-retirement sibling controls that stay grandfathered."""
+    def test_representative_paths_resolve_to_their_stable_targets(self) -> None:
+        """A FROZEN representative sample -- one source per resolution pattern -- proving
+        map_source_to_test produces the correct target shape: checks-mirror, concern-split package
+        DIR, package-mirror 1:1, non-roster grandfathered sibling, the KEPT ducklake special-cases,
+        and Decision-124 None. Every case is already-retired or permanently-classified, so the
+        sample is wave-invariant: DO NOT append a per-wave case here -- the retirement-state and
+        gate-flip tests below carry the moving parts."""
         cases: dict[Path, Path | None] = {
             ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py": ROOT
             / "tests"
@@ -69,7 +55,6 @@ class TestGrandfatherRetiringTable:
             ROOT / "scripts" / "executor" / "plan.py": None,
             ROOT / "scripts" / "executor" / "postflight.py": None,
             ROOT / "scripts" / "ops_portal" / "cli.py": None,
-            ROOT / "src" / "common" / "iceberg_reader.py": ROOT / "tests" / "test_iceberg_reader.py",
             ROOT / "src" / "common" / "ducklake_writes.py": ROOT / "tests" / "common" / "test_ducklake_writes.py",
             ROOT / "src" / "common" / "ducklake_runtime.py": ROOT / "tests" / "common" / "test_ducklake_runtime.py",
             ROOT / "scripts" / "ducklake_neon_smoke_test.py": ROOT / "tests" / "ducklake_neon_smoke_test",
@@ -77,50 +62,42 @@ class TestGrandfatherRetiringTable:
         for source, expected in cases.items():
             assert map_source_to_test(source) == expected, source
 
-    def test_retiring_is_all_target_homes_minus_fourteen_retired_waves(self) -> None:
-        """Fourteen basenames retired so far (Waves 1-7, 10 + PLAN-cd-realization-candidate-pass /
-        PCD-01); Wave 6 added "test_convergence_health.py" (a PACKAGE-MIRROR, NOT in
-        _CONCERN_SPLIT_TEST_PACKAGES); Wave 7 added "test_ducklake_runtime.py" (a MIRROR,
-        special-case KEPT) and "test_ducklake_neon_smoke_test.py" (a CONCERN-SPLIT, already
-        seeded); PCD-01 added "test_platform_roadmap_state.py" (a concern-split package mirror --
-        its source scripts/platform_roadmap_state.py IS in _CONCERN_SPLIT_TEST_PACKAGES); Wave 10
-        added "test_sync_ops.py", "test_session_postflight.py" (surgically -- its flat-file sibling
-        "test_session_metrics.py" stays grandfathered), and "test_ci_rca_evidence.py" -- all three
-        CONCERN-SPLITs, newly seeded in _CONCERN_SPLIT_TEST_PACKAGES that wave."""
-        retired = {
-            "test_validate.py",
-            "test_execute_recommendation.py",
-            "test_ops_data_portal.py",
-            "test_session_preflight.py",
-            "test_executor_plan.py",
-            "test_executor_postflight.py",
-            "test_executor_step_runner.py",
-            "test_convergence_health.py",
-            "test_ducklake_runtime.py",
-            "test_ducklake_neon_smoke_test.py",
-            "test_platform_roadmap_state.py",
-            "test_sync_ops.py",
-            "test_session_postflight.py",
-            "test_ci_rca_evidence.py",
-        }
-        assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - retired
-        assert "test_validate.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_execute_recommendation.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_ops_data_portal.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_session_preflight.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_executor_plan.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_executor_postflight.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_executor_step_runner.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_convergence_health.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_ducklake_runtime.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_ducklake_neon_smoke_test.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_platform_roadmap_state.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_sync_ops.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_session_postflight.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_ci_rca_evidence.py" not in _RETIRING_GRANDFATHER_HOMES
-        # Still-grandfathered roster-home control: proves neither this wave nor PCD-01 over-reached.
-        assert "test_contracts_enforcement.py" in _RETIRING_GRANDFATHER_HOMES
-        assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == retired
+    def test_retiring_homes_are_a_subset_of_the_frozen_roster(self) -> None:
+        """A wave only ever DELETES a basename from _RETIRING_GRANDFATHER_HOMES; it never adds one
+        outside the frozen roster. So _RETIRING is always a subset of _ALL_MIRROR_TARGET_HOMES --
+        a guard against a typo'd or off-roster basename being introduced during a retirement."""
+        assert _RETIRING_GRANDFATHER_HOMES <= _ALL_MIRROR_TARGET_HOMES
+
+    def test_retirement_state_matches_the_tests_tree(self) -> None:
+        """The load-bearing wave-invariant: a roster home is grandfathered (in _RETIRING) IFF its
+        flat monolith tests/<home> still exists. Retiring a home IS the act of deleting that flat
+        file (replaced by a mirror package/module), so this derives the retirement state from the
+        tree instead of a hand-maintained minus_N literal -- no wave edits this test; it stays green
+        as each wave deletes both the _RETIRING line and the flat file together. Replaces the former
+        test_retiring_is_all_target_homes_minus_N_retired_waves conflict-magnet (rec-2709)."""
+        for home in _ALL_MIRROR_TARGET_HOMES:
+            flat = ROOT / "tests" / home
+            if home in _RETIRING_GRANDFATHER_HOMES:
+                assert flat.is_file(), f"grandfathered home is missing its flat monolith: {home}"
+            else:
+                assert not flat.exists(), f"retired home still has a flat monolith: {home}"
+
+    def test_gate_flips_colocation_to_mirror_on_retirement(self, monkeypatch) -> None:
+        """The _RETIRING gate is precisely what flips a source from its pre-inversion colocation
+        target to its mirror. Demonstrated on an already-retired PLAIN package-mirror home
+        (test_convergence_health.py) so no future wave restales the example: in the real (retired)
+        state the source resolves to its 1:1 mirror; re-adding the home to the gate flips it back to
+        the grandfathered flat-file colocation target."""
+        source = ROOT / "scripts" / "convergence_health" / "record.py"
+        mirror = ROOT / "tests" / "convergence_health" / "test_record.py"
+        colocated = ROOT / "tests" / "test_convergence_health.py"
+        assert map_source_to_test(source) == mirror
+        monkeypatch.setattr(
+            checker,
+            "_RETIRING_GRANDFATHER_HOMES",
+            _RETIRING_GRANDFATHER_HOMES | {"test_convergence_health.py"},
+        )
+        assert map_source_to_test(source) == colocated
 
     def test_roster_is_the_24_known_basenames(self) -> None:
         """The fixed rec-2709 roster matches the 24 dec-130 config/sloc_budgets.yaml entries
