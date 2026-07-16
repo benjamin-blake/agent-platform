@@ -68,6 +68,12 @@ Trigger condition 2 -- **Surface-retiring plan**: the plan's `scope` includes a 
 
 12n. **SLOC decompose-by-default check (Decision 128):** For each `scripts/` or `src/` scope file with `action: Modify` (or `Create`), check whether the plan's own description of the change would push the file past its `config/sloc_budgets.yaml` budget (or past 500 SLOC if currently unregistered). If so, the plan MUST include a decomposition step (a facade package, Decision 80/104/124 pattern) OR an explicit, justified budget-raise step carrying a `# raise-approved: dec-NNN` marker citation. A plan that grows a scope file past its budget with neither => recommend REVISE: "Scope file [path] crosses its SLOC budget with no decomposition step and no raise-approved Decision citation -- decompose by default (Decision 128)."
 
+12o. **Graduation-classification honesty (T3.21, VF-05 enforcement):** For every `phase: pre-deploy` `verification_plan` step, check the `graduation` field (see the planning skill's "Graduation disposition authoring" for the three-way classification). Flag each of the following as a REVISE-worthy issue:
+   - **Missing disposition:** a pre-deploy step with no `graduation` field at all (only exempt if the plan predates T3.21 and declares zero dispositions anywhere -- a plan authored under this gate must classify every pre-deploy step).
+   - **Suspect `not-applicable`:** a step whose `command` is plainly a single command_exit_zero / grep_count / file_presence / test_selector / command_output_matches / metric_under_threshold shape (see `scripts.verification_checks.CANONICAL_SLOTS`) but is marked `not-applicable` instead of `graduate` -- this is exactly the classification-gaming shape the gate exists to catch, since `not-applicable` carries no downstream registry obligation.
+   - **Thin waiver:** a `waive` disposition whose `graduation_waiver_reason` is generic or non-substantive (e.g. "not needed", "skip", "later") rather than naming a concrete reason the check can't be graduated now.
+   If any step trips one of these, recommend REVISE citing the step number and which sub-check failed. Otherwise report "graduation dispositions complete and honest."
+
 ### Phase 2b: Frame Challenge (MANDATORY)
 
 Phase 2 checks the plan's *details* against the existing frame. This phase challenges the *frame itself*. See Decision 75 (Frame-Lock Anti-Pattern in Architectural Planning) for the failure mode this phase is designed to catch.
@@ -127,6 +133,8 @@ Ask the following five questions against the plan's chosen approach. For each, w
 **Closure Obligation (12l, follow-on plans):** N/A (not a follow-on) / Compliant / Missing [specifics]
 
 **Tier Fitness (12m):** Compliant / REVISE -- [scope file] requires [tier] but plan declares [lower tier]
+
+**Graduation Dispositions (12o):** Complete and honest / REVISE -- [step number(s) and sub-check failed]
 
 **Recommendation:** PROCEED / REVISE [with specific suggestions if REVISE]
 ```

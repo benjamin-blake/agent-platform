@@ -6,7 +6,7 @@
 contract:
   id: verification-registry
   class: A
-  contract_version: 2
+  contract_version: 3
   status: ratified
   ratified_at: "2026-06-29"
   ratified_via: "dec-102: PLAN-t3-1-verifier-harness merge to main (T3.1 CD.25 ritual)"
@@ -29,7 +29,12 @@ fields:
     semantics: >-
       PRIMARY KEY of the registry. Stable across plan iterations; changing a check
       implementation requires a new check_id (immutable identity of the test, not the
-      implementation). Must be unique within the data file.
+      implementation). Must be unique within the data file. T3.21 ENFORCEMENT LINKAGE: when a
+      PLAN-{slug}.yaml verification_plan step declares graduation: graduate, its
+      graduation_check_id (scripts/roadmap/plan_document.py VerificationStep field) MUST equal
+      this check_id verbatim -- validate_graduation_completeness's implement-PR leg matches a
+      declared-graduate step to its registry row on the (plan_slug, check_id) pair below, and
+      fails the PR when no row with that exact pair was newly added in the diff.
     populated_by: >-
       Plan author at graduation time. The implementing agent sets this when authoring
       the check definition and inserting the row into
@@ -37,6 +42,14 @@ fields:
     dq_intent:
       not_null:
         enforced: true
+    amendment_log:
+      - date: "2026-07-16"
+        semantic_break: true
+        change_class: governance_note_add
+        summary: >-
+          T3.21 amendment (verification-graduation-enforcement): documented the (plan_slug,
+          check_id) enforcement linkage that validate_graduation_completeness's implement-PR
+          leg relies on -- no type/nullability change to this field.
   primitive_slot:
     type: str
     iceberg_type: string
@@ -114,13 +127,24 @@ fields:
       PROVENANCE KEY. Not a FK enforced at write time but useful for audit trails.
       Matches the slug component of docs/plans/PLAN-{slug}.yaml. Future T3.7 orphan
       scans can use this to find the plan that would need updating if the check is
-      invalidated.
+      invalidated. T3.21 ENFORCEMENT LINKAGE: paired with check_id (see check_id's semantics
+      above), this is the join key validate_graduation_completeness's implement-PR leg uses to
+      confirm a plan's declared graduate-disposition VP step produced its obligated registry row
+      -- the row's plan_slug must equal the resolved PLAN-{slug}.yaml's own slug field.
     populated_by: >-
       Plan author at graduation time. Set to the slug of the IMPLEMENTATION plan
       executing the graduation (e.g. "t3-1-verifier-harness").
     dq_intent:
       not_null:
         enforced: true
+    amendment_log:
+      - date: "2026-07-16"
+        semantic_break: true
+        change_class: governance_note_add
+        summary: >-
+          T3.21 amendment (verification-graduation-enforcement): documented the (plan_slug,
+          check_id) enforcement linkage that validate_graduation_completeness's implement-PR
+          leg relies on -- no type/nullability change to this field.
   graduated_at:
     type: str
     iceberg_type: string
@@ -181,6 +205,17 @@ fields:
       not_null:
         enforced: false
 amendment_log:
+  - date: "2026-07-16"
+    semantic_break: true
+    change_class: governance_note_add
+    summary: >-
+      T3.21 amendment (verification-graduation-enforcement): bumped contract_version 2 -> 3.
+      No schema field change -- documents the (plan_slug, check_id) enforcement linkage that
+      validate_graduation_completeness's implement-PR leg relies on to match a
+      PLAN-{slug}.yaml verification_plan step declaring graduation: graduate (and its
+      graduation_check_id) to the registry row it obligates. Closes the gap where VF-05's
+      graduation producer and VF-06's differential admission gate existed but nothing forced
+      a fix PR to actually add the row it owed (PR #586 shipped 4 orphaned checks unnoticed).
   - date: "2026-07-04"
     semantic_break: false
     change_class: field_add

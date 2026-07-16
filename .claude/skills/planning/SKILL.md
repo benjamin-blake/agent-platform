@@ -312,6 +312,37 @@ itself. Steps that must invoke pytest, deploy infrastructure, or otherwise canno
 stay `hermetic: false` (the default) and are excluded from replay with a printed reason, not
 silently skipped.
 
+**Graduation disposition authoring (T3.21, enforced VF-05):** every `phase: pre-deploy` VP step
+must carry a `graduation` field -- one of `graduate`, `waive`, or `not-applicable`.
+`validate_graduation_completeness`'s plan-PR leg (`--pre` and full tiers) fails a diff-added or
+diff-modified `PLAN-*.yaml` that leaves any pre-deploy step's disposition unset (see the
+implement skill's Bundled Recommendation Relevance Re-check-adjacent "Verification Graduation"
+section for what happens with each disposition at implement time). Classify each pre-deploy step
+at plan-authoring time:
+- **`graduate`** -- the step's command is expressible as one of the six canonical primitive
+  slots in `scripts.verification_checks.CANONICAL_SLOTS` (command_exit_zero,
+  command_output_matches, file_presence, grep_count, test_selector, metric_under_threshold) AND
+  is hermetic-or-cheap enough to run as a standing regression guard. Requires
+  `graduation_check_id`: a stable, human-readable slug (e.g. `"kernel-slot-count-eq-6"`,
+  matching the registry's `check_id` convention) that the implementing session will use verbatim
+  as the registry row's identity -- pick it now so the plan-implement-registry linkage is fixed
+  at plan time, not improvised later.
+- **`waive`** -- the step is kernel-expressible in principle but graduating it now is
+  impractical (e.g. it depends on this session's transient repo state, or duplicates an
+  already-graduated check). Requires `graduation_waiver_reason`: a substantive, specific reason
+  (not "not needed" or "skip") -- the plan-critique gate reviews this reason for honesty.
+- **`not-applicable`** -- the step is NOT kernel-expressible: it requires multiple commands,
+  human/LLM judgement, live infrastructure (a V3 deploy/invoke), or wall-clock/credential state.
+  No extra field required.
+
+Classification is a judgement call with a known non-deterministic seam (a command's
+kernel-expressibility is not mechanically decidable in general) -- the plan-critique gate is the
+honesty check on this call, applied before the fix exists (so there is no pressure to wave
+through a finished implementation). When genuinely unsure between `graduate` and
+`not-applicable`, prefer `not-applicable` and let plan-critique push back if it disagrees --
+a false `not-applicable` is a missed regression guard; a false `graduate` becomes a mandatory
+`waive`-with-reason detour at implement time (harmless, but adds a step).
+
 ## Candidate Decision Ratification (Workflow Step 5b, when the plan realizes/ratifies a CD)
 
 Fires when the plan's scope realizes the work a pending `candidate_decision` (CD.NN) gates, OR the

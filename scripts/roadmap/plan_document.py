@@ -17,6 +17,7 @@ PlanType = Literal["IMPLEMENTATION", "STRATEGIC", "REPORT-ONLY"]
 VerificationTier = Literal["V1", "V2", "V3"]
 ScopeAction = Literal["Create", "Modify", "Delete"]
 Complexity = Literal["XS", "S", "M", "L", "XL"]
+GraduationDisposition = Literal["graduate", "waive", "not-applicable"]
 
 
 class ScopeEntry(BaseModel):
@@ -37,6 +38,9 @@ class VerificationStep(BaseModel):
     expected: str = Field(min_length=1)
     fix_if: str = Field(min_length=1)
     hermetic: bool = False
+    graduation: GraduationDisposition | None = None
+    graduation_check_id: str | None = None
+    graduation_waiver_reason: str | None = None
 
     @field_validator("command")
     @classmethod
@@ -44,6 +48,31 @@ class VerificationStep(BaseModel):
         if not v.strip():
             raise ValueError("verification step requires a non-empty executable command")
         return v
+
+    @model_validator(mode="after")
+    def _validate_graduation_disposition(self) -> VerificationStep:
+        has_check_id = bool(self.graduation_check_id and self.graduation_check_id.strip())
+        has_reason = bool(self.graduation_waiver_reason and self.graduation_waiver_reason.strip())
+        if self.graduation == "graduate":
+            if not has_check_id:
+                raise ValueError(
+                    f"verification step {self.step}: graduation='graduate' requires a non-empty graduation_check_id"
+                )
+            if self.graduation_waiver_reason:
+                raise ValueError(f"verification step {self.step}: graduation_waiver_reason requires graduation='waive'")
+        elif self.graduation == "waive":
+            if not has_reason:
+                raise ValueError(
+                    f"verification step {self.step}: graduation='waive' requires a non-empty graduation_waiver_reason"
+                )
+            if self.graduation_check_id:
+                raise ValueError(f"verification step {self.step}: graduation_check_id requires graduation='graduate'")
+        else:
+            if self.graduation_check_id:
+                raise ValueError(f"verification step {self.step}: graduation_check_id requires graduation='graduate'")
+            if self.graduation_waiver_reason:
+                raise ValueError(f"verification step {self.step}: graduation_waiver_reason requires graduation='waive'")
+        return self
 
 
 class WorkArea(BaseModel):

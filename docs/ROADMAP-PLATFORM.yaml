@@ -7939,6 +7939,90 @@ tier_items:
     strategic: false
     status: not_started
 
+  - id: T3.21
+    tier: T3
+    name: Enforced verification graduation (prevention gate)
+    intent: |
+      Successor to the complete T3.18 (VF-05 graduation producer + VF-06 differential admission
+      gate). Neither producer nor gate is an OBLIGATION: nothing forced a fix PR to actually add
+      the registry row it owed, so a skipped graduation was invisible to CI (PR #586 shipped 4
+      orphaned checks unnoticed; rec-2677 independently flagged an under-graduated plan). This
+      item turns the plan's own declared graduation dispositions (graduate|waive|not-applicable,
+      docs/plans/PLAN-{slug}.yaml verification_plan steps) into an enforced pre-merge obligation
+      via a new registered check, validate_graduation_completeness, with a plan-PR presence leg
+      and an implement-PR row-matching leg. Ratified by Decision 132.
+    depends_on: [T3.18]
+    files_in_scope:
+      - scripts/roadmap/plan_document.py    # graduation/graduation_check_id/graduation_waiver_reason fields
+      - scripts/checks/verification/validate_graduation_completeness.py    # new
+      - scripts/checks/registry.py    # pre_sequence()/full_sequence() registration
+      - scripts/validate.py    # facade re-export
+      - .claude/skills/implement/SKILL.md    # VF-05 section: graduation now mandatory per disposition
+      - .claude/skills/planning/SKILL.md    # VP-design disposition guidance
+      - .claude/skills/plan-critique/SKILL.md    # 12o classification-honesty criterion
+      - docs/contracts/verification-registry.yaml    # plan_slug + check_id enforcement linkage
+    exit_criteria:
+      - id: c1
+        text: >-
+          PlanDocument.VerificationStep accepts an optional graduation disposition
+          (graduate|waive|not-applicable) with graduation_check_id (required for graduate) and
+          graduation_waiver_reason (required for waive); graduate-without-check_id and
+          waive-without-reason are rejected; with the field absent, every historical
+          docs/plans/PLAN-*.yaml still validates.
+        status: met
+        met_by: verification-graduation-enforcement
+      - id: c2
+        text: >-
+          validate_graduation_completeness is registered in both pre_sequence() and
+          full_sequence() and is importable from the scripts.validate namespace (facade
+          re-export resolves).
+        status: met
+        met_by: verification-graduation-enforcement
+      - id: c3
+        text: >-
+          Plan-PR leg: a PR adding/modifying a PLAN-*.yaml whose pre-deploy VP step lacks a
+          graduation disposition fails the check; a plan whose steps all carry dispositions
+          passes; a historical plan not present in the diff is never evaluated.
+        status: met
+        met_by: verification-graduation-enforcement
+      - id: c4
+        text: >-
+          Implement-PR leg: on a feat({slug}) PR, a step declared graduate with no matching
+          new-in-diff registry row (plan_slug + graduation_check_id) fails the check; the check
+          passes when the row exists or the step is flipped to waive with a reason.
+        status: met
+        met_by: verification-graduation-enforcement
+      - id: c5
+        text: >-
+          The check never wedges a legitimate PR: an unresolvable feat({slug}) plan
+          (absent/renamed/.md plan file) and an unreachable origin/main both advisory-SKIP; the
+          plan-PR presence leg does not fire on a merely-modified pre-field plan that declares
+          zero dispositions.
+        status: met
+        met_by: verification-graduation-enforcement
+      - id: c6
+        text: >-
+          The implement, planning, and plan-critique skills carry the mandatory-disposition,
+          classification-guidance, and classification-honesty/waiver-review text respectively.
+        status: met
+        met_by: verification-graduation-enforcement
+    related_candidate_decisions: []
+    related_intents: [verification-system]
+    effort: M
+    strategic: false
+    status: complete
+    completed_at: "2026-07-16"
+    note: >-
+      Carrier for the T3.18 forward-note ("nothing enforces the obligation VF-05 creates").
+      Ratified by Decision 132. Disclosed residual limitations (classification seam,
+      feat({slug})-commit-omission trigger seam) are recorded on Decision 132, not re-litigated
+      here. Backlog recovery (PR #586's 4 orphaned checks; rec-2677's under-graduated plan) is
+      explicitly OUT of scope -- a separate follow-on plan owns retroactive recovery, since the
+      forward gate cannot reach already-merged history. All six exit criteria met within the same
+      session that created this item (verification-graduation-enforcement); each is a mechanically
+      verified command/test outcome, not a prose judgement call -- see the VP Compliance table and
+      the ## Verification Graduation PR-body section for the executed evidence.
+
   # ----- T4: Step Functions + Durable Functions executor + autonomy -----
   - id: T4.1
     tier: T4

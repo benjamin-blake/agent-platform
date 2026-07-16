@@ -191,6 +191,9 @@ from scripts.checks.sloc.validate_sloc_budget_raises import validate_sloc_budget
 from scripts.checks.verification.validate_differential_gate_baseline import (  # noqa: F401,E402
     validate_differential_gate_baseline,
 )
+from scripts.checks.verification.validate_graduation_completeness import (  # noqa: F401,E402
+    validate_graduation_completeness,
+)
 from scripts.checks.verification.validate_hermeticity_flags import (  # noqa: E402
     _UNIT_TEST_HERMETICITY_FLAGS,  # noqa: F401
     validate_hermeticity_flags,  # noqa: F401
