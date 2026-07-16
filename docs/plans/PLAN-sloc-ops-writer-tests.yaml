@@ -1,0 +1,518 @@
+schema_version: 1
+slug: sloc-ops-writer-tests
+intent: >-
+  Decompose tests/test_ops_writer.py (1157 SLOC, the largest remaining rec-2709 grandfathered test
+  monolith) into a tests/ops_writer/ concern-split test PACKAGE whose modules each cover
+  scripts/ops_writer.py and are each < 500 SLOC / < 20 CC, then retire its grandfather home and
+  delete its config/sloc_budgets.yaml entry -- rec-2709 Wave 9 of the Decision 131 mirror-convention
+  rollout that keeps every test file small enough for lower-tier model comprehension (the
+  load-bearing purpose of the 500-SLOC gate, Decision 128). Behaviour-preserving pure MOVE; no
+  test-logic change.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-ops-writer-tests.yaml
+phase: >-
+  rec-2709 Wave 9 (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (AGENTS.md Decision 128). Behaviour-preserving test MOVE of the
+  scripts/ops_writer.py test home into a concern-split package. No product-roadmap phase; platform
+  tooling only. (W9 was originally ops_writer + platform_roadmap_state; PCD-01/#607 already
+  decomposed and retired test_platform_roadmap_state.py, so W9 is now ops_writer ONLY.)
+scope:
+  - file: tests/ops_writer/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the scripts/ops_writer.py concern-split package (prepend import mode; empty
+      file). This is the directory the mirror machinery computes for scripts/ops_writer.py once its
+      grandfather home retires (tests/ops_writer/); check_test_file_exists accepts it once it holds
+      >=1 test_*.py.
+  - file: tests/fixtures/ops_writer_helpers.py
+    action: Create
+    purpose: >-
+      Home for the two cross-module shared surfaces hoisted VERBATIM from the monolith: (1)
+      make_writer() -- the module-level factory `_make_writer()` (returns OpsWriter() with a fresh
+      instance; the `from scripts.ops_writer import OpsWriter` stays INSIDE the function body), used
+      by all five new modules; (2) VALID_REC -- the module-level `_VALID_REC` dict (the OpsWriter
+      backstop-guard fields), used by test_write.py (TestOpsWriterWrite + TestRecsT219Rejection) and
+      test_outbox_emit.py (TestOpsWriterOutbox). tests/fixtures/ is an importable package (its
+      __init__.py already exists) exempt from the no-cross-test-import guard because its names never
+      start with test_. Consumers import with an alias to keep every body byte-identical:
+      `from tests.fixtures.ops_writer_helpers import make_writer as _make_writer` (and `, VALID_REC as
+      _VALID_REC` where used). VALID_REC is only ever COPIED (`{**_VALID_REC}`) / read, never mutated
+      in place, so a shared module-level constant is safe. Direct precedent: Wave 3's
+      tests/fixtures/ops_portal_records.py.
+  - file: tests/ops_writer/test_write.py
+    action: Create
+    purpose: >-
+      write() core + T2.19 recs-rejection concern (verbatim): TestOpsWriterWrite (154 SLOC, 11
+      methods -- timestamp injection, date->created_timestamp mapping, bucket/key prefix, no-op skip
+      paths, boto3-unavailable, id-validation, T2.19 hard-reject) and TestRecsT219Rejection (57 SLOC,
+      5 methods -- ops_recommendations rejected at the write()/compact() boundary, Decision 81 cl.7).
+      Fresh header: `from __future__ import annotations`, `import json`, `from unittest.mock import
+      MagicMock, patch`, and `from tests.fixtures.ops_writer_helpers import make_writer as
+      _make_writer, VALID_REC as _VALID_REC`. All patch targets stay "scripts.ops_writer.*" dotted
+      strings. NO heavy-dep marker (only patch-strings to scripts.ops_writer._BOTO3_AVAILABLE --
+      importing scripts.ops_writer is import-guarded, so no real boto3/pandas import). ~221 SLOC.
+  - file: tests/ops_writer/test_compact.py
+    action: Create
+    purpose: >-
+      compact() + compact_all() DataFrame/timestamp concern (verbatim): TestOpsWriterCompact (167,
+      9 methods), TestOpsWriterCompactAll (23, 2), TestOpsWriterCompactAllIncludesTelemetry (31, 1),
+      TestOpsWriterCompactTimestampHandling (97, 3). Each class's `_make_mock_client_with_staging`
+      @staticmethod-style helper is class-scoped and moves WITH its class. THIS is the ONLY module
+      that references a real heavy dep: the three lazy `import pandas as pd` statements (monolith
+      lines 452, 1218, 1267) all live inside these classes. MANDATORY module-level FAST-TIER
+      HEAVY-DEP MARKER `import pandas  # noqa: F401` (convergence_health-style comment) so the fast
+      tier's --collect-only collectability partition
+      (scripts/checks/_scaffolding.py::partition_changed_tests_by_collectability) PROACTIVELY defers
+      this file to the full tier (pandas excluded from requirements-fast.txt) instead of a fast-tier
+      ModuleNotFoundError at runtime. Keep the verbatim lazy in-test `import pandas as pd` too. Header
+      also carries `import json` + `from unittest.mock import MagicMock, patch`. ~330 SLOC.
+  - file: tests/ops_writer/test_compact_edge_cases.py
+    action: Create
+    purpose: >-
+      compact() edge-case + split-error-path concern (verbatim): TestOpsWriterCompactEdgeCases (113,
+      7 -- unknown table, boto3-unavailable, trade_date-defaults-today, client-None, get_object
+      failure, delete-object-failure-non-fatal) and TestCompactErrorPaths (106, 5 -- no-staging,
+      infra-error-raises, boto3_session forwarding, isolated temp_path per call). Class-scoped
+      `_make_staging_client` helper moves with TestCompactErrorPaths. Header: `import datetime`
+      (TestOpsWriterCompactEdgeCases uses datetime.date.today()), `import json`, `from unittest.mock
+      import MagicMock, patch`, `from tests.fixtures.ops_writer_helpers import make_writer as
+      _make_writer`. `import io` stays as an in-method import (stdlib, verbatim). NO heavy-dep marker
+      (no real pandas/boto3 import; only patch-strings). ~229 SLOC.
+  - file: tests/ops_writer/test_client_bucket.py
+    action: Create
+    purpose: >-
+      client / bucket-resolution / test-env helper concern (verbatim): TestOpsWriterGetClient (27, 2
+      -- SSO-profile Lambda fallback), TestOpsWriterHelpers (69, 8 -- _get_client cache/profile/None,
+      _bucket env, _is_test_env) and TestBucketResolution (30, 3 -- env-priority, config fallback,
+      personal-config fallback). Header: `from __future__ import annotations`, `from unittest.mock
+      import MagicMock, patch`, `from tests.fixtures.ops_writer_helpers import make_writer as
+      _make_writer`. In-method imports (`from scripts.ops_writer import _SSO_PROFILE, OpsWriter`,
+      `import os`, `import src.common.config`) stay verbatim inside their methods. NO heavy-dep marker
+      (patch-strings to scripts.ops_writer._boto3 only -- no real import). ~136 SLOC.
+  - file: tests/ops_writer/test_outbox_emit.py
+    action: Create
+    purpose: >-
+      outbox fallback + emit() telemetry concern (verbatim): TestOpsWriterOutbox (105, 6 --
+      S3-failure->outbox, direct _write_to_outbox, client-None->outbox, test-env/empty-bucket
+      suppression, swallowed failure) and TestOpsWriterEmit (158, 8 -- valid/unknown-field/missing-
+      field emit, unknown-table no-op, outbox-always-written, test-env suppression, never-raises).
+      Header: `from __future__ import annotations`, `import json`, `from unittest.mock import
+      MagicMock, patch`, `from tests.fixtures.ops_writer_helpers import make_writer as _make_writer,
+      VALID_REC as _VALID_REC` (TestOpsWriterOutbox.test_s3_failure_writes_to_outbox uses
+      `{**_VALID_REC}`). In-method imports (`from scripts.ops_writer import OpsWriter`, `import
+      uuid`, `from pathlib import Path`, `import json as _json`) stay verbatim. NO heavy-dep marker.
+      ~273 SLOC.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      THE FLIP (FINAL commit only): delete EXACTLY the single line `        "test_ops_writer.py",`
+      from the _RETIRING_GRANDFATHER_HOMES set literal (currently line 207). NO _CONCERN_SPLIT edit
+      -- "scripts/ops_writer.py" is ALREADY a seeded member of _CONCERN_SPLIT_TEST_PACKAGES (line
+      221), so once the retiring line is gone, map_source_to_test(scripts/ops_writer.py) routes
+      through _mirror_source_to_test to the tests/ops_writer package directory. Do NOT touch
+      _ALL_MIRROR_TARGET_HOMES (frozen roster -- "test_ops_writer.py" stays at line 181), do NOT
+      touch _NESTED_SUBPACKAGE_TEST_PREFIX, do NOT add any special-case. This is a one-line, minimal
+      merge-conflict edit.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete EXACTLY the one line `  tests/test_ops_writer.py: 1157  # raise-approved: dec-130
+      one-time grandfather of pre-existing tests/ SLOC debt (coverage-gap fix)` (currently line 24),
+      by hand, in the FINAL commit. NEVER run --update-sloc-budgets (it strips the dec-130 markers on
+      the other grandfathered entries and may auto-seed). HARD invariant: this file loses exactly
+      that one line and nothing else. Ratchet-DOWN removal (Decision 43/102), always unrestricted;
+      add NO raise marker and NO new tests/ budget entry (Decision 128).
+  - file: tests/test_ops_writer.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/ops_writer/. Deleted WHOLE in the FINAL commit only (kept 100%
+      intact through every prior commit). The wave-invariant grandfather oracle
+      (test_retirement_state_matches_the_tests_tree) COUPLES this deletion to the
+      _RETIRING_GRANDFATHER_HOMES line deletion: a roster home is grandfathered IFF its flat
+      monolith tests/<home> still exists, so the _RETIRING line and this file MUST be removed in the
+      SAME commit or that oracle fails. No synthetic sys.modules loader is involved (the tests import
+      the REAL scripts.ops_writer module), so there is NO dual-loader risk from the monolith
+      co-existing with the new package during intermediate commits.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation: the set of pytest node ids (class::function, module-path stripped)
+    collected from tests/ops_writer/ equals the pre-move set from origin-main's
+    tests/test_ops_writer.py. Same function set, same count (13 classes, 60 test methods), same
+    pass/skip outcomes. PURE move -- NO class rename, NO method rename, NO class-level split (largest
+    class TestOpsWriterCompact = 167 SLOC, far under 500); the diff MUST be EMPTY.
+  - >-
+    Every new test module under tests/ops_writer/ is < 500 SLOC (validate_sloc_limits counting:
+    non-blank, non-comment) and < 20 CC; NO config/sloc_budgets.yaml entry is added for any of them.
+  - >-
+    bin/venv-python -m scripts.validate --pre exits 0: SLOC gate green (all five modules unregistered
+    and < 500); no-cross-test-import guard green (only tests.fixtures.* imports across modules, never
+    a sibling test_* module); collectability green (test_compact.py proactively deferred by its
+    module-level pandas marker; the other four collect and run in the fast tier).
+  - >-
+    bin/venv-python -m pytest tests/ops_writer -q passes with the same total test count as the
+    pre-move baseline (pandas is present in the dev venv, so test_compact.py collects and its
+    pandas-dependent tests run).
+  - >-
+    git diff origin/main -- config/sloc_budgets.yaml shows ONLY the tests/test_ops_writer.py: 1157
+    line removed (with its dec-130 marker); every other entry byte-identical; zero added lines.
+  - >-
+    map_source_to_test(scripts/ops_writer.py) resolves to tests/ops_writer (concern-split package
+    DIR). _RETIRING_GRANDFATHER_HOMES no longer contains "test_ops_writer.py" and STILL contains
+    every other roster home; _ALL_MIRROR_TARGET_HOMES (frozenset of 24) is unchanged (test_ops_writer.py
+    still present); "scripts/ops_writer.py" remains in _CONCERN_SPLIT_TEST_PACKAGES. Proven by the two
+    existing wave-invariant coverage-checker oracle files staying green WITHOUT edits (see context).
+  - >-
+    Heavy-dep marker audit: tests/ops_writer/test_compact.py carries a module-level `import pandas  #
+    noqa: F401` marker; NO other new module contains a real `import`/`from` statement for
+    pandas/numpy/boto3/botocore/duckdb/pyarrow/psycopg2/awswrangler/requests/pyiceberg (patch-strings
+    like patch("scripts.ops_writer._boto3") are NOT heavy-dep imports and require no marker).
+  - >-
+    check_test_file_exists(scripts/ops_writer.py) returns True (tests/ops_writer exists with >=1
+    test_*.py and __init__.py) and the monolith tests/test_ops_writer.py is gone; whole tests/ tree
+    collects clean.
+  - >-
+    scripts/ops_writer.py is NOT a Lambda-packaged artifact: compute_affected_artifacts on the changed
+    tests/ files returns {} -- NO build/deploy/smoke-test/model-id VP steps are in scope (V2, not V3).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Capture the BEFORE test-id baseline from the intact monolith (run while tests/test_ops_writer.py
+      still exists -- before the FINAL commit deletes it). The monolith has no module-level pandas
+      marker so it always collects; pandas is present in the dev venv regardless.
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      bin/venv-python -m pytest tests/test_ops_writer.py --collect-only -q 2>/dev/null | grep '::'
+      | sed -E 's#^[^:]+::#CLASSFN::#' | sort -u > $S/before_ops_writer.txt;
+      echo "baseline: $(wc -l < $S/before_ops_writer.txt) ids"
+    expected: A non-empty sorted class::function baseline (60 method ids across 13 classes).
+    fix_if: >-
+      If the count is 0, the monolith skip-collected (pandas absent) -- install pandas in the venv and
+      re-run so the baseline is meaningful. If collection ERRORS (not skips), the monolith has a
+      pre-existing import problem to fix before decomposing.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Collect the AFTER id set from the new package and assert a byte-identical diff against the
+      baseline. Requires pandas present so test_compact.py collects (dev venv has pandas 3.0.3).
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      bin/venv-python -m pytest tests/ops_writer --collect-only -q 2>/dev/null | grep '::'
+      | sed -E 's#^[^:]+::#CLASSFN::#' | sort -u > $S/after_ops_writer.txt;
+      diff $S/before_ops_writer.txt $S/after_ops_writer.txt && echo "EMPTY-DIFF-OK"
+    expected: Empty diff (identical class::function sets). No sanctioned delta -- pure move, no renames/splits.
+    fix_if: >-
+      Any added/removed id means a class was dropped, duplicated, mis-copied, a method lost/renamed,
+      or a helper accidentally became a collected test_ name. STOP and reconcile. If test_compact.py
+      is absent from the AFTER set, pandas is not installed -- install it and re-run (the module-level
+      marker makes the file uncollectable without pandas).
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Run the authoritative fast presubmit tier -- proves the SLOC gate, no-cross-test-import guard, and collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No SLOC-limit failure, no cross-test-import failure, no collection error.
+    fix_if: >-
+      A >=500 unregistered module (rebalance classes -- but none should approach 500); a cross-test
+      import (a helper leaked between test_* modules -> move it to tests/fixtures/ops_writer_helpers.py);
+      a collectability failure (fix a module's fresh import header, or confirm the pandas marker on
+      test_compact.py is at module scope so the partition defers it).
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full scoped pass of the new package at the baseline count (dev venv, pandas present).
+    command: bin/venv-python -m pytest tests/ops_writer -q
+    expected: All pass; total selected count equals the step-1 baseline line count (60 methods).
+    fix_if: >-
+      A failure means a patch target or helper did not survive the move -- re-check that string patch
+      targets (scripts.ops_writer.*, src.common.config.*) are byte-identical to the monolith, that
+      make_writer/VALID_REC import aliases keep every body verbatim, and that each class-scoped
+      _make_mock_client_with_staging / _make_staging_client helper moved with its class.
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Assert config/sloc_budgets.yaml lost exactly the one target line and nothing else.
+    command: git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly one removed line (tests/test_ops_writer.py: 1157 with its dec-130 raise-approved marker)
+      and zero added lines; every other entry byte-identical.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was touched.
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Prove the retirement + the concern-split mapping via the two WAVE-INVARIANT coverage-checker
+      oracle files -- they need NO edit this wave and must stay green after the flip. (Do NOT grep for
+      the literal "test_ops_writer.py" string in scripts/test_coverage_checker.py to check retirement:
+      it persists in _ALL_MIRROR_TARGET_HOMES (roster, line 181), so a `! grep` always fails. The
+      oracle asserts _RETIRING membership directly -- that is the correct retirement check.)
+    command: >-
+      bin/venv-python -m pytest tests/test_coverage_checker_grandfather.py::TestGrandfatherRetiringTable
+      tests/test_coverage_checker_map.py::TestMirrorRule -q
+    expected: >-
+      All pass, including: test_retirement_state_matches_the_tests_tree (ops_writer now NOT in _RETIRING
+      AND its flat monolith is gone -> the else-branch `assert not flat.exists()` holds);
+      test_roster_is_the_24_known_basenames (unchanged 24-entry frozen roster);
+      test_concern_split_monolith_resolves_to_test_package_directory_once_retired (already asserts
+      scripts/ops_writer.py -> tests/ops_writer under a monkeypatched retired state).
+    fix_if: >-
+      A failing test_retirement_state_matches_the_tests_tree means the _RETIRING line deletion and the
+      monolith deletion were NOT landed in the same commit (they are coupled). A failing roster test
+      means _ALL_MIRROR_TARGET_HOMES was wrongly edited (it must stay frozen). Reconcile the FINAL
+      commit -- do NOT edit the oracle expectations (they are wave-invariant by construction).
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Confirm the monolith is gone, the retirement line is removed, a sibling roster line is untouched, and whole-suite collection is clean.
+    command: >-
+      test ! -f tests/test_ops_writer.py &&
+      test -f tests/ops_writer/__init__.py &&
+      grep -q '"test_ops_data_portal.py"' scripts/test_coverage_checker.py &&
+      bin/venv-python -m pytest tests/ --collect-only -q >/dev/null && echo "RETIRED-RC=$?"
+    expected: >-
+      RETIRED-RC=0 -- monolith deleted, package marker present, an unrelated roster line
+      (test_ops_data_portal.py) still present (proving no over-reach), and whole-suite collection clean
+      (no dangling reference to the deleted monolith, no broken import header).
+    fix_if: If the monolith survives, the package marker is absent, an unrelated line was removed, or collection errors, the FINAL commit is incomplete or a module header is malformed.
+  - step: 8
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Heavy-dep marker audit -- confirm the single pandas marker exists and no other new module has a
+      real heavy-dep import statement. (Grep for import STATEMENTS, not patch-strings: patch-strings
+      like patch("scripts.ops_writer._boto3") match the token boto3 but are harmless, so a blanket
+      token grep would false-fail.)
+    command: >-
+      grep -qE '^import pandas' tests/ops_writer/test_compact.py &&
+      ! grep -rnE '^[[:space:]]*(import|from) (pandas|numpy|boto3|botocore|duckdb|pyarrow|psycopg2|awswrangler|requests|pyiceberg)([. ]|$)'
+      tests/ops_writer/test_write.py tests/ops_writer/test_compact_edge_cases.py
+      tests/ops_writer/test_client_bucket.py tests/ops_writer/test_outbox_emit.py; echo "MARKER-RC=$?"
+    expected: >-
+      MARKER-RC=0 -- test_compact.py has the module-level `import pandas` marker; none of the other
+      four new modules has a real import/from statement for any heavy dep.
+    fix_if: >-
+      If test_compact.py lacks the marker, add `import pandas  # noqa: F401` at module scope. If
+      another module matches, a pandas/heavy-dep-using CLASS was mis-grouped -- since methods cannot
+      move between classes without breaking test-id preservation, move the whole owning class into
+      test_compact.py (the marked module) or give the module its own module-level marker.
+  - step: 9
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Confirm the change is test-only and touches no Lambda-packaged source (V2, not V3 -- no deploy steps).
+    command: >-
+      bin/venv-python -c "from scripts.lambda_manifest import compute_affected_artifacts;
+      print(compute_affected_artifacts(['tests/ops_writer/test_write.py','tests/ops_writer/test_compact.py',
+      'tests/fixtures/ops_writer_helpers.py','scripts/test_coverage_checker.py','config/sloc_budgets.yaml',
+      'tests/test_ops_writer.py']))"
+    expected: "Prints {} -- no active Lambda artifact is affected, so no build/deploy/smoke-test steps are required."
+    fix_if: A non-empty dict would mean a scope file is Lambda-packaged; it is not -- if this changes, add per-artifact V3 steps. (Not expected for this test-only wave.)
+constraints:
+  - >-
+    Pure behaviour-preserving MOVE. Copy every class body and every class-scoped helper VERBATIM with
+    its owner (each compact class's _make_mock_client_with_staging / _make_staging_client moves with
+    its class). Author a fresh per-file import header importing exactly the symbols each file
+    references at module scope -- no test-logic edits, no renames, no class splits (no class exceeds
+    500 SLOC; largest is TestOpsWriterCompact at 167).
+  - >-
+    Shared-surface hoisting: the module-level `_make_writer()` factory and `_VALID_REC` dict are the
+    ONLY module-level surfaces shared across modules -> hoist BOTH to
+    tests/fixtures/ops_writer_helpers.py as make_writer / VALID_REC, imported with aliases
+    (`make_writer as _make_writer`, `VALID_REC as _VALID_REC`) so every call site and dict-spread
+    stays byte-identical. Never import them from a sibling test_* module. tests/fixtures/ is
+    guard-exempt (names never start with test_) and already has its __init__.py.
+  - >-
+    FAST-TIER HEAVY-DEP MARKER (STANDING DIRECTIVE, W6 CI-only-failure lesson): only
+    tests/ops_writer/test_compact.py references a real heavy dep (three lazy `import pandas as pd` --
+    monolith lines 452/1218/1267 -- inside TestOpsWriterCompact and TestOpsWriterCompactTimestampHandling).
+    Give test_compact.py a module-level `import pandas  # noqa: F401` (convergence_health-style
+    comment) so the fast tier's --collect-only collectability partition defers it to the full tier
+    (pandas is not in requirements-fast.txt). Keep the verbatim lazy in-test imports too. The other
+    four modules reference ZERO real heavy-dep imports -> add NO marker there (patch-strings to
+    scripts.ops_writer._boto3 / .wr / patch.object(writer, "_get_boto3_session", ...) are NOT imports
+    -- importing scripts.ops_writer is import-guarded via _BOTO3_AVAILABLE / _AWR_AVAILABLE).
+  - >-
+    No cross-test imports (validate_no_cross_test_imports active in --pre and full). New modules import
+    only: stdlib (json, datetime, os, io, uuid, pathlib), pytest, unittest.mock, the real scripts.ops_writer
+    / src.common.config symbols (mostly as in-method imports moved verbatim), and
+    `from tests.fixtures.ops_writer_helpers import ...`.
+  - >-
+    ruff-format import discipline (tests/CLAUDE.md): one consolidated import block per module -- never
+    split a module's imports across two top-of-file blocks (ruff silently drops the second). After
+    authoring each module, run ruff to catch F401 (the pandas marker carries `# noqa: F401`).
+  - >-
+    Every new mirror directory carries an __init__.py (prepend import mode): tests/ops_writer/ only
+    (tests/fixtures/ already has one). No package conftest is needed -- the monolith defines no
+    module-level pytest fixture; the global recursion/socket guards live in the root tests/conftest.py
+    and merge up the tree.
+  - >-
+    Surgical retirement: delete ONLY the "test_ops_writer.py" basename from _RETIRING_GRANDFATHER_HOMES.
+    Do NOT touch _CONCERN_SPLIT_TEST_PACKAGES (scripts/ops_writer.py already seeded),
+    _ALL_MIRROR_TARGET_HOMES (frozen 24-roster), or _NESTED_SUBPACKAGE_TEST_PREFIX. The
+    _RETIRING-line deletion and the tests/test_ops_writer.py deletion MUST land in the same FINAL
+    commit (the wave-invariant grandfather oracle couples them).
+  - >-
+    config/sloc_budgets.yaml loses exactly the one target line; NEVER run --update-sloc-budgets. Add NO
+    raise marker and NO new tests/ budget entry (Decision 128 -- decompose, not raise).
+  - Do NOT resolve rec-2709 (Wave 9 of ~12 remaining); bundled_recommendations stays empty.
+  - >-
+    No rescue agents or workaround loops (Decision 55). On an unrecoverable collect-id mismatch, STOP
+    and RCA -- never patch around it. PUBLIC repo -- no AWS account IDs / ARNs / ExternalIds / secrets /
+    internal hostnames in any new file.
+  - Use bin/venv-python for all Python invocations; bash-only shell. Work on the harness claude/... branch, never main.
+context:
+  - >-
+    DECISION ANALYSIS (inline; the overseer is the critique gate for the rec-2709 program, so no
+    decision-scout / plan-critique sub-subagents were spawned this session -- mirrors the Wave 3/4/10
+    plans). CITE: Decision 131 (test-colocation inverted to a mirror rule + retiring grandfather-table
+    + no-cross-test-import guard + per-package conftest hierarchy; amends Decision 104; governs every
+    step and the concern-split-package resolution); Decision 130 (whole-repo structural-size governance
+    + the 24-home one-time grandfather of tests/ SLOC debt + the dec-130 markers -- governs the one
+    ratchet-DOWN budget-line deletion); Decision 128 (SLOC budget-raise guardrails: decompose by
+    default; this wave adds ZERO budget lines / ZERO raise markers); Decision 124 (scripts/executor/**
+    and scripts/ops_portal/** deliberately map to None -- unperturbed by this wave); Decision 132
+    (verification-step graduation dispositions -- every pre-deploy VP step carries
+    graduation: not-applicable). RELATED: Decision 80/104 (facade / concern-split precedent the package
+    mirrors -- exactly Wave 3's tests/ops_data_portal/); Decision 43/102 (CC-20 and 500-SLOC limits);
+    Decision 81 cl.7 (the T2.19 recs-rejection behaviour the moved tests lock -- unchanged).
+  - >-
+    CONTRADICTION CHECK = CLEAN. No class in the monolith exceeds 500 SLOC (largest TestOpsWriterCompact
+    167, then TestOpsWriterEmit 158, TestOpsWriterWrite 154), so NO class-level primary sibling-split,
+    NO id-qualifier delta, NO budget-raise-marker tension. This is a straight pure move verified by
+    test-id preservation -- exactly the shape Decision 131 was written for.
+  - >-
+    ORACLE FILES NEED ZERO EDITS THIS WAVE (verified against the live files -- the key difference from
+    the Wave 10 template). The former per-wave `..._minus_N_...` conflict-magnet was REDESIGNED into a
+    wave-invariant oracle (rec-2709 task #10, landed on main after W10). (1)
+    tests/test_coverage_checker_grandfather.py::TestGrandfatherRetiringTable::test_retirement_state_matches_the_tests_tree
+    DERIVES retirement state from the tests/ tree (a roster home is grandfathered IFF its flat monolith
+    exists), so deleting the _RETIRING line + the monolith TOGETHER keeps it green by construction; its
+    test_representative_paths_resolve_to_their_stable_targets explicitly says "DO NOT append a per-wave
+    case here"; its 24-roster test is frozen. (2)
+    tests/test_coverage_checker_map.py::TestMirrorRule::test_concern_split_monolith_resolves_to_test_package_directory_once_retired
+    ALREADY asserts scripts/ops_writer.py -> tests/ops_writer under a monkeypatched
+    (_ALL_MIRROR_TARGET_HOMES - {"test_ops_writer.py"}) retired state -- wave-invariant, no edit. So the
+    ONLY non-test-file edits are the single _RETIRING line deletion + the single budget line deletion.
+  - >-
+    CONCERN-SPLIT BREAKDOWN (verbatim class -> module; measured SLOC via ast + validate_sloc counting;
+    all < 500). tests/ops_writer/ (5 modules): test_write [TestOpsWriterWrite 154, TestRecsT219Rejection
+    57 -> ~221]; test_compact [TestOpsWriterCompact 167, TestOpsWriterCompactAll 23,
+    TestOpsWriterCompactAllIncludesTelemetry 31, TestOpsWriterCompactTimestampHandling 97 -> ~330, PANDAS
+    MARKER]; test_compact_edge_cases [TestOpsWriterCompactEdgeCases 113, TestCompactErrorPaths 106 ->
+    ~229]; test_client_bucket [TestOpsWriterGetClient 27, TestOpsWriterHelpers 69, TestBucketResolution
+    30 -> ~136]; test_outbox_emit [TestOpsWriterOutbox 105, TestOpsWriterEmit 158 -> ~273]. Class-content
+    sum = 1137 SLOC (matches the 1157 budget minus the 20-SLOC header/helpers moving to fixtures). Every
+    module has a comfortable margin under 500. The grouping is deliberate: consolidating TestOpsWriterCompact
+    and TestOpsWriterCompactTimestampHandling into test_compact.py puts ALL THREE real pandas imports in
+    ONE module, so exactly ONE heavy-dep marker is needed and the other four modules stay marker-free.
+  - >-
+    SHARED-HELPER HOISTING: make_writer (from `_make_writer`) + VALID_REC (from `_VALID_REC`) ->
+    tests/fixtures/ops_writer_helpers.py (both genuinely cross-module: make_writer used by all five
+    modules, VALID_REC by test_write + test_outbox_emit). All other helpers are class-scoped
+    (_make_mock_client_with_staging in TestOpsWriterCompact / TestOpsWriterCompactTimestampHandling,
+    _make_staging_client in TestCompactErrorPaths) and move verbatim with their owning class. There is
+    no module-level pytest fixture in the monolith, so no package conftest is created.
+  - >-
+    HEAVY-DEP GREP EVIDENCE (whole-monolith audit): the ONLY real import statements for a heavy dep are
+    `import pandas as pd` at lines 452 (TestOpsWriterCompact), 1218 and 1267
+    (TestOpsWriterCompactTimestampHandling) -- all land in test_compact.py. Every other boto3/botocore/
+    awswrangler token is a docstring, a patch-string to a scripts.ops_writer.* attribute
+    (patch("scripts.ops_writer._boto3"), patch("scripts.ops_writer.wr")), or a patch.object on the
+    writer instance -- none imports the real heavy module (importing scripts.ops_writer is guarded), so
+    none requires a marker. requirements-fast.txt contains no pandas/boto3/awswrangler/numpy (verified),
+    confirming pandas is a fast-tier-excluded heavy dep and the marker is load-bearing.
+  - >-
+    NOT A LAMBDA ARTIFACT: compute_affected_artifacts(<changed tests/ files>) returns {} (verified live),
+    so this wave has NO build/deploy/smoke-test/model-id steps -- it is V2 (unit), not V3. scripts/ops_writer.py
+    is grandfathered-un-nested (owner T-1.24) but is NOT in any src/lambdas/<slug>/manifest.yaml pattern.
+  - >-
+    COVERAGE-SAFETY (why CI stays green): validate_test_coverage is FULL-tier only and only checks
+    git-diff-changed SOURCE files under src/scripts. This wave changes zero such source files --
+    scripts/test_coverage_checker.py is name-excluded (starts with test_), config/sloc_budgets.yaml is
+    not .py, and every moved/new file is a test_ file. The coverage gate is a no-op for this PR in both
+    tiers (identical to the Wave 1/3 coverage-safety note).
+  - >-
+    OVERSEER STANDARD -- PR STRUCTURE: ONE branch (a FRESH claude/... W9 session branch cut from latest
+    origin/main, NOT this overseer bookkeeping branch) / ONE PR with BATCHED COMMITS (scaffold+fixtures
+    commit -> module-population commits with the monolith intact -> FINAL flip commit). Rebase onto
+    origin/main + re-run validate --pre right before pushing (main advances under the program between
+    waves -- W3 failed CI on a stale base). AST-verify id-preservation before the FINAL commit.
+  - >-
+    INTERMEDIATE-COMMIT SAFETY: while the monolith AND the new package co-exist (pre-FINAL commits),
+    ops_writer stays in _RETIRING and the flat monolith exists, so test_retirement_state_matches_the_tests_tree
+    holds; the new package files are additive extra tests; a full-suite collection sees both the monolith
+    and package classes but at DISTINCT node ids (different module paths) -- no collision, no synthetic
+    sys.modules loader (tests import the REAL scripts.ops_writer), so NO dual-loader hazard. For mid-batch
+    verification run SCOPED `pytest tests/ops_writer`. The FINAL commit's monolith delete + _RETIRING line
+    delete removes the duplication atomically; CI evaluates only the PR head (monolith gone), which is
+    unambiguous.
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): decision-scout NOT dispatched (overseer
+    is the rec-2709 critique gate; inline decision analysis above). CITE: Decision 131, 130, 128, 124,
+    132; RELATED 80, 104, 43, 102, 81."
+  - "gates: decision-scout=not-dispatched (overseer critique gate); plan-critique=overseer-review after 0 sub-subagent round(s)"
+  - >-
+    Branch: a fresh harness claude/... W9 session branch at implement time (verify not main). Wave 3
+    (tests/ops_data_portal/) and Wave 10 (tests/sync/ops/, tests/session/postflight/, tests/ci_rca/evidence/)
+    are the live concern-split templates on main. Preflight not machine-run in this read-only planning
+    subagent. No CI-RCA unresolved recs in scope. Main-divergence: scope is net-new package files + a
+    one-line coverage-checker edit + a one-line budget deletion + one monolith deletion; no overlap risk
+    flagged at planning time (rebase at commit-flow time per the Git-ops procedure).
+pre_implementation_checklist:
+  - Branch confirmed not on main (fresh harness claude/... W9 session branch cut from latest origin/main)
+  - scripts/test_coverage_checker.py read in full (map_source_to_test, _grandfathered/_mirror helpers, _RETIRING_GRANDFATHER_HOMES line 207, _ALL_MIRROR_TARGET_HOMES line 181, _CONCERN_SPLIT_TEST_PACKAGES line 221)
+  - tests/CLAUDE.md read (mirror convention, no-cross-test-import, per-package conftest hierarchy, ruff import discipline)
+  - Wave 3 (tests/ops_data_portal/) and Wave 10 (tests/sync/ops/) studied as the concern-split + fixtures-hoist templates
+  - Decision 131, 130, 128, 124, 132 located and their bearing confirmed (inline decision analysis)
+  - All 13 monolith classes located; class -> module map re-verified against the live file; no class exceeds 500 SLOC (no class-split)
+  - The single map edit (delete "test_ops_writer.py" from _RETIRING) confirmed against the live checker; scripts/ops_writer.py already in _CONCERN_SPLIT; roster stays 24
+  - Both coverage-checker oracle files confirmed WAVE-INVARIANT (no edit needed) -- grandfather derives from the tree; map oracle already has the monkeypatched ops_writer case
+  - Heavy-dep grep of the monolith run -- only test_compact.py's classes reference a real (lazy) pandas import; every other heavy-dep token is a patch-string/docstring
+  - compute_affected_artifacts confirmed {} (not Lambda-packaged; V2 not V3)
+  - "config/sloc_budgets.yaml line 24 (tests/test_ops_writer.py at 1157, dec-130 marker) identified for by-hand deletion"
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Confirm the working branch is a fresh harness claude/... W9 session branch cut from latest
+    origin/main (git branch --show-current), NOT main and NOT the overseer bookkeeping branch.
+  - >-
+    COMMIT 1 (scaffold + shared surfaces): create tests/ops_writer/__init__.py (empty) and
+    tests/fixtures/ops_writer_helpers.py (make_writer factory + VALID_REC dict, hoisted VERBATIM from
+    the monolith's _make_writer / _VALID_REC). Run `bin/venv-python -m scripts.validate --pre`
+    (additive -- must stay green).
+  - >-
+    COMMITS 2-3 (module population, monolith intact): create the five modules per the CONCERN-SPLIT
+    BREAKDOWN, copying each class VERBATIM with a fresh per-file import header that imports make_writer
+    (aliased _make_writer) and, where used, VALID_REC (aliased _VALID_REC). Add the module-level
+    `import pandas  # noqa: F401` marker to test_compact.py ONLY. Keep tests/test_ops_writer.py FULLY
+    INTACT. After each commit run SCOPED `bin/venv-python -m pytest tests/ops_writer -q` plus
+    `bin/venv-python -m scripts.validate --pre` on the touched files to localise any
+    SLOC/cross-import/collection failure early; run ruff to catch F401.
+  - >-
+    FINAL COMMIT (the surgical flip, atomic): delete the single "test_ops_writer.py" line from
+    _RETIRING_GRANDFATHER_HOMES in scripts/test_coverage_checker.py; delete the single
+    tests/test_ops_writer.py: 1157 line from config/sloc_budgets.yaml by hand; delete
+    tests/test_ops_writer.py WHOLE -- all three in the SAME commit (the wave-invariant grandfather
+    oracle couples the _RETIRING deletion to the monolith deletion). Do NOT edit either oracle file
+    (both are wave-invariant); do NOT touch _CONCERN_SPLIT / _ALL_MIRROR_TARGET_HOMES / _NESTED_SUBPACKAGE_TEST_PREFIX.
+  - >-
+    Execute the full Verification Plan (steps 1-9) on the FINAL commit; loop until all pass. Capture the
+    step-1 baseline BEFORE the FINAL commit deletes the monolith. On an unrecoverable collect-id
+    mismatch STOP and RCA (Decision 55) -- never patch around it.
+  - >-
+    Push -u origin HEAD (fresh W9 branch); open ONE PR (title: feat(sloc-ops-writer-tests): decompose
+    test_ops_writer monolith into concern-split package); subscribe_pr_activity; end the turn per the
+    AGENTS.md Git-ops procedure (event-driven CI-green wake, no poll loop).
+  - >-
+    Report: the final per-module SLOC breakdown for tests/ops_writer/; the VP step-2 empty-diff
+    confirmation; confirmation config/sloc_budgets.yaml lost exactly one line and both oracle files
+    stayed green WITHOUT edits; and the single pandas marker on test_compact.py.
+rollback: >-
+  Single-PR revert. The FINAL commit is the only one that changes the mapping / budget / deletes the
+  monolith -- reverting the PR restores test_ops_writer.py's grandfather membership and its dec-130
+  budget line, re-points scripts/ops_writer.py at the (restored) monolith, and leaves the already-created
+  package + the tests/fixtures/ops_writer_helpers.py helper as harmless extra coverage until re-attempted.
