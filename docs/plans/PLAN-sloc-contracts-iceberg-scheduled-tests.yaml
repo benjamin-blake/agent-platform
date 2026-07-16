@@ -1,0 +1,666 @@
+schema_version: 1
+slug: sloc-contracts-iceberg-scheduled-tests
+intent: >-
+  Decompose the THREE oversized concern-split test monoliths --
+  tests/test_contracts_enforcement.py (665), tests/test_iceberg_reader.py (641) and
+  tests/test_scheduled_agent_handler.py (502) -- into three concern-split test PACKAGES
+  (tests/contracts_enforcement/, tests/common/iceberg_reader/,
+  tests/data/handlers/scheduled_agent_handler/), each a set of cohesive test_<concern>.py modules
+  < 500 SLOC, then retire the three grandfather homes and delete their three
+  config/sloc_budgets.yaml lines -- rec-2709 Wave 11 of the Decision 131 mirror-convention rollout.
+  All three sources are ALREADY declared in _CONCERN_SPLIT_TEST_PACKAGES, so the checker flip is a
+  single Edit A (three _RETIRING deletions) -- no _CONCERN_SPLIT add, no smoke_actions-style
+  special-case. Purpose: keep every test file small enough for lower-tier model comprehension
+  (the load-bearing reason the 500-SLOC gate exists, Decision 128). Behaviour-preserving pure MOVE;
+  no source module is touched; no Lambda build/deploy/smoke-test (compute_affected_artifacts of the
+  changed tests/ files is {} -- confirmed).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-contracts-iceberg-scheduled-tests.yaml
+phase: >-
+  rec-2709 Wave 11 (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (AGENTS.md Decision 128). Behaviour-preserving test MOVE of three concern-split
+  monoliths. No product-roadmap phase; platform tooling only.
+scope:
+  - file: tests/contracts_enforcement/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the scripts/contracts_enforcement.py concern-split package (prepend import
+      mode; empty file). tests/contracts_enforcement/ is the directory the mirror machinery computes
+      for that source once its home retires (scripts root -> mirror_subdir empty -> tests/<stem>/);
+      check_test_file_exists accepts it once it holds >=1 test_*.py.
+  - file: tests/fixtures/contracts_enforcement.py
+    action: Create
+    purpose: >-
+      Shared plain-helper module (guard-exempt: tests/fixtures/ names never start with test_). Hoists
+      VERBATIM the ONE cross-module helper `_make_class_a_doc` (used by BOTH split modules:
+      test_contract_checks and test_provisional_triggers). Imports from scripts.contracts_schema
+      (AmendmentLogEntry, ContractClass, ContractDocument, ContractMeta, ContractStatus, FieldSpec)
+      plus `from __future__ import annotations`. No name collision -- tests/fixtures/ has no existing
+      contracts_enforcement.py (tests/fixtures/iceberg is a .ddl.sql dir, unrelated).
+  - file: tests/contracts_enforcement/test_contract_checks.py
+    action: Create
+    purpose: >-
+      Static contract-validation concern (VERBATIM): TestCheckRequiredInlineFields (8 tests),
+      TestCheckAmendmentForDiff (13 tests), TestCheckStatusTransition (4 tests), TestLoadContractFromText
+      (4 tests). Local helpers kept co-located (single-module use): `_make_class_b_doc`,
+      `_amendment_entry`. Header: `from __future__ import annotations`, textwrap, pytest,
+      `from scripts.contracts import ContractValidationError`, the four checks it references
+      (check_required_inline_fields, check_amendment_for_diff, check_status_transition,
+      _load_contract_from_text) from scripts.contracts_enforcement, the scripts.contracts_schema symbols
+      it references (AmendmentLogEntry, ChangeClass, ContractClass, ContractDocument, ContractMeta,
+      ContractStatus, FieldSpec), and `from tests.fixtures.contracts_enforcement import _make_class_a_doc`.
+      Keep the lazy in-body `from scripts.contracts_schema import VerbSpec` inside _make_class_b_doc
+      VERBATIM. No heavy dep, no integration mark, NO module-level marker. ~311 SLOC.
+  - file: tests/contracts_enforcement/test_provisional_triggers.py
+    action: Create
+    purpose: >-
+      Provisional-v0 re-ratification-trigger concern (VERBATIM): TestParseCondition (7 tests),
+      TestEvaluateProvisionalTrigger (14 tests; its method-local `_make_provisional_doc` moves inside the
+      class), TestDefaultProvisionalMetrics (7 tests), TestCheckReRatificationTrigger (9 tests, incl
+      test_live_contracts_pass which lazily imports load_contract and reads docs/contracts/*.yaml --
+      first-party, keep VERBATIM). Local helper `_make_provisional_doc_with_date` kept co-located (used
+      only by these two classes). Header: `from __future__ import annotations`, datetime/timezone,
+      pytest, the four functions it references (_parse_condition, evaluate_provisional_trigger,
+      default_provisional_metrics, check_re_ratification_trigger) from scripts.contracts_enforcement, the
+      scripts.contracts_schema symbols it references (ContractClass, ContractDocument, ContractMeta,
+      ContractStatus, FieldSpec), and `from tests.fixtures.contracts_enforcement import _make_class_a_doc`.
+      Keep the lazy in-body `from scripts.contracts_schema import ContractMeta` inside _make_provisional_doc
+      VERBATIM. No heavy dep, no integration mark, NO module-level marker. ~326 SLOC.
+  - file: tests/common/iceberg_reader/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the src/common/iceberg_reader.py concern-split package (prepend import mode;
+      empty). tests/common/ ALREADY exists with its own __init__.py (Wave 7); this adds ONLY the nested
+      iceberg_reader/ subpackage marker. The mirror machinery computes tests/common/iceberg_reader/ for
+      this source once its home retires (drop `src`, keep `common`, stem iceberg_reader, in _CONCERN_SPLIT
+      -> package DIR).
+  - file: tests/common/iceberg_reader/test_duckdb_iceberg_reader.py
+    action: Create
+    purpose: >-
+      DuckDBIcebergReader (pyiceberg-on-Iceberg) unit-test concern (VERBATIM): the arrow helpers
+      `_make_arrow_recs`, `_make_arrow_pq` (kept LOCAL -- used only here) and the whole
+      TestDuckDBIcebergReader class (all mocked I/O; builds real pyarrow tables; patches
+      "pyiceberg.catalog.glue.GlueCatalog"). **HEAVY-DEP MARKER MODULE**: carries a MODULE-LEVEL
+      `import pyarrow as pa` (this is the real, load-bearing import the helpers use -- pa.table(...) --
+      AND the fast-tier collectability marker: pyarrow is excluded from requirements-fast.txt, so
+      --collect-only fails and scripts/checks/_scaffolding.py PROACTIVELY defers this module to the full
+      tier, exactly as the monolith's module-level pyarrow import did). Header: `from __future__ import
+      annotations`, `from typing import Any`, `from unittest.mock import MagicMock, patch`,
+      `import pyarrow as pa`, `import pytest`. Keep the lazy in-method `from src.common.iceberg_reader
+      import ...` imports VERBATIM. ~270 SLOC.
+  - file: tests/common/iceberg_reader/test_warehouse_parity.py
+    action: Create
+    purpose: >-
+      Warehouse-parity integration concern (VERBATIM): `_has_warehouse_credentials` (functools.lru_cache
+      probe), `_fetch_athena_current` (lazily imports boto3+time inside the function body), and
+      TestWarehouseParity (`@pytest.mark.integration`, with its class-level autouse `_skip_if_no_warehouse`
+      fixture that requests `_allow_network_for_integration` -- the fixture is provided by the ROOT
+      tests/conftest.py and layers through automatically, so NO package conftest is needed). Header:
+      `from __future__ import annotations`, import functools, import pytest. NO module-level marker: every
+      test in this module is `@pytest.mark.integration`, and the fast tier runs pytest with
+      `-m "not integration"` (_scaffolding.py) so they are DESELECTED; under the fast-tier simulation they
+      SKIP (credentials unavailable -> graceful False). The lazy boto3 in `_fetch_athena_current` is only
+      reached by an integration test that has already skipped. ~114 SLOC.
+  - file: tests/common/iceberg_reader/test_ducklake_reader.py
+    action: Create
+    purpose: >-
+      DuckLakeReader (SigV4 Function-URL) concern (VERBATIM): `_FakeResp`, `_patch_dl_invoke`,
+      `_patch_dl_invoke_seq` (the two patch helpers lazily import boto3, requests, botocore.auth.SigV4Auth
+      inside their bodies -- keep VERBATIM), every module-level `test_ducklake_reader_*` function,
+      `test_ops_storage_backend_flag_retired`, the three `test_make_reader_*` functions,
+      `test_parse_single_key_filter`, and TestDuckLakeReaderSSMResolution. **HEAVY-DEP MARKER MODULE**:
+      carries a MODULE-LEVEL `import boto3  # noqa: F401` (the non-integration tests here assert the
+      non-skipped SigV4 path, which needs boto3/requests/botocore at runtime; the marker makes
+      --collect-only fail so the fast tier PROACTIVELY defers the whole module -- ops_writer precedent).
+      Keep the verbatim lazy in-body boto3/requests/botocore imports too. Header: `from __future__ import
+      annotations`, `from unittest.mock import MagicMock`, `import boto3  # noqa: F401`, `import pytest`.
+      Keep the lazy in-body `import src.common.iceberg_reader as ir` and `import json as _json` VERBATIM.
+      ~275 SLOC.
+  - file: tests/data/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the NET-NEW tests/data/ mirror subtree (prepend import mode; empty).
+      tests/data/ does not yet exist -- this is its root.
+  - file: tests/data/handlers/__init__.py
+    action: Create
+    purpose: Package marker for the NET-NEW tests/data/handlers/ mirror subtree (prepend import mode; empty).
+  - file: tests/data/handlers/scheduled_agent_handler/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the src/data/handlers/scheduled_agent_handler.py concern-split package (prepend
+      import mode; empty). The mirror machinery computes tests/data/handlers/scheduled_agent_handler/ for
+      this source once its home retires (drop `src`, keep `data/handlers`, stem scheduled_agent_handler,
+      in _CONCERN_SPLIT -> package DIR).
+  - file: tests/data/handlers/scheduled_agent_handler/test_helpers.py
+    action: Create
+    purpose: >-
+      Loader / helper-function concern (VERBATIM): TestGetGithubPat (4 tests; TWO are
+      `@pytest.mark.integration` and use `patch("boto3.client", ...)`), TestLoadPrompt (2),
+      TestLoadManifest (2), TestBedrockRetired (1), TestInvokeGithubModels (3). Header: `from __future__
+      import annotations`, `from pathlib import Path`, `from unittest.mock import MagicMock, patch`,
+      `import pytest`, `import src.data.handlers.scheduled_agent_handler as handler_mod`, and
+      `from src.data.handlers.scheduled_agent_handler import (_get_github_pat, _invoke_github_models,
+      _load_manifest, _load_prompt)`. NO module-level marker: the only heavy tokens (two
+      `patch("boto3.client")`) live in `@pytest.mark.integration` tests, which the fast tier DESELECTS
+      (`-m "not integration"`). Keep the `# pragma: allowlist secret` on the fake SecretString VERBATIM.
+      ~103 SLOC.
+  - file: tests/data/handlers/scheduled_agent_handler/test_handler_dispatch.py
+    action: Create
+    purpose: >-
+      Core handler() dispatch concern (VERBATIM): the whole TestHandler class -- its class-level autouse
+      `_enable_agents` fixture, its `_make_agent` method, and all dispatch tests (due/not-due, PAT-missing,
+      api-error, prompt-missing, write-fail, model-override, retired-bedrock-fallthrough,
+      default-missing-provider, retired-provider-short-circuit, missing-pat). All patches are first-party
+      (handler_mod.*, scripts.run_scheduled_agent.*, scripts.llm.github_models_client.*,
+      scripts.s3_log_store.*). Header: `from __future__ import annotations`, `from unittest.mock import
+      MagicMock, patch`, `import pytest`, `import src.data.handlers.scheduled_agent_handler as handler_mod`,
+      `from src.data.handlers.scheduled_agent_handler import handler`. NO heavy dep, NO marker. ~275 SLOC.
+  - file: tests/data/handlers/scheduled_agent_handler/test_handler_providers_telemetry.py
+    action: Create
+    purpose: >-
+      Retired-provider + telemetry concern (VERBATIM): TestRetiredProvider (3 tests incl the
+      `@pytest.mark.parametrize("provider", ["copilot-sdk", "gemini"])` case and its class-level autouse
+      `_enable_agents`) and TestHandlerTelemetry (2 tests, its `_make_gh_models_agent` method and its
+      class-level autouse `_enable_agents`). Each class keeps its OWN `_enable_agents` autouse fixture
+      VERBATIM (class-scoped -- do NOT hoist to a package conftest, which would widen the scope to
+      package-level; that is a semantic change, not a pure move). Header: `from __future__ import
+      annotations`, `from unittest.mock import patch`, `import pytest`, `import
+      src.data.handlers.scheduled_agent_handler as handler_mod`, `from src.data.handlers.scheduled_agent_handler
+      import RetiredProviderError, handler`. NO heavy dep, NO marker. ~136 SLOC.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      The surgical flip (FINAL commit only), a SINGLE edit -- Edit A ONLY. DELETE exactly three basename
+      lines from _RETIRING_GRANDFATHER_HOMES: "test_contracts_enforcement.py", "test_iceberg_reader.py",
+      "test_scheduled_agent_handler.py". Leaves exactly the four W12 basenames (build_lambda_deploy,
+      lambda_manifest, s3_log_store, verify_ci_workflow). There is NO Edit B -- all three sources
+      ("scripts/contracts_enforcement.py", "src/common/iceberg_reader.py",
+      "src/data/handlers/scheduled_agent_handler.py") are ALREADY in _CONCERN_SPLIT_TEST_PACKAGES (verified
+      lines 222/227/230). There is NO Edit C -- none of the three homes has a split-out sibling that
+      grandfathers to it (unlike Wave 8's ducklake_writer/smoke_actions), so no special-case return is
+      needed. Do NOT touch _CONCERN_SPLIT_TEST_PACKAGES, _ALL_MIRROR_TARGET_HOMES, map_source_to_test's
+      body, the Wave-8 smoke_actions branch, _ORCHESTRATION_SCAFFOLDING_FILES, _NESTED_SUBPACKAGE_TEST_PREFIX,
+      or _DUCKLAKE_RUNTIME_SPLIT_MODULES. The file SHRINKS by three lines (472 -> 469 SLOC); no headroom
+      concern and no budget entry (the checker is excluded from its own coverage roster).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete EXACTLY three lines by hand (FINAL commit): "  tests/test_contracts_enforcement.py: 665  #
+      raise-approved: ..." (line 19), "  tests/test_iceberg_reader.py: 641  # raise-approved: ..." (line
+      20), and "  tests/test_scheduled_agent_handler.py: 502  # raise-approved: ..." (line 23). NEVER run
+      --update-sloc-budgets (it strips the dec-130 markers on the other grandfathered entries and may
+      auto-seed). HARD invariant: this file loses exactly those three lines and nothing else. Ratchet-DOWN
+      removals (Decision 130/102/128) are always unrestricted; add NO raise marker and NO new tests/ budget
+      entry.
+  - file: tests/test_contracts_enforcement.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/contracts_enforcement/. Deleted WHOLE in the FINAL commit only (kept
+      100% intact through every prior commit to preserve the id-preservation baseline; the source is
+      imported by real name with no synthetic sys.modules loader, so there is no dual-loader risk).
+  - file: tests/test_iceberg_reader.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/common/iceberg_reader/. Deleted WHOLE in the FINAL commit only.
+      Real-module import (no synthetic loader) -> no dual-loader risk. NOTE: tests/validate/test_pytest_diff.py
+      references this path only as a MOCK STRING (scripts.checks._common.run is patched, the real file is
+      never read); it stays green after deletion exactly as it already does for the W1-deleted
+      tests/test_validate.py -- verified 17/17 green -- so no edit to test_pytest_diff.py is required.
+  - file: tests/test_scheduled_agent_handler.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/data/handlers/scheduled_agent_handler/. Deleted WHOLE in the FINAL commit
+      only. Real-module import (no synthetic loader) -> no dual-loader risk.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation (per file): the set of pytest node ids (module-path stripped) collected from each
+    new package equals the pre-move set from the corresponding monolith. contracts and scheduled monoliths
+    are class-based (id = Class::method, incl parametrize ids); the iceberg monolith mixes module-level
+    functions (id = funcname) and classes. PURE move -- NO rename, NO class-split (no new module exceeds 500
+    SLOC); the diff MUST be EMPTY for all three files. The overseer independently AST-verifies this.
+  - >-
+    bin/venv-python -m scripts.validate --pre exits 0: SLOC gate green (every new module < 500 SLOC and < 20
+    CC, none registered in config/sloc_budgets.yaml; scripts/test_coverage_checker.py stays < 500 SLOC);
+    no-cross-test-import guard green; collectability green (test_duckdb_iceberg_reader.py deferred by its
+    module-level pyarrow import, test_ducklake_reader.py deferred by its module-level boto3 marker).
+  - >-
+    bin/venv-python -m pytest tests/contracts_enforcement tests/common/iceberg_reader
+    tests/data/handlers/scheduled_agent_handler -q passes with the same total test count as the three
+    pre-move baselines summed (full local toolchain; all deps present).
+  - >-
+    git diff origin/main -- config/sloc_budgets.yaml shows ONLY the three lines removed
+    (test_contracts_enforcement.py 665, test_iceberg_reader.py 641, test_scheduled_agent_handler.py 502)
+    with their dec-130 markers; every other entry byte-identical; zero added lines.
+  - >-
+    map_source_to_test resolves each retired source to its concern-split package DIR (asserted by the
+    EXISTING, UNEDITED oracle files): scripts/contracts_enforcement.py -> tests/contracts_enforcement;
+    src/common/iceberg_reader.py -> tests/common/iceberg_reader;
+    src/data/handlers/scheduled_agent_handler.py -> tests/data/handlers/scheduled_agent_handler. Both
+    tests/test_coverage_checker_map.py and tests/test_coverage_checker_grandfather.py pass with ZERO edits
+    (green by construction -- no positive flat-mapping case exists for any of the three homes; the iceberg
+    TestMirrorRule case is monkeypatched and wave-invariant).
+  - >-
+    Retirement is proven by the tree-derived grandfather oracle
+    (test_retirement_state_matches_the_tests_tree): all three basenames absent from
+    _RETIRING_GRANDFATHER_HOMES AND all three flat monoliths deleted (atomic in the FINAL commit);
+    _ALL_MIRROR_TARGET_HOMES (24 entries) unchanged with all three basenames still present; all three sources
+    still present in _CONCERN_SPLIT_TEST_PACKAGES.
+  - >-
+    Heavy-dep marker audit: tests/common/iceberg_reader/test_duckdb_iceberg_reader.py carries a module-level
+    `import pyarrow as pa`; tests/common/iceberg_reader/test_ducklake_reader.py carries a module-level
+    `import boto3  # noqa: F401`; NO other new module carries a heavy-dep IMPORT STATEMENT (word-boundary
+    check on `import`) -- contracts modules, scheduled modules, and the parity module reference no heavy dep
+    at module scope.
+  - >-
+    Fast-tier simulation: with boto3/botocore/duckdb/pyarrow/numpy/awswrangler/pyiceberg/psycopg2 blocked and
+    `-m "not integration"`, the contracts package, the scheduled_agent_handler package, and
+    tests/common/iceberg_reader/test_warehouse_parity.py PASS (or exit 5 NO_TESTS_COLLECTED where all tests
+    are integration-deselected); and the two marked iceberg modules ERROR at --collect-only naming their
+    heavy dep (marker load-bearing).
+  - >-
+    Coverage preserved: pytest of each new package with --cov of its source reports 100% for
+    scripts/contracts_enforcement.py, src/common/iceberg_reader.py, and
+    src/data/handlers/scheduled_agent_handler.py respectively (each package covers its single source exactly
+    as the monolith did).
+  - >-
+    Every new test module is < 500 SLOC (validate_sloc_limits counting) and < 20 CC; NO new
+    config/sloc_budgets.yaml entry; the three monoliths are deleted; whole-suite collection is clean;
+    tests/validate/test_pytest_diff.py stays green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Capture the BEFORE test-id baseline for all three monoliths (run while they are still intact -- before
+      the FINAL commit deletes them). Strip only the module-path prefix so class/method/parametrize ids
+      survive; collect ALL ids (no -m filter) so integration ids are included. `-o addopts=""` clears the
+      repo's default flags so `-q` yields a flat `::` node-id list (avoids the -v+-q tree-report trap).
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      for m in test_contracts_enforcement test_iceberg_reader test_scheduled_agent_handler; do
+      bin/venv-python -m pytest tests/$m.py --collect-only -q -o addopts="" 2>/dev/null | grep '::' |
+      sed -E 's#^[^:]+::#FN::#' | sort -u > $S/before_$m.txt; echo "$m: $(wc -l < $S/before_$m.txt) ids"; done
+    expected: A non-empty sorted node-id baseline for each of the three files.
+    fix_if: If any collection errors, that monolith has a pre-existing import/collection problem -- fix before decomposing.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Collect the AFTER id set from each new package and assert a byte-identical diff against the matching baseline.
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      for pair in "test_contracts_enforcement:contracts_enforcement"
+      "test_iceberg_reader:common/iceberg_reader" "test_scheduled_agent_handler:data/handlers/scheduled_agent_handler";
+      do m=${pair%%:*}; d=${pair##*:}; bin/venv-python -m pytest tests/$d --collect-only -q -o addopts=""
+      2>/dev/null | grep '::' | sed -E 's#^[^:]+::#FN::#' | sort -u > $S/after_$m.txt; echo "== $m =="; diff
+      $S/before_$m.txt $S/after_$m.txt && echo "$m EMPTY-DIFF-OK"; done
+    expected: Empty diff for all three (identical node-id sets). No sanctioned delta -- pure move, no renames/splits.
+    fix_if: Any added/removed id means a function/method was dropped, duplicated, mis-copied, or renamed. STOP and reconcile.
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Run the authoritative fast presubmit tier -- proves SLOC gate, no-cross-test-import guard, collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No SLOC-limit failure, no cross-test-import failure, no collection error.
+    fix_if: >-
+      A >=500 unregistered module (rebalance the concern split further); a cross-test import (a helper leaked
+      between test_* modules -> move to tests/fixtures/); a collection error (fix a fresh import header, or a
+      missing pyarrow/boto3 marker on the iceberg modules).
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full scoped pass of all three new packages at the summed baseline count (full local toolchain).
+    command: >-
+      bin/venv-python -m pytest tests/contracts_enforcement tests/common/iceberg_reader
+      tests/data/handlers/scheduled_agent_handler -q
+    expected: All pass; total selected count equals the sum of the three step-1 baselines.
+    fix_if: >-
+      A failure means a patch target, fixture, or local helper did not survive the move -- most likely the
+      shared `_make_class_a_doc` import (contracts), a local con-helper mis-placed, or a class-level autouse
+      fixture (_enable_agents / _skip_if_no_warehouse) not co-located with its owning class.
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Assert config/sloc_budgets.yaml lost exactly the three target lines and nothing else.
+    command: git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly three removed lines (test_contracts_enforcement.py 665, test_iceberg_reader.py 641,
+      test_scheduled_agent_handler.py 502, each with its dec-130 raise-approved marker) and zero added lines.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was touched.
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Prove the retirement + mapping via BOTH coverage-checker oracle files -- WHICH THIS WAVE DOES NOT EDIT.
+      This is the authoritative retirement check; do NOT add a literal `grep -q '"test_iceberg_reader.py"'
+      scripts/test_coverage_checker.py` step (it always fails because the basename legitimately persists in
+      _ALL_MIRROR_TARGET_HOMES). The grandfather oracle's tree-derived test IS the _RETIRING membership check.
+    command: bin/venv-python -m pytest tests/test_coverage_checker_map.py tests/test_coverage_checker_grandfather.py -q
+    expected: >-
+      All pass with ZERO edits to either oracle file: TestMapSourceToTest / TestMirrorRule green (the
+      iceberg TestMirrorRule case is monkeypatched, wave-invariant); grandfather
+      test_retirement_state_matches_the_tests_tree green (all three homes absent from _RETIRING and all three
+      flat monoliths deleted); test_roster_is_the_24_known_basenames unchanged.
+    fix_if: >-
+      A failing grandfather test_retirement_state_matches_the_tests_tree means the three _RETIRING deletions
+      and the three monolith deletions did not land together in the same (FINAL) commit -- they MUST be
+      atomic. A failing map oracle means Edit A removed the wrong basename or touched _CONCERN_SPLIT. Do NOT
+      "fix" by editing an oracle file -- reconcile the checker Edit A and the deletions.
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Confirm all three monoliths are gone, all three new package dirs exist and are populated, and a control
+      still-grandfathered / off-roster home is untouched (no over-reach).
+    command: >-
+      test ! -f tests/test_contracts_enforcement.py && test ! -f tests/test_iceberg_reader.py &&
+      test ! -f tests/test_scheduled_agent_handler.py &&
+      ls tests/contracts_enforcement/test_*.py >/dev/null &&
+      ls tests/common/iceberg_reader/test_*.py >/dev/null &&
+      ls tests/data/handlers/scheduled_agent_handler/test_*.py >/dev/null &&
+      test -f tests/test_build_lambda_deploy.py && test -f tests/common/test_ducklake_runtime.py;
+      echo "RETIRED-RC=$?"
+    expected: >-
+      RETIRED-RC=0 (all three monoliths deleted; all three package dirs hold >=1 test_*.py; a still-retiring
+      W12 home test_build_lambda_deploy.py and an already-mirrored sibling tests/common/test_ducklake_runtime.py
+      both still present -- proving no over-reach).
+    fix_if: If a monolith survives, a package dir is empty, or a control home was disturbed, the FINAL commit is wrong.
+  - step: 8
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Heavy-dep marker audit (word-boundary on IMPORT STATEMENTS, not bare substrings). Confirm the two
+      required markers exist and no OTHER new module carries a heavy-dep import statement.
+    command: >-
+      grep -nE '^\s*import boto3\b' tests/common/iceberg_reader/test_ducklake_reader.py &&
+      grep -nE '^\s*import pyarrow\b' tests/common/iceberg_reader/test_duckdb_iceberg_reader.py &&
+      ! grep -rnE '^\s*(import|from)\s+(boto3|botocore|duckdb|pyarrow|numpy|pandas|awswrangler|pyiceberg|psycopg2|aiohttp)\b'
+      tests/contracts_enforcement tests/data/handlers/scheduled_agent_handler
+      tests/common/iceberg_reader/test_warehouse_parity.py; echo "MARKER-RC=$?"
+    expected: >-
+      test_ducklake_reader.py shows the module-level boto3 marker; test_duckdb_iceberg_reader.py shows the
+      module-level pyarrow import; MARKER-RC=0 (no heavy-dep import statement in any contracts/scheduled module
+      or the parity module -- the parity module's boto3/requests are LAZY inside function bodies, not module-scope
+      import statements, so they do not match).
+    fix_if: >-
+      A module-level heavy-dep import in an unexpected module means a marker was mis-placed. A missing required
+      marker means the iceberg split lost its proactive-defer marker -> add it (ops_writer / convergence_health
+      precedent).
+  - step: 9
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      MANDATORY fast-tier simulation (per scratchpad/fast_tier_sim.md, adapted to match the real fast tier's
+      `-m "not integration"` deselection). Block the heavy deps via a sitecustomize import guard, then (a) run
+      the NON-marked packages/modules and require PASS (rc 0 or 5), and (b) confirm each MARKED iceberg module
+      ERRORS at --collect-only (marker is load-bearing). Local --pre CANNOT catch the W9 graceful-skip trap;
+      this step is the only pre-merge proof.
+    command: >-
+      FT=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad/_ft; mkdir -p $FT;
+      printf 'import builtins\n_blocked={"boto3","botocore","duckdb","pyarrow","numpy","awswrangler","pyiceberg","psycopg2","psycopg2-binary"}\n_real=builtins.__import__\ndef _g(n,*a,**k):\n    if n.split(".")[0] in _blocked:\n        raise ModuleNotFoundError("No module named %%r (simulated fast-tier)"%%n.split(".")[0])\n    return _real(n,*a,**k)\nbuiltins.__import__=_g\n' > $FT/sitecustomize.py;
+      echo "--- non-marked must PASS (rc 0 or 5) ---";
+      PYTHONPATH=$FT bin/venv-python -m pytest tests/contracts_enforcement
+      tests/data/handlers/scheduled_agent_handler tests/common/iceberg_reader/test_warehouse_parity.py
+      -o addopts="" -m "not integration" -p no:cacheprovider -q --no-header; echo "NONMARKED-RC=$?";
+      echo "--- marked MUST error at collection ---";
+      PYTHONPATH=$FT bin/venv-python -m pytest --collect-only -o addopts="" -q
+      tests/common/iceberg_reader/test_duckdb_iceberg_reader.py tests/common/iceberg_reader/test_ducklake_reader.py
+      2>&1 | grep -E "pyarrow|boto3" && echo "MARKERS-DEFER-OK"
+    expected: >-
+      NONMARKED-RC is 0 (or 5 = NO_TESTS_COLLECTED, acceptable when integration deselection empties a module);
+      the marked-module collection prints a pyarrow AND a boto3 "No module named" line then MARKERS-DEFER-OK.
+    fix_if: >-
+      A non-marked module failing with a PLAIN AssertionError (not a collection error) is the W9 trap -- its
+      source-under-test needs a heavy dep for the asserted path; add a module-level `import <dep>  # noqa: F401`
+      to THAT module and re-run. A marked module that does NOT error at collection means its marker is missing
+      or non-load-bearing.
+  - step: 10
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Coverage preservation for the three sources -- pytest each new package with --cov of its single source
+      (the move must keep each at 100%, exactly as the monolith did).
+    command: >-
+      bin/venv-python -m pytest tests/contracts_enforcement --cov=scripts/contracts_enforcement
+      --cov-report=term-missing -q; bin/venv-python -m pytest tests/common/iceberg_reader
+      --cov=src/common/iceberg_reader --cov-report=term-missing -q; bin/venv-python -m pytest
+      tests/data/handlers/scheduled_agent_handler --cov=src/data/handlers/scheduled_agent_handler
+      --cov-report=term-missing -q
+    expected: Each source reports 100% line coverage.
+    fix_if: >-
+      < 100% means a test that exercised a branch was dropped or mis-grouped. STOP and reconcile against the
+      step-2 id diff (a genuine pure move preserves 100%).
+  - step: 11
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Whole-suite collection smoke -- no import/collection error anywhere from the move.
+    command: bin/venv-python -m pytest tests/ --collect-only -q
+    expected: >-
+      Clean collection; no ImportError/collection error from the three new packages, the shared contracts
+      fixtures helper, the deleted monoliths, or the (unedited) oracle files. (The two marked iceberg modules
+      collect under the full local toolchain; they only defer in the fast tier.)
+    fix_if: A collection error means a dangling reference to a deleted monolith or a broken import header in a new module.
+  - step: 12
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Regression guard for the deleted-file coupling: tests/validate/test_pytest_diff.py references
+      tests/test_iceberg_reader.py only as a MOCK STRING (scripts.checks._common.run is patched); confirm it
+      stays green after the monolith is deleted, exactly as it already does for the W1-deleted
+      tests/test_validate.py.
+    command: bin/venv-python -m pytest tests/validate/test_pytest_diff.py -m "not integration" -q
+    expected: All pass (currently 17/17). The mock-string references are pure data; deletion does not affect them.
+    fix_if: >-
+      If it reddens, a reference to tests/test_iceberg_reader.py is NOT a pure mock string after all -- re-point
+      the affected assertion to the new pyarrow-marked module tests/common/iceberg_reader/test_duckdb_iceberg_reader.py
+      (which also defers on "pyarrow"), keeping the expected dep tuple "pyarrow".
+constraints:
+  - >-
+    Pure behaviour-preserving MOVE. Copy every test function/method body and every in-function/nested/method
+    helper VERBATIM with its owner. Author a fresh per-file import header importing exactly the symbols each
+    file references -- no test-logic edits, no renames, no class-splits (no new module exceeds 500 SLOC).
+    Replicate EACH per-method `@pytest.mark.integration` decorator and EACH class-level autouse fixture
+    (_enable_agents, _skip_if_no_warehouse) EXACTLY where it appears. NONE of the three monoliths has a
+    module-level `pytestmark` -- do NOT add one to any new module.
+  - >-
+    Real-module imports only (no synthetic sys.modules loader for any package -- unlike Wave 4/10's
+    session_preflight/postflight). Each module imports the real source module and patches real dotted attrs.
+    So there is no dual-loader risk (Wave 10 OPEN RISK 1 does not apply); the monoliths are kept 100% intact
+    until the FINAL commit purely to preserve the id-preservation baseline.
+  - >-
+    Shared-helper hoisting is MINIMAL and cross-module-only. contracts: hoist ONLY `_make_class_a_doc`
+    (used by both split modules) to tests/fixtures/contracts_enforcement.py; keep `_make_class_b_doc`,
+    `_amendment_entry`, `_make_provisional_doc_with_date` LOCAL to their single owning module. iceberg:
+    NO hoisting -- `_make_arrow_recs`/`_make_arrow_pq` are local to the duckdb module, `_FakeResp`/
+    `_patch_dl_invoke`/`_patch_dl_invoke_seq` local to the ducklake module, `_has_warehouse_credentials`/
+    `_fetch_athena_current` local to the parity module. scheduled_agent_handler: NO hoisting -- `_make_agent`,
+    `_make_gh_models_agent` and the `_enable_agents` fixtures are class members that move with their classes.
+    Never import from another test_* module (validate_no_cross_test_imports, --pre + full).
+  - >-
+    NO per-package conftest for any of the three packages. No monolith defines a MODULE-LEVEL fixture; all
+    autouse fixtures are class-scoped and move verbatim with their classes. The global recursion/socket
+    guards and the `_allow_network_for_integration` fixture stay in the ROOT tests/conftest.py and layer
+    through automatically.
+  - >-
+    FAST-TIER HEAVY-DEP MARKERS (recurring CI-only failure -- local --pre CANNOT catch it; deps present
+    locally). Exactly TWO markers, both in the iceberg package:
+    tests/common/iceberg_reader/test_duckdb_iceberg_reader.py -> module-level `import pyarrow as pa` (real +
+    load-bearing; the arrow helpers build pa.table);
+    tests/common/iceberg_reader/test_ducklake_reader.py -> module-level `import boto3  # noqa: F401` (its
+    non-integration tests assert the non-skipped SigV4 path). Keep all verbatim lazy in-body heavy imports
+    too. Do NOT mark the parity module (all its tests are `@pytest.mark.integration` -> deselected by
+    `-m "not integration"` and skipped in the sim), and do NOT mark any contracts or scheduled module (the
+    only scheduled heavy tokens are two `patch("boto3.client")` inside `@pytest.mark.integration` tests).
+  - >-
+    scripts/test_coverage_checker.py: Edit A ONLY (delete three _RETIRING lines). NO Edit B (all three
+    sources already in _CONCERN_SPLIT), NO Edit C (no smoke_actions-style sibling wrinkle for any of the
+    three homes). Do NOT touch _CONCERN_SPLIT_TEST_PACKAGES, _ALL_MIRROR_TARGET_HOMES, map_source_to_test's
+    body, the Wave-8 smoke_actions special-case, _ORCHESTRATION_SCAFFOLDING_FILES,
+    _NESTED_SUBPACKAGE_TEST_PREFIX, or _DUCKLAKE_RUNTIME_SPLIT_MODULES. The file only shrinks.
+  - >-
+    ZERO edits to BOTH oracle files (tests/test_coverage_checker_map.py, tests/test_coverage_checker_grandfather.py)
+    -- they were redesigned wave-invariant (rec-2709 oracle-decompose / task #10). No positive flat-mapping
+    case exists for any of the three homes, and the iceberg TestMirrorRule case is monkeypatched, so deleting
+    the three _RETIRING lines AND the three flat monoliths together keeps both green by construction. Do NOT
+    add any case to either file. (This is the Wave 9 pattern, NOT the Wave 8 pattern.)
+  - >-
+    ZERO edits to tests/validate/test_pytest_diff.py -- its tests/test_iceberg_reader.py references are pure
+    MOCK STRINGS (scripts.checks._common.run is patched); it stays green after deletion exactly as it already
+    does for the W1-deleted tests/test_validate.py (verified 17/17 green). VP step 12 guards this.
+  - >-
+    The three _RETIRING deletions + the three budget-line deletions + the three monolith deletions ALL land in
+    ONE atomic FINAL commit. The grandfather oracle's tree-derived retirement test fails if a _RETIRING line
+    and its flat file diverge across commits.
+  - >-
+    config/sloc_budgets.yaml loses exactly the three target lines; NEVER run --update-sloc-budgets. Add NO
+    raise marker and NO new tests/ budget entry (Decision 128 -- decompose, not raise).
+  - >-
+    Every new mirror directory carries an __init__.py (prepend import mode): tests/contracts_enforcement/,
+    tests/common/iceberg_reader/ (tests/common/ already has one -- do NOT recreate it), tests/data/,
+    tests/data/handlers/, tests/data/handlers/scheduled_agent_handler/. tests/data/ is NET-NEW.
+  - >-
+    PUBLIC repo -- preserve every `# pragma: allowlist secret` and `# noqa` marker VERBATIM with its line
+    (the fake credential-shaped strings in the iceberg SigV4 helpers and the scheduled SecretString fixture
+    already carry them). No AWS account IDs/ARNs/secrets/internal hostnames in any new file.
+  - >-
+    ruff-format import discipline (tests/CLAUDE.md): ONE consolidated import block per module -- never split a
+    module's imports across two top-of-file blocks (ruff silently drops symbols from the second). Use
+    `# noqa: F401` where an import is needed only as a marker.
+  - >-
+    Do NOT resolve rec-2709 (Wave 11 of ~12); bundled_recommendations stays empty. The overseer owns
+    branch/PR/CI-green/merge. No rescue agents or workaround loops (Decision 55): on an unrecoverable
+    collect-id mismatch, STOP and RCA -- never patch around it.
+  - Use bin/venv-python for all Python invocations; bash-only shell. Work on the harness claude/... branch, never main.
+context:
+  - >-
+    DECISION ANALYSIS (inline; the OVERSEER is the critique gate for this rec-2709 wave, so no
+    decision-scout/plan-critique sub-subagents were spawned -- mirrors the Wave 3/4/9/10 precedent). CITE:
+    Decision 131 (test-colocation inverted to a mirror rule + retiring grandfather-table + concern-split
+    package targets + no-cross-test-import guard + per-package conftest hierarchy; amends Decision 104; governs
+    every step); Decision 130 (whole-repo structural-size governance + the 24-home one-time grandfather of
+    tests/ SLOC debt + the dec-130 markers -- governs the three ratchet-DOWN budget-line deletions); Decision
+    128 (SLOC budget-raise guardrails: decompose by default; this wave adds ZERO budget lines / ZERO raise
+    markers / never runs --update-sloc-budgets); Decision 124 (scripts/executor/** and scripts/ops_portal/**
+    map to None -- unperturbed); Decision 132 (verification-step graduation dispositions -- every pre-deploy VP
+    step carries graduation: not-applicable, since each is a one-off pure-move check, not a kernel-expressible
+    standing guard); Decision 79 (per-Lambda deploy gating -- compute_affected_artifacts of the changed tests/
+    files is {}, so NO build/deploy/smoke-test/model-ID steps, even though scheduled_agent_handler is a
+    Lambda-packaged SOURCE -- only its TEST files move). RELATED: Decision 80/104 (facade / concern-split
+    precedent -- Wave 3's tests/ops_data_portal/, Wave 9's tests/ops_writer/); Decision 43/102 (CC-20 and
+    500-SLOC limits).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): decision-scout=inline-analysis, verdict NO_FLAGS by inspection (mechanical test-move fully governed by Decisions 131/130/128; adds no budget line, retires three, touches no product/strategy surface). CITE: dec-131, dec-130, dec-128, dec-124, dec-132, dec-79 (related: dec-80, dec-104, dec-43, dec-102)."
+  - "gates: decision-scout=inline-analysis (NO_FLAGS); plan-critique=overseer-reviewed after 0 round(s)."
+  - >-
+    CHECKER FLIP IS Edit-A-ONLY (verified against the live checker). All three sources are ALREADY in
+    _CONCERN_SPLIT_TEST_PACKAGES (scripts/contracts_enforcement.py line 222, src/common/iceberg_reader.py line
+    227, src/data/handlers/scheduled_agent_handler.py line 230), and all three basenames are in
+    _RETIRING_GRANDFATHER_HOMES (lines 202/204/206). So the flip is exactly three deletions from _RETIRING. No
+    _CONCERN_SPLIT add is needed (contrast Wave 8), and none of the three homes has a split-out sibling
+    grandfathering to it (contrast Wave 8's smoke_actions), so no Edit C. Post-flip mirror resolution
+    (simulated in-memory): scripts/contracts_enforcement.py -> tests/contracts_enforcement (scripts root ->
+    empty mirror_subdir); src/common/iceberg_reader.py -> tests/common/iceberg_reader (keep `common` subpath);
+    src/data/handlers/scheduled_agent_handler.py -> tests/data/handlers/scheduled_agent_handler (keep
+    `data/handlers` subpath). All three land as concern-split PACKAGE DIRS.
+  - >-
+    ORACLE STATE ON MAIN (verified). Both oracle files are wave-invariant (rec-2709 oracle-decompose / #613):
+    tests/test_coverage_checker_grandfather.py::test_retirement_state_matches_the_tests_tree derives retirement
+    from disk (home in _RETIRING IFF its flat monolith exists), and tests/test_coverage_checker_map.py has NO
+    positive flat-mapping case for any of the three W11 homes -- its only iceberg reference,
+    TestMirrorRule::test_nested_concern_split_monolith_keeps_subdir_once_retired, MONKEYPATCHES _RETIRING to
+    `_ALL - {test_iceberg_reader.py}` and is therefore independent of the real retirement state. Consequence:
+    this wave needs ZERO oracle edits (the Wave 9 pattern, not the Wave 8 pattern). Current _RETIRING on main
+    has 7 entries (through Wave 8/9/10 + PCD-01); after this wave, 4 (the W12 set: build_lambda_deploy,
+    lambda_manifest, s3_log_store, verify_ci_workflow). STANDING DIRECTIVE: rebase onto latest origin/main
+    FIRST and verify _RETIRING count == 24 - (count of deleted flat monoliths) after rebase.
+  - >-
+    HEAVY-DEP ANALYSIS (the load-bearing, CI-only risk; local --pre CANNOT catch it). The fast tier installs
+    requirements-fast.txt (EXCLUDES boto3/botocore/duckdb/pyarrow/numpy/awswrangler/pyiceberg/psycopg2) and
+    runs pytest `-m "not integration"` (scripts/checks/_scaffolding.py). Per-module verdict: (1)
+    test_duckdb_iceberg_reader.py -- module-level `import pyarrow as pa` (helpers build pa.table) ->
+    --collect-only fails -> PROACTIVELY DEFERRED (matches the monolith's module-level pyarrow). (2)
+    test_ducklake_reader.py -- non-integration tests assert the non-skipped SigV4 path (boto3/requests/botocore
+    lazily imported in _patch_dl_invoke*) -> WOULD run in the fast tier and error reactively; add a module-level
+    `import boto3  # noqa: F401` so it defers proactively (ops_writer precedent). (3) test_warehouse_parity.py --
+    every test is `@pytest.mark.integration` -> DESELECTED in the fast tier; in the sim it SKIPS (credentials
+    unavailable -> _has_warehouse_credentials catches ModuleNotFoundError and returns False) -> NO marker. (4)
+    scheduled_agent_handler modules -- the only heavy tokens are two `patch("boto3.client")` inside
+    `@pytest.mark.integration` tests (deselected) -> NO marker; the source imports nothing heavy at module scope,
+    so `import src.data.handlers.scheduled_agent_handler` collects fine. (5) contracts modules -- no heavy dep at
+    all (scripts.contracts_schema uses pydantic, which IS in requirements-fast). The MANDATORY fast-tier
+    simulation (VP step 9) empirically confirms every verdict with `-m "not integration"` matching the real tier.
+  - >-
+    CONCERN-SPLIT BREAKDOWN (VERBATIM function/class -> module; all < 500 SLOC, measured). contracts (665) ->
+    tests/contracts_enforcement/ (2 modules): test_contract_checks [required_inline_fields + amendment_for_diff
+    + status_transition + load_contract, ~311]; test_provisional_triggers [parse_condition +
+    evaluate_provisional_trigger + default_provisional_metrics + check_re_ratification_trigger, ~326]; shared
+    _make_class_a_doc -> tests/fixtures/contracts_enforcement.py. iceberg (641) -> tests/common/iceberg_reader/
+    (3 modules): test_duckdb_iceberg_reader [DuckDBIcebergReader unit tests, PYARROW MARKER, ~270];
+    test_warehouse_parity [integration parity, ~114]; test_ducklake_reader [DuckLakeReader SigV4/url/factory,
+    BOTO3 MARKER, ~275]. scheduled (502) -> tests/data/handlers/scheduled_agent_handler/ (3 modules):
+    test_helpers [get_github_pat + load_prompt + load_manifest + bedrock_retired + invoke_github_models, ~103];
+    test_handler_dispatch [TestHandler, ~275]; test_handler_providers_telemetry [TestRetiredProvider +
+    TestHandlerTelemetry, ~136]. Function/class -> module placement is a cohesion/SLOC choice only -- the VP-2
+    id-preservation diff is the completeness oracle (every id appears exactly once across the union).
+  - >-
+    compute_affected_artifacts of the changed tests/ files == {} (verified empirically) -> NO Lambda deploy,
+    even though src/data/handlers/scheduled_agent_handler.py is a Lambda-packaged SOURCE: only its TEST files
+    move (the Lambda file patterns key off src paths, not tests/). Wave 3/9 (tests/ops_data_portal/,
+    tests/ops_writer/) are the live concern-split templates on main. Main-divergence: scope is net-new package
+    files + one shared fixture + a single Edit-A checker change + a three-line budget deletion + three monolith
+    deletions; the overseer rebases onto latest origin/main and re-runs --pre before push. Not preflight-run in
+    this read-only planning subagent.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - >-
+    scripts/test_coverage_checker.py read in full (map_source_to_test, _grandfathered_source_to_test,
+    _mirror_source_to_test, _RETIRING_GRANDFATHER_HOMES [7 entries], _ALL_MIRROR_TARGET_HOMES,
+    _CONCERN_SPLIT_TEST_PACKAGES [all 3 W11 sources present], the Wave-8 smoke_actions branch); checker SLOC = 472
+  - tests/CLAUDE.md read (mirror convention, no-cross-test-import, per-package conftest hierarchy, ruff import discipline, heavy-dep marker directive)
+  - Both oracle files read; confirmed wave-invariant (no positive case for the 3 homes; iceberg TestMirrorRule is monkeypatched) -> ZERO oracle edits
+  - tests/validate/test_pytest_diff.py read; confirmed pure-mock references (17/17 green with the W1-deleted test_validate.py) -> ZERO edits
+  - Wave 3/9 studied as concern-split templates; ops_writer boto3-marker + tests/fixtures pattern confirmed on main
+  - Decision 131, 130, 128, 124, 132, 79 located and their bearing confirmed (inline decision analysis)
+  - All three monoliths read in full; every test function/method + every helper located; per-module SLOC measured (all < 500); no module exceeds 500 SLOC
+  - Edit A confirmed against the live checker via in-memory simulation (three _RETIRING deletions; no Edit B, no Edit C)
+  - Heavy-dep grep of all three monoliths run -- iceberg = pyarrow (module-level) + boto3/requests/botocore (lazy) + pyiceberg (patch str); scheduled = 2 boto3 patch-strings (integration only); contracts = 0
+  - config/sloc_budgets.yaml lines for the three targets identified (665/641/502, dec-130 markers) for by-hand deletion
+  - compute_affected_artifacts of the changed tests/ files confirmed {} (no Lambda deploy)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Confirm the working branch is the harness claude/... session branch (git branch --show-current), NOT main.
+    Rebase onto latest origin/main FIRST and verify _RETIRING count == 24 - (count of deleted flat monoliths).
+  - >-
+    COMMIT 1 (scaffold + shared surface): create the six package markers (tests/contracts_enforcement/__init__.py,
+    tests/common/iceberg_reader/__init__.py, tests/data/__init__.py, tests/data/handlers/__init__.py,
+    tests/data/handlers/scheduled_agent_handler/__init__.py) and the shared fixtures helper
+    (tests/fixtures/contracts_enforcement.py = _make_class_a_doc). Run `bin/venv-python -m scripts.validate --pre`
+    (additive -- must stay green).
+  - >-
+    COMMITS 2-4 (module population, one package per commit): create the 2 contracts modules, then the 3 iceberg
+    modules, then the 3 scheduled modules per the CONCERN-SPLIT BREAKDOWN, copying each function/method VERBATIM
+    with a fresh per-file import header. Add the module-level `import pyarrow as pa` to test_duckdb_iceberg_reader.py
+    and the module-level `import boto3  # noqa: F401` to test_ducklake_reader.py; NO marker anywhere else. Keep ALL
+    three monoliths FULLY INTACT. After each commit run SCOPED `bin/venv-python -m pytest <that package> -q` plus
+    `bin/venv-python -m scripts.validate --pre` to localise any SLOC/cross-import/collection failure early.
+  - >-
+    FINAL COMMIT (the atomic surgical flip): edit scripts/test_coverage_checker.py (Edit A: delete the three
+    basenames from _RETIRING_GRANDFATHER_HOMES); delete the three config/sloc_budgets.yaml lines by hand; delete
+    the three monoliths WHOLE. (NO oracle edit, NO _CONCERN_SPLIT edit, NO test_pytest_diff.py edit -- all green
+    by construction.)
+  - >-
+    Execute the full Verification Plan (steps 1-12) on the FINAL commit; loop until all pass. On an unrecoverable
+    failure STOP and RCA (Decision 55) -- never patch around a collect-id mismatch.
+  - >-
+    Report: the final per-module SLOC breakdown for all three packages; confirmation config/sloc_budgets.yaml lost
+    exactly three lines; the three VP step-2 empty-diff confirmations; the two required markers (pyarrow on
+    test_duckdb_iceberg_reader.py, boto3 on test_ducklake_reader.py) and the fast-tier-sim result; that both oracle
+    files and test_pytest_diff.py stayed green with ZERO edits; and the checker's post-edit SLOC (469 < 500).
+    Commit locally and STOP -- the overseer owns branch/PR/CI-green/merge.
+rollback: >-
+  Single-PR revert. The FINAL commit is the only one that changes the mapping / budgets / deletes the monoliths --
+  reverting the PR restores all three grandfather memberships and their dec-130 budget lines, re-points all three
+  sources at their (restored) monoliths, and leaves the already-created packages + the shared contracts fixture as
+  harmless extra coverage until re-attempted.
