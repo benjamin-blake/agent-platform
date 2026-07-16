@@ -2,7 +2,8 @@
 # Class A data contract for ops_decisions (DuckLake SCD2 table).
 # Ratified under the CD.25 pre-codegen contract ratification ritual (T0.12.5).
 # Authored against the live DuckLake column inventory in
-# config/lambda/ducklake/field_semantics.yaml (13 columns + _contract_version = 14 total).
+# config/lambda/ducklake/field_semantics.yaml (13 columns + _contract_version = 14 total at
+# T0.12.5; +4 DAF-01 parity-backstop columns via PLAN-daf-etl-parity-fidelity = 18 total).
 #
 # Decision 65: this contract is the canonical field-semantic authority for ops_decisions.
 # Decision 84: sole backend is DuckLake-on-Neon. id follows DECISIONS.md numbering (caller);
@@ -20,14 +21,17 @@ contract:
   ratified_via: >-
     Step 11 smoke-test pass + PLAN-ratify-ops-class-a-contracts merge to main (T0.12.5)
   description: >-
-    Class A schema contract for the ops_decisions DuckLake SCD2 table. 14 fields: 13
-    from the live DuckLake inventory in config/lambda/ducklake/field_semantics.yaml plus
-    _contract_version (stamped at write time by the ducklake_writer Lambda, T0.12.5).
-    Sole backend is DuckLake-on-Neon (Decision 84). id follows DECISIONS.md numbering and
-    is caller-supplied (NOT file_ops-allocated -- Decision 84 I-2 exception). Graduation
-    arc: Phases 0+1 COMPLETE; Phases 2-6 NOT_STARTED. Phase 2 (Semantic Definition) is a
-    blocking gate on semantic migration -- open questions (dual id/decision_id keyspace,
-    status str not Literal, DqXxx with enforced=False) are explicitly deferred.
+    Class A schema contract for the ops_decisions DuckLake SCD2 table. 18 fields: the
+    T0.12.5 baseline of 13 from the live DuckLake inventory in
+    config/lambda/ducklake/field_semantics.yaml plus _contract_version (stamped at write
+    time by the ducklake_writer Lambda), plus 4 DAF-01 parity-backstop columns (raw_block,
+    reversal_conditions, superseded_by, content_hash) added by PLAN-daf-etl-parity-fidelity
+    (Decision 134 cl.4). Sole backend is DuckLake-on-Neon (Decision 84). id follows
+    DECISIONS.md numbering and is caller-supplied (NOT file_ops-allocated -- Decision 84
+    I-2 exception). Graduation arc: Phases 0+1 COMPLETE; Phases 2-6 NOT_STARTED. Phase 2
+    (Semantic Definition) is a blocking gate on semantic migration -- open questions (dual
+    id/decision_id keyspace, status str not Literal, DqXxx with enforced=False) are
+    explicitly deferred.
   projects_to:
     artifact: config/lambda/ducklake/field_semantics.yaml
     table: ops_decisions
@@ -263,6 +267,86 @@ fields:
       not_null:
         enforced: false
 
+  raw_block:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      Full heading-inclusive verbatim section text for this decision, as extracted by
+      scripts/decisions_md.py's per-file sectioning helper. The DAF-01 parity backstop:
+      whatever the typed fields (decision_text, context, reversal_conditions, ...) fail to
+      capture from the ~120-distinct-bold-marker corpus, raw_block preserves losslessly.
+    semantics: >-
+      Parity-backstop field (Decision 134 cl.4 / audit finding DAF-01). Consumed by LLM
+      reasoning as a fallback when a typed field is empty or suspect. Null only if the
+      source heading has no body at all (should not occur in practice -- every parsed
+      entry's raw_block is non-empty by construction).
+    populated_by: >-
+      Caller-supplied; scripts/decisions_md.py::parse_decisions_md computes raw_block as
+      full_block.strip() where full_block spans from the "## Decision N:" heading line
+      through (not including) the next heading.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  reversal_conditions:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      The decision's stated reversal/revisit trigger(s), sourced from the "**Reversal
+      conditions:**" marker (or the singular "**Reversal condition:**" Decision-67 variant).
+    semantics: >-
+      Typed extraction (Decision 134 cl.4 / audit finding DAF-01) -- previously dropped
+      entirely by the ETL for all carriers. Consumed by LLM reasoning to identify whether a
+      cited decision's premise still holds. Null for decisions with no reversal-conditions
+      section (most of the pre-106 band).
+    populated_by: >-
+      Caller-supplied; sourced from DECISIONS.md "**Reversal conditions:**" /
+      "**Reversal condition:**" section text.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  superseded_by:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      The decision that supersedes this one, in "dec-NNN" form, sourced from the canonical
+      inline marker "**Superseded by: Decision N**" (best-effort for the historical band's
+      differently-shaped "**Superseded by:** Decision N" marker).
+    semantics: >-
+      Typed extraction (Decision 134 cl.4 / audit finding DAF-01). Best-effort: the canonical
+      marker spelling is forward-enforced by a future Plan 3 authoring contract
+      (docs/contracts/decision-entry.yaml); historical entries may carry no recoverable
+      superseded_by even when superseded in prose. Null when absent or unrecognized.
+    populated_by: >-
+      Caller-supplied; sourced from DECISIONS.md's inline superseded-by marker.
+    dq_intent:
+      not_null:
+        enforced: false
+
+  content_hash:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      sha256 hex digest (64 chars) of the parser-normalized raw_block, used to gate the
+      backfill's SCD2 writes: an unchanged content_hash means the entry is skipped rather
+      than re-versioned (audit finding DAF-01 Q5-vi churn fix).
+    semantics: >-
+      Client-side change-detection key (Decision 134 cl.4). Read via the ducklake_reader
+      boundary by the backfill (scripts/ops_portal/decisions.py) before writing, to decide
+      whether a write is needed at all -- never used to gate reads. Null only for rows
+      written before this column existed.
+    populated_by: >-
+      Caller-supplied; scripts/decisions_md.py::parse_decisions_md computes
+      hashlib.sha256(raw_block.encode("utf-8")).hexdigest().
+    dq_intent:
+      not_null:
+        enforced: false
+
 governance:
   table_class: SCD2
   partition_by: "history=day(created_timestamp), current=bucket(8, id)"
@@ -305,4 +389,34 @@ amendment_log:
       derivation fields on ops_decisions (no effort/priority/automatable/risk). The runtime
       schema gate, DDL, partition transforms and MERGE behavior are unchanged.
       semantic_break=false.
+  - date: "2026-07-16"
+    semantic_break: false
+    change_class: field_add
+    summary: >-
+      PLAN-daf-etl-parity-fidelity (Decision 134 cl.4 / audit finding DAF-01): add
+      raw_block, reversal_conditions, superseded_by, content_hash -- four nullable parity-
+      backstop / typed-extraction / change-detection columns. No column removed or retyped.
+    migration_story: >-
+      All four columns are nullable, DQ-deferred (dq_intent.not_null.enforced: false, Phase-2
+      deferral pattern matching the existing decision columns), and populated by the extended
+      scripts/decisions_md.py parser + scripts/ops_portal/decisions.py backfill. Physical
+      schema evolution (ALTER TABLE ADD COLUMN on ops_decisions_history + ops_decisions_current)
+      is operator-invoked via the ducklake_maintenance reconcile_columns action, post-deploy of
+      the regenerated field_semantics.yaml -- see PLAN-daf-etl-parity-fidelity's
+      infrastructure_dependencies. No runtime schema-gate, DDL, or partition-transform code
+      changes; the reconcile path is schema-driven. semantic_break=false.
+  - date: "2026-07-16"
+    semantic_break: false
+    change_class: prose_improvement
+    summary: >-
+      Update contract.description prose to state the field count as 18 (previously 14),
+      reflecting the four DAF-01 parity-backstop columns added by the field_add entry
+      immediately above. Documentation-only: describes the post-addition schema accurately;
+      does not itself add, remove, or retype any field.
+    migration_story: >-
+      No schema, DDL, or runtime change accompanies this entry -- the field_add entry above
+      performs the actual column addition. This entry exists solely to satisfy category-6
+      (INTENT Invariant 3/4): a contract.description text diff must be paired with an
+      amendment_log[] entry pairing change_class: prose_improvement with semantic_break:
+      false. semantic_break=false.
 previous_versions: []
