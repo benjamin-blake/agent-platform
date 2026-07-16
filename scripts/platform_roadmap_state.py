@@ -15,6 +15,13 @@ from scripts.platform_roadmap_models import _TIER_SHORTCUT_RE, RoadmapDocument, 
 _CD_REF_RE = re.compile(r"\b(CD\.\d+)\b")
 _CANONICAL_TIER_ORDER: list[str] = ["T-1", "T0", "T1", "T2", "T3", "T4", "T5"]
 
+# Mirrors scripts/checks/roadmap/validate_candidate_decision_supersession.py's
+# _FULLY_SUPERSEDED_RE exactly (that guard's capture group is unneeded here -- we only need
+# match/no-match, not the referenced superseder id). Narrow supersession ("narrowly superseded
+# by CD.NN") and self-demotion ("[Amendment ...]" prose) do NOT match this phrase and are not
+# excluded by it -- same construction as the guard (audit PCD-03 / PCD-01).
+_FULLY_SUPERSEDED_RE = re.compile(r"fully superseded by CD\.\d+")
+
 
 def _item_dict(item: TierItem) -> dict[str, Any]:
     return {
@@ -237,7 +244,12 @@ class PlatformRoadmapState:
         return result
 
     def ratifiable_cds(self) -> list[dict[str, Any]]:
-        """Pending CDs carrying realization_evidence -- surfaced to /orient as ready to ratify."""
+        """Pending CDs carrying realization_evidence -- surfaced to /orient as ready to ratify.
+
+        rec-2468: realization_evidence is str | None; TRUTHY => evidenced/ratifiable, None or
+        empty-string => not. This filters on truthiness (`if cd.realization_evidence`), never
+        on `is not None` -- an empty string must not count as evidenced.
+        """
         return [
             {"id": cd.id, "title": cd.title, "realization_evidence": cd.realization_evidence, "gates": cd.gates}
             for cd in self._doc.candidate_decisions
@@ -259,6 +271,64 @@ class PlatformRoadmapState:
                 continue
             hint = detail[marker_idx : marker_idx + 80]
             result.append({"id": cd.id, "title": cd.title, "gates": cd.gates, "realized_hint": hint})
+        return result
+
+    def _gate_ref_items(self, ref: str) -> list[TierItem]:
+        """Resolve one cd.gates entry to its tier_item(s), reusing the _TIER_SHORTCUT_RE
+        convention shared with resolve_depends_on/_pending_gating_cds_for_item: a tier
+        shortcut resolves to every item whose tier matches; otherwise by_id.get(ref) with a
+        skip-on-None tolerance matching the existing resolver (an unresolvable ref is treated
+        as vacuously satisfied rather than raising)."""
+        if _TIER_SHORTCUT_RE.match(ref):
+            return [i for i in self._doc.tier_items if i.tier == ref]
+        item = self._by_id.get(ref)
+        return [item] if item is not None else []
+
+    def _all_gates_complete(self, gates: list[str]) -> bool:
+        """True iff every tier_item resolved from `gates` is complete or non-blocking
+        (_INACTIVE_FOR_TIER: reserved/deferred_post_mvp). Empty gates -- or a ref that resolves
+        to zero items -- is vacuously True (all() over an empty iterable)."""
+        for ref in gates:
+            items = self._gate_ref_items(ref)
+            if not all(i.status == "complete" or i.status in _INACTIVE_FOR_TIER for i in items):
+                return False
+        return True
+
+    def realization_candidates(self) -> list[dict[str, Any]]:
+        """Pending CDs whose every gated item is realized-but-unevidenced -- surfaced to /orient
+        as the lowest-confidence, derived-plausible tier (audit PCD-01), strictly disjoint from
+        both ratifiable_cds() and realized_but_pending_cds() by construction:
+          - excludes CDs carrying realization_evidence (those are ratifiable_cds()).
+          - excludes CDs whose detail carries a '[Realized' prose marker (those are
+            realized_but_pending_cds() -- a lower-but-still-distinct-confidence tier).
+          - excludes CDs whose detail matches "fully superseded by CD.NN" (that prose belongs
+            to the supersession lane, PCD-03/_FULLY_SUPERSEDED_RE -- a fully-superseded-in-prose
+            CD's content is replaced, not realized).
+          - includes only CDs whose every gated item (via cd.gates, resolved the same way as
+            the existing _TIER_SHORTCUT_RE gate-resolution: tier shortcut -> every item in that
+            tier; else by_id[ref]) is complete or non-blocking (_INACTIVE_FOR_TIER); empty gates
+            are vacuously included.
+
+        rec-2468: realization_evidence is str | None; TRUTHY => evidenced (excluded here), None
+        or empty-string => not evidenced (a candidate). This filters on truthiness, never on
+        `is not None`.
+
+        This is a derived-plausible signal only (Decision 55: no unilateral judgement calls) --
+        a candidate here is not deliberately corroborated and must never be treated as
+        ratifiable; writing realization_evidence stays a human-confirmed /plan action.
+        """
+        result: list[dict[str, Any]] = []
+        for cd in self._doc.candidate_decisions:
+            if cd.state != "pending" or cd.realization_evidence:
+                continue
+            detail = cd.detail or ""
+            if "[Realized" in detail:
+                continue
+            if _FULLY_SUPERSEDED_RE.search(detail):
+                continue
+            if not self._all_gates_complete(cd.gates):
+                continue
+            result.append({"id": cd.id, "title": cd.title, "gates": cd.gates})
         return result
 
     def to_preflight_dict(self, plans_dir: Path | None = None) -> dict[str, Any]:
@@ -295,6 +365,7 @@ class PlatformRoadmapState:
             "blocked_on_cd": self.blocked_on_cd(),
             "ratifiable_cds": self.ratifiable_cds(),
             "realized_but_pending_cds": self.realized_but_pending_cds(),
+            "realization_candidates": self.realization_candidates(),
             "gate_evaluations": self.evaluate_gates(),
         }
 
@@ -320,6 +391,7 @@ def compute_state_dict(yaml_path: Path, *, latest_decision_ts: str | None = None
             "blocked_on_cd": [],
             "ratifiable_cds": [],
             "realized_but_pending_cds": [],
+            "realization_candidates": [],
             "gate_evaluations": [],
         }
 
