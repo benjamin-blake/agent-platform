@@ -1,0 +1,394 @@
+schema_version: 1
+slug: "daf-authoring-grammar"
+intent: >-
+  Close audit finding DAF-03 by giving the decision log the authoring grammar it lacks -- a
+  machine-parseable decision-entry contract plus one shared parser every structural consumer
+  imports -- so the four divergent hand-rolled grammars stop drifting; this realizes Decision
+  134 clause 3 (the DAF-03 authoring-contract + single-shared-parser forward work).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-daf-authoring-grammar.yaml
+phase: >-
+  Platform interim decision-log governance (Decision 134 cl.3 / audit DAF-03). No tier_item
+  owns the grammar contract or parser consolidation (audit roadmap_crossref: novel,
+  dedup_hit_count 0); this is forward work Decision 134 scoped to a follow-on IMPLEMENTATION plan.
+scope:
+  - file: docs/contracts/decision-entry.yaml
+    action: Create
+    purpose: >-
+      The decision-entry authoring grammar contract. Free-form registry (NO top-level
+      contract:/class: block, header comment marking it not a Class A/B/C ritual contract so
+      the CD.25 drift gate skips it -- file-router.yaml/deploy-paths.yaml precedent). Defines
+      header form `## Decision NNN: <title> (<status>)`; REQUIRED markers Status/Date/Decision;
+      optional-with-fixed-spelling markers Problem, Rationale, Reversal conditions, Related,
+      Warehouse ID; amendment/blockquote annotation forms; the supersession marker spelled
+      EXACTLY `**Superseded by: Decision N**` (matching decisions_md._SUPERSEDED_BY_RE from
+      Plan 2 / PR #605); Decision 134's three size ceilings (400_000 live bytes / 120 live h2 /
+      700_000 combined) documented for authors; and the archive's h2-only convention.
+  - file: scripts/checks/decisions/validate_decision_entry_conformance.py
+    action: Create
+    purpose: >-
+      New diff-scoped FULL-tier forward conformance check (registry-registered per Decision
+      104, owner=platform). Enforces the contract's canonical markers on GENUINELY-NEW decision
+      entries only (header number absent from the origin/main baseline); modified/amended
+      historical entries are grandfathered. Reads required markers from decision-entry.yaml so
+      the contract is the single source of truth. Advisory SKIP (never a failure) when
+      origin/main is unreachable (graduation_completeness precedent).
+  - file: tests/checks/decisions/test_validate_decision_entry_conformance.py
+    action: Create
+    purpose: >-
+      Mirror-path unit tests: the check FAILS on a synthetic non-canonical NEW entry and PASSES
+      on a synthetic canonical NEW entry; a modified historical entry is not flagged; SKIP on
+      unreachable baseline. Injection seams for baseline/diff mirror the vp_replay precedent.
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      EXTEND (do not rework Plan 2's extraction) with shared public header helpers the other
+      consumers import: iter_decision_headings(content) -> matches (over the single module-level
+      _DECISION_HEADING_RE) and decision_header_numbers(paths=None) -> set[int]. Stays repo-local
+      and hermetic; parse_decisions_md / _iter_decision_sections / the byte-reconstruction
+      invariant are untouched.
+  - file: scripts/checks/roadmap/validate_candidate_decision_ratification.py
+    action: Modify
+    purpose: >-
+      Delete the private _HEADER_RE (`^## Decision (\d+):`) and _decision_header_numbers body;
+      call decisions_md.decision_header_numbers() instead. STAYS HERMETIC (Decision 105) --
+      decisions_md reads only the two git-tracked md files, no warehouse/reader; this is a
+      shared prose-header grep, NOT the future portal repoint (Decision 134 cl.5). Satisfies the
+      DAF-03 acceptance (`Decision (\d` gone, `decisions_md` present).
+  - file: scripts/preflight/context_docs.py
+    action: Modify
+    purpose: >-
+      Replace the open_decisions_count private regex (`^## Decision \d+[^\n]*`) enumeration with
+      decisions_md.iter_decision_headings over the live file; KEEP the local open/closed paren
+      heuristic. Population is identical (both yield 94 live headers today -- verified), so the
+      count is preserved.
+  - file: scripts/list_customizations.py
+    action: Modify
+    purpose: >-
+      Retire the dormant --with-decisions flag + build_decisions_index (the 4th divergent parser
+      that rebuilt logs/.decisions-index.jsonl FROM PROSE via write_text, bypassing the warehouse
+      and evading the Decision 104 write-path guard). No live callers exist; the legit
+      sync.ops-populated read-cache (sync/ops.py maps ops_decisions -> .decisions-index.jsonl) is
+      unaffected. Update the module docstring.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register validate_decision_entry_conformance in full_sequence() (FULL tier only; near
+      validate_decisions_size). Not added to pre_sequence().
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the facade import `from scripts.checks.decisions.validate_decision_entry_conformance
+      import validate_decision_entry_conformance` so _dispatch_check's getattr(validate, name)
+      resolves it (Decision 104 reality).
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Add "validate_decision_entry_conformance" to the REQUIRED_FULL_CHECKS membership floor.
+  - file: tests/test_decisions_md.py
+    action: Modify
+    purpose: >-
+      Add a TestHeaderHelperParity class asserting iter_decision_headings / decision_header_numbers
+      enumerate the same population the pre-consolidation regexes did, and that the promote raises
+      the both-files decision-number set to include 52/53/54.
+  - file: tests/checks/roadmap/test_validate_candidate_decision_ratification.py
+    action: Modify
+    purpose: >-
+      Update/extend for the consolidated helper: the guard's header-number set now comes from
+      decisions_md and includes the promoted 52/53/54; assert no currently-passing CD regresses.
+  - file: tests/session/preflight/test_context_docs.py
+    action: Modify
+    purpose: >-
+      Update/extend the open_decisions_count test to lock parity with the shared enumeration
+      (identical count over the live file).
+  - file: tests/test_list_customizations.py
+    action: Modify
+    purpose: >-
+      Delete the build_decisions_index / --with-decisions test section (the DECISIONS_CONTENT
+      fixture + the eight test_build_decisions_index_* tests, current lines 234-392); run
+      `ruff check --fix` for F401.
+  - file: docs/DECISIONS_ARCHIVE.md
+    action: Modify
+    purpose: >-
+      DPI-07 promote: change ONLY the three headers `### Decision 52/53/54:` to
+      `## Decision 52/53/54:` (lines 1481/1453/1432). No other content edits.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Add a discovery topic for docs/contracts/decision-entry.yaml. Verify the
+      customizations-manifest-script and decisions-index topics need no edit (the script and the
+      sync-populated cache both survive the --with-decisions removal) -- expected no structural
+      change beyond the new topic.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/contracts/decision-entry.yaml exists, is a non-ritual free-form contract (no top-level
+    `contract:` block), and pins the supersession marker EXACTLY as `**Superseded by: Decision N**`
+    (byte-identical to decisions_md._SUPERSEDED_BY_RE from Plan 2).
+  - >-
+    The R1 ratification guard no longer contains the substring `Decision (\d` and imports
+    decisions_md (DAF-03 acceptance); it stays hermetic (no warehouse/reader access).
+  - >-
+    The R1 guard and the preflight open-decisions counter enumerate their decision population via
+    the shared decisions_md helper and produce populations identical to the pre-consolidation
+    regexes (parity), with the archive-h3 promote raising the both-files number set by exactly 3.
+  - >-
+    The new FULL-tier check validate_decision_entry_conformance is registered in full_sequence(),
+    reachable via the validate facade, in the REQUIRED_FULL_CHECKS floor, fails on a synthetic
+    non-canonical NEW entry, and passes on a synthetic canonical NEW entry.
+  - >-
+    `grep -c '^### Decision' docs/DECISIONS_ARCHIVE.md` == 0 (DPI-07 resolved).
+  - >-
+    scripts/list_customizations.py no longer defines --with-decisions or build_decisions_index; the
+    logs/.decisions-index.jsonl read-cache remains sync-populated.
+  - >-
+    `bin/venv-python -m scripts.validate --pre` is green on the branch.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      The grammar contract is authored, non-ritual, and pins the exact cross-plan supersession
+      marker spelling.
+    command: >-
+      test -f docs/contracts/decision-entry.yaml && grep -qF '**Superseded by: Decision N**'
+      docs/contracts/decision-entry.yaml && ! grep -qE '^contract:' docs/contracts/decision-entry.yaml
+    expected: >-
+      Exit 0: the file exists, contains the exact marker string, and has no top-level `contract:`
+      key (so the CD.25 drift gate skips it).
+    fix_if: >-
+      Missing file, a different supersession spelling (would diverge from decisions_md._SUPERSEDED_BY_RE),
+      or a `contract:` block (would trip validate_contract_drift / load_contract).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-off contract-authoring string assertion. The forward conformance check (step 4) is the
+      durable grammar guard; a standing string-presence grep on this single contract file would
+      duplicate coverage without adding regression value.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      DAF-03 acceptance command (verbatim from audits/decisions-authoring-format-d140093.yaml):
+      contract present, R1 guard's private header regex gone, shared parser imported.
+    command: >-
+      test -f docs/contracts/decision-entry.yaml && ! grep -qF 'Decision (\d'
+      scripts/checks/roadmap/validate_candidate_decision_ratification.py && grep -qF 'decisions_md'
+      scripts/checks/roadmap/validate_candidate_decision_ratification.py
+    expected: >-
+      Exit 0: the contract exists, the `Decision (\d` regex substring is absent from the R1 guard,
+      and the guard references decisions_md.
+    fix_if: >-
+      The private _HEADER_RE was left in place, or the guard does not import/reference decisions_md.
+    hermetic: true
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Parser-consolidation parity: R1 guard + preflight counter enumerate the same decision
+      population as the shared helper, and the promote adds exactly 52/53/54 to the both-files set.
+    command: bin/venv-python -m pytest tests/test_decisions_md.py::TestHeaderHelperParity -q
+    expected: >-
+      Parity tests pass: iter_decision_headings/decision_header_numbers reproduce the
+      pre-consolidation regex populations; the both-files number set includes 52/53/54; the live
+      file yields an identical count for the preflight path.
+    fix_if: >-
+      A helper diverges from the original regex population (would silently change a consumer's
+      notion of "a decision"), or the promote did not land.
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      The forward conformance check fails on a synthetic non-canonical NEW entry and passes on a
+      synthetic canonical NEW entry; a modified historical entry is grandfathered; SKIP on
+      unreachable baseline.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decision_entry_conformance.py -q
+    expected: >-
+      All check unit tests pass, proving the diff-scoped enforcement targets new entries only and
+      grandfathers modified historical entries.
+    fix_if: >-
+      The check retro-enforces on a modified historical entry (would self-fail the DPI-07 promote of
+      52/53/54, which lack a separate **Date:** marker), or fails to flag a non-canonical new entry.
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      The new check is wired into the FULL tier, in the required-check floor, and reachable via the
+      validate facade.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q
+    expected: >-
+      Registry floor + getattr-reachability tests pass with validate_decision_entry_conformance in
+      REQUIRED_FULL_CHECKS and full_sequence().
+    fix_if: >-
+      The check is missing from full_sequence(), the facade import, or the REQUIRED_FULL_CHECKS floor.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A registry-wiring test. The membership-floor test in this same file is itself the standing
+      regression guard; graduating this into the verification kernel would duplicate that floor's role.
+  - step: 6
+    phase: pre-deploy
+    action: DPI-07 -- no h3 numbered decision headers remain in the archive.
+    command: test "$(grep -c '^### Decision' docs/DECISIONS_ARCHIVE.md)" -eq 0
+    expected: Exit 0 -- zero `### Decision` headers in docs/DECISIONS_ARCHIVE.md.
+    fix_if: A `### Decision` header remains (an h3 numbered decision the shared grammar forbids).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: archive-no-h3-numbered-decision-headers
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Closure sweep: the retired --with-decisions surface is unreachable (flag + build_decisions_index
+      gone) while the sync-populated read-cache topic persists.
+    command: >-
+      ! grep -qF -- '--with-decisions' scripts/list_customizations.py && ! grep -q 'def
+      build_decisions_index' scripts/list_customizations.py
+    expected: >-
+      Exit 0: neither the flag nor the divergent prose-rebuild function remains in
+      list_customizations.py.
+    fix_if: The flag or build_decisions_index was left behind (the 4th divergent parser survives).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time retirement sweep on a single retired flag; re-introduction is implausible and would
+      be caught in code review. A negative-presence grep on one dead flag adds registry noise without
+      proportional durable regression value.
+  - step: 8
+    phase: pre-deploy
+    action: The fast presubmit gate is green on the branch (exercises the consolidated R1 guard + all --pre checks).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: PASS -- all --pre-tier checks green, including the now-consolidated R1 ratification guard.
+    fix_if: Any --pre check fails; diagnose and fix on the branch (never mark this step hermetic -- replay recursion).
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: The plan document itself schema-validates.
+    command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-daf-authoring-grammar.yaml
+    expected: Schema validation passes (PlanDocument, extra=forbid).
+    fix_if: A schema violation (unknown key, missing required field, bad enum).
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - "bundled_recommendations: [] -- no recs (per brief / DAF-03 bundled_recommendations: [])."
+  - >-
+    EXTEND/REUSE scripts/decisions_md.py's Plan 2 extraction (raw_block, reversal_conditions,
+    superseded_by, content_hash, decorated-marker/plural-cite/ISO-date fixes) -- add shared header
+    helpers only; do NOT rework or revert Plan 2's changes (PR #605, on main).
+  - >-
+    The supersession marker in the contract MUST be spelled EXACTLY `**Superseded by: Decision N**`
+    to match decisions_md._SUPERSEDED_BY_RE and Plan 2's validate_candidate_decision_supersession
+    convention -- do not invent a different spelling.
+  - >-
+    The R1 guard STAYS HERMETIC (Decision 105): consolidating onto decisions_md is a shared
+    prose-header grep of the two git-tracked md files, NOT the future portal/cache repoint
+    (Decision 134 cl.5, gated behind the live read-portal).
+  - >-
+    The conformance check is grandfather-forward: enforce canonical markers ONLY on new decision
+    numbers (absent from origin/main baseline); modified/amended/promoted historical entries are NOT
+    retro-enforced (the historical band is grandfathered -- and 52/53/54 lack a separate **Date:**
+    marker, so retro-enforcing modified entries would self-fail this plan's own promote).
+  - >-
+    Do NOT edit DECISIONS.md/ARCHIVE content EXCEPT the 3 archive h3->h2 header promotes (DPI-07).
+  - >-
+    Do NOT touch scripts/checks/decisions/validate_decisions_size.py (Plan 1) or Plan 2's
+    schema/backfill files beyond importing the shared parser.
+  - >-
+    docs/contracts/decision-entry.yaml is a free-form registry (no top-level contract:/class:),
+    with a header comment marking it non-ritual so validate_contract_drift / load_contract skip it.
+  - "No new standing prose-architecture doc under docs/ (Decision 86); a machine-parseable contract under docs/contracts/ is allowed."
+  - No rescue agents or workaround loops (Decision 55); out-of-scope bugs become recommendations, not inline fixes.
+  - No em dashes (ASCII hyphen), no emojis; ruff 127; type hints; async for I/O; bin/venv-python (never bare python); no `python -c` in VP commands.
+  - >-
+    SLOC decompose-by-default (Decision 128): no scope file is expected to cross its budget (net
+    additions are small; list_customizations.py shrinks). If one would, decompose -- never raise.
+context:
+  - >-
+    Decision-scout verdict FLAGS_FOUND (Decisions triaged: 94 of 94, complete read). CITE list
+    (verbatim): Decision 134 (this plan implements its cl.3), Decision 84, Decision 105, Decision
+    104, Decision 86, Decision 132. RELATED: Decision 131 (mirror test rule -- confirmed no
+    coverage-gate conflict), Decision 118 (CD.25 free-form contract skip), Decision 128 (SLOC),
+    Decision 114, Decision 87. The single flag is a NOTE: Decision 134 cl.4 (DAF-01 ETL-parity)
+    also edits scripts/decisions_md.py -- RESOLVED, that sibling is Plan 2 and is already MERGED
+    (PR #605 on main), so this plan EXTENDS the landed parser with shared helpers and does not
+    rework it; there is no concurrent-authoring collision.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=overseer-run"
+  - >-
+    Implements Decision 134 clause 3 (DAF-03 authoring-contract + single-shared-parser forward work);
+    Decision 134 is the ratifying disposition Decision for the whole decisions-authoring-format audit.
+  - >-
+    Cross-plan consistency: Plan 2 (PR #605, on main) added decisions_md._SUPERSEDED_BY_RE keyed on
+    `**Superseded by: Decision N**` and ops_decisions.yaml already names decision-entry.yaml as "a
+    future Plan 3 authoring contract" pinning that spelling. The contract must formalize it verbatim.
+  - >-
+    Freshness Gate (verified against current main, 2 behind): the preflight counter has MOVED to
+    scripts/preflight/context_docs.py:49-56 (was scripts/session_preflight.py); decisions_md.py was
+    upgraded by Plan 2. Parity measured live -- R1 (h2-only) sees 111 numbers, decisions_md (#{2,3})
+    sees 114, difference exactly {52,53,54}; live-file preflight vs shared helper both = 94.
+  - >-
+    DPI-07 is a sibling-audit finding resolved as a bonus: the 3 archive h3 headers are promoted
+    atomically with the consolidation so no consumer window disagrees (R1 matched population +3).
+  - >-
+    list_customizations --with-decisions is CONFIRMED dormant (no live callers in
+    scripts/.github/.claude/config); delete is cleaner than repoint since it is dead.
+  - >-
+    Coverage-checker mappings confirmed: scripts/preflight/context_docs.py -> None (no mirror-test
+    requirement); decisions_md -> tests/test_decisions_md.py; R1 guard ->
+    tests/checks/roadmap/test_validate_candidate_decision_ratification.py; new check ->
+    tests/checks/decisions/test_validate_decision_entry_conformance.py; list_customizations ->
+    tests/test_list_customizations.py.
+  - >-
+    Every pre-deploy VP step carries a graduation disposition (Decision 132); pytest/bin/venv-python
+    steps are hermetic:false (validate_vp_replay runs hermetic pre-deploy steps in a venv-less CI
+    job); only pure-grep steps are hermetic:true.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/dreamy-feynman-80flv9)
+  - docs/PROJECT_CONTEXT.md read on demand (workflow context)
+  - Decision 134 (cl.3) read; audit DAF-03 read in full
+  - All files in scope located and readable; coverage-checker mappings confirmed
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Author docs/contracts/decision-entry.yaml as a free-form (non-ritual) grammar contract: header
+    form, required markers (Status/Date/Decision), optional-fixed-spelling markers, amendment forms,
+    the EXACT `**Superseded by: Decision N**` marker, Decision 134's size ceilings, archive h2
+    convention; header comment marks it non-ritual (CD.25 skip).
+  - >-
+    Extend scripts/decisions_md.py with iter_decision_headings(content) and
+    decision_header_numbers(paths=None) built on the existing _DECISION_HEADING_RE; do not touch the
+    Plan 2 extraction path or the byte-reconstruction invariant.
+  - >-
+    Repoint scripts/checks/roadmap/validate_candidate_decision_ratification.py onto
+    decisions_md.decision_header_numbers() (delete the private _HEADER_RE); keep it hermetic.
+  - >-
+    Repoint scripts/preflight/context_docs.py open_decisions_count onto iter_decision_headings over
+    the live file; keep the local open/closed paren heuristic.
+  - >-
+    Create scripts/checks/decisions/validate_decision_entry_conformance.py (FULL tier, owner=platform,
+    diff-scoped, new-entry-only, contract-driven required markers, SKIP on unreachable baseline);
+    register in scripts/checks/registry.py full_sequence(); add the facade import in scripts/validate.py;
+    add to REQUIRED_FULL_CHECKS in tests/test_checks_registry.py.
+  - >-
+    Promote the 3 archive headers `### Decision 52/53/54:` -> `## Decision 52/53/54:` in
+    docs/DECISIONS_ARCHIVE.md (headers only).
+  - >-
+    Delete --with-decisions + build_decisions_index from scripts/list_customizations.py and its
+    docstring line; delete the corresponding test section in tests/test_list_customizations.py and run
+    ruff check --fix.
+  - >-
+    Add the new mirror-path check tests and the parity tests
+    (tests/checks/decisions/test_validate_decision_entry_conformance.py, tests/test_decisions_md.py,
+    tests/checks/roadmap/test_validate_candidate_decision_ratification.py,
+    tests/session/preflight/test_context_docs.py).
+  - >-
+    Add a file-router.yaml discovery topic for decision-entry.yaml; verify no other file-router edit
+    is required.
+  - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: what was implemented, verification results."
+work_areas: []
+rollback: >-
+  All changes are additive or local; revert the branch commit. The DPI-07 promote and parser
+  consolidation land atomically, so a revert restores the pre-consolidation grammar with no partial
+  window.
