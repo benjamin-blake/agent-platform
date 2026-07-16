@@ -197,12 +197,7 @@ _ALL_MIRROR_TARGET_HOMES: frozenset[str] = frozenset(
 # dormant and map_source_to_test is byte-identical to the pre-inversion function for every
 # input (proven by TestMapSourceToTest / TestCheckTestFileExists staying green unchanged).
 # Kept a plain set literal, one basename per line, for minimal per-wave merge conflict.
-_RETIRING_GRANDFATHER_HOMES: set[str] = {
-    "test_build_lambda_deploy.py",
-    "test_lambda_manifest.py",
-    "test_s3_log_store.py",
-    "test_verify_ci_workflow.py",
-}
+_RETIRING_GRANDFATHER_HOMES: set[str] = set()
 
 # Repo-relative (POSIX, ROOT-relative) source paths whose mirror target is a test PACKAGE
 # DIRECTORY rather than a single test_<stem>.py file: single-file monoliths with no

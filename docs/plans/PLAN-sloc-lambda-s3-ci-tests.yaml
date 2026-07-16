@@ -280,9 +280,11 @@ acceptance_criteria:
     100% for scripts/build_lambda_deploy.py, scripts/lambda_manifest.py, scripts/s3_log_store.py, and
     scripts/verify_ci_workflow.py.
   - >-
-    ACCEPTANCE GATE (rec-2709 program completion): `grep -LE '^[[:space:]]*tests/'
-    config/sloc_budgets.yaml` returns the filename (exit 0) -- ZERO tests/ budget entries remain. All
-    four monoliths are deleted; whole-suite collection is clean.
+    ACCEPTANCE GATE (rec-2709 program completion): `! grep -qE '^[[:space:]]*tests/'
+    config/sloc_budgets.yaml && echo config/sloc_budgets.yaml` returns the filename (exit 0) -- ZERO
+    tests/ budget entries remain (the exit-code-correct equivalent of the plain `grep -L` form, which
+    exits 1 even in the desired zero-match state -- see VP step 12's note). All four monoliths are
+    deleted; whole-suite collection is clean.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -466,9 +468,14 @@ verification_plan:
     hermetic: true
     action: >-
       rec-2709 PROGRAM ACCEPTANCE GATE -- zero tests/ entries remain in config/sloc_budgets.yaml.
-      grep -L prints the filename (exit 0) only when NO line matches the tests/ pattern. Marked
+      NOTE (post-authoring correction): GNU grep -L's exit status reflects whether the PATTERN
+      matched anywhere in the input, not whether a filename was printed -- so a bare `grep -LE ...`
+      exits 1 even in the desired (zero-match) success case, making "prints the filename AND exits
+      0" unreachable with the originally-authored command. The command below is the exit-code-
+      correct equivalent of the same invariant (`! grep -q` inverted, then echo on success) so
+      validate_vp_replay's exit-code-always rule (a) can pass on the genuine success state. Marked
       hermetic so validate_vp_replay independently re-executes it on the PR tree.
-    command: grep -LE '^[[:space:]]*tests/' config/sloc_budgets.yaml
+    command: "! grep -qE '^[[:space:]]*tests/' config/sloc_budgets.yaml && echo config/sloc_budgets.yaml"
     expected: >-
       Prints "config/sloc_budgets.yaml" and exits 0 (zero tests/ budget entries). If it prints nothing
       / exits 1, tests/ entries remain -- W11 has not merged yet (STOP, surface to overseer) or a W12
