@@ -1,0 +1,460 @@
+schema_version: 1
+slug: daf-etl-parity-fidelity
+intent: >-
+  Realize Decision 134 clause 4 (audit finding DAF-01): make the docs/DECISIONS.md -> ops_decisions
+  ETL projection lossless-or-loud so the ratified recreatability premise (Decision 84) holds at real
+  fidelity. Add a raw_block full-text parity backstop plus typed reversal_conditions/superseded_by and
+  a content_hash column (content-hash-gated SCD2 to stop re-backfill churn), fix the parser
+  decorated-marker / plural-cite / date-fallback bugs, and add a loud backfill fidelity tripwire.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-daf-etl-parity-fidelity.yaml
+phase: >-
+  Platform tier T1.5 pre-work (DAF-01 ETL parity that T1.5 inherits; Decision 134 clause 4 forward-work).
+  Platform-plane per Decision 133 (platform-first sequencing). Does NOT close any roadmap exit criterion
+  (T1.5 c2's parity gate fires at the future reader-repoint, not here).
+scope:
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      parse_decisions_md gains raw_block (full heading-inclusive verbatim section text), content_hash
+      (sha256 of parser-normalized raw_block), reversal_conditions (from **Reversal conditions:** + the
+      singular Decision-67 variant), superseded_by (from a canonical **Superseded by: Decision N** marker,
+      best-effort for historical prose). Fixes: tolerate decorated Decision markers via
+      r"\*\*Decision\b[^:]*:\*\*"; accept plural "Decisions 69/78" cites in _extract_related_decisions and
+      dedupe the int list; restrict the decided_date Status-suffix fallback to ISO-shaped values only.
+      Expose a per-file sectioning helper (no dedupe/sort) so the byte-reconstruction test can assert
+      coverage. Covers docs/DECISIONS_ARCHIVE.md identically (both already in _DECISIONS_MD_PATHS).
+  - file: scripts/ops_portal/decisions.py
+    action: Modify
+    purpose: >-
+      Extend _DECISION_BACKFILL_COLS with raw_block, reversal_conditions, superseded_by, content_hash.
+      backfill_decisions_from_md gains per-run fidelity counters (live-h2 entries with empty decision_text
+      or non-ISO decided_date) that FAIL LOUDLY on regression vs the checked-in baseline, and a client-side
+      content_hash skip (fetch current row via the existing _fetch_decision_from_reader; skip file_decision
+      when content_hash is unchanged -- the cheaper path, no writer-handler change).
+  - file: src/schemas/decision.py
+    action: Modify
+    purpose: >-
+      Add raw_block, reversal_conditions, superseded_by, content_hash to the write-side DecisionPayload as
+      PLAIN `str | None = None` fields (content_hash included) -- do NOT wrap them in Annotated[...]/
+      DqNotNull/any Dq* marker, matching the existing non-Annotated problem/decision_text/context/
+      decided_date fields. Preserve the dual-write invariant.
+  - file: scripts/executor/jsonl_store.py
+    action: Modify
+    purpose: >-
+      Add the same four fields to the read-side Decision model as PLAIN `Optional[str] = None` (hand-synced
+      counterpart used by file_decision's client-side validation) -- no Dq markers here either. Preserve the
+      dual-write invariant. Stays under 500 SLOC.
+  - file: docs/contracts/ops_decisions.yaml
+    action: Modify
+    purpose: >-
+      Class A field_add amendment (Decision 65 authority): add the four columns (iceberg_type: string,
+      nullable: true, dq_intent.not_null.enforced: false, with description+semantics), plus an amendment_log
+      field_add entry (semantic_break: false). This contract is the generator source for field_semantics.
+  - file: config/lambda/ducklake/field_semantics.yaml
+    action: Modify
+    purpose: >-
+      GENERATED projection -- REGENERATE via scripts.schema_to_field_semantics (never hand-edit). The four
+      new ops_decisions columns project automatically from the amended contract; the --check drift gate
+      enforces byte-parity. This is the bundled DuckLake-Lambda asset whose change triggers the governed CD.
+  - file: config/agent/data_quality/decisions/ops_decisions.yaml
+    action: Modify
+    purpose: >-
+      Add DQ manifest rows for the four new fields (root_cause_class, human_decision: pending,
+      enforcement_ready: NO_TEST_NEEDED, current_test: none) -- Phase-2 deferral pattern, matching the
+      existing decision columns.
+  - file: config/agent/data_quality/decisions/fidelity_baseline.yaml
+    action: Create
+    purpose: >-
+      Checked-in fidelity baseline/allowlist consumed by the backfill tripwire at runtime: the known-bad
+      set of live-h2 entries that may never parse clean (pre-77-band, e.g. dec-067). NOT a zero-assertion;
+      the tripwire fails only on NEW regressions outside this set. YAML under config/ (Decision 86-compliant,
+      not a prose doc).
+  - file: tests/test_decisions_md.py
+    action: Create
+    purpose: >-
+      Parser-level unit tests: parity anchors (dec-084 decision_text non-empty via decorated-marker
+      tolerance; dec-114 reversal_conditions present; dec-067 decided_date empty-or-ISO), raw_block +
+      content_hash present for every live+archive entry, plural-cite parse+dedupe, byte-reconstruction
+      coverage assertion (per-file, with a synthetic sectioner-narrowing mutation), and dual schema-model
+      field sync (DecisionPayload and jsonl_store.Decision both carry the four fields).
+  - file: tests/test_ops_data_portal_decisions.py
+    action: Modify
+    purpose: >-
+      Backfill fidelity tripwire tests (baseline passes; a synthetic NEW empty-decision_text/non-ISO entry
+      fails loud; baselined entries do not trip), content_hash skip-gate tests (mocked reader: skip when
+      unchanged, write when changed), and a creds-gated live_reader_parity test for the post-deploy reader
+      spot-checks (skips when creds absent).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    Governed CD channel .github/workflows/deploy-ducklake-lambdas.yml (T2.38, Decision 125/126): on merge
+    to main touching config/lambda/ducklake/**, redeploys the four DuckLake Lambdas (writer/reader/
+    maintenance/catalog-dr) with the new bundled field_semantics.yaml via the scoped agent-platform-github-
+    ci-ducklake-deploy role (UpdateFunctionCode-only); gates on --lambda-attach / --lambda-reader smoke.
+    Terraform is NOT involved (code/infra decoupled, #544 ignore_changes=[source_code_hash]).
+  - >-
+    Deploy-role provisioning precondition (Decision 98 / scout NOTE flag): the scoped deploy role is
+    IAM-sensitive and admin-created out-of-band. Until the operator applies it and sets repo variable
+    DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true, the deploy job no-ops GREEN (deployed=false, smoke skipped) and
+    the new asset is NOT shipped. Confirm this variable is 'true' before treating the CI deploy as real.
+  - >-
+    Physical schema evolution: ALTER TABLE ADD COLUMN on ops_decisions_history + ops_decisions_current via
+    the ducklake_maintenance reconcile_columns action (operator-invoked, EXPLICIT production data_path +
+    meta_schema=ducklake_ops + table=ops_decisions). Not automatic on deploy. Ordering: deploy -> reconcile
+    -> backfill; the backfill before deploy+reconcile fails loudly (schema gate / missing column).
+acceptance_criteria:
+  - >-
+    parse_decisions_md emits raw_block and content_hash for every live+archive entry and reversal_conditions/
+    superseded_by where present; dec-084 decision_text is non-empty, dec-114 reversal_conditions is present,
+    dec-067 decided_date is '' or ISO-shaped; the plural cite "Decisions 69/78" is parsed and the int list
+    deduped. Covers DECISIONS_ARCHIVE.md identically.
+  - >-
+    Byte-reconstruction coverage: per-file concatenation of preamble + heading-inclusive raw_blocks
+    byte-equals docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md; a synthetic sectioner-narrowing mutation
+    fails the assertion (so future drift fails CI loudly, not silently).
+  - >-
+    The four columns exist in the ops_decisions Class A contract, regenerate cleanly into
+    field_semantics.yaml (schema_to_field_semantics --check clean), and appear on BOTH DecisionPayload and
+    jsonl_store.Decision with the dual-write invariant preserved.
+  - >-
+    backfill_decisions_from_md emits a per-run fidelity report and FAILS LOUDLY on a NEW empty-decision_text
+    or non-ISO-date live entry versus config/agent/data_quality/decisions/fidelity_baseline.yaml; baselined
+    known-bad entries do not trip it.
+  - >-
+    content_hash-gated backfill skips file_decision for unchanged entries (no new SCD2 version), with exactly
+    one legitimate full-corpus re-version on the first post-migration run (audit Q5-vi churn fixed).
+  - >-
+    Post-deploy: the governed channel ships the new field_semantics to writer/reader/maintenance,
+    reconcile_columns adds the four physical columns, and reader spot-checks confirm dec-084 / dec-114 /
+    dec-067 parity in ops_decisions.
+  - >-
+    DQ manifest rows are added for the four new fields (enforced=false Phase-2 deferral pattern); no DQ check
+    is enforced on them.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Parser parity anchors (the DAF-01 acceptance assertions, expressed as pytest so no `python -c` is
+      used): decorated-marker tolerance, reversal_conditions extraction, ISO-only date fallback,
+      raw_block/content_hash presence, plural-cite parse+dedupe, archive coverage.
+    command: bin/venv-python -m pytest tests/test_decisions_md.py -k "parity_anchors or plural_cite or archive" -q
+    expected: >-
+      All pass. rows[84].decision_text non-empty; rows[114].reversal_conditions present; rows[67].decided_date
+      == '' or its first 4 chars are digits; every live+archive entry carries non-empty raw_block and a
+      64-char content_hash; "Decisions 69/78" yields [69, 78] deduped.
+    fix_if: >-
+      Any anchor fails -> the corresponding extractor/regex is wrong (decorated-marker regex, reversal
+      marker, date-fallback ISO guard, or the plural-cite dedupe).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The parity anchors are committed pytest assertions; the durable coverage is the standing CI pytest
+      tier (the `Tests (pytest)` job) plus the registered checks, not a replayed VP step --
+      validate_vp_replay excludes non-hermetic steps (this one is hermetic: false) and never re-runs
+      them. A verification_registry test_selector row would duplicate that standing regression guard
+      rather than add coverage.
+  - step: 2
+    phase: pre-deploy
+    action: Byte-reconstruction coverage assertion (per-file, with a synthetic sectioner-narrowing mutation).
+    command: bin/venv-python -m pytest tests/test_decisions_md.py -k byte_reconstruction -q
+    expected: >-
+      Per-file concatenation of preamble + heading-inclusive raw_blocks byte-equals each source file; the
+      mutated-sectioner case fails the reconstruction assertion (proving the guard is live, not vacuous).
+    fix_if: Reconstruction mismatch on unmutated input -> raw_block boundaries drop bytes (sectioner narrowed).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The coverage assertion is a committed pytest test; the durable coverage is the standing CI pytest
+      tier (the `Tests (pytest)` job) plus the registered checks -- validate_vp_replay excludes
+      non-hermetic steps (this one is hermetic: false) and never re-runs them. Graduating a bespoke
+      registry test_selector duplicates the standing committed guard.
+  - step: 3
+    phase: pre-deploy
+    action: Fidelity tripwire behaviour -- baseline passes, a NEW regression fails loud, baselined entries do not.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal_decisions.py -k fidelity -q
+    expected: >-
+      The counter passes against the checked-in baseline; a synthetic live entry with empty decision_text or
+      a non-ISO date NOT in the baseline raises loudly; an entry present in the baseline does not trip it.
+    fix_if: Tripwire silent on a new regression, or fires on a baselined entry -> counter/baseline logic wrong.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The tripwire behaviour is a committed pytest test; the durable coverage is the standing CI pytest
+      tier (the `Tests (pytest)` job) plus the registered checks -- validate_vp_replay excludes
+      non-hermetic steps (this one is hermetic: false) and never re-runs them. A registry row duplicates
+      it. The runtime tripwire itself lives in the backfill (Decision 55 loud-fail), not a check.
+  - step: 4
+    phase: pre-deploy
+    action: content_hash skip-gate -- backfill skips unchanged entries and writes changed ones (mocked reader).
+    command: bin/venv-python -m pytest tests/test_ops_data_portal_decisions.py -k content_hash_skip -q
+    expected: >-
+      With the reader mocked to return a matching content_hash, backfill_decisions_from_md skips file_decision
+      and counts the entry as skipped; with a differing hash it writes; the summary reports skipped vs written.
+    fix_if: Writes when unchanged (churn persists) or skips when changed (missed update) -> gate logic wrong.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Committed pytest test; the durable coverage is the standing CI pytest tier (the `Tests (pytest)`
+      job) plus the registered checks -- validate_vp_replay excludes non-hermetic steps (this one is
+      hermetic: false) and never re-runs them. A registry row duplicates it. The gate reads the current
+      hash via the ducklake_reader boundary to DECIDE the write; the write source stays DECISIONS.md
+      (Decision 84 warehouse-as-SoT, never re-stage from a read cache).
+  - step: 5
+    phase: pre-deploy
+    action: Dual schema-model field sync (DecisionPayload and jsonl_store.Decision carry the four fields).
+    command: bin/venv-python -m pytest tests/test_decisions_md.py -k dual_model -q
+    expected: >-
+      Both models expose raw_block, reversal_conditions, superseded_by, content_hash as optional fields; a
+      record carrying all four validates on both; the dual-write invariant (int(id[4:]) == decision_id) holds.
+    fix_if: A field missing on one model -> the hand-synced write-side/read-side pair drifted.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Committed pytest test; the durable coverage is the standing CI pytest tier (the `Tests (pytest)`
+      job) plus the registered checks -- validate_vp_replay excludes non-hermetic steps (this one is
+      hermetic: false) and never re-runs them. Graduating a bespoke registry row duplicates the standing
+      dual-model sync test.
+  - step: 6
+    phase: pre-deploy
+    action: field_semantics.yaml regeneration drift gate (contract is the source of truth; asset is generated).
+    command: bin/venv-python -m scripts.schema_to_field_semantics --check
+    expected: >-
+      OK, no drift -- the committed field_semantics.yaml is the exact projection of the amended
+      ops_decisions.yaml contract, with the four new columns (role: input, sql_type: VARCHAR, nullable: true).
+    fix_if: >-
+      DRIFT DETECTED -> regenerate with `bin/venv-python -m scripts.schema_to_field_semantics` (never
+      hand-edit the generated file).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The drift gate is already enforced as a standing validate.py check (contract-drift / schema_to_field_
+      semantics --check) in both --pre and full tiers; a verification_registry row duplicates that committed gate.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Full fast-tier presubmit -- contract-drift (amendment_log field_add), ducklake-version-lockstep, SLOC
+      limits, and graduation-completeness on this plan all green.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      PASS. The amendment is a clean field_add; version.yaml is untouched (no DuckDB bump, Decision 99); no
+      scope file crosses its SLOC budget; every pre-deploy VP step here carries a graduation disposition.
+    fix_if: Any --pre check fails -> address the specific failing check (do not raise SLOC budgets, Decision 128).
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Confirm the governed CD channel genuinely shipped the new asset on the merge commit (Decision
+      119), distinguishing a real deploy from the bootstrap no-op (deployed=false, smoke skipped) --
+      the no-op also reports a green workflow run, so a CI-status-only check cannot tell them apart.
+      PRECONDITION: repo var DUCKLAKE_DEPLOY_ROLE_PROVISIONED == 'true'. NOTE: `gh` may be unavailable
+      in the post-merge environment (repo convention is the GitHub MCP tools, not local gh) -- if
+      CI-run-level corroboration is wanted, use mcp__github__actions_list / mcp__github__actions_get
+      against deploy-ducklake-lambdas.yml (or mcp__github__get_job_logs for the smoke job) instead of
+      `gh run list`/`gh run view`; the deploy-record check below is the authoritative signal either way.
+    command: >-
+      git fetch origin main -q && MERGE_SHA=$(git rev-parse origin/main) && for fn in
+      agent-platform-ducklake-writer agent-platform-ducklake-reader agent-platform-ducklake-maintenance
+      agent-platform-ducklake-catalog-dr; do REC=$(aws s3 cp
+      "s3://agent-platform-data-lake/deploy-records/ducklake/${fn}.json" - --profile agent_platform
+      --region eu-west-2) || { echo "NO RECORD for ${fn} -- deploy has never shipped"; exit 1; }; SHA=$(printf
+      '%s' "$REC" | jq -r '.source_git_sha'); echo "${fn}: record_sha=${SHA} merge_sha=${MERGE_SHA}"; [
+      "$SHA" = "$MERGE_SHA" ] || { echo "NO-OP OR STALE DEPLOY: ${fn} record_sha=${SHA} !=
+      merge_sha=${MERGE_SHA}"; exit 1; }; done
+    expected: >-
+      All four deploy-records/ducklake/*.json report source_git_sha == the merge commit SHA (git
+      rev-parse origin/main) -- positive proof the deploy job actually ran build_lambda --deploy on
+      this exact commit, not the bootstrap-window no-op. A no-op leaves the PREVIOUS record's
+      source_git_sha in place (the role-unprovisioned window never reaches deploy_code), so it fails
+      this equality check even though the workflow run itself is green with smoke skipped.
+    fix_if: >-
+      Any function's record is missing, or its source_git_sha != merge SHA -> either the deploy job
+      no-op'd this run (bootstrap window: scoped role unprovisioned) or a prior deploy is stale/
+      incomplete. Stop and RCA (Decision 55), never auto-retry into green: operator admin-creates
+      agent-platform-github-ci-ducklake-deploy and sets DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true, then
+      re-runs via workflow_dispatch.
+    hermetic: false
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Physical schema evolution -- add the four columns to ops_decisions_history + ops_decisions_current via
+      the ducklake_maintenance reconcile_columns action (operator-invoked; production data_path + meta_schema).
+    command: >-
+      aws lambda invoke --function-name agent-platform-ducklake-maintenance --cli-binary-format
+      raw-in-base64-out --payload
+      '{"action":"reconcile_columns","data_path":"s3://agent-platform-data-lake/ducklake/","meta_schema":"ducklake_ops","table":"ops_decisions"}'
+      --profile agent_platform /dev/stdout
+    expected: >-
+      Response ok:true; added_history and added_current include raw_block, reversal_conditions, superseded_by,
+      content_hash (or columns_pre_existing on an idempotent second run).
+    fix_if: >-
+      A subsequent backfill SchemaGateError or missing-column error -> reconcile did not run, or hit the smoke
+      catalog (must supply the EXPLICIT production data_path + meta_schema; no-arg invokes are refused).
+    hermetic: false
+  - step: 10
+    phase: post-deploy
+    action: Run the backfill; confirm the fidelity report is emitted (the DAF-01 acceptance) and new columns land.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md 2>&1 | tee /tmp/daf_backfill.log | grep -Eqi fidelity
+    expected: >-
+      Backfill completes; the per-run fidelity report line prints; the written count reflects one full-corpus
+      re-version on this first post-migration run (raw_block/content_hash change every row once = signal).
+    fix_if: >-
+      Writer SchemaGateError on a new column -> deploy/reconcile incomplete; fidelity line absent -> the
+      counter is not wired into the backfill output.
+    hermetic: false
+  - step: 11
+    phase: post-deploy
+    action: Reader parity spot-checks on the anchor decisions via the ducklake_reader (decision_by_id verb).
+    command: bin/venv-python -m pytest tests/test_ops_data_portal_decisions.py -k live_reader_parity -q
+    expected: >-
+      Fetched in-table: dec-084 decision_text non-empty; dec-114 reversal_conditions present; dec-067
+      decided_date '' or ISO; raw_block non-empty for each live anchor. The test skips when creds are absent.
+    fix_if: An anchor still lossy in-table -> parser output or the backfill column mapping is wrong.
+    hermetic: false
+  - step: 12
+    phase: post-deploy
+    action: Idempotent no-churn re-run (content_hash gate suppresses no-op SCD2 versions).
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md 2>&1 | tee /tmp/daf_backfill2.log
+    expected: >-
+      The second run reports skipped ~= all live entries and written ~= 0 (audit Q5-vi churn fixed): a
+      differential sync, not a full-corpus rewrite.
+    fix_if: written still ~= the full corpus -> the content_hash skip is not effective (hash normalization drift).
+    hermetic: false
+constraints:
+  - "bundled_recommendations: [] -- no recs; all work inline."
+  - >-
+    Do NOT touch scripts/checks/decisions/ (Plan 1 / validate_decisions_size) or author
+    docs/contracts/decision-entry.yaml (Plan 3's grammar contract). Keep the "**Superseded by: Decision N**"
+    marker spelling consistent with what Plan 3 will formalize.
+  - >-
+    Do NOT re-add the T1.5 c2 DAF-01 parity exit criterion -- verified present in docs/ROADMAP-PLATFORM.yaml
+    (Decision 134 clause 5). If somehow absent at implement time, flag it; do not silently duplicate.
+  - >-
+    DROP / do-not-add amendments, consequences, and clause-level status columns: they fold into raw_block, and
+    the amendment trail is carried by SCD2 history + content_hash gating (Decision 134 clause 4:
+    "amendments are recorded as SCD2 versions, not a separate column").
+  - >-
+    field_semantics.yaml is GENERATED (Decision 65) -- regenerate via scripts.schema_to_field_semantics; never
+    hand-edit. No terraform/personal edit (code/infra decoupled, Decision 125/126); no version.yaml DuckDB bump
+    (Decision 99); no src/common/ducklake_*.py DDL edit (the DDL + reconcile are generic/schema-driven).
+  - >-
+    No em dashes (ASCII hyphen), no emojis, ruff line length 127, type hints, always bin/venv-python; no
+    `python -c` in VP commands. SLOC decompose-by-default if a file crosses budget (Decision 128) -- do not
+    raise budgets and do not `--update-sloc-budgets`.
+  - >-
+    Loud-fail; no rescue agents or workaround loops (Decision 55). The fidelity tripwire and the content_hash
+    skip fail loud on genuine error and never auto-retry; the deploy/smoke gates are stop-and-RCA on red.
+  - >-
+    Warehouse-as-source-of-truth (Decision 84): the content_hash skip READS the current hash via the
+    ducklake_reader boundary to decide whether to write; the write source stays DECISIONS.md/parser -- never
+    re-stage from a read cache.
+  - >-
+    The four new fields on DecisionPayload (src/schemas/decision.py) and Decision (scripts/executor/
+    jsonl_store.py) are PLAIN `str | None = None` (content_hash included) -- never Annotated[...]/
+    DqNotNull/any Dq* marker. validate_pydantic_yaml_drift walks DecisionPayload's Annotated fields
+    against config/agent/data_quality/ops.yaml::ops_decisions; a Dq-wrapped new field would demand
+    matching ops.yaml blocks out of this plan's scope and redden the drift check. The DQ intent for these
+    fields lives in config/agent/data_quality/decisions/ops_decisions.yaml, not the Annotated schema.
+context:
+  - >-
+    Decision-scout: overseer-run (nested retrieval unreliable at planning-agent depth). This session DID
+    retrieve a completed scout run -- verdict FLAGS_FOUND, Decisions triaged 94 of 94 (N==M), one NOTE flag
+    (T2.38 deploy-role provisioning no-op-green risk), no BLOCK/WARN. Preliminary CITE list from planning
+    analysis: dec-134, dec-084, dec-079, dec-125, dec-126, dec-132, dec-055, dec-065, dec-086, dec-067,
+    dec-128, dec-119; RELATED: dec-103, dec-105, dec-099, dec-081 (CD.33).
+  - >-
+    gates: decision-scout=overseer-run (this session retrieved FLAGS_FOUND, 94/94, 1 NOTE);
+    plan-critique=PROCEED after 1 round (overseer-run; VP step 8 no-op detection + plain-str schema
+    fields + waiver-reason wording fixed)
+  - >-
+    Governing Decision: Decision 134 clause 4 scopes this exact forward-work (raw_block backstop + typed
+    reversal_conditions/superseded_by, content-hash-gated SCD2 with amendments-as-SCD2-versions, decorated-
+    marker/plural-cite/date-fallback fixes, loud fidelity tripwire). Clause 5 is T1.5 c2 (parity gate) --
+    already in the roadmap; do not duplicate.
+  - >-
+    Deploy channel (scout-confirmed): config/lambda/ducklake/field_semantics.yaml is a bundled generated asset
+    of the active DuckLake Lambdas. The code deploy is DECOUPLED from terraform/personal (Decision 125/126,
+    #544 ignore_changes=[source_code_hash]) and rides .github/workflows/deploy-ducklake-lambdas.yml (T2.38
+    governed channel), auto-triggered on merge by the config/lambda/ducklake/** path. The AGENTS.md
+    "T2.38 PENDING" text is STALE. No terraform/personal edit; no speculative-plan/filemd5 handling.
+  - >-
+    NOTE flag (Decision 55/98/126): deploy-ducklake-lambdas.yml no-ops GREEN (deployed=false, smoke skipped)
+    until the operator admin-creates agent-platform-github-ci-ducklake-deploy and sets repo var
+    DUCKLAKE_DEPLOY_ROLE_PROVISIONED=true. Confirm the variable is 'true' before treating the CI deploy as a
+    real verifier (VP step 8 precondition).
+  - >-
+    Physical evolution ordering: deploy (writer schema-gate accepts new cols) -> reconcile_columns (physical
+    ALTER TABLE ADD COLUMN via ducklake_maintenance, operator-invoked) -> backfill (writes new cols). The
+    backfill before deploy+reconcile fails loudly (schema gate rejects unknown field / MERGE hits missing col).
+  - >-
+    content_hash cheaper-path choice: client-side skip via the existing _fetch_decision_from_reader (no
+    writer-handler change, no new named-read verb, NAMED_READS_VERSION unchanged). A writer MERGE-gate was the
+    considered alternative (rejected: more scope + a runtime edit + redeploy).
+  - >-
+    Physical DDL is generic: src/common/ducklake_scd2_schema.py / ducklake_runtime.py / ducklake_tables.py
+    build the DDL and ALTER path from the field_semantics spec, so adding columns needs NO edit to them (the
+    audit's line-anchored surface list is stale on this point; the Freshness Gate reduces scope accordingly).
+  - >-
+    Preflight: 756 open recs / 645 non-automatable (informational). Preflight main_freshness commits_behind=2
+    with NO scope-file overlap; rebase deferred to implement-time (git-ops procedure).
+  - >-
+    ci-rca HARD-BLOCK deferral: one unresolved ci-rca rec, rec-2710 ("unit test hits real AWS: missing mock
+    for find_recent_ci_rca_rec_by_fingerprint", source_file tests/test_ops_data_portal.py). It is NOT bundled
+    -- different file (this plan touches tests/test_ops_data_portal_decisions.py + tests/test_decisions_md.py)
+    and a different failure category (missing-AWS-mock harness gap, not parser/ETL fidelity). Deferred with
+    this logged rationale per the Related-Work check; the overseer may re-home it separately.
+  - >-
+    Cross-plan forward dependency: Plan 3 (DAF-03 grammar) will FORMALIZE the "**Superseded by: Decision N**"
+    marker in docs/contracts/decision-entry.yaml. Keep the marker spelling identical here so Plan 3 inherits it.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (Decision 134 clauses 4 + 5; Decisions 84, 79, 125, 126, 132, 65, 55, 119)
+  - All files in scope located and readable; the two new files confirmed absent
+  - DUCKLAKE_DEPLOY_ROLE_PROVISIONED confirmed 'true' before the post-deploy VP steps are treated as real
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/decisions_md.py: add raw_block (heading-inclusive section text via a per-file sectioning helper,
+    no dedupe/sort) and content_hash (sha256 of the parser-normalized raw_block); add reversal_conditions and
+    superseded_by extractors; broaden the Decision-marker regex to r"\*\*Decision\b[^:]*:\*\*"; make
+    _extract_related_decisions accept "Decisions 69/78" plural cites and dedupe the int list; ISO-guard the
+    decided_date Status-suffix fallback. Cover DECISIONS_ARCHIVE.md.
+  - >-
+    docs/contracts/ops_decisions.yaml: add the four fields (iceberg_type: string, nullable: true,
+    dq_intent.not_null.enforced: false, description + semantics) and an amendment_log field_add entry
+    (semantic_break: false). Then regenerate config/lambda/ducklake/field_semantics.yaml via
+    `bin/venv-python -m scripts.schema_to_field_semantics` and confirm --check is clean.
+  - >-
+    src/schemas/decision.py and scripts/executor/jsonl_store.py: add the four fields (raw_block,
+    reversal_conditions, superseded_by, content_hash) to both models as PLAIN `str | None = None`
+    (jsonl_store.py: `Optional[str] = None`) -- do NOT wrap them in Annotated[...]/DqNotNull/any Dq*
+    marker, matching the existing non-Annotated problem/decision_text/context/decided_date fields.
+    Rationale: validate_pydantic_yaml_drift walks DecisionPayload's Annotated fields against
+    config/agent/data_quality/ops.yaml::ops_decisions column tests; a Dq-annotated new field would demand
+    matching ops.yaml blocks that are out of this plan's scope, reddening the drift check. The DQ intent
+    for these fields lives in config/agent/data_quality/decisions/ops_decisions.yaml (the Phase-2
+    deferral pattern), not the Annotated schema. Preserve the dual-write invariant; confirm
+    jsonl_store.py stays under 500 SLOC.
+  - >-
+    scripts/ops_portal/decisions.py: extend _DECISION_BACKFILL_COLS; add per-run fidelity counters + the
+    checked-in-baseline tripwire (loud on NEW regression only) and the client-side content_hash skip via
+    _fetch_decision_from_reader. Author config/agent/data_quality/decisions/fidelity_baseline.yaml (known-bad
+    set, e.g. dec-067) and add the four DQ manifest rows to config/agent/data_quality/decisions/ops_decisions.yaml.
+  - >-
+    tests: create tests/test_decisions_md.py (parity anchors, plural-cite, byte-reconstruction with a synthetic
+    mutation, dual-model sync) and extend tests/test_ops_data_portal_decisions.py (fidelity tripwire,
+    content_hash skip-gate, creds-gated live_reader_parity).
+  - >-
+    Execute Verification Plan -- run each pre-deploy step; loop until pass. After merge, verify the governed
+    deploy (step 8), then run reconcile (step 9) and the backfill + reader spot-checks (steps 10-12). On an
+    unrecoverable V3 failure, stop and RCA (Decision 55); do not auto-retry.
+  - "Report: what was implemented, pre-deploy verification results, and the post-deploy deploy/reconcile/backfill outcome."
+work_areas: []
+rollback: >-
+  Code is forward-fixable (revert the PR). The physical ALTER TABLE ADD COLUMN is additive and non-destructive
+  (reconcile_columns never DROPs); leaving the four columns in place is harmless if the code reverts. SCD2
+  history is append-only -- a bad backfill run is corrected by a subsequent good backfill (the content_hash
+  gate makes re-runs differential), never by deleting rows.
