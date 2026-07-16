@@ -196,7 +196,6 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_build_lambda_deploy.py",
     "test_ci_rca_evidence.py",
     "test_contracts_enforcement.py",
-    "test_convergence_health.py",
     "test_ducklake_maintenance_handler.py",
     "test_ducklake_neon_smoke_test.py",
     "test_ducklake_runtime.py",

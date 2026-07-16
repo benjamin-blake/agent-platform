@@ -1,0 +1,504 @@
+schema_version: 1
+slug: sloc-convergence-health-tests
+intent: >-
+  Decompose tests/test_convergence_health.py (1327 SLOC) into a 1:1 PACKAGE-MIRROR test package under
+  tests/convergence_health/ (six cohesive test_<module>.py modules, one per scripts/convergence_health/
+  submodule, each < 500 SLOC), then SURGICALLY retire only its grandfather home and delete its
+  config/sloc_budgets.yaml entry -- rec-2709 Wave 6 of the Decision 131 mirror-convention rollout.
+  Purpose: keep every test file small enough for lower-tier model comprehension (the load-bearing reason
+  the 500-SLOC gate exists, Decision 128). Behaviour-preserving pure MOVE; no test-logic change. The
+  SOURCE is already a package (Decision 128 facade decomposition), so this is the direct analog of Wave 1's
+  scripts/checks/** -> tests/checks/** package-mirror -- NOT a concern-split (Waves 2-4).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-convergence-health-tests.yaml
+phase: >-
+  rec-2709 Wave 6 (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (AGENTS.md Decision 128). Behaviour-preserving test MOVE of the
+  scripts/convergence_health/ package test home (already-a-package -> package-mirror). No product-roadmap
+  phase; platform tooling only.
+scope:
+  - file: tests/convergence_health/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the tests/convergence_health/ mirror tree (prepend import mode; empty file).
+      Mandatory per tests/CLAUDE.md ("every mirror test directory carries an __init__.py").
+  - file: tests/convergence_health/test_record.py
+    action: Create
+    purpose: >-
+      record.py mirror (verbatim, 6 classes): TestDeriveRedSince, TestRedAgeHours,
+      TestCountUnappliedTfCommits, TestReadConvergenceRecord, TestReadConvergenceRecordReraise,
+      TestCountUnappliedTfCommitsDefaultRunner. ~117 SLOC. Fresh header: from __future__ + io + json +
+      datetime/timezone + unittest.mock (patch/MagicMock as used) + `from scripts.convergence_health import
+      (count_unapplied_tf_commits, derive_red_since, read_convergence_record, red_age_hours)`. NO boto3, NO
+      ch alias, NO build_lambda_config.
+  - file: tests/convergence_health/test_approvals.py
+    action: Create
+    purpose: >-
+      approvals.py mirror (verbatim, 7 classes): TestFindReconcileRunsSince,
+      TestHasInFlightReconcileForEpisode, TestFindStuckGatedApprovals, TestFindStuckDefaultCaller,
+      TestMakeGithubCaller, TestFilterStuckRuns, TestDiagnoseStuckApprovals. ~232 SLOC. Fresh header:
+      from __future__ + datetime/timezone + json + unittest.mock + pytest (pytest.MonkeyPatch) + `from
+      scripts.convergence_health import (_make_github_caller, diagnose_stuck_approvals, filter_stuck_runs,
+      find_reconcile_runs_since, find_stuck_gated_approvals, has_in_flight_reconcile_for_episode)`. NO boto3,
+      NO ch alias, NO build_lambda_config.
+  - file: tests/convergence_health/test_assess.py
+    action: Create
+    purpose: >-
+      assess.py mirror (verbatim, 2 classes): TestEscalationAction, TestAssessHealth. ~125 SLOC. Fresh
+      header: from __future__ + datetime/timezone + `import scripts.convergence_health as ch` (for
+      ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS) + `from scripts.convergence_health import (HealthVerdict,
+      assess_health, escalation_action, red_age_hours)`. NO boto3, NO build_lambda_config.
+  - file: tests/convergence_health/test_escalate.py
+    action: Create
+    purpose: >-
+      escalate.py mirror (verbatim, 8 classes): TestFindOpenConvergenceStaleRec, TestEscalate,
+      TestEscalateReconcileInFlight, TestEscalateGreenClosesOpenRec, TestEscalateGreenStuckApproval,
+      TestEscalateGreenStaleBacklog, TestFetchOpenRecs, TestEscalateLiveFetchAndPortal. ~345 SLOC (largest
+      after code_drift). Fresh header: from __future__ + unittest.mock + `import scripts.convergence_health
+      as ch` (ch._TITLE_*/._RESOLUTION_*/._fetch_open_recs/.STALE_GREEN_BACKLOG_THRESHOLD_HOURS) + `from
+      scripts.convergence_health import (HealthVerdict, assess_health, escalate,
+      find_open_convergence_stale_rec, find_reconcile_runs_since, has_in_flight_reconcile_for_episode,
+      red_age_hours)`. NO boto3, NO build_lambda_config. In-class _make_verdict helpers move verbatim with
+      their classes.
+  - file: tests/convergence_health/test_code_drift.py
+    action: Create
+    purpose: >-
+      code_drift.py mirror (verbatim, 4 classes + code_drift-local support): the module constants
+      _ALL_DUCKLAKE_FUNCTIONS and _ALL_PROD_FUNCTIONS and the helper class _FakeDeployRecordsS3 (all used
+      ONLY here), plus TestFindOpenDucklakeDriftRec, TestDetectDucklakeCodeDrift, TestFindOpenProdDriftRec,
+      TestDetectProdCodeDrift. ~435 SLOC (closest to the 500 ceiling; ~65 headroom). Fresh header: from
+      __future__ + io + json + typing (Any, Optional) + unittest.mock + `import boto3  # noqa: F401` WITH
+      its verbatim ~8-line collectability comment (patch("boto3.Session") is used) + `from
+      scripts.build_lambda_config import (_DUCKLAKE_CATALOG_DR_FUNCTION, _DUCKLAKE_MAINTENANCE_FUNCTION,
+      _DUCKLAKE_READER_FUNCTION, _DUCKLAKE_WRITER_FUNCTION)` + `from scripts.convergence_health import
+      (detect_ducklake_code_drift, detect_prod_code_drift, find_open_ducklake_drift_rec,
+      find_open_prod_drift_rec)`. NO ch alias.
+  - file: tests/convergence_health/test___main__.py
+    action: Create
+    purpose: >-
+      __main__.py mirror (verbatim, 4 classes): TestMain, TestMainDiagnoseMode, TestMainDucklakeDrift,
+      TestMainProdDrift. ~189 SLOC. The filename is the EXACT path the machinery computes for
+      scripts/convergence_health/__main__.py (test_ + stem "__main__" = test___main__.py, verified against
+      _mirror_source_to_test) -- __main__.py is NOT excluded by get_changed_source_files (only __init__.py
+      is), so this mirror is MANDATORY or check_test_file_exists reports a missing test file. Do NOT rename
+      it to test_main.py. Fresh header: from __future__ + unittest.mock + pytest (monkeypatch) + `import
+      boto3  # noqa: F401` WITH its verbatim collectability comment (patch("boto3.Session") is used) + `from
+      scripts.convergence_health import (HealthVerdict, assess_health, detect_ducklake_code_drift,
+      detect_prod_code_drift, diagnose_stuck_approvals, escalate, find_reconcile_runs_since,
+      find_stuck_gated_approvals, main, main_ducklake_drift, main_prod_drift, read_convergence_record,
+      red_age_hours)`. NO ch alias, NO build_lambda_config.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      The surgical flip (FINAL commit only): delete the single line "test_convergence_health.py" from
+      _RETIRING_GRANDFATHER_HOMES. That is the ONLY code edit. Do NOT add anything to
+      _CONCERN_SPLIT_TEST_PACKAGES (scripts/convergence_health/ is a 1:1 package mirror, not a concern-split
+      monolith -- the mirror rule already yields test_<stem>.py per submodule). Do NOT touch the
+      convergence_health home-resolver branch in _grandfathered_source_to_test (`parts[1] ==
+      "convergence_health" -> tests/test_convergence_health.py`) -- it STAYS as the router that feeds the
+      retiring table, exactly as the scripts/checks/** branch stayed after Wave 1. Do NOT touch
+      _ALL_MIRROR_TARGET_HOMES or _NESTED_SUBPACKAGE_TEST_PREFIX. Gate reasoning: after the deletion,
+      home.name "test_convergence_health.py" is NOT in _RETIRING but IS in _ALL_MIRROR_TARGET_HOMES, and !=
+      "test_validate.py" (so the _ORCHESTRATION_SCAFFOLDING_FILES sub-case is skipped), so map_source_to_test
+      routes every scripts/convergence_health/*.py through _mirror_source_to_test to
+      tests/convergence_health/test_<stem>.py.
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Update the oracle (FINAL commit): (a) test_retiring_is_all_target_homes_minus_four_retired_waves ->
+      rename to ..._five_retired_waves; ADD "test_convergence_health.py" to the `retired` set (now the five
+      {test_validate, test_execute_recommendation, test_ops_data_portal, test_session_preflight,
+      test_convergence_health}); ADD assert "test_convergence_health.py" not in _RETIRING_GRANDFATHER_HOMES;
+      update the docstring "four"->"five". (b) ADD a positive parametrized test (mirroring
+      test_maps_ducklake_runtime_split_modules_to_test_ducklake_runtime) asserting each of the six
+      scripts/convergence_health/<sub>.py -> tests/convergence_health/test_<sub>.py, INCLUDING
+      __main__.py -> tests/convergence_health/test___main__.py. (c) ADD one convergence_health case to
+      test_representative_paths_resolve_under_current_retirement_state (e.g. scripts/convergence_health/
+      record.py -> tests/convergence_health/test_record.py) and KEEP the existing scripts/executor/** and
+      scripts/ops_portal/** -> None entries (Decision 124, unperturbed). LEAVE
+      test_roster_is_the_24_known_basenames UNCHANGED (roster frozen at 24; retirement never removes from
+      _ALL_MIRROR_TARGET_HOMES).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete ONLY the line "  tests/test_convergence_health.py: 1327  # raise-approved: dec-130 one-time
+      grandfather of pre-existing tests/ SLOC debt (coverage-gap fix)" by hand (FINAL commit). NEVER run
+      --update-sloc-budgets (it strips the dec-130 markers on the other grandfathered entries). HARD
+      invariant: this file loses exactly that one line and nothing else. This is a ratchet-DOWN removal
+      (Decision 43/102), always unrestricted; no raise marker is added (Decision 128 -- decompose, don't raise).
+  - file: tests/test_convergence_health.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into the tests/convergence_health/ package. Deleted WHOLE in the FINAL commit only
+      (kept 100% intact through every prior commit so the monolith and its mirror copies never diverge under
+      one full-suite collection -- see OPEN RISK 1).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation: the set of pytest node ids (class::function, module-path stripped) collected from
+    tests/convergence_health/ equals the pre-move set from origin/main's tests/test_convergence_health.py.
+    Same function set, same count (139 test functions), same pass/fail outcomes. Because this is a PURE move
+    with NO class rename, NO method rename, and NO class-level split (the largest class,
+    TestDetectProdCodeDrift, is ~181 SLOC -- far under 500), the diff MUST be EMPTY with no sanctioned delta.
+  - >-
+    bin/venv-python -m scripts.validate --pre exits 0: SLOC gate green (every new module < 500 SLOC and < 20
+    CC branches, none registered in config/sloc_budgets.yaml); no-cross-test-import guard green; collectability
+    green; test-coverage-checker (test-file-exists) green for every scripts/convergence_health/*.py including
+    __main__.py.
+  - "bin/venv-python -m pytest tests/convergence_health -q passes with the same number of tests as the pre-move baseline (139)."
+  - >-
+    git diff origin/main -- config/sloc_budgets.yaml shows ONLY the tests/test_convergence_health.py line
+    removed; every other dec-130 entry and its raise-approved marker is byte-identical.
+  - >-
+    map_source_to_test spot-checks (asserted by the updated tests/test_coverage_checker.py oracle):
+    scripts/convergence_health/record.py -> tests/convergence_health/test_record.py, and likewise
+    approvals->test_approvals, assess->test_assess, escalate->test_escalate, code_drift->test_code_drift,
+    __main__->test___main__.py; scripts/executor/step_runner.py -> None and scripts/ops_portal/cli.py -> None
+    (Decision 124, unperturbed).
+  - >-
+    _RETIRING_GRANDFATHER_HOMES no longer contains "test_convergence_health.py"; _ALL_MIRROR_TARGET_HOMES
+    (frozenset) is unchanged (24 entries); NO "scripts/convergence_health/*.py" entry was added to
+    _CONCERN_SPLIT_TEST_PACKAGES (1:1 mirror, not concern-split); the convergence_health home-resolver branch
+    in _grandfathered_source_to_test is unchanged.
+  - >-
+    Every new test module is < 500 SLOC (validate_sloc_limits counting: non-blank, non-comment lines) and
+    < 20 cyclomatic branches; NO new config/sloc_budgets.yaml entry is added; tests/test_convergence_health.py
+    is deleted.
+  - >-
+    Whole-suite collection is clean: bin/venv-python -m pytest tests/ --collect-only -q reports no import or
+    collection error from the new package, the deleted monolith, or the oracle edits.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Capture the BEFORE test-id baseline from the monolith before the FINAL commit deletes it.
+    command: >-
+      bin/venv-python -m pytest tests/test_convergence_health.py --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/cvh_before_ids.txt; wc -l /tmp/cvh_before_ids.txt
+    expected: A non-empty sorted baseline of class::function ids (module path stripped) written to the temp file; ~139 functions.
+    fix_if: If collection errors, the monolith has an import/collection problem that must be fixed before decomposing.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Collect the AFTER id set from the new package and assert byte-identical equality with the baseline.
+    command: >-
+      bin/venv-python -m pytest tests/convergence_health --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/cvh_after_ids.txt;
+      diff /tmp/cvh_before_ids.txt /tmp/cvh_after_ids.txt
+    expected: Empty diff (identical class::function sets). No sanctioned delta -- this is a pure move with no renames/splits.
+    fix_if: Any added/removed id means a class was dropped, duplicated, mis-copied, or a method was lost/renamed. STOP and reconcile.
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Run the authoritative fast presubmit tier -- proves SLOC gate, no-cross-test-import guard, coverage-checker, and collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No "SLOC limits" failure, no "cross-test import" failure, no "missing test file" failure, no collection error.
+    fix_if: >-
+      A >500 unregistered file (rebalance a class into a sibling -- never register a budget line), a cross-test
+      import (a helper leaked between test_* modules -- move it to tests/fixtures/ or a package conftest), a
+      missing-test-file for __main__.py (the test___main__.py filename was mangled), or a collection error (fix
+      the offending module's fresh import header).
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full pass of the new package at the same count as the baseline.
+    command: bin/venv-python -m pytest tests/convergence_health -q
+    expected: All pass; total selected count equals the step-1 baseline line count (139).
+    fix_if: >-
+      A failure means a patch target or symbol did not survive the move. Patch targets are already
+      submodule-qualified (scripts.convergence_health.<sub>.X) so no rewrite is needed -- most likely a fresh
+      import header is missing a symbol the moved class references (NameError) or boto3/ch/build_lambda_config
+      was placed in the wrong module.
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Assert config/sloc_budgets.yaml lost exactly the tests/test_convergence_health.py line and nothing else.
+    command: git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly one removed line (the "tests/test_convergence_health.py" budget entry with its 1327 value and
+      dec-130 raise-approved marker) and zero added lines.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was touched.
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Prove the retired + mirror mapping via the updated coverage-checker oracle.
+    command: bin/venv-python -m pytest tests/test_coverage_checker.py -q
+    expected: >-
+      All pass, including: each scripts/convergence_health/<sub>.py -> its tests/convergence_health/test_<sub>.py
+      (record/approvals/assess/escalate/code_drift/__main__); executor/** and ops_portal/** -> None; the updated
+      FIVE-retired-homes assertion; the unchanged 24-entry roster.
+    fix_if: >-
+      A failing oracle assertion means the flip was wrong -- e.g. convergence_health was mistakenly added to
+      _CONCERN_SPLIT_TEST_PACKAGES (would map to a package DIR not test_<stem>.py), the five-retired assertion
+      still expects four, or a mirror path is mis-declared. Correct the map edit or the oracle expectation to match.
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Confirm the monolith is gone, the retirement line is deleted, and convergence_health was NOT added to the concern-split set.
+    command: >-
+      test ! -f tests/test_convergence_health.py && ! grep -q '"test_convergence_health.py"' scripts/test_coverage_checker.py
+      && ! grep -q 'scripts/convergence_health' scripts/test_coverage_checker.py && echo RETIRED-OK
+    expected: Prints RETIRED-OK (monolith deleted, convergence_health line removed from _RETIRING, and no scripts/convergence_health entry in _CONCERN_SPLIT_TEST_PACKAGES).
+    fix_if: If the file survives, the retirement line remains, or a scripts/convergence_health/ concern-split entry was wrongly added, the FINAL commit is wrong.
+  - step: 8
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Measure each new module's SLOC (validate_sloc_limits formula) and assert all < 500.
+    command: >-
+      for f in tests/convergence_health/test_record.py tests/convergence_health/test_approvals.py
+      tests/convergence_health/test_assess.py tests/convergence_health/test_escalate.py
+      tests/convergence_health/test_code_drift.py tests/convergence_health/test___main__.py; do
+      printf '%s ' "$f"; grep -cvE '^[[:space:]]*(#.*)?$' "$f"; done
+    expected: >-
+      Every module prints a SLOC count < 500 (projected record ~117, approvals ~232, assess ~125,
+      escalate ~345, code_drift ~435, __main__ ~189).
+    fix_if: If any module measures >= 500, rebalance a class into a sibling module (never register a budget line, Decision 128).
+  - step: 9
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Whole-suite collection smoke -- no import/collection error anywhere from the move.
+    command: bin/venv-python -m pytest tests/ --collect-only -q
+    expected: Clean collection; no ImportError/collection error from the new package or the deleted monolith.
+    fix_if: A collection error means a dangling reference to the deleted file or a broken import header in a new module.
+constraints:
+  - >-
+    Pure behaviour-preserving MOVE. Copy every class body and every in-class helper (the _make_verdict /
+    _verdict / _acts_caller methods) VERBATIM with the class that owns them; copy the two module-scope
+    constants (_ALL_DUCKLAKE_FUNCTIONS, _ALL_PROD_FUNCTIONS) and the helper class _FakeDeployRecordsS3
+    VERBATIM into test_code_drift.py (their sole consumer). Author a fresh per-file import header importing
+    exactly the symbols that file references -- no test-logic edits.
+  - >-
+    Patch targets are ALREADY submodule-qualified (patch("scripts.convergence_health.record.subprocess.run"),
+    ".code_drift.subprocess.run", ".code_drift._fetch_open_recs", ".escalate._fetch_open_recs",
+    ".__main__.read_convergence_record" / ".escalate" / ".assess_health" / ".find_stuck_gated_approvals" /
+    ".find_reconcile_runs_since" / ".diagnose_stuck_approvals", plus external "scripts.ops_data_portal.*",
+    "boto3.Session", "urllib.request.urlopen", "src.common.iceberg_reader.make_reader") because the SOURCE is
+    already a package. Do NOT rewrite any patch target -- this is a package-mirror of an already-decomposed
+    source, NOT a monolith->package split.
+  - >-
+    boto3 module-scope import (`import boto3  # noqa: F401`) plus its verbatim ~8-line collectability comment
+    goes ONLY in test_code_drift.py and test___main__.py (the two modules that use patch("boto3.Session")).
+    OMIT it from the other four modules -- they never reference boto3, adding it would be a spurious F401 and
+    would wrongly defer a light module to the full tier. This preserves proactive full-tier deferral for the
+    boto3 tests while letting record/approvals/assess/escalate collect in the fast tier (a benefit, not a
+    regression: the facade import chain is boto3-free -- every heavy dep in the source submodules is lazy /
+    in-function; verified no module-scope boto3/iceberg in scripts/convergence_health/). VP steps 3 + 9
+    (--collect-only) + step 4 (scoped run) prove no tier regression.
+  - >-
+    `import scripts.convergence_health as ch` goes ONLY in test_assess.py and test_escalate.py (they alone use
+    ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS / ch._TITLE_* / ch._RESOLUTION_* / ch._fetch_open_recs). `from
+    scripts.build_lambda_config import (_DUCKLAKE_*_FUNCTION)` goes ONLY in test_code_drift.py.
+  - >-
+    No cross-test imports (validate_no_cross_test_imports is active in --pre and full). New modules import only
+    stdlib, pytest, unittest.mock, boto3 (two modules), `scripts.convergence_health`, and
+    `scripts.build_lambda_config` (one module) -- none starts with "test_". There is NO shared plain
+    cross-class helper to hoist (every _make_verdict/_verdict/_acts_caller is class-bound; _FakeDeployRecordsS3
+    and the two _ALL_* constants are used ONLY by code_drift classes). So NO tests/fixtures/ file is created.
+  - >-
+    NO package conftest is created: tests/test_convergence_health.py declares ZERO @pytest.fixture, and every
+    autouse guard it relies on is a GLOBAL fixture in the root tests/conftest.py, which pytest auto-merges into
+    tests/convergence_health/ (walks up the tree) without redeclaration. Do NOT duplicate, move, or redeclare
+    any root conftest autouse fixture.
+  - >-
+    ruff-format import discipline (tests/CLAUDE.md): one consolidated import block per module (never split the
+    same module's imports across two blocks -- ruff silently drops the second). After populating each module,
+    run `ruff check --fix` to clear unused imports (F401) and confirm every referenced symbol is imported (no
+    NameError).
+  - >-
+    Every mirror directory carries an __init__.py (prepend import mode): tests/convergence_health/__init__.py.
+    The __main__.py mirror MUST be named test___main__.py (test_ + stem "__main__") -- the exact path the
+    coverage checker asserts for scripts/convergence_health/__main__.py; do NOT tidy it to test_main.py.
+  - >-
+    SURGICAL retirement: remove ONLY "test_convergence_health.py" from _RETIRING_GRANDFATHER_HOMES. Do NOT add
+    anything to _CONCERN_SPLIT_TEST_PACKAGES (1:1 mirror), do NOT touch _ALL_MIRROR_TARGET_HOMES,
+    _NESTED_SUBPACKAGE_TEST_PREFIX, or the convergence_health home-resolver branch in
+    _grandfathered_source_to_test (it stays -- it routes the source into the retiring table).
+  - >-
+    config/sloc_budgets.yaml loses exactly the tests/test_convergence_health.py line; NEVER run
+    --update-sloc-budgets. Add NO raise marker and NO new tests/ budget entry (Decision 128 -- decompose, not raise).
+  - Do NOT resolve rec-2709 (Wave 6 of ~14); bundled_recommendations stays empty.
+  - >-
+    No rescue agents or workaround loops (Decision 55). On an unrecoverable collect-id mismatch, STOP and RCA --
+    never patch around it. PUBLIC repo -- no AWS account IDs/ARNs/secrets/internal hostnames in any new file.
+  - Use bin/venv-python for all Python invocations; bash-only shell.
+context:
+  - >-
+    DECISION ANALYSIS (inline; overseer is the critique gate, so no decision-scout/plan-critique sub-subagents
+    were spawned). CITE: Decision 131 (test-colocation inverted to a mirror rule + retiring grandfather-table +
+    no-cross-test-import guard + per-package conftest hierarchy; amends Decision 104; enables rec-2709 --
+    governs every step of this wave); Decision 130 (whole-repo structural-size governance + the 24-home
+    one-time grandfather of tests/ SLOC debt + the dec-130 sloc_budgets markers -- governs the budget-line
+    deletion, a ratchet-DOWN removal); Decision 128 (SLOC budget-raise guardrails: decompose by default, a
+    raise must be loud and Decision-cited -- this wave decomposes and adds ZERO budget lines / ZERO raise
+    markers; it is ALSO the decision under which the SOURCE scripts/convergence_health/ was itself decomposed
+    into a facade package, which is exactly why this is a package-mirror); Decision 132 (verification-graduation
+    completeness: every pre-deploy VP step must carry a graduation disposition -- all steps here are
+    not-applicable because a pure test MOVE introduces no new standing check to graduate); Decision 104 (the
+    colocation precedent the mirror inverts -- the convergence_health home-resolver branch in
+    _grandfathered_source_to_test IS the Decision-104 colocation special-case, preserved as the router).
+    RELATED: Decision 80 (facade/package precedent); Decision 43/102 (CC-20 and 500-SLOC limits; the
+    budget-line removal is unrestricted, new modules must respect the limits).
+  - >-
+    CONTRADICTION CHECK = CLEAN. This is a PACKAGE-MIRROR (source already a package,
+    PLAN-convergence-health-sloc-decompose-guardrails / Decision 128) -- the direct analog of Wave 1's
+    scripts/checks/** -> tests/checks/**, NOT a concern-split (Waves 2-4). Consequences: (a) NO
+    _CONCERN_SPLIT_TEST_PACKAGES entry (the mirror rule already yields test_<stem>.py 1:1 per submodule); (b) NO
+    shared importlib-loader singleton (the source is a real importable package -- patch("scripts.
+    convergence_health.<sub>.X") string targets already resolve; there is no spec_from_file_location
+    sys.modules-identity hazard like the Wave-4 session-preflight loader); (c) patch targets are ALREADY
+    submodule-qualified, so NO namespace rewrite. NO class exceeds 500 SLOC (largest: TestDetectProdCodeDrift
+    ~181, TestDetectDucklakeCodeDrift ~179) so NO class-level split. The one nuance: the source has a
+    __main__.py, which -- unlike __init__.py -- is NOT excluded by get_changed_source_files, so it MANDATES a
+    tests/convergence_health/test___main__.py mirror.
+  - >-
+    MIRROR PATH the machinery computes (verified live against _mirror_source_to_test AND against
+    map_source_to_test under a simulated deletion of "test_convergence_health.py" from
+    _RETIRING_GRANDFATHER_HOMES): record.py -> tests/convergence_health/test_record.py; approvals.py ->
+    test_approvals.py; assess.py -> test_assess.py; escalate.py -> test_escalate.py; code_drift.py ->
+    test_code_drift.py; __main__.py -> test___main__.py. scripts/convergence_health/*.py is NOT in
+    _CONCERN_SPLIT_TEST_PACKAGES, so the mirror returns test_<stem>.py files (not a package DIR). __init__.py
+    -> test___init__.py in principle, but get_changed_source_files EXCLUDES __init__.py so it is never checked
+    (no test file required for the facade). BEFORE the deletion all six colocate to
+    tests/test_convergence_health.py; AFTER it, each flips to its mirror.
+  - >-
+    RETIREMENT GATE REASONING (why the one-line deletion flips convergence_health/** to mirrors, and the
+    grandfather helper needs NO edit): _grandfathered_source_to_test KEEPS its `parts[1] ==
+    "convergence_health" -> tests/test_convergence_health.py` branch (the HOME resolver -- the Decision-104
+    colocation special-case). In map_source_to_test: home = tests/test_convergence_health.py; after the
+    deletion home.name is NOT in _RETIRING; home.name IS in _ALL_MIRROR_TARGET_HOMES; home.name !=
+    "test_validate.py" (so the _ORCHESTRATION_SCAFFOLDING_FILES sub-case is skipped) -> returns
+    _mirror_source_to_test(source) = the mirror. This is byte-identical to how Wave 1 flipped scripts/checks/**
+    (its grandfather branch also stayed). So the ONLY checker edit is the one-line _RETIRING deletion.
+  - >-
+    CLASS -> MODULE MAP (31 test classes across 6 mirror modules, verbatim; plus the code_drift-local helper
+    class _FakeDeployRecordsS3 and the constants _ALL_DUCKLAKE_FUNCTIONS / _ALL_PROD_FUNCTIONS). record (6):
+    TestDeriveRedSince, TestRedAgeHours, TestCountUnappliedTfCommits, TestReadConvergenceRecord,
+    TestReadConvergenceRecordReraise, TestCountUnappliedTfCommitsDefaultRunner. approvals (7):
+    TestFindReconcileRunsSince, TestHasInFlightReconcileForEpisode, TestFindStuckGatedApprovals,
+    TestFindStuckDefaultCaller, TestMakeGithubCaller, TestFilterStuckRuns, TestDiagnoseStuckApprovals. assess
+    (2): TestEscalationAction, TestAssessHealth. escalate (8): TestFindOpenConvergenceStaleRec, TestEscalate,
+    TestEscalateReconcileInFlight, TestEscalateGreenClosesOpenRec, TestEscalateGreenStuckApproval,
+    TestEscalateGreenStaleBacklog, TestFetchOpenRecs, TestEscalateLiveFetchAndPortal. code_drift (4):
+    TestFindOpenDucklakeDriftRec, TestDetectDucklakeCodeDrift, TestFindOpenProdDriftRec, TestDetectProdCodeDrift.
+    __main__ (4): TestMain, TestMainDiagnoseMode, TestMainDucklakeDrift, TestMainProdDrift.
+  - >-
+    PROJECTED SLOC per module (validate_sloc_limits counting = non-blank, non-comment; all < 500; measured
+    live off the current monolith + per-module fresh-header estimate): test_record ~117, test_approvals ~232,
+    test_assess ~125, test_escalate ~345, test_code_drift ~435 (closest to the ceiling, ~65 headroom),
+    test___main__ ~189. If any module measures >= 500 at implementation time, rebalance a class into a sibling
+    module (never register a budget line). VP step 8 measures each module explicitly.
+  - >-
+    IMPORT HEADERS (per-module fresh; finalize via ruff --fix). boto3 module-scope import + its verbatim
+    collectability comment -> ONLY test_code_drift.py + test___main__.py (they alone use
+    patch("boto3.Session")). `import scripts.convergence_health as ch` -> ONLY test_assess.py + test_escalate.py.
+    `from scripts.build_lambda_config import (_DUCKLAKE_*_FUNCTION)` -> ONLY test_code_drift.py. All modules:
+    from __future__ import annotations + the stdlib/mock/pytest subset each references + `from
+    scripts.convergence_health import (<its public symbols>)`. Consequence: the four non-boto3 modules become
+    fast-tier collectable (an improvement; the facade import chain is boto3-free -- all heavy deps in the
+    source submodules are lazy).
+  - >-
+    SHARED-HELPER HOISTING = NONE required. Every _make_verdict/_verdict/_acts_caller is a class-bound method
+    that moves with its class. The two module-scope constants (_ALL_DUCKLAKE_FUNCTIONS at line 1185,
+    _ALL_PROD_FUNCTIONS at line 1192) and the helper class _FakeDeployRecordsS3 (line 1199) are referenced ONLY
+    by code_drift classes (verified: sole usages at lines 1334 / 1583 and 1249-1682) -> they live inside
+    test_code_drift.py, not tests/fixtures/. There is NO bare cross-class side_effect/key helper, so
+    tests/fixtures/ is untouched. The monolith declares ZERO @pytest.fixture, so NO package conftest is created
+    (root tests/conftest.py auto-merges).
+  - >-
+    ORACLE CHANGES (tests/test_coverage_checker.py, FINAL commit): (a) rename
+    test_retiring_is_all_target_homes_minus_four_retired_waves -> ..._five_retired_waves; add
+    "test_convergence_health.py" to the `retired` set (now five) + add the "not in _RETIRING" assert + update
+    the docstring. (b) ADD a positive parametrized test (mirroring
+    test_maps_ducklake_runtime_split_modules_to_test_ducklake_runtime) over the six submodules ->
+    tests/convergence_health/test_<sub>.py, INCLUDING __main__ -> test___main__.py. (c) ADD a convergence_health
+    case to test_representative_paths_resolve_under_current_retirement_state and KEEP the executor/** +
+    ops_portal/** -> None entries. LEAVE test_roster_is_the_24_known_basenames UNCHANGED (roster frozen at 24).
+    This oracle-file id churn (renamed method + new tests) is EXPECTED and reviewed via VP step 6 (oracle
+    green), NOT VP step 2 (which diffs only the decomposed suite).
+  - >-
+    OVERSEER STANDARD -- PR STRUCTURE: ONE branch (harness claude/... session branch) / ONE PR with BATCHED
+    sequential COMMITS (module-population commit(s) keeping the monolith 100% intact -> FINAL flip commit:
+    delete monolith + one-line _RETIRING deletion + oracle update + one-line budget deletion). plan_type
+    IMPLEMENTATION, verification_tier V2, bundled_recommendations []. Verified atomically by test-id
+    preservation (VP 1-2) + validate --pre + the package suite.
+  - >-
+    Branch/divergence: harness claude/... session branch (verify not main). Foundation (Decision 131) and Waves
+    1-4 are already on main as the template (tests/checks/ is the package-mirror precedent; tests/session/
+    preflight/ is the retirement/oracle-edit reference). Preflight not machine-run in this planning subagent
+    (read-only assessment). No CI-RCA unresolved recs in scope. Scope = net-new package files + a one-line
+    checker edit + oracle + a one-line budget deletion + the monolith deletion; low overlap risk. If a
+    concurrent Wave 5 lands first and also edits the `retired` set / _RETIRING_GRANDFATHER_HOMES, rebase and
+    reconcile the retired-set membership (add BOTH homes) before the FINAL commit -- surface to the human if
+    scope files conflict.
+  - >-
+    OPEN RISK 1 (double-collection during intermediate commits): while BOTH the intact monolith and the new
+    modules exist on the branch, a FULL-suite collection double-collects identical class::function ids (the
+    monolith and its mirror copies coexist). Unlike the Wave-4 session-preflight loader, both import the SAME
+    real package scripts.convergence_health (no spec_from_file_location, no sys.modules identity swap), so there
+    is NO patch-decoupling -- the only effect is duplicate node ids in a full collection. MITIGATION: keep the
+    monolith 100% intact until the FINAL commit deletes it whole; for mid-batch verification run the SCOPED
+    `pytest tests/convergence_health` (monolith not co-collected). CI evaluates only the PR head (monolith
+    deleted) -> unambiguous. Dev-local, not a merged-state defect.
+  - >-
+    OPEN RISK 2 (oracle test-id churn EXPECTED, out-of-scope for VP-2): the tests/test_coverage_checker.py edit
+    renames one method + adds oracle tests -> changes ids in THAT file. The VP step-2 id-preservation diff
+    covers only the decomposed suite (tests/convergence_health vs the old monolith), so oracle-file id changes
+    are legitimate and reviewed via VP step 6 (oracle green), not VP step 2.
+  - >-
+    OPEN RISK 3 (test___main__.py naming): the double-underscore filename test___main__.py is the EXACT mirror
+    the machinery computes for __main__.py (test_ + stem "__main__"); the module name test___main__ is a valid
+    Python identifier and pytest collects it (matches test_*.py). Do NOT rename it to test_main.py -- the
+    coverage checker asserts that exact path for scripts/convergence_health/__main__.py, and a rename re-opens
+    the missing-test-file gate.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - scripts/test_coverage_checker.py read in full (map_source_to_test, _grandfathered_source_to_test, _mirror_source_to_test, _RETIRING_GRANDFATHER_HOMES, _ALL_MIRROR_TARGET_HOMES, _CONCERN_SPLIT_TEST_PACKAGES)
+  - tests/CLAUDE.md read (mirror convention, no-cross-test-import rule, per-package conftest hierarchy, ruff import discipline, later-wave hand-offs)
+  - PLAN-sloc-test-validate.yaml (Wave 1) + the tests/checks/ package studied as the PACKAGE-MIRROR template; PLAN-sloc-session-preflight-tests.yaml (Wave 4) as the retirement/oracle-edit reference
+  - Decisions 131, 130, 128, 132, 104 located and their bearing on this wave confirmed (inline decision analysis)
+  - All 31 test classes (+ the code_drift-local _FakeDeployRecordsS3 helper and the two _ALL_* constants) located; class -> module map re-verified against the live monolith; no class exceeds 500 SLOC (no class-split needed)
+  - Mirror paths verified live via _mirror_source_to_test + a simulated retirement (each submodule -> its test_<stem>.py; __main__ -> test___main__.py; scripts/convergence_health/*.py NOT a concern-split)
+  - boto3 / ch / build_lambda_config header placements pinned (boto3 -> code_drift + __main__; ch -> assess + escalate; _DUCKLAKE_* -> code_drift)
+  - No @pytest.fixture in the monolith and no cross-module shared plain helper confirmed -> no tests/fixtures/ file, no package conftest
+  - config/sloc_budgets.yaml line for tests/test_convergence_health.py identified (1327, dec-130 marker) for by-hand deletion
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Confirm the working branch is the harness claude/... session branch (git branch --show-current), NOT main.
+  - >-
+    COMMIT 1 (scaffold + population): create tests/convergence_health/__init__.py (empty); create the six
+    tests/convergence_health/test_<module>.py modules per the CLASS -> MODULE MAP, copying each class / helper
+    class / module constant VERBATIM with a fresh per-file import header (from __future__ + the stdlib/mock/
+    pytest subset used + `from scripts.convergence_health import (<symbols>)`; boto3 #noqa + its verbatim
+    comment ONLY in test_code_drift.py + test___main__.py; `import scripts.convergence_health as ch` ONLY in
+    test_assess.py + test_escalate.py; `from scripts.build_lambda_config import (_DUCKLAKE_*_FUNCTION)` ONLY in
+    test_code_drift.py). Keep tests/test_convergence_health.py FULLY INTACT. Run `ruff check --fix` on the new
+    files, then the SCOPED `bin/venv-python -m pytest tests/convergence_health -q` and `bin/venv-python -m
+    scripts.validate --pre`. (May be split into 2-3 population commits if preferred; the monolith stays intact
+    through all of them.)
+  - >-
+    FINAL COMMIT (the surgical flip): delete tests/test_convergence_health.py WHOLE; edit
+    scripts/test_coverage_checker.py (remove ONLY "test_convergence_health.py" from
+    _RETIRING_GRANDFATHER_HOMES -- add NOTHING to _CONCERN_SPLIT_TEST_PACKAGES, touch nothing else); update the
+    tests/test_coverage_checker.py oracle (rename the four->five retired-waves assertion + add
+    "test_convergence_health.py" to `retired`; add the positive per-submodule mirror test incl.
+    __main__ -> test___main__.py; add a convergence_health case to the representative-paths test, keep the
+    executor/ops_portal -> None entries; leave the 24-roster test unchanged); delete the
+    tests/test_convergence_health.py line from config/sloc_budgets.yaml by hand.
+  - >-
+    Execute the full Verification Plan (steps 1-9) on the FINAL commit; loop until all pass. On an
+    unrecoverable failure STOP and RCA (Decision 55) -- never patch around a collect-id mismatch.
+  - >-
+    Push -u origin HEAD; open ONE PR (title: feat(sloc-convergence-health-tests): ...); subscribe_pr_activity;
+    end the turn per the AGENTS.md Git-ops procedure (event-driven CI-green wake, no poll loop).
+  - >-
+    Report: the final per-module SLOC breakdown; confirmation config/sloc_budgets.yaml lost exactly one line;
+    VP step-2 empty-diff confirmation; and that each scripts/convergence_health/ submodule now resolves to its
+    tests/convergence_health/ mirror (incl. __main__ -> test___main__.py).
+rollback: >-
+  Single-PR revert. The FINAL commit is the only one that changes the mapping / budget / deletes the monolith --
+  reverting the PR restores tests/test_convergence_health.py's grandfather membership and its dec-130 budget
+  line, re-points scripts/convergence_health/*.py at the (restored) monolith, and leaves the already-created
+  tests/convergence_health/ package as harmless extra coverage until re-attempted.
