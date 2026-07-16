@@ -1,0 +1,381 @@
+schema_version: 1
+slug: "reversal-condition-monitor"
+intent: >-
+  Build the smallest owned surface that surfaces, each session, ratified Decisions whose named
+  review_by date has passed and reversal conditions expressible as repo-state predicates that have
+  fired -- so ratification stops decaying into recorded-then-forgotten (the Decision-40 rot),
+  keeping the decision lifecycle self-observing (audit SEQ-02).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-reversal-condition-monitor.yaml
+phase: >-
+  Platform governance / decision-lifecycle observability. Audit finding SEQ-02
+  (audits/platform-first-sequencing-f4dec93.yaml; classification novel, item_ids []) -- gives
+  Decision 133's machine-parseable reversal-conditions stanza a standing observer. No dedicated
+  tier_item; audit-driven ad-hoc governance (precedent: Decision 133 filed as user-explicit
+  ad-hoc governance).
+scope:
+  - file: scripts/preflight/decision_conditions.py
+    action: Create
+    purpose: >-
+      Parser + evaluator + predicate-registry + CLI for the reversal-conditions stanza. Reuses
+      scripts/decisions_md.py's _DECISION_HEADING_RE block splitter and _DECISIONS_MD_PATHS (scans
+      BOTH docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md). Anchors on the unique fence
+      info-string 'yaml reversal-conditions', associates each stanza to its enclosing Decision
+      header, cross-checks stanza decision:==header number, yaml.safe_load's the stanza, normalizes
+      the review_by date (quoted str vs unquoted datetime.date), and computes a per-decision state
+      (fired | manual-review-due | not-due | MALFORMED). Exposes preflight_bucket() +
+      print_decision_conditions() for the preflight facade and a __main__ CLI that exits nonzero on
+      any MALFORMED stanza. Predicate registry is a module-level dict, EMPTY today (Decision 133's
+      repo_state conditions both ship predicate: null). Decompose into a facade package
+      (scripts/preflight/decision_conditions/ with __init__.py facade + parser/predicates/evaluator/
+      render submodules, Decision 80/104/124 pattern) ONLY IF the single module crosses 500 SLOC
+      (Decision 128 -- decompose, never raise).
+  - file: scripts/session/preflight.py
+    action: Modify
+    purpose: >-
+      Add decision_conditions to the scripts.preflight package import tuple; in main() call
+      decision_conditions.preflight_bucket(), store it under report["decision_conditions"], and
+      print the stdout section (mirroring the existing '--- Provisional contracts due ---' block).
+      Preflight stays resilient: preflight_bucket() must never raise (returns a degraded bucket with
+      an 'error' field on any failure), so a malformed stanza surfaces loudly in the bucket without
+      crashing preflight. Keep the diff minimal (glue only). Coverage home for these net-new glue
+      lines is the mirror package tests/session/preflight/ (map_source_to_test ->
+      tests/session/preflight; the pre-#597 flat tests/test_session_preflight.py and its
+      grandfathered SLOC budget are RETIRED) -- specifically tests/session/preflight/test_main_report.py.
+  - file: tests/session/preflight/test_main_report.py
+    action: Modify
+    purpose: >-
+      Extend the existing main()-integration suite (which already drives _preflight.main() via
+      monkeypatch/capsys/tmp_path, e.g. test_all_required_keys_present) with a case asserting the
+      net-new glue lines execute: report["decision_conditions"] is present in the written JSON and
+      the stdout decision-conditions section renders. The preflight.py glue is NET-NEW and carries a
+      100%-coverage obligation now enforced against this mirror-package file (Decision 131 mirror
+      rule), not a pre-existing test.
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Add a row to the Inputs table sourcing report["decision_conditions"] from the preflight cache,
+      and a Status Digest bucket "Decisions past review date / reversal conditions fired" that ranks
+      surfaced decisions (fired first, then manual-review-due) and renders MALFORMED rows loudly.
+      Reads the preflight cache only (Decision 88 egress budget) -- issues no fresh read.
+  - file: scripts/checks/ops_governance/validate_reversal_stanzas.py
+    action: Create
+    purpose: >-
+      Stanza well-formedness gate. Reuses the same parser over the real _DECISIONS_MD_PATHS and
+      appends one failed[] entry per MALFORMED stanza (naming the decision + the error). Graduates
+      ONLY stanza well-formedness to a merge gate; condition monitoring (review-date-passed / fired)
+      stays surfacing-only and never gates a merge. Decorator uses the REAL signature:
+      @registry.register("validate_reversal_stanzas", owner="platform") -- name is a REQUIRED
+      POSITIONAL (scripts/checks/registry.py:42; existing checks pass it positionally). The check
+      MUST NOT require predicate/params on a kind: manual condition (they are absent by contract) --
+      requiring them would flag Decision 133 MALFORMED on its first row (platform-mvp-closes) and
+      break VP step 2.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Insert _c("validate_reversal_stanzas") into BOTH pre_sequence() and full_sequence() (adjacent
+      to the other ops-governance/contract checks). The check is cheap and scans the whole
+      _DECISIONS_MD_PATHS, so full_sequence() adds a near-zero-cost post-merge drift-canary; --pre
+      stays authoritative on PR CI (Decision 73).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Facade import 'from scripts.checks.ops_governance.validate_reversal_stanzas import
+      validate_reversal_stanzas  # noqa: F401,E402' so the registry's getattr(validate_module, name)
+      dispatch resolves. validate.py is the single source of truth. #596
+      (cd-marking-convention-enforcement) touched validate.py -- locate the ops_governance
+      facade-import block freshly on the rebased tree (the existing ops_governance imports are the
+      anchor, ~lines 136-156) and add the import adjacent to them (AGENTS.md merge protocol /
+      Decision 104).
+  - file: tests/test_decision_conditions.py
+    action: Create
+    purpose: >-
+      Unit tests for the monitor. Flat placement under tests/ is valid because map_source_to_test
+      returns None for scripts/preflight/*.py (no mandated mirror home); this suite provides the
+      module's 100%-coverage. Cases: past vs future review_by (manual-review-due vs not-due); a fired
+      repo_state predicate via an INJECTED fixture predicate dict (evaluate accepts a predicates=
+      override -- no production-registry mutation); malformed variants (bad fence, unclosed fence,
+      non-loadable YAML, missing/mismatched decision key, unknown predicate, bad kind) each fail
+      loud at the call site (never at import, never silent) and drive a nonzero CLI exit; prose-only
+      'Reversal conditions:' decisions (e.g. Decision 40) are NOT monitored; kind: manual and
+      predicate: null conditions are listed as context, never auto-fire. Keep under 500 SLOC
+      (Decision 130).
+  - file: tests/checks/ops_governance/test_validate_reversal_stanzas.py
+    action: Create
+    purpose: >-
+      Mirror-rule test (map_source_to_test ->
+      tests/checks/ops_governance/test_validate_reversal_stanzas.py). Asserts a well-formed stanza
+      passes (no failed[] append) and each malformed variant appends a failed[] entry naming the
+      decision. Uses a temp decisions file via monkeypatched paths -- self-contained (Decision 131
+      no-cross-test-import).
+  - file: tests/fixtures/decision_conditions/README-fixtures.txt
+    action: Create
+    purpose: >-
+      Committed fixture set with a .txt extension (NOT .md -- sidesteps validate_prose_allowlist,
+      which scans git ls-files '*.md' only; Decision 127): past_review.txt (past review_by ->
+      manual-review-due), fired_predicate.txt (repo_state predicate for the injected-predicate unit
+      case), not_due_133_like.txt (future review_by -> not-due), prose_only.txt (a '**Reversal
+      conditions:**' decision with NO fenced stanza -> not monitored), and malformed_*.txt
+      (bad_decision_key / unclosed_fence / unknown_predicate / bad_kind). Filenames finalised at
+      implement time; the README-fixtures.txt row documents the set (this scope row is the create
+      anchor for the whole directory).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    SEQ-02 (faithful paraphrase): an owned surface (the orient skill bucket + the preflight section)
+    demonstrably surfaces (a) a ratifying Decision's review date on expiry and (b) fired
+    repo-state-expressible reversal conditions; the owning skill/contract documents it. (Narrows the
+    audit's 'skill step, preflight section, OR scheduled audit' to the two committed surfaces, and
+    'the SEQ-01 decision' to 'a ratifying Decision'.)
+  - >-
+    Live run: a test-fixtured decision with a PAST review_by surfaces in the bucket as
+    manual-review-due, and the REAL Decision 133 (future review_by 2026-09-30) does NOT surface as
+    fired or due (state == not-due).
+  - >-
+    The monitor parses the EXACT frozen stanza schema (fence info-string 'yaml reversal-conditions';
+    top-level keys decision / review_by / on_trigger / conditions[]). Each condition carries id /
+    kind / description ALWAYS; predicate + params are present ONLY for kind: repo_state and are
+    ABSENT/OPTIONAL for kind: manual (Decision 133's first condition platform-mvp-closes is kind:
+    manual with only id/kind/description). The monitor GENERALIZES: it monitors ANY decision
+    carrying the stanza, not only Decision 133 (Decision 133 is the first row, not the schema).
+  - >-
+    A malformed stanza (bad fence, unclosed fence, non-loadable YAML, missing/mismatched decision
+    key, unknown/unregistered predicate, bad kind) produces an explicit MALFORMED row naming the
+    decision + error and a NONZERO CLI exit -- fail loud at the call site, never silent, never at
+    module import. A kind: manual condition with NO predicate/params is WELL-FORMED (not malformed);
+    the well-formedness rules never require predicate/params on a manual condition.
+  - >-
+    The condition-monitoring stays surfacing-only (a passed review date or fired condition NEVER
+    blocks a merge); only the separate validate_reversal_stanzas --pre check gates, and only on
+    stanza WELL-FORMEDNESS.
+  - >-
+    The new validate_reversal_stanzas check is registered in scripts/checks/registry.py (BOTH
+    pre_sequence and full_sequence) and imported in scripts/validate.py (single source of truth), and
+    validate.py --pre exits 0 on the current well-formed tree.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Monitor unit tests pass (parser, state machine, injected-predicate fired path, malformed fail-loud, prose-only-not-monitored).
+    command: bin/venv-python -m pytest tests/test_decision_conditions.py -q
+    expected: All tests pass; includes a case asserting a malformed stanza raises/collects at the call site (not at import) and a case asserting an injected fixture predicate yields state 'fired'.
+    fix_if: A test fails, or the module raises at import time (import-safety violation, AGENTS.md / Decision 55).
+    hermetic: false
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: LIVE -- real Decision 133 is not-due over the real DECISIONS.md files (future review_by; not fired).
+    command: bin/venv-python -m scripts.preflight.decision_conditions docs/DECISIONS.md docs/DECISIONS_ARCHIVE.md | grep -E '(^|[^0-9])133[^0-9].*not-due'
+    expected: Output shows Decision 133 in state not-due; command exits 0 (no malformed stanza on the real tree).
+    fix_if: 133 shows fired/manual-review-due (date-normalization or state-machine bug), or the command exits nonzero (a real stanza is being mis-parsed as malformed).
+    hermetic: false
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: LIVE -- a fixtured decision with a PAST review_by surfaces as manual-review-due.
+    command: bin/venv-python -m scripts.preflight.decision_conditions tests/fixtures/decision_conditions/past_review.txt | grep -q 'manual-review-due'
+    expected: Output classifies the fixture decision as manual-review-due; exit 0 (surfacing, not gating).
+    fix_if: The fixture is not surfaced as manual-review-due (date compare / normalization bug), or the command gates (nonzero) on a merely-due decision.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (command_output_matches over a committed fixture) but graduating it would
+      duplicate the standing manual-review-due unit coverage in tests/test_decision_conditions.py
+      (step 1), which already runs every CI. Waived to avoid a redundant registry row.
+  - step: 4
+    phase: pre-deploy
+    action: LIVE -- a malformed-stanza fixture makes the CLI exit nonzero with a MALFORMED row naming the decision.
+    command: bin/venv-python -m scripts.preflight.decision_conditions tests/fixtures/decision_conditions/malformed_bad_decision_key.txt; test $? -ne 0 && bin/venv-python -m scripts.preflight.decision_conditions tests/fixtures/decision_conditions/malformed_bad_decision_key.txt 2>&1 | grep -q 'MALFORMED'
+    expected: First invocation exits nonzero; the MALFORMED row is printed and names the offending decision. Never silent, never a module-import error.
+    fix_if: Exit code is 0, no MALFORMED row printed, or the failure surfaces as an import-time exception instead of at the call site.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (command_exit_zero negation + output match) but duplicates the malformed
+      fail-loud unit coverage in tests/test_decision_conditions.py (step 1), which is already a
+      standing CI guard. Waived to avoid a redundant registry row.
+  - step: 5
+    phase: pre-deploy
+    action: Check unit tests pass -- validate_reversal_stanzas passes a well-formed tree and appends a failed[] entry per malformed variant.
+    command: bin/venv-python -m pytest tests/checks/ops_governance/test_validate_reversal_stanzas.py -q
+    expected: All tests pass; the check appends one failed[] entry (naming the decision) per malformed fixture and none for a well-formed stanza.
+    fix_if: The check silently passes a malformed stanza, or false-fails a well-formed one.
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    action: The check is wired into the single source of truth -- registered in the registry and imported by validate.py.
+    command: grep -q 'validate_reversal_stanzas' scripts/checks/registry.py && grep -q 'validate_reversal_stanzas' scripts/validate.py
+    expected: Both greps succeed (name present in pre_sequence() and imported in validate.py).
+    fix_if: The check is registered but not imported (getattr dispatch fails), or added to ci.yml without validate.py (single-source-of-truth violation).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Structural grep (file_presence-adjacent) whose durable equivalent is already owned by the
+      registry's own coverage and validate_checks_registry wiring; a bespoke registry row for
+      'this check name appears in these two files' would duplicate that. Waived.
+  - step: 7
+    phase: pre-deploy
+    action: Full --pre gate is green on the well-formed tree (the new check does not false-fail; SLOC/graduation obligations met).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. validate_reversal_stanzas runs and passes; validate_sloc_limits/validate_sloc_budget_raises and validate_graduation_completeness pass for the new files and this plan.
+    fix_if: --pre fails -- read the failing check; if validate_reversal_stanzas false-fails, fix the parser; if SLOC over budget, decompose the module (Decision 128), never raise.
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: Preflight integration -- the decision_conditions bucket appears in the preflight report.
+    command: bin/venv-python -m scripts.session.preflight >/dev/null 2>&1; grep -q '"decision_conditions"' logs/.preflight-report.json
+    expected: logs/.preflight-report.json contains a decision_conditions bucket (with monitored[] + surfaced[] + malformed[] keys); preflight does not crash.
+    fix_if: The key is absent (glue not wired) or preflight crashes (preflight_bucket() raised instead of degrading).
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - plan_type IMPLEMENTATION -- STRATEGIC classification is suspended (Decision 67 / CD.17).
+  - bundled_recommendations stays [] -- no recommendation is used as a delivery vehicle; no audit finding is filed via file_rec.
+  - >-
+    GENERALIZE: the monitor reads ANY decision carrying the frozen stanza (fence info-string
+    'yaml reversal-conditions'); Decision 133 is the first row, not the schema. Prose-only
+    '**Reversal conditions:**' decisions (~24 existing, e.g. Decision 40) are opt-out by absence
+    and are not monitored.
+  - >-
+    Source of truth is the stanza co-located in DECISIONS.md/DECISIONS_ARCHIVE.md -- NOT a separate
+    registry/prose doc (Decision 86; a second surface is exactly the drift this fixes). The predicate
+    REGISTRY is code (a Python dict), not a doc.
+  - >-
+    Fail loud at the call site, never at module import (Decision 55 / AGENTS.md import-safety): all
+    parsing happens inside explicit function calls; a malformed stanza -> explicit MALFORMED row +
+    nonzero CLI exit; never eval()/exec(), never sympy (that is for formula evaluation only).
+  - >-
+    Surfacing, not gating: a passed review_by or a fired condition NEVER blocks a merge. Only the
+    separate validate_reversal_stanzas --pre check gates, and only on stanza WELL-FORMEDNESS
+    (Decision 73: --pre authoritative on PR CI, advisory locally).
+  - >-
+    Predicate coverage today: review_by date is machine-checkable now (the core of the bucket);
+    alpha-readiness (c) and sustained-slip (d) ship predicate: null (manual/context -- no repo-state
+    predicate is registered yet); platform-mvp-closes (a) is kind: manual. The sustained-slip
+    predicate needs an MVP-date snapshot series nothing writes today -- do NOT fake it with git
+    archaeology; keep it predicate: null.
+  - >-
+    Single source of truth: adding validate_reversal_stanzas touches validate.py (facade import) +
+    registry.py (BOTH pre_sequence and full_sequence) FIRST; never add a check to
+    .github/workflows/ci.yml without validate.py (AGENTS.md merge protocol). CI runs validate.py
+    --pre -- no per-check ci.yml edit is needed.
+  - >-
+    SLOC: keep scripts/preflight/decision_conditions.py and both new test files under 500 SLOC
+    (Decision 128/130). If the monitor module crosses 500, decompose into a facade package
+    (Decision 80/104/124) -- never a budget raise, never a bare --update-sloc-budgets re-seed.
+  - >-
+    Decision 127: committed fixtures use a .txt extension (NOT .md) so validate_prose_allowlist
+    (scans git ls-files '*.md' only) is not engaged -- no docs/contracts/file-router.yaml edit.
+  - >-
+    Decision 131: each new test directory (tests/checks/ops_governance already exists;
+    tests/fixtures/decision_conditions is new) carries the required __init__.py where applicable and
+    is self-contained (no cross-test imports). tests/fixtures/ needs no __init__.py.
+  - No rescue agents or workaround loops (Decision 55); on an unrecoverable failure, stop and RCA.
+  - bin/venv-python for all invocations; Python 3.12+ type hints; async only for I/O; no emojis; ASCII hyphens; ruff line length 127.
+context:
+  - >-
+    Origin: audit SEQ-02 (audits/platform-first-sequencing-f4dec93.yaml, finding id SEQ-02, severity
+    medium, depends_on SEQ-01 which landed as Decision 133). SEQ-02 acceptance is copied verbatim
+    into acceptance_criteria[0].
+  - >-
+    Evidence trail (why this exists): recorded triggers rot unobserved -- Decision 40's activation
+    triggers stayed cited as live at ROADMAP-PRODUCT.md:755 after going moot
+    (audits/decision-log-premise-integrity-8fb581e.md); no check under scripts/checks/** monitors
+    conditions or review dates; /orient is 'v1: platform roadmap only' (.claude/skills/orient/SKILL.md:216).
+  - >-
+    FROZEN stanza schema (Decision 133, docs/DECISIONS.md under '**Reversal conditions:**'):
+    fence info-string 'yaml reversal-conditions'; top-level keys decision:133, review_by:2026-09-30,
+    on_trigger, conditions[]. Each condition carries id + kind + description; predicate + params
+    appear ONLY for kind: repo_state (predicate: <registered-name>|null) and are ABSENT for kind:
+    manual (e.g. platform-mvp-closes is id/kind/description only). Do NOT redesign it; the
+    well-formedness check must treat predicate/params as optional-for-manual.
+  - >-
+    Parser contract: reuse scripts/decisions_md.py's _DECISION_HEADING_RE splitter + _DECISIONS_MD_PATHS
+    (both docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md); require column-0 fences; unclosed fence =
+    malformed; cross-check stanza decision:==header number; normalize yaml.safe_load date coercion
+    (unquoted -> datetime.date, quoted -> str) before compare; evaluate against today (UTC),
+    injectable for tests.
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (no BLOCK; 93 of 93
+    triaged). CITE: dec-133, dec-86, dec-104, dec-55, dec-131, dec-73, dec-132, dec-67 (CD.17).
+    RELATED: dec-40, dec-84, dec-105, dec-108, dec-80, dec-124, dec-102/128, dec-127, dec-130.
+  - >-
+    Scout flags folded in: [WARN dec-127] .md fixtures would trip validate_prose_allowlist ->
+    resolved by using .txt fixtures (allowlist is .md-only; verified via git ls-files '*.md' scope),
+    no file-router edit. [NOTE dec-128] three-concern module SLOC risk -> single module now with an
+    explicit decompose-to-facade-package contingency if >500 SLOC. [dec-132] every pre-deploy VP step
+    carries a graduation disposition (validate_graduation_completeness gates the plan PR).
+  - >-
+    gates: decision-scout=FLAGS_FOUND (folded, no BLOCK); plan-critique=REVISE x2 fresh-context gates
+    (base-staleness re #596/#597 mirror-package decomposition + manual-condition schema
+    clarification), all fixes applied.
+  - >-
+    Tier Item Freshness Gate: skipped -- intent names no tier_item (SEQ-02 is novel, item_ids []);
+    audit-driven ad-hoc governance matches the soft-warn exception (ad_hoc_rec / user_explicit_out_of_scope).
+    Precedent: Decision 133 filed as user-explicit ad-hoc governance.
+  - >-
+    Main divergence: branch was rebased onto current origin/main (8f0ddda: #596
+    cd-marking-convention-enforcement + #597 sloc-session-preflight-tests, which decomposed
+    tests/test_session_preflight.py into the tests/session/preflight/ mirror package). Scope updated
+    to the rebased reality.
+  - >-
+    Not Lambda-packaged (scripts/preflight, scripts/session, scripts/checks, scripts/decisions_md
+    return no lambda_manifest pattern) and no .tf in scope -- no Infrastructure/Lambda assessment;
+    verification_tier V2 (pure-Python unit over local files).
+  - >-
+    Closure Obligation: N/A -- additive plan; resolves no open rec and retires no surface (no Delete
+    row, no X->Y cutover). bundled_recommendations [].
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/exciting-archimedes-1n8tkp)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md Decision 133 stanza + Decision 131 mirror-rule read; DECISIONS.md scanned via decision-scout (93 of 93)
+  - >-
+    All files in scope located and readable (scripts/decisions_md.py splitter, scripts/session/preflight.py
+    facade + its tests/session/preflight/ mirror package, scripts/preflight/ package,
+    scripts/checks/registry.py + validate.py wiring, orient SKILL.md, tests/checks/ops_governance mirror)
+  - Acceptance criteria understood and verifiable (SEQ-02 faithful paraphrase + live not-due/manual-review-due checks)
+execution_steps:
+  - >-
+    Create scripts/preflight/decision_conditions.py: (1) import _DECISION_HEADING_RE + _DECISIONS_MD_PATHS
+    from scripts.decisions_md; (2) discover the 'yaml reversal-conditions' fence WITHIN each decision
+    block (column-0 fences, unclosed = malformed); (3) yaml.safe_load + cross-check decision:==header;
+    (4) a module-level predicate registry dict (EMPTY) + register_predicate decorator; (5) evaluate()
+    -> per-decision state (fired > manual-review-due > not-due, MALFORMED on any structural error),
+    accepting paths=, predicates=, today= overrides for tests; (6) preflight_bucket() +
+    print_decision_conditions(); (7) a __main__ CLI accepting path args, printing states, exiting
+    nonzero iff any MALFORMED. Never parse at import. Keep under 500 SLOC or decompose to a facade
+    package (Decision 128).
+  - >-
+    Modify scripts/session/preflight.py: add decision_conditions to the scripts.preflight import
+    tuple; in main() call preflight_bucket() (resilient -- never raises), assign
+    report["decision_conditions"], and print the stdout section. Keep the diff to glue lines only.
+  - >-
+    Create scripts/checks/ops_governance/validate_reversal_stanzas.py
+    (@registry.register("validate_reversal_stanzas", owner="platform")), reusing the monitor's
+    well-formedness pass over the real _DECISIONS_MD_PATHS; append one failed[] entry per MALFORMED
+    stanza (never requiring predicate/params on a kind: manual condition). Import it in
+    scripts/validate.py FIRST (adjacent to the existing ops_governance imports), then insert
+    _c("validate_reversal_stanzas") into BOTH pre_sequence() and full_sequence() in
+    scripts/checks/registry.py.
+  - >-
+    Modify .claude/skills/orient/SKILL.md: add the Inputs-table row + the Status Digest bucket
+    (fired-first, then manual-review-due; MALFORMED rendered loudly), reading the preflight cache only.
+  - >-
+    Create tests/test_decision_conditions.py + tests/checks/ops_governance/test_validate_reversal_stanzas.py
+    + committed .txt fixtures under tests/fixtures/decision_conditions/ (past_review, fired_predicate,
+    not_due_133_like, prose_only, malformed_bad_decision_key/unclosed_fence/unknown_predicate/bad_kind).
+    Inject a fixture predicate for the 'fired' case; do not mutate the production registry. Also
+    extend tests/session/preflight/test_main_report.py with a main()-integration case covering the
+    net-new preflight glue (report["decision_conditions"] present in the JSON + the stdout section
+    renders) -- the 100%-coverage home for those lines under the Decision-131 mirror rule.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable V2 failure stop and RCA (Decision 55).
+  - 'Report: what was implemented, verification results, whether the module was decomposed, and the final graduation dispositions.'
+work_areas: []
+rollback: >-
+  Pure-additive and read-only w.r.t. governance data. Revert by deleting
+  scripts/preflight/decision_conditions.py + the two new test files + tests/fixtures/decision_conditions/,
+  and reverting the glue edits to scripts/session/preflight.py, scripts/checks/registry.py,
+  scripts/validate.py, and .claude/skills/orient/SKILL.md. No warehouse writes, no migrations, no infra.
