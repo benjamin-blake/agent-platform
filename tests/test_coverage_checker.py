@@ -349,14 +349,15 @@ class TestGrandfatherRetiringTable:
     """Behaviour-preservation invariant (Decision 131): map_source_to_test resolves each
     roster home via colocation while it is grandfathered, and via the mirror rule once a wave
     retires it -- rec-2709 Wave 1 (PLAN-sloc-test-validate) retired the first of the 24,
-    "test_validate.py"."""
+    "test_validate.py"; Wave 2 (PLAN-sloc-execute-recommendation) retired the second,
+    "test_execute_recommendation.py"."""
 
     def test_representative_paths_resolve_under_current_retirement_state(self) -> None:
         """A representative real path set resolves correctly under the CURRENT retirement
-        state: "test_validate.py" is retired (its sources now resolve via the mirror rule /
-        the scripts/validate.py concern-split package), the other 23 roster homes are still
-        grandfathered, and scripts/executor/** and scripts/ops_portal/** keep returning None
-        (Decision 124 -- unperturbed by the Wave 1 map edits)."""
+        state: "test_validate.py" and "test_execute_recommendation.py" are retired (their
+        sources now resolve via the mirror rule / their concern-split packages), the other 22
+        roster homes are still grandfathered, and scripts/executor/** and scripts/ops_portal/**
+        keep returning None (Decision 124 -- unperturbed by the Wave 1/2 map edits)."""
         cases: dict[Path, Path | None] = {
             ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py": ROOT
             / "tests"
@@ -366,6 +367,7 @@ class TestGrandfatherRetiringTable:
             ROOT / "scripts" / "validate.py": ROOT / "tests" / "validate",
             ROOT / "scripts" / "checks" / "_scaffolding.py": ROOT / "tests" / "validate",
             ROOT / "scripts" / "checks" / "_terraform.py": ROOT / "tests" / "validate",
+            ROOT / "scripts" / "execute_recommendation.py": ROOT / "tests" / "execute_recommendation",
             ROOT / "src" / "common" / "config.py": ROOT / "tests" / "test_config.py",
             ROOT / "scripts" / "executor" / "step_runner.py": None,
             ROOT / "scripts" / "ops_portal" / "cli.py": None,
@@ -374,12 +376,15 @@ class TestGrandfatherRetiringTable:
         for source, expected in cases.items():
             assert map_source_to_test(source) == expected, source
 
-    def test_retiring_is_all_target_homes_minus_test_validate(self) -> None:
-        """Exactly one basename has retired so far: "test_validate.py" (rec-2709 Wave 1). The
-        mirror branch is live for it and dormant for the other 23 roster targets."""
-        assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - {"test_validate.py"}
+    def test_retiring_is_all_target_homes_minus_test_validate_and_test_execute_recommendation(self) -> None:
+        """Exactly two basenames have retired so far: "test_validate.py" (rec-2709 Wave 1) and
+        "test_execute_recommendation.py" (rec-2709 Wave 2). The mirror branch is live for both
+        and dormant for the other 22 roster targets."""
+        retired = {"test_validate.py", "test_execute_recommendation.py"}
+        assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - retired
         assert "test_validate.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == {"test_validate.py"}
+        assert "test_execute_recommendation.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == retired
 
     def test_roster_is_the_24_known_basenames(self) -> None:
         """The fixed rec-2709 roster matches the 24 dec-130 config/sloc_budgets.yaml entries
