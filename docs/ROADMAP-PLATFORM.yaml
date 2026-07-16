@@ -3734,7 +3734,11 @@ tier_items:
     name: ops_decisions graduation Phases 2-6 + ops_data_portal import-site sweep (STRATEGIC)
     intent: |
       Complete the migration from docs/DECISIONS.md to ops_decisions table. Phase 2 semantic definition;
-      3a migration + reader/writer port; 3b markdown delete; 4 data correction; 5 DQ graduation; 6 convergence.
+      3a migration + reader/writer port; 3b decisions read-portal cutover (read-lambda + named verbs +
+      synced hermetic cache, mirroring the recs read path) with ALL consumers (decision-scout, preflight,
+      the R1 guard validate_candidate_decision_ratification) repointed and the content-parity check
+      (T1.5 c2) confirmed BEFORE docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md retirement (Decision 133
+      portal-read end-state, not a projection markdown file); 4 data correction; 5 DQ graduation; 6 convergence.
       Round-3 correction: the original "14 production importers" claim was based on a string-match grep
       that over-counted by including comment / lint-config references. Verified `from scripts.ops_data_portal import`
       yields 7 production importers + 6 test files. Each importer migrates to agent_sdk verbs
@@ -3745,7 +3749,7 @@ tier_items:
     depends_on: [T0.7b, T1.1, T0.8]
     files_in_scope:
       - scripts/ops_data_portal.py
-      - docs/DECISIONS.md    # eventually deleted in 3b (per T5.4)
+      - docs/DECISIONS.md    # retired only after portal cutover + content-parity gate, see T1.5 c1
       - config/agent/data_quality/decisions/ops_decisions.yaml    # path corrected 2026-06-09 (audit F-015; DQ config relocated under config/agent/)
       # Verified production importers (7) — grep `from scripts.ops_data_portal import` confirmed
       - scripts/classify_risk.py
@@ -3764,10 +3768,21 @@ tier_items:
       - tests/test_execute_recommendation.py
     exit_criteria:
       - >-
-        docs/DECISIONS.md retired (Phase 3b): docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md deleted,
-        and `grep -r 'DECISIONS.md' scripts/ src/ docs/ terraform/` returns no production references
-        (grep-no-production-references + file-deletion mechanic folded from T5.4, tombstoned 2026-07-06
-        per audit RMAP-05; T1.5 c1 is the single owner of DECISIONS.md retirement)
+        docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md retired (Phase 3b) ONLY AFTER (a) a decisions read portal
+        (read-lambda + named verbs + a synced hermetic cache, mirroring the recs read path -- the ducklake_reader
+        closed boundary + logs/.recommendations-log.jsonl synced via sync.ops pull) is live and ALL consumers
+        read from it -- planning agents (decision-scout, preflight) AND CI guards, including the R1 ratification
+        guard validate_candidate_decision_ratification repointed off its prose-header grep onto the portal/cache;
+        AND (b) T1.5 c2's content-parity check confirms every live-entry governing section is recoverable from
+        ops_decisions before any reader is repointed. Then `grep -r 'DECISIONS.md' scripts/ src/ docs/ terraform/`
+        returns no production references (grep-no-production-references + file-deletion mechanic folded from
+        T5.4, tombstoned 2026-07-06 per audit RMAP-05; T1.5 c1 is the single owner of DECISIONS.md retirement;
+        Decision 133 corrects this end-state from the audit's generate-as-projection framing to portal-read)
+      - >-
+        A content-parity check confirms every live-entry governing section (Decision, Reversal
+        conditions, Related -- per the DAF-03 authoring contract) is recoverable from ops_decisions
+        before T1.5 c1 repoints any reader off docs/DECISIONS.md
+        (audits/decisions-authoring-format-d140093.yaml finding DAF-01; Decision 133 clause 5)
       - "ops_decisions DQ checks all green (Phase 5)"
       - "decision_id int column deprecated (Phase 6)"
       - "grep -rE 'from scripts.ops_data_portal import|import scripts.ops_data_portal' scripts/ src/ returns zero in production code outside src/lambdas/ (Lambda handlers retain internal imports)"
