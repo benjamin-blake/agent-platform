@@ -1,0 +1,434 @@
+schema_version: 1
+slug: "test-decomp-foundation"
+intent: >-
+  Lay the shared FOUNDATION (Wave 0) of rec-2709's test-decomposition program: invert
+  map_source_to_test from the Decision-104 test-colocation rule to a mirror rule guarded by a
+  retiring grandfather-table, add a no-cross-test-import AST validate check, and establish the
+  per-package conftest hierarchy -- moving ZERO test files and grandfathering all 24 oversized
+  tests/ files so behaviour is byte-identical and CI stays trivially green, while putting the
+  enabling machinery in place that the ~14 later decomposition waves consume.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-test-decomp-foundation.yaml
+phase: >-
+  Platform / Directed Growth Governance (Decisions 43/102/128/130). Enabling foundation of the
+  rec-2709 decomposition program deferred by Decision 130; realizes the map_source_to_test /
+  Decision-104 colocation inversion Decision 130 point 5 named. No ROADMAP tier_item closure;
+  rec-2709 is NOT resolved here (it closes only when the last tests/ budget entry is deleted).
+scope:
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Invert map_source_to_test from colocation to a MIRROR rule guarded by a retiring
+      grandfather-table. (1) Preserve the CURRENT body verbatim as a private helper
+      _grandfathered_source_to_test(source_path) -> Path | None (all Decision-104 special-cases
+      intact: scripts/checks/** -> test_validate.py except registry.py/_common.py ->
+      test_checks_registry.py; scripts/convergence_health/** -> test_convergence_health.py; the
+      _DUCKLAKE_RUNTIME_SPLIT_MODULES and src/lambdas parent-qualified and
+      _NESTED_SUBPACKAGE_TEST_PREFIX rules; src/** and scripts/*.py flat rules; None otherwise).
+      (2) Add _mirror_source_to_test(source_path) implementing the mirror convention (drop the
+      leading src/scripts root, keep the remaining sub-path, name the file test_<stem>.py; a
+      declared concern-split monolith instead returns its test PACKAGE DIRECTORY). (3) Add two
+      module constants: _ALL_MIRROR_TARGET_HOMES (frozenset, the fixed 24-basename roster) and
+      _RETIRING_GRANDFATHER_HOMES (mutable set, the not-yet-decomposed subset, seeded == all 24),
+      plus _CONCERN_SPLIT_TEST_PACKAGES (source paths whose mirror is a package dir). (4) Rewrite
+      map_source_to_test to: home = _grandfathered_source_to_test(sp); if home is None return None;
+      if home.name in _RETIRING_GRANDFATHER_HOMES return home; if home.name in
+      _ALL_MIRROR_TARGET_HOMES return _mirror_source_to_test(sp); return home. On day one every
+      target is retiring, so results are byte-identical for every input. (5) Extend
+      check_test_file_exists and check_per_file_coverage to accept a DIRECTORY target (a
+      concern-split package): a dir passes iff it exists and contains >=1 test_*.py; coverage runs
+      pytest against the directory. Rewrite the docstring to document the mirror convention, the
+      grandfather-table, and the concern-split package rule precisely. Keep the file under 500 SLOC
+      (currently ~310; decompose into a scripts/test_coverage/ facade package only if it would
+      cross 500 -- Decision 128 -- never a budget raise).
+  - file: scripts/checks/hygiene/validate_no_cross_test_imports.py
+    action: Create
+    purpose: >-
+      New AST-based validate check (same shape as scripts/checks/hygiene/validate_test_count_coupling.py:
+      @registry.register("validate_no_cross_test_imports", owner="platform"), signature
+      (failed: list[str]) -> None, scans sorted(tests_dir.glob("**/*.py")) via ast.parse). Flags any
+      test module that imports from ANOTHER test module -- an ast.Import or ast.ImportFrom whose
+      target module's final path component (or, for `from . import X`, the imported name X) starts
+      with "test_". conftest and tests/fixtures/ are naturally exempt (their names never start with
+      test_); a module importing from itself cannot occur. A documented
+      _GRANDFATHERED_CROSS_TEST_IMPORTS set seeded with the one pre-existing violation
+      (tests/test_verifier_harness.py, a re-export shim of tests/test_verifiers/test_harness.py)
+      exempts it until a later wave removes the shim. Under 500 SLOC and <20 cyclomatic branches per
+      function (Decision 43).
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register validate_no_cross_test_imports in BOTH ordered tier sequences, adjacent to its
+      sibling hygiene guard validate_test_count_coupling: in pre_sequence() immediately after
+      _c("validate_test_count_coupling"), and in full_sequence() immediately after the
+      _c("validate_test_count_coupling") entry in the run_python_checks() block. No other change; the
+      registry is the sole tier-membership SoT (Decision 104) -- do NOT touch scripts/validate.py or
+      .github/workflows/ci.yml.
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Add tests to the existing suite (importlib-loaded checker module "test_coverage_checker").
+      (a) TestGrandfatherRetiringTable: behaviour-preservation invariant -- for a representative real
+      path set, map_source_to_test returns exactly the pre-inversion homes while every target is
+      retiring, INCLUDING the None returns for scripts/executor/** and scripts/ops_portal/**; assert
+      _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES on day one and that the roster equals
+      the 24 known basenames (add `# count-coupling-ok: fixed historical roster of the 24 rec-2709
+      targets, not a growing collection`). (b) TestMirrorRule: with a home removed from
+      _RETIRING_GRANDFATHER_HOMES (monkeypatch), a package-source path resolves to
+      tests/<subpath>/test_<stem>.py and a declared concern-split monolith resolves to its package
+      DIRECTORY. (c) TestCheckTestFileExistsDirectoryTarget: a directory target passes iff it exists
+      with >=1 test_*.py, else (False, ...), PLUS a case driving the new directory branch of
+      check_per_file_coverage (mapped source -> temp package dir; assert pytest runs against the dir,
+      subprocess mocked) so that day-one-dead branch is not uncovered code. The EXISTING
+      TestMapSourceToTest / TestCheckTestFileExists classes must remain green unchanged (they are the
+      behaviour-preservation oracle). Keep the file under 500 SLOC.
+  - file: tests/checks/hygiene/test_validate_no_cross_test_imports.py
+    action: Create
+    purpose: >-
+      The new guard's own test, placed at its MIRROR location (tests/checks/hygiene/ mirrors
+      scripts/checks/hygiene/) to demonstrate the new convention. (check_test_file_exists is still
+      satisfied by tests/test_validate.py under the live grandfather, exactly as the existing
+      tests/checks/test_validate_prose_allowlist.py already relies on.) Cases: a synthetic tests dir
+      with `from tests.test_foo import X` is flagged; `from tests.conftest import Y` and
+      `from tests.fixtures.helper import Z` are NOT flagged; a grandfathered path is exempt; and
+      calling validate_no_cross_test_imports against the REAL repo tests/ tree returns failed == []
+      (proves the seeded allowlist exempts the one live violation). Imports only from
+      scripts.checks.hygiene -- never from another test module (it must pass its own guard).
+  - file: tests/checks/__init__.py
+    action: Create
+    purpose: >-
+      Empty package marker. pytest runs the DEFAULT `prepend` import mode (no `import-mode` set in
+      pyproject `[tool.pytest.ini_options]`), and the repo already depends on the package-path model
+      (`from tests.fixtures.iceberg_fixture import ...`), so switching to importlib mode is the wrong
+      fix. Under prepend, every mirror directory from tests/ downward MUST carry an __init__.py so
+      module paths are fully-qualified (`tests.checks.<module>`) and duplicate-basename collection
+      collisions cannot occur as the nested tree grows. tests/checks/ currently lacks this marker (a
+      fragile half-packaged tree); adding it fully-qualifies the two existing tests/checks/test_validate_*.py
+      as `tests.checks.test_validate_*`. __init__.py is excluded from the SLOC gate and from
+      get_changed_source_files, so zero budget/coverage impact.
+  - file: tests/checks/hygiene/__init__.py
+    action: Create
+    purpose: >-
+      Empty package marker completing the package chain above the new
+      tests/checks/hygiene/test_validate_no_cross_test_imports.py so it imports as
+      `tests.checks.hygiene.test_validate_no_cross_test_imports` (collision-free under prepend mode).
+  - file: tests/checks/conftest.py
+    action: Create
+    purpose: >-
+      Example per-package conftest establishing the hierarchy scaffolding (requirement: create the
+      pattern, relocate NO fixture yet). Docstring-only / no fixtures: documents that pytest merges
+      this with the root tests/conftest.py for tests under tests/checks/, that the global recursion
+      guards (_VALIDATE_DEPTH, _COVERAGE_SUBPROCESS, PYTEST_CURRENT_TEST early-exit) and socket
+      guards (--disable-socket addopts + _allow_network_for_integration autouse) stay in the ROOT
+      conftest and apply here automatically, and that package-specific autouse fixtures migrate here
+      per-wave alongside each decomposition -- not in this foundation. Excluded from the coverage
+      mapper (conftest.py is skipped by get_changed_source_files).
+  - file: tests/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Replace the colocation description with the new mirror convention: add a "Test file placement
+      -- mirror convention" section (source path -> mirror test path rule with 2-3 examples; the
+      concern-split monolith -> test-package-dir rule; the retiring grandfather-table and how a wave
+      retires one entry), a "No cross-test imports" rule (shared helpers live in conftest or
+      tests/fixtures/, enforced by validate_no_cross_test_imports), and a "Per-package conftest
+      hierarchy" note (global guards stay in root conftest; package autouse fixtures layer in
+      sub-conftests, migrated per-wave). The mirror section MUST state the import-mode policy verbatim:
+      "Every mirror test directory carries an `__init__.py` (prepend import mode; fully-qualified,
+      collision-free module paths). Shared helpers live in `tests/fixtures/` (an importable package,
+      exempt from the cross-test-import guard because its names never start with `test_`) or in
+      conftest fixtures -- never imported from another `test_*` module." Note that the existing
+      tests/test_verifiers/ lacks its __init__.py and will be normalized by its own wave, not this one.
+      Add two later-wave hand-off notes so wave planners are not misled: (a) three roster homes
+      (test_executor_step_runner.py, test_executor_plan.py, test_executor_postflight.py) have NO source
+      path mapping to them (scripts/executor/** returns None in the grandfather helper, preserved per
+      Decision 124), so their decomposition is a PURE test-file split + budget-entry deletion and
+      deleting their _RETIRING_GRANDFATHER_HOMES line is a no-op (the mirror branch never fires) -- the
+      "one-line retirement" is NOT uniform across all 24; (b) drop-root is safe/chosen because it
+      matches repo precedent (tests/checks/, tests/test_verifiers/) and is collision-free for the fixed
+      24-home roster (no scripts/<x>/ vs src/<x>/ subdir-name overlap), with the known boundary that a
+      future such collision would need a preserve-root exception (out of scope, flagged for the map
+      maintainer). Keep ALL existing hygiene rules (test isolation, coverage policy, mock exhaustion,
+      test-count coupling, ruff/format) intact.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 131 (next free number; Decision 130 is current top) newest-first ABOVE Decision
+      130, amending Decision 104 (test-colocation -> mirror + retiring grandfather-table) and
+      recording the no-cross-test-import AST guard and the per-package conftest-hierarchy convention.
+      Use the exact house format (Status / Date / Warehouse ID dec-131 / Problem / Decision /
+      Reversal conditions / Rationale / Related). Related must cite Decisions 104, 130, 128, 43, 86,
+      84; note the day-one byte-identical guarantee and that rec-2709 closes only when the last
+      tests/ budget entry is deleted. Its `## Decision 131:` header lands in THIS PR.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "map_source_to_test is behaviour-identical on day one: for every source path it returns exactly what the pre-inversion function returned (verified by the existing TestMapSourceToTest / TestCheckTestFileExists classes staying green unchanged), INCLUDING None for scripts/executor/** and scripts/ops_portal/** and each of the 24 grandfathered homes."
+  - "The mirror convention is implemented and documented in the map_source_to_test docstring: a source path maps to tests/<sub-path-after-dropping-src-or-scripts>/test_<stem>.py; a declared concern-split monolith maps to a test PACKAGE DIRECTORY (tests/<mirror-subpath>/<stem>/) accepted by check_test_file_exists when it exists with >=1 test_*.py."
+  - "A retiring grandfather-table (_RETIRING_GRANDFATHER_HOMES, seeded with all 24 oversized tests/ basenames; _ALL_MIRROR_TARGET_HOMES the fixed roster) gates the inversion: deleting exactly one basename from _RETIRING_GRANDFATHER_HOMES (a one-line, low-conflict edit) is all a later wave needs to switch that monolith's source paths to the mirror rule."
+  - "check_test_file_exists and check_per_file_coverage handle BOTH a single-file test target (.py) and a concern-split package DIRECTORY target (dir + >=1 test_*.py; coverage runs pytest against the dir)."
+  - "A new validate check scripts/checks/hygiene/validate_no_cross_test_imports.py fails when any tests/**/*.py imports from another test module (imported module/name whose final component starts with test_); conftest and tests/fixtures/ are exempt; the one pre-existing violation (tests/test_verifier_harness.py) is grandfathered in a documented allowlist; the check returns clean on the current real tree."
+  - "validate_no_cross_test_imports is registered in registry.pre_sequence() AND registry.full_sequence() (adjacent to validate_test_count_coupling); scripts/validate.py and .github/workflows/ci.yml are unmodified."
+  - "The per-package conftest hierarchy is scaffolded: tests/checks/conftest.py exists (docstring-only, no relocated fixture); the global recursion + socket guards remain solely in root tests/conftest.py; tests/CLAUDE.md documents the layering."
+  - "The import-mode policy is realized: pytest stays in default prepend mode; tests/checks/__init__.py and tests/checks/hygiene/__init__.py exist so the new guard test is fully-qualified (tests.checks.hygiene.test_validate_no_cross_test_imports); `pytest tests/checks/ -q` collects with no duplicate-basename / import errors and the two existing tests/checks/test_validate_*.py still pass under their now-fully-qualified path."
+  - "tests/CLAUDE.md documents the mirror convention (replacing the colocation description), the no-cross-test-import rule, and the conftest hierarchy, with all existing hygiene rules retained."
+  - "Decision 131 exists in docs/DECISIONS.md, amends Decision 104, records the AST guard + conftest-hierarchy convention, and its `## Decision 131:` header is present."
+  - "config/sloc_budgets.yaml is byte-identical to origin/main (the 24 dec-130 entries are untouched); scripts/test_coverage_checker.py and tests/test_coverage_checker.py each stay under 500 SLOC (no budget entry added, no raise, no decomposition forced)."
+  - "bin/venv-python -m scripts.validate --pre passes (SLOC/CC/raise-gate green, the new guard green on the real tree) within the fast-tier budget; rec-2709 is NOT resolved (bundled_recommendations empty)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Checker + guard unit tests pass, including the behaviour-preservation oracle (existing map
+      assertions unchanged-green) and the new mirror/grandfather/directory-target/AST cases.
+    command: bin/venv-python -m pytest tests/test_coverage_checker.py tests/checks/hygiene/test_validate_no_cross_test_imports.py -q
+    expected: >-
+      Exit 0. Existing TestMapSourceToTest / TestCheckTestFileExists assertions still pass (proving
+      day-one behaviour preservation) and the new TestGrandfatherRetiringTable, TestMirrorRule,
+      TestCheckTestFileExistsDirectoryTarget, and guard positive/negative/grandfather/real-tree-clean
+      cases pass.
+    fix_if: >-
+      A test fails. If an EXISTING map assertion broke, the inversion changed day-one behaviour --
+      the grandfather gate is wrong (a home is missing from _RETIRING_GRANDFATHER_HOMES, or None is
+      not being returned faithfully); fix until the oracle is green. If a new case fails, read the
+      assertion and fix the mirror rule / directory handling / guard within scope.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Behaviour-preservation invariant is explicit and machine-checked: map_source_to_test returns
+      the pre-inversion homes for a representative real path set and _RETIRING_GRANDFATHER_HOMES ==
+      _ALL_MIRROR_TARGET_HOMES == the 24 registered basenames on day one.
+    command: bin/venv-python -m pytest tests/test_coverage_checker.py::TestGrandfatherRetiringTable -q
+    expected: >-
+      Exit 0. Asserts scripts/checks/hygiene/x.py -> test_validate.py, scripts/validate.py ->
+      test_validate.py, src/common/config.py -> test_config.py, scripts/executor/step_runner.py ->
+      None, scripts/ops_portal/cli.py -> None, src/common/iceberg_reader.py -> test_iceberg_reader.py,
+      and roster == 24 basenames all hold.
+    fix_if: >-
+      Any mapping diverged from the pre-inversion result, or the roster/retiring set is not seeded
+      with all 24 -- correct the seed set and the gate ordering (retiring check must precede the
+      all-target/mirror branch).
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      The mirror + concern-split package behaviour activates correctly once a home retires (simulated
+      by removing one basename from _RETIRING_GRANDFATHER_HOMES).
+    command: bin/venv-python -m pytest tests/test_coverage_checker.py::TestMirrorRule tests/test_coverage_checker.py::TestCheckTestFileExistsDirectoryTarget -q
+    expected: >-
+      Exit 0. With a home retired, a package-source path resolves to tests/<subpath>/test_<stem>.py
+      and a declared concern-split monolith resolves to its package DIRECTORY; a directory target
+      passes check_test_file_exists iff it exists with >=1 test_*.py, else (False, ...).
+    fix_if: >-
+      The mirror path or the directory acceptance is wrong -- fix _mirror_source_to_test /
+      _CONCERN_SPLIT_TEST_PACKAGES / the check_test_file_exists directory branch.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      The no-cross-test-import guard is anti-no-op (flags a real violation), applies its exemptions,
+      and is clean on the real tree (grandfather allowlist works).
+    command: bin/venv-python -m pytest tests/checks/hygiene/test_validate_no_cross_test_imports.py -q
+    expected: >-
+      Exit 0. A synthetic `from tests.test_foo import X` is flagged; conftest and tests/fixtures/
+      imports are NOT flagged; the grandfathered path is exempt; and validate_no_cross_test_imports
+      over the real repo tests/ tree returns failed == [].
+    fix_if: >-
+      The guard misses the synthetic violation (detection logic wrong), false-positives on
+      conftest/fixtures (exemption wrong), or fails on the real tree (the pre-existing
+      tests/test_verifier_harness.py violation is not in _GRANDFATHERED_CROSS_TEST_IMPORTS) -- fix
+      within the guard module.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      The __init__.py import-mode policy holds: the tests/checks/ package tree collects cleanly under
+      prepend mode with no duplicate-basename / import errors, and the two existing
+      tests/checks/test_validate_*.py still pass under their now-fully-qualified module path.
+    command: bin/venv-python -m pytest tests/checks/ -q
+    expected: >-
+      Exit 0. Collection succeeds (no "import file mismatch" / duplicate-basename error) and every
+      tests/checks/ test passes, including the two pre-existing test_validate_* files now importing as
+      tests.checks.test_validate_* after tests/checks/__init__.py is added.
+    fix_if: >-
+      A collection or import error appears -- an __init__.py is missing along tests/checks[/hygiene]/,
+      or a module was imported by bare name and broke on the fully-qualified path. Add the missing
+      marker or fix the reference; do NOT switch pytest to importlib mode (it would break
+      `from tests.fixtures.iceberg_fixture import ...`).
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Decision 131 is present and amends Decision 104.
+    command: grep -q "^## Decision 131" docs/DECISIONS.md && grep -q "Decision 104" docs/DECISIONS.md && echo DECISION_OK
+    expected: "Prints DECISION_OK."
+    fix_if: >-
+      Decision 131 heading missing or it does not reference Decision 104 -- add/repair the entry in
+      the house format.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      The hard invariant: config/sloc_budgets.yaml is untouched and both modified .py files stay
+      under 500 SLOC (no budget crossing, no --update-sloc-budgets, no forced decomposition).
+    command: git diff --exit-code origin/main -- config/sloc_budgets.yaml && test "$(grep -cvE '^[[:space:]]*($|#)' scripts/test_coverage_checker.py)" -lt 500 && test "$(grep -cvE '^[[:space:]]*($|#)' tests/test_coverage_checker.py)" -lt 500 && echo INVARIANTS_OK
+    expected: "Exit 0; prints INVARIANTS_OK -- budgets byte-identical to main, both files under 500 SLOC."
+    fix_if: >-
+      config/sloc_budgets.yaml diverged (revert it; NEVER run --update-sloc-budgets, which strips the
+      dec-130 markers). If a file crossed 500 SLOC, decompose it into a facade package (Decision 128),
+      do NOT raise the budget.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Authoritative fast-tier presubmit is green AND the new guard actually ran in the sequence
+      (registration proof, not just file existence).
+    command: 'set -o pipefail; bin/venv-python -m scripts.validate --pre 2>&1 | tee /tmp/pre-testdecomp.log; rc=${PIPESTATUS[0]}; grep -qi "cross-test-import" /tmp/pre-testdecomp.log && test "$rc" -eq 0 && echo PRE_GREEN_GUARD_RAN'
+    expected: >-
+      Prints PRE_GREEN_GUARD_RAN -- validate --pre exits 0 (SLOC/CC/raise-gate green, all checks pass
+      within the fast-tier budget) and the new guard's section header appears in the output, proving
+      it is wired into pre_sequence() and passes on the real tree.
+    fix_if: >-
+      --pre is non-zero: read the failing check and fix within scope (if the raise-gate fails, the 24
+      markers or the Decision 131 header are the cause -- never run --update-sloc-budgets). If the
+      guard header is absent, its registry.pre_sequence() entry is missing -- add it.
+constraints:
+  - "MOVE ZERO test files and RETIRE ZERO grandfather entries: _RETIRING_GRANDFATHER_HOMES is seeded with ALL 24 basenames so the mirror rule is dormant and map_source_to_test is byte-identical on day one. No test file is split, renamed, or relocated in this wave."
+  - "NEVER run `bin/venv-python -m scripts.validate --update-sloc-budgets` at any point -- it regenerates config/sloc_budgets.yaml via yaml.safe_dump and STRIPS the `# raise-approved: dec-130` markers, failing validate_sloc_budget_raises. The 24 entries are hand-authored and must stay byte-identical to origin/main (Decision 130 / Decision 128)."
+  - "config/sloc_budgets.yaml is OUT of scope: not edited. New files (the AST guard, its test, tests/checks/conftest.py) MUST land under 500 SLOC and <20 cyclomatic branches per function (Decision 43); if scripts/test_coverage_checker.py or tests/test_coverage_checker.py would cross 500 SLOC, decompose into a facade package (Decision 128) -- never a budget raise, never --update-sloc-budgets."
+  - "validate.py stays the single source of truth: register the new check ONLY in scripts/checks/registry.py -- never hand-wire it into .github/workflows/ci.yml (AGENTS.md merge protocol, Decision 104)."
+  - "Preserve the existing None returns for scripts/executor/** and scripts/ops_portal/** exactly (Decision 124): the grandfather helper returns None for them, and map_source_to_test must return None (not a mirror path) on day one. Their later mirror activation is a per-wave concern, not the foundation's."
+  - "Executor test files (test_execute_recommendation.py, test_executor_*.py) are among the 24 but are NOT touched here; their later decomposition routes via /plan -> /implement, never the frozen executor (Decision 44/117/67). Wave 0 has no executor-boundary interaction."
+  - "The new check's own test goes at its mirror location tests/checks/hygiene/test_validate_no_cross_test_imports.py; map_source_to_test still resolves scripts/checks/**/*.py to tests/test_validate.py under the live grandfather, so check_test_file_exists is satisfied without adding to (and bloating past budget) tests/test_validate.py -- mirroring the existing tests/checks/test_validate_prose_allowlist.py precedent."
+  - "Do NOT relocate any package-specific autouse fixture in this wave. The global recursion guards (_VALIDATE_DEPTH, _COVERAGE_SUBPROCESS, PYTEST_CURRENT_TEST early-exit) and socket guards (--disable-socket addopts + _allow_network_for_integration autouse) STAY solely in root tests/conftest.py; tests/checks/conftest.py is an empty documented scaffold only."
+  - "Sync Decision 131 via `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` (idempotent ETL, DECISIONS.md -> ops_decisions, Decision 84). If creds/network are unavailable, note it in the PR body as a post-merge follow-up -- NEVER hand-edit the ops read cache."
+  - "Do NOT resolve rec-2709: bundled_recommendations is empty. The foundation is only Wave 0; rec-2709 closes when the LAST tests/ budget entry is deleted (acceptance: grep -LE '^[[:space:]]*tests/' config/sloc_budgets.yaml returns the file)."
+  - "PUBLIC repo (Decisions 73/83/101): no AWS account IDs/ARNs/ExternalIds/secrets/trading-alpha/internal hostnames in any artefact. This plan introduces only test-infrastructure code, a validate check, a Decision, and per-directory instructions."
+  - "No rescue agents or workaround loops (Decision 55): the retiring grandfather-table and the single documented cross-test-import allowlist entry are tracked, wave-by-wave-retiring mechanisms (the Decision 128/130 grandfather idiom), not silent workarounds."
+context:
+  - "rec-2709 program shape (from PLAN-sloc-whole-repo-coverage.yaml context + Decision 130 point 5): mirror-structure test packages (tests/<pkg>/test_<module>.py), invert the Decision-104 colocation rule in map_source_to_test to a mirror rule + retiring grandfather-table, add a no-cross-test-import AST guard and a per-package conftest hierarchy, decompose in waves ordered by size (test_validate.py at 7350 SLOC first). This plan builds ONLY that foundation; it does not decompose any file. Mirrors the Decision 102 -> rec-2414 source-file ratchet precedent."
+  - "MIRROR CONVENTION (documented verbatim in the map_source_to_test docstring): drop the leading source-root segment (src or scripts), keep the remaining directory sub-path, and name the test test_<stem>.py in that mirrored dir. Examples: scripts/checks/hygiene/validate_prose_allowlist.py -> tests/checks/hygiene/test_validate_prose_allowlist.py; scripts/executor/step_runner.py -> tests/executor/test_step_runner.py; src/common/config.py -> tests/common/test_config.py. A ROOT script (scripts/validate.py, no sub-path) mirrors to tests/test_validate.py -- identical to the flat rule, so retiring a root-script home is a no-op unless the source is a declared concern-split monolith. WHY drop-root (recorded in the docstring): it matches the established repo precedent (tests/checks/, tests/test_verifiers/) and standard pytest tree-mirroring, and is collision-free for the fixed 24-home roster because no scripts/<x>/ vs src/<x>/ subdirectory-name overlap exists. KNOWN BOUNDARY: were a future scripts/<x>/ and src/<x>/ to collide on a subdir name, that pair would need a preserve-root exception -- out of scope now, flagged for the map's maintainer."
+  - "MONOLITH concern-split: a single-file source whose oversized test must split by concern (ops_writer.py, ops_data_portal.py, s3_log_store.py, verify_ci_workflow.py, contracts_enforcement.py, platform_roadmap_state.py, build_lambda_deploy.py, lambda_manifest.py, ducklake_neon_smoke_test.py, src/common/iceberg_reader.py, src/data/handlers/scheduled_agent_handler.py) has no per-submodule source to mirror 1:1, so its mirror target is a test PACKAGE DIRECTORY -- e.g. scripts/ops_writer.py -> tests/ops_writer/ (concern-split test_*.py modules), src/common/iceberg_reader.py -> tests/common/iceberg_reader/. Declared in _CONCERN_SPLIT_TEST_PACKAGES; check_test_file_exists passes a dir target iff it exists with >=1 test_*.py, and check_per_file_coverage runs pytest against the dir. The two supported patterns are (a) package-mirror (source already a package: checks/**, executor/**, convergence_health, session, sync, ci_rca, ducklake runtime split) and (b) concern-split (source a monolith)."
+  - "GRANDFATHER-TABLE MECHANISM: _grandfathered_source_to_test = the current map_source_to_test body verbatim (all Decision-104 special-cases + None). _ALL_MIRROR_TARGET_HOMES = frozenset of the fixed 24-basename roster; _RETIRING_GRANDFATHER_HOMES = mutable set seeded == all 24 (the not-yet-decomposed subset). map_source_to_test: home=grandfather(sp); None->None; home.name in RETIRING -> home (colocation, pending); home.name in ALL_TARGET -> mirror (decomposed); else -> home (permanent flat home, never a program target). A later wave RETIRES one entry by DELETING one basename line from _RETIRING_GRANDFATHER_HOMES (one-line, low-merge-conflict); the home stays in _ALL_MIRROR_TARGET_HOMES so its source paths route to the mirror rule -- the wave also creates the mirror test files and deletes the config/sloc_budgets.yaml line. Day one: RETIRING == ALL_TARGET, so the mirror branch is never taken and every mapping is byte-identical (proven by the existing TestMapSourceToTest oracle staying green)."
+  - "AST-GUARD POLICY: validate_no_cross_test_imports scans tests/**/*.py; a violation is any ast.Import / ast.ImportFrom whose target module's final path component (or, for `from . import X`, the imported name X) starts with 'test_'. Shared helpers therefore MUST live in conftest.py or tests/fixtures/ (neither starts with test_, so both are exempt by construction) -- encoding 'each mirror package is self-contained'. EXISTING VIOLATIONS: exactly ONE was found -- tests/test_verifier_harness.py:6 `from tests.test_verifiers.test_harness import (...)`, a documented re-export shim ('Redirects to tests/test_verifiers/test_harness.py for package consistency'). It is grandfathered in _GRANDFATHERED_CROSS_TEST_IMPORTS (retired when a later wave removes the shim by moving the shared harness code to tests/fixtures/ or the verifiers mirror). The broad scan confirmed zero other cross-test imports in the tree."
+  - "CONFTEST HIERARCHY: root tests/conftest.py keeps the GLOBAL guards -- recursion (_VALIDATE_DEPTH, _COVERAGE_SUBPROCESS set at import; the PYTEST_CURRENT_TEST early-exit lives in scripts/validate.py main() per Decision 130 pt 4) and sockets (--disable-socket in pyproject.toml addopts + the _allow_network_for_integration autouse fixture). pytest merges conftests up the tree, so a sub-package tests/<pkg>/conftest.py layers UNDER the root without redeclaring globals. The foundation adds ONE example scaffold (tests/checks/conftest.py, docstring-only) and documents the pattern in tests/CLAUDE.md; per-wave decompositions later move each package's autouse fixtures (currently several executor/src-specific autouse fixtures in the root conftest) down into the matching sub-conftest -- NOT in this wave."
+  - "IMPORT-MODE / __init__.py POLICY (verified repo facts): pytest runs the DEFAULT prepend import mode (no import-mode in pyproject [tool.pytest.ini_options]); tests/__init__.py and tests/fixtures/__init__.py exist, but tests/checks/ and tests/test_verifiers/ currently have NO __init__.py (a fragile half-packaged tree). A large nested mirror tree under prepend WITHOUT an __init__.py in every dir risks hard duplicate-basename collection errors; and the repo already relies on `from tests.fixtures.iceberg_fixture import ...`, which REQUIRES the package-path (prepend + __init__.py) model -- so importlib mode is the wrong fix. Policy adopted: RETAIN prepend; every tests/ mirror directory carries an __init__.py (fully-qualified, collision-free module paths). The foundation creates tests/checks/__init__.py + tests/checks/hygiene/__init__.py (the chain above the new guard test); __init__.py is excluded from the SLOC gate and get_changed_source_files, so no budget/coverage impact. tests/test_verifiers/ is left as-is (normalized by its own wave)."
+  - "LATER-WAVE HAND-OFF (executor triad): test_executor_step_runner.py, test_executor_plan.py, test_executor_postflight.py are in the roster but have NO source path mapping to them -- scripts/executor/** returns None in the grandfather helper (preserved per Decision 124). Their decomposition is a PURE test-file split + config-entry deletion; deleting their _RETIRING_GRANDFATHER_HOMES line is a NO-OP (the mirror branch never fires because the source still returns None). The 'one-line retirement' is therefore NOT uniform across all 24 -- documented in tests/CLAUDE.md so wave planners are not misled."
+  - "The new check's test lives at tests/checks/hygiene/ (full mirror), while map_source_to_test still returns tests/test_validate.py for scripts/checks/**/*.py under the live grandfather -- so check_test_file_exists passes on test_validate.py existing, without adding to the 7350-SLOC grandfathered file. This is the existing tests/checks/test_validate_prose_allowlist.py pattern (real test in the mirror dir, mapping points at the monolith). validate_test_coverage runs only in the full (post-merge) tier, where the on-main diff is empty, so no coverage-mapping quirk blocks the PR."
+  - "Decision assigned: Decision 131 (verified: Decision 130 is the current top of docs/DECISIONS.md). Amends Decision 104 (colocation -> mirror + retiring grandfather-table); records the AST guard + conftest-hierarchy convention. Warehouse ID dec-131, synced via --backfill-decisions-md (post-merge follow-up if creds/network unavailable)."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (90 of 90 decisions triaged; no contradiction). CITE: Decision 104, Decision 130, Decision 128, Decision 84, Decision 86. RELATED: Decision 124 (ops_portal/executor None-returns preserved), Decision 44/117 (executor boundary -- later waves only), Decision 48 (V2 tier authority), Decision 43 (SLOC/CC limits), Decision 55 (no workaround loops), Decisions 73/83/101 (public-repo boundary), Decision 102/80 (SLOC ratchet + facade direction)."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round (no blockers; two informational later-wave hand-offs folded into the plan)"
+  - "Preflight (2026-07-15): venv=True, creds=ok, branch=claude/rec-2709-refactor-oversight-flcsac (not main), main=(0 behind, 0 ahead) -- no Main Divergence risk; ci_rca_unresolved=0 (no HARD BLOCK). ci_rca_likely_resolved=1 (rec-2710 candidate on tests/test_ops_data_portal.py, a missing-mock category, different file/category from this foundation -- informational, not addressed here)."
+  - "V2 tier (Decision 48): pure Python source under test (scripts/test_coverage_checker.py, the new check, their tests) plus V1 docs/config (DECISIONS.md, tests/CLAUDE.md, the sub-conftest). No .tf in scope -> no Infrastructure Assessment. scripts/checks and tests/ are not in any src/lambdas manifest -> no Lambda Deployment Assessment. Whole-tree AST scan of tests/ is cheap ast.parse and stays within the --pre budget."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/rec-2709-refactor-oversight-flcsac)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md scope confirmed via decision-scout gate (NO_FLAGS; CITE 104/130/128/84/86)
+  - scripts/test_coverage_checker.py read in full (map_source_to_test, check_test_file_exists, check_per_file_coverage, the None-returns for executor/ops_portal empirically confirmed)
+  - scripts/checks/hygiene/validate_test_count_coupling.py read (the AST-check shape to mirror) and scripts/checks/registry.py read (tier sequences)
+  - tests/test_coverage_checker.py read (importlib load pattern; existing TestMapSourceToTest / TestCheckTestFileExists that must stay green) and tests/conftest.py read (global guards that stay)
+  - "Existing cross-test imports investigated (exactly one -- tests/test_verifier_harness.py -> tests/test_verifiers/test_harness.py): grandfathered, not assumed zero"
+  - "pytest import mode confirmed prepend (default; no import-mode in pyproject) and __init__.py coverage checked (tests/ and tests/fixtures/ have it; tests/checks/, tests/test_verifiers/ do not) -- foundation adds tests/checks[/hygiene]/__init__.py"
+  - config/sloc_budgets.yaml current state read (24 dec-130 entries; to be left byte-identical) and the 24-basename roster captured
+  - Decision 131 confirmed as the next free number (Decision 130 is current top)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    In scripts/test_coverage_checker.py: rename the current map_source_to_test BODY verbatim to a
+    private helper _grandfathered_source_to_test(source_path: Path) -> Path | None (keep every
+    Decision-104 special-case and the None fall-through unchanged; keep _CHECKS_REGISTRY_MECHANISM_FILES,
+    _DUCKLAKE_RUNTIME_SPLIT_MODULES, _NESTED_SUBPACKAGE_TEST_PREFIX as-is).
+  - >-
+    Add module constants: _ALL_MIRROR_TARGET_HOMES = frozenset of the 24 basenames (the fixed
+    rec-2709 roster); _RETIRING_GRANDFATHER_HOMES = a set literal seeded with the SAME 24 basenames,
+    one per line, sorted (waves delete exactly one line each -- keep it a plain set literal for
+    minimal merge conflict); _CONCERN_SPLIT_TEST_PACKAGES = a set of repo-relative monolith source
+    paths whose mirror is a test package DIRECTORY (seed with the known monoliths: scripts/ops_writer.py,
+    scripts/ops_data_portal.py, scripts/s3_log_store.py, scripts/verify_ci_workflow.py,
+    scripts/contracts_enforcement.py, scripts/platform_roadmap_state.py, scripts/build_lambda_deploy.py,
+    scripts/lambda_manifest.py, scripts/ducklake_neon_smoke_test.py, src/common/iceberg_reader.py,
+    src/data/handlers/scheduled_agent_handler.py), with a comment that entries are dormant until their
+    home retires and each wave finalises its own membership.
+  - >-
+    Add _mirror_source_to_test(source_path: Path) -> Path | None: compute rel to ROOT; drop the
+    leading src/scripts segment; if the repo-relative source path is in _CONCERN_SPLIT_TEST_PACKAGES
+    return ROOT / "tests" / <mirror-subpath> / <stem> (a DIRECTORY); else return ROOT / "tests" /
+    <mirror-subpath> / f"test_{stem}.py". Factor any shared path math so both this and the main
+    function stay under 20 cyclomatic branches (Decision 43).
+  - >-
+    Rewrite map_source_to_test(source_path) -> Path | None to: home = _grandfathered_source_to_test(sp);
+    if home is None return None; if home.name in _RETIRING_GRANDFATHER_HOMES return home; if home.name
+    in _ALL_MIRROR_TARGET_HOMES return _mirror_source_to_test(sp); return home. Replace the docstring
+    with a precise statement of the mirror convention, the retiring grandfather-table, and the
+    concern-split package rule (with 2-3 examples). The docstring MUST also record WHY drop-root is
+    safe/chosen (matches repo precedent tests/checks/ + tests/test_verifiers/; collision-free for the
+    fixed 24-home roster since no scripts/<x>/ vs src/<x>/ subdir-name overlap exists) and the known
+    boundary (a future such collision would need a preserve-root exception -- flagged for the maintainer),
+    plus the note that scripts/executor/** and scripts/ops_portal/** deliberately return None (Decision 124).
+  - >-
+    Extend check_test_file_exists: after resolving expected = map_source_to_test(sp), if expected is a
+    DIRECTORY target (no .py suffix) return (True, ...) iff expected.is_dir() and
+    any(expected.glob("test_*.py")), else (False, "missing test package: <rel>"); keep the existing
+    .py-file behaviour and the None-skip. Extend check_per_file_coverage: when the mapped test_path is
+    a directory, run pytest against the directory (str(test_path)) instead of a single file; keep the
+    existence guard and the _COVERAGE_SUBPROCESS recursion break.
+  - >-
+    Create scripts/checks/hygiene/validate_no_cross_test_imports.py modelled on
+    validate_test_count_coupling.py: @registry.register("validate_no_cross_test_imports",
+    owner="platform"); scan sorted((_common.ROOT / "tests").glob("**/*.py")); for each, ast.parse and
+    walk top-level + nested imports; flag ast.Import aliases and ast.ImportFrom whose target module's
+    final dotted component (or, for level>=1 with module is None, each imported name) starts with
+    "test_"; skip any file whose repo-relative path is in _GRANDFATHERED_CROSS_TEST_IMPORTS (seed with
+    "tests/test_verifier_harness.py"); print a section header containing "cross-test-import" and append
+    to failed on any violation. Keep <500 SLOC, <20 branches/function.
+  - >-
+    In scripts/checks/registry.py: add _c("validate_no_cross_test_imports") immediately after
+    _c("validate_test_count_coupling") in BOTH pre_sequence() and full_sequence() (the
+    run_python_checks block). No other edit.
+  - >-
+    Add tests to tests/test_coverage_checker.py: TestGrandfatherRetiringTable (behaviour-preservation
+    invariant + roster/retiring-set assertions, with the count-coupling-ok waiver on the 24-count
+    assertion), TestMirrorRule (monkeypatch-remove one home; assert mirror path and concern-split
+    directory), TestCheckTestFileExistsDirectoryTarget (dir target pass/fail), and a minimal case that
+    drives the NEW directory branch of check_per_file_coverage (e.g. patch map_source_to_test to return
+    a temp package dir containing a test_*.py and assert pytest is invoked against the directory, mocking
+    the subprocess) so the day-one-dead directory branch is not uncovered code. Do NOT alter the existing
+    TestMapSourceToTest / TestCheckTestFileExists classes -- they are the preservation oracle.
+  - >-
+    Create the empty package markers tests/checks/__init__.py and tests/checks/hygiene/__init__.py so
+    the new guard test imports as tests.checks.hygiene.test_validate_no_cross_test_imports under pytest's
+    default prepend import mode (RETAIN prepend -- the repo relies on `from tests.fixtures.iceberg_fixture
+    import ...`; do NOT switch to importlib mode). This fully-qualifies the two existing
+    tests/checks/test_validate_*.py files as tests.checks.test_validate_*; confirm nothing imports them
+    by bare name. Do NOT add tests/test_verifiers/__init__.py (its own wave normalizes that tree).
+  - >-
+    Create tests/checks/hygiene/test_validate_no_cross_test_imports.py: synthetic-violation-flagged,
+    conftest/fixtures-not-flagged, grandfather-exempt, and real-tree-returns-empty cases. Import only
+    from scripts.checks.hygiene (never another test module).
+  - >-
+    Create tests/checks/conftest.py: docstring-only example sub-conftest documenting the layering
+    (global guards stay in root conftest; package autouse fixtures migrate here per-wave). Add NO
+    fixture.
+  - >-
+    Update tests/CLAUDE.md: add the "Test file placement -- mirror convention", "No cross-test
+    imports", and "Per-package conftest hierarchy" sections (replacing the colocation description);
+    retain all existing hygiene rules verbatim.
+  - >-
+    Add Decision 131 to docs/DECISIONS.md, inserted ABOVE Decision 130 (newest-first). Title e.g.
+    "Decision 131: Test-colocation mapping inverted to a mirror rule + retiring grandfather-table;
+    no-cross-test-import guard and per-package conftest hierarchy (amends Decision 104; enables
+    rec-2709)". Use the house format (Status: Decided / Date: 2026-07-15 / Warehouse ID: dec-131 /
+    Problem / Decision / Reversal conditions / Rationale / Related: Decision 104, 130, 128, 43, 86,
+    84). State the day-one byte-identical guarantee and that rec-2709 closes only when the last tests/
+    budget entry is deleted.
+  - >-
+    Sync the decision: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md (idempotent
+    ETL). If creds/network are unavailable, note it in the PR body for a post-merge backfill -- do NOT
+    hand-edit the ops cache.
+  - >-
+    Execute Verification Plan steps 1-7; loop until all pass. On any failure, fix within scope and
+    re-run. NEVER run --update-sloc-budgets.
+  - "Report: the mirror convention + examples, the grandfather-table mechanism and one-line retirement, the concern-split directory-target handling, the AST-guard policy + the one grandfathered violation, the conftest scaffold, Decision 131, and each VP step result."
+work_areas: []
+rollback: >-
+  Revert scripts/test_coverage_checker.py to restore the pre-inversion map_source_to_test (drop the
+  grandfather-table, mirror rule, concern-split, and directory handling); delete
+  scripts/checks/hygiene/validate_no_cross_test_imports.py and remove its two registry.py sequence
+  entries; delete tests/checks/hygiene/test_validate_no_cross_test_imports.py and tests/checks/conftest.py;
+  revert the tests/test_coverage_checker.py additions and the tests/CLAUDE.md edit; remove Decision 131
+  from docs/DECISIONS.md and re-run --backfill-decisions-md. config/sloc_budgets.yaml was never touched.
+  No deployed artefact, no infra, no CI job added -- removal is clean and total; rec-2709 stays open.

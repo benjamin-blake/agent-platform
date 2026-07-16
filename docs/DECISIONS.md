@@ -2,6 +2,95 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 131: Test-colocation mapping inverted to a mirror rule + retiring grandfather-table; no-cross-test-import guard and per-package conftest hierarchy (amends Decision 104; enables rec-2709) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-15
+**Warehouse ID:** dec-131 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 130 grandfathered the 24 pre-existing oversized `tests/` files and deferred both their
+decomposition and the inversion of `map_source_to_test` / the Decision-104 test-colocation rule to
+rec-2709. Before any of the ~14 decomposition waves can move a single test file, the program needs
+shared enabling machinery: a mapping rule that supports a mirror-package test layout, a mechanism
+that lets each wave retire exactly one grandfathered home without touching the other 23, a guard
+against the cross-package coupling a mirror-package split would otherwise invite, and a documented
+conftest layering convention for the sub-packages the splits create.
+
+**Decision:**
+1. **Mirror rule + retiring grandfather-table.** `scripts/test_coverage_checker.py`'s
+   `map_source_to_test` is inverted from unconditional Decision-104 colocation to a two-rule
+   function gated by a retiring grandfather-table. The pre-inversion body is preserved verbatim as
+   `_grandfathered_source_to_test`. `_ALL_MIRROR_TARGET_HOMES` is the fixed 24-basename rec-2709
+   roster (the Decision 130 grandfathered set); `_RETIRING_GRANDFATHER_HOMES` is a mutable subset,
+   seeded identical to the full roster on day one. `map_source_to_test` resolves a source path's
+   grandfathered home; while that home's basename is still in `_RETIRING_GRANDFATHER_HOMES`, the
+   colocation rule applies unchanged; once a wave deletes that basename (a one-line, low-conflict
+   edit), sources that grandfather to it resolve via `_mirror_source_to_test` -- drop the leading
+   `src`/`scripts` root, keep the remaining sub-path, name the test `test_<stem>.py`. A declared
+   concern-split monolith (`_CONCERN_SPLIT_TEST_PACKAGES`, seeded with the 11 known single-file
+   monoliths with no per-submodule source to mirror 1:1) instead resolves to a test PACKAGE
+   DIRECTORY. `check_test_file_exists` / `check_per_file_coverage` are extended to accept a
+   directory target (passes iff it exists with >=1 `test_*.py`; coverage runs pytest against the
+   directory). Day one, `_RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES`, so the mirror
+   branch is dormant and `map_source_to_test` is byte-identical to the pre-inversion function for
+   every input -- proven by the pre-existing `TestMapSourceToTest` / `TestCheckTestFileExists`
+   suite staying green unchanged. `scripts/executor/**` and `scripts/ops_portal/**` continue to
+   return `None` on both rules (Decision 124 preserved).
+2. **No-cross-test-import guard.** A new AST-based check,
+   `scripts/checks/hygiene/validate_no_cross_test_imports.py`
+   (`validate_no_cross_test_imports`, registered in both `pre_sequence()` and `full_sequence()`
+   adjacent to `validate_test_count_coupling`), fails when a `tests/**/*.py` module imports from
+   another `test_*` module. `conftest.py` and `tests/fixtures/**` are exempt by construction (their
+   names never start with `test_`), encoding "each mirror package is self-contained." The one
+   pre-existing violation, `tests/test_verifier_harness.py` (a documented re-export shim of
+   `tests/test_verifiers/test_harness.py`), is grandfathered in
+   `_GRANDFATHERED_CROSS_TEST_IMPORTS` until a later wave removes the shim.
+3. **Per-package conftest hierarchy.** The global recursion guards (`_VALIDATE_DEPTH`,
+   `_COVERAGE_SUBPROCESS`, the `PYTEST_CURRENT_TEST` early-exit) and socket guards
+   (`--disable-socket` + `_allow_network_for_integration`) stay solely in the root
+   `tests/conftest.py`; pytest merges conftests up the tree, so a sub-package
+   `tests/<pkg>/conftest.py` layers under it without redeclaration. `tests/checks/conftest.py` is
+   added as a docstring-only example scaffold; package-specific autouse fixtures migrate into their
+   matching sub-conftest per-wave, alongside that package's test-file decomposition.
+4. **Import-mode / `__init__.py` policy.** pytest stays in the default prepend import mode (the
+   repo already depends on the package-path model via `from tests.fixtures.iceberg_fixture import
+   ...`). Every mirror test directory carries an `__init__.py` so module paths stay fully-qualified
+   and collision-free as the mirror tree grows. `tests/checks/__init__.py` and
+   `tests/checks/hygiene/__init__.py` are added now (the chain above the new guard's own test);
+   `tests/test_verifiers/` is left as-is, normalized by its own wave.
+5. **Zero test files moved, zero grandfather entries retired.** This Decision lands ONLY the
+   enabling machinery. No test file is split, renamed, or relocated, and `config/sloc_budgets.yaml`
+   is untouched. rec-2709 closes only when the last `tests/` budget entry is deleted -- tracked
+   per-wave, not by this Decision.
+
+**Reversal conditions:** none anticipated for the mirror rule or the conftest-hierarchy convention
+while rec-2709 stays open; if the no-cross-test-import guard produces excessive false positives
+once mirror packages proliferate, the detection heuristic (final-dotted-component /
+relative-import-name starts with `test_`) can be tightened without reverting the guard itself.
+
+**Rationale:**
+Inverting the mapping behind a retiring grandfather-table lets each of the ~14 later decomposition
+waves retire exactly one basename with a single-line, low-merge-conflict edit, while guaranteeing
+day-one behaviour is byte-identical to the pre-inversion function (verified, not asserted) so this
+Decision carries zero regression risk on its own. The cross-test-import guard is scoped now, before
+any mirror package exists, so the self-containment invariant is enforced from the first split
+onward rather than retrofitted after packages have already coupled. The conftest-hierarchy note and
+the `__init__.py` policy are recorded as explicit, agent-first documentation (Decision 86) rather
+than left to be rediscovered independently by each of the ~14 waves.
+
+**Related:** Decision 104 (test-colocation mapping this amends; check-registry pattern the new
+guard follows), Decision 130 (the 24-file grandfather this program decomposes; rec-2709 filed
+there), Decision 128 (decompose-by-default / raise-approved marker discipline this foundation
+respects by staying under 500 SLOC), Decision 43 (SLOC/CC limits the new files stay under), Decision
+86 (agent-first, machine-parseable documentation principle), Decision 84 (Warehouse sync via
+`--backfill-decisions-md`); Decision 124 (the `scripts/executor/**` / `scripts/ops_portal/**`
+None-return preserved unchanged by both mapping rules). The day-one byte-identical guarantee is the
+gate for this Decision's own safety; rec-2709 closes only when the last `tests/` budget entry in
+`config/sloc_budgets.yaml` is deleted.
+
+---
+
 ## Decision 130: Structural-size governance covers the whole repo -- one-time grandfather of tests/ debt (completes Decision 43; amends Decisions 102/128 scan scope) (Decided)
 
 **Status:** Decided

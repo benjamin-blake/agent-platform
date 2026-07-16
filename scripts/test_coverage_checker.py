@@ -74,8 +74,9 @@ _NESTED_SUBPACKAGE_TEST_PREFIX = {
 }
 
 
-def map_source_to_test(source_path: Path) -> Path | None:
-    """Map a source file path to its expected test file path.
+def _grandfathered_source_to_test(source_path: Path) -> Path | None:
+    """Pre-inversion (Decision 104 colocation) mapping -- verbatim body, preserved as the
+    grandfather oracle every _RETIRING_GRANDFATHER_HOMES entry still resolves through.
 
     src/**/*.py           -> tests/test_{module}.py  (e.g. src/common/config.py -> tests/test_config.py)
     scripts/*.py          -> tests/test_{name}.py     (e.g. scripts/validate.py -> tests/test_validate.py)
@@ -105,7 +106,8 @@ def map_source_to_test(source_path: Path) -> Path | None:
                               test_llm_github_models_client.py. See _NESTED_SUBPACKAGE_TEST_PREFIX
                               (whitelisted to these five; no general len==3 rule).
 
-    Returns None for paths not under src/ or scripts/.
+    Returns None for paths not under src/ or scripts/ -- including scripts/executor/** and
+    scripts/ops_portal/**, which deliberately have no source-to-test mapping (Decision 124).
     """
     try:
         rel = source_path.resolve().relative_to(ROOT)
@@ -132,7 +134,7 @@ def map_source_to_test(source_path: Path) -> Path | None:
     elif parts[0] == "scripts" and len(parts) == 3 and parts[1] in _NESTED_SUBPACKAGE_TEST_PREFIX:
         # Nested scripts/ subpackages (RS-01 / rec-164): ci_rca/session/sync strip the family
         # prefix, roadmap keeps full names -- each module keeps its flat test (see the prefix map).
-        # One dict-lookup branch (not four parallel elifs) keeps map_source_to_test under the
+        # One dict-lookup branch (not four parallel elifs) keeps this function under the
         # Decision 43 cyclomatic-complexity ceiling; still whitelisted (no general len==3 rule).
         return ROOT / "tests" / f"{_NESTED_SUBPACKAGE_TEST_PREFIX[parts[1]]}{rel.stem}.py"
     elif parts[0] == "scripts" and len(parts) == 2:
@@ -142,15 +144,192 @@ def map_source_to_test(source_path: Path) -> Path | None:
     return None
 
 
-def check_test_file_exists(source_path: Path) -> tuple[bool, str]:
-    """Check whether a test file exists for the given source file.
+# The fixed rec-2709 roster: the 24 tests/ basenames grandfathered whole-repo by Decision 130
+# (config/sloc_budgets.yaml). A frozenset -- membership only, never mutated.
+_ALL_MIRROR_TARGET_HOMES: frozenset[str] = frozenset(
+    {
+        "test_build_lambda_deploy.py",
+        "test_ci_rca_evidence.py",
+        "test_contracts_enforcement.py",
+        "test_convergence_health.py",
+        "test_ducklake_maintenance_handler.py",
+        "test_ducklake_neon_smoke_test.py",
+        "test_ducklake_runtime.py",
+        "test_ducklake_writer_handler.py",
+        "test_execute_recommendation.py",
+        "test_executor_plan.py",
+        "test_executor_postflight.py",
+        "test_executor_step_runner.py",
+        "test_iceberg_reader.py",
+        "test_lambda_manifest.py",
+        "test_ops_data_portal.py",
+        "test_ops_writer.py",
+        "test_platform_roadmap_state.py",
+        "test_s3_log_store.py",
+        "test_scheduled_agent_handler.py",
+        "test_session_postflight.py",
+        "test_session_preflight.py",
+        "test_sync_ops.py",
+        "test_validate.py",
+        "test_verify_ci_workflow.py",
+    }
+)
 
-    Returns (True, reason) if the test file exists or the path is unmapped.
-    Returns (False, reason) if the test file is missing.
+# The not-yet-decomposed subset of _ALL_MIRROR_TARGET_HOMES -- a home in this set still
+# resolves through the grandfather (colocation) rule; a wave RETIRES a target by deleting
+# its one line here, which switches every source path mapping to that home over to the
+# mirror rule. Seeded == _ALL_MIRROR_TARGET_HOMES on day one, so the mirror branch below is
+# dormant and map_source_to_test is byte-identical to the pre-inversion function for every
+# input (proven by TestMapSourceToTest / TestCheckTestFileExists staying green unchanged).
+# Kept a plain set literal, one basename per line, for minimal per-wave merge conflict.
+_RETIRING_GRANDFATHER_HOMES: set[str] = {
+    "test_build_lambda_deploy.py",
+    "test_ci_rca_evidence.py",
+    "test_contracts_enforcement.py",
+    "test_convergence_health.py",
+    "test_ducklake_maintenance_handler.py",
+    "test_ducklake_neon_smoke_test.py",
+    "test_ducklake_runtime.py",
+    "test_ducklake_writer_handler.py",
+    "test_execute_recommendation.py",
+    "test_executor_plan.py",
+    "test_executor_postflight.py",
+    "test_executor_step_runner.py",
+    "test_iceberg_reader.py",
+    "test_lambda_manifest.py",
+    "test_ops_data_portal.py",
+    "test_ops_writer.py",
+    "test_platform_roadmap_state.py",
+    "test_s3_log_store.py",
+    "test_scheduled_agent_handler.py",
+    "test_session_postflight.py",
+    "test_session_preflight.py",
+    "test_sync_ops.py",
+    "test_validate.py",
+    "test_verify_ci_workflow.py",
+}
+
+# Repo-relative (POSIX, ROOT-relative) source paths whose mirror target is a test PACKAGE
+# DIRECTORY rather than a single test_<stem>.py file: single-file monoliths with no
+# per-submodule source to mirror 1:1, so their eventual decomposition splits the TEST by
+# concern into multiple test_*.py modules under one directory. Entries are dormant until
+# their _RETIRING_GRANDFATHER_HOMES line is deleted; each wave finalises its own membership
+# (this seed is the known monolith roster at foundation time, not a closed list).
+_CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
+    {
+        "scripts/ops_writer.py",
+        "scripts/ops_data_portal.py",
+        "scripts/s3_log_store.py",
+        "scripts/verify_ci_workflow.py",
+        "scripts/contracts_enforcement.py",
+        "scripts/platform_roadmap_state.py",
+        "scripts/build_lambda_deploy.py",
+        "scripts/lambda_manifest.py",
+        "scripts/ducklake_neon_smoke_test.py",
+        "src/common/iceberg_reader.py",
+        "src/data/handlers/scheduled_agent_handler.py",
+    }
+)
+
+
+def _mirror_source_to_test(source_path: Path) -> Path | None:
+    """Mirror-convention target for `source_path`, used once its grandfather home retires.
+
+    Drops the leading src/scripts root segment, keeps the remaining directory sub-path, and
+    names the test test_<stem>.py in that mirrored directory -- e.g.
+    scripts/checks/hygiene/validate_prose_allowlist.py ->
+    tests/checks/hygiene/test_validate_prose_allowlist.py; scripts/executor/step_runner.py ->
+    tests/executor/test_step_runner.py; src/common/config.py -> tests/common/test_config.py.
+    A root script (no sub-path, e.g. scripts/validate.py) mirrors to tests/test_validate.py --
+    identical to the flat rule, so retiring a root-script home is a no-op unless the source is
+    a declared concern-split monolith. A declared concern-split monolith
+    (_CONCERN_SPLIT_TEST_PACKAGES) instead resolves to its test PACKAGE DIRECTORY (no test_
+    prefix, no .py suffix) -- e.g. scripts/ops_writer.py -> tests/ops_writer/;
+    src/common/iceberg_reader.py -> tests/common/iceberg_reader/.
+    """
+    try:
+        rel = source_path.resolve().relative_to(ROOT)
+    except ValueError:
+        return None
+
+    parts = rel.parts
+    if len(parts) < 2:
+        return None
+
+    mirror_subdir = Path(*parts[1:-1]) if len(parts) > 2 else Path()
+    stem = rel.stem
+
+    if rel.as_posix() in _CONCERN_SPLIT_TEST_PACKAGES:
+        return ROOT / "tests" / mirror_subdir / stem
+    return ROOT / "tests" / mirror_subdir / f"test_{stem}.py"
+
+
+def map_source_to_test(source_path: Path) -> Path | None:
+    """Map a source file path to its expected test file (or test package directory) path.
+
+    Two rules, gated by a retiring grandfather-table (Decision 131, amends Decision 104):
+
+    1. COLOCATION (grandfathered, retiring): while a source path's grandfathered test home's
+       basename is still in _RETIRING_GRANDFATHER_HOMES, the pre-inversion colocation rule
+       applies unchanged -- see _grandfathered_source_to_test for its full per-pattern table.
+    2. MIRROR (post-retirement): once a wave deletes that basename from
+       _RETIRING_GRANDFATHER_HOMES, every source path that grandfathers to it instead resolves
+       via _mirror_source_to_test -- drop the leading src/scripts root, keep the remaining
+       sub-path, name the file test_<stem>.py (or, for a declared concern-split monolith, the
+       test PACKAGE DIRECTORY <mirror-subpath>/<stem>/). Examples: scripts/checks/hygiene/
+       validate_prose_allowlist.py -> tests/checks/hygiene/test_validate_prose_allowlist.py;
+       scripts/executor/step_runner.py -> tests/executor/test_step_runner.py;
+       src/common/config.py -> tests/common/test_config.py; scripts/ops_writer.py (concern-split)
+       -> tests/ops_writer/.
+
+    WHY drop-root is safe/chosen: it matches established repo precedent (tests/checks/,
+    tests/test_verifiers/) and standard pytest tree-mirroring, and is collision-free for the
+    fixed 24-home roster because no scripts/<x>/ vs src/<x>/ subdirectory-name overlap exists.
+    KNOWN BOUNDARY: a future scripts/<x>/ vs src/<x>/ collision would need a preserve-root
+    exception for that pair -- out of scope now, flagged for the map's maintainer.
+
+    scripts/executor/** and scripts/ops_portal/** deliberately return None on both rules
+    (Decision 124) -- their grandfathered home is already None, so neither the retiring nor the
+    mirror branch ever fires for them; a source path with no grandfathered home never joins the
+    roster.
+
+    Day one, _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES (every target is still
+    retiring), so the mirror branch below is never taken and every result is byte-identical to
+    the pre-inversion function (the TestMapSourceToTest / TestCheckTestFileExists oracle proves
+    this). A later wave retires exactly one basename per decomposition (a one-line,
+    low-merge-conflict edit to _RETIRING_GRANDFATHER_HOMES).
+
+    Returns None for paths not under src/ or scripts/, or with no grandfathered home.
+    """
+    home = _grandfathered_source_to_test(source_path)
+    if home is None:
+        return None
+    if home.name in _RETIRING_GRANDFATHER_HOMES:
+        return home
+    if home.name in _ALL_MIRROR_TARGET_HOMES:
+        return _mirror_source_to_test(source_path)
+    return home
+
+
+def check_test_file_exists(source_path: Path) -> tuple[bool, str]:
+    """Check whether a test file (or, for a concern-split target, a test package directory)
+    exists for the given source file.
+
+    Returns (True, reason) if the test file/package exists or the path is unmapped.
+    Returns (False, reason) if the test file/package is missing.
     """
     expected = map_source_to_test(source_path)
     if expected is None:
         return True, "skipped: not in src/ or scripts/"
+    if expected.suffix != ".py":
+        # Concern-split mirror target: a test PACKAGE DIRECTORY, not a single file.
+        if expected.is_dir() and any(expected.glob("test_*.py")):
+            return True, "test package found"
+        try:
+            display = expected.relative_to(ROOT)
+        except ValueError:
+            display = expected
+        return False, f"missing test package: {display}"
     if expected.exists():
         return True, "test file found"
     try:
@@ -158,6 +337,13 @@ def check_test_file_exists(source_path: Path) -> tuple[bool, str]:
     except ValueError:
         display = expected
     return False, f"missing test file: {display}"
+
+
+def _is_empty_directory_target(test_path: Path) -> bool:
+    """True if `test_path` is a concern-split test PACKAGE DIRECTORY not yet populated with
+    any test_*.py -- factored out so check_per_file_coverage's own branch count (Decision 43)
+    absorbs one Call node instead of the nested is_dir()/any() pair."""
+    return test_path.is_dir() and not any(test_path.glob("test_*.py"))
 
 
 def check_per_file_coverage(source_files: list[Path]) -> list[str]:
@@ -184,6 +370,11 @@ def check_per_file_coverage(source_files: list[Path]) -> list[str]:
         # re-invokes check_per_file_coverage, each spawning more pytest processes.
         test_path = map_source_to_test(source_path)
         if test_path is None or not test_path.exists():
+            continue
+        # Concern-split mirror target (post-retirement): run pytest against the whole test
+        # package directory (test_path_str below); skip if not yet populated -- mirrors the
+        # check_test_file_exists directory guard.
+        if _is_empty_directory_target(test_path):
             continue
         test_path_str = str(test_path.relative_to(ROOT)).replace("\\", "/")
 
