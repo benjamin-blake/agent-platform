@@ -1,0 +1,414 @@
+schema_version: 1
+slug: "daf-size-governance-ratify"
+intent: >-
+  Ratify the decisions-authoring-format audit's `ratify-prose-with-size-governance` disposition as one
+  numbered Decision, add a deterministic DECISIONS.md size-governance guard in both validate.py tiers, and
+  correct the T1.5 roadmap retirement end-state -- governing the decision log's growth so the decision-scout
+  /plan gate stays viable while the warehouse authority flip remains future work.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-daf-size-governance-ratify.yaml
+phase: >-
+  Platform tier_item T1.5 (ops_decisions graduation) end-state correction + governance backstop for the
+  DECISIONS.md prose monolith; actions audit findings DAF-02 and DAF-04 plus the audit's format_disposition
+  (ratify-prose-with-size-governance). DAF-01 and DAF-03 are adopted as direction and deferred to follow-on
+  IMPLEMENTATION plans.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add ONE new numbered Decision entry (next free number, re-derived at implement time -- currently max is
+      132, so likely 133) at the TOP of the file, ratifying the audit's format_disposition. Modern-band format,
+      mirroring Decision 114. No restructuring of any existing entry.
+  - file: scripts/checks/decisions/__init__.py
+    action: Create
+    purpose: New check subpackage for decision-log guards (no scripts/checks/decisions/ dir exists yet).
+  - file: scripts/checks/decisions/validate_decisions_size.py
+    action: Create
+    purpose: >-
+      New registry check (owner=platform) enforcing the DECISIONS.md/DECISIONS_ARCHIVE.md size ceiling via three
+      module-level constants and a pure `_decisions_size_issues()` helper, mirroring the
+      validate_platform_roadmap.py precedent (module-level constant + pure helper + guarded sys.path inject).
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: Insert `_c("validate_decisions_size")` into BOTH pre_sequence() and full_sequence().
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the facade re-export import so the check resolves via `globals()[name]` in _dispatch_check and via
+      `from scripts.validate import validate_decisions_size` (required by TestFacadeCompleteness). Single import
+      line only.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Add "validate_decisions_size" to BOTH REQUIRED_PRE_CHECKS and REQUIRED_FULL_CHECKS membership floors so the
+      check's presence in both tiers is enforced.
+  - file: tests/checks/decisions/__init__.py
+    action: Create
+    purpose: Mirror-package init for the new check's test module (Decision 131 mirror convention).
+  - file: tests/checks/decisions/test_validate_decisions_size.py
+    action: Create
+    purpose: >-
+      Unit tests exercising `_decisions_size_issues()` below/at/above each of the three constants via real code
+      paths (synthetic content), plus coverage of the relief-valve failure message and archive inclusion.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      DAF-04 end-state correction on tier_item T1.5: rewrite the first exit criterion to gate prose-file
+      retirement on the decisions read-portal + hermetic-read path (all consumers incl. the repointed R1 guard)
+      AND the DAF-01 content-parity gate; add the parity gate as an explicit T1.5 exit criterion; mirror the
+      portal/parity wording into the Phase 3b intent text; fix the stale files_in_scope comment that
+      cross-references the now-reserved T5.4.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/DECISIONS.md carries exactly one new `## Decision NNN:` entry at the top (NNN = the next free number
+    re-derived at implement time) in Decision-114-parity format (Status/Date/Warehouse ID/Decision/Reversal
+    conditions/Related/`---`), whose body records all five clauses: (a) prose-monolith authoring retained on
+    Decision 87 cl.2-3; (b) the size ceiling + deterministic dual guard naming the three constants,
+    validate_decisions_size, both tiers, and the archival/compaction relief valves; (c) adopts the DAF-03
+    authoring-contract/single-shared-parser direction as follow-on work; (d) adopts DAF-01's ETL-parity +
+    fidelity-tripwire direction as follow-on work; (e) records the T1.5 portal-read end-state + DAF-01 parity
+    correction.
+  - >-
+    scripts/checks/decisions/validate_decisions_size.py defines module-level `_DECISIONS_LIVE_MAX_BYTES = 400_000`,
+    `_DECISIONS_LIVE_MAX_H2 = 120`, `_DECISIONS_COMBINED_MAX_BYTES = 700_000` and a pure `_decisions_size_issues()`
+    helper; the check is registered `@registry.register("validate_decisions_size", owner="platform")` and covers
+    BOTH docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md, with a failure message that names archival (DPI-04) and
+    compaction-to-pointer-stubs as the relief valves.
+  - >-
+    validate_decisions_size runs in BOTH the --pre and full validate tiers (present in registry.pre_sequence()
+    and full_sequence()) and is listed in BOTH REQUIRED_PRE_CHECKS and REQUIRED_FULL_CHECKS; the guard PASSES on
+    the current tree (336 KB / 92 live headers / 430 KB combined all sit below the 400_000 / 120 / 700_000 ceilings).
+  - >-
+    The size helper is exercised below/at/above each of the three constants via unit tests that drive the real
+    `_decisions_size_issues()` code path (not mocks of it); AND the registered `validate_decisions_size(failed)`
+    check function itself is exercised for both a PASS and a FAIL case via `patch("scripts.checks._common.ROOT",
+    tmp_path)` over a synthetic docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md tree, so `validate_test_coverage`'s
+    100%-of-new-code gate is satisfied (mirrors the validate_platform_roadmap test).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml tier_item T1.5's first exit criterion encodes the portal-read + hermetic-cache
+    end-state (decisions read portal / read-lambda + named verbs + synced hermetic cache; all consumers incl. the
+    repointed R1 guard) and NOT a "generated projection markdown file"; a distinct DAF-01 content-parity exit
+    criterion is present; the Phase 3b intent wording mirrors the portal/parity end-state; and the stale
+    `# ... per T5.4` files_in_scope comment is corrected to reference T1.5 c1.
+  - The plan document validates against the PlanDocument schema.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise the size helper below/at/above each of the three constants via its unit tests (real code paths,
+      synthetic byte/header content).
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decisions_size.py -q
+    expected: >-
+      All tests pass; the suite includes below/at/above cases for each of _DECISIONS_LIVE_MAX_BYTES,
+      _DECISIONS_LIVE_MAX_H2, and _DECISIONS_COMBINED_MAX_BYTES, plus a case asserting the failure message names
+      the archival/compaction relief valves and that DECISIONS_ARCHIVE.md is covered, AND a PASS case and a FAIL
+      case that call the REGISTERED validate_decisions_size(failed) function with patch("scripts.checks._common.ROOT",
+      tmp_path) over a synthetic docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md tree, so the check function's own
+      file-read / count / print / failed.append branches are covered (validate_test_coverage 100%-of-new-code).
+    fix_if: >-
+      A boundary case is missing, the helper mis-handles the at-ceiling boundary (off-by-one), the archive file is
+      not counted, or the registered validate_decisions_size(failed) function is left uncovered (patch _common.ROOT
+      and assert both a PASS and a FAIL) -- fix the helper/tests until all boundary and coverage cases pass.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: "Durable coverage is the registered validate_decisions_size check plus its permanent mirror-package unit tests; a verification_registry graduation would duplicate standing coverage (Decision 132)."
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the three ceiling constants exist in the check module.
+    command: grep -Eq '_DECISIONS_LIVE_MAX_BYTES|_DECISIONS_LIVE_MAX_H2|_DECISIONS_COMBINED_MAX_BYTES' scripts/checks/decisions/validate_decisions_size.py
+    expected: Exit 0 -- all three constant names are present.
+    fix_if: A constant is missing or misnamed -- add/rename it in the module.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: "Structural constant-existence check; the constants are exercised by validate_decisions_size and its unit tests, so no separate standing guard is warranted (Decision 132)."
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the check is registered in BOTH tiers and enforced by BOTH membership floors, via the registry
+      oracle tests (real registry sequences + floors).
+    command: bin/venv-python -m pytest tests/test_checks_registry.py::TestSequenceInvariants tests/test_checks_registry.py::TestFacadeCompleteness -q
+    expected: >-
+      All pass -- the membership-floor tests confirm REQUIRED_PRE_CHECKS/REQUIRED_FULL_CHECKS (now including
+      validate_decisions_size) are subsets of the actual pre/full sequences, and the facade-completeness tests
+      confirm validate_decisions_size is reachable via getattr(validate, name) and `from scripts.validate import`.
+    fix_if: >-
+      A floor or facade test fails -- add the check to the missing sequence in registry.py, the missing floor in
+      tests/test_checks_registry.py, or the facade import in scripts/validate.py.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: "Exercises the existing tests/test_checks_registry.py oracle, already a permanent suite test; no new verification_registry primitive warranted (Decision 132)."
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the guard actually runs and prints its header in the full validate tier (authoritative full-tier presence proof).
+    command: bin/venv-python -m scripts.validate 2>&1 | grep -qi 'decisions size'
+    expected: Exit 0 -- the guard's section header (containing "DECISIONS size") appears in full-tier output.
+    fix_if: >-
+      The header does not appear -- confirm _c("validate_decisions_size") is in full_sequence() and the check
+      prints a header whose text contains the case-insensitive substring "decisions size".
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the guard PASSES on the current tree (all three ceilings sit above current size).
+    command: bin/venv-python -m scripts.validate --pre 2>&1 | grep -A3 -i 'decisions size'
+    expected: >-
+      The guard reports PASS (no FAIL line) -- 336 KB live / 92 headers / 430 KB combined are all under the
+      400_000 / 120 / 700_000 ceilings (re-derive at implement time -- sizes drift as decisions land).
+    fix_if: The guard FAILS on day one -- a ceiling was set at or below current size; raise it above current per Decision A.
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    action: Assert the rewritten T1.5 first exit criterion encodes the portal-read end-state (not a projection markdown file).
+    command: grep -q 'decisions read portal' docs/ROADMAP-PLATFORM.yaml && ! grep -q 'generated projection markdown' docs/ROADMAP-PLATFORM.yaml
+    expected: >-
+      Exit 0 -- the portal-read end-state phrase is present and the audit's "generated projection markdown"
+      framing is absent.
+    fix_if: >-
+      The portal-read phrase is missing, or projection-markdown language leaked in -- rewrite T1.5 c1 per
+      Decision B (portal + hermetic cache, mirroring the recs read path).
+    hermetic: true
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: Assert the DAF-01 content-parity gate is present as a T1.5 exit criterion and the R1-guard repoint is named.
+    command: "grep -q 'content-parity' docs/ROADMAP-PLATFORM.yaml && grep -A55 '^  - id: T1.5$' docs/ROADMAP-PLATFORM.yaml | grep -q 'validate_candidate_decision_ratification'"
+    expected: >-
+      Exit 0 -- the parity criterion (every live-entry governing section recoverable from ops_decisions before any
+      reader is repointed) and the R1 guard repoint are both encoded in T1.5's text.
+    fix_if: The parity criterion or R1 repoint is missing -- add per Decision B.
+    hermetic: true
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: Assert the stale T5.4 cross-reference in T1.5's files_in_scope comment is corrected.
+    command: bin/venv-python -m pytest tests/checks/roadmap/test_validate_platform_roadmap.py -q && ! grep -q 'eventually deleted in 3b (per T5.4)' docs/ROADMAP-PLATFORM.yaml
+    expected: >-
+      Roadmap schema validation passes and the stale `# eventually deleted in 3b (per T5.4)` comment no longer
+      appears (replaced by a T1.5 c1 cross-reference).
+    fix_if: The stale comment remains or the roadmap fails schema validation -- correct the comment / fix the structural error.
+    hermetic: true
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: Validate this plan document against the PlanDocument schema.
+    command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-daf-size-governance-ratify.yaml
+    expected: Exit 0 -- the plan document is schema-valid.
+    fix_if: Schema errors are reported -- fix the offending field and re-run.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: "One-time plan-document schema validation, not a product regression guard (Decision 132)."
+  - step: 10
+    phase: post-deploy
+    action: >-
+      After merge, confirm the new dec-NNN row lands in ops_decisions via the portal reader/cache (rec-autoclose.yml
+      auto-runs `--backfill-decisions-md` on the merge touching DECISIONS.md, per Decision 84).
+    command: bin/venv-python -m scripts.sync.ops pull && grep -q '"dec-NNN"' logs/.decisions-index.jsonl
+    expected: >-
+      The read cache rebuilt from the DuckLake reader contains the new dec-NNN row (substitute the actual number
+      allocated at implement time).
+    fix_if: >-
+      The row is absent after the backfill -- inspect the rec-autoclose.yml backfill run; re-run
+      `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` if the auto-run did not fire.
+    hermetic: false
+  - step: 11
+    phase: post-deploy
+    action: Confirm the R1 ratification guard stays green with the new decision header present.
+    command: bin/venv-python -m scripts.validate --pre 2>&1 | grep -A3 -i 'Candidate decision ratification'
+    expected: The R1 guard reports PASS -- adding a new `## Decision NNN:` header does not dangle any ratified CD pointer.
+    fix_if: R1 fails -- inspect for an accidental CD/header mismatch introduced by the edit.
+    hermetic: false
+constraints:
+  - "Do NOT decompose into recommendations -- all work executes inline (bundled_recommendations is empty)."
+  - >-
+    Do NOT touch scripts/decisions_md.py or src/schemas/decision.py -- the parser and schema are owned by the
+    follow-on DAF-01 IMPLEMENTATION plan. This plan does not change the parser or the schema.
+  - The docs/DECISIONS.md change is a NEW entry only -- no restructuring of any existing entry.
+  - Do NOT build the archival tool (DPI-04's scope) or the decisions read-portal (future T1.5 work); this plan only NAMES them.
+  - "No em dashes anywhere (ASCII hyphen only); no emojis; ruff line length 127; type hints required; bin/venv-python for all Python."
+  - "No `python -c` one-liners in acceptance/VP commands (tests/CLAUDE.md); no `pytest -k` selectors -- run via `pytest path::Class`."
+  - >-
+    SLOC decompose-by-default if any scope file would cross its config/sloc_budgets.yaml budget (Decision 128) --
+    the new check module and its test are small and expected well under 500 SLOC; do NOT raise a budget.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    Numbering-race: re-derive the next free `## Decision NNN:` at implement time (max is 132 now); a concurrent PR
+    may claim the number. The R1 guard catches any header mismatch, so shifting to the next free number at
+    execution time is safe. The new Decision entry is authored under an execution-time human confirmation gate.
+  - >-
+    Do NOT restructure T1.5's exit_criteria into ExitCriterion objects -- keep them bare strings (as they are
+    today). Edit only the criterion TEXT, the added parity criterion (bare string), the Phase 3b intent wording,
+    and the files_in_scope comment; leave the `- id: T1.5` line untouched so validate_platform_roadmap check (ii)
+    (touched-item-must-have-no-bare-string-criteria) does not fire.
+context:
+  - >-
+    Source of truth: audits/decisions-authoring-format-d140093.yaml (pinned at commit d140093 / 2026-07-05).
+    This plan actions findings DAF-02 (size governance) and DAF-04 (roadmap end-state) plus the audit's
+    format_disposition verdict `ratify-prose-with-size-governance` (confidence CONFIRMED). DAF-01 (ETL parity)
+    and DAF-03 (authoring contract / shared parser) are ADOPTED as direction and deferred to follow-on
+    IMPLEMENTATION plans -- cited as forward work in the new Decision, not built here.
+  - >-
+    DRIFT CORRECTION 1 (audit stale vs live main): T5.4 is now `status: reserved` with empty exit_criteria --
+    the 2026-07-06 roadmap audit RMAP-05 folded its delete mechanic into T1.5's FIRST exit criterion (T1.5 c1,
+    near roadmap line 3766). So DAF-04's fix targets T1.5 c1, NOT T5.4 (now empty). The DAF-04 acceptance was
+    re-pointed off T5.4 onto T1.5 c1 text (VP steps 6-8). The stale T1.5 files_in_scope comment
+    `docs/DECISIONS.md  # eventually deleted in 3b (per T5.4)` (line 3748) is corrected to reference T1.5 c1.
+  - >-
+    DRIFT CORRECTION 2 (live sizes, not the audit's stale 271KB/81; re-derive at implement time): DECISIONS.md =
+    336 KB / 92 `## Decision` headers; DECISIONS_ARCHIVE.md = 93.6 KB; combined = 430 KB; max live decision number =
+    132 (next free likely 133). The three ceilings (400_000 / 120 / 700_000) sit above these so the guard does not
+    fail on day one.
+  - >-
+    DRIFT CORRECTION 3 (check-registry facts, verified against code): the new check registers via
+    `@registry.register("validate_decisions_size", owner="platform")` in scripts/checks/registry.py; its name is
+    inserted into pre_sequence() and full_sequence(); scripts/validate.py dispatches via `globals()[name]`
+    (_dispatch_check, line 248) so a facade import line IS required there (the registry docstring's "never
+    scripts/validate.py" is aspirational -- TestFacadeCompleteness asserts every registered check is reachable
+    via validate.<name>). The oracle tests/test_checks_registry.py uses subset FLOORS
+    (REQUIRED_PRE_CHECKS/REQUIRED_FULL_CHECKS) -- add the check to BOTH. No scripts/checks/decisions/ dir exists
+    yet -- this plan creates it. The check mirrors scripts/checks/roadmap/validate_platform_roadmap.py
+    (module-level constant + pure `_roadmap_size_issues()` helper + guarded sys.path inject).
+  - >-
+    Test home is the Decision 131 MIRROR path: scripts/checks/decisions/validate_decisions_size.py ->
+    tests/checks/decisions/test_validate_decisions_size.py (rec-2709 Wave 1 retired test_validate.py from the
+    grandfather table, so scripts/checks/**/*.py resolves via the mirror rule). The mirror dir needs an
+    __init__.py. Confirmed via map_source_to_test.
+  - >-
+    Coverage: scripts/validate.py maps to the tests/validate/ package (exists) -- the single facade import line is
+    executed on module import, so it is covered without a new test file. scripts/checks/registry.py maps to
+    tests/test_checks_registry.py (exists) -- the two new `_c(...)` entries are covered by the sequence-iteration
+    tests.
+  - >-
+    DECISION B (human override of the audit): the T1.5 end-state is portal-read -- decisions served from the
+    SCD2 DuckLake via a read portal / read-lambda + named verbs + a synced hermetic cache, mirroring the recs
+    read path (the ducklake_reader closed boundary + logs/.recommendations-log.jsonl synced via sync.ops pull),
+    which ALL consumers read from -- planning agents (decision-scout, preflight) AND CI guards (the R1 guard
+    validate_candidate_decision_ratification, repointed off its prose-header grep onto the portal/cache). NOT a
+    "generated projection markdown file." The portal BUILD stays future T1.5 work (strategic/frozen); this plan
+    edits roadmap TEXT only.
+  - >-
+    DECISION A (human-decided): ONE new module registered in BOTH tiers (cheap stat+grep). Constants:
+    _DECISIONS_LIVE_MAX_BYTES=400_000 (binding constraint: the decision-scout gate reads the whole LIVE file
+    every /plan; ~2x headroom on a 200k-token window), _DECISIONS_LIVE_MAX_H2=120 (triage-quality guard),
+    _DECISIONS_COMBINED_MAX_BYTES=700_000 (live+archive backstop, since archival only shuffles bytes between the
+    two files). Failure message MUST name relief valves: archival per DPI-04
+    (audits/decision-log-premise-integrity-8fb581e.yaml) and compaction of superseded bodies to pointer stubs.
+    Cover BOTH files. Do NOT build the archival tool.
+  - >-
+    Freshness Gate (T1.5): (1) silent-completion -- T1.5 is not_started/strategic/frozen under CD.17, not
+    complete; no closeout. (2) stale-reference -- the `per T5.4` files_in_scope comment IS stale (T5.4 reserved);
+    corrected as an explicit scope edit. (3) supersession -- T5.4 already tombstoned into T1.5 c1 by RMAP-05; no
+    new supersession. (4) gating-decision -- T1.5 is gated by CD.18 (pending) for COMPLETION; this plan only
+    edits roadmap TEXT (does not start T1.5 implementation), so the CD.18 completion gate is not engaged. This is
+    NOT a follow-on plan closing T1.5 criteria -- no `closes_criteria` is declared; the criterion text is
+    re-grounded/extended per DAF-04, not flipped to `met`.
+  - >-
+    Closure Obligation: EXEMPT -- additive plan. bundled_recommendations is empty (not rec-resolving) and the
+    scope contains no Delete row and no X->Y surface cutover (the roadmap edit re-words a FUTURE end-state; the
+    actual prose-file retirement is future T1.5 work). No stale-reference sweep obligation triggers.
+  - >-
+    ci-rca deferral (HARD BLOCK relief): preflight reports one unresolved ci-rca rec, rec-2710 (Critical,
+    tests/test_ops_data_portal.py -- "Unit test hits real AWS: missing mock for
+    find_recent_ci_rca_rec_by_fingerprint"). This governance-ratification plan is disjoint from rec-2710 on all
+    three Related-Work axes (different file, no shared Decision, different failure category: test-isolation /
+    missing-AWS-mock vs decisions-size-governance). Deferred per human pre-approval of this scope; rec-2710 is
+    tracked for a dedicated test-isolation plan and is not addressable inside this plan's scope.
+  - >-
+    Main Divergence: the overseer REBASED this branch onto current origin/main before implementation. The branch
+    was 3 commits behind and origin/main gained Decision 132 (verification-graduation-enforcement, #592), plus #593
+    and #591; scope files docs/DECISIONS.md, docs/ROADMAP-PLATFORM.yaml, scripts/checks/registry.py, and
+    scripts/validate.py all changed on main and overlap this plan. The branch carried no committed work, so the
+    rebase was clean; the implement agent authors against current main. Consequence: Decision 132's
+    validate_graduation_completeness requires a graduation disposition on every pre-deploy VP step -- all are present
+    (waive/not-applicable), and the new Decision number is 133 (main max is now 132).
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (triaged 91 of 91). CITE:
+    Decision 114 (size-ceiling + deterministic-guard precedent this mirrors), Decision 104 (check-registry
+    mechanism / facade re-export / coverage mapping), Decision 131 (mirror-package test layout + __init__.py
+    chain), Decision 86 (rationale->numbered Decision routing; prose-monolith retained not converted), Decision 87
+    (cl.2-3 git-authoritative-until-autonomous-producer property test), Decision 84 (ops_decisions ETL + named-verb
+    read boundary underlying the T1.5 portal end-state), Decision 105 (the R1 guard's hermetic header referential
+    target to repoint at the flip). RELATED to also cite in the Decision body: Decision 123 (ratify CD.18 -- T1.5
+    Phase-2 revival), Decision 110 (agent-first one-file exemplar), Decision 132 (verification-graduation-enforcement,
+    landed on origin/main during this session -- this plan's pre-deploy VP steps carry graduation dispositions to
+    satisfy its validate_graduation_completeness gate). Two NOTE flags (neither BLOCK), both
+    pre-addressed: (1) Decision 104/131 coverage-mapping -- RESOLVED: map_source_to_test resolves
+    scripts/checks/decisions/validate_decisions_size.py to the mirror tests/checks/decisions/
+    test_validate_decisions_size.py (rec-2709 Wave 1 retired test_validate.py from the grandfather table), which
+    is exactly where the plan places the tests; (2) Decision 67 T1.5 strategic-freeze -- the plan is IMPLEMENTATION
+    type and edits only T1.5 exit-criterion TEXT + the stale files_in_scope comment (roadmap bookkeeping), never
+    authoring/executing the frozen decisions-portal build (locked by the constraints and Freshness-Gate context).
+  - "gates: decision-scout=FLAGS_FOUND (2 NOTE flags, both pre-addressed); plan-critique=PROCEED after 2 round(s) -- round 1 surfaced the Decision 132 graduation gate + rebase/renumber to 133; round 2 surfaced the check-function coverage gap + vacuous R1-repoint grep; all applied"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/dreamy-feynman-80flv9)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (Decision 114 format precedent + max number re-derived)
+  - All files in scope located and readable (scripts/checks/decisions/ to be created)
+  - Acceptance criteria understood and verifiable
+  - audits/decisions-authoring-format-d140093.yaml (SoT) read in full
+execution_steps:
+  - >-
+    Re-derive the next free `## Decision NNN:` number (grep the max `^## Decision` header in docs/DECISIONS.md;
+    currently 132 -> likely 133). Under an execution-time human confirmation gate, author ONE new numbered
+    Decision entry at the TOP of docs/DECISIONS.md in Decision-114-parity format (header ending `(Decided)`;
+    then `**Status:** Decided`, `**Date:** <ISO>`, `**Warehouse ID:** dec-NNN (keyed on the decision number;
+    synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)`,
+    `**Decision:**` body with the five clauses (a-e per Decision A/B and the audit format_disposition),
+    `**Reversal conditions:**` (bridge-guard framing, Decision-114 parity), `**Related:**` citing Decisions 84,
+    86, 87, 104, 105, 110, 114, 123, 132, CD.23, Decision 67; then `---`). No em dashes; ASCII hyphen only.
+  - >-
+    Create scripts/checks/decisions/__init__.py (empty package init) and
+    scripts/checks/decisions/validate_decisions_size.py: module-level `_DECISIONS_LIVE_MAX_BYTES = 400_000`,
+    `_DECISIONS_LIVE_MAX_H2 = 120`, `_DECISIONS_COMBINED_MAX_BYTES = 700_000`; a pure
+    `_decisions_size_issues(live_text, archive_text, ...)` helper returning a list of FAIL strings (empty when
+    all under ceiling); a `@registry.register("validate_decisions_size", owner="platform")` check function that
+    reads docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md via _common.ROOT, counts live `^## Decision` headers and
+    bytes, and on breach prints a FAIL message naming the relief valves (archival per DPI-04; compaction of
+    superseded bodies to pointer stubs). Mirror validate_platform_roadmap.py structure (guarded sys.path inject
+    in try/finally only if needed; type hints; ruff 127).
+  - >-
+    Insert `_c("validate_decisions_size")` into BOTH pre_sequence() and full_sequence() in
+    scripts/checks/registry.py (place near other cheap governance/doc checks). Add the facade import
+    `from scripts.checks.decisions.validate_decisions_size import validate_decisions_size  # noqa: F401,E402`
+    to scripts/validate.py alongside the other `from scripts.checks.*` imports.
+  - >-
+    Add "validate_decisions_size" to BOTH REQUIRED_PRE_CHECKS and REQUIRED_FULL_CHECKS frozensets in
+    tests/test_checks_registry.py.
+  - >-
+    Create tests/checks/decisions/__init__.py and tests/checks/decisions/test_validate_decisions_size.py with
+    unit tests driving `_decisions_size_issues()` below/at/above each of the three constants (real code paths,
+    synthetic content), plus a test asserting the failure message names the archival/compaction relief valves and
+    a test asserting DECISIONS_ARCHIVE.md bytes count toward the combined ceiling. ALSO exercise the REGISTERED
+    validate_decisions_size(failed) function itself for a PASS case and a FAIL case via
+    patch("scripts.checks._common.ROOT", tmp_path) over synthetic docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md
+    files, so the check function's file-read / count / print / failed.append branches reach 100% coverage
+    (validate_test_coverage; mirrors the validate_platform_roadmap test).
+  - >-
+    Edit docs/ROADMAP-PLATFORM.yaml tier_item T1.5 (DAF-04): rewrite the FIRST exit criterion so retirement of
+    docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md happens ONLY AFTER (a) the decisions read portal (read-lambda +
+    named verbs + synced hermetic cache, mirroring the recs read path -- ducklake_reader closed boundary +
+    logs/.recommendations-log.jsonl) is live and ALL consumers (decision-scout, preflight, AND the R1 guard
+    validate_candidate_decision_ratification repointed off its prose grep) read from it; AND (b) the content-parity
+    check confirms every live-entry governing section is recoverable from ops_decisions before any reader is
+    repointed. Add the content-parity gate as its own explicit T1.5 exit criterion (bare string). Mirror the
+    portal/parity wording into the Phase 3b intent text (line ~3737 "3b markdown delete"). Correct the
+    files_in_scope comment `# eventually deleted in 3b (per T5.4)` to reference T1.5 c1. Do NOT touch the
+    `- id: T1.5` line; keep criteria as bare strings. Preserve the RMAP-05 tombstone note and "single owner"
+    phrasing. Do NOT write "generated projection markdown file."
+  - >-
+    Execute the Verification Plan -- run each pre-deploy step; loop until pass. Mark steps 10-11 as post-deploy
+    (verified after merge). On any unrecoverable failure, stop and RCA (Decision 55) -- do not add workaround
+    loops.
+  - >-
+    Post-merge: confirm the rec-autoclose.yml backfill synced dec-NNN into ops_decisions (VP step 10) and the R1
+    guard stays green (VP step 11).
+  - "Report: what was implemented, the allocated dec-NNN, and verification results."
+work_areas: []
+rollback: >-
+  All edits are additive/text-only. To roll back: revert the docs/DECISIONS.md entry, remove
+  `_c("validate_decisions_size")` from both registry sequences and the facade import in scripts/validate.py,
+  delete scripts/checks/decisions/ and tests/checks/decisions/, drop the two floor entries in
+  tests/test_checks_registry.py, and revert the T1.5 roadmap edits. No data migration or infra state to unwind.
