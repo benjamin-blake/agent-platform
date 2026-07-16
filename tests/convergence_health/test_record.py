@@ -9,6 +9,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+# botocore is imported lazily inside two tests (from botocore.exceptions import ClientError).
+# Import boto3 at MODULE scope so the fast tier's cheap `--collect-only` pass sees the heavy-dep
+# requirement and defers this file PROACTIVELY to the full tier (boto3/botocore are excluded from
+# requirements-fast.txt) instead of running it and hitting a runtime ModuleNotFoundError. See
+# scripts/checks/_scaffolding.py::partition_changed_tests_by_collectability.
+import boto3  # noqa: F401
 import pytest
 
 from scripts.convergence_health import (
