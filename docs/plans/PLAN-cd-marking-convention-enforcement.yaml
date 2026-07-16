@@ -1,0 +1,383 @@
+schema_version: 1
+slug: "cd-marking-convention-enforcement"
+intent: >-
+  Move the platform roadmap's candidate-decision marking convention from author discipline to
+  load-time enforcement so a decision fully-superseded-in-prose by a now-ratified CD cannot silently
+  stay pending, and a typo'd state cannot unbind a CD from every state-keyed surface -- and discharge
+  the one live instance (CD.7, superseded by the now-ratified CD.28) in the same edit (audit findings
+  PCD-03, PCD-04, and the contract clause of PCD-05).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-cd-marking-convention-enforcement.yaml
+phase: >-
+  Platform governance -- candidate-decision marking-convention surface (Decision 105 ratification
+  lane hardening). Audit-sourced (audits/pending-cd-premise-validity-f4dec93.yaml PCD-03/04/05);
+  novel findings, no owning tier_item.
+scope:
+  - file: scripts/platform_roadmap_models.py
+    action: Modify
+    purpose: >-
+      PCD-04 -- change CandidateDecision.state from a free str to
+      Literal["pending","ratified","superseded"], mirroring the sibling OpenQuestion/KnownGap
+      Literal status fields so an unknown state value fails loudly at load.
+  - file: scripts/checks/roadmap/validate_candidate_decision_supersession.py
+    action: Create
+    purpose: >-
+      PCD-03 guard -- new registered check that FAILS when a state==pending CD's detail records
+      "fully superseded by CD.NN" AND that CD.NN is state==ratified. Narrow supersession (CD.11)
+      and self-demotion (CD.10) are out of the trigger by construction.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register validate_candidate_decision_supersession in BOTH pre_sequence() and full_sequence(),
+      immediately after validate_candidate_decision_ratification (governance guard, pre-merge gate).
+  - file: scripts/checks/roadmap/validate_candidate_decision_ratification.py
+    action: Modify
+    purpose: >-
+      rec-2467 -- anchor the _dec_number _DEC_NNN_RE regex bounds so a malformed pointer like
+      "dec-0123abc" fails loudly instead of partially resolving to dec-0123.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Discharge the one live violation -- flip CD.7 state pending -> superseded (canonical superseded
+      shape per the CD.14 exemplar; ratified_as/filed_via stay absent, R3 exempts superseded CDs from
+      dec-NNN resolution; keep CD.7's existing 2026-05-27 "fully superseded by CD.28" amendment and the
+      already-emptied gates). CD.28 is now decision-final (Decision 122), which is exactly the
+      condition that makes the held flip due. TOUCH ONLY the CD.7 block.
+  - file: docs/contracts/candidate-decision-ratification.yaml
+    action: Modify
+    purpose: >-
+      PCD-03 contract half + PCD-05 clause + Q5 cosmetic -- add the supersession-flip step and the
+      pending-window prose-sweep step to lane_steps.implement.execute; add a NEW note: sub-key under
+      referential_guard.rules.R2 (sibling to applies_to/rule) recording that pending_log_decision_lambda
+      is historical vocabulary meaning pending ratification via the live portal path (the literal in
+      R2.rule is retained, not renamed); cross-reference the new supersession guard.
+  - file: tests/test_platform_roadmap_models.py
+    action: Modify
+    purpose: >-
+      PCD-04 fixtures -- prove state "Retired" raises ValidationError at load and each of
+      pending/ratified/superseded is accepted.
+  - file: tests/checks/roadmap/test_validate_candidate_decision_supersession.py
+    action: Create
+    purpose: >-
+      PCD-03 fixture matrix (mirror convention, Decision 131): ratified-superseder=red;
+      pending-superseder=green; narrow-supersession=green; self-demotion=green; plus a
+      registered-in-both-tiers assertion.
+  - file: tests/checks/roadmap/test_validate_candidate_decision_ratification.py
+    action: Modify
+    purpose: >-
+      rec-2467 -- add a test proving a ratified CD whose pointer is "dec-0123abc" now fails the
+      guard loudly (no partial resolution), and confirm existing R1/R2/R3 cases still pass.
+bundled_recommendations: [rec-2467]
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Loading a roadmap whose candidate_decision has state "Retired" fails loudly with a Pydantic
+    ValidationError; each of "pending"/"ratified"/"superseded" loads without error.
+  - >-
+    The new supersession guard fixture matrix passes (guard LOGIC proven independently of live data):
+    pending CD + "fully superseded by CD.X" with CD.X ratified => guard FAIL; same with CD.X pending
+    => PASS; narrow-supersession analog => PASS; self-demotion analog => PASS.
+  - >-
+    validate_candidate_decision_supersession is present in BOTH pre_sequence() and full_sequence()
+    (parity with validate_candidate_decision_ratification).
+  - >-
+    Red-then-green on REAL data: the new guard, run against the pre-flip roadmap (origin/main, where
+    CD.7 is still pending and CD.28 is ratified), FAILs naming CD.7 -- the live violation; and after
+    the CD.7 -> superseded flip in this same PR, the guard run against the working-tree
+    docs/ROADMAP-PLATFORM.yaml passes (empty failed list). This is the proof the fix is complete.
+  - >-
+    rec-2467 -- a ratified CD whose only pointer is "dec-0123abc" fails the ratification guard
+    loudly (malformed pointer no longer partially resolves); all pre-existing ratification tests
+    still pass.
+  - >-
+    docs/contracts/candidate-decision-ratification.yaml still parses as YAML and
+    lane_steps.implement.execute carries both the supersession-flip clause and the prose-sweep clause;
+    referential_guard.rules.R2 gains a NEW note: sub-key containing "historical vocabulary" and
+    "portal" (the pending_log_decision_lambda literal in R2.rule is unchanged).
+  - "bin/venv-python -m scripts.validate --pre is green after the CD.7 flip."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      PCD-04 -- the state Literal rejects an unknown value and accepts the three valid ones (run the
+      model test file, which includes the new red/green state fixtures).
+    command: "bin/venv-python -m pytest tests/test_platform_roadmap_models.py -q"
+    expected: >-
+      All tests pass, including the new fixtures: state "Retired" raises ValidationError; each of
+      pending/ratified/superseded loads.
+    fix_if: >-
+      If an unknown state loads without error, the Literal was not applied to CandidateDecision.state
+      (check scripts/platform_roadmap_models.py line ~117).
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      PCD-03 -- run the new supersession-guard fixture matrix (red + three green cases) and the
+      registered-in-both-tiers assertion.
+    command: "bin/venv-python -m pytest tests/checks/roadmap/test_validate_candidate_decision_supersession.py -q"
+    expected: >-
+      All matrix tests pass: the ratified-superseder case appends the FAIL string; the
+      pending-superseder, narrow-supersession, and self-demotion cases append nothing.
+    fix_if: >-
+      A green case going red means the regex over-matches (e.g. catches "narrowly superseded"); the
+      red case staying green means the pending+ratified conjunction is not detected.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      rec-2467 -- run the ratification-guard test file. The new test asserts BOTH directions: a
+      malformed pointer "dec-0123abc" does NOT resolve (guard FAILs loudly), AND a valid
+      "ops_decisions:dec-078" STILL resolves to 78 (the anchored regex must not regress valid
+      pointers). Existing R1/R2/R3 cases still pass.
+    command: "bin/venv-python -m pytest tests/checks/roadmap/test_validate_candidate_decision_ratification.py -q"
+    expected: >-
+      All tests pass, including the new bidirectional test: "dec-0123abc" produces a guard FAIL (no
+      partial resolve) AND "ops_decisions:dec-078" still resolves to 78.
+    fix_if: >-
+      If "dec-0123abc" still resolves, _DEC_NNN_RE was not anchored; if a prior test broke, the new
+      bound is too tight (it must still match dec-078 inside ops_decisions:dec-078).
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Post-flip GREEN proof on real data -- run the new supersession guard against the working-tree
+      docs/ROADMAP-PLATFORM.yaml (CD.7 now superseded) and assert it is clean. Also confirms CD.11
+      narrow and CD.10 self-demotion do not fire.
+    command: >-
+      bin/venv-python -c "from scripts.checks.roadmap.validate_candidate_decision_supersession import
+      validate_candidate_decision_supersession as g; f=[]; g(f); assert f==[], f; print('post-flip:
+      live roadmap green under supersession guard')"
+    expected: "Prints 'post-flip: live roadmap green under supersession guard'; failed list is empty."
+    fix_if: >-
+      A non-empty failed list means CD.7 was not flipped (or was flipped wrong), or the guard fires on
+      another live pending CD (over-broad trigger) -- fix the flip/regex before proceeding.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Pre-flip RED demonstration on real data -- run the new guard against origin/main's roadmap
+      (CD.7 still pending, CD.28 ratified) in an isolated ROOT and assert it FAILs naming CD.7. Valid
+      at implement time (pre-merge); it is the live-violation proof the flip discharges.
+    command: >-
+      bin/venv-python -c "import subprocess,tempfile,pathlib; from unittest.mock import patch; from
+      scripts.checks import _common; from scripts.checks.roadmap.validate_candidate_decision_supersession
+      import validate_candidate_decision_supersession as g; d=pathlib.Path(tempfile.mkdtemp());
+      (d/'docs').mkdir();
+      (d/'docs'/'ROADMAP-PLATFORM.yaml').write_text(subprocess.check_output(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'],text=True));
+      patch.object(_common,'ROOT',d).start(); f=[]; g(f); assert f, 'expected guard FAIL on pre-flip
+      roadmap (CD.7 live violation)'; print('pre-flip red demo OK: guard fails on pre-flip roadmap (CD.7 is the sole trigger)')"
+    expected: "Prints 'pre-flip red demo OK: guard fails on pre-flip roadmap ...'; the failed list is non-empty (CD.7 is the sole trigger)."
+    fix_if: >-
+      If it does not fail on CD.7, the guard is not detecting the pending-CD.7 + ratified-CD.28
+      conjunction on real data -- the fixture matrix passing but this failing means the regex or the
+      superseder-state lookup diverges from the real detail prose.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm the contract edits landed in the correct YAML keys and the file still parses: flip +
+      prose-sweep clauses in lane_steps.implement.execute; a NEW note: sub-key under
+      referential_guard.rules.R2. This is the NON-VACUOUS check -- the existing literal in R2.rule
+      already contains 'pending_log_decision_lambda', so we assert the new note sub-key, not the literal.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; d=yaml.safe_load(pathlib.Path('docs/contracts/candidate-decision-ratification.yaml').read_text());
+      impl=d['lane_steps']['implement']['execute'].lower(); r2=d['referential_guard']['rules']['R2'];
+      note=(r2.get('note') or '').lower();
+      assert 'superseded' in impl and 'fully superseded' in impl; assert 'discipline_points' in impl or 'prose' in impl;
+      assert note and ('historical' in note or 'vocabulary' in note) and 'portal' in note, r2;
+      print('contract clauses + new R2 note present; YAML parses')"
+    expected: "Prints 'contract clauses + new R2 note present; YAML parses'."
+    fix_if: >-
+      A KeyError/AssertionError means the R2 note: sub-key was not added (or a lane clause landed under
+      the wrong key, or the YAML broke) -- add the note:/fix the structure, not the assertion.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Run the authoritative fast presubmit gate end-to-end after the CD.7 flip; the new guard, the
+      model change, and the roadmap flip must all pass in-sequence.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: >-
+      The run is green; both "Candidate decision" guards pass, the roadmap validates with CD.7
+      superseded, and no SLOC/CC/registry/tier-floor check reddens.
+    fix_if: >-
+      Diagnose the specific failing check from the output; if a SLOC budget is crossed, decompose
+      (Decision 128), do not raise.
+constraints:
+  - Only modify files listed in the Scope table (AGENTS.md -- out-of-scope bugs become recommendations, not inline fixes).
+  - >-
+    The supersession guard MUST key ONLY on the "fully superseded by CD.NN" detail-prose conjunction;
+    narrow supersession (CD.11 "narrowly superseded") and self-demotion (CD.10) MUST NOT trigger
+    (audit trap T4 -- surviving clauses bind).
+  - >-
+    Deliberate non-goal (out of scope, no code for it): the guard does NOT flag a dangling "fully
+    superseded by CD.NNN" whose CD.NNN does not exist in the roadmap (unknown superseder -> no match
+    -> no fail). The audit does not ask for it, and this mirrors the ratification guard's own
+    non-handling of unresolved pointers; leaving it out avoids scope creep.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml edit is SURGICAL -- flip ONLY CD.7's state field (pending ->
+    superseded). Do NOT sweep prose, do NOT touch any other CD or tier_item. The 5-CD ratification
+    wave (Unit D) and the pending-tense prose sweep (Unit B) are separate downstream plans.
+  - >-
+    CD.7 flip applies the CD.14 canonical superseded shape: state=superseded; leave ratified_as and
+    filed_via absent (R3 exempts superseded CDs from R1's dec-NNN resolution); keep the existing
+    detail amendment naming CD.28; leave gates empty (already emptied 2026-05-27). Justification is
+    Decision 122 (CD.28 now decision-final).
+  - >-
+    Do NOT rename the pending_log_decision_lambda literal (R2 still permits it) -- add only the
+    clarifying note (audit Q5, below-threshold cosmetic vocabulary drift).
+  - >-
+    Register the new check in scripts/checks/registry.py, never hand-wire into scripts/validate.py
+    (scripts/CLAUDE.md; validate.py is the single source of truth via the registry).
+  - >-
+    No exceptions raised at module import time -- the guard defers all validation to its registered
+    call (AGENTS.md Safety). No eval()/exec().
+  - >-
+    SLOC decompose-by-default (Decision 128): the new guard is a small cohesive module; no scope file
+    is projected to cross its config/sloc_budgets.yaml budget, so no budget raise is authored.
+  - >-
+    Test placement follows the mirror convention (Decision 131) -- the new guard's test lives at
+    tests/checks/roadmap/test_validate_candidate_decision_supersession.py.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Audit source: audits/pending-cd-premise-validity-f4dec93.yaml (findings PCD-03, PCD-04, PCD-05;
+    companion .md alongside). Novel findings; no owning tier_item.
+  - >-
+    PREMISE CORRECTION (supersedes the audit/f4dec93 framing): CD.28 is ALREADY RATIFIED at HEAD --
+    state: ratified, ratified_as: dec-122 (ROADMAP-PLATFORM.yaml:1303-1305), via Decision 122
+    ("Ratify CD.28 ...", DECISIONS.md:696, 2026-07-06, AFTER the audit's commit f4dec93). CD.7 is
+    state: pending with detail "[Amendment 2026-05-27 -- fully superseded by CD.28]" (line 469).
+    Therefore the supersession guard fires on CD.7 at HEAD: CD.7 is a LIVE marking-convention
+    violation, NOT a latent one. The old "guard stays latent / roadmap stays green as-is / flip is
+    mechanical later" framing is DEAD; this plan discharges CD.7 in the same PR that adds the guard.
+  - >-
+    PATH CORRECTION: the audit's anchor "scripts/platform_roadmap.py:381" is STALE -- that file does
+    not exist. CandidateDecision lives in scripts/platform_roadmap_models.py:111 (state field line
+    117); scripts/roadmap/platform_roadmap.py is the facade that re-exports it and provides load().
+    typing.Literal is already imported (models line 7), so the PCD-04 change needs no new import.
+  - >-
+    CD.7 is the SOLE live instance: CD.11 (line 531) uses "narrowly superseded by CD.27" + the
+    structured narrowly_supersedes field -- must NOT trigger; CD.10 (line 508) self-demotes its
+    six-Lambda enumeration -- must NOT trigger. Both are locked in as green fixtures. (The only other
+    "fully superseded by CD.28" strings are a tier_item retired_because field at line 301 and a
+    #comment at line 484 -- both outside candidate_decisions[].detail, so the CD-scoped guard skips
+    them.)
+  - >-
+    rec-2467 (open, Low, XS) bundled: its regex hardening lands in the same guard file
+    (scripts/checks/roadmap/validate_candidate_decision_ratification.py). Rec context: bare
+    re.search(r'dec-(\d+)') partially matches 'dec-0123abc'. Closure is via the Resolves: rec-2467
+    trailer at squash-merge (rec-autoclose.yml) -- the overseer owns the merge.
+  - >-
+    SEQUENCING (this = Unit A). A-before-D: the state Literal + the supersession guard must EXIST
+    before Unit D flips five more CDs to ratified (so the guard governs that wave). A-before-C: both
+    touch the platform_roadmap facade/models. A now ALSO touches docs/ROADMAP-PLATFORM.yaml (CD.7
+    block only), which Units B (prose sweep) and D (ratification wave) also edit -- disjoint line
+    ranges, but A must merge before B and D on that file so sequential ordering avoids a merge
+    conflict. Note: the old "A must merge before D so the CD.7 flip is mechanical" rationale is
+    discharged -- the CD.7 flip happens IN A now, not in D.
+  - >-
+    LAMBDA DEPLOYMENT ASSESSMENT (definitive): compute_affected_artifacts(scope) ==
+    {'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']}; data-pipeline is status: active. BUT
+    docs/ROADMAP-PLATFORM.yaml is a bundled ASSET (src/lambdas/data-pipeline/manifest.yaml assets:,
+    line 47), NOT a handler/include -- the CD.7 state flip changes reference-doc content, not the
+    Lambda's runtime code/behaviour. validate_lambda_deploy_gating is ADVISORY-ONLY (never fails CI).
+    validate_tier_floor deliberately EXCLUDES assets from its code-file set (it names
+    docs/ROADMAP-PLATFORM.yaml as the asset it must not over-flag) and only applies to
+    schema_version-2 plans (this is v1). Therefore NO per-Lambda build/deploy/smoke-test step is
+    required and the tier stays V2 (driven by the Python source, not the roadmap asset). Precedent:
+    PLAN-audit-remediation-wave-2 (V1), wave-5 (asset-exclusion), broker-credential-codegen. If a
+    refreshed bundle is ever wanted, the governed channel is .github/workflows/deploy-prod-lambdas.yml
+    (decoupled_build_pipeline class; the consuming scheduled-agent schedule is DISABLED). This same
+    reasoning governs Units B and D (they edit the same asset).
+  - >-
+    Branch is at origin/main HEAD (0 commits behind; merge-base 9d1eae25) and none of the scope files
+    changed on main since the branch point -- no Main Divergence Assessment concern.
+  - >-
+    Tier Item Freshness Gate skipped: intent is audit/ad_hoc-sourced enforcement hardening naming no
+    tier_item (soft-warn exception: ad_hoc_rec / user_explicit_out_of_scope).
+  - >-
+    CI-RCA Related-Work deferral: preflight surfaced rec-2710 as "[SOFT -- LIKELY RESOLVED]"
+    (likely-resolved bucket, non-blocking) on tests/test_ops_data_portal.py -- unrelated to this plan
+    (different file, different failure category: unit-test AWS-mock leak). Deferred here per the
+    planning skill's Related-Work check; overseer to verify/close.
+  - >-
+    Decision-scout verdict + CITE list: verdict was BLOCK on Decision 122 (the scout correctly caught
+    that CD.28 is already ratified, making the guard fire on CD.7 at HEAD); RESOLVED per human-confirmed
+    overseer decision by adding the CD.7 flip to scope and citing Decision 122. CITE (verbatim):
+    Decision 122 (justifies the CD.7 flip -- CD.28 decision-final), Decision 104 (check registry),
+    Decision 105 (ratification lane + sibling guard/contract), Decision 92 (superseded the
+    pending_log_decision_lambda clause; sharpest citation for the R2 note), Decision 55
+    (loud-failure/RCA-first), Decision 128 (SLOC decompose-by-default), Decision 131 (test mirror).
+    RELATED: Decision 84 (portal path in R2 note), Decision 114 (origin of the Literal lifecycle-field
+    pattern PCD-04 mirrors), Decision 130 (whole-repo SLOC now covers tests/), Decision 86 (contract
+    edit is the compliant machine-readable form).
+  - "gates: decision-scout=BLOCK->resolved (CD.7 flip added to scope, Decision 122 cited); plan-critique=<pending, run fresh-context by overseer>"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/cd-premise-validity-audit-j8isbv)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read via the decision-scout gate (fresh context, Step 6a)
+  - All files in scope located and readable (path correction applied -- platform_roadmap_models.py)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/platform_roadmap_models.py -- change CandidateDecision.state (line ~117) from
+    'state: str = "pending"' to 'state: Literal["pending", "ratified", "superseded"] = "pending"'.
+    Literal is already imported (line 7); mirror the OpenQuestion/KnownGap status pattern.
+  - >-
+    tests/test_platform_roadmap_models.py -- add a red fixture (a candidate_decision with
+    state "Retired" -> RoadmapDocument.model_validate raises ValidationError, mirroring the
+    test_cd_extra_forbid_rejects_bogus_field pattern at lines 277-280) and a green fixture asserting
+    each of pending/ratified/superseded loads.
+  - >-
+    scripts/checks/roadmap/validate_candidate_decision_supersession.py (new) -- implement the guard
+    mirroring validate_candidate_decision_ratification's structure (same _common.ROOT + sys.path
+    handling + 'from scripts.roadmap.platform_roadmap import load'). Build an id->CD map; for each
+    state=="pending" CD, search detail with re.compile(r"fully superseded by (CD\.\d+)"); if it
+    matches and the referenced CD exists and is state=="ratified", append a FAIL naming both CDs and
+    prescribing the same-edit flip. Decorate with
+    @registry.register("validate_candidate_decision_supersession", owner="platform").
+  - >-
+    scripts/checks/registry.py -- insert _c("validate_candidate_decision_supersession") immediately
+    after _c("validate_candidate_decision_ratification") in BOTH pre_sequence() and full_sequence().
+  - >-
+    scripts/checks/roadmap/validate_candidate_decision_ratification.py -- harden _DEC_NNN_RE from
+    r"dec-(\d+)" to an anchored form (e.g. r"(?<![0-9A-Za-z])dec-(\d+)(?![0-9A-Za-z])") so a
+    malformed pointer like "dec-0123abc" no longer partially matches; keep/extend the well-formedness
+    note near the regex (rec-2467).
+  - >-
+    tests/checks/roadmap/test_validate_candidate_decision_supersession.py (new) -- author the 4-case
+    matrix (ratified-superseder=red; pending-superseder=green; narrow-supersession=green;
+    self-demotion=green) using tmp_path + patch("scripts.checks._common.ROOT", tmp_path) like the
+    ratification test; add a test asserting the check name is in both pre_sequence() and
+    full_sequence().
+  - >-
+    tests/checks/roadmap/test_validate_candidate_decision_ratification.py -- add a test asserting BOTH
+    directions of the rec-2467 hardening: a ratified CD with ratified_as/filed_via "dec-0123abc"
+    produces a guard FAIL (malformed pointer no longer partially resolves), AND a valid
+    "ops_decisions:dec-078" still resolves to 78 (assert _dec_number("ops_decisions:dec-078") == 78
+    directly, or that a well-formed ratified CD still passes) -- the anchor must not regress valid
+    pointers.
+  - >-
+    docs/contracts/candidate-decision-ratification.yaml -- extend lane_steps.implement.execute with
+    the supersession-flip sentence and the PCD-05 prose-sweep sentence; add a NEW note: sub-key under
+    referential_guard.rules.R2 (sibling to applies_to/rule) with distinctive text, e.g.
+    "'pending_log_decision_lambda' is historical vocabulary meaning pending ratification via the live
+    vehicle (the portal path); the literal is retained, not renamed." -- do NOT alter the existing
+    literal in R2.rule; add a one-line pointer naming validate_candidate_decision_supersession as the
+    load-time backstop.
+  - >-
+    RED demonstration on real data (before flipping CD.7): run VP step 5 against origin/main's
+    roadmap and confirm the guard FAILs naming CD.7 -- the live violation this plan discharges.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml -- edit ONLY the single 'state:' line of the CD.7 block (roadmap
+    ~line 485), changing 'state: pending' to 'state: superseded'. CD.7's detail block (~lines 468-483)
+    and its already-empty gates line (~484) MUST remain byte-for-byte unchanged, preserving the CD.14
+    canonical superseded shape (ratified_as/filed_via stay absent, R3 exempt) and avoiding any prose
+    edit that would trip the downstream PCD-05 prose-sweep concern in this same PR. Touch no other CD
+    or tier_item. Justification: Decision 122 (CD.28 decision-final).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. This is V2 (unit + real-load);
+    no deploy. On an unrecoverable failure, stop and RCA (Decision 55), do not add a workaround.
+  - "Report: what was implemented, the verification results (red-then-green on real data), and the Resolves: rec-2467 trailer for the merge commit."
+work_areas: []
+rollback: >-
+  Revert the branch commit(s). Changes are additive or minimal: new guard module + two registry
+  lines, the state Literal, a regex anchor, a one-line CD.7 state flip, and prose-only contract/test
+  edits. No data migration, no infra, no deploy. Reverting restores CD.7 to pending (re-opening the
+  live violation the guard flags) and leaves rec-2467 open.
