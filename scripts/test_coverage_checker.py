@@ -200,8 +200,6 @@ _ALL_MIRROR_TARGET_HOMES: frozenset[str] = frozenset(
 _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_build_lambda_deploy.py",
     "test_contracts_enforcement.py",
-    "test_ducklake_maintenance_handler.py",
-    "test_ducklake_writer_handler.py",
     "test_iceberg_reader.py",
     "test_lambda_manifest.py",
     "test_s3_log_store.py",
@@ -227,6 +225,8 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/lambda_manifest.py",
         "scripts/ducklake_neon_smoke_test.py",
         "src/common/iceberg_reader.py",
+        "src/lambdas/ducklake_maintenance/handler.py",
+        "src/lambdas/ducklake_writer/handler.py",
         "src/data/handlers/scheduled_agent_handler.py",
         "scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py",
         "scripts/validate.py",
@@ -324,13 +324,15 @@ def map_source_to_test(source_path: Path) -> Path | None:
     if home.name in _RETIRING_GRANDFATHER_HOMES:
         return home
     if home.name in _ALL_MIRROR_TARGET_HOMES:
-        if home.name == "test_validate.py":
-            try:
-                rel_name = source_path.resolve().relative_to(ROOT).name
-            except ValueError:
-                rel_name = source_path.name
-            if rel_name in _ORCHESTRATION_SCAFFOLDING_FILES:
-                return ROOT / "tests" / "validate"
+        try:
+            rel_name = source_path.resolve().relative_to(ROOT).name
+        except ValueError:
+            rel_name = source_path.name
+        if home.name == "test_validate.py" and rel_name in _ORCHESTRATION_SCAFFOLDING_FILES:
+            return ROOT / "tests" / "validate"
+        # smoke_actions.py shares ducklake_writer's concern-split handler package (Edit C, rec-2709 Wave 8).
+        if home.name == "test_ducklake_writer_handler.py" and rel_name == "smoke_actions.py":
+            return ROOT / "tests" / "lambdas" / "ducklake_writer" / "handler"
         return _mirror_source_to_test(source_path)
     return home
 
