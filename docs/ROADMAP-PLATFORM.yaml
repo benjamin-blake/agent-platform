@@ -1378,7 +1378,7 @@ candidate_decisions:
       - Scheduled meta-validation (T3.7) is alarm-not-gate and runs on a GitHub Actions schedule, NOT a Lambda. Decision 62 retired the Session E DQ-freshness routine (cron agent -> EC2 -> commit dq-latest.json -> auto-merge); meta-validation here is GH-Actions-scheduled, advisory, and not a merge gate, so it is not that routine. (Separately, 62's no-separate-routine conclusion for live-reader DQ is being revisited under T1.6 because its cheap-live-DQ-on-the-gate premise is invalidated -- CD.21 / Decision 73; that revisit is orthogonal to meta-validation.)
       - CD.29 changes the platform verification DEFAULT from advisory (the current run_verification behaviour) to required/hard-gate. This is a deliberate semantic change, enforced only after T3.6; no prior numbered Decision is superseded because the advisory behaviour was an executor implementation default, not a ratified decision.
       - Precedence: when the executor's per-rec checks (executor-side) and the CI validation gate including diff-coverage (CI-side) both apply, CI is authoritative per the AGENTS.md merge protocol (remote CI is the authoritative pre-merge gate).
-      - "Gate status: T3.6 (hermeticity) [SATISFIED 2026-06-25: criteria c1-c4 met via PLAN-t3-6-hermeticity-closeout; c5 rehomed to T1.6; authoritative record on the T3.6 tier_item]. Remaining gates T3.1/T3.7/T0.12.5 open. Recording a satisfied gate is bookkeeping about the gating tier_item, NOT ratification of CD.29 -- state remains pending."
+      - "Gate status: T3.6 (hermeticity) [SATISFIED 2026-06-25: criteria c1-c4 met via PLAN-t3-6-hermeticity-closeout; c5 rehomed to T1.6; authoritative record on the T3.6 tier_item]. [Refreshed 2026-07-16: T3.1 (complete 2026-07-03) and T0.12.5 (complete 2026-06-20) have since closed; of the four gates (T3.1, T3.6, T3.7, T0.12.5) only T3.7 (deferred_post_mvp) remains open.] Recording a satisfied gate is bookkeeping about the gating tier_item, NOT ratification of CD.29 -- state remains pending."
       - "[VF-11, 2026-07-03] Structural-vs-behavioural admission doctrine extends to unattended-merge authority: a candidate admitted only via structural-only kernel slots (grep_count / file_presence) proves text presence, not behaviour. CD.17's post-reversal merge-authority clause (cross-referenced there) makes this unattended-merge-affecting -- such acceptance is ADVISORY for unattended merges until T3.7 (mutation-on-target) is live for graduated checks AND T3.18 (differential admission enforcement) / the per-rec differential verify job is live. This does not relax the differential admission gate itself (a candidate must still fail on revert); it addresses the residual structural-vs-behavioural gap a fail-on-revert-passing structural check can still have."
 
   - id: CD.30
@@ -1421,9 +1421,11 @@ candidate_decisions:
     title: Adopt DuckLake for the operational lakehouse (ops + telemetry tables)
     detail: |
       This roadmap edit does NOT touch DECISIONS.md and does NOT change any numbered Decision's status.
-      The proposed supersessions of Decisions 50, 56, 51, 69 and any NS.1 generalisation land at
-      ratification via the log-decision path and the FP-B follow-on IMPLEMENTATION plan -- exactly
-      mirroring CD.30.
+      [Resolved-historical, 2026-07-16: CD.31 ratified 2026-06-02 as Decision 78 (dec-078) via the
+      log-decision path; the proposed supersessions of Decisions 50, 56, 51, 69 and the NS.1
+      generalisation (OQ.13: "S3 + Iceberg" -> "S3 + open table format") landed at that ratification
+      through the FP-B follow-on IMPLEMENTATION plan (T2.19), mirroring CD.30 -- see
+      supersedes_decisions and discipline_points below.]
 
       PROPOSAL: replace the Iceberg-based ops/telemetry write path and the DuckDB-on-Iceberg read path
       with DuckLake v1.0 -- a metadata-in-RDS-PostgreSQL + data-in-S3-Parquet open table format natively
@@ -1482,10 +1484,9 @@ candidate_decisions:
         - CD.15: Athena cannot read DuckLake. The Athena escape hatch transitions from "Athena on
           Iceberg snapshots" to OQ.7. DuckDB-on-DuckLake replaces DuckDB-on-Iceberg-snapshot for ops.
 
-      This roadmap edit does NOT touch DECISIONS.md and does NOT change any numbered Decision's status.
-      The proposed supersessions of Decisions 50, 56, 51, 69 and any NS.1 generalisation (OQ.13:
-      "S3 + Iceberg" -> "S3 + open table format") land at ratification via the log-decision path and
-      the FP-B follow-on IMPLEMENTATION plan -- exactly mirroring CD.30.
+      [Resolved-historical, 2026-07-16: the OQ.13 supersession/generalisation summary formerly
+      repeated here verbatim is already recorded as ENACTED in discipline_points below; removed
+      as a duplicate of the opening paragraph above.]
 
       Named follow-on plans (NOT in this scope):
         - FP-B = T2.19: DuckLake ops write/read migration (replace OpsWriter JSONL-staging with DuckLake
@@ -1508,7 +1509,7 @@ candidate_decisions:
       - "Product D.lake.* and market_data Iceberg tables REMAIN Iceberg (KG.1 platform/product boundary; independently Class-A-gated per CD.25). Market-data DuckLake assessment is deferred to FP-C."
       - "The RDS catalog is a metadata store (Glue-analog), NOT a query engine. NS.1 governs engine-swappability, not a metastore ban. NS.3 actively supports a small managed cloud state-store."
       - "VPC egress (to reach RDS) is orthogonal to Function-URL + AWS_IAM ingress (CD.10 / NS.5). The extension layer must be pre-baked into a Lambda layer to work around blocked egress to extensions.duckdb.org (T2.17)."
-      - "Supersession of Decisions 50/56/51/69 is proposed-at-ratification only. Until CD.31 is ratified, all four Decisions remain in force and the existing write path (JSONL-staging, Single-Portal invariant per Decision 69) continues."
+      - "[Resolved-historical, 2026-07-16] Supersession of Decisions 50/56/51/69, originally proposed-at-ratification only, is now enacted: CD.31 ratified as Decision 78 (dec-078, 2026-06-02) and Decisions 50/56/51/69 are superseded (see supersedes_decisions above). The DuckLake writer is live (T2.19); the former JSONL-staging write path is retired per Decision 84, with the Single-Portal invariant (Decision 69) preserved on the DuckLake writer."
       - "[Amendment -- CD.34]: the catalog backend (\"a dedicated micro RDS PostgreSQL instance\") is migrated to Neon serverless Postgres per CD.34 (pending), for cost. This amends only the backend instantiation; the metadata-store framing, NS.1/NS.3 reasoning, S3-Parquet data plane, DuckDB engine, and closed boundary are unchanged. The RDS-specific text above (\"metadata-in-RDS-PostgreSQL\", \"the always-on RDS instance\", \"VPC egress to reach RDS\") is superseded by Neon (public TLS endpoint, no VPC attach for catalog reachability, Secrets Manager DSN). See docs/plans/reports/REPORT-ducklake-catalog-neon-migration.md."
 
   - id: CD.32
@@ -1577,8 +1578,10 @@ candidate_decisions:
     title: DuckLake ops runtime architecture -- writer/reader/maintenance split, OCC-retry concurrency, current projection, closed read/write boundary
     detail: |
       Pins the ops DuckLake runtime architecture that Decision 78 (CD.31) deferred to T2.17-T2.19.
-      Ratified by Decision 81 (this CD does NOT edit DECISIONS.md while pending; ratification lands via
-      the log-decision path = Decision 81, mirroring CD.31 -> Decision 78).
+      [Ratified 2026-06-04 as Decision 81 (dec-081) via the log-decision path, mirroring CD.31 ->
+      Decision 78 -- see the state/ratified_as/filed_via fields below. Pre-ratification this
+      parenthetical recorded that this CD would not touch DECISIONS.md during the pending window;
+      retained as resolved-historical.]
       (1) Three-artifact split by access pattern -- ducklake_writer / ducklake_reader / ducklake_maintenance
           -- justified by IAM-principal + scaling + deploy isolation, NOT concurrency. Supersedes CD.10's
           six-Lambda enumeration, which was illustrative (examples of needed verbs), never canonical. CD.33
@@ -1636,7 +1639,7 @@ candidate_decisions:
     discipline_points:
       - "Supersedes CD.10's six-Lambda enumeration; CD.10 is state:pending so no DECISIONS.md transition. CD.10's six slugs are status:stub MOCK examples (verified on disk), which confirms they were illustrative, never canonical. The agent verb/tool surface is explicitly NOT frozen by CD.33 -- only the writer/reader/maintenance path split and the closed boundary are. CD.10's PlatformDev/PlatformAdmin two-principal allow-list is retained, not superseded."
       - "Preserves the Decision 69 Single-Portal primitive-level invariant AS CARRIED FORWARD BY Decision 78 (Decision 69 itself was already superseded by Decision 78; only its invariant survives). Portal abstraction unchanged; transport changes."
-      - "Does NOT edit DECISIONS.md while pending; supersession + OQ.7/OQ.10/OQ.11 resolution land at ratification via the log-decision path = Decision 81."
+      - "[Resolved-historical, 2026-07-16] Ratified as Decision 81 (dec-081, 2026-06-04) via the log-decision path; the OQ.7/OQ.10/OQ.11 resolutions this CD proposed are now enacted and recorded in the detail body above (closed read/write boundary, OCC-retry concurrency, inlining disabled for governance tables)."
       - "Refines CD.15 (typed query reader) and CD.8 (DuckDB engine) and applies CD.9 partitioning; does not contradict them."
       - "OQ.11 resolves to option (c) (inlining disabled for governance tables), NOT option (b); the v1 draft's option (b) was overturned by the C2 durability-window finding."
       - "Write-id RESOLVED: history PK = monotonic ULID (stable across OCC retries) + high-precision stable timestamp (ordering-only). This single mechanism grounds clause-2 idempotency, clause-7 append idempotency, clause-8 PK uniqueness, and deterministic DR rebuild; the _prepare_record now() re-stamp must move out of the retry loop at T2.17."
@@ -1720,8 +1723,10 @@ candidate_decisions:
       now live). Authored by the agent-native Terraform CI/CD design review (architect + adversarial-risk
       zero-context review, converged over three rounds; source design doc retired per Decision 86 / T5.5,
       recoverable in git history); the deep-dive realisation of the T2.16b retrospective
-      CI follow-on. Ratified later via the log-decision path (a numbered Decision when Wave 1 / T2.20 ships);
-      does NOT edit DECISIONS.md while pending.
+      CI follow-on. [Ratified 2026-06-19 as Decision 92 (dec-092) at Wave 1 / T2.20 -- see the
+      state/ratified_as/filed_via fields and discipline_points below. Pre-ratification this clause recorded
+      that ratification would land later via the log-decision path with no DECISIONS.md edit during the
+      pending window; retained as resolved-historical.]
       Load-bearing design choices (from the converged review):
       (1) Convergence anchored SERVER-SIDE: the apply job writes a durable S3 convergence record
           (pipeline-writer-identity-only write-IAM; always-run, red-on-failure) and refuses to apply against a
@@ -4811,7 +4816,7 @@ tier_items:
     status: complete
     completed_at: "2026-05-28"
     bootstrap_completion_exempt: true
-    note: "Realized via Phase B personal-account Terraform re-deploy (PR #1; cite Decision 77). Out-of-order complete: deps T0.4 (inference creds) and T0.6 (Lambda Terraform skeleton) not_started at completion. Criteria 3-4 annotated superseded/re-homed per the audit truth-maintenance rule so the item re-adjudicates true. bootstrap_completion_exempt under scope (c): gating CD.6/CD.17 ratify post-hoc via the portal vehicle."
+    note: "Realized via Phase B personal-account Terraform re-deploy (PR #1; cite Decision 77). Out-of-order complete: deps T0.4 (inference creds) and T0.6 (Lambda Terraform skeleton) not_started at completion. Criteria 3-4 annotated superseded/re-homed per the audit truth-maintenance rule so the item re-adjudicates true. bootstrap_completion_exempt under scope (c): [Refreshed 2026-07-16] gating CD.6 ratified post-hoc via the portal vehicle (dec-106); CD.17 does NOT ratify post-hoc -- it ratifies at its structural reversal trigger (the Decision 67 STRATEGIC-freeze reversal at T4.2 stability, per CD.17), so the scope-(c) exemption is retained on CD.17's still-pending account."
   - id: T2.2
     tier: T2
     name: Ops + decisions table export+import (rebuild data)
@@ -5292,7 +5297,7 @@ tier_items:
       - "ops_execution_plans DQ block restored in ops.yaml (or table formally retired with rec via ops_data_portal) after provisioning in personal account; gated on CD.17 reversal at T4.2"
       - "ops_session_log DQ coverage replaced by telemetry_agent_turns checks once CD.40 (T3.20's agent-turn telemetry capture) is ratified and telemetry_agent_turns is live (T3.2/T3.3)"
       - "CausalChainVerifier re-registered in scripts/verifiers/__init__.py, rewritten to target telemetry_agent_turns, and its covers globs restored in validate.py --coverage (T3.2)"
-    related_candidate_decisions: [CD.17]
+    related_candidate_decisions: [CD.17, CD.40]
     effort: M
     strategic: false
     bootstrap_completion_exempt: false
