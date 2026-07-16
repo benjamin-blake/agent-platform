@@ -20,7 +20,12 @@ import sys
 from scripts.checks import _common, registry
 
 _HEADER_RE = re.compile(r"^## Decision (\d+):", re.MULTILINE)
-_DEC_NNN_RE = re.compile(r"dec-(\d+)")
+# Anchored on both sides (rec-2467) -- a bare r"dec-(\d+)" would partially match a malformed
+# pointer like "dec-0123abc" (silently resolving to dec-123). The lookaround bounds require
+# the match not be flanked by another alnum char, so a malformed pointer fails to resolve at
+# all (loud failure) instead of partially resolving; "ops_decisions:dec-078" still resolves
+# (":" is not alnum).
+_DEC_NNN_RE = re.compile(r"(?<![0-9A-Za-z])dec-(\d+)(?![0-9A-Za-z])")
 
 
 def _decision_header_numbers() -> set[int]:

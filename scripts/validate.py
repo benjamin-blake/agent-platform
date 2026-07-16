@@ -168,6 +168,9 @@ from scripts.checks.roadmap.check_graduation_guard import (  # noqa: E402
 from scripts.checks.roadmap.validate_candidate_decision_ratification import (  # noqa: F401,E402
     validate_candidate_decision_ratification,
 )
+from scripts.checks.roadmap.validate_candidate_decision_supersession import (  # noqa: F401,E402
+    validate_candidate_decision_supersession,
+)
 from scripts.checks.roadmap.validate_plan_documents import validate_plan_documents  # noqa: F401,E402
 from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap  # noqa: F401,E402
 from scripts.checks.roadmap.validate_product_roadmap import validate_product_roadmap  # noqa: F401,E402
