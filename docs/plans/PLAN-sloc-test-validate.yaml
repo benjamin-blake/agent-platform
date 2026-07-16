@@ -1,0 +1,330 @@
+schema_version: 1
+slug: sloc-test-validate
+intent: >-
+  Decompose tests/test_validate.py (the repo's largest file, 7350 SLOC) into per-check mirror
+  test modules under tests/checks/** plus a tests/validate/ orchestrator concern-split package,
+  then retire its grandfather home and delete its config/sloc_budgets.yaml entry -- rec-2709 Wave 1
+  of the Decision 131 mirror-convention rollout that keeps files small enough for lower-tier
+  model comprehension (the load-bearing purpose of the 500-SLOC gate).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-test-validate.yaml
+phase: >-
+  rec-2709 Wave 1 (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (AGENTS.md Decision 128). Behavior-preserving test MOVE of scripts/checks/**
+  + scripts/validate.py test homes. No product-roadmap phase; platform tooling only.
+scope:
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Retire the grandfather: delete the single line "test_validate.py" from
+      _RETIRING_GRANDFATHER_HOMES; add "scripts/validate.py" to _CONCERN_SPLIT_TEST_PACKAGES so the
+      residual orchestrator tests resolve to the tests/validate/ package; add scripts/checks/_scaffolding.py
+      and scripts/checks/_terraform.py to a new orchestration-scaffolding special-case routing them to
+      the same tests/validate/ home (their tests live there, not in a per-check mirror). Do NOT touch
+      the registry.py/_common.py special-case.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete ONLY the "tests/test_validate.py: 7350" line by hand once the residual is gone. NEVER run
+      --update-sloc-budgets (it strips the dec-130 markers on the other 23 entries). HARD invariant:
+      this file loses exactly that one line and nothing else.
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Update the map_source_to_test / check_test_file_exists oracle assertions to reflect the retired
+      mapping (scripts/checks/**/*.py now resolve to their mirror; scripts/validate.py to tests/validate/;
+      _scaffolding.py/_terraform.py to tests/validate/; registry.py/_common.py unchanged).
+  - file: tests/test_validate.py
+    action: Delete
+    purpose: >-
+      Fully decomposed; replaced by the tests/validate/ concern-split package (orchestrator residue) plus
+      the per-check mirror modules under tests/checks/**. Deleted in the FINAL batch only.
+  - file: tests/conftest.py
+    action: Modify
+    purpose: >-
+      Hoist the _neutralized_pre_registry fixture here (root conftest) -- it is used by TestGraduationGuard
+      (moves to tests/checks/roadmap/) AND the tests/validate/ orchestrator classes, so it must be visible
+      to both trees. No global-guard changes.
+  - file: tests/fixtures/subprocess_stubs.py
+    action: Create
+    purpose: >-
+      Home for the _mock_completed helper (used by TestEnsureFreshDqResults -> tests/validate/ AND
+      TestPlatformRoadmapCriteriaIntegrity -> tests/checks/roadmap/). tests/fixtures/ is exempt from the
+      no-cross-test-import guard (names never start with test_), so both consumers import it here.
+  - file: tests/validate/__init__.py
+    action: Create
+    purpose: Package marker for the orchestrator concern-split (prepend import mode; mirror convention).
+  - file: tests/validate/conftest.py
+    action: Create
+    purpose: >-
+      Package conftest for tests/validate/. Hoist _pre_mock_run here (shared across the split orchestrator
+      modules). Layers under the root conftest; declares no global guards.
+  - file: tests/validate/test_tiers.py
+    action: Create
+    purpose: >-
+      Orchestrator tier/dispatch tests (call _validate.main()): TestLoadHelpers, TestPreModeDiffAware,
+      TestPreModePytestSelection, TestSlocLimitsInPreMode, TestPreModeChecks, TestPreModeRegistryIsolation,
+      TestPreRoadmapGuardSelection. Keep < 500 SLOC (regroup if needed).
+  - file: tests/validate/test_budget.py
+    action: Create
+    purpose: >-
+      Budget-assertion orchestrator tests: TestBudgetAssertion, TestIgnoreBudgetFlag, TestIgnoreBudgetCIGuard,
+      TestBudgetBreachRecFiling, TestBudgetRecFilingCiGuard, TestBudgetBreachCiTelemetry. Keep < 500 SLOC.
+  - file: tests/validate/test_pytest_diff.py
+    action: Create
+    purpose: >-
+      _scaffolding pytest-diff/collectability tests: TestFastTierCollectability, TestRunPytestDiff,
+      TestRunPytestDiffSingleExecution, TestRunPytestDiffReactiveDefer, TestPytestDiffParallelAndTimeout,
+      TestPytestFlagsPinnedSeed, TestExcludedHeavyDeps. Keep < 500 SLOC (regroup with test_scaffold_gates).
+  - file: tests/validate/test_scaffold_gates.py
+    action: Create
+    purpose: >-
+      _scaffolding/_terraform gate tests: TestRunTerraformChecks, TestRunCoverageCheck, TestEnsureFreshDqResults,
+      TestWholeRepoScanCoverage. Keep < 500 SLOC (rebalance vs test_pytest_diff so neither exceeds 500).
+  - file: tests/validate/test_changed_files.py
+    action: Create
+    purpose: >-
+      get_changed_files origin/main + deleted-path tests: TestGetChangedFilesOriginMain,
+      TestGetChangedFilesDeletedPaths.
+  - file: tests/checks/ci_guards/__init__.py
+    action: Create
+    purpose: Package marker for ci_guards mirrors.
+  - file: tests/checks/ci_guards/test_validate_ci_rca_trigger.py
+    action: Create
+    purpose: Mirror for TestValidateCiRcaTrigger, TestValidateCiRcaTaxonomy, TestValidateCiWorkflowGuards, TestValidateOpsPortalPatchTargets (one class per source module; see context map).
+  - file: tests/checks/contracts/__init__.py
+    action: Create
+    purpose: Package marker for contracts mirrors.
+  - file: tests/checks/contracts/test_validate_contract_drift.py
+    action: Create
+    purpose: >-
+      RELOCATE tests/test_validate_contract_drift.py (flat root, 457 SLOC, no test_validate.py overlap) here;
+      plus create sibling contracts mirrors for TestClaudeMdPointerInvariant, TestValidatePromptCompliance,
+      TestValidateInstructionArchitectureLayers, TestValidateNoUnderscoreInstructions, TestIntentDocFreeze,
+      TestValidatePortalDrift (see context map).
+  - file: tests/checks/deps/__init__.py
+    action: Create
+    purpose: Package marker for deps mirrors (TestDependencyGraphFreshness, TestValidateImportContracts, TestValidateLockfileSync).
+  - file: tests/checks/executor/__init__.py
+    action: Create
+    purpose: Package marker for executor mirror (TestValidateExecutorBoundary).
+  - file: tests/checks/hygiene/test_validate_placement.py
+    action: Create
+    purpose: >-
+      Mirror for TestValidatePlacement (522 SLOC single class -- SEE OPEN RISK 1: split into two classes
+      or register a raise marker). Plus hygiene siblings: TestValidateCliToolsInPrompts,
+      TestValidateSubprocessEncoding, TestValidateTestCountCoupling, TestValidateSysExecutable.
+  - file: tests/checks/hygiene/test_validate_prose_allowlist.py
+    action: Create
+    purpose: RELOCATE tests/checks/test_validate_prose_allowlist.py into the hygiene/ subdir (no test_validate.py overlap; verified).
+  - file: tests/checks/test_validate_prose_allowlist.py
+    action: Delete
+    purpose: Superseded by the hygiene/ mirror relocation.
+  - file: tests/checks/iam_tf/__init__.py
+    action: Create
+    purpose: Package marker for iam_tf mirrors.
+  - file: tests/checks/iam_tf/test_validate_authority_budget.py
+    action: Create
+    purpose: RELOCATE tests/test_validate_authority_budget.py (flat root, 23 SLOC). Plus iam_tf siblings TestValidateEnvironmentTaxonomy, TestValidateTerraformTry, TestValidateIamRunnerPolicy, TestValidateInvokeImpliesResolve (+ _write_oidc_tf helper).
+  - file: tests/checks/iam_tf/validate_ci_refresh_read_coverage/__init__.py
+    action: Create
+    purpose: >-
+      CONCERN-SPLIT package (declare scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py in
+      _CONCERN_SPLIT_TEST_PACKAGES). MERGE the two test_validate.py classes
+      (TestValidateCiRefreshReadCoverageHelpers, TestValidateCiRefreshReadCoverageEndToEnd + the
+      _write_ci_refresh_read_fixture helper) WITH the flat-root TestValidateCiRefreshReadCoverage class
+      (~655 SLOC total) -- one class per module file, each < 500. Delete the flat root file.
+  - file: tests/test_validate_authority_budget.py
+    action: Delete
+    purpose: Relocated to tests/checks/iam_tf/test_validate_authority_budget.py.
+  - file: tests/test_validate_ci_refresh_read_coverage.py
+    action: Delete
+    purpose: Merged into the tests/checks/iam_tf/validate_ci_refresh_read_coverage/ concern-split package.
+  - file: tests/test_validate_contract_drift.py
+    action: Delete
+    purpose: Relocated to tests/checks/contracts/test_validate_contract_drift.py.
+  - file: tests/checks/lambda_pkg/__init__.py
+    action: Create
+    purpose: Package marker for lambda_pkg mirrors (TestValidateLambdaManifests, TestValidateLambdaManifestCoverage, TestValidateLambdaBundleCompleteness, TestValidateLambdaDeployGating).
+  - file: tests/checks/misc/__init__.py
+    action: Create
+    purpose: Package marker for misc mirrors (TestValidateTestCoverage, TestValidateInvariants, TestValidateScheduledAgentLogs, TestDucklakeVersionLockstepGate, TestValidateGhasProbe).
+  - file: tests/checks/ops_governance/__init__.py
+    action: Create
+    purpose: Package marker for ops_governance mirrors.
+  - file: tests/checks/ops_governance/test_validate_deploy_channel_conformance.py
+    action: Create
+    purpose: RELOCATE tests/checks/test_validate_deploy_channel_conformance.py into ops_governance/ (no test_validate.py overlap; verified). Plus siblings TestFieldSemanticsDriftGate, TestValidateRecommendationsSchema, TestValidateRecWritePaths, TestValidateWarehouseWriteSources, TestValidateOutboxStaleness, TestValidateDqManifestGate, TestCheckSourceRegistry, TestValidateRecRelevanceContract.
+  - file: tests/checks/ops_governance/test_validate_decisions_local_writes.py
+    action: Create
+    purpose: RELOCATE+RENAME tests/test_validate_decisions.py (source module validate_decisions_local_writes.py).
+  - file: tests/checks/ops_governance/test_validate_pydantic_yaml_drift.py
+    action: Create
+    purpose: RELOCATE+RENAME tests/test_validate_dq_drift.py (source module validate_pydantic_yaml_drift.py).
+  - file: tests/checks/test_validate_deploy_channel_conformance.py
+    action: Delete
+    purpose: Superseded by the ops_governance/ mirror relocation.
+  - file: tests/test_validate_decisions.py
+    action: Delete
+    purpose: Relocated+renamed to tests/checks/ops_governance/test_validate_decisions_local_writes.py.
+  - file: tests/test_validate_dq_drift.py
+    action: Delete
+    purpose: Relocated+renamed to tests/checks/ops_governance/test_validate_pydantic_yaml_drift.py.
+  - file: tests/checks/product/__init__.py
+    action: Create
+    purpose: Package marker (mirrors scripts/checks/product/).
+  - file: tests/checks/product/trading/__init__.py
+    action: Create
+    purpose: Package marker; mirror for TestBrokerEnvReadGuard (validate_broker_env_reads).
+  - file: tests/checks/roadmap/__init__.py
+    action: Create
+    purpose: Package marker for roadmap mirrors.
+  - file: tests/checks/roadmap/test_check_graduation_guard.py
+    action: Create
+    purpose: >-
+      Mirror for check_graduation_guard.py: MERGE TestGraduationGuard, TestGraduationGuardUnavailableCarveout,
+      TestExtractEnforcedMap (~278 SLOC). NOTE: the task listed graduation-guard/_extract_enforced_map as
+      "orchestrator residue"; corrected here -- check_graduation_guard.py is a registered check module whose
+      mirror must exist. Plus roadmap siblings test_validate_platform_roadmap.py (MERGE
+      TestPlatformRoadmapCriteriaIntegrity, TestPlatformRoadmapT31Criteria, TestRoadmapSizeGuard +
+      the test_platform_roadmap_t31_criteria_are_structured module func),
+      test_validate_candidate_decision_ratification.py, test_validate_tier_floor.py.
+  - file: tests/checks/sloc/__init__.py
+    action: Create
+    purpose: Package marker for sloc mirrors (test_sloc_limits.py<-TestValidateSlocLimits, test_validate_sloc_budget_raises.py, test_cc_limits.py<-TestValidateCcLimits, test_complexity.py<-TestValidateComplexity).
+  - file: tests/checks/verification/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for verification mirrors: test_validate_hermeticity_flags.py, test_validate_verifier_hermeticity.py,
+      test_validate_verifier_same_pr_guard.py (MERGE TestSamePrGuard/Helpers/Differential + module func),
+      test_validate_verification_registry.py (MERGE TestVerificationRegistry/Differential/TestEntriesAtRef + 2 module funcs),
+      test_validate_differential_gate_baseline.py (TestDifferentialGateStep + module func),
+      test_validate_vp_replay.py (TestValidateVpReplay + _vp_replay helpers).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation: the union of pytest node ids collected from the new mirror modules
+    (tests/checks/**) + the tests/validate/ package + the relocated flat files equals the pre-move
+    union collected from origin/main's tests/test_validate.py + the six relocated flat root/checks files,
+    modulo module-path changes (and, IF OPEN RISK 1 is resolved by class-split, the class-qualifier of the
+    TestValidatePlacement methods). Same function set, same count, same pass/fail outcomes.
+  - "bin/venv-python -m scripts.validate --pre exits 0 (SLOC gate green: no file over 500 unregistered; no-cross-test-import guard green)."
+  - "bin/venv-python -m pytest tests/checks tests/validate -q passes with the same number of tests as before the move."
+  - "git diff origin/main -- config/sloc_budgets.yaml shows ONLY the tests/test_validate.py line removed; the other 23 dec-130 entries and their raise-approved markers are byte-identical."
+  - >-
+    map_source_to_test spot-checks (asserted by the updated tests/test_coverage_checker.py oracle):
+    scripts/checks/hygiene/validate_placement.py -> its hygiene mirror; scripts/validate.py -> tests/validate;
+    scripts/checks/_scaffolding.py and _terraform.py -> tests/validate; scripts/checks/registry.py and
+    _common.py -> tests/test_checks_registry.py (unchanged).
+  - "_RETIRING_GRANDFATHER_HOMES no longer contains 'test_validate.py'; _ALL_MIRROR_TARGET_HOMES (frozenset) is unchanged; the other 23 retiring entries are intact."
+  - "Every new/relocated test file is < 500 SLOC (validate_sloc_limits counting: non-blank, non-comment lines) OR is a declared concern-split package whose modules are each < 500; no new config/sloc_budgets.yaml entry is added (see OPEN RISK 1 for the TestValidatePlacement exception)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Capture the BEFORE test-id baseline from the union of all source homes before any move.
+    command: >-
+      bin/venv-python -m pytest tests/test_validate.py tests/checks/test_validate_prose_allowlist.py
+      tests/checks/test_validate_deploy_channel_conformance.py tests/test_validate_authority_budget.py
+      tests/test_validate_ci_refresh_read_coverage.py tests/test_validate_contract_drift.py
+      tests/test_validate_decisions.py tests/test_validate_dq_drift.py --collect-only -q
+      | grep '::' | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/claude-0/before_ids.txt; wc -l /tmp/claude-0/before_ids.txt
+    expected: A non-empty sorted baseline of class::function ids (module path stripped) written to the temp file.
+    fix_if: If collection errors, a source file has an import/collection problem that must be fixed before moving anything.
+  - step: 2
+    phase: pre-deploy
+    action: After the move, collect the AFTER id set from the new homes and assert equality with the baseline.
+    command: >-
+      bin/venv-python -m pytest tests/checks tests/validate --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/claude-0/after_ids.txt;
+      diff /tmp/claude-0/before_ids.txt /tmp/claude-0/after_ids.txt
+    expected: >-
+      Empty diff (identical class::function sets). If OPEN RISK 1 is resolved by splitting TestValidatePlacement,
+      the only permitted delta is the class-qualifier rename of that one class's methods, which must be reviewed
+      line-by-line and explicitly accepted.
+    fix_if: Any unexpected added/removed id means a class was dropped, duplicated, or a merge lost/renamed a function.
+  - step: 3
+    phase: pre-deploy
+    action: Run the authoritative fast presubmit tier -- proves SLOC gate, no-cross-test-import guard, and collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No "SLOC limits" failure, no "cross-test import" failure.
+    fix_if: >-
+      A >500 unregistered file (split it), a cross-test import (hoist the helper to tests/fixtures/ or a conftest),
+      or a collection error (fix the mirror's import header).
+  - step: 4
+    phase: pre-deploy
+    action: Full pass of the moved suites at the same count as before.
+    command: bin/venv-python -m pytest tests/checks tests/validate -q
+    expected: All pass; total selected count equals the step-1 baseline line count.
+    fix_if: A failure means a patch target or fixture did not survive the move (namespace-migration discipline).
+  - step: 5
+    phase: pre-deploy
+    action: Assert config/sloc_budgets.yaml lost exactly the test_validate.py line and nothing else.
+    command: >-
+      git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly one removed line ("  tests/test_validate.py: 7350  # raise-approved: dec-130 ...") and (per OPEN RISK 1
+      resolution) at most zero added lines; the other 23 entries + markers untouched.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was added.
+  - step: 6
+    phase: pre-deploy
+    action: Prove the retired mapping via the updated coverage-checker oracle (no python -c; runs the oracle test file).
+    command: bin/venv-python -m pytest tests/test_coverage_checker.py -q
+    expected: >-
+      All pass, including the updated map_source_to_test assertions for the retired mapping (checks/** -> mirror,
+      validate.py -> tests/validate, _scaffolding/_terraform -> tests/validate, registry/_common unchanged).
+    fix_if: An oracle assertion still asserts grandfather behavior for test_validate.py -- update it to the post-retirement mapping.
+  - step: 7
+    phase: pre-deploy
+    action: Confirm the residual monolith is gone and the retirement line is deleted.
+    command: >-
+      test ! -f tests/test_validate.py && ! grep -q '"test_validate.py"' scripts/test_coverage_checker.py && echo RETIRED-OK
+    expected: Prints RETIRED-OK.
+    fix_if: If the file survives or the line remains, the FINAL batch is incomplete.
+constraints:
+  - No test-logic changes -- this is a behavior-preserving MOVE. Copy each class/method body verbatim; only author a fresh per-file import header importing exactly the symbols that file references (from the source check module and scripts.checks._common), mirroring the pre-existing flat files' pattern.
+  - Namespace-migration discipline (tests/CLAUDE.md) -- rewrite any `patch("validate.<X>")` that targets the check-under-test to its source-module path; leave absolute `scripts.checks.*` patch targets untouched. Grep each moved class for `patch("validate.` before finalizing.
+  - No cross-test imports (validate_no_cross_test_imports is active in --pre and full). Shared helpers go to tests/fixtures/ (importable, exempt) or a conftest fixture -- NEVER imported between test_* modules.
+  - Every mirror directory carries an __init__.py (prepend import mode). Declared concern-split packages need >=1 test_*.py plus __init__.py.
+  - config/sloc_budgets.yaml loses exactly the tests/test_validate.py line; NEVER run --update-sloc-budgets (it strips the 23 dec-130 markers). See OPEN RISK 1 for the single possible exception.
+  - Do NOT touch the registry.py/_common.py -> tests/test_checks_registry.py special-case, and do NOT touch tests/checks/hygiene/test_validate_no_cross_test_imports.py (foundation artefact).
+  - Do NOT resolve rec-2709 (Wave 1 of ~14); bundled_recommendations stays empty.
+  - No rescue agents or workaround loops (Decision 55). PUBLIC repo -- no AWS account IDs/ARNs/secrets/hostnames in any new file.
+  - Use bin/venv-python for all Python invocations; bash-only shell.
+context:
+  - "Gates: decision-scout=FLAGS_FOUND (91/91 triaged). CITE: Decision 131 (mirror convention + retiring grandfather + no-cross-test-import guard -- governs every step), Decision 130 (whole-repo SLOC scan + 24-home grandfather + sloc_budgets markers -- governs the budget-line deletion), Decision 104 (check-registry colocation precedent being inverted). The single WARN is the Decision-128 conflict on the 522-SLOC TestValidatePlacement single-class mirror file -- RESOLVED by OVERSEER DECISION OPEN RISK 1 = PRIMARY (concern-split; no raise marker), which is the scout's own recommended doctrine-aligned resolution. RELATED: Decision 124 (the map edits must preserve the scripts/executor/** and scripts/ops_portal/** None-returns -- add a targeted regression assertion to the oracle), Decision 43/102 (the budget-line deletion is a ratchet-DOWN removal, unrestricted; new mirror files must respect the 500/CC-20 limits), Decision 80 (facade/concern-split precedent the tests/validate/ package mirrors). plan-critique gate: dispatched but did not return before overseer review (nested-agent stall); the OVERSEER conducted a direct review in its stead and PROCEEDs (this is a behavior-preserving pure move verified by test-id preservation)."
+  - "OVERSEER DECISION -- OPEN RISK 1 (TestValidatePlacement 522-SLOC single class): resolution = PRIMARY (concern-split the class into a tests/checks/hygiene/validate_placement/ package declared in _CONCERN_SPLIT_TEST_PACKAGES, split by a sensible 2-way seam that keeps both modules < 500 SLOC; method bodies verbatim). The FALLBACK (raise-approved budget marker) is REJECTED -- it would leave a tests/ entry in config/sloc_budgets.yaml, violating rec-2709's acceptance (zero tests/ entries). Accept the one class-qualifier test-id delta for that class's methods (VP step 2 permitted exception)."
+  - "OVERSEER DECISION -- PR STRUCTURE OVERRIDE: implement as ONE branch (claude/rec-2709-w1-test-validate) / ONE PR with the batches as SEQUENTIAL COMMITS (Batch 0 helpers -> domain batches -> FINAL flip), NOT the plan's multi-PR-per-domain. Rationale: intermediate batches are low-risk by design (monolith stays grandfathered, mirrors additive) so per-domain PRs buy little safety while multiplying overhead ~14x; W1+ auto-merge on green (no human-review bottleneck to relieve); the whole move is verified atomically by test-id preservation (VP 1-2) + validate --pre + full suite. Run validate --pre + scoped tests after each batch-commit to localize failures early. The rollback note's 'each batch is an independent squash-merge' is superseded: rollback = revert the single PR."
+  - "OVERSEER FOLLOW-UP (non-blocking): the retirement exposes ~5 check modules with no test anywhere (validate_workflow_agent_safety, validate_imports, validate_requirements, validate_claude_p_retry_wrapper, validate_verification_harness) that will resolve to non-existent mirrors post-retirement -- full-tier-only, forward-fixed when touched. The overseer will file a follow-up rec to backfill these test stubs. NOT a Wave 1 blocker (this wave edits none of them)."
+  - "FULL class->mirror map (91 classes + 5 module test-funcs). PER-CHECK MIRRORS (move out): ci_guards{TestValidateCiRcaTrigger,TestValidateCiRcaTaxonomy,TestValidateCiWorkflowGuards,TestValidateOpsPortalPatchTargets}; contracts{TestClaudeMdPointerInvariant,TestValidatePromptCompliance,TestValidateInstructionArchitectureLayers,TestValidateNoUnderscoreInstructions,TestIntentDocFreeze,TestValidatePortalDrift}; deps{TestDependencyGraphFreshness,TestValidateImportContracts,TestValidateLockfileSync}; executor{TestValidateExecutorBoundary}; hygiene{TestValidateCliToolsInPrompts,TestValidatePlacement,TestValidateSubprocessEncoding,TestValidateTestCountCoupling,TestValidateSysExecutable}; iam_tf{TestValidateEnvironmentTaxonomy,TestValidateTerraformTry,TestValidateIamRunnerPolicy,TestValidateInvokeImpliesResolve,TestValidateCiRefreshReadCoverageHelpers,TestValidateCiRefreshReadCoverageEndToEnd}; lambda_pkg{TestValidateLambdaManifests,TestValidateLambdaManifestCoverage,TestValidateLambdaBundleCompleteness,TestValidateLambdaDeployGating}; misc{TestValidateTestCoverage,TestValidateInvariants,TestValidateScheduledAgentLogs,TestDucklakeVersionLockstepGate,TestValidateGhasProbe}; ops_governance{TestFieldSemanticsDriftGate,TestValidateRecommendationsSchema,TestValidateRecWritePaths,TestValidateWarehouseWriteSources,TestValidateOutboxStaleness,TestValidateDqManifestGate,TestCheckSourceRegistry,TestValidateRecRelevanceContract}; product/trading{TestBrokerEnvReadGuard}; roadmap{TestGraduationGuard,TestGraduationGuardUnavailableCarveout,TestExtractEnforcedMap->check_graduation_guard; TestPlatformRoadmapCriteriaIntegrity,TestPlatformRoadmapT31Criteria,TestRoadmapSizeGuard->validate_platform_roadmap; TestCandidateDecisionRatification; TestValidateTierFloor}; sloc{TestValidateSlocLimits->test_sloc_limits,TestValidateSlocBudgetRaises,TestValidateCcLimits->test_cc_limits,TestValidateComplexity->test_complexity}; verification{TestValidateHermeticityFlags,TestVerifierHermeticity,TestSamePrGuard+Helpers+Differential->validate_verifier_same_pr_guard,TestVerificationRegistry+Differential+TestEntriesAtRef->validate_verification_registry,TestDifferentialGateStep->validate_differential_gate_baseline,TestValidateVpReplay}."
+  - "ORCHESTRATOR RESIDUE (stay -> tests/validate/ concern-split, ~1980 SLOC): TestLoadHelpers, TestRunTerraformChecks(_terraform), TestWholeRepoScanCoverage, TestEnsureFreshDqResults/TestRunCoverageCheck/TestFastTierCollectability/TestRunPytestDiff*/TestPytestDiffParallelAndTimeout/TestPytestFlagsPinnedSeed/TestExcludedHeavyDeps(_scaffolding), TestGetChangedFilesOriginMain/DeletedPaths(_common.get_changed_files), TestPreModeDiffAware/PytestSelection/Checks/RegistryIsolation, TestSlocLimitsInPreMode, TestPreRoadmapGuardSelection(select_roadmap_guard_tests), TestBudgetAssertion/IgnoreBudgetFlag/IgnoreBudgetCIGuard/BudgetBreachRecFiling/BudgetRecFilingCiGuard/BudgetBreachCiTelemetry. These call _validate.main() or exercise validate.py-defined/_scaffolding/_terraform helpers -- no per-check source module owns them."
+  - "MODULE-LEVEL test funcs to relocate with their target: test_registry_differential_skip_is_non_fatal + test_verification_registry_accepts_empty_file -> verification/test_validate_verification_registry.py; test_same_pr_guard_passes_on_no_verifier_in_diff -> verification/test_validate_verifier_same_pr_guard.py; test_differential_gate_step_passes_on_live_tree -> verification/test_validate_differential_gate_baseline.py; test_platform_roadmap_t31_criteria_are_structured -> roadmap/test_validate_platform_roadmap.py."
+  - "SHARED-HELPER HOISTING (avoid cross-test imports): _mock_completed (cross-tree: tests/validate/ + tests/checks/roadmap/) -> tests/fixtures/subprocess_stubs.py; _neutralized_pre_registry fixture (cross-tree: tests/checks/roadmap/ TestGraduationGuard + tests/validate/) -> ROOT tests/conftest.py; _pre_mock_run (tests/validate/ intra-package) -> tests/validate/conftest.py. SINGLE-CONSUMER (move with their class): _vp_replay_plan_dict/_write_vp_replay_plan -> verification/test_validate_vp_replay.py; _write_oidc_tf -> iam_tf/test_validate_invoke_implies_resolve.py; _write_ci_refresh_read_fixture -> the ci_refresh_read_coverage concern-split package."
+  - "RECONCILE pre-existing partial mirrors -- 2 under tests/checks/ (task-named): test_validate_prose_allowlist.py -> hygiene/, test_validate_deploy_channel_conformance.py -> ops_governance/. VERIFIED: test_validate.py has NO prose-allowlist or deploy-channel class (grep clean), so NO duplicate-merge for these two -- pure relocation. ADDITIONALLY discovered 6 flat-root files whose source modules also mirror into tests/checks/**: test_validate_contract_drift.py(457, pure relocate), test_validate_authority_budget.py(23, pure relocate), test_validate_decisions.py(79, relocate+rename ->validate_decisions_local_writes), test_validate_dq_drift.py(106, relocate+rename ->validate_pydantic_yaml_drift), test_validate_ci_refresh_read_coverage.py(183, MERGE with the two test_validate.py classes -> concern-split pkg). test_validate_telemetry.py(239) has NO scripts/checks source module (not a check) -- OUT OF SCOPE, left in place."
+  - "COVERAGE-SAFETY (why CI stays green): validate_test_coverage is FULL-tier only (registry.full_sequence), NOT in pre_sequence, and only checks git-diff-changed source files. scripts/test_coverage_checker.py is name-excluded (starts with test_); config yaml is not .py; moved tests are test_-excluded. So THIS wave changes zero coverage-checked source files -> the coverage gate is a no-op for this PR in both tiers."
+  - "LATENT OBLIGATIONS exposed by retirement (full-tier-only, forward-fixed as touched -- NOT PR-blocking): ~5 check modules with NO test anywhere (validate_workflow_agent_safety, validate_imports, validate_requirements, validate_claude_p_retry_wrapper, validate_verification_harness) and the domain _shared.py helpers (ci_guards/_shared.py, contracts/_shared.py have no public defs; sloc/_shared.py's iter_gated_py_files is exercised by TestWholeRepoScanCoverage in tests/validate/) resolve to non-existent mirrors post-retirement. A future PR editing one will fail the FULL-tier coverage gate on main until a mirror is created. Recommend a follow-up rec (or a later wave) to backfill these; _scaffolding.py/_terraform.py are handled by this plan's special-case."
+  - "Branch claude/rec-2709-w1-test-validate; foundation (Decision 131) already merged. Preflight (Step 1) not machine-run in this planning subagent; assessed from repo state. No ci-rca unresolved recs surfaced in scope. Main-divergence: scope is net-new/relocated test files + coverage-checker + budget; no overlap risk flagged at planning time."
+  - "PR STRUCTURE = DOMAIN-BATCHED multi-PR (see OPEN RISK / rationale in execution_steps). ~7350 SLOC across ~45 files is too large to review atomically; batching keeps each PR green and reviewable, with the mapping-flip (retire line + concern-split declaration + budget-line delete + tests/test_validate.py delete) isolated to the FINAL batch."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/rec-2709-w1-test-validate)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (Decision 131, 130, 128, 104)
+  - scripts/test_coverage_checker.py read in full (map_source_to_test, _RETIRING_GRANDFATHER_HOMES, _ALL_MIRROR_TARGET_HOMES, _CONCERN_SPLIT_TEST_PACKAGES, _mirror_source_to_test)
+  - tests/CLAUDE.md read (mirror convention, no-cross-test-import rule, conftest hierarchy)
+  - All 91 classes + 5 module funcs located; class->mirror map (context) understood and re-verified against the live file
+  - OPEN RISK 1 (TestValidatePlacement 522-SLOC single-class SLOC/id conflict) resolution chosen by the overseer before the hygiene batch
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "BATCH 0 (prep, one PR): create tests/fixtures/subprocess_stubs.py (_mock_completed); hoist _neutralized_pre_registry into tests/conftest.py; leave test_validate.py importing them (import _mock_completed from the fixture; delete its local _neutralized_pre_registry def so it uses the root-conftest fixture). Run --pre; confirm the full existing suite still passes (pure refactor, no move yet). This de-risks the cross-tree helpers before any class moves."
+  - "BATCHES 1..N (one per domain or 2-3 domains): for each domain, create tests/checks/<domain>/__init__.py + the per-check mirror module(s); COPY each class/module-func verbatim; author a fresh import header per file (import the check fn + helpers directly from scripts.checks.<domain>.<module> and scripts.checks._common, matching the pre-existing flat files); rewrite any patch('validate.<check-under-test>') to the source-module path; DELETE the moved classes from tests/test_validate.py. Relocate the matching flat files in the same domain batch (prose->hygiene, deploy_channel/decisions/dq_drift->ops_governance, authority_budget->iam_tf, contract_drift->contracts). Do NOT touch _RETIRING_GRANDFATHER_HOMES or config/sloc_budgets.yaml yet -- test_validate.py stays grandfathered and simply shrinks under its 7350 budget, so every intermediate PR is green (mirrors are valid tests; --pre passes; coverage gate is a no-op). Run VP steps 2-4 scoped to the touched files each batch."
+  - "IAM_TF concern-split (in the iam_tf batch): declare scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py in _CONCERN_SPLIT_TEST_PACKAGES; create tests/checks/iam_tf/validate_ci_refresh_read_coverage/ with __init__.py + one module per class (Helpers, EndToEnd, and the relocated flat TestValidateCiRefreshReadCoverage), each < 500 SLOC; move _write_ci_refresh_read_fixture into whichever module(s) use it (dedup against any same-named helper in the flat file). This adds a _CONCERN_SPLIT_TEST_PACKAGES entry but is still guarded by the grandfather until the FINAL batch, so it is dormant/harmless until then."
+  - "HYGIENE batch -- resolve OPEN RISK 1 for TestValidatePlacement (522 SLOC single class): PRIMARY = split its methods into two same-file-sibling classes across a concern-split package tests/checks/hygiene/validate_placement/ (declare the source in _CONCERN_SPLIT_TEST_PACKAGES), grouped by the docs-root vs scripts-root feature (natural seam: _docs_root_stray_files vs _scripts_root_stray_files), preserving every method body verbatim -- this keeps all files < 500 and adds NO budget line; the only id delta is the class-qualifier of the moved methods (accept explicitly in VP step 2). FALLBACK (if no clean 2-way seam) = keep the single class in tests/checks/hygiene/test_validate_placement.py and add a `tests/checks/hygiene/test_validate_placement.py: <sloc>  # raise-approved: dec-131 ...` line to config/sloc_budgets.yaml. The overseer chooses PRIMARY vs FALLBACK before this batch."
+  - "FINAL BATCH (the mapping flip, one PR): move the orchestrator residue into tests/validate/ (create __init__.py, conftest.py with _pre_mock_run, and the test_tiers/test_budget/test_pytest_diff/test_scaffold_gates/test_changed_files modules -- rebalance so each is < 500 SLOC, measured by the validate_sloc_limits counting rule); delete the now-empty tests/test_validate.py; edit scripts/test_coverage_checker.py: delete 'test_validate.py' from _RETIRING_GRANDFATHER_HOMES, add 'scripts/validate.py' to _CONCERN_SPLIT_TEST_PACKAGES, add the _scaffolding.py/_terraform.py orchestration-scaffolding special-case routing to tests/validate; update tests/test_coverage_checker.py oracle assertions for the retired mapping; delete the tests/test_validate.py line from config/sloc_budgets.yaml by hand."
+  - "Execute the full Verification Plan on the FINAL batch (steps 1-7); loop until all pass. On an unrecoverable failure, STOP and RCA (Decision 55) -- never patch around a collect-id mismatch."
+  - "Report: which OPEN RISK 1 resolution was used; the final tests/validate/ module SLOC breakdown; confirmation config/sloc_budgets.yaml lost exactly one line; the follow-up-rec text for the latent orphan modules."
+rollback: >-
+  Each batch is an independent squash-merge; revert the offending batch's PR. The FINAL batch is the only
+  one that changes the mapping/budget -- reverting it restores tests/test_validate.py's grandfather + budget
+  entry and re-points scripts/checks/** at the (still-present) monolith, leaving the already-created mirror
+  files as harmless extra coverage until re-attempted.
