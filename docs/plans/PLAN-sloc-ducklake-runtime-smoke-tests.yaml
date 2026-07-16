@@ -1,0 +1,568 @@
+schema_version: 1
+slug: sloc-ducklake-runtime-smoke-tests
+intent: >-
+  Decompose the two remaining ducklake test-home monoliths in ONE PR -- tests/test_ducklake_runtime.py
+  (991 SLOC, MIRROR pattern) into per-source-module mirror modules under tests/common/, and
+  tests/test_ducklake_neon_smoke_test.py (1110 SLOC, CONCERN-SPLIT pattern, already seeded) into a
+  tests/ducklake_neon_smoke_test/ package -- then retire BOTH grandfather homes and delete BOTH
+  config/sloc_budgets.yaml entries. rec-2709 Wave 7 of the Decision 131 mirror-convention rollout that
+  keeps files small enough for lower-tier model comprehension (the load-bearing purpose of the
+  500-SLOC gate, Decision 128).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-ducklake-runtime-smoke-tests.yaml
+phase: >-
+  rec-2709 Wave 7 (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (Decision 128). Behavior-preserving pure test MOVE of the two ducklake test homes.
+  No product-roadmap phase; platform tooling only.
+scope:
+  # ---- FILE 1: test_ducklake_runtime.py -> tests/common/ mirror modules ----
+  - file: tests/common/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the new tests/common/ mirror tree (prepend import mode; mirror convention).
+      Empty file. tests/common/ does not exist yet -- this wave creates it. No package conftest is
+      needed (test_ducklake_runtime.py defines NO custom pytest fixtures -- only monkeypatch/tmp_path/
+      capsys builtins; the root tests/conftest.py global guards merge up the tree).
+  - file: tests/fixtures/ducklake_fakes.py
+    action: Create
+    purpose: >-
+      Home for the two CROSS-BUCKET shared helpers of the runtime suite: the FakeCon connection double
+      (used by all five buckets) and the _SEMANTICS dict (used by writes + runtime buckets). tests/fixtures/
+      is an importable package exempt from the no-cross-test-import guard (names never start with test_).
+      FakeCon references rt.SMOKE_HISTORY_TABLE/SMOKE_CURRENT_TABLE, so this module imports
+      `from src.common import ducklake_runtime as rt`. Consumers import with an alias where needed to keep
+      bodies byte-identical. FileOpsCon (writes-only), NamedReadCon (reads-only), _DSN + _patch_duckdb
+      (runtime-only) and _APPEND_ONLY_RT_SEMANTICS (writes-only) are SINGLE-CONSUMER and move WITH their
+      bucket module, NOT hoisted (Wave 1/3 single-consumer precedent).
+  - file: tests/common/test_ducklake_writes.py
+    action: Create
+    purpose: >-
+      MIRROR for src/common/ducklake_writes.py. Verbatim move of every test whose primary symbol is
+      writes-owned: mint_write_identity (2), is_occ_collision/_occ_backoff (2), write_scd2 core +
+      derivation/idempotency/OCC (12), _safe_rollback/_emit_write_metrics (2), write_scd2 table-param
+      require_exists / status-transition (8), file_scd2 / bootstrap_entity_counter / _advance_entity_counter
+      (16, incl the FileOpsCon class moved in here), churn budget constants (1, CHURN_* live in
+      ducklake_writes), and the append_only write_scd2 tests (4) with the _APPEND_ONLY_RT_SEMANTICS dict
+      (writes-single-consumer, moved in here). ~440 SLOC after header -- under 500 (largest mirror file;
+      see OPEN RISK 1 for the sibling-split fallback if the real header pushes it over). Fresh import
+      header; pytestmark = pytest.mark.unit replicated; FakeCon + _SEMANTICS imported from the fixture.
+  - file: tests/common/test_ducklake_tables.py
+    action: Create
+    purpose: >-
+      MIRROR for src/common/ducklake_tables.py (create_scd2_tables, reconcile_table_columns): the two
+      create_scd2_tables partition/force-recreate tests, the ops-DDL-real-types test, the two append_only
+      create_scd2_tables tests, and reconcile_table_columns append_only. ~68 SLOC. FakeCon +
+      _APPEND_ONLY_RT_SEMANTICS -- note _APPEND_ONLY lives in test_ducklake_writes.py (single-consumer);
+      the append_only tables tests here do NOT pass semantics (they call create_scd2_tables(con,
+      table="ops_smoke_events") with no semantics arg), so tables needs only FakeCon from the fixture.
+      pytestmark replicated.
+  - file: tests/common/test_ducklake_reads.py
+    action: Create
+    purpose: >-
+      MIRROR for src/common/ducklake_reads.py (read_current, read_history, assert_read_only_sql,
+      named_read, query_current): read_current all/by-rec-id/limit (3), the ops-table read_current /
+      read_history / query_current (3), the assert_read_only_sql SELECT-allow + writes-reject
+      (parametrized) + multistatement + query_current-enforces (4), named_read registry / unknown-verb /
+      param-mismatch / select-only (4), read_current unknown-filter-column + binds-named-column (2, with
+      the NamedReadCon class moved in here -- reads-single-consumer), and the two append_only read_current/
+      query_current raises (2). ~157 SLOC. FakeCon from the fixture. pytestmark replicated.
+  - file: tests/common/test_ducklake_metrics.py
+    action: Create
+    purpose: >-
+      MIRROR for src/common/ducklake_metrics.py (emit_metric, make_metric_sink): the four
+      emit_metric / make_metric_sink tests (injected client, swallows client error, boto3 path, sink
+      units). ~53 SLOC. No FakeCon needed (these use their own inline _CW doubles). pytestmark replicated.
+  - file: tests/common/test_ducklake_runtime.py
+    action: Create
+    purpose: >-
+      MIRROR for src/common/ducklake_runtime.py (the facade). Carries the genuine runtime-owned tests
+      (assert_duckdb_version 3, fetch_dsn/libpq_conninfo 5, open_connection 5 with the _patch_duckdb
+      helper + _DSN dict, both runtime-single-consumer) AND the facade RE-EXPORT tests that exercise
+      symbols owned by ducklake_scd2_schema but surfaced through rt.* (field-semantics 4, schema_gate
+      loud-fail 8, resolve_table_spec / schema_gate-ops / _PY_TYPE_FOR_SQL / _build_merge_* /
+      ops_table_names 13, and the split-invariant byte-identical / re-export-identity / no-import-cycle
+      tests 6). scd2_schema keeps its own dedicated tests/test_ducklake_scd2_schema.py and is NOT in
+      scope; these facade tests belong with the runtime re-export surface. ~278 SLOC. FakeCon + _SEMANTICS
+      from the fixture; pytestmark replicated.
+  - file: tests/test_ducklake_runtime.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into the five tests/common/test_ducklake_*.py mirror modules. Deleted in the FINAL
+      commit only, atomically with the retire-line deletion + budget-line deletion + oracle update.
+  # ---- FILE 2: test_ducklake_neon_smoke_test.py -> tests/ducklake_neon_smoke_test/ concern-split ----
+  - file: tests/ducklake_neon_smoke_test/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the concern-split (prepend import mode; mirror convention). Empty file. No
+      package conftest is needed (the smoke suite defines NO custom pytest fixtures -- only monkeypatch/
+      capsys builtins; the root tests/conftest.py global recursion/socket guards merge up the tree).
+  - file: tests/fixtures/ducklake_smoke_fakes.py
+    action: Create
+    purpose: >-
+      Home for the smoke suite's three CROSS-CONCERN shared helpers: the smoke FakeCon (records executed
+      SQL; used by core open_attached + direct_gates attach/single-writer/probe tests), the _Resp HTTP
+      response double (used by core url-invoke + every lambda-gate concern + canary), and the _DSN dict
+      (used by core + direct_gates). These are DISTINCT from tests/fixtures/ducklake_fakes.py's runtime
+      FakeCon/_DSN (different signatures) -- keep a separate smoke fixtures module so bodies stay verbatim.
+      Single-concern helpers (_completed, _stub_churn_gate_prelude, _patch_gate, _churn_single_body,
+      _patch_fanout_churn, _warm_reuse_invoker, _stub_canary_rehearsal, _stub_invoke_response, the
+      _FAKE_BRANCH_* / _FAKE_PROJECT_ID canary constants) move WITH their concern module, NOT hoisted.
+  - file: tests/ducklake_neon_smoke_test/test_core.py
+    action: Create
+    purpose: >-
+      CONCERN: scripts/ducklake_smoke/core.py -- fetch_dsn (2), _libpq_conninfo/_dsn_uri (3),
+      _open_attached (2), and the lambda-invoke PRIMITIVES also owned by core (_function_url,
+      _sigv4_invoke, _ok_json: 6). ~147 SLOC. FakeCon + _Resp + _DSN from the smoke fixture. Verbatim.
+  - file: tests/ducklake_neon_smoke_test/test_direct_gates.py
+    action: Create
+    purpose: >-
+      CONCERN: scripts/ducklake_smoke/direct_gates.py -- attach_roundtrip (2), OCC classification +
+      _single_writer_commit (4), _run_churn_burst + _p95 + _evaluate_churn (6), churn_gate (3, with the
+      _stub_churn_gate_prelude helper moved in here), _engine_tag/_run (3, with the _completed helper),
+      pg_dump/restore wrappers (4), probe write/verify + _derive_scratch_dsn (4), restore_drill (3), and
+      the DUCKLAKE_ALLOW_DIRECT_GATE guard tests for churn_gate + restore_drill (4). ~241 SLOC (largest
+      concern module -- comfortable margin under 500). FakeCon + _DSN from the fixture. Verbatim.
+  - file: tests/ducklake_neon_smoke_test/test_lambda_ec_gates.py
+    action: Create
+    purpose: >-
+      CONCERN: scripts/ducklake_smoke/lambda_ec_gates.py -- lambda_attach/ingress/idempotency/partition/
+      inlining/loudfail gates (12, with the _patch_gate helper), the lambda_churn fan-out cohort (with
+      _churn_single_body + _patch_fanout_churn helpers, 7 tests) incl test_churn_constants_imported_from_runtime,
+      and lambda_churn_incontainer (2). ~208 SLOC. _Resp from the fixture. Verbatim.
+  - file: tests/ducklake_neon_smoke_test/test_lambda_ops_gates.py
+    action: Create
+    purpose: >-
+      CONCERN: scripts/ducklake_smoke/lambda_ops_gates.py -- lambda_reader (2), lambda_warm_reuse /
+      lambda_warm_reuse_writer (3, with the _warm_reuse_invoker helper), ops_read_your_write (2),
+      ops_churn_regate (1), catalog_restore_drill (2). ~133 SLOC. _Resp from the fixture. Verbatim.
+  - file: tests/ducklake_neon_smoke_test/test_lambda_maintenance_gates.py
+    action: Create
+    purpose: >-
+      CONCERN: scripts/ducklake_smoke/lambda_maintenance_gates.py -- the four lambda_maintenance_merge
+      gate tests (ok / empty-catalog / files-grew-fail / not-ok-fail). ~54 SLOC. _Resp from the fixture.
+      Verbatim.
+  - file: tests/ducklake_neon_smoke_test/test_canary.py
+    action: Create
+    purpose: >-
+      CONCERN: scripts/ducklake_smoke/canary.py -- canary_rehearsal orchestration (11 tests, with the
+      _stub_canary_rehearsal helper + the _FAKE_BRANCH_ID/_FAKE_BRANCH_HOST/_FAKE_PROJECT_ID module
+      constants), _lambda_invoke_cli (3, with the _stub_invoke_response helper), and _wait_function_active
+      (2). ~254 SLOC. _Resp from the fixture. Verbatim.
+  - file: tests/ducklake_neon_smoke_test/test_main_dispatch.py
+    action: Create
+    purpose: >-
+      CONCERN: the facade CLI main() dispatch -- all nine test_main_* tests (direct-gate dispatch,
+      churn-incontainer dispatch, lambda-attach dispatch, lambda-gate loud-fail, canary dispatch). main()
+      is defined in the facade scripts/ducklake_neon_smoke_test.py itself. ~58 SLOC. Verbatim.
+  - file: tests/ducklake_neon_smoke_test/test_facade.py
+    action: Create
+    purpose: >-
+      CONCERN: facade completeness + Decision-104 module-object interception --
+      test_facade_reexports_identity_equal_to_owning_submodule (with the _PACKAGE_SUBMODULES tuple) plus
+      the five interception tests (core._sigv4_invoke through the ec/maintenance/ops/canary families and
+      lambda_ec_gates.lambda_churn via ops_churn_regate). ~92 SLOC. Imports all six ducklake_smoke
+      submodules. Verbatim. SEE OPEN RISK 2: the facade-completeness test scans `__file__` for smoke.<name>
+      refs; post-move it scans only test_facade.py (narrower set) -- still green, coverage flagged.
+  - file: tests/test_ducklake_neon_smoke_test.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into the tests/ducklake_neon_smoke_test/ concern-split package. Deleted in the
+      FINAL commit only, atomically with the map flip + budget-line deletion + oracle update.
+  # ---- THE SHARED FLIP (final commit) ----
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      THE FLIP (final commit): delete BOTH lines "test_ducklake_runtime.py" and
+      "test_ducklake_neon_smoke_test.py" from _RETIRING_GRANDFATHER_HOMES. CRUX (FILE 1): KEEP
+      _DUCKLAKE_RUNTIME_SPLIT_MODULES and its special-case branch UNCHANGED -- do NOT remove it. Removing
+      it would route src/common/ducklake_{writes,tables,reads,metrics}.py to grandfather home
+      test_ducklake_{stem}.py, which is NOT in _ALL_MIRROR_TARGET_HOMES, so the mirror branch would never
+      fire and they would wrongly resolve to the FLAT tests/test_ducklake_writes.py instead of the mirror
+      tests/common/test_ducklake_writes.py. Keeping the special-case (exactly the Wave 1 scripts/checks/**
+      precedent) means: once test_ducklake_runtime.py is deleted from _RETIRING, the four modules'
+      grandfather home (test_ducklake_runtime.py, still in the frozen roster) drives the mirror rule ->
+      _mirror_source_to_test drops src, keeps common, non-concern-split -> tests/common/test_ducklake_*.py.
+      NO _CONCERN_SPLIT_TEST_PACKAGES edit for FILE 2 -- "scripts/ducklake_neon_smoke_test.py" is ALREADY
+      seeded there, so its retire-line deletion alone resolves it to the tests/ducklake_neon_smoke_test/
+      package dir. Do NOT touch _ALL_MIRROR_TARGET_HOMES (frozen 24). Optionally update the
+      _DUCKLAKE_RUNTIME_SPLIT_MODULES doc comment to note the post-Wave-7 mirror behaviour (doc-only,
+      mirrors Wave 1's comment updates).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete ONLY the two lines "tests/test_ducklake_neon_smoke_test.py: 1110 ..." and
+      "tests/test_ducklake_runtime.py: 991 ..." by hand. NEVER run --update-sloc-budgets (it strips the
+      dec-130 markers on the other retiring entries and could re-seed the new modules). HARD invariant:
+      this file loses exactly those two lines and nothing else.
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Update the map_source_to_test / retiring-table oracle to the post-Wave-7 state (SIX homes retired).
+      (a) test_maps_ducklake_runtime_split_modules_to_test_ducklake_runtime (parametrized over the four
+      split stems): change the expected from ROOT/tests/test_ducklake_runtime.py to
+      ROOT/tests/common/test_ducklake_{stem}.py and update the docstring/method name to
+      "...resolve_to_their_common_mirror" -- THIS is the assertion that proves the crux (special-case kept
+      + retirement drives the mirror). (b) test_representative_paths_resolve_under_current_retirement_state:
+      ADD cases src/common/ducklake_writes.py -> tests/common/test_ducklake_writes.py,
+      src/common/ducklake_runtime.py -> tests/common/test_ducklake_runtime.py, and
+      scripts/ducklake_neon_smoke_test.py -> tests/ducklake_neon_smoke_test (package dir); KEEP the
+      scripts/executor/step_runner.py -> None and scripts/ops_portal/cli.py -> None Decision-124 regression
+      cases; update the docstring to "six homes retired". (c) test_retiring_is_all_target_homes_minus_four_retired_waves:
+      rename to ...minus_six_retired_waves, add "test_ducklake_runtime.py" + "test_ducklake_neon_smoke_test.py"
+      to the `retired` set, add the two "not in _RETIRING_GRANDFATHER_HOMES" asserts, keep the
+      test_session_postflight.py-still-grandfathered control, update the docstring. (d) LEAVE
+      test_roster_is_the_24_known_basenames UNCHANGED (frozen roster already contains both names).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Per-file test-id preservation: the union of class::function pytest node ids collected from
+    tests/common/ (module path stripped) equals the pre-move union from origin/main's
+    tests/test_ducklake_runtime.py; AND the union from tests/ducklake_neon_smoke_test/ equals the pre-move
+    union from origin/main's tests/test_ducklake_neon_smoke_test.py. Both diffs are EMPTY (no class > 500
+    exists in either file, so there is NO sanctioned class-qualifier rename this wave). Same function set,
+    same count, same pass/skip outcomes. The two baselines are captured and diffed SEPARATELY (the smoke
+    and runtime suites share function names like test_fetch_dsn_success -- they must not be cross-compared).
+  - >-
+    Every new test module under tests/common/ and tests/ducklake_neon_smoke_test/ is < 500 SLOC
+    (validate_sloc_limits counting: non-blank, non-comment) and < 20 CC per function; no
+    config/sloc_budgets.yaml entry is added for any of them.
+  - "bin/venv-python -m scripts.validate --pre exits 0 (SLOC gate green; no-cross-test-import guard green; collectability green)."
+  - >-
+    bin/venv-python -m pytest tests/common -q and bin/venv-python -m pytest tests/ducklake_neon_smoke_test -q
+    each collect/pass the same number of tests as their respective origin/main monolith.
+  - >-
+    git diff origin/main -- config/sloc_budgets.yaml shows EXACTLY the two lines removed
+    (tests/test_ducklake_runtime.py: 991 and tests/test_ducklake_neon_smoke_test.py: 1110); every other
+    entry and its dec-130 marker is byte-identical.
+  - >-
+    map_source_to_test oracle (asserted by the updated tests/test_coverage_checker.py): each
+    src/common/ducklake_{writes,tables,reads,metrics}.py -> tests/common/test_ducklake_{stem}.py;
+    src/common/ducklake_runtime.py -> tests/common/test_ducklake_runtime.py;
+    scripts/ducklake_neon_smoke_test.py -> tests/ducklake_neon_smoke_test (package dir);
+    scripts/executor/step_runner.py -> None and scripts/ops_portal/cli.py -> None (Decision 124 preserved).
+    _RETIRING_GRANDFATHER_HOMES no longer contains either "test_ducklake_runtime.py" or
+    "test_ducklake_neon_smoke_test.py"; _ALL_MIRROR_TARGET_HOMES (frozen 24) is unchanged;
+    _DUCKLAKE_RUNTIME_SPLIT_MODULES is unchanged; "scripts/ducklake_neon_smoke_test.py" stays in
+    _CONCERN_SPLIT_TEST_PACKAGES.
+  - >-
+    check_test_file_exists returns True for both retired sources: src/common/ducklake_writes.py finds
+    tests/common/test_ducklake_writes.py, and scripts/ducklake_neon_smoke_test.py finds the
+    tests/ducklake_neon_smoke_test package (>= 1 test_*.py + __init__.py); both monoliths are gone.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Capture the BEFORE runtime id baseline from the monolith (module path stripped).
+    command: >-
+      bin/venv-python -m pytest tests/test_ducklake_runtime.py --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/claude-0/rt_before.txt; wc -l /tmp/claude-0/rt_before.txt
+    expected: "A non-empty sorted baseline of CLASSFN:: ids for the runtime suite."
+    fix_if: If collection ERRORS (not a clean list), the monolith has an import/collection problem to fix before moving anything.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Capture the BEFORE smoke id baseline from the monolith (module path stripped).
+    command: >-
+      bin/venv-python -m pytest tests/test_ducklake_neon_smoke_test.py --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/claude-0/smoke_before.txt; wc -l /tmp/claude-0/smoke_before.txt
+    expected: "A non-empty sorted baseline of CLASSFN:: ids for the smoke suite."
+    fix_if: If collection errors, fix the monolith's import/collection problem before moving anything.
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: After the move, collect the AFTER runtime id set from tests/common/ and diff against the baseline.
+    command: >-
+      bin/venv-python -m pytest tests/common --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/claude-0/rt_after.txt;
+      diff /tmp/claude-0/rt_before.txt /tmp/claude-0/rt_after.txt
+    expected: Empty diff (identical id sets). No class > 500 exists, so there is NO sanctioned rename -- any delta is a defect.
+    fix_if: Any added/removed id means a test was dropped, duplicated, or a verbatim body was lost/renamed during the move -- restore it. A helper that became a collected test_ name is a naming error; keep helpers underscore-prefixed.
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: After the move, collect the AFTER smoke id set from tests/ducklake_neon_smoke_test/ and diff against the baseline.
+    command: >-
+      bin/venv-python -m pytest tests/ducklake_neon_smoke_test --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/claude-0/smoke_after.txt;
+      diff /tmp/claude-0/smoke_before.txt /tmp/claude-0/smoke_after.txt
+    expected: Empty diff (identical id sets).
+    fix_if: Any added/removed id means a test was dropped, duplicated, or a body was lost/renamed -- restore it.
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Run the authoritative fast presubmit tier -- proves the SLOC gate, the no-cross-test-import guard, and collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No "SLOC limits" failure, no "cross-test import" failure, no collection error.
+    fix_if: >-
+      A >500 unregistered module (rebalance / sibling-split, see OPEN RISK 1), a cross-test import (hoist
+      the shared helper to tests/fixtures/ or keep a single-consumer helper in its module), or a collection
+      error (fix the module's fresh import header / a missing pytestmark replication).
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full pass of both moved suites at the same counts as their baselines.
+    command: bin/venv-python -m pytest tests/common tests/ducklake_neon_smoke_test -q
+    expected: All pass; the tests/common count equals the step-1 baseline and the tests/ducklake_neon_smoke_test count equals the step-2 baseline.
+    fix_if: A failure means a patch target or mock did not survive the move -- re-check that string patch targets (src.common.*, scripts.ducklake_smoke.*, boto3, requests) are byte-identical and that FakeCon/_Resp/_DSN were imported from the correct fixture module.
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Assert config/sloc_budgets.yaml lost exactly the two target lines and nothing else.
+    command: git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly two removed lines ("tests/test_ducklake_runtime.py: 991 ..." and
+      "tests/test_ducklake_neon_smoke_test.py: 1110 ...") and zero added lines; every other entry + its
+      dec-130 marker untouched.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was added.
+  - step: 8
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Prove the retired mapping, the kept _DUCKLAKE_RUNTIME_SPLIT_MODULES special-case, and the Decision 124 None-returns via the updated coverage-checker oracle.
+    command: bin/venv-python -m pytest tests/test_coverage_checker.py -q
+    expected: >-
+      All pass, including: the four ducklake split modules -> tests/common/test_ducklake_{stem}.py;
+      src/common/ducklake_runtime.py -> tests/common/test_ducklake_runtime.py;
+      scripts/ducklake_neon_smoke_test.py -> tests/ducklake_neon_smoke_test; the two executor/ops_portal
+      None-returns; both basenames absent from _RETIRING_GRANDFATHER_HOMES; roster still the frozen 24.
+    fix_if: An oracle assertion still asserts grandfather behavior for either home, or a None-return regressed, or the split-modules assertion still expects the flat tests/test_ducklake_runtime.py -- update it to the mirror target.
+  - step: 9
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Confirm both monoliths are gone, both retirement lines are deleted, and the whole tests/ tree still collects clean.
+    command: >-
+      test ! -f tests/test_ducklake_runtime.py && test ! -f tests/test_ducklake_neon_smoke_test.py
+      && ! grep -qE '"test_ducklake_runtime.py"|"test_ducklake_neon_smoke_test.py"' scripts/test_coverage_checker.py
+      && bin/venv-python -m pytest tests/ --collect-only -q >/dev/null && echo RETIRED-OK
+    expected: Prints RETIRED-OK (both monoliths absent, both retirement lines absent, whole-suite collection clean -- no import/collision error).
+    fix_if: If a file survives, a line remains, or collection errors, the FINAL commit is incomplete or a module header is malformed.
+constraints:
+  - >-
+    PURE MOVE, no test-logic changes. Copy each test function / helper class body VERBATIM; author only a
+    fresh per-file import header importing exactly the symbols that file references. Patch string targets
+    (src.common.ducklake_runtime.*, src.common.ducklake_spike.*, scripts.ducklake_smoke.*, boto3, requests)
+    stay BYTE-IDENTICAL -- the SOURCE decomposition (ducklake_runtime facade + ducklake_smoke package)
+    already happened, so there is NO patch-target namespace rewrite in this wave.
+  - >-
+    Replicate the module-level `pytestmark = pytest.mark.unit` marker in EVERY new tests/common/ module
+    (test_ducklake_runtime.py carries it at module scope; it must be present in each of the five mirrors
+    so the unit marker is preserved). The smoke monolith has NO pytestmark and NO importorskip guard --
+    neither file uses `pytest.importorskip("duckdb")`, so there is no guard to preserve in either split
+    (unlike Wave 3's ops_data_portal). Do not invent one.
+  - >-
+    No cross-test imports (validate_no_cross_test_imports is active in --pre and full). CROSS-BUCKET shared
+    helpers go to tests/fixtures/ (importable, exempt): runtime FakeCon + _SEMANTICS ->
+    tests/fixtures/ducklake_fakes.py; smoke FakeCon + _Resp + _DSN -> tests/fixtures/ducklake_smoke_fakes.py.
+    SINGLE-CONSUMER helpers move WITH their module and are NEVER imported between test_* modules: runtime
+    FileOpsCon (writes), NamedReadCon (reads), _DSN + _patch_duckdb (runtime), _APPEND_ONLY_RT_SEMANTICS
+    (writes); smoke _completed / _stub_churn_gate_prelude (direct_gates), _patch_gate / _churn_single_body /
+    _patch_fanout_churn (ec_gates), _warm_reuse_invoker (ops_gates), _stub_canary_rehearsal /
+    _stub_invoke_response / _FAKE_* (canary).
+  - >-
+    THE CRUX (FILE 1 map edit): KEEP _DUCKLAKE_RUNTIME_SPLIT_MODULES and its branch in
+    _grandfathered_source_to_test UNCHANGED. The ONLY behavioural edit to scripts/test_coverage_checker.py
+    is deleting the two retire lines from _RETIRING_GRANDFATHER_HOMES. Do NOT remove the special-case, do
+    NOT add anything to _CONCERN_SPLIT_TEST_PACKAGES (smoke already seeded; runtime + the four split
+    modules are plain mirrors, single files, NOT packages), do NOT edit _ALL_MIRROR_TARGET_HOMES.
+  - >-
+    config/sloc_budgets.yaml loses exactly the two target lines by hand; NEVER run --update-sloc-budgets.
+    Preserve the scripts/executor/** and scripts/ops_portal/** None-returns (Decision 124 regression
+    assertion in the oracle).
+  - >-
+    Every new dir carries an __init__.py (prepend import mode). No conftest.py is created in either new
+    package (neither suite defines custom pytest fixtures; the root tests/conftest.py provides the global
+    recursion/socket guards, merged up the tree).
+  - >-
+    No test-count-coupling regressions (tests/CLAUDE.md): the move introduces no new exact-count asserts.
+    After removing functions there is no monolith left to lint; after adding modules, verify every symbol
+    used in side_effect=/assertions is imported at module scope, and run `ruff check --fix` to catch F401.
+  - >-
+    Do NOT resolve rec-2709 (Wave 7 of the roster); bundled_recommendations stays empty. No rescue agents
+    or workaround loops (Decision 55). PUBLIC repo -- no AWS account IDs / ARNs / ExternalIds / secrets /
+    internal hostnames in any new file (the fixtures carry only the fake `# pragma: allowlist secret`
+    values already present in the monoliths, moved verbatim). Use bin/venv-python for all Python
+    invocations; bash-only shell.
+  - >-
+    PR STRUCTURE (overseer standard): ONE branch / ONE PR with batched sequential COMMITS (additive-module
+    commits -> FINAL flip commit), NOT multi-PR. Intermediate commits are low-risk (each monolith stays
+    grandfathered and simply shrinks under its budget while the new modules are additive valid tests), so
+    every intermediate state keeps --pre green; the FINAL flip (both retire lines + both budget-line deletes
+    + oracle update + both monolith deletes) is isolated to the last commit.
+context:
+  - >-
+    Gates: decision-scout NOT dispatched (planning-agent instruction -- inline decision analysis). CITE:
+    Decision 131 (mirror convention + retiring grandfather-table + no-cross-test-import guard + per-package
+    conftest hierarchy -- governs every step), Decision 130 (whole-repo SLOC scan + 24-home grandfather +
+    sloc_budgets dec-130 markers -- governs the two-line budget deletion, a ratchet-DOWN removal that is
+    unrestricted), Decision 128 (decompose-by-default; the 500-SLOC gate is load-bearing for lower-tier
+    model comprehension -- forbids a budget raise; no file here needs one), Decision 132 (verification
+    graduation is an enforced pre-merge obligation -- every pre-deploy VP step carries
+    graduation: not-applicable since this is a pure pre-deploy test move with no runtime graduation),
+    Decision 124 (scripts/executor/** and scripts/ops_portal/** map to None -- the oracle must keep the
+    regression assertion). RELATED: Decision 104 (colocation precedent being inverted), Decision 80
+    (facade / concern-split package precedent). No decision CONTRADICTION: this is a behavior-preserving
+    pure move verified by per-file test-id preservation.
+  - >-
+    THE CRUX -- FILE 1 map mechanics (traced precisely). _grandfathered_source_to_test maps BOTH the four
+    _DUCKLAKE_RUNTIME_SPLIT_MODULES {ducklake_writes,tables,reads,metrics}.py (via the special-case branch)
+    AND src/common/ducklake_runtime.py (via the generic `src/** len>=2` stem rule) to the single home
+    tests/test_ducklake_runtime.py. QUESTION posed by the task: after retiring that home, must the
+    _DUCKLAKE_RUNTIME_SPLIT_MODULES special-case be REMOVED (so the 4 fall through to the mirror)? ANSWER:
+    NO -- KEEP IT. If removed, ducklake_writes.py grandfathers to test_ducklake_writes.py, which is NOT in
+    _ALL_MIRROR_TARGET_HOMES, so BOTH the retiring branch AND the mirror branch are skipped and
+    map_source_to_test returns the FLAT grandfather home tests/test_ducklake_writes.py -- WRONG (we want
+    the mirror tests/common/test_ducklake_writes.py). Keeping the special-case is exactly the Wave 1
+    scripts/checks/** treatment (its parts[1]=="checks" branch was KEPT, not removed; retirement alone
+    flipped it to the mirror). Post-flip trace with the special-case KEPT and test_ducklake_runtime.py
+    deleted from _RETIRING: ducklake_writes.py -> grandfather home test_ducklake_runtime.py (retired, still
+    in frozen roster) -> mirror branch -> _mirror_source_to_test(src/common/ducklake_writes.py) drops src,
+    keeps common, rel.as_posix() NOT in _CONCERN_SPLIT -> tests/common/test_ducklake_writes.py. Same for
+    tables/reads/metrics. ducklake_runtime.py -> generic grandfather home test_ducklake_runtime.py (retired)
+    -> mirror branch -> tests/common/test_ducklake_runtime.py (a SINGLE FILE: ducklake_runtime.py is NOT in
+    _CONCERN_SPLIT_TEST_PACKAGES -- verified). So the ONLY behavioural edit is deleting the two retire lines.
+  - >-
+    FILE 2 map mechanics: scripts/ducklake_neon_smoke_test.py is ALREADY a seeded member of
+    _CONCERN_SPLIT_TEST_PACKAGES (line ~234, verified -- exactly one occurrence). So deleting
+    "test_ducklake_neon_smoke_test.py" from _RETIRING is sufficient: post-flip the generic `scripts/**
+    len==2` grandfather returns home test_ducklake_neon_smoke_test.py (retired) -> mirror branch ->
+    _mirror_source_to_test sees rel.as_posix()=="scripts/ducklake_neon_smoke_test.py" IN _CONCERN_SPLIT ->
+    returns the PACKAGE DIRECTORY tests/ducklake_neon_smoke_test (no test_ prefix, no .py). No frozenset
+    edit, no special-case (analogous to Wave 3's ops_data_portal.py). "already seeded" = the
+    _CONCERN_SPLIT entry exists; the package DIR itself does not yet exist and is created by this wave.
+  - >-
+    FILE 1 class->mirror map (all module-level test functions; the file has NO test classes, only helper
+    classes). ducklake_writes.py <- mint_write_identity(2), is_occ_collision/_occ_backoff(2), write_scd2
+    core(12), _safe_rollback/_emit_write_metrics(2), write_scd2 require_exists/status-transition(8),
+    file_scd2/bootstrap_entity_counter/_advance(16 incl FileOpsCon), churn budget constants(1),
+    append_only write_scd2(4 incl _APPEND_ONLY_RT_SEMANTICS) ~440 SLOC. ducklake_tables.py <-
+    create_scd2_tables(2)+ops-ddl(1)+append_only tables(2)+reconcile(1) ~68. ducklake_reads.py <-
+    read_current(3)+ops read/history/query(3)+assert_read_only_sql(4)+named_read(4 incl NamedReadCon)+
+    read_current filter(2)+append_only reads(2) ~157. ducklake_metrics.py <- emit_metric/make_metric_sink(4)
+    ~53. ducklake_runtime.py (facade) <- assert_duckdb_version(3)+fetch_dsn/libpq(5)+open_connection(5 incl
+    _DSN,_patch_duckdb)+field-semantics(4)+schema_gate loud-fail(8)+resolve_table_spec/schema_gate-ops/
+    _PY_TYPE_FOR_SQL/_build_merge/ops_table_names(13)+split-invariant(6) ~278. The schema-owned symbols
+    (schema_gate, resolve_table_spec, field-semantics, _PY_TYPE_FOR_SQL, _build_merge_*, ops_table_names,
+    NAMED_READS, SMOKE_*) live in ducklake_scd2_schema.py and are exercised via the rt.* FACADE -- they go
+    in the runtime mirror as re-export tests; ducklake_scd2_schema.py keeps its own
+    tests/test_ducklake_scd2_schema.py (NOT in scope, NOT a roster home).
+  - >-
+    FILE 2 concern breakdown (8 modules, following the six scripts/ducklake_smoke/ submodules + main +
+    facade; each < 500 SLOC content). test_core.py [fetch_dsn, libpq/dsn_uri, open_attached, url-invoke
+    primitives _function_url/_sigv4_invoke/_ok_json] ~147; test_direct_gates.py [attach_roundtrip, OCC/
+    single_writer, burst/evaluate, churn_gate, engine_tag/_run, pg_dump/restore, probe/scratch,
+    restore_drill, DIRECT_GATE guard] ~241 (largest); test_lambda_ec_gates.py [attach/ingress/idempotency/
+    partition/inlining/loudfail, churn fan-out, churn_incontainer] ~208; test_lambda_ops_gates.py [reader,
+    warm_reuse(+writer), ops_read_your_write, ops_churn_regate, catalog_restore_drill] ~133;
+    test_lambda_maintenance_gates.py [maintenance_merge x4] ~54; test_canary.py [canary_rehearsal x11,
+    _lambda_invoke_cli x3, _wait_function_active x2] ~254; test_main_dispatch.py [all nine test_main_*] ~58;
+    test_facade.py [facade-completeness + 5 module-object interception tests] ~92. Content sum ~1187 +
+    fixtures ~32 ~= the monolith's 1110 total + per-file headers.
+  - >-
+    SHARED-HELPER HOISTING. FILE 1: tests/fixtures/ducklake_fakes.py <- FakeCon (all 5 buckets) + _SEMANTICS
+    (writes+runtime). FILE 2: tests/fixtures/ducklake_smoke_fakes.py <- FakeCon (core+direct_gates) + _Resp
+    (core+all lambda gates+canary) + _DSN (core+direct_gates). The two FakeCon/_DSN pairs are DISTINCT
+    (different signatures) -- keep two separate fixture modules so bodies stay verbatim. Everything else is
+    single-consumer and moves with its module (see the no-cross-test-imports constraint for the full list).
+  - >-
+    SIZING: NO file needs a sibling-split and NO class needs splitting -- the largest mirror module
+    (test_ducklake_writes.py ~440) and the largest concern module (test_direct_gates.py ~241) are both
+    under 500 by comfortable margins; there are no test classes (only tiny helper doubles). SLOC measured
+    with the validate_sloc counting rule (non-blank, non-comment) per top-level def/class. Because no class
+    > 500 exists, there is NO sanctioned test-id rename this wave -- both AFTER diffs (VP steps 3-4) must be
+    strictly EMPTY.
+  - >-
+    ORACLE (tests/test_coverage_checker.py) changes: (1) update the parametrized
+    test_maps_ducklake_runtime_split_modules_to_test_ducklake_runtime to expect
+    tests/common/test_ducklake_{stem}.py (rename to ...resolve_to_their_common_mirror) -- proves the crux;
+    (2) add the three new representative cases + keep the two Decision-124 None cases in
+    test_representative_paths_resolve_under_current_retirement_state (docstring "six homes retired");
+    (3) rename/extend test_retiring_is_all_target_homes_minus_four_retired_waves ->
+    ...minus_six_retired_waves with both new basenames in `retired` and the two "not in _RETIRING" asserts,
+    keeping the test_session_postflight.py-still-grandfathered control; (4) leave
+    test_roster_is_the_24_known_basenames unchanged. The current oracle already reflects four retired waves
+    (validate, execute_recommendation, ops_data_portal, session_preflight); this wave takes it to six.
+  - >-
+    COVERAGE-SAFETY (why CI stays green): validate_test_coverage is FULL-tier only and only checks
+    git-diff-changed SOURCE files under src/scripts. This wave changes zero such source files --
+    scripts/test_coverage_checker.py is name-excluded (starts with test_), config/sloc_budgets.yaml is not
+    .py, and every moved/new file is a test_ file. So the coverage gate is a no-op for this PR in both tiers
+    (identical to the Wave 1/3 coverage-safety note).
+  - >-
+    Branch = the harness-assigned claude/... session branch (NOT an agent/ branch). Closest templates:
+    PLAN-sloc-test-validate.yaml (Wave 1 -- mirror + retiring-grandfather, the scripts/checks/** special-case-KEPT
+    precedent that FILE 1 mirrors) and PLAN-sloc-ops-data-portal-tests.yaml (Wave 3 -- concern-split of an
+    already-_CONCERN_SPLIT-seeded home, the exact FILE 2 template). Preflight (baseline collect) not
+    machine-run in this read-only planning agent; assessed from repo state. Nothing imports either monolith
+    (grep clean) so deletion is safe. No ci-rca unresolved recs surfaced in scope. Rebase at commit-flow
+    time per the Git-ops procedure.
+  - >-
+    OPEN RISK 1 (test_ducklake_writes.py margin): estimated ~440 SLOC after a ~18-SLOC import header --
+    under 500 with a 60-SLOC margin. If the real header (imports of every writes symbol + FakeCon/_SEMANTICS
+    from the fixture) pushes it over 500, PRIMARY resolution = sibling-split off the file_scd2 / entity-counter
+    cohort (FileOpsCon + the ~16 file_scd2/bootstrap/_advance tests, ~92 content SLOC) into a sibling
+    tests/common/test_ducklake_writes_file_ops.py -- the mirror map still resolves
+    src/common/ducklake_writes.py to tests/common/test_ducklake_writes.py (which remains present with the
+    other writes tests) and the sibling is harmless bonus coverage. NO budget marker either way (Decision
+    128). Verify the split with VP step 5 (--pre SLOC gate).
+  - >-
+    OPEN RISK 2 (facade-completeness scan scope): test_facade_reexports_identity_equal_to_owning_submodule
+    scans `pathlib.Path(__file__).read_text()` for smoke.<name> references. Moved verbatim into
+    test_facade.py, `__file__` becomes test_facade.py, so it now scans only that module's smoke.<name>
+    refs (the interception tests + its own) rather than the whole original suite. It stays GREEN (every
+    referenced name is a valid facade re-export and checked > 0 holds), and aggregate re-export validity is
+    still exercised because every used smoke.<name> across the package would AttributeError if a re-export
+    were missing. This is an inherent property of the pure/verbatim move (rewriting the scan to a package
+    glob would be a test-LOGIC change, forbidden this wave). Accept the narrowed scan; recommend a
+    follow-up rec to broaden it to the package glob in a later, logic-touching change. LOW risk, non-blocking.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness-assigned claude/... session branch)
+  - scripts/test_coverage_checker.py read in full (_grandfathered_source_to_test, _DUCKLAKE_RUNTIME_SPLIT_MODULES, _RETIRING_GRANDFATHER_HOMES, _ALL_MIRROR_TARGET_HOMES, _CONCERN_SPLIT_TEST_PACKAGES, _mirror_source_to_test, map_source_to_test)
+  - tests/CLAUDE.md read (mirror convention, no-cross-test-import rule, conftest hierarchy)
+  - PLAN-sloc-test-validate.yaml (Wave 1) + PLAN-sloc-ops-data-portal-tests.yaml (Wave 3) read as the mirror + concern-split templates
+  - Verified both basenames are in _RETIRING_GRANDFATHER_HOMES and _ALL_MIRROR_TARGET_HOMES; "scripts/ducklake_neon_smoke_test.py" already in _CONCERN_SPLIT_TEST_PACKAGES; ducklake_runtime.py NOT in _CONCERN_SPLIT
+  - "Traced the FILE 1 crux: _DUCKLAKE_RUNTIME_SPLIT_MODULES special-case must be KEPT (removing it routes the 4 modules to the flat home, not the mirror)"
+  - Confirmed scripts/executor/** and scripts/ops_portal/** return None (Decision 124) via a post-flip map_source_to_test trace
+  - All runtime + smoke test functions located; per-function SLOC computed with the validate_sloc rule; largest mirror (writes ~440) and largest concern (direct_gates ~241) confirmed < 500; no test class > 500 (no sanctioned rename)
+  - Confirmed NEITHER file has pytest.importorskip("duckdb"); runtime carries pytestmark=pytest.mark.unit (replicate per module); smoke carries neither
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    COMMIT 0 (fixtures prep): create tests/common/__init__.py, tests/ducklake_neon_smoke_test/__init__.py,
+    tests/fixtures/ducklake_fakes.py (FakeCon + _SEMANTICS copied verbatim from the runtime monolith) and
+    tests/fixtures/ducklake_smoke_fakes.py (FakeCon + _Resp + _DSN copied verbatim from the smoke monolith).
+    Do NOT yet touch either monolith. Run --pre to confirm the additive files collect clean.
+  - >-
+    COMMITS 1..N (additive module creation): for each mirror/concern module, create the file with a fresh
+    import header (replicate pytestmark=pytest.mark.unit for every tests/common/ module; import
+    FakeCon/_SEMANTICS or FakeCon/_Resp/_DSN from the correct fixture with an alias where a body needs it);
+    COPY each function / single-consumer helper VERBATIM; then DELETE the moved functions from the monolith
+    in the SAME commit. Batch the runtime mirrors (writes, tables, reads, metrics, runtime) and the smoke
+    concerns (core, direct_gates, ec_gates, ops_gates, maintenance_gates, canary, main_dispatch, facade)
+    across a few commits. Keep all patch string targets byte-identical. Do NOT touch
+    _RETIRING_GRANDFATHER_HOMES or config/sloc_budgets.yaml yet -- each monolith stays grandfathered and
+    simply shrinks under its budget, so every intermediate commit is --pre green. Run VP steps 3-6 scoped
+    to the touched modules after each commit to localize any failure early.
+  - >-
+    FINAL COMMIT (the flip): delete tests/test_ducklake_runtime.py and tests/test_ducklake_neon_smoke_test.py
+    (now empty of tests); edit scripts/test_coverage_checker.py to delete BOTH "test_ducklake_runtime.py" and
+    "test_ducklake_neon_smoke_test.py" lines from _RETIRING_GRANDFATHER_HOMES (KEEP _DUCKLAKE_RUNTIME_SPLIT_MODULES
+    unchanged; NO _CONCERN_SPLIT edit; optionally refresh the _DUCKLAKE_RUNTIME_SPLIT_MODULES doc comment);
+    update the tests/test_coverage_checker.py oracle assertions (the four ducklake split modules -> their
+    common mirrors; add the runtime + smoke representative cases; keep the executor/ops_portal None cases;
+    subtract BOTH new homes in the retiring-set assertion); delete BOTH budget lines from
+    config/sloc_budgets.yaml by hand.
+  - >-
+    Execute the full Verification Plan (steps 1-9) on the FINAL commit; loop until all pass. On an
+    unrecoverable failure (e.g. a non-empty AFTER diff, or the oracle still expecting the flat home), STOP
+    and RCA (Decision 55) -- never patch around a collect-id mismatch.
+  - >-
+    Report: the final tests/common/ and tests/ducklake_neon_smoke_test/ per-module SLOC breakdown;
+    confirmation the crux special-case was KEPT (not removed) and both AFTER diffs are empty; confirmation
+    config/sloc_budgets.yaml lost exactly two lines and the executor/ops_portal None-returns are intact;
+    which OPEN RISK 1 / 2 dispositions applied.
+rollback: >-
+  ONE PR -- rollback = revert the single squash-merge PR. Only the FINAL commit changes the map / budgets;
+  reverting the PR restores both monoliths' grandfather homes + their 991/1110 budget entries and re-points
+  the ducklake sources at the restored monoliths. The additive module files and the two tests/fixtures/
+  fake modules are harmless if left behind on a partial revert, but a clean single-PR revert removes them too.

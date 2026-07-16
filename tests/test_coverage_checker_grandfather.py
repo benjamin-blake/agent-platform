@@ -28,12 +28,17 @@ class TestGrandfatherRetiringTable:
     "test_executor_postflight.py", and "test_executor_step_runner.py" -- a PURE test-file split
     with a no-op mapping consequence (their sources, scripts/executor/**, already returned None
     per Decision 124, so the retirement is bookkeeping/tidiness only, not a mapping flip); Wave 6
-    retired the eighth, "test_convergence_health.py" -- a PACKAGE-MIRROR, not a concern-split."""
+    retired the eighth, "test_convergence_health.py" -- a PACKAGE-MIRROR, not a concern-split;
+    Wave 7 (PLAN-sloc-ducklake-runtime-smoke-tests) retired the ninth and tenth,
+    "test_ducklake_runtime.py" (a MIRROR, with the _DUCKLAKE_RUNTIME_SPLIT_MODULES special-case
+    KEPT -- see test_maps_ducklake_runtime_split_modules_resolve_to_their_common_mirror) and
+    "test_ducklake_neon_smoke_test.py" (a CONCERN-SPLIT, already seeded in
+    _CONCERN_SPLIT_TEST_PACKAGES before this wave)."""
 
     def test_representative_paths_resolve_under_current_retirement_state(self) -> None:
-        """A representative path set resolves under the CURRENT retirement state: Waves 1-6's
-        five retired homes resolve via their mirror / concern-split / package-mirror, the other
-        16 roster homes stay grandfathered, scripts/executor/** + scripts/ops_portal/** keep
+        """A representative path set resolves under the CURRENT retirement state: Waves 1-7's
+        seven retired homes resolve via their mirror / concern-split / package-mirror, the other
+        14 roster homes stay grandfathered, scripts/executor/** + scripts/ops_portal/** keep
         returning None (Decision 124), and scripts/session/postflight.py + metrics.py are
         surgical-retirement controls that stay grandfathered."""
         cases: dict[Path, Path | None] = {
@@ -57,13 +62,18 @@ class TestGrandfatherRetiringTable:
             ROOT / "scripts" / "executor" / "postflight.py": None,
             ROOT / "scripts" / "ops_portal" / "cli.py": None,
             ROOT / "src" / "common" / "iceberg_reader.py": ROOT / "tests" / "test_iceberg_reader.py",
+            ROOT / "src" / "common" / "ducklake_writes.py": ROOT / "tests" / "common" / "test_ducklake_writes.py",
+            ROOT / "src" / "common" / "ducklake_runtime.py": ROOT / "tests" / "common" / "test_ducklake_runtime.py",
+            ROOT / "scripts" / "ducklake_neon_smoke_test.py": ROOT / "tests" / "ducklake_neon_smoke_test",
         }
         for source, expected in cases.items():
             assert map_source_to_test(source) == expected, source
 
-    def test_retiring_is_all_target_homes_minus_eight_retired_waves(self) -> None:
-        """Eight basenames retired so far (Waves 1-6); Wave 6 added "test_convergence_health.py"
-        (a PACKAGE-MIRROR, NOT added to _CONCERN_SPLIT_TEST_PACKAGES)."""
+    def test_retiring_is_all_target_homes_minus_ten_retired_waves(self) -> None:
+        """Ten basenames retired so far (Waves 1-7); Wave 6 added "test_convergence_health.py"
+        (a PACKAGE-MIRROR, NOT added to _CONCERN_SPLIT_TEST_PACKAGES); Wave 7 added
+        "test_ducklake_runtime.py" (a MIRROR, special-case KEPT) and
+        "test_ducklake_neon_smoke_test.py" (a CONCERN-SPLIT, already seeded)."""
         retired = {
             "test_validate.py",
             "test_execute_recommendation.py",
@@ -73,6 +83,8 @@ class TestGrandfatherRetiringTable:
             "test_executor_postflight.py",
             "test_executor_step_runner.py",
             "test_convergence_health.py",
+            "test_ducklake_runtime.py",
+            "test_ducklake_neon_smoke_test.py",
         }
         assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - retired
         assert "test_validate.py" not in _RETIRING_GRANDFATHER_HOMES
@@ -83,6 +95,8 @@ class TestGrandfatherRetiringTable:
         assert "test_executor_postflight.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_executor_step_runner.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_convergence_health.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert "test_ducklake_runtime.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert "test_ducklake_neon_smoke_test.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_session_postflight.py" in _RETIRING_GRANDFATHER_HOMES
         assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == retired
 

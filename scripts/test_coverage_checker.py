@@ -61,6 +61,11 @@ _ORCHESTRATION_SCAFFOLDING_FILES = {"_scaffolding.py", "_terraform.py"}
 # The four ducklake_runtime split-out modules (PLAN-sloc-ducklake-layer) route to the
 # pre-decomposition monolith's test file, mirroring the Decision 104 scripts/checks/** precedent:
 # they are the write/table-DDL/read/metrics behavior oracle, exercised via the facade re-export.
+# KEPT post rec-2709 Wave 7 (test_ducklake_runtime.py retired from _RETIRING_GRANDFATHER_HOMES):
+# this special-case branch is exactly the Wave 1 scripts/checks/** treatment -- once the
+# grandfather home retires, these four route through the mirror branch (drop-root, non-concern-split)
+# to their own tests/common/test_ducklake_<stem>.py, rather than falling through to the FLAT
+# per-file grandfather rule (which would wrongly resolve to tests/test_ducklake_writes.py etc.).
 _DUCKLAKE_RUNTIME_SPLIT_MODULES = {
     "ducklake_writes.py",
     "ducklake_tables.py",
@@ -197,8 +202,6 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_ci_rca_evidence.py",
     "test_contracts_enforcement.py",
     "test_ducklake_maintenance_handler.py",
-    "test_ducklake_neon_smoke_test.py",
-    "test_ducklake_runtime.py",
     "test_ducklake_writer_handler.py",
     "test_iceberg_reader.py",
     "test_lambda_manifest.py",
