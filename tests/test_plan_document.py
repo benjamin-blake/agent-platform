@@ -322,6 +322,24 @@ class TestGraduationDisposition:
         with pytest.raises(ValidationError, match="graduation_waiver_reason requires graduation='waive'"):
             PlanDocument.model_validate(d)
 
+    def test_graduate_with_stray_waiver_reason_rejected(self) -> None:
+        """Cross-field leakage: a 'graduate' step must not also carry a waiver reason."""
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "graduate"
+        d["verification_plan"][0]["graduation_check_id"] = "some-check-id"
+        d["verification_plan"][0]["graduation_waiver_reason"] = "stray leftover reason"
+        with pytest.raises(ValidationError, match="graduation_waiver_reason requires graduation='waive'"):
+            PlanDocument.model_validate(d)
+
+    def test_waive_with_stray_check_id_rejected(self) -> None:
+        """Cross-field leakage: a 'waive' step must not also carry a check_id."""
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "waive"
+        d["verification_plan"][0]["graduation_waiver_reason"] = "requires live infra"
+        d["verification_plan"][0]["graduation_check_id"] = "stray leftover check-id"
+        with pytest.raises(ValidationError, match="graduation_check_id requires graduation='graduate'"):
+            PlanDocument.model_validate(d)
+
     def test_historical_plans_all_validate(self) -> None:
         """No PLAN-*.yaml on disk carries the new field yet -- confirms the field is optional."""
         from scripts.roadmap.plan_document import main as _main

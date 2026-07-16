@@ -51,13 +51,23 @@ class VerificationStep(BaseModel):
 
     @model_validator(mode="after")
     def _validate_graduation_disposition(self) -> VerificationStep:
-        if self.graduation == "graduate" and not (self.graduation_check_id and self.graduation_check_id.strip()):
-            raise ValueError(f"verification step {self.step}: graduation='graduate' requires a non-empty graduation_check_id")
-        if self.graduation == "waive" and not (self.graduation_waiver_reason and self.graduation_waiver_reason.strip()):
-            raise ValueError(
-                f"verification step {self.step}: graduation='waive' requires a non-empty graduation_waiver_reason"
-            )
-        if self.graduation in (None, "not-applicable"):
+        has_check_id = bool(self.graduation_check_id and self.graduation_check_id.strip())
+        has_reason = bool(self.graduation_waiver_reason and self.graduation_waiver_reason.strip())
+        if self.graduation == "graduate":
+            if not has_check_id:
+                raise ValueError(
+                    f"verification step {self.step}: graduation='graduate' requires a non-empty graduation_check_id"
+                )
+            if self.graduation_waiver_reason:
+                raise ValueError(f"verification step {self.step}: graduation_waiver_reason requires graduation='waive'")
+        elif self.graduation == "waive":
+            if not has_reason:
+                raise ValueError(
+                    f"verification step {self.step}: graduation='waive' requires a non-empty graduation_waiver_reason"
+                )
+            if self.graduation_check_id:
+                raise ValueError(f"verification step {self.step}: graduation_check_id requires graduation='graduate'")
+        else:
             if self.graduation_check_id:
                 raise ValueError(f"verification step {self.step}: graduation_check_id requires graduation='graduate'")
             if self.graduation_waiver_reason:
