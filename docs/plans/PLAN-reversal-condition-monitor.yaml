@@ -177,24 +177,28 @@ verification_plan:
     command: bin/venv-python -m scripts.preflight.decision_conditions tests/fixtures/decision_conditions/past_review.txt | grep -q 'manual-review-due'
     expected: Output classifies the fixture decision as manual-review-due; exit 0 (surfacing, not gating).
     fix_if: The fixture is not surfaced as manual-review-due (date compare / normalization bug), or the command gates (nonzero) on a merely-due decision.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      Kernel-expressible (command_output_matches over a committed fixture) but graduating it would
-      duplicate the standing manual-review-due unit coverage in tests/test_decision_conditions.py
-      (step 1), which already runs every CI. Waived to avoid a redundant registry row.
+      hermetic: false -- this LIVE step asserts post-implementation state (the monitor module + the
+      committed fixture, both created by the implement PR) absent on the plan-doc PR, so it is
+      excluded from VP replay (same posture as steps 1/2/5/7/8). Graduation waived: kernel-expressible
+      in principle, but it would duplicate the standing manual-review-due unit coverage in
+      tests/test_decision_conditions.py (step 1), which already runs every CI.
   - step: 4
     phase: pre-deploy
     action: LIVE -- a malformed-stanza fixture makes the CLI exit nonzero with a MALFORMED row naming the decision.
     command: bin/venv-python -m scripts.preflight.decision_conditions tests/fixtures/decision_conditions/malformed_bad_decision_key.txt; test $? -ne 0 && bin/venv-python -m scripts.preflight.decision_conditions tests/fixtures/decision_conditions/malformed_bad_decision_key.txt 2>&1 | grep -q 'MALFORMED'
     expected: First invocation exits nonzero; the MALFORMED row is printed and names the offending decision. Never silent, never a module-import error.
     fix_if: Exit code is 0, no MALFORMED row printed, or the failure surfaces as an import-time exception instead of at the call site.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      Kernel-expressible (command_exit_zero negation + output match) but duplicates the malformed
-      fail-loud unit coverage in tests/test_decision_conditions.py (step 1), which is already a
-      standing CI guard. Waived to avoid a redundant registry row.
+      hermetic: false -- this LIVE step asserts post-implementation state (the monitor module + the
+      malformed fixture, both created by the implement PR) absent on the plan-doc PR, so it is
+      excluded from VP replay (same posture as steps 1/2/5/7/8). Graduation waived: kernel-expressible
+      in principle, but it would duplicate the malformed fail-loud unit coverage in
+      tests/test_decision_conditions.py (step 1), already a standing CI guard.
   - step: 5
     phase: pre-deploy
     action: Check unit tests pass -- validate_reversal_stanzas passes a well-formed tree and appends a failed[] entry per malformed variant.
@@ -209,12 +213,13 @@ verification_plan:
     command: grep -q 'validate_reversal_stanzas' scripts/checks/registry.py && grep -q 'validate_reversal_stanzas' scripts/validate.py
     expected: Both greps succeed (name present in pre_sequence() and imported in validate.py).
     fix_if: The check is registered but not imported (getattr dispatch fails), or added to ci.yml without validate.py (single-source-of-truth violation).
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
-      Structural grep (file_presence-adjacent) whose durable equivalent is already owned by the
-      registry's own coverage and validate_checks_registry wiring; a bespoke registry row for
-      'this check name appears in these two files' would duplicate that. Waived.
+      hermetic: false -- this LIVE grep asserts post-implementation wiring (validate_reversal_stanzas
+      registered + imported, created by the implement PR) absent on the plan-doc PR, so it is excluded
+      from VP replay (same posture as steps 1/2/5/7/8). Graduation waived: the durable equivalent is
+      already owned by the registry's own coverage and validate_checks_registry wiring.
   - step: 7
     phase: pre-deploy
     action: Full --pre gate is green on the well-formed tree (the new check does not false-fail; SLOC/graduation obligations met).
