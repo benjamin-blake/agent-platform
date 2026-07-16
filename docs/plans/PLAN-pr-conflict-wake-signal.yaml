@@ -155,7 +155,7 @@ verification_plan:
     fix_if: >-
       failed is non-empty naming the missing/incorrect workflow property -> correct
       pr-conflict-signal.yml until the guard passes. ImportError -> the module was not created.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       The assertion is permanently enforced as the registered validate_pr_conflict_signal check in
@@ -170,7 +170,7 @@ verification_plan:
     expected: Prints "wired OK (2)" (or more), exit 0.
     fix_if: >-
       Count < 2 -> add _c("validate_pr_conflict_signal") to both pre_sequence() and full_sequence().
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       The wiring is self-evidencing once the guard runs in both tiers (step 8's validate --pre
@@ -206,7 +206,7 @@ verification_plan:
     fix_if: >-
       AssertionError -> restore continue-on-error, add the bounded retry loop around gh pr comment,
       or revert an unintended needs change.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       The retry is a reliability nicety on an already continue-on-error best-effort step; a standing
@@ -226,7 +226,7 @@ verification_plan:
     fix_if: >-
       No match / the old permit language still present -> add the conflict-wake registration and the
       forbid-backstop directive, and remove the "exactly one send_later permitted" sentence.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       Prose-content assertion; the exact wording will evolve, so a standing grep guard would be
@@ -247,7 +247,7 @@ verification_plan:
       dropped -> remove the backstop component from the list and keep the canonical pointer. (This
       pattern matches the real backtick text ``send_later` backstop bounds``, unlike a naive
       space-separated pattern.)
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       Prose-content assertion tied to a specific line range; a standing registry row would be
@@ -266,7 +266,7 @@ verification_plan:
       Any lingering permit-language match in AGENTS.md or .claude/skills/ -> remove or rewrite it to
       the forbid directive (historical plan docs under docs/plans/ that merely record the old design
       are out of scope for this sweep; only live instruction surfaces must be clean).
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       One-shot migration sweep for this cutover; not a recurring regression target once the backstop
@@ -285,7 +285,7 @@ verification_plan:
       A registry.py match -> rewrite the module docstring to state a check also needs the validate.py
       re-export; no scripts/CLAUDE.md "re-export" mention -> the "Adding a validate.py check" section
       was not reconciled.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       One-shot doc-coherence sweep for this cutover; the register()-pattern doc is stable and this is
@@ -430,6 +430,16 @@ context:
     import line, and scripts/CLAUDE.md gains one doc line -- all under budget, none registered. No
     at-budget file is modified (in particular NOT tests/test_verify_ci_workflow.py at 573/573), so no
     raise and no decomposition is required by this plan.
+  - >-
+    VP-replay (T3.15/VF-01): all pre-deploy VP steps are hermetic:false intentionally. This plan
+    lands as a plan-only PR (plan({slug}) commit) with implementation deferred to a separate
+    /implement session, so every pre-deploy step verifies not-yet-created implementation state
+    (the new module/workflow, the AGENTS.md/skill edits, the docstring fix) and CANNOT pass when
+    validate_vp_replay re-executes it against the plan-only tree. Marking them hermetic:true failed
+    the first pr-validate run (all 7 replayed steps exit 1); they are excluded from replay as
+    hermetic:false and executed for real at /implement time (execution step "Execute the
+    Verification Plan"). Plans that mark such steps hermetic:true are ones landing plan+implementation
+    in a single feat({slug}) PR, where the implementation is present when the replay runs.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
