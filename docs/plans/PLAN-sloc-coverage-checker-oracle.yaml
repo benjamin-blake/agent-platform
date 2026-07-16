@@ -1,0 +1,390 @@
+schema_version: 1
+slug: sloc-coverage-checker-oracle
+intent: >-
+  Decompose tests/test_coverage_checker.py (496 SLOC, 8 classes -- the shared "oracle" file that
+  EVERY rec-2709 wave edits to add mirror-mapping and retirement-state assertions) into three flat
+  sibling test files plus a shared tests/fixtures/ singleton loader, so it stops crowding the
+  500-SLOC limit as future waves keep growing it (~34 SLOC/wave). Purpose: keep every test file
+  small enough for lower-tier model comprehension (the load-bearing reason the 500-SLOC gate
+  exists, Decision 128). Behaviour-preserving pure MOVE; no test-logic change. rec-2709 Wave 6b --
+  NOT a mirror-roster retirement: scripts/test_coverage_checker.py is excluded from its own
+  coverage scan (its name starts with "test_", per get_changed_source_files) and is not one of the
+  24 _ALL_MIRROR_TARGET_HOMES roster entries, so this wave touches neither
+  _RETIRING_GRANDFATHER_HOMES nor config/sloc_budgets.yaml -- it is a bare SLOC-governance split of
+  the oracle file itself, sibling to (not part of) the Wave 1-6 mirror-convention rollout.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-coverage-checker-oracle.yaml
+phase: >-
+  rec-2709 Wave 6b (oracle-file SLOC governance; Decision 128 decompose-by-default, amends Decision
+  102). No product-roadmap phase; platform tooling / test-infrastructure only. Distinct from the
+  Decision 131 mirror-convention waves (1-6, 7+): this file is not a map_source_to_test TARGET, it
+  is the test suite FOR map_source_to_test itself.
+scope:
+  - file: tests/fixtures/coverage_checker_module.py
+    action: Create
+    purpose: >-
+      Idempotent singleton loader for scripts/test_coverage_checker.py under the
+      sys.modules["test_coverage_checker"] slot (mirrors tests/fixtures/validate_module.py's
+      docstring/structure, Wave 1, plus the idempotent sys.modules reuse guard from
+      tests/fixtures/session_preflight_module.py, Wave 4). Exposes `checker` (the loaded module
+      object) plus the three shared names every split file needs: ROOT, _ALL_MIRROR_TARGET_HOMES,
+      _RETIRING_GRANDFATHER_HOMES. tests/fixtures/ is exempt from the no-cross-test-import guard
+      (its names never start with test_). One singleton so patch("test_coverage_checker.<name>")
+      and monkeypatch.setattr(checker, "_RETIRING_GRANDFATHER_HOMES", ...) both resolve against the
+      SAME module object every function's own global lookups read from.
+  - file: tests/test_coverage_checker_map.py
+    action: Create
+    purpose: >-
+      TestMapSourceToTest + TestMirrorRule (verbatim, 2 classes) -- the mirror-mapping assertions,
+      the part future waves grow most (every new source->test mapping case lands here). ~140 SLOC.
+      Fresh header: pathlib.Path + pytest + `from tests.fixtures.coverage_checker_module import
+      ROOT, _ALL_MIRROR_TARGET_HOMES, checker as _checker` (the `_checker` alias is REQUIRED,
+      not cosmetic: TestMirrorRule's verbatim body calls `monkeypatch.setattr(_checker, ...)` by
+      that exact bare name) + `map_source_to_test = _checker.map_source_to_test`. NO boto3.
+  - file: tests/test_coverage_checker_grandfather.py
+    action: Create
+    purpose: >-
+      TestGrandfatherRetiringTable + TestCheckTestFileExistsDirectoryTarget +
+      TestCheckPerFileCoverageDirectoryTarget (verbatim, 3 classes) -- the retirement-state
+      assertions (also grows every wave) plus the concern-split directory-target checks. ~170 SLOC.
+      Fresh header: pathlib.Path + unittest.mock (MagicMock, patch) + `from
+      tests.fixtures.coverage_checker_module import ROOT, _ALL_MIRROR_TARGET_HOMES,
+      _RETIRING_GRANDFATHER_HOMES, checker` + local aliases `map_source_to_test =
+      checker.map_source_to_test`, `check_test_file_exists = checker.check_test_file_exists`,
+      `check_per_file_coverage = checker.check_per_file_coverage`. NO boto3.
+  - file: tests/test_coverage_checker_checks.py
+    action: Create
+    purpose: >-
+      TestExtractDefinitions + TestCheckTestFileExists + TestGetChangedSourceFiles (verbatim, 3
+      classes) -- the stable AST-extraction / test-file-exists / changed-files helper tests. ~145
+      SLOC. Fresh header: pathlib.Path + unittest.mock (MagicMock, patch) + `from
+      tests.fixtures.coverage_checker_module import ROOT, checker` + local aliases
+      `extract_definitions = checker.extract_definitions`, `check_test_file_exists =
+      checker.check_test_file_exists`, `get_changed_source_files = checker.get_changed_source_files`.
+      NO boto3.
+  - file: tests/test_coverage_checker.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into the three sibling files above plus the shared fixture. Pure MOVE, no
+      test-logic change. scripts/test_coverage_checker.py (the module under test),
+      config/sloc_budgets.yaml (never registered this file -- always < 500 SLOC before today),
+      _RETIRING_GRANDFATHER_HOMES, and _CONCERN_SPLIT_TEST_PACKAGES are all untouched by this plan.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation: the set of pytest node ids (class::function, module-path stripped)
+    collected from the union of tests/test_coverage_checker_map.py,
+    tests/test_coverage_checker_grandfather.py, and tests/test_coverage_checker_checks.py equals
+    the pre-move set from tests/test_coverage_checker.py (verified identical to origin/main before
+    the move begins). Same function set, same count, same pass/fail outcomes. This is a PURE move
+    with NO class rename, NO method rename, and NO class-level split -- the diff MUST be EMPTY with
+    no sanctioned delta.
+  - >-
+    bin/venv-python -m scripts.validate --pre exits 0: SLOC gate green (every new file < 500 SLOC
+    and < 20 CC branches, none registered in config/sloc_budgets.yaml); no-cross-test-import guard
+    green (the three split files import only from tests.fixtures.coverage_checker_module, never
+    from each other); validate_plan_documents green for this plan file; collectability green.
+  - >-
+    bin/venv-python -m pytest tests/test_coverage_checker_map.py
+    tests/test_coverage_checker_grandfather.py tests/test_coverage_checker_checks.py -q passes with
+    the same total test count as the pre-move tests/test_coverage_checker.py baseline.
+  - >-
+    Whole-suite bin/venv-python -m pytest tests/ --collect-only -q is clean: no import/collection
+    error from the new fixture, the three new files, or the deleted monolith.
+  - >-
+    git diff origin/main -- scripts/test_coverage_checker.py config/sloc_budgets.yaml is empty --
+    this plan changes ONLY tests/ file layout, nothing in the module under test or the SLOC budget
+    registry.
+  - >-
+    tests/test_coverage_checker.py is deleted; each of the three new files plus the fixture loader
+    is under 500 SLOC (validate_sloc_limits counting: non-blank, non-comment lines); none of the
+    four new files references boto3/botocore/duckdb (confirmed by grep; matches the pre-move
+    oracle, which has none of these dependencies).
+  - >-
+    The fixture singleton is proven live, not just by construction: TestMirrorRule's
+    monkeypatch.setattr(_checker, "_RETIRING_GRANDFATHER_HOMES", ...) test and the
+    patch("test_coverage_checker.<name>") tests in the other two files all pass in the same pytest
+    session, showing every consumer resolves the identical loaded module object.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Confirm the working branch is the harness claude/... session branch (not main), and confirm
+      the on-disk oracle file has not already diverged from origin/main before using it as the
+      before-move baseline.
+    command: >-
+      git branch --show-current; git diff --quiet origin/main -- tests/test_coverage_checker.py &&
+      echo IDENTICAL-TO-MAIN
+    expected: >-
+      Prints the claude/... branch name (not "main"), then IDENTICAL-TO-MAIN (empty diff against
+      origin/main for the not-yet-touched oracle file).
+    fix_if: >-
+      If on main, STOP -- do not edit. If the file already differs from origin/main, reconcile
+      (or re-derive the baseline from `git show origin/main:tests/test_coverage_checker.py`)
+      before trusting it as the id-preservation baseline.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Capture the BEFORE test-id baseline from the monolith before it is deleted.
+    command: >-
+      bin/venv-python -m pytest tests/test_coverage_checker.py --collect-only -q | grep '::' | sed
+      -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/tcc_before_ids.txt; wc -l /tmp/tcc_before_ids.txt
+    expected: A non-empty sorted baseline of class::function ids (module path stripped).
+    fix_if: If collection errors, the monolith has a pre-existing import/collection problem that must be fixed first (unrelated to this move).
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Collect the AFTER id set from the union of the three new files and assert byte-identical
+      equality with the baseline.
+    command: >-
+      bin/venv-python -m pytest tests/test_coverage_checker_map.py
+      tests/test_coverage_checker_grandfather.py tests/test_coverage_checker_checks.py
+      --collect-only -q | grep '::' | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u >
+      /tmp/tcc_after_ids.txt; diff /tmp/tcc_before_ids.txt /tmp/tcc_after_ids.txt
+    expected: Empty diff (identical class::function id sets). No sanctioned delta -- pure move, no renames/splits.
+    fix_if: >-
+      Any added/removed id means a class or method was dropped, duplicated, mis-copied, or renamed
+      during the split. STOP and reconcile against the original class bodies before proceeding.
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full scoped pass of the three new files at the same count as the baseline.
+    command: >-
+      bin/venv-python -m pytest tests/test_coverage_checker_map.py
+      tests/test_coverage_checker_grandfather.py tests/test_coverage_checker_checks.py -q
+    expected: All pass; total selected count equals the step-2 baseline line count.
+    fix_if: >-
+      A failure means a patch target, monkeypatch target, or shared name did not survive the move
+      -- most likely a fresh header is missing a symbol the moved class references (NameError), or
+      the fixture singleton is not actually shared (a vacuous-pass hazard: check that all three
+      files import `checker`/`_checker` from tests/fixtures/coverage_checker_module.py, never
+      re-running their own importlib.util.spec_from_file_location).
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Heavy-dependency scan: confirm none of the three split files references boto3/botocore/duckdb
+      (module-level, lazy-in-test, or inside a patch(...) string) -- the pre-move oracle has none,
+      so none should appear post-move either.
+    command: grep -lE "boto3|botocore|duckdb" tests/test_coverage_checker_map.py tests/test_coverage_checker_grandfather.py tests/test_coverage_checker_checks.py; echo "grep-exit=$?"
+    expected: "grep prints no filenames; grep-exit=1 (no match in any of the three files)."
+    fix_if: >-
+      If a match is found (it should not be, per the verbatim pre-move source), add a module-level
+      `import boto3  # noqa: F401` marker to that file so the fast-tier --collect-only partition
+      defers it, per the FAST-TIER HEAVY-DEP CHECK convention.
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Delete the monolith, then run the authoritative fast presubmit tier.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0. No "SLOC limits" failure, no "cross-test import" failure, no "missing test file"
+      failure (scripts/test_coverage_checker.py is name-excluded from the coverage gate), no plan
+      document validation failure, no collection error.
+    fix_if: >-
+      A >500-SLOC unregistered file means rebalance a class into a sibling (never register a
+      budget line, Decision 128). A cross-test-import failure means a helper leaked between the
+      three split files instead of living in tests/fixtures/coverage_checker_module.py. A plan
+      validation failure means this YAML has a schema error -- fix it and re-run
+      `bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-sloc-coverage-checker-oracle.yaml`.
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Measure each new file's SLOC (validate_sloc_limits formula) and assert all < 500.
+    command: >-
+      for f in tests/fixtures/coverage_checker_module.py tests/test_coverage_checker_map.py
+      tests/test_coverage_checker_grandfather.py tests/test_coverage_checker_checks.py; do printf
+      '%s ' "$f"; grep -cvE '^[[:space:]]*(#.*)?$' "$f"; done
+    expected: >-
+      Every file prints a SLOC count < 500 (projected: fixture ~30, map ~140, grandfather ~170,
+      checks ~145).
+    fix_if: If any file measures >= 500, rebalance a class into a sibling module (never register a budget line).
+  - step: 8
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Confirm the monolith is gone and nothing outside tests/ file layout changed.
+    command: >-
+      test ! -f tests/test_coverage_checker.py && git diff --quiet origin/main --
+      scripts/test_coverage_checker.py config/sloc_budgets.yaml && echo RETIRED-OK
+    expected: Prints RETIRED-OK (monolith deleted; module-under-test and SLOC budget registry byte-identical to origin/main).
+    fix_if: If the file survives, or scripts/test_coverage_checker.py / config/sloc_budgets.yaml differ from origin/main, the commit touched something out of scope.
+  - step: 9
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Whole-suite collection smoke -- no import/collection error anywhere from the move.
+    command: bin/venv-python -m pytest tests/ --collect-only -q | tail -5
+    expected: Clean collection summary; no ImportError/collection error from the new files or the deleted monolith.
+    fix_if: A collection error means a dangling reference to the deleted file or a broken import header in a new file.
+constraints:
+  - >-
+    Pure behaviour-preserving MOVE. Copy each of the 8 class bodies VERBATIM (byte-identical) into
+    its destination file -- TestMapSourceToTest + TestMirrorRule -> test_coverage_checker_map.py;
+    TestGrandfatherRetiringTable + TestCheckTestFileExistsDirectoryTarget +
+    TestCheckPerFileCoverageDirectoryTarget -> test_coverage_checker_grandfather.py;
+    TestExtractDefinitions + TestCheckTestFileExists + TestGetChangedSourceFiles ->
+    test_coverage_checker_checks.py. Only the per-file import header is new. No test-logic edits.
+  - >-
+    No cross-test imports (validate_no_cross_test_imports is active in --pre and full tiers): the
+    three split files import ONLY from tests.fixtures.coverage_checker_module (exempt -- its name
+    never starts with test_), never from each other.
+  - >-
+    Do NOT touch scripts/test_coverage_checker.py (the module under test), config/sloc_budgets.yaml
+    (this file was never registered there -- it was always < 500 SLOC before today, so nothing to
+    ratchet), _RETIRING_GRANDFATHER_HOMES, or _CONCERN_SPLIT_TEST_PACKAGES. This wave changes ONLY
+    the test-file layout under tests/.
+  - >-
+    ONE singleton load: tests/fixtures/coverage_checker_module.py idempotently loads
+    scripts/test_coverage_checker.py exactly once (reuses sys.modules["test_coverage_checker"] if
+    already present, mirroring tests/fixtures/session_preflight_module.py's guard) so
+    patch("test_coverage_checker.<name>") and monkeypatch.setattr(checker, ...) in all three split
+    files resolve against the SAME module object every function's own global lookups read from.
+  - >-
+    The `_checker` (underscore) alias is mandatory specifically in test_coverage_checker_map.py,
+    because TestMirrorRule's verbatim body text calls `monkeypatch.setattr(_checker, ...)` by that
+    exact bare name -- renaming the import alias would silently break the verbatim-copy invariant
+    by forcing a body edit. The other two split files use the unaliased `checker` name since their
+    verbatim bodies never reference `_checker` bare.
+  - >-
+    FAST-TIER HEAVY-DEP CHECK (VP step 5): grep each split file for boto3/botocore/duckdb; add a
+    module-level `import boto3  # noqa: F401` marker only if found (the pre-move oracle has none,
+    so none is expected).
+  - >-
+    ruff-format import discipline (tests/CLAUDE.md): one consolidated import block per module
+    (never split the same module's imports across two separate `from X import ...` statements --
+    ruff silently drops symbols from the second block). Run `ruff check --fix` after populating
+    each file to catch unused imports (F401) and confirm every referenced symbol is imported.
+  - >-
+    No package conftest and no tests/<pkg>/__init__.py are created: the three split files are FLAT
+    sibling files directly under tests/ (matching the original file's own placement), not a
+    subdirectory mirror package -- the tests/CLAUDE.md "every mirror test directory carries an
+    __init__.py" rule governs mirror SUBDIRECTORIES (e.g. tests/checks/), not flat root-level
+    files. The monolith declared ZERO @pytest.fixture, and every autouse guard it relied on is a
+    GLOBAL fixture in the root tests/conftest.py, which pytest auto-merges without redeclaration.
+  - >-
+    Do NOT resolve rec-2709 (this is one supplementary wave of ~14+); bundled_recommendations stays
+    empty. No rescue agents or workaround loops (Decision 55) -- on an unrecoverable id-mismatch,
+    STOP and RCA, never patch around it. PUBLIC repo -- no AWS account IDs/ARNs/secrets/internal
+    hostnames in any new file. Use bin/venv-python for all Python invocations; bash-only shell.
+  - "Implement + verify + commit LOCALLY only. Do NOT push/PR/merge or run any GitHub tool."
+context:
+  - >-
+    DECISION ANALYSIS (inline; single-agent IMPLEMENTATION plan authored and executed together, no
+    decision-scout/plan-critique sub-subagents spawned for this compact infra wave). CITE: Decision
+    128 (SLOC budget-raise guardrails: decompose by default, a raise must be loud and
+    Decision-cited -- this wave decomposes and adds ZERO budget lines / ZERO raise markers, the
+    direct governing decision for why this split happens at all); Decision 43/102/130 (whole-repo
+    per-file SLOC budget ratchet mechanics -- the counting formula and the "unregistered file over
+    500 fails" gate this wave must clear for four new files); Decision 131 (introduces the
+    tests/fixtures/ shared-helper convention and the no-cross-test-import guard this wave relies on
+    -- but its MIRROR/RETIRING-TABLE machinery does not apply here, since
+    scripts/test_coverage_checker.py is not a map_source_to_test target); Decision 132
+    (verification-graduation completeness: every pre-deploy VP step must carry a graduation
+    disposition -- all steps here are not-applicable because a pure test MOVE introduces no new
+    standing check to graduate). RELATED: Decision 80/104/124 (facade/package decomposition
+    precedent this wave's fixture-loader pattern borrows from, via Wave 1's validate_module.py and
+    Wave 4's session_preflight_module.py).
+  - >-
+    CONTRADICTION CHECK = CLEAN. This is NOT a rec-2709 mirror-roster wave: "test_coverage_checker.py"
+    is absent from _ALL_MIRROR_TARGET_HOMES (the fixed 24-entry frozenset; verified by reading
+    scripts/test_coverage_checker.py in full) and scripts/test_coverage_checker.py is excluded from
+    get_changed_source_files by its own "test_" name prefix -- so map_source_to_test never resolves
+    anything TO this file, and nothing in _RETIRING_GRANDFATHER_HOMES, _CONCERN_SPLIT_TEST_PACKAGES,
+    or config/sloc_budgets.yaml (grepped: no entry) needs to change. This is a bare SLOC-governance
+    split, structurally closest to the "PURE test-file split, no source-mapping consequence" carve-out
+    tests/CLAUDE.md documents for the three executor roster homes (Wave 5) -- except this file was
+    never on the roster at all, so there is no _RETIRING line to delete either.
+  - >-
+    CLASS -> FILE MAP (8 classes across 3 flat files, verbatim, verified against a live grep -n
+    "^class " of the current monolith): test_coverage_checker_map.py (2): TestMapSourceToTest
+    (lines 87-253 in the pre-move file), TestMirrorRule (lines 483-516). test_coverage_checker_grandfather.py
+    (3): TestGrandfatherRetiringTable (376-480), TestCheckTestFileExistsDirectoryTarget (519-559),
+    TestCheckPerFileCoverageDirectoryTarget (562-607). test_coverage_checker_checks.py (3):
+    TestExtractDefinitions (26-84), TestCheckTestFileExists (256-295), TestGetChangedSourceFiles
+    (298-373). Every class boundary was confirmed via `sed`/`cat -A` before extraction (the file is
+    607 lines with no trailing newline on its last line, not 608 -- a Read-tool display artifact
+    for the final partial line, verified independently against `wc -l`/`awk 'END{print NR}'`).
+  - >-
+    PROJECTED SLOC per file (validate_sloc_limits counting = non-blank, non-comment; all
+    comfortably < 500): fixture loader ~30, test_coverage_checker_map.py ~140,
+    test_coverage_checker_grandfather.py ~170, test_coverage_checker_checks.py ~145 (sums close to
+    the pre-move monolith's 496 plus ~30 for three repeated header/docstring blocks minus the one
+    shared header the monolith paid once). VP step 7 measures each file explicitly; large headroom
+    under 500 in every file even as future waves append assertions to _map.py and _grandfather.py.
+  - >-
+    SHARED-HELPER DESIGN: tests/fixtures/coverage_checker_module.py exposes exactly four names --
+    `checker` (the loaded module object, for `.attr` access and for monkeypatch.setattr targets),
+    `ROOT`, `_ALL_MIRROR_TARGET_HOMES`, `_RETIRING_GRANDFATHER_HOMES`. Individual function aliases
+    (map_source_to_test, check_test_file_exists, check_per_file_coverage, extract_definitions,
+    get_changed_source_files) are NOT re-exported by the fixture itself -- each split file derives
+    only the subset it needs as a local one-line alias off `checker`/`_checker` in its own header,
+    exactly mirroring how the original monolith derived its own bare names off `_checker`. This
+    keeps the fixture generic and keeps each split file's header self-documenting about what that
+    file actually uses.
+  - >-
+    IDEMPOTENCY RATIONALE: idempotency (reuse sys.modules["test_coverage_checker"] if present) is
+    not just cosmetic parity with session_preflight_module.py -- it guards the same transient
+    working-tree window that Wave 4's OPEN RISK 1 documented: between creating the three new files
+    and deleting the monolith, both the old file (which carries its own unconditional
+    non-idempotent loader) and the new fixture could theoretically be collected in the same pytest
+    session and race for the sys.modules slot. VP steps 2-3 deliberately collect the monolith and
+    the new files in SEPARATE scoped pytest invocations (never a combined `pytest tests/
+    test_coverage_checker*.py`) specifically to sidestep this during verification; idempotency is
+    the belt-and-suspenders fix for any other invocation order.
+  - >-
+    Branch/divergence: harness claude/... session branch (verify not main via VP step 1). This
+    plan and its implementation land in ONE local commit sequence (plan commit, then implementation
+    commit) per the task's explicit scope boundary -- no push/PR/merge/GitHub tool use. Low overlap
+    risk: this wave touches only tests/fixtures/coverage_checker_module.py (new) and the four
+    tests/test_coverage_checker*.py files (three new, one deleted); no other in-flight rec-2709
+    wave is known to touch this exact file set.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - tests/test_coverage_checker.py read in full and confirmed byte-identical to origin/main
+  - scripts/test_coverage_checker.py read in full (confirms it is NOT a map_source_to_test target and NOT in _ALL_MIRROR_TARGET_HOMES; confirms it is untouched by this plan)
+  - tests/fixtures/validate_module.py and tests/fixtures/session_preflight_module.py read as the fixture-loader templates
+  - tests/CLAUDE.md read (no-cross-test-import rule, tests/fixtures/ exemption, ruff import discipline)
+  - PLAN-sloc-convergence-health-tests.yaml read as the plan-structure template
+  - All 8 test classes located via `grep -n "^class "`; exact line boundaries independently confirmed via sed/cat -A (not eyeballed) before any extraction
+  - config/sloc_budgets.yaml grepped for "test_coverage_checker" -- confirmed no entry exists (nothing to delete)
+  - Decisions 128, 43/102/130, 131, 132 located and their bearing on this wave confirmed (inline decision analysis)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - Confirm the working branch is the harness claude/... session branch (git branch --show-current), NOT main; confirm tests/test_coverage_checker.py is byte-identical to origin/main.
+  - >-
+    Create tests/fixtures/coverage_checker_module.py: an idempotent singleton loader for
+    scripts/test_coverage_checker.py (reuse sys.modules["test_coverage_checker"] if present;
+    otherwise spec_from_file_location + exec_module + register it), exposing `checker`, `ROOT`,
+    `_ALL_MIRROR_TARGET_HOMES`, `_RETIRING_GRANDFATHER_HOMES`.
+  - >-
+    Create the three split files by copying each class body VERBATIM from the current
+    tests/test_coverage_checker.py per the CLASS -> FILE MAP, each with a fresh per-file header
+    (imports + local function aliases off `checker`/`_checker`, per the SHARED-HELPER DESIGN
+    context note). Run `ruff check --fix` on the four new files.
+  - >-
+    Capture the BEFORE test-id baseline from the still-intact monolith (VP step 2), then collect
+    the AFTER id set from the three new files (VP step 3) and diff -- must be empty before
+    proceeding. Run the heavy-dependency grep (VP step 5).
+  - Delete tests/test_coverage_checker.py.
+  - Run bin/venv-python -m scripts.validate --pre (VP step 6); loop until green.
+  - Run the scoped full pass of the three new files (VP step 4), measure each file's SLOC (VP step 7), confirm retirement (VP step 8), and confirm whole-suite collection is clean (VP step 9).
+  - >-
+    Commit the plan document first (`plan(sloc-coverage-checker-oracle): approved oracle-file
+    decomposition for rec-2709`), then commit the implementation
+    (`feat(sloc-coverage-checker-oracle): split the map_source_to_test oracle into three files`).
+    Both commits carry the `Co-authored-by: Claude <noreply@anthropic.com>` trailer. Do NOT
+    push/PR/merge or invoke any GitHub tool -- implement, verify, and commit locally only, per this
+    task's explicit scope boundary.
+  - >-
+    Report: the plan path; per-file SLOC of the three new files (plus the fixture loader); the
+    test-id diff result (must be empty); the validate --pre result; confirmation the fixtures
+    singleton works (TestMirrorRule's monkeypatch + the other files' patch(...) calls all pass in
+    the same session) and that no cross-test imports exist; any blockers.
+rollback: >-
+  Single local revert: `git revert` the implementation commit (restores tests/test_coverage_checker.py
+  whole and deletes the four new files), or reset to the plan-commit SHA if neither commit has been
+  pushed anywhere. No production system, infra, or warehouse state is touched by this plan -- pure
+  local test-file layout -- so rollback carries zero operational risk.
