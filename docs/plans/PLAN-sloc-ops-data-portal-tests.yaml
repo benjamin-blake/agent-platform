@@ -1,0 +1,481 @@
+schema_version: 1
+slug: sloc-ops-data-portal-tests
+intent: >-
+  Decompose tests/test_ops_data_portal.py (2805 SLOC, the largest remaining rec-2709 roster home
+  after Wave 1) into a tests/ops_data_portal/ concern-split test PACKAGE whose modules each cover
+  scripts/ops_data_portal.py and are each < 500 SLOC, then retire its grandfather home and delete
+  its config/sloc_budgets.yaml entry -- rec-2709 Wave 3 of the Decision 131 mirror-convention
+  rollout that keeps files small enough for lower-tier model comprehension (the load-bearing
+  purpose of the 500-SLOC gate, Decision 128).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-ops-data-portal-tests.yaml
+phase: >-
+  rec-2709 Wave 3 (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (Decision 128). Behavior-preserving pure test MOVE of the
+  scripts/ops_data_portal.py test home into a concern-split package. No product-roadmap phase;
+  platform tooling only.
+scope:
+  - file: tests/ops_data_portal/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the concern-split (prepend import mode; mirror convention). Empty file --
+      no conftest is needed because there are no cross-module shared pytest fixtures (the global
+      recursion/socket guards live in the root tests/conftest.py and merge up the tree; the only
+      shared items are plain data constants, which go to tests/fixtures/).
+  - file: tests/fixtures/ops_portal_records.py
+    action: Create
+    purpose: >-
+      Home for the two cross-module shared data constants VALID_FIELDS (used by ~all write-path
+      modules; 32 refs in the monolith) and VALID_DECISION_FIELDS (2 refs). tests/fixtures/ is an
+      importable package exempt from the no-cross-test-import guard (names never start with test_),
+      so every consuming test_*.py imports from here rather than from a sibling test module.
+      Consumers alias on import (`from tests.fixtures.ops_portal_records import VALID_FIELDS as
+      _VALID_FIELDS, VALID_DECISION_FIELDS as _VALID_DECISION_FIELDS`) so every method body stays
+      byte-identical (`dict(_VALID_FIELDS)`, `{**_VALID_FIELDS, ...}`). Constants are never mutated
+      in place in the monolith (always copied), so a shared module-level constant is safe.
+  - file: tests/ops_data_portal/test_rec_write.py
+    action: Create
+    purpose: >-
+      Facade write-path core (file_rec / update_rec + write_validators + migration params):
+      TestFileRec, TestUpdateRec, TestRetiredSurfaces, TestWriteTimeDispatch, TestMigrationParams
+      (~280 content SLOC). Verbatim class/method bodies; fresh import header carrying the duckdb
+      importorskip guard.
+  - file: tests/ops_data_portal/test_pipeline_reader.py
+    action: Create
+    purpose: >-
+      Reader / cache / sync consolidation (the rec-2707 reader-mock surface): TestPipelineConsolidation,
+      TestFetchRecFromReader, TestClosedBoundaryNoAthenaFallback, TestSyncTable (~142 content SLOC).
+      Preserve every explicit reader patch/mock verbatim.
+  - file: tests/ops_data_portal/test_decisions.py
+    action: Create
+    purpose: >-
+      scripts/ops_portal/decisions.py surface (file_decision / update_decision / fetch_decision /
+      backfill_decisions_from_md): TestFileDecision, TestUpdateDecision, TestBackfillDecisionsFromMd
+      (~155 content SLOC). Uses VALID_DECISION_FIELDS from the fixture; keeps the scripts.decisions_md
+      string patch targets verbatim.
+  - file: tests/ops_data_portal/test_cli.py
+    action: Create
+    purpose: >-
+      scripts/ops_portal/cli.py argv-dispatch surface: TestCLI (~87 content SLOC). Verbatim.
+  - file: tests/ops_data_portal/test_maintenance.py
+    action: Create
+    purpose: >-
+      scripts/ops_portal/maintenance_ops.py surface (enqueue findings, postmortems, selftests):
+      TestEnqueueFindings, TestPostmortems, TestSelftests (~185 content SLOC). The class-scoped
+      @staticmethod _reader_with_rows helper (in TestPostmortems) moves with its class.
+  - file: tests/ops_data_portal/test_risk_scoring.py
+    action: Create
+    purpose: >-
+      scripts/ops_portal/risk_scoring.py surface: TestComputeRisk (~94 content SLOC). The class-scoped
+      _radon_mock helper moves with the class.
+  - file: tests/ops_data_portal/test_writer_transport.py
+    action: Create
+    purpose: >-
+      scripts/ops_portal/writer_transport.py transport surface: TestDuckLakeTransportHelpers
+      (~120) PLUS the two module-level helpers _FakeResp and _patch_writer_transport (~37) that
+      are SINGLE-CONSUMER of this class (all usages are inside TestDuckLakeTransportHelpers) --
+      they move verbatim into this module, NOT hoisted (Wave 1 SINGLE-CONSUMER precedent). Keeps
+      the SigV4 / boto3 / requests.post monkeypatch fakes verbatim. ~157 content SLOC.
+  - file: tests/ops_data_portal/test_ci_rca_schema.py
+    action: Create
+    purpose: >-
+      scripts/ops_portal/ci_rca_schema.py enforcement surface: TestCiRcaSourceFileGate,
+      TestCiRcaSchemaEnforcement (~311 content SLOC). This module MUST bind the guard as
+      `duckdb = pytest.importorskip("duckdb")` (name bound, not a bare call) because
+      test_reconcile_table_columns_rerun_safety uses `duckdb.connect(":memory:")` verbatim.
+      Preserve the class setup_method verbatim.
+  - file: tests/ops_data_portal/test_ci_rca_dispute.py
+    action: Create
+    purpose: >-
+      ci_rca_schema.py evidence-dispute + strict-legacy-reject surface: TestCiRcaEvidenceDispute,
+      TestCiRcaStrictLegacyReject (~107 content SLOC). Verbatim.
+  - file: tests/ops_data_portal/test_ci_rca_runtime.py
+    action: Create
+    purpose: >-
+      scripts/ops_portal/ci_rca_runtime.py cross-check spine + typed gates: TestCiRcaCrossCheckSpine,
+      TestEvidenceBundleRefConditional, TestTerminusOverrideTyped, TestWarnModePerRuleStamping,
+      TestWhyChainCeilingVersioned, TestDetectionGapUnknownGate (~348 content SLOC). TestCiRcaCrossCheckSpine's
+      class-scoped _make_bundle/_ctx_v2 helpers move with the class (this class's _make_bundle variant
+      differs from the fingerprint class's -- keep each class's own copy; do NOT unify).
+  - file: tests/ops_data_portal/test_ci_rca_propose_close.py
+    action: Create
+    purpose: >-
+      ci_rca_runtime.py propose/close + bundle-absent + evidence-S3 + warn-mode-reject surface:
+      TestProposeOrCloseRec, TestBundleAbsentFailLoud, TestEvidenceS3Existence, TestWarnModeRejectMarker
+      (~335 content SLOC). Verbatim.
+  - file: tests/ops_data_portal/test_ci_rca_fingerprint.py
+    action: Create
+    purpose: >-
+      OVER-500 SPLIT, Part A (Wave 1 OPEN-RISK-1 PRIMARY precedent -- sibling classes across modules,
+      verbatim, NO budget marker). TestCiRcaFingerprintDedup retains its guard/fingerprint/backstop/bump
+      cohort (all methods with lineno < 2566: the autouse _guard_live_reader guard, find_open/find_recent
+      fingerprint tests, the file_rec write-time backstop tests, and bump_ci_rca_occurrence tests),
+      plus the class attr _FINGERPRINT and helpers _make_bundle/_ctx_v2 (~262 content SLOC).
+  - file: tests/ops_data_portal/test_ci_rca_close_then_recur.py
+    action: Create
+    purpose: >-
+      OVER-500 SPLIT, Part B. New sibling class TestCiRcaCloseThenRecur carries the close-then-recur
+      / recent-finder cohort (all methods with lineno >= 2566: the test_close_then_recur_* group plus
+      test_fingerprint_bump_open_match_never_consults_recent_finder). To stay self-contained under the
+      no-cross-test-import guard, DUPLICATE verbatim into this class the shared members it references:
+      the _FINGERPRINT class attr, the autouse _guard_live_reader fixture (rec-2707 backstop-reader
+      guard -- must remain autouse-active in each module), and the _make_bundle/_ctx_v2 builders
+      (~234 method SLOC + ~56 duplicated helper SLOC = ~290 content SLOC). The class rename
+      (TestCiRcaFingerprintDedup -> TestCiRcaCloseThenRecur) is the sole sanctioned test-id delta.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      THE FLIP (final commit): delete the single line "test_ops_data_portal.py" from
+      _RETIRING_GRANDFATHER_HOMES. NO frozenset edit is needed -- "scripts/ops_data_portal.py" is
+      ALREADY a seeded member of _CONCERN_SPLIT_TEST_PACKAGES (foundation roster), so once the
+      retiring line is deleted, map_source_to_test(scripts/ops_data_portal.py) resolves to the
+      tests/ops_data_portal package directory. Do NOT touch _ALL_MIRROR_TARGET_HOMES (frozen roster --
+      test_ops_data_portal.py stays). Do NOT add any special-case: scripts/ops_portal/** already
+      returns None in the grandfather helper (Decision 124), so no analog to Wave 1's
+      _scaffolding/_terraform routing exists here.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete ONLY the "tests/test_ops_data_portal.py: 2805  # raise-approved: dec-130 ..." line by
+      hand. NEVER run --update-sloc-budgets (it would strip the dec-130 markers on the other 23
+      entries and could re-seed the new modules). HARD invariant: this file loses exactly that one
+      line and nothing else.
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Update the map_source_to_test oracle to the post-Wave-3 state. In
+      test_representative_paths_resolve_under_current_retirement_state: update the docstring (two
+      homes now retired -- test_validate.py AND test_ops_data_portal.py) and ADD the case
+      `scripts/ops_data_portal.py -> tests/ops_data_portal`, while KEEPING the existing
+      `scripts/ops_portal/cli.py -> None` and `scripts/executor/step_runner.py -> None` cases
+      (Decision 124 regression assertion). In test_retiring_is_all_target_homes_minus_test_validate:
+      update the assertion set to `_ALL_MIRROR_TARGET_HOMES - {"test_validate.py",
+      "test_ops_data_portal.py"}`, add `"test_ops_data_portal.py" not in _RETIRING_GRANDFATHER_HOMES`,
+      and generalize the docstring/method name to "two homes retired". Leave test_roster_is_the_24_known_basenames
+      unchanged (the frozen roster is unaffected).
+  - file: tests/test_ops_data_portal.py
+    action: Delete
+    purpose: >-
+      Fully decomposed; replaced by the tests/ops_data_portal/ concern-split package. Deleted in the
+      FINAL commit only, atomically with the map flip + budget-line deletion + oracle update.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation: the union of class::function pytest node ids collected from
+    tests/ops_data_portal/ (module path stripped) equals the pre-move union collected from
+    origin/main's tests/test_ops_data_portal.py, modulo (a) module-path changes and (b) the SINGLE
+    sanctioned class-qualifier rename of the ~17 methods moved out of TestCiRcaFingerprintDedup into
+    the new sibling TestCiRcaCloseThenRecur. Same function set, same count, same pass/skip outcomes.
+  - >-
+    Every new test module under tests/ops_data_portal/ is < 500 SLOC (validate_sloc_limits counting:
+    non-blank, non-comment lines) and < 20 CC branches per function; no config/sloc_budgets.yaml
+    entry is added for any of them (the OVER-500 TestCiRcaFingerprintDedup is resolved by concern-split
+    into two sibling modules, NOT a raise marker).
+  - "bin/venv-python -m scripts.validate --pre exits 0 (SLOC gate green; no-cross-test-import guard green; collectability green)."
+  - >-
+    bin/venv-python -m pytest tests/ops_data_portal -q collects/passes the same number of tests as
+    origin/main's tests/test_ops_data_portal.py (in a duckdb-equipped environment). Where duckdb is
+    absent (e.g. the requirements-fast.txt --pre tier), every module skip-collects cleanly via the
+    module-level `pytest.importorskip("duckdb")` guard -- expected, behavior-preserving.
+  - >-
+    git diff origin/main -- config/sloc_budgets.yaml shows ONLY the tests/test_ops_data_portal.py
+    line removed; the other 23 dec-130 entries and their raise-approved markers are byte-identical.
+  - >-
+    map_source_to_test oracle (asserted by the updated tests/test_coverage_checker.py):
+    scripts/ops_data_portal.py -> tests/ops_data_portal (concern-split package dir);
+    scripts/ops_portal/cli.py -> None and scripts/executor/step_runner.py -> None (Decision 124
+    None-returns preserved). _RETIRING_GRANDFATHER_HOMES no longer contains "test_ops_data_portal.py";
+    _ALL_MIRROR_TARGET_HOMES (frozenset of 24) is unchanged; "scripts/ops_data_portal.py" remains in
+    _CONCERN_SPLIT_TEST_PACKAGES.
+  - >-
+    check_test_file_exists(scripts/ops_data_portal.py) returns True (the tests/ops_data_portal package
+    exists with >= 1 test_*.py and an __init__.py), and the monolith tests/test_ops_data_portal.py is
+    gone.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Capture the BEFORE class::function id baseline from the monolith (module path stripped).
+      Requires duckdb importable in the running venv; if the module skip-collects (duckdb absent),
+      install duckdb first so the baseline is non-empty and meaningful.
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_data_portal.py --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/claude-0/before_ids.txt; wc -l /tmp/claude-0/before_ids.txt
+    expected: A non-empty sorted baseline of CLASSFN::Class::method ids written to the temp file.
+    fix_if: >-
+      If the count is 0, duckdb is not installed (the importorskip skipped the whole module) -- install
+      duckdb in the venv and re-run so id-preservation is actually exercised. If collection ERRORS
+      (not skips), the monolith has an import/collection problem to fix before moving anything.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      After the move, collect the AFTER id set from the new package and diff against the baseline;
+      the ONLY permitted delta is the TestCiRcaFingerprintDedup -> TestCiRcaCloseThenRecur
+      class-qualifier rename on the ~17 close-then-recur / recent-finder methods.
+    command: >-
+      bin/venv-python -m pytest tests/ops_data_portal --collect-only -q | grep '::'
+      | sed -E 's/^[^:]+::/CLASSFN::/' | sort -u > /tmp/claude-0/after_ids.txt;
+      diff /tmp/claude-0/before_ids.txt /tmp/claude-0/after_ids.txt
+    expected: >-
+      The diff shows ONLY paired lines where "TestCiRcaFingerprintDedup::test_close_then_recur_*"
+      (and test_fingerprint_bump_open_match_never_consults_recent_finder) are removed and the
+      identical method names re-appear under "TestCiRcaCloseThenRecur::...". Review that pairing
+      line-by-line and accept it; no other added/removed id is permitted.
+    fix_if: >-
+      Any unpaired added/removed id means a class/method was dropped, duplicated, or a verbatim body
+      was lost/renamed during the move -- restore it. A duplicated helper that accidentally became a
+      collected test_ name is a naming error; keep helpers underscore-prefixed.
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Run the authoritative fast presubmit tier -- proves the SLOC gate, the no-cross-test-import guard, and collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No "SLOC limits" failure, no "cross-test import" failure, no collection error.
+    fix_if: >-
+      A >500 unregistered module (rebalance classes across modules, or split further), a cross-test
+      import (hoist the shared constant to tests/fixtures/ or duplicate the class-scoped helper), or
+      a collection error (fix the module's fresh import header / the importorskip placement).
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full pass of the moved package at the same count as the baseline (duckdb-equipped environment).
+    command: bin/venv-python -m pytest tests/ops_data_portal -q
+    expected: >-
+      All pass (or uniformly skip if duckdb is absent). In a duckdb-equipped run the selected/passed
+      count equals the step-1 baseline line count. No StopIteration / mock-exhaustion failures (the
+      rec-2707 reader mocks and the autouse _guard_live_reader guard survived the move in each module).
+    fix_if: >-
+      A failure means a patch target or mock did not survive the move -- re-check that string patch
+      targets (scripts.ops_data_portal.*, scripts.ops_portal.*, src.common.*, scripts.sync.*,
+      scripts.decisions_md.*) are byte-identical to the monolith, and that _guard_live_reader was
+      duplicated into the Part B class.
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Assert config/sloc_budgets.yaml lost exactly the tests/test_ops_data_portal.py line and nothing else.
+    command: git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly one removed line ("  tests/test_ops_data_portal.py: 2805  # raise-approved: dec-130 ...")
+      and zero added lines; the other 23 entries and their dec-130 markers untouched.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was added.
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Prove the retired mapping and the Decision 124 None-returns via the updated coverage-checker oracle.
+    command: bin/venv-python -m pytest tests/test_coverage_checker.py -q
+    expected: >-
+      All pass, including the updated assertions: scripts/ops_data_portal.py -> tests/ops_data_portal;
+      scripts/ops_portal/cli.py -> None; scripts/executor/step_runner.py -> None;
+      "test_ops_data_portal.py" not in _RETIRING_GRANDFATHER_HOMES; _ALL_MIRROR_TARGET_HOMES == the
+      frozen 24.
+    fix_if: >-
+      An oracle assertion still asserts grandfather behavior for test_ops_data_portal.py, or a
+      None-return regressed -- update the assertion / restore the None-return.
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Confirm the monolith is gone, the retirement line is deleted, and the whole tests/ tree still collects clean.
+    command: >-
+      test ! -f tests/test_ops_data_portal.py && ! grep -q '"test_ops_data_portal.py"'
+      scripts/test_coverage_checker.py && bin/venv-python -m pytest tests/ --collect-only -q >/dev/null
+      && echo RETIRED-OK
+    expected: Prints RETIRED-OK (monolith absent, retirement line absent, whole-suite collection clean -- no import/collision errors).
+    fix_if: If the file survives, the line remains, or collection errors, the FINAL commit is incomplete or a module header is malformed.
+constraints:
+  - >-
+    PURE MOVE, no test-logic changes. Copy each class/method body verbatim; author only a fresh
+    per-file import header importing exactly the symbols that file references. Patch string targets
+    (scripts.ops_data_portal.*, scripts.ops_portal.*, src.common.*, scripts.sync.*,
+    scripts.decisions_md.*) stay BYTE-IDENTICAL -- the source decomposition into scripts/ops_portal/**
+    already happened, so unlike Wave 1 there is NO patch-target namespace rewrite in this wave.
+  - >-
+    Preserve the module-level `pytest.importorskip("duckdb")` guard in EVERY new module (duckdb is
+    excluded from requirements-fast.txt, so the guard is what keeps --pre skip-collection clean).
+    Bind it as `duckdb = pytest.importorskip("duckdb")` in test_ci_rca_schema.py (that module calls
+    `duckdb.connect(":memory:")` verbatim); a bare `pytest.importorskip("duckdb")` is acceptable in
+    modules that never reference the bound name, but carrying the bound form uniformly is fine
+    (module-level assignment is not F841-flagged).
+  - >-
+    No cross-test imports (validate_no_cross_test_imports is active in --pre and full). The two shared
+    DATA constants (_VALID_FIELDS, _VALID_DECISION_FIELDS) go to tests/fixtures/ops_portal_records.py
+    (importable, exempt) and are imported with an alias to keep bodies verbatim. Single-consumer
+    module helpers (_FakeResp, _patch_writer_transport) move WITH their class into
+    test_writer_transport.py -- not hoisted. Class-scoped helpers (_make_bundle, _ctx_v2, _radon_mock,
+    _reader_with_rows, _guard_live_reader, the _FINGERPRINT attr) move with their class; where the
+    OVER-500 fingerprint class is split, its shared members are DUPLICATED verbatim into both sibling
+    classes (never imported between test_* modules).
+  - >-
+    The OVER-500 class TestCiRcaFingerprintDedup (501 SLOC) is concern-split into two sibling classes
+    across two modules (Wave 1 OPEN-RISK-1 PRIMARY precedent), NOT registered with a budget raise. The
+    close-then-recur / recent-finder cohort (lineno >= 2566) becomes TestCiRcaCloseThenRecur; this
+    single class-qualifier rename is the only permitted test-id delta (accept in VP step 2).
+  - >-
+    config/sloc_budgets.yaml loses exactly the tests/test_ops_data_portal.py line; NEVER run
+    --update-sloc-budgets. Do NOT edit _ALL_MIRROR_TARGET_HOMES; do NOT add anything to
+    _CONCERN_SPLIT_TEST_PACKAGES (scripts/ops_data_portal.py is already seeded there). Preserve the
+    scripts/executor/** and scripts/ops_portal/** None-returns (Decision 124 regression assertion in
+    the oracle).
+  - >-
+    Every new dir carries an __init__.py (prepend import mode). No conftest.py is created in
+    tests/ops_data_portal/ (no shared pytest fixtures across modules; the root tests/conftest.py
+    provides the global recursion/socket guards, merged up the tree).
+  - >-
+    No test-count-coupling regressions (tests/CLAUDE.md): the move introduces no new exact-count
+    asserts. After removing classes there is no monolith left to lint; after adding modules, verify
+    every symbol used in side_effect=/assertions is imported at module scope, and run ruff to catch
+    F401.
+  - >-
+    Do NOT resolve rec-2709 (Wave 3 of ~14); bundled_recommendations stays empty. No rescue agents or
+    workaround loops (Decision 55). PUBLIC repo -- no AWS account IDs / ARNs / ExternalIds / secrets /
+    internal hostnames in any new file. Use bin/venv-python for all Python invocations; bash-only shell.
+  - >-
+    PR STRUCTURE (overseer standard): ONE branch / ONE PR with batched sequential COMMITS
+    (additive-modules commits -> FINAL flip commit), NOT multi-PR-per-domain. Intermediate commits are
+    low-risk (the monolith stays grandfathered and simply shrinks under its 2805 budget while the new
+    modules are additive valid tests), so every intermediate state keeps --pre green; the FINAL flip
+    (retire line + budget-line delete + oracle update + monolith delete) is isolated to the last commit.
+context:
+  - >-
+    Gates: decision-scout NOT dispatched (overseer instruction -- inline decision analysis; the
+    overseer is the critique gate). CITE: Decision 131 (mirror convention + retiring grandfather +
+    no-cross-test-import guard -- governs every step and the concern-split-package resolution),
+    Decision 130 (whole-repo SLOC scan + 24-home grandfather + sloc_budgets dec-130 markers -- governs
+    the one-line budget deletion, a ratchet-DOWN removal that is unrestricted), Decision 128
+    (decompose-by-default; the 500-SLOC gate is load-bearing for lower-tier model comprehension --
+    forbids a raise for the OVER-500 class), Decision 124 (scripts/executor/** and scripts/ops_portal/**
+    map to None -- the map edit must preserve those None-returns; add/keep the oracle regression
+    assertion). RELATED: Decision 104 (colocation precedent being inverted), Decision 80 (facade /
+    concern-split package precedent the tests/ops_data_portal/ package mirrors, same as Wave 1's
+    tests/validate/). No decision CONTRADICTION found: this wave is a behavior-preserving pure move
+    verified by test-id preservation, exactly the shape Decision 131 was written for.
+  - >-
+    OVERSEER-EQUIVALENT DECISION -- OVER-500 class (TestCiRcaFingerprintDedup = 501 SLOC single class):
+    resolution = PRIMARY concern-split into two sibling classes across two modules
+    (test_ci_rca_fingerprint.py keeps the guard/fingerprint/backstop/bump cohort as
+    TestCiRcaFingerprintDedup; test_ci_rca_close_then_recur.py takes the close-then-recur / recent-finder
+    cohort as TestCiRcaCloseThenRecur). Natural seam: the test_close_then_recur_* group is a cohesive
+    sub-concern (find_recent_ci_rca_rec_by_fingerprint / reopen path) with a clean positional boundary
+    at line 2566. Shared members (_FINGERPRINT attr, autouse _guard_live_reader, _make_bundle, _ctx_v2)
+    are DUPLICATED verbatim into both classes -- they reference self/class-attrs and one is an autouse
+    fixture, so hoisting to a fixture would require de-verbatim edits; duplication is the faithful
+    pure-move choice and keeps both modules self-contained under the no-cross-test-import guard. The
+    FALLBACK (raise-approved budget marker) is REJECTED (would leave a tests/ entry in
+    config/sloc_budgets.yaml, violating rec-2709's zero-tests/-entries acceptance and Decision 128).
+  - >-
+    CONCERN-SPLIT MODULE BREAKDOWN (13 modules, content SLOC before per-file header; each stays < 500
+    with a ~20-45 SLOC header). test_rec_write.py [TestFileRec, TestUpdateRec, TestRetiredSurfaces,
+    TestWriteTimeDispatch, TestMigrationParams] ~280; test_pipeline_reader.py [TestPipelineConsolidation,
+    TestFetchRecFromReader, TestClosedBoundaryNoAthenaFallback, TestSyncTable] ~142; test_decisions.py
+    [TestFileDecision, TestUpdateDecision, TestBackfillDecisionsFromMd] ~155; test_cli.py [TestCLI] ~87;
+    test_maintenance.py [TestEnqueueFindings, TestPostmortems, TestSelftests] ~185; test_risk_scoring.py
+    [TestComputeRisk] ~94; test_writer_transport.py [TestDuckLakeTransportHelpers + _FakeResp +
+    _patch_writer_transport] ~157; test_ci_rca_schema.py [TestCiRcaSourceFileGate,
+    TestCiRcaSchemaEnforcement] ~311 (binds duckdb name); test_ci_rca_dispute.py [TestCiRcaEvidenceDispute,
+    TestCiRcaStrictLegacyReject] ~107; test_ci_rca_runtime.py [TestCiRcaCrossCheckSpine,
+    TestEvidenceBundleRefConditional, TestTerminusOverrideTyped, TestWarnModePerRuleStamping,
+    TestWhyChainCeilingVersioned, TestDetectionGapUnknownGate] ~348; test_ci_rca_propose_close.py
+    [TestProposeOrCloseRec, TestBundleAbsentFailLoud, TestEvidenceS3Existence, TestWarnModeRejectMarker]
+    ~335; test_ci_rca_fingerprint.py [TestCiRcaFingerprintDedup Part A] ~262; test_ci_rca_close_then_recur.py
+    [TestCiRcaCloseThenRecur Part B, incl ~56 duplicated helper SLOC] ~290. Content sum ~2753 ~= the
+    monolith's 2755 class-content SLOC (2805 total minus the ~50-SLOC header, of which ~15 = the
+    VALID_FIELDS dicts moving to fixtures). Largest module ~388 SLOC after header -- comfortable margin.
+  - >-
+    SHARED-HELPER HOISTING: (a) _VALID_FIELDS + _VALID_DECISION_FIELDS -> tests/fixtures/ops_portal_records.py
+    (cross-module plain data constants; always copied, never mutated -- safe as shared module-level
+    constants; imported with alias to keep bodies verbatim). (b) _FakeResp + _patch_writer_transport =
+    SINGLE-CONSUMER (all usages inside TestDuckLakeTransportHelpers) -> move verbatim into
+    test_writer_transport.py, NOT hoisted. (c) Class-scoped helpers move with their class; the split
+    fingerprint class duplicates _FINGERPRINT/_guard_live_reader/_make_bundle/_ctx_v2 into both siblings.
+    NOTE: TestCiRcaCrossCheckSpine's _make_bundle variant (no fingerprint/failure_category keys) DIFFERS
+    from the fingerprint class's variant -- keep each class's own copy; do NOT attempt to unify into a
+    shared fixture.
+  - >-
+    DUCKLAKE / rec-2707 HAZARD PRESERVED: the monolith carries `duckdb = pytest.importorskip("duckdb")`
+    at module level (duckdb excluded from requirements-fast.txt) and was the subject of ci-rca rec-2707
+    (a missing-mock / backstop-reader issue). Every split module carries the same importorskip guard so
+    skip-collection semantics are identical in the fast tier. The rec-2707 fix surface -- the autouse
+    _guard_live_reader guard ("blocks unmocked reader") and the explicit reader mocks in the file_rec
+    backstop / find_open / find_recent / close_then_recur tests -- is preserved verbatim: the guard is
+    duplicated into BOTH fingerprint-split classes, and the per-test reader patches
+    (patch.object(p, "find_open_ci_rca_rec_by_fingerprint" ...), etc.) move byte-identical.
+  - >-
+    ops_portal/** CONFIRMED None: traced map_source_to_test under the simulated post-flip state --
+    scripts/ops_data_portal.py -> tests/ops_data_portal (package dir); scripts/ops_portal/cli.py ->
+    None; scripts/ops_portal/ci_rca_runtime.py -> None; scripts/executor/step_runner.py -> None. The
+    grandfather helper returns None for scripts/ops_portal/** (len==3, "ops_portal" not in the nested
+    subpackage whitelist), so neither the retiring nor the mirror branch ever fires for those paths;
+    the flip cannot perturb them. "scripts/ops_data_portal.py" is already in _CONCERN_SPLIT_TEST_PACKAGES.
+  - >-
+    COVERAGE-SAFETY (why CI stays green): validate_test_coverage is FULL-tier only and only checks
+    git-diff-changed SOURCE files under src/scripts. This wave changes zero such source files --
+    scripts/test_coverage_checker.py is name-excluded (starts with test_), config/sloc_budgets.yaml is
+    not .py, and every moved/new file is a test_ file. So the coverage gate is a no-op for this PR in
+    both tiers (identical to the Wave 1 coverage-safety note).
+  - >-
+    Branch = the harness-assigned claude/... session branch (NOT an agent/ branch); Wave 1 is committed
+    on the current branch as the closest template (a monolith source -> a concern-split test package,
+    tests/validate/). Preflight (baseline collect) not machine-run in this read-only planning subagent;
+    assessed from repo state. No ci-rca unresolved recs surfaced in scope. Main-divergence: scope is
+    net-new test files + coverage-checker one-line edit + budget one-line delete + oracle assertions;
+    no overlap risk flagged at planning time. Rebase at commit-flow time per the Git-ops procedure.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness-assigned claude/... session branch)
+  - scripts/test_coverage_checker.py read in full (map_source_to_test, _RETIRING_GRANDFATHER_HOMES, _ALL_MIRROR_TARGET_HOMES, _CONCERN_SPLIT_TEST_PACKAGES, _mirror/_grandfathered helpers)
+  - tests/CLAUDE.md read (mirror convention, no-cross-test-import rule, conftest hierarchy)
+  - PLAN-sloc-test-validate.yaml (Wave 1) + tests/validate/ package read as the template
+  - Verified "test_ops_data_portal.py" is in both _RETIRING_GRANDFATHER_HOMES and _ALL_MIRROR_TARGET_HOMES, and "scripts/ops_data_portal.py" is already in _CONCERN_SPLIT_TEST_PACKAGES
+  - Verified scripts/ops_portal/** and scripts/executor/** return None (Decision 124) via a post-flip map_source_to_test trace
+  - All 35 top-level test classes + 2 module helpers located; per-class SLOC computed with the validate_sloc counting rule; the single OVER-500 class (TestCiRcaFingerprintDedup, 501) identified and its 2-way seam chosen
+  - importorskip guard + rec-2707 reader-mock/guard surface understood and its preservation planned
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    COMMIT 0 (fixtures prep): create tests/ops_data_portal/__init__.py and
+    tests/fixtures/ops_portal_records.py (VALID_FIELDS + VALID_DECISION_FIELDS copied verbatim from
+    the monolith's _VALID_FIELDS / _VALID_DECISION_FIELDS dicts). Do NOT yet touch the monolith. Run
+    --pre to confirm the additive files collect clean.
+  - >-
+    COMMITS 1..N (additive module creation, batched by ops_portal subsystem -- e.g. write-path,
+    decisions+cli, maintenance+risk+transport, ci_rca schema+dispute, ci_rca runtime+propose_close,
+    ci_rca fingerprint-split): for each module, create tests/ops_data_portal/<module>.py with a fresh
+    import header (carry the duckdb importorskip guard; import VALID_FIELDS/VALID_DECISION_FIELDS from
+    the fixture with an alias where used); COPY each class/method body VERBATIM; then DELETE the moved
+    classes from tests/test_ops_data_portal.py in the SAME commit. Keep all patch string targets
+    byte-identical. Do NOT touch _RETIRING_GRANDFATHER_HOMES or config/sloc_budgets.yaml yet -- the
+    monolith stays grandfathered and simply shrinks under its 2805 budget, so every intermediate commit
+    is --pre green. Run VP steps 2-4 scoped to the touched modules after each commit to localize any
+    failure early.
+  - >-
+    FINGERPRINT-SPLIT COMMIT (within the ci_rca batch): create test_ci_rca_fingerprint.py
+    (TestCiRcaFingerprintDedup Part A, methods lineno < 2566, verbatim, retaining _FINGERPRINT +
+    _guard_live_reader + _make_bundle + _ctx_v2) and test_ci_rca_close_then_recur.py
+    (TestCiRcaCloseThenRecur Part B, methods lineno >= 2566, verbatim, with _FINGERPRINT +
+    _guard_live_reader + _make_bundle + _ctx_v2 DUPLICATED verbatim). Delete the original
+    TestCiRcaFingerprintDedup from the monolith. Confirm no helper accidentally becomes a collected
+    test_ name.
+  - >-
+    FINAL COMMIT (the flip): delete tests/test_ops_data_portal.py (now empty of classes); edit
+    scripts/test_coverage_checker.py to delete the single "test_ops_data_portal.py" line from
+    _RETIRING_GRANDFATHER_HOMES (NO frozenset edit -- ops_data_portal.py is already in
+    _CONCERN_SPLIT_TEST_PACKAGES; NO special-case); update the tests/test_coverage_checker.py oracle
+    assertions (add the scripts/ops_data_portal.py -> tests/ops_data_portal case, keep the ops_portal/**
+    + executor/** None cases, update the retiring-set assertion to subtract both retired homes); delete
+    the "tests/test_ops_data_portal.py: 2805 ..." line from config/sloc_budgets.yaml by hand.
+  - >-
+    Execute the full Verification Plan (steps 1-7) on the FINAL commit; loop until all pass. On an
+    unrecoverable failure (e.g. a collect-id mismatch that is not the sanctioned class rename), STOP and
+    RCA (Decision 55) -- never patch around a collect-id mismatch.
+  - >-
+    Report: the final tests/ops_data_portal/ per-module SLOC breakdown; confirmation the OVER-500 class
+    was concern-split (not raised); confirmation config/sloc_budgets.yaml lost exactly one line and the
+    ops_portal/** + executor/** None-returns are intact.
+rollback: >-
+  ONE PR -- rollback = revert the single squash-merge PR. Only the FINAL commit changes the map / budget;
+  reverting the PR restores tests/test_ops_data_portal.py's grandfather home + its 2805 budget entry and
+  re-points scripts/ops_data_portal.py at the (restored) monolith. The additive module files and the
+  tests/fixtures/ops_portal_records.py constant are harmless if left behind on a partial revert, but a
+  clean single-PR revert removes them too.
