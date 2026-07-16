@@ -83,6 +83,7 @@ from scripts.checks.contracts.validate_no_underscore_instructions import (  # no
 )
 from scripts.checks.contracts.validate_portal_drift import validate_portal_drift  # noqa: F401,E402
 from scripts.checks.contracts.validate_prompt_compliance import validate_prompt_compliance  # noqa: F401,E402
+from scripts.checks.decisions.validate_decisions_size import validate_decisions_size  # noqa: F401,E402
 from scripts.checks.deps.validate_dependency_graph_freshness import (  # noqa: F401,E402
     validate_dependency_graph_freshness,
 )
