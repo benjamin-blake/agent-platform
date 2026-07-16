@@ -49,7 +49,11 @@ scope:
       Insert _c("validate_pr_conflict_signal") into BOTH pre_sequence() and full_sequence()
       (adjacent to the existing _c("validate_ci_workflow_guards") entries) so the new guard runs in
       the --pre and full tiers. Registry insertion alone is NOT sufficient -- the check must also
-      be re-exported by scripts/validate.py (next row) to be dispatchable.
+      be re-exported by scripts/validate.py (next row) to be dispatchable. ALSO correct this file's
+      module docstring (lines 8-11): "Adding a check touches only this package, never
+      scripts/validate.py" contradicts the same module's dispatch note (lines 13-15) and the
+      register() docstring's "facade re-export key in scripts/validate.py" (lines 45-47) -- rewrite
+      it to state a new check ALSO requires the scripts/validate.py re-export import.
   - file: scripts/validate.py
     action: Modify
     purpose: >-
@@ -62,11 +66,14 @@ scope:
   - file: scripts/CLAUDE.md
     action: Modify
     purpose: >-
-      Root-cause doc fix: the "Adding a validate.py check" section says checks are "not hand-wired
-      into scripts/validate.py" and directs touching only the module + registry.py -- but the actual
-      globals()[name] dispatch REQUIRES the explicit validate.py re-export line. Add one line naming
-      that requirement so the next check author does not repeat this omission (this plan is the
-      living proof the doc is incomplete).
+      Root-cause doc fix: the "Adding a validate.py check" section opens "CI checks are registered,
+      not hand-wired into scripts/validate.py" and directs touching only the module + registry.py --
+      but the actual globals()[name] dispatch REQUIRES the explicit validate.py re-export line.
+      RECONCILE that opening clause (do not merely append beneath it, which would leave a
+      self-contradictory paragraph): clarify that a new check is registered via @register + tier
+      insertion AND still requires the "from scripts.checks.<domain>.<module> import <name>
+      # noqa: F401,E402" re-export in scripts/validate.py so it becomes the module-level global that
+      globals()[name] resolves. Closes the doc gap that produced this plan's round-2 miss.
   - file: tests/checks/ci_guards/test_validate_pr_conflict_signal.py
     action: Create
     purpose: >-
@@ -113,6 +120,11 @@ acceptance_criteria:
     tests for the new guard, and the registry membership/reachability tests in
     tests/test_checks_registry.py stay green -- reachability requires BOTH the registry.py insertion
     AND the scripts/validate.py re-export (no edit to the test file itself is required).
+  - >-
+    The check-authoring wiring docs are internally consistent with the globals()[name] dispatch:
+    scripts/checks/registry.py's module docstring no longer claims a check "touches only this package,
+    never scripts/validate.py", and scripts/CLAUDE.md's "Adding a validate.py check" section names the
+    required scripts/validate.py re-export rather than contradicting it (VP step 11).
   - >-
     ci.yml's signal-green comment step retries the gh pr comment up to 3 times, remains
     continue-on-error: true, remains gated to claude/* PRs, and signal-green.needs is unchanged
@@ -259,6 +271,25 @@ verification_plan:
     graduation_waiver_reason: >-
       One-shot migration sweep for this cutover; not a recurring regression target once the backstop
       language is gone (nothing reintroduces it on a normal change).
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Wiring-doc coherence: no live check-authoring doc surface still claims a new check touches only
+      the checks package / never scripts/validate.py, and scripts/CLAUDE.md now names the re-export.
+    command: >-
+      bash -c 'if grep -niE "never .?scripts/validate\.py|touches only this package"
+      scripts/checks/registry.py; then echo "STALE registry docstring claim"; exit 1; fi;
+      grep -qi "re-export" scripts/CLAUDE.md && echo "doc-coherence OK"'
+    expected: Prints "doc-coherence OK", exit 0.
+    fix_if: >-
+      A registry.py match -> rewrite the module docstring to state a check also needs the validate.py
+      re-export; no scripts/CLAUDE.md "re-export" mention -> the "Adding a validate.py check" section
+      was not reconciled.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-shot doc-coherence sweep for this cutover; the register()-pattern doc is stable and this is
+      not a recurring regression target once the contradictory phrasing is corrected.
   - step: 8
     phase: pre-deploy
     action: Full fast-tier presubmit passes (the authoritative pre-merge gate PR CI runs).
@@ -343,7 +374,7 @@ context:
     Decision 132, Decision 128, Decision 86. RELATED = Decision 74 (workflow_dispatch escape-hatch),
     Decision 75 (frame-lock -- consciously discharged), Decision 100 (no native GitHub primitive for
     a conflict wake).
-  - "gates: decision-scout=NO_FLAGS (round 2; round 1 was FLAGS_FOUND on a Decision 83 NOTE, accepted-with-deferral by the human); plan-critique round 1 = REVISE (SLOC-ceiling blocker + vacuous VP step 6 -- both fixed: guard relocated to registered module, grep corrected); plan-critique round 2 = REVISE (missing scripts/validate.py re-export required for globals()[name] dispatch -- fixed: validate.py added to scope + re-export execution step + scripts/CLAUDE.md doc-gap fix); plan-critique round 3 = pending re-dispatch"
+  - "gates: decision-scout=NO_FLAGS (round 2; round 1 was FLAGS_FOUND on a Decision 83 NOTE, accepted-with-deferral by the human); plan-critique round 1 = REVISE (SLOC-ceiling blocker + vacuous VP step 6 -- both fixed: guard relocated to registered module, grep corrected); plan-critique round 2 = REVISE (missing scripts/validate.py re-export required for globals()[name] dispatch -- fixed: validate.py added to scope + re-export execution step + scripts/CLAUDE.md doc-gap fix); plan-critique round 3 = REVISE (doc-coherence only; functional wiring confirmed correct by the gate; registry.py module docstring lines 8-11 + scripts/CLAUDE.md opening clause still said 'never/only-this-package scripts/validate.py'); addressed in the already-in-scope registry.py + scripts/CLAUDE.md rows plus a new VP step 11 doc-coherence sweep. 3-round convergence cap reached -- escalated to the human for the proceed/re-critique decision."
   - >-
     Decision 83/76 name GitHub-native auto-merge (enable_pr_auto_merge; CD.20 / rec-940) as the
     durable successor that will eventually retire the comment-wake machinery. This plan consciously
@@ -442,12 +473,17 @@ execution_steps:
     scripts.checks.ci_guards.validate_pr_conflict_signal import validate_pr_conflict_signal
     # noqa: F401,E402" to scripts/validate.py in the ci_guards import block (adjacent to line 64's
     validate_ci_workflow_guards import): dispatch is globals()[name](failed) with no auto-discovery,
-    so without this line validate --pre KeyErrors on the check and the reachability tests fail.
+    so without this line validate --pre KeyErrors on the check and the reachability tests fail. ALSO
+    rewrite scripts/checks/registry.py's module docstring (lines 8-11) so its "Adding a check touches
+    only this package, never scripts/validate.py" no longer contradicts the same module's dispatch
+    note and the register() docstring -- it must name the required scripts/validate.py re-export.
   - >-
-    In scripts/CLAUDE.md "Adding a validate.py check", add one line documenting the required
-    scripts/validate.py re-export ("from scripts.checks.<domain>.<module> import <name>
-    # noqa: F401,E402") so the check becomes a module-level global for globals()[name] dispatch --
-    closing the doc gap that omitted this step and caused this plan's round-2 critique miss.
+    In scripts/CLAUDE.md "Adding a validate.py check", RECONCILE the opening clause "CI checks are
+    registered, not hand-wired into scripts/validate.py" (do not merely append a contradictory line
+    beneath it): clarify that a check is @register + tier-inserted AND still requires the "from
+    scripts.checks.<domain>.<module> import <name>  # noqa: F401,E402" re-export in scripts/validate.py
+    so it becomes the module-level global for globals()[name] dispatch. Closes the doc gap that caused
+    this plan's round-2 critique miss.
   - >-
     Create tests/checks/ci_guards/test_validate_pr_conflict_signal.py with a pass-path class (real
     file + a valid mocked _load returning a well-formed workflow dict -> failed stays empty) and a
