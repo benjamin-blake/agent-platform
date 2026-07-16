@@ -116,6 +116,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_verifier_same_pr_guard"),
         _c("validate_verification_registry"),
         _c("validate_vp_replay"),
+        _c("validate_graduation_completeness"),
         _s("coverage_report"),
         _s("budget_assertion"),
     ]
@@ -177,6 +178,7 @@ def full_sequence() -> list[Step]:
         _c("validate_verifier_hermeticity"),
         _c("validate_verifier_same_pr_guard"),
         _c("validate_verification_registry"),
+        _c("validate_graduation_completeness"),
         _c("validate_differential_gate_baseline"),
         _c("validate_intent_doc_freeze"),
         _c("validate_prose_allowlist"),

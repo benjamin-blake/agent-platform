@@ -320,7 +320,7 @@ silent pass.
 5. **Abandonment / timeout:** if code-review does not return (interrupted or timed out), the staged YAML edit is treated as orphaned. On next session entry, the idempotency check detects the orphaned stage and reports it to the user for explicit accept/reject -- the implement skill does not auto-commit bookkeeping that lacks a verdict-attested verification pass.
 6. **Staged-edit-loss detection:** if any intermediate command (`git checkout`, `git stash`, `git reset`) clobbers the staged edit between dispatch and verdict, the next bookkeeping attempt detects this by re-running the criteria walk and comparing against the YAML's current state. Loss is observable, not silent.
 
-## Verification Graduation (VF-05, T3.18 -- fires on VP Compliance Gate all-PASS, before the commit flow)
+## Verification Graduation (VF-05, T3.18/T3.21 -- fires on VP Compliance Gate all-PASS, before the commit flow)
 
 Fires in the same window as Tier_item bookkeeping (after the VP Compliance Gate shows all rows
 PASS, before the commit flow in Step 7) but is a distinct action: it tries to promote this
@@ -335,38 +335,63 @@ distinguishes pre-change from post-change; a tautological check that passes on b
 be worse than no check (false confidence). The differential admission gate is the guard against
 that: real, never simulated (Decision 55).
 
+**T3.21 (enforced, amends T3.18):** graduation is no longer optional-by-forgetting. If this
+plan's `verification_plan` steps carry `graduation` dispositions (mandatory on pre-deploy steps
+for any plan authored after T3.21 -- see the planning skill), the implement-PR leg of
+`validate_graduation_completeness` (both --pre and full tiers) FAILS the PR unless every step
+declared `graduate` produced a matching registry row. A plan authored before this field existed
+(no dispositions anywhere) is not subject to this obligation -- treat its graduation as the
+legacy best-effort walk in step 1 below.
+
 ### Protocol
-1. **Enumerate candidates.** Walk this plan's `verification_plan` steps and identify any whose
-   `command` is expressible as one of the six canonical primitive slots in
+1. **Enumerate candidates from the plan's declared dispositions.** Walk this plan's
+   `verification_plan` steps and take every step whose `graduation == "graduate"` as a candidate;
+   its declared `graduation_check_id` IS the registry row's `check_id` (do not invent a
+   different slug -- the implement-PR leg matches on `plan_slug` + `graduation_check_id`
+   verbatim). Steps marked `waive` or `not-applicable` are never candidates. **Legacy fallback:**
+   if this plan predates the graduation field (zero dispositions anywhere in
+   `verification_plan`), fall back to the pre-T3.21 walk -- identify any step whose `command` is
+   expressible as one of the six canonical primitive slots in
    `scripts.verification_checks.CANONICAL_SLOTS` (command_exit_zero, command_output_matches,
-   file_presence, grep_count, test_selector, metric_under_threshold). A step that requires
-   multiple commands, human judgement, or live infrastructure (V3 deploy/invoke) is not a
-   candidate -- skip it.
-2. **Build a registry row** for each candidate: `check_id` (stable slug), `primitive_slot`,
-   `check_spec` (the primitive's parameters -- see `docs/contracts/verification-registry.yaml`
-   for the per-slot shape), `guard_target` (the artefact it defends), `guard_symbol` (optional),
-   `plan_slug` (this plan's slug), `graduated_at` (today's ISO date), `graduated_by` (this
-   session's canonical_id per Decision 66, or omit if none applies).
+   file_presence, grep_count, test_selector, metric_under_threshold) and invent a stable
+   `check_id` slug for it. A step that requires multiple commands, human judgement, or live
+   infrastructure (V3 deploy/invoke) is never a candidate either way -- skip it.
+2. **Build a registry row** for each candidate: `check_id` (the step's `graduation_check_id`, or
+   the invented slug under the legacy fallback), `primitive_slot`, `check_spec` (the primitive's
+   parameters -- see `docs/contracts/verification-registry.yaml` for the per-slot shape),
+   `guard_target` (the artefact it defends), `guard_symbol` (optional), `plan_slug` (this plan's
+   slug), `graduated_at` (today's ISO date), `graduated_by` (this session's canonical_id per
+   Decision 66, or omit if none applies).
 3. **Run the REAL differential admission gate** for each candidate row via
    `scripts.verification_graduation.run_differential(row, repo_root=<repo root>)`: it materializes
    the check, runs it live (must PASS), then checks it out in a real `git worktree` at
    `origin/main` and runs it there (must FAIL). This is a genuine `git worktree add`/`remove` --
    never a simulated revert.
 4. **Admitted rows** (`outcome.admitted`) get appended to
-   `config/agent/verification_registry/registry.yaml`'s `entries` list. **Rejected rows**
-   (tautological, or failing on HEAD/live) are dropped -- do not add them.
-5. **Errors are fail-loud (Decision 55).** A `scripts.verification_graduation.GraduationError`
+   `config/agent/verification_registry/registry.yaml`'s `entries` list.
+5. **A declared-`graduate` candidate that is REJECTED (tautological, or fails on HEAD/live) is
+   un-graduatable, not silently dropped.** Flip that VP step's disposition from `graduate` to
+   `waive` in `docs/plans/PLAN-{slug}.yaml`, setting `graduation_waiver_reason` to the concrete
+   rejection reason (e.g. "differential rejected -- passes even with origin/main reverted,
+   tautological given this repo's fixture state"), and remove `graduation_check_id`. Commit this
+   plan edit in the same PR (Step 7's `git add -A` picks it up) -- this is what satisfies
+   `validate_graduation_completeness`'s implement-PR leg for that step, since a `waive`
+   disposition requires no registry row. A legacy-fallback candidate (step 1's fallback path) that
+   is rejected is simply dropped, unchanged from pre-T3.21 behaviour -- there is no disposition
+   field to flip.
+6. **Errors are fail-loud (Decision 55).** A `scripts.verification_graduation.GraduationError`
    (worktree add/remove failure, a materialization error, a missing check_spec key) STOPS this
    step and surfaces to the human -- it never silently becomes "none graduated". Only a
-   legitimately empty candidate set (step 1 found nothing kernel-expressible) is a real "none
-   graduated" outcome.
-6. **Record the outcome ephemerally.** Whether rows were admitted or the candidate set was
-   legitimately empty, record an explicit note in the PR body (a `## Verification Graduation`
-   section: which check_ids were admitted, which candidates were rejected and why, or "no
-   kernel-expressible VP steps this session -- none graduated"). This record is ephemeral
+   legitimately empty candidate set (step 1 found no `graduate`-disposition steps, and -- under
+   the legacy fallback -- nothing kernel-expressible) is a real "none graduated" outcome.
+7. **Record the outcome ephemerally.** Whether rows were admitted, some were flipped to waive, or
+   the candidate set was legitimately empty, record an explicit note in the PR body (a
+   `## Verification Graduation` section: which check_ids were admitted, which were flipped to
+   waive and why, which legacy-fallback candidates were rejected and dropped, or "no
+   graduate-disposition VP steps this session -- none graduated"). This record is ephemeral
    PR-body evidence (Decision 115) -- NOT a numbered Decision, NOT a warehouse write. The durable
-   artefact is the registry.yaml diff itself, committed in the same commit as the plan's other
-   changes (Step 7's `git add -A` picks it up).
+   artefacts are the registry.yaml diff and any plan disposition flips, committed in the same
+   commit as the plan's other changes (Step 7's `git add -A` picks it up).
 
 ### Constraints
 - Never invent a registry row for a VP step that doesn't genuinely distinguish pre/post-change

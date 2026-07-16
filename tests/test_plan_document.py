@@ -259,3 +259,71 @@ class TestSchemaVersion2:
     def test_v2_unsupported_version_still_rejected(self) -> None:
         with pytest.raises(ValidationError, match="Unsupported schema_version"):
             PlanDocument.model_validate(_mutate_v2(schema_version=3))
+
+
+class TestGraduationDisposition:
+    """T3.21 (VF-05 enforcement): per-VP-step graduation disposition, backward-compatible."""
+
+    def test_graduate_with_check_id_accepted(self) -> None:
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "graduate"
+        d["verification_plan"][0]["graduation_check_id"] = "some-check-id"
+        doc = PlanDocument.model_validate(d)
+        assert doc.verification_plan[0].graduation == "graduate"
+        assert doc.verification_plan[0].graduation_check_id == "some-check-id"
+
+    def test_waive_with_reason_accepted(self) -> None:
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "waive"
+        d["verification_plan"][0]["graduation_waiver_reason"] = "requires live infra, not kernel-expressible"
+        doc = PlanDocument.model_validate(d)
+        assert doc.verification_plan[0].graduation == "waive"
+        assert doc.verification_plan[0].graduation_waiver_reason == "requires live infra, not kernel-expressible"
+
+    def test_not_applicable_accepted(self) -> None:
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "not-applicable"
+        doc = PlanDocument.model_validate(d)
+        assert doc.verification_plan[0].graduation == "not-applicable"
+
+    def test_absent_field_backward_compatible(self) -> None:
+        doc = PlanDocument.model_validate(_base())
+        assert doc.verification_plan[0].graduation is None
+        assert doc.verification_plan[0].graduation_check_id is None
+        assert doc.verification_plan[0].graduation_waiver_reason is None
+
+    def test_graduate_without_check_id_rejected(self) -> None:
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "graduate"
+        with pytest.raises(ValidationError, match="graduation='graduate' requires a non-empty graduation_check_id"):
+            PlanDocument.model_validate(d)
+
+    def test_waive_without_reason_rejected(self) -> None:
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "waive"
+        with pytest.raises(ValidationError, match="graduation='waive' requires a non-empty graduation_waiver_reason"):
+            PlanDocument.model_validate(d)
+
+    def test_unknown_disposition_value_rejected(self) -> None:
+        d = _base()
+        d["verification_plan"][0]["graduation"] = "bogus"
+        with pytest.raises(ValidationError):
+            PlanDocument.model_validate(d)
+
+    def test_check_id_without_graduate_rejected(self) -> None:
+        d = _base()
+        d["verification_plan"][0]["graduation_check_id"] = "orphaned-check-id"
+        with pytest.raises(ValidationError, match="graduation_check_id requires graduation='graduate'"):
+            PlanDocument.model_validate(d)
+
+    def test_reason_without_waive_rejected(self) -> None:
+        d = _base()
+        d["verification_plan"][0]["graduation_waiver_reason"] = "orphaned reason"
+        with pytest.raises(ValidationError, match="graduation_waiver_reason requires graduation='waive'"):
+            PlanDocument.model_validate(d)
+
+    def test_historical_plans_all_validate(self) -> None:
+        """No PLAN-*.yaml on disk carries the new field yet -- confirms the field is optional."""
+        from scripts.roadmap.plan_document import main as _main
+
+        assert _main([]) == 0

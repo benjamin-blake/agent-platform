@@ -2,6 +2,113 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 132: Verification graduation is an enforced pre-merge obligation, not a skippable skill instruction (amends Decision 104; successor to T3.18/VF-05/VF-06) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-16
+**Warehouse ID:** dec-132 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+T3.18 shipped the VF-05 graduation PRODUCER (the implement skill's Tier_item bookkeeping walk
+graduates a plan's own kernel-expressible VP steps into
+`config/agent/verification_registry/registry.yaml`) and the VF-06 differential admission gate
+(`validate_verification_registry` re-runs a real `git worktree` revert against `origin/main` for
+every new-in-diff row). Neither is an OBLIGATION: nothing forces a fix PR to actually add the row
+it owes, and a skipped graduation is invisible to CI -- zero new registry rows looks identical to
+"correctly graduated nothing." PR #586 shipped 4 orphaned checks unnoticed by this gap; rec-2677
+independently flagged an under-graduated plan (2 of 6 candidate rows). The graduated-validation
+model stays honest only if the obligation itself is enforced, not merely documented as a skill
+instruction an agent can forget under context pressure.
+
+**Decision:**
+1. **Schema: an optional, validated graduation disposition per VP step.**
+   `scripts/roadmap/plan_document.py`'s `VerificationStep` gains three optional fields:
+   `graduation` (`graduate | waive | not-applicable`, `None` by default), `graduation_check_id`
+   (required iff `graduation == "graduate"`), `graduation_waiver_reason` (required iff
+   `graduation == "waive"`). A `model_validator` enforces both directions (required-when-set and
+   forbidden-when-unset). The field is optional at the schema level -- `validate_plan_documents`
+   re-validates every `PLAN-*.yaml` whole-directory (Decision 85), so every historical plan
+   authored before this Decision keeps validating unchanged.
+2. **New registered check: `validate_graduation_completeness` (both `--pre` and full tiers).**
+   Diff-scoped, two legs:
+   - **Plan-PR leg:** a diff-added or diff-modified `PLAN-*.yaml` must carry a graduation
+     disposition on every `pre-deploy` VP step -- field PRESENCE only, never a
+     kernel-expressibility inference (that classification judgement stays a human/plan-critique
+     call, at plan time, never mechanized here). Enforced only when the plan is net-new in the
+     diff (`git diff --diff-filter=A`) OR it already declares >=1 disposition -- a merely-modified
+     plan with zero dispositions anywhere (a correction to a pre-field plan, or the lagged `.yaml`
+     archival sweep) is a pre-field plan and is skipped, not failed.
+   - **Implement-PR leg:** resolves the plan(s) named by `feat({slug})` commit subjects on
+     `git log origin/main..HEAD`, loads `PLAN-{slug}.yaml`, and asserts every step declared
+     `graduate` produced a matching NEW-in-diff registry row (`plan_slug` + `check_id` ==
+     `graduation_check_id`). `waive`/`not-applicable` require no row. A step that proves
+     un-graduatable at implement time is expected to flip to `waive` (with a reason) in the same
+     PR -- the implement skill's Verification Graduation section is amended accordingly.
+   Both legs advisory-SKIP (never fail) rather than wedge a legitimate PR when: origin/main is
+   unreachable (the implement-PR leg cannot resolve new-vs-baseline without it), or a
+   `feat({slug})` commit names a plan whose `PLAN-{slug}.yaml` is absent (legacy `.md`-era,
+   archived, or a typo'd slug). Genuine errors (an import failure loading
+   `scripts.roadmap.plan_document`) stay fail-loud (Decision 55) -- there is no silent
+   "none enforced" path for an infrastructural error.
+3. **Planning and plan-critique skills carry the obligation forward.** The planning skill's VP
+   Design section requires a disposition on every pre-deploy step and gives the three-way
+   classification rubric plus a `graduation_check_id` naming convention. The plan-critique skill
+   adds criterion 12o: flag a missing disposition, a suspect `not-applicable` on an obviously
+   kernel-expressible command, or a thin/generic `waive` reason -- the fresh-context honesty check
+   this enforcement structurally depends on (see residual limitation A below).
+4. **`docs/contracts/verification-registry.yaml` bumped to `contract_version: 3`** (a
+   `governance_note_add` amendment, no schema field change) documenting the `(plan_slug,
+   check_id)` join the implement-PR leg relies on.
+
+**Disclosed residual limitations (on the record, not deferred silently):**
+- **A -- classification seam:** whether a shell command is kernel-expressible
+  (`graduate`-worthy) vs. genuinely `not-applicable` is not mechanically decidable in general.
+  This Decision enforces disposition PRESENCE, never the classification's correctness. The
+  fresh-context plan-critique gate (12o) is the honesty check, applied at PLAN TIME -- before the
+  fix exists, so there is no pressure to wave through a finished implementation. A deterministic
+  "smell" backstop for the obvious cases (a bare `pytest`/`test -f` node marked `not-applicable`)
+  is deferred to a later phase, not this Decision.
+- **B -- trigger seam:** the implement-PR obligation resolves from the `feat({slug})` commit
+  subject convention (`## Commit-message conventions` in AGENTS.md). A code PR that omits or
+  varies that prefix escapes the PRODUCTION-side obligation -- a disclosed false negative. This is
+  the best available signal without a heuristic diff-based plan resolution; the plan-PR presence
+  leg and the planning/plan-critique disposition-emission still bind the plan side regardless.
+- Backlog recovery (PR #586's 4 orphaned checks; rec-2677's under-graduated plan) is explicitly
+  OUT of this Decision's scope -- the forward gate cannot reach already-merged history; a separate
+  follow-on plan owns retroactive recovery (optionally via a `fix_commit`-anchored differential, or
+  a one-time manual graduation for a backlog this small).
+
+**Reversal conditions:** if the disclosed trigger-seam false-negative rate (code PRs that omit
+the `feat({slug})` prefix and thus escape the implement-PR obligation) proves material in
+practice, revisit the resolution mechanism (e.g. a `Resolves: rec-NNNN` secondary trigger, deferred
+to Phase 2 at decision time) rather than reverting the gate. If the plan-PR presence leg produces
+excessive false positives on plans that are legitimately exempt, tighten the net-new/has-disposition
+predicate rather than disabling the leg.
+
+**Rationale:**
+A prevention gate succeeds here where retroactive graduation of an already-merged fix (the PR #586
+backlog) is structurally tautological: this Decision's non-tautology property depends on the
+Decision 76/85 two-PR flow (the plan merges first, so at implement-PR CI time `origin/main` is the
+PRE-FIX baseline and the differential is valid) -- and holds equally for a single-PR flow (plan +
+fix together), since the plan is new-in-diff and `origin/main` is still pre-fix either way. Field
+presence, not classification correctness, is what CI can enforce loudly and deterministically;
+classification honesty is delegated to the layer built for judgement calls (plan-critique),
+consistent with Decision 55's fail-loud-on-genuine-error / no-heuristic-inference discipline.
+
+**Related:** Decision 55 (fail-loud, no rescue loops, no heuristic bug-fix inference), Decision 73
+(fast-tier PR-gate budget this diff-scoped check must respect), Decision 76 (two-PR plan/implement
+flow this Decision's non-tautology property depends on), Decision 83 (branch protection making the
+`--pre` tier authoritative), Decision 84 (Warehouse sync via `--backfill-decisions-md`), Decision 85
+(whole-directory plan re-validation; optional-field backward compatibility), Decision 86
+(agent-first, machine-parseable documentation), Decision 104 (registered-check pattern this new
+check follows; the differential admission gate framework it extends), Decision 128 (decompose-by-
+default discipline both new files stay under). Roadmap/audit refs (not DECISIONS.md entries,
+grounded directly): CD.29 (six-slot kernel vocabulary, never touched by this Decision), VF-05
+(the producer this Decision makes an obligation), VF-06 (the differential gate this Decision does
+not modify), VF-11, tier_item T3.18 (predecessor, complete) and T3.21 (this Decision's carrier).
+
+---
+
 ## Decision 131: Test-colocation mapping inverted to a mirror rule + retiring grandfather-table; no-cross-test-import guard and per-package conftest hierarchy (amends Decision 104; enables rec-2709) (Decided)
 
 **Status:** Decided
