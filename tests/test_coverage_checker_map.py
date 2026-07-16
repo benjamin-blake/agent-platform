@@ -106,13 +106,28 @@ class TestMapSourceToTest:
         "stem",
         ["ducklake_writes", "ducklake_tables", "ducklake_reads", "ducklake_metrics"],
     )
-    def test_maps_ducklake_runtime_split_modules_to_test_ducklake_runtime(self, stem: str) -> None:
-        """The four ducklake_runtime split-out src/common modules map to tests/test_ducklake_runtime.py
-        (PLAN-sloc-ducklake-layer), mirroring the Decision 104 scripts/checks/** precedent."""
+    def test_maps_ducklake_runtime_split_modules_resolve_to_their_common_mirror(self, stem: str) -> None:
+        """The four ducklake_runtime split-out src/common modules map to their own
+        tests/common/test_ducklake_<stem>.py mirror (rec-2709 Wave 7: "test_ducklake_runtime.py"
+        retired from _RETIRING_GRANDFATHER_HOMES). Proves the crux: _DUCKLAKE_RUNTIME_SPLIT_MODULES
+        is KEPT (not removed) -- it still routes these four to the ducklake_runtime grandfather
+        home, and once that home retires, the mirror branch (drop-root, non-concern-split) resolves
+        each to its real per-module test home instead of the flat tests/test_ducklake_<stem>.py a
+        removed special-case would wrongly produce."""
         source = ROOT / "src" / "common" / f"{stem}.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_ducklake_runtime.py"
+        assert result == ROOT / "tests" / "common" / f"test_{stem}.py"
+
+    def test_maps_ducklake_neon_smoke_test_to_concern_split_package(self) -> None:
+        """scripts/ducklake_neon_smoke_test.py maps to the tests/ducklake_neon_smoke_test/
+        concern-split package (rec-2709 Wave 7: "test_ducklake_neon_smoke_test.py" retired from
+        _RETIRING_GRANDFATHER_HOMES, and scripts/ducklake_neon_smoke_test.py is a declared
+        _CONCERN_SPLIT_TEST_PACKAGES entry, already seeded before this wave)."""
+        source = ROOT / "scripts" / "ducklake_neon_smoke_test.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "ducklake_neon_smoke_test"
 
     def test_maps_ducklake_writer_smoke_actions_to_test_ducklake_writer_handler(self) -> None:
         """src/lambdas/ducklake_writer/smoke_actions.py maps to tests/test_ducklake_writer_handler.py
