@@ -1,0 +1,653 @@
+schema_version: 1
+slug: sloc-ducklake-handler-tests
+intent: >-
+  Decompose the TWO oversized ducklake Lambda-handler test monoliths --
+  tests/test_ducklake_maintenance_handler.py (758) and tests/test_ducklake_writer_handler.py (671)
+  -- into two concern-split test PACKAGES (tests/lambdas/ducklake_maintenance/handler/ and
+  tests/lambdas/ducklake_writer/handler/), each a set of cohesive test_<concern>.py modules < 500
+  SLOC, then retire the two grandfather homes and delete their two config/sloc_budgets.yaml lines --
+  rec-2709 Wave 8 of the Decision 131 mirror-convention rollout. Each home's REAL source is a single
+  src/lambdas/<slug>/handler.py (basename<->source mismatch: the parent-qualified RS-08 rule keys the
+  test home off the slug dir, not the file stem), so each is a genuine CONCERN-SPLIT of one module.
+  Purpose: keep every test file small enough for lower-tier model comprehension (the load-bearing
+  reason the 500-SLOC gate exists, Decision 128). Behaviour-preserving pure MOVE; handler source is
+  never touched; no Lambda build/deploy/smoke-test (compute_affected_artifacts of the changed tests/
+  files is {} -- confirmed).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-ducklake-handler-tests.yaml
+phase: >-
+  rec-2709 Wave 8 (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (AGENTS.md Decision 128). Behaviour-preserving test MOVE of two src/lambdas/*/
+  handler.py grandfather homes. No product-roadmap phase; platform tooling only.
+scope:
+  - file: tests/lambdas/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the NEW tests/lambdas/ mirror tree (prepend import mode; empty file).
+      tests/lambdas/ does not yet exist -- this is its root.
+  - file: tests/lambdas/ducklake_maintenance/__init__.py
+    action: Create
+    purpose: Package marker for the ducklake_maintenance lambda mirror subtree (prepend import mode; empty).
+  - file: tests/lambdas/ducklake_maintenance/handler/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the src/lambdas/ducklake_maintenance/handler.py concern-split package
+      (prepend import mode; empty). This is the directory the mirror machinery computes for that
+      source once its home retires (tests/lambdas/ducklake_maintenance/handler/);
+      check_test_file_exists accepts it once it holds >=1 test_*.py.
+  - file: tests/fixtures/ducklake_maintenance_handler.py
+    action: Create
+    purpose: >-
+      Shared plain-helper module for the maintenance package (guard-exempt: names never start with
+      test_). Hoists VERBATIM the module-level surfaces shared across >1 split module: the FakeCon
+      connection-double class, the _response_body(r) helper, and the _FULL_DSN fixture dict. Extends
+      the existing tests/fixtures/ package. No synthetic sys.modules loader is needed -- the monolith
+      imports src.lambdas.ducklake_maintenance.handler as a REAL module and patches real dotted paths
+      (patch.object(h, ...), patch.object(h.rt, ...)); there is no synthetic-name patch target.
+  - file: tests/lambdas/ducklake_maintenance/handler/test_dispatch.py
+    action: Create
+    purpose: >-
+      Envelope + handler dispatch + handler error mapping concern (VERBATIM): test_parse_event_body_string,
+      test_parse_event_body_dict, test_parse_event_body_empty_string, test_parse_event_direct_dict,
+      test_parse_event_non_dict, test_response_envelope, test_handler_unknown_action,
+      test_handler_missing_action, test_handler_lists_known_actions, test_handler_lists_new_operational_actions,
+      test_handler_maintenance_error_maps_to_500, test_handler_version_mismatch_maps_to_500,
+      test_handler_runtime_error_maps_to_500, test_handler_connection_closed_on_success,
+      test_handler_connection_closed_on_error, test_handler_breaker_probe_via_handler_returns_500,
+      test_handler_catalog_dr_error_maps_to_500. Fresh header: json, MagicMock, patch, pytest,
+      `import src.lambdas.ducklake_maintenance.handler as h`, the three DuckLake* error classes it
+      references, `pytestmark = pytest.mark.unit`, and `_response_body` from the fixtures helper. ~200 SLOC.
+  - file: tests/lambdas/ducklake_maintenance/handler/test_maintenance_actions.py
+    action: Create
+    purpose: >-
+      Core maintenance primitives concern (VERBATIM): action_merge (_merge_con local helper +
+      test_action_merge_ok, test_action_merge_force_recreate_calls_create_tables,
+      test_action_merge_no_force_skips_create_tables, test_action_merge_emits_metrics); action_gc
+      (_gc_con local helper + test_action_gc_ok, test_action_gc_force_file_fraction,
+      test_action_gc_force_byte_budget, test_action_gc_emits_metrics); breaker_probe
+      (test_action_breaker_probe_raises_when_files_present, test_action_breaker_probe_returns_ok_when_no_deletable_files,
+      test_action_breaker_probe_does_not_emit_metric_directly, test_handler_breaker_probe_emits_metric_exactly_once);
+      hot_merge (_hot_merge_con local helper + test_action_hot_merge_ok, test_action_hot_merge_no_destructive_dispatch,
+      test_action_hot_merge_emits_metrics, test_action_hot_merge_force_recreate, test_handler_hot_merge_dispatch);
+      env-thresholds (test_env_gc_breaker_file_fraction_passed_to_run_gc, test_env_gc_breaker_bytes_passed_to_run_gc --
+      both use importlib.reload(h) and _gc_con). Header imports FakeCon + `pytestmark = pytest.mark.unit`;
+      _merge_con/_gc_con/_hot_merge_con stay LOCAL (co-located with their owning concern; each returns FakeCon(...)).
+      ~330 SLOC.
+  - file: tests/lambdas/ducklake_maintenance/handler/test_operational_actions.py
+    action: Create
+    purpose: >-
+      T2.19 operational actions concern (VERBATIM): catalog_reinit (test_catalog_reinit_drops_then_reattaches,
+      test_catalog_reinit_requires_s3_data_path, test_catalog_reinit_rejects_bad_meta_schema,
+      test_catalog_reinit_requires_explicit_meta_schema, test_catalog_reinit_requires_matching_confirm);
+      restore_drill (_restore_drill_patches local helper + test_restore_drill_ok,
+      test_restore_drill_probe_lost_loud_fails, test_restore_drill_pg_dump_failure_loud_fails);
+      test_handler_connectionless_action_skips_open_connection; merge_ops (test_action_merge_ops_requires_data_path,
+      test_action_merge_ops_requires_s3_data_path, test_action_merge_ops_requires_meta_schema,
+      test_action_merge_ops_no_tables_discovered, test_action_merge_ops_discovers_and_merges_tables,
+      test_action_merge_ops_covers_ops_recommendations_and_ops_decisions, test_action_merge_ops_emits_metrics,
+      test_action_merge_ops_handler_does_not_open_smoke_connection, test_action_merge_ops_no_destructive_primitives,
+      test_handler_merge_ops_listed_in_actions); catalog_stats (test_action_catalog_stats_success,
+      test_action_catalog_stats_requires_meta_schema, test_action_catalog_stats_is_connectionless_and_attach_free,
+      test_handler_catalog_stats_listed_in_actions). Header imports MagicMock, patch, pytest, h, DuckLakeRuntimeError,
+      `_FULL_DSN` from fixtures, `pytestmark = pytest.mark.unit`; _restore_drill_patches stays LOCAL. ~230 SLOC.
+  - file: tests/lambdas/ducklake_maintenance/handler/test_clone_catalog.py
+    action: Create
+    purpose: >-
+      OQ.12 clone_catalog canary-rehearsal concern (VERBATIM): the module-level _BRANCH_HOST and
+      _PROD_DATA_PATH constants + the _clone_catalog_branch_patches helper (which defines a NESTED
+      local _FakeCon class -- moves verbatim inside the helper) + test_action_clone_catalog_happy_path,
+      test_action_clone_catalog_branch_dsn_inherits_prod_credentials,
+      test_action_clone_catalog_missing_branch_host_loud_fails, test_action_clone_catalog_missing_data_path_loud_fails,
+      test_action_clone_catalog_invalid_data_path_loud_fails, test_action_clone_catalog_empty_schemata_loud_fails,
+      test_action_clone_catalog_attach_failure_loud_fails, test_action_clone_catalog_no_pg_dump_no_pg_restore,
+      test_action_clone_catalog_is_connectionless, test_action_clone_catalog_listed_in_actions. Header imports
+      patch, pytest, h, `_FULL_DSN` from fixtures, `pytestmark = pytest.mark.unit`. Split out from the ops
+      module for cohesion + headroom (clone is a distinct Decision-100 canary surface). ~135 SLOC.
+  - file: tests/lambdas/ducklake_writer/__init__.py
+    action: Create
+    purpose: Package marker for the ducklake_writer lambda mirror subtree (prepend import mode; empty).
+  - file: tests/lambdas/ducklake_writer/handler/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the src/lambdas/ducklake_writer/handler.py concern-split package (prepend
+      import mode; empty). Directory the mirror machinery computes for that source once retired
+      (tests/lambdas/ducklake_writer/handler/).
+  - file: tests/lambdas/ducklake_writer/handler/conftest.py
+    action: Create
+    purpose: >-
+      Package conftest hoisting the module-level autouse fixture `_reset_warm_connection` VERBATIM
+      (it calls rt.reset_warm_connection() before/after every test so the per-container warm-connection
+      global never leaks between tests -- D2). It is a FIXTURE -> conftest, NOT tests/fixtures/. Imports
+      `from src.common import ducklake_runtime as rt`. Layers UNDER root tests/conftest.py without
+      redeclaring the global recursion/socket/env-clearing autouse fixtures. (The maintenance package
+      needs NO conftest -- its monolith defines zero module-level fixtures, confirmed by grep.)
+  - file: tests/fixtures/ducklake_writer_handler.py
+    action: Create
+    purpose: >-
+      Shared plain-helper module for the writer package (guard-exempt). Hoists VERBATIM the surfaces
+      shared across >1 split module: the writer's FakeCon connection-double (records executed SQL;
+      canned fetchone by substring) and the _result(**kw) helper (builds a rt.WriteResult). Imports
+      datetime/timezone + `from src.common import ducklake_runtime as rt` (for WriteResult). NOTE: this
+      writer FakeCon differs from the maintenance FakeCon -- keeping them in SEPARATE fixture modules
+      avoids any name collision. The _churn_result helper stays LOCAL to test_churn.py (single-module use).
+  - file: tests/lambdas/ducklake_writer/handler/test_envelope_dispatch.py
+    action: Create
+    purpose: >-
+      Envelope + core handler dispatch + error mapping concern (VERBATIM): test_parse_event_body_string,
+      test_parse_event_body_dict, test_parse_event_body_empty_string, test_parse_event_direct_dict,
+      test_parse_event_non_dict, test_response_envelope, test_handler_unknown_action, test_handler_attach_check,
+      test_handler_create_tables, test_handler_write, test_handler_write_with_force_recreate,
+      test_handler_idempotency_probe, test_handler_partition_probe, test_handler_inlining_probe,
+      test_handler_loudfail_probe, test_loudfail_probe_reports_not_raised_when_gates_broken,
+      test_handler_schema_gate_error_maps_422, test_handler_occ_exhausted_maps_503,
+      test_handler_version_mismatch_maps_500, test_handler_runtime_error_maps_500,
+      test_handler_status_transition_error_maps_422. Header: json, types, datetime/timezone,
+      `import src.lambdas.ducklake_writer.handler as h`, `from src.common import ducklake_runtime as rt`,
+      `from src.common.ducklake_version import pinned_duckdb_version`,
+      `from src.lambdas.ducklake_writer import smoke_actions`, FakeCon + _result from fixtures,
+      `pytestmark = pytest.mark.unit`. ~250 SLOC.
+  - file: tests/lambdas/ducklake_writer/handler/test_churn.py
+    action: Create
+    purpose: >-
+      Churn / concurrency-probe / colliding-connection concern (VERBATIM): _churn_result local helper +
+      test_handler_churn, test_handler_churn_single_normal, test_handler_churn_single_setup,
+      test_churn_one_single_write, test_churn_one_single_write_occ, test_churn_one_writer,
+      test_churn_one_writer_counts_occ, test_churn_constants_imported_from_runtime, test_frozen_creds,
+      test_p95, test_concurrency_probe_success, test_concurrency_probe_runtime_error_is_handled,
+      test_concurrency_probe_hard_error_false, test_always_colliding_raises_on_merge,
+      test_always_colliding_delegates_non_merge. **HEAVY-DEP MARKER MODULE**: test_frozen_creds does a
+      lazy `import boto3` inside its body -> this module MUST carry a module-level `import boto3  # noqa: F401`
+      marker (convergence_health precedent) so scripts/checks/_scaffolding.py's fast-tier collectability
+      partition PROACTIVELY defers it to the full tier (boto3 excluded from requirements-fast.txt). Keep the
+      verbatim lazy in-test `import boto3` too. Header: json, types, h, rt, smoke_actions, FakeCon + _result
+      from fixtures, boto3 marker, `pytestmark = pytest.mark.unit`; _churn_result LOCAL. ~200 SLOC.
+  - file: tests/lambdas/ducklake_writer/handler/test_metadata_helpers.py
+    action: Create
+    purpose: >-
+      Metadata-count helpers + describe verb-schema + open-writer-connection concern (VERBATIM):
+      test_count_files_success, test_count_files_swallows_error, test_count_files_for_predicate_success,
+      test_count_files_for_predicate_fallback, test_count_inlined_rows_success, test_count_inlined_rows_swallows_error,
+      test_action_describe_returns_write_verb_schema, test_describe_in_connectionless_actions,
+      test_handler_describe_end_to_end, test_describe_write_verbs_covers_every_registered_verb (parametrized over
+      sorted(rt.VERB_REGISTRY)), test_open_writer_connection. Header: json, pytest, h, rt, FakeCon from fixtures,
+      `pytestmark = pytest.mark.unit`. ~120 SLOC.
+  - file: tests/lambdas/ducklake_writer/handler/test_ops_actions.py
+    action: Create
+    purpose: >-
+      T2.19 production ops verbs + connect_probe concern (VERBATIM): test_action_write_ops_dispatches_to_runtime,
+      test_action_update_ops_sets_require_exists, test_action_create_ops_tables,
+      test_action_create_ops_tables_force_requires_confirm, test_action_create_ops_tables_plain_create_needs_no_confirm,
+      test_action_file_ops, test_action_file_ops_rejects_bad_idempotency_ulid,
+      test_action_file_ops_without_idempotency_mints_identity, test_require_ops_table_rejects_unknown,
+      test_require_ops_table_rejects_non_string, test_handler_write_ops_unknown_table_returns_400,
+      test_handler_update_ops_referential_returns_409, test_action_create_ops_tables_caller_keyspace_skips_counter,
+      test_action_file_ops_rejects_caller_keyspace_table, test_action_write_ops_append_only_table,
+      test_handler_reopens_on_dead_connection_and_retries, test_handler_reset_warm_connection,
+      test_handler_connect_probe_runs_without_connection, test_handler_connect_probe_success,
+      test_connect_probe_in_connectionless_actions. The connect_probe tests do a lazy first-party
+      `import src.common.ducklake_connect_probe as p` and file_ops tests a lazy first-party
+      `from src.common.ducklake_scd2_schema import WriteResult` -- NEITHER is a heavy dep, so NO marker
+      (preserve the monolith's no-marker state). Header: json, pytest, h, rt, FakeCon + _result from fixtures,
+      `pytestmark = pytest.mark.unit`. ~230 SLOC.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      The surgical flip (FINAL commit only), THREE edits. Edit A -- DELETE exactly two basename lines from
+      _RETIRING_GRANDFATHER_HOMES: "test_ducklake_maintenance_handler.py", "test_ducklake_writer_handler.py".
+      Edit B -- ADD exactly two repo-relative POSIX source paths to the _CONCERN_SPLIT_TEST_PACKAGES frozenset:
+      "src/lambdas/ducklake_maintenance/handler.py", "src/lambdas/ducklake_writer/handler.py". Edit C
+      (REQUIRED correctness fix -- see context "SMOKE_ACTIONS WRINKLE"): route the ducklake_writer sibling
+      src/lambdas/ducklake_writer/smoke_actions.py to the SAME concern-split package dir as its handler.py.
+      In map_source_to_test, restructure the existing _ALL_MIRROR_TARGET_HOMES branch to compute rel_name once
+      (hoist the try/except out of the validate-only nesting) and add ONE guarded return -- mirroring the
+      _ORCHESTRATION_SCAFFOLDING_FILES precedent -- BEFORE the `return _mirror_source_to_test(source_path)`:
+      `if home.name == "test_ducklake_writer_handler.py" and rel_name == "smoke_actions.py": return ROOT /
+      "tests" / "lambdas" / "ducklake_writer" / "handler"`. Add a one-line `#` COMMENT (not docstring -- SLOC)
+      above it. Do NOT add a new module-level constant (SLOC headroom is tight: 472/500). Do NOT touch
+      _grandfathered_source_to_test, _NESTED_SUBPACKAGE_TEST_PREFIX, _ALL_MIRROR_TARGET_HOMES,
+      _DUCKLAKE_RUNTIME_SPLIT_MODULES, or any other home. Verify the file stays < 500 SLOC after the edit.
+  - file: tests/test_coverage_checker_map.py
+    action: Modify
+    purpose: >-
+      Map oracle (FINAL commit). (1) Add the import `_RETIRING_GRANDFATHER_HOMES` to the existing
+      `from tests.fixtures.coverage_checker_module import ...` line. (2) MODIFY
+      test_ducklake_writer_handler_py_maps_to_parent_qualified_test -> assert
+      src/lambdas/ducklake_writer/handler.py resolves to ROOT/"tests"/"lambdas"/"ducklake_writer"/"handler"
+      (concern-split package DIR; rename to test_maps_ducklake_writer_handler_to_concern_split_package,
+      update docstring to cite rec-2709 Wave 8). (3) ADD test_maps_ducklake_maintenance_handler_to_concern_split_package
+      asserting src/lambdas/ducklake_maintenance/handler.py -> ROOT/"tests"/"lambdas"/"ducklake_maintenance"/"handler".
+      (4) MODIFY test_maps_ducklake_writer_smoke_actions_to_test_ducklake_writer_handler -> assert
+      smoke_actions.py resolves to the SAME ROOT/"tests"/"lambdas"/"ducklake_writer"/"handler" package (rename to
+      test_maps_ducklake_writer_smoke_actions_to_handler_concern_split_package; docstring cites Edit C /
+      _ORCHESTRATION_SCAFFOLDING_FILES precedent). (5) REDESIGN
+      test_all_lambda_handlers_map_to_distinct_existing_parent_qualified_tests (growth-safe): for each
+      src/lambdas/*/handler.py, if its flat home basename is in _ALL_MIRROR_TARGET_HOMES AND NOT in
+      _RETIRING_GRANDFATHER_HOMES expect the concern-split package dir tests/lambdas/<slug>/handler (dir with
+      >=1 test_*.py); else expect the flat tests/test_<slug>_handler.py (is_file). Keep the distinctness +
+      no-test_handler.py-shim asserts; keep the "smoke_actions shares ducklake_writer's home" assert (now the
+      package dir). LEAVE test_other_lambda_dirs_get_their_own_parent_qualified_test (ducklake_reader,
+      still-grandfathered off-roster) UNCHANGED.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete EXACTLY two lines by hand (FINAL commit): "  tests/test_ducklake_maintenance_handler.py: 758  #
+      raise-approved: ..." and "  tests/test_ducklake_writer_handler.py: 671  # raise-approved: ...". NEVER run
+      --update-sloc-budgets (it strips the dec-130 markers on the other grandfathered entries and may auto-seed).
+      HARD invariant: this file loses exactly those two lines and nothing else. Ratchet-DOWN removals (Decision
+      130/102), always unrestricted; add NO raise marker and NO new tests/ budget entry (Decision 128).
+  - file: tests/test_ducklake_maintenance_handler.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/lambdas/ducklake_maintenance/handler/. Deleted WHOLE in the FINAL commit only
+      (kept 100% intact through every prior commit -- the real module is imported by real name, no synthetic
+      sys.modules loader, so there is no dual-loader risk; keeping it intact preserves the id-preservation
+      baseline until the flip).
+  - file: tests/test_ducklake_writer_handler.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/lambdas/ducklake_writer/handler/. Deleted WHOLE in the FINAL commit only.
+      Real-module import (no synthetic loader) -> no dual-loader risk.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation (per file): the set of pytest node ids (function name, module-path stripped)
+    collected from each new package (tests/lambdas/ducklake_maintenance/handler,
+    tests/lambdas/ducklake_writer/handler) equals the pre-move set from the corresponding monolith. Both
+    monoliths are entirely module-level test functions (no test classes; FakeCon is a non-collected helper),
+    so the id set is the flat function-name set. PURE move -- NO rename, NO class-split (no file exceeds 500
+    SLOC); the diff MUST be EMPTY for both files.
+  - >-
+    bin/venv-python -m scripts.validate --pre exits 0: SLOC gate green (every new module < 500 SLOC and < 20 CC,
+    none registered in config/sloc_budgets.yaml; scripts/test_coverage_checker.py stays < 500 SLOC after Edit
+    A/B/C); no-cross-test-import guard green; collectability green (test_churn.py proactively deferred by its
+    module-level boto3 marker).
+  - >-
+    bin/venv-python -m pytest tests/lambdas/ducklake_maintenance/handler tests/lambdas/ducklake_writer/handler -q
+    passes with the same total test count as the two pre-move baselines summed.
+  - >-
+    git diff origin/main -- config/sloc_budgets.yaml shows ONLY the two lines removed
+    (test_ducklake_maintenance_handler.py 758, test_ducklake_writer_handler.py 671) with their dec-130 markers;
+    every other entry byte-identical; zero added lines.
+  - >-
+    map_source_to_test spot-checks (asserted by the updated map oracle): src/lambdas/ducklake_maintenance/handler.py
+    -> tests/lambdas/ducklake_maintenance/handler; src/lambdas/ducklake_writer/handler.py ->
+    tests/lambdas/ducklake_writer/handler; src/lambdas/ducklake_writer/smoke_actions.py ->
+    tests/lambdas/ducklake_writer/handler (shares the handler package via Edit C). Off-roster sibling stays
+    grandfathered: src/lambdas/ducklake_reader/handler.py -> tests/test_ducklake_reader_handler.py (flat).
+  - >-
+    Retirement is proven by the two coverage-checker oracle files, NOT by a literal-basename grep:
+    _RETIRING_GRANDFATHER_HOMES no longer contains the two basenames (grandfather oracle
+    test_retirement_state_matches_the_tests_tree derives this from the tree -- both monoliths deleted ->
+    both homes must be absent from _RETIRING) and STILL contains every other roster home;
+    _ALL_MIRROR_TARGET_HOMES (frozenset, 24 entries) unchanged with both basenames still present;
+    "src/lambdas/ducklake_maintenance/handler.py" and "src/lambdas/ducklake_writer/handler.py" are present in
+    _CONCERN_SPLIT_TEST_PACKAGES; _NESTED_SUBPACKAGE_TEST_PREFIX untouched.
+  - >-
+    Heavy-dep marker audit: tests/lambdas/ducklake_writer/handler/test_churn.py carries a module-level
+    `import boto3  # noqa: F401` marker; NO other new module (maintenance = zero heavy tokens; writer envelope/
+    metadata/ops = zero) references boto3/botocore/duckdb/requests/pandas/numpy/pyarrow/psycopg2/awswrangler/
+    aiohttp/pyiceberg at module, lazy, or patch-string scope.
+  - >-
+    Coverage preserved for BOTH writer source files: pytest tests/lambdas/ducklake_writer/handler with
+    --cov=src/lambdas/ducklake_writer/handler and --cov=src/lambdas/ducklake_writer/smoke_actions reports 100%
+    for each (the package covers handler.py AND its re-exported smoke_actions.py, exactly as the monolith did).
+  - >-
+    Every new test module is < 500 SLOC (validate_sloc_limits counting) and < 20 CC; NO new config/sloc_budgets.yaml
+    entry; the two monoliths are deleted; whole-suite collection is clean.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Capture the BEFORE test-id baseline for both monoliths (run while they are still intact -- before the
+      FINAL commit deletes them). Both are flat module-level functions, so the id is the bare function name.
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      for m in test_ducklake_maintenance_handler test_ducklake_writer_handler; do bin/venv-python -m pytest
+      tests/$m.py --collect-only -q 2>/dev/null | grep '::' | sed -E 's#^[^:]+::#FN::#' | sort -u
+      > $S/before_$m.txt; echo "$m: $(wc -l < $S/before_$m.txt) ids"; done
+    expected: A non-empty sorted function-id baseline for each of the two files.
+    fix_if: If either collection errors, that monolith has a pre-existing import/collection problem -- fix before decomposing.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Collect the AFTER id set from each new package and assert a byte-identical diff against the matching baseline.
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      for pair in "test_ducklake_maintenance_handler:lambdas/ducklake_maintenance/handler"
+      "test_ducklake_writer_handler:lambdas/ducklake_writer/handler"; do m=${pair%%:*}; d=${pair##*:};
+      bin/venv-python -m pytest tests/$d --collect-only -q 2>/dev/null | grep '::' | sed -E 's#^[^:]+::#FN::#'
+      | sort -u > $S/after_$m.txt; echo "== $m =="; diff $S/before_$m.txt $S/after_$m.txt && echo "$m EMPTY-DIFF-OK"; done
+    expected: Empty diff for both (identical function-id sets). No sanctioned delta -- pure move, no renames/splits.
+    fix_if: Any added/removed id means a function was dropped, duplicated, mis-copied, or renamed. STOP and reconcile.
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Run the authoritative fast presubmit tier -- proves SLOC gate, no-cross-test-import guard, collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No SLOC-limit failure, no cross-test-import failure, no collection error.
+    fix_if: >-
+      A >=500 unregistered module (rebalance -- e.g. split test_maintenance_actions.py or test_operational_actions.py
+      further); a checker >500 (tighten Edit C -- it must be net ~+1 SLOC, use a # comment not a docstring line, add no
+      new constant); a cross-test import (a helper leaked between test_* modules -> move to tests/fixtures/ or the
+      writer conftest); a collection error (fix a fresh import header, or the boto3 marker on test_churn.py).
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full scoped pass of both new packages at the summed baseline count.
+    command: bin/venv-python -m pytest tests/lambdas/ducklake_maintenance/handler tests/lambdas/ducklake_writer/handler -q
+    expected: All pass; total selected count equals the sum of the two step-1 baselines.
+    fix_if: >-
+      A failure means a patch target or fixture did not survive the move -- most likely the writer
+      _reset_warm_connection autouse fixture (must be in the package conftest, applying to all four writer modules),
+      a FakeCon/_result import (writer) or FakeCon/_response_body/_FULL_DSN import (maintenance), or a local con-helper
+      (_merge_con/_gc_con/_hot_merge_con/_restore_drill_patches/_clone_catalog_branch_patches) that was not co-located
+      with its owning tests.
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Assert config/sloc_budgets.yaml lost exactly the two target lines and nothing else.
+    command: git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly two removed lines (tests/test_ducklake_maintenance_handler.py 758,
+      tests/test_ducklake_writer_handler.py 671, each with its dec-130 raise-approved marker) and zero added lines.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was touched.
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Prove the retired + surgical mapping (and the smoke_actions Edit C) via BOTH coverage-checker oracle files. This
+      is the authoritative retirement check -- do NOT add a literal `grep -q '"test_ducklake_writer_handler.py"'
+      scripts/test_coverage_checker.py` step: it ALWAYS fails because the basename legitimately persists in
+      _ALL_MIRROR_TARGET_HOMES. The grandfather oracle's tree-derived test IS the _RETIRING membership check.
+    command: bin/venv-python -m pytest tests/test_coverage_checker_map.py tests/test_coverage_checker_grandfather.py -q
+    expected: >-
+      All pass, including: the two handlers -> their concern-split package dirs; smoke_actions.py -> the SAME
+      ducklake_writer/handler package; ducklake_reader still flat-grandfathered; the redesigned
+      test_all_lambda_handlers_...; grandfather test_retirement_state_matches_the_tests_tree green (both homes
+      absent from _RETIRING and both flat monoliths deleted); test_roster_is_the_24_known_basenames unchanged.
+    fix_if: >-
+      A failing map oracle means the flip/Edit-C is wrong (a handler path mis-declared in _CONCERN_SPLIT, or the
+      smoke_actions branch missing/mis-targeted). A failing grandfather test_retirement_state_matches_the_tests_tree
+      means the _RETIRING deletion and the monolith deletion did not land together in the same (FINAL) commit --
+      they MUST be atomic. Correct the map edit or the oracle expectation to match.
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Confirm both monoliths are gone, both new package dirs exist and are populated, and a control
+      still-grandfathered off-roster sibling home is untouched (no over-reach).
+    command: >-
+      test ! -f tests/test_ducklake_maintenance_handler.py && test ! -f tests/test_ducklake_writer_handler.py &&
+      ls tests/lambdas/ducklake_maintenance/handler/test_*.py >/dev/null &&
+      ls tests/lambdas/ducklake_writer/handler/test_*.py >/dev/null &&
+      test -f tests/test_ducklake_reader_handler.py; echo "RETIRED-RC=$?"
+    expected: >-
+      RETIRED-RC=0 (both monoliths deleted, both package dirs hold >=1 test_*.py, and the off-roster
+      ducklake_reader flat home still present -- proving no over-reach into the parent-qualified rule).
+    fix_if: If a monolith survives, a package dir is empty, or the ducklake_reader home was removed, the FINAL commit is wrong.
+  - step: 8
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Heavy-dep marker audit -- confirm the single boto3 marker exists and no other new module references a heavy dep.
+    command: >-
+      grep -n 'import boto3' tests/lambdas/ducklake_writer/handler/test_churn.py &&
+      ! grep -rnE 'boto3|botocore|duckdb|requests|pandas|numpy|pyarrow|psycopg2|awswrangler|aiohttp|pyiceberg'
+      tests/lambdas/ducklake_maintenance/handler
+      $(ls tests/lambdas/ducklake_writer/handler/*.py | grep -v 'test_churn.py'); echo "MARKER-RC=$?"
+    expected: >-
+      test_churn.py shows the module-level `import boto3` marker; MARKER-RC=0 (no heavy-dep token in any other new
+      maintenance or writer module -- the connect_probe/file_ops lazy imports are first-party, not heavy deps).
+    fix_if: >-
+      A heavy-dep token in another new module means a test carrying it was mis-grouped -- move the module-level marker
+      onto that module (convergence_health pattern) or regroup so the heavy-dep test lands only in test_churn.py.
+  - step: 9
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Coverage preservation for both writer source files -- pytest the writer package with per-file --cov for
+      handler.py AND smoke_actions.py (Edit C routes both to this package; the move must keep each at 100%).
+    command: >-
+      bin/venv-python -m pytest tests/lambdas/ducklake_writer/handler
+      --cov=src/lambdas/ducklake_writer/handler --cov=src/lambdas/ducklake_writer/smoke_actions
+      --cov-report=term-missing -q
+    expected: Both src/lambdas/ducklake_writer/handler.py and .../smoke_actions.py report 100% line coverage.
+    fix_if: >-
+      < 100% for handler.py means a dispatch/error-mapping test was dropped; < 100% for smoke_actions.py means a
+      churn/probe test that exercised the re-exported smoke_actions internals was dropped or mis-grouped. STOP and
+      reconcile against the step-2 id diff (a genuine pure move preserves both at 100%).
+  - step: 10
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Whole-suite collection smoke -- no import/collection error anywhere from the move.
+    command: bin/venv-python -m pytest tests/ --collect-only -q
+    expected: >-
+      Clean collection; no ImportError/collection error from the two new packages, the two shared fixture helpers,
+      the writer conftest, the deleted monoliths, or the oracle edits. (test_churn.py may be deferred in the fast
+      tier by its boto3 marker; under the full local toolchain it collects and test_frozen_creds runs.)
+    fix_if: A collection error means a dangling reference to a deleted monolith or a broken import header in a new module.
+constraints:
+  - >-
+    Pure behaviour-preserving MOVE. Copy every test function body and every in-function/nested helper VERBATIM
+    with its owner. Author a fresh per-file import header importing exactly the symbols each file references -- no
+    test-logic edits, no renames, no splits (no file exceeds 500 SLOC, so no class/function split is needed).
+    Replicate `pytestmark = pytest.mark.unit` at module scope in EVERY new test module (both monoliths carry it).
+  - >-
+    maintenance (SIMPLEST -- no synthetic loader, no conftest): each new module imports the REAL module
+    (`import src.lambdas.ducklake_maintenance.handler as h`); patch targets stay real dotted attrs
+    (patch.object(h, ...), patch.object(h.rt, ...), patch.dict(h._ACTIONS, ...)). Hoist FakeCon + _response_body +
+    _FULL_DSN to tests/fixtures/ducklake_maintenance_handler.py; keep the per-concern con-builders
+    (_merge_con/_gc_con/_hot_merge_con) and _restore_drill_patches / _clone_catalog_branch_patches (+ its nested
+    _FakeCon) LOCAL to their owning module.
+  - >-
+    writer (synthetic loader NOT needed -- real-module import): each module imports
+    `import src.lambdas.ducklake_writer.handler as h`, `from src.common import ducklake_runtime as rt`, and
+    `from src.lambdas.ducklake_writer import smoke_actions` where referenced; patch targets stay real dotted attrs
+    (patch/monkeypatch on h.*, rt.*, smoke_actions.*). Hoist the autouse `_reset_warm_connection` fixture to
+    tests/lambdas/ducklake_writer/handler/conftest.py; hoist FakeCon + _result to
+    tests/fixtures/ducklake_writer_handler.py; keep _churn_result LOCAL to test_churn.py.
+  - >-
+    FAST-TIER HEAVY-DEP MARKER (recurring CI-only failure -- local --pre CANNOT catch it, deps present locally):
+    only tests/lambdas/ducklake_writer/handler/test_churn.py references a heavy dep (lazy `import boto3` in
+    test_frozen_creds) -> give it a module-level `import boto3  # noqa: F401` and keep the verbatim lazy in-test
+    import. The maintenance monolith references ZERO heavy-dep tokens (confirmed by grep) and the writer's other
+    modules reference none (connect_probe/file_ops lazy imports are FIRST-PARTY src.common.* modules, not heavy
+    deps) -> expect ZERO markers there. Do NOT add a marker where no reference exists.
+  - >-
+    scripts/test_coverage_checker.py is at 472/500 SLOC -- only 28 headroom. Edit C MUST be minimal: restructure the
+    _ALL_MIRROR_TARGET_HOMES branch to compute rel_name once, add ONE guarded return for smoke_actions, use a `#`
+    comment (excluded from SLOC) not an expanded docstring (docstring lines COUNT as SLOC), and add NO new
+    module-level constant. Verify < 500 SLOC post-edit (VP step 3). Keep map_source_to_test under CC-20 (Decision 43).
+  - >-
+    Surgical retirement: remove ONLY the two basenames from _RETIRING_GRANDFATHER_HOMES; add ONLY the two handler
+    source paths to _CONCERN_SPLIT_TEST_PACKAGES; add ONLY the one smoke_actions special-case (Edit C). Do NOT touch
+    _NESTED_SUBPACKAGE_TEST_PREFIX, _ALL_MIRROR_TARGET_HOMES, _DUCKLAKE_RUNTIME_SPLIT_MODULES, or
+    _ORCHESTRATION_SCAFFOLDING_FILES.
+  - >-
+    The grandfather oracle tests/test_coverage_checker_grandfather.py needs ZERO edits -- it was redesigned
+    (rec-2709 oracle-decompose / task #10) to derive retirement state from the tree
+    (test_retirement_state_matches_the_tests_tree), so deleting the two _RETIRING lines AND the two flat monoliths
+    together keeps it green by construction. Its frozen representative sample explicitly forbids per-wave case
+    appends and contains no ducklake-handler case. Do NOT add any case to that file.
+  - >-
+    The _RETIRING deletion + _CONCERN_SPLIT adds + Edit C + the map-oracle edits + the two budget-line deletions +
+    the two monolith deletions ALL land in ONE atomic FINAL commit. The grandfather oracle's tree-derived
+    retirement test fails if the _RETIRING line and its flat file diverge across commits.
+  - >-
+    config/sloc_budgets.yaml loses exactly the two target lines; NEVER run --update-sloc-budgets. Add NO raise
+    marker and NO new tests/ budget entry (Decision 128 -- decompose, not raise).
+  - >-
+    No cross-test imports (validate_no_cross_test_imports active in --pre and full). New modules import only:
+    stdlib, pytest, the real src.lambdas.* / src.common.* modules a test references, and `from tests.fixtures.*
+    import ...`. Never `from tests.lambdas...test_* import ...`.
+  - >-
+    ruff-format import discipline (tests/CLAUDE.md): one consolidated import block per module (never split a
+    module's imports across two blocks -- ruff silently drops the second).
+  - >-
+    Every new mirror directory carries an __init__.py (prepend import mode): tests/lambdas/,
+    tests/lambdas/ducklake_maintenance/, tests/lambdas/ducklake_maintenance/handler/,
+    tests/lambdas/ducklake_writer/, tests/lambdas/ducklake_writer/handler/. tests/lambdas/ is NET-NEW (did not
+    previously exist).
+  - >-
+    Do NOT resolve rec-2709 (Wave 8 of ~14); bundled_recommendations stays empty. This is one wave of the program;
+    the overseer owns branch/PR/CI-green/merge.
+  - >-
+    No rescue agents or workaround loops (Decision 55). On an unrecoverable collect-id mismatch, STOP and RCA --
+    never patch around it. PUBLIC repo -- no AWS account IDs/ARNs/secrets/internal hostnames in any new file
+    (the credential-shaped strings in the writer tests are fake fixtures already carrying `# pragma: allowlist
+    secret` markers -- move them VERBATIM with their markers intact).
+  - Use bin/venv-python for all Python invocations; bash-only shell. Work on the harness claude/... branch, never main.
+context:
+  - >-
+    DECISION ANALYSIS (inline; the OVERSEER is the critique gate for this rec-2709 wave, so no
+    decision-scout/plan-critique sub-subagents were spawned -- mirrors the Wave 3/4/10 precedent). CITE:
+    Decision 131 (test-colocation inverted to a mirror rule + retiring grandfather-table + concern-split package
+    targets + no-cross-test-import guard + per-package conftest hierarchy; amends Decision 104; governs every
+    step); Decision 130 (whole-repo structural-size governance + the 24-home one-time grandfather of tests/ SLOC
+    debt + the dec-130 markers -- governs the two ratchet-DOWN budget-line deletions); Decision 128 (SLOC
+    budget-raise guardrails: decompose by default; this wave adds ZERO budget lines / ZERO raise markers);
+    Decision 124 (scripts/executor/** and scripts/ops_portal/** deliberately map to None -- unperturbed);
+    Decision 132 (verification-step graduation dispositions -- every pre-deploy VP step carries
+    graduation: not-applicable, since each is a one-off pure-move check, not a kernel-expressible standing guard);
+    Decision 79 (per-Lambda deploy gating -- compute_affected_artifacts of the changed tests/ files is {}, so NO
+    build/deploy/smoke-test/model-ID steps; handler SOURCE is untouched). RELATED: Decision 80/104 (facade /
+    concern-split precedent -- exactly Wave 3's tests/ops_data_portal/ and Wave 4's tests/session/preflight/);
+    Decision 100 (clone_catalog Neon-branch canary -- the clone tests being moved); Decision 43/102 (CC-20 and
+    500-SLOC limits, incl. the coverage-checker's own budget).
+  - >-
+    gates: overseer-as-critique-gate (rec-2709 program); decision-scout=inline-analysis (NO_FLAGS by inspection --
+    this is a mechanical test-move fully governed by Decisions 131/130/128); plan-critique=overseer-reviewed. No
+    decision contradiction: the wave adds no budget line, retires two, and touches no product/strategy surface.
+  - >-
+    BASENAME<->SOURCE MISMATCH (verified). Neither home's basename matches a real source stem: the RS-08
+    parent-qualified rule (`_grandfathered_source_to_test`, parts[0]=="src" and len>=4 and parts[1]=="lambdas" ->
+    tests/test_{parts[2]}_handler.py) keys the grandfather home off the parent slug dir. So
+    src/lambdas/ducklake_maintenance/handler.py -> test_ducklake_maintenance_handler.py and
+    src/lambdas/ducklake_writer/handler.py -> test_ducklake_writer_handler.py. There is NO
+    ducklake_maintenance_handler.py / ducklake_writer_handler.py source file. Post-flip (source added to
+    _CONCERN_SPLIT, basename removed from _RETIRING): _mirror_source_to_test computes parts=("src","lambdas",
+    "<slug>","handler.py"), mirror_subdir=lambdas/<slug>, stem="handler", in-concern-split -> PACKAGE DIR
+    tests/lambdas/<slug>/handler (no test_ prefix, no .py). Verified in-memory against the live checker.
+  - >-
+    SMOKE_ACTIONS WRINKLE (the non-obvious correctness issue the recon under-specified -- REQUIRES Edit C).
+    src/lambdas/ducklake_writer/ contains TWO source files: handler.py AND smoke_actions.py (split out of
+    handler.py; handler.py imports+re-exports its functions -- verified `from src.lambdas.ducklake_writer.smoke_actions
+    import (...)`). The RS-08 parent-qualified rule maps BOTH to test_ducklake_writer_handler.py, so retiring that
+    home flips smoke_actions.py too. Without a special-case, smoke_actions.py (NOT in _CONCERN_SPLIT) would flip to
+    the PLAIN per-file mirror tests/lambdas/ducklake_writer/test_smoke_actions.py -- a file this wave does NOT create
+    -> a latent check_test_file_exists break on any future smoke_actions.py change AND a silently-skipped coverage
+    gate (the writer monolith is smoke_actions.py's ONLY coverage source today). Edit C routes smoke_actions.py to
+    the SAME tests/lambdas/ducklake_writer/handler/ package as handler.py (the _ORCHESTRATION_SCAFFOLDING_FILES
+    precedent: scripts/checks/_scaffolding.py/_terraform.py -> tests/validate/). This preserves the current oracle
+    invariant "smoke_actions shares ducklake_writer's home" (now the package dir) and keeps its coverage verifiable
+    (VP step 9). The concern-split package intentionally covers handler.py AND smoke_actions.py together because the
+    monolith's tests are intertwined (dispatch tests patch smoke_actions internals through the handler re-export);
+    splitting coverage by source-of-origin would be a semantic reorganization, not a pure move.
+  - >-
+    ORACLE STATE ON MAIN (verified -- do NOT trust the program's stale "minus_N" language). The grandfather oracle
+    was REDESIGNED (rec-2709 oracle-decompose, task #10): tests/test_coverage_checker.py is GONE; the retiring-count
+    is no longer a hand-edited literal. tests/test_coverage_checker_grandfather.py::TestGrandfatherRetiringTable::
+    test_retirement_state_matches_the_tests_tree derives retirement from disk (a roster home is in _RETIRING IFF its
+    flat monolith exists). Consequence: this wave needs ZERO grandfather-oracle edits -- deleting the two _RETIRING
+    lines and the two flat files together keeps it green. Current _RETIRING on main has 10 entries (14 already
+    retired through Wave 10 + PCD-01); after this wave, 8. All map-oracle moving parts live in
+    tests/test_coverage_checker_map.py (5 edits: 1 import add, 2 modifies, 1 add, 1 redesign) -- see the scope row.
+  - >-
+    CONCERN-SPLIT BREAKDOWN (VERBATIM function -> module; all < 500 SLOC; both monoliths are flat module-level
+    functions with NO test classes). maintenance (758) -> tests/lambdas/ducklake_maintenance/handler/ (4 modules):
+    test_dispatch [envelope + dispatch + error-mapping, ~200]; test_maintenance_actions [merge + gc + breaker_probe
+    + hot_merge + env-thresholds, ~330]; test_operational_actions [catalog_reinit + restore_drill + merge_ops +
+    catalog_stats + connectionless-skip, ~230]; test_clone_catalog [clone_catalog canary, ~135]. writer (671) ->
+    tests/lambdas/ducklake_writer/handler/ (4 modules): test_envelope_dispatch [envelope + core dispatch + error
+    mapping, ~250]; test_churn [churn/probe/colliding-conn -- BOTO3 MARKER, ~200]; test_metadata_helpers [count
+    helpers + describe + open_writer_connection, ~120]; test_ops_actions [T2.19 write/update/create/file_ops +
+    connect_probe, ~230]. Function->module placement is a cohesion/SLOC choice only -- the VP-2 id-preservation diff
+    is the completeness oracle (every id appears exactly once across the union).
+  - >-
+    SHARED-HELPER HOISTING. maintenance: FakeCon (class) + _response_body (func) + _FULL_DSN (dict) ->
+    tests/fixtures/ducklake_maintenance_handler.py (used across >1 module); per-concern con-builders + patch-stack
+    helpers stay LOCAL. writer: _reset_warm_connection (autouse fixture) -> package conftest; FakeCon + _result ->
+    tests/fixtures/ducklake_writer_handler.py; _churn_result stays LOCAL to test_churn.py. The two FakeCon classes
+    are DIFFERENT (maintenance: substring fetchone_map + fetchall; writer: records executed + reset_warm) -> kept in
+    SEPARATE fixture modules, no collision. All hoisted names are guard-exempt (never start with test_; tests/fixtures/
+    is exempt by construction).
+  - >-
+    NO SYNTHETIC sys.modules LOADER for either package (unlike Wave 4's session_preflight / Wave 10's
+    session_postflight). Both monoliths import their handler by REAL name and patch REAL dotted attrs -- there is no
+    `patch("<synthetic_name>.*")` target, so no idempotent importlib singleton is needed and there is no dual-loader
+    (OPEN RISK 1 from Wave 10 does not apply). Keeping each monolith 100% intact until the FINAL commit is purely to
+    preserve the id-preservation baseline.
+  - >-
+    OPEN RISK (oracle-map id churn is EXPECTED, out-of-scope for VP-2): the map-oracle edits rename/add/redesign
+    test methods in tests/test_coverage_checker_map.py, changing ids in THAT file. The VP step-2 id-preservation diff
+    covers only the two decomposed suites vs their monoliths, so oracle-file id changes are legitimate and reviewed
+    via VP step 6 (oracle green), not VP step 2.
+  - >-
+    OPEN RISK / FOLLOW-UP (checker SLOC headroom): scripts/test_coverage_checker.py is at 472/500 SLOC. Edit C keeps
+    it under 500 (net ~+1 SLOC), but a FUTURE wave needing another checker edit could cross 500 and force the
+    checker's own decomposition. Flagged for the overseer (non-blocking this wave). If VP-3 shows the checker >=500,
+    the fix is to tighten Edit C, not to register/raise a budget for it.
+  - >-
+    Branch: harness-assigned claude/... session branch (verify not main). Wave 3 (tests/ops_data_portal/) and
+    Wave 4/10 (tests/session/preflight|postflight/, tests/fixtures/session_*_module.py) are the live concern-split
+    templates on main. Preflight not machine-run in this read-only planning subagent. compute_affected_artifacts of
+    the changed tests/ files = {} (verified) -> no Lambda deploy. Main-divergence: scope is net-new package files +
+    two shared fixtures + a writer conftest + coverage-checker (3 tiny edits) + one oracle file + a two-line budget
+    deletion + two monolith deletions; the overseer rebases onto latest origin/main and re-runs --pre before push
+    (STANDING DIRECTIVE: verify _RETIRING count == 24 - (retired-basename count) after rebase).
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - >-
+    scripts/test_coverage_checker.py read in full (map_source_to_test, _grandfathered_source_to_test [RS-08
+    parent-qualified lambdas branch], _mirror_source_to_test, _RETIRING_GRANDFATHER_HOMES,
+    _ALL_MIRROR_TARGET_HOMES, _CONCERN_SPLIT_TEST_PACKAGES, _ORCHESTRATION_SCAFFOLDING_FILES); checker SLOC = 472
+  - tests/CLAUDE.md read (mirror convention, no-cross-test-import, per-package conftest hierarchy, ruff import discipline, heavy-dep marker directive)
+  - Wave 3/4/10 studied as concern-split templates; the redesigned tree-derived grandfather oracle confirmed on main
+  - Decision 131, 130, 128, 124, 132, 79 located and their bearing confirmed (inline decision analysis)
+  - Both monoliths read in full; every module-level test function located; class->module map re-verified; no file exceeds 500 SLOC
+  - The three exact map edits (Edit A delete-from-_RETIRING, Edit B add-to-_CONCERN_SPLIT, Edit C smoke_actions->handler package) confirmed against the live checker via in-memory simulation
+  - Heavy-dep grep of both monoliths run -- maintenance = 0 tokens; writer = 1 (lazy boto3 in test_frozen_creds only)
+  - smoke_actions.py re-export coupling in handler.py confirmed; smoke_actions is smoke_actions.py's only coverage source
+  - config/sloc_budgets.yaml lines for the two targets identified (758/671, dec-130 markers) for by-hand deletion
+  - compute_affected_artifacts of the changed tests/ files confirmed {} (no Lambda deploy)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Confirm the working branch is the harness claude/... session branch (git branch --show-current), NOT main.
+  - >-
+    COMMIT 1 (scaffold + shared surfaces): create the package markers (tests/lambdas/__init__.py,
+    tests/lambdas/ducklake_maintenance/__init__.py, tests/lambdas/ducklake_maintenance/handler/__init__.py,
+    tests/lambdas/ducklake_writer/__init__.py, tests/lambdas/ducklake_writer/handler/__init__.py); create the two
+    fixtures helpers (tests/fixtures/ducklake_maintenance_handler.py = FakeCon + _response_body + _FULL_DSN;
+    tests/fixtures/ducklake_writer_handler.py = FakeCon + _result); create the writer package conftest
+    (tests/lambdas/ducklake_writer/handler/conftest.py = _reset_warm_connection autouse). Run
+    `bin/venv-python -m scripts.validate --pre` (additive -- must stay green).
+  - >-
+    COMMITS 2-3 (module population, one package per commit): create the 4 maintenance modules then the 4 writer
+    modules per the CONCERN-SPLIT BREAKDOWN, copying each function VERBATIM with a fresh per-file import header and
+    `pytestmark = pytest.mark.unit`. Add the module-level `import boto3  # noqa: F401` marker to test_churn.py only.
+    Keep BOTH monoliths FULLY INTACT. After each commit run SCOPED `bin/venv-python -m pytest <that package> -q`
+    plus `bin/venv-python -m scripts.validate --pre` on the touched files to localise any SLOC/cross-import/collection
+    failure early.
+  - >-
+    FINAL COMMIT (the atomic surgical flip): edit scripts/test_coverage_checker.py (Edit A: remove the two basenames
+    from _RETIRING_GRANDFATHER_HOMES; Edit B: add the two handler source paths to _CONCERN_SPLIT_TEST_PACKAGES; Edit
+    C: add the smoke_actions->ducklake_writer/handler special-case, minimal, verify checker < 500 SLOC); update
+    tests/test_coverage_checker_map.py (add _RETIRING import; modify the writer-handler + smoke_actions cases; add the
+    maintenance-handler positive; redesign test_all_lambda_handlers_...); delete the two config/sloc_budgets.yaml lines
+    by hand; delete the two monoliths WHOLE. (No grandfather-oracle edit -- it self-adjusts from the tree.)
+  - >-
+    Execute the full Verification Plan (steps 1-10) on the FINAL commit; loop until all pass. On an unrecoverable
+    failure STOP and RCA (Decision 55) -- never patch around a collect-id mismatch.
+  - >-
+    Report: the final per-module SLOC breakdown for both packages; confirmation config/sloc_budgets.yaml lost exactly
+    two lines; the two VP step-2 empty-diff confirmations; that smoke_actions.py and both handlers resolve to their
+    concern-split package dirs while ducklake_reader stayed flat-grandfathered; the single boto3 marker on test_churn.py;
+    and the checker's post-edit SLOC (< 500). Commit locally and STOP -- the overseer owns branch/PR/CI-green/merge.
+rollback: >-
+  Single-PR revert. The FINAL commit is the only one that changes the mapping / budgets / deletes the monoliths --
+  reverting the PR restores both grandfather memberships and their dec-130 budget lines, re-points both handler sources
+  (and smoke_actions.py) at their (restored) monolith, and leaves the already-created packages + the two shared fixture
+  helpers + the writer conftest as harmless extra coverage until re-attempted.
