@@ -8,7 +8,6 @@ import itertools
 import json
 import re
 import sys
-import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -21,7 +20,6 @@ from scripts.checks._scaffolding import (
     _parse_requirement_dist_names,
     partition_changed_tests_by_collectability,
 )
-from scripts.checks.ci_guards.validate_ops_portal_patch_targets import _find_violations as _ops_portal_patch_violations
 from scripts.checks.hygiene.validate_placement import (
     _docs_root_stray_files,
     _load_docs_root_allowlist,
@@ -41,7 +39,6 @@ from scripts.checks.iam_tf.validate_ci_refresh_read_coverage import (
     _scan_resources,
     _split_top_level_objects,
 )
-from scripts.checks.misc.validate_ghas_probe import _run_cli as _ghas_run_cli
 from tests.fixtures.subprocess_stubs import _mock_completed, _pre_mock_run  # noqa: E402
 from tests.fixtures.validate_module import _validate  # noqa: E402
 
@@ -871,68 +868,6 @@ class TestValidatePlacement:
         assert failed == []
 
 
-class TestValidateTestCoverage:
-    """Tests for validate_test_coverage()."""
-
-    @pytest.fixture(autouse=True)
-    def _clear_subprocess_guard(self, monkeypatch):
-        """Remove the conftest recursion guard so coverage logic is exercised."""
-        monkeypatch.delenv("_COVERAGE_SUBPROCESS", raising=False)
-
-    def test_passes_when_no_changed_files(self) -> None:
-        """No failures when get_changed_source_files returns empty list."""
-        mock_checker = MagicMock()
-        mock_checker.get_changed_source_files.return_value = []
-
-        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=mock_checker):
-            failed: list[str] = []
-            validate_test_coverage(failed)
-
-        assert failed == []
-
-    def test_passes_when_all_test_files_exist(self, tmp_path: Path) -> None:
-        """No failures when all changed files have corresponding test files."""
-        source = tmp_path / "src" / "config.py"
-        source.parent.mkdir(parents=True)
-        source.write_text("def foo(): pass", encoding="utf-8")
-
-        mock_checker = MagicMock()
-        mock_checker.get_changed_source_files.return_value = [source]
-        mock_checker.check_test_file_exists.return_value = (True, "test file found")
-        mock_checker.check_per_file_coverage.return_value = []
-
-        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=mock_checker):
-            failed: list[str] = []
-            validate_test_coverage(failed)
-
-        assert failed == []
-
-    def test_fails_when_test_file_missing(self, tmp_path: Path) -> None:
-        """Appends to failed list when a changed file has no test file."""
-        source = tmp_path / "src" / "new_module.py"
-        source.parent.mkdir(parents=True)
-        source.write_text("def bar(): pass", encoding="utf-8")
-
-        mock_checker = MagicMock()
-        mock_checker.get_changed_source_files.return_value = [source]
-        mock_checker.check_test_file_exists.return_value = (False, "missing test file: tests/test_new_module.py")
-
-        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=mock_checker):
-            failed: list[str] = []
-            validate_test_coverage(failed)
-
-        assert len(failed) == 1
-        assert "Test coverage check" in failed[0]
-
-    def test_skips_when_checker_not_found(self) -> None:
-        """No failures (and no exception) when test_coverage_checker.py is absent."""
-        with patch("scripts.checks.misc.validate_test_coverage._load_coverage_checker", return_value=None):
-            failed: list[str] = []
-            validate_test_coverage(failed)
-
-        assert failed == []
-
-
 class TestValidatePromptCompliance:
     """Tests for validate_prompt_compliance()."""
 
@@ -1639,67 +1574,6 @@ class TestValidateTestCountCoupling:
         assert names.count("validate_test_count_coupling") >= 2
 
 
-class TestValidateOpsPortalPatchTargets:
-    """Tests for validate_ops_portal_patch_targets() (rec-2637 caller-aware facade-patch guard).
-
-    Exercises the pure _find_violations(paths) core directly on synthetic temp files: a
-    stale facade patch on a moved caller (file_decision) is rejected, the corrected
-    submodule patch passes, and a facade-resident caller (file_rec) patching the same
-    symbol name at the facade namespace is NOT flagged (caller-aware, not symbol-only).
-    """
-
-    def _write(self, tmp_path: Path, name: str, body: str) -> Path:
-        path = tmp_path / name
-        path.write_text(body, encoding="utf-8")
-        return path
-
-    def test_ops_portal_patch_targets_stale_facade_patch_is_flagged(self, tmp_path: Path) -> None:
-        body = (
-            "from unittest.mock import patch\n"
-            "def test_x():\n"
-            "    with patch('scripts.ops_data_portal._ducklake_write'):\n"
-            "        file_decision({'title': 'd'}, _skip_sync=True)\n"
-        )
-        path = self._write(tmp_path, "test_a.py", body)
-        with patch("scripts.checks._common.ROOT", tmp_path):
-            violations = _ops_portal_patch_violations([path])
-        assert len(violations) == 1
-        assert "file_decision" in violations[0]
-
-    def test_ops_portal_patch_targets_corrected_submodule_patch_not_flagged(self, tmp_path: Path) -> None:
-        body = (
-            "from unittest.mock import patch\n"
-            "def test_x():\n"
-            "    with patch('scripts.ops_portal.decisions._ducklake_write'):\n"
-            "        file_decision({'title': 'd'}, _skip_sync=True)\n"
-        )
-        path = self._write(tmp_path, "test_b.py", body)
-        with patch("scripts.checks._common.ROOT", tmp_path):
-            violations = _ops_portal_patch_violations([path])
-        assert violations == []
-
-    def test_ops_portal_patch_targets_facade_resident_caller_not_flagged(self, tmp_path: Path) -> None:
-        """file_rec is facade-resident -- patching scripts.ops_data_portal for the same
-        symbol name a moved caller also uses must NOT be flagged (caller-aware)."""
-        body = (
-            "from unittest.mock import patch\n"
-            "def test_x():\n"
-            "    with patch('scripts.ops_data_portal._ducklake_write'):\n"
-            "        file_rec({'title': 'd'}, _skip_sync=True)\n"
-        )
-        path = self._write(tmp_path, "test_c.py", body)
-        with patch("scripts.checks._common.ROOT", tmp_path):
-            violations = _ops_portal_patch_violations([path])
-        assert violations == []
-
-    def test_registered_in_both_tiers(self) -> None:
-        """validate_ops_portal_patch_targets appears in both pre_sequence() and full_sequence()."""
-        from scripts.checks import registry
-
-        names = [s.name for s in registry.pre_sequence() + registry.full_sequence()]
-        assert names.count("validate_ops_portal_patch_targets") >= 2
-
-
 class TestValidateSysExecutable:
     """Tests for validate_sys_executable()."""
 
@@ -1816,136 +1690,6 @@ class TestValidateTerraformTry:
         assert "Terraform try() lint" in failed
 
 
-class TestValidateInvariants:
-    """Tests for validate_invariants(): @file gotcha and mock count checks."""
-
-    def test_passes_when_no_violations(self, tmp_path: Path) -> None:
-        """No failures when codebase has no @file violations and mock counts are OK."""
-        scripts_dir = tmp_path / "scripts" / "executor"
-        scripts_dir.mkdir(parents=True)
-        tests_dir = tmp_path / "tests"
-        tests_dir.mkdir()
-
-        # Other script: no @file pattern
-        (tmp_path / "scripts" / "other.py").write_text(
-            'subprocess.run(["git", "status"])\n',
-            encoding="utf-8",
-        )
-        # postflight: 2 subprocess.run calls in cleanup_after_merge
-        (scripts_dir / "postflight.py").write_text(
-            "def cleanup_after_merge(branch):\n"
-            "    subprocess.run(['git', 'checkout', 'main'])\n"
-            "    subprocess.run(['git', 'pull'])\n"
-            "    return True\n",
-            encoding="utf-8",
-        )
-        # test file: side_effect list with 4 MagicMock entries (2*2+2=6 threshold)
-        (tests_dir / "test_execute_recommendation.py").write_text(
-            "class TestCleanupAfterMerge:\n"
-            "    def test_example(self):\n"
-            "        responses = [\n"
-            "            MagicMock(returncode=0),\n"
-            "            MagicMock(returncode=0),\n"
-            "            MagicMock(returncode=0),\n"
-            "            MagicMock(returncode=0),\n"
-            "        ]\n",
-            encoding="utf-8",
-        )
-
-        with patch("scripts.checks._common.ROOT", tmp_path):
-            failed: list[str] = []
-            validate_invariants(failed)
-
-        assert failed == []
-
-    def test_fails_on_at_file_without_instruction(self, tmp_path: Path) -> None:
-        """Fails when a script uses '-p', '@file' pattern without an instruction string."""
-        scripts_dir = tmp_path / "scripts" / "executor"
-        scripts_dir.mkdir(parents=True)
-        tests_dir = tmp_path / "tests"
-        tests_dir.mkdir()
-
-        # A script that uses the bad pattern
-        (tmp_path / "scripts" / "bad_script.py").write_text(
-            'cmd.extend(["-p", f"@{some_file}"])\n',
-            encoding="utf-8",
-        )
-        # Minimal postflight + test files so check 2 doesn't interfere
-        (scripts_dir / "postflight.py").write_text(
-            "def cleanup_after_merge(b):\n    subprocess.run(['git', 'checkout'])\n    return True\n",
-            encoding="utf-8",
-        )
-        (tests_dir / "test_execute_recommendation.py").write_text(
-            "class TestCleanupAfterMerge:\n"
-            "    def test_x(self):\n"
-            "        r = [MagicMock(returncode=0), MagicMock(returncode=0), MagicMock(returncode=0)]\n",
-            encoding="utf-8",
-        )
-
-        with patch("scripts.checks._common.ROOT", tmp_path):
-            failed: list[str] = []
-            validate_invariants(failed)
-
-        assert "Invariant checks" in failed
-        # Error message must mention the @file gotcha
-        # (validated by test passing -- the function adds to failed list)
-
-    def test_passes_on_instruction_before_at_file(self, tmp_path: Path) -> None:
-        """Does not flag a '-p' call list that carries an instruction before @file."""
-        scripts_dir = tmp_path / "scripts" / "executor"
-        scripts_dir.mkdir(parents=True)
-        tests_dir = tmp_path / "tests"
-        tests_dir.mkdir()
-
-        # A script that uses -p with an inline instruction preceding @file
-        (tmp_path / "scripts" / "good_script.py").write_text(
-            'cmd.extend(["-p", "review this", f"@{some_file}"])\n',
-            encoding="utf-8",
-        )
-        (scripts_dir / "postflight.py").write_text(
-            "def cleanup_after_merge(b):\n    subprocess.run(['git', 'checkout'])\n    return True\n",
-            encoding="utf-8",
-        )
-        (tests_dir / "test_execute_recommendation.py").write_text(
-            "class TestCleanupAfterMerge:\n"
-            "    def test_x(self):\n"
-            "        r = [MagicMock(returncode=0), MagicMock(returncode=0), MagicMock(returncode=0)]\n",
-            encoding="utf-8",
-        )
-
-        with patch("scripts.checks._common.ROOT", tmp_path):
-            failed: list[str] = []
-            validate_invariants(failed)
-
-        assert failed == []
-
-    def test_fails_on_mock_count_mismatch(self, tmp_path: Path) -> None:
-        """Fails when cleanup_after_merge has many subprocess calls but few test mocks."""
-        scripts_dir = tmp_path / "scripts" / "executor"
-        scripts_dir.mkdir(parents=True)
-        tests_dir = tmp_path / "tests"
-        tests_dir.mkdir()
-
-        # postflight: 12 subprocess.run calls (many, simulate a bloated function)
-        postflight_src = "def cleanup_after_merge(branch):\n"
-        for i in range(12):
-            postflight_src += f"    subprocess.run(['cmd{i}'])\n"
-        postflight_src += "    return True\n"
-        (scripts_dir / "postflight.py").write_text(postflight_src, encoding="utf-8")
-
-        # test file: only 1 MagicMock in side_effect list (12 > 1*2+2=4 -> FAIL)
-        (tests_dir / "test_execute_recommendation.py").write_text(
-            "class TestCleanupAfterMerge:\n    def test_x(self):\n        r = [MagicMock(returncode=0)]\n",
-            encoding="utf-8",
-        )
-
-        with patch("scripts.checks._common.ROOT", tmp_path):
-            failed: list[str] = []
-            validate_invariants(failed)
-
-        assert "Invariant checks" in failed
-
-
 class TestValidateNoUnderscoreInstructions:
     """Tests for validate_no_underscore_instructions()."""
 
@@ -1994,7 +1738,6 @@ class TestValidateRecommendationsSchema:
     }
 
     def _write_jsonl(self, tmp_path: Path, entries: list[dict]) -> Path:
-        import json
 
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True)
@@ -2542,7 +2285,6 @@ class TestValidateComplexity:
         assert failed == []
         warnings_file = tmp_path / "logs" / ".complexity-warnings.json"
         assert warnings_file.exists()
-        import json
 
         data = json.loads(warnings_file.read_text(encoding="utf-8"))
         assert data == []
@@ -3132,7 +2874,6 @@ class TestGraduationGuard:
     )
 
     def _write_dq_latest(self, tmp_path: Path, checks: list) -> None:
-        import json
 
         dq_dir = tmp_path / "logs" / "debug"
         dq_dir.mkdir(parents=True, exist_ok=True)
@@ -3216,7 +2957,6 @@ class TestGraduationGuard:
 
     def test_warns_no_block_no_checks_array(self, tmp_path: Path, capsys) -> None:
         """Warns but does not block when dq-latest.json has no 'checks' array."""
-        import json
 
         dq_dir = tmp_path / "logs" / "debug"
         dq_dir.mkdir(parents=True)
@@ -3313,7 +3053,6 @@ class TestGraduationGuardUnavailableCarveout:
     )
 
     def _write_dq_latest(self, tmp_path: Path, checks: list) -> None:
-        import json
 
         dq_dir = tmp_path / "logs" / "debug"
         dq_dir.mkdir(parents=True, exist_ok=True)
@@ -3367,7 +3106,6 @@ class TestGraduationGuardUnavailableCarveout:
         """A genuine non-PASS/non-SKIP/non-UNAVAILABLE verdict (FAIL) still blocks graduation."""
         dq_dir = tmp_path / "logs" / "debug"
         dq_dir.mkdir(parents=True, exist_ok=True)
-        import json
 
         checks_data = [{"table": "tbl", "column": "col", "test": "not_null", "verdict": "FAIL"}]
         (dq_dir / "dq-latest.json").write_text(
@@ -3530,101 +3268,6 @@ class TestCheckSourceRegistry:
             failed: list[str] = []
             check_source_registry(failed)
         assert "Source registry CI guard" in failed
-
-
-class TestValidateScheduledAgentLogs:
-    """Tests for validate_scheduled_agent_logs()."""
-
-    def _make_run(self, changed_files: list[str]):
-        """Return a mock for validate.run that reports the given changed files."""
-
-        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = "\n".join(changed_files) + "\n" if changed_files else ""
-            return result
-
-        return mock_run
-
-    def test_passes_with_valid_agent_log(self, tmp_path: Path) -> None:
-        """Passes when all changed files are valid scheduled-agent JSONL logs."""
-        agent_dir = tmp_path / "logs" / "agents" / "rec-curator"
-        agent_dir.mkdir(parents=True)
-        log_file = agent_dir / "20260509T182000Z.jsonl"
-        log_file.write_text(
-            '{"type": "priority-queue-entry", "timestamp": "2026-05-09T18:20:00Z", "rank": 1}\n',
-            encoding="utf-8",
-        )
-        changed = ["logs/agents/rec-curator/20260509T182000Z.jsonl"]
-        with (
-            patch("scripts.checks._common.run", side_effect=self._make_run(changed)),
-            patch("scripts.checks._common.ROOT", tmp_path),
-        ):
-            failed: list[str] = []
-            validate_scheduled_agent_logs(failed)
-        assert failed == []
-
-    def test_fails_on_canonical_state_write(self) -> None:
-        """Fails when logs/.recommendations-log.jsonl appears in the diff."""
-        changed = [
-            "logs/agents/rec-curator/20260509T182000Z.jsonl",
-            "logs/.recommendations-log.jsonl",
-        ]
-        with patch("scripts.checks._common.run", side_effect=self._make_run(changed)):
-            failed: list[str] = []
-            validate_scheduled_agent_logs(failed)
-        assert "Scheduled agent log validation" in failed
-
-    def test_fails_on_malformed_jsonl(self, tmp_path: Path) -> None:
-        """Fails when a JSONL file contains a non-JSON line."""
-        agent_dir = tmp_path / "logs" / "agents" / "rec-curator"
-        agent_dir.mkdir(parents=True)
-        log_file = agent_dir / "20260509T182000Z.jsonl"
-        log_file.write_text("this is not json\n", encoding="utf-8")
-        changed = ["logs/agents/rec-curator/20260509T182000Z.jsonl"]
-        with (
-            patch("scripts.checks._common.run", side_effect=self._make_run(changed)),
-            patch("scripts.checks._common.ROOT", tmp_path),
-        ):
-            failed: list[str] = []
-            validate_scheduled_agent_logs(failed)
-        assert "Scheduled agent log validation" in failed
-
-    def test_fails_on_invalid_filename(self, tmp_path: Path) -> None:
-        """Fails when JSONL filename does not match the ISO timestamp pattern."""
-        agent_dir = tmp_path / "logs" / "agents" / "rec-curator"
-        agent_dir.mkdir(parents=True)
-        log_file = agent_dir / "output.jsonl"
-        log_file.write_text(
-            '{"type": "cluster", "timestamp": "2026-05-09T18:20:00Z"}\n',
-            encoding="utf-8",
-        )
-        changed = ["logs/agents/rec-curator/output.jsonl"]
-        with (
-            patch("scripts.checks._common.run", side_effect=self._make_run(changed)),
-            patch("scripts.checks._common.ROOT", tmp_path),
-        ):
-            failed: list[str] = []
-            validate_scheduled_agent_logs(failed)
-        assert "Scheduled agent log validation" in failed
-
-    def test_skips_when_source_files_changed(self) -> None:
-        """Skips validation when non-log files appear in the diff (feature branch)."""
-        changed = [
-            "scripts/validate.py",
-            "logs/agents/rec-curator/20260509T182000Z.jsonl",
-        ]
-        with patch("scripts.checks._common.run", side_effect=self._make_run(changed)):
-            failed: list[str] = []
-            validate_scheduled_agent_logs(failed)
-        assert failed == []
-
-    def test_skips_when_no_files_changed(self) -> None:
-        """Skips validation when there are no changed files relative to main."""
-        with patch("scripts.checks._common.run", side_effect=self._make_run([])):
-            failed: list[str] = []
-            validate_scheduled_agent_logs(failed)
-        assert failed == []
 
 
 class TestValidateIamRunnerPolicy:
@@ -5177,108 +4820,6 @@ class TestBudgetBreachCiTelemetry:
         assert "pytest_diff" in captured.err
 
 
-class TestValidateCiRcaTrigger:
-    """Tests for validate_ci_rca_trigger() -- the presubmit wrapper around _check_ci_rca_filter."""
-
-    def test_passes_when_guard_succeeds(self) -> None:
-        mock_module = MagicMock()
-        mock_module._check_ci_rca_filter = MagicMock()
-
-        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
-            failed: list[str] = []
-            validate_ci_rca_trigger(failed)
-
-        assert failed == []
-        mock_module._check_ci_rca_filter.assert_called_once()
-
-    def test_appends_to_failed_when_guard_raises(self) -> None:
-        mock_module = MagicMock()
-        mock_module._check_ci_rca_filter.side_effect = AssertionError("main-branch gate missing")
-
-        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
-            failed: list[str] = []
-            validate_ci_rca_trigger(failed)
-
-        assert len(failed) == 1
-        assert "ci-rca trigger gate" in failed[0]
-
-    def test_no_error_propagation_on_assertion(self) -> None:
-        mock_module = MagicMock()
-        mock_module._check_ci_rca_filter.side_effect = AssertionError("something wrong")
-
-        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
-            failed: list[str] = []
-            validate_ci_rca_trigger(failed)
-
-        assert failed == ["ci-rca trigger gate"]
-
-    def test_no_error_propagation_on_runtime_error(self) -> None:
-        """rec-2027: validate_ci_rca_trigger catches non-AssertionError and records failure."""
-        mock_module = MagicMock()
-        mock_module._check_ci_rca_filter.side_effect = RuntimeError("unexpected boom")
-
-        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
-            failed: list[str] = []
-            validate_ci_rca_trigger(failed)
-
-        assert len(failed) == 1
-        assert "ci-rca trigger gate" in failed[0]
-
-
-class TestValidateCiWorkflowGuards:
-    """Tests for validate_ci_workflow_guards() -- the presubmit wrapper around four ci guards."""
-
-    def test_passes_when_all_guards_succeed(self) -> None:
-        mock_module = MagicMock()
-        for attr in ("_check_jobs_and_flags", "_check_fetch_depth", "_check_concurrency", "_check_canary"):
-            setattr(mock_module, attr, MagicMock())
-
-        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
-            failed: list[str] = []
-            validate_ci_workflow_guards(failed)
-
-        assert failed == []
-
-    def test_appends_failure_when_guard_raises_assertion(self) -> None:
-        mock_module = MagicMock()
-        mock_module._check_jobs_and_flags = MagicMock()
-        mock_module._check_fetch_depth = MagicMock()
-        mock_module._check_concurrency = MagicMock(side_effect=AssertionError("ci-runner still present"))
-        mock_module._check_canary = MagicMock()
-
-        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
-            failed: list[str] = []
-            validate_ci_workflow_guards(failed)
-
-        assert len(failed) == 1
-        assert "concurrency" in failed[0]
-
-    def test_records_failure_on_runtime_error_no_propagation(self) -> None:
-        """rec-2027: a non-AssertionError exception records a failure and does not propagate."""
-        mock_module = MagicMock()
-        mock_module._check_jobs_and_flags = MagicMock(side_effect=RuntimeError("disk full"))
-        mock_module._check_fetch_depth = MagicMock()
-        mock_module._check_concurrency = MagicMock()
-        mock_module._check_canary = MagicMock()
-
-        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": mock_module}):
-            failed: list[str] = []
-            validate_ci_workflow_guards(failed)
-
-        assert len(failed) == 1
-        assert "jobs-and-flags" in failed[0]
-
-    def test_records_failure_on_import_error_no_propagation(self) -> None:
-        """rec-2027: an ImportError at guard-import time records a gate failure, no propagation."""
-        # Setting the module to None in sys.modules makes `import` raise ImportError.
-        with patch.dict(sys.modules, {"scripts.verify_ci_workflow": None}):
-            failed: list[str] = []
-            validate_ci_workflow_guards(failed)
-
-        assert len(failed) == 1
-        assert "ci-workflow guards gate" in failed[0]
-
-
 class TestValidateHermeticityFlags:
     """Tests for validate_hermeticity_flags() and _build_unit_test_cmd()."""
 
@@ -5325,166 +4866,6 @@ class TestValidateHermeticityFlags:
         failed: list[str] = []
         validate_hermeticity_flags(failed)
         assert failed == [], "default command must contain all hermeticity flags"
-
-
-class TestValidateLambdaManifests:
-    """Tests for validate_lambda_manifests() -- schema validation wrapper."""
-
-    def test_passes_when_cmd_validate_returns_zero(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_validate.return_value = 0
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_manifests(failed)
-        assert failed == []
-
-    def test_fails_when_cmd_validate_returns_nonzero(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_validate.return_value = 1
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_manifests(failed)
-        assert "Lambda manifest schema validation" in failed
-
-    def test_fails_on_import_error(self) -> None:
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": None}):
-            failed: list[str] = []
-            validate_lambda_manifests(failed)
-        assert "Lambda manifest schema validation" in failed
-
-    def test_fails_on_unexpected_exception(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_validate.side_effect = RuntimeError("unexpected boom")
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_manifests(failed)
-        assert "Lambda manifest schema validation" in failed
-
-
-class TestValidateLambdaManifestCoverage:
-    """Tests for validate_lambda_manifest_coverage() -- coverage gate wrapper."""
-
-    def test_passes_when_cmd_check_coverage_returns_zero(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_check_coverage.return_value = 0
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_manifest_coverage(failed)
-        assert failed == []
-
-    def test_fails_when_cmd_check_coverage_returns_nonzero(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_check_coverage.return_value = 1
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_manifest_coverage(failed)
-        assert "Lambda manifest coverage" in failed
-
-    def test_fails_on_import_error(self) -> None:
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": None}):
-            failed: list[str] = []
-            validate_lambda_manifest_coverage(failed)
-        assert "Lambda manifest coverage" in failed
-
-    def test_fails_on_unexpected_exception(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_check_coverage.side_effect = RuntimeError("boom")
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_manifest_coverage(failed)
-        assert "Lambda manifest coverage" in failed
-
-
-class TestValidateLambdaBundleCompleteness:
-    """Tests for validate_lambda_bundle_completeness() -- bundle check wrapper."""
-
-    def test_passes_when_cmd_check_bundles_returns_zero(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_check_bundles.return_value = 0
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_bundle_completeness(failed)
-        assert failed == []
-
-    def test_fails_when_cmd_check_bundles_returns_nonzero(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_check_bundles.return_value = 1
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_bundle_completeness(failed)
-        assert "Lambda bundle completeness" in failed
-
-    def test_fails_on_import_error(self) -> None:
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": None}):
-            failed: list[str] = []
-            validate_lambda_bundle_completeness(failed)
-        assert "Lambda bundle completeness" in failed
-
-    def test_fails_on_unexpected_exception(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.cmd_check_bundles.side_effect = RuntimeError("staging failed")
-        with patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}):
-            failed: list[str] = []
-            validate_lambda_bundle_completeness(failed)
-        assert "Lambda bundle completeness" in failed
-
-
-class TestValidateLambdaDeployGating:
-    """Tests for validate_lambda_deploy_gating() -- advisory deploy scope check."""
-
-    def test_no_changed_files_skips_silently(self) -> None:
-        mock_lm = MagicMock()
-        with (
-            patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
-            patch("scripts.checks._common.get_changed_files", return_value=[]),
-        ):
-            failed: list[str] = []
-            validate_lambda_deploy_gating(failed)
-        assert failed == []
-        mock_lm.compute_affected_artifacts.assert_not_called()
-
-    def test_reports_affected_artifact_without_failing(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.compute_affected_artifacts.return_value = {"data-pipeline": ["src/data/handlers/fetch_handler.py"]}
-        with (
-            patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
-            patch("scripts.checks._common.get_changed_files", return_value=["src/data/handlers/fetch_handler.py"]),
-        ):
-            failed: list[str] = []
-            validate_lambda_deploy_gating(failed)
-        assert failed == []
-        mock_lm.compute_affected_artifacts.assert_called_once_with(["src/data/handlers/fetch_handler.py"])
-
-    def test_no_affected_artifacts_is_advisory_pass(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.compute_affected_artifacts.return_value = {}
-        with (
-            patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
-            patch("scripts.checks._common.get_changed_files", return_value=["docs/README.md"]),
-        ):
-            failed: list[str] = []
-            validate_lambda_deploy_gating(failed)
-        assert failed == []
-
-    def test_fails_on_import_error(self) -> None:
-        with (
-            patch.dict(sys.modules, {"scripts.lambda_manifest": None}),
-            patch("scripts.checks._common.get_changed_files", return_value=["src/some/file.py"]),
-        ):
-            failed: list[str] = []
-            validate_lambda_deploy_gating(failed)
-        assert "Lambda deploy gating" in failed
-
-    def test_fails_on_unexpected_exception(self) -> None:
-        mock_lm = MagicMock()
-        mock_lm.compute_affected_artifacts.side_effect = RuntimeError("load failed")
-        with (
-            patch.dict(sys.modules, {"scripts.lambda_manifest": mock_lm}),
-            patch("scripts.checks._common.get_changed_files", return_value=["src/some/file.py"]),
-        ):
-            failed: list[str] = []
-            validate_lambda_deploy_gating(failed)
-        assert "Lambda deploy gating" in failed
 
 
 @pytest.mark.usefixtures("_neutralized_pre_registry")
@@ -5717,64 +5098,6 @@ class TestIntentDocFreeze:
         assert failed == []
         captured = capsys.readouterr()
         assert "WARNING" in captured.out or "WARNING" in captured.err
-
-
-class TestValidateCiRcaTaxonomy:
-    """Tests for validate_ci_rca_taxonomy (wired into both --pre and run_python_checks)."""
-
-    def test_complete_map_passes(self) -> None:
-        failed: list[str] = []
-        validate_ci_rca_taxonomy(failed)
-        assert not failed, f"Expected no failures, got: {failed}"
-
-    def test_missing_workflow_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        import scripts.ci_rca.taxonomy as taxonomy_mod  # noqa: I001
-        import yaml
-
-        incomplete_taxonomy = {
-            "schema_version": 1,
-            "taxonomy_version": 1,
-            "function_to_category": {},
-            "log_pattern_to_category": [],
-            "workflow_to_tier": {"CI": "CI"},
-        }
-        tax_path = tmp_path / "taxonomy.yaml"
-        tax_path.write_text(yaml.dump(incomplete_taxonomy))
-
-        taxonomy_mod._TAXONOMY_CACHE = None
-        original_path = taxonomy_mod._TAXONOMY_PATH
-        taxonomy_mod._TAXONOMY_PATH = tax_path
-        try:
-            from scripts.ci_rca.taxonomy import enumerate_workflow_names
-
-            workflows_dir = ROOT / ".github" / "workflows"
-            actual_names = enumerate_workflow_names(workflows_dir)
-            missing = [n for n in actual_names if n != "CI"]
-            if not missing:
-                pytest.skip("All workflows happen to be in the minimal map")
-
-            failed: list[str] = []
-            validate_ci_rca_taxonomy(failed)
-            assert any("absent from workflow_to_tier" in f for f in failed), (
-                f"Expected taxonomy failure for missing workflows, got: {failed}"
-            )
-        finally:
-            taxonomy_mod._TAXONOMY_PATH = original_path
-            taxonomy_mod._TAXONOMY_CACHE = None
-
-    def test_taxonomy_file_missing_fails(self, tmp_path: Path) -> None:
-        import scripts.ci_rca.taxonomy as taxonomy_mod
-
-        taxonomy_mod._TAXONOMY_CACHE = None
-        original_path = taxonomy_mod._TAXONOMY_PATH
-        taxonomy_mod._TAXONOMY_PATH = tmp_path / "nonexistent.yaml"
-        try:
-            failed: list[str] = []
-            validate_ci_rca_taxonomy(failed)
-            assert any("CI-RCA taxonomy" in f for f in failed), f"Expected taxonomy error, got: {failed}"
-        finally:
-            taxonomy_mod._TAXONOMY_PATH = original_path
-            taxonomy_mod._TAXONOMY_CACHE = None
 
 
 class TestVerifierHermeticity:
@@ -6154,89 +5477,6 @@ class TestPlatformRoadmapCriteriaIntegrity:
             validate_platform_roadmap(failed)
         assert "Platform roadmap criteria integrity" not in failed
         assert "Platform roadmap schema validation" not in failed
-
-
-class TestDucklakeVersionLockstepGate:
-    """Tests for validate_ducklake_version_lockstep() -- the OQ.12 SSOT drift gate."""
-
-    def test_passes_on_coherent_tree(self, tmp_path: Path) -> None:
-        """Gate passes when requirements.txt is in sync and no literal in derive surfaces."""
-        import scripts.sync.ducklake_version as _sdv_inner  # noqa: PLC0415
-
-        # coherent requirements.txt
-        req = tmp_path / "requirements.txt"
-        req.write_text(_sdv_inner._expected_floor_line("1.5.4") + "\n", encoding="utf-8")
-
-        src = tmp_path / "src" / "common"
-        src.mkdir(parents=True)
-        runtime = src / "ducklake_runtime.py"
-        no_literal = (
-            "# no literal\n"
-            "from src.common.ducklake_version import pinned_duckdb_version as _p\n"
-            "_PINNED_DUCKDB_VERSION = None\n"
-        )
-        runtime.write_text(no_literal, encoding="utf-8")
-
-        scripts = tmp_path / "scripts"
-        scripts.mkdir()
-        build = scripts / "build_lambda.py"
-        build.write_text(
-            "from src.common.ducklake_version import pinned_duckdb_version as _p\nPINNED_DUCKDB_VERSION = _p()\n",
-            encoding="utf-8",
-        )
-
-        import scripts.sync.ducklake_version as sdv  # noqa: PLC0415
-
-        failed: list[str] = []
-        with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
-            with patch("scripts.checks._common.ROOT", tmp_path):
-                validate_ducklake_version_lockstep(failed)
-        assert failed == [], failed
-
-    def test_fails_when_requirements_drifts(self, tmp_path: Path) -> None:
-        """Gate fails when requirements.txt has old floor."""
-        req = tmp_path / "requirements.txt"
-        req.write_text("duckdb>=1.5.3  # old\n", encoding="utf-8")
-
-        src = tmp_path / "src" / "common"
-        src.mkdir(parents=True)
-        (src / "ducklake_runtime.py").write_text("# no literal\n", encoding="utf-8")
-
-        scripts = tmp_path / "scripts"
-        scripts.mkdir()
-        (scripts / "build_lambda.py").write_text("# no literal\n", encoding="utf-8")
-
-        import scripts.sync.ducklake_version as sdv  # noqa: PLC0415
-
-        failed: list[str] = []
-        with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
-            with patch("scripts.checks._common.ROOT", tmp_path):
-                validate_ducklake_version_lockstep(failed)
-        assert any("duckdb floor" in f or "requirements" in f for f in failed), failed
-
-    def test_fails_when_literal_in_derive_surface(self, tmp_path: Path) -> None:
-        """Gate fails when a raw PINNED_DUCKDB_VERSION = '...' literal is in a derive surface."""
-        import scripts.sync.ducklake_version as _sdv_inner  # noqa: PLC0415
-
-        req = tmp_path / "requirements.txt"
-        req.write_text(_sdv_inner._expected_floor_line("1.5.4") + "\n", encoding="utf-8")
-
-        src = tmp_path / "src" / "common"
-        src.mkdir(parents=True)
-        # reintroduce a hardcoded literal
-        (src / "ducklake_runtime.py").write_text('PINNED_DUCKDB_VERSION = "1.5.3"\n', encoding="utf-8")
-
-        scripts = tmp_path / "scripts"
-        scripts.mkdir()
-        (scripts / "build_lambda.py").write_text("# no literal\n", encoding="utf-8")
-
-        import scripts.sync.ducklake_version as sdv  # noqa: PLC0415
-
-        failed: list[str] = []
-        with patch.object(sdv, "_get_pinned_version", return_value="1.5.4"):
-            with patch("scripts.checks._common.ROOT", tmp_path):
-                validate_ducklake_version_lockstep(failed)
-        assert any("hardcoded" in f or "literal" in f or "ducklake_runtime" in f for f in failed), failed
 
 
 @pytest.mark.usefixtures("_neutralized_pre_registry")
@@ -7205,200 +6445,6 @@ class TestRoadmapSizeGuard:
         text = "line\n" * 10000
         issues = _roadmap_size_issues(text, ceiling=10000)
         assert issues == []
-
-
-class TestValidateGhasProbe:
-    """Tests for validate_ghas_probe() (CHECK, skip-when-unscoped) and _run_cli() (RUNNER, loud-fail)."""
-
-    class _FakeResponse:
-        def __init__(self, status: int, body: bytes) -> None:
-            self.status = status
-            self._body = body
-
-        def read(self) -> bytes:
-            return self._body
-
-        def __enter__(self) -> "TestValidateGhasProbe._FakeResponse":
-            return self
-
-        def __exit__(self, *exc_info: object) -> bool:
-            return False
-
-    @staticmethod
-    def _repo_body(secret_scanning: str = "enabled", push_protection: str = "enabled") -> bytes:
-        return json.dumps(
-            {
-                "security_and_analysis": {
-                    "secret_scanning": {"status": secret_scanning},
-                    "secret_scanning_push_protection": {"status": push_protection},
-                }
-            }
-        ).encode("utf-8")
-
-    @staticmethod
-    def _actions_body(enabled: bool = True, allowed_actions: str = "all") -> bytes:
-        return json.dumps({"enabled": enabled, "allowed_actions": allowed_actions}).encode("utf-8")
-
-    def _make_urlopen(self, secret_scanning: str = "enabled", push_protection: str = "enabled", actions_enabled: bool = True):
-        def _urlopen(request: object, timeout: float = 15) -> "TestValidateGhasProbe._FakeResponse":
-            url = request.full_url  # type: ignore[attr-defined]
-            if url.endswith("/actions/permissions"):
-                return self._FakeResponse(200, self._actions_body(enabled=actions_enabled))
-            if url.endswith("/secret-scanning/alerts"):
-                if secret_scanning != "enabled":  # pragma: allowlist secret -- control-state enum, not a secret
-                    # Real GitHub behavior: this endpoint 404s when secret scanning is disabled
-                    # for the repo -- exactly the case this probe exists to catch.
-                    raise urllib.error.HTTPError(url=url, code=404, msg="Not Found", hdrs=None, fp=None)  # type: ignore[arg-type]
-                return self._FakeResponse(200, b"[]")
-            return self._FakeResponse(200, self._repo_body(secret_scanning, push_protection))
-
-        return _urlopen
-
-    # -- CHECK: validate_ghas_probe(failed) --
-
-    def test_check_passes_all_controls_enabled(self) -> None:
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=self._make_urlopen()),
-        ):
-            failed: list[str] = []
-            validate_ghas_probe(failed)
-        assert failed == []
-
-    def test_check_fails_on_disabled_control(self) -> None:
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch(
-                "scripts.checks.misc.validate_ghas_probe.urlopen",
-                side_effect=self._make_urlopen(secret_scanning="disabled"),
-            ),
-        ):
-            failed: list[str] = []
-            validate_ghas_probe(failed)
-        assert failed != []
-        assert "disabled" in failed[0]
-
-    def test_check_reports_disabled_control_despite_alerts_endpoint_404(self) -> None:
-        """Regression: a 404 from the alerts endpoint (GitHub's real behavior when secret
-        scanning is disabled) must not be swallowed as a generic transport error that discards
-        the already-fetched disabled-control state and reads as a clean SKIP."""
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch(
-                "scripts.checks.misc.validate_ghas_probe.urlopen",
-                side_effect=self._make_urlopen(secret_scanning="disabled"),
-            ),
-        ):
-            failed: list[str] = []
-            validate_ghas_probe(failed)
-        assert failed != []
-        assert "scanning_status=disabled" in failed[0]
-
-    def test_check_skips_when_token_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GHAS_PROBE_TOKEN", raising=False)
-        with patch("scripts.checks.misc.validate_ghas_probe.urlopen") as mock_urlopen:
-            failed: list[str] = []
-            validate_ghas_probe(failed)
-        assert failed == []
-        mock_urlopen.assert_not_called()
-
-    def test_check_skips_on_auth_error(self) -> None:
-        def _raise_401(request: object, timeout: float = 15) -> None:
-            raise urllib.error.HTTPError(url="x", code=401, msg="Unauthorized", hdrs=None, fp=None)  # type: ignore[arg-type]
-
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_401),
-        ):
-            failed: list[str] = []
-            validate_ghas_probe(failed)
-        assert failed == []
-
-    def test_check_skips_on_transport_error(self) -> None:
-        def _raise_url_error(request: object, timeout: float = 15) -> None:
-            raise urllib.error.URLError("network unreachable")
-
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_url_error),
-        ):
-            failed: list[str] = []
-            validate_ghas_probe(failed)
-        assert failed == []
-
-    def test_check_never_prints_token(self, capsys: pytest.CaptureFixture) -> None:
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "super-secret-token"}),
-            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=self._make_urlopen()),
-        ):
-            failed: list[str] = []
-            validate_ghas_probe(failed)
-        assert "super-secret-token" not in capsys.readouterr().out
-
-    # -- RUNNER: _run_cli() --
-
-    def test_runner_returns_zero_when_all_enabled(self) -> None:
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=self._make_urlopen()),
-        ):
-            assert _ghas_run_cli() == 0
-
-    def test_runner_nonzero_on_disabled_control(self) -> None:
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch(
-                "scripts.checks.misc.validate_ghas_probe.urlopen",
-                side_effect=self._make_urlopen(actions_enabled=False),
-            ),
-        ):
-            assert _ghas_run_cli() != 0
-
-    def test_runner_nonzero_on_disabled_secret_scanning_despite_alerts_404(self) -> None:
-        """Regression: same alerts-endpoint-404 scenario as the CHECK, exercised via the
-        loud-fail runner."""
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch(
-                "scripts.checks.misc.validate_ghas_probe.urlopen",
-                side_effect=self._make_urlopen(secret_scanning="disabled"),
-            ),
-        ):
-            assert _ghas_run_cli() != 0
-
-    def test_runner_nonzero_when_token_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GHAS_PROBE_TOKEN", raising=False)
-        with patch("scripts.checks.misc.validate_ghas_probe.urlopen") as mock_urlopen:
-            assert _ghas_run_cli() != 0
-        mock_urlopen.assert_not_called()
-
-    def test_runner_nonzero_on_auth_error(self) -> None:
-        def _raise_403(request: object, timeout: float = 15) -> None:
-            raise urllib.error.HTTPError(url="x", code=403, msg="Forbidden", hdrs=None, fp=None)  # type: ignore[arg-type]
-
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_403),
-        ):
-            assert _ghas_run_cli() != 0
-
-    def test_runner_nonzero_on_transport_error(self) -> None:
-        def _raise_url_error(request: object, timeout: float = 15) -> None:
-            raise urllib.error.URLError("network unreachable")
-
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "tok"}),
-            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=_raise_url_error),
-        ):
-            assert _ghas_run_cli() != 0
-
-    def test_runner_never_prints_token(self, capsys: pytest.CaptureFixture) -> None:
-        with (
-            patch.dict("os.environ", {"GHAS_PROBE_TOKEN": "super-secret-token"}),
-            patch("scripts.checks.misc.validate_ghas_probe.urlopen", side_effect=self._make_urlopen()),
-        ):
-            _ghas_run_cli()
-        assert "super-secret-token" not in capsys.readouterr().out
 
 
 class TestPreRoadmapGuardSelection:
