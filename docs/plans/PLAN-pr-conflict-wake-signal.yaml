@@ -33,32 +33,27 @@ scope:
       dropped best-effort green comment -- the one residual the retired backstop also hedged --
       becomes near-impossible. Step stays continue-on-error: true; signal-green.needs, the
       claude/* gate, and the job's if-condition are unchanged.
-  - file: scripts/verify_ci_workflow.py
+  - file: scripts/checks/ci_guards/validate_pr_conflict_signal.py
+    action: Create
+    purpose: >-
+      New registered check (@registry.register, scripts/checks/<domain>/ pattern per scripts/CLAUDE.md)
+      asserting the new workflow's load-bearing shape (trigger = push:[main] + workflow_dispatch,
+      claude/* head filter, mergeable poll with UNKNOWN-skip, CONFLICTING-only comment gate,
+      continue-on-error, head-SHA dedup marker, pull-requests: write). A dedicated module (rather
+      than a helper added to scripts/verify_ci_workflow.py) because that module's mirror test
+      tests/test_verify_ci_workflow.py is at its SLOC ceiling (573/573); a fresh module + mirror
+      test sidesteps the ceiling and matches the modern registered-check pattern (Decision 104).
+  - file: scripts/checks/registry.py
     action: Modify
     purpose: >-
-      Add _check_pr_conflict_signal() asserting the new workflow's load-bearing shape (trigger =
-      push:[main] + workflow_dispatch, claude/* head filter, mergeable poll with UNKNOWN-skip,
-      CONFLICTING-only comment gate, continue-on-error, head-SHA dedup marker, permissions), and
-      register it in the module's _COMMANDS dispatch dict. Mirrors the existing
-      _check_signal_green_needs guard.
-  - file: scripts/checks/ci_guards/validate_ci_workflow_guards.py
-    action: Modify
+      Insert _c("validate_pr_conflict_signal") into BOTH pre_sequence() and full_sequence()
+      (adjacent to the existing _c("validate_ci_workflow_guards") entries) so the new guard runs in
+      the --pre and full tiers. validate.py is the single source of truth for CI gates.
+  - file: tests/checks/ci_guards/test_validate_pr_conflict_signal.py
+    action: Create
     purpose: >-
-      Import _check_pr_conflict_signal and add ("pr-conflict-signal", _check_pr_conflict_signal)
-      to the guards list so the new structural guard runs in the --pre presubmit tier (validate.py
-      single-source-of-truth for CI-workflow structure, Decision 104).
-  - file: tests/test_verify_ci_workflow.py
-    action: Modify
-    purpose: >-
-      Add TestCheckPrConflictSignal pass-path and fail-path classes (mirroring the existing
-      _check_signal_green_needs test classes) covering the new guard's assertions on mocked and
-      real workflow data.
-  - file: tests/checks/ci_guards/test_validate_ci_workflow_guards.py
-    action: Modify
-    purpose: >-
-      Coverage for the newly-wired guard entry if the coverage checker requires it. The existing
-      wrapper tests exercise the guards loop via a MagicMock module (auto-creates the new attr), so
-      this touch may be a no-op; listed defensively so the wiring change stays in-scope.
+      Pass-path (real file + valid mocked _load) and fail-path (mocked data missing each asserted
+      property -> failed non-empty) unit tests for the new guard, mirroring the ci_guards test style.
   - file: AGENTS.md
     action: Modify
     purpose: >-
@@ -90,14 +85,14 @@ acceptance_criteria:
     re-posted when a marker for the current head SHA already exists on the PR (so repeated pushes
     to main do not re-spam a still-conflicted PR). The comment step is continue-on-error: true.
   - >-
-    _check_pr_conflict_signal() in scripts/verify_ci_workflow.py asserts the workflow's trigger,
-    claude/* filter, mergeable poll, CONFLICTING-only comment gate, continue-on-error, head-SHA
-    dedup marker, and permissions; it is registered in _COMMANDS and wired into the --pre tier via
-    validate_ci_workflow_guards's guards list.
+    scripts/checks/ci_guards/validate_pr_conflict_signal.py is a registered check that asserts the
+    workflow's trigger, claude/* filter, mergeable poll, CONFLICTING-only comment gate,
+    continue-on-error, head-SHA dedup marker, and permissions, and is inserted into BOTH the
+    pre_sequence() and full_sequence() tiers in scripts/checks/registry.py.
   - >-
-    tests/test_verify_ci_workflow.py has pass-path and fail-path unit tests for
-    _check_pr_conflict_signal, and tests/checks/ci_guards/test_validate_ci_workflow_guards.py stays
-    green.
+    tests/checks/ci_guards/test_validate_pr_conflict_signal.py has pass-path and fail-path unit
+    tests for the new guard, and the growth-safe registry membership/reachability tests in
+    tests/test_checks_registry.py stay green with the new registration (no edit required there).
   - >-
     ci.yml's signal-green comment step retries the gh pr comment up to 3 times, remains
     continue-on-error: true, remains gated to claude/* PRs, and signal-green.needs is unchanged
@@ -117,48 +112,48 @@ verification_plan:
   - step: 1
     phase: pre-deploy
     action: >-
-      New structural guard executes clean against the real pr-conflict-signal.yml (asserts trigger,
+      New registered guard executes clean against the real pr-conflict-signal.yml (asserts trigger,
       claude/* filter, mergeable poll, CONFLICTING gate, continue-on-error, dedup marker,
-      permissions).
+      permissions) -- an empty failed list means pass.
     command: >-
-      bin/venv-python -c 'from scripts.verify_ci_workflow import _check_pr_conflict_signal;
-      _check_pr_conflict_signal(); print("guard OK")'
-    expected: Prints "guard OK", exit 0.
+      bin/venv-python -c 'from scripts.checks.ci_guards.validate_pr_conflict_signal import
+      validate_pr_conflict_signal as f; failed=[]; f(failed); assert not failed, failed;
+      print("guard OK")'
+    expected: Prints "guard OK", exit 0 (failed list empty).
     fix_if: >-
-      AssertionError names the missing/incorrect workflow property -> correct pr-conflict-signal.yml
-      until the guard passes. ImportError -> the guard was not added/exported.
+      failed is non-empty naming the missing/incorrect workflow property -> correct
+      pr-conflict-signal.yml until the guard passes. ImportError -> the module was not created.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      The assertion is permanently enforced as the _check_pr_conflict_signal ci-workflow guard wired
-      into validate --pre (via validate_ci_workflow_guards); a verification_registry row would
-      duplicate that standing guard, not add differential coverage.
+      The assertion is permanently enforced as the registered validate_pr_conflict_signal check in
+      the --pre and full tiers; a verification_registry row would duplicate that standing guard, not
+      add differential coverage.
   - step: 2
     phase: pre-deploy
-    action: The new guard is wired into the --pre presubmit tier (appears in the guards list).
+    action: The new guard is wired into both the pre and full tier sequences in registry.py.
     command: >-
-      bin/venv-python -c 'import inspect; from scripts.checks.ci_guards import
-      validate_ci_workflow_guards as m; src=inspect.getsource(m); assert "_check_pr_conflict_signal"
-      in src, "guard not wired"; print("wired OK")'
-    expected: Prints "wired OK", exit 0.
+      bash -c 'n=$(grep -c "validate_pr_conflict_signal" scripts/checks/registry.py); test "$n" -ge 2
+      && echo "wired OK ($n)"'
+    expected: Prints "wired OK (2)" (or more), exit 0.
     fix_if: >-
-      AssertionError -> add the import and the ("pr-conflict-signal", _check_pr_conflict_signal)
-      tuple to the guards list in validate_ci_workflow_guards.py.
+      Count < 2 -> add _c("validate_pr_conflict_signal") to both pre_sequence() and full_sequence().
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      The wiring is self-evidencing once the guard runs in the --pre tier; a standing registry row
-      duplicates the guard's own presence.
+      The wiring is self-evidencing once the guard runs in both tiers (step 8's validate --pre
+      exercises it); a standing registry row duplicates the guard's own tier membership.
   - step: 3
     phase: pre-deploy
-    action: New guard unit tests (pass + fail paths) and the guard-wiring wrapper tests pass.
+    action: New guard unit tests (pass + fail paths) pass; the registry tests stay green.
     command: >-
-      bin/venv-python -m pytest tests/test_verify_ci_workflow.py
-      tests/checks/ci_guards/test_validate_ci_workflow_guards.py -q
+      bin/venv-python -m pytest tests/checks/ci_guards/test_validate_pr_conflict_signal.py
+      tests/test_checks_registry.py -q
     expected: All tests pass, exit 0.
     fix_if: >-
-      A failing test -> fix the guard logic or the test fixtures; a StopIteration/mock-exhaustion
-      error -> the wrapper test's mock module needs the new guard attribute.
+      A failing guard test -> fix the guard logic or fixtures; a registry test failure -> the new
+      check is unreachable via getattr/from-import (registration/name mismatch) or was pinned to a
+      non-default owner (keep owner="platform").
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -211,13 +206,15 @@ verification_plan:
       implement skill wait-for-CI no longer lists the send_later backstop and still points to
       AGENTS.md as canonical.
     command: >-
-      bash -c 'sed -n "470,490p" .claude/skills/implement/SKILL.md | grep -qi "AGENTS.md" &&
-      ! (sed -n "470,490p" .claude/skills/implement/SKILL.md | grep -qi "send_later backstop") &&
-      echo "implement-skill OK"'
+      bash -c 'blk=$(sed -n "478,484p" .claude/skills/implement/SKILL.md); echo "$blk" | grep -qi
+      "AGENTS.md" && ! (echo "$blk" | grep -qiE "send_later.{0,5}backstop|backstop bounds") && echo
+      "implement-skill OK"'
     expected: Prints "implement-skill OK", exit 0.
     fix_if: >-
-      The backstop is still listed, or the AGENTS.md pointer was dropped -> remove the backstop
-      component from the wait-for-CI list and keep the canonical pointer.
+      The backstop phrase is still present in the wait-for-CI block, or the AGENTS.md pointer was
+      dropped -> remove the backstop component from the list and keep the canonical pointer. (This
+      pattern matches the real backtick text ``send_later` backstop bounds``, unlike a naive
+      space-separated pattern.)
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -226,17 +223,17 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: >-
-      Stale-reference sweep (closure obligation): no repo instruction surface still permits/instructs
+      Stale-reference sweep (closure obligation): no LIVE instruction surface still permits/instructs
       arming the ~1h send_later CI-wait backstop.
     command: >-
-      bash -c 'if grep -rniE "send_later.{0,40}(backstop|self-check-in|check-in).{0,40}(permit|allow|arm)|(permit|allow|arm).{0,40}send_later.{0,40}(backstop|check-in)"
-      AGENTS.md .claude/skills/ docs/; then echo "LINGERING permit-language found"; exit 1; else echo
+      bash -c 'if grep -rniE "(permit|allow|arm|one-shot).{0,60}send_later.{0,60}(backstop|check-in)|send_later.{0,60}(backstop|check-in).{0,60}(permit|allow|arm)"
+      AGENTS.md .claude/skills/; then echo "LINGERING permit-language found"; exit 1; else echo
       "sweep clean"; fi'
     expected: Prints "sweep clean", exit 0.
     fix_if: >-
-      Any lingering permit-language match -> remove or rewrite it to the forbid directive (note:
-      historical plan docs under docs/plans/ that merely record the old design are acceptable; only
-      live instruction surfaces must be clean).
+      Any lingering permit-language match in AGENTS.md or .claude/skills/ -> remove or rewrite it to
+      the forbid directive (historical plan docs under docs/plans/ that merely record the old design
+      are out of scope for this sweep; only live instruction surfaces must be clean).
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
@@ -285,7 +282,7 @@ verification_plan:
       the loop so a first-attempt success still posts exactly one comment.
 constraints:
   - >-
-    Only modify the 8 files listed in scope (AGENTS.md "Only modify files explicitly in scope").
+    Only modify the 7 files listed in scope (AGENTS.md "Only modify files explicitly in scope").
   - >-
     A wake signal must never red a build: the new conflict-wake comment step and the signal-green
     comment step are continue-on-error: true (mirrors the sanctioned signal-green precedent; the
@@ -307,6 +304,11 @@ constraints:
     push-only and would deadlock a PR-scoped job; the new workflow is a separate file and cross-workflow
     needs are unsupported).
   - >-
+    The new guard is a dedicated registered module under scripts/checks/ci_guards/ (owner="platform",
+    NOT pinned) -- do not add its assertions to scripts/verify_ci_workflow.py (its mirror test is at
+    the 573/573 SLOC ceiling, Decision 128/130) and do not decompose that test file here (that is the
+    rec-2709 tests/ SLOC wave's job, not this plan's).
+  - >-
     AGENTS.md is canonical for the wake contract; the implement skill points to it and does not
     restate it (the "## Git-ops procedure" header rule / Decision 86 forward-routing).
   - >-
@@ -321,7 +323,7 @@ context:
     Decision 132, Decision 128, Decision 86. RELATED = Decision 74 (workflow_dispatch escape-hatch),
     Decision 75 (frame-lock -- consciously discharged), Decision 100 (no native GitHub primitive for
     a conflict wake).
-  - "gates: decision-scout=NO_FLAGS (round 2; round 1 was FLAGS_FOUND on a Decision 83 NOTE, accepted-with-deferral by the human); plan-critique=pending (Step 9)"
+  - "gates: decision-scout=NO_FLAGS (round 2; round 1 was FLAGS_FOUND on a Decision 83 NOTE, accepted-with-deferral by the human); plan-critique round 1 = REVISE (SLOC-ceiling blocker on tests/test_verify_ci_workflow.py + vacuous VP step 6); both addressed (guard relocated to a dedicated registered module scripts/checks/ci_guards/validate_pr_conflict_signal.py; VP step 6 grep corrected for the backtick text); plan-critique round 2 = pending re-dispatch"
   - >-
     Decision 83/76 name GitHub-native auto-merge (enable_pr_auto_merge; CD.20 / rec-940) as the
     durable successor that will eventually retire the comment-wake machinery. This plan consciously
@@ -338,6 +340,18 @@ context:
     delivered by the harness subscribe_pr_activity subscription (the exact basis of signal-green), so
     a comment is a valid immediate wake for the otherwise-undelivered merge-conflict transition.
   - >-
+    Guard-placement rationale: the new structural guard lives in a dedicated registered module
+    (scripts/checks/ci_guards/validate_pr_conflict_signal.py) rather than as a helper in
+    scripts/verify_ci_workflow.py, because that module's colocated mirror test
+    tests/test_verify_ci_workflow.py is at its exact SLOC ceiling (573/573, grandfathered under
+    Decision 130 pending the rec-2709 tests/ decomposition wave) -- any added test would red
+    validate_sloc_limits. A fresh module + fresh mirror test (tests/checks/ci_guards/
+    test_validate_pr_conflict_signal.py) has ample headroom and follows the modern registered-check
+    pattern (scripts/CLAUDE.md "Adding a validate.py check"; Decision 104). registry.py additions are
+    growth-safe: tests/test_checks_registry.py asserts membership floors + uniqueness + reachability,
+    not exact counts, and the new check must stay owner="platform" (unpinned) so
+    test_exactly_three_pinned_checks holds.
+  - >-
     Prior art: PLAN-green-ci-wake-gate (created the signal-green job) and PLAN-pr-subscribe-wake-reconcile
     (introduced the ~1h send_later backstop this plan retires). The backstop was introduced by a plan
     doc, NOT by a Decision, so retiring it contradicts no active decision -- and it is MORE aligned
@@ -348,28 +362,22 @@ context:
     "repo contract overrides harness suggestion" (PLAN-pr-subscribe-wake-reconcile), so forbidding
     the backstop in AGENTS.md is consistent with the existing posture, not a new conflict.
   - >-
-    Coverage note: modifying scripts/checks/ci_guards/validate_ci_workflow_guards.py obligates
-    coverage in tests/checks/ci_guards/test_validate_ci_workflow_guards.py. The existing wrapper
-    tests drive the guards loop through a MagicMock module (which auto-creates the new
-    _check_pr_conflict_signal attribute), so the new entry is exercised without a change; the test
-    file is in scope defensively in case the coverage checker wants an explicit assertion.
-  - >-
     Related-Work / CI-RCA: ci_rca_unresolved_recs is empty at planning time (no HARD BLOCK). The
     human explicitly scoped this session away from CI-RCA recs (user_explicit_out_of_scope).
   - >-
     Main Divergence: branch was 0 commits behind origin/main at planning time; no scope-file overlap
     with main_files_changed_since_branch.
   - >-
-    SLOC (Decision 128/130): scripts/verify_ci_workflow.py, validate_ci_workflow_guards.py, and the
-    two test files must stay under their config/sloc_budgets.yaml budgets -- decompose rather than
-    raise if a change crosses budget.
+    SLOC (Decision 128/130): the newly created module and test file are well under 500 SLOC and need
+    no budget entry; registry.py (188 SLOC) gains two lines. No at-budget file is modified, so no
+    raise and no decomposition is required by this plan.
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
   - >-
     DECISIONS.md reviewed (handled via the decision-scout gate at planning time -- NO_FLAGS; CITE
     Decision 76, 55, 73, 83, 104, 132, 128, 86)
-  - All 8 files in scope located and readable
+  - All 7 files in scope located and readable
   - Acceptance criteria understood and verifiable
 execution_steps:
   - >-
@@ -391,19 +399,24 @@ execution_steps:
     (e.g. for i in 1 2 3; do gh pr comment ... && break || sleep 3; done). Keep continue-on-error: true,
     the claude/* if-gate, and needs: [pr-validate, terraform-validate] unchanged.
   - >-
-    In scripts/verify_ci_workflow.py, add _check_pr_conflict_signal() that loads
-    .github/workflows/pr-conflict-signal.yml and asserts: on has push with branches [main] and
-    workflow_dispatch; the job permissions include pull-requests: write; the steps text filters on
-    "claude/", polls mergeable (references "mergeable" and skips/handles "UNKNOWN"), gates the comment
-    on "CONFLICTING", carries continue-on-error, and embeds a "conflict-wake:" head-SHA marker. Register
-    it in the _COMMANDS dict. Then in scripts/checks/ci_guards/validate_ci_workflow_guards.py import it
-    and append ("pr-conflict-signal", _check_pr_conflict_signal) to the guards list.
+    Create scripts/checks/ci_guards/validate_pr_conflict_signal.py: a registered check decorated
+    @registry.register("validate_pr_conflict_signal", owner="platform") with signature
+    def validate_pr_conflict_signal(failed: list[str]) -> None that loads
+    .github/workflows/pr-conflict-signal.yml (reuse _load and _get_steps_text imported from
+    scripts.verify_ci_workflow to avoid duplication) and appends a distinct label to failed for each
+    missing/incorrect property: on.push.branches == [main]; on has workflow_dispatch; job permissions
+    include pull-requests: write; the steps text filters on "claude/"; polls "mergeable" and handles
+    "UNKNOWN" (skip); gates the comment on "CONFLICTING"; carries continue-on-error; embeds a
+    "conflict-wake:" head-SHA marker. Then in scripts/checks/registry.py insert
+    _c("validate_pr_conflict_signal") into BOTH pre_sequence() and full_sequence(), adjacent to the
+    existing _c("validate_ci_workflow_guards") entries. Do NOT pin the owner (keeps
+    test_exactly_three_pinned_checks at 3).
   - >-
-    In tests/test_verify_ci_workflow.py, add TestCheckPrConflictSignalPassPath (real file + a valid
-    mocked _load) and TestCheckPrConflictSignalFailPath (mocked data missing each asserted property ->
-    AssertionError), mirroring the _check_signal_green_needs test classes. If the coverage checker flags
-    validate_ci_workflow_guards.py, extend tests/checks/ci_guards/test_validate_ci_workflow_guards.py
-    minimally to exercise the new guard entry.
+    Create tests/checks/ci_guards/test_validate_pr_conflict_signal.py with a pass-path class (real
+    file + a valid mocked _load returning a well-formed workflow dict -> failed stays empty) and a
+    fail-path class (mocked data missing each asserted property -> failed non-empty, asserting the
+    specific label), mirroring the ci_guards test style. No edit to tests/test_checks_registry.py is
+    required (its membership/reachability assertions are growth-safe).
   - >-
     In AGENTS.md "## Git-ops procedure" -> "Push -> PR -> CI -> merge flow" step 4: register the new
     merge-conflict wake signal next to the signal-green CI-success wake, and replace the "Dropped-signal
@@ -426,7 +439,7 @@ execution_steps:
   - "Report: what was implemented and the verification results."
 work_areas: []
 rollback: >-
-  Revert the 8-file diff. The harness subscribe_pr_activity message, the signal-green wake, and any
+  Revert the 7-file diff. The harness subscribe_pr_activity message, the signal-green wake, and any
   active PR subscription are unaffected. If the conflict-wake proves insufficient in practice,
   re-adding the AGENTS.md/implement-skill backstop guidance restores the prior ~1h send_later
   safety net without touching the new workflow.
