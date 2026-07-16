@@ -20,11 +20,14 @@ scope:
     purpose: >-
       Live per-run affected-set derivation. Unions FOUR channels over the edited-set, strictly
       additively (selection can only GROW): (1) import-closure reverse-deps via
-      scripts/dependency_graph.py; (2) data-edge basename grep (generalizes+retires
-      select_roadmap_guard_tests); (3) map_source_to_test() mirror map; (4) conftest-subtree rule.
-      Composition + ~35-module cap + loud defer of the transitive residue + exception->edited-set
-      fallback + selection-manifest.json emission. Decompose into scripts/checks/deps/ submodules if
-      it would cross 500 SLOC (Decision 128 -- never raise the budget).
+      scripts/dependency_graph.py; (2) data-edge PRECISE-match channel (generalizes+retires
+      select_roadmap_guard_tests) -- scoped to non-.py data artifacts changed in the diff PLUS the
+      deleted-.py-bytes Incident-B case, matched by PATH or QUOTED-TOKEN reference (NOT a bare
+      substring), so common basenames (config.py, utils.py, __init__.py, base.py) do NOT
+      false-positive and inflate the uncapped protected set; (3) map_source_to_test() mirror map;
+      (4) conftest-subtree rule. Composition + ~35-module cap + loud defer of the transitive residue
+      + exception->edited-set fallback + selection-manifest.json emission. Decompose into
+      scripts/checks/deps/ submodules if it would cross 500 SLOC (Decision 128 -- never raise).
   - file: scripts/checks/_common.py
     action: Modify
     purpose: >-
@@ -45,23 +48,28 @@ scope:
   - file: scripts/validate.py
     action: Modify
     purpose: >-
-      Replace the inline edited-set changed_tests computation in main()'s --pre block with a call to
-      the new derivation; retire select_roadmap_guard_tests (function + call site) into the general
-      data-edge channel; wire the manifest emit/print. main() is the thin CLI surface (Decision 104);
-      the new check registers via the registry, not by hand-wiring here.
+      PREFERRED IMPLEMENTATION: inline -- replace the edited-set changed_tests computation in main()'s
+      --pre block with a call to the new derivation that FEEDS THE EXISTING pytest_diff scaffold
+      (touching NEITHER registry.py NOR the frozen-baseline). Retire select_roadmap_guard_tests
+      (function + call site) into the general data-edge channel; wire the manifest emit/print. main()
+      is the thin CLI surface (Decision 104).
   - file: scripts/checks/registry.py
     action: Modify
     purpose: >-
-      pre_sequence() wiring for any new --pre step introduced by the derivation. WS1 owns this file;
-      any registration edit moves in the SAME commit as the tests/test_checks_registry.py floor
-      update (frozen-baseline canary coupling).
+      CONDITIONAL / preferred no-op. Only touched if the implementer introduces a NEW pre_sequence
+      scaffold/check step instead of the preferred inline path. If so, WS1 owns this file and any
+      wiring edit moves in the SAME commit as the tests/test_checks_registry.py floor+scaffold-anchor
+      update (canary coupling). With the inline path this entry is a no-op (registry.py untouched).
   - file: scripts/checks/_scaffolding.py
     action: Modify
     purpose: >-
       Batch the currently-serial per-file collect-only pass in
       partition_changed_tests_by_collectability into ONE pytest invocation (~30x saving) to net-fund
-      the cap+defer + derivation cost inside the 5-min budget. Preserve the existing loud defer idiom
-      (_print_deferred_warning).
+      the cap+defer + derivation cost inside the 5-min budget. MUST parse the batched --collect-only
+      ERROR blocks PER FILE (attribute each collection error to its own file via the error header
+      path), so exactly the uncollectable file(s) defer and the rest still run -- a naive single-batch
+      collect that mis-defers the ENTIRE affected-set on one bad file is a near-silent under-run and
+      is forbidden. Preserve the existing loud defer idiom (_print_deferred_warning).
   - file: .github/workflows/ci.yml
     action: Modify
     purpose: >-
@@ -72,18 +80,26 @@ scope:
   - file: tests/checks/deps/test_affected_tests.py
     action: Create
     purpose: >-
-      Incident-replay + per-channel + additive-invariant + cap/defer + manifest + graceful-degrade
-      regression tests that exercise the REAL selector (not mocks of it) and fail when the relevant
-      channel is disabled. New package dir carries __init__.py; self-contained (no cross-test
-      imports), conftest layered per Decision 131.
+      Regression tests that exercise the REAL selector (not mocks of it) and fail when the relevant
+      channel is disabled. Classes: TestImportClosureChannel, TestDataEdgeChannel (Incident A),
+      TestDeletedPathDataEdge (Incident B), TestFacadeNodeSoundness, TestPatchStringEdgeSoundness,
+      TestAdditiveOnlyInvariant, TestCapAndDefer, TestDataEdgePrecision (common-basename no-over-
+      select), TestManifestEmission (keys + per-test provenance/channel), TestS3UploadDegradesGracefully
+      (lazy boto3 + loud skip), TestExceptionFallback (edited-set loud fallback), TestManifestNotAnInput
+      (selection byte-identical across absent/present/mutated prior manifest). New package dir carries
+      __init__.py; self-contained (no cross-test imports), conftest layered per Decision 131.
   - file: tests/test_dependency_graph.py
     action: Modify
     purpose: Tests for the two soundness patches (facade __init__ package nodes; patch-string module edges).
   - file: tests/test_checks_registry.py
     action: Modify
     purpose: >-
-      Update REQUIRED_PRE_CHECKS floor if a new --pre check is registered (same-commit canary
-      coupling). This file is also _common.py's coverage-checker mapped home.
+      CONDITIONAL / preferred no-op. Only touched if registry.py's pre_sequence gains a new
+      scaffold/check step: a new SCAFFOLD step needs a FROZEN_PRE_SCAFFOLDS exact-tuple update
+      (a new CHECK passes the membership floor unchanged), and either moves in the SAME commit as the
+      registry.py edit. With the preferred inline path this entry is a no-op. This file is also
+      _common.py's coverage-checker mapped home (so it may still be touched to cover the new
+      status-aware diff fn).
   - file: tests/validate/test_changed_files.py
     action: Modify
     purpose: >-
@@ -130,18 +146,33 @@ acceptance_criteria:
     select_roadmap_guard_tests is removed (function + call site) and its behavior is subsumed by the
     general data-edge channel: a roadmap-YAML change still selects the roadmap-guard tests.
   - >-
+    Data-edge precision: the channel matches by PATH or QUOTED-TOKEN reference (not bare substring)
+    and is scoped to non-.py data artifacts + the deleted-.py-bytes Incident-B case, so a change to a
+    common basename (config.py, utils.py, __init__.py) does NOT over-select every test that merely
+    mentions that word; the uncapped protected set stays bounded and the whole-tests/ scan cost is
+    counted in the fast-tier budget.
+  - >-
     A per-run selection-manifest.json is emitted (sha, status-aware diff, per-test provenance/channel,
     selected/capped/deferred, timings) to a gitignored path, printed in the CI log, and uploaded as a
     GitHub Actions artifact; the aws s3 cp path lazy-imports boto3 and degrades gracefully (loud skip)
     when creds/boto3 are absent (the no-creds fast tier); the manifest is NEVER a selection input.
   - >-
     The collect-only partition in partition_changed_tests_by_collectability runs as a single batched
-    pytest invocation.
+    pytest invocation that attributes collection errors PER FILE: a mixed batch (one uncollectable +
+    several runnable) defers ONLY the uncollectable file and runs the rest -- never mis-defers the
+    whole affected-set on one bad file.
   - >-
-    bin/venv-python -m scripts.validate --pre passes green within the 5-minute fast-tier budget; any
-    new --pre check registration + the tests/test_checks_registry.py floor update + any docs move in
-    the SAME commit; every touched source file stays <= 500 SLOC (decompose, never raise -- Decision
-    128 / 130).
+    The manifest surface is verified: emission with per-test provenance/channel content; best-effort
+    S3 upload that lazy-imports boto3 and LOUD-skips (not silent) when creds/boto3 absent; the
+    exception->edited-set LOUD fallback; and the MANIFEST-NOT-AN-INPUT invariance (selection is
+    byte-identical whether a prior manifest is absent or mutated -- proves the cacheless/no-drift
+    property structurally, not by comment).
+  - >-
+    bin/venv-python -m scripts.validate --pre passes green within the 5-minute fast-tier budget;
+    every touched source file stays <= 500 SLOC (decompose, never raise -- Decision 128 / 130). IF
+    (and only if) the implementer adds a new pre_sequence scaffold/check step instead of the preferred
+    inline path, the registry.py wiring + the tests/test_checks_registry.py floor/scaffold-anchor
+    update + any docs move in the SAME commit (canary coupling).
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -252,24 +283,90 @@ verification_plan:
     graduation_waiver_reason: Standing pytest regression (TestRoadmapGuardSubsumption); the subsumption equivalence is suite-covered, not a kernel primitive.
   - step: 10
     phase: pre-deploy
-    action: Batched collect-only -- partition_changed_tests_by_collectability runs one pytest invocation, not one per file.
-    command: bin/venv-python -m pytest tests/validate/test_pytest_diff.py -v
-    expected: Tests pass, including the assertion that collect-only is invoked exactly once for a multi-file batch.
-    fix_if: The partition still spawns one collect-only subprocess per file (serial), not a single batched invocation.
+    action: >-
+      Data-edge PRECISION -- a change to a common basename (e.g. config.py / utils.py / __init__.py)
+      does NOT over-select every test that merely mentions that word; only precise path/quoted-token
+      references select.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestDataEdgePrecision -v
+    expected: Test passes; a common-basename change selects only tests with a precise path/quoted-token reference, not bare-substring mentions -- the uncapped protected set stays bounded.
+    fix_if: The data-edge channel matches bare substrings, so a common basename inflates the protected set (and can blow the 5-min budget with no cap relief).
     hermetic: false
     graduation: waive
-    graduation_waiver_reason: Standing pytest regression (test_pytest_diff.py); the batching behavior is suite-covered.
+    graduation_waiver_reason: Standing pytest regression (TestDataEdgePrecision); the precise-match property is a pure-function grep over a fixture repo, suite-covered with no independent kernel signal.
   - step: 11
     phase: pre-deploy
     action: >-
-      Registry canary coupling -- the growth-safe floor + scaffold-anchor order stay green after any
-      pre_sequence wiring (same-commit baseline update).
-    command: bin/venv-python -m pytest tests/test_checks_registry.py -v
-    expected: All tests pass; REQUIRED_PRE_CHECKS floor and FROZEN_PRE_SCAFFOLDS order hold after the wiring + baseline update land together.
-    fix_if: A new --pre step was registered without the same-commit floor update, or a scaffold-anchor was perturbed.
+      Batched collect-only with PER-FILE attribution -- a MIXED batch (one uncollectable file +
+      several runnable) defers ONLY the uncollectable one and runs the rest (not one collect-only
+      subprocess per file, and NOT a whole-batch mis-defer on one bad file).
+    command: bin/venv-python -m pytest tests/validate/test_pytest_diff.py -v
+    expected: Tests pass, including a mixed-batch case where exactly the one uncollectable file defers and the several runnable files still run under a single batched collect-only invocation.
+    fix_if: The batch mis-defers the entire affected-set on one uncollectable file (near-silent under-run), or reverts to one collect-only subprocess per file.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: Standing pytest regression (test_pytest_diff.py); the per-file attribution + batching behavior is suite-covered.
   - step: 12
+    phase: pre-deploy
+    action: >-
+      Manifest emission + content -- selection-manifest.json is produced with the required keys (sha,
+      status-aware diff, per-test provenance/channel, selected/capped/deferred, timings) and each
+      selected test carries a correct channel/provenance tag.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestManifestEmission -v
+    expected: Test passes; the manifest dict has all required keys and per-test provenance matches the channel that selected each test.
+    fix_if: The manifest is missing keys, or per-test provenance is absent/wrong (cannot attribute an escape to a channel).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: Standing pytest regression (TestManifestEmission); the manifest schema/content is suite-covered, no independent kernel signal.
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      S3 best-effort graceful degrade -- with boto3/creds absent, the upload lazy-imports boto3 and
+      prints a LOUD skip (never silent, never raising), and never counts against the budget.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestS3UploadDegradesGracefully -v
+    expected: Test passes; when boto3 import or creds resolution fails, the function prints a loud skip and returns without raising (Decision 55 no-silent-skip).
+    fix_if: The upload raises (breaks --pre in the no-creds fast tier), or skips silently with no printed warning.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: Standing pytest regression (TestS3UploadDegradesGracefully); the degrade path is suite-covered.
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Exception -> edited-set LOUD fallback -- when the derivation raises internally, the selector
+      falls back to the edited-set and prints a loud warning, never silently shrinking below it.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestExceptionFallback -v
+    expected: Test passes; an injected derivation exception yields a selection >= the edited-set with a loud printed fallback warning.
+    fix_if: A derivation exception silently shrinks the selection (below the edited-set) or is swallowed without a warning.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: Standing pytest regression (TestExceptionFallback); the fail-loud fallback is suite-covered.
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      MANIFEST-NOT-AN-INPUT invariance -- the derivation output is byte-identical whether a prior
+      selection-manifest.json is ABSENT, present, or deliberately MUTATED; the manifest never feeds
+      selection (proves the cacheless/no-drift property structurally, not by comment).
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestManifestNotAnInput -v
+    expected: Test passes; selection for a fixed diff is identical across absent / present / mutated prior-manifest states.
+    fix_if: The selection changes when a prior manifest is present or mutated -- the manifest is being read as an input (drift/cache violation).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: Standing pytest regression (TestManifestNotAnInput); the no-input invariance is suite-covered, no independent kernel signal.
+  - step: 16
+    phase: pre-deploy
+    action: >-
+      Registry/canary coupling OR inline no-op -- either registry.py + the frozen-baseline stay green
+      after a same-commit scaffold/check wiring, OR (preferred inline path) both are untouched.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -v
+    expected: All tests pass; REQUIRED_PRE_CHECKS floor + FROZEN_PRE_SCAFFOLDS order hold (untouched under the inline path; consistently updated if a new step was wired in the same commit).
+    fix_if: A new scaffold/check step was wired without the same-commit floor/scaffold-anchor update, perturbing the baseline.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Standing registry regression (test_checks_registry.py) that runs in the full post-merge tier;
+      it is a suite-level structural guard over the check registry with no per-change verification
+      seam a kernel primitive would capture, and under the preferred inline path it is a pure no-op
+      assertion -- graduating it adds no independent signal.
+  - step: 17
     phase: pre-deploy
     action: >-
       End-to-end + net-budget proof -- the full fast tier runs green within the 5-min budget with live
@@ -278,7 +375,19 @@ verification_plan:
     expected: "Validation Summary (scope: pre): All checks passed; elapsed under the 5-minute fast-tier budget (no budget-breach rec filed)."
     fix_if: The derivation errors (should fall back to edited-set loudly, never silently shrink), reds a check, or blows the budget (the batched collect-only saving did not net-fund the derivation).
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is an end-to-end budget/meta-run of the whole fast tier (invokes validate --pre), not a
+      single kernel-primitive command; graduating it would recurse into the check sequence it runs.
+      It is the plan's integration proof, not a graduatable standing check.
+  - step: 18
+    phase: post-deploy
+    action: >-
+      rec-2638 closure -- after the feat PR merges with a `Resolves: rec-2638` trailer, rec-autoclose
+      closes the rec; confirm it via the operator cache-rebuild + read.
+    command: 'bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path(''logs/.recommendations-log.jsonl'').read_text().splitlines() if l.strip()]; r=next((x for x in rows if x.get(''id'')==''rec-2638''), None); assert r and r.get(''status'')==''closed'', (r or {}).get(''status''); print(''rec-2638 closed'')"'
+    expected: Prints `rec-2638 closed`; the read cache (rebuilt from the DuckLake reader) shows rec-2638 status=closed. Behavioral co-resolution itself is covered pre-merge by VP step 7.
+    fix_if: rec-2638 is still open post-merge -- the Resolves trailer was omitted from the squash-merge body (fallback closure via ops_data_portal --update-rec rec-2638 --status closed).
 constraints:
   - No SLOC budget raises -- decompose past-budget files into a scripts/checks/deps/ facade package (Decision 128 / 80 / 104 / 124); never raise config/sloc_budgets.yaml. New + modified tests/ files are whole-repo scanned (Decision 130).
   - Never add a check to .github/workflows/ci.yml without adding it to validate.py / the checks registry first (validate.py is the single source of truth). The ci.yml edit here is an artifact-upload STEP, not a check; it must keep validate_ci_workflow_guards green.
@@ -288,7 +397,8 @@ constraints:
   - Selection is STRICTLY ADDITIVE over the edited-set -- it can only GROW, never shrink. On derivation exception, fall back to edited-set and print loudly; never silently shrink (Decision 55).
   - S3 upload stays best-effort/async so it never counts against the 5-min budget assertion (Decision 73); it degrades to a loud skip (lazy boto3) in the no-creds fast tier -- never silent (Decision 55).
   - No rescue agents or workaround loops (Decision 55); on an unrecoverable failure, stop and RCA.
-  - "WS1 owns scripts/checks/registry.py (pre_sequence wiring) AND the tests/test_checks_registry.py frozen-baseline tests -- any new --pre registration + the baseline update + any docs MUST land in the SAME commit (canary trap rec-2673/2674/2675)."
+  - "PREFER the inline path: the derivation feeds the EXISTING pytest_diff scaffold from main()'s --pre block, touching NEITHER scripts/checks/registry.py NOR the tests/test_checks_registry.py frozen-baseline. ONLY IF a new pre_sequence scaffold/check step is introduced does WS1's ownership + same-commit canary coupling apply: the wiring + the floor/scaffold-anchor update + any docs land in ONE commit (canary trap rec-2673/2674/2675); a new SCAFFOLD needs the FROZEN_PRE_SCAFFOLDS exact-tuple update, a new CHECK passes the membership floor unchanged. Under the inline path this coupling AND the WS3 registry handoff are moot."
+  - "Data-edge channel matches by PATH or QUOTED-TOKEN reference, NEVER bare substring, and is scoped to non-.py data artifacts + the deleted-.py-bytes Incident-B case -- so common basenames (config.py/utils.py/__init__.py) do not inflate the uncapped protected set; the whole-tests/ single-pass scan cost is counted against the 5-min budget (VP step 17)."
   - Do NOT add a DuckLake table or a warehouse named-verb for the manifest -- that registration is deferred to T2.36. Do NOT file a KG.13 test-impact/caching tier_item and do NOT arm the Decision 80 Bazel/Pants revisit trigger.
   - Every pre-deploy VP step carries a graduation disposition; graduate steps must produce a matching verification-checks registry row at implement time or validate_graduation_completeness reds the feat PR (Decision 132).
   - "Scope-drift check at implement start -- confirm the working tree matches this Scope table before editing; out-of-scope bugs become recommendations via scripts.ops_data_portal, not inline fixes."
@@ -297,7 +407,7 @@ context:
   - "KG.13 BOUNDARY (load-bearing; decision-scout D80 NOTE, no pivot needed): KG.13 is the deferred Bazel-style Test-Impact-Analysis + selection/coverage-cache work, gated by T3.11 c5's revisit trigger (concurrency>1 AND (KG.13 filed OR fast-tier-budget breach)). This design is a LIVE, cacheless, strictly-additive, tool-free (ast/networkx) derivation -- NOT a selection cache and NOT a coverage cache -- so it lands in Decision 80 pt3's sanctioned bucket, not pt4's deferred orchestrator bucket. The new Decision must state explicitly that it does NOT file a KG.13 tier_item and does NOT arm the revisit trigger, so a later reader cannot mistake it for KG.13's realization. KG.13 stays deferred and undisturbed."
   - "DECISION-SCOUT D73-budget NOTE (net-budget math): the added cost (import-graph build ~2.2s + basename grep + manifest emit) is net-funded by batching the currently-serial per-file collect-only pass into one pytest invocation (~30x saving); the best-effort/async S3 cp never counts against the budget assertion. VP step 12 runs the real `--pre` and asserts green-under-budget (no budget-breach rec). p90 target ~2-2.5 min."
   - "DECISION-SCOUT D48-tier NOTE (V2 is correct): the .github/workflows/ci.yml edit is an artifact-upload step (not in D48's exhaustive V3 trigger list) and the manifest S3 object is best-effort observability, not a contract another service consumes (pr-validate has no creds; it degrades). V2 is the correct classification (avoids the rec-448 under-classification failure D48 was born from); the substantive verification is unit-level incident replay against the REAL selector."
-  - "CROSS-DEPENDENCY with parallel WS3 (aws-test-hermeticity) plan being written concurrently: WS1 (this plan) OWNS scripts/checks/registry.py pre_sequence wiring AND the FROZEN_PRE_SEQUENCE baseline tests (tests/test_checks_registry.py). WS3 owns tests/conftest.py and DEFERS its own check registration to a post-WS1 rebase. WS1 lands first; WS3 rebases -- do not let WS3's conftest changes and WS1's registry/baseline changes collide."
+  - "CROSS-DEPENDENCY with parallel WS3 (aws-test-hermeticity), CONDITIONAL on WS1 taking the scaffold/check-registration path: if WS1 uses the PREFERRED inline path it touches neither registry.py nor the frozen-baseline, so there is no collision surface and the WS3 handoff is MOOT. IF WS1 instead introduces a new pre_sequence step, then WS1 owns registry.py + the FROZEN_PRE_SEQUENCE baseline and lands first; WS3 (which owns tests/conftest.py and defers its own check registration) rebases after. Flag which path was taken at implement time so the overseer can sequence WS3."
   - "Manifest path is gitignored (e.g. logs/debug/selection-manifest.json -- confirmed git check-ignore); never committed. Printed in the CI log + uploaded as a GitHub Actions artifact in pr-validate. The aws s3 cp to the data-lake ci/selection/ prefix is best-effort and creds-gated: pr-validate has permissions contents:read only (no OIDC, no AWS creds) and requirements-fast.txt omits boto3, so the upload lazy-imports boto3 and degrades to a loud skip (mirrors ensure_fresh_dq_results / _file_budget_breach_rec CI-guard patterns). The Actions artifact is the PR-context capture; S3 durable store + DuckLake query surface deferred to T2.36."
   - "get_changed_files() (scripts/checks/_common.py ~line 42) filters out deleted paths (and untracked never appear -- git diff only); the NEW status-aware diff function is added ALONGSIDE it and get_changed_files()'s contract is preserved for existing callers (tests/validate/test_changed_files.py asserts the deleted-path drop). Untracked visibility primarily fixes LOCAL --pre under-checking (rec-2638); CI checkouts contain only committed files."
   - "dependency_graph.reverse_deps returns DIRECT predecessors only; the affected-set needs the full reverse transitive closure -- compute via nx.ancestors in affected_tests.py. build_graph currently skips __init__.py (soundness patch (i) adds package nodes) and does not union patch-string module edges (soundness patch (ii))."
@@ -305,23 +415,23 @@ context:
   - "Decision draft (slug 'Decision affected-set-selection'): the number is assigned by the implement subagent at final rebase (main moves ~13/day; numbers collide -- Decision 77 precedent) and lands IN the feat PR via the ops portal (Decision 84 numbering authority), not this plan PR. Draft ratifies: (a) the four-channel live derivation + cap+defer + soundness patches (facade nodes, string edges, status-aware diff incl. deletions/untracked); (b) selection manifests as append-only S3 observability artifacts consumed ONLY by CI-RCA escape-attribution, explicitly NOT a selection input; (c) DuckLake/named-verb registration deferred to T2.36 with trigger 'first written cross-run query'. It AMENDS Decision 73 (2nd amendment), builds on 80/104/124/131, and cross-references KG.13 as deliberately undisturbed (files no KG.13 tier_item, arms no revisit trigger)."
   - "Bundled rec-2638 (open, manual, scripts/checks/_common.py): 'validate --pre under-checks UNTRACKED new files' -- co-resolved by the status-aware diff's git ls-files --others --exclude-standard leg. Include Resolves: rec-2638 in the feat squash-merge commit body."
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (3 NOTE flags, no BLOCK, all resolved without pivot). CITE: 73, 104, 80, 131, 124, 84, 55, 86, 128, 130, 132, 48. RELATED (lineage, non-governing): 60, 43, 129. KG.13 (roadmap gap in ROADMAP-PLATFORM.yaml T3.11 c5) cross-referenced as deliberately undisturbed."
-  - "gates: decision-scout=FLAGS_FOUND (3 NOTE flags, no BLOCK, all resolved in-plan without pivot); plan-critique=DEFERRED_TO_OVERSEER (nested-gate completion notification did not reach the planning agent -- overseer runs plan-critique as a sibling subagent before merging this plan PR or spawning /implement)."
+  - "gates: decision-scout=FLAGS_FOUND (3 NOTE flags, no BLOCK, all resolved in-plan without pivot); plan-critique=REVISE->ADDRESSED (run at the overseer level -- the nested gate's completion notification never reached the planning agent; 6 refinement items folded in v2: (1) manifest VP coverage [VP 12-15], (2) data-edge PRECISE match + common-basename no-over-select [VP 10], (3) per-file collect-only attribution / mixed-batch [VP 11], (4) graduation reclassified to waive for the e2e + registry steps [VP 16-17], (5) rec-2638 post-deploy closure step [VP 18], (6) registry/canary coupling + WS3 handoff conditionalized on the scaffold path with the inline path preferred). Overseer re-checks at its discretion before merge/implement."
 pre_implementation_checklist:
   - Branch confirmed not on main (feat branch off latest origin/main).
   - docs/PROJECT_CONTEXT.md read.
   - DECISIONS.md read (73, 80, 104, 124, 128, 130, 131, 55, 84, 86, 132, 48; KG.13 boundary in ROADMAP-PLATFORM.yaml T3.11 c5).
   - All files in scope located and readable; scope-drift check run at implement start.
   - Acceptance criteria understood and verifiable; incident-replay tests exercise the REAL selector (not mocks of it).
-  - "Coordinated with parallel WS3 (aws-test-hermeticity) -- WS1 lands registry.py + baseline first; WS3 rebases its check registration after."
+  - "WS3 (aws-test-hermeticity) coordination is CONDITIONAL: only if WS1 takes the scaffold/check-registration path (not the preferred inline path) does WS1 land registry.py + baseline first with WS3 rebasing after; the inline path makes this moot. Flag the chosen path at implement time."
 execution_steps:
   - "scripts/checks/_common.py -- add the status-aware diff function (git diff --name-status vs merge-base + git ls-files --others --exclude-standard; deleted paths carry D status; untracked surfaced). Keep get_changed_files()'s deleted-path-dropping contract unchanged; qualified-name interception preserved."
   - "scripts/dependency_graph.py -- soundness patch (i): add __init__.py package nodes so facade re-export edges are retained; soundness patch (ii): union string-constant module edges from patch(\"scripts.x.y\") targets via an AST pass over ast.Constant matching ^(src|scripts)(\\.\\w+)+. Keep the stable public API."
-  - "scripts/checks/deps/affected_tests.py -- implement the four-channel derivation (import-closure reverse-transitive via nx.ancestors; data-edge basename alternation over changed+deleted basenames; map_source_to_test mirror map; conftest-subtree rule), union with the edited-set, ~35-module cap keeping edited-set + direct reverse-deps + data-edge hits and deferring only the transitive residue via the existing _print_deferred_warning idiom, exception->edited-set loud fallback, and selection-manifest.json emission (sha, status-aware diff, per-test provenance/channel, selected/capped/deferred, timings). Keep <500 SLOC or decompose into scripts/checks/deps/ submodules (Decision 128)."
-  - "scripts/checks/_scaffolding.py -- batch the serial per-file collect-only pass in partition_changed_tests_by_collectability into ONE pytest invocation; preserve the loud defer idiom."
-  - "scripts/validate.py -- replace the inline edited-set changed_tests computation in main()'s --pre block with the new derivation; retire select_roadmap_guard_tests (function + call site); print the manifest."
-  - "scripts/checks/registry.py + tests/test_checks_registry.py -- if a new --pre step is registered, wire pre_sequence() AND update REQUIRED_PRE_CHECKS in the SAME commit (canary coupling); keep FROZEN_PRE_SCAFFOLDS order intact."
+  - "scripts/checks/deps/affected_tests.py -- implement the four-channel derivation (import-closure reverse-transitive via nx.ancestors; data-edge PRECISE match [path or quoted-token, NOT bare substring] scoped to non-.py data artifacts + the deleted-.py-bytes Incident-B case; map_source_to_test mirror map; conftest-subtree rule), union with the edited-set, ~35-module cap keeping edited-set + direct reverse-deps + data-edge hits and deferring only the transitive residue via the existing _print_deferred_warning idiom, exception->edited-set LOUD fallback, and selection-manifest.json emission (sha, status-aware diff, per-test provenance/channel, selected/capped/deferred, timings) with a best-effort lazy-boto3 S3 upload that LOUD-skips when creds absent. The manifest is emitted as OUTPUT only and is NEVER read back as an input. Keep <500 SLOC or decompose into scripts/checks/deps/ submodules (Decision 128)."
+  - "scripts/checks/_scaffolding.py -- batch the serial per-file collect-only pass in partition_changed_tests_by_collectability into ONE pytest invocation, parsing the --collect-only ERROR blocks PER FILE (attribute each collection error to its own file) so exactly the uncollectable file(s) defer and the rest still run; preserve the loud defer idiom."
+  - "scripts/validate.py -- PREFERRED INLINE PATH: replace the edited-set changed_tests computation in main()'s --pre block with the new derivation and feed the EXISTING pytest_diff scaffold (do NOT add a new registry step unless there is a concrete reason); retire select_roadmap_guard_tests (function + call site); print the manifest."
+  - "scripts/checks/registry.py + tests/test_checks_registry.py -- CONDITIONAL (skip under the inline path): ONLY if a new pre_sequence scaffold/check step is introduced, wire pre_sequence() AND update the baseline (FROZEN_PRE_SCAFFOLDS exact-tuple for a new scaffold; the membership floor already admits a new check) in the SAME commit (canary coupling)."
   - ".github/workflows/ci.yml -- add an actions/upload-artifact (if: always()) step to pr-validate capturing selection-manifest.json; keep validate_ci_workflow_guards green; add NO AWS creds to pr-validate."
-  - "Tests -- create tests/checks/deps/test_affected_tests.py (incident A/B, facade, patch-string, additive-invariant, cap/defer, manifest, graceful-degrade, exception-fallback, all against the real selector); extend tests/test_dependency_graph.py (both soundness patches); tests/validate/test_changed_files.py (status-aware diff: deletions + untracked, rec-2638); tests/validate/test_pytest_diff.py (batched collect-only); tests/validate/test_tiers.py (retire guard-test tests + subsumption proof)."
+  - "Tests -- create tests/checks/deps/test_affected_tests.py (incident A/B, facade, patch-string, additive-invariant, cap/defer, data-edge PRECISION/common-basename no-over-select, manifest emission+provenance, S3 graceful-degrade, exception->edited-set fallback, manifest-not-an-input invariance -- all against the REAL selector); extend tests/test_dependency_graph.py (both soundness patches); tests/validate/test_changed_files.py (status-aware diff: deletions + untracked, rec-2638); tests/validate/test_pytest_diff.py (batched collect-only with per-file mixed-batch attribution); tests/validate/test_tiers.py (retire guard-test tests + subsumption proof)."
   - "Draft the Decision (slug 'Decision affected-set-selection') VERBATIM; the implement subagent assigns the next free number at final rebase and lands it in the feat PR via the ops portal."
   - "Execute Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55)."
   - "Report: what was implemented, verification results, the assigned Decision number, and rec-2638 closure (Resolves: rec-2638 in the squash-merge body)."
