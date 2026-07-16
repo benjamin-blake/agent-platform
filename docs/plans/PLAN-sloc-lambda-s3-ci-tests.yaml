@@ -1,0 +1,717 @@
+schema_version: 1
+slug: sloc-lambda-s3-ci-tests
+intent: >-
+  Decompose the FOUR remaining oversized concern-split test monoliths --
+  tests/test_build_lambda_deploy.py (612), tests/test_lambda_manifest.py (599),
+  tests/test_s3_log_store.py (539) and tests/test_verify_ci_workflow.py (573) -- into four
+  concern-split test PACKAGES (tests/build_lambda_deploy/, tests/lambda_manifest/,
+  tests/s3_log_store/, tests/verify_ci_workflow/), each a set of cohesive test_<concern>.py modules
+  < 500 SLOC, then retire the four grandfather homes and delete their four config/sloc_budgets.yaml
+  lines. This is rec-2709 Wave 12 -- the FINAL wave of the Decision 131 mirror-convention rollout:
+  its merge is the program ACCEPTANCE GATE (zero tests/ entries remain in config/sloc_budgets.yaml).
+  All four sources are ALREADY seeded in _CONCERN_SPLIT_TEST_PACKAGES, so the checker flip is a pure
+  _RETIRING deletion. Behaviour-preserving pure MOVE; no source is touched; no Lambda build/deploy/
+  smoke-test (compute_affected_artifacts of the changed files is {} -- confirmed).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-lambda-s3-ci-tests.yaml
+phase: >-
+  rec-2709 Wave 12 (FINAL) (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (AGENTS.md Decision 128). Behaviour-preserving test MOVE of four already-seeded
+  concern-split grandfather homes. No product-roadmap phase; platform tooling only.
+scope:
+  - file: tests/build_lambda_deploy/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the src/... no -- scripts/build_lambda_deploy.py concern-split package
+      (prepend import mode; empty). Directory the mirror machinery computes for that source once its
+      home retires (tests/build_lambda_deploy/); check_test_file_exists accepts it once it holds
+      >=1 test_*.py. tests/build_lambda_deploy/ is NET-NEW.
+  - file: tests/build_lambda_deploy/test_update_functions.py
+    action: Create
+    purpose: >-
+      Deploy update-path concern (VERBATIM): TestUpdateLambdaFunctions (prod class: 6-call
+      update+deploy-record sequence) and TestUpdateLambdaFunctionsDucklakeOnly (8-call ducklake
+      class). No heavy dep (patches scripts.build_lambda.subprocess.run via string target). Fresh
+      header: json, types, MagicMock, patch, pytest, `import scripts.build_lambda_deploy as bd`, the
+      config constants it references (_LAMBDA_FUNCTION_NAMES, _OPS_COMPACTION_FUNCTION_NAME,
+      _OPS_COMPACTION_ZIP_KEY, _DUCKLAKE_WRITER/READER/MAINTENANCE/CATALOG_DR_FUNCTION) from
+      scripts.build_lambda_config, `pytestmark = pytest.mark.unit`. ~210 SLOC.
+  - file: tests/build_lambda_deploy/test_deploy_records.py
+    action: Create
+    purpose: >-
+      Deploy-record write/read concern (VERBATIM): TestWriteDucklakeDeployRecord and
+      TestReadDeployRecord. **HEAVY-DEP MARKER MODULE** -- TestReadDeployRecord references boto3
+      (test_lazy_creates_boto3_client_when_none does `patch("boto3.client")`) and botocore
+      (test_returns_none_on_no_such_key / test_reraises_non_nosuchkey_error do a lazy
+      `from botocore.exceptions import ClientError`), so this module MUST carry the module-level
+      `import boto3  # noqa: F401` marker (verbatim from the monolith's line 14) so the fast tier's
+      --collect-only PROACTIVELY defers it (boto3 excluded from requirements-fast.txt). Keep the
+      verbatim lazy in-test botocore imports and the boto3.client patch string. Fresh header: io,
+      json, types, MagicMock, patch, pytest, `import boto3  # noqa: F401`,
+      `import scripts.build_lambda_deploy as bd`, _DUCKLAKE_*_FUNCTION constants,
+      `pytestmark = pytest.mark.unit`. ~235 SLOC.
+  - file: tests/build_lambda_deploy/test_canary_layers.py
+    action: Create
+    purpose: >-
+      Canary-layer publishing + ducklake-profile resolution concern (VERBATIM): TestPublishCanaryLayers
+      and TestResolveDucklakeProfile. The _FakePath double and the _args() argparse-namespace builder
+      stay LOCAL to this module (grep-confirmed: both are used ONLY by
+      TestResolveDucklakeProfile.test_ducklake_build_resolves_profile). This is the ONLY new module
+      that references `scripts.build_lambda as bl` (bl._run_ducklake_build, one call site). Fresh
+      header: json (local in-test), types, patch, pytest, `import scripts.build_lambda as bl`,
+      `import scripts.build_lambda_deploy as bd`, `pytestmark = pytest.mark.unit`; _FakePath + _args
+      LOCAL. No heavy dep. ~150 SLOC.
+  - file: tests/build_lambda_deploy/test_bucket_argv.py
+    action: Create
+    purpose: >-
+      Bucket-existence + resolve-bucket + profileless-argv concern (VERBATIM): the three MODULE-LEVEL
+      functions test_validate_bucket_exists_success / _failure / _call_args (move verbatim as
+      module-level functions, NOT wrapped in a class), TestResolveBucket, and TestProfilelessArgv. No
+      heavy dep. Fresh header: types, MagicMock, patch, pytest, `import scripts.build_lambda_deploy as
+      bd`, `pytestmark = pytest.mark.unit`. ~100 SLOC.
+  - file: tests/lambda_manifest/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the scripts/lambda_manifest.py concern-split package (prepend import mode;
+      empty). Directory the mirror machinery computes once test_lambda_manifest.py retires
+      (tests/lambda_manifest/). tests/lambda_manifest/ is NET-NEW.
+  - file: tests/lambda_manifest/test_schema_and_staging.py
+    action: Create
+    purpose: >-
+      Schema + load + staging concern (VERBATIM): TestLambdaManifestSchema, TestLoadManifest,
+      TestStageBundle, TestExcludesField (the excludes[] field is a staging behaviour). No heavy dep
+      (yaml is NOT a blocked fast-tier dep). Fresh header: pathlib.Path, MagicMock, patch, pytest,
+      yaml, and the scripts.lambda_manifest symbols referenced at module scope (LambdaManifest, load,
+      load_all, stage_bundle, _copytree_ignore, _is_excluded, compute_affected_artifacts,
+      derive_lambda_file_patterns), `pytestmark = pytest.mark.unit`. ~280 SLOC.
+  - file: tests/lambda_manifest/test_bundle_checks.py
+    action: Create
+    purpose: >-
+      Bundle-integrity checks + pattern derivation concern (VERBATIM): TestCheckHandlerImports,
+      TestCheckAssetsPresent, TestLambdaFilePatterns, TestComputeAffectedArtifacts (its _make_manifest
+      method stays with the class). No heavy dep. Fresh header: pathlib.Path, patch, pytest, yaml,
+      LambdaManifest, check_handler_imports, check_assets_present, derive_lambda_file_patterns,
+      compute_affected_artifacts, `pytestmark = pytest.mark.unit`. ~195 SLOC.
+  - file: tests/lambda_manifest/test_cli_commands.py
+    action: Create
+    purpose: >-
+      CLI command-entrypoint concern (VERBATIM): TestCoverageCheck, TestCmdValidate,
+      TestCmdCheckBundles, TestCmdListPatterns, TestMinimalEnv. Keep the verbatim in-test local
+      imports (`from scripts.lambda_manifest import cmd_check_coverage / cmd_validate /
+      cmd_check_bundles / cmd_list_patterns / _minimal_env`, and the `import shutil as _sh` /
+      `import os` locals) exactly where they are. No heavy dep. Fresh header: MagicMock, patch,
+      pytest, yaml, `pytestmark = pytest.mark.unit`. ~215 SLOC.
+  - file: tests/s3_log_store/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the scripts/s3_log_store.py concern-split package (prepend import mode;
+      empty). Directory the mirror machinery computes once test_s3_log_store.py retires
+      (tests/s3_log_store/). tests/s3_log_store/ is NET-NEW.
+  - file: tests/s3_log_store/test_read_append.py
+    action: Create
+    purpose: >-
+      Backend-selection + read/append/list concern (VERBATIM): TestGetBackend, TestReadJsonlLocal,
+      TestReadJsonlS3, TestAppendJsonlLocal, TestAppendJsonlS3, TestListKeysLocal (the
+      TestReadJsonlS3._make_s3_mock helper is a METHOD, stays with its class). The S3-mode tests
+      fully mock the boto3 surface -- `patch.object(store_mod, "_BOTO3_AVAILABLE", True)` +
+      `patch.object(store_mod, "_get_s3_client", ...)` -- and use duck-typed exceptions (a plain
+      Exception with a .response attr), so NO real boto3/botocore is invoked -> NO marker EXPECTED
+      (confirm via the VP fast-tier simulation; add a module-level `import boto3  # noqa: F401` ONLY
+      if the simulation flags this module). Do NOT add `pytestmark` (the monolith has none). Fresh
+      header: json, pathlib.Path, MagicMock, patch, pytest, `import scripts.s3_log_store as store_mod`,
+      and the functions used (get_backend, read_jsonl, append_jsonl, list_keys). ~200 SLOC.
+  - file: tests/s3_log_store/test_findings_overwrite.py
+    action: Create
+    purpose: >-
+      Timestamped-findings + agent-findings listing + overwrite concern (VERBATIM):
+      TestWriteTimestampedFindings, TestListAgentFindings, TestReadAllAgentFindings, TestOverwriteJsonl.
+      Same full-mock boto3 pattern as test_read_append.py -> NO marker EXPECTED (confirm via
+      simulation). Do NOT add `pytestmark`. Fresh header: json, pathlib.Path, MagicMock, patch, pytest,
+      `import scripts.s3_log_store as store_mod`, and the functions used (write_timestamped_findings,
+      list_agent_findings, read_all_agent_findings, overwrite_jsonl). ~205 SLOC.
+  - file: tests/s3_log_store/test_write_through_registry.py
+    action: Create
+    purpose: >-
+      OpsWriter write-through (Decision 50) + log-storage YAML registry (T-1.15) concern (VERBATIM):
+      TestOpsWriterWriteThrough, TestLogStorageRegistry. The autouse `reset_registry` fixture is a
+      CLASS-scoped method of TestLogStorageRegistry -- it stays with its class (NOT a package
+      conftest). All write-through tests patch `_get_ops_writer` and run local-mode (no boto3). NO
+      marker. Do NOT add `pytestmark`. Fresh header: json (if used), pathlib.Path, MagicMock, patch,
+      pytest, `import scripts.s3_log_store as store_mod`; keep the verbatim in-test local imports
+      (`import scripts.s3_log_store as store_mod_local`, `from scripts.s3_log_store import
+      append_jsonl / overwrite_jsonl`, `import yaml`, `import sys`). ~190 SLOC.
+  - file: tests/verify_ci_workflow/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the scripts/verify_ci_workflow.py concern-split package (prepend import mode;
+      empty). Directory the mirror machinery computes once test_verify_ci_workflow.py retires
+      (tests/verify_ci_workflow/). tests/verify_ci_workflow/ is NET-NEW.
+  - file: tests/verify_ci_workflow/test_ci_data_guards.py
+    action: Create
+    purpose: >-
+      The five guards that share the _VALID_CI_DATA fixture (VERBATIM): TestCheckJobsAndFlags
+      {PassPath,FailPath}, TestCheckFetchDepth{PassPath,FailPath}, TestCheckConcurrency
+      {PassPath,FailPath}, TestCheckValidateSingleSource{PassPath,FailPath}, TestCheckSignalGreenNeeds
+      {PassPath,FailPath}. The module-level `_VALID_CI_DATA` dict is KEPT LOCAL here (grep-confirmed:
+      _VALID_CI_DATA is referenced ONLY by these five class-pairs -- grouping them by data-locality
+      avoids any tests/fixtures/ hoist and any cross-test import). No heavy dep. Fresh header:
+      typing.Any, patch, pytest, and the five check functions (_check_jobs_and_flags,
+      _check_fetch_depth, _check_concurrency, _check_validate_single_source, _check_signal_green_needs).
+      Do NOT add `pytestmark` (the monolith has none). ~275 SLOC.
+  - file: tests/verify_ci_workflow/test_ci_rca_and_canary.py
+    action: Create
+    purpose: >-
+      ci-rca-filter guard + canary guard concern (VERBATIM): TestCheckCiRcaFilterPassPath,
+      TestCheckCiRcaFilterMainBranchGate, TestCheckCiRcaFilterFiledMarker, TestCheckCanaryPassPath,
+      TestCheckCanaryFailPath. KEEP LOCAL the module-level data these use: _REAL_RCA_IF, _REAL_RCA_DATA,
+      _REAL_CANARY_DATA, _FILED_MARKER_CONTENT (ci-rca), and _VALID_CANARY_DATA (canary) -- grep-confirmed
+      used only by these classes. No heavy dep. Fresh header: typing.Any, patch, pytest, _check_ci_rca_filter,
+      _check_canary. Do NOT add `pytestmark`. ~145 SLOC.
+  - file: tests/verify_ci_workflow/test_apply_and_terraform.py
+    action: Create
+    purpose: >-
+      apply-rca-fallback guard + terraform-apply-concurrency guard concern (VERBATIM):
+      TestCheckApplyRcaFallbackPassPath, TestCheckApplyRcaFallbackFailPath,
+      TestCheckTerraformApplyConcurrencyPassPath, TestCheckTerraformApplyConcurrencyFailPath. KEEP LOCAL:
+      _DISPATCH_STEP, _VALID_APPLY_SANDBOX_DATA (apply-rca), and _VALID_APPLY_CONCURRENCY_GROUP,
+      _VALID_APPLY_CONCURRENCY_DATA, _VALID_RECONCILE_CONCURRENCY_DATA, plus the module-level
+      `_mock_load_for` helper (terraform) -- grep-confirmed used only by these classes. No heavy dep.
+      Fresh header: typing.Any, patch, pytest, _check_apply_rca_fallback, _check_terraform_apply_concurrency.
+      Do NOT add `pytestmark`. ~175 SLOC.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      The surgical flip (FINAL commit only), ONE edit region: DELETE exactly the four W12 basename
+      lines from _RETIRING_GRANDFATHER_HOMES -- "test_build_lambda_deploy.py",
+      "test_lambda_manifest.py", "test_s3_log_store.py", "test_verify_ci_workflow.py". NO
+      _CONCERN_SPLIT_TEST_PACKAGES edit (all four sources -- scripts/build_lambda_deploy.py,
+      scripts/lambda_manifest.py, scripts/s3_log_store.py, scripts/verify_ci_workflow.py -- are
+      ALREADY seeded there). **EMPTY-SET HAZARD (CRITICAL):** after Wave 11 has merged, deleting
+      these four EMPTIES _RETIRING_GRANDFATHER_HOMES. A bare `{ }` left behind is an empty DICT, not a
+      set -- it CRASHES the grandfather oracle (test_retiring_homes_are_a_subset_of_the_frozen_roster
+      does `_RETIRING <= _ALL...`; test_gate_flips_colocation_to_mirror_on_retirement does `_RETIRING
+      | {...}`; both raise TypeError on a dict). So when the deletion empties it, REPLACE the whole
+      brace block with `_RETIRING_GRANDFATHER_HOMES: set[str] = set()`. (If Wave 11 has NOT yet merged
+      -- i.e. after rebase the set still holds contracts_enforcement/iceberg_reader/
+      scheduled_agent_handler -- STOP and surface to the overseer; W12 is sequenced AFTER W11.) Do NOT
+      touch _grandfathered_source_to_test, _ALL_MIRROR_TARGET_HOMES, _CONCERN_SPLIT_TEST_PACKAGES,
+      _NESTED_SUBPACKAGE_TEST_PREFIX, _DUCKLAKE_RUNTIME_SPLIT_MODULES, _ORCHESTRATION_SCAFFOLDING_FILES,
+      or the smoke_actions Edit-C branch. File shrinks (~-4 SLOC); stays well under 500.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete EXACTLY four lines by hand (FINAL commit): "  tests/test_build_lambda_deploy.py: 612  #
+      raise-approved: ...", "  tests/test_lambda_manifest.py: 599  # raise-approved: ...",
+      "  tests/test_s3_log_store.py: 539  # raise-approved: ...", "  tests/test_verify_ci_workflow.py:
+      573  # raise-approved: ...". NEVER run --update-sloc-budgets (it strips dec-130 markers and may
+      auto-seed). HARD invariant: this file loses exactly those four lines and nothing else; after
+      this wave (with W11 merged) ZERO tests/ entries remain -- the program ACCEPTANCE GATE. Ratchet-
+      DOWN removals (Decision 130/102), always unrestricted; add NO raise marker and NO new tests/
+      budget entry (Decision 128).
+  - file: tests/test_build_lambda_deploy.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/build_lambda_deploy/. Deleted WHOLE in the FINAL commit only (kept
+      100% intact through every prior commit -- the real module is imported by real name
+      `import scripts.build_lambda_deploy as bd`, no synthetic sys.modules loader, so no dual-loader
+      risk; intactness preserves the id-preservation baseline until the flip).
+  - file: tests/test_lambda_manifest.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/lambda_manifest/. Deleted WHOLE in the FINAL commit only. Real-module
+      import (`from scripts.lambda_manifest import ...`), no synthetic loader -> no dual-loader risk.
+  - file: tests/test_s3_log_store.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/s3_log_store/. Deleted WHOLE in the FINAL commit only. Real-module
+      import (`import scripts.s3_log_store as store_mod`), no synthetic loader -> no dual-loader risk.
+  - file: tests/test_verify_ci_workflow.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/verify_ci_workflow/. Deleted WHOLE in the FINAL commit only.
+      Real-module import (`from scripts.verify_ci_workflow import ...`), no synthetic loader -> no
+      dual-loader risk.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation (per file): the set of pytest node ids (module-path stripped) collected from
+    each new package equals the pre-move set from the corresponding monolith. Every monolith is a PURE
+    move -- whole test classes (and, for build_lambda_deploy, three module-level test functions) copied
+    verbatim, NO rename, NO class-split (no new module exceeds 500 SLOC) -- so each of the four id-diffs
+    MUST be EMPTY. The overseer independently AST-verifies id-preservation (ast.walk over
+    FunctionDef/AsyncFunctionDef under each ClassDef + module-level test_ funcs).
+  - >-
+    bin/venv-python -m scripts.validate --pre exits 0: SLOC gate green (all 13 new modules < 500 SLOC
+    and < 20 CC, none registered in config/sloc_budgets.yaml; scripts/test_coverage_checker.py stays
+    < 500 SLOC after the deletion); no-cross-test-import guard green (no new module imports from
+    another test_* module); collectability green.
+  - >-
+    Fast-tier heavy-dep correctness (the recurring CI-only failure class -- local --pre CANNOT catch
+    it): exactly ONE new module carries a module-level `import boto3  # noqa: F401` marker --
+    tests/build_lambda_deploy/test_deploy_records.py (TestReadDeployRecord's boto3.client patch +
+    lazy botocore imports). The fast-tier simulation (VP step 9) passes for every non-marked module
+    with boto3/botocore/duckdb/pandas/numpy/pyarrow/psycopg2/awswrangler/pyiceberg blocked, and the
+    marked module ERRORS at collection when boto3 is blocked (marker load-bearing).
+  - >-
+    bin/venv-python -m pytest tests/build_lambda_deploy tests/lambda_manifest tests/s3_log_store
+    tests/verify_ci_workflow -q passes with the same total test count as the four pre-move baselines
+    summed.
+  - >-
+    git diff origin/main -- config/sloc_budgets.yaml shows ONLY the four W12 lines removed (with their
+    dec-130 markers); every other entry byte-identical; zero added lines.
+  - >-
+    map_source_to_test spot-checks stay green in the (unchanged) coverage-checker oracles:
+    scripts/build_lambda_deploy.py -> tests/build_lambda_deploy; scripts/lambda_manifest.py ->
+    tests/lambda_manifest; scripts/s3_log_store.py -> tests/s3_log_store; scripts/verify_ci_workflow.py
+    -> tests/verify_ci_workflow (each the concern-split package DIR). The grandfather oracle's
+    tree-derived test_retirement_state_matches_the_tests_tree stays green (all four homes absent from
+    _RETIRING AND all four flat monoliths deleted).
+  - >-
+    Retirement is atomic and the empty-set is a genuine set: _RETIRING_GRANDFATHER_HOMES no longer
+    contains any of the four W12 basenames and (with W11 merged) is `set()` -- proven by the
+    grandfather oracle staying green (a leftover `{ }` dict would raise TypeError in
+    test_retiring_homes_are_a_subset_of_the_frozen_roster's `<=` or
+    test_gate_flips_colocation_to_mirror_on_retirement's `|`). _ALL_MIRROR_TARGET_HOMES (24-frozenset)
+    unchanged with all four basenames still present.
+  - >-
+    Coverage preserved for all four sources: pytest each new package with --cov of its source reports
+    100% for scripts/build_lambda_deploy.py, scripts/lambda_manifest.py, scripts/s3_log_store.py, and
+    scripts/verify_ci_workflow.py.
+  - >-
+    ACCEPTANCE GATE (rec-2709 program completion): `! grep -qE '^[[:space:]]*tests/'
+    config/sloc_budgets.yaml && echo config/sloc_budgets.yaml` returns the filename (exit 0) -- ZERO
+    tests/ budget entries remain (the exit-code-correct equivalent of the plain `grep -L` form, which
+    exits 1 even in the desired zero-match state -- see VP step 12's note). All four monoliths are
+    deleted; whole-suite collection is clean.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Capture the BEFORE test-id baseline for all four monoliths (run while they are still intact --
+      before the FINAL commit deletes them). Use -qq (NOT -q): the repo addopts carries -v, so -v+-q
+      nets to verbosity 0 = a TREE report with no '::' node lines; -qq forces the flat node-id list.
+      Strip the differing module-path prefix so class-methods (Class::method) and the three bare
+      module-level funcs both normalise cleanly.
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      for m in test_build_lambda_deploy test_lambda_manifest test_s3_log_store test_verify_ci_workflow;
+      do bin/venv-python -m pytest tests/$m.py --collect-only -qq 2>/dev/null | grep '::' | sed -E
+      's#^[^:]+::#FN::#' | sort -u > $S/before_$m.txt; echo "$m: $(wc -l < $S/before_$m.txt) ids"; done
+    expected: A non-empty sorted node-id baseline for each of the four files.
+    fix_if: If any collection errors, that monolith has a pre-existing import/collection problem -- fix before decomposing.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Collect the AFTER id set from each new package and assert a byte-identical diff against the matching baseline.
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      for pair in "test_build_lambda_deploy:build_lambda_deploy" "test_lambda_manifest:lambda_manifest"
+      "test_s3_log_store:s3_log_store" "test_verify_ci_workflow:verify_ci_workflow"; do m=${pair%%:*};
+      d=${pair##*:}; bin/venv-python -m pytest tests/$d --collect-only -qq 2>/dev/null | grep '::' |
+      sed -E 's#^[^:]+::#FN::#' | sort -u > $S/after_$m.txt; echo "== $m =="; diff $S/before_$m.txt
+      $S/after_$m.txt && echo "$m EMPTY-DIFF-OK"; done
+    expected: Empty diff for all four (identical node-id sets). No sanctioned delta -- pure move, no renames/splits.
+    fix_if: Any added/removed id means a test was dropped, duplicated, mis-copied, or renamed. STOP and reconcile.
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Run the authoritative fast presubmit tier -- proves SLOC gate, no-cross-test-import guard, collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No SLOC-limit failure, no cross-test-import failure, no collection error.
+    fix_if: >-
+      A >=500 unregistered module: rebalance (e.g. split test_schema_and_staging.py or
+      test_ci_data_guards.py further). A cross-test import: a helper/data dict leaked between test_*
+      modules -> either regroup by data-locality (the verify_ci_workflow design) or move a genuinely
+      shared plain helper to tests/fixtures/ (NEVER `from tests.<pkg> import test_*`). A collection
+      error: fix a fresh import header, or the boto3 marker on test_deploy_records.py.
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full scoped pass of all four new packages at the summed baseline count.
+    command: >-
+      bin/venv-python -m pytest tests/build_lambda_deploy tests/lambda_manifest tests/s3_log_store
+      tests/verify_ci_workflow -q
+    expected: All pass; total selected count equals the sum of the four step-1 baselines.
+    fix_if: >-
+      A failure means a patch target, fixture, local helper, or module-level data dict did not survive
+      the move -- most likely a missing fresh-header import, a mis-grouped _VALID_CI_DATA/_VALID_CANARY_DATA/
+      _VALID_APPLY_* datum (verify_ci_workflow), a local _FakePath/_args (build_lambda_deploy
+      test_canary_layers.py), or the class-scoped reset_registry autouse fixture that must stay inside
+      TestLogStorageRegistry (s3_log_store).
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Assert config/sloc_budgets.yaml lost exactly the four target lines and nothing else.
+    command: git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly four removed lines (test_build_lambda_deploy.py 612, test_lambda_manifest.py 599,
+      test_s3_log_store.py 539, test_verify_ci_workflow.py 573, each with its dec-130 raise-approved
+      marker) and zero added lines.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was touched.
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Prove the retired mapping + the empty-set integrity via BOTH coverage-checker oracle files.
+      These files need ZERO edits this wave (the map oracle has no per-home case for any of the four
+      W12 basenames; the grandfather oracle derives retirement state from the tree). The grandfather
+      oracle is ALSO the empty-set guard: a leftover `{ }` dict (instead of `set()`) raises TypeError
+      in test_retiring_homes_are_a_subset_of_the_frozen_roster (`_RETIRING <= _ALL...`) and
+      test_gate_flips_colocation_to_mirror_on_retirement (`_RETIRING | {...}`), so green here proves
+      _RETIRING is a genuine (possibly empty) set.
+    command: bin/venv-python -m pytest tests/test_coverage_checker_map.py tests/test_coverage_checker_grandfather.py -q
+    expected: >-
+      All pass, including test_retirement_state_matches_the_tests_tree (all four homes absent from
+      _RETIRING and all four flat monoliths deleted), test_retiring_homes_are_a_subset_of_the_frozen_roster,
+      test_gate_flips_colocation_to_mirror_on_retirement, and test_roster_is_the_24_known_basenames.
+    fix_if: >-
+      A TypeError in the grandfather oracle means _RETIRING was left as a `{ }` dict -- change it to
+      `set()`. A failing test_retirement_state_matches_the_tests_tree means a _RETIRING deletion and
+      its flat-file deletion did not land together in the same FINAL commit (they MUST be atomic), or
+      W11 has not merged. Do NOT edit the oracle files to make them pass.
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    hermetic: true
+    action: Confirm all four monoliths are gone and all four new package dirs exist and are populated with >=1 test_*.py.
+    command: >-
+      for m in test_build_lambda_deploy test_lambda_manifest test_s3_log_store test_verify_ci_workflow;
+      do test ! -f tests/$m.py || { echo "MONOLITH SURVIVES: $m"; exit 1; }; done; for d in
+      build_lambda_deploy lambda_manifest s3_log_store verify_ci_workflow; do ls tests/$d/test_*.py
+      >/dev/null 2>&1 || { echo "EMPTY PACKAGE: $d"; exit 1; }; done; echo "RETIRED-OK"
+    expected: RETIRED-OK (all four monoliths deleted; all four package dirs hold >=1 test_*.py).
+    fix_if: If a monolith survives or a package dir is empty, the FINAL commit is incomplete.
+  - step: 8
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Heavy-dep marker audit -- exactly ONE module carries the boto3 marker and no OTHER new module
+      references a heavy dep. Use a word-boundary grep on import STATEMENTS + patch strings (not a bare
+      substring -- avoids false positives on first-party symbols like pinned_duckdb_version).
+    command: >-
+      grep -qE '^import boto3' tests/build_lambda_deploy/test_deploy_records.py &&
+      ! grep -rnE '\b(import|from) +(boto3|botocore|duckdb|pandas|numpy|pyarrow|psycopg2|awswrangler|pyiceberg|aiohttp)\b|patch\(["'"'"']+(boto3|botocore|duckdb)'
+      tests/build_lambda_deploy/test_update_functions.py tests/build_lambda_deploy/test_canary_layers.py
+      tests/build_lambda_deploy/test_bucket_argv.py tests/lambda_manifest tests/s3_log_store
+      tests/verify_ci_workflow && echo "MARKER-OK"
+    expected: >-
+      MARKER-OK -- test_deploy_records.py has the module-level `import boto3` marker; no other new
+      module has a heavy-dep import statement or a boto3/botocore/duckdb patch string. (s3_log_store's
+      duck-typed exceptions + fully-mocked _get_s3_client mean its S3 tests reference no heavy token.)
+    fix_if: >-
+      A heavy-dep token in another new module means a boto3/botocore test was mis-grouped: move the
+      module-level marker onto that module (convergence_health / W8 test_churn precedent) OR regroup so
+      the heavy-dep tests land only in test_deploy_records.py.
+  - step: 9
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      MANDATORY fast-tier simulation (per scratchpad/fast_tier_sim.md) -- the ONLY check that catches
+      the CI-only heavy-dep failure class (local --pre has all deps, so it cannot). Block the heavy
+      deps via a sitecustomize import guard, then run every NEW module EXCEPT the marked one; each must
+      PASS with deps blocked. Then confirm the marked module ERRORS at collection with deps blocked
+      (marker load-bearing).
+    command: >-
+      set -e; FT=$(mktemp -d); printf '%s\n' 'import builtins'
+      '_b={"boto3","botocore","duckdb","pyarrow","pandas","numpy","awswrangler","pyiceberg","psycopg2"}'
+      '_r=builtins.__import__' 'def _g(n,*a,**k):' ' if n.split(".")[0] in _b: raise
+      ModuleNotFoundError("No module named %r (simulated fast-tier)" % n.split(".")[0])' ' return
+      _r(n,*a,**k)' 'builtins.__import__=_g' > $FT/sitecustomize.py; PYTHONPATH=$FT bin/venv-python -m
+      pytest tests/build_lambda_deploy/test_update_functions.py tests/build_lambda_deploy/test_canary_layers.py
+      tests/build_lambda_deploy/test_bucket_argv.py tests/lambda_manifest tests/s3_log_store
+      tests/verify_ci_workflow -o addopts="" -p no:randomly -p no:cacheprovider -q --no-header;
+      echo "NON-MARKED-PASS"; PYTHONPATH=$FT bin/venv-python -m pytest
+      tests/build_lambda_deploy/test_deploy_records.py --collect-only -o addopts="" -q 2>&1 | grep -qiE
+      'error|no module named' && echo "MARKED-DEFERS-OK" || { echo "MARKER NOT LOAD-BEARING"; exit 1; }
+    expected: >-
+      NON-MARKED-PASS (all 12 non-marked modules pass with heavy deps blocked -- confirms the
+      s3_log_store S3 tests are genuinely boto3-free via their full-mock pattern, and lambda_manifest/
+      verify_ci_workflow are clean) followed by MARKED-DEFERS-OK (test_deploy_records.py errors at
+      collection with boto3 blocked).
+    fix_if: >-
+      Any non-marked module failing with ModuleNotFoundError OR a plain AssertionError (the W9 TRAP: a
+      source that gracefully-skips a heavy dep while a test asserts the non-skipped path) MUST get a
+      module-level `import <dep>  # noqa: F401` marker so it defers proactively -- then re-run. If
+      MARKED-DEFERS-OK fails, the boto3 marker is missing from test_deploy_records.py.
+  - step: 10
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Coverage preservation -- pytest each new package with --cov of its source; each must stay 100%
+      (a genuine pure move drops no covered line). Run per-package so the checker's own concern-split
+      directory-coverage path is exercised.
+    command: >-
+      bin/venv-python -m pytest tests/build_lambda_deploy --cov=scripts/build_lambda_deploy --cov-report=term-missing -q &&
+      bin/venv-python -m pytest tests/lambda_manifest --cov=scripts/lambda_manifest --cov-report=term-missing -q &&
+      bin/venv-python -m pytest tests/s3_log_store --cov=scripts/s3_log_store --cov-report=term-missing -q &&
+      bin/venv-python -m pytest tests/verify_ci_workflow --cov=scripts/verify_ci_workflow --cov-report=term-missing -q
+    expected: 100% line coverage reported for each of the four sources.
+    fix_if: >-
+      < 100% for a source means a test that exercised a branch was dropped or mis-grouped. STOP and
+      reconcile against the step-2 id diff (a genuine pure move preserves 100%).
+  - step: 11
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Whole-suite collection smoke -- no import/collection error anywhere from the move.
+    command: bin/venv-python -m pytest tests/ --collect-only -qq
+    expected: >-
+      Clean collection; no ImportError/collection error from the four new packages, the deleted
+      monoliths, or the checker edit. (test_deploy_records.py may be deferred in the CI fast tier by
+      its boto3 marker; under the full local toolchain it collects and runs.)
+    fix_if: A collection error means a dangling reference to a deleted monolith or a broken import header in a new module.
+  - step: 12
+    phase: pre-deploy
+    graduation: not-applicable
+    hermetic: true
+    action: >-
+      rec-2709 PROGRAM ACCEPTANCE GATE -- zero tests/ entries remain in config/sloc_budgets.yaml.
+      NOTE (post-authoring correction): GNU grep -L's exit status reflects whether the PATTERN
+      matched anywhere in the input, not whether a filename was printed -- so a bare `grep -LE ...`
+      exits 1 even in the desired (zero-match) success case, making "prints the filename AND exits
+      0" unreachable with the originally-authored command. The command below is the exit-code-
+      correct equivalent of the same invariant (`! grep -q` inverted, then echo on success) so
+      validate_vp_replay's exit-code-always rule (a) can pass on the genuine success state. Marked
+      hermetic so validate_vp_replay independently re-executes it on the PR tree.
+    command: "! grep -qE '^[[:space:]]*tests/' config/sloc_budgets.yaml && echo config/sloc_budgets.yaml"
+    expected: >-
+      Prints "config/sloc_budgets.yaml" and exits 0 (zero tests/ budget entries). If it prints nothing
+      / exits 1, tests/ entries remain -- W11 has not merged yet (STOP, surface to overseer) or a W12
+      line was not deleted.
+    fix_if: >-
+      Non-zero exit / no filename means at least one tests/ budget entry survives. Confirm W11 merged
+      (rebase onto latest origin/main) and that all four W12 lines were hand-deleted.
+constraints:
+  - >-
+    Pure behaviour-preserving MOVE. Copy every test class, every module-level test function (the three
+    in build_lambda_deploy), and every in-class/local helper VERBATIM with its owner. Author a fresh
+    per-file import header importing exactly the symbols each module references -- no test-logic edits,
+    no renames, no class-splits (no new module exceeds 500 SLOC). Patch targets stay UNCHANGED: every
+    patch string targets the SOURCE module (scripts.build_lambda.subprocess.run, scripts.s3_log_store.*,
+    scripts.verify_ci_workflow._load, scripts.lambda_manifest.ROOT/_LAMBDAS_DIR), which does not move --
+    so there is NO namespace-migration rewrite in this wave.
+  - >-
+    pytestmark discipline: replicate `pytestmark = pytest.mark.unit` at module scope ONLY in the modules
+    whose monolith carried it -- build_lambda_deploy (all 4 modules) and lambda_manifest (all 3). Do NOT
+    add pytestmark to any s3_log_store or verify_ci_workflow module (those monoliths have none).
+  - >-
+    NO tests/fixtures/ hoist and NO package conftest this wave. Every shared surface is kept LOCAL by
+    grouping: build_lambda_deploy's _FakePath/_args live only with TestResolveDucklakeProfile;
+    verify_ci_workflow's module-level fixture dicts are grouped by which classes use them (data-locality
+    split); s3_log_store's helpers (_make_s3_mock) and autouse fixture (reset_registry) are class-scoped
+    methods that travel with their class. NEVER `from tests.<pkg>.<module> import ...` (no-cross-test-import
+    guard, --pre + full).
+  - >-
+    FAST-TIER HEAVY-DEP MARKER (recurring CI-only failure -- local --pre CANNOT catch it, all deps present
+    locally): exactly ONE new module needs the marker -- tests/build_lambda_deploy/test_deploy_records.py
+    carries the module-level `import boto3  # noqa: F401` (TestReadDeployRecord's boto3.client patch + lazy
+    botocore ClientError imports). s3_log_store's S3 tests are boto3-FREE by construction (they patch
+    `_BOTO3_AVAILABLE=True` + mock `_get_s3_client`, and the source uses duck-typed `hasattr(exc,"response")`
+    exceptions, not `botocore.exceptions.ClientError`), and lambda_manifest/verify_ci_workflow reference no
+    heavy dep at all -> expect ZERO markers there. The VP-9 fast-tier simulation is the arbiter: add a marker
+    to ANY module it flags; do NOT add a marker where no reference exists.
+  - >-
+    scripts/test_coverage_checker.py: DELETE ONLY the four W12 basenames from _RETIRING_GRANDFATHER_HOMES.
+    When that empties the set (W11 merged), write `_RETIRING_GRANDFATHER_HOMES: set[str] = set()` -- a bare
+    `{ }` is a DICT and crashes the grandfather oracle's `<=`/`|` ops. Touch NOTHING else in the checker
+    (no _CONCERN_SPLIT add -- all four sources already seeded; no _ALL_MIRROR_TARGET_HOMES,
+    _ORCHESTRATION_SCAFFOLDING_FILES, smoke_actions Edit-C, or docstring change). The empty _RETIRING is
+    CORRECT and EXPECTED -- all 24 homes retired; the mirror branch now fires for every roster source.
+  - >-
+    Coverage-checker ORACLE files (tests/test_coverage_checker_map.py, tests/test_coverage_checker_grandfather.py)
+    need ZERO edits. The map oracle has no per-home case for any of the four W12 basenames (verified). The
+    grandfather oracle is wave-invariant (task #10 redesign: derives retirement from the tree). Do NOT add
+    or edit any oracle case; if VP-6 fails, the fix is in the checker/tree/atomicity, never the oracle.
+  - >-
+    The _RETIRING deletion (+ set() conversion) + the four budget-line deletions + the four monolith
+    deletions ALL land in ONE atomic FINAL commit. The grandfather oracle's tree-derived retirement test
+    fails if a _RETIRING line and its flat file diverge across commits. Create the packages + modules in
+    EARLIER additive commits (monoliths intact) so those commits stay green independently.
+  - >-
+    config/sloc_budgets.yaml loses exactly the four target lines; NEVER run --update-sloc-budgets. Add NO
+    raise marker and NO new tests/ budget entry (Decision 128 -- decompose, not raise). This wave completes
+    the dec-130 tests/ SLOC-debt burndown to ZERO.
+  - >-
+    ruff-format import discipline (tests/CLAUDE.md): one consolidated import block per module (never split a
+    module's imports across two blocks -- ruff silently drops the second). Every new mirror directory carries
+    an __init__.py (prepend import mode): tests/build_lambda_deploy/, tests/lambda_manifest/,
+    tests/s3_log_store/, tests/verify_ci_workflow/ -- all NET-NEW.
+  - >-
+    Do NOT resolve rec-2709 in THIS plan (bundled_recommendations stays empty). W12 completes the program,
+    but the overseer adds the `Resolves: rec-2709` trailer on the FINAL squash-merge -- not this plan.
+  - >-
+    W11-before-W12 sequencing: the overseer merges Wave 11 (contracts_enforcement + iceberg_reader +
+    scheduled_agent_handler) BEFORE this wave. The implementer REBASES onto latest origin/main first
+    (STANDING DIRECTIVE), then deletes exactly the four W12 basenames from the ACTUAL current _RETIRING. If
+    after rebase _RETIRING still holds any non-W12 basename (W11 not merged), the acceptance-gate VP (step 12)
+    cannot pass -- STOP and surface to the overseer rather than forcing it.
+  - >-
+    No rescue agents or workaround loops (Decision 55). On an unrecoverable collect-id mismatch, STOP and
+    RCA -- never patch around it. PUBLIC repo -- no AWS account IDs/ARNs/secrets/internal hostnames in any
+    new file (the credential-shaped strings in the build_lambda_deploy layer-ARN tests are fake
+    ACCOUNT_ID_PLACEHOLDER fixtures already -- move them VERBATIM).
+  - Use bin/venv-python for all Python invocations; bash-only shell. Work on the harness claude/... branch, never main.
+context:
+  - >-
+    DECISION ANALYSIS (inline; the OVERSEER is the critique gate for this rec-2709 wave, so no
+    decision-scout/plan-critique sub-subagents were spawned -- mirrors the Wave 3/4/8/10 precedent). CITE:
+    Decision 131 (test-colocation inverted to a mirror rule + retiring grandfather-table + concern-split
+    package targets + no-cross-test-import guard + per-package conftest hierarchy; amends Decision 104;
+    governs every step); Decision 130 (whole-repo structural-size governance + the 24-home one-time
+    grandfather of tests/ SLOC debt + the dec-130 markers -- governs the four ratchet-DOWN budget-line
+    deletions, which complete the burndown to ZERO); Decision 128 (SLOC budget-raise guardrails: decompose
+    by default; this wave adds ZERO budget lines / ZERO raise markers); Decision 124
+    (scripts/executor/** and scripts/ops_portal/** map to None -- unperturbed; none of the four W12 sources
+    is executor/ops_portal); Decision 132 (verification-step graduation dispositions -- every pre-deploy VP
+    step carries graduation: not-applicable, since each is a one-off pure-move check, not a
+    kernel-expressible standing regression guard); Decision 79 (per-Lambda deploy gating --
+    compute_affected_artifacts of the changed files is {}, so NO build/deploy/smoke-test/model-ID steps).
+    RELATED: Decision 80/104 (facade / concern-split precedent -- exactly Wave 3's tests/ops_data_portal/,
+    Wave 8's tests/lambdas/*/handler/, Wave 9's tests/ops_writer/); Decision 43/102 (CC-20 and 500-SLOC
+    limits). Decision-scout verdict: NO_FLAGS by inspection -- this is a mechanical, decision-governed
+    test-move that adds no budget line, retires four, touches no product/strategy surface.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS -- CITE dec-131, dec-130, dec-128, dec-124, dec-132, dec-79 (related: dec-80, dec-104, dec-43, dec-102)"
+  - "gates: decision-scout=NO_FLAGS (inline overseer analysis); plan-critique=overseer-reviewed after 0 round(s)"
+  - >-
+    COMPUTE_AFFECTED_ARTIFACTS == {} (verified). The ONLY changed non-test source file is
+    scripts/test_coverage_checker.py; the only other non-test change is config/sloc_budgets.yaml. Neither
+    matches any active Lambda manifest's includes/handlers/assets/config: manifests include EXPLICIT
+    scripts/ files (scripts/__init__.py, scripts/aws_profile.py, scripts/llm/*, scripts/ops_writer.py,
+    scripts/run_scheduled_agent.py, scripts/s3_log_store.py, scripts/telemetry_schemas.py,
+    scripts/tool_runtime.py) plus `src/` -- NOT scripts/test_coverage_checker.py and NOT
+    config/sloc_budgets.yaml. Note: scripts/s3_log_store.py IS Lambda-packaged, but this wave changes only
+    its TESTS (tests/test_s3_log_store.py -> tests/s3_log_store/), never the source -> {} holds. So NO
+    build/deploy/smoke-test steps despite build_lambda_deploy/lambda_manifest being lambda-tooling ABOUT
+    Lambdas.
+  - >-
+    HEAVY-DEP AUDIT (source-verified, the recurring CI-only failure class). Blocked in the fast tier
+    (requirements-fast.txt): boto3/botocore/duckdb/pyarrow/pandas/numpy/awswrangler/pyiceberg/psycopg2.
+    (1) build_lambda_deploy: source imports boto3 ONLY lazily inside read_deploy_record (not at module
+    top), so `import scripts.build_lambda_deploy as bd` is import-safe; only TestReadDeployRecord references
+    boto3/botocore (patch("boto3.client") + lazy `from botocore.exceptions import ClientError`) -> its
+    module test_deploy_records.py carries the module-level marker (verbatim from monolith line 14); the
+    other 3 modules are boto3-free. (2) s3_log_store: THE W9-TRAP SUSPECT, cleared -- source imports boto3
+    only in a guarded `try: import boto3` (sets _BOTO3_AVAILABLE) and inside _get_s3_client(); EVERY S3-mode
+    test patches `_BOTO3_AVAILABLE=True` AND mocks `_get_s3_client`, and the source's exception handling is
+    duck-typed (`hasattr(exc,"response")`, NOT botocore.exceptions.ClientError). So the asserted S3 paths
+    invoke NO real boto3 -> the W9 trap (source gracefully-skips, test asserts non-skipped path) does NOT
+    fire here (the tests force availability AND inject a mock client). EXPECTED zero markers; VP-9 simulation
+    confirms. (3) lambda_manifest + verify_ci_workflow: sources have NO module-scope heavy import (verified
+    by grep); tests use yaml (NOT blocked) / mock / tmp_path -> zero markers.
+  - >-
+    CONCERN-SPLIT BREAKDOWN (VERBATIM whole-class move; all < 500 SLOC). build_lambda_deploy (612) ->
+    tests/build_lambda_deploy/ (4 modules): test_update_functions [TestUpdateLambdaFunctions +
+    TestUpdateLambdaFunctionsDucklakeOnly, ~210]; test_deploy_records [TestWriteDucklakeDeployRecord +
+    TestReadDeployRecord -- BOTO3 MARKER, ~235]; test_canary_layers [TestPublishCanaryLayers +
+    TestResolveDucklakeProfile + local _FakePath/_args + the sole `import scripts.build_lambda as bl`, ~150];
+    test_bucket_argv [3 module-level validate_bucket funcs + TestResolveBucket + TestProfilelessArgv, ~100].
+    lambda_manifest (599) -> tests/lambda_manifest/ (3): test_schema_and_staging [Schema + LoadManifest +
+    StageBundle + ExcludesField, ~280]; test_bundle_checks [CheckHandlerImports + CheckAssetsPresent +
+    LambdaFilePatterns + ComputeAffectedArtifacts, ~195]; test_cli_commands [CoverageCheck + CmdValidate +
+    CmdCheckBundles + CmdListPatterns + MinimalEnv, ~215]. s3_log_store (539) -> tests/s3_log_store/ (3):
+    test_read_append [GetBackend + ReadJsonlLocal + ReadJsonlS3 + AppendJsonlLocal + AppendJsonlS3 +
+    ListKeysLocal, ~200]; test_findings_overwrite [WriteTimestampedFindings + ListAgentFindings +
+    ReadAllAgentFindings + OverwriteJsonl, ~205]; test_write_through_registry [OpsWriterWriteThrough +
+    LogStorageRegistry, ~190]. verify_ci_workflow (573) -> tests/verify_ci_workflow/ (3): test_ci_data_guards
+    [JobsAndFlags + FetchDepth + Concurrency + ValidateSingleSource + SignalGreenNeeds -- share _VALID_CI_DATA,
+    ~275]; test_ci_rca_and_canary [CiRcaFilter x3 + Canary x2 -- _REAL_RCA_*/_FILED_MARKER/_VALID_CANARY_DATA,
+    ~145]; test_apply_and_terraform [ApplyRcaFallback + TerraformApplyConcurrency -- _VALID_APPLY_*/
+    _mock_load_for, ~175]. Function->module placement is a cohesion/SLOC/data-locality choice only -- the
+    VP-2 id-preservation diff is the completeness oracle.
+  - >-
+    ORACLE STATE ON MAIN (verified). tests/test_coverage_checker_grandfather.py is the wave-invariant
+    redesign (rec-2709 task #10, #613): test_retirement_state_matches_the_tests_tree derives retirement from
+    disk; test_retiring_homes_are_a_subset_of_the_frozen_roster asserts `_RETIRING <= _ALL...`;
+    test_gate_flips_colocation_to_mirror_on_retirement does `_RETIRING | {...}`. Both `<=` and `|` raise
+    TypeError on an empty DICT `{}` -- so the mandatory `set()` conversion is enforced by VP-6, no python -c
+    needed. tests/test_coverage_checker_map.py has NO case for any W12 basename (its cases cover validate,
+    session/preflight, sync/ops, session/postflight, ci_rca/evidence, the ducklake handlers + smoke_actions,
+    ducklake_neon_smoke_test, ducklake_runtime splits, convergence_health). _RETIRING on main currently has 7
+    entries (W11's 3 + W12's 4); after W11 merges it has the 4 W12 basenames; after this wave, empty (set()).
+  - >-
+    NO SYNTHETIC sys.modules LOADER for any package (unlike Wave 4/10's session_preflight/postflight). All
+    four monoliths import their subject module by REAL name and patch REAL dotted attrs / string targets --
+    no `patch("<synthetic_name>.*")` target -> no importlib singleton, no dual-loader (Wave 10 OPEN RISK 1
+    does not apply). Keeping each monolith 100% intact until the FINAL commit is purely to preserve the
+    id-preservation baseline.
+  - >-
+    Branch: harness-assigned claude/... session branch (verify not main). Wave 8 (tests/lambdas/*/handler/)
+    and Wave 9 (tests/ops_writer/) are the live concern-split templates on main. Preflight not machine-run
+    in this read-only planning subagent. Main-divergence: scope is net-new package files (4 __init__.py + 13
+    modules) + checker (one deletion region) + a four-line budget deletion + four monolith deletions; the
+    overseer rebases onto latest origin/main (with W11) and re-runs --pre before push (STANDING DIRECTIVE:
+    verify _RETIRING count == 24 - retired-basename count == 0 after rebase+flip).
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - >-
+    scripts/test_coverage_checker.py read in full (map_source_to_test, _grandfathered_source_to_test,
+    _mirror_source_to_test, _RETIRING_GRANDFATHER_HOMES [7 entries on main], _ALL_MIRROR_TARGET_HOMES,
+    _CONCERN_SPLIT_TEST_PACKAGES [all 4 W12 sources already seeded], the smoke_actions Edit-C branch)
+  - >-
+    tests/CLAUDE.md read (mirror convention, no-cross-test-import, per-package conftest hierarchy, ruff
+    import discipline, heavy-dep marker directive, pytestmark/import-block rules)
+  - >-
+    Both oracle files read; confirmed ZERO edits (map has no W12 case; grandfather is tree-derived and its
+    `<=`/`|` ops enforce the set() invariant)
+  - Wave 8/9 studied as concern-split templates on main
+  - Decision 131, 130, 128, 124, 132, 79 located and their bearing confirmed (inline decision analysis)
+  - >-
+    All four monoliths read in full; every test class + the three build_lambda_deploy module-level funcs
+    located; class->module map re-verified; no new module exceeds 500 SLOC
+  - >-
+    Heavy-dep grep of all four monoliths + their sources run -- build_lambda_deploy source imports boto3
+    lazily (import-safe) and only TestReadDeployRecord references boto3/botocore; s3_log_store S3 tests
+    fully mock _BOTO3_AVAILABLE + _get_s3_client (duck-typed exceptions) so are boto3-free;
+    lambda_manifest/verify_ci_workflow sources+tests reference no heavy dep
+  - >-
+    Shared-surface locality confirmed by grep: build_lambda_deploy _FakePath/_args used only in
+    TestResolveDucklakeProfile; verify_ci_workflow _VALID_CI_DATA/_VALID_CANARY_DATA/_VALID_APPLY_*/
+    _mock_load_for grouped by consuming class; s3_log_store _make_s3_mock + reset_registry are class methods
+    -- so NO tests/fixtures/ hoist and NO conftest this wave
+  - config/sloc_budgets.yaml lines for the four targets identified (612/599/539/573, dec-130 markers) for by-hand deletion
+  - compute_affected_artifacts of the changed files confirmed {} (no Lambda deploy)
+  - Acceptance criteria understood and verifiable; the acceptance-gate grep (zero tests/ entries) understood as contingent on W11 having merged
+execution_steps:
+  - >-
+    Confirm the working branch is the harness claude/... session branch (git branch --show-current), NOT
+    main. REBASE onto latest origin/main first (STANDING DIRECTIVE) so Wave 11's retirements are present;
+    confirm _RETIRING_GRANDFATHER_HOMES then holds exactly the four W12 basenames (if it holds more, W11 has
+    not merged -- STOP and surface to the overseer).
+  - >-
+    COMMIT 1 (scaffold): create the four package markers (tests/build_lambda_deploy/__init__.py,
+    tests/lambda_manifest/__init__.py, tests/s3_log_store/__init__.py, tests/verify_ci_workflow/__init__.py).
+    Run `bin/venv-python -m scripts.validate --pre` (additive -- must stay green).
+  - >-
+    COMMITS 2-5 (module population, one package per commit): create the 13 modules per the CONCERN-SPLIT
+    BREAKDOWN, copying each whole class (and build_lambda_deploy's three module-level funcs) VERBATIM with a
+    fresh per-file import header. Add `pytestmark = pytest.mark.unit` ONLY to the build_lambda_deploy (4) and
+    lambda_manifest (3) modules. Add the module-level `import boto3  # noqa: F401` marker to
+    test_deploy_records.py ONLY. Keep ALL FOUR monoliths FULLY INTACT. After each commit run SCOPED
+    `bin/venv-python -m pytest <that package> -q` + `bin/venv-python -m scripts.validate --pre`, and the
+    VP-9 fast-tier simulation on that package, to localise any SLOC/cross-import/collection/heavy-dep failure
+    early.
+  - >-
+    FINAL COMMIT (the atomic surgical flip): edit scripts/test_coverage_checker.py (delete the four W12
+    basenames from _RETIRING_GRANDFATHER_HOMES; when it empties, write `set()` NOT `{ }`); delete the four
+    config/sloc_budgets.yaml lines by hand; delete the four monoliths WHOLE. NO oracle edit, NO _CONCERN_SPLIT
+    edit.
+  - >-
+    Execute the full Verification Plan (steps 1-12) on the FINAL commit; loop until all pass. On an
+    unrecoverable failure STOP and RCA (Decision 55) -- never patch around a collect-id mismatch or force the
+    acceptance gate before W11 has merged.
+  - >-
+    Report: the final per-module SLOC breakdown for all four packages; the four VP step-2 empty-diff
+    confirmations; the single boto3 marker on test_deploy_records.py + the VP-9 simulation result;
+    confirmation that _RETIRING is now `set()` (grandfather oracle green); confirmation config/sloc_budgets.yaml
+    lost exactly four lines and the acceptance-gate grep returns the file (zero tests/ entries). Commit locally
+    and STOP -- the overseer owns branch/PR/CI-green/merge and adds the `Resolves: rec-2709` trailer on the
+    FINAL squash-merge.
+rollback: >-
+  Single-PR revert. The FINAL commit is the only one that changes the mapping / budgets / deletes the
+  monoliths -- reverting the PR restores all four grandfather memberships (and the _RETIRING set literal) and
+  their dec-130 budget lines, re-points all four sources at their (restored) monoliths, and leaves the
+  already-created packages as harmless extra coverage until re-attempted. Because this is the ACCEPTANCE-GATE
+  wave, a revert also re-opens the burndown (four tests/ entries return); the overseer re-sequences it after
+  any conflicting wave settles.
