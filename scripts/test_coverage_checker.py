@@ -204,7 +204,6 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_ducklake_writer_handler.py",
     "test_iceberg_reader.py",
     "test_lambda_manifest.py",
-    "test_ops_writer.py",
     "test_s3_log_store.py",
     "test_scheduled_agent_handler.py",
     "test_verify_ci_workflow.py",
