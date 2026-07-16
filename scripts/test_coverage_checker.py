@@ -211,7 +211,6 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_s3_log_store.py",
     "test_scheduled_agent_handler.py",
     "test_session_postflight.py",
-    "test_session_preflight.py",
     "test_sync_ops.py",
     "test_verify_ci_workflow.py",
 }
@@ -238,6 +237,7 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py",
         "scripts/validate.py",
         "scripts/execute_recommendation.py",
+        "scripts/session/preflight.py",
     }
 )
 
