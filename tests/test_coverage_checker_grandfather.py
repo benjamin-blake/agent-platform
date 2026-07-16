@@ -33,14 +33,18 @@ class TestGrandfatherRetiringTable:
     "test_ducklake_runtime.py" (a MIRROR, with the _DUCKLAKE_RUNTIME_SPLIT_MODULES special-case
     KEPT -- see test_maps_ducklake_runtime_split_modules_resolve_to_their_common_mirror) and
     "test_ducklake_neon_smoke_test.py" (a CONCERN-SPLIT, already seeded in
-    _CONCERN_SPLIT_TEST_PACKAGES before this wave)."""
+    _CONCERN_SPLIT_TEST_PACKAGES before this wave); Wave 10 (PLAN-sloc-sync-session-circa-tests)
+    retired the eleventh, twelfth, and thirteenth -- "test_sync_ops.py",
+    "test_session_postflight.py" (surgically -- its flat-file sibling "test_session_metrics.py"
+    stays grandfathered), and "test_ci_rca_evidence.py" -- all three CONCERN-SPLITs, newly seeded
+    in _CONCERN_SPLIT_TEST_PACKAGES this wave."""
 
     def test_representative_paths_resolve_under_current_retirement_state(self) -> None:
-        """A representative path set resolves under the CURRENT retirement state: Waves 1-7's
-        seven retired homes resolve via their mirror / concern-split / package-mirror, the other
-        14 roster homes stay grandfathered, scripts/executor/** + scripts/ops_portal/** keep
-        returning None (Decision 124), and scripts/session/postflight.py + metrics.py are
-        surgical-retirement controls that stay grandfathered."""
+        """A representative path set resolves under the CURRENT retirement state: Waves 1-7 and
+        10's thirteen retired homes resolve via their mirror / concern-split / package-mirror,
+        the other 11 roster homes stay grandfathered, scripts/executor/** + scripts/ops_portal/**
+        keep returning None (Decision 124), and scripts/sync/recommendations.py + ci_rca/filing.py
+        are surgical-retirement sibling controls that stay grandfathered."""
         cases: dict[Path, Path | None] = {
             ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py": ROOT
             / "tests"
@@ -53,7 +57,11 @@ class TestGrandfatherRetiringTable:
             ROOT / "scripts" / "execute_recommendation.py": ROOT / "tests" / "execute_recommendation",
             ROOT / "scripts" / "ops_data_portal.py": ROOT / "tests" / "ops_data_portal",
             ROOT / "scripts" / "session" / "preflight.py": ROOT / "tests" / "session" / "preflight",
-            ROOT / "scripts" / "session" / "postflight.py": ROOT / "tests" / "test_session_postflight.py",
+            ROOT / "scripts" / "sync" / "ops.py": ROOT / "tests" / "sync" / "ops",
+            ROOT / "scripts" / "session" / "postflight.py": ROOT / "tests" / "session" / "postflight",
+            ROOT / "scripts" / "ci_rca" / "evidence.py": ROOT / "tests" / "ci_rca" / "evidence",
+            ROOT / "scripts" / "sync" / "recommendations.py": ROOT / "tests" / "test_sync_recommendations.py",
+            ROOT / "scripts" / "ci_rca" / "filing.py": ROOT / "tests" / "test_ci_rca_filing.py",
             ROOT / "scripts" / "session" / "metrics.py": ROOT / "tests" / "test_session_metrics.py",
             ROOT / "scripts" / "convergence_health" / "record.py": ROOT / "tests" / "convergence_health" / "test_record.py",
             ROOT / "src" / "common" / "config.py": ROOT / "tests" / "test_config.py",
@@ -69,13 +77,16 @@ class TestGrandfatherRetiringTable:
         for source, expected in cases.items():
             assert map_source_to_test(source) == expected, source
 
-    def test_retiring_is_all_target_homes_minus_eleven_retired_waves(self) -> None:
-        """Eleven basenames retired so far (Waves 1-7 + PLAN-cd-realization-candidate-pass / PCD-01);
-        Wave 6 added "test_convergence_health.py" (a PACKAGE-MIRROR, NOT in
+    def test_retiring_is_all_target_homes_minus_fourteen_retired_waves(self) -> None:
+        """Fourteen basenames retired so far (Waves 1-7, 10 + PLAN-cd-realization-candidate-pass /
+        PCD-01); Wave 6 added "test_convergence_health.py" (a PACKAGE-MIRROR, NOT in
         _CONCERN_SPLIT_TEST_PACKAGES); Wave 7 added "test_ducklake_runtime.py" (a MIRROR,
         special-case KEPT) and "test_ducklake_neon_smoke_test.py" (a CONCERN-SPLIT, already
         seeded); PCD-01 added "test_platform_roadmap_state.py" (a concern-split package mirror --
-        its source scripts/platform_roadmap_state.py IS in _CONCERN_SPLIT_TEST_PACKAGES)."""
+        its source scripts/platform_roadmap_state.py IS in _CONCERN_SPLIT_TEST_PACKAGES); Wave 10
+        added "test_sync_ops.py", "test_session_postflight.py" (surgically -- its flat-file sibling
+        "test_session_metrics.py" stays grandfathered), and "test_ci_rca_evidence.py" -- all three
+        CONCERN-SPLITs, newly seeded in _CONCERN_SPLIT_TEST_PACKAGES that wave."""
         retired = {
             "test_validate.py",
             "test_execute_recommendation.py",
@@ -88,6 +99,9 @@ class TestGrandfatherRetiringTable:
             "test_ducklake_runtime.py",
             "test_ducklake_neon_smoke_test.py",
             "test_platform_roadmap_state.py",
+            "test_sync_ops.py",
+            "test_session_postflight.py",
+            "test_ci_rca_evidence.py",
         }
         assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - retired
         assert "test_validate.py" not in _RETIRING_GRANDFATHER_HOMES
@@ -101,7 +115,11 @@ class TestGrandfatherRetiringTable:
         assert "test_ducklake_runtime.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_ducklake_neon_smoke_test.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_platform_roadmap_state.py" not in _RETIRING_GRANDFATHER_HOMES
-        assert "test_session_postflight.py" in _RETIRING_GRANDFATHER_HOMES
+        assert "test_sync_ops.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert "test_session_postflight.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert "test_ci_rca_evidence.py" not in _RETIRING_GRANDFATHER_HOMES
+        # Still-grandfathered roster-home control: proves neither this wave nor PCD-01 over-reached.
+        assert "test_contracts_enforcement.py" in _RETIRING_GRANDFATHER_HOMES
         assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == retired
 
     def test_roster_is_the_24_known_basenames(self) -> None:

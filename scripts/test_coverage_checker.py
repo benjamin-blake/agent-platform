@@ -199,7 +199,6 @@ _ALL_MIRROR_TARGET_HOMES: frozenset[str] = frozenset(
 # Kept a plain set literal, one basename per line, for minimal per-wave merge conflict.
 _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_build_lambda_deploy.py",
-    "test_ci_rca_evidence.py",
     "test_contracts_enforcement.py",
     "test_ducklake_maintenance_handler.py",
     "test_ducklake_writer_handler.py",
@@ -208,8 +207,6 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_ops_writer.py",
     "test_s3_log_store.py",
     "test_scheduled_agent_handler.py",
-    "test_session_postflight.py",
-    "test_sync_ops.py",
     "test_verify_ci_workflow.py",
 }
 
@@ -236,6 +233,9 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/validate.py",
         "scripts/execute_recommendation.py",
         "scripts/session/preflight.py",
+        "scripts/sync/ops.py",
+        "scripts/session/postflight.py",
+        "scripts/ci_rca/evidence.py",
     }
 )
 
