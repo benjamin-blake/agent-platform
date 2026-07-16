@@ -1,0 +1,612 @@
+schema_version: 1
+slug: sloc-sync-session-circa-tests
+intent: >-
+  Decompose THREE oversized test monoliths -- tests/test_sync_ops.py (738),
+  tests/test_session_postflight.py (832), tests/test_ci_rca_evidence.py (772) -- into three
+  concern-split test PACKAGES (tests/sync/ops/, tests/session/postflight/, tests/ci_rca/evidence/),
+  each a set of cohesive test_<concern>.py modules < 500 SLOC / < 20 CC, then SURGICALLY retire only
+  the three grandfather homes and delete their three config/sloc_budgets.yaml lines -- rec-2709
+  Wave 10 of the Decision 131 mirror-convention rollout. Each source is a single nested-subpackage
+  module with no per-submodule source to mirror 1:1, so each is a CONCERN-SPLIT of one module. The
+  _NESTED_SUBPACKAGE_TEST_PREFIX rule is KEPT (the family siblings -- sync/{recommendations,
+  ducklake_version}, session/metrics, ci_rca/{filing,taxonomy,tier_map,probe_health,back_validation,
+  vacuous_pass,dedup,convergence_dedup} -- stay grandfathered to their flat test_*_*.py homes).
+  Purpose: keep every test file small enough for lower-tier model comprehension (the load-bearing
+  reason the 500-SLOC gate exists, Decision 128). Behaviour-preserving pure MOVE; no test-logic change.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-sloc-sync-session-circa-tests.yaml
+phase: >-
+  rec-2709 Wave 10 (Decision 131 mirror convention, amends Decision 104); SLOC governance /
+  model-portability (AGENTS.md Decision 128). Behaviour-preserving test MOVE of three
+  nested-subpackage test homes (scripts/sync/ops.py, scripts/session/postflight.py,
+  scripts/ci_rca/evidence.py). No product-roadmap phase; platform tooling only.
+scope:
+  - file: tests/sync/__init__.py
+    action: Create
+    purpose: Package marker for the tests/sync/ mirror tree (prepend import mode; empty file).
+  - file: tests/sync/ops/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the scripts/sync/ops.py concern-split package (prepend import mode; empty).
+      This is the directory the mirror machinery computes for scripts/sync/ops.py once its home
+      retires (tests/sync/ops/); check_test_file_exists accepts it once it holds >=1 test_*.py.
+  - file: tests/sync/ops/test_drain.py
+    action: Create
+    purpose: >-
+      drain concern (verbatim): TestDrain, TestDrainSkipsRecsOutbox. Each method-local _FakeOpsWriter/
+      _FailingOpsWriter class moves VERBATIM with its owning method (they are defined INSIDE the test
+      bodies -- no module-level helper, no cross-import). Fresh header: json, MagicMock, patch, and
+      `from scripts.sync import ops as sync_ops` (real module; patch targets are "scripts.sync.ops.*"
+      dotted paths -- NO synthetic sys.modules loader). ~160 SLOC.
+  - file: tests/sync/ops/test_pull.py
+    action: Create
+    purpose: >-
+      pull / _rebuild_local_cache / reader concern (verbatim): TestPull. ~230 SLOC (largest sync_ops
+      module; single class, far under 500 -- no class-split).
+  - file: tests/sync/ops/test_coercion.py
+    action: Create
+    purpose: >-
+      Athena/reader row-coercion helpers (verbatim): TestCoerceOpsRecRow, TestCoerceAthenaArray,
+      TestCoerceOpsPriorityQueueRow, TestCoerceOpsDecisionsRow, TestCoerceOpsSessionLogRow, and the
+      module-level function test_coerce_athena_array_handles_native_list. ~215 SLOC.
+  - file: tests/sync/ops/test_sync_cli.py
+    action: Create
+    purpose: >-
+      sync orchestration + outbox + CLI + table-map invariants + upsert (verbatim): TestSync,
+      TestOutboxSummary, TestMain, TestTelemetryMappings, TestPipelineConsolidation, TestUpsertCacheRow.
+      ~230 SLOC. (If any module measures >=500 at implement time, split this grab-bag further; it will not.)
+  - file: tests/session/postflight/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the scripts/session/postflight.py concern-split package (prepend import mode;
+      empty). tests/session/__init__.py ALREADY EXISTS (created by Wave 4) -- do NOT re-create it.
+  - file: tests/fixtures/session_postflight_module.py
+    action: Create
+    purpose: >-
+      Shared SINGLETON load of scripts/session/postflight.py under the synthetic sys.modules name
+      "session_postflight" (idempotent: return the existing sys.modules entry if already present).
+      Re-exports `postflight` (the module object) AND `MODULE_PATH` (public) -- test_auto.py's
+      TestRetiredDrainBlocks reads the source text via _MODULE_PATH. MANDATORY because the monolith
+      patches the SYNTHETIC name (patch("session_postflight.time.sleep"), ".run_validate",
+      "._get_changed_files"): a per-file re-run of the importlib loader would let the last-collected
+      copy win sys.modules["session_postflight"] while each file's own _postflight.run_push() kept
+      reading its own now-orphaned copy -- decoupling the patch from the function it must intercept
+      (vacuous-pass hazard). Direct precedent: tests/fixtures/session_preflight_module.py (Wave 4).
+      tests/fixtures/ is exempt from the no-cross-test-import guard.
+  - file: tests/session/postflight/conftest.py
+    action: Create
+    purpose: >-
+      Package conftest hoisting the module-level autouse fixture `_mock_sync_ops_postflight` VERBATIM
+      (it stubs scripts.sync.ops.sync + scripts.sync.ops._pull_single_table so run_auto() tests never
+      reach AWS). It is a FIXTURE -> conftest, NOT tests/fixtures/. Imports
+      tests.fixtures.session_postflight_module (noqa F401) so sys.modules["session_postflight"] is
+      registered before any patch("session_postflight.*") runs. Layers UNDER root tests/conftest.py
+      without redeclaring the global recursion/socket/env-clearing autouse fixtures.
+  - file: tests/session/postflight/test_validate_commit.py
+    action: Create
+    purpose: >-
+      validate / pre-commit-sanity / commit-retry concern (verbatim): TestValidateMode,
+      TestPreCommitSanity, TestCommitRetry. Header imports `from tests.fixtures.session_postflight_module
+      import postflight as _postflight` + `from scripts.postflight import _common`. ~110 SLOC.
+  - file: tests/session/postflight/test_push.py
+    action: Create
+    purpose: >-
+      push / PR / CI-poll concern (verbatim): TestPushUpstreamDetection, TestCIPollingTimeout. Uses
+      patch("session_postflight.time.sleep/.time") (synthetic name resolves via the shared singleton).
+      ~175 SLOC.
+  - file: tests/session/postflight/test_close.py
+    action: Create
+    purpose: >-
+      close / telemetry-session concern (verbatim): TestCloseMode, TestCloseTelemetrySession. ~125 SLOC.
+  - file: tests/session/postflight/test_auto.py
+    action: Create
+    purpose: >-
+      run_auto full-sequence concern (verbatim): TestAutoMode, TestRetiredDrainBlocks,
+      TestRunAutoCompactAll. Imports MODULE_PATH from the shared loader for the source-text assertion.
+      ~260 SLOC (largest postflight module; under 500 -- no class-split).
+  - file: tests/session/postflight/test_metrics_housekeeping.py
+    action: Create
+    purpose: >-
+      metrics + telemetry-log pruning + document-derived-tables concern (verbatim): TestMetricsMode,
+      TestPruneTelemetryLogs, TestStageDocumentDerivedTables. Uses patch.object(_common, "LOGS_DIR"/
+      "ARCHIVE_DIR"/"ROOT") -- imports the REAL scripts.postflight._common. ~165 SLOC.
+  - file: tests/ci_rca/__init__.py
+    action: Create
+    purpose: Package marker for the tests/ci_rca/ mirror tree (prepend import mode; empty file).
+  - file: tests/ci_rca/evidence/__init__.py
+    action: Create
+    purpose: >-
+      Package marker for the scripts/ci_rca/evidence.py concern-split package (prepend import mode;
+      empty). Directory the mirror machinery computes for scripts/ci_rca/evidence.py once retired.
+  - file: tests/fixtures/ci_rca/evidence_taxonomies.py
+    action: Create
+    purpose: >-
+      Shared plain-data helper hoisting the three module-level taxonomy dicts VERBATIM: MINI_TAXONOMY
+      (used by the conftest taxonomy_file fixture AND directly by TestLiveS3Roundtrip -> genuinely
+      cross-module, so it MUST be hoisted), MULTI_TAXONOMY, MULTI_FUNC_TAXONOMY. Extends the existing
+      tests/fixtures/ci_rca/ package (plain data, names never start with test_ -> guard-exempt). No
+      synthetic loader needed for ci_rca_evidence -- the monolith imports scripts.ci_rca.evidence /
+      scripts.ci_rca.taxonomy as REAL modules and patches real dotted paths.
+  - file: tests/ci_rca/evidence/conftest.py
+    action: Create
+    purpose: >-
+      Package conftest hoisting the shared fixtures VERBATIM: reset_taxonomy_cache (autouse -- resets
+      scripts.ci_rca.taxonomy._TAXONOMY_CACHE before/after each test), taxonomy_file (writes
+      MINI_TAXONOMY), log_file. Imports MINI_TAXONOMY from tests.fixtures.ci_rca.evidence_taxonomies and
+      `import scripts.ci_rca.taxonomy as taxonomy_mod`. Layers under root tests/conftest.py.
+  - file: tests/ci_rca/evidence/test_hashing.py
+    action: Create
+    purpose: >-
+      canonical-json + sha256 helpers (verbatim): TestCanonicalJson, TestSha256Of. No fixtures/heavy
+      deps. ~38 SLOC.
+  - file: tests/ci_rca/evidence/test_bucket_pending.py
+    action: Create
+    purpose: >-
+      bucket resolution + pending-write + upload-persist (verbatim): TestResolveBucket, TestWritePending,
+      TestUploadAndPersist. Patches scripts.ci_rca.evidence._upload_to_s3 (NO real boto3 -> no marker).
+      ~78 SLOC.
+  - file: tests/ci_rca/evidence/test_live_s3.py
+    action: Create
+    purpose: >-
+      Live-S3 integration roundtrip (verbatim): TestLiveS3Roundtrip (@skipif(RUN_LIVE_S3 unset) +
+      @integration). This is the ONLY heavy-dep module in the whole wave: it does a lazy `import boto3`
+      + boto3.Session inside the test. Add the FAST-TIER HEAVY-DEP MARKER at module scope --
+      `import boto3  # noqa: F401` with the convergence_health-style comment -- so the fast tier's
+      `--collect-only` collectability partition (scripts/checks/_scaffolding.py) PROACTIVELY defers this
+      file to the full tier (boto3 excluded from requirements-fast.txt) instead of crashing. Keep the
+      verbatim lazy in-test `import boto3` too. ~50 SLOC.
+  - file: tests/ci_rca/evidence/test_generate.py
+    action: Create
+    purpose: >-
+      generate_bundles + bundle-field/schema-version + schema-integration (verbatim): TestGenerateBundles,
+      TestNewBundleFields, TestSchemaVersion3, TestBundleToSchema. TestBundleToSchema's lazy `from
+      scripts.ops_data_portal import CiRcaContext` is a FIRST-PARTY import (not a heavy-dep NAME) -> no
+      marker (preserve the monolith's no-marker state). ~195 SLOC.
+  - file: tests/ci_rca/evidence/test_main_emit.py
+    action: Create
+    purpose: >-
+      CLI main() + --emit-dir (verbatim): TestMain, TestEmitDir. ~82 SLOC.
+  - file: tests/ci_rca/evidence/test_fingerprint.py
+    action: Create
+    purpose: >-
+      grouping-fingerprint + slugify + first-error-signature + single-bundle fan-out (verbatim):
+      TestFingerprint, TestBundleEmissionFanOut (co-locate MULTI_FUNC_TAXONOMY here OR import it from the
+      shared fixtures helper -- it is single-use). ~155 SLOC.
+  - file: tests/ci_rca/evidence/test_multi_pre_runtime.py
+    action: Create
+    purpose: >-
+      multi-failure enumeration + pre-runtime env-stamp (verbatim): TestMultiFailureEnumeration (imports
+      MULTI_TAXONOMY from the shared fixtures helper), TestPreRuntimeStamp. ~155 SLOC.
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      The surgical flip (FINAL commit only): (1) DELETE exactly three basename lines from
+      _RETIRING_GRANDFATHER_HOMES -- "test_sync_ops.py", "test_session_postflight.py",
+      "test_ci_rca_evidence.py"; (2) ADD exactly three repo-relative POSIX source paths to the
+      _CONCERN_SPLIT_TEST_PACKAGES frozenset -- "scripts/sync/ops.py", "scripts/session/postflight.py",
+      "scripts/ci_rca/evidence.py". Do NOT touch _NESTED_SUBPACKAGE_TEST_PREFIX (siblings depend on it),
+      _ALL_MIRROR_TARGET_HOMES (frozen roster), or any other home. After (1)+(2): each source's
+      grandfather home leaves _RETIRING but stays in _ALL_MIRROR_TARGET_HOMES, so map_source_to_test
+      routes it through _mirror_source_to_test, and the new concern-split entry makes that return the
+      PACKAGE DIR (tests/sync/ops, tests/session/postflight, tests/ci_rca/evidence). Verified in-memory:
+      the three flip to package dirs; every family sibling stays flat-grandfathered; roster stays 24.
+  - file: tests/test_coverage_checker_grandfather.py
+    action: Modify
+    purpose: >-
+      Oracle #1 (retiring-set + representative paths; FINAL commit). (a) In
+      test_representative_paths_resolve_under_current_retirement_state: FLIP the existing
+      scripts/session/postflight.py control from tests/test_session_postflight.py to
+      tests/session/postflight (concern-split DIR); ADD scripts/sync/ops.py -> tests/sync/ops and
+      scripts/ci_rca/evidence.py -> tests/ci_rca/evidence; ADD still-grandfathered SIBLING controls
+      scripts/sync/recommendations.py -> tests/test_sync_recommendations.py and scripts/ci_rca/filing.py
+      -> tests/test_ci_rca_filing.py (scripts/session/metrics.py -> tests/test_session_metrics.py is
+      already present -- keep it). (b) In the CURRENT retiring-count assertion (named ..._minus_<N>_...
+      -- read the ACTUAL current N at implement time; higher waves may have landed): ADD the three
+      basenames to the `retired` set, add the three `... not in _RETIRING_GRANDFATHER_HOMES` asserts,
+      KEEP a control asserting a still-grandfathered sibling home, and RENAME the method + docstring to
+      the new count (do NOT hardcode "ten"->"thirteen"; compute from the current state). LEAVE
+      test_roster_is_the_24_known_basenames UNCHANGED (roster frozen; the three basenames REMAIN in
+      _ALL_MIRROR_TARGET_HOMES).
+  - file: tests/test_coverage_checker_map.py
+    action: Modify
+    purpose: >-
+      Oracle #2 (mirror mappings; FINAL commit). ADD three positive TestMapSourceToTest cases mirroring
+      test_maps_scripts_session_preflight_to_concern_split_package: scripts/sync/ops.py -> tests/sync/ops,
+      scripts/session/postflight.py -> tests/session/postflight, scripts/ci_rca/evidence.py ->
+      tests/ci_rca/evidence. ADD still-grandfathered SIBLING-CONTROL cases proving the
+      _NESTED_SUBPACKAGE_TEST_PREFIX rule still resolves off-roster siblings to FLAT homes:
+      scripts/sync/recommendations.py -> tests/test_sync_recommendations.py, scripts/session/metrics.py ->
+      tests/test_session_metrics.py, scripts/ci_rca/filing.py -> tests/test_ci_rca_filing.py.
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete EXACTLY three lines by hand (FINAL commit): "  tests/test_ci_rca_evidence.py: 772  #
+      raise-approved: ...", "  tests/test_session_postflight.py: 832  # raise-approved: ...",
+      "  tests/test_sync_ops.py: 738  # raise-approved: ...". NEVER run --update-sloc-budgets (it strips
+      the dec-130 markers on the other grandfathered entries and may auto-seed). HARD invariant: this
+      file loses exactly those three lines and nothing else. Ratchet-DOWN removals (Decision 43/102),
+      always unrestricted; add NO raise marker and NO new tests/ budget entry (Decision 128).
+  - file: tests/test_sync_ops.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/sync/ops/. Deleted WHOLE in the FINAL commit only (kept 100% intact
+      through every prior commit). Simplest of the three -- no synthetic loader, no conftest.
+  - file: tests/test_session_postflight.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/session/postflight/. Deleted WHOLE in the FINAL commit only, so its
+      own non-idempotent top-of-file session_postflight loader never coexists with the new shared
+      singleton under one full-suite collection (OPEN RISK 1).
+  - file: tests/test_ci_rca_evidence.py
+    action: Delete
+    purpose: >-
+      Fully decomposed into tests/ci_rca/evidence/. Deleted WHOLE in the FINAL commit only.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Test-id preservation (per file): the set of pytest node ids (class::function, module-path stripped)
+    collected from each new package (tests/sync/ops, tests/session/postflight, tests/ci_rca/evidence)
+    equals the pre-move set from the corresponding monolith. Same function set, same count, same
+    pass/fail outcomes. PURE move -- NO class rename, NO method rename, NO class-level concern-split
+    (largest class TestPull ~230 SLOC / TestAutoMode ~177 / TestFingerprint ~148, all far under 500);
+    the diff MUST be EMPTY for all three files.
+  - >-
+    bin/venv-python -m scripts.validate --pre exits 0: SLOC gate green (every new module < 500 SLOC and
+    < 20 CC, none registered in config/sloc_budgets.yaml); no-cross-test-import guard green; collectability
+    green (test_live_s3.py proactively deferred by its module-level boto3 marker).
+  - >-
+    bin/venv-python -m pytest tests/sync/ops tests/session/postflight tests/ci_rca/evidence -q passes with
+    the same total test count as the three pre-move baselines summed.
+  - >-
+    git diff origin/main -- config/sloc_budgets.yaml shows ONLY the three lines removed
+    (test_sync_ops.py 738, test_session_postflight.py 832, test_ci_rca_evidence.py 772) with their
+    dec-130 markers; every other entry byte-identical; zero added lines.
+  - >-
+    map_source_to_test spot-checks (asserted by the two updated oracle files): scripts/sync/ops.py ->
+    tests/sync/ops; scripts/session/postflight.py -> tests/session/postflight; scripts/ci_rca/evidence.py
+    -> tests/ci_rca/evidence (all concern-split package DIRS). SIBLING controls stay FLAT-grandfathered:
+    scripts/sync/recommendations.py -> tests/test_sync_recommendations.py; scripts/session/metrics.py ->
+    tests/test_session_metrics.py; scripts/ci_rca/filing.py -> tests/test_ci_rca_filing.py. Prior-wave
+    controls unperturbed: scripts/session/preflight.py -> tests/session/preflight; scripts/executor/**
+    -> None.
+  - >-
+    _RETIRING_GRANDFATHER_HOMES no longer contains the three basenames and STILL contains every other
+    roster home; _ALL_MIRROR_TARGET_HOMES (frozenset) unchanged (24 entries, the three basenames still
+    present); "scripts/sync/ops.py", "scripts/session/postflight.py", "scripts/ci_rca/evidence.py" are
+    present in _CONCERN_SPLIT_TEST_PACKAGES; _NESTED_SUBPACKAGE_TEST_PREFIX untouched.
+  - >-
+    Heavy-dep marker audit: tests/ci_rca/evidence/test_live_s3.py carries a module-level
+    `import boto3  # noqa: F401` marker; NO other new module (sync_ops or postflight -- both monoliths
+    reference zero heavy deps) references boto3/botocore/duckdb/requests/pandas/numpy/pyarrow/psycopg2 at
+    module, lazy, or patch-string scope.
+  - >-
+    Every new test module is < 500 SLOC (validate_sloc_limits counting) and < 20 CC; NO new
+    config/sloc_budgets.yaml entry; the three monoliths are deleted; whole-suite collection is clean.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    graduation: not-applicable
+    action: >-
+      Capture the BEFORE test-id baseline for all three monoliths (run while they are still intact --
+      before the FINAL commit deletes them).
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      for m in test_sync_ops test_session_postflight test_ci_rca_evidence; do bin/venv-python -m pytest
+      tests/$m.py --collect-only -q 2>/dev/null | grep '::' | sed -E 's#^[^:]+::#CLASSFN::#' | sort -u
+      > $S/before_$m.txt; echo "$m: $(wc -l < $S/before_$m.txt) ids"; done
+    expected: A non-empty sorted class::function baseline for each of the three files.
+    fix_if: If any collection errors, that monolith has a pre-existing import/collection problem -- fix before decomposing.
+  - step: 2
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Collect the AFTER id set from each new package and assert a byte-identical diff against the matching baseline.
+    command: >-
+      S=/tmp/claude-0/-home-user-agent-platform/efde6a5d-8723-5096-89dd-16f0c066db30/scratchpad;
+      for pair in "test_sync_ops:sync/ops" "test_session_postflight:session/postflight"
+      "test_ci_rca_evidence:ci_rca/evidence"; do m=${pair%%:*}; d=${pair##*:}; bin/venv-python -m pytest
+      tests/$d --collect-only -q 2>/dev/null | grep '::' | sed -E 's#^[^:]+::#CLASSFN::#' | sort -u
+      > $S/after_$m.txt; echo "== $m =="; diff $S/before_$m.txt $S/after_$m.txt && echo "$m EMPTY-DIFF-OK"; done
+    expected: Empty diff for all three (identical class::function sets). No sanctioned delta -- pure move, no renames/splits.
+    fix_if: Any added/removed id means a class was dropped, duplicated, mis-copied, or a method lost/renamed. STOP and reconcile.
+  - step: 3
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Run the authoritative fast presubmit tier -- proves SLOC gate, no-cross-test-import guard, collectability.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0. No SLOC-limit failure, no cross-test-import failure, no collection error.
+    fix_if: >-
+      A >=500 unregistered module (rebalance classes -- e.g. subdivide test_sync_cli.py or test_auto.py);
+      a cross-test import (a helper leaked between test_* modules -> move to tests/fixtures/ or the package
+      conftest); a collection error (fix that module's fresh import header, or the boto3 marker on test_live_s3.py).
+  - step: 4
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Full scoped pass of all three new packages at the summed baseline count.
+    command: bin/venv-python -m pytest tests/sync/ops tests/session/postflight tests/ci_rca/evidence -q
+    expected: All pass; total selected count equals the sum of the three step-1 baselines.
+    fix_if: >-
+      A failure means a patch target or fixture did not survive the move -- most likely the
+      session_postflight singleton identity (postflight), the reset_taxonomy_cache/taxonomy_file/log_file
+      conftest fixtures (ci_rca_evidence), or a method-local fake writer (sync_ops). Verify _postflight is
+      the same object as sys.modules["session_postflight"] in every postflight module.
+  - step: 5
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Assert config/sloc_budgets.yaml lost exactly the three target lines and nothing else.
+    command: git diff origin/main -- config/sloc_budgets.yaml
+    expected: >-
+      Exactly three removed lines (tests/test_ci_rca_evidence.py 772, tests/test_session_postflight.py 832,
+      tests/test_sync_ops.py 738, each with its dec-130 raise-approved marker) and zero added lines.
+    fix_if: Any other changed line means --update-sloc-budgets was run (forbidden) or an unintended entry was touched.
+  - step: 6
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Prove the retired + surgical mapping via the two updated coverage-checker oracle files.
+    command: bin/venv-python -m pytest tests/test_coverage_checker_grandfather.py tests/test_coverage_checker_map.py -q
+    expected: >-
+      All pass, including: the three sources -> their concern-split package dirs; the sibling controls
+      (sync/recommendations, session/metrics, ci_rca/filing) still FLAT-grandfathered; the renamed
+      retiring-count assertion with the three new basenames removed from _RETIRING; the unchanged 24-entry roster.
+    fix_if: >-
+      A failing oracle assertion means the flip was wrong -- a sibling stopped grandfathering (over-reach into
+      _NESTED_SUBPACKAGE_TEST_PREFIX), a concern-split path is mis-declared, or the retiring-count assertion/name
+      was not updated to the current N. Correct the map edit or the oracle expectation to match.
+  - step: 7
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Confirm the three monoliths are gone, the three retirement lines are removed, and the sibling homes are untouched.
+    command: >-
+      test ! -f tests/test_sync_ops.py && test ! -f tests/test_session_postflight.py &&
+      test ! -f tests/test_ci_rca_evidence.py &&
+      ! grep -qE '"test_(sync_ops|session_postflight|ci_rca_evidence)\.py"' scripts/test_coverage_checker.py &&
+      grep -q '"test_session_preflight\.py"' scripts/test_coverage_checker.py; echo "RETIRED-RC=$?"
+    expected: >-
+      RETIRED-RC=0 (all three monoliths deleted, all three basenames removed from _RETIRING, and the
+      prior-wave test_session_preflight.py line still present -- proving no over-reach).
+    fix_if: If any monolith survives, a target line remains, or an unrelated line was removed, the FINAL commit is wrong.
+  - step: 8
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Heavy-dep marker audit -- confirm the single boto3 marker exists and no other new module references a heavy dep.
+    command: >-
+      grep -n 'import boto3' tests/ci_rca/evidence/test_live_s3.py &&
+      ! grep -rnE 'boto3|botocore|duckdb|requests|pandas|numpy|pyarrow|psycopg2'
+      tests/sync/ops tests/session/postflight
+      $(ls tests/ci_rca/evidence/*.py | grep -v test_live_s3.py); echo "MARKER-RC=$?"
+    expected: >-
+      test_live_s3.py shows the module-level `import boto3` marker; MARKER-RC=0 (no heavy-dep token in any
+      other new sync_ops/postflight/ci_rca_evidence module).
+    fix_if: >-
+      A heavy-dep token in another new module means a class carrying it was mis-grouped -- either move the
+      module-level marker onto that module (convergence_health pattern) or regroup so the heavy-dep test lands
+      only in an already-marked module.
+  - step: 9
+    phase: pre-deploy
+    graduation: not-applicable
+    action: Whole-suite collection smoke -- no import/collection error anywhere from the move.
+    command: bin/venv-python -m pytest tests/ --collect-only -q
+    expected: >-
+      Clean collection; no ImportError/collection error from the three new packages, the two shared fixture
+      helpers, the deleted monoliths, or the oracle edits. (test_live_s3.py may be deferred in the fast tier;
+      under the full toolchain it collects and its integration test skips.)
+    fix_if: A collection error means a dangling reference to a deleted monolith or a broken import header in a new module.
+constraints:
+  - >-
+    Pure behaviour-preserving MOVE. Copy every class body and every in-class/in-method helper VERBATIM with
+    its owner (sync_ops's method-local _FakeOpsWriter/_FailingOpsWriter move with their methods; the ci_rca
+    taxonomy dicts and the postflight fixtures/loader are the only module-level surfaces, handled explicitly
+    below). Author a fresh per-file import header importing exactly the symbols each file references -- no
+    test-logic edits, no renames, no class splits (no class exceeds 500 SLOC).
+  - >-
+    sync_ops (SIMPLEST -- no synthetic loader): each new module imports the REAL module
+    (`from scripts.sync import ops as sync_ops` / `from scripts.sync.ops import <fn>`); patch targets stay
+    "scripts.sync.ops.*" / "src.common.iceberg_reader.*" dotted strings. No conftest, no fixtures helper
+    (the monolith defines no module-level fixture; tmp_path/caplog are pytest built-ins).
+  - >-
+    postflight (synthetic loader REQUIRED): create tests/fixtures/session_postflight_module.py as an
+    IDEMPOTENT singleton (reuse sys.modules["session_postflight"] if present) re-exporting `postflight` AND
+    `MODULE_PATH`; every new module does `from tests.fixtures.session_postflight_module import postflight as
+    _postflight` (and MODULE_PATH where needed). Hoist the autouse `_mock_sync_ops_postflight` fixture VERBATIM
+    to tests/session/postflight/conftest.py. Do NOT re-run the importlib loader per module.
+  - >-
+    ci_rca_evidence (real modules + shared fixtures): hoist reset_taxonomy_cache (autouse), taxonomy_file,
+    log_file to tests/ci_rca/evidence/conftest.py; hoist MINI_TAXONOMY (cross-module: conftest + TestLiveS3Roundtrip)
+    -- plus MULTI_TAXONOMY / MULTI_FUNC_TAXONOMY -- to tests/fixtures/ci_rca/evidence_taxonomies.py. Modules import
+    the real scripts.ci_rca.evidence / scripts.ci_rca.taxonomy and patch real dotted paths.
+  - >-
+    FAST-TIER HEAVY-DEP MARKER: grep EVERY new module for boto3/botocore/duckdb/requests/pandas/numpy/pyarrow/
+    psycopg2 (module-level, lazy, or patch string). Only tests/ci_rca/evidence/test_live_s3.py references one
+    (boto3) -- give it a module-level `import boto3  # noqa: F401` + the convergence_health-style comment, and
+    keep its verbatim lazy in-test import. sync_ops and postflight monoliths reference ZERO heavy deps -> expect
+    ZERO markers there (confirm by grep -- do not add a marker where no reference exists).
+  - >-
+    No cross-test imports (validate_no_cross_test_imports active in --pre and full). New modules import only:
+    stdlib, pytest, the real scripts.* modules a class references, `from tests.fixtures.* import ...`, and
+    (postflight) the session_postflight singleton. patch("session_postflight.*") is a STRING target -- never
+    `import session_postflight` from a test module.
+  - >-
+    ruff-format import discipline (tests/CLAUDE.md): one consolidated import block per module (never split a
+    module's imports across two blocks -- ruff silently drops the second).
+  - >-
+    Every new mirror directory carries an __init__.py (prepend import mode): tests/sync/, tests/sync/ops/,
+    tests/session/postflight/, tests/ci_rca/, tests/ci_rca/evidence/. tests/session/__init__.py ALREADY EXISTS
+    (Wave 4) -- do NOT re-create it.
+  - >-
+    Surgical retirement: remove ONLY the three basenames from _RETIRING_GRANDFATHER_HOMES; add ONLY the three
+    source paths to _CONCERN_SPLIT_TEST_PACKAGES. Do NOT touch _NESTED_SUBPACKAGE_TEST_PREFIX (the sync/session/
+    ci_rca family siblings depend on it to keep resolving to their flat test_*_*.py homes) or
+    _ALL_MIRROR_TARGET_HOMES.
+  - >-
+    config/sloc_budgets.yaml loses exactly the three target lines; NEVER run --update-sloc-budgets. Add NO raise
+    marker and NO new tests/ budget entry (Decision 128 -- decompose, not raise).
+  - Do NOT resolve rec-2709 (Wave 10 of ~14); bundled_recommendations stays empty.
+  - >-
+    No rescue agents or workaround loops (Decision 55). On an unrecoverable collect-id mismatch or sys.modules
+    identity failure, STOP and RCA -- never patch around it. PUBLIC repo -- no AWS account IDs/ARNs/secrets/
+    internal hostnames in any new file.
+  - Use bin/venv-python for all Python invocations; bash-only shell. Work on the harness claude/... branch, never main.
+context:
+  - >-
+    DECISION ANALYSIS (inline; the overseer is the critique gate, so no decision-scout/plan-critique
+    sub-subagents were spawned). CITE: Decision 131 (test-colocation inverted to a mirror rule + retiring
+    grandfather-table + no-cross-test-import guard + per-package conftest hierarchy; amends Decision 104; governs
+    every step); Decision 130 (whole-repo structural-size governance + the 24-home one-time grandfather of tests/
+    SLOC debt + the dec-130 markers -- governs the three ratchet-DOWN budget-line deletions); Decision 128 (SLOC
+    budget-raise guardrails: decompose by default; this wave adds ZERO budget lines / ZERO raise markers);
+    Decision 124 (scripts/executor/** and scripts/ops_portal/** deliberately map to None -- unperturbed); Decision
+    132 (verification-step graduation dispositions -- every pre-deploy VP step carries graduation: not-applicable).
+    RELATED: Decision 80/104 (facade / concern-split precedent the three packages mirror -- exactly Wave 3's
+    tests/ops_data_portal/ and Wave 4's tests/session/preflight/); Decision 43/102 (CC-20 and 500-SLOC limits).
+  - >-
+    CONTRADICTION CHECK = CLEAN. No class in any of the three monoliths exceeds 500 SLOC (largest: TestPull
+    ~230, TestAutoMode ~177, TestFingerprint ~148), so NO class-level primary sibling-split, NO id-qualifier
+    delta, NO budget-raise-marker tension. The doctrinal nuance is the surgical-retirement caveat (tests/CLAUDE.md
+    "one-line retirement is NOT uniform"): all three sources resolve via _NESTED_SUBPACKAGE_TEST_PREFIX to their
+    flat grandfather homes, then through the mirror branch to a package dir -- each is a genuine flip, while the
+    family siblings (whose homes were never on the 24-roster) stay flat-grandfathered. This mirrors Wave 4's
+    surgical session split (preflight flipped; postflight+metrics stayed) -- Wave 10 now flips postflight, leaving
+    metrics grandfathered.
+  - >-
+    EXACT map_source_to_test EDITS (verified in-memory against the live checker). Edit A -- delete from
+    _RETIRING_GRANDFATHER_HOMES: "test_sync_ops.py", "test_session_postflight.py", "test_ci_rca_evidence.py".
+    Edit B -- add to _CONCERN_SPLIT_TEST_PACKAGES: "scripts/sync/ops.py", "scripts/session/postflight.py",
+    "scripts/ci_rca/evidence.py". _mirror_source_to_test then computes: scripts/sync/ops.py (parts=("scripts",
+    "sync","ops.py"), subdir="sync", stem="ops", in concern-split) -> tests/sync/ops; scripts/session/postflight.py
+    -> tests/session/postflight; scripts/ci_rca/evidence.py -> tests/ci_rca/evidence (all PACKAGE DIRS, no test_
+    prefix, no .py). check_test_file_exists passes once each dir holds >=1 test_*.py.
+  - >-
+    SURGICAL-RETIREMENT GATE REASONING (why exactly the three sources flip and every sibling stays). For each
+    retired source, home.name is no longer in _RETIRING but IS in _ALL_MIRROR_TARGET_HOMES and != "test_validate.py"
+    -> _mirror_source_to_test -> the declared concern-split package dir. For each family SIBLING
+    (scripts/sync/{recommendations,ducklake_version}.py -> test_sync_*; scripts/session/metrics.py ->
+    test_session_metrics.py; scripts/ci_rca/{filing,taxonomy,tier_map,probe_health,back_validation,vacuous_pass,
+    dedup,convergence_dedup}.py -> test_ci_rca_*): _grandfathered_source_to_test still fires the
+    _NESTED_SUBPACKAGE_TEST_PREFIX branch to a flat home whose basename is in NEITHER _RETIRING NOR
+    _ALL_MIRROR_TARGET_HOMES (never on the 24-roster), so map_source_to_test returns `home` unconditionally --
+    unchanged flat grandfather. The _NESTED_SUBPACKAGE_TEST_PREFIX map and the new _CONCERN_SPLIT entries are
+    ORTHOGONAL: the prefix map computes the grandfather home (deciding roster membership / retirement); the
+    concern-split set only shapes the post-retirement mirror target. Both must coexist -- removing the prefix map
+    would break every sibling.
+  - >-
+    CONCERN-SPLIT BREAKDOWN (verbatim class -> module; all < 500 SLOC). sync_ops -> tests/sync/ops/ (4 modules):
+    test_drain [TestDrain, TestDrainSkipsRecsOutbox ~160]; test_pull [TestPull ~230]; test_coercion
+    [TestCoerceOpsRecRow, TestCoerceAthenaArray, TestCoerceOpsPriorityQueueRow, TestCoerceOpsDecisionsRow,
+    TestCoerceOpsSessionLogRow, + module-level test_coerce_athena_array_handles_native_list ~215]; test_sync_cli
+    [TestSync, TestOutboxSummary, TestMain, TestTelemetryMappings, TestPipelineConsolidation, TestUpsertCacheRow
+    ~230]. postflight -> tests/session/postflight/ (5 modules): test_validate_commit [TestValidateMode,
+    TestPreCommitSanity, TestCommitRetry ~110]; test_push [TestPushUpstreamDetection, TestCIPollingTimeout ~175];
+    test_close [TestCloseMode, TestCloseTelemetrySession ~125]; test_auto [TestAutoMode, TestRetiredDrainBlocks,
+    TestRunAutoCompactAll ~260]; test_metrics_housekeeping [TestMetricsMode, TestPruneTelemetryLogs,
+    TestStageDocumentDerivedTables ~165]. ci_rca_evidence -> tests/ci_rca/evidence/ (7 modules): test_hashing
+    [TestCanonicalJson, TestSha256Of ~38]; test_bucket_pending [TestResolveBucket, TestWritePending,
+    TestUploadAndPersist ~78]; test_live_s3 [TestLiveS3Roundtrip ~50 -- BOTO3 MARKER]; test_generate
+    [TestGenerateBundles, TestNewBundleFields, TestSchemaVersion3, TestBundleToSchema ~195]; test_main_emit
+    [TestMain, TestEmitDir ~82]; test_fingerprint [TestFingerprint, TestBundleEmissionFanOut ~155];
+    test_multi_pre_runtime [TestMultiFailureEnumeration, TestPreRuntimeStamp ~155].
+  - >-
+    SHARED-HELPER HOISTING. sync_ops: NONE (all helpers method-local; move verbatim). postflight: (1) the
+    session_postflight importlib singleton -> tests/fixtures/session_postflight_module.py (idempotent; re-export
+    postflight + MODULE_PATH); (2) autouse _mock_sync_ops_postflight -> tests/session/postflight/conftest.py.
+    GREP `_make_run(` first: the module-level _make_run helper (monolith lines 39-57) appears UNUSED in the
+    current monolith -- confirm by grep; if genuinely unreferenced, DROP it (dead code, do not carry forward); if
+    a usage exists, co-locate it (single module) or hoist to tests/fixtures/ (multi-module). ci_rca_evidence:
+    reset_taxonomy_cache/taxonomy_file/log_file -> package conftest; MINI/MULTI/MULTI_FUNC taxonomy dicts ->
+    tests/fixtures/ci_rca/evidence_taxonomies.py (MINI is genuinely cross-module: conftest fixture + direct use in
+    TestLiveS3Roundtrip).
+  - >-
+    HEAVY-DEP MARKERS NEEDED: exactly ONE -- tests/ci_rca/evidence/test_live_s3.py gets a module-level
+    `import boto3  # noqa: F401` (convergence_health precedent: the fast tier's --collect-only collectability
+    partition sees the heavy-dep import and proactively defers the file to the full tier). sync_ops (0 refs) and
+    postflight (0 refs) monoliths contain no boto3/duckdb/etc. token, so their split modules need NO marker
+    (preserve the original no-marker state). Verified by grep of all three monoliths.
+  - >-
+    NO CLASS EXCEEDS 500 SLOC -- so NO primary sibling-split of any class is required this wave. Largest classes:
+    TestPull (~230), TestAutoMode (~177), TestCIPollingTimeout (~159), TestFingerprint (~148).
+  - >-
+    OVERSEER STANDARD -- PR STRUCTURE: ONE branch (harness claude/... session branch) / ONE PR with BATCHED
+    COMMITS (scaffold+shared-surfaces commit -> per-file module-population commits, monoliths intact -> FINAL flip
+    commit), NOT multi-PR. The move is verified atomically by per-file test-id preservation (VP 1-2) + validate
+    --pre + the three scoped suites + the two oracle files.
+  - >-
+    OPEN RISK 1 (postflight dual-loader sys.modules clash during intermediate commits): while BOTH the intact
+    monolith (its own NON-idempotent top-of-file session_postflight loader) and the new modules (the fixtures
+    singleton) exist on the branch, a FULL-suite collection can leave sys.modules["session_postflight"] pointing at
+    whichever copy collected last, breaking main()-patch tests order-dependently. MITIGATION: keep the monolith
+    100% intact until the FINAL commit deletes it whole; make the fixtures loader idempotent (reuse the existing
+    sys.modules entry); for mid-batch verification run SCOPED `pytest tests/session/postflight` (monolith not
+    co-collected). CI evaluates only the PR head (monolith deleted) which is unambiguous. Dev-local, not a
+    merged-state defect. sync_ops and ci_rca_evidence use REAL-module imports (no synthetic name) -> no dual-loader
+    risk for those two.
+  - >-
+    OPEN RISK 2 (oracle test-id churn is EXPECTED and out-of-scope for VP-2): the two oracle-file edits rename the
+    retiring-count method and add positive/sibling cases -- changing ids in THOSE files. The VP step-2
+    id-preservation diff covers only the three decomposed suites vs their monoliths, so oracle-file id changes are
+    legitimate and reviewed via VP step 6 (oracle green), not VP step 2.
+  - >-
+    OPEN RISK 3 (retiring-count method name drift): tests/test_coverage_checker_grandfather.py's retiring assertion
+    is currently named ..._minus_ten_... with a 10-entry `retired` set (Waves 1-7), but Waves 8-9 may land before
+    this wave implements. The implementer MUST read the ACTUAL current method/set, ADD the three Wave-10 basenames,
+    and RENAME to the resulting count -- never hardcode a delta from "ten".
+  - >-
+    Branch: harness-assigned claude/... session branch (verify not main). Wave 3 (tests/ops_data_portal/) and Wave 4
+    (tests/session/preflight/, tests/fixtures/session_preflight_module.py) are the live templates on main. Preflight
+    not machine-run in this read-only planning subagent. No CI-RCA unresolved recs in scope. Main-divergence: scope
+    is net-new package files + coverage-checker + two oracle files + a three-line budget deletion + three monolith
+    deletions; no overlap risk flagged at planning time.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - scripts/test_coverage_checker.py read in full (map_source_to_test, _grandfathered_source_to_test, _mirror_source_to_test, _RETIRING_GRANDFATHER_HOMES, _ALL_MIRROR_TARGET_HOMES, _CONCERN_SPLIT_TEST_PACKAGES, _NESTED_SUBPACKAGE_TEST_PREFIX)
+  - tests/CLAUDE.md read (mirror convention, no-cross-test-import, per-package conftest hierarchy, ruff import discipline, later-wave hand-offs)
+  - Wave 3 (tests/ops_data_portal/) and Wave 4 (tests/session/preflight/ + tests/fixtures/session_preflight_module.py) studied as the concern-split + synthetic-loader templates
+  - Decision 131, 130, 128, 124, 132 located and their bearing confirmed (inline decision analysis)
+  - All classes in the three monoliths located; class -> module map re-verified against the live files; no class exceeds 500 SLOC (no class-split)
+  - The three exact map edits (Edit A delete-from-_RETIRING, Edit B add-to-_CONCERN_SPLIT) confirmed against the live checker via in-memory simulation -- three flip to package dirs, all siblings stay flat, roster stays 24
+  - Heavy-dep grep of all three monoliths run -- only test_ci_rca_evidence.py references boto3 (lazy, in TestLiveS3Roundtrip)
+  - The `_make_run` helper usage in the postflight monolith grepped (appears unused -- confirm before dropping)
+  - config/sloc_budgets.yaml lines for the three targets identified (772/832/738, dec-130 markers) for by-hand deletion
+  - CURRENT name + `retired` set of tests/test_coverage_checker_grandfather.py's retiring-count assertion read (do not hardcode the count)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Confirm the working branch is the harness claude/... session branch (git branch --show-current), NOT main.
+  - >-
+    COMMIT 1 (scaffold + shared surfaces): create the package markers (tests/sync/__init__.py,
+    tests/sync/ops/__init__.py, tests/session/postflight/__init__.py, tests/ci_rca/__init__.py,
+    tests/ci_rca/evidence/__init__.py -- NOT tests/session/__init__.py, which exists); create
+    tests/fixtures/session_postflight_module.py (idempotent singleton re-exporting postflight + MODULE_PATH);
+    create tests/fixtures/ci_rca/evidence_taxonomies.py (MINI/MULTI/MULTI_FUNC dicts); create
+    tests/session/postflight/conftest.py (_mock_sync_ops_postflight autouse) and tests/ci_rca/evidence/conftest.py
+    (reset_taxonomy_cache autouse + taxonomy_file + log_file). Run `bin/venv-python -m scripts.validate --pre`
+    (additive -- must stay green).
+  - >-
+    COMMITS 2-4 (module population, one file's package per commit): create the 4 sync_ops modules, the 5 postflight
+    modules, and the 7 ci_rca_evidence modules per the CONCERN-SPLIT BREAKDOWN, copying each class VERBATIM with a
+    fresh per-file import header. Add the module-level `import boto3  # noqa: F401` marker to test_live_s3.py only.
+    Keep all three monoliths FULLY INTACT. After each commit run SCOPED `bin/venv-python -m pytest <that package>
+    -q` (monolith not co-collected -- avoids OPEN RISK 1) plus `bin/venv-python -m scripts.validate --pre` on the
+    touched files to localise any SLOC/cross-import/collection failure early.
+  - >-
+    FINAL COMMIT (the surgical flip): edit scripts/test_coverage_checker.py (Edit A: remove the three basenames
+    from _RETIRING_GRANDFATHER_HOMES; Edit B: add the three source paths to _CONCERN_SPLIT_TEST_PACKAGES -- touch
+    nothing else); update tests/test_coverage_checker_grandfather.py (flip the postflight representative case, add
+    the sync_ops/evidence positives + the sync/ci_rca sibling controls, update+rename the retiring-count assertion
+    to the current N, leave the 24-roster test unchanged); update tests/test_coverage_checker_map.py (three positive
+    concern-split cases + three still-grandfathered sibling controls); delete the three config/sloc_budgets.yaml
+    lines by hand; delete the three monoliths WHOLE.
+  - >-
+    Execute the full Verification Plan (steps 1-9) on the FINAL commit; loop until all pass. On an unrecoverable
+    failure STOP and RCA (Decision 55) -- never patch around a collect-id mismatch or a sys.modules-identity failure.
+  - >-
+    Push -u origin HEAD; open ONE PR (title: feat(sloc-sync-session-circa-tests): ...); subscribe_pr_activity; end
+    the turn per the AGENTS.md Git-ops procedure (event-driven CI-green wake, no poll loop).
+  - >-
+    Report: the final per-module SLOC breakdown for all three packages; confirmation config/sloc_budgets.yaml lost
+    exactly three lines; the three VP step-2 empty-diff confirmations; that every family sibling remained
+    grandfathered while only the three targets flipped; and the single boto3 marker on test_live_s3.py.
+rollback: >-
+  Single-PR revert. The FINAL commit is the only one that changes the mapping / budgets / deletes the monoliths --
+  reverting the PR restores all three grandfather memberships and their dec-130 budget lines, re-points the three
+  sources at their (restored) monoliths, and leaves the already-created packages + the two shared fixture helpers as
+  harmless extra coverage until re-attempted.
