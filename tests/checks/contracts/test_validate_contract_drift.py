@@ -19,7 +19,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "validate.py"
+_SCRIPT_PATH = Path(__file__).parent.parent.parent.parent / "scripts" / "validate.py"
 _spec = importlib.util.spec_from_file_location("validate_contract_drift_under_test", _SCRIPT_PATH)
 _validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(_validate)  # type: ignore[union-attr]
@@ -508,7 +508,7 @@ class TestReRatificationTriggerWellFormedness:
         # The three real Class B provisional_v0 contracts (ducklake_writer/reader/maintenance)
         # must pass the well-formedness check now enforced in Pass 1.
         _install_fake_git(monkeypatch, _FakeGit(merge_base_rc=1))
-        real_dir = Path(__file__).resolve().parent.parent / "docs" / "contracts"
+        real_dir = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "contracts"
         failed: list[str] = []
         validate_contract_drift(failed, contracts_dir=real_dir)
         assert failed == []
