@@ -48,7 +48,25 @@ scope:
     purpose: >-
       Insert _c("validate_pr_conflict_signal") into BOTH pre_sequence() and full_sequence()
       (adjacent to the existing _c("validate_ci_workflow_guards") entries) so the new guard runs in
-      the --pre and full tiers. validate.py is the single source of truth for CI gates.
+      the --pre and full tiers. Registry insertion alone is NOT sufficient -- the check must also
+      be re-exported by scripts/validate.py (next row) to be dispatchable.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the re-export line "from scripts.checks.ci_guards.validate_pr_conflict_signal import
+      validate_pr_conflict_signal  # noqa: F401,E402" in the ci_guards import block (adjacent to the
+      sibling line 64 validate_ci_workflow_guards import). Check dispatch is globals()[name](failed)
+      (validate.py:256) with NO auto-discovery, so a registered check must be a module-level global
+      of validate.py via this explicit re-export; without it, validate --pre KeyErrors on the check
+      and the tests/test_checks_registry.py reachability tests fail.
+  - file: scripts/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Root-cause doc fix: the "Adding a validate.py check" section says checks are "not hand-wired
+      into scripts/validate.py" and directs touching only the module + registry.py -- but the actual
+      globals()[name] dispatch REQUIRES the explicit validate.py re-export line. Add one line naming
+      that requirement so the next check author does not repeat this omission (this plan is the
+      living proof the doc is incomplete).
   - file: tests/checks/ci_guards/test_validate_pr_conflict_signal.py
     action: Create
     purpose: >-
@@ -87,12 +105,14 @@ acceptance_criteria:
   - >-
     scripts/checks/ci_guards/validate_pr_conflict_signal.py is a registered check that asserts the
     workflow's trigger, claude/* filter, mergeable poll, CONFLICTING-only comment gate,
-    continue-on-error, head-SHA dedup marker, and permissions, and is inserted into BOTH the
-    pre_sequence() and full_sequence() tiers in scripts/checks/registry.py.
+    continue-on-error, head-SHA dedup marker, and permissions; it is inserted into BOTH the
+    pre_sequence() and full_sequence() tiers in scripts/checks/registry.py AND re-exported by
+    scripts/validate.py (the module-level global that _dispatch_check resolves via globals()).
   - >-
     tests/checks/ci_guards/test_validate_pr_conflict_signal.py has pass-path and fail-path unit
-    tests for the new guard, and the growth-safe registry membership/reachability tests in
-    tests/test_checks_registry.py stay green with the new registration (no edit required there).
+    tests for the new guard, and the registry membership/reachability tests in
+    tests/test_checks_registry.py stay green -- reachability requires BOTH the registry.py insertion
+    AND the scripts/validate.py re-export (no edit to the test file itself is required).
   - >-
     ci.yml's signal-green comment step retries the gh pr comment up to 3 times, remains
     continue-on-error: true, remains gated to claude/* PRs, and signal-green.needs is unchanged
@@ -282,7 +302,7 @@ verification_plan:
       the loop so a first-attempt success still posts exactly one comment.
 constraints:
   - >-
-    Only modify the 7 files listed in scope (AGENTS.md "Only modify files explicitly in scope").
+    Only modify the 9 files listed in scope (AGENTS.md "Only modify files explicitly in scope").
   - >-
     A wake signal must never red a build: the new conflict-wake comment step and the signal-green
     comment step are continue-on-error: true (mirrors the sanctioned signal-green precedent; the
@@ -323,7 +343,7 @@ context:
     Decision 132, Decision 128, Decision 86. RELATED = Decision 74 (workflow_dispatch escape-hatch),
     Decision 75 (frame-lock -- consciously discharged), Decision 100 (no native GitHub primitive for
     a conflict wake).
-  - "gates: decision-scout=NO_FLAGS (round 2; round 1 was FLAGS_FOUND on a Decision 83 NOTE, accepted-with-deferral by the human); plan-critique round 1 = REVISE (SLOC-ceiling blocker on tests/test_verify_ci_workflow.py + vacuous VP step 6); both addressed (guard relocated to a dedicated registered module scripts/checks/ci_guards/validate_pr_conflict_signal.py; VP step 6 grep corrected for the backtick text); plan-critique round 2 = pending re-dispatch"
+  - "gates: decision-scout=NO_FLAGS (round 2; round 1 was FLAGS_FOUND on a Decision 83 NOTE, accepted-with-deferral by the human); plan-critique round 1 = REVISE (SLOC-ceiling blocker + vacuous VP step 6 -- both fixed: guard relocated to registered module, grep corrected); plan-critique round 2 = REVISE (missing scripts/validate.py re-export required for globals()[name] dispatch -- fixed: validate.py added to scope + re-export execution step + scripts/CLAUDE.md doc-gap fix); plan-critique round 3 = pending re-dispatch"
   - >-
     Decision 83/76 name GitHub-native auto-merge (enable_pr_auto_merge; CD.20 / rec-940) as the
     durable successor that will eventually retire the comment-wake machinery. This plan consciously
@@ -347,10 +367,16 @@ context:
     Decision 130 pending the rec-2709 tests/ decomposition wave) -- any added test would red
     validate_sloc_limits. A fresh module + fresh mirror test (tests/checks/ci_guards/
     test_validate_pr_conflict_signal.py) has ample headroom and follows the modern registered-check
-    pattern (scripts/CLAUDE.md "Adding a validate.py check"; Decision 104). registry.py additions are
-    growth-safe: tests/test_checks_registry.py asserts membership floors + uniqueness + reachability,
-    not exact counts, and the new check must stay owner="platform" (unpinned) so
-    test_exactly_three_pinned_checks holds.
+    pattern (scripts/CLAUDE.md "Adding a validate.py check"; Decision 104). Dispatch mechanics
+    (verified during round-2 critique): registration is driven ENTIRELY by scripts/validate.py's
+    explicit "from scripts.checks.<domain>.<module> import <name>  # noqa: F401,E402" block (no
+    walk_packages auto-discovery), and dispatch is globals()[name](failed) (validate.py:256) -- so a
+    registered check needs BOTH the registry.py tier insertion AND a validate.py re-export line, or
+    validate --pre KeyErrors and tests/test_checks_registry.py reachability tests fail. scripts/CLAUDE.md's
+    "Adding a validate.py check" section omits the re-export requirement (the doc gap that produced this
+    plan's round-2 miss); this plan closes it. registry.py additions are otherwise growth-safe
+    (membership floors + uniqueness, not exact counts), and the new check must stay owner="platform"
+    (unpinned) so test_exactly_three_pinned_checks holds.
   - >-
     Prior art: PLAN-green-ci-wake-gate (created the signal-green job) and PLAN-pr-subscribe-wake-reconcile
     (introduced the ~1h send_later backstop this plan retires). The backstop was introduced by a plan
@@ -369,7 +395,9 @@ context:
     with main_files_changed_since_branch.
   - >-
     SLOC (Decision 128/130): the newly created module and test file are well under 500 SLOC and need
-    no budget entry; registry.py (188 SLOC) gains two lines. No at-budget file is modified, so no
+    no budget entry; registry.py (188 SLOC) gains two lines, scripts/validate.py (430 SLOC) gains one
+    import line, and scripts/CLAUDE.md gains one doc line -- all under budget, none registered. No
+    at-budget file is modified (in particular NOT tests/test_verify_ci_workflow.py at 573/573), so no
     raise and no decomposition is required by this plan.
 pre_implementation_checklist:
   - Branch confirmed not on main
@@ -377,7 +405,7 @@ pre_implementation_checklist:
   - >-
     DECISIONS.md reviewed (handled via the decision-scout gate at planning time -- NO_FLAGS; CITE
     Decision 76, 55, 73, 83, 104, 132, 128, 86)
-  - All 7 files in scope located and readable
+  - All 9 files in scope located and readable
   - Acceptance criteria understood and verifiable
 execution_steps:
   - >-
@@ -410,7 +438,16 @@ execution_steps:
     "conflict-wake:" head-SHA marker. Then in scripts/checks/registry.py insert
     _c("validate_pr_conflict_signal") into BOTH pre_sequence() and full_sequence(), adjacent to the
     existing _c("validate_ci_workflow_guards") entries. Do NOT pin the owner (keeps
-    test_exactly_three_pinned_checks at 3).
+    test_exactly_three_pinned_checks at 3). ALSO add the re-export line "from
+    scripts.checks.ci_guards.validate_pr_conflict_signal import validate_pr_conflict_signal
+    # noqa: F401,E402" to scripts/validate.py in the ci_guards import block (adjacent to line 64's
+    validate_ci_workflow_guards import): dispatch is globals()[name](failed) with no auto-discovery,
+    so without this line validate --pre KeyErrors on the check and the reachability tests fail.
+  - >-
+    In scripts/CLAUDE.md "Adding a validate.py check", add one line documenting the required
+    scripts/validate.py re-export ("from scripts.checks.<domain>.<module> import <name>
+    # noqa: F401,E402") so the check becomes a module-level global for globals()[name] dispatch --
+    closing the doc gap that omitted this step and caused this plan's round-2 critique miss.
   - >-
     Create tests/checks/ci_guards/test_validate_pr_conflict_signal.py with a pass-path class (real
     file + a valid mocked _load returning a well-formed workflow dict -> failed stays empty) and a
@@ -439,7 +476,7 @@ execution_steps:
   - "Report: what was implemented and the verification results."
 work_areas: []
 rollback: >-
-  Revert the 7-file diff. The harness subscribe_pr_activity message, the signal-green wake, and any
+  Revert the 9-file diff. The harness subscribe_pr_activity message, the signal-green wake, and any
   active PR subscription are unaffected. If the conflict-wake proves insufficient in practice,
   re-adding the AGENTS.md/implement-skill backstop guidance restores the prior ~1h send_later
   safety net without touching the new workflow.
