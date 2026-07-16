@@ -103,6 +103,16 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "validate"
 
+    def test_maps_scripts_session_preflight_to_concern_split_package(self) -> None:
+        """scripts/session/preflight.py maps to the tests/session/preflight/ concern-split
+        package (rec-2709 Wave 4: "test_session_preflight.py" retired from
+        _RETIRING_GRANDFATHER_HOMES, and scripts/session/preflight.py is a declared
+        _CONCERN_SPLIT_TEST_PACKAGES entry)."""
+        source = ROOT / "scripts" / "session" / "preflight.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "session" / "preflight"
+
     def test_returns_none_for_unmapped_path(self, tmp_path: Path) -> None:
         """Paths not under src/ or scripts/ return None."""
         source = tmp_path / "docs" / "README.py"
@@ -351,15 +361,21 @@ class TestGrandfatherRetiringTable:
     retires it -- rec-2709 Wave 1 (PLAN-sloc-test-validate) retired the first of the 24,
     "test_validate.py"; Wave 2 (PLAN-sloc-execute-recommendation) retired the second,
     "test_execute_recommendation.py"; Wave 3 (PLAN-sloc-ops-data-portal-tests) retired the
-    third, "test_ops_data_portal.py"."""
+    third, "test_ops_data_portal.py"; Wave 4 (PLAN-sloc-session-preflight-tests) retired the
+    fourth, "test_session_preflight.py" (surgically -- its flat-file sibling
+    "test_session_postflight.py" stays grandfathered until its own later wave)."""
 
     def test_representative_paths_resolve_under_current_retirement_state(self) -> None:
         """A representative real path set resolves correctly under the CURRENT retirement
-        state: "test_validate.py", "test_execute_recommendation.py", and
-        "test_ops_data_portal.py" are retired (their sources now resolve via the mirror rule /
-        their concern-split packages), the other 21 roster homes are still grandfathered, and
-        scripts/executor/** and scripts/ops_portal/** keep returning None (Decision 124 --
-        unperturbed by the Wave 1/2/3 map edits)."""
+        state: "test_validate.py", "test_execute_recommendation.py", "test_ops_data_portal.py",
+        and "test_session_preflight.py" are retired (their sources now resolve via the mirror
+        rule / their concern-split packages), the other 20 roster homes are still
+        grandfathered, and scripts/executor/** and scripts/ops_portal/** keep returning None
+        (Decision 124 -- unperturbed by the Wave 1/2/3/4 map edits). scripts/session/postflight.py
+        and scripts/session/metrics.py are surgical-retirement controls: postflight.py's home
+        ("test_session_postflight.py") stays in _RETIRING_GRANDFATHER_HOMES so it still
+        grandfathers, and metrics.py's home is off-roster entirely (never in
+        _ALL_MIRROR_TARGET_HOMES) so it grandfathers unconditionally -- only preflight flips."""
         cases: dict[Path, Path | None] = {
             ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py": ROOT
             / "tests"
@@ -371,6 +387,9 @@ class TestGrandfatherRetiringTable:
             ROOT / "scripts" / "checks" / "_terraform.py": ROOT / "tests" / "validate",
             ROOT / "scripts" / "execute_recommendation.py": ROOT / "tests" / "execute_recommendation",
             ROOT / "scripts" / "ops_data_portal.py": ROOT / "tests" / "ops_data_portal",
+            ROOT / "scripts" / "session" / "preflight.py": ROOT / "tests" / "session" / "preflight",
+            ROOT / "scripts" / "session" / "postflight.py": ROOT / "tests" / "test_session_postflight.py",
+            ROOT / "scripts" / "session" / "metrics.py": ROOT / "tests" / "test_session_metrics.py",
             ROOT / "src" / "common" / "config.py": ROOT / "tests" / "test_config.py",
             ROOT / "scripts" / "executor" / "step_runner.py": None,
             ROOT / "scripts" / "ops_portal" / "cli.py": None,
@@ -379,16 +398,25 @@ class TestGrandfatherRetiringTable:
         for source, expected in cases.items():
             assert map_source_to_test(source) == expected, source
 
-    def test_retiring_is_all_target_homes_minus_three_retired_waves(self) -> None:
-        """Exactly three basenames have retired so far: "test_validate.py" (rec-2709 Wave 1),
-        "test_execute_recommendation.py" (rec-2709 Wave 2), and "test_ops_data_portal.py"
-        (rec-2709 Wave 3). The mirror branch is live for all three and dormant for the other 21
-        roster targets."""
-        retired = {"test_validate.py", "test_execute_recommendation.py", "test_ops_data_portal.py"}
+    def test_retiring_is_all_target_homes_minus_four_retired_waves(self) -> None:
+        """Exactly four basenames have retired so far: "test_validate.py" (rec-2709 Wave 1),
+        "test_execute_recommendation.py" (rec-2709 Wave 2), "test_ops_data_portal.py"
+        (rec-2709 Wave 3), and "test_session_preflight.py" (rec-2709 Wave 4). The mirror branch
+        is live for all four and dormant for the other 20 roster targets. Surgical-retirement
+        regression: "test_session_postflight.py" -- session_preflight's flat-file sibling --
+        stays grandfathered (its own wave decomposes it later); Wave 4 flips exactly one home."""
+        retired = {
+            "test_validate.py",
+            "test_execute_recommendation.py",
+            "test_ops_data_portal.py",
+            "test_session_preflight.py",
+        }
         assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - retired
         assert "test_validate.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_execute_recommendation.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_ops_data_portal.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert "test_session_preflight.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert "test_session_postflight.py" in _RETIRING_GRANDFATHER_HOMES
         assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == retired
 
     def test_roster_is_the_24_known_basenames(self) -> None:
