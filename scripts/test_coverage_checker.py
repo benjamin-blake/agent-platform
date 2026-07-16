@@ -201,7 +201,6 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_ducklake_neon_smoke_test.py",
     "test_ducklake_runtime.py",
     "test_ducklake_writer_handler.py",
-    "test_execute_recommendation.py",
     "test_executor_plan.py",
     "test_executor_postflight.py",
     "test_executor_step_runner.py",
@@ -239,6 +238,7 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "src/data/handlers/scheduled_agent_handler.py",
         "scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py",
         "scripts/validate.py",
+        "scripts/execute_recommendation.py",
     }
 )
 
