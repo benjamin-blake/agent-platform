@@ -456,19 +456,30 @@ class TestResidualPatchSiteClosure:
         re.compile(r'monkeypatch\.setattr\(\s*"session_preflight\.(\w+)'),
         re.compile(r'monkeypatch\.setattr\(\s*_preflight\s*,\s*"(\w+)"'),
     ]
-    _SIBLING_FILES = [
-        "test_session_preflight.py",
-        "test_session_preflight_cache_serving.py",
-        "test_session_preflight_platform_roadmap.py",
-        "test_session_preflight_product_roadmap.py",
-        "test_session_preflight_contracts.py",
-    ]
+    # Dynamically derived (glob), not hardcoded, so this scan cannot go stale when a future
+    # decomposition wave adds/removes files: rec-2709 Wave 4 (PR #597) deleted
+    # test_session_preflight.py and split its content into the tests/session/preflight/ mirror
+    # package -- exactly where any residual old-namespace reference would now live, so it must
+    # stay in the scan set for the invariant to remain meaningful. Covers (1) any remaining flat
+    # test_session_preflight_*.py sibling, excluding this scanner file itself, and (2) every
+    # module in the migrated mirror package.
+    _SIBLING_FILES = sorted(
+        p.relative_to(Path(__file__).resolve().parent)
+        for p in (
+            list(Path(__file__).resolve().parent.glob("test_session_preflight_*.py"))
+            + list((Path(__file__).resolve().parent / "session" / "preflight").glob("*.py"))
+        )
+        if p.name != Path(__file__).name
+    )
 
     def test_zero_residual_old_namespace_patch_sites(self) -> None:
         tests_dir = Path(__file__).resolve().parent
         residual: list[str] = []
         for fname in self._SIBLING_FILES:
-            text = (tests_dir / fname).read_text(encoding="utf-8")
+            path = tests_dir / fname
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
             for pattern in self._IDIOM_PATTERNS:
                 for m in pattern.finditer(text):
                     sym = m.group(1)
