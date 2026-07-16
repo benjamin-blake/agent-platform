@@ -30,6 +30,7 @@ from scripts.preflight import (
     ci_rca_signals,
     context_docs,
     correlation,
+    decision_conditions,
     env_git,
     priority_queue,
     recs_cache,
@@ -336,6 +337,12 @@ def main(roadmap_detail: str = "slim") -> int:
         print("  (none)")
     print()
 
+    # Reversal-conditions monitor (audit SEQ-02, Decision 133 follow-on): reads local
+    # DECISIONS.md/DECISIONS_ARCHIVE.md only (no creds needed). Resilient -- never raises;
+    # a malformed stanza surfaces loudly in the bucket without crashing preflight.
+    decision_conditions_bucket = decision_conditions.preflight_bucket()
+    decision_conditions.print_decision_conditions(decision_conditions_bucket)
+
     # Dedupe open_recs: count already computed in Phase B; pass to read_context_files
     # to skip the second open_recs verb call (Decision 84 I-3: closed named-verb boundary).
     open_recs_count = open_recommendations if recs_read_status == "ok" else None
@@ -395,6 +402,7 @@ def main(roadmap_detail: str = "slim") -> int:
     }
 
     report["provisional_contracts_due"] = provisional_contracts_due
+    report["decision_conditions"] = decision_conditions_bucket
     report["non_automatable_softcap_breached"] = recs_cache._check_non_automatable_softcap(non_automatable_count)
     report["ci_rca_liveness_alert"] = ci_rca_liveness_alert
     report["convergence_rca_gap_alert"] = convergence_rca_gap_alert
