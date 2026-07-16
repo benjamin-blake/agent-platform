@@ -2,7 +2,8 @@
 tests/ci_rca/evidence/test_bucket_pending.py (rec-2709 Wave 10).
 
 Split from the former tests/test_ci_rca_evidence.py monolith: TestResolveBucket, TestWritePending,
-TestUploadAndPersist. Patches scripts.ci_rca.evidence._upload_to_s3 (no real boto3 -> no marker).
+TestUploadAndPersist. Patches scripts.ci_rca.evidence._upload_to_s3 (the S3 client is never
+touched directly here -> no heavy-dep marker needed).
 """
 
 import json

@@ -45,6 +45,61 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "session" / "preflight"
 
+    def test_maps_scripts_sync_ops_to_concern_split_package(self) -> None:
+        """scripts/sync/ops.py maps to the tests/sync/ops/ concern-split package (rec-2709
+        Wave 10: "test_sync_ops.py" retired from _RETIRING_GRANDFATHER_HOMES, and
+        scripts/sync/ops.py is a declared _CONCERN_SPLIT_TEST_PACKAGES entry)."""
+        source = ROOT / "scripts" / "sync" / "ops.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "sync" / "ops"
+
+    def test_maps_scripts_session_postflight_to_concern_split_package(self) -> None:
+        """scripts/session/postflight.py maps to the tests/session/postflight/ concern-split
+        package (rec-2709 Wave 10: "test_session_postflight.py" retired from
+        _RETIRING_GRANDFATHER_HOMES, and scripts/session/postflight.py is a declared
+        _CONCERN_SPLIT_TEST_PACKAGES entry)."""
+        source = ROOT / "scripts" / "session" / "postflight.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "session" / "postflight"
+
+    def test_maps_scripts_ci_rca_evidence_to_concern_split_package(self) -> None:
+        """scripts/ci_rca/evidence.py maps to the tests/ci_rca/evidence/ concern-split package
+        (rec-2709 Wave 10: "test_ci_rca_evidence.py" retired from _RETIRING_GRANDFATHER_HOMES,
+        and scripts/ci_rca/evidence.py is a declared _CONCERN_SPLIT_TEST_PACKAGES entry)."""
+        source = ROOT / "scripts" / "ci_rca" / "evidence.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "ci_rca" / "evidence"
+
+    def test_maps_still_grandfathered_sync_sibling_to_flat_home(self) -> None:
+        """scripts/sync/recommendations.py (never on the 24-roster) still resolves to its flat
+        grandfathered home via _NESTED_SUBPACKAGE_TEST_PREFIX -- proves Wave 10's retirement of
+        "test_sync_ops.py" did not perturb the family-sibling prefix rule."""
+        source = ROOT / "scripts" / "sync" / "recommendations.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_sync_recommendations.py"
+
+    def test_maps_still_grandfathered_session_sibling_to_flat_home(self) -> None:
+        """scripts/session/metrics.py (never on the 24-roster) still resolves to its flat
+        grandfathered home via _NESTED_SUBPACKAGE_TEST_PREFIX -- proves Wave 10's retirement of
+        "test_session_postflight.py" did not perturb the family-sibling prefix rule."""
+        source = ROOT / "scripts" / "session" / "metrics.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_session_metrics.py"
+
+    def test_maps_still_grandfathered_ci_rca_sibling_to_flat_home(self) -> None:
+        """scripts/ci_rca/filing.py (never on the 24-roster) still resolves to its flat
+        grandfathered home via _NESTED_SUBPACKAGE_TEST_PREFIX -- proves Wave 10's retirement of
+        "test_ci_rca_evidence.py" did not perturb the family-sibling prefix rule."""
+        source = ROOT / "scripts" / "ci_rca" / "filing.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "test_ci_rca_filing.py"
+
     def test_returns_none_for_unmapped_path(self, tmp_path: Path) -> None:
         """Paths not under src/ or scripts/ return None."""
         source = tmp_path / "docs" / "README.py"
