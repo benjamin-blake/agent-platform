@@ -4,13 +4,11 @@ Covers: validate_cli_tools_in_prompts, validate_test_coverage, validate_prompt_c
 and the _load_coverage_checker / _load_prompt_compliance helpers.
 """
 
-import importlib.util
 import itertools
 import json
 import re
 import sys
 import urllib.error
-from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -44,12 +42,8 @@ from scripts.checks.iam_tf.validate_ci_refresh_read_coverage import (
     _split_top_level_objects,
 )
 from scripts.checks.misc.validate_ghas_probe import _run_cli as _ghas_run_cli
-
-_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "validate.py"
-_spec = importlib.util.spec_from_file_location("validate", _SCRIPT_PATH)
-_validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-_spec.loader.exec_module(_validate)  # type: ignore[union-attr]
-sys.modules["validate"] = _validate
+from tests.fixtures.subprocess_stubs import _mock_completed, _pre_mock_run  # noqa: E402
+from tests.fixtures.validate_module import _validate  # noqa: E402
 
 validate_scheduled_agent_logs = _validate.validate_scheduled_agent_logs
 validate_ghas_probe = _validate.validate_ghas_probe
@@ -3039,15 +3033,6 @@ class TestValidateOutboxStaleness:
         assert failed == []
 
 
-def _mock_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> MagicMock:
-    """Build a MagicMock that quacks like subprocess.CompletedProcess."""
-    cp = MagicMock()
-    cp.returncode = returncode
-    cp.stdout = stdout
-    cp.stderr = stderr
-    return cp
-
-
 class TestEnsureFreshDqResults:
     """Tests for ensure_fresh_dq_results() — the DQ runner auto-invoke."""
 
@@ -3912,14 +3897,6 @@ class TestGetChangedFilesOriginMain:
         assert files == []
 
 
-def _pre_mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
-    """Shared subprocess mock that handles git branch + everything else."""
-    result = MagicMock()
-    result.returncode = 0
-    result.stdout = "agent/test-branch\n"
-    return result
-
-
 class TestExcludedHeavyDeps:
     """Excluded-heavy import-name set derivation from the REAL requirements files (rec-2485)."""
 
@@ -4537,28 +4514,6 @@ class TestPytestFlagsPinnedSeed:
         combined = result.stdout + result.stderr
         match = re.search(r"randomly-seed[:= ]+(\d+)", combined)
         assert match and match.group(1) == pin, combined[-600:]
-
-
-@pytest.fixture
-def _neutralized_pre_registry():
-    """Patch every check-kind step of pre_sequence() to a no-op on the `validate` namespace.
-
-    Applied via @pytest.mark.usefixtures to the classes whose tests call _validate.main()
-    in --pre mode, so those tests exercise only the scaffold machinery plus whichever
-    check(s) they explicitly patch themselves -- not the real check registry.
-    _dispatch_check resolves each check via globals()[name] on the `validate` module
-    (Decision 104), so patching "validate.<name>" intercepts it. A test's own explicit
-    `with patch("validate.<name>")` still wins for the duration of its body: it is
-    entered inside this fixture's ExitStack, so it becomes the innermost -- and active --
-    patch on that name.
-    """
-    from scripts.checks import registry as _registry  # noqa: PLC0415
-
-    with ExitStack() as stack:
-        for step in _registry.pre_sequence():
-            if step.kind == "check":
-                stack.enter_context(patch(f"validate.{step.name}"))
-        yield
 
 
 @pytest.mark.usefixtures("_neutralized_pre_registry")
