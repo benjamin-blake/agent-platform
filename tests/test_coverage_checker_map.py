@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.coverage_checker_module import _ALL_MIRROR_TARGET_HOMES, ROOT
+from tests.fixtures.coverage_checker_module import _ALL_MIRROR_TARGET_HOMES, _RETIRING_GRANDFATHER_HOMES, ROOT
 from tests.fixtures.coverage_checker_module import checker as _checker
 
 map_source_to_test = _checker.map_source_to_test
@@ -184,23 +184,38 @@ class TestMapSourceToTest:
         assert result is not None
         assert result == ROOT / "tests" / "ducklake_neon_smoke_test"
 
-    def test_maps_ducklake_writer_smoke_actions_to_test_ducklake_writer_handler(self) -> None:
-        """src/lambdas/ducklake_writer/smoke_actions.py maps to tests/test_ducklake_writer_handler.py
-        (split-out from handler.py, PLAN-sloc-ducklake-layer)."""
+    def test_maps_ducklake_writer_smoke_actions_to_handler_concern_split_package(self) -> None:
+        """src/lambdas/ducklake_writer/smoke_actions.py maps to the tests/lambdas/ducklake_writer/handler/
+        concern-split package -- it shares handler.py's home (Edit C / rec-2709 Wave 8, mirroring the
+        _ORCHESTRATION_SCAFFOLDING_FILES precedent: "test_ducklake_writer_handler.py" retired from
+        _RETIRING_GRANDFATHER_HOMES, and src/lambdas/ducklake_writer/handler.py is a declared
+        _CONCERN_SPLIT_TEST_PACKAGES entry)."""
         source = ROOT / "src" / "lambdas" / "ducklake_writer" / "smoke_actions.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_ducklake_writer_handler.py"
+        assert result == ROOT / "tests" / "lambdas" / "ducklake_writer" / "handler"
 
-    def test_ducklake_writer_handler_py_maps_to_parent_qualified_test(self) -> None:
-        """src/lambdas/ducklake_writer/handler.py maps to tests/test_ducklake_writer_handler.py under
-        the RS-08 parent-qualified rule -- keyed off the parent lambda-slug directory rather than the
-        handler.py stem, so it no longer collides with the other lambdas' handler.py files on the
-        retired tests/test_handler.py shim."""
+    def test_maps_ducklake_writer_handler_to_concern_split_package(self) -> None:
+        """src/lambdas/ducklake_writer/handler.py maps to the tests/lambdas/ducklake_writer/handler/
+        concern-split package (rec-2709 Wave 8: "test_ducklake_writer_handler.py" retired from
+        _RETIRING_GRANDFATHER_HOMES, and src/lambdas/ducklake_writer/handler.py is a declared
+        _CONCERN_SPLIT_TEST_PACKAGES entry) -- keyed off the parent lambda-slug directory (RS-08)
+        rather than the handler.py stem, so it no longer collides with the other lambdas' handler.py
+        files on the retired tests/test_handler.py shim."""
         source = ROOT / "src" / "lambdas" / "ducklake_writer" / "handler.py"
         result = map_source_to_test(source)
         assert result is not None
-        assert result == ROOT / "tests" / "test_ducklake_writer_handler.py"
+        assert result == ROOT / "tests" / "lambdas" / "ducklake_writer" / "handler"
+
+    def test_maps_ducklake_maintenance_handler_to_concern_split_package(self) -> None:
+        """src/lambdas/ducklake_maintenance/handler.py maps to the tests/lambdas/ducklake_maintenance/
+        handler/ concern-split package (rec-2709 Wave 8: "test_ducklake_maintenance_handler.py"
+        retired from _RETIRING_GRANDFATHER_HOMES, and src/lambdas/ducklake_maintenance/handler.py is
+        a declared _CONCERN_SPLIT_TEST_PACKAGES entry)."""
+        source = ROOT / "src" / "lambdas" / "ducklake_maintenance" / "handler.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "lambdas" / "ducklake_maintenance" / "handler"
 
     def test_other_lambda_dirs_get_their_own_parent_qualified_test(self) -> None:
         """A non-ducklake_writer lambda dir resolves to its OWN distinct test home -- the RS-08
@@ -212,19 +227,26 @@ class TestMapSourceToTest:
         assert result == ROOT / "tests" / "test_ducklake_reader_handler.py"
 
     def test_all_lambda_handlers_map_to_distinct_existing_parent_qualified_tests(self) -> None:
-        """RS-08: every src/lambdas/*/handler.py resolves to a distinct, EXISTING
-        tests/test_{slug}_handler.py home; smoke_actions.py shares ducklake_writer's home; none
-        collides on the retired tests/test_handler.py shim (deleted by this plan)."""
+        """RS-08, growth-safe (rec-2709 Wave 8): every src/lambdas/*/handler.py resolves to its own
+        distinct, EXISTING test home -- a concern-split package dir (tests/lambdas/<slug>/handler/)
+        once its flat home has retired from _RETIRING_GRANDFATHER_HOMES, else the still-grandfathered
+        flat tests/test_{slug}_handler.py. smoke_actions.py shares ducklake_writer's home either way;
+        none collides on the retired tests/test_handler.py shim."""
         # Derive the slug set from disk (growth-safe: a future lambda is covered automatically, and
-        # one added without a parent-qualified test home fails result.exists() below). Do NOT hardcode
+        # one added without a parent-qualified test home fails the checks below). Do NOT hardcode
         # a list of a collection that grows by addition -- tests/CLAUDE.md test-count-coupling rule.
         handler_paths = sorted((ROOT / "src" / "lambdas").glob("*/handler.py"))
         assert handler_paths, "no src/lambdas/*/handler.py found -- glob is wrong"
         handler_results = {p.parent.name: map_source_to_test(p) for p in handler_paths}
 
         for slug, result in handler_results.items():
-            assert result == ROOT / "tests" / f"test_{slug}_handler.py", (slug, result)
-            assert result.exists(), f"missing test home for {slug}: {result}"
+            flat_home = f"test_{slug}_handler.py"
+            if flat_home in _ALL_MIRROR_TARGET_HOMES and flat_home not in _RETIRING_GRANDFATHER_HOMES:
+                assert result == ROOT / "tests" / "lambdas" / slug / "handler", (slug, result)
+                assert result.is_dir() and any(result.glob("test_*.py")), f"empty/missing package for {slug}: {result}"
+            else:
+                assert result == ROOT / "tests" / flat_home, (slug, result)
+                assert result.is_file(), f"missing test home for {slug}: {result}"
 
         # Every handler's home is distinct from every other handler's home (no collision).
         assert len({str(r) for r in handler_results.values()}) == len(handler_results)
