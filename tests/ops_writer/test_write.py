@@ -8,6 +8,13 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+# boto3 is required at RUNTIME by scripts.ops_writer.write() (the S3-staging path). Import it at
+# MODULE scope -- even though it is only used indirectly -- so the fast tier's cheap --collect-only
+# probe defers this file to the full tier (boto3 is excluded from requirements-fast.txt). Without
+# this marker the S3-staging assertions fail in the fast tier ("boto3 unavailable -- staging
+# skipped"), because ops_writer.write() short-circuits when boto3 cannot be imported.
+import boto3  # noqa: F401
+
 from tests.fixtures.ops_writer_helpers import VALID_REC as _VALID_REC
 from tests.fixtures.ops_writer_helpers import make_writer as _make_writer
 
