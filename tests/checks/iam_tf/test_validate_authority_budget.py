@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.validate import validate_authority_budget
+from scripts.checks.iam_tf.validate_authority_budget import validate_authority_budget
 
 
 def test_real_budget_agrees_with_hcl() -> None:
@@ -19,7 +19,7 @@ def test_real_budget_agrees_with_hcl() -> None:
 
 def test_extra_managed_role_not_in_hcl_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A budget table that lists a role absent from the IAMRoleWriteBounded SCP is rejected."""
-    real_budget = Path(__file__).parent.parent / "terraform" / "bootstrap" / "authority_budget.json"
+    real_budget = Path(__file__).parent.parent.parent.parent / "terraform" / "bootstrap" / "authority_budget.json"
     budget = json.loads(real_budget.read_text(encoding="utf-8"))
     budget["in_budget_managed_roles"].append("some-role-not-in-hcl")
     bad_path = tmp_path / "bad_budget.json"

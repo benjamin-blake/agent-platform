@@ -1,5 +1,6 @@
-"""Tests for the CI refresh-read resource coverage gate (rec-2702 anti-recurrence,
-PLAN-ci-apply-grant-coupling), flat tests/ convention (cf. tests/test_validate_authority_budget.py).
+"""Real-tree + synthetic-gap tests for the CI refresh-read resource coverage gate (rec-2702
+anti-recurrence, PLAN-ci-apply-grant-coupling). Concern-split module (rec-2709 Wave 1) -- see
+test_helpers.py and test_end_to_end.py for the other two modules of this package.
 """
 
 from __future__ import annotations
@@ -7,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.validate import validate_ci_refresh_read_coverage
+from scripts.checks.iam_tf.validate_ci_refresh_read_coverage import validate_ci_refresh_read_coverage
 
 _BOOTSTRAP_TF = """
 resource "aws_iam_role_policy" "github_ci_apply" {{

@@ -228,6 +228,7 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/ducklake_neon_smoke_test.py",
         "src/common/iceberg_reader.py",
         "src/data/handlers/scheduled_agent_handler.py",
+        "scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py",
     }
 )
 
