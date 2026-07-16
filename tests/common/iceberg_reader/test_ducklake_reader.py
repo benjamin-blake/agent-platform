@@ -49,7 +49,7 @@ def _patch_dl_invoke(monkeypatch, resp: _FakeResp, captured: dict):
         def get_credentials(self):
             return _Creds()
 
-    import boto3
+    import boto3  # noqa: F811 -- shadows the module-level marker import intentionally
     import requests
     from botocore.auth import SigV4Auth
 
@@ -87,7 +87,7 @@ def _patch_dl_invoke_seq(monkeypatch, responses: list, captured: dict):
         def get_credentials(self):
             return _Creds()
 
-    import boto3
+    import boto3  # noqa: F811 -- shadows the module-level marker import intentionally
     import requests
     from botocore.auth import SigV4Auth
 

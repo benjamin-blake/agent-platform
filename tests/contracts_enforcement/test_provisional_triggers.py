@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from scripts.contracts_enforcement import (
     _parse_condition,
     check_re_ratification_trigger,
