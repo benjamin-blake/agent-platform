@@ -116,7 +116,14 @@ class CandidateDecision(BaseModel):
     gates: list[str] = Field(default_factory=list)
     state: Literal["pending", "ratified", "superseded"] = "pending"
     ratified_as: str | None = None
-    realization_evidence: str | None = None
+    realization_evidence: str | None = Field(
+        default=None,
+        description=(
+            "str|None; TRUTHY => ratifiable/realized-evidenced, None or empty-string => not. "
+            "ratifiable_cds/realization_candidates filter on truthiness (not 'is not None'), so "
+            "'' is excluded."
+        ),
+    )
     decision_required_before: list[str] | str | None = None
     bootstrap_allowance: bool = False
     filed_via: str | None = None

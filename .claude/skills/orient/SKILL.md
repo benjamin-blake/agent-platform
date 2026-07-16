@@ -31,6 +31,7 @@ Status flips remain the verification-earned closing step owned by `/implement` t
 | Blocked-on-CD annotations | `logs/.preflight-report.json` (`platform_roadmap.blocked_on_cd`) | Read preflight cache |
 | Ratifiable CDs | `logs/.preflight-report.json` (`platform_roadmap.ratifiable_cds`) | Read preflight cache |
 | Realized-but-pending CDs | `logs/.preflight-report.json` (`platform_roadmap.realized_but_pending_cds`) | Read preflight cache |
+| Realization candidates | `logs/.preflight-report.json` (`platform_roadmap.realization_candidates`) | Read preflight cache |
 | Gate evaluations | `logs/.preflight-report.json` (`platform_roadmap.gate_evaluations`) | Read preflight cache |
 | Best-Practices signals | `logs/.preflight-report.json` (`convergence_health`, `telemetry_health`, `data_quality`, `non_automatable_softcap_breached`, `terraform_pending`) | Read preflight cache |
 | Roadmap detail (`files_in_scope`, `depends_on`) | `docs/ROADMAP-PLATFORM.yaml` | Typed-loader projection: `scripts.roadmap.platform_roadmap.load()` (pure-local, no warehouse I/O -- distinct from the banned `-m scripts.roadmap.platform_roadmap` module entrypoint), returning both a candidate-scoped projection (filtered to the ids already surfaced by the preflight cache) and a roadmap-wide `depends_index` (`{id: depends_on}`, cheap) for reverse-dependency lookups; see the orient command Step 2 for the literal runnable form. Full-file Read only as an error fallback if the extraction fails. |
@@ -97,6 +98,12 @@ A CD appearing here is a candidate for a `/plan` session that drafts its ratifyi
 Realized-but-pending (needs corroboration): CD.2 (hint: <realized_hint>) | CD.21 (hint: ...)
 ```
 `/orient` ranks these as candidates for a human-confirmed `/plan` ratification session -- it never ratifies them itself (read-only, same discipline as Ratifiable CDs). Preserve the "do NOT surface a pending CD with no `realization_evidence` in the RATIFIABLE list" rule above unchanged: a CD promoted out of this list into Ratifiable CDs only once `realization_evidence` is actually set (typically at ratification time, when the prose marker is folded into the structured field).
+
+**Realization candidates** (derived, lowest-confidence; audit PCD-01, building on Decision 105): read `platform_roadmap.realization_candidates` from the preflight cache -- pending CDs with no `realization_evidence` and no `[Realized` prose marker, whose every gated tier_item (or tier, via the same tier-shortcut gate-resolution used elsewhere) is `complete` or non-blocking (`reserved`/`deferred_post_mvp`), and whose detail does NOT match "fully superseded by CD.NN" (that prose belongs to the supersession lane, not here). This is a third tier, strictly disjoint from and BELOW Realized-but-pending CDs above: candidates for evidence-writing in a human-confirmed `/plan` session, never a status /orient computes or writes itself. List each as:
+```
+Realization candidates (derived): CD.4 (gates: ...) | CD.5 (gates: ...)
+```
+`/orient` stays read-only here exactly as elsewhere in this section -- it never writes `realization_evidence`; a human-confirmed `/plan` session is what would draft the evidence text (and, separately, the ratifying Decision, per the planning skill's ratification section). Preserve the "do NOT surface a pending CD with no `realization_evidence` in the RATIFIABLE list" rule above unchanged: a CD surfacing here never appears in Ratifiable CDs until a human writes `realization_evidence` for it.
 
 **Blocked-on-CD annotation**: for each item in `platform_roadmap.blocked_on_cd`, add a "gated by CD.NN" note in the Notes column including the relationship type (`gates`, `related`, or `decision_required_before`) and whether the item carries `bootstrap_completion_exempt: true` (in which case it may start/complete despite the pending CD). An item can be eligible-to-start while still annotated as gated-by-CD; the annotation informs planning, it is not a hard block on eligibility.
 

@@ -1,0 +1,296 @@
+schema_version: 1
+slug: "cd-realization-candidate-pass"
+intent: >-
+  Add a deterministic realization-candidate pass (audit PCD-01) so realized-but-unevidenced
+  pending candidate_decisions stop being structurally invisible to the Decision 105 ratification
+  lane -- surfaced as a third, strictly-disjoint derived-plausible tier below ratifiable and
+  realized-but-pending CDs.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-cd-realization-candidate-pass.yaml
+phase: >-
+  Platform governance -- Decision 105 candidate-decision ratification lane (ratification_feed
+  surface). Audit-sourced (audits/pending-cd-premise-validity-f4dec93.yaml, finding PCD-01);
+  novel finding, no owning tier_item. Sequenced after PLAN-cd-marking-convention-enforcement
+  (merged #596).
+scope:
+  - file: scripts/platform_roadmap_state.py
+    action: Modify
+    purpose: >-
+      Add PlatformRoadmapState.realization_candidates() (pending CD, no realization_evidence,
+      no '[Realized' marker, not 'fully superseded by CD.NN' in detail, every gated item complete
+      with deferred_post_mvp/reserved non-blocking via _INACTIVE_FOR_TIER, empty gates vacuous),
+      reusing the existing _TIER_SHORTCUT_RE gate-resolution; add a module-level
+      _FULLY_SUPERSEDED_RE mirroring the supersession guard's phrase; include the key in
+      to_preflight_dict AND the compute_state_dict error dict; add the rec-2468 truthy-vs-None
+      docstring notes at ratifiable_cds() and realization_candidates().
+  - file: scripts/platform_roadmap_models.py
+    action: Modify
+    purpose: >-
+      rec-2468 -- document the realization_evidence truthy-vs-None contract at the field
+      definition via Field(default=None, description=...) on CandidateDecision.realization_evidence
+      (Field is already imported; description is validation-inert metadata).
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: >-
+      Add a 'Realization candidates' subsection BELOW the Realized-but-pending CDs subsection in
+      Deliverable Shape section 1 ("candidates for evidence-writing in a human-confirmed /plan
+      session"; read-only; never writes realization_evidence); add the platform_roadmap.
+      realization_candidates row to the Inputs table; preserve the verbatim "do NOT surface a
+      pending CD with no realization_evidence in the RATIFIABLE list" rule unchanged.
+  - file: tests/fixtures/platform_roadmap_state.py
+    action: Create
+    purpose: >-
+      Importable shared-helper module (exempt from the cross-test-import guard; name does not
+      start with test_) holding the migrated _BASE_DOC/_doc/_item/_make_state/_write_fixture_yaml/
+      _cd/_state_from_doc helpers; extend _cd with a detail param for the superseded-prose and
+      [Realized-marker fixture cases.
+  - file: tests/platform_roadmap_state/__init__.py
+    action: Create
+    purpose: Mirror-package marker (prepend import mode; fully-qualified module paths).
+  - file: tests/platform_roadmap_state/test_graph.py
+    action: Create
+    purpose: >-
+      Migrated eligibility/blocked/tier-shortcut/active-tier/internal-helper/blocked-on-cd test
+      classes from the retired monolith (cohesive concern split, <500 SLOC).
+  - file: tests/platform_roadmap_state/test_state_dict_and_feeds.py
+    action: Create
+    purpose: >-
+      Migrated stale-cache/compute_state_dict/load/ratifiable_cds/realized_but_pending_cds test
+      classes from the retired monolith (cohesive concern split, <500 SLOC).
+  - file: tests/platform_roadmap_state/test_realization_candidates.py
+    action: Create
+    purpose: >-
+      New fixture-based tests for realization_candidates(): all-gates-complete, vacuous-empty-gates,
+      deferred-gate-nonblocking, reserved-gate-nonblocking, already-evidenced-excluded,
+      superseded-prose-edge, [Realized-marker-excluded (disjointness), gate-incomplete-excluded,
+      tier-shortcut resolution, to_preflight_dict carries the key, and an f4dec93-equivalent fixture
+      yielding at least CD.4/CD.5/CD.9/CD.39. Tests run on FIXTURES, not live roadmap state.
+  - file: tests/test_platform_roadmap_state.py
+    action: Delete
+    purpose: >-
+      Retire the at-budget (825/825 SLOC) grandfather monolith; its content moves into the
+      tests/platform_roadmap_state/ mirror package (Decision 128 decompose-don't-raise; Decision
+      131 mirror convention).
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Retire 'test_platform_roadmap_state.py' from _RETIRING_GRANDFATHER_HOMES (one-line deletion)
+      so map_source_to_test resolves scripts/platform_roadmap_state.py to its pre-declared
+      concern-split package tests/platform_roadmap_state/ (already in _CONCERN_SPLIT_TEST_PACKAGES).
+  - file: tests/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      Update the retired-waves oracle (test_retiring_is_all_target_homes_minus_seven_retired_waves)
+      to include test_platform_roadmap_state.py in the retired set (eight retired waves).
+  - file: config/sloc_budgets.yaml
+    action: Modify
+    purpose: >-
+      Delete the retired tests/test_platform_roadmap_state.py: 825 budget entry (removals are
+      unrestricted under validate_sloc_budget_raises; the entry carries a raise-approved: dec-130
+      marker, so its removal is a sanctioned ratchet-down).
+bundled_recommendations: [rec-2468]
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    PlatformRoadmapState.realization_candidates() returns pending CDs whose every gated item is
+    complete (deferred_post_mvp/reserved non-blocking; empty gates vacuously included), excluding
+    CDs that carry realization_evidence, carry a '[Realized' prose marker, or match "fully
+    superseded by CD.NN" in detail -- reusing the existing _TIER_SHORTCUT_RE gate-resolution.
+  - >-
+    Against a fixture equivalent to the f4dec93 roadmap, the derived list contains at least CD.4,
+    CD.5, CD.9, CD.39.
+  - >-
+    ratifiable_cds(), realized_but_pending_cds(), and realization_candidates() are pairwise
+    disjoint by construction (verified on a fixture where a CD carrying both a [Realized marker and
+    complete gates appears only in realized_but_pending_cds).
+  - >-
+    to_preflight_dict() and compute_state_dict() (including the parse-error dict) carry a
+    realization_candidates list.
+  - >-
+    .claude/skills/orient/SKILL.md surfaces the new list BELOW Realized-but-pending CDs as
+    "candidates for evidence-writing in a human-confirmed /plan session", keeps /orient read-only,
+    and preserves the verbatim "do NOT surface a pending CD with no realization_evidence in the
+    RATIFIABLE list" rule.
+  - >-
+    rec-2468: the realization_evidence truthy-vs-None contract is documented at the field
+    definition (CandidateDecision.realization_evidence) and the ratifiable_cds/realization_candidates
+    consumer sites; rec-2468 closes on merge via the Resolves trailer.
+  - >-
+    The superseded-prose edge (CD.7 pattern) is handled: a pending CD whose detail matches "fully
+    superseded by CD.NN" with emptied gates does NOT vacuously surface (fixture-verified).
+  - >-
+    tests/test_platform_roadmap_state.py is decomposed into the concern-split mirror package
+    tests/platform_roadmap_state/ with no SLOC budget raised (zero new sloc_budgets entries);
+    per-file 100% coverage of the changed source holds; validate --pre is green.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: The retired grandfather home resolves the source to its concern-split mirror package and that package exists (Decision 131 NOTE flag check).
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.test_coverage_checker import
+      map_source_to_test, check_test_file_exists; p=Path('scripts/platform_roadmap_state.py');
+      t=map_source_to_test(p); assert t is not None and t.name=='platform_roadmap_state' and
+      t.suffix=='', t; ok,msg=check_test_file_exists(p); assert ok, msg; print('OK', t.name, msg)"
+    expected: Prints OK; mapped target is the tests/platform_roadmap_state package directory and it exists with >=1 test_*.py.
+    fix_if: map_source_to_test still returns the .py file (home not retired) or check_test_file_exists reports missing package.
+    hermetic: false
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: Behavioural smoke on the live roadmap -- the four target CDs surface, superseded CD.7 does not, and the three feeds are disjoint.
+    command: >-
+      bin/venv-python -c "from scripts.platform_roadmap_state import load, PlatformRoadmapState;
+      s=PlatformRoadmapState(load('docs/ROADMAP-PLATFORM.yaml'));
+      rc={c['id'] for c in s.realization_candidates()};
+      assert {'CD.4','CD.5','CD.9','CD.39'} <= rc, rc; assert 'CD.7' not in rc, rc;
+      rat={c['id'] for c in s.ratifiable_cds()}; rbp={c['id'] for c in s.realized_but_pending_cds()};
+      assert rc.isdisjoint(rat) and rc.isdisjoint(rbp), (rc, rat, rbp); print('OK', sorted(rc))"
+    expected: Prints OK; derived set is a superset of {CD.4,CD.5,CD.9,CD.39}, excludes CD.7, and is disjoint from the other two feeds.
+    fix_if: A target CD is missing, CD.7 (superseded) leaks in, or the sets overlap.
+    hermetic: false
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: The preflight projection carries the new key through both the normal and parse-error paths.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.platform_roadmap_state import
+      compute_state_dict; d=compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml'));
+      assert 'realization_candidates' in d and isinstance(d['realization_candidates'], list), list(d);
+      e=compute_state_dict(Path('does-not-exist.yaml')); assert 'realization_candidates' in e, list(e);
+      print('OK', len(d['realization_candidates']))"
+    expected: Prints OK; the key is present and list-typed in both the valid-roadmap dict and the error dict.
+    fix_if: KeyError -- the key was not added to to_preflight_dict or the compute_state_dict error dict.
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: Fixture unit tests for realization_candidates (the five required cases plus disjointness, negatives, tier-shortcut, and the f4dec93-equivalent acceptance) pass.
+    command: bin/venv-python -m pytest tests/platform_roadmap_state/test_realization_candidates.py -q
+    expected: All tests pass, including the superseded-prose-edge and [Realized-marker-excluded (disjointness) cases and the f4dec93-equivalent fixture yielding CD.4/CD.5/CD.9/CD.39.
+    fix_if: Any predicate case fails -- inclusion/exclusion logic or the fixture shape is wrong.
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: The full mirror package passes -- migrated tests survived the split and collect cleanly.
+    command: bin/venv-python -m pytest tests/platform_roadmap_state/ -q
+    expected: All migrated + new tests pass; no import errors from the fixtures relocation.
+    fix_if: A migrated test fails to import the relocated helpers or a class was dropped in the split.
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    action: Per-file 100% coverage of both changed source files holds via their mapped test targets.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.test_coverage_checker import
+      check_per_file_coverage; errs=check_per_file_coverage([Path('scripts/platform_roadmap_state.py'),
+      Path('scripts/platform_roadmap_models.py')]); assert not errs, errs; print('COVERAGE OK')"
+    expected: Prints COVERAGE OK; realization_candidates() and the Field(description=...) line are covered by the mapped package.
+    fix_if: Coverage < 100% -- the new method's branches are not exercised by tests collected from the mapped package.
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: The coverage-checker retiring-table oracle is consistent with the retired home.
+    command: bin/venv-python -m pytest tests/test_coverage_checker.py -q
+    expected: Oracle tests pass with test_platform_roadmap_state.py retired (eight retired waves; _RETIRING == _ALL_MIRROR_TARGET_HOMES - retired).
+    fix_if: The retired-waves assertion still expects seven, or the equality check fails.
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: rec-2468 -- the realization_evidence truthy-vs-None contract is documented at the field definition and the consumer sites.
+    command: >-
+      bin/venv-python -c "import scripts.platform_roadmap_models as m;
+      d=m.CandidateDecision.model_fields['realization_evidence'].description or '';
+      assert 'truthy' in d.lower(), d; print('FIELD OK')" &&
+      grep -qiE "truthy" scripts/platform_roadmap_state.py && echo CONSUMER OK
+    expected: Prints FIELD OK and CONSUMER OK -- the field description and the ratifiable_cds/realization_candidates docstrings carry the truthy-vs-None contract.
+    fix_if: The field description or consumer docstrings omit the truthy-vs-None semantics.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step asserts rec-2468's truthy-vs-None documentation is present at the field and consumer
+      sites. Documentation presence is not runtime behaviour and is not expressible as one of the six
+      canonical verification-kernel slots (which guard code behaviour, not docstrings/field-metadata);
+      graduating it would register a doc-grep as a standing behavioural check, which the kernel is not for.
+  - step: 9
+    phase: pre-deploy
+    action: The orient SKILL.md surfaces the new list below Realized-but-pending CDs and preserves the verbatim RATIFIABLE-exclusion rule.
+    command: >-
+      grep -qi "realization candidates" .claude/skills/orient/SKILL.md &&
+      grep -qi "candidates for evidence-writing" .claude/skills/orient/SKILL.md &&
+      grep -q "do NOT surface a pending CD with no" .claude/skills/orient/SKILL.md && echo OK
+    expected: Prints OK -- the new subsection, the "candidates for evidence-writing" framing, and the preserved verbatim rule are all present.
+    fix_if: The subsection is missing, mis-placed above Realized-but-pending, or the verbatim rule was altered/removed.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step asserts the orient SKILL.md surfacing block, the "candidates for evidence-writing in a
+      human-confirmed /plan session" framing, and the preserved verbatim RATIFIABLE-exclusion rule are
+      present. Skill prose is instruction text, not kernel-expressible runtime behaviour; there is no
+      canonical-slot regression guard for a documentation-presence grep.
+  - step: 10
+    phase: pre-deploy
+    action: Fast-tier presubmit is green with the decomposition -- SLOC budgets, budget-raises (no new entries), cross-test-import, placement, plan schema, roadmap guards (Decision 130/128 NOTE flag check).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: PASS -- no over-budget file (retired entry removed, each new module <500 SLOC), zero new config/sloc_budgets.yaml registrations, no cross-test import, no unmarked budget change, plan document valid, roadmap guards green.
+    fix_if: Any pre-tier gate fails (e.g. a new test module exceeds 500 SLOC -- split it further; a helper import trips the cross-test-import guard -- route it through tests/fixtures/).
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: post-deploy
+    action: rec-2468 is closed after the squash-merge Resolves trailer fires.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json;
+      rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip()];
+      r=next(x for x in rows if x.get('id')=='rec-2468'); assert r.get('status')=='closed', r.get('status');
+      print('rec-2468 closed')"
+    expected: Prints rec-2468 closed -- rec-autoclose closed it from the Resolves trailer.
+    fix_if: rec-2468 still open -- run the fallback ops_data_portal --update-rec rec-2468 --status closed close command.
+constraints:
+  - No rescue agents or workaround loops (Decision 55); the pass is a deterministic read-side derivation, not an LLM judgement call.
+  - /orient stays read-only (Decision 84/86/88/90) -- it never writes realization_evidence; writing evidence stays a human-confirmed /plan/implement action.
+  - The three CD feeds are kept strictly disjoint by construction and never merged (Decision 55 epistemic split -- derived-plausible is not deliberately-corroborated).
+  - realization_candidates() reuses the existing _TIER_SHORTCUT_RE gate-resolution and the _INACTIVE_FOR_TIER constant -- do NOT reinvent gate traversal or the inactive-status set.
+  - Decision 128 -- decompose the at-budget test file, never raise its budget; new test modules stay <500 SLOC (unregistered default), producing zero new sloc_budgets entries.
+  - Decision 130/131 -- tests run on fixtures; shared helpers live in tests/fixtures/ (never imported from another test_* module); each mirror module is self-contained and carries the package __init__.py.
+  - Only modify files listed in scope; out-of-scope issues become recommendations, not inline fixes.
+context:
+  - "Audit source: audits/pending-cd-premise-validity-f4dec93.yaml finding PCD-01 (severity medium, CONFIRMED); Q4 root-cause is process (producer step has no recurring trigger)."
+  - "SCOPE/PATH CORRECTION (audit ~10 days stale): PlatformRoadmapState (with ratifiable_cds() line ~239 and realized_but_pending_cds() line ~247) lives in scripts/platform_roadmap_state.py, NOT scripts/platform_roadmap.py (which does not exist); scripts/roadmap/platform_roadmap.py is the re-export facade and needs NO edit (it re-exports the class + compute_state_dict)."
+  - "Live pending+unevidenced re-baseline: CD.4/CD.5/CD.9/CD.39 are still pending with no realization_evidence (acceptance targets); CD.28 (dec-122) and CD.18 (dec-123) are now ratified and MUST NOT appear; CD.7 is now state:superseded (PLAN-cd-marking-convention-enforcement #596) so it never surfaces. The live derived set additionally includes CD.8/CD.10/CD.15/CD.23/CD.29/CD.30/CD.32/CD.37 (realized-unevidenced or forward-intent CDs whose gates are now complete/deferred) -- acceptance is 'at least CD.4/5/9/39', and the derived-plausible tier is intentionally broad and human-adjudicated downstream."
+  - "Superseded-prose edge decision = EXCLUDE (not annotate): realization_candidates() drops any pending CD whose detail matches 'fully superseded by CD.NN' (module-level _FULLY_SUPERSEDED_RE mirroring scripts/checks/roadmap/validate_candidate_decision_supersession.py's regex r'fully superseded by (CD\\.\\d+)'). Rationale: a fully-superseded-in-prose CD is not a realization candidate (its decision content is replaced, not realized) -- it belongs to the supersession lane (PCD-03 guard/flip), so surfacing it even annotated would muddy /orient triage. Defensive-only on the live roadmap (CD.7 already state:superseded; no live pending CD matches), but fires for the future case the guard cannot catch (a pending CD fully-superseded-in-prose by a still-PENDING superseder). Fixture-tested. Narrow supersession (CD.11) and self-demotion (CD.10) do not match the phrase and are not excluded -- same construction as the guard."
+  - "Disjoint-by-construction: to make the principal's 'three tiers, never merged' requirement provable, realization_candidates() also excludes pending CDs carrying a '[Realized' prose marker (those surface one tier up in realized_but_pending_cds). Feeds: ratifiable=pending AND evidence; realized_but_pending=pending AND no-evidence AND marker; realization_candidates=pending AND no-evidence AND no-marker AND no-superseded-prose AND all-gates-complete -> pairwise disjoint. This clause is not in the principal's literal predicate but is required to satisfy the stated disjoint-by-construction property; it drops no acceptance target (no CD.4/5/9/39 carries a marker; realized_but_pending is currently empty)."
+  - "Predicate NARROWED to gate-completeness only (not the audit's OR-with-scope-(c)-ledger): the pre-confirmed Plan-C intent scopes realization_candidates() to gated-item completeness + vacuous empty gates + the three exclusions; it does NOT parse the scope-(c) exemption ledger. This avoids reinventing ledger parsing and matches the intent verbatim."
+  - "TEST DECOMPOSITION (forced, anticipated): tests/test_platform_roadmap_state.py is at exactly 825/825 SLOC (zero headroom); validate_sloc_limits + validate_sloc_budget_raises are pre-tier, and per-file 100% coverage (validate_test_coverage, full tier) runs pytest against ONLY the mapped path. So the new tests must land in the mapped target. scripts/platform_roadmap_state.py is pre-declared in _CONCERN_SPLIT_TEST_PACKAGES (-> tests/platform_roadmap_state/ package dir; verified at scripts/test_coverage_checker.py line ~228); its home is still in _RETIRING_GRANDFATHER_HOMES (line ~207). Per Decision 128 we decompose (this home's rec-2709 wave) rather than raise. Retiring flips ONLY scripts/platform_roadmap_state.py (1:1 home)."
+  - "Lambda Deployment Assessment (definitive): compute_affected_artifacts(scope) == {} -- scripts/platform_roadmap_state.py is NOT in lambda_manifest --list-patterns and .claude/skills/orient/SKILL.md is not Lambda-packaged. No status:active artifact affected; no build/deploy/smoke-test; V2 tier."
+  - "Sequencing satisfied: PLAN-cd-marking-convention-enforcement merged as #596 (commit c8668eb); it touched models.py + checks/ + registry.py, NOT platform_roadmap_state.py -- so no live file-overlap conflict remains. CandidateDecision.state is already Literal[pending,ratified,superseded] (PCD-04 landed there), out of this plan's scope."
+  - "Preflight: main_freshness ok (0 behind, 0 ahead, no overlapping scope files); working tree clean; venv ok; creds ok; telemetry Phase-4 stub (unknown) and data_quality last_run FAIL with 0 checks defined -- both non-blocking, this plan touches no data pipeline. ops_outbox has 1 ops_recommendations entry (a Decision 84 I-4 migrated-table anomaly) -- surfaced to the operator, out of this plan's scope. Softcap breached (752 open / 644 non-automatable) -- informational."
+  - "CI-RCA HARD BLOCK deferral: ci_rca_unresolved_recs = [rec-2710] ('Unit test hits real AWS: missing mock for find_recent_ci_rca_rec_by_fingerprint', tests/test_ops_data_portal.py). This plan does NOT satisfy any Related-Work condition (different file, no shared Decision, different failure category -- rec-2710 is an AWS-mock gap, this plan is an additive read-side derivation). Deferral rationale: the work here was explicitly directed by the human (audit PCD-01, user_explicit_out_of_scope relative to rec-2710) and is architecturally independent; rec-2710 is triaged separately."
+  - "Decision-scout verdict + CITE list: FLAGS_FOUND (2 NOTE flags, no BLOCK; 94/94 decisions triaged). CITE: Decision 105 (ratification lane), Decision 55 (epistemic split), Decision 128 (SLOC decompose-don't-raise), Decision 131 (test mirror convention), Decision 130 (whole-repo SLOC), Decision 86 (field-semantics routing, not a new prose doc), Decision 90 (four-tier workflow, /orient writes nothing). RELATED: Decision 59, 127, 84, 134, 104/102/43. NOTE flag 1 (131): platform_roadmap_state.py must be in _CONCERN_SPLIT_TEST_PACKAGES so the mirror resolves to the package dir -- VERIFIED present, asserted by VP step 1. NOTE flag 2 (130/128): each new module <500 SLOC, zero new sloc_budgets entries -- enforced by VP step 10."
+  - "gates: decision-scout=FLAGS_FOUND (2 NOTE, no BLOCK, both resolved in-plan) after 1 round; plan-critique=deferred to the overseer (this planning agent does not run the Step 9 critique gate or the Step 11 merge per its charter)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/cd-premise-validity-audit-j8isbv)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via decision-scout gate (not full-file loaded in planning)
+  - All files in scope located and readable (scripts/platform_roadmap_state.py, models.py, orient SKILL.md, test_coverage_checker.py, sloc_budgets.yaml, existing tests/test_platform_roadmap_state.py)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "scripts/platform_roadmap_state.py: add module-level _FULLY_SUPERSEDED_RE = re.compile(r\"fully superseded by CD\\.\\d+\") (mirrors the supersession guard); add PlatformRoadmapState.realization_candidates() returning, for each pending CD with falsy realization_evidence, no '[Realized' in detail, and no _FULLY_SUPERSEDED_RE match, the CD when every gated item resolved via _TIER_SHORTCUT_RE (tier shortcut -> items whose tier==ref; else by_id[ref]) has status complete OR in _INACTIVE_FOR_TIER (empty gates vacuously included); return dicts {id, title, gates}."
+  - "scripts/platform_roadmap_state.py: add 'realization_candidates': self.realization_candidates() to to_preflight_dict()'s returned dict AND 'realization_candidates': [] to the compute_state_dict parse-error dict. Add rec-2468 truthy-vs-None docstring notes at ratifiable_cds() and realization_candidates() (realization_evidence is str|None; TRUTHY => evidenced, None/'' => not; consumers filter on truthiness, not 'is not None')."
+  - "scripts/platform_roadmap_models.py: change CandidateDecision.realization_evidence to Field(default=None, description=\"str|None; TRUTHY => ratifiable/realized-evidenced, None or empty-string => not. ratifiable_cds/realization_candidates filter on truthiness (not 'is not None'), so '' is excluded.\") (resolves rec-2468 field-definition leg; Field already imported)."
+  - ".claude/skills/orient/SKILL.md: add a platform_roadmap.realization_candidates row to the Inputs table; add a 'Realization candidates (derived, lowest-confidence)' subsection immediately BELOW the Realized-but-pending CDs subsection in Deliverable Shape section 1, framed as 'candidates for evidence-writing in a human-confirmed /plan session' with read-only discipline; leave the verbatim 'do NOT surface a pending CD with no realization_evidence in the RATIFIABLE list' rule unchanged."
+  - "tests/fixtures/platform_roadmap_state.py: create the importable helper module -- move _BASE_DOC/_doc/_item/_make_state/_write_fixture_yaml/_cd/_state_from_doc/_LIVE_ROADMAP out of the monolith; extend _cd with an optional detail param."
+  - "tests/platform_roadmap_state/__init__.py + test_graph.py + test_state_dict_and_feeds.py: create the mirror package; move the existing test classes into 2 cohesive modules (each <500 SLOC), importing helpers from tests.fixtures.platform_roadmap_state."
+  - "tests/platform_roadmap_state/test_realization_candidates.py: create the new fixture tests (all-gates-complete, vacuous-empty-gates, deferred-nonblocking, reserved-nonblocking, already-evidenced-excluded, superseded-prose-edge, [Realized-marker-excluded/disjoint, gate-incomplete-excluded, tier-shortcut, to_preflight_dict key, f4dec93-equivalent -> CD.4/5/9/39)."
+  - "Delete tests/test_platform_roadmap_state.py; delete its config/sloc_budgets.yaml entry; delete 'test_platform_roadmap_state.py' from _RETIRING_GRANDFATHER_HOMES in scripts/test_coverage_checker.py; update the retired-waves oracle in tests/test_coverage_checker.py (add the basename; eight retired waves)."
+  - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55). Include a 'Resolves: rec-2468' trailer in the squash-merge commit body."
+  - "Report: what was implemented, verification results, and confirmation that validate --pre is green and the three feeds are disjoint."
+work_areas: []
+rollback: >-
+  Revert the branch commit(s). The change is additive read-side derivation + a test-file
+  decomposition; no data migration, no infra, no warehouse writes. If the decomposition needs
+  reverting independently, restore tests/test_platform_roadmap_state.py, re-add its sloc_budgets
+  entry, and re-add its _RETIRING_GRANDFATHER_HOMES line + the oracle's seven-retired assertion.

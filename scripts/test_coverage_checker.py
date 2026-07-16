@@ -206,7 +206,6 @@ _RETIRING_GRANDFATHER_HOMES: set[str] = {
     "test_iceberg_reader.py",
     "test_lambda_manifest.py",
     "test_ops_writer.py",
-    "test_platform_roadmap_state.py",
     "test_s3_log_store.py",
     "test_scheduled_agent_handler.py",
     "test_session_postflight.py",

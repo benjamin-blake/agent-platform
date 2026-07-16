@@ -69,11 +69,13 @@ class TestGrandfatherRetiringTable:
         for source, expected in cases.items():
             assert map_source_to_test(source) == expected, source
 
-    def test_retiring_is_all_target_homes_minus_ten_retired_waves(self) -> None:
-        """Ten basenames retired so far (Waves 1-7); Wave 6 added "test_convergence_health.py"
-        (a PACKAGE-MIRROR, NOT added to _CONCERN_SPLIT_TEST_PACKAGES); Wave 7 added
-        "test_ducklake_runtime.py" (a MIRROR, special-case KEPT) and
-        "test_ducklake_neon_smoke_test.py" (a CONCERN-SPLIT, already seeded)."""
+    def test_retiring_is_all_target_homes_minus_eleven_retired_waves(self) -> None:
+        """Eleven basenames retired so far (Waves 1-7 + PLAN-cd-realization-candidate-pass / PCD-01);
+        Wave 6 added "test_convergence_health.py" (a PACKAGE-MIRROR, NOT in
+        _CONCERN_SPLIT_TEST_PACKAGES); Wave 7 added "test_ducklake_runtime.py" (a MIRROR,
+        special-case KEPT) and "test_ducklake_neon_smoke_test.py" (a CONCERN-SPLIT, already
+        seeded); PCD-01 added "test_platform_roadmap_state.py" (a concern-split package mirror --
+        its source scripts/platform_roadmap_state.py IS in _CONCERN_SPLIT_TEST_PACKAGES)."""
         retired = {
             "test_validate.py",
             "test_execute_recommendation.py",
@@ -85,6 +87,7 @@ class TestGrandfatherRetiringTable:
             "test_convergence_health.py",
             "test_ducklake_runtime.py",
             "test_ducklake_neon_smoke_test.py",
+            "test_platform_roadmap_state.py",
         }
         assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - retired
         assert "test_validate.py" not in _RETIRING_GRANDFATHER_HOMES
@@ -97,6 +100,7 @@ class TestGrandfatherRetiringTable:
         assert "test_convergence_health.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_ducklake_runtime.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_ducklake_neon_smoke_test.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert "test_platform_roadmap_state.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_session_postflight.py" in _RETIRING_GRANDFATHER_HOMES
         assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == retired
 
