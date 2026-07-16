@@ -1,0 +1,362 @@
+schema_version: 1
+slug: cd-prose-currency-sweep
+intent: >-
+  Discharge audit finding PCD-05 (prose-currency has no maintenance trigger) by sweeping the
+  stale pending-tense prose that ratified candidate decisions left behind, keeping the roadmap's
+  in-file architectural record truthful so agents that read a CD's detail act on the ratified
+  reality, not a superseded pending-window assertion. Text-only; zero decision-state change.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-cd-prose-currency-sweep.yaml
+phase: >-
+  Platform truth-maintenance (audit PCD-05, audits/pending-cd-premise-validity-f4dec93.yaml).
+  Not a tier_item deliverable -- a governance-data currency correction under the Decision 105
+  ratification lane's PCD-05 prose-sweep clause (already landed in the lane contract by the prior
+  cd-marking-convention-enforcement unit; this plan performs the roadmap-instance sweep it mandates).
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Date-bracket / correct six stale-prose (and one in-scope crossref) loci on already-ratified
+      CDs and one pending CD's stale gate-status note. This is a `data-pipeline` bundled ASSET, not
+      Lambda handler/include code -- editing prose in it requires NO build/deploy/smoke-test step and
+      does not force V3 (see Lambda Deployment Assessment in context).
+bundled_recommendations:
+  - rec-2287
+  - rec-2048
+  - rec-2511
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "docs/ROADMAP-PLATFORM.yaml parses as YAML after the sweep."
+  - >-
+    rec-2287 discharged: the substring 'does NOT edit DECISIONS.md while pending' (any case) no longer
+    appears anywhere in docs/ROADMAP-PLATFORM.yaml (CD.35 detail item 1 + CD.33 detail/dp3 item 3 --
+    rec-2287's acceptance oracle is FILE-WIDE, so both loci must be swept for it to pass).
+  - >-
+    rec-2048 discharged: within the CD.31 block the 'does NOT touch DECISIONS.md' disclaimer appears
+    exactly once (the opening instance retained, the duplicate closing paragraph removed); CD.30's
+    separate, still-current instance is untouched. CD.31 discipline-point 6's present-tense
+    'the existing write path (JSONL-staging ...) continues' conditional is date-bracketed as resolved.
+  - >-
+    CD.29's stale gate-status discipline point no longer claims 'Remaining gates T3.1/T3.7/T0.12.5 open';
+    it is refreshed (dated) to record that T3.1 (complete 2026-07-03) and T0.12.5 (complete 2026-06-20)
+    have closed and only T3.7 (deferred_post_mvp) remains open. CD.29 stays state:pending.
+  - >-
+    T2.1's scope-(c) note no longer asserts 'gating CD.6/CD.17 ratify post-hoc via the portal vehicle';
+    it is corrected (CD.6 ratified as dec-106; CD.17 ratifies at its structural reversal trigger, not
+    post-hoc) while the scope-(c) record and the bootstrap_completion_exempt: true flag are preserved
+    verbatim.
+  - >-
+    rec-2511 discharged: T2.15's related_candidate_decisions is extended from [CD.17] to [CD.17, CD.40]
+    per T2.15's own exit criterion #2 that cites CD.40 (CD.40 exists, state pending). This is the ONE
+    permitted structured-field edit -- a crossref list extension, not a state/lifecycle change.
+  - >-
+    Zero changes to any state:, gates:, ratified_as:, filed_via:, realization_evidence:, or
+    bootstrap_completion_exempt: field anywhere in the file (the T2.15 related_candidate_decisions
+    crossref is the sole non-prose line in the diff).
+  - "bin/venv-python -m scripts.validate --pre is green (roadmap, ratification, and supersession guards pass)."
+  - "On squash-merge with the Resolves: trailer, rec-2287, rec-2048, and rec-2511 close."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Roadmap still parses as YAML after the sweep.
+    command: "bin/venv-python -c \"import yaml; yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); print('parses')\""
+    expected: "Prints 'parses'; exit 0."
+    fix_if: "YAML parse error -- a bracket edit broke indentation or a quoted-scalar boundary. Fix the offending line."
+    hermetic: false
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      rec-2287 (items 1 + 3): the stale phrase 'does NOT edit DECISIONS.md while pending' is gone
+      file-wide (case-insensitive, catching the capital-'Does' dp3 variant too).
+    command: "test \"$(grep -ic 'does NOT edit DECISIONS.md while pending' docs/ROADMAP-PLATFORM.yaml)\" = \"0\""
+    expected: "Count is 0 (was 3: CD.33 detail, CD.33 dp3, CD.35 detail). Exit 0."
+    fix_if: >-
+      A residual instance survives -- rec-2287's file-wide oracle will NOT pass. Re-word the missed
+      locus (CD.35 detail item 1, and/or CD.33 detail + dp3 item 3) so no case-variant of the phrase remains.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a grep_count asserting the retired 'does NOT edit DECISIONS.md while pending'
+      phrase never reappears file-wide, but deliberately not graduated: a standing presence-grep proves
+      text-state not behaviour, and a 'retired phrase must never reappear' registry row would be redundant
+      noise. The class-level regression guard is the lane-contract prose-currency-sweep clause landed in
+      #596 (PCD-03/05), which mandates a prose sweep at every ratification flip.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      rec-2048 (item 2a): within the CD.31 block the 'does NOT touch DECISIONS.md' disclaimer appears
+      exactly once (opening retained, closing duplicate removed). Block-scoped so CD.30's current instance
+      is excluded.
+    command: "test \"$(awk '/^  - id: CD.31$/{f=1} /^  - id: CD.32$/{f=0} f' docs/ROADMAP-PLATFORM.yaml | grep -c 'does NOT touch DECISIONS.md')\" = \"1\""
+    expected: "Count is 1 within the CD.31 block (was 2). Exit 0."
+    fix_if: >-
+      Count is 2 (closing duplicate not removed) or 0 (opening deleted -- must be preserved, a prior VP
+      required it within 40 lines of 'id: CD.31'). Restore exactly one, the opening, bracketed as historical.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a block-scoped grep_count that CD.31's not-touch-DECISIONS.md disclaimer stays
+      de-duplicated to a single instance, but deliberately not graduated: it guards a one-off dedup specific
+      to this sweep and proves text-state not behaviour; a standing registry row would be redundant noise.
+      The class-level regression guard is the #596 (PCD-03/05) lane-contract prose-currency-sweep clause.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      rec-2048 (item 2b): CD.31 discipline-point 6's present-tense pending-window conditional is gone
+      (date-bracketed as resolved).
+    command: "! grep -q 'Until CD.31 is ratified, all four Decisions remain in force' docs/ROADMAP-PLATFORM.yaml"
+    expected: "The stale conditional phrase is absent. Exit 0 (negated grep succeeds)."
+    fix_if: >-
+      The phrase survives -- the false present-tense 'JSONL-staging ... continues' implication (contradicted
+      by Decision 84) still reads as live. Bracket dp6 as resolved-historical.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a command_exit_zero that CD.31 dp6's retired present-tense 'Until CD.31 is
+      ratified ... continues' conditional stays absent, but deliberately not graduated: a per-phrase
+      absence-grep proves text-state not behaviour and a standing row would be redundant noise. The
+      class-level regression guard is the #596 (PCD-03/05) lane-contract prose-currency-sweep clause.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      CD.29 (item 4): the stale 'Remaining gates T3.1/T3.7/T0.12.5 open' is gone and the refresh names
+      only T3.7 as still-open.
+    command: "! grep -q 'Remaining gates T3.1/T3.7/T0.12.5 open' docs/ROADMAP-PLATFORM.yaml && grep -q 'only T3.7' docs/ROADMAP-PLATFORM.yaml"
+    expected: "Stale gate-status string absent AND the refreshed 'only T3.7' text present. Exit 0."
+    fix_if: >-
+      Stale string survives or the refresh does not name T3.7 -- re-verify live statuses (T3.1 complete
+      2026-07-03; T0.12.5 complete 2026-06-20; T3.7 deferred_post_mvp) and re-word the dp accordingly.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as grep_count/command_exit_zero over the CD.29 gate-status refresh, but deliberately
+      not graduated: gate-status text is transient (it rots again as T3.7 later closes), so a standing grep
+      would guard a moving target and prove text-state not behaviour. The class-level regression guard is the
+      #596 (PCD-03/05) prose-currency-sweep clause plus the gated-item-completion truth-maintenance rule.
+  - step: 6
+    phase: pre-deploy
+    action: "T2.1 (item 5): the mis-stated 'gating CD.6/CD.17 ratify post-hoc' phrase is corrected."
+    command: "! grep -q 'gating CD.6/CD.17 ratify post-hoc' docs/ROADMAP-PLATFORM.yaml"
+    expected: "The stale phrase is absent (replaced by the corrected, dated wording). Exit 0."
+    fix_if: >-
+      The phrase survives -- CD.17 does NOT ratify post-hoc. Correct it (CD.6 ratified dec-106; CD.17
+      ratifies at its structural reversal trigger) while preserving the scope-(c) record and the flag.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a command_exit_zero that T2.1's corrected scope-(c) phrase stays absent, but
+      deliberately not graduated: a per-phrase absence-grep proves text-state not behaviour and a standing
+      registry row would be redundant noise. The class-level regression guard is the #596 (PCD-03/05)
+      lane-contract prose-currency-sweep clause.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      rec-2511 (item 6): T2.15's related_candidate_decisions now lists CD.40 (this is rec-2511's exact
+      acceptance oracle, block-scoped to T2.15).
+    command: "awk '/^  - id: T2.15$/{f=1} /^  - id: T2.16$/{f=0} f' docs/ROADMAP-PLATFORM.yaml | grep -q 'related_candidate_decisions:.*CD.40'"
+    expected: "The T2.15 block's related_candidate_decisions line contains CD.40. Exit 0."
+    fix_if: "CD.40 not present -- extend [CD.17] to [CD.17, CD.40] on T2.15's related_candidate_decisions line."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a block-scoped grep that T2.15's related_candidate_decisions lists CD.40
+      (rec-2511's own oracle), but deliberately not graduated: it guards a one-off crossref extension
+      specific to this rec, not a durable behavioural surface, and validate_platform_roadmap already
+      enforces that every related_candidate_decisions entry resolves to a real CD -- a per-crossref
+      registry row would be redundant.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Structured-field invariant: the diff changes NO state/gates/ratified_as/filed_via/
+      realization_evidence/bootstrap_completion_exempt field (the T2.15 related_candidate_decisions
+      crossref is the only non-prose line permitted).
+    command: "! git diff origin/main -- docs/ROADMAP-PLATFORM.yaml | grep -E '^[-+][[:space:]]*(state|gates|ratified_as|filed_via|realization_evidence|bootstrap_completion_exempt):'"
+    expected: "No added/removed line is one of the six forbidden structured fields. Exit 0 (negated grep succeeds)."
+    fix_if: >-
+      A forbidden field appears in the diff -- a bracket edit accidentally touched a structured line.
+      Revert that line; this plan is prose + the single related_candidate_decisions crossref only.
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Full fast-tier validation passes -- exercises validate_platform_roadmap (Decision 114),
+      validate_candidate_decision_ratification (Decision 105 R1-R3), validate_candidate_decision_supersession
+      (audit PCD-03), and validate_graduation_completeness (T3.21) against the swept tree.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0; all registered --pre checks pass."
+    fix_if: >-
+      Any guard fails. A ratification/supersession-guard failure means a structured field was perturbed
+      (see step 8); a roadmap-schema failure means a referential break (e.g. CD.40 must exist for the
+      T2.15 crossref). Diagnose from the named check; do not weaken a guard.
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Closure obligation: after the squash-merge lands the Resolves: trailer, pull the read-cache and
+      confirm all three bundled recs closed.
+    command: "bin/venv-python -m scripts.sync.ops pull && for r in rec-2287 rec-2048 rec-2511; do bin/venv-python -c \"import json,sys; rows=[json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip()]; row=next((x for x in rows if x.get('id')=='$r'),None); sys.exit(0 if row and row.get('status')=='closed' else 1)\" || { echo \"$r not closed\"; exit 1; }; done; echo 'all closed'"
+    expected: "Prints 'all closed'; rec-2287, rec-2048, rec-2511 each show status=closed in the cache."
+    fix_if: >-
+      A rec is still open -- confirm the squash-merge commit body carried 'Resolves: rec-2287, rec-2048,
+      rec-2511'. Fallback: close via bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN
+      --status closed --resolution '...' (Decision 70 Resolves-trailer/autoclose convention).
+    hermetic: false
+constraints:
+  - "Prose-only sweep: modify docs/ROADMAP-PLATFORM.yaml ONLY. No other file, no DECISIONS.md, no ops_decisions write."
+  - >-
+    ZERO changes to any state:, gates:, ratified_as:, filed_via:, realization_evidence:, or
+    bootstrap_completion_exempt: field. The single T2.15 related_candidate_decisions crossref extension
+    (item 6) is the only permitted non-prose line -- it is a list extension, not a lifecycle field.
+  - >-
+    Do NOT touch CD.7 (already flipped to superseded by the prior cd-marking-convention-enforcement unit)
+    or CD.28 (ratified dec-122). Do NOT touch CD.30's line 1407 'does NOT touch DECISIONS.md' instance --
+    CD.30 is state:pending, so that statement is currently TRUE.
+  - >-
+    Follow CD.34/Decision 107's date-bracketing pattern: mark a stale clause historical with a date and
+    what changed; never bare-delete traceability. EXCEPTION forced by rec-2287's oracle: the literal
+    substring 'does NOT edit DECISIONS.md while pending' must not survive verbatim, so paraphrase the
+    retained-history note (do not quote that exact phrase).
+  - "No rescue agents or workaround loops (Decision 55). This is a currency correction, not a guard bypass."
+  - "Preserve T2.1's bootstrap_completion_exempt: true flag and scope-(c) record verbatim (Decision 118 flag-strip safety rule: strip only when ALL gating CDs ratify; CD.17 is still pending, so the flag stays)."
+context:
+  - >-
+    Audit source: audits/pending-cd-premise-validity-f4dec93.yaml finding PCD-05 (low severity, CONFIRMED).
+    The audit is ~10 days stale; every locus below was RE-LOCATED by content at HEAD and its current line
+    number recorded. CD.35/CD.31/CD.33 confirmed still ratified; the three bundled recs confirmed still open.
+  - >-
+    RE-LOCATED loci (current line numbers at HEAD, subject to drift -- /implement must re-grep by content):
+    item 1 CD.35 detail ~L1723-1724; item 2a CD.31 opening disclaimer ~L1423 + closing duplicate ~L1485-1488;
+    item 2b CD.31 dp6 ~L1511; item 3 CD.33 detail ~L1580-1581 + dp3 ~L1639; item 4 CD.29 gate-status dp ~L1381;
+    item 5 T2.1 note ~L4799; item 6 T2.15 related_candidate_decisions ~L5280.
+  - >-
+    CD.29 gate-status VERIFIED LIVE at HEAD: T3.1 status=complete (completed_at 2026-07-03), T0.12.5
+    status=complete (completed_at 2026-06-20), T3.7 status=deferred_post_mvp (still open). T3.6 already
+    SATISFIED in the same dp (2026-06-25). So the refresh names ONLY T3.7 as still-open -- the audit's
+    snapshot is confirmed correct against live status.
+  - >-
+    rec-2048 ORACLE CAVEAT (deviation, surfaced): rec-2048's stored acceptance oracle is a FILE-WIDE
+    `grep -c 'does NOT touch DECISIONS.md' | grep -q '^1'` (== exactly one). At HEAD the phrase appears
+    3x file-wide: CD.30 detail (L1407, pending -> currently TRUE, out of scope), CD.31 opening (L1423,
+    retained), CD.31 closing (L1485, removed). After the sweep the file-wide count is 2, so rec-2048's
+    literal oracle would NOT reach 1 -- it is now miscalibrated by CD.30's legitimate later-added instance.
+    The plan therefore verifies rec-2048's INTENT with a CD.31-BLOCK-SCOPED count (VP step 3, == 1), not the
+    stale file-wide oracle. Closure is via the Resolves: trailer (trust-based autoclose, Decision 103/the
+    Decision 70 trailer convention -- runs no oracle), verified post-merge by VP step 10.
+  - >-
+    Lambda Deployment Assessment: docs/ROADMAP-PLATFORM.yaml is a `data-pipeline` bundled ASSET (roadmap
+    data), NOT Lambda handler/include code. Editing prose in it requires NO build/deploy/smoke-test step
+    and does not force V3. Verification tier is V2: a schema-validated governed-data file whose invariants
+    are enforced by executable Python guards, so verification exercises those real code paths (not static docs).
+  - >-
+    Graduation dispositions (T3.21 / VF-05): this plan is net-new, so every pre-deploy VP step carries a
+    `graduation` field, and NONE is a GRADUATE candidate (a prose currency sweep has no durable behaviour to
+    guard -- per CD.29's VF-11 doctrine a structural-only grep proves text-presence, not behaviour, and a
+    'retired phrase must never reappear' registry row would be noise, not a regression guard). Dispositions,
+    corrected per the plan-critique gate (superseding an earlier all-not-applicable pass): steps 2-7 are
+    grep-shaped checks (grep_count / command_exit_zero kernel shapes), so the honest disposition is `waive`
+    with a per-step reason -- classifying a kernel-primitive shape as not-applicable is exactly what the
+    VF-05 gate exists to catch. Steps 1 (yaml parse -- not a grep_count primitive), 8 (PR-diff-scoped
+    one-shot structured-field guard against the PR base, not a standing file grep), and 9 (validate --pre
+    meta-gate) stay `not-applicable`; the post-deploy closure step (10) needs no disposition. The class-level
+    regression guard for this whole category is the lane-contract prose-currency-sweep clause landed in #596
+    (PCD-03/05), which mandates a prose sweep at every ratification flip -- so no per-phrase row is owed.
+  - >-
+    VP-replay note (VF-01): all pre-deploy steps are hermetic:false BY DESIGN. Every phrase-count/absence
+    step asserts POST-sweep state; validate_vp_replay re-executes hermetic:true pre-deploy steps of a
+    diff-added PLAN at PLAN-PR time (before the roadmap sweep exists), where they would fail. hermetic:false
+    excludes them from replay -- the correct authoring for steps that assert post-implementation state
+    (matches the sibling PLAN-cd-marking-convention-enforcement convention).
+  - >-
+    The lane-contract half of PCD-05 (a prose-sweep clause on the /implement flip step) already landed in
+    docs/contracts/candidate-decision-ratification.yaml via the prior cd-marking-convention-enforcement unit
+    (#596). This plan performs ONLY the roadmap-instance sweep that clause mandates -- it does NOT edit the
+    contract.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (93 of 93 triaged). CITE: Decision 105 (ratification lane / PCD-05 owner / R1-R3 shape the sweep must not perturb); Decision 86 (roadmap YAML is the sanctioned home for CD architectural prose; no new prose doc, no DECISIONS.md edit); Decision 84 (DuckLake sole ops backend -- the reality that makes item 2b's JSONL-staging present-tense claim stale); Decision 92 / dec-092 (CD.35, item 1 target); Decision 78 / dec-078 (CD.31, item 2 target); Decision 81 / dec-081 (CD.33, item 3 target); Decision 106 / dec-106 (CD.6 ratified -- grounds item 5's correction); Decision 118 (flag-strip safety rule -- item 5 correctly RETAINS T2.1's exemption flag because CD.17 is still pending); Decision 107 / dec-107 (the date-bracketing exemplar this sweep copies)."
+  - >-
+    Decision-scout NOTE flag resolved: cite Decision 103 (rec relevance / closure-proof lifecycle) as the
+    authority for how the three bundled recs close, NOT Decision 70 -- Decision 70 governs bootstrap-record
+    deletion; it is linked to rec closure only via the AGENTS.md Resolves:-trailer/autoclose convention.
+  - >-
+    Related decisions (scout RELATED): Decision 103 (rec closure lifecycle -- the Decision-70 mis-cite's
+    correct target); Decision 114 (10k-line roadmap ceiling + validate_platform_roadmap; current 9445 lines,
+    sweep nets ~+8, safe); Decision 121 (test_live_platform_yaml_bootstrap_exemption_set regression test --
+    protects the T2.1 exemption flag item 5 preserves); Decision 67 / CD.17-T4.2 reversal gate (grounds
+    item 5's 'CD.17 ratifies at its structural reversal trigger' correction; confirms IMPLEMENTATION type);
+    Decision 91 (stale-prose re-grounding precedent); Decision 55 (fail-loud currency correction); Decision
+    93 (deferred_post_mvp semantics for T3.7 / CD.17); Decision 122 / dec-122 (CD.28 ratified -- out of scope,
+    awareness only).
+  - "gates: decision-scout=FLAGS_FOUND (1 NOTE, resolved by the Decision 103 citation fix; 93 of 93 triaged); plan-critique=<pending, run fresh-context by the overseer>."
+  - >-
+    Preflight at planning time: venv ok, creds ok, branch fresh (0 behind / 0 ahead of origin/main),
+    ci_rca_unresolved=0 (no HARD BLOCK), ci_rca_likely_resolved=1 (informational). open_recs=755
+    (informational). No Main Divergence (0 behind).
+pre_implementation_checklist:
+  - "Branch confirmed not on main."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "Re-grep every locus by content (line numbers in context are HEAD-time and will drift)."
+  - "Confirm CD.35/CD.31/CD.33 still ratified and rec-2287/rec-2048/rec-2511 still open at implement time."
+  - "Acceptance criteria understood and verifiable."
+execution_steps:
+  - >-
+    Item 1 (CD.35 detail, rec-2287): replace the sentence "Ratified later via the log-decision path (a
+    numbered Decision when Wave 1 / T2.20 ships); does NOT edit DECISIONS.md while pending." with a
+    date-bracketed resolved-historical note that points at the live dec-092 ratification and paraphrases
+    (does NOT quote) the retired pending-window clause. Suggested: "[Ratified 2026-06-19 as Decision 92
+    (dec-092) at Wave 1 / T2.20 -- see the state/ratified_as/filed_via fields and discipline_points below.
+    Pre-ratification this clause recorded that ratification would land later via the log-decision path with
+    no DECISIONS.md edit during the pending window; retained as resolved-historical.]" MUST NOT reproduce
+    the literal substring 'does NOT edit DECISIONS.md while pending'.
+  - >-
+    Item 2a (CD.31 duplicate disclaimer, rec-2048): (i) bracket the RETAINED opening instance
+    ("This roadmap edit does NOT touch DECISIONS.md and does NOT change any numbered Decision's status.")
+    as resolved-historical with a 2026-07-16 date + dec-078 pointer, keeping the literal 'does NOT touch
+    DECISIONS.md' sentence intact (a prior VP requires it within 40 lines of 'id: CD.31'); (ii) remove the
+    DUPLICATE CLOSING paragraph (the second "This roadmap edit does NOT touch DECISIONS.md ..." + its
+    OQ.13 continuation), replacing it with a one-line bracketed pointer noting the OQ.13 generalisation is
+    already recorded (ENACTED) in discipline_points. Net: within the CD.31 block, 'does NOT touch
+    DECISIONS.md' appears exactly once.
+  - >-
+    Item 2b (CD.31 discipline-point 6, rec-2048): replace "Supersession of Decisions 50/56/51/69 is
+    proposed-at-ratification only. Until CD.31 is ratified, all four Decisions remain in force and the
+    existing write path (JSONL-staging, Single-Portal invariant per Decision 69) continues." with a dated
+    resolved-historical bracket: CD.31 ratified dec-078, Decisions 50/56/51/69 now superseded (see
+    supersedes_decisions), the DuckLake writer is live (T2.19) and the JSONL-staging path is retired per
+    Decision 84 (Single-Portal invariant preserved on the DuckLake writer). Remove the false present-tense
+    'continues'.
+  - >-
+    Item 3 (CD.33 detail + dp3, completes rec-2287): reword the detail parenthetical "Ratified by Decision
+    81 (this CD does NOT edit DECISIONS.md while pending; ratification lands via the log-decision path =
+    Decision 81, mirroring CD.31 -> Decision 78)." and discipline-point 3 "Does NOT edit DECISIONS.md while
+    pending; supersession + OQ.7/OQ.10/OQ.11 resolution land at ratification via the log-decision path =
+    Decision 81." as dated resolved-historical (dec-081 live; the deferred supersession + OQ resolutions now
+    enacted). Neither reworded locus may contain any case-variant of 'does NOT edit DECISIONS.md while
+    pending'.
+  - >-
+    Item 4 (CD.29 gate-status dp): in the "Gate status: T3.6 (hermeticity) [SATISFIED ...]. Remaining gates
+    T3.1/T3.7/T0.12.5 open. Recording a satisfied gate ..." point, replace "Remaining gates T3.1/T3.7/T0.12.5
+    open." with a dated refresh, e.g. "[Refreshed 2026-07-16: T3.1 (complete 2026-07-03) and T0.12.5
+    (complete 2026-06-20) have since closed; of the four gates (T3.1, T3.6, T3.7, T0.12.5) only T3.7
+    (deferred_post_mvp) remains open.]" Keep the surrounding T3.6-satisfied and 'state remains pending'
+    clauses. CD.29's state:/gates: fields are UNCHANGED.
+  - >-
+    Item 5 (T2.1 note, scope-(c)): within the `note:` value, replace "bootstrap_completion_exempt under
+    scope (c): gating CD.6/CD.17 ratify post-hoc via the portal vehicle." with a dated correction, e.g.
+    "bootstrap_completion_exempt under scope (c): [Refreshed 2026-07-16] gating CD.6 ratified post-hoc via
+    the portal vehicle (dec-106); CD.17 does NOT ratify post-hoc -- it ratifies at its structural reversal
+    trigger (the Decision 67 STRATEGIC-freeze reversal at T4.2 stability, per CD.17), so the scope-(c)
+    exemption is retained on CD.17's still-pending account." Do NOT touch the bootstrap_completion_exempt:
+    true field or the rest of the scope-(c) record.
+  - >-
+    Item 6 (T2.15 related_candidate_decisions, rec-2511): change "related_candidate_decisions: [CD.17]" to
+    "related_candidate_decisions: [CD.17, CD.40]" (preserve the exact existing indentation). This is the
+    only structured-field line the diff may add. CD.40 exists (state pending) so referential integrity holds.
+  - "Execute the Verification Plan -- run each step; loop until pass. Do NOT weaken any guard to make a step pass (Decision 55)."
+  - "Report: the six loci swept (with final line numbers), the git diff (prose + the single crossref line), and VP results."
+rollback: >-
+  Revert the single branch commit. The change is prose-only plus one related_candidate_decisions crossref;
+  no data migration, no infra, no deploy. Reverting restores the stale pending-tense prose (re-opening the
+  PCD-05 clarity debt) and leaves rec-2287/rec-2048/rec-2511 open.
