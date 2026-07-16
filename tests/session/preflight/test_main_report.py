@@ -434,3 +434,108 @@ class TestPreflightReportDisputeKey:
         report = json.loads(preflight_report.read_text(encoding="utf-8"))
         assert "ci_rca_dispute_recs" in report, f"ci_rca_dispute_recs missing from report keys: {list(report)[:30]}"
         assert report["ci_rca_dispute_recs"] == dispute_recs
+
+
+class TestDecisionConditionsGlue:
+    """Net-new glue lines wiring scripts.preflight.decision_conditions into main() (SEQ-02 /
+    Decision 133 follow-on). This mirror-package file is the 100%-coverage home for these lines
+    per the Decision-131 mirror rule -- see PLAN-reversal-condition-monitor.yaml.
+    """
+
+    def test_report_contains_decision_conditions_bucket(self, tmp_path: Path) -> None:
+        """report["decision_conditions"] is present and carries the preflight_bucket() shape."""
+        preflight_report = tmp_path / ".preflight-report.json"
+        canned_bucket = {
+            "monitored": [133],
+            "surfaced": [
+                {"decision": 901, "state": "manual-review-due", "review_by": "2020-01-01", "fired_condition_ids": []}
+            ],
+            "malformed": [],
+        }
+        with (
+            patch("scripts.preflight.env_git.check_venv", return_value=True),
+            patch("scripts.preflight.env_git.get_git_status", return_value=("main", False, [])),
+            patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+            patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+            patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+            patch("scripts.preflight.recs_cache.count_recommendations", return_value=(0, 0, 0, [])),
+            patch("session_preflight._sync_ops_pull", return_value={}),
+            patch(
+                "scripts.preflight.context_docs.read_context_files",
+                return_value={
+                    "roadmap_phase": "Phase 2",
+                    "open_decisions_count": 0,
+                    "recent_sessions": [],
+                    "strategic_review_due": False,
+                    "recommendations_count": 0,
+                },
+            ),
+            patch(
+                "scripts.preflight.context_docs.check_telemetry_health",
+                return_value={"overall": "ok", "checks": [], "friction_patterns": []},
+            ),
+            patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
+            patch("scripts.preflight.decision_conditions.preflight_bucket", return_value=canned_bucket),
+            patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+            patch("builtins.print"),
+        ):
+            _preflight.main()
+
+        assert preflight_report.exists()
+        data = json.loads(preflight_report.read_text(encoding="utf-8"))
+        assert "decision_conditions" in data, f"decision_conditions missing from report keys: {list(data)[:30]}"
+        assert data["decision_conditions"] == canned_bucket
+        assert set(data["decision_conditions"]) == {"monitored", "surfaced", "malformed"}
+
+    def test_stdout_renders_decision_conditions_section(self) -> None:
+        """The stdout section (mirroring '--- Provisional contracts due ---') renders during
+        main(), naming the surfaced decision."""
+        preflight_report = Path("/tmp/_test_decision_conditions_stdout_report.json")
+        canned_bucket = {
+            "monitored": [901],
+            "surfaced": [
+                {"decision": 901, "state": "manual-review-due", "review_by": "2020-01-01", "fired_condition_ids": []}
+            ],
+            "malformed": [],
+        }
+        printed: list[str] = []
+
+        def capture_print(*args: object, **kwargs: object) -> None:
+            printed.append(" ".join(str(a) for a in args))
+
+        try:
+            with (
+                patch("scripts.preflight.env_git.check_venv", return_value=True),
+                patch("scripts.preflight.env_git.get_git_status", return_value=("main", False, [])),
+                patch("scripts.preflight.aws_infra.check_terraform_pending", return_value=False),
+                patch("scripts.preflight.aws_infra.check_credentials", return_value="ok"),
+                patch("scripts.preflight.context_docs.parse_last_session", return_value=""),
+                patch("scripts.preflight.recs_cache.count_recommendations", return_value=(0, 0, 0, [])),
+                patch("scripts.preflight.priority_queue.read_priority_queue", return_value=[]),
+                patch("session_preflight._sync_ops_pull", return_value={}),
+                patch(
+                    "scripts.preflight.context_docs.read_context_files",
+                    return_value={
+                        "roadmap_phase": "Phase 2",
+                        "open_decisions_count": 0,
+                        "recent_sessions": [],
+                        "strategic_review_due": False,
+                        "recommendations_count": 0,
+                    },
+                ),
+                patch(
+                    "scripts.preflight.context_docs.check_telemetry_health",
+                    return_value={"overall": "ok", "checks": [], "friction_patterns": []},
+                ),
+                patch("scripts.preflight.ci_rca_signals._check_ci_rca_liveness", return_value=None),
+                patch("scripts.preflight.decision_conditions.preflight_bucket", return_value=canned_bucket),
+                patch("session_preflight.PREFLIGHT_REPORT", preflight_report),
+                patch("builtins.print", side_effect=capture_print),
+            ):
+                _preflight.main()
+        finally:
+            preflight_report.unlink(missing_ok=True)
+
+        output = "\n".join(printed)
+        assert "--- Decisions past review date / reversal conditions fired ---" in output
+        assert "Decision 901: REVIEW DUE" in output

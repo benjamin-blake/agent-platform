@@ -157,6 +157,7 @@ from scripts.checks.ops_governance.validate_rec_write_paths import validate_rec_
 from scripts.checks.ops_governance.validate_recommendations_schema import (  # noqa: F401,E402
     validate_recommendations_schema,
 )
+from scripts.checks.ops_governance.validate_reversal_stanzas import validate_reversal_stanzas  # noqa: F401,E402
 from scripts.checks.ops_governance.validate_warehouse_write_sources import (  # noqa: F401,E402
     validate_warehouse_write_sources,
 )
