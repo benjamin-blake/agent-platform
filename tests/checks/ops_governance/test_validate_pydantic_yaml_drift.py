@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from src.schemas.annotations import DqAcceptedValues, DqDeleted, DqNotNull, migrating
 
-_SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "validate.py"
+_SCRIPT_PATH = Path(__file__).parent.parent.parent.parent / "scripts" / "validate.py"
 _spec = importlib.util.spec_from_file_location("validate_drift", _SCRIPT_PATH)
 _validate = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(_validate)  # type: ignore[union-attr]
