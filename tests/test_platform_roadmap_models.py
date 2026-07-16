@@ -279,6 +279,17 @@ class TestCD25SchemaAmendments:
         with pytest.raises(Exception, match="bogus_field|Extra inputs"):
             RoadmapDocument.model_validate(_doc(candidate_decisions=[cd]))
 
+    def test_cd_state_literal_rejects_unknown_value(self) -> None:
+        cd = {"id": "CD.X", "title": "T", "state": "Retired"}
+        with pytest.raises(Exception, match="state"):
+            RoadmapDocument.model_validate(_doc(candidate_decisions=[cd]))
+
+    @pytest.mark.parametrize("state", ["pending", "ratified", "superseded"])
+    def test_cd_state_literal_accepts_valid_values(self, state: str) -> None:
+        cd = {"id": "CD.X", "title": "T", "state": state}
+        doc = RoadmapDocument.model_validate(_doc(candidate_decisions=[cd]))
+        assert doc.candidate_decisions[0].state == state
+
     def test_other_classes_still_extra_ignore(self) -> None:
         # NorthStar uses extra="ignore"; unknown fields are dropped without error.
         d = _doc(north_star={"principles": [], "bogus_field": "ignored"})

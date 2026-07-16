@@ -95,6 +95,15 @@ referential_guard:
       rule: >-
         MUST NOT carry ratified_as. filed_via MUST be absent or the literal
         'pending_log_decision_lambda' -- never a dec-NNN pointer.
+      note: >-
+        'pending_log_decision_lambda' is historical vocabulary meaning pending ratification via
+        the live vehicle (the portal path) -- Decision 92 superseded the Lambda-based filing
+        mechanism the literal originally named, but the literal itself is retained in R2.rule,
+        not renamed (below-threshold cosmetic vocabulary drift; audit Q5). Load-time backstop for
+        the sibling marking-convention failure mode (a pending CD that should have flipped):
+        scripts/checks/roadmap/validate_candidate_decision_supersession.py (registered in both
+        pre_sequence() and full_sequence()) fails a state==pending CD whose detail records
+        "fully superseded by CD.NN" once CD.NN itself reaches state==ratified.
     R3:
       applies_to: "state == superseded"
       rule: "Exempt from R1 (a superseded CD's historical dec pointer, if any, is not re-verified)."
@@ -118,7 +127,15 @@ lane_steps:
       the DECISIONS.md entry, (2) ETLs it via `scripts.ops_data_portal --backfill-decisions-md`
       (`--file-decision` is the single-row alternative; Single Portal Invariant, Decision 84),
       (3) flips the CD to the canonical ratified shape in docs/ROADMAP-PLATFORM.yaml, (4)
-      re-runs session_preflight to confirm the completion/blocking gate cleared.
+      re-runs session_preflight to confirm the completion/blocking gate cleared. (5) Marking-
+      convention obligation (audit PCD-03): if ratifying this CD makes any OTHER state==pending
+      CD's detail read "fully superseded by CD.NN" against the now-ratified CD.NN, flip that
+      other CD to state=superseded in the same edit (CD.14 canonical superseded shape --
+      ratified_as/filed_via stay absent, R3 exempts it from R1);
+      validate_candidate_decision_supersession is the load-time backstop that fails the PR if this
+      is missed. (6) Pending-window prose sweep (audit PCD-05): sweep any pending-tense
+      discipline_points/detail prose on CDs touched by this ratification that assumed the CD was
+      still pending, so stale pending-tense assertions do not survive the flip.
 
 necessary_not_sufficient: >-
   Ratifying a CD clears the COMPLETION gate on items it gates (gate derivation keys purely on

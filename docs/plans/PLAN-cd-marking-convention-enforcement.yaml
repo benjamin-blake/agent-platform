@@ -109,6 +109,7 @@ verification_plan:
     fix_if: >-
       If an unknown state loads without error, the Literal was not applied to CandidateDecision.state
       (check scripts/platform_roadmap_models.py line ~117).
+    graduation: not-applicable
   - step: 2
     phase: pre-deploy
     action: >-
@@ -121,6 +122,7 @@ verification_plan:
     fix_if: >-
       A green case going red means the regex over-matches (e.g. catches "narrowly superseded"); the
       red case staying green means the pending+ratified conjunction is not detected.
+    graduation: not-applicable
   - step: 3
     phase: pre-deploy
     action: >-
@@ -135,6 +137,7 @@ verification_plan:
     fix_if: >-
       If "dec-0123abc" still resolves, _DEC_NNN_RE was not anchored; if a prior test broke, the new
       bound is too tight (it must still match dec-078 inside ops_decisions:dec-078).
+    graduation: not-applicable
   - step: 4
     phase: pre-deploy
     action: >-
@@ -149,6 +152,7 @@ verification_plan:
     fix_if: >-
       A non-empty failed list means CD.7 was not flipped (or was flipped wrong), or the guard fires on
       another live pending CD (over-broad trigger) -- fix the flip/regex before proceeding.
+    graduation: not-applicable
   - step: 5
     phase: pre-deploy
     action: >-
@@ -168,6 +172,7 @@ verification_plan:
       If it does not fail on CD.7, the guard is not detecting the pending-CD.7 + ratified-CD.28
       conjunction on real data -- the fixture matrix passing but this failing means the regex or the
       superseder-state lookup diverges from the real detail prose.
+    graduation: not-applicable
   - step: 6
     phase: pre-deploy
     action: >-
@@ -186,6 +191,13 @@ verification_plan:
     fix_if: >-
       A KeyError/AssertionError means the R2 note: sub-key was not added (or a lane clause landed under
       the wrong key, or the YAML broke) -- add the note:/fix the structure, not the assertion.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a grep_count on the lane-contract clauses, but deliberately not graduated
+      in this PR: the substantive PCD-03 enforcement is the registered
+      validate_candidate_decision_supersession guard, and the contract clauses are process
+      documentation whose removal would be caught at plan-critique/contract-review time; a standing
+      grep is deferred as low-value for this change.
   - step: 7
     phase: pre-deploy
     action: >-
@@ -198,6 +210,7 @@ verification_plan:
     fix_if: >-
       Diagnose the specific failing check from the output; if a SLOC budget is crossed, decompose
       (Decision 128), do not raise.
+    graduation: not-applicable
 constraints:
   - Only modify files listed in the Scope table (AGENTS.md -- out-of-scope bugs become recommendations, not inline fixes).
   - >-
@@ -308,6 +321,18 @@ context:
     pattern PCD-04 mirrors), Decision 130 (whole-repo SLOC now covers tests/), Decision 86 (contract
     edit is the compliant machine-readable form).
   - "gates: decision-scout=BLOCK->resolved (CD.7 flip added to scope, Decision 122 cited); plan-critique=<pending, run fresh-context by overseer>"
+  - >-
+    GRADUATION DISPOSITIONS (added post-critique to satisfy the mid-flight T3.21 requirement --
+    validate_graduation_completeness now requires a graduation: field on every pre-deploy VP step since
+    this net-new plan gets no pre-field carve-out): 6 steps not-applicable, 1 step waive, 0 graduate ->
+    no verification_registry row required. Honest per VF-05 (the registry graduates only kernel-PRIMITIVE
+    checks): the three pytest steps (1,2,3) are not kernel-primitive -- their standing enforcement is the
+    test suite itself; the two python -c guard demonstrations (4,5) are one-shot -- the guard's standing
+    enforcement is its registration in scripts/checks/registry.py, not a registry row; validate --pre (7)
+    is the meta-gate, not a single primitive; the contract clause-presence step (6) is waived (kernel-
+    expressible as a grep_count but deferred low-value -- the real PCD-03 enforcement is the registered
+    supersession guard). This enforcement change has no graduation candidates; its standing protection is
+    the registered guard + the test suite.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/cd-premise-validity-audit-j8isbv)
   - docs/PROJECT_CONTEXT.md read

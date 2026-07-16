@@ -3,7 +3,10 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.checks.roadmap.validate_candidate_decision_ratification import validate_candidate_decision_ratification
+from scripts.checks.roadmap.validate_candidate_decision_ratification import (
+    _dec_number,
+    validate_candidate_decision_ratification,
+)
 
 
 class TestCandidateDecisionRatification:
@@ -105,6 +108,25 @@ class TestCandidateDecisionRatification:
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_candidate_decision_ratification(failed)
         assert failed == []
+
+    def test_malformed_dec_pointer_does_not_partially_resolve_rec_2467(self, tmp_path: Path) -> None:
+        """rec-2467: a malformed pointer 'dec-0123abc' must fail loudly, not partially resolve to dec-123."""
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.99\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-0123abc\n    filed_via: ops_decisions:dec-0123abc\n",
+            decisions_md="## Decision 123: Something (Decided)\n",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert "Candidate decision ratification guard" in failed
+        assert _dec_number("dec-0123abc") is None
+
+    def test_well_formed_dec_pointer_still_resolves_rec_2467(self) -> None:
+        """The anchor must not regress a valid pointer like 'ops_decisions:dec-078'."""
+        assert _dec_number("ops_decisions:dec-078") == 78
 
     def test_dec_resolves_via_archive_only(self, tmp_path: Path) -> None:
         """A dec-NNN whose header lives only in DECISIONS_ARCHIVE.md still resolves (union read)."""

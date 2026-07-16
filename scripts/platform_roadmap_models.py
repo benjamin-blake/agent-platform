@@ -114,7 +114,7 @@ class CandidateDecision(BaseModel):
     title: str
     detail: str = ""
     gates: list[str] = Field(default_factory=list)
-    state: str = "pending"
+    state: Literal["pending", "ratified", "superseded"] = "pending"
     ratified_as: str | None = None
     realization_evidence: str | None = None
     decision_required_before: list[str] | str | None = None
