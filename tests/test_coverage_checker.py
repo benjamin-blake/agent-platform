@@ -234,6 +234,24 @@ class TestMapSourceToTest:
         smoke_actions_result = map_source_to_test(ROOT / "src" / "lambdas" / "ducklake_writer" / "smoke_actions.py")
         assert smoke_actions_result == handler_results["ducklake_writer"]
 
+    @pytest.mark.parametrize(
+        ("stem", "expected_test_name"),
+        [
+            ("record", "test_record.py"),
+            ("approvals", "test_approvals.py"),
+            ("assess", "test_assess.py"),
+            ("escalate", "test_escalate.py"),
+            ("code_drift", "test_code_drift.py"),
+            ("__main__", "test___main__.py"),
+        ],
+    )
+    def test_maps_convergence_health_submodules_to_their_own_mirror(self, stem: str, expected_test_name: str) -> None:
+        # rec-2709 Wave 6 PACKAGE-MIRROR: each submodule maps 1:1 to its own mirror file.
+        source = ROOT / "scripts" / "convergence_health" / f"{stem}.py"
+        result = map_source_to_test(source)
+        assert result is not None
+        assert result == ROOT / "tests" / "convergence_health" / expected_test_name
+
 
 class TestCheckTestFileExists:
     """Tests for check_test_file_exists()."""
@@ -367,22 +385,15 @@ class TestGrandfatherRetiringTable:
     (PLAN-sloc-executor-tests) retired the fifth, sixth, and seventh -- "test_executor_plan.py",
     "test_executor_postflight.py", and "test_executor_step_runner.py" -- a PURE test-file split
     with a no-op mapping consequence (their sources, scripts/executor/**, already returned None
-    per Decision 124, so the retirement is bookkeeping/tidiness only, not a mapping flip)."""
+    per Decision 124, so the retirement is bookkeeping/tidiness only, not a mapping flip); Wave 6
+    retired the eighth, "test_convergence_health.py" -- a PACKAGE-MIRROR, not a concern-split."""
 
     def test_representative_paths_resolve_under_current_retirement_state(self) -> None:
-        """A representative real path set resolves correctly under the CURRENT retirement
-        state: "test_validate.py", "test_execute_recommendation.py", "test_ops_data_portal.py",
-        and "test_session_preflight.py" are retired (their sources now resolve via the mirror
-        rule / their concern-split packages), the other 17 roster homes are still
-        grandfathered, and scripts/executor/** (step_runner.py, plan.py, postflight.py) and
-        scripts/ops_portal/** keep returning None (Decision 124 -- unperturbed by the Wave
-        1/2/3/4/5 map edits, and unperturbed by Wave 5 retiring the three executor test
-        basenames, since None short-circuits before the retiring check ever runs).
-        scripts/session/postflight.py and scripts/session/metrics.py are surgical-retirement
-        controls: postflight.py's home ("test_session_postflight.py") stays in
-        _RETIRING_GRANDFATHER_HOMES so it still grandfathers, and metrics.py's home is
-        off-roster entirely (never in _ALL_MIRROR_TARGET_HOMES) so it grandfathers
-        unconditionally -- only preflight flips."""
+        """A representative path set resolves under the CURRENT retirement state: Waves 1-6's
+        five retired homes resolve via their mirror / concern-split / package-mirror, the other
+        16 roster homes stay grandfathered, scripts/executor/** + scripts/ops_portal/** keep
+        returning None (Decision 124), and scripts/session/postflight.py + metrics.py are
+        surgical-retirement controls that stay grandfathered."""
         cases: dict[Path, Path | None] = {
             ROOT / "scripts" / "checks" / "hygiene" / "validate_prose_allowlist.py": ROOT
             / "tests"
@@ -397,6 +408,7 @@ class TestGrandfatherRetiringTable:
             ROOT / "scripts" / "session" / "preflight.py": ROOT / "tests" / "session" / "preflight",
             ROOT / "scripts" / "session" / "postflight.py": ROOT / "tests" / "test_session_postflight.py",
             ROOT / "scripts" / "session" / "metrics.py": ROOT / "tests" / "test_session_metrics.py",
+            ROOT / "scripts" / "convergence_health" / "record.py": ROOT / "tests" / "convergence_health" / "test_record.py",
             ROOT / "src" / "common" / "config.py": ROOT / "tests" / "test_config.py",
             ROOT / "scripts" / "executor" / "step_runner.py": None,
             ROOT / "scripts" / "executor" / "plan.py": None,
@@ -407,18 +419,9 @@ class TestGrandfatherRetiringTable:
         for source, expected in cases.items():
             assert map_source_to_test(source) == expected, source
 
-    def test_retiring_is_all_target_homes_minus_seven_retired_waves(self) -> None:
-        """Exactly seven basenames have retired so far: "test_validate.py" (rec-2709 Wave 1),
-        "test_execute_recommendation.py" (rec-2709 Wave 2), "test_ops_data_portal.py"
-        (rec-2709 Wave 3), "test_session_preflight.py" (rec-2709 Wave 4), and
-        "test_executor_plan.py", "test_executor_postflight.py", "test_executor_step_runner.py"
-        (all three rec-2709 Wave 5). The mirror branch is live for the first four and dormant
-        for the other 17 roster targets; the three Wave 5 executor basenames are a no-op for
-        the mirror branch (their sources, scripts/executor/**, already return None per
-        Decision 124, so retiring them is bookkeeping/tidiness, not a mapping flip).
-        Surgical-retirement regression: "test_session_postflight.py" -- session_preflight's
-        flat-file sibling -- stays grandfathered (its own wave decomposes it later); Wave 5
-        flips exactly three homes (all three executor test files, in one wave)."""
+    def test_retiring_is_all_target_homes_minus_eight_retired_waves(self) -> None:
+        """Eight basenames retired so far (Waves 1-6); Wave 6 added "test_convergence_health.py"
+        (a PACKAGE-MIRROR, NOT added to _CONCERN_SPLIT_TEST_PACKAGES)."""
         retired = {
             "test_validate.py",
             "test_execute_recommendation.py",
@@ -427,6 +430,7 @@ class TestGrandfatherRetiringTable:
             "test_executor_plan.py",
             "test_executor_postflight.py",
             "test_executor_step_runner.py",
+            "test_convergence_health.py",
         }
         assert _RETIRING_GRANDFATHER_HOMES == _ALL_MIRROR_TARGET_HOMES - retired
         assert "test_validate.py" not in _RETIRING_GRANDFATHER_HOMES
@@ -436,6 +440,7 @@ class TestGrandfatherRetiringTable:
         assert "test_executor_plan.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_executor_postflight.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_executor_step_runner.py" not in _RETIRING_GRANDFATHER_HOMES
+        assert "test_convergence_health.py" not in _RETIRING_GRANDFATHER_HOMES
         assert "test_session_postflight.py" in _RETIRING_GRANDFATHER_HOMES
         assert _ALL_MIRROR_TARGET_HOMES - _RETIRING_GRANDFATHER_HOMES == retired
 
