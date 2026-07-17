@@ -412,3 +412,21 @@ class TestParseTsNaiveDatetime:
         naive_old = (now - timedelta(days=45)).replace(tzinfo=None).isoformat()
         naive_created = (now - timedelta(days=60)).replace(tzinfo=None).isoformat()
         assert is_inactive({"last_seen": naive_old}, naive_created, now=now) is True
+
+
+class TestLifecycleFieldsInProjection:
+    """VP11 target: the five new lifecycle fields validate in CiRcaContext (context_v2_json
+    projection), never as new ops_recommendations columns (Decision 84/103/63)."""
+
+    def test_lifecycle_fields_present_in_ci_rca_context(self):
+        from scripts.ops_data_portal import CiRcaContext
+
+        fields = set(CiRcaContext.model_fields)
+        assert {"regression_of", "fixed_by_sha", "affected_nodeids", "flaky", "escape_class"} <= fields
+
+    def test_lifecycle_fields_absent_from_recommendation_columns(self):
+        from scripts.executor.jsonl_store import Recommendation
+
+        rec_fields = set(Recommendation.model_fields)
+        for name in ("regression_of", "fixed_by_sha", "affected_nodeids", "flaky", "escape_class"):
+            assert name not in rec_fields, f"{name} must not be a top-level ops_recommendations column"
