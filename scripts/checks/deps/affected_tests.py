@@ -330,13 +330,19 @@ def emit_manifest(manifest: dict[str, Any], *, repo_root: Path | None = None) ->
     """Print, write (gitignored path), and best-effort-upload the selection manifest.
 
     The manifest is NEVER read back as a selection input -- this function is write/print-only.
+    The local write is best-effort (Decision 55: LOUD skip, never silent, never raising) --
+    an observability artifact must never crash the --pre gate on a local disk I/O error, the
+    same philosophy already applied to the S3 upload leg below.
     """
     root = repo_root if repo_root is not None else _common.ROOT
     print("\n=== Affected-set selection manifest ===")
     rendered = json.dumps(manifest, indent=2, sort_keys=True)
     print(rendered)
     manifest_path = root / "logs" / "debug" / "selection-manifest.json"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(rendered, encoding="utf-8")
+    try:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(rendered, encoding="utf-8")
+    except OSError as exc:
+        print(f"Selection manifest: local write to {manifest_path} failed -- loud skip (Decision 55): {exc!r}")
     _upload_manifest_best_effort(manifest)
     return manifest_path

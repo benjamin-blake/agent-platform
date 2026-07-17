@@ -84,7 +84,17 @@ from scripts.checks.contracts.validate_no_underscore_instructions import (  # no
 from scripts.checks.contracts.validate_portal_drift import validate_portal_drift  # noqa: F401,E402
 from scripts.checks.contracts.validate_prompt_compliance import validate_prompt_compliance  # noqa: F401,E402
 from scripts.checks.decisions.validate_decisions_size import validate_decisions_size  # noqa: F401,E402
-from scripts.checks.deps.affected_tests import derive_affected_tests, emit_manifest  # noqa: F401,E402
+
+# scripts.checks.deps.affected_tests is DELIBERATELY NOT imported at module scope here (unlike
+# every other facade re-export above): it imports networkx at ITS OWN module scope (Decision 80's
+# import-graph oracle dependency), and the terraform-validate CI job installs only pydantic +
+# pyyaml (`pip install pyyaml pydantic`) before running `python -m scripts.validate
+# --terraform-only`, which imports this whole module. A module-level import here would make
+# --terraform-only hard-crash with ModuleNotFoundError on every PR, never reaching the terraform
+# checks. derive_affected_tests/emit_manifest are imported lazily inside main()'s --pre block
+# instead (the ONLY place they are called) -- the same deferred-import pattern
+# validate_dependency_graph_freshness already uses for its own networkx-dependent import of
+# scripts.dependency_graph.
 from scripts.checks.deps.validate_dependency_graph_freshness import (  # noqa: F401,E402
     validate_dependency_graph_freshness,
 )
@@ -392,6 +402,13 @@ def main() -> None:
         # its existing callers (lint/mypy/precommit/coverage) is unchanged. Defensively unioned
         # with `changed` (assumed status "M") so the two independent git reads never silently
         # diverge on which paths are in scope for selection.
+        #
+        # Deferred (function-scope) import: scripts.checks.deps.affected_tests imports networkx
+        # at its own module scope, and this is the ONLY place these two names are used --
+        # importing eagerly at validate.py's module scope would break --terraform-only, whose CI
+        # job installs only pyyaml+pydantic (see the facade-import block's comment above).
+        from scripts.checks.deps.affected_tests import derive_affected_tests, emit_manifest  # noqa: PLC0415
+
         status_entries = _common.get_status_aware_diff()
         _status_paths = {path for _, path in status_entries}
         for f in changed:

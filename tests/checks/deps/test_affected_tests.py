@@ -250,6 +250,25 @@ class TestManifestEmission:
         assert manifest_path == tmp_path / "logs" / "debug" / "selection-manifest.json"
         assert manifest_path.exists()
 
+    def test_emit_manifest_local_write_failure_is_loud_skip_not_raise(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """A local disk I/O error (e.g. 'logs' exists as a FILE, not a directory, so mkdir()
+        raises NotADirectoryError) must be a loud skip -- never crash --pre (Decision 55),
+        matching the best-effort philosophy already applied to the S3 upload leg."""
+        _write(tmp_path, "tests/test_a.py", "def test_a():\n    assert True\n")
+        result = at.derive_affected_tests([("M", "tests/test_a.py")], repo_root=tmp_path)
+        (tmp_path / "logs").write_text("not a directory", encoding="utf-8")
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("S3_LOG_BUCKET", None)
+            manifest_path = at.emit_manifest(result["manifest"], repo_root=tmp_path)
+        captured = capsys.readouterr()
+        assert "local write" in captured.out
+        assert "loud skip" in captured.out.lower()
+        assert not manifest_path.exists()
+
 
 class TestS3UploadDegradesGracefully:
     """With boto3/creds absent, the upload lazy-imports boto3 and prints a LOUD skip -- never
