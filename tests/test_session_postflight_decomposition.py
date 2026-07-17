@@ -183,19 +183,20 @@ class TestResidualPatchSiteClosure:
         re.compile(r'patch\(\s*"session_postflight\.(\w+)'),
         re.compile(r'patch\.object\(\s*_postflight\s*,\s*"(\w+)"'),
     ]
-    _SIBLING_FILES = ["test_session_postflight.py"]
 
     def test_zero_residual_old_namespace_patch_sites(self) -> None:
         tests_dir = Path(__file__).resolve().parent
+        sibling_files = sorted((tests_dir / "session" / "postflight").glob("test_*.py"))
+        assert sibling_files, "expected >=1 decomposed postflight test file under tests/session/postflight/"
         residual: list[str] = []
-        for fname in self._SIBLING_FILES:
-            text = (tests_dir / fname).read_text(encoding="utf-8")
+        for fpath in sibling_files:
+            text = fpath.read_text(encoding="utf-8")
             for pattern in self._IDIOM_PATTERNS:
                 for m in pattern.finditer(text):
                     sym = m.group(1)
                     if sym in _MOVED_SYMBOLS:
                         line_no = text[: m.start()].count("\n") + 1
-                        residual.append(f"{fname}:{line_no}:{sym}")
+                        residual.append(f"{fpath.name}:{line_no}:{sym}")
         assert residual == [], f"residual old-namespace patch sites for migrated symbols: {residual}"
 
 

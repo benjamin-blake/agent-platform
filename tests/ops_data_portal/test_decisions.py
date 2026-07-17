@@ -179,6 +179,7 @@ class TestBackfillDecisionsFromMd:
             patch("scripts.decisions_md.parse_decisions_md", return_value=entries),
             patch("scripts.ops_portal.decisions.file_decision", return_value="dec-084") as mock_fd,
             patch("scripts.ops_portal.decisions._sync_table") as mock_sync,
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
