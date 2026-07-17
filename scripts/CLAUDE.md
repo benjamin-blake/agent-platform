@@ -29,7 +29,14 @@ platform and resolves the correct venv binary. Each Bash tool call is independen
 `source .venv/bin/activate`.
 
 ## Adding a validate.py check
-CI checks are registered, not hand-wired into `scripts/validate.py`. Add the module under
-`scripts/checks/<domain>/`, decorate it `@register(...)`, and insert its name in the ordered tier
-sequence(s) in `scripts/checks/registry.py`. `scripts/validate.py` is the single source of truth
-for CI gates (AGENTS.md merge protocol) -- never add a CI check without adding it here first.
+CI checks are registered via `@register(...)` and tier-ordered in `scripts/checks/registry.py`,
+not hand-wired step-by-step into `scripts/validate.py` -- but a registered check still requires
+one explicit line in `scripts/validate.py`. Add the module under `scripts/checks/<domain>/`,
+decorate it `@register(...)`, insert its name in the ordered tier sequence(s) in
+`scripts/checks/registry.py`, AND add a "from scripts.checks.<domain>.<module> import <name>
+# noqa: F401,E402" re-export line in `scripts/validate.py`'s facade re-export block. Dispatch is
+`globals()[name](failed)` in `scripts/validate.py` (no walk_packages auto-discovery), so without
+that re-export line the check is not a module-level global there: `validate --pre` KeyErrors on
+the check name and the reachability tests in `tests/test_checks_registry.py` fail.
+`scripts/validate.py` is the single source of truth for CI gates (AGENTS.md merge protocol) --
+never add a CI check without adding it here first.

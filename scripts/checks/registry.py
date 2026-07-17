@@ -5,17 +5,22 @@
 (registered check names interleaved with the fixed non-check scaffolding
 steps: lint, precommit, mypy, explicit pytest, unit-test invoke_step,
 dependency/coverage/terraform gates, budget assertion) for each presubmit
-tier. Adding a check touches only this package, never scripts/validate.py:
-add the check's module under scripts/checks/<domain>/, decorate it with
-``@register(...)``, and insert its name at the right position in the
-sequence(s) below.
+tier. Adding a check touches this package AND scripts/validate.py: add the
+check's module under scripts/checks/<domain>/, decorate it with
+``@register(...)``, insert its name at the right position in the
+sequence(s) below, AND add a "from scripts.checks.<domain>.<module> import
+<name>  # noqa: F401,E402" re-export line in scripts/validate.py -- dispatch
+there is ``globals()[name](failed)`` (no walk_packages auto-discovery), so a
+registered check must become a module-level global of scripts/validate.py or
+validate --pre KeyErrors on the check name and the reachability tests in
+tests/test_checks_registry.py fail.
 
 Tier dispatch (scripts/validate.py) iterates these sequences; each "check"
-step is resolved via ``getattr(validate_module, name)(failed)`` at call time
-so mock patches on the ``validate`` namespace still intercept, and each
-"scaffold" step is resolved against a dict of closures built locally in
-main() (they close over per-run locals like the diff-aware changed-files
-list that a generic registry cannot own).
+step is resolved via ``globals()[name](failed)`` at call time (mock patches on
+the ``validate`` namespace still intercept, since that IS the globals() of the
+running module), and each "scaffold" step is resolved against a dict of
+closures built locally in main() (they close over per-run locals like the
+diff-aware changed-files list that a generic registry cannot own).
 """
 
 from __future__ import annotations
@@ -113,6 +118,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_invoke_implies_resolve"),
         _c("validate_ci_refresh_read_coverage"),
         _c("validate_ci_workflow_guards"),
+        _c("validate_pr_conflict_signal"),
         _c("validate_ducklake_version_lockstep"),
         _c("validate_import_contracts"),
         _c("validate_lockfile_sync"),
@@ -155,6 +161,7 @@ def full_sequence() -> list[Step]:
         _c("validate_invariants"),
         _c("validate_ci_rca_trigger"),
         _c("validate_ci_workflow_guards"),
+        _c("validate_pr_conflict_signal"),
         _c("validate_claude_p_retry_wrapper"),
         _c("validate_sloc_limits"),
         _c("check_source_registry"),

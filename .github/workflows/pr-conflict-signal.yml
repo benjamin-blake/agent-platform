@@ -1,0 +1,86 @@
+name: pr-conflict-signal
+
+# Push-to-main counterpart to ci.yml's signal-green job (Decision 76/83, PLAN-pr-conflict-wake-signal).
+#
+# A push to main fires NO pull_request event on open PRs, so the pull_request-only signal-green
+# job structurally cannot deliver a wake when a merge to main turns a previously-clean claude/*
+# PR into a merge conflict. This workflow closes that gap: on every push to main (and on-demand
+# via workflow_dispatch), it polls the mergeability of every open claude/* PR and posts a
+# one-time wake comment on any PR that is now CONFLICTING.
+#
+# Design invariants (mirrors signal-green; Decision 55/76/83):
+#   - Advisory only: never a required status check (branch protection stays non-wedging).
+#   - Mergeability is computed asynchronously by GitHub -- UNKNOWN means "still computing", not a
+#     conflict; a still-UNKNOWN PR after the poll bound is skipped, never flagged.
+#   - Idempotent by head SHA: the comment embeds a "<!-- conflict-wake:<headRefOid> -->" marker
+#     and is never reposted while that marker is already present, so repeated pushes to main do
+#     not re-spam an already-flagged, still-conflicted PR.
+#   - continue-on-error: true -- a wake signal must never red a build.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  detect-conflicts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Poll open claude/* PRs and wake conflicted ones
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+
+          prs=$(gh pr list --base main --state open --json number,headRefName,headRefOid \
+            --jq '.[] | select(.headRefName | startswith("claude/")) | [.number, .headRefOid] | @tsv')
+
+          if [ -z "$prs" ]; then
+            echo "No open claude/* PRs against main."
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r number head_sha; do
+            [ -z "$number" ] && continue
+
+            mergeable="UNKNOWN"
+            for attempt in 1 2 3 4 5; do
+              mergeable=$(gh pr view "$number" --json mergeable --jq '.mergeable')
+              if [ "$mergeable" != "UNKNOWN" ]; then
+                break
+              fi
+              echo "PR #$number: mergeable=UNKNOWN (attempt $attempt/5), retrying in 5s..."
+              sleep 5
+            done
+
+            if [ "$mergeable" = "UNKNOWN" ]; then
+              echo "PR #$number: mergeability still UNKNOWN after poll bound, skipping (never false-wake on UNKNOWN)."
+              continue
+            fi
+
+            if [ "$mergeable" != "CONFLICTING" ]; then
+              echo "PR #$number: mergeable=$mergeable, no wake needed."
+              continue
+            fi
+
+            marker="<!-- conflict-wake:${head_sha} -->"
+            existing=$(gh pr view "$number" --json comments --jq '.comments[].body' | grep -F -- "$marker" || true)
+            if [ -n "$existing" ]; then
+              echo "PR #$number: wake comment for head $head_sha already posted, skipping (idempotent)."
+              continue
+            fi
+
+            echo "PR #$number: CONFLICTING at head $head_sha, posting wake comment."
+            gh pr comment "$number" --body "$marker
+          Merge conflict: this PR now conflicts with main and must be rebased/resolved before it can merge. Automated wake signal for a watching session; no action needed until you pick this back up."
+          done <<< "$prs"

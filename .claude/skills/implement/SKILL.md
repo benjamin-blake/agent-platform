@@ -476,7 +476,7 @@ This workflow runs on Claude Code on the web: the harness assigned this session 
 The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR.
 
 ### Wait-for-CI: event-driven, never polled
-Wait for the PR-tier CI (the fast `--pre` tier, ~1-3 min; Decision 73) via subscription, never polling. The wake mechanism -- `subscribe_pr_activity`, ending the turn, the `ci.yml` "CI green" comment wake signal, the one-shot `send_later` backstop bounds, and the GitHub-native auto-merge successor -- is canonical in AGENTS.md `## Git-ops procedure` steps 3-5; do not restate it here.
+Wait for the PR-tier CI (the fast `--pre` tier, ~1-3 min; Decision 73) via subscription, never polling. The wake mechanism -- `subscribe_pr_activity`, ending the turn, the `ci.yml` "CI green" comment wake signal, the `pr-conflict-signal.yml` merge-conflict wake, and the GitHub-native auto-merge successor -- is canonical in AGENTS.md `## Git-ops procedure` steps 3-5; do not restate it here.
 
 **On wake**, always confirm check runs via `mcp__github__pull_request_read` (`get_status` / `get_check_runs`) BEFORE merging, then branch on status:
    - **All green** -> `mcp__github__merge_pull_request(owner, repo, pullNumber, merge_method="squash")`, then `mcp__github__unsubscribe_pr_activity(...)`. Report the merge. **Carve-out:** for a PR touching `terraform/personal/**`, do NOT unsubscribe here -- defer to the "Hold subscription through apply" section below (the real outcome is the post-merge apply, not the merge).
