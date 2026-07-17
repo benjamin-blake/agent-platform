@@ -184,9 +184,7 @@ class TestCiRcaFingerprintDedup:
         VERIFIED bundle, mirroring fingerprint/failure_category -- never agent-authored."""
         import scripts.ops_data_portal as p
 
-        sha, bundle_data = self._make_bundle(
-            tmp_path, affected_nodeids=["tests/test_a.py::test_a"], escape_class="capped"
-        )
+        sha, bundle_data = self._make_bundle(tmp_path, affected_nodeids=["tests/test_a.py::test_a"], escape_class="capped")
         ctx = self._ctx_v2()
         ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
         with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
