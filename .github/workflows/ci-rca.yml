@@ -151,22 +151,26 @@ jobs:
           RUN_ID="${{ steps.meta.outputs.run_id }}"
           # Retry loop: the workflow_run log-availability race means logs may not
           # be ready immediately after the triggering run completes (rec-2117 / rec-2118).
+          # A transient gh API error (e.g. "failed to get jobs: HTTP 503: Service Unavailable")
+          # writes non-empty stderr into the log file, so `test -s` alone falsely satisfies
+          # "log fetched" and the retry loop never fires (rec-2718). Reject that content.
+          TRANSIENT_ERROR_RE='failed to get jobs|failed to get run|HTTP 5[0-9][0-9]|Service Unavailable'
           LOG_FETCHED=false
           for ATTEMPT in 1 2 3; do
             gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > /tmp/ci-rca-failed.log 2>&1 \
               || gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/ci-rca-failed.log 2>&1 \
               || true
-            if test -s /tmp/ci-rca-failed.log; then
+            if test -s /tmp/ci-rca-failed.log && ! grep -qiE "$TRANSIENT_ERROR_RE" /tmp/ci-rca-failed.log; then
               LOG_FETCHED=true
               break
             fi
-            echo "Attempt ${ATTEMPT}: log empty or unavailable; waiting before retry..." >&2
+            echo "Attempt ${ATTEMPT}: log empty, unavailable, or a transient gh API error; waiting before retry..." >&2
             sleep $((ATTEMPT * 10))
           done
           if [ "$LOG_FETCHED" != "true" ]; then
-            echo "::error::ci-rca: log file is empty after ${ATTEMPT} attempts for run ${RUN_ID}. " \
+            echo "::error::ci-rca: log file is empty or only contains a transient gh API error after ${ATTEMPT} attempts for run ${RUN_ID}. " \
               "The log may not be available yet or the run produced no output. Failing loudly so " \
-              "the agent is not invoked on a 0-byte log (rec-2117 / rec-2118)."
+              "the agent is not invoked on a 0-byte log (rec-2117 / rec-2118 / rec-2718)."
             exit 1
           fi
 

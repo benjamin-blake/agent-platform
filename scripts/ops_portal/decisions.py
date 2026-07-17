@@ -19,12 +19,12 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 import yaml
 
 from scripts.executor.jsonl_store import DECISIONS_JSONL, Decision
+from scripts.ops_portal._common import ROOT
 from scripts.ops_portal.cache import _refresh_cache_after_write, _sanitize_athena_record, _sync_table
 from scripts.ops_portal.write_validators import _load_write_time_validators
 from scripts.ops_portal.writer_transport import _ducklake_write
@@ -47,14 +47,7 @@ _DECISION_BACKFILL_COLS = (
     "content_hash",
 )
 
-_FIDELITY_BASELINE_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "config"
-    / "agent"
-    / "data_quality"
-    / "decisions"
-    / "fidelity_baseline.yaml"
-)
+_FIDELITY_BASELINE_PATH = ROOT / "config" / "agent" / "data_quality" / "decisions" / "fidelity_baseline.yaml"
 
 _ISO_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}(?:-\d{2})?")
 
