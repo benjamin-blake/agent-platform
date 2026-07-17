@@ -3,40 +3,46 @@ slug: "aws-test-hermeticity"
 intent: >-
   Close the unit-test AWS-hermeticity gap (rec-2484) so no unit test can silently reach real AWS:
   replace the copy-pasted per-class reader guards with one global defense-in-depth hermetic-AWS
-  guard in the root tests/conftest.py, and normalize the production reader's AWS-profile injection
-  so dev keeps the agent_platform named profile while Lambda/CI run on ambient OIDC.
+  guard in the root tests/conftest.py. Pure test-infrastructure hygiene -- no production code change.
 plan_type: IMPLEMENTATION
-verification_tier: V3
+verification_tier: V2
 plan_path: docs/plans/PLAN-aws-test-hermeticity.yaml
 phase: >-
-  Platform hardening (test hermeticity / CI-local drift elimination). Discharges the rec-2484 /
-  rec-2710 / rec-2707 residue class. No product-roadmap phase; no tier_item claimed (soft-warn
-  exception category: ad_hoc_rec, discharges an open manual rec).
+  Platform hardening (test hermeticity / CI-local drift elimination). Discharges rec-2484 and the
+  rec-2710/rec-2707 per-class-guard residue. No product-roadmap phase; no tier_item claimed
+  (soft-warn exception category: ad_hoc_rec, discharges an open manual rec).
 scope:
-  # ---- PHASE 1 (no check registration; fully implementable now) ----
   - file: tests/conftest.py
     action: Modify
     purpose: >-
       Add (L1) a global autouse hermetic-AWS fixture that consolidates the existing
       _clear_aws_credential_env fixture (line 54) -- deletes AWS_PROFILE/AWS_DEFAULT_PROFILE plus
-      AWS_ACCESS_KEY_ID/AWS_LAMBDA_FUNCTION_NAME, redirects AWS_CONFIG_FILE + AWS_SHARED_CREDENTIALS_FILE
-      to a nonexistent path, and sets AWS_EC2_METADATA_DISABLED=true, with an @pytest.mark.integration
-      opt-out -- so boto3.Session(profile_name='agent_platform') raises ProfileNotFound deterministically
-      on every machine. Add (L2) a botocore.session.Session.create_client tripwire autouse fixture
-      (single chokepoint under boto3.client/resource/Session().client) that raises loudly on any
-      un-mocked client construction, mirroring _block_llm_cli_subprocess (line 138), with a
-      @pytest.mark.aws opt-in for moto/Stubber tests.
+      AWS_ACCESS_KEY_ID/AWS_LAMBDA_FUNCTION_NAME (NO fake credentials set), redirects AWS_CONFIG_FILE
+      + AWS_SHARED_CREDENTIALS_FILE to a nonexistent path, and sets AWS_EC2_METADATA_DISABLED=true,
+      with an @pytest.mark.integration opt-out -- so boto3.Session(profile_name='agent_platform')
+      raises ProfileNotFound deterministically on every machine. Add (L2) a
+      botocore.session.Session.create_client tripwire autouse fixture (single chokepoint under
+      boto3.client/resource/Session().client) that raises loudly on any un-mocked client
+      construction, mirroring _block_llm_cli_subprocess (line 138), with a @pytest.mark.aws opt-in
+      for moto/Stubber tests.
+  - file: pyproject.toml
+    action: Modify
+    purpose: >-
+      Register the `aws` marker in [tool.pytest.ini_options].markers (the suite runs --strict-markers,
+      so an unregistered marker errors). No addopts change.
   - file: tests/ops_data_portal/test_ci_rca_fingerprint.py
     action: Modify
     purpose: >-
       Retire the per-class _guard_live_reader autouse fixture (the global L1/L2 guard supersedes it)
-      and re-point its self-verifying meta-test (test_guard_blocks_unmocked_reader) to assert the new
-      global-guard behavior instead of the removed AssertionError. All tests in this file stay green.
+      AND delete the now-obsolete self-verifying meta-test test_guard_blocks_unmocked_reader -- the
+      global guard has its own behavior test (tests/test_conftest_hermeticity.py), and the ci_rca
+      dedup fail-open path (see Context) means the per-class "name the missing mock" ergonomic the
+      meta-test asserted is not reproduced by the global guard anyway. Remaining tests stay green.
   - file: tests/ops_data_portal/test_ci_rca_close_then_recur.py
     action: Modify
     purpose: >-
-      Retire the duplicated per-class _guard_live_reader autouse fixture and re-point its
-      self-verifying meta-test to the global guard. All tests in this file stay green.
+      Remove the duplicated per-class _guard_live_reader autouse fixture ONLY (this file has the
+      fixture but NO self-verifying meta-test -- nothing else to change). Remaining tests stay green.
   - file: tests/test_conftest_hermeticity.py
     action: Create
     purpose: >-
@@ -44,71 +50,9 @@ scope:
       boto3.Session(profile_name='agent_platform') raises ProfileNotFound under L1; an un-mocked
       botocore create_client raises the L2 tripwire; @pytest.mark.integration bypasses L1 and
       @pytest.mark.aws bypasses L2.
-  - file: pyproject.toml
-    action: Modify
-    purpose: >-
-      Register the `aws` marker in [tool.pytest.ini_options].markers (the suite runs --strict-markers,
-      so an unregistered marker errors). No addopts change.
-  - file: src/common/iceberg_reader.py
-    action: Modify
-    purpose: >-
-      Normalize AWS-profile injection: resolve the profile ONCE at the make_reader boundary and pass
-      an explicit profile into DuckLakeReader so every boto3.Session site (the two Function-URL
-      resolvers and _invoke) uses the same injected profile via scripts.aws_profile.resolve_aws_profile
-      -- dev resolves the agent_platform default (Decision 113); Lambda/CI resolve None (ambient OIDC).
-      Remove the buried per-callsite default so the profile is genuinely injected, not defaulted deep
-      in the call stack. Behavior-preserving for Lambda/CI (resolve already returns None there).
-  - file: tests/test_iceberg_reader.py
-    action: Modify
-    purpose: >-
-      Cover the new/changed lines from the make_reader/DuckLakeReader profile-injection normalization
-      (Decision 104 coverage-gate: iceberg_reader.py maps here). This file is grandfathered at 641 SLOC
-      (raise-approved: dec-130) -- keep additions from raising its budget (Decision 128: no unmarked raise;
-      decompose only if it crosses).
-  - file: scripts/ops_portal/ci_rca_runtime.py
-    action: Modify
-    purpose: >-
-      Confirm-only in most cases: the CI-RCA dedup call sites already forward profile via
-      make_reader(profile=...). Reconcile with the normalized iceberg_reader boundary and remove any
-      residual hardcode if found; preserve the fail-open connectivity contract and the Decision-124
-      facade import/patch surface (dec-43 CC waiver). map_source_to_test returns None (no hard
-      coverage gate); if a code change lands, tests/ops_data_portal/test_ci_rca_runtime.py plus the
-      in-scope fingerprint/close-then-recur reader-path tests exercise it.
-  # ---- PHASE 2 (DEFERRED: rebase AFTER the sibling WS1 "affected-set-selection" plan merges) ----
-  - file: scripts/checks/hygiene/validate_no_profile_name_literal.py
-    action: Create
-    purpose: >-
-      New --pre hygiene check forbidding profile_name= STRING LITERALS (profile_name='...' /
-      profile_name="...") in src/ and scripts/ -- so a hardcoded named profile can never reappear
-      in a production path. Must match only a quoted string-literal argument value (AST-based or a
-      regex scoped to exclude docstrings/comments and the profile_name=... ellipsis placeholder),
-      never profile_name=<name> or profile_name=<call>. Decorated @registry.register(...).
-  - file: scripts/checks/registry.py
-    action: Modify
-    purpose: >-
-      Insert _c("validate_no_profile_name_literal") into pre_sequence() (single-line addition).
-      DEFERRED to Phase 2 to avoid a concurrent-edit collision on pre_sequence() with the WS1
-      affected-set-selection plan and the registry equivalence-oracle / growth-safe invariants in
-      tests/test_checks_registry.py (rec-2673/2674/2675).
-  - file: scripts/validate.py
-    action: Modify
-    purpose: >-
-      Add the facade re-export import for validate_no_profile_name_literal (mirrors the existing
-      per-check facade imports), so getattr-resolution on the `validate` namespace finds it.
-  - file: tests/checks/hygiene/test_validate_no_profile_name_literal.py
-    action: Create
-    purpose: >-
-      Test the new check: passes on the current clean tree, flags a planted profile_name='agent_platform'
-      literal, and does NOT flag profile_name=<variable>/<call> or docstring occurrences. Self-contained
-      (Decision 131 clause 2: no cross-test imports; helpers via conftest/tests.fixtures only).
 bundled_recommendations:
   - rec-2484
-infrastructure_dependencies:
-  - >-
-    No terraform/*.tf in scope. src/common/iceberg_reader.py is a bundle include for the ACTIVE
-    Lambda artifacts data-pipeline and ops-compaction (compute_affected_artifacts; --list-bundle
-    confirms), so the change deploys via the decoupled_build_pipeline channel (bin/venv-python -m
-    scripts.build_lambda --deploy); no terraform/personal filemd5 coupling and no IAM change.
+infrastructure_dependencies: []
 acceptance_criteria:
   - >-
     Under the L1 fixture, boto3.Session(profile_name='agent_platform') raises botocore ProfileNotFound
@@ -117,31 +61,22 @@ acceptance_criteria:
     Under the L2 fixture, an un-mocked botocore create_client (boto3.client/resource/Session().client)
     raises the tripwire loudly; @pytest.mark.aws tests bypass it; @pytest.mark.integration tests bypass L1.
   - >-
-    The per-class _guard_live_reader fixtures are removed from both ci_rca test files and every test in
-    tests/ops_data_portal/test_ci_rca_fingerprint.py and test_ci_rca_close_then_recur.py still passes under
-    the global guard (35 tests total).
+    The per-class _guard_live_reader fixtures are removed from both ci_rca test files, the obsolete
+    test_guard_blocks_unmocked_reader meta-test is deleted, and the remaining ci_rca tests still pass
+    under the global guard (34 = the prior 35 minus the deleted meta-test).
   - >-
     tests/test_aws_profile.py stays green: resolve_aws_profile still returns the agent_platform named
-    profile when no ambient credential signals are present, and None under Lambda/CI signals (Decision 113).
+    profile when no ambient credential signals are present, and None under Lambda/CI signals -- the
+    fixture consolidation deletes credential-signal env vars (does NOT set fake ones).
   - >-
-    The production reader path injects the profile at the make_reader boundary and resolves via
-    resolve_aws_profile at every boto3.Session site; Lambda/CI behavior (ambient OIDC) is unchanged; the
-    new/changed iceberg_reader.py lines are covered by tests/test_iceberg_reader.py (Decision 104 coverage gate).
+    The broader unit suite stays green under the global L1/L2 guards: any test that legitimately
+    constructs an AWS client is either mocked or carries @pytest.mark.aws (no un-marked live-AWS test remains).
   - >-
-    (Phase 2) The new validate_no_profile_name_literal --pre check passes clean on the current tree,
-    is wired into pre_sequence(), and flags a planted profile_name='agent_platform' literal while not
-    flagging profile_name=<variable>/<call> or docstring occurrences.
-  - >-
-    (V3) data-pipeline and ops-compaction are rebuilt, deployed via build_lambda --deploy, and smoke-tested
-    healthy post-deploy with no ProfileNotFound regression in the deployed reader path.
-  - >-
-    The per-class _guard_live_reader fixture DEFINITIONS are gone from both ci_rca test files (surface
-    retired), and rec-2484 is closed via the "Resolves:" squash-merge trailer (confirmed against the synced
-    read cache post-merge).
+    rec-2484 is closed via the "Resolves:" squash-merge trailer (confirmed against the synced read cache post-merge).
 verification_plan:
   - step: 1
     phase: pre-deploy
-    action: Prove the L1 hermetic fixture and the L2 create_client tripwire both fire (rec-2484 acceptance).
+    action: Prove the L1 hermetic fixture and the L2 create_client tripwire both fire, and the opt-outs work (rec-2484 acceptance).
     command: bin/venv-python -m pytest tests/test_conftest_hermeticity.py -q
     expected: >-
       All tests pass: a bare boto3.Session(profile_name='agent_platform') raises ProfileNotFound; an
@@ -154,12 +89,12 @@ verification_plan:
     graduation: not-applicable
   - step: 2
     phase: pre-deploy
-    action: Prove the 35 ci_rca tests still pass with the per-class guards removed and the global guard active.
+    action: Prove the remaining ci_rca tests pass with the per-class guards removed and the meta-test deleted.
     command: bin/venv-python -m pytest tests/ops_data_portal/test_ci_rca_fingerprint.py tests/ops_data_portal/test_ci_rca_close_then_recur.py -q
-    expected: 35 passed; no test relies on the removed _guard_live_reader fixture; the re-pointed meta-tests pass.
+    expected: 34 passed (prior 35 minus the deleted test_guard_blocks_unmocked_reader); no test relies on the removed _guard_live_reader fixture.
     fix_if: >-
-      A dedup-path test falls through to a live make_reader (add the missing mock in that test), or a
-      re-pointed meta-test still asserts the old AssertionError shape.
+      A dedup-path test relied on the removed fixture's ergonomics -- add the missing mock in that test.
+      A count other than 34 means the fixture/meta-test deletion was incomplete or over-broad.
     graduation: not-applicable
   - step: 3
     phase: pre-deploy
@@ -167,65 +102,12 @@ verification_plan:
     command: bin/venv-python -m pytest tests/test_aws_profile.py -q
     expected: >-
       All pass -- resolve_aws_profile(default="agent_platform") returns "agent_platform" with no ambient
-      signals and None under AWS_ACCESS_KEY_ID/AWS_LAMBDA_FUNCTION_NAME (Decision 113 preserved).
+      signals and None under AWS_ACCESS_KEY_ID/AWS_LAMBDA_FUNCTION_NAME.
     fix_if: >-
-      L1 set a fake AWS_ACCESS_KEY_ID globally (flips resolve to None) -- delete credential-signal env vars
-      instead of setting fakes; scope any moto fake creds to the @pytest.mark.aws opt-in path only.
+      L1 set a fake AWS_ACCESS_KEY_ID (flips resolve to None) -- the design is delete-credential-signals
+      only; never set fake creds globally. Scope any moto fake creds to the @pytest.mark.aws opt-in path.
     graduation: not-applicable
   - step: 4
-    phase: pre-deploy
-    action: Prove the reader profile-injection normalization did not break the reader unit tests and the new lines are covered.
-    command: bin/venv-python -m pytest tests/test_iceberg_reader.py -q
-    expected: All pass -- make_reader/DuckLakeReader resolve the injected profile; no regression in URL resolution or _invoke.
-    fix_if: A boto3.Session site still bypasses resolve_aws_profile or the make_reader boundary no longer forwards profile.
-    graduation: not-applicable
-  - step: 5
-    phase: pre-deploy
-    action: Prove the new profile_name-literal check behaves correctly (clean pass, planted-literal fail, no false positives).
-    command: bin/venv-python -m pytest tests/checks/hygiene/test_validate_no_profile_name_literal.py -q
-    expected: >-
-      All pass -- the check passes on the clean tree, flags a planted profile_name='agent_platform' literal,
-      and does NOT flag profile_name=<variable>/<call> or docstring/comment occurrences.
-    fix_if: The regex/AST is too broad (flags variables/calls/docstrings) or too narrow (misses the planted literal).
-    graduation: not-applicable
-  - step: 6
-    phase: pre-deploy
-    action: Prove the new check is wired into the --pre gate end-to-end and the whole fast tier passes.
-    command: bin/venv-python -m scripts.validate --pre
-    expected: >-
-      --pre passes; validate_no_profile_name_literal runs as a registered step (visible in the sequence) and
-      the registry growth-safe invariants in tests/test_checks_registry.py remain satisfied.
-    fix_if: >-
-      Check not reached (missing @register or missing pre_sequence insertion or missing validate.py facade
-      re-export), or a registry invariant/canary fails -- confirm this ran AFTER the WS1 rebase.
-    graduation: not-applicable
-  - step: 7
-    phase: post-deploy
-    action: Confirm the changed reader file is bundled into both active Lambda artifacts before deploying.
-    command: bin/venv-python -m scripts.build_lambda --list-bundle data-pipeline | grep -q 'iceberg_reader.py' && bin/venv-python -m scripts.build_lambda --list-bundle ops-compaction | grep -q 'iceberg_reader.py'
-    expected: iceberg_reader.py appears in both bundle file lists (the change is deploy-relevant to both artifacts).
-    fix_if: File absent from a bundle -- re-check manifest includes/excludes; the affected-artifact set changed.
-  - step: 8
-    phase: post-deploy
-    action: Build, upload, and deploy the two affected active Lambda artifacts (decoupled_build_pipeline channel).
-    command: bin/venv-python -m scripts.build_lambda --deploy --profile agent_platform
-    expected: >-
-      data-pipeline and ops-compaction build, upload to S3, and update-function-code succeed for their
-      functions (agent-platform-scheduled-agent-dispatcher, agent-platform-findings-processor,
-      agent-platform-ops-compaction); the DuckLake artifacts are unaffected by this change.
-    fix_if: Build/upload/deploy error -- read the build_lambda output; do not hand-patch AWS (Decision 55, forward-fix).
-  - step: 9
-    phase: post-deploy
-    action: Post-deploy smoke -- the deployed functions are healthy and the reader path resolves ambient creds (no ProfileNotFound).
-    command: aws lambda get-function --function-name agent-platform-ops-compaction --profile agent_platform --query 'Configuration.[State,LastUpdateStatus]' --output text
-    expected: >-
-      "Active Successful" -- the function updated cleanly. Then invoke ops-compaction with a benign/dry event
-      and confirm a non-error response with no ProfileNotFound / NoCredentialsError in the function logs
-      (the in-Lambda reader resolves ambient OIDC via resolve_aws_profile -> None).
-    fix_if: >-
-      State != Active/LastUpdateStatus != Successful, or logs show ProfileNotFound/NoCredentialsError -- the
-      profile injection regressed the ambient path; RCA per Decision 55, do not swap back inline.
-  - step: 10
     phase: pre-deploy
     action: Stale-reference sweep -- confirm the retired per-class _guard_live_reader fixture DEFINITIONS are gone.
     command: "test $(grep -rc 'def _guard_live_reader' tests/ops_data_portal/test_ci_rca_fingerprint.py tests/ops_data_portal/test_ci_rca_close_then_recur.py | awk -F: '{s+=$2} END {print s}') -eq 0"
@@ -234,12 +116,23 @@ verification_plan:
     graduation: waive
     graduation_waiver_reason: >-
       One-time surface retirement, not a recurring invariant -- the standing regression guard is the global
-      fixture's own behavior test (step 1) and the 35 ci_rca tests passing without the per-class guard (step 2).
+      fixture's own behavior test (step 1) and the ci_rca tests passing without the per-class guard (step 2).
       A permanent grep_count==0 registry check would ossify these two specific filenames.
-  - step: 11
+  - step: 5
+    phase: pre-deploy
+    action: Blast-radius check -- the global L1/L2 guards do not red pre-existing unit tests.
+    command: bin/venv-python -m pytest tests/ -q -p no:randomly
+    expected: >-
+      The unit suite is green. Any test that legitimately constructs an AWS client now either mocks it or
+      carries @pytest.mark.aws; any test needing a named profile carries @pytest.mark.integration.
+    fix_if: >-
+      A previously-passing test now errors with ProfileNotFound or the create_client tripwire -- mock its
+      client or add the correct opt-out marker; do NOT weaken the global guard (Decision 55, forward-fix).
+    graduation: not-applicable
+  - step: 6
     phase: post-deploy
     action: Closure verification -- confirm rec-2484 is closed after the squash-merge Resolves trailer fires.
-    command: bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; r=next(x for x in rows if x.get('id')=='rec-2484'); assert r.get('status')=='closed', r.get('status'); print('rec-2484 closed')"
+    command: bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; r=next(x for x in rows if x.get('id')=='rec-2484'); assert r.get('status')=='closed', r.get('status'); print('rec-2484 closed')"
     expected: >-
       rec-2484 status == closed in the synced read cache. Runs AFTER the PR squash-merges (the "Resolves: rec-2484"
       trailer triggers rec-autoclose.yml). If run before merge it will read 'open' -- that is expected pre-merge.
@@ -247,31 +140,23 @@ verification_plan:
       Still 'open' post-merge -- confirm the squash-commit body carried "Resolves: rec-2484"; fallback:
       bin/venv-python -m scripts.ops_data_portal --update-rec rec-2484 --status closed --resolution "..." (Decision 70).
 constraints:
-  - Only modify files listed in Scope. Out-of-scope bugs become recommendations via scripts/ops_data_portal, not inline fixes.
+  - Only modify files listed in Scope. This plan makes NO production code change (test infrastructure + pyproject only). Out-of-scope bugs become recommendations via scripts/ops_data_portal, not inline fixes.
   - No rescue agents or workaround loops; no unilateral judgement closures; forward-fix on failure (Decision 55).
-  - No SLOC budget raise -- if any touched file crosses its budget, decompose into a facade package (Decision 128). Headroom is ample on production/scripts files; tests/test_iceberg_reader.py is grandfathered at 641 (dec-130) -- keep additions from raising it.
-  - Do NOT add a check to .github/workflows/ci.yml; register the Phase-2 check in scripts/checks/registry.py + scripts/validate.py first (validate.py is the single SoT).
+  - No SLOC budget raise -- headroom is ample on all touched files; if a file crossed budget, decompose (Decision 128), never raise.
+  - No direct writes to logs/.recommendations-log.jsonl or logs/.decisions-index.jsonl; rec-2484 closes via the "Resolves:" squash-commit trailer (rec-autoclose) or the ops portal.
+  - No terraform, no Lambda deploy, no Decision Record -- this is pure test hygiene (extends Decision 131 clause 3; the L1/L2 fixtures are hygiene, no ADR).
+  - Never edit or commit on main; work on the claude/... session branch.
   - >-
-    No direct writes to logs/.recommendations-log.jsonl or logs/.decisions-index.jsonl; rec-2484 closes
-    via the "Resolves:" squash-commit trailer (rec-autoclose) or the ops portal. Author the new Decision
-    in DECISIONS.md then --backfill-decisions-md (Decision 84/86); never write the JSONL caches.
-  - No terraform apply; the Lambda deploy is the decoupled_build_pipeline code channel, not an infra apply.
-  - Never edit or commit on main; work on the claude/... session branch. Auto-rebase at commit-flow time only.
-  - >-
-    L1 must NOT set a real-looking AWS_ACCESS_KEY_ID globally -- that flips resolve_aws_profile to None and
-    breaks named-profile resolution. Achieve the ProfileNotFound guarantee via the nonexistent-config-path
-    redirect (+ AWS_EC2_METADATA_DISABLED + the L2 tripwire + --disable-socket). Scope any moto fake
-    credentials to the @pytest.mark.aws opt-in path only. tests/test_aws_profile.py (uses clear=True) is
-    immune, but other tests relying on the credential-env deletion are not.
+    L1 must NOT set a real-looking AWS_ACCESS_KEY_ID -- that flips resolve_aws_profile to None and breaks
+    named-profile resolution. Achieve the ProfileNotFound guarantee via the nonexistent-config-path redirect
+    (+ AWS_EC2_METADATA_DISABLED + the L2 tripwire + --disable-socket). Scope any moto fake credentials to
+    the @pytest.mark.aws opt-in path only. tests/test_aws_profile.py (uses clear=True) is immune, but other
+    tests relying on the credential-env deletion are not.
   - >-
     The new fixtures live in the ROOT tests/conftest.py (Decision 131 clause 3: the global socket/AWS/
     hermeticity guards live SOLELY in the root conftest; package sub-conftests layer under it and never
-    redeclare globals). New test modules and re-pointed meta-tests are bound by validate_no_cross_test_imports
-    (Decision 131 clause 2): each stays self-contained; shared helpers via conftest fixtures or tests.fixtures only.
-  - >-
-    Preserve Decision 113: dev/CC-web uses the agent_platform named profile (static-key + chained AssumeRole);
-    Lambda and GitHub-OIDC CI use ambient credentials (resolve_aws_profile returns None). The reader
-    normalization must not change this or the Decision-124 facade import/patch surface of ci_rca_runtime.py.
+    redeclare globals). tests/test_conftest_hermeticity.py stays self-contained (Decision 131 clause 2:
+    validate_no_cross_test_imports).
 context:
   - >-
     Discharges rec-2484 (open, source=manual -- "--disable-socket + --allow-hosts does not block
@@ -285,67 +170,47 @@ context:
     ProfileNotFound at Session construction (config parse) BEFORE any socket, so --disable-socket cannot catch
     it; it passes on dev (has the ~/.aws profile) and reds only on CI (OIDC, no named profile).
   - >-
-    TWO-PHASE / OWNERSHIP SPLIT (critical): a concurrent sibling plan WS1 "affected-set-selection" owns
-    scripts/checks/registry.py and the registry baselines in tests/test_checks_registry.py. Phase 1 (conftest
-    L1/L2 + ci_rca guard retirement + pyproject aws marker + reader profile injection + V3 Lambda deploy)
-    registers NO check and is implementable now. Phase 2 (register validate_no_profile_name_literal in
-    pre_sequence + validate.py facade + its test) MUST be rebased onto main AFTER WS1 merges -- a concurrent
-    edit to pre_sequence() collides and can trip the registry equivalence-oracle / growth-safe invariants
-    (rec-2673/2674/2675). WS3 owns tests/conftest.py outright.
+    DESCOPED from this plan (deferred, likely dropped): the profile-injection normalization of
+    src/common/iceberg_reader.py + scripts/ops_portal/ci_rca_runtime.py, its coverage in
+    tests/test_iceberg_reader.py, the validate_no_profile_name_literal --pre check (+ registry/validate.py
+    wiring), and the "aws-test-hermeticity" Decision. Reason: iceberg_reader.py is a LIVE ~15-caller DuckLake
+    reader and the injection is behavior-preserving (Lambda/CI already resolve None via resolve_aws_profile),
+    not worth a V3 two-Lambda deploy (data-pipeline + ops-compaction). Plan A closes rec-2484 via the conftest
+    fixtures alone. No WS1 (affected-set-selection) dependency remains.
   - >-
-    VERIFICATION TIER = V3 (forced, not discretionary): src/common/iceberg_reader.py is a bundle include for
-    the ACTIVE artifacts data-pipeline and ops-compaction (compute_affected_artifacts confirms; --list-bundle
-    shows iceberg_reader.py in both). Decision 79 mandates per-Lambda build + deploy + smoke-test for active
-    artifacts. The change is behavior-preserving in-Lambda (ambient creds unchanged), but the tier rule is
-    deterministic. DESCOPE OPTION for the reviewer: dropping src/common/iceberg_reader.py + tests/test_iceberg_reader.py
-    + scripts/ops_portal/ci_rca_runtime.py from scope makes this a V2 pure-test-hermeticity change -- the
-    conftest fixtures already fully close rec-2484, and the buried agent_platform default is dev-correct
-    (Decision 113) and made deterministic-ProfileNotFound by L1. Kept in scope here to honor the confirmed design.
+    KNOWN TRADEOFF (why the meta-test is deleted, not re-pointed): the ci_rca dedup path fails OPEN --
+    find_open/find_recent_ci_rca_rec_by_fingerprint wrap make_reader in a broad except, and
+    iceberg_reader._resolve_function_url_via_ssm/_api themselves catch all exceptions and return None, so a
+    guard error (ProfileNotFound / L2 tripwire) is converted into a RuntimeError "cannot reach the DuckLake
+    reader" that _is_reader_unreachable_error treats as reader-unreachable -> returns None (dedup skipped).
+    So the per-class guard's loud "name the missing mock" AssertionError ergonomic is NOT reproduced by the
+    global guard on the ci_rca path; test_guard_blocks_unmocked_reader asserted that ergonomic and is now
+    obsolete. Accepted: the global guard still prevents a LIVE AWS call (the rec-2484 goal); it just does not
+    reproduce the per-test naming ergonomic. Correctly-mocked ci_rca tests are unaffected.
+  - Decisions to CITE -- 131 (root-conftest hierarchy clause 3 + no-cross-test-import clause 2; this plan extends it), 55 (fail-loud tripwire idiom / forward-fix), 86 + 84 (no prose doc; rec closure via portal/trailer, not JSONL writes).
   - >-
-    Decision draft (NEW, tiny separate Decision, slug "aws-test-hermeticity"): establishes (i) the
-    AWS-profile-injection standard for production reader/AWS paths (inject at the boundary; resolve via
-    resolve_aws_profile; dev=agent_platform, Lambda/CI=ambient) and (ii) the no-profile_name=-string-literal
-    enforcement check. Precedent: recent registered checks that establish a NEW enforceable rule each carried
-    their own numbered Decision (127/128/129/131/132); a separate small Decision is preferable to folding into
-    WS1's affected-set-selection (different subject/rationale; Decision 86 canonical-home + one-coherent-subject
-    grain). The Phase-1 hermetic fixtures are hygiene (no ADR). Filed via ops_data_portal --backfill-decisions-md
-    at implement time; number re-checked at write time (current max is Decision 134, so likely Decision 135;
-    well under the Decision-134 decisions-size ceiling).
-  - >-
-    Decisions to CITE -- 131 (root-conftest hierarchy + no-cross-test-import), 104 (check-registry pattern
-    + coverage-gate mapping), 79 + 48 (Lambda-tier gating / V3), 113 (static-key/assume-role dev vs ambient),
-    128 (SLOC decompose-by-default), 130 (tests/ grandfather of test_iceberg_reader.py), 55 (forward-fix /
-    no workaround loops), 86 + 84 (route rationale to a numbered Decision, backfill not JSONL), 124
-    (ci_rca_runtime facade import/patch surface). Plus the new "aws-test-hermeticity" Decision.
-  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: dec-131, dec-104, dec-79, dec-48, dec-113, dec-128, dec-130, dec-55, dec-86, dec-84, dec-124, plus new dec (slug aws-test-hermeticity). Decision-104 coverage NOTE folded in: tests/test_iceberg_reader.py added to scope. Triaged 94 of 94."
-  - "gates: decision-scout=FLAGS_FOUND (dec-104 coverage NOTE resolved by adding tests/test_iceberg_reader.py to scope); plan-critique=DEFERRED_TO_OVERSEER (nested-gate wake failed)"
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. Its sole actionable flag was a
+    Decision-104 coverage NOTE on tests/test_iceberg_reader.py -- now MOOT because iceberg_reader.py is
+    descoped from Plan A. Effective CITE for Plan A: dec-131, dec-55, dec-86, dec-84. No BLOCK; no new Decision.
+  - "gates: decision-scout=FLAGS_FOUND (dec-104 coverage NOTE now moot -- iceberg_reader.py descoped); plan-critique=applied at overseer level (this restructure implements the critique verdict; not re-run per overseer)"
 pre_implementation_checklist:
   - Branch confirmed not on main (a fresh claude/... implement branch off latest origin/main)
   - docs/PROJECT_CONTEXT.md read
-  - DECISIONS.md read (131, 104, 79, 48, 113, 128, 130, 55, 86, 84, 124) + current max decision number re-checked for the new Decision
-  - Scope-drift check at implement start (files in scope match this list; WS1 has not since claimed tests/conftest.py)
-  - CONFIRM WS1 "affected-set-selection" has merged to main BEFORE starting Phase 2; rebase onto main first
+  - DECISIONS.md read (131, 55, 86, 84)
+  - Scope-drift check at implement start (files in scope match this 5-file list)
   - All files in scope located and readable
   - Acceptance criteria understood and verifiable
 execution_steps:
-  - "PHASE 1a: tests/conftest.py -- add the L1 hermetic-AWS autouse fixture (consolidating _clear_aws_credential_env) and the L2 botocore create_client tripwire autouse fixture, with @pytest.mark.integration (L1) and @pytest.mark.aws (L2) opt-outs."
-  - "PHASE 1b: pyproject.toml -- register the `aws` marker under [tool.pytest.ini_options].markers."
-  - "PHASE 1c: tests/ops_data_portal/test_ci_rca_fingerprint.py and test_ci_rca_close_then_recur.py -- delete the per-class _guard_live_reader fixtures and re-point each self-verifying meta-test to the global-guard behavior."
-  - "PHASE 1d: tests/test_conftest_hermeticity.py -- create the test proving L1 (ProfileNotFound), L2 (create_client tripwire), and both opt-outs."
-  - "PHASE 1e: src/common/iceberg_reader.py -- resolve the profile once at the make_reader boundary and route every boto3.Session site through resolve_aws_profile with the injected profile; remove the buried per-callsite default. tests/test_iceberg_reader.py -- add/adjust coverage for the changed lines. scripts/ops_portal/ci_rca_runtime.py -- confirm profile forwarding, remove any residual hardcode, preserve the facade surface."
-  - "PHASE 1 verify: run VP steps 1-4 (hermeticity test, 35 ci_rca tests, aws_profile regression, iceberg_reader tests); loop until green."
-  - "PHASE 1 V3 deploy: run VP steps 7-9 (bundle-membership check, build_lambda --deploy for data-pipeline + ops-compaction, post-deploy health + no-ProfileNotFound smoke). On unrecoverable deploy/smoke failure STOP and RCA (Decision 55)."
-  - "GATE: confirm WS1 affected-set-selection has merged to main; git fetch origin main && git rebase origin/main; STOP on conflict and surface."
-  - "PHASE 2a: scripts/checks/hygiene/validate_no_profile_name_literal.py -- create the check (@registry.register), scoped to quoted string-literal profile_name= values only."
-  - "PHASE 2b: scripts/checks/registry.py -- insert _c(\"validate_no_profile_name_literal\") into pre_sequence(). scripts/validate.py -- add the facade re-export. This is ONE commit."
-  - "PHASE 2c: tests/checks/hygiene/test_validate_no_profile_name_literal.py -- create the check's test (clean pass / planted-literal fail / no false positives)."
-  - "PHASE 2 verify: run VP steps 5-6 (check-behavior test, then full --pre wiring). Loop until green."
-  - "File the new \"aws-test-hermeticity\" Decision via ops_data_portal --backfill-decisions-md (re-check the max Decision number at write time)."
-  - "Execute the full Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)."
-  - "Report: what was implemented, verification results, deploy outcome, and rec-2484 closure via the Resolves: trailer."
+  - "tests/conftest.py -- add the L1 hermetic-AWS autouse fixture (consolidating _clear_aws_credential_env; delete credential signals, redirect config/creds files to a nonexistent path, disable IMDS, @pytest.mark.integration opt-out) and the L2 botocore.session.Session.create_client tripwire autouse fixture (@pytest.mark.aws opt-in)."
+  - "pyproject.toml -- register the `aws` marker under [tool.pytest.ini_options].markers."
+  - "tests/ops_data_portal/test_ci_rca_fingerprint.py -- delete the per-class _guard_live_reader fixture AND the obsolete test_guard_blocks_unmocked_reader meta-test."
+  - "tests/ops_data_portal/test_ci_rca_close_then_recur.py -- delete the per-class _guard_live_reader fixture only (no meta-test present)."
+  - "tests/test_conftest_hermeticity.py -- create the test proving L1 (ProfileNotFound), L2 (create_client tripwire), and both opt-outs."
+  - "Execute the Verification Plan -- run VP steps 1-5 (hermeticity test, remaining ci_rca tests, aws_profile regression, stale-reference sweep, blast-radius suite run); loop until green. On a pre-existing test tripped by the global guard, mock its client or add the correct opt-out marker (never weaken the guard)."
+  - "Post-merge: run VP step 6 to confirm rec-2484 closed via the Resolves: trailer."
+  - "Report: what was implemented, verification results, and rec-2484 closure."
 work_areas: []
 rollback: >-
-  Phase 1 is test-only + a behavior-preserving reader normalization; revert the branch to restore the
-  per-class guards. If the V3 Lambda deploy regresses the ambient path, redeploy the prior data-pipeline /
-  ops-compaction package via build_lambda from origin/main (the code channel is decoupled from infra;
-  no terraform state change). Phase 2 (the check) reverts by removing its pre_sequence line + facade import.
+  Test-infrastructure only -- revert the branch to restore the per-class _guard_live_reader fixtures and
+  the deleted meta-test. No production, Lambda, terraform, or Decision state is touched, so there is nothing
+  else to roll back.
