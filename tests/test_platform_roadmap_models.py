@@ -308,6 +308,15 @@ class TestCD25SchemaAmendments:
         (still gated by a pending CD.25/CD.10/CD.12/CD.4/CD.5/CD.8/CD.15/CD.34 -- e.g.
         T0.3 is ALSO gated by pending CD.10, so it stays despite CD.26 ratifying) is
         retained verbatim.
+
+        cd-ratification-wave (2026-07-17): CD.9/CD.5/CD.4/CD.8 ratified (Decisions
+        137/138/139/140) and CD.19 ratified as a resolved-by-events closure (Decision
+        141) via the Decision 105 lane. Strips the 4 items whose gating CDs are now
+        ALL ratified (17 -> 13): T0.9 (sole gate CD.4), T0.10 (sole gate CD.5), T2.4
+        (CD.9 + already-ratified CD.31), T2.2 (CD.6 + CD.19, both now ratified).
+        T2.5 (co-gating CD.15 still pending) is the only item touched by CD.8's
+        ratification, and it stays exempt per the strip-only-when-ALL-gating-CDs-
+        ratified safety rule.
         """
         roadmap = Path(__file__).parent.parent / "docs" / "ROADMAP-PLATFORM.yaml"
         doc = load(roadmap)
@@ -317,7 +326,6 @@ class TestCD25SchemaAmendments:
             "T0.7b",
             "T0.7c",
             "T0.8",
-            "T0.9",
             "T0.12",
             "T0.13",
             "T0.12.5",
@@ -326,14 +334,12 @@ class TestCD25SchemaAmendments:
             # same circular ratification bind as the items above -- T0.7b not yet built.
             "T0.3",
             "T2.1",
-            "T2.2",
             # Scope (c) realized-ahead-of-ratification additions (2026-06-09 roadmap audit
             # integration, finding F-002): items completed under pending gating CDs that
             # ratify post-hoc via the ops portal vehicle. Exemption ends when the gating
-            # CD ratifies (CD.5/CD.8+CD.15/CD.34 respectively; CD.2/CD.20/CD.21/CD.26 slices
-            # discharged by close-audit-ulf-02, see docstring above).
-            "T0.10",
-            "T2.4",
+            # CD ratifies (CD.8+CD.15 -- CD.15 still pending -- respectively; CD.2/CD.20/
+            # CD.21/CD.26 slices discharged by close-audit-ulf-02; CD.5/CD.9/CD.4/CD.19
+            # slices discharged by cd-ratification-wave, see docstring above).
             "T2.5",
             "T2.17",
         }

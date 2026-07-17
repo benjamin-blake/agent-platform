@@ -2,6 +2,102 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 141: Ratify CD.19 -- SCD2 timestamp policy on the T2.2 ops-table import was settled de facto as option (b) (created preserved, last_updated = import_time); resolved-by-events closure (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-16
+**Warehouse ID:** dec-141 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CD.19 (promoted from KG.10) required a timestamp-preservation decision BEFORE T2.2 imported ops_recommendations + ops_decisions from the company profile into the personal account, recommending option (c) (preserve created_timestamp; set last_updated = import_time; tag source='import-bootstrap' with a schema change in T0.12/T1.6). T2.2 completed 2026-05-29 out of order under a scope-(c) bootstrap exemption, and the decision window closed WITHOUT a formal ratification -- CD.19 was left `state: pending`, reading as a live pre-T2.2 decision that can no longer be taken (audit PCD-02: overtaken by events). This is a RESOLVED-BY-EVENTS closure decided by the human principal, NOT a realized-by-gate-completion ratification (T1.6, which CD.19 also gates, remains not_started).
+
+**Decision:** Ratifies CD.19, recording the de facto outcome. T2.2 applied OPTION (b): created_timestamp preserved verbatim; last_updated_timestamp SET TO import_time. Rationale (principal's firsthand account): last_updated_timestamp is deterministically derived, so a workaround to preserve the original last_updated was not warranted at this stage. The recommended option (c) source='import-bootstrap' tag / schema change was deliberately NOT done. Consequence, accepted: last_updated lineage for import-era rows is not preserved (history loss, tolerable at this early dev stage). The false-positive-freshness flood that CD.19 feared was option (a)'s risk (preserve BOTH timestamps verbatim) and does NOT arise under option (b): last_updated = import_time makes imported rows read FRESH to any freshness check; moreover no freshness consumers are live (rec-curator disabled; the ratchet/drift detector depends on T3.7, unbuilt; the T1.6 DQ-runner reshape is not_started). Ratification clears CD.19's completion gate on T1.6 (and on the already-complete T0.12 and T2.2). T2.2's stale note ("original ids and timestamps preserved") is corrected in the same edit to state created preserved / last_updated = import_time.
+
+**Reversal conditions:** none -- the timestamp policy is a settled historical fact of the completed T2.2 import, not a reversible forward commitment. If a future need to reconstruct pre-import last_updated lineage arises, that is NEW work (a re-import or a lineage-backfill) decided under its own Decision, not a reversal of this one. Any surviving live question about how the T1.6 DQ-runner treats import-era rows is ordinary T1.6 design scope, not a CD.19 gate.
+
+**Related:** CD.19 (this ratifies it), CD.12 / T1.6 (DQ-runner reshape -- import-era rows read fresh under option (b); ordinary T1.6 design scope, no longer CD.19-gated), T2.2 (gated item, complete 2026-05-29; its scope-(c) bootstrap_completion_exempt is discharged by this ratification -- CD.6 + CD.19 now both ratified), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane), audit PCD-02 (audits/pending-cd-premise-validity-f4dec93.yaml -- the overtaken-by-events finding this closes; note the audit mis-recorded the outcome as option-(a)-shaped, corrected here to option (b) per the principal).
+
+---
+
+## Decision 140: Ratify CD.8 -- DuckDB is the realized default operational read engine (scoped to the engine choice; necessary not sufficient) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-16
+**Warehouse ID:** dec-140 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CD.8 ("DuckDB = default operational read engine -- embedded, sub-second, no SSO, runs anywhere; Athena retained conditionally per CD.15; the typed query Lambda hides the engine from agents") was realized -- the engine choice is live -- but CD.8 stayed `state: pending`, gating completion of T1.2 and T2.5 and carrying no realization_evidence.
+
+**Decision:** Ratifies CD.8, scoped to the realized ENGINE CHOICE. DuckDB is the embedded default operational read engine and DuckLake-on-Neon is the live ops read substrate: the ducklake_reader closed named-verb boundary (Decision 84 I-3) serves ops_recommendations / ops_decisions / ops_priority_queue reads, and the local read paths (sync_ops, ops_data_portal, session_preflight) route through the DuckDB reader (src/common/iceberg_reader.py) with the Athena escape hatch retained conditionally per CD.15. This ratification is NECESSARY, NOT SUFFICIENT (CD.2/CD.6/CD.20 precedent): it clears CD.8's completion gate on the items it gates -- T2.5 (DuckDB swap on read paths, complete 2026-05-31) and T1.2 (query-Lambda full verb expansion, completed_at 2026-07-07, flipped via the T1.16 verb-surface-closeout joint-closeout bookkeeping per RMAP-11) -- but does not itself close those items' code criteria (already met) and does not resolve the still-open CD.15 Athena-escape-hatch clause (OQ.7). T2.5's bootstrap_completion_exempt flag is RETAINED because its co-gating CD.15 remains pending (strip-only-when-ALL-gating-CDs-ratified).
+
+**Reversal conditions:** revisit the default-engine choice if operational read scale exceeds what the embedded DuckDB reader serves within budget (the CD.15 Athena escape hatch is the retained relief valve; a sustained shift of the primary read path off DuckDB would supersede this Decision). The engine choice is coupled to CD.31 / Decision 78 (DuckLake as the native table format); a reversal of DuckLake adoption would reopen the engine question.
+
+**Related:** CD.8 (this ratifies it), CD.15 (Athena escape-hatch clause -- still pending; co-gates T2.5, whose exemption is retained), CD.31 / Decision 78 (DuckLake table format under which DuckDB serves reads), T2.5 and T1.2 (gated items, both complete), Decision 118 (CD.25 ratification -- the "necessary NOT sufficient" scoping precedent this Decision follows, alongside CD.2/CD.6/CD.20 = Decisions 109/106/111), Decision 84 (closed ducklake_reader named-verb boundary + DECISIONS.md canonical/backfill), Decision 105 (candidate-decision ratification lane).
+
+---
+
+## Decision 139: Ratify CD.4 -- vendor lock-in to Claude Code on the web is acceptable; AGENTS.md is the realized portability hedge (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-16
+**Warehouse ID:** dec-139 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CD.4 ("vendor lock-in to Claude Code on the web is acceptable; AGENTS.md is the portability hedge -- symlinked or duplicated to CLAUDE.md so other harnesses pick up the same instructions") was realized when T0.9 (AGENTS.md sidecar + CLAUDE.md linkage) completed 2026-05-19, but CD.4 stayed `state: pending` with no realization_evidence.
+
+**Decision:** Ratifies CD.4. The portability hedge is live: root `CLAUDE.md` is `@AGENTS.md` (an import directive), so AGENTS.md is the single canonical instruction surface and any other agent harness that reads AGENTS.md (Cursor, Aider, OpenHands, Continue, Codex) inherits the same universal rules without a per-harness fork. The deliberate lock-in to CC-web as the sole primary development surface (CD.2) is operating reality; the project consciously does not over-invest in cross-harness abstraction beyond the AGENTS.md hedge. Ratification clears CD.4's completion gate on T0.9 (already complete) -- necessary, not sufficient -- and discharges T0.9's bootstrap_completion_exempt flag (T0.9 gated solely by CD.4).
+
+**Reversal conditions:** re-evaluate the lock-in acceptance and the level of cross-harness abstraction investment if a second agent harness becomes a first-class (co-primary) development surface, or if CC-web availability/pricing changes materially. The AGENTS.md hedge is the retained escape hatch that keeps that reversal cheap.
+
+**Related:** CD.4 (this ratifies it), CD.2 (CC-web as sole primary surface -- the lock-in this Decision accepts), T0.9 (gated item, complete; exemption discharged), CD.20 / Decision 111 (AGENTS.md is part of the public curated portal), CD.5 / Decision 138 (sibling ratification in the same wave), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+---
+
+## Decision 138: Ratify CD.5 -- pre-commit augments (does not replace) the never_on_main hook; keep both commit-safety layers (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-16
+**Warehouse ID:** dec-138 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CD.5 ("pre-commit augments, does not replace, the never_on_main hook -- keep both; scheduled_agent_log_only.py stays, no portable analog") was realized when T0.10 (Pre-commit safety net) completed 2026-05-19, and T0.10's own exemption note already records "CD.5 ratifies post-hoc via the portal vehicle" -- but the evidence was never written and CD.5 stayed `state: pending`, invisible to the ratification lane.
+
+**Decision:** Ratifies CD.5. The two commit-safety layers are both live and both retained: `.claude/hooks/never_on_main.py` intercepts intent-to-edit at the harness/PreToolUse layer (blocks Edit/Write/MultiEdit/NotebookEdit and git commit/push while on main); `.pre-commit-config.yaml` intercepts at commit-time in any clone (portable backstop, optionally bundling ruff / EOF / secrets scan). `scheduled_agent_log_only.py` stays (no portable analog). Ratification clears CD.5's completion gate on T0.10 (already complete) -- necessary, not sufficient -- and discharges T0.10's scope-(c) bootstrap_completion_exempt flag (T0.10 gated solely by CD.5; strip-only-when-ALL-gating-CDs-ratified is satisfied).
+
+**Reversal conditions:** revisit if the harness-level never_on_main interceptor is retired or a single hook layer is shown to subsume both intercept points (harness intent-to-edit AND commit-time in a bare clone). Absent that, the augment-not-replace posture stands.
+
+**Related:** CD.5 (this ratifies it), T0.10 (gated item, complete; scope-(c) exemption discharged by this Decision), CD.4 / Decision 139 (sibling portability-hedge ratification in the same wave), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+---
+
+## Decision 137: Ratify CD.9 -- partition-every-table uniform rule (substance already ratified by proxy via Decisions 78/81; this closes the locus gap) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-16
+**Warehouse ID:** dec-137 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CD.9 ("partition every table; uniform rule -- ops/telemetry by day(last_updated_timestamp), market data by day(trade_date); new tables inherit the partitioned template; no unpartitioned-table path") was realized, and its substance was already ratified BY PROXY through Decision 78 (CD.31, DuckLake adoption) and Decision 81 (the CD.9 amendment establishing ALTER ... SET PARTITIONED BY as the DuckLake partitioning mechanism). That fact was recorded only in T2.4's note (the gated item), not on CD.9's own entry -- so an agent reading candidate_decisions[] saw a fully open decision (audit Q5c: same file, wrong locus). CD.9 carried no realization_evidence and was invisible to the ratification lane.
+
+**Decision:** Ratifies CD.9, folding the proxy-ratification fact into the CD entry itself. The partitioning rule is in force. The three ops tables (ops_recommendations, ops_decisions, ops_priority_queue) live on DuckLake-on-Neon -- the sole backend (Decision 84) -- where partitioning is applied via ALTER ... SET PARTITIONED BY (a metadata-only operation), row/file-count-conditional per Decision 81 and not warranted at current ops-table sizes; T2.33 owns DuckLake partition-as-code going forward. Their day(last_updated_timestamp) partitioning originated in the T2.1 Iceberg era and is carried forward under DuckLake (the frozen Iceberg copy stopped being a live read path when writes moved to the DuckLake boundary, Decision 84). For the still-Iceberg tables (product D.lake.* + market data), scripts/schema_to_iceberg.py (T0.13) raises MissingPartitionSpec on @partition_by-less models and emits PARTITIONED BY verbatim (two-arg bucket/truncate extraction fixed by rec-2314). The "no unpartitioned-table path" absolute holds. Ratification clears CD.9's completion gate on T2.4 (already complete) -- necessary, not sufficient (T2.4's own criteria were already met).
+
+**Reversal conditions:** none anticipated -- partition-everywhere is a uniform durable rule. Revisit only if a specific table's access pattern makes day-granularity partitioning net-negative at scale, in which case amend this Decision with the per-table exception rather than relaxing the uniform rule (Decision 81's mechanism-level CD.9 amendment is the precedent for a mechanism, not policy, change).
+
+**Related:** CD.9 (this ratifies it), Decision 78 / dec-078 (CD.31 DuckLake adoption -- proxy ratification of the partitioning substance), Decision 81 / dec-081 (CD.9 ALTER-partitioning mechanism amendment), T2.4 (gated item, complete; its note carried the proxy fact this Decision folds back), T2.33 (DuckLake partition-as-code owner), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+---
+
+## Decision 136: Ratify CD.39 -- exit-criteria ledger (per-criterion status) is the realized in_progress-resolution mechanism; follow-on planning is the in_progress default (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-16
+**Warehouse ID:** dec-136 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CD.39 promoted each exit_criteria entry from free-text prose to a structured object {id, text, status: open|met|rehomed, met_by} so that "remaining work" on an in_progress item is the deterministic set of open criteria (Decision 59), replacing the conflation of mid-implementing / needs-next-plan / blocked under a single in_progress status. The mechanism is fully built, validate.py-enforced, and in daily bookkeeping use across the live roadmap, but CD.39 remained `state: pending` -- presenting as an open decision and (realization_evidence absent) invisible to the ratification lane.
+
+**Decision:** Ratifies CD.39. The structured exit-criteria ledger is the realized, enforced mechanism: `scripts/checks/roadmap/validate_platform_roadmap.py` requires met/rehomed criteria to carry a met_by resolving to a real plan/commit/item, forbids a touched tier_item from retaining bare-string criteria, and resolves plan closes_criteria refs to real item criteria. The harness consumes it end to end -- /orient ranks in_progress items fewest-open-criteria-first and emits follow-on /plan prompts; /plan's follow-on mode declares closes_criteria; /implement flips declared criteria open->met on a verified VP pass and NEVER auto-flips an all-criteria-met item to complete (Status-Trusted-Never-Inferred, T2.20). CD.39 gates no tier_item (gates: []), so ratification carries no completion-gate side effect; it removes CD.39 from the pending / realization-candidate surfaces.
+
+**Reversal conditions:** the git-YAML ledger is the lightweight near-term stand-in for T4.5 / Decision 87 (ops_plans / ops_plan_revisions warehouse entities, gated on CD.17); met_by is forward-compatible as a future ops_plans foreign key. When T4.5 lands, the ledger migrates to the warehouse (met_by becomes an ops_plans FK) -- a forward migration of the storage substrate, not a reversal of the per-criterion-status decision itself. Reversal proper would require abandoning deterministic per-criterion resolution for item-grain status only; file a superseding Decision if that is ever chosen.
+
+**Related:** CD.39 (this ratifies it), Decision 59 (deterministic remaining-work), Decision 90 (three-tier /orient->/plan->/implement workflow the ledger feeds), Decision 87 / T4.5 (future ops_plans warehouse home; met_by FK forward-compat), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+---
+
 ## Decision 135: Live, cacheless, strictly-additive affected-set selection replaces the --pre edited-set tier gate (amends Decision 73, 2nd amendment; builds on 80/104/124/131) (Decided)
 
 **Status:** Decided
