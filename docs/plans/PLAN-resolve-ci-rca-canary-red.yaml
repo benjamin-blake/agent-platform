@@ -101,11 +101,14 @@ verification_plan:
       to ci-rca.yml and guards against regression to the bare test -s predicate).
     command: >-
       grep -qE 'failed to get jobs' .github/workflows/ci-rca.yml && grep -qiE 'HTTP 5|Service
-      Unavailable' .github/workflows/ci-rca.yml
-    expected: "Both greps match (exit 0): the retry predicate references the gh transient-error text."
+      Unavailable' .github/workflows/ci-rca.yml && grep -qE '! *grep' .github/workflows/ci-rca.yml
+    expected: >-
+      All three greps match (exit 0): the retry predicate references the gh transient-error text
+      AND carries a negated-grep guard, binding the committed predicate to the step-2 behaviour
+      rather than only asserting the substrings appear somewhere in the file.
     fix_if: >-
       No match. The content-aware guard was not committed to the workflow, or the retry loop
-      still uses only test -s.
+      still uses only test -s (no negated-grep predicate).
     hermetic: true
     graduation: graduate
     graduation_check_id: "ci-rca-log-fetch-503-guard-present"
@@ -162,7 +165,8 @@ context:
   - "Scout flag adopted: closure of rec-2716/rec-2718 via the Resolves trailer is governed by Decision 103 (closure-proof / rec lifecycle), NOT Decision 70 (physical deletion); Decision 70 is retained only for the --update-rec fallback mechanics in VP step 6."
   - "Scout flag adopted: .github/workflows/*.yml is not on Decision 48's exhaustive V3 trigger list (deterministically V2); the conservative V3 label is retained and its behavioural-acceptance clause is satisfied by the step-2 predicate simulation rather than post-deploy observation alone."
   - "Verification graduation is an enforced pre-merge obligation (Decision 132): every pre-deploy VP step carries a graduation disposition; validate_graduation_completeness's plan-PR leg fails an unset one."
-  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=PROCEED after 1 round"
+  - "Implementer option (plan-critique Frame Q3, non-blocking): the content-classification predicate could instead live in a unit-tested scripts/ci_rca/ helper, matching the workflow's own fp_dedup 'logic out of the shell' pattern (ci-rca.yml ~lines 302-305). The inline anchored guard is adequate (covered by VP steps 2-3 + the post-deploy canary); extract only if it lands cleanly without expanding scope."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/ci-failure-rca-plan-l8q4hy)
   - docs/PROJECT_CONTEXT.md read
