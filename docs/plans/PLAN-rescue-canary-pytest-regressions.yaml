@@ -1,0 +1,193 @@
+schema_version: 1
+slug: "rescue-canary-pytest-regressions"
+intent: >-
+  Rescue Main Canary CI (red on main) by fixing the two pytest regressions ci-rca rec-2725
+  root-caused, restoring the full-tier presubmit to green so platform work can merge again.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-rescue-canary-pytest-regressions.yaml
+phase: >-
+  Platform maintenance / CI health (Decision 73 two-tier CI + L8 drift canary). Forward-fix of a
+  source=ci_rca, priority=critical rec via the sanctioned /plan lane (AGENTS.md merge protocol).
+scope:
+  - file: tests/ops_data_portal/test_decisions.py
+    action: Modify
+    purpose: >-
+      In TestBackfillDecisionsFromMd.test_backfill_writes_coerced_entries, add
+      patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None) to the
+      existing patch context so the backfill dedup fetch is intercepted. Under PR #622's autouse
+      AWS-hermeticity fixture the unmocked reader call raises, counting the row failed
+      (written=0/failed=1); returning None is the correct "not found" branch that lets
+      file_decision run and restores written=1/failed=0.
+  - file: tests/test_session_postflight_decomposition.py
+    action: Modify
+    purpose: >-
+      Repoint TestResidualPatchSiteClosure._SIBLING_FILES from the deleted single filename
+      "test_session_postflight.py" (removed by PR #610's decomposition) to a directory glob of the
+      current decomposed test files (tests/session/postflight/test_*.py). Restores the residual
+      moved-symbol scan's meaning and removes the hard-coded deleted-path fragility that caused the
+      FileNotFoundError.
+bundled_recommendations:
+  - rec-2725
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    rec-2725's acceptance command passes: both named tests
+    (test_zero_residual_old_namespace_patch_sites and test_backfill_writes_coerced_entries) exit 0.
+  - >-
+    Both full affected test modules (tests/ops_data_portal/test_decisions.py and
+    tests/test_session_postflight_decomposition.py) pass with no new failures.
+  - >-
+    The fast presubmit tier (scripts.validate --pre) reports no failed checks on the branch.
+  - >-
+    rec-2725 is closed after the squash-merge (via the Resolves: trailer / rec-autoclose).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run rec-2725's exact acceptance command -- the two previously-failing tests together.
+    command: >-
+      bin/venv-python -m pytest
+      tests/test_session_postflight_decomposition.py::TestResidualPatchSiteClosure::test_zero_residual_old_namespace_patch_sites
+      tests/ops_data_portal/test_decisions.py::TestBackfillDecisionsFromMd::test_backfill_writes_coerced_entries
+      -x
+    expected: "2 passed, exit code 0 (no FileNotFoundError, no written/failed assertion mismatch)."
+    fix_if: >-
+      Fix 1 still red -> the _fetch_decision_from_reader patch target/namespace is wrong; confirm
+      the symbol at scripts.ops_portal.decisions and that return_value=None reaches decisions.py:242.
+      Fix 2 still red -> the glob resolved zero files or a real moved-symbol residual exists; print
+      the residual list and inspect tests/session/postflight/test_*.py.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The two fixed tests ARE the standing regression guard for this failure; they execute in the
+      full pytest tier on every Main Canary run. A graduated kernel test_selector check would
+      duplicate existing suite coverage rather than add a new invariant.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run both full affected modules to confirm the edits introduce no collateral failures in
+      sibling tests (both modules exercise the same fixtures/patch surfaces).
+    command: >-
+      bin/venv-python -m pytest tests/ops_data_portal/test_decisions.py
+      tests/test_session_postflight_decomposition.py
+    expected: "All tests in both modules pass; exit code 0."
+    fix_if: >-
+      A sibling test fails -> the patch context edit changed behaviour beyond the target test, or
+      the _SIBLING_FILES glob altered which files another test in the class scans; inspect the named
+      failure and narrow the change.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Full-module regression coverage is already provided by the pytest tier that runs every canary;
+      graduating a per-module kernel check would duplicate the existing suite, not add an invariant.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Run the fast presubmit tier to confirm no other --pre check (SLOC, hygiene, coverage) regressed
+      from the two test edits.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Validation Summary reports no failed checks; exit code 0."
+    fix_if: >-
+      A check fails -> read the named check's output; a coverage-checker or test-count-coupling
+      failure most likely relates to the edited test files. Resolve before pushing.
+    graduation: not-applicable
+  - step: 4
+    phase: post-deploy
+    action: >-
+      After the squash-merge (carrying "Resolves: rec-2725"), confirm rec-2725 is closed in the
+      warehouse-backed read cache.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && grep '"rec-2725"' logs/.recommendations-log.jsonl
+      | grep -q '"status": "closed"'
+    expected: "grep matches -- rec-2725 shows status closed after rec-autoclose ran."
+    fix_if: >-
+      Not closed -> the Resolves: trailer was missing/malformed in the squash body; run the fallback
+      bin/venv-python -m scripts.ops_data_portal --update-rec rec-2725 --status closed --resolution
+      "Fixed both canary pytest regressions (test_decisions dedup mock + postflight _SIBLING_FILES glob)."
+constraints:
+  - >-
+    No rescue agents or workaround loops (Decision 55). Both edits are genuine forward-fixes of
+    tests left stale by #622/#610 -- not workarounds masking a product defect. Fix 1 hides no real
+    dedup regression: "not found" is the correct branch that lets file_decision run.
+  - >-
+    Only the two files in scope may be modified. The two preventive actions named in rec-2725 are
+    deferred to separate follow-up recs (see execution_steps) -- do NOT touch scripts/validate.py,
+    scripts/checks/registry.py, or scripts/checks/hygiene/ in this rescue.
+  - >-
+    Fix 1's patch target MUST be scripts.ops_portal.decisions._fetch_decision_from_reader (the
+    submodule holding the bare import), NOT the ops_data_portal facade (Decision 124).
+  - >-
+    Test-only V2 change: no AWS calls, no network, no Lambda/Terraform. Preserve test hermeticity
+    (rec-2484 / the autouse fixture from #622).
+context:
+  - >-
+    Root causes (rec-2725): (1) tests/ops_data_portal/test_decisions.py:178-181 patches only
+    file_decision/parse_decisions_md/_sync_table; backfill_decisions_from_md() also calls
+    _fetch_decision_from_reader (scripts/ops_portal/decisions.py:242) for a dedup check, which now
+    raises under #622's (commit 275334b) autouse AWS-hermeticity fixture -> written=0/failed=1.
+    (2) tests/test_session_postflight_decomposition.py:186 _SIBLING_FILES hard-codes
+    "test_session_postflight.py", deleted by #610 (commit b7fa3d2) which split it into 5 files under
+    tests/session/postflight/ -> FileNotFoundError at :192.
+  - >-
+    Both regressions escaped --pre because the diff-aware selector did not include either module in
+    the merging PRs' scope; they surfaced only in the full-tier Main Canary. This is the detection
+    gap the deferred preventive recs target.
+  - >-
+    Fix 2 verified non-vacuous: the decomposed files patch only facade-resident symbols
+    (run_validate/run_close/run_commit/_get_changed_files/time) via the conftest-aliased old
+    namespace; none are in _MOVED_SYMBOLS, so the repointed scan finds zero residuals and passes
+    while still actively guarding the current 5-file suite.
+  - >-
+    Related-Work condition satisfied (same file): scope includes tests/ops_data_portal/test_decisions.py,
+    rec-2725's cited source_file. This plan resolves the open ci-rca HARD BLOCK.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS; CITE = Decision 55, Decision 124"
+  - "gates: decision-scout=NO_FLAGS; plan-critique=PROCEED after 1 round(s)"
+  - >-
+    RELATED (decision-scout): Decision 84 (reader boundary -- mocking it in a V2 unit test is
+    boundary-consistent isolation), Decision 130/131 (tests/ now SLOC-gated + mirror layout; edits
+    are trivially small), Decision 135 (live additive --pre affected-set selection -- the deferred
+    "--pre full-scope-on-conftest-change" preventive rec MUST cross-check whether Decision 135's
+    conftest-subtree channel already covers the gap before re-deriving it), Decision 73 (two-tier CI
+    forward-fix model this rescue operates inside).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-failure-rca-sxxuf5)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via decision-scout gate (95 of 95, NO_FLAGS)
+  - Both scope files located and readable; both failures reproduced locally
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Modify tests/ops_data_portal/test_decisions.py: in test_backfill_writes_coerced_entries add
+    patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None) as an
+    entry in the existing `with (...)` patch context (alongside the file_decision / parse_decisions_md
+    / _sync_table patches). Do not change the assertions.
+  - >-
+    Modify tests/test_session_postflight_decomposition.py: replace the _SIBLING_FILES literal
+    (["test_session_postflight.py"]) with a glob over the current decomposed suite -- derive the
+    list at scan time from sorted((tests_dir / "session" / "postflight").glob("test_*.py")) and
+    scan those files (adjust the loop to use the resolved paths, keeping the same idiom-pattern /
+    _MOVED_SYMBOLS residual check). Guard against an empty glob (assert the directory yielded >=1
+    file) so a future move fails loudly rather than passing vacuously.
+  - >-
+    Execute the Verification Plan -- run steps 1-3 pre-merge; loop until pass. On an unrecoverable
+    failure stop and RCA (Decision 55), do not add workaround loops.
+  - >-
+    File follow-up rec (preventive, deferred): a hygiene check under scripts/checks/hygiene/ that
+    validates hard-coded test-file inventories (patterns like _SIBLING_FILES) resolve to existing
+    on-disk files at collection time, so a deleted sibling fails fast instead of raising a runtime
+    FileNotFoundError. Use get_rec_write_guidance() then file_rec (source not ci_rca; priority
+    medium). Reference rec-2725 as origin.
+  - >-
+    File follow-up rec (preventive, deferred): broaden the --pre diff selector to force full-suite
+    scope when tests/conftest.py or any autouse-fixture module changes. The rec MUST first
+    cross-check Decision 135's already-shipped conftest-subtree affected-set channel (#621) to
+    confirm the gap is a real residual and not already covered -- scope it as a verification-then-fix,
+    not a blind re-derivation. Reference rec-2725 as origin.
+  - >-
+    Push, open PR, and on green CI squash-merge with body carrying "Resolves: rec-2725". Then run
+    VP step 4 to confirm closure.
+  - 'Report: what was implemented, verification results for all 4 VP steps, and the two follow-up rec ids filed.'
+work_areas: []
+rollback: >-
+  Both changes are test-only and independently revertable. If either fix proves incorrect, revert
+  that single file's diff; the canary returns to its prior red state (no production impact). No data
+  or infra migration to unwind.
