@@ -184,6 +184,55 @@ jobs:
           gh run view "$RUN_ID" --repo "${{ github.repository }}" --json jobs \
             > /tmp/ci-rca-jobs.json 2>/dev/null || echo '{}' > /tmp/ci-rca-jobs.json
 
+      - name: Fetch junit report (v2 fingerprint substrate)
+        # ci-rca-identity-lifecycle: best-effort download of the failing run's own pytest-junit
+        # artifact (uploaded by ci.yml's main-validate / main-canary.yml's canary job, per
+        # scripts.checks._scaffolding._build_unit_test_cmd's --junitxml). Absent for a non-pytest
+        # failure (e.g. terraform-apply-sandbox) -- the evidence generator falls back to the
+        # log-tail signature when the file is missing, never fails the job.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          RUN_ID="${{ steps.meta.outputs.run_id }}"
+          mkdir -p /tmp/ci-rca-junit
+          gh run download "$RUN_ID" --repo "${{ github.repository }}" --name pytest-junit --dir /tmp/ci-rca-junit \
+            || echo "No pytest-junit artifact for run ${RUN_ID} -- falling back to log-tail signature."
+
+      - name: Fetch merged PR's selection-manifest (Decision 135 escape-attribution)
+        # ci-rca-identity-lifecycle: this workflow only ever fires post-merge on the default
+        # branch (see the job-level `if:` gate above), so the failing commit IS a merge onto
+        # main. Best-effort: resolve the PR that produced it, then its --pre selection-manifest
+        # artifact (uploaded by ci.yml's pr-validate job on the PR's OWN head commit). Any
+        # resolution failure degrades to no manifest -- escape_class is simply omitted.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          ANCHOR_SHA="${{ steps.meta.outputs.anchor_sha }}"
+          mkdir -p /tmp/ci-rca-manifest
+          PR_NUMBER=$(gh api "repos/${{ github.repository }}/commits/${ANCHOR_SHA}/pulls" --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo "No merged PR resolved for commit ${ANCHOR_SHA} -- skipping selection-manifest (escape_class omitted)."
+            exit 0
+          fi
+          PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefOid --jq .headRefOid 2>/dev/null || echo "")
+          if [ -z "$PR_HEAD_SHA" ]; then
+            echo "Could not resolve head SHA for PR #${PR_NUMBER} -- skipping selection-manifest."
+            exit 0
+          fi
+          ARTIFACT_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts" --paginate \
+            --jq ".artifacts[] | select(.name==\"selection-manifest\" and .workflow_run.head_sha==\"${PR_HEAD_SHA}\") | .id" \
+            2>/dev/null | head -1 || echo "")
+          if [ -z "$ARTIFACT_ID" ]; then
+            echo "No selection-manifest artifact found for PR #${PR_NUMBER} (head ${PR_HEAD_SHA}) -- skipping."
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/actions/artifacts/${ARTIFACT_ID}/zip" > /tmp/ci-rca-manifest.zip \
+            && unzip -o -q /tmp/ci-rca-manifest.zip -d /tmp/ci-rca-manifest \
+            && echo "Downloaded selection-manifest for PR #${PR_NUMBER}." \
+            || echo "Selection-manifest download/unzip failed -- escape_class will be omitted."
+
       - name: Generate evidence bundle
         id: evidence
         continue-on-error: true
@@ -192,12 +241,21 @@ jobs:
         run: |
           RUN_ID="${{ steps.meta.outputs.run_id }}"
           WORKFLOW_NAME="${{ steps.meta.outputs.workflow_name }}"
+          JUNIT_FLAG=""
+          if [ -f /tmp/ci-rca-junit/pytest-junit.xml ]; then
+            JUNIT_FLAG="--junit-file /tmp/ci-rca-junit/pytest-junit.xml"
+          fi
+          MANIFEST_FLAG=""
+          if [ -f /tmp/ci-rca-manifest/selection-manifest.json ]; then
+            MANIFEST_FLAG="--selection-manifest /tmp/ci-rca-manifest/selection-manifest.json"
+          fi
           .venv/bin/python -m scripts.ci_rca.evidence \
             --log-file /tmp/ci-rca-failed.log \
             --jobs-file /tmp/ci-rca-jobs.json \
             --workflow-name "$WORKFLOW_NAME" \
             --workflow-run-id "$RUN_ID" \
             --emit-dir /tmp/ci-rca-bundles \
+            ${JUNIT_FLAG} ${MANIFEST_FLAG} \
             > /tmp/ci-rca-evidence-out.txt 2>/tmp/ci-rca-evidence-err.txt || true
           BUNDLE_SHA=$(grep '^BUNDLE_SHA=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")
           BUNDLE_S3_URI=$(grep '^BUNDLE_S3_URI=' /tmp/ci-rca-evidence-out.txt | head -1 | cut -d= -f2 || echo "")

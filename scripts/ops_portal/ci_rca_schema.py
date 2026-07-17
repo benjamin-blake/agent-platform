@@ -117,6 +117,14 @@ class CiRcaContext(BaseModel):
     failure_category: Optional[str] = None
     occurrence_count: Optional[int] = Field(default=None, ge=1)
     last_seen: Optional[str] = None
+    # ci-rca-identity-lifecycle: status-aware chain + regression + escape-attribution fields.
+    # All Optional[...]=None -- backward-compatible additions, NO schema_version ceiling raise
+    # (Decision 84/103/63: projection fields, never new ops_recommendations columns).
+    regression_of: Optional[str] = Field(default=None, pattern=r"^rec-\d+$")
+    fixed_by_sha: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F]{7,40}$")
+    affected_nodeids: Optional[list[str]] = None
+    flaky: Optional[bool] = None
+    escape_class: Optional[str] = Field(default=None, pattern=r"^(no-edge|capped|unknown-data-edge)$")
 
     @field_validator("why_chain")
     @classmethod

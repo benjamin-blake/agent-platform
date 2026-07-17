@@ -67,6 +67,7 @@ jobs:
 
           from scripts.rec_trailer import parse_resolves_trailer
           from scripts.ops_data_portal import update_rec, sync
+          from scripts.ops_portal.ci_rca_lifecycle import stamp_fixed_by_sha
 
           commit_sha = os.environ.get("GITHUB_SHA", "unknown")
           repo = os.environ.get("GITHUB_REPOSITORY", "unknown")
@@ -115,9 +116,21 @@ jobs:
                   print(f"rec-autoclose: closed {rec_id}")
               except RuntimeError as exc:
                   print(f"rec-autoclose: WARN {rec_id} not found in portal ({exc}) -- skipping")
+                  continue
               except Exception as exc:
                   print(f"rec-autoclose: ERROR closing {rec_id}: {exc}", file=sys.stderr)
                   exit_code = 1
+                  continue
+
+              # ci-rca-identity-lifecycle: record the fix commit into the closed rec's
+              # context_v2_json.fixed_by_sha via the importable helper -- that SHA powers a
+              # future recurrence's regression-vs-drop ancestry check. No-op for non-ci_rca recs.
+              if existing and existing.get("source") == "ci_rca":
+                  try:
+                      stamp_fixed_by_sha(rec_id, commit_sha)
+                      print(f"rec-autoclose: stamped fixed_by_sha={commit_sha} on {rec_id}")
+                  except Exception as exc:
+                      print(f"rec-autoclose: WARN could not stamp fixed_by_sha on {rec_id}: {exc}", file=sys.stderr)
 
           sys.exit(exit_code)
           PYEOF

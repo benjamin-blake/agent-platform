@@ -60,6 +60,12 @@ from scripts.ops_portal.cache import (  # noqa: F401
     _sanitize_athena_record,
     _sync_table,
 )
+from scripts.ops_portal.ci_rca_lifecycle import (  # noqa: F401
+    classify_closed_head,
+    closed_head_of_chain,
+    current_commit_sha,
+    file_regression_record,
+)
 from scripts.ops_portal.ci_rca_runtime import (  # noqa: F401
     _CI_RCA_BACK_VALIDATE_DEFAULT_SINCE,
     _print_ci_rca_back_validation_report,
@@ -67,8 +73,6 @@ from scripts.ops_portal.ci_rca_runtime import (  # noqa: F401
     back_validate_ci_rca,
     bump_ci_rca_occurrence,
     find_open_ci_rca_rec_by_fingerprint,
-    find_recent_ci_rca_rec_by_fingerprint,
-    reopen_ci_rca_rec,
 )
 from scripts.ops_portal.ci_rca_schema import (  # noqa: F401
     _CI_RCA_VALID_MODES,
@@ -295,24 +299,34 @@ def file_rec(
                     )
                     return existing_id
 
-                # rec-2644 close-then-recur fix: no OPEN match, but a recently-CLOSED match means
-                # this is the same incident recurring, not a fresh episode. Reopen via the
-                # SEPARATE single-writer (reopen_ci_rca_rec) instead of inserting a duplicate --
-                # mutually exclusive with the open-match bump above, so occurrence never
-                # double-counts (Risk B). An out-of-window closed match (or no match at all)
-                # falls through to the normal insert path below.
-                recent = find_recent_ci_rca_rec_by_fingerprint(fingerprint, profile=profile)
-                if recent is not None:
-                    recent_id, was_closed = recent
-                    if was_closed:
-                        reopen_ci_rca_rec(recent_id, profile=profile)
+                # ci-rca-identity-lifecycle: no OPEN match. Status-aware chain: check the
+                # fingerprint's CLOSED head (if any) and run the regression-vs-drop ancestry
+                # classification (Decision 55 fail-closed to REGRESSION when the head has no
+                # fixed_by_sha) -- NEVER a closed->open flip (the rec-2644 revive path, its
+                # status-flip mutator and READ-ONLY recency finder, is fully retired; a closed
+                # rec's fixed_by_sha is a closure PROOF, citing Decision 103's closure-proof
+                # clause, that reopening would discard without contrary evidence).
+                head = closed_head_of_chain(fingerprint, profile=profile)
+                if head is not None:
+                    failing_sha = current_commit_sha()
+                    verdict = classify_closed_head(failing_sha, head)
+                    if verdict == "drop":
                         logger.info(
-                            "[CI_RCA_DEDUP] fingerprint=%s matches recently-closed %s; reopened + bumped "
-                            "occurrence once (write-time backstop, rec-2644).",
+                            "[CI_RCA_LIFECYCLE] fingerprint=%s failing_sha=%s is an ancestor of closed "
+                            "%s's fixed_by_sha -- stale-code rerun, dropping (no insert, no bump, no reopen).",
                             fingerprint,
-                            recent_id,
+                            failing_sha,
+                            head.rec_id,
                         )
-                        return recent_id
+                        return head.rec_id
+                    fields, context_v2_json = file_regression_record(fields, context_v2_json, head.rec_id)
+                    logger.info(
+                        "[CI_RCA_LIFECYCLE] fingerprint=%s matches closed %s with no ancestry proof of "
+                        "fix -- filing a NEW REGRESSION record (regression_of=%s); never reopening.",
+                        fingerprint,
+                        head.rec_id,
+                        head.rec_id,
+                    )
 
     _derive_computed_fields(fields)
 

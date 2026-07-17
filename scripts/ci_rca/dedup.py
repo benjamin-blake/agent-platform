@@ -15,6 +15,15 @@ genuinely-novel or fingerprint-less bundle always contributes to running the age
 -- dedup never silently swallows an undiagnosed failure). The overall run-agent decision is the
 OR of every bundle's individual verdict.
 
+Status-aware over the fingerprint CHAIN (ci-rca-identity-lifecycle): `finder` only ever matches
+the NEWEST record in a fingerprint's chain while it is status=open (see
+scripts.ops_portal.ci_rca_lifecycle.newest_open_in_chain) -- a CLOSED head is never bumped. An
+optional `closed_head_resolver` seam additionally classifies a closed-head match as a stale-code
+rerun ('drop' -- skip the agent, no bump, no reopen) or a genuine regression ('regression' -- run
+the agent same as a novel fingerprint) via git ancestry (classify_closed_head). It defaults to
+None (never consulted) so existing callers of decide() that inject only finder/bumper keep their
+exact prior behaviour unchanged; main() wires the real resolver explicitly.
+
 CLI usage (invoked by the workflow):
     bin/venv-python -m scripts.ci_rca.dedup --bundles-dir /tmp/ci-rca-bundles [--force-rca]
 Prints one line per bundle verdict, then `deduped=true|false` for the workflow to capture.
@@ -34,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 FinderFn = Callable[[str], Optional[str]]
 BumperFn = Callable[[str], None]
+ClosedHeadResolverFn = Callable[[str], Optional[str]]  # fingerprint -> "drop" | "regression" | None
 
 
 @dataclass
@@ -55,9 +65,10 @@ class DedupResult:
 
 
 def _default_finder(fingerprint: str, profile: Optional[str] = None) -> Optional[str]:
-    from scripts.ops_portal.ci_rca_runtime import find_open_ci_rca_rec_by_fingerprint  # noqa: PLC0415
+    """Status-aware: only the NEWEST record in the fingerprint's chain, while status=open."""
+    from scripts.ops_portal.ci_rca_lifecycle import newest_open_in_chain  # noqa: PLC0415
 
-    return find_open_ci_rca_rec_by_fingerprint(fingerprint, profile=profile)
+    return newest_open_in_chain(fingerprint, profile=profile)
 
 
 def _default_bumper(rec_id: str, profile: Optional[str] = None) -> None:
@@ -66,12 +77,27 @@ def _default_bumper(rec_id: str, profile: Optional[str] = None) -> None:
     bump_ci_rca_occurrence(rec_id, profile=profile)
 
 
+def _default_closed_head_resolver(fingerprint: str, profile: Optional[str] = None) -> Optional[str]:
+    """Real closed-head classifier: 'drop' | 'regression' | None (no closed head at all)."""
+    from scripts.ops_portal.ci_rca_lifecycle import (  # noqa: PLC0415
+        classify_closed_head,
+        closed_head_of_chain,
+        current_commit_sha,
+    )
+
+    head = closed_head_of_chain(fingerprint, profile=profile)
+    if head is None:
+        return None
+    return classify_closed_head(current_commit_sha(), head)
+
+
 def decide(
     fingerprints: list[str],
     *,
     force_rca: bool = False,
     finder: Optional[FinderFn] = None,
     bumper: Optional[BumperFn] = None,
+    closed_head_resolver: Optional[ClosedHeadResolverFn] = None,
     profile: Optional[str] = None,
 ) -> DedupResult:
     """Per-bundle dedup decision over a run's evidence-bundle fingerprints.
@@ -82,15 +108,25 @@ def decide(
         force_rca: CIRCA-03(c) / Decision 74 dedup-bypass. Bypasses ALL lookups and always
             runs the agent -- mirrors the fp_dedup step's `force_rca` input.
         finder: Injected callable(fingerprint) -> rec_id | None. Defaults to the real
-            DuckLake-backed lookup (find_open_ci_rca_rec_by_fingerprint).
+            status-aware chain lookup (newest_open_in_chain) -- only the newest, OPEN record
+            in a fingerprint's chain is ever a bump target; a closed head never matches here.
         bumper: Injected callable(rec_id) -> None. Defaults to the real occurrence bump
-            (bump_ci_rca_occurrence). Called once per matched bundle.
-        profile: AWS profile override for the default finder/bumper.
+            (bump_ci_rca_occurrence). Called once per matched-open bundle.
+        closed_head_resolver: Injected callable(fingerprint) -> "drop" | "regression" | None.
+            Consulted ONLY when `finder` misses. "drop" skips the agent (no bump, matches a
+            stale-code rerun of an already-fixed commit); "regression" or None (no closed head
+            at all) runs the agent same as a genuinely novel fingerprint. Defaults to None
+            (never consulted) so a caller injecting only finder/bumper keeps EXACTLY its prior
+            behaviour -- main() wires the real resolver (_default_closed_head_resolver)
+            explicitly for the workflow's fp_dedup step.
+        profile: AWS profile override for the default finder/bumper/resolver.
 
     Returns:
         DedupResult.run_agent is True (deduped is False) iff force_rca, no fingerprints were
-        supplied at all (zero evidence -- fail closed), or ANY bundle's fingerprint is missing
-        or has no open-rec match. A matched bundle's rec is bumped as a side effect via bumper.
+        supplied at all (zero evidence -- fail closed), or ANY bundle's fingerprint is missing,
+        has no open-rec match AND no closed-head 'drop' verdict. A matched-open bundle's rec is
+        bumped as a side effect via bumper; a closed-head 'drop' match is never bumped (a closed
+        head is never mutated).
     """
     if force_rca:
         return DedupResult(run_agent=True, verdicts=[], force_rca=True)
@@ -112,9 +148,14 @@ def decide(
         if rec_id:
             resolved_bumper(rec_id)
             verdicts.append(BundleVerdict(fingerprint=fp, matched_rec_id=rec_id, run_agent=False))
-        else:
-            verdicts.append(BundleVerdict(fingerprint=fp, matched_rec_id=None, run_agent=True))
-            any_novel = True
+            continue
+        if closed_head_resolver is not None and closed_head_resolver(fp) == "drop":
+            # Closed head, ancestry-proven stale-code rerun: skip the agent, never bump, never
+            # reopen (a closed head is never mutated).
+            verdicts.append(BundleVerdict(fingerprint=fp, matched_rec_id=None, run_agent=False))
+            continue
+        verdicts.append(BundleVerdict(fingerprint=fp, matched_rec_id=None, run_agent=True))
+        any_novel = True
 
     return DedupResult(run_agent=any_novel, verdicts=verdicts)
 
@@ -140,7 +181,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     fingerprints = _load_fingerprints(args.bundles_dir) if args.bundles_dir.exists() else []
-    result = decide(fingerprints, force_rca=args.force_rca, profile=args.profile)
+    result = decide(
+        fingerprints,
+        force_rca=args.force_rca,
+        profile=args.profile,
+        closed_head_resolver=lambda fp: _default_closed_head_resolver(fp, profile=args.profile),
+    )
 
     if result.force_rca:
         print("force_rca=true; bypassing fingerprint dedup.")
@@ -149,6 +195,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     for v in result.verdicts:
         if v.matched_rec_id:
             print(f"Fingerprint {v.fingerprint} matches open {v.matched_rec_id}; bumped occurrence.")
+        elif v.fingerprint and not v.run_agent:
+            print(f"Fingerprint {v.fingerprint} matches a closed head; ancestry-proven stale rerun, dropping.")
         elif v.fingerprint:
             print(f"Fingerprint {v.fingerprint} has no open match; running agent.")
         else:

@@ -215,7 +215,12 @@ def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], r
 
 
 def _build_unit_test_cmd() -> list[str]:
-    """Return the pytest command for the 'Unit tests + coverage' step."""
+    """Return the pytest command for the 'Unit tests + coverage' step.
+
+    --junitxml (ci-rca-identity-lifecycle): emits a junit XML report both tiers' full-suite run
+    can hand to scripts.ci_rca.evidence for v2 fingerprint cause-group parsing on a post-merge
+    failure. Additive to the hermeticity flags (validate_hermeticity_flags checks presence only).
+    """
     return [
         _common.PYTHON,
         "-m",
@@ -228,6 +233,7 @@ def _build_unit_test_cmd() -> list[str]:
         "--cov-report=term-missing",
         "--disable-socket",
         "--randomly-seed=last",
+        "--junitxml=logs/debug/pytest-junit.xml",
     ]
 
 
