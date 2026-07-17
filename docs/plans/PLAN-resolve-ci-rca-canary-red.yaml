@@ -1,0 +1,185 @@
+schema_version: 1
+slug: "resolve-ci-rca-canary-red"
+intent: >-
+  Restore green post-merge Main Canary by fixing the two open Critical ci_rca recs (rec-2716,
+  rec-2718), keeping the full-tier gate trustworthy so autonomous and human sessions can rely on
+  a green main as the North-Star correctness signal.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-resolve-ci-rca-canary-red.yaml
+phase: >-
+  Platform reliability / CI-RCA -- restore post-merge Main Canary green under the Decision 73
+  two-tier presubmit model (full tier is the post-merge SoT; a red canary blocks /plan via the
+  ci_rca HARD BLOCK).
+scope:
+  - file: tests/test_schema_to_field_semantics.py
+    action: Modify
+    purpose: >-
+      Bump the frozen ops_decisions column-count assertion in test_ops_decisions_columns_present
+      from 14 to 18, reconciling the canary with the four parity-backstop columns (raw_block,
+      reversal_conditions, superseded_by, content_hash) ratified by Decision 134 clause 4.
+  - file: scripts/ops_portal/decisions.py
+    action: Modify
+    purpose: >-
+      Replace the independent Path(__file__).resolve().parent.parent.parent walk that builds
+      _FIDELITY_BASELINE_PATH with ROOT imported from scripts.ops_portal._common, restoring the
+      single-source-root invariant (Decision 104/124) enforced by
+      test_root_single_source_no_recompute_outside_common.
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Make the "Fetch failed run logs" retry predicate content-aware so a transient gh
+      API-error stderr (503 / "failed to get jobs") no longer satisfies the test -s non-empty
+      check; the 3-attempt backoff must actually fire and the loud exit 1 on persistent failure
+      is retained as the fail-safe.
+bundled_recommendations:
+  - rec-2716
+  - rec-2718
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    rec-2716 acceptance passes: bin/venv-python -m pytest
+    tests/test_session_preflight_decomposition.py tests/test_ops_portal_facade.py
+    tests/ops_data_portal/test_decisions.py tests/test_schema_to_field_semantics.py exits 0 with
+    zero failures.
+  - >-
+    test_ops_decisions_columns_present asserts 18 columns and passes; the schema growth is
+    reconciled with Decision 134 clause 4, not rolled back.
+  - >-
+    test_root_single_source_no_recompute_outside_common passes: scripts/ops_portal/decisions.py
+    contains no Path(__file__) occurrence and imports ROOT from scripts.ops_portal._common.
+  - >-
+    rec-2718 fixed: .github/workflows/ci-rca.yml's log-fetch retry predicate rejects a gh
+    transient-error string (503 stderr does not count as a valid log) while still accepting a
+    real failures log; the guard is present in the workflow.
+  - >-
+    Post-merge, the next Main Canary run on main concludes success, and rec-2716 + rec-2718 are
+    closed via the squash-merge Resolves trailer.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the full rec-2716 acceptance command (all four cited test files) and confirm zero
+      failures after the two source fixes.
+    command: >-
+      bin/venv-python -m pytest tests/test_session_preflight_decomposition.py
+      tests/test_ops_portal_facade.py tests/ops_data_portal/test_decisions.py
+      tests/test_schema_to_field_semantics.py -q
+    expected: >-
+      All collected tests pass (exit 0); in particular test_ops_decisions_columns_present and
+      test_root_single_source_no_recompute_outside_common pass.
+    fix_if: >-
+      Any failure. If test_ops_decisions_columns_present still shows 18 != 14, the count bump was
+      not applied; if test_root_single_source_no_recompute_outside_common lists decisions.py, a
+      Path(__file__) occurrence remains in that module.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      These four test files already run as standing full-tier checks in the post-merge Main
+      Canary (the same gate that filed rec-2716). Graduating a duplicate kernel-registry row
+      would re-run identical assertions and add no regression coverage beyond the canary itself.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Behaviourally exercise the content-aware retry predicate (Decision 48 V3 behavioural
+      clause): confirm the guard regex rejects a gh 503 transient-error string and accepts a
+      real pytest FAILURES line.
+    command: >-
+      P='^failed to get (jobs|run)|HTTP 5[0-9][0-9]:|Service Unavailable'; printf 'failed to get
+      jobs: HTTP 503: 503 Service Unavailable\n' | grep -qiE "$P" && printf 'FAILED
+      tests/test_x.py::t - AssertionError\n' | grep -qivE "$P" && echo BEHAVIOUR-OK
+    expected: "Prints BEHAVIOUR-OK and exits 0 (503 stderr matches the guard -> rejected; real failures line does not -> accepted)."
+    fix_if: >-
+      Exit non-zero or no BEHAVIOUR-OK. The guard regex either fails to catch the 503 transient
+      string or false-positives on a genuine failures log; retune the anchored patterns.
+    hermetic: true
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the committed workflow carries the content-aware guard (binds the step-2 behaviour
+      to ci-rca.yml and guards against regression to the bare test -s predicate).
+    command: >-
+      grep -qE 'failed to get jobs' .github/workflows/ci-rca.yml && grep -qiE 'HTTP 5|Service
+      Unavailable' .github/workflows/ci-rca.yml
+    expected: "Both greps match (exit 0): the retry predicate references the gh transient-error text."
+    fix_if: >-
+      No match. The content-aware guard was not committed to the workflow, or the retry loop
+      still uses only test -s.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "ci-rca-log-fetch-503-guard-present"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Run the authoritative pre-merge gate to confirm no regression introduced by the three edits
+      (Decision 73: --pre is the authoritative pre-merge gate).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      The --pre tier passes; credential-dependent verifiers may emit SKIPPED (degraded mode) but
+      none FAIL, and validate_graduation_completeness accepts this plan's dispositions.
+    fix_if: >-
+      Any --pre check fails. Read the failing check name; a validate_graduation_completeness
+      failure means a pre-deploy VP step is missing its disposition.
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: post-deploy
+    action: >-
+      After squash-merge to main, confirm the next Main Canary run concludes success (the real
+      proof CI is green again).
+    command: >-
+      mcp__github__actions_list list_workflow_runs main-canary.yml branch=main -- inspect the
+      newest run's conclusion (expect success)
+    expected: "The newest Main Canary run on main after this merge concludes 'success'."
+    fix_if: >-
+      The canary is still red. Re-fetch the failing job log, identify the residual failure, and
+      forward-fix on a new branch (Decision 55: no auto-revert).
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Confirm rec-2716 and rec-2718 auto-closed via the Resolves trailer; refresh the local read
+      cache and check status.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && grep -E '"id": "rec-271[68]"'
+      logs/.recommendations-log.jsonl
+    expected: "Both rec-2716 and rec-2718 show status closed in the refreshed cache."
+    fix_if: >-
+      Either rec is still open. The Resolves trailer was omitted or rec-autoclose.yml failed; use
+      the bin/venv-python -m scripts.ops_data_portal --update-rec fallback (Decision 70 mechanics).
+constraints:
+  - "Forward-fix only (Decision 55): do not revert PR #605 and do not roll back the ops_decisions schema; reconcile the canary to the ratified 18-column shape."
+  - "No rescue agents or workaround loops (Decision 55). The ci-rca retry predicate must retain its loud exit 1 on persistent failure -- a false-positive on the guard fails safe (loud), never silently classifies a bad bundle."
+  - "Only the three files in scope may be modified. The two secondary bugs surfaced during RCA are filed as follow-on recs (rec-2719 classifier mis-attribution, rec-2720 reopen validator) and are out of scope here."
+  - "SLOC: step 2 net-removes a Path(__file__) walk from decisions.py in favour of one import -- no budget raise or raise-approved marker is triggered (Decision 128)."
+  - "ci-rca.yml is a GitHub Actions workflow, not a Lambda-packaged file (Decision 79 patterns) and not .tf -- no build/deploy/smoke-test or terraform steps apply."
+context:
+  - "Root cause: PR #605 (daf-etl-parity-fidelity, commit 0fec964) passed --pre but broke two full-tier-only tests; the Main Canary has concluded failure on every completed run since (07-16 -> 07-17)."
+  - "rec-2716 originally cited 5 failures; 3 were incidentally fixed by later SLOC-decomposition merges. Two remain live: the 14->18 column-count freeze and the decisions.py repo-root recompute -- both reproduced locally (2 failed, 273 passed)."
+  - "rec-2718 is a ci-rca infrastructure bug: the retry predicate uses test -s, so a gh 503 stderr string counts as a valid log and the 3-attempt backoff never fires, yielding an 'unknown'-classified evidence bundle (log-availability race class, rec-2117/rec-2118)."
+  - "This /plan session IS the mandated architectural RCA review of the two ci_rca recs (Decision 72 RCA-as-Plan-Source); it satisfies, not violates, the AGENTS.md 'do not inline-patch a ci_rca rec before /plan review' rule."
+  - "Decision-scout verdict: FLAGS_FOUND (94 of 94 triaged). CITE: dec-134, dec-104, dec-124, dec-55, dec-73, dec-74, dec-132, dec-103. RELATED: dec-72, dec-84, dec-128."
+  - "Scout flag adopted: closure of rec-2716/rec-2718 via the Resolves trailer is governed by Decision 103 (closure-proof / rec lifecycle), NOT Decision 70 (physical deletion); Decision 70 is retained only for the --update-rec fallback mechanics in VP step 6."
+  - "Scout flag adopted: .github/workflows/*.yml is not on Decision 48's exhaustive V3 trigger list (deterministically V2); the conservative V3 label is retained and its behavioural-acceptance clause is satisfied by the step-2 predicate simulation rather than post-deploy observation alone."
+  - "Verification graduation is an enforced pre-merge obligation (Decision 132): every pre-deploy VP step carries a graduation disposition; validate_graduation_completeness's plan-PR leg fails an unset one."
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<pending>"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ci-failure-rca-plan-l8q4hy)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via decision-scout gate (94 of 94)
+  - All three scope files located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "tests/test_schema_to_field_semantics.py: change the assertion in test_ops_decisions_columns_present from len(cols) == 14 to len(cols) == 18. Leave test_ops_recommendations_columns_present (26) untouched."
+  - "scripts/ops_portal/decisions.py: add `from scripts.ops_portal._common import ROOT`; rewrite _FIDELITY_BASELINE_PATH to build from ROOT (ROOT / 'config' / 'agent' / 'data_quality' / 'decisions' / 'fidelity_baseline.yaml'); remove the Path(__file__).resolve().parent.parent.parent walk. Confirm no other Path(__file__) occurrence remains in the module; keep the `from pathlib import Path` import only if still used elsewhere."
+  - ".github/workflows/ci-rca.yml: in the 'Fetch failed run logs' step, change the success predicate from `if test -s /tmp/ci-rca-failed.log` to also require that the log does NOT match the anchored gh transient-error patterns (^failed to get (jobs|run) | HTTP 5xx: | Service Unavailable), so the 3-attempt backoff fires on a 503; retain the loud exit 1 after attempts are exhausted."
+  - "Execute Verification Plan steps 1-4 (pre-deploy); loop until pass. On an unrecoverable failure, stop and RCA (Decision 55)."
+  - "Commit with a feat(resolve-ci-rca-canary-red) message; squash-merge body carries `Resolves: rec-2716, rec-2718`."
+  - "Post-merge: execute VP steps 5-6 (Main Canary green + rec closure confirmation)."
+  - "Report: what was changed in each of the three files and the verification results."
+work_areas: []
+rollback: >-
+  Each edit is independently revertable. Reverting tests/test_schema_to_field_semantics.py or
+  scripts/ops_portal/decisions.py re-reds the canary (not desirable). Reverting only the
+  ci-rca.yml predicate restores the prior (buggy) log-fetch behaviour without affecting canary
+  green. No schema or data migration is involved, so there is no data rollback.
