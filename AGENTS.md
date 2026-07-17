@@ -110,6 +110,8 @@ Decision 90 four-tier workflow (end-goal: /orient -> /plan -> /implement -> /dev
 - `/develop-executor` — supervisor for executor (Lambda) development.
 - `/audit` — composes a self-contained audit prompt (`docs/audit-prompts/AUDIT-{slug}.md`) for a high-capability model to execute in a fresh session; deep recon + zero-context subagent verification happen in the composing session so the expensive model pays only for judgment. Performs no audit itself. Invokes the `audit-prompt` skill.
 
+`/overseer` is an orchestration meta-layer, not a fifth tier: it composes the existing `/plan` and `/implement` subagents (Fable advice-consult, Opus planning, Sonnet implementation) to drive an entire platform roadmap item or audit to completion largely unattended, narrowing the human to intake (G0), decomposition (G1), and completion (G3) gates. It never bypasses the four-tier workflow above or the Decision 67 executor freeze -- it is interactive/human-gated, IMPLEMENTATION-only, and does not consume the recommendation queue. Invokes the `overseer` skill.
+
 When a slash command instructs you to "apply" or "invoke" a skill, use the `Skill` tool — do **not** manually `Read` `SKILL.md` files. The Skill tool loads them on demand.
 
 ## Operational data governance — Single Portal Invariant
