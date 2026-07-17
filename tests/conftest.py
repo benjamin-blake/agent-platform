@@ -51,20 +51,77 @@ def _clear_executor_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
-@pytest.fixture(autouse=True)
-def _clear_aws_credential_env(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip ambient AWS credential-signal env vars so profile-resolution tests stay hermetic.
+_NONEXISTENT_AWS_DIR_SEGMENT = "nonexistent-aws-config-dir"
 
-    scripts.aws_profile.resolve_aws_profile returns None (boto3 default chain) when
-    AWS_ACCESS_KEY_ID or AWS_LAMBDA_FUNCTION_NAME is present. The OIDC main-validate runner
-    exports AWS_ACCESS_KEY_ID into the job env before pytest, which would flip named-profile
-    assertions to None and fail them only on CI. Clearing these keeps unit tests deterministic
-    across local and CI; integration tests opt out.
+
+@pytest.fixture(autouse=True)
+def _hermetic_aws_profile(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """L1 (rec-2484): force boto3.Session(profile_name=...) to raise ProfileNotFound everywhere.
+
+    Consolidates the former _clear_aws_credential_env fixture. Deletes the ambient
+    credential-signal env vars scripts.aws_profile.resolve_aws_profile and boto3 consult
+    (AWS_PROFILE, AWS_DEFAULT_PROFILE, AWS_ACCESS_KEY_ID, AWS_LAMBDA_FUNCTION_NAME) -- a
+    delete-credential-signals design, never a fake AWS_ACCESS_KEY_ID, which would flip
+    resolve_aws_profile to None and silently break named-profile resolution
+    (tests/test_aws_profile.py) -- and redirects AWS_CONFIG_FILE / AWS_SHARED_CREDENTIALS_FILE
+    to a nonexistent path so no real profile (named or default) can resolve regardless of what
+    is on disk in ~/.aws, identically on dev and CI. Also disables the EC2 instance-metadata
+    credential provider so the default chain cannot fall through to IMDS. The OIDC
+    main-validate runner exports AWS_ACCESS_KEY_ID into the job env before pytest, which
+    would otherwise flip named-profile assertions to None only on CI; deleting it keeps unit
+    tests deterministic across local and CI. @pytest.mark.integration tests opt out -- they
+    need real AWS access. Uses get_closest_marker (not own_markers, per the rec-575 gap) so a
+    class- or module-level @pytest.mark.integration decorator is honoured, not just a
+    method-level one.
     """
-    if "integration" in [m.name for m in request.node.own_markers]:
+    if request.node.get_closest_marker("integration") is not None:
         return
-    for var in ("AWS_ACCESS_KEY_ID", "AWS_LAMBDA_FUNCTION_NAME"):
+    for var in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_LAMBDA_FUNCTION_NAME"):
         monkeypatch.delenv(var, raising=False)
+    nonexistent_dir = tmp_path / _NONEXISTENT_AWS_DIR_SEGMENT
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(nonexistent_dir / "config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(nonexistent_dir / "credentials"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+@pytest.fixture(autouse=True)
+def _block_unmocked_aws_client(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """L2 (rec-2484): raise loudly on any un-mocked AWS client construction.
+
+    botocore.session.Session.create_client is the single chokepoint underneath
+    boto3.client(), boto3.resource(), and Session().client() -- patching it here catches
+    every construction path in one place, mirroring the _block_llm_cli_subprocess idiom
+    above. L1 already makes profile resolution fail (ProfileNotFound) for the common case;
+    this layer is defense-in-depth against the residual paths where a client could still be
+    built (e.g. the boto3 default credential chain, which does not require a named profile
+    at all). Tests that genuinely construct a client -- mocked (moto, Stubber) or live -- opt
+    in with @pytest.mark.aws. This is a separate opt-out from L1's @pytest.mark.integration:
+    a live-AWS integration test needs @pytest.mark.aws too to fully bypass both layers. Uses
+    get_closest_marker (not own_markers, per the rec-575 gap) so a class- or module-level
+    @pytest.mark.aws decorator is honoured, not just a method-level one. boto3/botocore are
+    deliberately excluded from requirements-fast.txt (rec-2485, ~3GB of heavy wheels) -- this
+    fixture is autouse and runs for every test in every tier, so the import is guarded the
+    same way _get_executor_env_vars/_isolate_plans_jsonl/_clear_fear_greed_cache above guard
+    their own optional imports: a genuinely-absent botocore means no test in this process can
+    construct a real client anyway, so the guard has nothing to do.
+    """
+    if request.node.get_closest_marker("aws") is not None:
+        return
+
+    try:
+        import botocore.session as _botocore_session  # noqa: PLC0415
+    except ImportError:
+        return
+
+    def _guarded_create_client(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError(
+            "Unit test constructed a real AWS client (boto3.client/resource/Session().client) "
+            "without mocking it. Mock the client (moto, unittest.mock.patch, botocore Stubber) "
+            "and mark the test @pytest.mark.aws, or mark it @pytest.mark.integration (+ "
+            "@pytest.mark.aws) if it legitimately needs real AWS access (rec-2484)."
+        )
+
+    monkeypatch.setattr(_botocore_session.Session, "create_client", _guarded_create_client)
 
 
 @pytest.fixture(autouse=True)

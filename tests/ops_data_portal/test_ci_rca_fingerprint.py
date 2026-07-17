@@ -9,8 +9,9 @@ precedent) rather than a config/sloc_budgets.yaml raise marker: TestCiRcaFingerp
 keeps the guard/fingerprint/backstop/bump cohort; the close-then-recur / recent-finder cohort
 (rec-2644) becomes the sibling class TestCiRcaCloseThenRecur in test_ci_rca_close_then_recur.py.
 The class-qualifier rename on that moved cohort is the SOLE sanctioned test-id delta of rec-2709
-Wave 3. The rec-2707 backstop-reader guard (_guard_live_reader, autouse) is duplicated verbatim
-into both sibling classes so each module stays self-contained (no cross-test imports).
+Wave 3. The rec-2707 backstop-reader guard (_guard_live_reader, autouse) formerly duplicated
+verbatim into both sibling classes has since been retired (rec-2484): the global L1/L2
+hermetic-AWS guard in the root tests/conftest.py now supersedes it class-wide.
 """
 
 from __future__ import annotations
@@ -30,39 +31,16 @@ from tests.fixtures.ops_portal_records import VALID_FIELDS as _VALID_FIELDS  # n
 
 class TestCiRcaFingerprintDedup:
     """CIRCA-03: find_open_ci_rca_rec_by_fingerprint(), the write-time backstop, and the
-    bundle-derived fingerprint/failure_category stamp inside _run_ci_rca_cross_check()."""
+    bundle-derived fingerprint/failure_category stamp inside _run_ci_rca_cross_check().
+
+    The former per-class _guard_live_reader autouse fixture (rec-2707 backstop-reader guard)
+    is retired: the global L1/L2 hermetic-AWS guard in the root tests/conftest.py (rec-2484)
+    now blocks any un-mocked src.common.iceberg_reader.make_reader() -> boto3 client path
+    class-wide, so the per-class duplicate is redundant. Its own behavior test lives in
+    tests/test_conftest_hermeticity.py, not here.
+    """
 
     _FINGERPRINT = "a" * 64
-
-    @pytest.fixture(autouse=True)
-    def _guard_live_reader(self):
-        """Class-scoped backstop: any dedup-path test that forgets to mock
-        find_open_ci_rca_rec_by_fingerprint / find_recent_ci_rca_rec_by_fingerprint would
-        otherwise fall through to a live src.common.iceberg_reader.make_reader() call. On this
-        container that call SUCCEEDS (working assume-role creds) and silently masks the leak;
-        on the GitHub-hosted CI runner (no ~/.aws profile) it raises ProfileNotFound instead.
-        Fail the same way everywhere: turn any un-mocked call into a deterministic
-        AssertionError naming the missing mock (rec-2707)."""
-
-        def _unmocked_make_reader(*args, **kwargs):
-            raise AssertionError(
-                "src.common.iceberg_reader.make_reader() called without a mock -- add "
-                "patch.object(p, 'find_open_ci_rca_rec_by_fingerprint', ...) and/or "
-                "patch.object(p, 'find_recent_ci_rca_rec_by_fingerprint', ...) to this test's "
-                "with-block (rec-2707)."
-            )
-
-        with patch("src.common.iceberg_reader.make_reader", side_effect=_unmocked_make_reader):
-            yield
-
-    def test_guard_blocks_unmocked_reader(self):
-        """Self-verifying meta-test: proves _guard_live_reader is active and targets the right
-        dotted path -- an un-mocked src.common.iceberg_reader.make_reader() call must raise
-        AssertionError, not silently succeed."""
-        import src.common.iceberg_reader as iceberg_reader
-
-        with pytest.raises(AssertionError):
-            iceberg_reader.make_reader()
 
     def _make_bundle(self, tmp_path, **overrides):
         import hashlib as _hashlib
