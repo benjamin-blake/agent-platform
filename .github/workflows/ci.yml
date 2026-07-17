@@ -63,6 +63,22 @@ jobs:
         AWS_DEFAULT_REGION: eu-west-2
       run: python -m scripts.validate --pre
 
+    - name: Upload affected-set selection manifest
+      # PR-context observability capture for the live affected-set derivation (Decision
+      # affected-set-selection): the manifest is an OUTPUT/observability artifact only, never
+      # a selection input -- best-effort, always uploaded regardless of the validate step's
+      # outcome so a red run's selection is diagnosable too. pr-validate has no AWS creds (see
+      # requirements-fast.txt / no OIDC block above); the manifest's own best-effort S3 leg
+      # lazy-imports boto3 and degrades to a loud skip in this job -- this artifact is the
+      # PR-context capture, independent of that S3 leg.
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: selection-manifest
+        path: logs/debug/selection-manifest.json
+        if-no-files-found: ignore
+        retention-days: 14
+
   main-validate:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest

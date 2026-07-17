@@ -18,8 +18,15 @@ def _mock_completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> 
 
 
 def _pre_mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
-    """Shared subprocess mock that handles git branch + everything else."""
+    """Shared subprocess mock that handles git branch + everything else.
+
+    stderr is set to "" (not left as an auto-vivified MagicMock attribute) so callers that
+    unconditionally build a combined stdout+stderr string (e.g.
+    scripts.checks._scaffolding._attribute_batched_collect_errors, which must scan for a
+    graceful SKIPPED line even on a returncode-0 batch) get a real string rather than a Mock.
+    """
     result = MagicMock()
     result.returncode = 0
     result.stdout = "agent/test-branch\n"
+    result.stderr = ""
     return result
