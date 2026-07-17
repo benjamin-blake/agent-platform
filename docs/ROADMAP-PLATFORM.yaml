@@ -143,6 +143,16 @@ document:
             T0.3 (also CD.26-gated) STAYS exempt despite CD.26 ratifying -- it is
             ALSO gated by CD.10 (still pending), so its flag is retained per the
             flag-strip safety rule (strip only when ALL gating CDs are ratified).
+            [DISCHARGED 2026-07-17, dec-137/dec-138/dec-139/dec-141 (Decisions
+            137/138/139 ratify CD.9/CD.5/CD.4; Decision 141 ratifies CD.19 -- all
+            via the Decision 105 lane) + dec-140 (CD.8)]: bootstrap_completion_exempt
+            stripped in the same edit for the items whose gating CDs are now ALL
+            ratified -- T0.9 (CD.4), T0.10 (CD.5), T2.4 (CD.9 + already-ratified
+            CD.31), T2.2 (CD.6 + CD.19, both now ratified). RETAINED per the
+            strip-safety rule: T2.5 (co-gating CD.15 pending), T0.13 (CD.12
+            pending), T2.1 (pending CD.17 gates it), T0.12.5 (CD.29), T0.12.7/T0.3
+            (CD.10). CD.8 (dec-140) clears completion gates on T1.2 and T2.5 (both
+            complete); it strips no flag (T1.2 carries none; T2.5 retained).
     - Ratification vehicle (single source of truth; supersedes earlier "T0.7b
       is the first ratification vehicle" phrasing -- 2026-06-09 audit F-001;
       re-described as the shared /orient->/plan->/implement lane by Decision
@@ -442,12 +452,32 @@ candidate_decisions:
     title: Vendor lock-in to Claude Code on the web is acceptable; AGENTS.md is portability hedge
     detail: Not over-investing in cross-harness abstraction. AGENTS.md is symlinked or duplicated to CLAUDE.md so other agent harnesses (Cursor, Aider, etc.) pick up the same instructions.
     gates: [T0.9]
-    state: pending
+    state: ratified
+    ratified_as: dec-139
+    filed_via: ops_decisions:dec-139
+    realization_evidence: >-
+      Realized: T0.9 complete (2026-05-19). The CLAUDE.md-loads-AGENTS.md portability hedge is
+      live -- root CLAUDE.md is `@AGENTS.md` (import directive), so any harness reading AGENTS.md
+      (Cursor, Aider, OpenHands, Continue, Codex) inherits the same universal rules; the lock-in
+      to CC-web as sole primary dev surface (CD.2) is operating reality. Clears CD.4's completion
+      gate on T0.9 (already complete; necessary-not-sufficient) and discharges T0.9's bootstrap_
+      completion_exempt flag (T0.9 gated solely by CD.4). Ratified via dec-139.
   - id: CD.5
     title: Pre-commit augments, does not replace, never_on_main hook
     detail: .claude/hooks/never_on_main.py intercepts intent-to-edit; pre-commit intercepts commit. Keep both. scheduled_agent_log_only.py stays (no portable analog).
     gates: [T0.10]
-    state: pending
+    state: ratified
+    ratified_as: dec-138
+    filed_via: ops_decisions:dec-138
+    realization_evidence: >-
+      Realized: T0.10 complete (2026-05-19). .pre-commit-config.yaml augments (does not replace)
+      the .claude/hooks/never_on_main.py intent-to-edit interceptor -- both kept: never_on_main
+      intercepts intent-to-edit at the harness/PreToolUse layer, pre-commit intercepts at commit-time
+      in any clone; scheduled_agent_log_only.py retained (no portable analog). T0.10's exemption note
+      already records 'CD.5 ratifies post-hoc via the portal vehicle'; this writes the evidence that
+      note anticipated. Clears CD.5's completion gate on T0.10 (already complete; necessary-not-
+      sufficient) and discharges T0.10's scope-(c) bootstrap_completion_exempt flag (T0.10 gated
+      solely by CD.5). Ratified via dec-138.
   - id: CD.6
     title: Personal AWS account = destination; rebuild not migrate
     detail: |
@@ -491,7 +521,21 @@ candidate_decisions:
       [Amendment -- CD.31]: Under the proposed DuckLake adoption (CD.31), DuckDB's native operational
       table format transitions from Iceberg to DuckLake; the embedded-engine choice (DuckDB) is unchanged.
     gates: [T1.2, T2.5]
-    state: pending
+    state: ratified
+    ratified_as: dec-140
+    filed_via: ops_decisions:dec-140
+    realization_evidence: >-
+      Realized (engine choice): DuckDB is the embedded default operational read engine and
+      DuckLake-on-Neon is the live ops read substrate -- the ducklake_reader closed named-verb
+      boundary (Decision 84 I-3) serves ops_recommendations/ops_decisions/ops_priority_queue
+      reads; local read paths (sync_ops, ops_data_portal, session_preflight) route through the
+      DuckDB reader (src/common/iceberg_reader.py) with the Athena escape hatch retained
+      conditionally per CD.15. Scoped to the engine choice only -- necessary, not sufficient
+      (CD.2/CD.6/CD.20 precedent): both gated items are complete (T2.5 2026-05-31; T1.2
+      completed_at 2026-07-07 via the T1.16 joint-closeout, RMAP-11) so ratification clears their
+      completion gates but closes no code criteria; the CD.15 Athena-escape-hatch clause (OQ.7)
+      stays open. T2.5's bootstrap_completion_exempt is RETAINED (co-gating CD.15 still pending).
+      Ratified via dec-140.
   - id: CD.9
     title: Partition every table; uniform rule
     detail: |
@@ -504,7 +548,22 @@ candidate_decisions:
       row/file count warrants. T2.4 applies the ALTER mechanism for DuckLake ops tables; the Iceberg
       partition sweep for all other tables is otherwise unchanged.
     gates: [T2.4]
-    state: pending
+    state: ratified
+    ratified_as: dec-137
+    filed_via: ops_decisions:dec-137
+    realization_evidence: >-
+      Realized -- substance already ratified BY PROXY via Decision 78 (= CD.31 DuckLake adoption)
+      and Decision 81 (CD.9 ALTER-partitioning mechanism), per T2.4's note (closes audit Q5c locus
+      gap). The three ops tables (ops_recommendations, ops_decisions, ops_priority_queue) live on
+      DuckLake-on-Neon -- the sole backend (Decision 84) -- where partitioning is applied via ALTER ...
+      SET PARTITIONED BY (metadata-only), row/file-count-conditional per Decision 81 and not warranted
+      at current ops-table sizes; T2.33 owns DuckLake partition-as-code. Their
+      day(last_updated_timestamp) partitioning originated in the T2.1 Iceberg era and is carried
+      forward under DuckLake (the frozen Iceberg copy is not a live read path, Decision 84). For the
+      still-Iceberg tables (product D.lake.* + market data), scripts/schema_to_iceberg.py (T0.13)
+      raises MissingPartitionSpec on @partition_by-less models and emits PARTITIONED BY verbatim
+      (rec-2314 two-arg fix). The 'no unpartitioned-table path' absolute holds. Clears CD.9's
+      completion gate on T2.4 (already complete; necessary-not-sufficient). Ratified via dec-137.
   - id: CD.10
     title: Agent Tooling Platform = Lambda per tool; replaces ops_data_portal as agent surface
     detail: |
@@ -734,8 +793,21 @@ candidate_decisions:
       freshness check semantics) — earlier-tier dependencies. Without ratification, T2.2's implementation
       plan has no anchor.
     gates: [T0.12, T1.6, T2.2]    # round-3 adversarial LOW-11: T0.12 and T1.6 must ship the schema change before T2.2 can use it
-    state: pending
-    decision_required_before: T2.2 status == "in_progress"
+    state: ratified
+    ratified_as: dec-141
+    filed_via: ops_decisions:dec-141
+    realization_evidence: >-
+      Resolved by human decision -- overtaken by events, NOT realized-by-gate-completion (T1.6
+      remains not_started). The timestamp-policy decision CD.19 required BEFORE T2.2 was settled DE
+      FACTO when T2.2 completed 2026-05-29 under option (b): created_timestamp preserved,
+      last_updated_timestamp set to import_time (last_updated is deterministically derived, so a
+      workaround to preserve originals was not warranted). The recommended option (c) source='import-
+      bootstrap' tag / schema change was deliberately NOT done. Consequence: last_updated lineage for
+      import-era rows is not preserved (history loss, accepted at this early dev stage). The feared
+      false-positive-freshness flood was option (a)'s risk and does NOT apply under (b) (rows read fresh; no
+      live freshness consumers -- rec-curator disabled, ratchet/drift = T3.7 unbuilt, T1.6 DQ-runner
+      not_started). Ratified via dec-141; clears CD.19's completion gate on T1.6 (and the already-complete
+      T0.12/T2.2).
   - id: CD.20
     title: Repository public-flip after T2.3; public surface is curated portal, not export of operational data
     detail: |
@@ -1899,8 +1971,19 @@ candidate_decisions:
       tier_item may not retain bare-string criteria; plan closes_criteria refs resolve to real item
       criteria.
     gates: []
-    state: pending
-    filed_via: pending_log_decision_lambda
+    state: ratified
+    ratified_as: dec-136
+    filed_via: ops_decisions:dec-136
+    realization_evidence: >-
+      Realized (T-1.20 / RMAP era): the per-criterion exit-criteria ledger CD.39 decides is
+      fully built and validate.py-ENFORCED -- scripts/checks/roadmap/validate_platform_roadmap.py
+      requires met/rehomed criteria to carry a met_by resolving to a real plan/commit/item, forbids
+      bare-string criteria on touched items, and resolves plan closes_criteria refs to real
+      item:criterion pairs. The harness reads it in daily bookkeeping: /orient ranks in_progress
+      items fewest-open-criteria-first and emits follow-on /plan prompts; /plan declares
+      closes_criteria; /implement flips criteria open->met on a verified VP pass and never auto-flips
+      (Status-Trusted-Never-Inferred, T2.20). CD.39 gates no item (gates: []); the structured-object
+      ledger is the live operating format. Ratified via dec-136.
 
   - id: CD.40
     title: >-
@@ -3243,9 +3326,9 @@ tier_items:
     related_candidate_decisions: [CD.4]
     effort: XS
     strategic: false
-    bootstrap_completion_exempt: true
     status: complete
     completed_at: "2026-05-19"
+    note: "bootstrap_completion_exempt discharged 2026-07-17 (dec-139: CD.4 ratified via the Decision 105 lane; T0.9 was CD.4's sole gating item)."
   - id: T0.10
     tier: T0
     name: Pre-commit safety net
@@ -3261,10 +3344,9 @@ tier_items:
     related_candidate_decisions: [CD.5]
     effort: XS
     strategic: false
-    bootstrap_completion_exempt: true
     status: complete
     completed_at: "2026-05-19"
-    note: "bootstrap_completion_exempt added 2026-06-09 (audit F-002, scope (c)): completed with gating CD.5 pending; CD.5 ratifies post-hoc via the portal vehicle."
+    note: "bootstrap_completion_exempt added 2026-06-09 (audit F-002, scope (c)): completed with gating CD.5 pending; CD.5 ratifies post-hoc via the portal vehicle. [DISCHARGED 2026-07-17, dec-138: CD.5 ratified via the Decision 105 lane; T0.10 was CD.5's sole gating item.]"
   - id: T0.11
     tier: T0
     name: session_preflight.py Linux-generalisation
@@ -4820,7 +4902,7 @@ tier_items:
   - id: T2.2
     tier: T2
     name: Ops + decisions table export+import (rebuild data)
-    intent: Export ops_recommendations + ops_decisions from company-aws-profile as JSON. Import into personal account via log-rec / log-decision Lambdas with import-mode flag (preserves original ids and timestamps). Other tables are rebuilt empty.
+    intent: Export ops_recommendations + ops_decisions from company-aws-profile as JSON. Import into personal account via log-rec / log-decision Lambdas with import-mode flag (preserves original ids and created_timestamp; last_updated_timestamp set to import_time, per CD.19 option (b)). Other tables are rebuilt empty.
     depends_on: [T2.1, T0.7a, T0.7b]
     files_in_scope:
       - scripts/migrate_ops_data.py    # new
@@ -4833,8 +4915,7 @@ tier_items:
     strategic: false
     status: complete
     completed_at: "2026-05-29"
-    bootstrap_completion_exempt: true
-    note: "Realized: preflight recommendation_sync confirmed 722 recs + 38 decisions in personal-account Athena at migration time (2026-05-29; the audit could not re-corroborate the figure from a fresh container -- treat as point-in-time attestation). Out-of-order complete: deps T0.7a/T0.7b not_started (data imported via direct migration path before Lambda tooling landed). CD.19 timestamp preservation policy applied: original ids and timestamps preserved. bootstrap_completion_exempt under scope (c)."
+    note: "Realized: preflight recommendation_sync confirmed 722 recs + 38 decisions in personal-account Athena at migration time (2026-05-29; the audit could not re-corroborate the figure from a fresh container -- treat as point-in-time attestation). Out-of-order complete: deps T0.7a/T0.7b not_started (data imported via direct migration path before Lambda tooling landed). CD.19 timestamp policy applied (option (b), ratified dec-141): original ids and created_timestamp preserved; last_updated_timestamp set to import_time (deterministically derived). bootstrap_completion_exempt discharged 2026-07-17 (dec-141: CD.19 ratified; CD.6 + CD.19 now both ratified)."
   - id: T2.3
     tier: T2
     name: company-aws-profile profile-reference sweep
@@ -4897,11 +4978,12 @@ tier_items:
       matching the T2.5/T0.13 precedent. DuckLake partition-as-code posture: ALTER ... SET PARTITIONED
       BY is row/file-count-conditional per Decision 81; not warranted at current ops-table sizes.
       T2.33 owns the DuckLake partition-as-code domain going forward.
+      [DISCHARGED 2026-07-17, dec-137: CD.9 ratified via the Decision 105 lane; CD.31 was already
+      ratified (dec-078) -- both of T2.4's gating CDs are now ratified.]
     effort: M
     strategic: false
     status: complete
     completed_at: "2026-06-23"
-    bootstrap_completion_exempt: true
     progress_note: >-
       2026-06-23: Criterion adjudication -- (1) T2.1 delivered live partitioned personal-account Iceberg
       ops tables (PARTITIONED BY day(last_updated_timestamp)); work-account iceberg_tables.tf

@@ -1,0 +1,583 @@
+schema_version: 1
+slug: "cd-ratification-wave"
+intent: >-
+  Execute the Decision-105 ratification lane over six pending candidate decisions -- five realized-
+  but-unevidenced (CD.39, CD.9, CD.5, CD.4, CD.8) plus CD.19 (a resolved-by-events closure ratified
+  by explicit human decision) -- plus the lockstep roadmap/test bookkeeping, draining ratification
+  DEBT so the pending-CD count reflects genuinely open decisions and the governance surface stays
+  truthful. DRAFT-only during /plan; all warehouse writes and state flips are /implement-time behind
+  an execution-time human confirmation gate.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-cd-ratification-wave.yaml
+phase: >-
+  Platform governance / Decision-105 candidate-decision ratification lane
+  (docs/contracts/candidate-decision-ratification.yaml). Drains the pending_cd_disposition ledger
+  from audit audits/pending-cd-premise-validity-f4dec93.yaml (Unit D residue, re-baselined at
+  origin/main HEAD 2026-07-16). No tier_item is advanced; this is ratification + bookkeeping only.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Author 6 new `## Decision NNN:` entries (dec-135..dec-140) ratifying CD.39/9/5/4/8/19, at the
+      top of the file (newest-first convention). Numbering authority is DECISIONS.md; numbers
+      re-derived at /implement time (current max = Decision 134). Format matches the ETL parser
+      (scripts/decisions_md.py) and the Decision 122/123 template so the Decision-134 DAF fidelity
+      tripwire does not fire. Verbatim drafts in context items DRAFT-DEC-135..DRAFT-DEC-140.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      (a) Flip CD.39/9/5/4/8/19 to the canonical ratified shape (state: ratified + ratified_as +
+      filed_via, dec-135..dec-140) with each realization_evidence written (context DRAFT-EVIDENCE +
+      DRAFT-ROADMAP-FLIPS); (b) strip bootstrap_completion_exempt on T0.9/T0.10/T2.4/T2.2 (each now
+      has all gating CDs ratified) and add a dated discharge record to the scope-(c) exemption ledger
+      (context DRAFT-BOOKKEEPING); (c) correct T2.2's stale timestamp-policy note (option (b), not
+      "timestamps preserved"). RETAIN exemptions on T2.5/T0.13/T2.1/T0.12.5/T0.12.7/T0.3 (each still
+      gated by a pending CD).
+  - file: tests/test_platform_roadmap_models.py
+    action: Modify
+    purpose: >-
+      Lockstep update of test_live_platform_yaml_bootstrap_exemption_set: remove "T0.9", "T0.10",
+      "T2.4", "T2.2" from the verbatim `expected` set (17 -> 13; they strip) and refresh the docstring
+      to record the dec-136/137/138 (CD.9/CD.5/CD.4) and dec-140 (CD.19) discharge. This is the ONLY
+      test coupled to the live CD/exemption state; all realization_candidates/ratifiable_cds tests are
+      fixture-based and safe.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The referential ratification guard (validate_candidate_decision_ratification, both --pre and
+    full tiers) is GREEN over all SIX newly-ratified shapes: each of CD.39/9/5/4/8/19 has state:
+    ratified + ratified_as: dec-NNN + filed_via: ops_decisions:dec-NNN with matching NNN, and each
+    dec-NNN resolves to a `## Decision NNN:` header in DECISIONS.md (R1).
+  - >-
+    ratifiable_cds() and realization_candidates() reflect the drain: CD.4, CD.5, CD.8, CD.9, CD.39
+    no longer appear in realization_candidates() (which drops from 13 entries to the 8 forward-
+    intent/genuinely-open remainder CD.3/CD.10/CD.15/CD.23/CD.29/CD.30/CD.32/CD.37); none of the six
+    ratified CDs remain in the pending set (CD.19 was never a realization_candidate -- it ratifies as
+    a resolved-by-events closure, not a realized-by-gate one).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml parses cleanly (scripts.roadmap.platform_roadmap.load succeeds) and
+    validate_platform_roadmap passes; CD counts move pending 20->14, ratified 18->24, superseded 2,
+    total 40 (no new CD is created).
+  - >-
+    bootstrap_completion_exempt is stripped on exactly T0.9, T0.10, T2.4, T2.2 and RETAINED on
+    T2.5/T0.13/T2.1/T0.12.5/T0.12.7/T0.3; test_live_platform_yaml_bootstrap_exemption_set is updated
+    in lockstep (expected set now 13) and GREEN (actual == expected).
+  - >-
+    The `--backfill-decisions-md` ETL writes the 6 new rows to ops_decisions without raising the
+    Decision-134 DAF fidelity tripwire (each entry parses to a non-empty decision_text and an ISO
+    decided_date), and each dec-NNN is retrievable via the decision_by_id read verb.
+  - >-
+    CD.19 is ratified as dec-140 and HONESTLY framed as a resolved-by-events closure (human-decided;
+    NOT realized-by-gate -- T1.6 remains not_started); its detail records the de facto option (b)
+    outcome, and T2.2's stale note is corrected to "created preserved; last_updated = import_time".
+  - >-
+    session_preflight re-run confirms the cleared completion gates (T0.9/T0.10/T2.4/T2.2 no longer
+    blocked_on_cd; CD.19's gate on T1.6 cleared) and validate.py --pre is GREEN end to end.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      After the DECISIONS.md + roadmap edits, confirm the six target CDs carry the canonical ratified
+      shape in the roadmap.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib;d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text());cds={c['id']:c
+      for c in d['candidate_decisions']};print([(i,cds[i]['state'],cds[i].get('ratified_as'),cds[i].get('filed_via'))
+      for i in ['CD.39','CD.9','CD.5','CD.4','CD.8','CD.19']])"
+    expected: >-
+      Each tuple reads (id, 'ratified', 'dec-NNN', 'ops_decisions:dec-NNN') with matching NNN:
+      CD.39->135, CD.9->136, CD.5->137, CD.4->138, CD.8->139, CD.19->140 (numbers subject to
+      /implement re-derivation).
+    fix_if: >-
+      Any CD still state: pending, a missing/typo'd ratified_as or filed_via, or ratified_as/
+      filed_via NNN disagreement -> re-edit the roadmap CD entry.
+    graduation: waive
+    graduation_waiver_reason: >-
+      grep/parse-shaped and grep_count-expressible in principle, but it verifies THIS wave's transient
+      six-CD set and numbers; the standing validate_candidate_decision_ratification guard already
+      graduates the general ratified-shape referential invariant across all CDs, so a per-wave
+      graduated check would duplicate it.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the six new Decision headers are present in DECISIONS.md.
+    command: grep -cE '^## Decision (135|136|137|138|139|140):' docs/DECISIONS.md
+    expected: "6"
+    fix_if: >-
+      Count < 6 -> a drafted entry is missing or its header is malformed; re-insert. (If the
+      /implement re-derivation shifted the block off 135-140, adjust the grep to the actual range.)
+    graduation: waive
+    graduation_waiver_reason: >-
+      grep_count-shaped but pinned to this wave's specific decision numbers, which shift if a
+      concurrent PR claims 135+; a graduated standing check would encode transient literals. The
+      durable header<->ratified_as linkage is already graduated by the referential guard.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the roadmap still parses, the realization feed has drained, and the pending count
+      arithmetic holds.
+    command: >-
+      bin/venv-python -c "from pathlib import Path;from scripts.roadmap.platform_roadmap import
+      load,PlatformRoadmapState;doc=load(Path('docs/ROADMAP-PLATFORM.yaml'));st=PlatformRoadmapState(doc);rc={c['id']
+      for c in st.realization_candidates()};pend={c.id for c in doc.candidate_decisions if
+      c.state=='pending'};print('rc_residue',{'CD.4','CD.5','CD.8','CD.9','CD.39'}&rc,'pending_residue',{'CD.4','CD.5','CD.8','CD.9','CD.39','CD.19'}&pend,'pending_count',len(pend))"
+    expected: "rc_residue set() pending_residue set() pending_count 14 (the six have left; 20 -> 14)."
+    fix_if: >-
+      A target CD still present in either set, or pending_count != 14 -> a state flip did not persist;
+      re-edit.
+    graduation: waive
+    graduation_waiver_reason: >-
+      parse-shaped and command_output_matches-expressible in principle, but it verifies THIS wave's
+      transient six-CD feed/pending residue; the general realization_candidates()/ratifiable_cds()
+      behavior is already graduated by the fixture unit tests in
+      tests/platform_roadmap_state/test_realization_candidates.py, so a per-wave graduated check would
+      duplicate them. Parity with the step 1-2 waivers.
+  - step: 4
+    phase: pre-deploy
+    action: Run the bootstrap-exemption lockstep test.
+    command: bin/venv-python -m pytest tests/test_platform_roadmap_models.py -k bootstrap_exemption_set -q
+    expected: >-
+      PASS -- actual bootstrap_completion_exempt set == expected (13 items) with T0.9/T0.10/T2.4/T2.2
+      removed and the retains intact.
+    fix_if: >-
+      AssertionError missing=/extra= -> reconcile: the roadmap strips and the test `expected` set must
+      agree; do NOT loosen the test to a membership floor -- this is a deliberate verbatim SoT
+      assertion.
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: Run the fast presubmit tier (governance writes gate pre-merge).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      GREEN. In particular validate_candidate_decision_ratification and
+      validate_candidate_decision_supersession pass, the DECISIONS.md-header referential checks
+      resolve all six new dec-NNN, and validate_decisions_size stays under the 400KB/120-header
+      ceilings.
+    fix_if: >-
+      Any check red -> forward-fix on the branch (never auto-revert, Decision 55); if a ci-rca-class
+      failure, follow the RCA-first protocol.
+    graduation: not-applicable
+  - step: 6
+    phase: post-deploy
+    action: >-
+      ETL the new DECISIONS.md entries into ops_decisions (Single Portal Invariant, Decision 84).
+      Requires the agent_platform assume-role profile.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
+    expected: >-
+      Returns {"written": >=6, "failed": 0, "skipped": ...} with no RuntimeError -- the six new
+      live-h2 entries parse to non-empty decision_text + ISO decided_date, so the DAF fidelity
+      tripwire does NOT fire and no fidelity_baseline.yaml allowlist edit is needed.
+    fix_if: >-
+      Fidelity tripwire RuntimeError -> a new entry parsed to empty decision_text or a non-ISO date;
+      fix the entry's `**Decision:**` body / `**Date:**` line and re-run (idempotent upsert). Portal
+      unreachable -> confirm `aws sts get-caller-identity --profile agent_platform`; write fails
+      loudly, no offline outbox (Decision 84 I-4).
+  - step: 7
+    phase: post-deploy
+    action: Confirm each ratified CD's dec-NNN is retrievable from ops_decisions via the reader.
+    command: >-
+      bin/venv-python -c "from scripts.ops_portal.decisions import _fetch_decision_from_reader as
+      f;print([bool(f(x)) for x in ['dec-135','dec-136','dec-137','dec-138','dec-139','dec-140']])"
+    expected: "[True, True, True, True, True, True] (adjust ids to the /implement-derived numbers)."
+    fix_if: "Any False -> the backfill did not land that row; re-run step 6 and inspect the writer response."
+  - step: 8
+    phase: post-deploy
+    action: Re-run session_preflight to confirm the completion gates cleared and the realization surface updated.
+    command: bin/venv-python -m scripts.session.preflight
+    expected: >-
+      Preflight OK; T0.9/T0.10/T2.4/T2.2 no longer appear in blocked_on_cd for CD.4/CD.5/CD.9/CD.19,
+      CD.19's gate on T1.6 is cleared, and the realization-candidate surface no longer lists the five
+      realized CDs.
+    fix_if: >-
+      A target item still blocked_on its now-ratified CD -> the state flip did not persist; re-check
+      the roadmap edit. Creds unavailable -> degraded mode is acceptable (Decision 60); credential-
+      dependent legs emit SKIPPED, non-blocking.
+constraints:
+  - >-
+    DRAFT-ONLY during /plan and this plan artefact: do NOT run --backfill-decisions-md or
+    --file-decision, do NOT edit DECISIONS.md, do NOT flip any state/ratified_as/filed_via/
+    realization_evidence, do NOT strip any bootstrap_completion_exempt flag, do NOT call the ops
+    portal. Every such action is /implement-time, AFTER the execution-time human confirmation gate
+    (Decision 105 lane; plan-confirmation + plan-critique are the sign-off on the drafted text).
+  - >-
+    CD.19's disposition was DECIDED BY THE HUMAN PRINCIPAL: ratify as dec-140, a resolved-by-events
+    closure (NOT a realized-by-gate ratification -- T1.6 remains not_started). The drafted DEC-140 +
+    evidence must frame it honestly as overtaken-by-events and record the true de facto outcome
+    (option (b): created preserved, last_updated = import_time), not the audit's mis-recorded
+    option-(a) framing.
+  - >-
+    File NO recs (the lane's only prescribed portal call is the /implement-time backfill ETL). No
+    rescue agents or workaround loops (Decision 55); CI-red is forward-fixed on the branch, never
+    auto-reverted.
+  - >-
+    Single Portal Invariant (Decision 84): decision writes go ONLY through
+    scripts.ops_data_portal --backfill-decisions-md; never Edit/Write logs/.decisions-index.jsonl
+    (read cache). Numbering authority is DECISIONS.md (caller supplies decision_id); re-derive the
+    next free number at /implement time -- a concurrent PR may have claimed dec-135+.
+  - >-
+    No new standing prose-architecture docs (Decision 86): rationale lives in the DECISIONS.md
+    entries, not a companion doc. No SLOC concern (Decision 128) -- YAML/markdown/test edits only,
+    no source file crosses its budget.
+context:
+  - >-
+    RE-BASELINE (audit ~10 days stale, verified at origin/main HEAD 2026-07-16): THREE of the
+    audit's Unit-D items are already done and OUT of scope -- CD.28 ratified (dec-122, Unit A), CD.7
+    flipped to superseded (Unit A / dec-122), and CD.18 ratified as dec-123 REVIVE (Q3's disposition
+    resolved as option (a) revive, NOT the audit's favored void). Verified live: CD.39/9/5/4/8/19 are
+    all still state: pending with no realization_evidence.
+  - >-
+    CD.19 DISPOSITION -- HUMAN-DECIDED, with a de-facto correction to the audit: the audit
+    (PCD-02) mis-recorded the T2.2 timestamp outcome as option-(a)-shaped ("original ids and
+    timestamps preserved"). The principal's firsthand account is that T2.2 actually applied OPTION
+    (b): created_timestamp preserved; last_updated_timestamp SET TO import_time (last_updated is
+    deterministically derived, so a preserve-originals workaround was not warranted). The recommended
+    option (c) source-tag/schema change was deliberately NOT done. The human directs RATIFICATION of
+    CD.19 (dec-140) as the closure -- a resolved/overtaken-by-events decision, honestly distinct from
+    the five realized-by-gate ratifications. Consequence: last_updated lineage for import-era rows is
+    not preserved (history loss, accepted at this early dev stage). The feared false-positive-
+    freshness flood was option (a)'s risk and does NOT apply under (b) (rows read fresh; no live
+    freshness consumers -- rec-curator disabled, ratchet/drift = T3.7 unbuilt, T1.6 DQ-runner
+    not_started).
+  - >-
+    RE-BASELINE delta on CD.8: T1.2 (query-Lambda full verb expansion) is now status: complete
+    (completed_at 2026-07-07, flipped via the T1.16 verb-surface-closeout joint-closeout bookkeeping,
+    RMAP-11) -- the stale audit said "T1.2 still gated". Both of CD.8's gated items (T1.2, T2.5) are
+    therefore complete; ratifying CD.8 is a clean gate-clear. T1.2 carries no
+    bootstrap_completion_exempt flag (its related_candidate_decisions are [CD.10, CD.15]); the latent
+    question -- how T1.2 completed with CD.8/CD.10/CD.15 pending and no exemption flag -- is OUT of
+    this wave's scope and RESOLVES (does not worsen) when CD.8 ratifies. Observation, not a fix.
+  - >-
+    ETL FORMAT (Decision 134 / #605 DAF-etl-parity): the DECISIONS.md->ops_decisions backfill is now
+    lossless (raw_block + typed cols decision_text/decided_date/reversal_conditions/superseded_by +
+    content-hash SCD2 + a per-run fidelity tripwire). The parser (scripts/decisions_md.py) extracts
+    decided_date from `**Date:**` (ISO), reversal_conditions from a `**Reversal conditions:**`
+    section, superseded_by from `**Superseded by:** Decision N`. The 6 drafted entries follow the
+    Decision 122/123 template exactly (ISO date, non-empty `**Decision:**` body, explicit `**Reversal
+    conditions:**`), so the tripwire passes with no config/agent/data_quality/decisions/
+    fidelity_baseline.yaml change.
+  - >-
+    TEST COUPLING: the ONLY test coupled to live CD/exemption state is
+    test_live_platform_yaml_bootstrap_exemption_set (a verbatim set-equality, NOT a len()==N count).
+    The test-count-coupling guard (validate_test_count_coupling) scans for len==N patterns and will
+    NOT flag a set-equality, so the coupling is caught by the test's own loud failure + this plan's
+    explicit lockstep edit (rec-2504/rec-2506 precedent: post-ratification test staleness). All
+    realization_candidates/ratifiable_cds tests are fixture-based (synthetic docs); the product-
+    roadmap CD.9 references are structural (state-independent). No other test breaks.
+  - >-
+    EMPIRICAL BASELINE at HEAD (2026-07-16): ratifiable_cds() == [] (no pending CD carries evidence
+    yet); realization_candidates() == [CD.3, CD.4, CD.5, CD.8, CD.9, CD.10, CD.15, CD.23, CD.29,
+    CD.30, CD.32, CD.37, CD.39]; CD counts pending=20, ratified=18, superseded=2, total=40. T2.2's
+    only pending gater is CD.19 (verified: sole CD with T2.2 in gates; related [CD.6 ratified,
+    CD.19]) -> T2.2 strips definitively once CD.19 ratifies.
+  - >-
+    SIZE GATE (Decision 134 flag from decision-scout): validate_decisions_size runs in both CI tiers
+    with _DECISIONS_LIVE_MAX_BYTES = 400_000 and _DECISIONS_LIVE_MAX_H2 = 120. DECISIONS.md is at
+    ~354KB / 94 live headers at HEAD; adding 6 entries -> ~370-385KB / 100 headers, both comfortably
+    under the ceilings. validate --pre (VP step 5) runs this gate, so it is covered -- confirm green.
+    Re-baseline nuance: Decision 134's TEXT (clause 4) says the DAF fidelity tripwire was "adopted
+    but NOT YET built", but #605 (0fec9649, daf-etl-parity-fidelity) BUILT it -- the live
+    scripts/ops_portal/decisions.py + scripts/decisions_md.py carry the tripwire + typed columns.
+    This plan is grounded in the live code, not the stale Decision-134 text.
+  - >-
+    VP HERMETICITY: every pre-deploy VP step here VERIFIES the ratification edits, which do not exist
+    on this plan's PR tree -- so ALL steps are hermetic: false (default) and are EXCLUDED from
+    validate_vp_replay. Marking any hermetic: true would make validate_vp_replay execute them against
+    the pre-edit tree and fail spuriously.
+  - |
+    DRAFT-EVIDENCE -- the six verbatim realization_evidence strings /implement writes onto each CD:
+
+    CD.39: "Realized (T-1.20 / RMAP era): the per-criterion exit-criteria ledger CD.39 decides is
+    fully built and validate.py-ENFORCED -- scripts/checks/roadmap/validate_platform_roadmap.py
+    requires met/rehomed criteria to carry a met_by resolving to a real plan/commit/item, forbids
+    bare-string criteria on touched items, and resolves plan closes_criteria refs to real
+    item:criterion pairs. The harness reads it in daily bookkeeping: /orient ranks in_progress items
+    fewest-open-criteria-first and emits follow-on /plan prompts; /plan declares closes_criteria;
+    /implement flips criteria open->met on a verified VP pass and never auto-flips (Status-Trusted-
+    Never-Inferred, T2.20). CD.39 gates no item (gates: []); the structured-object ledger is the live
+    operating format. Ratified via dec-135."
+
+    CD.9: "Realized -- substance already ratified BY PROXY via Decision 78 (= CD.31 DuckLake adoption)
+    and Decision 81 (CD.9 ALTER-partitioning mechanism), per T2.4's note (closes audit Q5c locus
+    gap). The three ops tables (ops_recommendations, ops_decisions, ops_priority_queue) live on
+    DuckLake-on-Neon -- the sole backend (Decision 84) -- where partitioning is applied via ALTER ...
+    SET PARTITIONED BY (metadata-only), row/file-count-conditional per Decision 81 and not warranted
+    at current ops-table sizes; T2.33 owns DuckLake partition-as-code. Their
+    day(last_updated_timestamp) partitioning originated in the T2.1 Iceberg era and is carried
+    forward under DuckLake (the frozen Iceberg copy is not a live read path, Decision 84). For the
+    still-Iceberg tables (product D.lake.* + market data), scripts/schema_to_iceberg.py (T0.13)
+    raises MissingPartitionSpec on @partition_by-less models and emits PARTITIONED BY verbatim
+    (rec-2314 two-arg fix). The 'no unpartitioned-table path' absolute holds. Clears CD.9's
+    completion gate on T2.4 (already complete; necessary-not-sufficient). Ratified via dec-136."
+
+    CD.5: "Realized: T0.10 complete (2026-05-19). .pre-commit-config.yaml augments (does not replace)
+    the .claude/hooks/never_on_main.py intent-to-edit interceptor -- both kept: never_on_main
+    intercepts intent-to-edit at the harness/PreToolUse layer, pre-commit intercepts at commit-time
+    in any clone; scheduled_agent_log_only.py retained (no portable analog). T0.10's exemption note
+    already records 'CD.5 ratifies post-hoc via the portal vehicle'; this writes the evidence that
+    note anticipated. Clears CD.5's completion gate on T0.10 (already complete; necessary-not-
+    sufficient) and discharges T0.10's scope-(c) bootstrap_completion_exempt flag (T0.10 gated solely
+    by CD.5). Ratified via dec-137."
+
+    CD.4: "Realized: T0.9 complete (2026-05-19). The CLAUDE.md-loads-AGENTS.md portability hedge is
+    live -- root CLAUDE.md is `@AGENTS.md` (import directive), so any harness reading AGENTS.md
+    (Cursor, Aider, OpenHands, Continue, Codex) inherits the same universal rules; the lock-in to
+    CC-web as sole primary dev surface (CD.2) is operating reality. Clears CD.4's completion gate on
+    T0.9 (already complete; necessary-not-sufficient) and discharges T0.9's bootstrap_completion_
+    exempt flag (T0.9 gated solely by CD.4). Ratified via dec-138."
+
+    CD.8: "Realized (engine choice): DuckDB is the embedded default operational read engine and
+    DuckLake-on-Neon is the live ops read substrate -- the ducklake_reader closed named-verb boundary
+    (Decision 84 I-3) serves ops_recommendations/ops_decisions/ops_priority_queue reads; local read
+    paths (sync_ops, ops_data_portal, session_preflight) route through the DuckDB reader
+    (src/common/iceberg_reader.py) with the Athena escape hatch retained conditionally per CD.15.
+    Scoped to the engine choice only -- necessary, not sufficient (CD.2/CD.6/CD.20 precedent): both
+    gated items are complete (T2.5 2026-05-31; T1.2 completed_at 2026-07-07 via the T1.16
+    joint-closeout, RMAP-11) so ratification clears their completion gates but closes no code
+    criteria; the CD.15 Athena-escape-hatch clause (OQ.7) stays open. T2.5's bootstrap_completion_
+    exempt is RETAINED (co-gating CD.15 still pending). Ratified via dec-139."
+
+    CD.19: "Resolved by human decision -- overtaken by events, NOT realized-by-gate-completion (T1.6
+    remains not_started). The timestamp-policy decision CD.19 required BEFORE T2.2 was settled DE
+    FACTO when T2.2 completed 2026-05-29 under option (b): created_timestamp preserved,
+    last_updated_timestamp set to import_time (last_updated is deterministically derived, so a
+    workaround to preserve originals was not warranted). The recommended option (c) source='import-
+    bootstrap' tag / schema change was deliberately NOT done. Consequence: last_updated lineage for
+    import-era rows is not preserved (history loss, accepted at this early dev stage). The feared
+    false-positive-freshness flood was option (a)'s risk and does NOT apply under (b) -- last_updated
+    = import_time makes imported rows read FRESH, and no freshness consumers are live (rec-curator
+    disabled; ratchet/drift = T3.7 unbuilt; T1.6 DQ-runner not_started). Ratified via dec-140; clears
+    CD.19's completion gate on T1.6 (and the already-complete T0.12/T2.2)."
+  - |
+    DRAFT-DEC-135 -- verbatim DECISIONS.md entry for CD.39:
+
+    ## Decision 135: Ratify CD.39 -- exit-criteria ledger (per-criterion status) is the realized in_progress-resolution mechanism; follow-on planning is the in_progress default (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-16
+    **Warehouse ID:** dec-135 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:** CD.39 promoted each exit_criteria entry from free-text prose to a structured object {id, text, status: open|met|rehomed, met_by} so that "remaining work" on an in_progress item is the deterministic set of open criteria (Decision 59), replacing the conflation of mid-implementing / needs-next-plan / blocked under a single in_progress status. The mechanism is fully built, validate.py-enforced, and in daily bookkeeping use across the live roadmap, but CD.39 remained `state: pending` -- presenting as an open decision and (realization_evidence absent) invisible to the ratification lane.
+
+    **Decision:** Ratifies CD.39. The structured exit-criteria ledger is the realized, enforced mechanism: `scripts/checks/roadmap/validate_platform_roadmap.py` requires met/rehomed criteria to carry a met_by resolving to a real plan/commit/item, forbids a touched tier_item from retaining bare-string criteria, and resolves plan closes_criteria refs to real item criteria. The harness consumes it end to end -- /orient ranks in_progress items fewest-open-criteria-first and emits follow-on /plan prompts; /plan's follow-on mode declares closes_criteria; /implement flips declared criteria open->met on a verified VP pass and NEVER auto-flips an all-criteria-met item to complete (Status-Trusted-Never-Inferred, T2.20). CD.39 gates no tier_item (gates: []), so ratification carries no completion-gate side effect; it removes CD.39 from the pending / realization-candidate surfaces.
+
+    **Reversal conditions:** the git-YAML ledger is the lightweight near-term stand-in for T4.5 / Decision 87 (ops_plans / ops_plan_revisions warehouse entities, gated on CD.17); met_by is forward-compatible as a future ops_plans foreign key. When T4.5 lands, the ledger migrates to the warehouse (met_by becomes an ops_plans FK) -- a forward migration of the storage substrate, not a reversal of the per-criterion-status decision itself. Reversal proper would require abandoning deterministic per-criterion resolution for item-grain status only; file a superseding Decision if that is ever chosen.
+
+    **Related:** CD.39 (this ratifies it), Decision 59 (deterministic remaining-work), Decision 90 (three-tier /orient->/plan->/implement workflow the ledger feeds), Decision 87 / T4.5 (future ops_plans warehouse home; met_by FK forward-compat), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+    ---
+  - |
+    DRAFT-DEC-136 -- verbatim DECISIONS.md entry for CD.9:
+
+    ## Decision 136: Ratify CD.9 -- partition-every-table uniform rule (substance already ratified by proxy via Decisions 78/81; this closes the locus gap) (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-16
+    **Warehouse ID:** dec-136 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:** CD.9 ("partition every table; uniform rule -- ops/telemetry by day(last_updated_timestamp), market data by day(trade_date); new tables inherit the partitioned template; no unpartitioned-table path") was realized, and its substance was already ratified BY PROXY through Decision 78 (CD.31, DuckLake adoption) and Decision 81 (the CD.9 amendment establishing ALTER ... SET PARTITIONED BY as the DuckLake partitioning mechanism). That fact was recorded only in T2.4's note (the gated item), not on CD.9's own entry -- so an agent reading candidate_decisions[] saw a fully open decision (audit Q5c: same file, wrong locus). CD.9 carried no realization_evidence and was invisible to the ratification lane.
+
+    **Decision:** Ratifies CD.9, folding the proxy-ratification fact into the CD entry itself. The partitioning rule is in force. The three ops tables (ops_recommendations, ops_decisions, ops_priority_queue) live on DuckLake-on-Neon -- the sole backend (Decision 84) -- where partitioning is applied via ALTER ... SET PARTITIONED BY (a metadata-only operation), row/file-count-conditional per Decision 81 and not warranted at current ops-table sizes; T2.33 owns DuckLake partition-as-code going forward. Their day(last_updated_timestamp) partitioning originated in the T2.1 Iceberg era and is carried forward under DuckLake (the frozen Iceberg copy stopped being a live read path when writes moved to the DuckLake boundary, Decision 84). For the still-Iceberg tables (product D.lake.* + market data), scripts/schema_to_iceberg.py (T0.13) raises MissingPartitionSpec on @partition_by-less models and emits PARTITIONED BY verbatim (two-arg bucket/truncate extraction fixed by rec-2314). The "no unpartitioned-table path" absolute holds. Ratification clears CD.9's completion gate on T2.4 (already complete) -- necessary, not sufficient (T2.4's own criteria were already met).
+
+    **Reversal conditions:** none anticipated -- partition-everywhere is a uniform durable rule. Revisit only if a specific table's access pattern makes day-granularity partitioning net-negative at scale, in which case amend this Decision with the per-table exception rather than relaxing the uniform rule (Decision 81's mechanism-level CD.9 amendment is the precedent for a mechanism, not policy, change).
+
+    **Related:** CD.9 (this ratifies it), Decision 78 / dec-078 (CD.31 DuckLake adoption -- proxy ratification of the partitioning substance), Decision 81 / dec-081 (CD.9 ALTER-partitioning mechanism amendment), T2.4 (gated item, complete; its note carried the proxy fact this Decision folds back), T2.33 (DuckLake partition-as-code owner), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+    ---
+  - |
+    DRAFT-DEC-137 -- verbatim DECISIONS.md entry for CD.5:
+
+    ## Decision 137: Ratify CD.5 -- pre-commit augments (does not replace) the never_on_main hook; keep both commit-safety layers (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-16
+    **Warehouse ID:** dec-137 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:** CD.5 ("pre-commit augments, does not replace, the never_on_main hook -- keep both; scheduled_agent_log_only.py stays, no portable analog") was realized when T0.10 (Pre-commit safety net) completed 2026-05-19, and T0.10's own exemption note already records "CD.5 ratifies post-hoc via the portal vehicle" -- but the evidence was never written and CD.5 stayed `state: pending`, invisible to the ratification lane.
+
+    **Decision:** Ratifies CD.5. The two commit-safety layers are both live and both retained: `.claude/hooks/never_on_main.py` intercepts intent-to-edit at the harness/PreToolUse layer (blocks Edit/Write/MultiEdit/NotebookEdit and git commit/push while on main); `.pre-commit-config.yaml` intercepts at commit-time in any clone (portable backstop, optionally bundling ruff / EOF / secrets scan). `scheduled_agent_log_only.py` stays (no portable analog). Ratification clears CD.5's completion gate on T0.10 (already complete) -- necessary, not sufficient -- and discharges T0.10's scope-(c) bootstrap_completion_exempt flag (T0.10 gated solely by CD.5; strip-only-when-ALL-gating-CDs-ratified is satisfied).
+
+    **Reversal conditions:** revisit if the harness-level never_on_main interceptor is retired or a single hook layer is shown to subsume both intercept points (harness intent-to-edit AND commit-time in a bare clone). Absent that, the augment-not-replace posture stands.
+
+    **Related:** CD.5 (this ratifies it), T0.10 (gated item, complete; scope-(c) exemption discharged by this Decision), CD.4 / Decision 138 (sibling portability-hedge ratification in the same wave), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+    ---
+  - |
+    DRAFT-DEC-138 -- verbatim DECISIONS.md entry for CD.4:
+
+    ## Decision 138: Ratify CD.4 -- vendor lock-in to Claude Code on the web is acceptable; AGENTS.md is the realized portability hedge (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-16
+    **Warehouse ID:** dec-138 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:** CD.4 ("vendor lock-in to Claude Code on the web is acceptable; AGENTS.md is the portability hedge -- symlinked or duplicated to CLAUDE.md so other harnesses pick up the same instructions") was realized when T0.9 (AGENTS.md sidecar + CLAUDE.md linkage) completed 2026-05-19, but CD.4 stayed `state: pending` with no realization_evidence.
+
+    **Decision:** Ratifies CD.4. The portability hedge is live: root `CLAUDE.md` is `@AGENTS.md` (an import directive), so AGENTS.md is the single canonical instruction surface and any other agent harness that reads AGENTS.md (Cursor, Aider, OpenHands, Continue, Codex) inherits the same universal rules without a per-harness fork. The deliberate lock-in to CC-web as the sole primary development surface (CD.2) is operating reality; the project consciously does not over-invest in cross-harness abstraction beyond the AGENTS.md hedge. Ratification clears CD.4's completion gate on T0.9 (already complete) -- necessary, not sufficient -- and discharges T0.9's bootstrap_completion_exempt flag (T0.9 gated solely by CD.4).
+
+    **Reversal conditions:** re-evaluate the lock-in acceptance and the level of cross-harness abstraction investment if a second agent harness becomes a first-class (co-primary) development surface, or if CC-web availability/pricing changes materially. The AGENTS.md hedge is the retained escape hatch that keeps that reversal cheap.
+
+    **Related:** CD.4 (this ratifies it), CD.2 (CC-web as sole primary surface -- the lock-in this Decision accepts), T0.9 (gated item, complete; exemption discharged), CD.20 / Decision 111 (AGENTS.md is part of the public curated portal), CD.5 / Decision 137 (sibling ratification in the same wave), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane).
+
+    ---
+  - |
+    DRAFT-DEC-139 -- verbatim DECISIONS.md entry for CD.8:
+
+    ## Decision 139: Ratify CD.8 -- DuckDB is the realized default operational read engine (scoped to the engine choice; necessary not sufficient) (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-16
+    **Warehouse ID:** dec-139 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:** CD.8 ("DuckDB = default operational read engine -- embedded, sub-second, no SSO, runs anywhere; Athena retained conditionally per CD.15; the typed query Lambda hides the engine from agents") was realized -- the engine choice is live -- but CD.8 stayed `state: pending`, gating completion of T1.2 and T2.5 and carrying no realization_evidence.
+
+    **Decision:** Ratifies CD.8, scoped to the realized ENGINE CHOICE. DuckDB is the embedded default operational read engine and DuckLake-on-Neon is the live ops read substrate: the ducklake_reader closed named-verb boundary (Decision 84 I-3) serves ops_recommendations / ops_decisions / ops_priority_queue reads, and the local read paths (sync_ops, ops_data_portal, session_preflight) route through the DuckDB reader (src/common/iceberg_reader.py) with the Athena escape hatch retained conditionally per CD.15. This ratification is NECESSARY, NOT SUFFICIENT (CD.2/CD.6/CD.20 precedent): it clears CD.8's completion gate on the items it gates -- T2.5 (DuckDB swap on read paths, complete 2026-05-31) and T1.2 (query-Lambda full verb expansion, completed_at 2026-07-07, flipped via the T1.16 verb-surface-closeout joint-closeout bookkeeping per RMAP-11) -- but does not itself close those items' code criteria (already met) and does not resolve the still-open CD.15 Athena-escape-hatch clause (OQ.7). T2.5's bootstrap_completion_exempt flag is RETAINED because its co-gating CD.15 remains pending (strip-only-when-ALL-gating-CDs-ratified).
+
+    **Reversal conditions:** revisit the default-engine choice if operational read scale exceeds what the embedded DuckDB reader serves within budget (the CD.15 Athena escape hatch is the retained relief valve; a sustained shift of the primary read path off DuckDB would supersede this Decision). The engine choice is coupled to CD.31 / Decision 78 (DuckLake as the native table format); a reversal of DuckLake adoption would reopen the engine question.
+
+    **Related:** CD.8 (this ratifies it), CD.15 (Athena escape-hatch clause -- still pending; co-gates T2.5, whose exemption is retained), CD.31 / Decision 78 (DuckLake table format under which DuckDB serves reads), T2.5 and T1.2 (gated items, both complete), Decision 118 (CD.25 ratification -- the "necessary NOT sufficient" scoping precedent this Decision follows, alongside CD.2/CD.6/CD.20 = Decisions 109/106/111), Decision 84 (closed ducklake_reader named-verb boundary + DECISIONS.md canonical/backfill), Decision 105 (candidate-decision ratification lane).
+
+    ---
+  - |
+    DRAFT-DEC-140 -- verbatim DECISIONS.md entry for CD.19:
+
+    ## Decision 140: Ratify CD.19 -- SCD2 timestamp policy on the T2.2 ops-table import was settled de facto as option (b) (created preserved, last_updated = import_time); resolved-by-events closure (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-16
+    **Warehouse ID:** dec-140 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:** CD.19 (promoted from KG.10) required a timestamp-preservation decision BEFORE T2.2 imported ops_recommendations + ops_decisions from the company profile into the personal account, recommending option (c) (preserve created_timestamp; set last_updated = import_time; tag source='import-bootstrap' with a schema change in T0.12/T1.6). T2.2 completed 2026-05-29 out of order under a scope-(c) bootstrap exemption, and the decision window closed WITHOUT a formal ratification -- CD.19 was left `state: pending`, reading as a live pre-T2.2 decision that can no longer be taken (audit PCD-02: overtaken by events). This is a RESOLVED-BY-EVENTS closure decided by the human principal, NOT a realized-by-gate-completion ratification (T1.6, which CD.19 also gates, remains not_started).
+
+    **Decision:** Ratifies CD.19, recording the de facto outcome. T2.2 applied OPTION (b): created_timestamp preserved verbatim; last_updated_timestamp SET TO import_time. Rationale (principal's firsthand account): last_updated_timestamp is deterministically derived, so a workaround to preserve the original last_updated was not warranted at this stage. The recommended option (c) source='import-bootstrap' tag / schema change was deliberately NOT done. Consequence, accepted: last_updated lineage for import-era rows is not preserved (history loss, tolerable at this early dev stage). The false-positive-freshness flood that CD.19 feared was option (a)'s risk (preserve BOTH timestamps verbatim) and does NOT arise under option (b): last_updated = import_time makes imported rows read FRESH to any freshness check; moreover no freshness consumers are live (rec-curator disabled; the ratchet/drift detector depends on T3.7, unbuilt; the T1.6 DQ-runner reshape is not_started). Ratification clears CD.19's completion gate on T1.6 (and on the already-complete T0.12 and T2.2). T2.2's stale note ("original ids and timestamps preserved") is corrected in the same edit to state created preserved / last_updated = import_time.
+
+    **Reversal conditions:** none -- the timestamp policy is a settled historical fact of the completed T2.2 import, not a reversible forward commitment. If a future need to reconstruct pre-import last_updated lineage arises, that is NEW work (a re-import or a lineage-backfill) decided under its own Decision, not a reversal of this one. Any surviving live question about how the T1.6 DQ-runner treats import-era rows is ordinary T1.6 design scope, not a CD.19 gate.
+
+    **Related:** CD.19 (this ratifies it), CD.12 / T1.6 (DQ-runner reshape -- import-era rows read fresh under option (b); ordinary T1.6 design scope, no longer CD.19-gated), T2.2 (gated item, complete 2026-05-29; its scope-(c) bootstrap_completion_exempt is discharged by this ratification -- CD.6 + CD.19 now both ratified), Decision 84 (DECISIONS.md canonical + portal backfill), Decision 105 (candidate-decision ratification lane), audit PCD-02 (audits/pending-cd-premise-validity-f4dec93.yaml -- the overtaken-by-events finding this closes; note the audit mis-recorded the outcome as option-(a)-shaped, corrected here to option (b) per the principal).
+
+    ---
+  - |
+    DRAFT-ROADMAP-FLIPS -- the canonical ratified shape /implement writes on each CD entry
+    (contract docs/contracts/candidate-decision-ratification.yaml: state: ratified + ratified_as:
+    dec-NNN + filed_via: ops_decisions:dec-NNN, same NNN in both). Add the realization_evidence
+    string from DRAFT-EVIDENCE to each. For CD.39, REPLACE the existing
+    `filed_via: pending_log_decision_lambda` line with `filed_via: ops_decisions:dec-135`. For CD.19,
+    ALSO remove its `decision_required_before: T2.2 status == "in_progress"` line (the pre-T2.2 window
+    is closed and the decision is now ratified).
+
+      CD.39:  state: pending -> ratified ; ratified_as: dec-135 ; filed_via: ops_decisions:dec-135
+      CD.9:   state: pending -> ratified ; ratified_as: dec-136 ; filed_via: ops_decisions:dec-136
+      CD.5:   state: pending -> ratified ; ratified_as: dec-137 ; filed_via: ops_decisions:dec-137
+      CD.4:   state: pending -> ratified ; ratified_as: dec-138 ; filed_via: ops_decisions:dec-138
+      CD.8:   state: pending -> ratified ; ratified_as: dec-139 ; filed_via: ops_decisions:dec-139
+      CD.19:  state: pending -> ratified ; ratified_as: dec-140 ; filed_via: ops_decisions:dec-140
+              (also drop decision_required_before; gates stay [T0.12, T1.6, T2.2] -- all complete or gate-cleared by ratification)
+
+    (Numbers subject to /implement re-derivation; keep ratified_as == filed_via NNN or R1 fails.)
+  - |
+    DRAFT-BOOKKEEPING -- bootstrap_completion_exempt strip/retain decisions, re-derived against the
+    LIVE roadmap at HEAD (safety rule: strip ONLY when ALL of an item's gating CDs are ratified).
+    The strip set considers only items whose gating set includes a CD in this wave.
+
+    STRIP (delete `bootstrap_completion_exempt: true`; annotate the item note as discharged):
+      - T0.9  -- related [CD.4]. Sole gating CD ratifies (dec-138). STRIP.
+      - T0.10 -- related [CD.5]. Sole gating CD ratifies (dec-137). STRIP. (note already says
+                 "CD.5 ratifies post-hoc via the portal vehicle" -- mark discharged.)
+      - T2.4  -- related [CD.9, CD.31]. CD.31 already ratified (dec-078); CD.9 ratifies (dec-136) ->
+                 ALL gating CDs ratified. STRIP.
+      - T2.2  -- related [CD.6, CD.19]; the sole CD carrying T2.2 in gates[] is CD.19 (verified in
+                 code). CD.6 already ratified (dec-106); CD.19 ratifies (dec-140) -> ALL gating CDs
+                 ratified. STRIP.
+
+    RETAIN (a gating CD is still pending after this wave):
+      - T2.5    -- related [CD.8, CD.15]. CD.8 ratifies but CD.15 pending. RETAIN.
+      - T0.13   -- related [CD.9, CD.12, CD.31]. CD.9+CD.31 ratified but CD.12 pending. RETAIN.
+      - T2.1    -- gated by pending CD.17 (CD.17.gates includes T2.1, and T2.1 is strategic: true), so
+                   its completion is genuinely blocked regardless of related-field content. RETAIN
+                   (DEFINITIVELY correct, not a hedge). Its related_candidate_decisions [CD.6, CD.9,
+                   CD.28] omit CD.17 -- a separate data drift; see FINDING below.
+      - T0.12.5 -- gated by CD.29 (pending). Not touched by this wave. RETAIN.
+      - T0.12.7 -- gated by CD.10 (pending). Not touched by this wave. RETAIN.
+      - T0.3    -- gated by CD.26 (ratified) + CD.10 (pending). Not touched by this wave. RETAIN.
+
+    Post-strip exemption set = 13 items: T0.6, T0.7a, T0.7b, T0.7c, T0.8, T0.12, T0.13, T0.12.5,
+    T0.12.7, T0.3, T2.1, T2.5, T2.17 (was 17; removed T0.9, T0.10, T2.4, T2.2). Update the verbatim
+    `expected` set in test_live_platform_yaml_bootstrap_exemption_set to exactly this.
+
+    T2.2 NOTE CORRECTION (item D -- same-subject prose fix, in the same edit): T2.2's note currently
+    reads "CD.19 timestamp preservation policy applied: original ids and timestamps preserved" -- but
+    last_updated was RESET to import_time under option (b). Correct it to: "CD.19 timestamp policy
+    applied (option (b), ratified dec-140): original ids and created_timestamp preserved;
+    last_updated_timestamp set to import_time (deterministically derived). bootstrap_completion_exempt
+    discharged 2026-07-16 (dec-140: CD.19 ratified; CD.6 + CD.19 now both ratified)." Also align the
+    item's intent line ("import-mode flag (preserves original ids and timestamps)") to the same
+    option-(b) phrasing so the item is internally consistent.
+
+    DISCHARGE RECORD to add to the scope-(c) exemption ledger block (~roadmap lines 125-145),
+    mirroring the dec-118 / close-audit-ulf-02 precedent:
+      "[DISCHARGED 2026-07-16, dec-136/dec-137/dec-138/dec-140 (Decisions 136/137/138 ratify
+       CD.9/CD.5/CD.4; Decision 140 ratifies CD.19 -- all via the Decision 105 lane) + dec-139 (CD.8)]:
+       bootstrap_completion_exempt stripped in the same edit for the items whose gating CDs are now ALL
+       ratified -- T0.9 (CD.4), T0.10 (CD.5), T2.4 (CD.9 + already-ratified CD.31), T2.2 (CD.6 + CD.19,
+       both now ratified). RETAINED per the strip-safety rule: T2.5 (co-gating CD.15 pending), T0.13
+       (CD.12 pending), T2.1 (pending CD.17 gates it), T0.12.5 (CD.29), T0.12.7/T0.3 (CD.10). CD.8
+       (dec-139) clears completion gates on T1.2 and T2.5 (both complete); it strips no flag (T1.2
+       carries none; T2.5 retained)."
+
+    FINDING (surface to human, do NOT fix here): T2.1's related_candidate_decisions [CD.6, CD.9,
+    CD.28] OMITS CD.17 even though CD.17.gates includes T2.1 and is the actual pending completion
+    gate (the item's note correctly names CD.17) -- a structured-field-vs-gate-truth drift. Also the
+    scope-(c) prose member list (roadmap ~129-130) omits T0.9 and T2.4 though both carry the flag.
+    Both are pre-existing minor ledger-hygiene drifts for a separate cleanup, not this wave.
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (94 of 94 triaged; no
+    BLOCK -- run over the original 5-CD scope; the human's post-scout CD.19 ratification directive
+    adds a 6th ratification in the SAME Decision-105 lane and introduces no new decision contradiction
+    -- CD.19's honest resolved-by-events framing is consistent with Decision 55, a human decision not
+    an autonomous judgment). CITE: Decision 105 (ratification lane / canonical shape / R1-R3 guard),
+    Decision 118 (governing precedent -- necessary-not-sufficient scoping AND the "strip only when ALL
+    gating CDs ratified" safety rule), Decision 84 (Single Portal Invariant / DECISIONS.md numbering
+    authority), Decision 134 (authoring + DAF ETL parity + fidelity tripwire + size gate), Decision 78
+    + Decision 81 (CD.9 proxy-ratification substance; Decision 81 also grounds CD.8's engine-unchanged
+    evidence), Decision 122 + Decision 123 (CD.28/CD.18 ratification-shape precedents), Decision 55
+    (no autonomous judgment -- CD.19 human-decided), Decision 93 (load-time model_validator must not
+    trip), Decision 128 (SLOC decompose-by-default -- test edit stays under budget). RELATED:
+    Decisions 108-113 (prior ratification wave; 106/109/111 = the CD.6/CD.2/CD.20 necessary-not-
+    sufficient precedents), Decision 92 (backfill-ETL is the canonical ratification path), Decision 90
+    (tier-status flips are a separate step), Decision 114 (roadmap 10k-line ceiling -- tiny edit),
+    Decision 96 (corroborates CD.9 partition-everything).
+  - >-
+    gates: decision-scout=FLAGS_FOUND after 1 round (2 NOTE flags, both resolved/accepted -- Decision
+    67 STRATEGIC-freeze: resolved, plan_type is IMPLEMENTATION; Decision 134 size-gate: accepted,
+    covered by validate --pre with ample headroom); plan-critique=PROCEED-after-fixes (fresh-context
+    critique verified all evidence claims TRUE + bookkeeping correct; one MUST-FIX [CD.9 substrate
+    label] + accuracy nits applied). Scope subsequently expanded to 6 CDs on the human's CD.19
+    ratification directive (draft-only revision; no new BLOCK-class contradiction).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/cd-premise-validity-audit-j8isbv)
+  - docs/PROJECT_CONTEXT.md read (on demand at /implement)
+  - Lane contract docs/contracts/candidate-decision-ratification.yaml read (canonical ratified shape + R1/R2/R3 guard)
+  - DECISIONS.md read for the next free decision number (re-derive at /implement time; current max = 134)
+  - All files in scope located and readable
+  - Human has directed CD.19 ratification (dec-140, resolved-by-events closure; option (b) de facto outcome)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "EXECUTE ONLY AFTER EXECUTION-TIME HUMAN CONFIRMATION (Decision 105 lane). Nothing below runs during /plan."
+  - "1. Re-derive the next free decision numbers: grep -oE '^## Decision [0-9]+:' docs/DECISIONS.md | grep -oE '[0-9]+' | sort -n | tail -1. If 134, use dec-135..dec-140 as drafted; if a concurrent PR claimed 135+, shift the whole block up and adjust every ratified_as/filed_via/header in lockstep (the referential guard catches any mismatch)."
+  - "2. Edit docs/DECISIONS.md: insert the 6 verbatim entries from context DRAFT-DEC-135..DRAFT-DEC-140 at the TOP of the decisions list, newest-first (dec-140 down to dec-135), immediately above `## Decision 134:`."
+  - "3. Edit docs/ROADMAP-PLATFORM.yaml (a): flip CD.39/9/5/4/8/19 to the canonical ratified shape per context DRAFT-ROADMAP-FLIPS and write each realization_evidence from context DRAFT-EVIDENCE. For CD.39 replace `filed_via: pending_log_decision_lambda` with `filed_via: ops_decisions:dec-135`; for CD.19 drop `decision_required_before`."
+  - "4. Edit docs/ROADMAP-PLATFORM.yaml (b): strip bootstrap_completion_exempt from T0.9, T0.10, T2.4, T2.2; RETAIN on T2.5/T0.13/T2.1/T0.12.5/T0.12.7/T0.3; add the discharge record from context DRAFT-BOOKKEEPING to the scope-(c) ledger block (~lines 125-145)."
+  - "5. Edit docs/ROADMAP-PLATFORM.yaml (c): correct T2.2's stale timestamp note (option (b): created preserved / last_updated = import_time) and align its intent line, per context DRAFT-BOOKKEEPING > T2.2 NOTE CORRECTION."
+  - "6. Run the ETL: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md (agent_platform profile). Idempotent caller-keyed upsert; raises loudly on the fidelity tripwire."
+  - "7. Edit tests/test_platform_roadmap_models.py: remove \"T0.9\", \"T0.10\", \"T2.4\", \"T2.2\" from the `expected` set in test_live_platform_yaml_bootstrap_exemption_set (17 -> 13) and refresh its docstring to record the CD.4/CD.5/CD.9 (dec-138/137/136) and CD.19 (dec-140) discharge and the T0.9/T0.10/T2.4/T2.2 strip."
+  - "8. Re-run bin/venv-python -m scripts.session.preflight to confirm cleared gates + drained feeds."
+  - "9. Run bin/venv-python -m scripts.validate --pre; forward-fix to green (Decision 55). Then execute the Verification Plan; on any post-deploy V3 failure stop and RCA (Decision 55)."
+  - "Report: the final decision numbers, backfill {written/failed/skipped}, and verification results."
+work_areas: []
+rollback: >-
+  Pre-ETL (roadmap/DECISIONS/test edits only): git checkout -- docs/DECISIONS.md
+  docs/ROADMAP-PLATFORM.yaml tests/test_platform_roadmap_models.py restores the tree. Post-ETL: the
+  backfill is an idempotent caller-keyed upsert on dec-NNN; to reverse a ratification the DECISIONS.md
+  entry must be removed AND the ops_decisions row reconciled -- prefer forward-fix (amend the
+  Decision) over deletion, since DECISIONS.md is the source of truth the warehouse projects from. The
+  roadmap CD flips and exemption strips are reverted by restoring the YAML and re-running the backfill
+  (upsert refreshes from the markdown SoT).
