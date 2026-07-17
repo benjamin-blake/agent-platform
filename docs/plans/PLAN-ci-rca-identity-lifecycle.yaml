@@ -51,27 +51,45 @@ scope:
       ci_rca_runtime.py stays under its 500-SLOC budget, Decision 128): resolve_chain(fingerprint)
       -> ordered records (named-verb reads, Decision 84/88; no ad-hoc re-fetch);
       classify_closed_head(failing_sha, head) via git merge-base --is-ancestor <failing-commit>
-      <head.fixed_by_sha> -> "drop" | "regression"; file_regression_record(head_id, ...) sets
-      regression_of, REGRESSION: title prefix, critical; flake escalation (chain length >= 3 ->
-      flaky tag + quarantine list); the inactivity-close predicate as a DETERMINISTIC probe
-      (zero occurrences across the last N post-merge runs AND age >= 14d) that yields a recorded
-      proof licensing a direct close under Decision 103's deterministic-satisfaction boundary.
+      <head.fixed_by_sha> -> "drop" | "regression", with a FAIL-CLOSED default: a closed head
+      carrying NO fixed_by_sha (every rec closed before this change; manual closures) cannot run
+      the ancestry check, so it files a REGRESSION rather than silently dropping a real recurrence
+      (Decision 55); file_regression_record(head_id, ...) sets regression_of, REGRESSION: title
+      prefix, critical; stamp_fixed_by_sha(rec_id, fixed_by_sha, profile=None) -- the importable
+      helper rec-autoclose.yml calls at close; flake escalation (chain length >= 3 -> flaky tag +
+      quarantine list); the inactivity-close predicate as a purely TIMESTAMP-based deterministic
+      probe (context_v2_json.last_seen, falling back to created_timestamp, older than the
+      inactivity window AND rec created-age >= 14d) whose recorded proof licenses a direct close
+      under Decision 103's deterministic-satisfaction boundary -- no run-history data source needed.
   - file: scripts/ops_portal/ci_rca_runtime.py
     action: Modify
     purpose: >-
-      Remove the rec-2644 reopen path (reopen_ci_rca_rec + find_recent_ci_rca_rec_by_fingerprint
-      close-then-recur revive) and repoint the write-time dedup backstop at the status-aware chain
-      helpers in ci_rca_lifecycle. bump_ci_rca_occurrence stays but is called ONLY for an
-      open newest-in-chain rec. Stamp regression_of/fixed_by_sha/escape_class/flaky/affected_nodeids
-      into context_v2_json from the verified bundle (portal-derived, never agent-authored).
+      Remove the rec-2644 reopen helpers HOSTED here (reopen_ci_rca_rec +
+      find_recent_ci_rca_rec_by_fingerprint close-then-recur revive). bump_ci_rca_occurrence stays
+      but is called ONLY for an open newest-in-chain rec. Stamp
+      regression_of/fixed_by_sha/escape_class/flaky/affected_nodeids into context_v2_json from the
+      verified bundle (portal-derived, never agent-authored). NOTE: the write-time backstop that
+      CALLS these helpers is in scripts/ops_data_portal.py (file_rec), NOT here -- see that scope row.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      CRITICAL repoint (portal-wedge guard): file_rec's write-time close-then-recur backstop
+      (lines ~284-315) imports (lines 70-71) and CALLS find_recent_ci_rca_rec_by_fingerprint +
+      reopen_ci_rca_rec. Removing those from ci_rca_runtime.py WITHOUT repointing here
+      ImportError-wedges the ENTIRE portal (file_rec/update_rec/sync). Remove the two dead imports;
+      replace the reopen branch with the status-aware-chain path from ci_rca_lifecycle -- on a
+      closed-head fingerprint match run the regression-vs-drop ancestry classification (fail-closed
+      to REGRESSION when the head has no fixed_by_sha), never a closed->open flip. The open-match
+      bump path stays (newest-open-in-chain only). 399 SLOC -- the edit stays well under 500.
   - file: scripts/ops_portal/ci_rca_schema.py
     action: Modify
     purpose: >-
-      Extend CiRcaContext with the new projection fields (regression_of: Optional[str] matching
-      ^rec-\d+$; fixed_by_sha: Optional[str] 7-40 hex; affected_nodeids: Optional[list[str]];
-      flaky: Optional[bool]; escape_class: Optional[str] in {no-edge,capped,unknown-data-edge}) and
-      raise the schema_version ceiling to admit v2-fingerprint records. These ride in
-      context_v2_json (projection), NOT ops_recommendations columns (Decision 84/103/63).
+      Extend CiRcaContext with the new projection fields, all Optional[...]=None so NO
+      schema_version ceiling raise is needed (they are backward-compatible additions):
+      regression_of: Optional[str] matching ^rec-\d+$; fixed_by_sha: Optional[str] 7-40 hex;
+      affected_nodeids: Optional[list[str]]; flaky: Optional[bool]; escape_class: Optional[str] in
+      {no-edge,capped,unknown-data-edge}. These ride in context_v2_json (projection), NOT
+      ops_recommendations columns (Decision 84/103/63).
   - file: scripts/checks/_scaffolding.py
     action: Modify
     purpose: >-
@@ -84,9 +102,9 @@ scope:
     purpose: >-
       CLI backstop (bin/venv-python -m scripts.ci_rca.inactivity_sweep) that reads open source=ci_rca
       recs via the DuckLake reader NAMED VERBS (Decision 84 I-3 / Decision 88; no ad-hoc re-fetch)
-      and closes those satisfying the deterministic inactivity predicate through the ops portal
-      (update_rec, resolution=stale_no_recurrence, with the run-set + zero-occurrence proof recorded).
-      Portal-only writes (Decision 84); never re-stages from a read cache.
+      and closes those satisfying the timestamp-based deterministic inactivity predicate (via
+      ci_rca_lifecycle) through the ops portal (update_rec, resolution=stale_no_recurrence, with the
+      last_seen + age proof recorded). Portal-only writes (Decision 84); never re-stages from a read cache.
   - file: .github/workflows/ci.yml
     action: Modify
     purpose: >-
@@ -108,8 +126,9 @@ scope:
   - file: .github/workflows/rec-autoclose.yml
     action: Modify
     purpose: >-
-      When closing a source=ci_rca rec from a Resolves: trailer, record fixed_by_sha (the merge
-      commit SHA) into the rec's context_v2_json via the portal -- that SHA powers the regression
+      When closing a source=ci_rca rec from a Resolves: trailer, call the importable helper
+      scripts.ops_portal.ci_rca_lifecycle.stamp_fixed_by_sha(rec_id, <merge-commit-sha>) to record
+      fixed_by_sha into the rec's context_v2_json via the portal -- that SHA powers the regression
       ancestry check. Idempotent; no-op for non-ci_rca recs.
   - file: .github/workflows/ci-rca-inactivity-sweep.yml
     action: Create
@@ -125,8 +144,8 @@ scope:
       Class A columns; declares ritual-vs-free-form per Decision 118/CD.25, mirroring
       recommendation-relevance.yaml) for the identity + lifecycle fields: fingerprint v2 formula +
       error_signature structure, regression_of, fixed_by_sha, affected_nodeids, flaky, escape_class
-      enum, the status-aware-chain / regression-vs-drop rules, and the auto-close split (fix-linked /
-      deterministic-inactivity-with-proof / flake).
+      enum, the status-aware-chain / regression-vs-drop rules (incl. the no-fixed_by_sha fail-closed
+      default), and the auto-close split (fix-linked / timestamp-based inactivity-with-proof / flake).
   - file: tests/test_ci_rca_fingerprint.py
     action: Create
     purpose: >-
@@ -137,14 +156,26 @@ scope:
     action: Create
     purpose: >-
       Unit tests for status-aware chain dedup, regression-vs-drop ancestry classification (mocked
-      git ancestry), regression-record fields, flake escalation, and the deterministic
-      inactivity-close predicate.
+      git ancestry) INCLUDING the legacy closed-head-with-no-fixed_by_sha fail-closed-to-regression
+      case, regression-record fields, flake escalation, the timestamp-based inactivity-close
+      predicate, and stamp_fixed_by_sha.
   - file: tests/test_ci_rca_dedup.py
     action: Modify
     purpose: Extend for the status-aware chain behaviour (closed head never bumped; newest-open-only absorb).
   - file: tests/test_ci_rca_evidence.py
     action: Modify
     purpose: Update bundle-shape expectations for the v2 fingerprint + affected_nodeids emission.
+  - file: tests/ops_data_portal/test_ci_rca_close_then_recur.py
+    action: Modify
+    purpose: >-
+      Rewrite the rec-2644 reopen-path coverage as chain/regression coverage: a closed-head
+      fingerprint match files a REGRESSION (never reopens); a legacy closed head with no
+      fixed_by_sha fails closed to a REGRESSION; the open-match bump path is unchanged.
+  - file: tests/ops_data_portal/test_ci_rca_fingerprint.py
+    action: Modify
+    purpose: >-
+      Update the portal-side write-time backstop coverage for v2 -- the backstop resolves the
+      chain via ci_rca_lifecycle (not find_open + reopen) and imports resolve (portal not wedged).
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -177,27 +208,36 @@ acceptance_criteria:
     non-ancestor (genuine regression) files a NEW record with regression_of set, a REGRESSION:
     title prefix, and critical priority -- NOT a closed->open status flip.
   - >-
-    The rec-2644 reopen path (reopen_ci_rca_rec / close-then-recur revive) is removed; no code path
-    flips a source=ci_rca rec from closed back to open.
+    A closed-head match with NO fixed_by_sha (every rec closed before this change; manual closures)
+    cannot run the ancestry check, so it FAILS CLOSED to a REGRESSION record -- never a silent drop
+    (Decision 55).
   - >-
-    rec-autoclose records fixed_by_sha (the merge commit) into the closed rec's context_v2_json;
-    the inactivity backstop closes open ci_rca recs with zero occurrences across the last N
-    post-merge runs AND age >= 14 days as a DETERMINISTIC probe with recorded proof
-    (resolution=stale_no_recurrence); a chain of >= 3 records is tagged flaky and quarantined
-    instead of filing fresh criticals.
+    The rec-2644 reopen path (reopen_ci_rca_rec / find_recent_ci_rca_rec_by_fingerprint) is removed
+    from ci_rca_runtime.py AND its call site in scripts/ops_data_portal.py (file_rec write-time
+    backstop) is repointed at the chain helpers with the two dead imports gone -- so no code path
+    flips a source=ci_rca rec from closed back to open, and the portal is NOT ImportError-wedged.
+  - >-
+    rec-autoclose calls stamp_fixed_by_sha to record fixed_by_sha (the merge commit) into the
+    closed rec's context_v2_json; the inactivity backstop closes open ci_rca recs whose last_seen
+    (fallback created_timestamp) is older than the inactivity window AND whose created-age >= 14
+    days -- a purely timestamp-based DETERMINISTIC probe with recorded proof
+    (resolution=stale_no_recurrence), no run-history source; a chain of >= 3 records is tagged
+    flaky and quarantined instead of filing fresh criticals.
   - >-
     Escape-attribution tags a post-merge full-tier failure with escape_class in
     {no-edge, capped, unknown-data-edge} by diffing the failed test against the merged PR's
     selection-manifest (Decision 135): a test that --pre DEFERRED then failed post-merge tags capped.
   - >-
     regression_of, fixed_by_sha, affected_nodeids, flaky, and escape_class are carried in the
-    ci-rca-lifecycle projection / context_v2_json and validate against the extended CiRcaContext;
-    NO new Class A columns are added to ops_recommendations, and all rec writes transit the ops portal.
+    ci-rca-lifecycle projection / context_v2_json and validate against the extended CiRcaContext
+    (all Optional, no schema_version raise); NO new Class A columns are added to ops_recommendations,
+    and all rec writes transit the ops portal.
   - >-
     docs/contracts/ci-rca-lifecycle.yaml is a schema-valid projection contract; the junit wiring is
     present (--junitxml in _build_unit_test_cmd; artifact upload in ci.yml + main-canary.yml;
     artifact download in ci-rca.yml); evidence.py and ci_rca_runtime.py remain within their SLOC
-    budgets via the two new submodules (Decision 128, no budget raise).
+    budgets via the two new submodules (Decision 128, no budget raise); the tests/ops_data_portal/
+    suite (portal-not-wedged) is green.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -234,7 +274,8 @@ verification_plan:
     expected: Selected tests pass -- the deepest-in-app frame resolves to the src/ function, not the two different test functions.
     fix_if: A failure means the bottom-up traceback walk stops at the test frame instead of the shared src/ cause.
     hermetic: false
-    graduation: not-applicable
+    graduation: graduate
+    graduation_check_id: ci-rca-fp-v2-cause-grouping
   - step: 4
     phase: pre-deploy
     action: Special cases -- collection error, non-pytest fallback (incl. terraform-apply-sandbox), mass-failure collapse.
@@ -246,7 +287,8 @@ verification_plan:
       collapse to one run-level record.
     fix_if: A failing case means the corresponding branch is missing or mis-keyed.
     hermetic: false
-    graduation: not-applicable
+    graduation: graduate
+    graduation_check_id: ci-rca-fp-v2-special-cases
   - step: 5
     phase: pre-deploy
     action: v1 -> v2 no-collision / no-migration proof.
@@ -267,38 +309,43 @@ verification_plan:
     expected: Passes -- a closed newest record is never bumped; an open newest record is bumped exactly once.
     fix_if: A bump on a closed head reproduces the fixed-but-open magnet bug.
     hermetic: false
-    graduation: not-applicable
+    graduation: graduate
+    graduation_check_id: ci-rca-dedup-status-aware-chain
   - step: 7
     phase: pre-deploy
-    action: Regression-vs-drop ancestry classification (mocked git merge-base --is-ancestor).
+    action: Regression-vs-drop ancestry classification (mocked git merge-base --is-ancestor), incl. the legacy no-fixed_by_sha fail-closed path.
     command: >-
-      bin/venv-python -m pytest tests/test_ci_rca_lifecycle.py -k "regression or stale_rerun_drop" -q --no-header
+      bin/venv-python -m pytest tests/test_ci_rca_lifecycle.py -k "regression or stale_rerun_drop or legacy_closed_no_sha" -q --no-header
     expected: >-
       Passes -- failing-commit-is-ancestor-of-fix drops with a no-op note; failing-commit-not-ancestor
-      files a NEW record with regression_of set, REGRESSION: title prefix, critical priority. No status flip.
-    fix_if: A closed->open flip, or a regression that reuses the closed rec id, violates the closure-proof discipline.
+      files a NEW record with regression_of set, REGRESSION: title prefix, critical priority; a closed head
+      with NO fixed_by_sha fails closed to a REGRESSION (never a silent drop). No status flip in any case.
+    fix_if: A closed->open flip, a reused closed rec id, or a silent drop on the no-sha path violates the closure-proof / fail-closed discipline.
     hermetic: false
-    graduation: not-applicable
+    graduation: graduate
+    graduation_check_id: ci-rca-regression-vs-drop
   - step: 8
     phase: pre-deploy
-    action: Reopen path removed -- no code flips a source=ci_rca rec from closed to open.
+    action: Reopen path fully removed -- no caller of the reopen helpers survives anywhere in scripts/ or tests/.
     command: >-
-      bash -c "! grep -rnE 'reopen_ci_rca_rec|find_recent_ci_rca_rec_by_fingerprint' scripts/ci_rca scripts/ops_portal && echo REOPEN_PATH_REMOVED"
-    expected: Prints "REOPEN_PATH_REMOVED"; exit 0 (no references remain).
-    fix_if: Any surviving reference means the rec-2644 status-flip path was not fully replaced by regression chains.
+      bash -c "! grep -rnE 'reopen_ci_rca_rec|find_recent_ci_rca_rec_by_fingerprint' scripts/ tests/ && echo REOPEN_PATH_REMOVED"
+    expected: Prints "REOPEN_PATH_REMOVED"; exit 0 (no references remain in scripts/ -- incl. ops_data_portal.py at the root -- or tests/).
+    fix_if: Any surviving reference (esp. in scripts/ops_data_portal.py) means the rec-2644 status-flip path or a caller was not fully replaced -> portal wedge risk.
     hermetic: false
     graduation: not-applicable
   - step: 9
     phase: pre-deploy
-    action: Flake escalation and deterministic inactivity-close predicate.
+    action: Flake escalation and timestamp-based inactivity-close predicate.
     command: >-
       bin/venv-python -m pytest tests/test_ci_rca_lifecycle.py -k "flaky_escalation or inactivity_close" -q --no-header
     expected: >-
       Passes -- a chain reaching 3 records is tagged flaky and quarantined (no fresh critical); an open rec
-      with zero recent occurrences AND age >= 14 days closes with resolution=stale_no_recurrence and a recorded proof.
-    fix_if: A 3rd fresh critical, or a premature/never inactivity close, means the thresholds are wrong.
+      whose last_seen (fallback created_timestamp) predates the inactivity window AND whose created-age >= 14
+      days closes with resolution=stale_no_recurrence and a recorded proof; a rec inside either bound stays open.
+    fix_if: A 3rd fresh critical, or a premature/never inactivity close, means the thresholds or timestamp fields are wrong.
     hermetic: false
-    graduation: not-applicable
+    graduation: graduate
+    graduation_check_id: ci-rca-flake-and-inactivity
   - step: 10
     phase: pre-deploy
     action: Escape-attribution -- a --pre-DEFERRED, post-merge-failed test tags capped.
@@ -309,7 +356,8 @@ verification_plan:
       (over the cap) tags escape_class=capped; a test with no reverse-dep edge tags no-edge.
     fix_if: A mis-tag means the manifest selected/capped/deferred diff is read incorrectly.
     hermetic: false
-    graduation: not-applicable
+    graduation: graduate
+    graduation_check_id: ci-rca-escape-attribution
   - step: 11
     phase: pre-deploy
     action: Projection-not-columns -- new fields validate in context_v2_json; no new ops_recommendations columns.
@@ -340,38 +388,60 @@ verification_plan:
     graduation: not-applicable
   - step: 13
     phase: pre-deploy
-    action: rec-autoclose records fixed_by_sha for source=ci_rca (unit-level, real closure path).
+    action: rec-autoclose closure path stamps fixed_by_sha via the named helper (unit-level, real path).
     command: >-
-      bin/venv-python -m pytest tests/test_ci_rca_lifecycle.py -k "fixed_by_sha_recorded" -q --no-header
-    expected: Passes -- closing a source=ci_rca rec via the Resolves path stamps fixed_by_sha into context_v2_json.
-    fix_if: A missing fixed_by_sha means the regression ancestry check has no fix commit to compare against.
+      bin/venv-python -m pytest tests/test_ci_rca_lifecycle.py -k "fixed_by_sha_recorded or stamp_fixed_by_sha" -q --no-header
+    expected: Passes -- stamp_fixed_by_sha(rec_id, sha) writes fixed_by_sha into context_v2_json via the portal; the closed rec then carries the fix commit.
+    fix_if: A missing/misnamed helper or absent fixed_by_sha means the regression ancestry check has no fix commit to compare against.
     hermetic: false
-    graduation: not-applicable
+    graduation: graduate
+    graduation_check_id: ci-rca-fixed-by-sha-recorded
   - step: 14
     phase: pre-deploy
     action: SLOC budgets held via decomposition (no raise) -- the fast tier's SLOC guard passes on the scope.
     command: >-
       bin/venv-python -m scripts.validate --pre 2>&1 | grep -iE "sloc" || echo "SLOC_OK (no sloc failures reported)"
-    expected: No SLOC failure for scripts/ci_rca/evidence.py or scripts/ops_portal/ci_rca_runtime.py; new submodules each under 500.
+    expected: No SLOC failure for scripts/ci_rca/evidence.py, scripts/ops_portal/ci_rca_runtime.py, or scripts/ops_data_portal.py; new submodules each under 500.
     fix_if: A SLOC failure means logic must move further into fingerprint.py / ci_rca_lifecycle.py, never a budget raise (Decision 128).
     hermetic: false
     graduation: not-applicable
   - step: 15
     phase: pre-deploy
-    action: Full ci_rca unit suite green (regression guard on the whole subsystem).
+    action: Full ci_rca unit suite green (cross-subsystem regression check).
     command: >-
       bin/venv-python -m pytest tests/test_ci_rca_fingerprint.py tests/test_ci_rca_lifecycle.py tests/test_ci_rca_dedup.py tests/test_ci_rca_evidence.py -q --no-header
     expected: All tests pass.
     fix_if: Any failure in the existing dedup/evidence suites means the v2 change broke a retained contract.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Aggregate multi-file suite run whose per-property behaviours are already graduated individually
+      (steps 1-4, 6, 7, 9, 10, 13) and which the standing pytest merge gate re-runs post-merge; a standing
+      duplicate of the whole-suite run adds no distinct regression signal beyond the per-property checks.
+  - step: 16
+    phase: pre-deploy
+    action: Portal NOT wedged -- imports resolve and the reopen->chain rewrite is covered (tests/ops_data_portal/ suite).
+    command: >-
+      bin/venv-python -c "import scripts.ops_data_portal" &&
+      bin/venv-python -m pytest tests/ops_data_portal/test_ci_rca_close_then_recur.py tests/ops_data_portal/test_ci_rca_fingerprint.py tests/ops_data_portal/test_ci_rca_runtime.py -q --no-header
+    expected: The import succeeds (no ImportError from removed helpers) and the portal-side ci_rca suite passes -- closed-head match files a REGRESSION, never reopens.
+    fix_if: An ImportError, or a surviving reopen assertion, means the ops_data_portal.py backstop was not repointed (CRITICAL portal-wedge).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Directory-scoped suite the standing pytest merge gate already runs post-merge; retained here as an
+      explicit implement-time portal-not-wedged proof, but graduating a second standing copy duplicates that gate.
 constraints:
   - "All rec writes transit the ops portal (file_rec/update_rec); never Edit/Write logs/*.jsonl (Decision 84 single-portal invariant)."
   - "The fingerprint and every dedup/regression/inactivity/escape decision are computed IN CODE, never by the LLM RCA agent (Decision 55)."
   - "regression_of, fixed_by_sha, affected_nodeids, flaky, escape_class live in the ci-rca-lifecycle projection / context_v2_json -- NO new Class A columns on ops_recommendations (Decision 84/103); fix-state is not denormalized onto the rec row (Decision 63). The in-place fingerprint recompute is the only field written in place."
-  - "The inactivity backstop closes DIRECTLY only as a deterministic probe with recorded proof (0 occurrences across the last N post-merge runs AND age >= 14d are both deterministic queries) -- this stays inside Decision 103's deterministic-satisfaction boundary and does NOT auto-close on a semantic inference (which would require close_proposed, Decision 103/55)."
+  - "PORTAL-WEDGE guard: removing reopen_ci_rca_rec + find_recent_ci_rca_rec_by_fingerprint from ci_rca_runtime.py REQUIRES repointing their call site in scripts/ops_data_portal.py (file_rec write-time backstop, lines ~284-315) and deleting the two dead imports (lines 70-71) in the SAME change, or file_rec/update_rec/sync ImportError-wedge."
+  - "A closed-head match with NO fixed_by_sha (legacy/manual closures) FAILS CLOSED to a REGRESSION record -- never a silent drop (Decision 55); the git merge-base --is-ancestor check runs only when the head carries a fixed_by_sha."
+  - "The inactivity backstop closes DIRECTLY only as a purely timestamp-based deterministic probe with recorded proof (last_seen/created_timestamp older than the window AND created-age >= 14d) -- it names NO run-history data source and stays inside Decision 103's deterministic-satisfaction boundary; it does NOT auto-close on a semantic inference (which would require close_proposed, Decision 103/55)."
   - "The inactivity sweep reads open ci_rca recs via the DuckLake reader NAMED VERBS only (Decision 84 I-3 / Decision 88); no ad-hoc warehouse re-fetch; never re-stage from a read cache."
   - "The non-pytest error_signature fallback must cover terraform-apply-sandbox apply failures, whose source=ci_rca records also carry fingerprints (Decision 92)."
+  - "New CiRcaContext fields are all Optional[...]=None -- do NOT raise the schema_version ceiling (backward-compatible additions). If a future change does raise it, fix the why_chain ceiling branch `400 if schema_version == 2 else 250` to `>= 2` so v3+ records do not silently regress to 250."
+  - "rec-autoclose.yml records the fix commit via the importable helper scripts.ops_portal.ci_rca_lifecycle.stamp_fixed_by_sha(rec_id, sha) -- not an inline ad-hoc update -- so VP13 tests the real closure path."
   - "No SLOC budget raise: cross-budget logic is decomposed into fingerprint.py and ci_rca_lifecycle.py facade submodules (Decision 128); do not run --update-sloc-budgets to seed an oversized file."
   - "IMPLEMENTATION plan only -- STRATEGIC is suspended (Decision 67 freeze)."
   - "The closed->open prohibition is upheld as a FRESH forward rule that CITES Decision 103's closure-proof clause (a closed ci_rca rec carries a fixed_by_sha proof; reopening would discard it) -- NOT framed as amending a Decision 103 closed->open clause, which does not exist in Decision 103's text. Do NOT cite Decision 70 for closure-proof (it governs bootstrap-record deletion; the principle is Decision 103)."
@@ -381,34 +451,36 @@ constraints:
 context:
   - "PROBLEM incidents: rec-2710 (an unrelated session_preflight failure masked into the already-fixed rec via the coarse step-name fingerprint) and rec-2644 (close-then-recur reopen force-filed a duplicate). This work resolves both."
   - "The v1 grouping key is scripts/ci_rca/evidence.py:65 _compute_fingerprint(workflow_slug, failed_check, failure_category) where failed_check is the CI STEP name ('Unit tests + coverage') -- identical for any pytest failure."
-  - "context_v2_json already carries fingerprint/failure_category/occurrence_count/last_seen as a JSON projection (scripts/ops_portal/ci_rca_schema.py CiRcaContext) -- the new fields extend this same projection pattern; the fingerprint regex ^[0-9a-f]{64}$ still matches a v2 sha256."
+  - "PORTAL-WEDGE (critique CRITICAL): scripts/ops_data_portal.py imports find_recent_ci_rca_rec_by_fingerprint + reopen_ci_rca_rec (lines 70-71) and calls them in file_rec's write-time close-then-recur backstop (lines ~287-315). ci_rca_runtime.py only HOSTS the helpers; the CALL SITE / backstop is in ops_data_portal.py. Both files are in scope and repointed in the same change."
+  - "context_v2_json already carries fingerprint/failure_category/occurrence_count/last_seen as a JSON projection (scripts/ops_portal/ci_rca_schema.py CiRcaContext) -- the new fields extend this same projection pattern; the fingerprint regex ^[0-9a-f]{64}$ still matches a v2 sha256; last_seen is the timestamp the inactivity probe reads."
   - "The existing per-bundle dedup seam (scripts/ci_rca/dedup.py decide() with injected finder/bumper) and the workflow wiring (.github/workflows/ci-rca.yml fp_dedup step) are reused; the change is status-awareness over the chain, not a new dedup mechanism."
   - "Decision-103 framing (verified against DECISIONS.md lines 1614-1663 AND by the decision-scout): Decision 103 governs closure-PROOF ('closure requires a closure proof, not an LLM assertion') and relevance verdicts; it contains NO closed->open prohibition, and the current reopen_ci_rca_rec code (ci_rca_runtime.py:186, rec-2644, cites no Decision) actively flips closed->open. The closed-head-immutability rule is a design convention, framed here as a fresh forward Decision CITING 103's closure-proof clause; regression chains are the mechanism that restores it."
-  - "LAMBDA TIER: V2. compute_affected_artifacts over the full scope set returns {} -- no active Lambda artifact is affected (Decision 79/48). No per-Lambda build/deploy/smoke steps. Decision 48 note: the junit-XML + selection-manifest handoff between ci.yml/main-canary.yml and ci-rca.yml is an intra-repo CI artifact contract (no external service, no deploy); V2 is grounded on compute_affected_artifacts={} and the cross-workflow contract is verified behaviourally in-CI (unit tests + structural greps + the natural post-merge self-test), not via a Lambda deploy."
+  - "LAMBDA TIER: V2. compute_affected_artifacts over the full scope set (incl. scripts/ops_data_portal.py) returns {} -- no active Lambda artifact is affected (Decision 79/48). No per-Lambda build/deploy/smoke steps. Decision 48 note: the junit-XML + selection-manifest handoff between ci.yml/main-canary.yml and ci-rca.yml is an intra-repo CI artifact contract (no external service, no deploy); V2 is grounded on compute_affected_artifacts={} and the cross-workflow contract is verified behaviourally in-CI (unit tests + structural greps + the natural post-merge self-test), not via a Lambda deploy."
   - "Branch created off origin/main at commit 275334b (aws-test-hermeticity); WS1's manifest (10b31adc, Decision 135) and hermeticity guards are both present. No scope file overlaps a main-diverged file (branch is at HEAD)."
   - "junit is NOT currently emitted; --junitxml is added to _build_unit_test_cmd() and the report is carried to evidence.py via CI artifact -- this is the substrate the v2 error_signature parses. Non-pytest, terraform-apply-sandbox, and collection-error failures use the documented fallbacks."
   - "Decision-scout note reconciliation: the scout flagged 'Decision 135 does not exist' -- a FALSE POSITIVE from reading the working tree while it was still 2 commits behind main (before the WS1 checkout). Verified on origin/main HEAD (commit 275334b): Decision 135 exists (max Decision number = 135). The Decision 135 citation stands."
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (no BLOCK). CITE: Decision 103 (closure-proof + direct-vs-proposed close boundary), Decision 84 (portal-only / named-verb / no new Class A columns), Decision 72 (RCA-as-plan-source), Decision 55 (deterministic-in-code / no LLM judgment / fail-loud), Decision 86 (rationale->Decision, semantics->contract, no new prose doc), Decision 128 (SLOC decompose-by-default), Decision 104 (check-registry / _scaffolding.py command-builder home), Decision 63 (no denormalized fix-state), Decision 62 (scheduled monitor / alarm-not-gate), Decision 79 + Decision 48 (per-Lambda + verification-tier gating; V2 verdict), Decision 73 (public-repo boundary + --pre budget + L5 ci_rca hard-block), Decision 132 (verification-graduation enforced pre-merge), Decision 135 (WS1 selection manifest). RELATED: Decision 124 (ops_portal/** unmapped for coverage gate -- known gap), Decision 118/CD.25 (contract ritual-vs-free-form declaration), Decision 88 (named-verb reads, egress budget), Decision 92 (apply-failure ci_rca records carry fingerprints), Decision 70 (do-NOT-cite-for-closure caution). CIRCA-03 grouping-fingerprint contract is superseded by this work."
-  - "gates: decision-scout=FLAGS_FOUND (1 round; flags resolved -- 135-does-not-exist is a stale-tree false positive, inactivity-close reframed as deterministic-probe-with-proof per Decision 103, Decision 48 V2-grounding noted); plan-critique=DEFERRED_TO_OVERSEER"
+  - "gates: decision-scout=FLAGS_FOUND (1 round; flags resolved); plan-critique=REVISE -> revised (overseer sibling round 1; all 7 findings folded on this branch -- portal-wedge scope fix [CRITICAL], ops_data_portal tests + VP16, widened reopen grep, VP graduation reclassification, no-fixed_by_sha fail-closed default, timestamp-based inactivity predicate, dropped schema_version raise + named stamp_fixed_by_sha helper); overseer re-verifies (nested plan-critique wakes unreliable here)."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/plan-ci-rca-identity-lifecycle)
   - docs/PROJECT_CONTEXT.md read
   - "DECISIONS.md read (CITE: 103, 84, 72, 55, 86, 128, 104, 63, 62, 79, 48, 73, 132, 135; RELATED: 124, 118/CD.25, 88, 92, 70-caution; supersedes CIRCA-03)"
-  - All files in scope located and readable (evidence.py, dedup.py, ci_rca_runtime.py, ci_rca_schema.py, _scaffolding.py, ci.yml, main-canary.yml, ci-rca.yml, rec-autoclose.yml)
+  - "All files in scope located and readable (fingerprint.py [new], evidence.py, dedup.py, ci_rca_lifecycle.py [new], ci_rca_runtime.py, ops_data_portal.py, ci_rca_schema.py, _scaffolding.py, inactivity_sweep.py [new], ci.yml, main-canary.yml, ci-rca.yml, rec-autoclose.yml)"
   - Acceptance criteria understood and verifiable
   - "Decision draft (slug ci-rca-identity-lifecycle) authored verbatim in the plan report; re-check the max Decision number in DECISIONS.md at implement time (currently 135) before filing"
 execution_steps:
   - "Create scripts/ci_rca/fingerprint.py with the public API (compute_fingerprint_v2, error_signature_from_junit, error_signature_from_log_tail incl. terraform-apply-sandbox fallback, deepest_in_app_frame, normalize_message_head, collapse_mass_failure); keep it under 500 SLOC."
   - "Modify scripts/ci_rca/evidence.py: replace _compute_fingerprint(:65) with a compute_fingerprint_v2 call using the junit/log-tail error_signature; add a --junit-file arg; emit affected_nodeids into the bundle; apply mass-failure collapse; leave the whole-bundle sha256 untouched."
-  - "Create scripts/ops_portal/ci_rca_lifecycle.py (chain resolution via named verbs, regression-vs-drop ancestry via git merge-base --is-ancestor, regression-record filing, flake escalation, deterministic inactivity-close predicate); modify scripts/ops_portal/ci_rca_runtime.py to remove reopen_ci_rca_rec + find_recent_ci_rca_rec_by_fingerprint and repoint the write-time backstop at the chain helpers; keep ci_rca_runtime.py under 500 SLOC."
+  - "Create scripts/ops_portal/ci_rca_lifecycle.py (resolve_chain via named verbs; classify_closed_head via git merge-base --is-ancestor with the no-fixed_by_sha fail-closed-to-REGRESSION default; file_regression_record; stamp_fixed_by_sha; flake escalation; the timestamp-based inactivity-close predicate). Modify scripts/ops_portal/ci_rca_runtime.py to REMOVE reopen_ci_rca_rec + find_recent_ci_rca_rec_by_fingerprint (helpers hosted here); keep ci_rca_runtime.py under 500 SLOC."
+  - "CRITICAL: modify scripts/ops_data_portal.py -- the file_rec write-time backstop (lines ~284-315) is the CALL SITE. Remove the two dead imports (lines 70-71); repoint the closed-match branch at the ci_rca_lifecycle chain path (regression-vs-drop, fail-closed on no fixed_by_sha), never reopen; keep the open-match bump (newest-open-in-chain only). Verify `import scripts.ops_data_portal` succeeds (portal not wedged)."
   - "Modify scripts/ci_rca/dedup.py for status-aware chain dedup (newest-open-only bump; closed head -> lifecycle regression path)."
-  - "Modify scripts/ops_portal/ci_rca_schema.py: add regression_of/fixed_by_sha/affected_nodeids/flaky/escape_class to CiRcaContext and raise the schema_version ceiling."
+  - "Modify scripts/ops_portal/ci_rca_schema.py: add regression_of/fixed_by_sha/affected_nodeids/flaky/escape_class to CiRcaContext (all Optional=None; NO schema_version ceiling raise)."
   - "Modify scripts/checks/_scaffolding.py: add --junitxml=logs/debug/pytest-junit.xml to _build_unit_test_cmd()."
-  - "Create scripts/ci_rca/inactivity_sweep.py and .github/workflows/ci-rca-inactivity-sweep.yml (scheduled + dispatch, OIDC); portal-only writes; named-verb reads."
-  - "Modify .github/workflows/ci.yml + main-canary.yml to upload the pytest-junit.xml artifact on failure; modify .github/workflows/ci-rca.yml to download the junit + selection-manifest artifacts, pass --junit-file, file regression records on closed-head match, and tag escape_class; modify .github/workflows/rec-autoclose.yml to record fixed_by_sha at close for source=ci_rca."
+  - "Create scripts/ci_rca/inactivity_sweep.py and .github/workflows/ci-rca-inactivity-sweep.yml (scheduled + dispatch, OIDC); portal-only writes; named-verb reads; timestamp-based predicate."
+  - "Modify .github/workflows/ci.yml + main-canary.yml to upload the pytest-junit.xml artifact on failure; modify .github/workflows/ci-rca.yml to download the junit + selection-manifest artifacts, pass --junit-file, file regression records on closed-head match, and tag escape_class; modify .github/workflows/rec-autoclose.yml to call ci_rca_lifecycle.stamp_fixed_by_sha at close for source=ci_rca."
   - "Create docs/contracts/ci-rca-lifecycle.yaml (projection contract; mirror recommendation-relevance.yaml; declare ritual-vs-free-form per Decision 118/CD.25)."
   - "Author the Decision (slug ci-rca-identity-lifecycle) verbatim from the plan report into docs/DECISIONS.md at the next free number (>= 136), and file it via ops_data_portal --backfill-decisions-md post-merge (Decision 84)."
-  - "Create tests/test_ci_rca_fingerprint.py + tests/test_ci_rca_lifecycle.py; update tests/test_ci_rca_dedup.py + tests/test_ci_rca_evidence.py."
+  - "Create tests/test_ci_rca_fingerprint.py + tests/test_ci_rca_lifecycle.py; update tests/test_ci_rca_dedup.py + tests/test_ci_rca_evidence.py; rewrite tests/ops_data_portal/test_ci_rca_close_then_recur.py + tests/ops_data_portal/test_ci_rca_fingerprint.py (reopen coverage -> chain/regression coverage)."
   - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
   - "Report: what was implemented, verification results, and the filed Decision number."
 work_areas: []
