@@ -6,9 +6,11 @@ of TestCiRcaFingerprintDedup (test_ci_rca_fingerprint.py), separated at the OVER
 concern-split boundary (the pre-move monolith's lineno 2566). TestCiRcaCloseThenRecur is a NEW
 class name -- the class-qualifier rename on this cohort (methods verbatim, unchanged) is the
 SOLE sanctioned test-id delta of rec-2709 Wave 3. The shared members this cohort references --
-the _FINGERPRINT class attr, the autouse _guard_live_reader rec-2707 backstop-reader guard, and
-the _make_bundle / _ctx_v2 builders -- are DUPLICATED verbatim from TestCiRcaFingerprintDedup
-(never imported between test_* modules, per the no-cross-test-import guard).
+the _FINGERPRINT class attr and the _make_bundle / _ctx_v2 builders -- are DUPLICATED verbatim
+from TestCiRcaFingerprintDedup (never imported between test_* modules, per the
+no-cross-test-import guard). The autouse _guard_live_reader rec-2707 backstop-reader guard this
+class formerly duplicated too has since been retired (rec-2484): the global L1/L2 hermetic-AWS
+guard in the root tests/conftest.py now supersedes it class-wide.
 """
 
 from __future__ import annotations
@@ -31,31 +33,16 @@ class TestCiRcaCloseThenRecur:
     """CIRCA-03 (rec-2644 close-then-recur): find_recent_ci_rca_rec_by_fingerprint(),
     reopen_ci_rca_rec(), and the close-then-recur backstop routing in file_rec() -- the sibling
     of TestCiRcaFingerprintDedup (test_ci_rca_fingerprint.py) split out at the rec-2709 Wave 3
-    OVER-500-class boundary. Duplicates (not imports) the shared _FINGERPRINT /
-    _guard_live_reader / _make_bundle / _ctx_v2 members from that sibling."""
+    OVER-500-class boundary. Duplicates (not imports) the shared _FINGERPRINT / _make_bundle /
+    _ctx_v2 members from that sibling.
+
+    The former per-class _guard_live_reader autouse fixture (rec-2707 backstop-reader guard)
+    is retired: the global L1/L2 hermetic-AWS guard in the root tests/conftest.py (rec-2484)
+    now blocks any un-mocked src.common.iceberg_reader.make_reader() -> boto3 client path
+    class-wide, so the per-class duplicate is redundant.
+    """
 
     _FINGERPRINT = "a" * 64
-
-    @pytest.fixture(autouse=True)
-    def _guard_live_reader(self):
-        """Class-scoped backstop: any dedup-path test that forgets to mock
-        find_open_ci_rca_rec_by_fingerprint / find_recent_ci_rca_rec_by_fingerprint would
-        otherwise fall through to a live src.common.iceberg_reader.make_reader() call. On this
-        container that call SUCCEEDS (working assume-role creds) and silently masks the leak;
-        on the GitHub-hosted CI runner (no ~/.aws profile) it raises ProfileNotFound instead.
-        Fail the same way everywhere: turn any un-mocked call into a deterministic
-        AssertionError naming the missing mock (rec-2707)."""
-
-        def _unmocked_make_reader(*args, **kwargs):
-            raise AssertionError(
-                "src.common.iceberg_reader.make_reader() called without a mock -- add "
-                "patch.object(p, 'find_open_ci_rca_rec_by_fingerprint', ...) and/or "
-                "patch.object(p, 'find_recent_ci_rca_rec_by_fingerprint', ...) to this test's "
-                "with-block (rec-2707)."
-            )
-
-        with patch("src.common.iceberg_reader.make_reader", side_effect=_unmocked_make_reader):
-            yield
 
     def _make_bundle(self, tmp_path, **overrides):
         import hashlib as _hashlib
