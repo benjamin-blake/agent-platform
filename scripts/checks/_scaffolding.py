@@ -421,52 +421,99 @@ def _runtime_heavy_dep_defer_reason(test_file: str, excluded: set[str]) -> str |
     return None
 
 
-def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
-    """Partition changed test files into (runnable, deferred) via the cheap `--collect-only` pass
-    only (Decision 104 / rec-2485; single-execution reshape).
+# Decision affected-set-selection: pytest's own `ERROR collecting <path>` block header
+# (verified empirically -- one header per uncollectable file, in argv order, regardless of
+# argv position) and the `-rs` short-summary `SKIPPED [N] <path>:<line>: <reason>` line (a
+# graceful module-level pytest.importorskip, not a hard collection error). Both carry the file
+# path verbatim as passed on argv, so a straight substring/suffix match resolves it back to its
+# entry in changed_tests.
+_ERROR_COLLECTING_RE = re.compile(r"ERROR collecting (\S+)")
+_SKIPPED_LINE_RE = re.compile(r"^SKIPPED\s+\[\d+\]\s+(\S+):\d+:\s*(.+)$", re.MULTILINE)
 
-    A file defers when its `--collect-only` root-cause ModuleNotFoundError names a deliberately-
-    excluded heavy dependency (in requirements.txt, not requirements-fast.txt) that is genuinely
-    absent (`importlib.util.find_spec` is None) -- a module-scope import, visible without running
-    any test body. Every other shape -- a real test failure, a non-heavy collection error, or an
-    error with no "No module named" line at all -- routes to `runnable`, so the subsequent real
-    pytest run reproduces and reddens the genuine failure with full diagnostics (fail-closed).
+
+def _match_changed_test_path(file_token: str, changed_tests: list[str]) -> str | None:
+    """Resolve a path token echoed by pytest (relative-as-passed, or occasionally an
+    absolute/rootdir-relative variant) back to its exact entry in changed_tests."""
+    normalized = file_token.replace("\\", "/")
+    for f in changed_tests:
+        if normalized == f or normalized.endswith("/" + f):
+            return f
+    return None
+
+
+def _attribute_batched_collect_errors(combined: str, changed_tests: list[str], excluded: set[str]) -> dict[str, str]:
+    """Parse ONE combined `--collect-only -rs` invocation's stdout+stderr and attribute each
+    per-file signal -- a hard collection-ERROR block, or a graceful SKIPPED line -- to its OWN
+    file, so a mixed batch (one uncollectable file among several runnable ones) defers exactly
+    the uncollectable file(s), never the whole batch."""
+    deferred: dict[str, str] = {}
+
+    headers = list(_ERROR_COLLECTING_RE.finditer(combined))
+    for i, header in enumerate(headers):
+        file_token = header.group(1)
+        block_end = headers[i + 1].start() if i + 1 < len(headers) else len(combined)
+        block = combined[header.end() : block_end]
+        matches = _NO_MODULE_NAMED_RE.findall(block)
+        missing = _excluded_and_absent(matches[-1], excluded) if matches else None
+        matched_file = _match_changed_test_path(file_token, changed_tests)
+        if matched_file and missing:
+            deferred[matched_file] = missing
+
+    for skip_match in _SKIPPED_LINE_RE.finditer(combined):
+        file_token, reason = skip_match.group(1), skip_match.group(2)
+        matches = _NO_MODULE_NAMED_RE.findall(reason)
+        missing = _excluded_and_absent(matches[-1], excluded) if matches else None
+        matched_file = _match_changed_test_path(file_token, changed_tests)
+        if matched_file and missing and matched_file not in deferred:
+            deferred[matched_file] = missing
+
+    return deferred
+
+
+def partition_changed_tests_by_collectability(changed_tests: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """Partition changed test files into (runnable, deferred) via a SINGLE batched
+    `--collect-only` invocation covering every changed test file at once (Decision
+    affected-set-selection, ~30x fewer collect-only subprocess spawns than the prior one-call-
+    per-file loop; net-funds the affected-set derivation's added cost inside the 5-min budget).
+
+    A file defers when its OWN per-file signal (a `ERROR collecting <path>` block, or a `-rs`
+    SKIPPED line) root-causes to a deliberately-excluded heavy dependency (in requirements.txt,
+    not requirements-fast.txt) that is genuinely absent (`importlib.util.find_spec` is None) --
+    module-scope, visible without running any test body. Every other shape -- a real test
+    failure, a non-heavy collection error, or a file with no signal at all -- routes to
+    `runnable`, so the subsequent real pytest run reproduces and reddens the genuine failure
+    with full diagnostics (fail-closed). Attribution is PER FILE (see
+    _attribute_batched_collect_errors): a mixed batch of one uncollectable file and several
+    runnable ones defers only the uncollectable one -- never a whole-batch mis-defer on one bad
+    file (a near-silent under-run this batching would otherwise risk).
 
     `-rs` (show skip reasons) is required here: a module-level `pytest.importorskip("duckdb")`
     guard (e.g. tests/test_ops_data_portal.py) makes `--collect-only` exit 5 (NO_TESTS_COLLECTED)
     with "collected 0 items / 1 skipped" -- a graceful skip, not a collection error -- and without
     `-rs` the "could not import 'duckdb': No module named 'duckdb'" reason text never appears in
     stdout, so this genuinely-absent-heavy-dep shape is invisible to the regex below and the file
-    is misrouted to `runnable`. When such a file is the ONLY entry in `changed_tests`, the
-    subsequent real run in `run_pytest_diff` collects 0 distributable items under `-n auto` and
-    exits nonzero, reddening the fast-tier gate on a dependency that was deliberately excluded
-    from it (rec-2707 CI follow-up).
+    is misrouted to `runnable`. A self-skipping file alongside at least one good file in the SAME
+    batch exits 0 overall (verified empirically) -- so per-file SKIPPED-line attribution runs
+    UNCONDITIONALLY (not gated on a nonzero returncode) to still catch it.
 
     A heavy dependency imported LAZILY (function scope, not module scope) is invisible to
     `--collect-only` and is no longer proactively probed here -- `run_pytest_diff` catches that
     shape reactively, only if and after the combined run fails (see `_runtime_heavy_dep_defer_reason`).
     """
+    if not changed_tests:
+        return [], []
     excluded = _excluded_heavy_import_names()
-    runnable: list[str] = []
-    deferred: list[tuple[str, str]] = []
-    for test_file in changed_tests:
-        result = _common.run(
-            [_common.PYTHON, "-m", "pytest", "--collect-only", "-q", "-rs", test_file, "-m", "not integration"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            cwd=_common.ROOT,
-        )
-        if result.returncode != 0:
-            combined = (result.stdout or "") + (result.stderr or "")
-            matches = _NO_MODULE_NAMED_RE.findall(combined)
-            missing = _excluded_and_absent(matches[-1], excluded) if matches else None
-            if missing:
-                deferred.append((test_file, missing))
-            else:
-                runnable.append(test_file)
-            continue
-        runnable.append(test_file)
+    result = _common.run(
+        [_common.PYTHON, "-m", "pytest", "--collect-only", "-q", "-rs", *changed_tests, "-m", "not integration"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=_common.ROOT,
+    )
+    combined = (result.stdout or "") + (result.stderr or "")
+    deferred_map = _attribute_batched_collect_errors(combined, changed_tests, excluded)
+    runnable = [f for f in changed_tests if f not in deferred_map]
+    deferred = [(f, deferred_map[f]) for f in changed_tests if f in deferred_map]
     return runnable, deferred
 
 

@@ -2,6 +2,123 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 135: Live, cacheless, strictly-additive affected-set selection replaces the --pre edited-set tier gate (amends Decision 73, 2nd amendment; builds on 80/104/124/131) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-17
+**Warehouse ID:** dec-135 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The --pre fast tier's pytest selection (Decision 73, amended by the PR #334 explicit-paths fix)
+only ever ran tests that were THEMSELVES literally present in the diff (the "edited-set"). A
+source-only PR that broke a test it did not itself touch, or broke a downstream consumer of a
+changed data file / roadmap YAML, passed the fast gate clean and only reddened post-merge on the
+full tier (or the Main Canary) -- surfaced via rec-2638 (validate --pre under-checks untracked new
+files) and repeated CI-RCA incidents where a data-shape change (Incident A: a YAML entry-count
+edit) or a deleted file's dependents (Incident B) escaped the fast gate. Decision 73's own Known
+Gap flagged this directly ("pytest --picked may be upgraded if false-negatives accumulate").
+
+**Decision:**
+1. **Four-channel live affected-set derivation** (`scripts/checks/deps/affected_tests.py`), unioned
+   over the edited-set STRICTLY ADDITIVELY (selection can only grow): (a) import-closure
+   reverse-deps, computed via `nx.ancestors` over `scripts/dependency_graph.py`'s live import
+   graph; (b) a PRECISE data-edge channel (path or quoted-token match, never a bare substring) over
+   non-.py data artifacts changed in the diff plus deleted-.py-bytes (Incident B) -- generalizes and
+   retires the `select_roadmap_guard_tests` special case; (c)
+   `scripts.test_coverage_checker.map_source_to_test()`'s mirror map (read-only use); (d) a
+   conftest-subtree rule. A ~35-module cap protects against the import-closure channel's
+   combinatorial blow-up: the edited-set, DIRECT reverse-deps, and data-edge hits are never
+   deferred; only the transitive residue (plus the bounded mirror-map/conftest-subtree
+   contributions) is capped, and any overflow defers LOUDLY -- the full post-merge tier still
+   covers it. On an internal derivation exception, the selector falls back to the edited-set with a
+   loud warning (Decision 55), never silently shrinking below it.
+2. **Two dependency-graph soundness patches** (`scripts/dependency_graph.py`): (i) `__init__.py`
+   package facades (Decision 124) are now graph nodes, so an importer of the PACKAGE (not a
+   specific submodule) keeps its edge instead of silently dropping it; (ii) an AST pass unions
+   string-constant module edges (e.g. `mock.patch("scripts.x.y")` targets), resolved to the longest
+   existing graph-node module prefix.
+3. **A new status-aware diff primitive** (`scripts/checks/_common.py`'s `get_status_aware_diff()`),
+   added ALONGSIDE `get_changed_files()` (whose own contract for its existing callers is
+   unchanged): `git diff --name-status` against the origin/main merge-base (deletions carry `D`
+   status) plus `git ls-files --others --exclude-standard` (untracked new files) -- co-resolves
+   rec-2638.
+4. **Batched collect-only partitioning** (`scripts/checks/_scaffolding.py`): the per-file serial
+   `--collect-only` loop is replaced by ONE batched invocation over every affected test file, with
+   collection-ERROR blocks and `-rs` SKIPPED lines attributed back to their own file (never a
+   whole-batch mis-defer on one bad file) -- nets ~30x fewer collect-only subprocess spawns, funding
+   the derivation's added cost inside the 5-minute fast-tier budget.
+5. **A per-run `selection-manifest.json`** (sha, status-aware diff, per-test provenance/channel,
+   selected/capped/deferred, timings) is printed to the CI log, uploaded as a GitHub Actions
+   artifact (`pr-validate`, `if: always()`), and best-effort-uploaded to S3
+   (`ci/selection/<sha>/`, lazy-imports boto3, LOUD-skips when creds/boto3 are absent -- the
+   no-creds fast tier). The manifest is an APPEND-ONLY OBSERVABILITY ARTIFACT consumed only by
+   future CI-RCA escape-attribution -- it is NEVER read back as a selection input (structurally
+   proven: the derivation never reads a prior manifest). DuckLake table / named-verb registration
+   for the manifest is DEFERRED to T2.36, triggered by "first written cross-run query" -- this
+   Decision does not build that registration.
+6. **`select_roadmap_guard_tests` retired** (function + call site removed from
+   `scripts/validate.py`); its behavior is subsumed by the general data-edge channel (proven by
+   `TestRoadmapGuardSubsumption`).
+7. **Inline implementation path taken.** The derivation feeds the EXISTING `pytest_diff` scaffold
+   in `scripts/validate.py`'s `--pre` block; `scripts/checks/registry.py` and the
+   `tests/test_checks_registry.py` frozen-baseline (`FROZEN_PRE_SCAFFOLDS`) are UNTOUCHED -- no new
+   registered check or scaffold step was introduced.
+
+**KG.13 boundary (explicitly NOT engaged):** KG.13 is the deferred Bazel/Pants-style
+Test-Impact-Analysis + selection/coverage-CACHE work (`ROADMAP-PLATFORM.yaml` T3.11 c5), gated by a
+revisit trigger (concurrency > 1 AND (KG.13 filed OR a fast-tier-budget breach)). This Decision's
+derivation is LIVE, CACHELESS, and tool-free (ast/networkx only) -- explicitly NOT a selection cache
+and NOT a coverage cache -- so it lands in Decision 80 point 3's sanctioned "live derivation"
+bucket, not point 4's deferred-orchestrator bucket. This Decision files NO KG.13 tier_item and ARMS
+NO revisit trigger; KG.13 stays deferred and undisturbed.
+
+**Net-budget math:** the added live-derivation cost (import-graph build ~2-4s + the data-edge
+single-pass scan + manifest emission) is net-funded by the collect-only batching's ~30x
+subprocess-spawn reduction; the S3 upload leg is best-effort/async and never counts against the
+5-minute budget assertion (Decision 73). VP step 17 (`validate --pre` dogfooding this very diff) is
+the empirical proof; p90 target ~2-2.5 minutes.
+
+**Verification tier:** V2 (Decision 48) -- the `ci.yml` edit is an `actions/upload-artifact` STEP
+(not a check; not in Decision 48's V3 trigger list), and the S3 manifest object is best-effort
+observability, not a contract another service consumes. The substantive verification is unit-level
+incident-replay against the REAL selector (`tests/checks/deps/test_affected_tests.py`), not a live
+deploy/invoke.
+
+**Rationale:**
+The prior edited-set selection was structurally blind to exactly the failure shape it exists to
+catch (a change whose blast radius extends beyond the files it touches). A live, additive
+derivation over the real import graph and data-references closes that gap without trading away
+Decision 73's non-wedging fast-tier design: the additive-only invariant guarantees the new
+selection is never a strict subset of the old one (no regression risk from the upgrade itself), the
+cap+defer keeps worst-case cost bounded, and the manifest gives CI-RCA a forward-looking
+escape-attribution surface without becoming a second source of truth (it is never read back).
+
+**Reversal conditions:** Revisit this design if (a) the ~35-module cap's transitive-residue defer
+rate proves high enough in practice that the full tier is routinely catching what should have been
+fast-tier-caught (tighten the cap's channel-priority ordering, or promote the manifest's
+deferred-count telemetry into a tier_item); (b) T3.11 c5's KG.13 revisit trigger fires for an
+unrelated reason (concurrency > 1 or a genuine fast-tier-budget breach) -- re-examine whether this
+design's live per-run cost still nets out, or whether a genuine selection/coverage cache (KG.13) is
+now warranted; (c) the manifest's first written cross-run query need materializes -- action the
+deferred T2.36 DuckLake/named-verb registration then, not preemptively.
+
+**Related:** Decision 73 (fast-tier selection mechanism this amends, 2nd amendment after the PR
+#334 explicit-paths fix), Decision 80 (import-graph oracle; the sanctioned-live-derivation vs
+deferred-cache boundary this Decision sits inside), Decision 104 (checks registry / `_common.py`
+sole-home discipline; the inline path this Decision took leaves both untouched), Decision 124
+(facade re-export pattern the `__init__.py` soundness patch preserves), Decision 131 (mirror-map /
+conftest hierarchy / per-package `__init__.py` -- channel 3's read-only dependency and channel 4's
+rule), Decision 84 (warehouse SoT + numbering; DuckLake/named-verb registration deferred to T2.36
+under this same authority), Decision 86 (agent-first; the manifest and this Decision's rationale
+route here, not a new prose doc), Decision 128 / Decision 130 (SLOC decompose-by-default discipline
+every touched/new file stays under), Decision 55 (fail-loud fallback on derivation exception; no
+rescue loops), Decision 132 (verification graduation obligation this plan's VP dispositions
+satisfy). Roadmap refs (not DECISIONS.md entries): rec-2638 (co-resolved: untracked new files now
+visible to `--pre` selection), T2.36 (deferred DuckLake/named-verb registration for the manifest),
+KG.13 / T3.11 c5 (deliberately undisturbed, see boundary note above).
+
+---
+
 ## Decision 134: Ratify prose-monolith DECISIONS.md authoring with Decision-114-parity size governance; adopt the DAF-01/DAF-03 ETL-parity and authoring-contract direction as forward work; correct the T1.5 retirement end-state (Decided)
 
 **Status:** Decided

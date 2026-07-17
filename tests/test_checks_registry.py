@@ -25,7 +25,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -416,3 +416,94 @@ class TestUpdateSlocBudgetsLoweringGap:
             result = _validate._load_sloc_budgets()
 
         assert result["scripts/shrunk_but_still_big.py"] == 550
+
+
+class TestCommonPrimitives:
+    """Direct coverage of scripts/checks/_common.py's primitives.
+
+    _common.py is _common.py's own mapped coverage-checker home (Decision 104 grandfather
+    rule: scripts/checks/_common.py -> tests/test_checks_registry.py, a flat, non-retiring
+    mapping outside the 24-item mirror roster) -- its 100% per-file coverage is asserted HERE,
+    not in tests/validate/test_changed_files.py (which covers the SAME primitives'
+    behavioural contract, but is not the file this module's coverage check runs against).
+    """
+
+    def test_run_delegates_to_subprocess_run(self) -> None:
+        result = _common.run(["true"])
+        assert result.returncode == 0
+
+    def test_invoke_step_appends_on_nonzero(self, capsys: pytest.CaptureFixture) -> None:
+        failed: list[str] = []
+        with patch("scripts.checks._common.run", return_value=MagicMock(returncode=1)):
+            _common.invoke_step("dummy-step", ["true"], failed)
+        assert failed == ["dummy-step"]
+        assert "dummy-step" in capsys.readouterr().out
+
+    def test_invoke_step_no_append_on_zero(self) -> None:
+        failed: list[str] = []
+        with patch("scripts.checks._common.run", return_value=MagicMock(returncode=0)):
+            _common.invoke_step("dummy-step", ["true"], failed)
+        assert failed == []
+
+    def test_get_changed_files_origin_main_success_branch(self, tmp_path: Path) -> None:
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "a.py\n"
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run), patch("scripts.checks._common.ROOT", tmp_path):
+            files = _common.get_changed_files()
+        assert files == ["a.py"]
+
+    def test_get_changed_files_head_fallback_branch(self, tmp_path: Path) -> None:
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            if "origin/main" in cmd:
+                result.returncode = 1
+                result.stdout = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run), patch("scripts.checks._common.ROOT", tmp_path):
+            files = _common.get_changed_files()
+        assert files == []
+
+    def test_get_status_aware_diff_full_pass(self, tmp_path: Path) -> None:
+        """Exercises every line of get_status_aware_diff(): a successful merge-base, a mixed
+        M/A/D/malformed diff, and untracked existing/nonexistent paths."""
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "new_thing.py").write_text("x = 2\n", encoding="utf-8")
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0
+            if cmd[:2] == ["git", "merge-base"]:
+                result.stdout = "deadbeef\n"
+            elif cmd[:2] == ["git", "diff"]:
+                result.stdout = "M\ta.py\n\nD\tscripts/gone.py\nno-tab-here\nM\tnot_on_disk.py\nM\t   \nR\told_renamed.py\n"
+            elif cmd[:2] == ["git", "ls-files"]:
+                result.stdout = "new_thing.py\nghost.py\n"
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run), patch("scripts.checks._common.ROOT", tmp_path):
+            entries = _common.get_status_aware_diff()
+
+        assert set(entries) == {("M", "a.py"), ("D", "scripts/gone.py"), ("??", "new_thing.py")}
+
+    def test_get_status_aware_diff_merge_base_failure_fallback(self, tmp_path: Path) -> None:
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 0 if cmd[:2] != ["git", "merge-base"] else 1
+            result.stdout = ""
+            return result
+
+        with patch("scripts.checks._common.run", side_effect=mock_run), patch("scripts.checks._common.ROOT", tmp_path):
+            entries = _common.get_status_aware_diff()
+        assert entries == []

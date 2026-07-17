@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.checks.deps import affected_tests as at
 from tests.fixtures.subprocess_stubs import _pre_mock_run
 from tests.fixtures.validate_module import _validate
 
@@ -19,7 +20,6 @@ validate_iam_runner_policy = _validate.validate_iam_runner_policy
 get_changed_files = _validate.get_changed_files
 ROOT = _validate.ROOT
 validate_import_contracts = _validate.validate_import_contracts
-select_roadmap_guard_tests = _validate.select_roadmap_guard_tests
 validate_prompt_files = _validate.validate_prompt_files
 
 
@@ -114,7 +114,13 @@ class TestPreModeDiffAware:
         ruff_cmds = [c for c in captured_cmds if "ruff" in c]
         assert not ruff_cmds, f"Unexpected ruff invocation: {ruff_cmds}"
 
-    def test_skips_pytest_when_no_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_source_only_change_now_selects_reverse_dep_tests_via_affected_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Superseded by Decision affected-set-selection: a source-only diff (no test file
+        literally changed) used to skip pytest entirely under the old edited-set selection.
+        The live affected-set derivation now walks scripts/validate.py's REAL reverse-dependency
+        test modules (e.g. tests/checks/roadmap/test_validate_tier_floor.py statically imports
+        it) via the import-closure channel, so pytest DOES run -- this is the plan's headline
+        acceptance criterion (a source-only PR is caught pre-merge), not a regression."""
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -138,8 +144,9 @@ class TestPreModeDiffAware:
             _validate.main()
 
         assert exc_info.value.code == 0
-        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
-        assert not pytest_cmds
+        pytest_cmds = [c for c in captured_cmds if "--collect-only" not in c and "pytest" in c]
+        assert pytest_cmds, "expected the import-closure channel to select scripts.validate's real reverse-dep tests"
+        assert "scripts/validate.py" not in pytest_cmds[0], "a changed SOURCE file must never itself be a pytest target"
 
     def test_invokes_pytest_with_explicit_files_when_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
@@ -263,7 +270,11 @@ class TestPreModePytestSelection:
 
         assert exc_info.value.code != 0, "exit 5 / 0-collected with changed test files must redden the gate"
 
-    def test_no_pytest_when_no_test_files_changed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_source_only_changes_now_select_reverse_dep_tests_via_affected_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Superseded by Decision affected-set-selection (see the sibling test in
+        TestPreModeDiffAware): two source-only changes with real reverse-dep test modules
+        (scripts.validate, scripts.sync.ops both have several) now select those tests via the
+        import-closure channel instead of running no tests at all."""
         monkeypatch.setattr(sys, "argv", ["validate.py", "--pre"])
         monkeypatch.setenv("_VALIDATE_DEPTH", "0")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -287,8 +298,8 @@ class TestPreModePytestSelection:
             _validate.main()
 
         assert exc_info.value.code == 0
-        pytest_cmds = [c for c in captured_cmds if "pytest" in c]
-        assert not pytest_cmds, f"pytest must not run when no test files changed, got: {pytest_cmds}"
+        pytest_cmds = [c for c in captured_cmds if "--collect-only" not in c and "pytest" in c]
+        assert pytest_cmds, "expected the import-closure channel to select real reverse-dep tests"
 
 
 @pytest.mark.usefixtures("_neutralized_pre_registry")
@@ -424,41 +435,40 @@ class TestPreModeRegistryIsolation:
         )
 
 
-class TestPreRoadmapGuardSelection:
-    """ci-rca-cd25-ratification-tier-gap -- select_roadmap_guard_tests() dynamically pulls tests/ files that reference
-    a roadmap YAML into the --pre fast tier's changed_tests set whenever a roadmap YAML
-    appears in the diff, so live-roadmap guard tests stop being tier_misplaced (they used
-    to run only in the full post-merge tier)."""
-
-    select_roadmap_guard_tests = staticmethod(_validate.select_roadmap_guard_tests)
+class TestRoadmapGuardSubsumption:
+    """Subsumption proof (Decision affected-set-selection, VP step 9): the retired
+    select_roadmap_guard_tests special case (ci-rca-cd25-ratification-tier-gap) is subsumed by
+    the general data-edge channel in scripts/checks/deps/affected_tests.py -- a roadmap-YAML
+    change still selects the tests that reference its basename, via the GENERAL channel, not a
+    roadmap-specific special case."""
 
     def _make_tests_dir(self, tmp_path: Path) -> None:
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
-        (tests_dir / "test_roadmap_guard.py").write_text('ROADMAP = "ROADMAP-PLATFORM.yaml"\n', encoding="utf-8")
+        (tests_dir / "test_roadmap_guard.py").write_text(
+            'ROADMAP = "ROADMAP-PLATFORM.yaml"\n\ndef test_x():\n    assert ROADMAP\n', encoding="utf-8"
+        )
         (tests_dir / "test_unrelated.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
-        pycache_dir = tests_dir / "__pycache__"
-        pycache_dir.mkdir()
-        (pycache_dir / "test_roadmap_guard.cpython-312.pyc").write_bytes(b"ROADMAP-PLATFORM.yaml")
 
-    def test_roadmap_yaml_in_diff_selects_guard_tests(self, tmp_path: Path) -> None:
+    def test_roadmap_yaml_change_selects_guard_test_via_general_channel(self, tmp_path: Path) -> None:
         self._make_tests_dir(tmp_path)
-        result = self.select_roadmap_guard_tests(["docs/ROADMAP-PLATFORM.yaml"], repo_root=tmp_path)
-        assert result == ["tests/test_roadmap_guard.py"]
+        result = at.derive_affected_tests([("M", "docs/ROADMAP-PLATFORM.yaml")], repo_root=tmp_path)
+        assert "tests/test_roadmap_guard.py" in result["selected"]
+        assert result["manifest"]["provenance"]["tests/test_roadmap_guard.py"] == "data_edge"
 
-    def test_no_roadmap_yaml_in_diff_does_not_force_select(self, tmp_path: Path) -> None:
+    def test_unrelated_diff_does_not_force_select_guard_test(self, tmp_path: Path) -> None:
         self._make_tests_dir(tmp_path)
-        result = self.select_roadmap_guard_tests(["scripts/validate.py"], repo_root=tmp_path)
-        assert result == []
+        result = at.derive_affected_tests([("M", "scripts/unrelated_thing.py")], repo_root=tmp_path)
+        assert "tests/test_roadmap_guard.py" not in result["selected"]
 
-    def test_pycache_paths_excluded(self, tmp_path: Path) -> None:
-        self._make_tests_dir(tmp_path)
-        result = self.select_roadmap_guard_tests(["docs/ROADMAP-PLATFORM.yaml"], repo_root=tmp_path)
-        assert all("__pycache__" not in f and f.endswith(".py") for f in result)
-
-    def test_product_roadmap_yaml_also_triggers_selection(self, tmp_path: Path) -> None:
+    def test_product_roadmap_yaml_also_selects_via_general_channel(self, tmp_path: Path) -> None:
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
-        (tests_dir / "test_product_guard.py").write_text('ROADMAP = "ROADMAP-PRODUCT.yaml"\n', encoding="utf-8")
-        result = self.select_roadmap_guard_tests(["docs/ROADMAP-PRODUCT.yaml"], repo_root=tmp_path)
-        assert result == ["tests/test_product_guard.py"]
+        (tests_dir / "test_product_guard.py").write_text(
+            'ROADMAP = "ROADMAP-PRODUCT.yaml"\n\ndef test_x():\n    assert ROADMAP\n', encoding="utf-8"
+        )
+        result = at.derive_affected_tests([("M", "docs/ROADMAP-PRODUCT.yaml")], repo_root=tmp_path)
+        assert "tests/test_product_guard.py" in result["selected"]
+
+    def test_special_case_function_no_longer_exists(self) -> None:
+        assert not hasattr(_validate, "select_roadmap_guard_tests")

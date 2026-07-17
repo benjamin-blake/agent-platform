@@ -22,6 +22,12 @@ _SEARCH_DIRS: tuple[str, ...] = ("src", "scripts", "tests")
 _FIRST_PARTY_ROOTS: tuple[str, ...] = ("src", "scripts")
 _EXPORT_PATH = _REPO_ROOT / "docs" / "dependency-graph.json"
 _CLI_PATTERN = re.compile(r"-m\s+(scripts(?:\.\w+)+)")
+# Soundness patch (ii), Decision affected-set-selection: a string literal naming a first-party
+# module or module.attribute path (e.g. a mock.patch("scripts.checks._common.run") target).
+# Matched against the WHOLE string; the module edge itself resolves to the longest graph-node
+# prefix of the match (see _patch_string_module_targets), so both a bare module-path string and
+# a module.attribute string resolve to their owning module node.
+_PATCH_STRING_RE = re.compile(r"^(src|scripts)(\.\w+)+$")
 
 KNOWN_UNSOUND: list[dict[str, str]] = [
     {
@@ -181,6 +187,39 @@ def _enrich_symbol_layer(graph: nx.DiGraph, py_file: Path, module: str) -> None:
                 graph.add_node(sym, kind="symbol")
 
 
+def _patch_string_module_targets(py_file: Path, graph: nx.DiGraph) -> list[str]:
+    """Soundness patch (ii), Decision affected-set-selection: AST pass over ast.Constant string
+    literals matching _PATCH_STRING_RE, resolved to the LONGEST existing graph-node module
+    prefix of each match.
+
+    Handles both a bare module-path string (e.g. "scripts.checks.deps.affected_tests") and a
+    module.attribute mock-patch target (e.g. "scripts.checks._common.run", where only
+    "scripts.checks._common" is a real module node) -- the longest-prefix walk resolves either
+    shape to its owning module without requiring the caller to know which shape a given string
+    is. A candidate that resolves to no known module (e.g. an unrelated dotted string that only
+    coincidentally matches the pattern) contributes no edge.
+    """
+    try:
+        source = py_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(py_file))
+    except (OSError, SyntaxError):
+        return []
+    targets: list[str] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        value = node.value
+        if not _PATCH_STRING_RE.match(value):
+            continue
+        parts = value.split(".")
+        for end in range(len(parts), 1, -1):
+            candidate = ".".join(parts[:end])
+            if candidate in graph:
+                targets.append(candidate)
+                break
+    return targets
+
+
 def build_graph(
     repo_root: Path | None = None,
     granularity: str = "module",
@@ -190,6 +229,14 @@ def build_graph(
     Nodes: dotted module names with kind='module'. Edges: A->B means A imports B.
     Root nodes are tagged graph.nodes[mod]['is_root'] = True.
     granularity='symbol' adds function/class nodes (kind='symbol') and call edges.
+
+    Soundness patch (i), Decision affected-set-selection: package __init__.py files ARE
+    included as graph nodes (dotted package name, via _file_to_module's existing __init__
+    stripping) so a facade re-export (Decision 124: `__init__.py` re-exporting a submodule's
+    public surface) does not silently drop the edge from an importer of the package to the
+    package node itself -- previously __init__.py was skipped entirely, so
+    `from scripts.checks.deps import X` (importing the PACKAGE) had no node to land on and the
+    edge was dropped.
     """
     root = repo_root if repo_root is not None else _REPO_ROOT
     graph: nx.DiGraph = nx.DiGraph()
@@ -200,8 +247,6 @@ def build_graph(
         if not sdir.is_dir():
             continue
         for py_file in sorted(sdir.rglob("*.py")):
-            if py_file.name == "__init__.py":
-                continue
             mod = _file_to_module(py_file, root)
             if mod:
                 graph.add_node(mod, kind="module")
@@ -211,6 +256,10 @@ def build_graph(
         for imported_mod in _imports_for_file(py_file, root):
             if imported_mod in graph and imported_mod != mod:
                 graph.add_edge(mod, imported_mod)
+        # Soundness patch (ii): union string-constant module edges (mock.patch targets etc.).
+        for target in _patch_string_module_targets(py_file, graph):
+            if target != mod:
+                graph.add_edge(mod, target)
 
     root_set = _gather_roots(root)
     for mod in root_set:

@@ -38,7 +38,7 @@ from scripts.checks import _common, registry  # noqa: E402
 # and for `patch("validate.ROOT"/"validate.run"/"validate.PYTHON"/"validate.invoke_step"/
 # "validate.get_changed_files")`). Scaffolding below uses the qualified _common.* form so that
 # scripts.checks._common is the single interception point for every caller, extracted or not.
-from scripts.checks._common import PYTHON, ROOT, get_changed_files, invoke_step, run  # noqa: F401,E402
+from scripts.checks._common import PYTHON, ROOT, get_changed_files, get_status_aware_diff, invoke_step, run  # noqa: F401,E402
 from scripts.checks._scaffolding import (  # noqa: F401,E402
     _DQ_FRESHNESS_SECONDS,
     _TERRAFORM_ROOTS,
@@ -84,6 +84,17 @@ from scripts.checks.contracts.validate_no_underscore_instructions import (  # no
 from scripts.checks.contracts.validate_portal_drift import validate_portal_drift  # noqa: F401,E402
 from scripts.checks.contracts.validate_prompt_compliance import validate_prompt_compliance  # noqa: F401,E402
 from scripts.checks.decisions.validate_decisions_size import validate_decisions_size  # noqa: F401,E402
+
+# scripts.checks.deps.affected_tests is DELIBERATELY NOT imported at module scope here (unlike
+# every other facade re-export above): it imports networkx at ITS OWN module scope (Decision 80's
+# import-graph oracle dependency), and the terraform-validate CI job installs only pydantic +
+# pyyaml (`pip install pyyaml pydantic`) before running `python -m scripts.validate
+# --terraform-only`, which imports this whole module. A module-level import here would make
+# --terraform-only hard-crash with ModuleNotFoundError on every PR, never reaching the terraform
+# checks. derive_affected_tests/emit_manifest are imported lazily inside main()'s --pre block
+# instead (the ONLY place they are called) -- the same deferred-import pattern
+# validate_dependency_graph_freshness already uses for its own networkx-dependent import of
+# scripts.dependency_graph.
 from scripts.checks.deps.validate_dependency_graph_freshness import (  # noqa: F401,E402
     validate_dependency_graph_freshness,
 )
@@ -219,32 +230,6 @@ from scripts.checks.verification.validate_verifier_same_pr_guard import (  # noq
 from scripts.checks.verification.validate_vp_replay import validate_vp_replay  # noqa: F401,E402
 
 _FAST_TIER_BUDGET_SECONDS = 300
-
-_ROADMAP_YAML_PATHS = {"docs/ROADMAP-PLATFORM.yaml", "docs/ROADMAP-PRODUCT.yaml"}
-_ROADMAP_YAML_BASENAMES = {"ROADMAP-PLATFORM.yaml", "ROADMAP-PRODUCT.yaml"}
-
-
-def select_roadmap_guard_tests(changed_files: list[str], repo_root: _Path = ROOT) -> list[str]:
-    """Discover tests/**/*.py files that reference a roadmap YAML, so live-roadmap guard
-    tests (which pin state read directly off docs/ROADMAP-PLATFORM.yaml or
-    docs/ROADMAP-PRODUCT.yaml) run in the fast --pre tier whenever a roadmap YAML changes.
-    Returns [] when no roadmap YAML is present in changed_files -- never force-selects
-    the guard tests otherwise. Matches on the YAML basename (not the full docs/-prefixed
-    path) since guard tests typically build the path via Path(__file__).parent.parent /
-    "docs" / "ROADMAP-PLATFORM.yaml" rather than embedding the literal repo-relative string."""
-    if not any(f in _ROADMAP_YAML_PATHS for f in changed_files):
-        return []
-    guard_tests: list[str] = []
-    for path in sorted((repo_root / "tests").rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if any(basename in text for basename in _ROADMAP_YAML_BASENAMES):
-            guard_tests.append(path.relative_to(repo_root).as_posix())
-    return guard_tests
 
 
 def _dispatch_check(name: str, failed: list[str]) -> None:
@@ -406,27 +391,32 @@ def main() -> None:
         changed = _common.get_changed_files()
         diff_manifest = list(changed)
         changed_py = [f for f in changed if f.endswith(".py")]
-        # Select changed test files from the same get_changed_files() result that drives the rest of
-        # --pre. Passing explicit paths removes the dependence on pytest-picked's independent
-        # branch-diff, which collapses to 0 tests in GitHub Actions' detached-HEAD PR checkout
-        # (PR #334, job 84147146286 -- "collected 0 items / no tests ran" yet all-passed).
-        # Decision 55 backstop: exit 5 (0 collected) while changed test files are present is a
-        # contradiction -- redden the gate loudly rather than swallowing it as the old (0,5)
-        # whitelist did.
-        # Accepted edge case: a changed test file containing ONLY integration-marked tests will
-        # trip this backstop because -m "not integration" deselects all; resolve by not gating
-        # all-integration files behind the unit tier.
-        import re as _re
+        # Live, cacheless, strictly-additive affected-set selection (Decision affected-set-
+        # selection, amends Decision 73's 2nd amendment): upgrades the edited-set (test files
+        # literally in the diff) to a per-run affected-set (tests AFFECTED by the diff), so a
+        # source-only PR -- or a test broken by a change it does not itself contain -- is
+        # caught pre-merge. Feeds the SAME pytest_diff scaffold below (preferred inline path --
+        # touches neither scripts/checks/registry.py nor the frozen pre-sequence scaffold
+        # baseline). status_entries is a SEPARATE diff surface from `changed` above (includes
+        # deletions + untracked new files, rec-2638) -- get_changed_files()'s own contract for
+        # its existing callers (lint/mypy/precommit/coverage) is unchanged. Defensively unioned
+        # with `changed` (assumed status "M") so the two independent git reads never silently
+        # diverge on which paths are in scope for selection.
+        #
+        # Deferred (function-scope) import: scripts.checks.deps.affected_tests imports networkx
+        # at its own module scope, and this is the ONLY place these two names are used --
+        # importing eagerly at validate.py's module scope would break --terraform-only, whose CI
+        # job installs only pyyaml+pydantic (see the facade-import block's comment above).
+        from scripts.checks.deps.affected_tests import derive_affected_tests, emit_manifest  # noqa: PLC0415
 
-        changed_tests = [f for f in changed if _re.match(r"tests/.*test_[^/]+\.py$", f)]
-        # tier_misplaced fix (ci-rca-cd25-ratification-tier-gap): when a roadmap YAML
-        # changed, union in the tests/ files that reference it (dynamic discovery -- no
-        # hardcoded list) so the live-roadmap guard tests run in the fast --pre tier
-        # instead of only the full post-merge tier.
-        roadmap_guard_tests = select_roadmap_guard_tests(changed)
-        for f in roadmap_guard_tests:
-            if f not in changed_tests:
-                changed_tests.append(f)
+        status_entries = _common.get_status_aware_diff()
+        _status_paths = {path for _, path in status_entries}
+        for f in changed:
+            if f not in _status_paths:
+                status_entries.append(("M", f))
+        _affected_selection = derive_affected_tests(status_entries, repo_root=_common.ROOT)
+        changed_tests = _affected_selection["selected"]
+        emit_manifest(_affected_selection["manifest"], repo_root=_common.ROOT)
 
         def _scaffold_lint() -> None:
             run_lint_checks(failed, files=changed)

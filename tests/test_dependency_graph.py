@@ -322,6 +322,103 @@ class TestKnownUnsound:
         assert any("schedule.yaml" in p for p in patterns)
 
 
+class TestFacadeInitPackageNode:
+    """Soundness patch (i), Decision affected-set-selection: __init__.py facade re-exports
+    (Decision 124) are graph nodes, so an importer of the PACKAGE (not a specific submodule)
+    keeps its edge instead of silently dropping it."""
+
+    def _make_facade_fixture(self, tmp_path: Path) -> Path:
+        (tmp_path / "scripts" / "pkg").mkdir(parents=True)
+        (tmp_path / "scripts" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "scripts" / "pkg" / "__init__.py").write_text("from scripts.pkg.impl import helper\n", encoding="utf-8")
+        (tmp_path / "scripts" / "pkg" / "impl.py").write_text("def helper():\n    pass\n", encoding="utf-8")
+        (tmp_path / "scripts" / "consumer.py").write_text(
+            "from scripts.pkg import helper\n\ndef main():\n    helper()\n", encoding="utf-8"
+        )
+        return tmp_path
+
+    def test_package_init_is_a_graph_node(self, tmp_path: Path) -> None:
+        root = self._make_facade_fixture(tmp_path)
+        graph = build_graph(repo_root=root)
+        assert "scripts.pkg" in graph
+
+    def test_facade_reexport_edge_from_init_to_impl(self, tmp_path: Path) -> None:
+        """The facade's own re-export (`from scripts.pkg.impl import helper` inside __init__.py)
+        produces a real graph edge scripts.pkg -> scripts.pkg.impl."""
+        root = self._make_facade_fixture(tmp_path)
+        graph = build_graph(repo_root=root)
+        assert graph.has_edge("scripts.pkg", "scripts.pkg.impl")
+
+    def test_consumer_of_package_facade_edge_not_dropped(self, tmp_path: Path) -> None:
+        """`from scripts.pkg import helper` (importing the PACKAGE) must land an edge on the
+        scripts.pkg node -- previously __init__.py was skipped entirely so this edge was lost."""
+        root = self._make_facade_fixture(tmp_path)
+        graph = build_graph(repo_root=root)
+        assert graph.has_edge("scripts.consumer", "scripts.pkg")
+
+    def test_consumer_is_reverse_dep_of_package(self, tmp_path: Path) -> None:
+        root = self._make_facade_fixture(tmp_path)
+        graph = build_graph(repo_root=root)
+        assert "scripts.consumer" in reverse_deps(graph, "scripts.pkg")
+
+    def test_init_node_has_module_kind(self, tmp_path: Path) -> None:
+        root = self._make_facade_fixture(tmp_path)
+        graph = build_graph(repo_root=root)
+        assert graph.nodes["scripts.pkg"].get("kind") == "module"
+
+
+class TestPatchStringModuleEdges:
+    """Soundness patch (ii), Decision affected-set-selection: a string-constant module path
+    (e.g. a mock.patch("scripts.x.y") target) is unioned into the graph as an edge, even though
+    no `import` statement exists."""
+
+    def _make_patch_string_fixture(self, tmp_path: Path) -> Path:
+        (tmp_path / "scripts").mkdir(parents=True)
+        (tmp_path / "scripts" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "scripts" / "target_module.py").write_text("def run():\n    pass\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "tests" / "test_target_module.py").write_text(
+            'from unittest.mock import patch\n\ndef test_x():\n    with patch("scripts.target_module.run"):\n        pass\n',
+            encoding="utf-8",
+        )
+        return tmp_path
+
+    def test_patch_string_edge_added(self, tmp_path: Path) -> None:
+        root = self._make_patch_string_fixture(tmp_path)
+        graph = build_graph(repo_root=root)
+        assert graph.has_edge("tests.test_target_module", "scripts.target_module")
+
+    def test_patch_string_resolves_module_attribute_to_module_node(self, tmp_path: Path) -> None:
+        """The mock target string names an ATTRIBUTE (scripts.target_module.run), not the bare
+        module -- the edge must resolve to the longest existing module-node prefix."""
+        root = self._make_patch_string_fixture(tmp_path)
+        graph = build_graph(repo_root=root)
+        assert "scripts.target_module.run" not in graph
+        assert graph.has_edge("tests.test_target_module", "scripts.target_module")
+
+    def test_patch_string_target_is_reverse_dep(self, tmp_path: Path) -> None:
+        root = self._make_patch_string_fixture(tmp_path)
+        graph = build_graph(repo_root=root)
+        assert "tests.test_target_module" in reverse_deps(graph, "scripts.target_module")
+
+    def test_non_matching_string_constant_adds_no_edge(self, tmp_path: Path) -> None:
+        """An arbitrary string constant that doesn't match the src|scripts dotted-path shape
+        must not be treated as a patch-string target."""
+        root = self._make_patch_string_fixture(tmp_path)
+        (root / "scripts" / "consumer.py").write_text('X = "not.a.module.path.at.all.blah"\n', encoding="utf-8")
+        graph = build_graph(repo_root=root)
+        assert graph.out_degree("scripts.consumer") == 0
+
+    def test_unresolvable_dotted_string_adds_no_edge(self, tmp_path: Path) -> None:
+        """A string matching the src|scripts shape but naming no real module/attribute in the
+        graph resolves to nothing (no phantom edge)."""
+        root = self._make_patch_string_fixture(tmp_path)
+        (root / "scripts" / "consumer.py").write_text('X = "scripts.nonexistent_module.some_attr"\n', encoding="utf-8")
+        graph = build_graph(repo_root=root)
+        assert graph.out_degree("scripts.consumer") == 0
+
+
 class TestCheckExportFreshness:
     """Tests for check_export_freshness()."""
 
