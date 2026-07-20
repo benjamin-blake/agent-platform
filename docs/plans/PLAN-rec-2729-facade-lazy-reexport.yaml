@@ -72,6 +72,10 @@ acceptance_criteria:
     legacy pre-split sibling, still patching scripts.ops_portal.decisions.* directly) pass
     with pytest-randomly's default random order (no fixed seed), confirming no other test in
     the package relies on the five names being eagerly bound on the facade.
+  - >-
+    rec-2729 shows "status": "closed" in the ops warehouse after the plan's PR merges (verified
+    post-merge per verification_plan step 9), satisfying this plan's rec-resolving closure
+    obligation.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -184,21 +188,37 @@ verification_plan:
       reference against rec-2725's already-root-caused regressions before treating it as a new
       bug in this fix).
     hermetic: true
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the existing full-presubmit-tier pytest run (scripts/validate.py's
+      run_python_checks / pytest_diff scaffolding already exercises this package on every
+      PR); kept here as a fast local pre-implementation loop check, not a new standing
+      registry guard.
   - step: 7
     phase: pre-deploy
     action: >-
-      Confirm the facade's SLOC stays under its 500-line budget after the edit (the fix
-      shrinks the import block and adds a small __getattr__, net near-neutral or a decrease)
-      and that no scripts/ops_data_portal.py entry appears in config/sloc_budgets.yaml as a
-      raise-approved marker (none should be needed).
+      Confirm the facade's SLOC stays under its 500-line budget after the edit, using the
+      exact comment/blank-stripped formula scripts/checks/sloc/sloc_limits.py's
+      validate_sloc_limits() applies (not a raw `wc -l` line count, which overcounts by
+      including comments/blanks). Baseline measured at plan-authoring time: 399 SLOC by this
+      formula against the 500 limit (100 lines of headroom over the unregistered default
+      budget) -- raw `wc -l` reports 499, which is a different, non-gating number; do not
+      confuse the two. No scripts/ops_data_portal.py entry should appear in
+      config/sloc_budgets.yaml (none should be needed at this headroom).
     command: >-
-      bin/venv-python -m scripts.checks.hygiene.validate_sloc_limits scripts/ops_data_portal.py
-    expected: "PASS -- file is within its SLOC budget with no raise-approved marker required."
+      bin/venv-python -c "from scripts.checks.sloc.sloc_limits import validate_sloc_limits as
+      v; f = []; v(f); import sys; sys.exit(1 if any('ops_data_portal.py' in e for e in f)
+      else 0)"
+    expected: >-
+      Exit code 0 -- scripts/ops_data_portal.py does not appear in the validator's failed-file
+      list (i.e. its true SLOC, per the validator's own formula, is <=500).
     fix_if: >-
-      If this fails, the __getattr__ addition or guard-test scaffolding pushed the facade over
-      budget -- per Decision 128, decompose (do not raise the budget) if this occurs; but given
-      the change nets fewer lines than the eager import block, this is not expected to fire.
+      If this fails, the __getattr__ addition or guard-test scaffolding pushed the facade's
+      true SLOC (comment/blank-stripped) over 500 despite the 100-line baseline headroom --
+      per Decision 128, decompose (e.g. extract the __getattr__ block and its supporting
+      comment into a small helper module) rather than registering a budget raise; a raise
+      requires a `# raise-approved: dec-NNN` marker naming a real Decision, which is not
+      warranted for a bug fix of this size.
     hermetic: true
     graduation: graduate
     graduation_check_id: rec-2729-facade-sloc-budget
@@ -211,6 +231,30 @@ verification_plan:
     expected: "No lint errors reported."
     fix_if: "Fix any reported lint violations (e.g. unused imports from the removed eager binding, missing noqa on the intentionally-unused decisions module alias if flagged) and re-run."
     hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the existing standing lint gate (scripts/validate.py's lint scaffolding runs
+      ruff check across the full diff on every PR in both --pre and full tiers); kept here as
+      a fast local pre-implementation check, not a new standing registry guard.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      After the plan's PR merges (via the squash-merge Resolves: rec-2729 trailer, or a
+      manual --update-rec close), verify rec-2729 is actually closed in the ops warehouse --
+      satisfying the plan's rec-resolving closure obligation.
+    command: >-
+      bin/venv-python -m scripts.sync.ops sync && grep -o '"id": "rec-2729".*"status": "[a-z]*"'
+      logs/.recommendations-log.jsonl
+    expected: >-
+      The synced local cache shows rec-2729 with "status": "closed" (matched via a grep on the
+      refreshed logs/.recommendations-log.jsonl read-cache immediately after the sync pull).
+    fix_if: >-
+      If rec-2729 is still "open" after sync, the Resolves: trailer did not fire
+      rec-autoclose.yml (check the merge commit body for the trailer) or the manual close
+      command was not yet run -- close it explicitly via `bin/venv-python -m
+      scripts.ops_data_portal --update-rec rec-2729 --status closed --resolution "..."` and
+      re-sync.
+    hermetic: false
     graduation: not-applicable
 constraints:
   - "Only scripts/ops_data_portal.py and tests/test_ops_portal_facade.py may be modified (Scope table is exhaustive)."
@@ -224,7 +268,8 @@ context:
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (one NOTE-severity flag, no BLOCK). CITE: Decision 124, Decision 48, Decision 55, Decision 135. RELATED (context only, not cited as governing): Decision 84, Decision 104, Decision 69, Decision 88, Decision 128/130."
   - "Decision 135 (NOTE flag, resolved in this plan's scope entry): a fully-deferred __getattr__ using importlib.import_module inside the function body would drop the static facade -> scripts.ops_portal.decisions import-graph edge that Decision 135's live affected-set test selector relies on for reverse-dependency selection. Resolution: keep an eager module-level import of the scripts.ops_portal.decisions submodule itself; __getattr__ only defers resolution of the five individual names via getattr() on that already-imported submodule object, not the submodule import itself."
   - "Decision 48 confirms V2 is the correct verification tier: pure Python change, no Lambda handler, no Terraform, no cross-service contract -- scripts/ops_data_portal.py is not in any Lambda manifest's packaged-file set."
-  - "gates: decision-scout=FLAGS_FOUND (NOTE-severity, resolved in scope; no BLOCK); plan-critique=<pending, filled after Step 9>"
+  - "SLOC math (round 1 critique correction): scripts/ops_data_portal.py's true SLOC (per scripts/checks/sloc/sloc_limits.py's comment/blank-stripped formula, the same one validate_sloc_limits enforces) is 399 against the 500 limit -- 101 lines of headroom. Raw `wc -l`/file-line-count reports 499, a different and non-gating number; verification_plan step 7 measures the correct formula directly via the real validator function, not a proxy count."
+  - "gates: decision-scout=FLAGS_FOUND (NOTE-severity, resolved in scope; no BLOCK); plan-critique=REVISE after round 1 (fixed: broken VP step 7 command referencing a nonexistent module, SLOC-headroom math corrected with the real validator formula, added VP step 9 for post-merge rec-2729 closure verification per the 12k closure-obligation gate, reclassified VP steps 6 and 8 from not-applicable to waive with substantive graduation_waiver_reason since both duplicate standing CI checks) -> PROCEED after round 2 <fill in after re-dispatch confirms>"
   - "tests/test_ops_portal_facade.py's existing TestFacadeCompleteness/TestFacadeImportable suites already parametrize over the five names via _REQUIRED_PUBLIC/_REQUIRED_PRIVATE -- they exercise hasattr()/getattr() access, which PEP 562 __getattr__ satisfies identically to a static attribute for both access forms, so those existing tests require no modification, only the new guard class is additive."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/rec-2729-critical-bug-plan-yje3iz)
