@@ -75,6 +75,7 @@ from scripts.checks.contracts.validate_claude_md_pointer_invariant import (  # n
     validate_claude_md_pointer_invariant,  # noqa: F401
 )
 from scripts.checks.contracts.validate_contract_drift import validate_contract_drift  # noqa: F401,E402
+from scripts.checks.contracts.validate_data_model_standard import validate_data_model_standard  # noqa: F401,E402
 from scripts.checks.contracts.validate_instruction_architecture_layers import (  # noqa: F401,E402
     validate_instruction_architecture_layers,
 )

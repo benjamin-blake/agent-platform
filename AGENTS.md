@@ -137,6 +137,33 @@ The legitimate write paths are: (a) `file_rec` / `update_rec` portal calls, and 
 
 If a clone or runner shows stale data, an operator may rebuild that environment's local cache by running `python -m scripts.sync.ops sync` (which pulls every migrated table from the DuckLake reader and overwrites local). Never fix drift by re-staging from the local file.
 
+## Data-modeling default
+Before designing any table, decide **grain first** -- "one row per ___" -- then pick a write mode. This is
+not a CRUD default: never design a table as "one row per entity, mutate in place." Full rules, the
+write-mode table, and index pointers live in `docs/contracts/data-modeling-standard.yaml`; this is the
+ambient summary.
+
+- **Grain first.** Name the grain in one sentence before anything else (e.g. "one row per rec_id",
+  "one row per event_id"). If you cannot state the grain, you are not ready to pick a write mode.
+- **Write-mode branch (not "default to SCD2"):**
+  - **SCD2** (history table + Type-1 current projection) for mutable-entity ops tables -- rows that get
+    updated over their lifetime (e.g. `ops_priority_queue`, `ops_session_log`, `ops_execution_plans`).
+  - **append_only** (history-only event journal, no current projection) for event/telemetry tables --
+    insert-once rows that are never mutated (e.g. `ops_smoke_events`, the telemetry_* tables).
+  - **append_only is the design default/prior, NOT a ban** on sanctioned exceptional physical deletes
+    (Decision 70) or lifecycle-closure paths (Decision 103) -- those remain legitimate, scoped exceptions.
+- **Identity**: ULID, minted once at the write boundary (never client-side, never a natural-key PK),
+  propagated to children as FKs.
+- **Merge-on-business-key**: SCD2 merges key off the table's business key, not a surrogate row id.
+- **Partition every table** (CD.9) -- no unpartitioned table, event-time for append_only, mutation-time
+  for SCD2 current/history as appropriate.
+- **A read cache is never a write source** (see Warehouse-as-source-of-truth invariant above).
+
+At design time (planning a table, a `field_semantics` entry, or a warehouse write path), the `planning`
+skill's Data-Model Assessment walks grain -> merge_key/history-current -> identity -> join keys -> write
+mode -> partitioning -> reject-CRUD checklist -> Fable escalation for load-bearing calls. See
+`docs/contracts/data-modeling-standard.yaml`.
+
 ## Git-ops procedure
 
 Canonical authority for all agent and session git-ops. All other surfaces (skills, commands) point here and do not restate.
