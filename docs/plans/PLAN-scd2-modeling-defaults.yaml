@@ -104,7 +104,12 @@ verification_plan:
     expected: All tests pass; the missing-grain and malformed-contract cases assert a check FAILURE, the complete case asserts PASS.
     fix_if: A test fails, or the missing-grain/malformed-contract case does not trigger a check failure (guard too weak or mis-scoped).
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a test_selector slot, but graduating is redundant: this test file is already
+      permanently enforced by the pytest_diff (--pre) and unit_tests (full) scaffold steps, and the check's
+      standing enforcement is its Decision 104 registry registration -- a graduation-registry row would
+      double-enforce the same test.
   - step: 2
     phase: pre-deploy
     action: >-
@@ -114,7 +119,11 @@ verification_plan:
     expected: The wiring test passes -- 'validate_data_model_standard' is in both registry.pre_sequence() and full_sequence() and resolves on scripts.validate.
     fix_if: The name is absent from a sequence or unresolvable on the facade (guard would never run under validate.py).
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a test_selector slot (a -k subset of the same test file), but graduating is
+      redundant for the same reason as step 1: the test is already enforced by the pytest_diff/unit_tests
+      scaffold gate and the check's standing enforcement is its Decision 104 registry registration.
   - step: 3
     phase: pre-deploy
     action: Run the real fast presubmit on the branch to prove the backfilled contract + new guard integrate cleanly and nothing regressed.
@@ -170,7 +179,7 @@ context:
     (one row per event_id; append_only -- write_mode already present, add grain), ops_session_log
     (one row per session_id; scd2), ops_execution_plans (one row per rec_id; scd2).
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (no BLOCK, 102/102 triaged). CITE: Decision 78, 81, 84, 95, 96, 97, 141, 66, 86, 118 (CD.25), 104, 128, 55, 137 (CD.9), 132. RELATED: 63, 70, 87, 88, 103."
-  - "gates: decision-scout=FLAGS_FOUND (no BLOCK, 102/102 triaged); plan-critique=pending (updated after Step 9)."
+  - "gates: decision-scout=FLAGS_FOUND (no BLOCK, 102/102 triaged); plan-critique=REVISE round 1 (VP steps 1-2 graduation not-applicable -> waive) -> re-critique pending."
   - Decision 96 WARN handled -- ambient rule is grain-first then write-mode branch, not default-SCD2.
   - Decision 70/103 NOTE handled -- append-only framed as default/prior, not a ban.
   - Decision 86/127 NOTE handled -- standard is machine-parseable + gets a file-router pointer entry.
@@ -228,7 +237,10 @@ execution_steps:
     collect offenders and fail loud naming each table. When data-modeling-standard.yaml is changed (or on any
     run that validates it): assert valid YAML, no top-level contract:/class:, and presence of the required
     sections (rules, write_modes, indexes). Follow the module shape of a sibling check
-    (scripts/checks/contracts/validate_contract_drift.py).
+    (scripts/checks/contracts/validate_contract_drift.py). Add a one-line docstring note that -- unlike
+    validate_contract_drift's unconditional structural pass -- this check is fully diff-gated, so its
+    data-modeling-standard.yaml shape validation runs on the PR tier only (sound: git guarantees the file
+    cannot change without appearing in the diff).
   - >-
     scripts/checks/registry.py: insert _c("validate_data_model_standard") into pre_sequence() and
     full_sequence() adjacent to validate_contract_drift in both.
