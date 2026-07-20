@@ -162,6 +162,7 @@ def full_sequence() -> list[Step]:
         _c("validate_candidate_decision_ratification"),
         _c("validate_candidate_decision_supersession"),
         _c("validate_decisions_size"),
+        _c("validate_decision_entry_conformance"),
         _c("validate_lambda_manifests"),
         _c("validate_lambda_manifest_coverage"),
         _c("validate_lambda_bundle_completeness"),

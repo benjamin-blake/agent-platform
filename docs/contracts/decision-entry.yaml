@@ -1,0 +1,118 @@
+# Decision-entry authoring grammar (audit finding DAF-03 / Decision 134 clause 3 / Plan 3
+# PLAN-daf-authoring-grammar). NOT a Class A/B/C ritual contract -- no top-level contract:/class:
+# block, so the CD.25 drift gate (validate_contract_drift) skips this file as a non-ritual doc
+# (precedent: file-router.yaml, deploy-paths.yaml, read-engine.yaml; free-form registry per
+# Decision 118).
+#
+# Purpose: name the ONE canonical shape a docs/DECISIONS.md / docs/DECISIONS_ARCHIVE.md entry
+# must take, so authors stop imitating the previous entry (folklore) and every structural
+# consumer (the R1 ratification guard, the preflight open-decisions counter, the forward
+# conformance check below, any future index generator) can import ONE shared parser --
+# scripts/decisions_md.py -- instead of hand-rolling its own regex. This file is the source of
+# truth for required_markers/optional_markers; scripts/checks/decisions/
+# validate_decision_entry_conformance.py reads required_markers from here at check time (never
+# hardcodes its own copy).
+#
+# Scope: forward-enforced on genuinely-NEW decision entries only (a header number absent from
+# the origin/main baseline). The historical band (every entry that exists at origin/main) is
+# grandfathered -- imitation-folklore entries do not retroactively fail a contract that postdates
+# them (see docs/DECISIONS_ARCHIVE.md's Decisions 52/53/54, promoted from h3 to h2 by this same
+# plan, which lack a separate Date marker and would fail Required markers if retro-enforced).
+schema_version: 1
+
+header_form: "## Decision NNN: <title> (<status>)"
+
+header_grammar_note: >-
+  The live file (docs/DECISIONS.md) uses '## Decision NNN:' (h2) exclusively. The archive
+  (docs/DECISIONS_ARCHIVE.md) also uses '## Decision NNN:' (h2) exclusively as of this plan's
+  DPI-07 promote (docs/DECISIONS_ARCHIVE.md previously carried 3 non-conforming h3 '### Decision
+  NNN:' entries -- Decisions 52/53/54 -- promoted to h2 here). scripts/decisions_md.py's shared
+  _DECISION_HEADING_RE grammar (r"^#{2,3}\s+Decision\s+(\d+):\s*(.+)$") still tolerates h3 for
+  read-compatibility with any pre-promote git history a consumer walks, but no entry may be
+  AUTHORED at h3 going forward -- h2 is the sole authoring convention for both files.
+
+# Every marker below is a bold, colon-terminated line prefix: "**<Marker>:**". Multiline bodies
+# (the common case) put the marker on its own line with the body on the following line(s);
+# a single-line inline body ("**Marker:** text") is also accepted (see
+# scripts.decisions_md._extract_by_marker_pattern, which tries both forms).
+
+required_markers:
+  # Every entry -- new or historical -- carries these three. Forward-enforced (new entries
+  # only) by validate_decision_entry_conformance; the historical band is grandfathered.
+  - Status
+  - Date
+  - Decision
+
+optional_markers_fixed_spelling:
+  # Not required, but WHEN PRESENT must use exactly this spelling so the shared parser's
+  # exact-marker extraction (scripts.decisions_md._extract_multiline_section /
+  # _extract_related_decisions) recognizes them. A synonym (e.g. "Trigger" for "Problem",
+  # "Key details" for "Rationale") is tolerated by the parser as a fallback alias but the
+  # canonical spelling below is preferred for new entries.
+  - Problem
+  - Rationale
+  - Reversal conditions
+  - Related
+  - Warehouse ID
+
+decision_marker_tolerance: >-
+  The "Decision" required marker tolerates a decorated form -- "**Decision (four
+  invariants):**", "**Decision (single-writer numbering):**" -- as long as the marker's inner
+  text starts with the literal word "Decision" (scripts.decisions_md._DECISION_MARKER_BODY:
+  r"Decision\b[^:]*"). Plain "**Decision:**" is the preferred spelling for new entries; the
+  decorated form is tolerated for continuity with the historical band (e.g. dec-084), never
+  widened past the leading word "Decision" (so "**Decision Required By:**", an unrelated field
+  used in unheaded candidate-decision sections, never collides).
+
+amendment_forms:
+  # Two annotation shapes appear in the historical band; both are tolerated read-side, neither
+  # is required. A NEW entry never predicts its own amendment -- these forms only apply when an
+  # EXISTING ratified entry is later amended in place.
+  - form: trailing_bracket
+    example: "[Amendment 2026-07-03: ...]"
+    description: >-
+      A trailing bracketed annotation appended after the entry's original body, dated, prefixed
+      "[Amendment ".
+  - form: blockquote_update
+    example: "> **Update (2026-05-01):** ..."
+    description: >-
+      A blockquote-prefixed dated update line, prefixed "> **Update (".
+
+supersession_marker: "**Superseded by: Decision N**"
+supersession_marker_note: >-
+  MUST be spelled EXACTLY as above for a NEW entry -- byte-identical to
+  scripts.decisions_md._SUPERSEDED_BY_RE's primary form (Plan 2 / PR #605). The historical band's
+  differently-shaped "**Superseded by:** Decision N" (colon after the word "by", not before "Decision")
+  is tolerated read-side (the same regex's fallback alternative) but is NOT a valid spelling for
+  a new entry.
+
+related_decisions_form: >-
+  "**Related:** Decision N (...), Decisions M/P (...)" -- both the singular "Decision N" form and
+  the plural "Decisions M/P" (slash- or comma-separated) form are accepted; the shared parser
+  dedupes by first occurrence (scripts.decisions_md._extract_related_decisions).
+
+decided_date_form: >-
+  Prefer an explicit "**Date:**" marker with an ISO-shaped value (YYYY-MM or YYYY-MM-DD). When
+  absent, the parser falls back to the "**Status:**" line's " -- <suffix>" clause ONLY when that
+  suffix is itself ISO-shaped -- a non-date clause (e.g. "Status: Active -- remove when reversal
+  condition is met") is never harvested as a date (DAF-01 fix). New entries should always carry
+  an explicit "**Date:**" marker rather than relying on the fallback.
+
+size_governance:
+  # Decision 134 / Decision-114 parity ceilings (enforced by
+  # scripts/checks/decisions/validate_decisions_size.py, both --pre and full tiers). Documented
+  # here for authors: approaching these ceilings is a signal to archive superseded entries
+  # (DPI-04's dispositions) or compact superseded bodies to pointer stubs, not to raise the
+  # ceiling.
+  live_max_bytes: 400000
+  live_max_h2_headers: 120
+  combined_max_bytes: 700000
+
+shared_parser: scripts/decisions_md.py
+shared_parser_note: >-
+  The single importable grammar every structural consumer must use:
+  iter_decision_headings(content) for a raw heading-match iterator, and
+  decision_header_numbers(paths=None) for the set of decision numbers across one or more files.
+  Both are built on the module's single _DECISION_HEADING_RE ('#{2,3}' grammar) -- a consumer
+  that hand-rolls its own header regex instead of importing these two functions is exactly the
+  divergence this contract exists to close (DAF-03).

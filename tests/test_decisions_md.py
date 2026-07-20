@@ -22,6 +22,8 @@ from scripts.decisions_md import (
     _extract_related_decisions,
     _extract_section,
     _iter_decision_sections,
+    decision_header_numbers,
+    iter_decision_headings,
     parse_decisions_md,
     read_jsonl,
 )
@@ -89,6 +91,67 @@ class TestArchiveCoverage:
     def test_archive_and_live_paths_both_configured(self) -> None:
         names = {p.name for p in _DECISIONS_MD_PATHS}
         assert names == {"DECISIONS.md", "DECISIONS_ARCHIVE.md"}
+
+
+class TestHeaderHelperParity:
+    """DAF-03 (PLAN-daf-authoring-grammar): iter_decision_headings() / decision_header_numbers()
+    must reproduce the exact population the pre-consolidation regexes did (parity, growth-safe:
+    derived from the live files, never a hardcoded count -- Decision 55 / test-count-coupling),
+    and the DECISIONS_ARCHIVE.md h3->h2 promote (Decisions 52/53/54) must land in the both-files
+    number set.
+    """
+
+    # The R1 ratification guard's pre-consolidation private regex (both files, h2-only).
+    _R1_PRE_CONSOLIDATION_RE = re.compile(r"^## Decision (\d+):", re.MULTILINE)
+    # The preflight open-decisions counter's pre-consolidation private regex (live file only).
+    _PREFLIGHT_PRE_CONSOLIDATION_RE = re.compile(r"^## Decision \d+[^\n]*", re.MULTILINE)
+
+    def test_decision_header_numbers_matches_pre_consolidation_r1_regex(self) -> None:
+        """R1 used to hand-roll '^## Decision (\\d+):' over both files -- the shared helper (the
+        '#{2,3}' grammar) must enumerate an identical population now that the archive promote
+        landed (both regexes now see Decisions 52/53/54, previously h3-only and R1-invisible)."""
+        r1_numbers: set[int] = set()
+        for path in _DECISIONS_MD_PATHS:
+            if path.exists():
+                r1_numbers.update(int(n) for n in self._R1_PRE_CONSOLIDATION_RE.findall(path.read_text(encoding="utf-8")))
+        assert decision_header_numbers() == r1_numbers
+
+    def test_iter_decision_headings_matches_pre_consolidation_preflight_regex_on_live_file(self) -> None:
+        """The preflight counter used to hand-roll '^## Decision \\d+[^\\n]*' over the live file
+        only -- iter_decision_headings() must yield an identical count (derived, not hardcoded)."""
+        live_path = _DECISIONS_MD_PATHS[0]
+        assert live_path.name == "DECISIONS.md"
+        live_content = live_path.read_text(encoding="utf-8")
+        old_count = len(self._PREFLIGHT_PRE_CONSOLIDATION_RE.findall(live_content))
+        new_count = len(iter_decision_headings(live_content))
+        assert new_count == old_count
+
+    def test_archive_promote_lands_decisions_52_53_54_in_both_files_number_set(self) -> None:
+        assert {52, 53, 54} <= decision_header_numbers()
+
+    def test_archive_no_longer_carries_h3_numbered_decision_headers(self) -> None:
+        """DPI-07: no '### Decision N:' header remains in the archive after the promote."""
+        archive_path = _DECISIONS_MD_PATHS[1]
+        assert archive_path.name == "DECISIONS_ARCHIVE.md"
+        content = archive_path.read_text(encoding="utf-8")
+        assert not re.search(r"^### Decision \d+:", content, re.MULTILINE)
+
+    def test_decision_header_numbers_paths_seam_is_honored_not_ignored(self, tmp_path: Path) -> None:
+        """R1-guard hinge: decision_header_numbers(paths=...) must use the GIVEN paths, never
+        silently fall back to this module's own repo root -- the R1 guard depends on this to
+        honor a patched scripts.checks._common.ROOT."""
+        only = tmp_path / "only.md"
+        only.write_text("## Decision 7: Test (Decided)\n", encoding="utf-8")
+        assert decision_header_numbers(paths=[only]) == {7}
+
+    def test_decision_header_numbers_missing_path_is_skipped(self, tmp_path: Path) -> None:
+        missing = tmp_path / "does-not-exist.md"
+        assert decision_header_numbers(paths=[missing]) == set()
+
+    def test_iter_decision_headings_returns_match_objects_in_file_order(self) -> None:
+        content = "## Decision 2: Second (Decided)\n\nbody\n\n## Decision 1: First (Decided)\n\nbody\n"
+        matches = iter_decision_headings(content)
+        assert [int(m.group(1)) for m in matches] == [2, 1]
 
 
 class TestByteReconstruction:

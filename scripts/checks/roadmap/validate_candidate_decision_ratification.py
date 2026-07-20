@@ -10,6 +10,14 @@ R3: state==superseded CDs are exempt from R1.
 Referential target is the two git-tracked decision files, not the gitignored
 ops_decisions cache (CI PR roles lack reader access) -- see docs/contracts/
 candidate-decision-ratification.yaml for the canonical shape this guard enforces.
+
+DAF-03 consolidation (PLAN-daf-authoring-grammar, Decision 134 cl.3): the header-number scan
+is now scripts.decisions_md.decision_header_numbers(), the shared '#{2,3}' grammar every
+structural consumer imports -- this guard no longer hand-rolls its own header regex. Called
+WITH an explicit paths= list derived from _common.ROOT (never no-arg): a no-arg call would read
+decisions_md's own module-level repo root instead of the patched _common.ROOT the test suite
+(and any future re-rooting) relies on. Stays hermetic (Decision 105): decisions_md reads only
+the two git-tracked md files, no warehouse/reader access.
 """
 
 from __future__ import annotations
@@ -18,8 +26,8 @@ import re
 import sys
 
 from scripts.checks import _common, registry
+from scripts.decisions_md import decision_header_numbers
 
-_HEADER_RE = re.compile(r"^## Decision (\d+):", re.MULTILINE)
 # Anchored on both sides (rec-2467) -- a bare r"dec-(\d+)" would partially match a malformed
 # pointer like "dec-0123abc" (silently resolving to dec-123). The lookaround bounds require
 # the match not be flanked by another alnum char, so a malformed pointer fails to resolve at
@@ -29,13 +37,15 @@ _DEC_NNN_RE = re.compile(r"(?<![0-9A-Za-z])dec-(\d+)(?![0-9A-Za-z])")
 
 
 def _decision_header_numbers() -> set[int]:
-    numbers: set[int] = set()
-    for name in ("DECISIONS.md", "DECISIONS_ARCHIVE.md"):
-        path = _common.ROOT / "docs" / name
-        if not path.exists():
-            continue
-        numbers.update(int(n) for n in _HEADER_RE.findall(path.read_text(encoding="utf-8")))
-    return numbers
+    """Header-number population, via the shared decisions_md grammar, rooted at _common.ROOT.
+
+    Always passes an explicit paths= list -- never a no-arg call -- so a patched
+    scripts.checks._common.ROOT (the test suite's re-rooting seam) is honored instead of
+    decisions_md's own module-level repo root.
+    """
+    return decision_header_numbers(
+        paths=[_common.ROOT / "docs" / "DECISIONS.md", _common.ROOT / "docs" / "DECISIONS_ARCHIVE.md"]
+    )
 
 
 def _dec_number(pointer: str | None) -> int | None:

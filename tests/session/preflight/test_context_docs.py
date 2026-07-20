@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -87,6 +88,27 @@ class TestReadContextFiles:
             result = _preflight.read_context_files()
         # Decision 1 and 3 are open; Decision 2 is Decided
         assert result["open_decisions_count"] == 2
+
+    def test_open_decisions_count_parity_with_pre_consolidation_regex_on_live_file(self) -> None:
+        """DAF-03 (PLAN-daf-authoring-grammar): open_decisions_count now enumerates headers via
+        decisions_md.iter_decision_headings() instead of a hand-rolled '^## Decision \\d+[^\\n]*'
+        regex. Derive the expected count independently by re-running the PRE-CONSOLIDATION regex
+        over the CURRENT live docs/DECISIONS.md file (never a hardcoded literal -- Decision 55 /
+        test-count-coupling) and assert both enumerations agree under the same open/closed paren
+        heuristic.
+        """
+        from scripts.preflight import _common as preflight_common
+
+        content = preflight_common.DECISIONS_FILE.read_text(encoding="utf-8")
+        old_headers = re.findall(r"^## Decision \d+[^\n]*", content, re.MULTILINE)
+        expected_open = sum(
+            1
+            for header in old_headers
+            if not re.search(r"\(Decided\)|\(Resolved\)|\(Closed\)|\(Done\)", header, re.IGNORECASE)
+        )
+
+        result = _preflight.read_context_files()
+        assert result["open_decisions_count"] == expected_open
 
     def test_recent_sessions_extracted(self, tmp_path: Path) -> None:
         session_log = tmp_path / "SESSION_LOG.md"
