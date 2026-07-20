@@ -1,0 +1,131 @@
+---
+# Named read-time projection contract for CI-RCA identity + lifecycle (ci-rca-identity-lifecycle).
+# This file is intentionally non-ritual (no contract:/class: block) per the CD.25 gate
+# (validate.py::validate_contract_drift skips files without a top-level contract: key) --
+# mirrors docs/contracts/recommendation-relevance.yaml's shape and Decision 118/CD.25 declaration.
+# Field semantics only (Decision 86): rationale lives in the Decision, not here.
+projection_id: ci-rca-lifecycle
+version: 1
+status: active
+ratified_via: >-
+  PLAN-ci-rca-identity-lifecycle merge to main (Decision 142)
+description: >-
+  Fingerprint v2 + status-aware chain lifecycle fields for source=ci_rca recommendations. All
+  fields ride in context_v2_json (CiRcaContext, scripts/ops_portal/ci_rca_schema.py) -- NO new
+  Class A columns are added to ops_recommendations (Decision 84/103/63); fix-state is not
+  denormalized onto the rec row.
+
+fingerprint_v2:
+  formula: >-
+    sha256("v2" \0 workflow_slug \0 failure_category \0 error_signature) -- the literal "v2"
+    salt guarantees disjointness from any v1 (CIRCA-03(a), workflow_slug/failed_check/
+    failure_category) fingerprint for the same logical failure; no warehouse migration required.
+  error_signature_structure: >-
+    "{exception_type}::{deepest_in_app_frame}::{normalized_message_head}" where
+    deepest_in_app_frame is itself "{module}::{function}" (repo-relative, NO line number) --
+    the first traceback frame, walked bottom-up, that is not in site-packages/pytest-internals/
+    conftest.py. A plain assertion failure inside a test resolves to the test function itself
+    (anti-masking: distinct tests never collide); an error raised inside a shared src/ helper
+    resolves to that helper (cause grouping: distinct tests sharing one cause collapse together).
+  special_cases:
+    collection_error: >-
+      Keys on the failing MODULE PATH (recovered from the log's own "ERROR collecting <path>"
+      headers), never a traceback frame -- there is no test body to attribute a collection
+      failure to. failure_category=collection_error (config/ci_rca_taxonomy.yaml).
+    non_pytest_fallback: >-
+      error_signature_from_log_tail(log_text, tool) -- "{tool}::{normalized-representative-line}",
+      preferring a terraform-style "Error: ..." line when present (covers terraform-apply-sandbox
+      apply failures, Decision 92).
+    mass_failure_collapse: >-
+      collapse_mass_failure(signatures, threshold=5) -- when a run produces more than ~5 distinct
+      NEW signatures, ALL bundles collapse into ONE run-level record instead of fanning out.
+
+status_aware_chain:
+  resolve_chain: >-
+    Every source=ci_rca record whose context_v2_json.fingerprint matches, ordered NEWEST FIRST
+    (last_updated_timestamp, falling back to created_timestamp).
+  bump_rule: >-
+    Only the NEWEST record in a fingerprint's chain, and only while status=open, is ever bumped
+    (occurrence_count/last_seen). A CLOSED head is never mutated -- no closed->open status flip
+    exists anywhere in this system (the rec-2644 reopen_ci_rca_rec /
+    find_recent_ci_rca_rec_by_fingerprint revive path is retired).
+  regression_vs_drop:
+    ancestry_check: >-
+      git merge-base --is-ancestor <failing-commit-sha> <closed-head.fixed_by_sha>.
+    drop: >-
+      failing-commit IS an ancestor of the closed head's fixed_by_sha -- a stale-code rerun of an
+      already-fixed commit. No insert, no bump, no reopen; a no-op note is logged.
+    regression: >-
+      failing-commit is NOT an ancestor (or the closed head carries NO fixed_by_sha -- Decision 55
+      fail-closed default for every rec closed before this change / any manual closure) -- files a
+      brand-new record with regression_of=<head_id> set, a "REGRESSION: " title prefix, and
+      priority=Critical. Never a closed->open flip.
+  closure_proof_citation: >-
+    The closed->open prohibition is a fresh forward rule CITING Decision 103's closure-proof
+    clause (a closed ci_rca rec carries a fixed_by_sha proof; reopening would discard it without
+    contrary evidence) -- it does NOT amend a closed->open clause in Decision 103 (no such clause
+    exists there). Do not cite Decision 70 for this (Decision 70 governs bootstrap-record deletion).
+
+auto_close:
+  fix_linked:
+    trigger: >-
+      rec-autoclose.yml, on closing a source=ci_rca rec from a Resolves: trailer, calls
+      scripts.ops_portal.ci_rca_lifecycle.stamp_fixed_by_sha(rec_id, <merge-commit-sha>).
+    effect: "context_v2_json.fixed_by_sha is set to the merge commit -- powers the ancestry check above."
+  timestamp_inactivity:
+    type: deterministic
+    predicate: >-
+      last_seen (falling back to created_timestamp) is older than the inactivity window (30 days)
+      AND the rec's created-age is >= 14 days. BOTH bounds must hold. Purely timestamp-based --
+      no run-history data source -- so it stays inside Decision 103's deterministic-satisfaction
+      boundary (a recorded proof licenses a direct close, no close_proposed needed).
+    action: >-
+      scripts.ci_rca.inactivity_sweep closes via update_rec(status=closed,
+      resolution=stale_no_recurrence) with the last_seen/age proof recorded in the resolution text.
+    read_path: >-
+      scripts.ops_portal.ci_rca_lifecycle.list_open_ci_rca_recs -- DuckLake reader NAMED VERBS only
+      (Decision 84 I-3 / Decision 88); no ad-hoc warehouse re-fetch; never re-stages from a cache.
+  flake_escalation:
+    trigger: "A fingerprint's chain reaches (>=) 3 records."
+    action: "Tagged flaky=true and quarantined instead of filing another fresh critical."
+
+escape_attribution:
+  source: "Decision 135's --pre affected-set selection manifest (logs/debug/selection-manifest.json)."
+  classes:
+    no-edge: >-
+      The failed test's file is absent from manifest.selected -- no reverse-dependency edge
+      connected it to the diff, so --pre had no way to know it might be affected.
+    capped: >-
+      The failed test's file is present in manifest.deferred -- --pre identified it as affected
+      but deferred it over the transitive-residue cap (Decision affected-set-selection).
+    unknown-data-edge: >-
+      The failed test's file WAS in manifest.selected (should have run under --pre) but still
+      failed post-merge -- an escape --pre's channels could not explain; flagged for manual
+      review, never silently assumed benign.
+
+projection_fields:
+  regression_of:
+    type: "Optional[str]"
+    pattern: "^rec-\\d+$"
+    home: context_v2_json (CiRcaContext)
+  fixed_by_sha:
+    type: "Optional[str]"
+    pattern: "^[0-9a-fA-F]{7,40}$"
+    home: context_v2_json (CiRcaContext)
+  affected_nodeids:
+    type: "Optional[list[str]]"
+    home: context_v2_json (CiRcaContext)
+  flaky:
+    type: "Optional[bool]"
+    home: context_v2_json (CiRcaContext)
+  escape_class:
+    type: "Optional[str]"
+    enum: [no-edge, capped, unknown-data-edge]
+    home: context_v2_json (CiRcaContext)
+
+constraints:
+  - "Decision 84/103/63: these fields are a context_v2_json projection only -- ops_recommendations' Class A schema is untouched."
+  - "Decision 55: the fingerprint and every dedup/regression/inactivity/escape decision is computed IN CODE, never by the LLM RCA agent."
+  - "All new CiRcaContext fields are Optional[...]=None -- no schema_version ceiling raise (backward-compatible additions)."
+  - "The inactivity sweep reads via DuckLake reader named verbs only; never re-stages from logs/.recommendations-log.jsonl."
+  - "All rec writes (fix-link stamp, regression filing, inactivity close) transit the ops portal (file_rec/update_rec) -- Decision 84 single-portal invariant."

@@ -105,6 +105,91 @@ class TestDecide:
         mock_bump.assert_called_once_with("rec-9")
 
 
+class TestStatusAwareChainDedup:
+    """ci-rca-identity-lifecycle: closed_head_resolver seam -- a closed head is never bumped;
+    'drop' skips the agent; 'regression' (or no closed head at all) runs it same as novel."""
+
+    def test_closed_head_drop_skips_agent_without_bump(self):
+        finder = MagicMock(return_value=None)
+        bumper = MagicMock()
+        closed_head_resolver = MagicMock(return_value="drop")
+
+        result = decide(["fp-a"], finder=finder, bumper=bumper, closed_head_resolver=closed_head_resolver)
+
+        assert result.run_agent is False
+        assert result.deduped is True
+        bumper.assert_not_called()
+        closed_head_resolver.assert_called_once_with("fp-a")
+        assert result.verdicts[0].matched_rec_id is None
+        assert result.verdicts[0].run_agent is False
+
+    def test_closed_head_regression_runs_agent(self):
+        finder = MagicMock(return_value=None)
+        bumper = MagicMock()
+        closed_head_resolver = MagicMock(return_value="regression")
+
+        result = decide(["fp-a"], finder=finder, bumper=bumper, closed_head_resolver=closed_head_resolver)
+
+        assert result.run_agent is True
+        bumper.assert_not_called()
+
+    def test_no_closed_head_at_all_runs_agent(self):
+        """closed_head_resolver returning None (no chain match whatsoever) is genuinely novel."""
+        finder = MagicMock(return_value=None)
+        closed_head_resolver = MagicMock(return_value=None)
+
+        result = decide(["fp-a"], finder=finder, closed_head_resolver=closed_head_resolver)
+
+        assert result.run_agent is True
+
+    def test_open_match_never_consults_closed_head_resolver(self):
+        """Mutually exclusive: an open match returns before the closed-head seam is touched."""
+        finder = MagicMock(return_value="rec-1")
+        bumper = MagicMock()
+        closed_head_resolver = MagicMock()
+
+        result = decide(["fp-a"], finder=finder, bumper=bumper, closed_head_resolver=closed_head_resolver)
+
+        assert result.deduped is True
+        bumper.assert_called_once_with("rec-1")
+        closed_head_resolver.assert_not_called()
+
+    def test_closed_head_resolver_not_injected_preserves_prior_behaviour(self):
+        """Omitting closed_head_resolver entirely (the pre-lifecycle call shape) never consults
+        it -- a finder miss is treated as plain novel, exactly as before this change."""
+        finder = MagicMock(return_value=None)
+        bumper = MagicMock()
+
+        result = decide(["fp-a"], finder=finder, bumper=bumper)
+
+        assert result.run_agent is True
+        bumper.assert_not_called()
+
+    def test_default_closed_head_resolver_no_head_returns_none(self):
+        import scripts.ci_rca.dedup as dedup_mod
+
+        with patch("scripts.ops_portal.ci_rca_lifecycle.closed_head_of_chain", return_value=None) as mock_head:
+            result = dedup_mod._default_closed_head_resolver("fp-a")
+
+        assert result is None
+        mock_head.assert_called_once_with("fp-a", profile=None)
+
+    def test_default_closed_head_resolver_delegates_to_classify(self):
+        import scripts.ci_rca.dedup as dedup_mod
+        from scripts.ops_portal.ci_rca_lifecycle import ChainRecord
+
+        head = ChainRecord(rec_id="rec-1", status="closed", fixed_by_sha="abc123", last_touched="2026-01-01T00:00:00Z")
+        with (
+            patch("scripts.ops_portal.ci_rca_lifecycle.closed_head_of_chain", return_value=head),
+            patch("scripts.ops_portal.ci_rca_lifecycle.current_commit_sha", return_value="abc123"),
+            patch("scripts.ops_portal.ci_rca_lifecycle.classify_closed_head", return_value="drop") as mock_classify,
+        ):
+            result = dedup_mod._default_closed_head_resolver("fp-a")
+
+        assert result == "drop"
+        mock_classify.assert_called_once_with("abc123", head)
+
+
 class TestLoadFingerprints:
     def test_reads_fingerprint_from_each_bundle(self, tmp_path: Path):
         (tmp_path / "a.json").write_text(json.dumps({"fingerprint": "fp-a"}))
@@ -155,6 +240,7 @@ class TestMain:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(dedup_mod, "_default_finder", lambda fp, profile=None: None)
+            mp.setattr(dedup_mod, "_default_closed_head_resolver", lambda fp, profile=None: None)
             rc = main(["--bundles-dir", str(tmp_path)])
 
         out = capsys.readouterr().out

@@ -1,17 +1,17 @@
-"""Tests for find_open_ci_rca_rec_by_fingerprint(), the file_rec() write-time dedup backstop,
-and the bundle-derived fingerprint/failure_category stamp inside _run_ci_rca_cross_check()
-(CIRCA-03).
+"""Tests for find_open_ci_rca_rec_by_fingerprint(), the file_rec() write-time dedup backstop
+(open-match bump path), and the bundle-derived fingerprint/failure_category stamp inside
+_run_ci_rca_cross_check() (CIRCA-03).
 
 Split out of the former tests/test_ops_data_portal.py monolith (rec-2709 Wave 3). This class
 was 501 SLOC (OVER the 500-SLOC budget) and is resolved by a PRIMARY concern-split into two
 sibling classes across two modules (Decision 128 forbids a raise; Wave 1 OPEN-RISK-1
 precedent) rather than a config/sloc_budgets.yaml raise marker: TestCiRcaFingerprintDedup here
-keeps the guard/fingerprint/backstop/bump cohort; the close-then-recur / recent-finder cohort
-(rec-2644) becomes the sibling class TestCiRcaCloseThenRecur in test_ci_rca_close_then_recur.py.
-The class-qualifier rename on that moved cohort is the SOLE sanctioned test-id delta of rec-2709
-Wave 3. The rec-2707 backstop-reader guard (_guard_live_reader, autouse) formerly duplicated
-verbatim into both sibling classes has since been retired (rec-2484): the global L1/L2
-hermetic-AWS guard in the root tests/conftest.py now supersedes it class-wide.
+keeps the guard/fingerprint/backstop/bump cohort. The closed-head regression-vs-drop cohort
+(ci-rca-identity-lifecycle, Decision 142 -- formerly the rec-2644 close-then-recur cohort) lives
+in the sibling class TestCiRcaClosedHeadRegression in test_ci_rca_close_then_recur.py. The rec-2707
+backstop-reader guard (_guard_live_reader, autouse) formerly duplicated verbatim into both sibling
+classes has since been retired (rec-2484): the global L1/L2 hermetic-AWS guard in the root
+tests/conftest.py now supersedes it class-wide.
 """
 
 from __future__ import annotations
@@ -179,6 +179,32 @@ class TestCiRcaFingerprintDedup:
         p._run_ci_rca_cross_check(ctx)
         assert "fingerprint" not in ctx
 
+    def test_cross_check_stamps_affected_nodeids_and_escape_class(self, tmp_path: Path):
+        """ci-rca-identity-lifecycle: affected_nodeids/escape_class are stamped from the
+        VERIFIED bundle, mirroring fingerprint/failure_category -- never agent-authored."""
+        import scripts.ops_data_portal as p
+
+        sha, bundle_data = self._make_bundle(tmp_path, affected_nodeids=["tests/test_a.py::test_a"], escape_class="capped")
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
+            p._run_ci_rca_cross_check(ctx)
+        assert ctx["affected_nodeids"] == bundle_data["affected_nodeids"]
+        assert ctx["escape_class"] == bundle_data["escape_class"]
+
+    def test_cross_check_no_affected_nodeids_or_escape_class_leaves_unset(self, tmp_path: Path):
+        """A bundle carrying neither field (e.g. no junit report, no selection manifest) never
+        stamps them -- absence is not itself a signal."""
+        import scripts.ops_data_portal as p
+
+        sha, _ = self._make_bundle(tmp_path)
+        ctx = self._ctx_v2()
+        ctx["evidence_bundle_ref"] = {"sha256": sha, "s3_uri": "", "upload_status": "ok"}
+        with patch.object(_ci_rca_schema_mod, "ROOT", tmp_path):
+            p._run_ci_rca_cross_check(ctx)
+        assert "affected_nodeids" not in ctx
+        assert "escape_class" not in ctx
+
     # -- write-time backstop (file_rec) -------------------------------------------------------
 
     def test_file_rec_backstop_returns_existing_id_on_fingerprint_hit(self, tmp_path: Path, monkeypatch):
@@ -204,6 +230,10 @@ class TestCiRcaFingerprintDedup:
         mock_write.assert_not_called()
 
     def test_file_rec_backstop_inserts_on_fingerprint_miss(self, tmp_path: Path, monkeypatch):
+        """No open match AND no closed head at all (genuinely novel fingerprint) -- normal insert.
+        ci-rca-identity-lifecycle: the rec-2644 recency-finder revive check is retired; the
+        closed-head path is now closed_head_of_chain (see
+        tests/ops_data_portal/test_ci_rca_close_then_recur.py for its full coverage)."""
         import scripts.ops_data_portal as p
 
         monkeypatch.delenv("CI_RCA_FORCE_RCA", raising=False)
@@ -215,7 +245,7 @@ class TestCiRcaFingerprintDedup:
         with (
             patch.object(_ci_rca_schema_mod, "ROOT", tmp_path),
             patch.object(p, "find_open_ci_rca_rec_by_fingerprint", return_value=None) as mock_find,
-            patch.object(p, "find_recent_ci_rca_rec_by_fingerprint", return_value=None),
+            patch.object(p, "closed_head_of_chain", return_value=None),
             patch.object(p, "_ducklake_write", return_value={"key": "rec-800"}) as mock_write,
             patch.object(p, "RECS_JSONL", tmp_path / "recs.jsonl"),
             patch("scripts.sync.ops.upsert_cache_row"),

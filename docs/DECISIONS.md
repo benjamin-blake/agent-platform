@@ -2,6 +2,147 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 142: CI-RCA fingerprint v2 (cause-anchored) + status-aware chain lifecycle replaces the CIRCA-03(a) step-name key and the rec-2644 close-then-recur revive path (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-17
+**Warehouse ID:** dec-142 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The CIRCA-03(a) grouping fingerprint (`scripts/ci_rca/evidence.py:65` `_compute_fingerprint`) keyed
+on `(workflow_slug, failed_check, failure_category)` -- `failed_check` is the CI STEP name (e.g.
+"Unit tests + coverage"), identical for ANY pytest failure in that step. Two DISTINCT failing tests
+collided onto the same fingerprint, so an unrelated `session_preflight` failure was masked into an
+already-fixed rec (rec-2710) instead of filing its own record. Separately, the write-time backstop's
+close-then-recur fix (rec-2644: `find_recent_ci_rca_rec_by_fingerprint` + `reopen_ci_rca_rec` in
+`scripts/ops_portal/ci_rca_runtime.py`) flipped a CLOSED rec back to `open` on any fingerprint match
+within a 14-day window -- discarding the closed rec's fix-proof with no verification that the new
+failure was actually the SAME unfixed cause recurring, rather than a genuine regression or an
+unrelated new failure sharing the coarse key.
+
+**Decision:**
+1. **Fingerprint v2** (`scripts/ci_rca/fingerprint.py`, new): `compute_fingerprint_v2(workflow_slug,
+   failure_category, error_signature) -> sha256` with a literal `"v2"` salt folded into the hashed
+   payload -- guarantees disjointness from any v1 fingerprint for the same logical failure, so NO
+   warehouse migration is required (the two keyspaces never collide). `error_signature` is
+   `"{exception_type}::{deepest_in_app_frame}::{normalized_message_head}"`, where
+   `deepest_in_app_frame` is `"{module}::{function}"` (no line number) -- the traceback frame,
+   walked bottom-up, that is the first one NOT in site-packages/pytest-internals/conftest.py.
+   junit-parsed (`error_signature_from_junit`, grouping failing testcases by identical raw tuple --
+   the anti-masking property AND cause-grouping fall out of this single walk: a plain assertion
+   failure's deepest in-app frame is the test function itself, so distinct tests never collide; an
+   error raised inside a shared `src/` helper resolves to that helper, so distinct tests sharing one
+   cause collapse together). Special cases: a pytest collection error keys on the failing MODULE
+   PATH (`failure_category=collection_error`, a taxonomy category this Decision adds to
+   `config/ci_rca_taxonomy.yaml` since none existed for a genuine collection failure, distinct from
+   the pre-existing `test_collection_empty` vacuous-pass category); a non-pytest failure (including a
+   terraform-apply-sandbox apply failure, Decision 92) uses `error_signature_from_log_tail(tool,
+   normalized-line)`; more than ~5 distinct new signatures in one run collapse to a single run-level
+   record (`collapse_mass_failure`).
+2. **junit wiring end-to-end**: `--junitxml=logs/debug/pytest-junit.xml` added to
+   `scripts/checks/_scaffolding.py`'s `_build_unit_test_cmd()` (additive to the hermeticity flags);
+   `.github/workflows/ci.yml`'s `main-validate` job and `.github/workflows/main-canary.yml`'s
+   `canary` job upload it as the `pytest-junit` artifact on `if: always()`; `.github/workflows/ci-
+   rca.yml` downloads it for the failing run (best-effort -- a non-pytest failure has no such
+   artifact and falls back to the log-tail signature, never blocking the job).
+3. **Status-aware chain, never closed->open**
+   (`scripts/ops_portal/ci_rca_lifecycle.py`, new): `resolve_chain(fingerprint)` returns every
+   source=ci_rca record matching a fingerprint, newest first. Only the NEWEST record, and only
+   while `status=open`, is ever bumped (`newest_open_in_chain`) -- a closed head is never mutated.
+   The rec-2644 revive path (`reopen_ci_rca_rec` / `find_recent_ci_rca_rec_by_fingerprint`) is
+   REMOVED from `scripts/ops_portal/ci_rca_runtime.py`, and its call site -- the `file_rec()`
+   write-time backstop in `scripts/ops_data_portal.py` -- is repointed at the chain helpers in the
+   SAME change (portal-wedge guard: the two dead imports are deleted; `import
+   scripts.ops_data_portal` and the `tests/ops_data_portal/` suite are the standing proof it is not
+   ImportError-wedged). A closed-head fingerprint match runs `git merge-base --is-ancestor
+   <failing-commit> <head.fixed_by_sha>`: an ancestor (stale-code rerun) is dropped with a no-op
+   note (no insert, no bump, no reopen); a non-ancestor files a NEW record with `regression_of` set,
+   a `"REGRESSION: "` title prefix, and `priority="Critical"`. A closed head with NO `fixed_by_sha`
+   (every rec closed before this change; any manual closure) FAILS CLOSED to a REGRESSION -- the
+   ancestry check cannot run without a fix commit to compare against, so this never silently drops a
+   possibly-real recurrence (Decision 55). The closed->open prohibition is a fresh forward rule
+   CITING Decision 103's closure-proof clause (a closed rec's `fixed_by_sha` is exactly that proof;
+   reopening would discard it without contrary evidence) -- it does NOT amend a closed->open clause
+   in Decision 103 (no such clause exists there); Decision 70 governs bootstrap-record deletion, not
+   this.
+4. **Auto-close, three paths, all deterministic**: (a) fix-linked --
+   `.github/workflows/rec-autoclose.yml`, on closing a source=ci_rca rec from a `Resolves:`
+   trailer, calls the importable helper `ci_rca_lifecycle.stamp_fixed_by_sha(rec_id,
+   <merge-commit-sha>)`, recording the fix commit that powers point 3's ancestry check; (b) a purely
+   TIMESTAMP-based inactivity predicate (`is_inactive` -- `last_seen`/`created_timestamp` older than
+   a 30-day window AND rec created-age >= 14 days, BOTH bounds) closes via
+   `scripts/ci_rca/inactivity_sweep.py` (new; `.github/workflows/ci-rca-inactivity-sweep.yml`, new
+   scheduled + `workflow_dispatch` runner, OIDC creds, reads via the DuckLake reader NAMED VERBS
+   only -- Decision 84 I-3 / Decision 88) with `resolution=stale_no_recurrence` and the recorded
+   proof -- a purely deterministic timestamp probe stays inside Decision 103's
+   deterministic-satisfaction boundary (no `close_proposed` needed, no run-history data source
+   named); (c) a chain reaching 3 records is tagged `flaky` and quarantined instead of filing
+   another fresh critical.
+5. **Escape-attribution** (`ci_rca_lifecycle.compute_escape_class`): a post-merge full-tier failure
+   is tagged `escape_class` in `{no-edge, capped, unknown-data-edge}` by diffing the failed test's
+   file against the merged PR's Decision-135 `--pre` selection manifest -- `no-edge` (never
+   selected, no reverse-dependency edge existed), `capped` (selected but deferred over the
+   transitive-residue cap), or `unknown-data-edge` (was selected and should have run, but still
+   escaped -- flagged for manual review, never silently assumed benign). `ci-rca.yml` best-effort
+   resolves the merged PR from the failing commit and downloads its `selection-manifest` artifact;
+   any resolution failure degrades to omitting `escape_class`, never blocking the job.
+6. **Projection, not columns**: `regression_of`, `fixed_by_sha`, `affected_nodeids`, `flaky`, and
+   `escape_class` are added to `CiRcaContext` (`scripts/ops_portal/ci_rca_schema.py`) as
+   `Optional[...]=None` fields riding in `context_v2_json` -- NO `schema_version` ceiling raise (all
+   backward-compatible additions), NO new `ops_recommendations` columns (Decision 84/103/63: the
+   `ducklake_writer` owns the keyspace; fix-state is not denormalized onto the rec row). Field
+   semantics are declared in `docs/contracts/ci-rca-lifecycle.yaml` (Decision 86: rationale here,
+   semantics there), a non-ritual projection contract (no `contract:`/`class:` block, per Decision
+   118/CD.25) mirroring `docs/contracts/recommendation-relevance.yaml`'s shape.
+
+**Verification tier:** V2 (Decision 48/79) -- `compute_affected_artifacts` over the full scope set
+(including `scripts/ops_data_portal.py`) returns `{}`; no active Lambda artifact is affected. The
+junit-XML + selection-manifest handoff between `ci.yml`/`main-canary.yml` and `ci-rca.yml` is an
+intra-repo CI artifact contract (no external service, no deploy) verified behaviourally via unit
+tests, structural greps of the workflow wiring, and the natural post-merge self-test -- not a Lambda
+deploy.
+
+**Rationale:**
+Anchoring the fingerprint on the failure's CAUSE (the deepest in-app traceback frame + exception
+type + normalized message, or the failing module path for a collection error, or a normalized
+log-tail signature for a non-pytest tool) rather than the CI step name is what makes two distinct
+test failures in the same step stop masking each other while still letting one shared-helper
+infrastructure error group correctly across the different tests it surfaces through. Making the
+closed-head path a status-aware, ancestry-verified regression-or-drop decision -- instead of a
+window-bounded reopen -- means a closed rec's fix-proof is never silently discarded: either the
+ancestry check proves the new failure predates the fix (drop, no mutation) or it cannot prove that
+and a fresh record captures the recurrence with its own investigation trail. The fail-closed default
+on a missing `fixed_by_sha` extends that same discipline to the entire pre-this-change population of
+closed recs, which carry no fix commit to check against.
+
+**Reversal conditions:** Revisit this design if (a) the deepest-in-app-frame heuristic proves too
+coarse or too fine in practice (e.g. a widely-shared low-level helper causing over-grouping of
+genuinely distinct causes, or per-test-function attribution proving too granular for a class of
+parametrized-test failures) -- adjust the frame-exclusion list or the message-head normalization
+rules rather than reverting to a step-name key; (b) the ancestry check
+(`git merge-base --is-ancestor`) proves unreliable on a shallow-clone runner in practice (ci-rca.yml
+already checks out `fetch-depth: 2`, which may be insufficient for an old `fixed_by_sha` -- widen the
+fetch depth or fall back to a deeper fetch on ancestry-check failure, never silently drop); (c) the
+escape-attribution manifest-resolution path's best-effort PR/artifact lookup proves too fragile in
+practice (a durable manifest->commit mapping, e.g. a DuckLake-registered table per the Decision 135
+T2.36 deferral, would replace the current gh-api chase).
+
+**Related:** Decision 135 (the `--pre` affected-set selection manifest this Decision consumes for
+escape-attribution), Decision 103 (closure-proof clause this Decision's closed->open prohibition
+cites; do NOT cite Decision 70 for this), Decision 84 (portal-only writes / named-verb reads / no
+new Class A columns), Decision 92 (terraform-apply-sandbox apply-failure records carry
+fingerprints -- the non-pytest fallback must cover them), Decision 72 (RCA-as-plan-source), Decision
+55 (deterministic-in-code, fail-closed, no LLM-authored dedup/regression/inactivity/escape
+decisions), Decision 86 (rationale->Decision, semantics->contract, no new prose doc), Decision 128
+(SLOC decompose-by-default -- this work's two new submodules, `fingerprint.py` and
+`ci_rca_lifecycle.py`, keep `evidence.py` and `ci_rca_runtime.py` under budget), Decision 104
+(check-registry / `_scaffolding.py` command-builder home), Decision 63 (no denormalized fix-state),
+Decision 62 (scheduled monitor / alarm-not-gate -- the inactivity-sweep workflow), Decision 48 +
+Decision 79 (per-Lambda + verification-tier gating; V2 verdict), Decision 73 (public-repo boundary).
+Supersedes CIRCA-03's grouping-fingerprint contract; resolves rec-2710 and rec-2644.
+
+---
+
 ## Decision 141: Ratify CD.19 -- SCD2 timestamp policy on the T2.2 ops-table import was settled de facto as option (b) (created preserved, last_updated = import_time); resolved-by-events closure (Decided)
 
 **Status:** Decided

@@ -96,111 +96,6 @@ def find_open_ci_rca_rec_by_fingerprint(fingerprint: str, profile: Optional[str]
     return None
 
 
-# Bounded reopen window (rec-2644 close-then-recur fix): a CLOSED match is only revived when its
-# last write falls within this many days of now. Matches the CI-RCA dedup-effectiveness/abstention
-# gauge windows (scripts/preflight/ci_rca_gauges.py) -- an ancient closure is a genuinely new
-# episode (Decision 55 fail-closed-toward-refiling), not a live recurrence.
-_CI_RCA_REOPEN_RECENCY_WINDOW_DAYS = 14
-
-
-def find_recent_ci_rca_rec_by_fingerprint(
-    fingerprint: str,
-    profile: Optional[str] = None,
-    window_days: int = _CI_RCA_REOPEN_RECENCY_WINDOW_DAYS,
-) -> Optional[tuple[str, bool]]:
-    """READ-ONLY: find the most-recently-touched source=ci_rca rec (open or closed) matching
-    fingerprint, for the rec-2644 close-then-recur fix.
-
-    Stays a pure read -- mirrors find_open_ci_rca_rec_by_fingerprint's contract ("a read cache is
-    never a dedup source", CLAUDE.md). Reopening a matched closed rec is a SEPARATE single-writer,
-    reopen_ci_rca_rec() below -- never called from here.
-
-    Only 'open' and 'closed' rows are considered (a 'failed'/'declined'/'superseded' rec is not a
-    close-then-recur candidate). Among matches, the most recently touched row wins
-    (last_updated_timestamp, falling back to created_timestamp) -- the best signal for "is this
-    the same live incident recurring".
-
-    Returns:
-        (rec_id, was_closed=False) for an open match (mirrors find_open_ci_rca_rec_by_fingerprint;
-            callers normally never reach this since find_open already covers the open case).
-        (rec_id, was_closed=True) for a closed match whose last_updated_timestamp is within
-            window_days of now.
-        None when no match exists, or the newest closed match falls outside the window (an
-            out-of-window closure is treated as a genuinely new episode, not revived).
-
-    Fails OPEN (returns None + a loud log) ONLY when the reader itself is unreachable, matching
-    find_open_ci_rca_rec_by_fingerprint's fail-open contract. Any other exception raises
-    (Decision 55).
-    """
-    from src.common.iceberg_reader import make_reader  # noqa: PLC0415
-
-    try:
-        rows = make_reader(profile=profile).current_state("ops_recommendations", row_filter="source = 'ci_rca'") or []
-    except Exception as exc:  # noqa: BLE001
-        if _is_reader_unreachable_error(exc):
-            logger.warning(
-                "[CI_RCA_DEDUP] DuckLake reader unreachable while searching (recent) for fingerprint=%s; "
-                "failing open (dedup skipped, filing proceeds): %s",
-                fingerprint,
-                exc,
-            )
-            return None
-        raise
-
-    matches: list[dict] = []
-    for row in rows:
-        if row.get("status") not in ("open", "closed"):
-            continue
-        ctx_raw = row.get("context_v2_json")
-        if not ctx_raw:
-            continue
-        try:
-            ctx = json.loads(ctx_raw) if isinstance(ctx_raw, str) else ctx_raw
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(ctx, dict) and ctx.get("fingerprint") == fingerprint:
-            matches.append(row)
-
-    if not matches:
-        return None
-
-    matches.sort(key=lambda r: r.get("last_updated_timestamp") or r.get("created_timestamp") or "", reverse=True)
-    newest = matches[0]
-    rec_id = str(newest.get("id"))
-    if newest.get("status") != "closed":
-        return (rec_id, False)
-
-    last_touched_raw = newest.get("last_updated_timestamp") or newest.get("created_timestamp") or ""
-    try:
-        last_touched = datetime.fromisoformat(str(last_touched_raw).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if last_touched.tzinfo is None:
-        last_touched = last_touched.replace(tzinfo=timezone.utc)
-    age_days = (datetime.now(timezone.utc) - last_touched).total_seconds() / 86400
-    if age_days > window_days:
-        return None
-    return (rec_id, True)
-
-
-def reopen_ci_rca_rec(rec_id: str, profile: Optional[str] = None) -> int:
-    """SEPARATE single-writer: reopen a recently-closed source=ci_rca rec exactly once (rec-2644).
-
-    Flips status='open' then bumps occurrence_count/last_seen via bump_ci_rca_occurrence -- the
-    ONLY call site that performs this reopen; find_open_ci_rca_rec_by_fingerprint and
-    find_recent_ci_rca_rec_by_fingerprint above stay pure reads and never call this. Called ONLY
-    from file_rec's write-time dedup backstop (ops_data_portal.py) on a find_open MISS +
-    find_recent HIT within the recency window -- mutually exclusive with the open-match bumper
-    path, so occurrence never double-counts (Risk B).
-
-    Returns the new occurrence_count (mirrors bump_ci_rca_occurrence's return contract).
-    """
-    from scripts.ops_data_portal import update_rec  # noqa: PLC0415
-
-    update_rec(rec_id, {"status": "open"}, profile=profile)
-    return bump_ci_rca_occurrence(rec_id, profile=profile)
-
-
 def _run_ci_rca_cross_check(
     context_v2_json: dict,
     s3_client_factory: Optional[Callable[[], Any]] = None,
@@ -285,6 +180,13 @@ def _run_ci_rca_cross_check(
         context_v2_json["fingerprint"] = bundle["fingerprint"]
     if bundle.get("failure_category"):
         context_v2_json["failure_category"] = bundle["failure_category"]
+    # ci-rca-identity-lifecycle: affected_nodeids (v2 junit-parsed cause-group membership) and
+    # escape_class (Decision 135 selection-manifest attribution, when the workflow step stamped
+    # it onto the bundle) are likewise portal-derived from the verified bundle, never agent-authored.
+    if bundle.get("affected_nodeids"):
+        context_v2_json["affected_nodeids"] = bundle["affected_nodeids"]
+    if bundle.get("escape_class"):
+        context_v2_json["escape_class"] = bundle["escape_class"]
 
     detection_gap = context_v2_json.get("detection_gap") or {}
     agent_evg = detection_gap.get("earliest_viable_gate")
