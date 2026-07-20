@@ -10,6 +10,7 @@ import scripts.build_lambda_config as bl_config
 from scripts.build_lambda_config import (
     _DUCKLAKE_CATALOG_DR_FUNCTION,
     _DUCKLAKE_MAINTENANCE_FUNCTION,
+    _DUCKLAKE_MAINTENANCE_SMOKE_FUNCTION,
     _DUCKLAKE_READER_FUNCTION,
     _DUCKLAKE_WRITER_FUNCTION,
     _LAMBDA_SCRIPTS,
@@ -36,6 +37,10 @@ class TestPinnedConstants:
         assert bl_config._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_READER_FUNCTION] == "lambda-packages/ducklake-reader.zip"
         assert (
             bl_config._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_MAINTENANCE_FUNCTION] == "lambda-packages/ducklake-maintenance.zip"
+        )
+        assert (
+            bl_config._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_MAINTENANCE_SMOKE_FUNCTION]
+            == "lambda-packages/ducklake-maintenance-smoke.zip"
         )
         assert (
             bl_config._DUCKLAKE_FUNCTION_ZIP_KEYS[_DUCKLAKE_CATALOG_DR_FUNCTION] == "lambda-packages/ducklake-catalog-dr.zip"

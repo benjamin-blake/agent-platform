@@ -62,6 +62,7 @@ class TestResolveDucklakeProfile:
                     _FakePath(name="w.zip"),
                     _FakePath(name="r.zip"),
                     _FakePath(name="m.zip"),
+                    _FakePath(name="ms.zip"),
                     _FakePath(name="dr.zip"),
                 ],
             ),

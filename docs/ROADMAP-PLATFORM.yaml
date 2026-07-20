@@ -5551,37 +5551,55 @@ tier_items:
       inspect and tune; Lambda avoids a new GH Actions surface for non-CI work).
     depends_on: [T2.16, T2.17]
     files_in_scope:
-      - src/lambdas/ducklake_maintenance/    # new -- or extend an existing maintenance Lambda
-      - src/lambdas/ducklake_maintenance/manifest.yaml    # new -- CD.24 per-Lambda manifest (SSOT path per lambda_manifest.py)
+      - src/lambdas/ducklake_maintenance/
+      - src/lambdas/ducklake_maintenance/manifest.yaml
+      - src/lambdas/ducklake_maintenance_smoke/    # T2.18 c9 follow-on split: CI-invokable smoke sibling (bundled Decision 143)
+      - src/lambdas/ducklake_maintenance_smoke/manifest.yaml
+      - terraform/personal/ducklake_maintenance_smoke.tf
+      - terraform/personal/ducklake_maintenance.tf
     exit_criteria:
       - id: c1
         text: >-
           Inlining DISABLED for ALL tables including telemetry (OQ.11 -> c as amended by CD.34:
           ducklake_default_data_inlining_row_limit=0), so flush_inlined_data is a no-op safety net; the
           maintenance sequence is merge -> expire -> cleanup -> delete_orphaned (+ rewrite) (CD.33 clause 5)
-        status: open
+        status: met
+        met_by: ducklake-maintenance-smoke-split
       - id: c2
         text: >-
-          expire_snapshots + cleanup_old_files + delete_orphaned_files all scheduled; S3 storage confirmed
-          stable after N maintenance cycles
+          [Re-grounded 2026-07-20 (T2.18 c9 follow-on split): the smoke-scoped half is met -- weekly guarded
+          GC (expire_snapshots + cleanup_old_files + delete_orphaned_files) is scheduled on
+          ducklake_maintenance_smoke and exercised by the autonomous c9 CI gate. The production-catalog
+          destructive GC + confirming S3 storage is stable after N maintenance cycles remains intentionally
+          deferred and is owned by T2.26 (rec-2113 restore-drill start gate).] expire_snapshots +
+          cleanup_old_files + delete_orphaned_files all scheduled; S3 storage confirmed stable after N
+          maintenance cycles
         status: open
       - id: c3
         text: Cadence mechanism (Lambda vs GH Actions) chosen and documented per CD.29 / Decision 62
-        status: open
+        status: met
+        met_by: ducklake-maintenance-smoke-split
       - id: c4
-        text: ops_compaction Lambda retired or repurposed
-        status: open
+        text: >-
+          [Rehomed 2026-07-20 (T2.18 c9 follow-on split): ops_compaction retirement is owned by T2.26 c3,
+          which tracks the two named blockers (telemetry retirement T2.36/Phase 4; ops_session_log
+          T3.20/CD.40) -- not required for this item's completion.] ops_compaction Lambda retired or
+          repurposed
+        status: rehomed
+        met_by: T2.26
       - id: c5
         text: >-
           Maintenance runs as two deterministic singleton cadences (daily non-destructive merge;
           separately-cadenced guarded destructive GC) with no LLM / agent invocation (CD.33 clause 5)
-        status: open
+        status: met
+        met_by: ducklake-maintenance-smoke-split
       - id: c6
         text: >-
           Destructive GC guardrails pinned (tunable): expire 30d history / 7d current, floor >= last 2
           snapshots, file-deletion older_than grace >=7d, circuit breaker aborts+pages at >20% files or >10GB,
           weekly cadence, never cleanup_all in scheduled runs (CD.33 H1/R-3/O-3/M-3)
-        status: open
+        status: met
+        met_by: ducklake-maintenance-smoke-split
       - id: c7
         text: >-
           Catalog DR (CD.34, weekly per Decision 88): a weekly pg_dump of the Neon catalog (single consistent
@@ -5593,18 +5611,28 @@ tier_items:
           with a >25h alarm; lowered to weekly by Decision 88 -- a daily full-catalog pg_dump is
           storage-negligible but a material METERED-EGRESS line (the free-tier breach), and paid-tier Neon's
           7-day PITR covers between-dump recovery.]
-        status: open
+        status: met
+        met_by: ducklake-maintenance-smoke-split
       - id: c8
         text: >-
-          Telemetry small-file load: disabling telemetry inlining (CD.34) shifts small writes onto compaction;
-          high-write-rate tables get a higher-frequency merge_adjacent_files, and the guarded-GC circuit
-          breaker (>20% files) is co-tuned for the raised dead-file rate so it does not false-positive
-          abort+page (CD.34)
-        status: open
+          [Rehomed 2026-07-20 (T2.18 c9 follow-on split): final numeric co-tuning against real high-write-rate
+          tables is owned by T2.26 -- telemetry is not yet on DuckLake (T2.36), so there is no real
+          high-write-rate table to co-tune against yet.] Telemetry small-file load: disabling telemetry
+          inlining (CD.34) shifts small writes onto compaction; high-write-rate tables get a higher-frequency
+          merge_adjacent_files, and the guarded-GC circuit breaker (>20% files) is co-tuned for the raised
+          dead-file rate so it does not false-positive abort+page (CD.34)
+        status: rehomed
+        met_by: T2.26
       - id: c9
         text: >-
-          Per-Lambda build + deploy + smoke-test for ducklake_maintenance (V3 tier per CD.16; Decision 67
-          Lambda-deploy clause lifted by Decision 79)
+          [Re-grounded 2026-07-20 (T2.18 c9 follow-on split, bundled Decision 143): closed by splitting
+          ducklake_maintenance into the CI-invokable ducklake_maintenance_smoke (dispatch={merge, gc,
+          breaker_probe, hot_merge}) and the retained admin-gated ducklake_maintenance. The four maintenance
+          smoke gates run autonomously in the governed CD channel
+          (.github/workflows/deploy-ducklake-lambdas.yml) under github_ci_branch's invoke grant scoped to the
+          smoke function ARN only -- no agent_platform_admin session required. Flips met once the post-deploy
+          CD smoke run confirms green.] Per-Lambda build + deploy + smoke-test for ducklake_maintenance (V3
+          tier per CD.16; Decision 67 Lambda-deploy clause lifted by Decision 79)
         status: open
     related_candidate_decisions: [CD.31, CD.29, CD.33, CD.34]
     effort: M
@@ -5645,6 +5673,15 @@ tier_items:
           destructive GC for production tables remains gated by rec-2113 / T2.26 (intentional deferral,
           Decision 55). Post-deploy VP steps (9-13: live invocation + read-your-write + smoke regression
           + EventBridge rule ENABLED) execute on next session after sandbox CD apply converges.
+      - 2026-07-20 (PLAN-ducklake-maintenance-smoke-split, bundled Decision 143): T2.18 c9 follow-on split --
+          ducklake_maintenance decomposed into ducklake_maintenance_smoke (CI-invokable, dispatch={merge, gc,
+          breaker_probe, hot_merge}, smoke-prefix-scoped IAM, github_ci_branch invoke grant scoped to this
+          function ARN only) and the retained admin-gated ducklake_maintenance (production-destructive +
+          operational verbs only; merge_ops stays scheduled there). Freshness-Gate re-adjudication: c1/c3/c5/
+          c6/c7 flipped met (pre-existing architecture, re-verified against current code -- VP8-10); c4/c8
+          rehomed to T2.26; c2 re-grounded (smoke-scoped half met, production destructive GC deferred to
+          T2.26/rec-2113); c9 re-grounded to the split + autonomous CI gate -- flips met once the post-deploy
+          CD smoke run (deploy-ducklake-lambdas.yml) confirms green.
 
   - id: T2.19
     tier: T2

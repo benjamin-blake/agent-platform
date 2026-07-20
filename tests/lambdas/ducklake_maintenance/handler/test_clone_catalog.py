@@ -143,8 +143,10 @@ def test_action_clone_catalog_no_pg_dump_no_pg_restore():
 
 
 def test_action_clone_catalog_is_connectionless():
-    """clone_catalog must appear in _CONNECTIONLESS_ACTIONS (handler skips open_connection call)."""
-    assert "clone_catalog" in h._CONNECTIONLESS_ACTIONS
+    """clone_catalog manages its own connection -- the handler dispatches it with con=None."""
+    with patch.dict(h._ACTIONS, {"clone_catalog": lambda payload, con: {"ok": True, "con_is_none": con is None}}):
+        r = h.handler({"action": "clone_catalog", "branch_host": _BRANCH_HOST, "data_path": _PROD_DATA_PATH})
+    assert _response_body(r)["con_is_none"] is True
 
 
 def test_action_clone_catalog_listed_in_actions():

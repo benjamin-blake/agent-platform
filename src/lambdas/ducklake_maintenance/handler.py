@@ -1,24 +1,26 @@
-"""ducklake_maintenance Lambda entrypoint (T2.18 / CD.33, Decision 81).
+"""ducklake_maintenance Lambda entrypoint (T2.18 / CD.33, Decision 81; T2.18 c9 follow-on split,
+bundled Decision amending Decision 81 clause 1, runtime artifacts 3 -> 4).
 
-Singleton maintenance Lambda invoked on two EventBridge schedules:
-  daily  (cron 04:00 UTC): action=merge  -- non-destructive merge only
-  weekly (cron 05:00 UTC Sunday): action=gc  -- full guarded GC with circuit breaker
+Admin-gated singleton retaining the production-destructive and operational verbs. The
+non-destructive smoke cadences (action=merge / action=gc / action=hot_merge / action=breaker_probe)
+were split out to the CI-invokable src/lambdas/ducklake_maintenance_smoke/handler.py sibling, which
+shares src/common/ducklake_maintenance.py -- this function no longer runs them, so it no longer
+pre-opens a shared smoke-scoped connection (every remaining action manages its own connection, or
+is connectionless). The only surviving SCHEDULED cadence on this function is action=merge_ops
+(every 6h, non-destructive, production ops_* catalog).
 
-Also supports action=breaker_probe (forced-threshold test for VP step 11).
-
-T2.19 recs cutover adds OPERATIONAL admin actions invoked over 443 via `aws lambda invoke` (NOT
-public Function URLs, NOT agent surfaces): catalog_reinit (rec-2099 fix -- drop the squatting
-meta-schema + re-init at the production DATA_PATH) and restore_drill (pg_dump->pg_restore +
-read-your-write DR gate). These target the PRODUCTION catalog (ducklake_ops) via explicit event
-params; the SCHEDULED merge/gc cadence stays on the smoke catalog (ducklake_smoke, relocated off
-ducklake_ops -- rec-2099 root-cause). (The TEMPORARY seed_ops_recommendations bootstrap action was
-removed at the 2026-06-09 recs sign-off -- the closed boundary now admits recs writes only via the
-portal `file_rec`/`update_rec` -> writer path, Decision 81 cl.7.)
+OPERATIONAL admin actions are invoked over 443 via `aws lambda invoke` (NOT public Function URLs,
+NOT agent surfaces): catalog_reinit (rec-2099 fix -- drop the squatting meta-schema + re-init at the
+production DATA_PATH), restore_drill (pg_dump->pg_restore + read-your-write DR gate),
+reconcile_columns, catalog_stats, and clone_catalog (OQ.12 canary rehearsal). These target the
+PRODUCTION catalog (ducklake_ops) via explicit event params. (The TEMPORARY
+seed_ops_recommendations bootstrap action was removed at the 2026-06-09 recs sign-off -- the closed
+boundary now admits recs writes only via the portal `file_rec`/`update_rec` -> writer path,
+Decision 81 cl.7.)
 
 No LLM / agent invocation anywhere in this path (CD.33 clause 5 / Decision 81 clause 6).
 Singleton enforced by reserved_concurrent_executions=1 (Decision 81 clause 6; see Terraform).
 
-Scheduled table scope: ducklake_smoke_* (now under the ducklake_smoke meta-schema).
 See src/common/ducklake_maintenance.py::MAINTENANCE_SCOPE_NOTE.
 """
 
@@ -34,44 +36,10 @@ from src.common import catalog_dr
 from src.common import ducklake_maintenance as maint
 from src.common import ducklake_runtime as rt
 
-DATA_PATH = os.environ.get("DUCKLAKE_DATA_PATH", rt.SMOKE_DATA_PATH)
-META_SCHEMA = os.environ.get("DUCKLAKE_META_SCHEMA", rt.SMOKE_META_SCHEMA)
 EXTENSION_DIRECTORY = os.environ.get("DUCKLAKE_EXTENSION_DIRECTORY", rt.LAMBDA_EXTENSION_DIRECTORY)
 
 # A SQL identifier (meta-schema name) -- guards the few f-string-interpolated DDL sites below.
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-# GC circuit-breaker thresholds: sourced from env when set (FP-B co-tuning, CD.34).
-# Env overrides the module-level defaults but NOT the forced_* event fields (which take precedence).
-# Tuning these to pass a gate is a Decision-55 violation.
-_ENV_GC_BREAKER_FILE_FRACTION: float = float(os.environ.get("GC_BREAKER_FILE_FRACTION", maint.GC_BREAKER_FILE_FRACTION))
-_ENV_GC_BREAKER_BYTES: int = int(os.environ.get("GC_BREAKER_BYTES", maint.GC_BREAKER_BYTES))
-
-# Table scope: ducklake_smoke_* (T2.18 FP-A/B only -- see MAINTENANCE_SCOPE_NOTE for T2.19 expansion).
-_SCOPE_TABLES = maint.GC_TABLE_SCOPE
-_HOT_SCOPE_TABLES = maint.HOT_TABLE_SCOPE
-
-# Forced-threshold breaker_probe: set these to guaranteed-trip values. The probe writes many small
-# files before invoking so the dry-run count lands above the threshold, then checks that the
-# MaintenanceBreakerTrip metric was emitted and that no files were deleted.
-_BREAKER_PROBE_FILE_FRACTION = 0.0  # 0% -> any 1 deletable file trips it
-_BREAKER_PROBE_BYTE_BUDGET = 0  # 0 bytes -> any file trips it
-
-
-def _open_connection() -> Any:
-    """Open a maintenance-scoped baked-extension connection to the Neon catalog.
-
-    The SCHEDULED merge/gc/hot_merge cadence operates on the smoke catalog (`ducklake_smoke` at the
-    smoke DATA_PATH); the OPERATIONAL actions (catalog_reinit / seed / restore_drill) manage their own
-    connections against the production catalog via explicit event params.
-    """
-    dsn = rt.fetch_dsn()
-    return rt.open_connection(dsn=dsn, data_path=DATA_PATH, meta_schema=META_SCHEMA, extension_directory=EXTENSION_DIRECTORY)
-
-
-def _make_metric_sink(profile: str | None = None) -> Any:
-    """Build a CloudWatch metric sink for the DuckLakeMaintenance namespace."""
-    return rt.make_metric_sink(namespace=maint.MAINTENANCE_CLOUDWATCH_NAMESPACE, profile=profile)
 
 
 def _emit_maintenance_metric(name: str, value: float, *, profile: str | None = None) -> None:
@@ -79,111 +47,12 @@ def _emit_maintenance_metric(name: str, value: float, *, profile: str | None = N
 
 
 # ---------------------------------------------------------------------------
-# Actions
-# ---------------------------------------------------------------------------
-
-
-def action_merge(event: dict[str, Any], con: Any) -> dict[str, Any]:
-    """Daily non-destructive merge: flush_inlined_data + merge_adjacent_files.
-
-    Accepts force_recreate_tables=True (re-creates the smoke tables, idempotent re-run).
-    """
-    if event.get("force_recreate_tables"):
-        rt.create_scd2_tables(con, force_recreate=True)
-
-    t0 = time.perf_counter()
-    result = maint.run_merge(con, _SCOPE_TABLES)
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    result["elapsed_ms"] = round(elapsed_ms, 2)
-
-    _emit_maintenance_metric("MergeDurationMs", elapsed_ms)
-    _emit_maintenance_metric("FilesBeforeMerge", float(result["files_before"]))
-    _emit_maintenance_metric("FilesAfterMerge", float(result["files_after_merge"]))
-    return result
-
-
-def action_gc(event: dict[str, Any], con: Any) -> dict[str, Any]:
-    """Weekly guarded GC: full five-step sequence with circuit breaker.
-
-    Accepts force_* event fields per Lambda convention:
-      force_recreate_tables -- drop/recreate smoke tables before GC (test harness)
-      force_file_fraction   -- override GC_BREAKER_FILE_FRACTION (test; not used in scheduled runs)
-      force_byte_budget     -- override GC_BREAKER_BYTES (test; not used in scheduled runs)
-    """
-    if event.get("force_recreate_tables"):
-        rt.create_scd2_tables(con, force_recreate=True)
-
-    file_fraction = float(event.get("force_file_fraction", _ENV_GC_BREAKER_FILE_FRACTION))
-    byte_budget = int(event.get("force_byte_budget", _ENV_GC_BREAKER_BYTES))
-
-    t0 = time.perf_counter()
-    result = maint.run_gc(con, _SCOPE_TABLES, file_fraction=file_fraction, byte_budget=byte_budget)
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    result["elapsed_ms"] = round(elapsed_ms, 2)
-
-    _emit_maintenance_metric("GcDurationMs", elapsed_ms)
-    _emit_maintenance_metric("FilesBeforeGc", float(result["files_before"]))
-    _emit_maintenance_metric("FilesAfterGc", float(result["files_after"]))
-    _emit_maintenance_metric("SnapshotsExpired", float(result["snapshots_expired"]))
-    _emit_maintenance_metric("FilesCleaned", float(result["files_cleaned"]))
-    _emit_maintenance_metric("OrphansDeleted", float(result["orphans_deleted"]))
-    _emit_maintenance_metric("MaintenanceBreakerTrip", 0.0)
-    return result
-
-
-def action_hot_merge(event: dict[str, Any], con: Any) -> dict[str, Any]:
-    """Higher-frequency merge-only cadence (T2.18 FP-B / CD.34).
-
-    Invokes merge_adjacent_files ONLY over HOT_TABLE_SCOPE. No snapshot expiry, no file
-    deletion. Bounds the small-file COUNT between weekly GC passes without reclaiming storage.
-    Table scope is ducklake_smoke_* for T2.18; expands to real high-write-rate ops_* at T2.19.
-
-    Accepts force_recreate_tables=True (re-creates the smoke tables, idempotent re-run).
-    """
-    if event.get("force_recreate_tables"):
-        rt.create_scd2_tables(con, force_recreate=True)
-
-    t0 = time.perf_counter()
-    result = maint.run_hot_merge(con, _HOT_SCOPE_TABLES)
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    result["elapsed_ms"] = round(elapsed_ms, 2)
-
-    _emit_maintenance_metric("HotMergeDurationMs", elapsed_ms)
-    _emit_maintenance_metric("FilesBeforeHotMerge", float(result["files_before"]))
-    _emit_maintenance_metric("FilesAfterHotMerge", float(result["files_after"]))
-    return result
-
-
-def action_breaker_probe(event: dict[str, Any], con: Any) -> dict[str, Any]:
-    """Forced-threshold circuit-breaker test (VP step 11).
-
-    Overrides thresholds to zero so the breaker ALWAYS trips on any deletable file.
-    Asserts that check_gc_breaker raises DuckLakeMaintenanceError and that no files are
-    deleted.
-
-    On trip: re-raises DuckLakeMaintenanceError. The handler's outer catch emits
-    MaintenanceBreakerTrip=1 exactly once. Do NOT emit it here -- the outer catch is the
-    single emit point for all DuckLakeMaintenanceError paths (H1 fix: no double-emit).
-
-    Returns {"ok": False, "breaker_tripped": True, "error_type": "breaker", "error": ...}
-    with status 500 so the smoke-test gate can assert the loud-fail.
-    """
-    maint.check_gc_breaker(
-        con,
-        _SCOPE_TABLES,
-        file_fraction=_BREAKER_PROBE_FILE_FRACTION,
-        byte_budget=_BREAKER_PROBE_BYTE_BUDGET,
-    )
-    return {"ok": True, "breaker_tripped": False, "message": "Breaker did NOT trip (no deletable files in probe)"}
-
-
-# ---------------------------------------------------------------------------
 # Operational actions (T2.19 recs cutover) -- invoked over 443 via `aws lambda invoke`, NOT public
 # Function URLs and NOT agent surfaces. They target the PRODUCTION catalog (ducklake_ops) via explicit
-# event params and manage their own connections (the scheduled merge/gc stay on the smoke catalog).
-# catalog_reinit + restore_drill are retained as operational DR ops. The TEMPORARY
-# seed_ops_recommendations bootstrap was removed at the 2026-06-09 recs sign-off (closed boundary --
-# recs writes now transit only the portal -> writer path, Decision 81 cl.7).
+# event params and manage their own connections. catalog_reinit + restore_drill are retained as
+# operational DR ops. The TEMPORARY seed_ops_recommendations bootstrap was removed at the
+# 2026-06-09 recs sign-off (closed boundary -- recs writes now transit only the portal -> writer
+# path, Decision 81 cl.7).
 # ---------------------------------------------------------------------------
 
 
@@ -546,29 +415,12 @@ def action_merge_ops(event: dict[str, Any], _con: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _ACTIONS: dict[str, Any] = {
-    "merge": action_merge,
-    "gc": action_gc,
-    "hot_merge": action_hot_merge,
-    "breaker_probe": action_breaker_probe,
     "catalog_reinit": action_catalog_reinit,
     "restore_drill": action_restore_drill,
     "merge_ops": action_merge_ops,
     "catalog_stats": action_catalog_stats,
     "reconcile_columns": action_reconcile_columns,
     "clone_catalog": action_clone_catalog,
-}
-
-# Operational actions manage their OWN connections (their target catalog/data_path comes from the
-# event, not the scheduled smoke env), so the dispatcher must NOT pre-open the smoke connection.
-# catalog_stats is ATTACH-free (psycopg2 metadata read) -- also connectionless.
-# clone_catalog manages its own scratch-db connection (never the scheduled smoke env).
-_CONNECTIONLESS_ACTIONS = {
-    "catalog_reinit",
-    "restore_drill",
-    "merge_ops",
-    "catalog_stats",
-    "reconcile_columns",
-    "clone_catalog",
 }
 
 
@@ -589,7 +441,12 @@ def _response(status: int, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
-    """Maintenance Lambda entrypoint. Dispatches `action`; loud-fail maps to 4xx/5xx (no silent drop)."""
+    """Maintenance Lambda entrypoint. Dispatches `action`; loud-fail maps to 4xx/5xx (no silent drop).
+
+    Every remaining action manages its own connection internally (or is connection-free, e.g.
+    catalog_stats) -- unlike before the smoke split, this dispatcher never pre-opens a shared
+    connection itself.
+    """
     payload = _parse_event(event)
     action: str | None = payload.get("action")
     fn = _ACTIONS.get(action or "")
@@ -597,15 +454,7 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         return _response(400, {"ok": False, "error": f"unknown action {action!r}", "actions": sorted(_ACTIONS)})
 
     try:
-        if action in _CONNECTIONLESS_ACTIONS:
-            return _response(200, fn(payload, None))
-        t0 = time.perf_counter()
-        con = _open_connection()
-        payload["_connect_ms"] = (time.perf_counter() - t0) * 1000.0
-        try:
-            return _response(200, fn(payload, con))
-        finally:
-            con.close()
+        return _response(200, fn(payload, None))
     except maint.DuckLakeMaintenanceError as exc:
         _emit_maintenance_metric("MaintenanceBreakerTrip", 1.0)
         return _response(500, {"ok": False, "error_type": "breaker", "breaker_tripped": True, "error": str(exc)})

@@ -49,6 +49,7 @@ from scripts.ducklake_smoke.core import (  # noqa: F401 -- re-exported package s
     CATALOG_ALIAS,
     CATALOG_DR_URL_ENV,
     DSN_SECRET_ID,
+    MAINTENANCE_SMOKE_URL_ENV,
     MAINTENANCE_URL_ENV,
     META_SCHEMA,
     READER_URL_ENV,

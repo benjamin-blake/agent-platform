@@ -1,12 +1,13 @@
 name: deploy-ducklake-lambdas
 
-# Governed code-deploy channel for the four DuckLake Lambdas (T2.38 / Decision 125/126).
+# Governed code-deploy channel for the five DuckLake Lambdas (T2.38 / Decision 125/126; T2.18 c9
+# split added the maintenance-smoke function, bundled Decision amending Decision 81 clause 1).
 #
-# Realizes the Decision 125 "deploy code" verb: writer/reader/maintenance/catalog-dr code ships
-# through this scoped, auditable path with post-deploy smoke gates and a deployment record --
-# retiring the local `bin/venv-python -m scripts.build_lambda --ducklake-only --deploy` break-glass
-# invocation as the ONLY route (it remains available as a genuinely non-default fallback; see
-# docs/contracts/build-lambda.yaml deploy_channels.ducklake_functions).
+# Realizes the Decision 125 "deploy code" verb: writer/reader/maintenance/maintenance-smoke/
+# catalog-dr code ships through this scoped, auditable path with post-deploy smoke gates and a
+# deployment record -- retiring the local `bin/venv-python -m scripts.build_lambda --ducklake-only
+# --deploy` break-glass invocation as the ONLY route (it remains available as a genuinely
+# non-default fallback; see docs/contracts/build-lambda.yaml deploy_channels.ducklake_functions).
 #
 # Terraform is NOT involved in this channel (Decision 126 point 1): code ships via this
 # build/deploy pipeline scoped to UpdateFunctionCode-equivalent permissions only.
@@ -16,7 +17,7 @@ name: deploy-ducklake-lambdas
 #
 # deploy job:
 #   - Assumes agent-platform-github-ci-ducklake-deploy (T2.38 scoped role: UpdateFunctionCode-only
-#     on the four ducklake function ARNs; no lambda-config, no invoke, no terraform, no iam-write).
+#     on the five ducklake function ARNs; no lambda-config, no invoke, no terraform, no iam-write).
 #   - This role is IAM-SENSITIVE and lands via the human-gated admin-create path (Decision 98) --
 #     it does NOT exist until an operator applies terraform/personal/oidc.tf under
 #     agent_platform_admin. continue-on-error on the assume-role step covers that bootstrap
@@ -26,7 +27,7 @@ name: deploy-ducklake-lambdas
 #     assume-role (a trust/policy regression, throttling, expired federation) FAILS LOUD instead
 #     of reporting a silent green no-op deploy. Pre-admin-create pushes no-op (green,
 #     deployed=false); post-provisioning regressions are red.
-#   - Runs `build_lambda --ducklake-only --deploy`, which builds + uploads + deploys the four
+#   - Runs `build_lambda --ducklake-only --deploy`, which builds + uploads + deploys the five
 #     function zips and three layer zips, capturing each function's CodeSha256 and writing a
 #     deploy-records/ducklake/<function>.json record (function -> CodeSha256 -> source git SHA;
 #     c3). Emits deployed=true only on a genuine successful deploy.
@@ -34,17 +35,19 @@ name: deploy-ducklake-lambdas
 # smoke job (needs: deploy; Decision 55 false-green avoidance):
 #   - Runs ONLY when deploy actually shipped code (needs.deploy.outputs.deployed == 'true') --
 #     never on a bootstrap-window no-op.
-#   - Asserts deploy-record freshness (source_git_sha == github.sha) for all four functions
+#   - Asserts deploy-record freshness (source_git_sha == github.sha) for all five functions
 #     BEFORE running the smoke gates -- a stale or partially-written record fails closed instead
 #     of letting a skipped/no-op deploy report smoke-green.
 #   - Assumes agent-platform-github-ci-branch (reuses its existing DuckLakeInvokeCI writer+reader
-#     Function-URL invoke grant -- the scoped deploy role above needs no invoke permission, which
+#     Function-URL invoke grant, plus the T2.18 c9 MaintenanceSmokeInvokeCI grant scoped to the
+#     smoke function ARN only -- the scoped deploy role above needs no invoke permission, which
 #     keeps c1's "UpdateFunctionCode-only" literal).
-#   - Runs ducklake_neon_smoke_test --lambda-attach (EC1 in-Lambda ATTACH proof) and
-#     --lambda-reader (EC1/boundary closed reader path). A failed gate is a loud-fail (Decision
-#     55): stop and RCA, never auto-retry into green.
+#   - Runs ducklake_neon_smoke_test --lambda-attach (EC1 in-Lambda ATTACH proof), --lambda-reader
+#     (EC1/boundary closed reader path), and the four --lambda-maintenance-* gates (merge/gc/
+#     breaker/hot-merge) against the smoke function -- the autonomous T2.18 c9 gate. A failed gate
+#     is a loud-fail (Decision 55): stop and RCA, never auto-retry into green.
 #
-# T2.42 boundary: this workflow deploys the four FUNCTION code artifacts only. Layer version
+# T2.42 boundary: this workflow deploys the FUNCTION code artifacts only. Layer version
 # publishing stays with T2.42 -- no publish-version step is added here.
 
 on:
@@ -163,14 +166,14 @@ jobs:
 
       - name: Assert deploy-record freshness (source_git_sha == github.sha)
         # False-green guard (Decision 55): a skipped/partial/stale deploy must not let the smoke
-        # gates report green against previously-deployed code. Reads each of the four deploy
+        # gates report green against previously-deployed code. Reads each of the five deploy
         # records this run's deploy job wrote and asserts source_git_sha matches the commit that
         # triggered this workflow run.
         env:
           EXPECTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          for fn in agent-platform-ducklake-writer agent-platform-ducklake-reader agent-platform-ducklake-maintenance agent-platform-ducklake-catalog-dr; do
+          for fn in agent-platform-ducklake-writer agent-platform-ducklake-reader agent-platform-ducklake-maintenance agent-platform-ducklake-maintenance-smoke agent-platform-ducklake-catalog-dr; do
             RECORD=$(aws s3 cp "s3://agent-platform-data-lake/deploy-records/ducklake/${fn}.json" - --region eu-west-2)
             ACTUAL_SHA=$(printf '%s' "$RECORD" | python3 -c "import json,sys; print(json.load(sys.stdin).get('source_git_sha') or '')")
             if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
@@ -201,6 +204,23 @@ jobs:
             echo "Resolved DUCKLAKE_${role^^}_URL (masked)."
           done
 
+      - name: Resolve DuckLake maintenance-smoke Function URL
+        # Same rationale as the writer/reader resolution above; a dedicated step (not folded into
+        # that loop) because the function name (agent-platform-ducklake-maintenance-smoke) and the
+        # target env var (DUCKLAKE_MAINTENANCE_SMOKE_URL) don't fit the loop's
+        # agent-platform-ducklake-${role} / DUCKLAKE_${role^^}_URL naming convention -- bash
+        # uppercasing does not translate a hyphenated role into the underscored env var name.
+        run: |
+          set -euo pipefail
+          URL=$(aws lambda get-function-url-config --function-name "agent-platform-ducklake-maintenance-smoke" --region eu-west-2 --query FunctionUrl --output text)
+          if [ -z "$URL" ] || [ "$URL" = "None" ]; then
+            echo "::error::Could not resolve the maintenance-smoke Function URL via get-function-url-config." >&2
+            exit 1
+          fi
+          echo "::add-mask::${URL}"
+          echo "DUCKLAKE_MAINTENANCE_SMOKE_URL=${URL}" >> "$GITHUB_ENV"
+          echo "Resolved DUCKLAKE_MAINTENANCE_SMOKE_URL (masked)."
+
       - name: Setup Python 3.12
         uses: actions/setup-python@v6
         with:
@@ -217,3 +237,15 @@ jobs:
 
       - name: Smoke test -- lambda-reader (EC1/boundary closed reader path)
         run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-reader
+
+      - name: Smoke test -- maintenance-merge (T2.18 c9 autonomous gate)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-merge
+
+      - name: Smoke test -- maintenance-gc (T2.18 c9 autonomous gate)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-gc
+
+      - name: Smoke test -- maintenance-breaker (T2.18 c9 autonomous gate)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-breaker
+
+      - name: Smoke test -- maintenance-hot-merge (T2.18 c9 autonomous gate)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-hot-merge

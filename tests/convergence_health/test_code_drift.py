@@ -23,6 +23,7 @@ import boto3  # noqa: F401
 from scripts.build_lambda_config import (
     _DUCKLAKE_CATALOG_DR_FUNCTION,
     _DUCKLAKE_MAINTENANCE_FUNCTION,
+    _DUCKLAKE_MAINTENANCE_SMOKE_FUNCTION,
     _DUCKLAKE_READER_FUNCTION,
     _DUCKLAKE_WRITER_FUNCTION,
 )
@@ -37,6 +38,7 @@ _ALL_DUCKLAKE_FUNCTIONS = {
     _DUCKLAKE_WRITER_FUNCTION,
     _DUCKLAKE_READER_FUNCTION,
     _DUCKLAKE_MAINTENANCE_FUNCTION,
+    _DUCKLAKE_MAINTENANCE_SMOKE_FUNCTION,
     _DUCKLAKE_CATALOG_DR_FUNCTION,
 }
 
@@ -167,7 +169,7 @@ class TestDetectDucklakeCodeDrift:
         assert result == {"action": "close", "rec_id": "rec-654"}
         assert acts == ["close"]
 
-    def test_reads_all_four_ducklake_functions(self) -> None:
+    def test_reads_all_ducklake_functions(self) -> None:
         seen_functions: set[str] = set()
 
         class _RecordingS3:
