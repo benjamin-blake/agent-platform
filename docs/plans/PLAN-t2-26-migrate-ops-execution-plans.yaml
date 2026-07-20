@@ -135,21 +135,21 @@ verification_plan:
     command: "bin/venv-python -m scripts.schema_to_field_semantics --check"
     expected: "Exit 0 / no drift -- the generated field_semantics.yaml matches the edited static sidecar."
     fix_if: "Drift reported -> the sidecar was edited but not regenerated; run scripts.schema_to_field_semantics (no --check) then re-run."
-    hermetic: true
+    hermetic: false
   - step: 2
     phase: pre-deploy
     action: The resolved spec carries the expanded columns, merge_key rec_id, and status is live.
     command: "bin/venv-python -c \"from src.common.ducklake_scd2_schema import resolve_table_spec, load_field_semantics; s=resolve_table_spec('ops_execution_plans'); cols=[c for c,_ in s.ordered_columns]; assert s.merge_key=='rec_id', s.merge_key; need={'rec_id','revision','status','model','tokens_used','prompt_hash','planning_session_id','steps','critique_history','plan_text'}; assert need<=set(cols), sorted(need-set(cols)); st=load_field_semantics()['ops_tables']['ops_execution_plans'].get('status','live'); assert st!='dormant', st; print('OK', st, cols)\""
     expected: "Prints OK, a non-dormant status, and a column list containing every promoted scalar + the JSON blobs."
     fix_if: "AssertionError -> columns not expanded, merge_key wrong, or status still dormant in the sidecar."
-    hermetic: true
+    hermetic: false
   - step: 3
     phase: pre-deploy
     action: No OpsWriter/Iceberg write path for ops_execution_plans remains (replacement closure, static).
     command: "bin/venv-python -c \"import pathlib; t=pathlib.Path('scripts/executor/plan.py').read_text(); assert 'OpsWriter().write(\\\"ops_execution_plans\\\"' not in t, 'plan.py still writes via OpsWriter'; from scripts.ops_writer import _OPS_TABLE_NAMES; assert 'ops_execution_plans' not in _OPS_TABLE_NAMES, 'still in _OPS_TABLE_NAMES'; import scripts.s3_log_store as s; assert 'ops_execution_plans' not in set(getattr(s,'_OPS_TABLE_ROUTING',{}).values()), 's3_log_store still routes it'; print('OK')\""
     expected: "OK -- plan.py no longer OpsWriter-writes execution_plans; it is absent from _OPS_TABLE_NAMES and the s3_log_store routing."
     fix_if: "Assertion fails -> a residual Iceberg/OpsWriter write path survives; remove it."
-    hermetic: true
+    hermetic: false
   - step: 4
     phase: pre-deploy
     action: Unit-test the new portal producer projection (dataclass -> registered columns, JSON blobs, opaque session id).
@@ -163,14 +163,14 @@ verification_plan:
     command: "bin/venv-python -c \"from scripts.data_quality_execute import _DUCKLAKE_OPS_TABLES; from scripts.sync.ops import _TABLE_TO_LOCAL,_DUCKLAKE_MIGRATED_TABLES; assert 'ops_execution_plans' in _DUCKLAKE_OPS_TABLES; assert 'ops_execution_plans' in _TABLE_TO_LOCAL and 'ops_execution_plans' in _DUCKLAKE_MIGRATED_TABLES; print('OK')\""
     expected: "OK -- DQ routes execution_plans checks to the reader; sync pulls it from the reader with no Athena fallback."
     fix_if: "Missing membership -> add to the named set(s)."
-    hermetic: true
+    hermetic: false
   - step: 6
     phase: pre-deploy
     action: The plan->telemetry-trace join and the grain note are registered in the contracts.
     command: "bin/venv-python -c \"import pathlib; j=pathlib.Path('docs/contracts/_joins.yaml').read_text(); sid=pathlib.Path('docs/contracts/session-id.yaml').read_text(); ss=pathlib.Path('docs/contracts/storage-substrate.yaml').read_text(); assert 'ops_execution_plans.planning_session_id' in j, '_joins.yaml missing the join'; assert 'ops_execution_plans' in sid, 'session-id.yaml missing consumer'; assert 'revision' in ss, 'storage-substrate grain note missing'; print('OK')\""
     expected: "OK -- planning_session_id -> telemetry_sessions.session_id join defined; session-id lists execution_plans; storage-substrate records the per-revision grain."
     fix_if: "Missing -> register the join / consumer / grain note (telemetry correlation is a launch requirement, not polish)."
-    hermetic: true
+    hermetic: false
   - step: 7
     phase: pre-deploy
     action: Fast presubmit passes (schema, placement, roadmap closes_criteria referential integrity).
