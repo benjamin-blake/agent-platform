@@ -451,6 +451,31 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         ]
       },
       {
+        # apply-phase MODIFY needs PublishLayerVersion/DeleteLayerVersion on the three ducklake
+        # layers. rec-2646/2654 decoupled the FOUR ducklake Lambda FUNCTIONS' source_code_hash from
+        # terraform (lifecycle ignore_changes), but the layer resources were out of that fix's scope
+        # and still compute source_code_hash live from a freshly-rebuilt local zip -- any CD run that
+        # rebuilds before planning (speculative-plan, apply-the-saved-plan, workflow_dispatch) can see
+        # a spurious "must be replaced" diff even with no real dependency change (rec-2755 tracks the
+        # durable fix: extending the functions' ignore_changes pattern to these layer resources). This
+        # grant lets the apply role actually execute that replace when the guard routes it to
+        # gated-apply, instead of failing AccessDenied and requiring an admin bailout every time.
+        Sid    = "LambdaLayerVersionWrite"
+        Effect = "Allow"
+        Action = [
+          "lambda:PublishLayerVersion",
+          "lambda:DeleteLayerVersion"
+        ]
+        Resource = [
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-pgclient:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-deps:*",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:layer:ducklake-extensions:*",
+        ]
+      },
+      {
         # Refresh-time reads the provider issues on aws_cloudwatch_event_rule every plan.
         # Per-service read-wildcard closure: events:Describe*/List* closes the anti-pattern.
         # Resource axis (Decision 129 / T2.43 rec-2702 anti-recurrence): broadened from five
