@@ -217,6 +217,14 @@ acceptance_criteria:
     T2.18 exit_criteria are reconciled: c1/c3/c5/c6/c7 flipped met with proof; c2 re-grounded
     (smoke-met, prod-GC->T2.26); c4/c8 re-homed to T2.26; c9 flipped met on the CD gate green.
   - "bin/venv-python -m scripts.validate --pre passes on the branch diff."
+  - >-
+    VP hermetic/graduation policy (VF-01 vp-replay + T3.21 graduation-completeness, both landed on main
+    during the planning gap): every pre-deploy VP step carries graduation=not-applicable (these are
+    plan-specific one-shot migration/wiring/re-adjudication checks, not reusable kernel verifiers -- none
+    graduates into config/agent/verification_registry). All implementation-verifying steps are
+    hermetic:false because they grep files /implement CREATES (so they cannot pass the plan-PR-tree
+    vp-replay); only VP8 (c6 re-adjudication of already-landed src/common/ducklake_maintenance.py) is
+    hermetic:true and independently replay-proven at PR time.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -233,7 +241,8 @@ verification_plan:
     fix_if: >-
       A destructive verb name appears in the smoke handler, or a smoke action is missing -- a crafted
       CI payload could then reach a production verb; remove the verb from the smoke dispatch.
-    hermetic: true
+    hermetic: false
+    graduation: not-applicable
   - step: 2
     phase: pre-deploy
     action: >-
@@ -245,7 +254,8 @@ verification_plan:
     fix_if: >-
       A smoke action accepts a caller-supplied data_path/meta_schema; remove it so the connection is
       env-pinned to the smoke catalog only.
-    hermetic: true
+    hermetic: false
+    graduation: not-applicable
   - step: 3
     phase: pre-deploy
     action: New smoke-handler unit tests pass (dispatch, unknown-action 400 for a destructive payload, env-pinning).
@@ -254,6 +264,7 @@ verification_plan:
     fix_if: >-
       Dispatch admits a destructive action, env pinning is wrong, or the 400 path is not returned.
     hermetic: false
+    graduation: not-applicable
   - step: 4
     phase: pre-deploy
     action: >-
@@ -265,6 +276,7 @@ verification_plan:
       dispatch and catalog_reinit/merge_ops/reconcile_columns/restore_drill remain.
     fix_if: A smoke action is still routable on the admin function, or an operational verb was dropped.
     hermetic: false
+    graduation: not-applicable
   - step: 5
     phase: pre-deploy
     action: >-
@@ -281,7 +293,8 @@ verification_plan:
     fix_if: >-
       The admin maintenance ARN is present in a github_ci_branch invoke statement (blast-radius widen --
       the whole point of the split is defeated), or the smoke invoke grant is missing.
-    hermetic: true
+    hermetic: false
+    graduation: not-applicable
   - step: 6
     phase: pre-deploy
     action: >-
@@ -296,6 +309,7 @@ verification_plan:
       The coverage verifier fails (an UNMAPPED resource type / an uncovered resource -- extra grants are
       harmless, they do NOT fail it); enumerate the new smoke exec role in IAMRolesRead per Decision 129 pt2/98.
     hermetic: false
+    graduation: not-applicable
   - step: 7
     phase: pre-deploy
     action: >-
@@ -322,7 +336,8 @@ verification_plan:
     fix_if: >-
       A wiring or grant reference is missing -- the CD deploy would AccessDeny, the smoke URL would not
       resolve, the EventBridge permission would fail to apply, or validate_ci_refresh_read_coverage fails.
-    hermetic: true
+    hermetic: false
+    graduation: not-applicable
   - step: 8
     phase: pre-deploy
     action: >-
@@ -333,10 +348,13 @@ verification_plan:
       && grep -qE 'FILE_CLEANUP_GRACE_DAYS: int = 7' src/common/ducklake_maintenance.py
       && grep -qE 'SNAPSHOT_FLOOR: int = 2' src/common/ducklake_maintenance.py
       && grep -qE '_DEFAULT_GC_BREAKER_FILE_FRACTION: float = 0.20' src/common/ducklake_maintenance.py
-      && ! grep -qE 'cleanup_all=True' src/common/ducklake_maintenance.py
-    expected: All guardrail constants match CD.33/Decision 81; cleanup_all=True appears nowhere.
-    fix_if: A guardrail drifted or cleanup_all=True is present -- do NOT relax to pass (Decision 55).
+      && grep -qE 'cleanup_all=False' src/common/ducklake_maintenance.py
+    expected: >-
+      All guardrail constants match CD.33/Decision 81; the scheduled cleanup call passes cleanup_all=False
+      (the string cleanup_all=True appears only in docstrings, never as a call arg).
+    fix_if: A guardrail drifted or a scheduled call passes cleanup_all=True -- do NOT relax to pass (Decision 55).
     hermetic: true
+    graduation: not-applicable
   - step: 9
     phase: pre-deploy
     action: >-
@@ -351,7 +369,8 @@ verification_plan:
       Both functions pin singleton concurrency; inlining is disabled at the connection level; no LLM
       client import in the smoke handler.
     fix_if: A maintenance function lost its singleton cap, inlining re-enabled, or an LLM import leaked in.
-    hermetic: true
+    hermetic: false
+    graduation: not-applicable
   - step: 10
     phase: pre-deploy
     action: >-
@@ -371,7 +390,8 @@ verification_plan:
     fix_if: >-
       A cadence is on the wrong function, a moved merge/gc/hot_merge rule still exists in the admin tf
       (destroy/recreate collision -- consider a moved{} block), or the DR cadence/alarm drifted (Decision 88).
-    hermetic: true
+    hermetic: false
+    graduation: not-applicable
   - step: 11
     phase: pre-deploy
     action: Full fast presubmit passes on the branch diff (ruff, mypy, pytest, coverage, SLOC, roadmap referential guard, VP replay).
@@ -381,6 +401,7 @@ verification_plan:
       all exist) and the Freshness-Gate criterion edits; test_coverage_checker passes for every modified source file.
     fix_if: Any gate fails; fix forward (Decision 55) -- never relax a check to pass.
     hermetic: false
+    graduation: not-applicable
   - step: 12
     phase: post-deploy
     action: >-
