@@ -143,12 +143,15 @@ verification_plan:
       assert not bad, bad; print('ok', sorted(k for k,v in t.items() if isinstance(v,dict) and v.get('merge_key')))"
     expected: Prints "ok" followed by the merge_key-bearing table names (ops_priority_queue, ops_smoke_events, ops_session_log, ops_execution_plans).
     fix_if: AssertionError lists a table missing grain or write_mode.
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       Kernel-expressible as command_exit_zero, but this exact invariant is the standing job of the new
       validate_data_model_standard check (which fires on every storage-substrate.yaml diff); a graduated
       duplicate would double-enforce the same rule. Graduation deferred deliberately to avoid redundancy.
+      Marked hermetic:false because it asserts post-implementation state (the grain/write_mode backfill),
+      which is absent on the plan PR tree -- so it must not be re-executed by validate_vp_replay before
+      /implement lands the backfill; it runs as a normal pre-deploy step at implement time.
 constraints:
   - Only modify files listed in scope.
   - No rescue agents or workaround loops (Decision 55). The guard fails loud and names the offending table; never weaken it to make the presubmit pass.
