@@ -111,8 +111,25 @@ verification_plan:
       the submodule import itself was patched instead of the name) -- grep the facade file for
       any remaining eager import of the five names and remove it.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: rec-2729-decisions-facade-seed-1323563830
+    graduation: waive
+    graduation_waiver_reason: >-
+      Registry row admitted locally (real differential gate: fails on origin/main, passes on
+      HEAD) but CI's own re-verification of newly-added entries (validate_verification_registry's
+      differential admission gate, which runs exclusively inside the pr-validate fast-tier job)
+      rejected it: tests/ops_data_portal/test_decisions.py carries a module-level
+      `duckdb = pytest.importorskip("duckdb")` guard, and duckdb is deliberately excluded from
+      requirements-fast.txt, so a whole-file pytest invocation collects zero tests there
+      ("found no collectors", pytest exit 5) every time this differential runs -- it always runs
+      in the fast tier (comparing against pre-merge origin/main), never the full tier. The
+      existing graceful-skip carve-out for this exact shape
+      (scripts.verification_graduation._differential_skip_reason) only recognises
+      primitive_slot=test_selector rows, not command_exit_zero (needed here for the
+      --randomly-seed flag); widening it is a shared-kernel change out of this plan's exhaustive
+      two-file scope (Decision 55). A single test_selector node also cannot reproduce this bug
+      (the pollution requires multiple tests running together in one session), so there is no
+      kernel-expressible differential for this step today. Registry row removed; the fix itself
+      is still proven by the direct VP-step pytest run recorded in this plan and the PR's VP
+      Compliance table.
   - step: 3
     phase: pre-deploy
     action: >-
@@ -130,8 +147,15 @@ verification_plan:
       capturable symbol was missed -- re-grep the facade's scripts.ops_portal.decisions import
       block for any remaining eager `from ... import` form.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: rec-2729-decisions-facade-seed-sweep
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same root cause as VP step 2's waiver: the seed-sweep command also runs
+      tests/ops_data_portal/test_decisions.py as a whole file, which is duckdb-importorskip-
+      guarded, so it collects zero tests in the fast-tier differential-admission environment
+      (the bash `for` loop's `|| exit 1` masks pytest's real exit 5 as exit 1, but it is the
+      identical "found no collectors" failure). See VP step 2's graduation_waiver_reason for the
+      full diagnosis (test_selector-only skip carve-out, out-of-scope kernel widening, no
+      kernel-expressible differential for a multi-test-ordering bug). Registry row removed.
   - step: 4
     phase: pre-deploy
     action: >-
