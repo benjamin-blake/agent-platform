@@ -6208,6 +6208,20 @@ tier_items:
           Replacement closure verified per the implement skill's Replacement closure check: old paths dead or
           designed-rollback-only, no unconditional fallbacks
         status: open
+      - id: c9
+        text: >-
+          ops_execution_plans migrated to the closed DuckLake boundary: table provisioned on the catalog
+          (history + current, grain = one row per plan revision, merge_key rec_id, current = latest revision);
+          the executor save_plan producer repointed off OpsWriter/Iceberg onto the portal-routed
+          ducklake_writer boundary (Single-Portal preserved); planning_session_id carried as a first-class
+          opaque-VARCHAR soft-FK to telemetry_sessions.session_id (registered in _joins.yaml / session-id.yaml);
+          DQ + sync read via the ducklake_reader; no Iceberg/Athena write path or _current view survives for it.
+          NOTE (stale-reference correction, this slice): no live Iceberg table or _current Athena view ever
+          existed for execution_plans in the personal account (only unapplied legacy terraform/iceberg_tables.tf
+          DDL + a dead OpsWriter staging path) -- so this is create-fresh-on-DuckLake, not migrate-from-Iceberg,
+          and c8's execution_plans half is a no-op verification. c2/c3/c8 remain open on the ops_session_log
+          half (CD.40 / T3.20 pending).
+        status: open
     related_candidate_decisions: [CD.31, CD.33, CD.34]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): decomposed per_table into atomic IMPLEMENTATION plans
