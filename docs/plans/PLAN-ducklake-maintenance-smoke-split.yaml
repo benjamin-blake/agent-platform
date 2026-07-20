@@ -33,9 +33,11 @@ scope:
   - file: src/lambdas/ducklake_maintenance/handler.py
     action: Modify
     purpose: >-
-      Remove the 4 smoke actions (merge/gc/hot_merge/breaker_probe) from the dispatch table; retain
-      the production/operational verbs (catalog_reinit, merge_ops, reconcile_columns, restore_drill,
-      catalog_stats, clone_catalog). SLOC decreases (Decision 128; decreases unrestricted).
+      Remove the 4 smoke actions from the dispatch table AND their now-orphaned defs/constants
+      (action_merge/action_gc/action_hot_merge/action_breaker_probe, _SCOPE_TABLES, _HOT_SCOPE_TABLES,
+      _BREAKER_PROBE_* -- ruff F811/unused + coverage force this) ; retain the production/operational
+      verbs (catalog_reinit, merge_ops, reconcile_columns, restore_drill, catalog_stats, clone_catalog).
+      SLOC decreases (Decision 128; decreases unrestricted).
   - file: src/lambdas/ducklake_maintenance/manifest.yaml
     action: Modify
     purpose: Update notes to reflect the admin-gated destructive/operational role after the split.
@@ -150,15 +152,25 @@ closes_criteria:
   - "T2.18:c6"
   - "T2.18:c7"
   - "T2.18:c9"
-infrastructure_dependencies:
   - >-
-    terraform/personal apply -- NEW smoke IAM execution role CREATE is guard-BLOCKED
-    (scripts/terraform_apply_guard.py IAM fail-closed, Decision 77) -> routes to the human-gated
-    tf-gated-apply GitHub Environment (Decision 92/T2.22). IAM apply MUST precede the code deploy.
+    APPLY-PATH SPLIT (critical -- github_ci_apply's own authority budget, not just the guard, decides
+    who can apply). These IAM changes are BEYOND github_ci_apply's bounded authority
+    (IAMRoleCreateBounded only mints boundary-carrying roles; IAMRoleWriteBounded scopes PutRolePolicy
+    to github-ci-branch/pr ONLY; DenyIAMEscalation) -- so tf-gated-apply/apply-sandbox CANNOT apply them
+    and they require agent_platform_admin (human-gated `-target` apply from the ADMIN container/operator,
+    same precedent as the github_ci_drift admin-create and the T2.43 prod exec roles / ducklake_maintenance.tf
+    APPLY POSTURE): (a) the new smoke exec role + inline policy (ducklake_maintenance_smoke.tf); (b) the
+    github_ci_ducklake_deploy DucklakeUpdateFunctionCode grant addition (oidc.tf); (c) the
+    github_ci_plan/github_ci_drift IAMPlatformRolesRead grant addition (oidc.tf); (d) the bootstrap
+    IAMRolesRead + lambda:AddPermission additions (terraform/bootstrap, already admin-only out-of-band).
+    The DEV /implement container LACKS agent_platform_admin -- the IAM-create portion is an operator/ADMIN
+    handoff, NOT a tf-gated-apply approval. IAM apply MUST precede the code deploy.
   - >-
-    github_ci_branch invoke-grant is an aws_iam_role_policy UPDATE -- classify per Decision 92 pt5
-    (in-budget IAM inline-policy UPDATE may auto-apply; out-of-budget routes to gated-apply). The
-    speculative-plan job's guard verdict on the PR is authoritative for the routing.
+    CD-applicable subset: the github_ci_branch MaintenanceSmokeInvokeCI grant IS within
+    github_ci_apply's write-bounded set (branch/pr), so it routes via the guard-flagged IAM path ->
+    tf-gated-apply human approval -> github_ci_apply applies. The NON-IAM resources (the smoke function,
+    Function URL, and the moved EventBridge rules/targets/permissions) auto-apply behind the guard on the
+    normal apply-sandbox path (Decision 77/92). The speculative-plan guard verdict on the PR is advisory.
   - >-
     Code deploy via the governed CD channel .github/workflows/deploy-ducklake-lambdas.yml (T2.38,
     Decision 125/126); the new function carries lifecycle { ignore_changes = [source_code_hash] } so
@@ -270,8 +282,8 @@ verification_plan:
       IAMRolesRead; the function/rule are covered by the D129 account-wide prefixes -- no per-ARN
       lambda/eventbridge additions).
     fix_if: >-
-      The coverage verifier fails (an unmapped resource type or a redundant per-ARN grant); align with
-      Decision 129 pt1/pt4 by removing per-ARN lambda/eventbridge grants and mapping the role.
+      The coverage verifier fails (an UNMAPPED resource type / an uncovered resource -- extra grants are
+      harmless, they do NOT fail it); enumerate the new smoke exec role in IAMRolesRead per Decision 129 pt2/98.
     hermetic: false
   - step: 7
     phase: pre-deploy
@@ -361,16 +373,19 @@ verification_plan:
   - step: 12
     phase: post-deploy
     action: >-
-      CI-delegated terraform gate (Decision 119): the terraform-validate check and the speculative-plan
-      job (guard verdict) on the PR are green; the smoke role CREATE routes to tf-gated-apply.
+      Terraform gate + APPLY-PATH SPLIT (Decision 119 CI-delegation + Decision 92/98 authority tiering):
+      terraform-validate green; the beyond-budget IAM lands via agent_platform_admin; the branch grant +
+      non-IAM resources land via the CD gated path.
     command: >-
-      echo "CI-AUTHORITATIVE: confirm terraform-validate + speculative-plan (guard verdict) green via mcp__github__pull_request_read get_check_runs; the new smoke IAM role CREATE is guard-BLOCKED -> approve the tf-gated-apply Environment (benjamin-blake) so apply-sandbox applies the saved plan.bin"
+      echo "CI: confirm terraform-validate + speculative-plan (guard verdict) green via mcp__github__pull_request_read get_check_runs. ADMIN HANDOFF (agent_platform_admin -target, operator/ADMIN container -- NOT tf-gated-apply): apply the smoke exec role+policy (ducklake_maintenance_smoke.tf), the oidc DucklakeUpdateFunctionCode + IAMPlatformRolesRead grant additions, and the bootstrap IAMRolesRead + AddPermission additions. CD: the github_ci_branch MaintenanceSmokeInvokeCI grant (tf-gated-apply approval, benjamin-blake) + the non-IAM function/URL/EventBridge rules apply via apply-sandbox. IAM precedes code deploy."
     expected: >-
-      terraform-validate green; speculative-plan posts the predicted guard verdict (BLOCKED on the new
-      IAM role); the gated-apply is approved and apply-sandbox writes a green convergence record.
+      terraform-validate green; the beyond-budget IAM (exec role+policy, deploy/plan/drift grant edits,
+      bootstrap) is admin-applied and converges; the github_ci_branch grant + non-IAM resources apply via
+      the CD gated path and apply-sandbox writes a green convergence record.
     fix_if: >-
-      terraform-validate fails (fix the .tf and re-push) or the guard verdict is unexpected (re-scope
-      the IAM delta); do NOT hand-apply from a laptop.
+      terraform-validate fails (fix the .tf and re-push); or an implementer routed the exec-role CREATE /
+      deploy-plan-drift grant edits to tf-gated-apply and hit AccessDenied on iam:CreateRole/PutRolePolicy
+      (github_ci_apply is out-of-budget for these) -- re-route those to agent_platform_admin.
     hermetic: false
   - step: 13
     phase: post-deploy
@@ -442,9 +457,11 @@ context:
     dec-117, dec-44.
   - >-
     gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique: round 1 REVISE (5 blocking + 3
-    recommended fixed), round 2 REVISE (1 blocking -- VP7 bootstrap grep must use the hyphenated literal
-    spelling since terraform/bootstrap cannot interpolate resource refs -- + 2 polish, all fixed); re-run
-    pending (target PROCEED).
+    recommended fixed), round 2 REVISE (1 blocking VP7 bootstrap-grep spelling + 2 polish, fixed), round 3
+    REVISE (1 blocking -- IAM apply-path mis-stated: exec-role CREATE + deploy/plan/drift grant edits
+    exceed github_ci_apply's authority budget and require agent_platform_admin, not tf-gated-apply -- + 2
+    polish, all fixed). 3-round cap reached; findings converged 5->1->1, all real + resolved, core approach
+    affirmed sound each round; escalated to human for the cap decision.
   - >-
     Decision-scout WARN (Decision 129): dropped the per-ARN Lambda/EventBridge refresh-read grants
     (D129 pt1 already broadened LambdaRead/EventBridgeRead to agent-platform-* account-wide, and
@@ -562,8 +579,12 @@ execution_steps:
     re-ground c9; update files_in_scope + progress_note).
   - >-
     Execute the Verification Plan pre-deploy steps (loop until green). Push; open the PR; the
-    speculative-plan job + terraform-validate run. Approve the tf-gated-apply Environment for the new
-    IAM role; apply-sandbox applies the saved plan.bin.
+    speculative-plan job + terraform-validate run. APPLY-PATH SPLIT: the beyond-budget IAM (smoke exec
+    role+policy, oidc DucklakeUpdateFunctionCode + IAMPlatformRolesRead grant edits, bootstrap
+    IAMRolesRead + AddPermission) requires an agent_platform_admin `-target` apply -- an operator/ADMIN
+    handoff, NOT a tf-gated-apply approval (github_ci_apply is out-of-budget for these). The
+    github_ci_branch MaintenanceSmokeInvokeCI grant (tf-gated-apply human approval) + the non-IAM
+    function/URL/EventBridge resources apply via apply-sandbox. IAM precedes the code deploy.
   - >-
     After apply converges, deploy code via the governed CD channel; run the post-deploy VP steps
     (12-15) -- the four smoke gates (c9), --backfill-decisions-md, and the roadmap-bookkeeping
