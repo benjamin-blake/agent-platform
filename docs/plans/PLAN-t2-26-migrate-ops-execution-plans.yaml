@@ -138,6 +138,7 @@ verification_plan:
     expected: "Exit 0 / no drift -- the generated field_semantics.yaml matches the edited static sidecar."
     fix_if: "Drift reported -> the sidecar was edited but not regenerated; run scripts.schema_to_field_semantics (no --check) then re-run."
     hermetic: false
+    graduation: not-applicable   # invokes the already-registered field-semantics drift gate (schema_to_field_semantics --check); not a new kernel check
   - step: 2
     phase: pre-deploy
     action: The resolved spec carries the expanded columns, merge_key rec_id, and status is live.
@@ -145,6 +146,11 @@ verification_plan:
     expected: "Prints OK, a non-dormant status, and a column list containing every promoted scalar + the JSON blobs."
     fix_if: "AssertionError -> columns not expanded, merge_key wrong, or status still dormant in the sidecar."
     hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (command_exit_zero on resolve_table_spec), but the ops_execution_plans spec is already
+      under standing protection by the field-semantics drift gate (step 1) and the ducklake_writer schema-gate;
+      a dedicated column-presence registry check would duplicate that coverage.
   - step: 3
     phase: pre-deploy
     action: No OpsWriter/Iceberg write path for ops_execution_plans remains (replacement closure, static).
@@ -152,6 +158,13 @@ verification_plan:
     expected: "OK -- plan.py no longer OpsWriter-writes execution_plans; it is absent from _OPS_TABLE_NAMES and the s3_log_store routing."
     fix_if: "Assertion fails -> a residual Iceberg/OpsWriter write path survives; remove it."
     hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (grep_count == 0 across the three OpsWriter write-path surfaces) and a genuine
+      no-resurrection guard -- but its correct durable form is TABLE-AGNOSTIC ("no migrated ops table is
+      re-added to the OpsWriter/Iceberg path", covering recs/decisions/priority_queue/execution_plans
+      uniformly), not a per-table grep. Graduating a single-table check here would proliferate near-duplicate
+      registry entries; the table-agnostic guard is a separate concern, out of this migration's scope.
   - step: 4
     phase: pre-deploy
     action: Unit-test the new portal producer projection (dataclass -> registered columns, JSON blobs, opaque session id).
@@ -159,6 +172,7 @@ verification_plan:
     expected: "Passing -- save_execution_plan projects rec_id/revision/status/model/tokens_used/prompt_hash/slug/planning_session_id and json.dumps(steps|critique_history); planning_session_id passes through as an opaque string."
     fix_if: "Failing -> projection drops/renames a column or mis-serializes a JSON blob."
     hermetic: false
+    graduation: not-applicable   # a pytest unit test (multi-assertion, needs the finished producer); runs under the existing suite gate, not a single-primitive kernel check
   - step: 5
     phase: pre-deploy
     action: DQ and sync routing include ops_execution_plans on the DuckLake/reader path.
@@ -166,6 +180,11 @@ verification_plan:
     expected: "OK -- DQ routes execution_plans checks to the reader; sync pulls it from the reader with no Athena fallback."
     fix_if: "Missing membership -> add to the named set(s)."
     hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible membership assertion, but post-cutover the DQ/sync routing sets are stable config
+      already exercised functionally by the DQ runner (step 11) and sync pull (step 12); a standing membership
+      grep adds no durable protection beyond those functional checks.
   - step: 6
     phase: pre-deploy
     action: The plan->telemetry-trace join and the grain note are registered in the contracts.
@@ -173,13 +192,19 @@ verification_plan:
     expected: "OK -- planning_session_id -> telemetry_sessions.session_id join defined; session-id lists execution_plans; storage-substrate records the per-revision grain."
     fix_if: "Missing -> register the join / consumer / grain note (telemetry correlation is a launch requirement, not polish)."
     hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible grep, but _joins.yaml is a free-form registry the CD.25 drift gate deliberately skips,
+      and the join is an analytic-linkage doc entry with no runtime consumer until telemetry lands (T2.36,
+      not_started); a standing grep would guard a low-regression-risk documentation artifact.
   - step: 7
     phase: pre-deploy
-    action: Fast presubmit passes (schema, placement, roadmap closes_criteria referential integrity).
+    action: Fast presubmit passes (schema, placement, closes_criteria integrity, graduation-completeness).
     command: "bin/venv-python -m scripts.validate --pre"
-    expected: "PASS -- plan_document schema, placement, and closes_criteria [T2.26:c9] referential integrity all green."
-    fix_if: "Failure -> address the named check; if closes_criteria fails, c9 is missing from docs/ROADMAP-PLATFORM.yaml."
+    expected: "PASS -- plan_document schema, placement, closes_criteria [T2.26:c9] referential integrity, AND validate_graduation_completeness (every pre-deploy VP step carries a graduation disposition; the graduate step has its registry row on the implement PR) all green."
+    fix_if: "Failure -> address the named check; if closes_criteria fails, c9 is missing from docs/ROADMAP-PLATFORM.yaml; if graduation-completeness fails, a pre-deploy step lacks a disposition or the graduated check_id lacks its registry row."
     hermetic: false
+    graduation: not-applicable   # runs validate --pre itself (the gate aggregator, incl. validate_graduation_completeness); cannot graduate itself
   - step: 8
     phase: post-deploy
     action: The governed deploy channel redeployed writer+reader at the merge SHA (CI-delegated, Decision 119).
@@ -250,7 +275,7 @@ context:
     ratified since pass 1 (dec-133/134/136..142) block or contradict this plan). CITE (verbatim ids):
     dec-84, dec-78, dec-81 (CD.33), dec-79, dec-48, dec-125, dec-126, dec-88, dec-117, dec-55; RELATED:
     dec-87, dec-107 (CD.34), dec-140, dec-136. (Decision 70 mis-cited as append-only/queue and dropped.)
-  - "gates: decision-scout=FLAGS_FOUND (2 passes, both NOTE flags resolved in-approach); plan-critique=REVISE round 1 (procedural: rebase + baseline refresh) -> re-run pending"
+  - "gates: decision-scout=FLAGS_FOUND (2 passes, both NOTE flags resolved in-approach); plan-critique: r1 REVISE (rebase/baseline refresh), r2 REVISE (T3.21 graduation dispositions on pre-deploy VP steps + step-7 expected), r3 re-run pending"
   - >-
     Deploy-channel currency (scout NOTE 1): confirmed on rebased main -- .github/workflows/deploy-ducklake-lambdas.yml
     EXISTS and tier_item T2.38 is status:complete (c1-c4 met), with the config/lambda/ducklake/** push trigger +
