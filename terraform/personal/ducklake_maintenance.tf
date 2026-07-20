@@ -185,7 +185,7 @@ resource "aws_lambda_function" "ducklake_maintenance" {
 
   tags = {
     Name    = "DuckLake Maintenance Admin"
-    Purpose = "T2.18 ducklake_maintenance admin singleton (production-destructive + operational verbs)"
+    Purpose = "T2.18 ducklake_maintenance admin singleton - production-destructive + operational verbs"
   }
 
   # Decision 125 physical decoupling: code deploys go via build_lambda --ducklake-only --deploy
