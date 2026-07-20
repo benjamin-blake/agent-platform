@@ -166,11 +166,22 @@ closes_criteria:
     The DEV /implement container LACKS agent_platform_admin -- the IAM-create portion is an operator/ADMIN
     handoff, NOT a tf-gated-apply approval. IAM apply MUST precede the code deploy.
   - >-
-    CD-applicable subset: the github_ci_branch MaintenanceSmokeInvokeCI grant IS within
-    github_ci_apply's write-bounded set (branch/pr), so it routes via the guard-flagged IAM path ->
-    tf-gated-apply human approval -> github_ci_apply applies. The NON-IAM resources (the smoke function,
-    Function URL, and the moved EventBridge rules/targets/permissions) auto-apply behind the guard on the
-    normal apply-sandbox path (Decision 77/92). The speculative-plan guard verdict on the PR is advisory.
+    CD-applicable subset: the github_ci_branch MaintenanceSmokeInvokeCI grant is an in-budget
+    aws_iam_role_policy UPDATE on a managed boundary-carrying role (github-ci-branch is in
+    authority_budget.json in_budget_managed_roles; UPDATE in in_budget_actions), so per T2.25 / Decision
+    92 pt5 the guard classifies it IN-BUDGET and it AUTO-APPLIES behind the guard (exit 0) -- NOT
+    tf-gated-apply gated. The NON-IAM resources (the smoke function, Function URL, and the moved
+    EventBridge rules/targets/permissions) also auto-apply behind the guard on the apply-sandbox path
+    (Decision 77/92). The speculative-plan guard verdict on the PR is advisory.
+  - >-
+    EventBridge write-grant coverage (verify at /implement -- VP10 does NOT check this): github_ci_apply's
+    bootstrap EventBridgeWrite grant is ENUMERATED to the existing rule ARNs (no rule/agent-platform-*
+    wildcard, unlike the READ side). RECOMMENDED: keep the moved smoke rules' AWS `name` attributes equal
+    to the existing rule names (agent-platform-ducklake-maintenance-{merge,gc,hot_merge}) and move only
+    the terraform resource ADDRESS via `moved{}` -- the ARN is unchanged so the enumerated grant already
+    covers PutRule/PutTargets and the CD apply does not AccessDeny. If instead new AWS rule names are
+    chosen, the new rule ARNs MUST be added to the bootstrap EventBridgeWrite grant (another
+    agent_platform_admin bootstrap edit). This makes `moved{}` recommended, not merely optional.
   - >-
     Code deploy via the governed CD channel .github/workflows/deploy-ducklake-lambdas.yml (T2.38,
     Decision 125/126); the new function carries lifecycle { ignore_changes = [source_code_hash] } so
@@ -377,7 +388,7 @@ verification_plan:
       terraform-validate green; the beyond-budget IAM lands via agent_platform_admin; the branch grant +
       non-IAM resources land via the CD gated path.
     command: >-
-      echo "CI: confirm terraform-validate + speculative-plan (guard verdict) green via mcp__github__pull_request_read get_check_runs. ADMIN HANDOFF (agent_platform_admin -target, operator/ADMIN container -- NOT tf-gated-apply): apply the smoke exec role+policy (ducklake_maintenance_smoke.tf), the oidc DucklakeUpdateFunctionCode + IAMPlatformRolesRead grant additions, and the bootstrap IAMRolesRead + AddPermission additions. CD: the github_ci_branch MaintenanceSmokeInvokeCI grant (tf-gated-apply approval, benjamin-blake) + the non-IAM function/URL/EventBridge rules apply via apply-sandbox. IAM precedes code deploy."
+      echo "CI: confirm terraform-validate + speculative-plan (guard verdict) green via mcp__github__pull_request_read get_check_runs. ADMIN HANDOFF (agent_platform_admin -target, operator/ADMIN container -- NOT tf-gated-apply): apply the smoke exec role+policy (ducklake_maintenance_smoke.tf), the oidc DucklakeUpdateFunctionCode + IAMPlatformRolesRead grant additions, and the bootstrap IAMRolesRead + AddPermission additions. CD: the github_ci_branch MaintenanceSmokeInvokeCI grant (in-budget T2.25 auto-apply behind the guard, not gated) + the non-IAM function/URL/EventBridge rules apply via apply-sandbox. IAM precedes code deploy."
     expected: >-
       terraform-validate green; the beyond-budget IAM (exec role+policy, deploy/plan/drift grant edits,
       bootstrap) is admin-applied and converges; the github_ci_branch grant + non-IAM resources apply via
@@ -461,7 +472,10 @@ context:
     REVISE (1 blocking -- IAM apply-path mis-stated: exec-role CREATE + deploy/plan/drift grant edits
     exceed github_ci_apply's authority budget and require agent_platform_admin, not tf-gated-apply -- + 2
     polish, all fixed). 3-round cap reached; findings converged 5->1->1, all real + resolved, core approach
-    affirmed sound each round; escalated to human for the cap decision.
+    affirmed sound each round; human chose one confirming round. Round 4 (confirming) = PROCEED: round-3
+    IAM apply-path fix verified accurate against the real roots, no regression; 2 non-blocking notes
+    (N1 branch-grant is in-budget T2.25 auto-apply not gated; N2 enumerated EventBridgeWrite -> use moved{}
+    to retain rule names) folded into infra_dependencies/context for the /implement handoff.
   - >-
     Decision-scout WARN (Decision 129): dropped the per-ARN Lambda/EventBridge refresh-read grants
     (D129 pt1 already broadened LambdaRead/EventBridgeRead to agent-platform-* account-wide, and
@@ -583,8 +597,8 @@ execution_steps:
     role+policy, oidc DucklakeUpdateFunctionCode + IAMPlatformRolesRead grant edits, bootstrap
     IAMRolesRead + AddPermission) requires an agent_platform_admin `-target` apply -- an operator/ADMIN
     handoff, NOT a tf-gated-apply approval (github_ci_apply is out-of-budget for these). The
-    github_ci_branch MaintenanceSmokeInvokeCI grant (tf-gated-apply human approval) + the non-IAM
-    function/URL/EventBridge resources apply via apply-sandbox. IAM precedes the code deploy.
+    github_ci_branch MaintenanceSmokeInvokeCI grant (in-budget T2.25 auto-apply behind the guard) + the
+    non-IAM function/URL/EventBridge resources apply via apply-sandbox. IAM precedes the code deploy.
   - >-
     After apply converges, deploy code via the governed CD channel; run the post-deploy VP steps
     (12-15) -- the four smoke gates (c9), --backfill-decisions-md, and the roadmap-bookkeeping
