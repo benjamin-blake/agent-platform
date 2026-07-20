@@ -201,7 +201,7 @@ verification_plan:
       exact comment/blank-stripped formula scripts/checks/sloc/sloc_limits.py's
       validate_sloc_limits() applies (not a raw `wc -l` line count, which overcounts by
       including comments/blanks). Baseline measured at plan-authoring time: 399 SLOC by this
-      formula against the 500 limit (100 lines of headroom over the unregistered default
+      formula against the 500 limit (101 lines of headroom over the unregistered default
       budget) -- raw `wc -l` reports 499, which is a different, non-gating number; do not
       confuse the two. No scripts/ops_data_portal.py entry should appear in
       config/sloc_budgets.yaml (none should be needed at this headroom).
@@ -214,7 +214,7 @@ verification_plan:
       list (i.e. its true SLOC, per the validator's own formula, is <=500).
     fix_if: >-
       If this fails, the __getattr__ addition or guard-test scaffolding pushed the facade's
-      true SLOC (comment/blank-stripped) over 500 despite the 100-line baseline headroom --
+      true SLOC (comment/blank-stripped) over 500 despite the 101-line baseline headroom --
       per Decision 128, decompose (e.g. extract the __getattr__ block and its supporting
       comment into a small helper module) rather than registering a budget raise; a raise
       requires a `# raise-approved: dec-NNN` marker naming a real Decision, which is not
@@ -269,7 +269,7 @@ context:
   - "Decision 135 (NOTE flag, resolved in this plan's scope entry): a fully-deferred __getattr__ using importlib.import_module inside the function body would drop the static facade -> scripts.ops_portal.decisions import-graph edge that Decision 135's live affected-set test selector relies on for reverse-dependency selection. Resolution: keep an eager module-level import of the scripts.ops_portal.decisions submodule itself; __getattr__ only defers resolution of the five individual names via getattr() on that already-imported submodule object, not the submodule import itself."
   - "Decision 48 confirms V2 is the correct verification tier: pure Python change, no Lambda handler, no Terraform, no cross-service contract -- scripts/ops_data_portal.py is not in any Lambda manifest's packaged-file set."
   - "SLOC math (round 1 critique correction): scripts/ops_data_portal.py's true SLOC (per scripts/checks/sloc/sloc_limits.py's comment/blank-stripped formula, the same one validate_sloc_limits enforces) is 399 against the 500 limit -- 101 lines of headroom. Raw `wc -l`/file-line-count reports 499, a different and non-gating number; verification_plan step 7 measures the correct formula directly via the real validator function, not a proxy count."
-  - "gates: decision-scout=FLAGS_FOUND (NOTE-severity, resolved in scope; no BLOCK); plan-critique=REVISE after round 1 (fixed: broken VP step 7 command referencing a nonexistent module, SLOC-headroom math corrected with the real validator formula, added VP step 9 for post-merge rec-2729 closure verification per the 12k closure-obligation gate, reclassified VP steps 6 and 8 from not-applicable to waive with substantive graduation_waiver_reason since both duplicate standing CI checks) -> PROCEED after round 2 <fill in after re-dispatch confirms>"
+  - "gates: decision-scout=FLAGS_FOUND (NOTE-severity, resolved in scope; no BLOCK); plan-critique=REVISE after round 1 (fixed: broken VP step 7 command referencing a nonexistent module, SLOC-headroom math corrected with the real validator formula, added VP step 9 for post-merge rec-2729 closure verification per the 12k closure-obligation gate, reclassified VP steps 6 and 8 from not-applicable to waive with substantive graduation_waiver_reason since both duplicate standing CI checks) -> PROCEED after round 2 (all four round-1 fixes independently re-verified; two non-blocking cosmetic nits found and fixed in passing: a duplicate graduation key on VP step 9, and a 100-vs-101 headroom wording inconsistency)"
   - "tests/test_ops_portal_facade.py's existing TestFacadeCompleteness/TestFacadeImportable suites already parametrize over the five names via _REQUIRED_PUBLIC/_REQUIRED_PRIVATE -- they exercise hasattr()/getattr() access, which PEP 562 __getattr__ satisfies identically to a static attribute for both access forms, so those existing tests require no modification, only the new guard class is additive."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/rec-2729-critical-bug-plan-yje3iz)
