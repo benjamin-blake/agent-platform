@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Scratch probe entry (PLAN-pr-conflict-wake-signal VP9 -- this PR is closed without merge, never lands on main)
+- Deliberately conflicts with the real CHANGELOG entry landed by claude/changelog-pr-conflict-wake-signal at the same insertion point, to exercise pr-conflict-signal.yml's live conflict-wake end-to-end.
+
 ### Added (2026-04-27 executor-supervision session: rec-325 PR #261, filed rec-517/518)
 - `.github/copilot-instructions.md`: Widened postflight mock-exhaustion Known Gotcha from `cleanup_after_merge()` scope to any function in `scripts/executor/postflight.py` (rec-325, PR #261). Supersedes rec-117.
 - `logs/.recommendations-log.jsonl`: Filed rec-517 (plan-guard staged-file blind spot — change `git diff --name-only` to `git diff --name-only HEAD`), rec-518 (step telemetry model field records hardcoded `deepseek.v3.2` for all Gemini runs since Decision 53).
