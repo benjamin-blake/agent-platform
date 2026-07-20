@@ -118,6 +118,39 @@ scope:
     purpose: >-
       Verify the handler test still passes after ops_execution_plans leaves ops_writer.TABLE_NAMES; re-base
       ONLY if it references the real TABLE_NAMES (its _VALID_TABLES is locally patched -- likely a no-op).
+  - file: tests/test_schema_to_field_semantics.py
+    action: Modify
+    purpose: >-
+      test_dormant_tables_present (line ~225) asserts ops_execution_plans status == "dormant"; drop it from
+      the dormant tuple (it flips to live) so the generator test matches the new field_semantics.
+  - file: tests/sync/ops/test_sync_cli.py
+    action: Modify
+    purpose: >-
+      TestTelemetryMappings: drop ops_execution_plans from _REMOVED_OPS_TABLES (test_non_migrated_ops_tables_absent)
+      and add it to the expected _TABLE_TO_LOCAL + _DUCKLAKE_MIGRATED_TABLES set-equality (test_migrated_ops_tables_present).
+  - file: tests/test_data_quality_execute.py
+    action: Modify
+    purpose: >-
+      The exact-set assertion `_DUCKLAKE_OPS_TABLES == frozenset({recs,decisions,priority_queue})` (line ~345)
+      must add ops_execution_plans.
+  - file: tests/executor/plan/test_dataclasses.py
+    action: Modify
+    purpose: >-
+      test_save_and_load_roundtrip asserts OpsWriter.write("ops_execution_plans", ...) -- re-base to the new
+      save_execution_plan producer call; fix the patch.object(plan_mod, "OpsWriter") targets in the sibling
+      save_plan tests if the OpsWriter import is dropped.
+  - file: tests/execute_recommendation/test_plan_lifecycle.py
+    action: Modify
+    purpose: >-
+      TestSavePlan::test_save_plan calls the REAL save_plan with only PLANS_JSONL patched; the fail-loud repoint
+      makes it raise on the unresolvable writer URL -- patch scripts.ops_portal.execution_plans.save_execution_plan
+      (or writer_transport) so it stays green.
+  - file: scripts/checks/ops_governance/validate_warehouse_write_sources.py
+    action: Modify
+    purpose: >-
+      Precautionary: remove scripts/executor/plan.py's now-unused warehouse-write whitelist entry (line ~40)
+      once its OpsWriter().write("ops_execution_plans") is gone. No-op if the check does not fail on unused
+      entries; do NOT touch the separate s3_log_store queue-producer exemption (that stays until the queue repoint).
 bundled_recommendations: []
 infrastructure_dependencies:
   - >-
@@ -295,9 +328,9 @@ verification_plan:
       s3_log_store / ops-compaction suites + the new producer test pass green once ops_execution_plans
       leaves _OPS_TABLE_NAMES and the routing sentinel is gone. Explicit fast signal; validate --pre
       (step 7) also selects these diff-aware.
-    command: "bin/venv-python -m pytest tests/ops_writer/ tests/s3_log_store/ tests/test_ops_compaction_handler.py tests/test_ops_portal_execution_plans.py -q"
-    expected: "All pass -- the removed-routing / dt=-prefix / SCD2 assertions were re-based off ops_execution_plans and the new producer test passes."
-    fix_if: "Failures -> a test still asserts the old ops_execution_plans OpsWriter routing/staging; re-base it to the DuckLake path (do not delete coverage wholesale)."
+    command: "bin/venv-python -m pytest tests/ops_writer/ tests/s3_log_store/ tests/test_ops_compaction_handler.py tests/test_ops_portal_execution_plans.py tests/test_schema_to_field_semantics.py tests/sync/ tests/executor/plan/ tests/execute_recommendation/test_plan_lifecycle.py tests/test_data_quality_execute.py tests/checks/ops_governance/test_validate_warehouse_write_sources.py -q"
+    expected: "All pass -- every test asserting the retired ops_execution_plans surface (OpsWriter routing, dt= staging, dormant status, sync/DQ set-equality, save_plan OpsWriter call) was re-based, and the new producer test passes. Backstop for the full test blast radius."
+    fix_if: "Failures -> a test still asserts the old ops_execution_plans OpsWriter/Iceberg/dormant/routing surface; re-base it to the DuckLake path (do not delete coverage wholesale). If a failing test is not yet enumerated in scope, it is an in-scope addition under this plan's test-rebasing intent (see execution_steps) -- add and re-base it."
     hermetic: false
     graduation: not-applicable   # pytest suites under the standing suite gate (mirrors step 4); not a single-primitive kernel check
 constraints:
@@ -325,7 +358,7 @@ context:
     ratified since pass 1 (dec-133/134/136..142) block or contradict this plan). CITE (verbatim ids):
     dec-84, dec-78, dec-81 (CD.33), dec-79, dec-48, dec-125, dec-126, dec-88, dec-117, dec-55; RELATED:
     dec-87, dec-107 (CD.34), dec-140, dec-136. (Decision 70 mis-cited as append-only/queue and dropped.)
-  - "gates: decision-scout=FLAGS_FOUND (2 passes, both NOTE flags resolved in-approach); plan-critique: r1 REVISE (rebase/baseline refresh), r2 REVISE (T3.21 graduation dispositions), r3 REVISE (test-surface scope-completeness: breaking ops_writer/s3_log_store tests + producer test added to scope, affected-suite VP step 14, storage-substrate field flip, fail-loud repoint); reached the 3-round convergence cap -> human-directed closeout"
+  - "gates: decision-scout=FLAGS_FOUND (2 passes, both NOTE flags resolved in-approach); plan-critique: r1 REVISE (rebase/baseline refresh), r2 REVISE (T3.21 graduation dispositions), r3 REVISE (test-surface scope-completeness), reached the 3-round convergence cap -> human directed one confirmatory round then merge; r4 confirmatory REVISE (deeper sweep found the r3 test fix incomplete) -> closed out via an exhaustive test-blast-radius sweep (added tests/test_schema_to_field_semantics, tests/sync/ops/test_sync_cli, tests/test_data_quality_execute, tests/executor/plan/test_dataclasses, tests/execute_recommendation/test_plan_lifecycle + warehouse-write-source whitelist cleanup; VP step 14 broadened to run the full affected tree as backstop with residual in-scope authorization) -> human-directed merge"
   - >-
     Deploy-channel currency (scout NOTE 1): confirmed on rebased main -- .github/workflows/deploy-ducklake-lambdas.yml
     EXISTS and tier_item T2.38 is status:complete (c1-c4 met), with the config/lambda/ducklake/** push trigger +
@@ -416,11 +449,18 @@ execution_steps:
     ".execution-plans.jsonl" routing sentinel + docs/contracts/log-storage.yaml mirror; drop ops_execution_plans
     from scripts/ops_writer.py _OPS_TABLE_NAMES and _OPS_TABLE_DTYPES.
   - >-
-    Re-base the tests the removals break (they assert the retired surface): tests/s3_log_store/
-    test_write_through_registry.py (the execution_plans write-through assertion), tests/ops_writer/test_write.py
-    + test_compact.py + test_compact_edge_cases.py (the dt= staging prefix + SCD2 canonical-table examples), and
-    verify tests/test_ops_compaction_handler.py. Author tests/test_ops_portal_execution_plans.py for the new
-    producer. Run the affected suites green (VP step 14) before deploy.
+    Re-base EVERY test that asserts the retired ops_execution_plans surface (this migration's test-rebasing
+    intent covers the whole blast radius; the enumerated set below is definitive from an exhaustive sweep, and
+    any residual a VP-step-14 run surfaces is an in-scope addition under this intent):
+    tests/s3_log_store/test_write_through_registry.py (write-through assertion),
+    tests/ops_writer/{test_write,test_compact,test_compact_edge_cases}.py (dt= staging prefix + SCD2 canonical
+    examples), tests/test_schema_to_field_semantics.py (dormant-status assertion), tests/sync/ops/test_sync_cli.py
+    (_TABLE_TO_LOCAL / _DUCKLAKE_MIGRATED_TABLES set-equality + _REMOVED_OPS_TABLES), tests/test_data_quality_execute.py
+    (_DUCKLAKE_OPS_TABLES frozenset), tests/executor/plan/test_dataclasses.py (OpsWriter.write assertion + patch
+    targets), tests/execute_recommendation/test_plan_lifecycle.py (real save_plan under fail-loud -> patch the new
+    producer). Verify tests/test_ops_compaction_handler.py (likely no-op). Author tests/test_ops_portal_execution_plans.py
+    for the new producer. Tidy the validate_warehouse_write_sources plan.py whitelist entry if unused. Run the full
+    affected tree green (VP step 14) before deploy.
   - >-
     DQ: add ops_execution_plans to _DUCKLAKE_OPS_TABLES in scripts/data_quality_execute.py (fix the stale
     comments); add an ops_execution_plans block to config/agent/data_quality/ops.yaml (rec_id not_null; status
