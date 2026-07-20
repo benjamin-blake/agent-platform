@@ -1,0 +1,257 @@
+schema_version: 1
+slug: "scd2-modeling-defaults"
+intent: >-
+  Inject the append-only/SCD2 lakehouse data-modeling standard at agent reasoning-time
+  (ambient first-contact + design-time /plan gate) so agents declare table grain and pick a
+  write mode before designing any data model -- generalizing Precision Context Injection
+  (Decision 66) to the data layer and preventing CRUD-default grain errors (NS.4, agent-first repo).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-scd2-modeling-defaults.yaml
+phase: >-
+  Platform / instruction-architecture governance -- generalizes Decision 66 (Precision Context
+  Injection) to the data-modeling layer across Layer 1 (AGENTS.md) and Layer 4 (planning skill).
+  Ad-hoc governance improvement, no specific tier_item; root-caused from the T2.26
+  execution_plans planning session where a CRUD "one row per rec-revision, mutate in place"
+  model nearly shipped.
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Lever 1 (ambient). Add a "Data-modeling default" subsection beside the "Warehouse-as-source-of-truth
+      invariant" -- grain-first then a write-mode branch (SCD2 for mutable-entity ops tables vs append_only
+      for event/telemetry), ULID boundary-minted identity, merge-on-business-key, every table partitioned;
+      append-only framed as the default/prior, not a ban. Points to docs/contracts/data-modeling-standard.yaml.
+  - file: docs/contracts/data-modeling-standard.yaml
+    action: Create
+    purpose: >-
+      Lever 3 (consolidated SoT). Machine-parseable, non-ritual index (no top-level contract:/class:, so
+      the CD.25 drift gate skips it -- precedent telemetry-lexicon.yaml). Enumerates the standard's rules
+      + a write-mode table, and INDEXES existing detailed sources rather than absorbing them. Levers 1/2/4
+      point here.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Lever 2 (design-time forcing function). Add a "Data-Model Assessment (Workflow Step 4)" section
+      mirroring the Infrastructure/Lambda/Complexity assessments -- grain-first walk plus the Fable
+      escalation (Lever 5) for load-bearing grain/identity calls.
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: >-
+      Lever 2. Add a one-line Step 4 trigger reference: conduct a Data-Model Assessment when a table,
+      field_semantics entry, or warehouse write path is in scope.
+  - file: docs/contracts/storage-substrate.yaml
+    action: Modify
+    purpose: >-
+      Lever 4 backfill. Add grain (transcribed from the latent field_semantics purpose: strings) and
+      write_mode to the four merge_key-bearing table entries, so the new guard enforces a populated field.
+  - file: scripts/checks/contracts/validate_data_model_standard.py
+    action: Create
+    purpose: >-
+      Lever 4 (backstop guard). Decomposed check (Decision 104): diff-aware, fires only when
+      storage-substrate.yaml or data-modeling-standard.yaml is in the changed set; fail-loud.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: Register validate_data_model_standard in both pre_sequence() and full_sequence(), near validate_contract_drift.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: Add the facade re-export import for validate_data_model_standard (import only; no check logic in validate.py).
+  - file: tests/checks/contracts/test_validate_data_model_standard.py
+    action: Create
+    purpose: >-
+      V2 test exercising the real check: missing-grain entry fails, complete entry passes, group entry
+      (no merge_key) is skipped, invalid/missing standard contract fails, and the check is wired into both
+      tiers + facade-resolvable. 100% coverage of the new module (map_source_to_test resolves this path).
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: Add a one-line pointer/index entry for docs/contracts/data-modeling-standard.yaml (Decision 86/127 NOTE).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    AGENTS.md contains a "Data-modeling default" subsection that (a) states grain-first, (b) presents the
+    SCD2-vs-append_only write-mode branch (not "default to SCD2"), (c) names ULID boundary-minted identity,
+    merge-on-business-key, and partition-every-table, (d) frames append-only as default-not-ban, and
+    (e) links docs/contracts/data-modeling-standard.yaml.
+  - >-
+    docs/contracts/data-modeling-standard.yaml exists, is valid YAML, is non-ritual (no top-level
+    contract: or class: key), and carries the enumerated rules, a write_modes section, and an indexes
+    section pointing to the existing sources.
+  - >-
+    .claude/skills/planning/SKILL.md contains a "Data-Model Assessment" section triggered by a table /
+    field_semantics entry / warehouse write path in scope, walking grain -> merge_key + history/current ->
+    identity -> join keys -> write mode -> partitioning -> reject-CRUD checklist -> Fable escalation.
+  - .claude/commands/plan.md Step 4 references the Data-Model Assessment.
+  - >-
+    Every table entry in docs/contracts/storage-substrate.yaml that declares merge_key also declares
+    non-empty grain and write_mode.
+  - >-
+    validate_data_model_standard is importable, registered in registry.pre_sequence() and full_sequence(),
+    getattr-resolvable on the scripts.validate module, fails when a merge_key-bearing storage-substrate
+    entry lacks grain/write_mode (or the standard contract is missing/malformed), and passes on the
+    backfilled repo state.
+  - tests/checks/contracts/test_validate_data_model_standard.py passes and covers the fail, pass, group-skip, and wiring cases.
+  - docs/contracts/file-router.yaml has an index/pointer entry for docs/contracts/data-modeling-standard.yaml.
+  - "bin/venv-python -m scripts.validate --pre exits 0 on the branch."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Prove the guard behaviorally via its unit test: a merge_key-bearing entry missing grain fails,
+      a complete entry passes, a group entry without merge_key is skipped (no false positive), and a
+      missing/malformed data-modeling-standard.yaml fails.
+    command: bin/venv-python -m pytest tests/checks/contracts/test_validate_data_model_standard.py -v
+    expected: All tests pass; the missing-grain and malformed-contract cases assert a check FAILURE, the complete case asserts PASS.
+    fix_if: A test fails, or the missing-grain/malformed-contract case does not trigger a check failure (guard too weak or mis-scoped).
+    hermetic: false
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the guard is wired into the presubmit so it is not dead: assert the name is in the runtime
+      pre and full sequences and is getattr-resolvable on the validate facade.
+    command: bin/venv-python -m pytest tests/checks/contracts/test_validate_data_model_standard.py -v -k wiring
+    expected: The wiring test passes -- 'validate_data_model_standard' is in both registry.pre_sequence() and full_sequence() and resolves on scripts.validate.
+    fix_if: The name is absent from a sequence or unresolvable on the facade (guard would never run under validate.py).
+    hermetic: false
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: Run the real fast presubmit on the branch to prove the backfilled contract + new guard integrate cleanly and nothing regressed.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit code 0.
+    fix_if: Non-zero exit -- read the named failing check and fix on the branch (do not weaken the guard to pass).
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Independently prove the backfill on the PR tree with a pure file read: every storage-substrate
+      table entry that declares merge_key also declares non-empty grain and write_mode.
+    command: >-
+      bin/venv-python -c "import yaml; t=yaml.safe_load(open('docs/contracts/storage-substrate.yaml'))['tables'];
+      bad=[k for k,v in t.items() if isinstance(v,dict) and v.get('merge_key') and (not v.get('grain') or not v.get('write_mode'))];
+      assert not bad, bad; print('ok', sorted(k for k,v in t.items() if isinstance(v,dict) and v.get('merge_key')))"
+    expected: Prints "ok" followed by the merge_key-bearing table names (ops_priority_queue, ops_smoke_events, ops_session_log, ops_execution_plans).
+    fix_if: AssertionError lists a table missing grain or write_mode.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as command_exit_zero, but this exact invariant is the standing job of the new
+      validate_data_model_standard check (which fires on every storage-substrate.yaml diff); a graduated
+      duplicate would double-enforce the same rule. Graduation deferred deliberately to avoid redundancy.
+constraints:
+  - Only modify files listed in scope.
+  - No rescue agents or workaround loops (Decision 55). The guard fails loud and names the offending table; never weaken it to make the presubmit pass.
+  - >-
+    data-modeling-standard.yaml must be machine-parseable (enumerated rules + a write_modes table +
+    indexed pointers), NOT narrative normative prose, and must carry no top-level contract:/class: key so
+    it stays non-ritual and the CD.25 drift gate skips it (Decision 86/127; precedent telemetry-lexicon.yaml).
+  - >-
+    The AGENTS.md ambient rule must be grain-first then a SCD2-vs-append_only write-mode branch, NOT
+    "default to SCD2" -- telemetry/event tables are insert-once append_only with no SCD2 envelope
+    (Decision 96, T1.14 append_only event-journal).
+  - >-
+    Frame append-only/SCD2 as the design default/prior, explicitly not a ban on sanctioned exceptional
+    physical deletes (Decision 70) or lifecycle-closure paths (Decision 103).
+  - Do NOT hand-edit config/lambda/ducklake/field_semantics.yaml -- it is GENERATED. grain lives in storage-substrate.yaml and the standard contract, not the generated file.
+  - The guard keys off merge_key presence to validate an entry, which naturally skips group entries like telemetry_tables (no merge_key).
+  - New check module stays under 500 SLOC (Decision 128); decompose rather than raise if it would exceed.
+  - Follow map_source_to_test naming (Decision 104/131) so the per-file coverage gate resolves the new test at tests/checks/contracts/test_validate_data_model_standard.py.
+context:
+  - Root-caused from the T2.26 execution_plans planning session; a CRUD "one row per rec-revision, mutate in place" model formed before any SCD2 decision loaded.
+  - Generalizes Decision 66 Precision Context Injection to the data-modeling layer -- surface the standard at reasoning/design time, not as a post-rejection error.
+  - >-
+    grain is already latent in config/lambda/ducklake/field_semantics.yaml per-table "purpose" strings
+    ("one row per rec_id"); Levers 3/4 formalize and name it. That file is generated, so the durable grain
+    lives in storage-substrate.yaml + the standard.
+  - >-
+    Backfill grain/write_mode targets: ops_priority_queue (one row per rec_id; scd2), ops_smoke_events
+    (one row per event_id; append_only -- write_mode already present, add grain), ops_session_log
+    (one row per session_id; scd2), ops_execution_plans (one row per rec_id; scd2).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (no BLOCK, 102/102 triaged). CITE: Decision 78, 81, 84, 95, 96, 97, 141, 66, 86, 118 (CD.25), 104, 128, 55, 137 (CD.9), 132. RELATED: 63, 70, 87, 88, 103."
+  - "gates: decision-scout=FLAGS_FOUND (no BLOCK, 102/102 triaged); plan-critique=pending (updated after Step 9)."
+  - Decision 96 WARN handled -- ambient rule is grain-first then write-mode branch, not default-SCD2.
+  - Decision 70/103 NOTE handled -- append-only framed as default/prior, not a ban.
+  - Decision 86/127 NOTE handled -- standard is machine-parseable + gets a file-router pointer entry.
+  - Decision 137/CD.9 folded in -- partition-every-table is a data-modeling default surfaced in both the standard and the assessment.
+  - Decision 132 -- every pre-deploy VP step carries a graduation disposition; Decision 104/131 map_source_to_test resolves the new test path.
+  - Deferred scope -- the in-place-mutation SQL grep guard (false-positive-prone; "backstop, not primary" per the source message and the scout) is filed as a follow-on rec during /implement, not built here.
+  - No existing open rec matches this design-time-injection idea (searched SCD2/data-model/grain/injection/Kimball); bundled_recommendations empty. Closure Obligation exempt (additive; no Delete row, no X->Y migration).
+  - Branch was 0 commits behind origin/main at planning time; no Main Divergence Assessment overlap.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - Decision-scout gate run (verdict FLAGS_FOUND, 102/102 triaged); CITE list carried into context
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "field_semantics.yaml confirmed GENERATED -- grain durably lives in storage-substrate.yaml + the standard, not the generated file"
+execution_steps:
+  - >-
+    AGENTS.md: add a "Data-modeling default" subsection beside "Warehouse-as-source-of-truth invariant" --
+    grain-first ("one row per ___"), then the write-mode branch (SCD2 history+current for mutable-entity ops
+    tables; append_only event-journal for event/telemetry, no SCD2 envelope); ULID boundary-minted identity;
+    merge-on-business-key; every table partitioned (CD.9); append-only is the default/prior, NOT a ban on
+    Decision 70 exceptional deletes / Decision 103 lifecycle closure; a read cache is never a write source;
+    link docs/contracts/data-modeling-standard.yaml.
+  - >-
+    Create docs/contracts/data-modeling-standard.yaml (non-ritual: no contract:/class:). Sections:
+    a version/updated_at header note; rules: (enumerated grain-first, identity=ULID-at-boundary,
+    merge-on-business-key, partition-every-table, read-cache-never-write-source, append-only-default-not-ban);
+    write_modes: (scd2 -> history+Type-1 current, when-to-use=mutable entity, example tables;
+    append_only -> history-only event-journal, when-to-use=insert-once event, example tables); indexes:
+    (pointers to storage-substrate.yaml, ops_recommendations.yaml, ops_decisions.yaml, the four telemetry_*
+    contracts, ducklake_reader.yaml, ducklake_writer.yaml, _joins.yaml); decisions_cited:
+    [78,81,84,95,96,97,141,66,137].
+  - >-
+    docs/contracts/storage-substrate.yaml: add grain: and write_mode: to the four merge_key-bearing entries
+    per the context backfill list (ops_smoke_events already has write_mode: append_only -- add grain only).
+    Leave telemetry_tables (group, no merge_key) unchanged.
+  - >-
+    .claude/skills/planning/SKILL.md: add "## Data-Model Assessment (Workflow Step 4)" mirroring the sibling
+    assessments. Trigger: scope touches a table (DDL/schema), a field_semantics entry, or a warehouse write
+    path. Walk order: (1) grain "one row per ___"; (2) merge_key + history/current split; (3) identity
+    (ULID minted at the boundary, not client-side/natural-key-PK); (4) join/correlation keys (session/trace
+    FKs, _joins.yaml); (5) write mode (SCD2 vs append_only); (6) partitioning (CD.9); (7) reject-CRUD
+    checklist (no in-place UPDATE/DELETE as default, no one-row-per-entity mutation, read cache never a write
+    source); (8) Fable escalation for load-bearing/novel calls only (NEW table, NEW identity scheme, or a
+    merge_key change) -- dispatch a model:"fable" advice-consult per the overseer skill's protocol. Point to
+    docs/contracts/data-modeling-standard.yaml.
+  - >-
+    .claude/commands/plan.md Step 4: add a numbered line -- "Conduct a Data-Model Assessment if a table,
+    field_semantics entry, or warehouse write path is in scope."
+  - >-
+    Create scripts/checks/contracts/validate_data_model_standard.py: @register("validate_data_model_standard").
+    Diff-aware -- return early (pass) unless docs/contracts/storage-substrate.yaml or
+    docs/contracts/data-modeling-standard.yaml is in the changed-files set. When storage-substrate.yaml is
+    changed: for each entry under tables: that declares merge_key, require non-empty grain and write_mode;
+    collect offenders and fail loud naming each table. When data-modeling-standard.yaml is changed (or on any
+    run that validates it): assert valid YAML, no top-level contract:/class:, and presence of the required
+    sections (rules, write_modes, indexes). Follow the module shape of a sibling check
+    (scripts/checks/contracts/validate_contract_drift.py).
+  - >-
+    scripts/checks/registry.py: insert _c("validate_data_model_standard") into pre_sequence() and
+    full_sequence() adjacent to validate_contract_drift in both.
+  - >-
+    scripts/validate.py: add "from scripts.checks.contracts.validate_data_model_standard import
+    validate_data_model_standard  # noqa: F401,E402" next to the other contracts-check imports.
+  - >-
+    Create tests/checks/contracts/test_validate_data_model_standard.py covering: (a) a synthetic
+    storage-substrate with a merge_key entry missing grain -> check fails; (b) a complete entry -> passes;
+    (c) a group entry without merge_key -> skipped, no false positive; (d) missing or contract:-bearing or
+    section-missing data-modeling-standard.yaml -> fails; (e) wiring: name in registry.pre_sequence() and
+    full_sequence() and getattr on scripts.validate resolves (mark with -k wiring). 100% coverage of the new module.
+  - >-
+    docs/contracts/file-router.yaml: add a one-line pointer/index entry for
+    docs/contracts/data-modeling-standard.yaml, matching the style of the existing contract entries.
+  - Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and RCA (Decision 55), never inline-patch around the guard.
+  - >-
+    File a follow-on recommendation via file_rec (call get_rec_write_guidance() first) for the deferred
+    in-place-mutation SQL grep guard (detect UPDATE/DELETE against warehouse tables outside the writer
+    boundary) -- scoped narrow to control false positives; captured here so the deferral is not lost.
+  - "Report: what was implemented, verification results, and the follow-on rec id."
+work_areas: []
+rollback: >-
+  All changes are additive governance/config plus one new diff-aware check; revert the implementation commit
+  to remove them. The guard fires only when storage-substrate.yaml or data-modeling-standard.yaml is in the
+  diff, so it cannot retroactively break unrelated PRs.
