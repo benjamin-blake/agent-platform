@@ -1,0 +1,281 @@
+schema_version: 1
+slug: "ducklake-ops-migration-fpb"
+intent: >-
+  Close out the T2.19 keystone (DuckLake ops write/read migration FP-B) by verifying its 14 already-shipped
+  exit criteria with fresh V3 evidence and flipping them via /implement, re-grounding the two
+  OPS_STORAGE_BACKEND-premised criteria (c9/c10) to Decision 84 reality, and clearing three tails
+  (rec-2707 ci-rca mock, rec-2114 probe leak, rec-2115 maintenance-smoke gap). Completing T2.19 unblocks the
+  DuckLake runtime CD estate (CD.31/CD.33/CD.34) toward the operational-data-backbone North Star.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ducklake-ops-migration-fpb.yaml
+phase: >-
+  Platform tier_item T2.19 (follow-on closeout; keystone gating CD.31/CD.33/CD.34 and the T2 DuckLake estate).
+  Product axis: operational data backbone (docs/PROJECT_CONTEXT.md section 2).
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground c9/c10 criterion text to Decision 84 reality (OPS_STORAGE_BACKEND retired, Athena recs
+      fallback removed not gated, guard = validate_warehouse_write_sources); on the verified VP pass, flip
+      c1-c14 status open->met, set T2.19 status:complete + completed_at, and annotate the semantic
+      supersessions (c3 current write-through table not a literal current_state column; c4 resolved-by-
+      elimination). All roadmap mutations execute in /implement's bookkeeping walk (Decision 90), never at
+      plan time.
+  - file: tests/ops_data_portal/test_ci_rca_fingerprint.py
+    action: Modify
+    purpose: >-
+      rec-2707: add the missing find_recent_ci_rca_rec_by_fingerprint mock to
+      test_file_rec_backstop_inserts_on_fingerprint_miss (the backstop falls through to it when
+      find_open_* returns None). (Path per the rec-2709 test-package decomposition, PR #595.)
+  - file: tests/ops_data_portal/test_maintenance.py
+    action: Modify
+    purpose: >-
+      rec-2114: add test_selftest_roundtrip_purges_probe asserting the selftest probe is superseded on
+      success (co-located with the existing selftest_roundtrip tests).
+  - file: scripts/ops_portal/maintenance_ops.py
+    action: Modify
+    purpose: >-
+      rec-2114: selftest_roundtrip supersedes its test-roundtrip-<uuid> probe on successful read-back (SCD2
+      supersede via the writer on the caller-keyed test- keyspace) so the probe cannot linger as an open row
+      that fails the ops_recommendations.automatable not_null DQ check and reddens main.
+  - file: scripts/ducklake_smoke/lambda_ops_gates.py
+    action: Modify
+    purpose: >-
+      rec-2114: the ops_read_your_write smoke gate supersedes its test-ryw- probe on success (same leak class
+      as selftest_roundtrip) so a live read-your-write VP step leaves no DQ-failing residue.
+  - file: scripts/ducklake_smoke/lambda_maintenance_gates.py
+    action: Modify
+    purpose: >-
+      rec-2115 gap-1: lambda_maintenance_gc handles the smoke-catalog table pair (pass force_recreate_tables
+      / order gc after a table-creating merge) so it does not 502 on a fresh smoke catalog. The merge gate
+      already passes force_recreate_tables=True; this closes the residual on the gc gate.
+  - file: tests/ducklake_neon_smoke_test/test_lambda_ops_gates.py
+    action: Modify
+    purpose: >-
+      Cover the rec-2114 ops_read_your_write probe supersede with a mocked Function-URL unit test (no live
+      AWS). (Path per the rec-2709 smoke-test decomposition, PR #606.)
+  - file: tests/ducklake_neon_smoke_test/test_lambda_maintenance_gates.py
+    action: Modify
+    purpose: >-
+      Cover the rec-2115 gap-1 gc-gate smoke-catalog handling with a mocked Function-URL unit test.
+bundled_recommendations:
+  - rec-2707
+  - rec-2114
+  - rec-2115
+closes_criteria:
+  - "T2.19:c1"
+  - "T2.19:c2"
+  - "T2.19:c3"
+  - "T2.19:c4"
+  - "T2.19:c5"
+  - "T2.19:c6"
+  - "T2.19:c7"
+  - "T2.19:c8"
+  - "T2.19:c9"
+  - "T2.19:c10"
+  - "T2.19:c11"
+  - "T2.19:c12"
+  - "T2.19:c13"
+  - "T2.19:c14"
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "c1: file_rec/update_rec route ops_recommendations writes exclusively through _ducklake_write to the ducklake_writer Lambda; no OpsWriter/Iceberg recs write path is reachable (Single-Portal preserved)."
+  - "c2: recs operational reads transit make_reader().named(...) / DuckLakeReader; DuckDBIcebergReader is not on the recs read path."
+  - "c3: SCD2 is reproduced as history + a write-through current table; CDC/time-travel optional extension is documented (Decision 78/81). Annotate that the implementation uses a current table, not a literal current_state boolean column."
+  - "c4: OQ.7 is resolved by elimination -- no Athena escape hatch for boundary tables -- and tested via reader_failure_loud_fails (no Athena / no local-cache fallback)."
+  - "c5: OQ.10 writer-concurrency is bounded application-level OCC retry (exponential backoff + full jitter, OCCRetryExhaustedError loud-fail on exhaustion) in ducklake_writes; reserved-concurrency=1 / SQS-FIFO rejected per CD.33 clause 2."
+  - "c6: Decision 69 Single-Portal invariant holds -- validate_rec_write_paths + validate_warehouse_write_sources (both registered in the --pre tier) fail CI on any recs write bypassing the portal/writer."
+  - "c7: ducklake_writer owns the schema-enforcement gate (schema_gate loud-fail -> 422); no recs write path bypasses it -- OBSERVED live via the EC7 loudfail gate (schema_reject=raised), not routing inference alone."
+  - "c8: closed boundary for recs is live -- every read transits ducklake_reader, every write ducklake_writer, no out-of-band access; audited PlatformAdmin break-glass (DuckLakeBreakGlass: Neon DSN secret + ducklake- S3 read-only) exists."
+  - "c9 (re-grounded): sync_ops recs cache-pull/rebuild has NO Athena fallback -- a reader failure loud-fails/leaves the cache untouched with a warning (Decision 84 I-1 removed the OPS_STORAGE_BACKEND=iceberg branch entirely; stronger than the original gating ask). Roadmap c9 text updated to state removal, not gating."
+  - "c10 (re-grounded): the recs-topology guard is validate_warehouse_write_sources (--pre); it fails CI if any recs/decisions write routes to OpsWriter/Iceberg or a recs Athena read branch is reintroduced. The retired OPS_STORAGE_BACKEND default-site assertion is dropped with the flag (Decision 84). Roadmap c10 text updated accordingly."
+  - "c11: connection-churn / OCC-commit-latency headroom is re-validated at production-shaped concurrency using the Decision 82 frame (N=4 concurrent invocations, per-invocation wall p95 < COMMIT_LATENCY_BUDGET_MS=2000, collision handled) against a warmed Neon endpoint."
+  - "c12: current write-through projection is live -- reads hit current; each write is one DuckLake txn (INSERT history + MERGE current); read-your-write is proven by a live smoke that leaves NO leaked test- probe (rec-2114 fixed)."
+  - "c13: SCD2 DQ checks enforce ULID uniqueness on history, current-version uniqueness on the merge key, and in-transaction update referential existence (config/agent/data_quality/ops.yaml declarations + a green DQ-over-DuckLake run)."
+  - "c14: the governed per-Lambda build+deploy+smoke channel for ducklake_writer/ducklake_reader exists (.github/workflows/deploy-ducklake-lambdas.yml, T2.38) and both manifests are status:active; verified by invoking the deployed functions (no rebuild -- no handler code in scope)."
+  - "rec-2707 closed: the ci-rca HARD BLOCK is cleared -- test_file_rec_backstop_inserts_on_fingerprint_miss mocks find_recent_ci_rca_rec_by_fingerprint and passes deterministically across seeds."
+  - "rec-2114 closed: selftest_roundtrip and ops_read_your_write supersede their probe on success; a full DQ-over-DuckLake run shows no automatable-null failure from a leaked probe."
+  - "rec-2115 closed: gap-1 (maintenance-gc smoke-catalog handling) landed and verified; gap-2 closed as obsolete (OPS_STORAGE_BACKEND=iceberg pyiceberg direct-read path retired by Decision 84)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "c9 topology anchor -- confirm sync_ops recs pull/rebuild has no Athena fallback (Decision 84 removal, not gating)."
+    command: "grep -q 'no Athena fallback' scripts/sync/ops.py"
+    expected: "Match: the Decision 84 I-1 comment documenting the removed fallback is present; the code path leaves the cache untouched on reader failure."
+    fix_if: "No match -- an Athena/iceberg fallback branch survives in scripts/sync/ops.py; re-ground and remove it before flipping c9."
+    hermetic: true
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: "c10 topology anchor -- OPS_STORAGE_BACKEND is retired from runtime code (only the retirement comment remains)."
+    command: "test \"$(grep -rn 'OPS_STORAGE_BACKEND' scripts/ src/ --include='*.py' | grep -v 'iceberg_reader.py' | grep -vc 'test')\" = \"0\""
+    expected: "Zero live OPS_STORAGE_BACKEND references in scripts/ + src/ outside the iceberg_reader retirement comment -- the flag is gone (Decision 84 I-1)."
+    fix_if: "A live OPS_STORAGE_BACKEND branch remains -- the c10 re-ground is premature; excise the flag first."
+    hermetic: true
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: "c5 anchor -- OCC retry contract (backoff + full jitter + loud-fail on exhaustion) present in the writer primitive."
+    command: "grep -Eq 'OCC_MAX_ATTEMPTS' src/common/ducklake_writes.py && grep -q 'full jitter' src/common/ducklake_writes.py && grep -q 'OCCRetryExhaustedError' src/common/ducklake_writes.py"
+    expected: "All three present: bounded attempts, exponential backoff + full jitter, and the loud-fail exhaustion error."
+    fix_if: "Any missing -- the OQ.10 OCC contract is not as claimed; do not flip c5."
+    hermetic: true
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: "c13 anchor -- SCD2 DQ declarations present on ops_recommendations."
+    command: "grep -q 'ulid_history_unique: true' config/agent/data_quality/ops.yaml && grep -q 'current_merge_key_unique: true' config/agent/data_quality/ops.yaml && grep -q 'referential: true' config/agent/data_quality/ops.yaml"
+    expected: "ULID-history-unique, current-merge-key-unique, and referential DQ checks are all declared."
+    fix_if: "Any missing -- add the declaration before flipping c13."
+    hermetic: true
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: "c8/c14 anchors -- break-glass grant + active writer/reader manifests present."
+    command: "grep -q 'DuckLakeBreakGlass' terraform/personal/platform_roles.tf && grep -q 'status: active' src/lambdas/ducklake_writer/manifest.yaml && grep -q 'status: active' src/lambdas/ducklake_reader/manifest.yaml"
+    expected: "Audited PlatformAdmin break-glass statement exists; both DuckLake Lambda manifests are active."
+    fix_if: "Any missing -- closed-boundary break-glass or the deploy target is not as claimed."
+    hermetic: true
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    action: "c14 anchor -- the governed per-Lambda deploy+smoke channel exists (T2.38)."
+    command: "grep -Eq 'lambda-reader|lambda-attach|reader' .github/workflows/deploy-ducklake-lambdas.yml"
+    expected: "The governed channel workflow exists and its smoke job invokes the reader/attach gates (CI-delegated per Decision 119)."
+    fix_if: "Workflow absent or has no smoke job -- c14's deploy+smoke channel is not in place."
+    hermetic: true
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: "rec-2707 -- the fingerprint-miss backstop test mocks find_recent_ci_rca_rec_by_fingerprint and passes deterministically (loop across seeds)."
+    command: "for s in 0 1 2 3 4; do bin/venv-python -m pytest 'tests/ops_data_portal/test_ci_rca_fingerprint.py::TestCiRcaFingerprintDedup::test_file_rec_backstop_inserts_on_fingerprint_miss' -p randomly --randomly-seed=$s -q || exit 1; done"
+    expected: "Green on every seed -- the previously-unmocked find_recent_ci_rca_rec_by_fingerprint no longer reaches the live reader."
+    fix_if: "Any seed fails -- the mock is still missing/mistargeted (patch the facade scripts.ops_data_portal.find_recent_ci_rca_rec_by_fingerprint)."
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: "rec-2114 -- the selftest probe-purge unit test exists and passes."
+    command: "grep -q 'def test_selftest_roundtrip_purges_probe' tests/ops_data_portal/test_maintenance.py && bin/venv-python -m pytest tests/ops_data_portal/test_maintenance.py -k selftest_roundtrip_purges_probe -q"
+    expected: "The purge test is present and green -- selftest_roundtrip supersedes its probe on success."
+    fix_if: "Missing/red -- add the purge-on-success supersede write and the asserting test."
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: "c1/c2/c4/c6/c7/c9/c10 behavioural proof -- portal routing + closed-boundary + no-Athena-fallback tests pass (decomposed package + standalone decisions file)."
+    command: "bin/venv-python -m pytest tests/ops_data_portal/ -k 'reader_failure or write' -q && bin/venv-python -m pytest tests/test_ops_data_portal_decisions.py -k reader_failure_loud_fails -q"
+    expected: "Green -- reads loud-fail with no Athena/local-cache fallback; writes route only through the writer."
+    fix_if: "Red -- an Athena/OpsWriter recs path survives; do not flip c1/c2/c4/c9."
+    graduation: not-applicable
+  - step: 10
+    phase: pre-deploy
+    action: "c6/c10 guard proof -- the closed-boundary write-source guards fire and the recs Athena/OpsWriter regression tests pass (dedicated guard test files)."
+    command: "bin/venv-python -m pytest tests/checks/ops_governance/test_validate_warehouse_write_sources.py tests/checks/ops_governance/test_validate_rec_write_paths.py -q"
+    expected: "Green -- validate_warehouse_write_sources + validate_rec_write_paths block a recs->OpsWriter/Iceberg regression."
+    fix_if: "Red -- the recs-topology guard (c10) is not enforcing; fix before flipping."
+    graduation: not-applicable
+  - step: 11
+    phase: pre-deploy
+    action: "rec-2115 gap-1 unit proof -- the /implement-added gc-gate smoke-catalog test exists and passes (mocked Function URL). The file currently has only merge-gate tests; /implement adds the gc test."
+    command: "grep -qE 'def test_lambda_maintenance_gc' tests/ducklake_neon_smoke_test/test_lambda_maintenance_gates.py && bin/venv-python -m pytest tests/ducklake_neon_smoke_test/test_lambda_maintenance_gates.py -k gc -q"
+    expected: "The new gc test is present and green -- lambda_maintenance_gc supplies the smoke-catalog table pair (force_recreate_tables / merge-first ordering) instead of 502ing on a fresh catalog."
+    fix_if: "Missing/red -- add the gc-gate smoke-catalog handling and its unit test."
+    graduation: not-applicable
+  - step: 12
+    phase: pre-deploy
+    action: "Full fast presubmit is green after all edits land (authoritative on PR CI)."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0 -- ruff, schema, SLOC, graduation-completeness, guards, VP-replay, and all bundled tests pass on the branch."
+    fix_if: "Non-zero -- read the failing check and forward-fix (Decision 55); never relax a guard to pass."
+    graduation: not-applicable
+  - step: 13
+    phase: post-deploy
+    action: "c12 + rec-2114 live -- BOTH probe emitters leave no residue. The --ops-read-your-write gate emits test-ryw- (lambda_ops_gates); --selftest-roundtrip emits test-roundtrip- (maintenance_ops). Run both, sync, and assert neither prefix survives."
+    command: "bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-read-your-write --profile agent_platform && bin/venv-python -m scripts.ops_data_portal --selftest-roundtrip --profile agent_platform && bin/venv-python -m scripts.ops_data_portal --sync && ! grep -qE 'test-ryw-|test-roundtrip-' logs/.recommendations-log.jsonl"
+    expected: "Both gates PASS read-back and, after a cache sync, NEITHER test-ryw- NOR test-roundtrip- remains in current -- each supersede purged its own probe (rec-2114 fully verified for both emitters)."
+    fix_if: "Either gate fails, or either prefix survives the sync -- the closed write path or a rec-2114 supersede is broken. On unrecoverable failure, stop and RCA (Decision 55)."
+  - step: 14
+    phase: post-deploy
+    action: "c8 live -- the reader serves recs current-state (closed boundary read proof). --selftest-read is an ops_data_portal verb (NOT the smoke-test module)."
+    command: "bin/venv-python -m scripts.ops_data_portal --selftest-read --profile agent_platform"
+    expected: "SELFTEST_READ OK -- ducklake_reader returns rows for ops_recommendations over the closed boundary."
+    fix_if: "Fails -- the reader boundary is not serving; do not flip c8."
+  - step: 15
+    phase: post-deploy
+    action: "c7 live -- writer schema-enforcement gate is OBSERVED (not inferred): a schema-invalid write is loud-rejected. Runs the EC7 loud-fail gate (schema_reject + occ_exhaust raised, silent_drop false)."
+    command: "bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-loudfail --profile agent_platform"
+    expected: "LOUDFAIL OK schema_reject=raised occ_exhaust=raised silent_drop=false -- the ducklake_writer schema_gate loud-fails (maps to 422) on an invalid record; no write bypasses it."
+    fix_if: "schema_reject != raised (or a silent drop) -- the writer-owned schema gate (c7) is not enforcing live; do not flip c7 on routing inference alone."
+  - step: 16
+    phase: post-deploy
+    action: "c11 live -- warm-Neon churn / OCC-commit-latency re-gate at production-shaped concurrency (Decision 82 frame). Warm-up via the ops_data_portal --selftest-read verb, then --ops-churn-regate on the smoke module."
+    command: "bin/venv-python -m scripts.ops_data_portal --selftest-read --profile agent_platform && bin/venv-python -m scripts.ducklake_neon_smoke_test --ops-churn-regate --profile agent_platform"
+    expected: "CHURN_REGATE OK: collisions handled, per-invocation wall p95 < 2000ms (COMMIT_LATENCY_BUDGET_MS). The preceding selftest-read warms Neon so the gate does not fail on a cold endpoint."
+    fix_if: "p95 >= 2000ms or collisions unhandled on a warm endpoint -- headroom regressed; RCA before flipping c11. (Cold-Neon failure is a warm-up artefact, re-run after warming.)"
+  - step: 17
+    phase: post-deploy
+    action: "c13 live -- DQ-over-DuckLake for ops_recommendations is green (ULID/current-uniqueness/referential enforced; no leaked-probe automatable-null)."
+    command: "bin/venv-python -m scripts.data_quality_runner --tables ops_recommendations"
+    expected: "Verdict PASS -- SCD2 uniqueness + referential checks hold and no automatable not_null failure (rec-2114 probe leak resolved)."
+    fix_if: "FAIL -- inspect logs/debug/dq-latest.json; a red DQ blocks the c12/c13 flip and the closeout."
+  - step: 18
+    phase: post-deploy
+    action: "rec-2115 gap-1 live [ADMIN-GATED / CI-DELEGATED] -- maintenance-gc gate no longer 502s on the smoke catalog. Requires agent_platform_admin (PlatformAdmin break-glass); PlatformDev cannot invoke maintenance. Run from the ADMIN container or via the governed CI smoke job."
+    command: "bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-gc --profile agent_platform_admin"
+    expected: "MAINTENANCE_GC OK (files stable/lower, breaker not tripped). If agent_platform_admin is unavailable in-session, defer this step to the governed CI smoke job and record the delegation -- do NOT self-grant PlatformAdmin."
+    fix_if: "502/missing-table -- the gc-gate smoke-catalog fix (step 11) did not take effect against the live maintenance Lambda."
+  - step: 19
+    phase: post-deploy
+    action: "Bookkeeping + rec-closure (in /implement, on the verified VP pass) -- flip c1-c14, re-ground c9/c10, mark T2.19 complete; the Resolves: trailer closes the bundled recs via rec-autoclose, verified post-merge by a cache sync + grep (portal close fires at merge, so pre-merge closure is not observable)."
+    command: "grep -Eq 'status: complete' docs/ROADMAP-PLATFORM.yaml && ! bin/venv-python -m scripts.roadmap.platform_roadmap 2>/dev/null | grep -q 'T2.19.*open'"
+    expected: "T2.19 shows status:complete with c1-c14 met, c9/c10 text re-grounded, and evidence annotations; rec-2707/2114/2115 close via the Resolves: trailer (gap-2 obsolete) -- post-merge, confirm with `scripts.ops_data_portal --sync` then grep the cache for each rec status=closed."
+    fix_if: "T2.19 still shows open criteria -- the bookkeeping walk did not flip all declared closes_criteria; reconcile before merge. If a rec stays open post-merge, close via `ops_data_portal --update-rec rec-NNNN --status closed`."
+constraints:
+  - "No rescue agents or workaround loops (Decision 55). On an unrecoverable V3 failure, stop and RCA -- never inline-patch to force green, never relax a guard."
+  - "Single-Portal invariant preserved: all ops_recommendations writes transit ops_data_portal -> ducklake_writer (Decisions 78/81/84; Decision 69 is superseded -- cite the live form)."
+  - "rec-2114 probe purge is an SCD2 supersede via the writer on the caller-keyed test- keyspace (Decision 84 I-2 sanctioned exception; Decision 103/81 supersede mechanism). It is NOT a Decision-70 physical delete and NOT a new delete_rec verb."
+  - "No Lambda handler/runtime code is in scope: ducklake_writer/ducklake_reader are INVOKED, not rebuilt; c14 is verified by channel existence + a live smoke, not a fresh deploy. compute_affected_artifacts() returns {} for the source scope files."
+  - "Decision 79 deferral (data-pipeline asset): docs/ROADMAP-PLATFORM.yaml is a passive bundled asset of the active data-pipeline manifest. Its sole consumers (scheduled agents) are disabled (Decision 61/37/116), and data-pipeline code-deploy is decoupled/governed via deploy-prod-lambdas.yml (Decision 125/126). This roadmap-data edit triggers NO self-directed local Lambda deploy; if an asset refresh is ever wanted it routes through the governed channel."
+  - "Graduation dispositions (VF-05 / T3.21 / 12o): all 12 pre-deploy steps are graduation: not-applicable -- this verify-and-close plan introduces no net-new kernel-expressible verifier. The topology invariants are ALREADY enforced by registered checks (validate_warehouse_write_sources, validate_rec_write_paths, validate_vp_replay); the remaining pre-deploy steps are one-off closeout confirmations, standard pytest coverage, or the meta validate --pre run."
+  - "c11 warm churn re-gate uses the Decision 82 frame (N=4 concurrent invocations, per-invocation wall p95, COMMIT_LATENCY_BUDGET_MS=2000) against a warmed Neon endpoint -- NOT the retired in-container 8-thread harness. Neon egress stays within the Decision 88 budget."
+  - "Maintenance-gc live smoke (step 18) requires agent_platform_admin (PlatformAdmin break-glass); PlatformDev holds InvokeFunction on writer+reader only. Admin-gated/CI-delegated (Decision 119) -- never self-grant PlatformAdmin from CC-web."
+  - "Commit-flow rebase is MANDATORY: main advances fast (48 commits during this planning session, incl. the rec-2709 test-package decomposition PRs #595/#606). Before pushing /implement's roadmap edit, git fetch origin main && git rebase origin/main and re-confirm the T2.19 exit_criteria block + Decision 84 + the scope test paths are unchanged post-rebase -- the branch touches neither docs/ROADMAP-PLATFORM.yaml (beyond the T2.19 flip) nor docs/DECISIONS.md, so a stale push would revert main's advances (AGENTS.md Git-ops: DO auto-rebase at commit-flow time)."
+  - "/plan never flips criterion statuses. c1-c14 flips + T2.19 status:complete + completed_at + c9/c10 re-ground land ONLY in /implement's bookkeeping walk on the verified VP pass (Decision 90; Status-Trusted-Never-Inferred)."
+  - "SLOC: all scope files are additive small changes well under budget (maintenance_ops ~176, lambda_ops_gates ~223 (272 post-rebase), lambda_maintenance_gates ~159 (186 post-rebase)) -- no decomposition and no budget raise (Decision 128)."
+  - "Test coverage (test_coverage_checker): maintenance_ops.py -> tests/ops_data_portal/test_maintenance.py; lambda_ops_gates.py -> tests/ducklake_neon_smoke_test/test_lambda_ops_gates.py; lambda_maintenance_gates.py -> tests/ducklake_neon_smoke_test/test_lambda_maintenance_gates.py. (Test paths per the rec-2709 decomposition; re-verify at commit-flow rebase.)"
+context:
+  - "Decision-scout verdict: FLAGS_FOUND (Decisions triaged: 89 of 89). CITE (verbatim ids): Decision 84, Decision 81, Decision 78, Decision 48, Decision 90, Decision 103, Decision 82, Decision 88, Decision 107, Decision 55, Decision 72, Decision 79, Decision 125, Decision 126, Decision 61, Decision 37, Decision 116, Decision 119. Single-Portal invariant is governed by Decisions 78/81/84 (Decision 69 superseded)."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 round(s) (round-1: VP13 vacuous-grep + stale main-divergence + c7 inference-only; round-2: graduation dispositions 12o + rec-2709 decomposed test paths + --selftest-read wrong module; round-3: clean PROCEED, all resolved, no new defects)"
+  - "closes_criteria = T2.19:c1..c14. Per the 2026-07-15 silent-completion adjudication all 14 are already satisfied by shipped work; this plan produces fresh observed evidence and drives the /implement flip. c15 is already rehomed to T2.26 (met_by) with its gate rec-2113 closed -- out of scope here."
+  - "Decision 79 flag [WARN] resolution: deferral logged (see constraints) -- passive asset, disabled consumers, governed decoupled deploy channel; no local deploy triggered."
+  - "Decision 70 flag [NOTE] resolution: rec-2114 purge re-framed as an SCD2 supersede via the writer (Decision 103/81/84 I-2), not a Decision-70 physical delete."
+  - "HARD BLOCK cleared: rec-2707 (Critical, open, source=ci_rca) -- scope includes tests/ops_data_portal/test_ci_rca_fingerprint.py (the rec's source_file, post-decomposition) so the same-file Related-Work condition is satisfied; this reviewed /plan session is the sanctioned consumption path (Decision 55/72), not an inline hot-patch. rec-2707 is a seed-dependent test-isolation flake (passes in isolation; main CI currently green)."
+  - "Main divergence: preflight reported 0 behind/0 ahead at session start, but main advanced 48 commits during this long-running planning session (plan-critique round-1 caught the drift). The plan branch was REBASED onto origin/main at planning time (clean -- it only adds this plan file). The rebase pulled in the rec-2709 test-package decomposition (PRs #595/#606): tests/test_ops_data_portal.py -> tests/ops_data_portal/ package; tests/test_ducklake_neon_smoke_test.py -> tests/ducklake_neon_smoke_test/ package; tests/test_validate.py guard tests -> tests/checks/ops_governance/ -- all scope/VP paths were re-pointed accordingly (round-2). Post-rebase re-verified: T2.19 exit_criteria block unchanged (c1-c14 open, c15 rehomed). /implement MUST rebase again at its own commit-flow time (see constraints) -- main keeps advancing."
+  - "Adjudication evidence (2026-07-15): recs write/read cutover live since 2026-06-08/09/10; Decision 84 made DuckLake the sole ops backend; Decision 81 resolved OQ.7 (no Athena escape hatch) / OQ.10 (bounded OCC); DR gate rec-2113 CLOSED; the June-10 human-gated terraform apply (SSM DuckLakeEndpointDiscovery + drop_ops_recommendations_view) landed (successor T2.26 plan states ops_recommendations_current is already dropped; runtime serves recs every session); reader/writer manifests status:active; governed deploy+smoke channel landed at T2.38."
+  - "rec-2115 gap-1 is partly pre-fixed: lambda_maintenance_merge already passes force_recreate_tables=True; the residual is the gc gate. gap-2 (OPS_STORAGE_BACKEND=iceberg pyiceberg direct-read) is OBSOLETE (Decision 84 retired the flag/path) and is closed via the Resolves: trailer."
+  - "Verification nuance: pre-deploy static-anchor steps (1-6) are hermetic and verify already-shipped state (they pass on the current tree, so plan-merge VP-replay is safe); pytest and live-smoke steps are non-hermetic. Live PlatformDev steps (13-17) run in /implement's CC-web session; step 18 (maintenance-gc) is admin-gated/CI-delegated. VP13 asserts BOTH probe prefixes (test-ryw- from the ryw gate, test-roundtrip- from --selftest-roundtrip); step 15 gives c7 a fresh schema-reject 422 observation via the EC7 loudfail gate. --selftest-read is an ops_data_portal verb (steps 14, 16), NOT a smoke-test flag."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/ducklake-ops-migration-fpb-r38fc8)"
+  - "docs/PROJECT_CONTEXT.md read (operational-data-backbone section 2)"
+  - "Relevant decisions read via decision-scout (84/81/78/48/90/103/82/88/107/55/72/79/125/126/61/37/116/119)"
+  - "All scope files located and readable at their post-rec-2709-decomposition paths; test-coverage mapping confirmed"
+  - "Acceptance criteria understood and 1:1 mapped onto closes_criteria c1-c14 + the three bundled recs"
+  - "Re-verify the current max Decision header is unchanged (this plan ratifies no new Decision; it cites existing ones)"
+execution_steps:
+  - "tests/ops_data_portal/test_ci_rca_fingerprint.py: add patch.object(p, 'find_recent_ci_rca_rec_by_fingerprint', return_value=None) to test_file_rec_backstop_inserts_on_fingerprint_miss (rec-2707); confirm green across seeds (VP step 7)."
+  - "scripts/ops_portal/maintenance_ops.py: after a successful read-back, selftest_roundtrip supersedes its test-roundtrip-<uuid> probe via the writer (SCD2 supersede, status=superseded, caller-keyed test- keyspace; Decision 103/81/84 I-2) so no DQ-failing open probe lingers (rec-2114)."
+  - "scripts/ducklake_smoke/lambda_ops_gates.py: apply the same supersede-on-success purge to the ops_read_your_write gate's test-ryw- probe (rec-2114)."
+  - "tests/ops_data_portal/test_maintenance.py: add test_selftest_roundtrip_purges_probe asserting the supersede write on success (rec-2114 acceptance)."
+  - "scripts/ducklake_smoke/lambda_maintenance_gates.py: make lambda_maintenance_gc supply the smoke-catalog table pair (force_recreate_tables / merge-first ordering) so it does not 502 on a fresh catalog (rec-2115 gap-1)."
+  - "tests/ducklake_neon_smoke_test/test_lambda_ops_gates.py + test_lambda_maintenance_gates.py: add mocked-Function-URL unit tests for the ops_read_your_write purge and the gc-gate smoke-catalog handling."
+  - "Execute the Verification Plan: run each step; loop until pass. Pre-deploy steps 1-12 in-session; post-deploy 13-17 via PlatformDev; step 18 admin-gated/CI-delegated; on unrecoverable V3 failure stop and RCA (Decision 55)."
+  - "Before pushing: git fetch origin main && git rebase origin/main (commit-flow rebase, mandatory -- main advances fast); STOP on conflict and surface. Re-confirm the T2.19 exit_criteria block + Decision 84 + scope test paths are unchanged post-rebase before the criterion flip, so the roadmap edit does not revert main's advances."
+  - "Roadmap bookkeeping (ONLY on the verified VP pass): re-ground c9/c10 text to Decision 84 reality; flip c1-c14 status open->met with evidence annotations (c3 current-table, c4 by-elimination); set T2.19 status:complete + completed_at; keep c15 rehomed."
+  - "Close the bundled recs via the squash-merge Resolves: trailer (rec-2707, rec-2114, rec-2115 -- gap-2 annotated obsolete). Verify post-merge via scripts.ops_data_portal --sync then a cache grep for each rec status=closed."
+  - "Report: which criteria were verified with what observed evidence, the DQ verdict, and the T2.19 completion state."
+work_areas: []
+rollback: >-
+  Code/test/roadmap edits are revertible by dropping the branch (no infra apply, no Lambda deploy). The
+  rec-2114 supersede writes only affect throwaway test- keyspace rows. If a post-deploy smoke fails
+  unrecoverably, stop and RCA (Decision 55); the roadmap flips are gated on the verified VP pass, so a failed
+  VP leaves T2.19 criteria open (no false closeout).
