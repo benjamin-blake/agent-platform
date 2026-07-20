@@ -1,0 +1,501 @@
+schema_version: 1
+slug: "ducklake-maintenance-smoke-split"
+intent: >-
+  Split the privileged ducklake_maintenance Lambda into a CI-invokable smoke-safe function and an
+  admin-gated singleton holding the production-destructive verbs, so the T2.18 c9 post-deploy smoke
+  test runs autonomously in the governed CD channel without granting the always-on public-repo CI
+  identity invoke on a production-catalog-destructive Lambda -- advancing the self-improving loop's
+  no-human-in-the-critical-path goal while keeping factory-state blast radius behind IAM.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml
+phase: >-
+  Platform tier_item T2.18 (DuckLake maintenance pipeline replacing ops_compaction) follow-on --
+  closes c9 (autonomous per-Lambda smoke gate) and reconciles the silently-complete criteria;
+  product phase unaffected (platform-axis infrastructure only).
+scope:
+  - file: src/lambdas/ducklake_maintenance_smoke/handler.py
+    action: Create
+    purpose: >-
+      Smoke-safe Lambda entrypoint. Dispatch table = {merge, gc, breaker_probe, hot_merge} ONLY,
+      env-pinned to the smoke catalog (DUCKLAKE_DATA_PATH/META_SCHEMA default to smoke). Shares
+      src/common/ducklake_maintenance.py. Destructive/operational verbs are ABSENT from its dispatch,
+      so a crafted CI payload (e.g. action=catalog_reinit) returns 400 unknown-action.
+  - file: src/lambdas/ducklake_maintenance_smoke/__init__.py
+    action: Create
+    purpose: Package marker for the new Lambda slug.
+  - file: src/lambdas/ducklake_maintenance_smoke/manifest.yaml
+    action: Create
+    purpose: >-
+      CD.24 per-Lambda packaging manifest (Decision 79 coverage invariant). status active. Includes
+      the shared ducklake runtime/maintenance modules; excludes catalog_dr/pgclient (restore_drill
+      stays admin-side). lifecycle-decoupled code deploy via the governed channel (Decision 125/126).
+  - file: src/lambdas/ducklake_maintenance/handler.py
+    action: Modify
+    purpose: >-
+      Remove the 4 smoke actions (merge/gc/hot_merge/breaker_probe) from the dispatch table; retain
+      the production/operational verbs (catalog_reinit, merge_ops, reconcile_columns, restore_drill,
+      catalog_stats, clone_catalog). SLOC decreases (Decision 128; decreases unrestricted).
+  - file: src/lambdas/ducklake_maintenance/manifest.yaml
+    action: Modify
+    purpose: Update notes to reflect the admin-gated destructive/operational role after the split.
+  - file: terraform/personal/ducklake_maintenance_smoke.tf
+    action: Create
+    purpose: >-
+      New smoke function + smoke-prefix-scoped IAM execution role (S3 RW+Delete on the SMOKE prefix
+      only, Neon DSN read, DuckLakeMaintenance metrics, logs), reserved_concurrent_executions=1,
+      AWS_IAM Function URL, deps+extensions layers (no pgclient). Re-targeted EventBridge rules for
+      merge (daily) / gc (weekly) / hot_merge (6h). Breaker CloudWatch alarm (namespace-scoped).
+      lifecycle { ignore_changes = [source_code_hash] } (Decision 125/126). Outputs the smoke
+      Function URL + name.
+  - file: terraform/personal/ducklake_maintenance.tf
+    action: Modify
+    purpose: >-
+      Remove the merge/gc/hot_merge EventBridge rules+targets+permissions (moved to the smoke fn);
+      keep the admin function, the merge_ops (prod, 6h) schedule, and the breaker alarm reference.
+      Narrow the admin exec role to drop the now-unused smoke-prefix S3 grant (prod prefix retained;
+      restore_drill scratch lives under the prod prefix). Keep the existing AWS_IAM Function URL.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Grant github_ci_branch lambda:InvokeFunction/InvokeFunctionUrl/GetFunctionUrlConfig on the NEW
+      smoke function ARN ONLY (never the admin maintenance ARN). Add the new smoke exec role ARN to
+      github_ci_apply IAMRolesRead (enumerated, Decision 98/129 pt2). Do NOT add per-ARN
+      LambdaRead/EventBridgeRead grants -- Decision 129 pt1 already broadened those to
+      function:agent-platform-* / rule:agent-platform-* account-wide (per-ARN additions are redundant
+      and risk tripping validate_ci_refresh_read_coverage).
+  - file: .github/workflows/deploy-ducklake-lambdas.yml
+    action: Modify
+    purpose: >-
+      Build+deploy the 5th ducklake function; add it to the deploy-record false-green guard loop;
+      add post-deploy smoke steps (--lambda-maintenance-merge/gc/breaker/hot-merge) resolving the
+      smoke Function URL under the github_ci_branch role. This is the autonomous c9 gate.
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: Add the 5th ducklake function to the --ducklake-only build + --deploy code-update set.
+  - file: scripts/build_lambda_config.py
+    action: Modify
+    purpose: Register the smoke function name -> lambda-packages/ducklake-maintenance-smoke.zip mapping.
+  - file: scripts/ducklake_smoke/core.py
+    action: Modify
+    purpose: >-
+      Add DUCKLAKE_MAINTENANCE_SMOKE_URL env + _function_url "maintenance_smoke" -> env /
+      terraform-output ducklake_maintenance_smoke_function_url resolution.
+  - file: scripts/ducklake_smoke/lambda_maintenance_gates.py
+    action: Modify
+    purpose: >-
+      Repoint the 4 maintenance smoke gates from _function_url("maintenance") to
+      _function_url("maintenance_smoke"); update docstrings (no longer "requires agent_platform_admin"
+      -- now invoked by github_ci_branch on the smoke function).
+  - file: tests/test_ducklake_maintenance_smoke_handler.py
+    action: Create
+    purpose: >-
+      Unit tests for the new handler: dispatch table contains exactly the 4 smoke actions and NOT any
+      destructive verb; a destructive-action payload returns 400 unknown-action; the smoke actions do
+      not read data_path/meta_schema from the event (env-pinned). 100% coverage of the new module.
+  - file: tests/test_ducklake_maintenance_handler.py
+    action: Modify
+    purpose: Assert the 4 smoke actions are removed from the admin dispatch and operational verbs remain.
+  - file: tests/test_ducklake_neon_smoke_test.py
+    action: Modify
+    purpose: Update gate patch targets / URL resolution for the repointed maintenance_smoke gates.
+  - file: tests/test_build_lambda_config.py
+    action: Modify
+    purpose: Assert the 5th ducklake function + zip mapping is registered.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Freshness-Gate bookkeeping on T2.18: flip c1(mechanism)/c3/c5/c6/c7 -> met (met_by this plan);
+      re-ground c2 to smoke-scoped-met + prod-GC-owned-by-T2.26, and re-home c4 (ops_compaction
+      retirement) and c8 (final numeric co-tuning + real high-write tables) to T2.26 by criterion-text
+      update; re-ground c9 to the split + autonomous CI gate; update files_in_scope + progress_note.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Author the new Decision (privileged-verb Lambda decomposition rule; amends Decision 81 cl.1
+      3->4 runtime artifacts) at the next free ## Decision NNN header. Written to ops_decisions via
+      --backfill-decisions-md at /implement time (Decision 84/105); NEVER a direct warehouse write.
+bundled_recommendations: []
+closes_criteria:
+  - "T2.18:c1"
+  - "T2.18:c3"
+  - "T2.18:c5"
+  - "T2.18:c6"
+  - "T2.18:c7"
+  - "T2.18:c9"
+infrastructure_dependencies:
+  - >-
+    terraform/personal apply -- NEW smoke IAM execution role CREATE is guard-BLOCKED
+    (scripts/terraform_apply_guard.py IAM fail-closed, Decision 77) -> routes to the human-gated
+    tf-gated-apply GitHub Environment (Decision 92/T2.22). IAM apply MUST precede the code deploy.
+  - >-
+    github_ci_branch invoke-grant is an aws_iam_role_policy UPDATE -- classify per Decision 92 pt5
+    (in-budget IAM inline-policy UPDATE may auto-apply; out-of-budget routes to gated-apply). The
+    speculative-plan job's guard verdict on the PR is authoritative for the routing.
+  - >-
+    Code deploy via the governed CD channel .github/workflows/deploy-ducklake-lambdas.yml (T2.38,
+    Decision 125/126); the new function carries lifecycle { ignore_changes = [source_code_hash] } so
+    code redeploys do not surface as a terraform diff on the IAM-gated apply path.
+  - >-
+    Provider-init egress: terraform/personal uses the kislerdm/neon third-party provider (github.com
+    checksum fetch blocked from a stock CC-web session, Decision 119) -- local terraform steps are
+    fmt/grep only; terraform validate/plan/apply are CI-delegated (terraform-validate check +
+    speculative-plan/apply-sandbox jobs are authoritative).
+acceptance_criteria:
+  - >-
+    A new smoke-safe Lambda ducklake_maintenance_smoke exists whose dispatch table is exactly
+    {merge, gc, breaker_probe, hot_merge}; no production-destructive verb is reachable on it.
+  - >-
+    The smoke function's IAM execution role can write/delete S3 only under the smoke prefix (no prod
+    prefix), and reserved_concurrent_executions=1 is preserved.
+  - >-
+    github_ci_branch is granted invoke on the smoke function ARN only; it is NOT granted invoke on
+    the admin ducklake_maintenance ARN (verified by grep of the diffed oidc.tf).
+  - >-
+    The admin ducklake_maintenance function retains the production/operational verbs, its prod-prefix
+    IAM, the merge_ops schedule, and reserved_concurrent_executions=1; the 4 smoke actions are gone
+    from its dispatch.
+  - >-
+    deploy-ducklake-lambdas.yml builds/deploys the smoke function and runs the four
+    --lambda-maintenance-* smoke gates post-deploy under github_ci_branch (the autonomous c9 gate).
+  - >-
+    The four maintenance smoke gates pass against the deployed smoke function (c9 verified live).
+  - >-
+    A new Decision is written to ops_decisions (via --backfill-decisions-md) ratifying the
+    scope-by-worst-verb rule and amending Decision 81 cl.1 (3->4 runtime artifacts).
+  - >-
+    T2.18 exit_criteria are reconciled: c1/c3/c5/c6/c7 flipped met with proof; c2 re-grounded
+    (smoke-met, prod-GC->T2.26); c4/c8 re-homed to T2.26; c9 flipped met on the CD gate green.
+  - "bin/venv-python -m scripts.validate --pre passes on the branch diff."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Blast-radius invariant: the smoke handler dispatch admits ONLY the 4 smoke actions and NO
+      production-destructive verb.
+    command: >-
+      grep -qE '"merge":|"gc":|"hot_merge":|"breaker_probe":' src/lambdas/ducklake_maintenance_smoke/handler.py
+      && ! grep -qE 'catalog_reinit|merge_ops|reconcile_columns|restore_drill|clone_catalog' src/lambdas/ducklake_maintenance_smoke/handler.py
+    expected: >-
+      Exit 0 -- the 4 smoke actions are present and none of the 5 production-destructive/operational
+      verbs appear anywhere in the smoke handler source.
+    fix_if: >-
+      A destructive verb name appears in the smoke handler, or a smoke action is missing -- a crafted
+      CI payload could then reach a production verb; remove the verb from the smoke dispatch.
+    hermetic: true
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Env-pinning invariant: the smoke actions do not read data_path/meta_schema from the event (they
+      use the env-pinned smoke connection), so a payload cannot redirect them to the prod catalog.
+    command: >-
+      ! grep -nE "event.get\\((['\"])(data_path|meta_schema)\\1\\)" src/lambdas/ducklake_maintenance_smoke/handler.py
+    expected: Exit 0 -- no data_path/meta_schema event override exists in the smoke handler.
+    fix_if: >-
+      A smoke action accepts a caller-supplied data_path/meta_schema; remove it so the connection is
+      env-pinned to the smoke catalog only.
+    hermetic: true
+  - step: 3
+    phase: pre-deploy
+    action: New smoke-handler unit tests pass (dispatch, unknown-action 400 for a destructive payload, env-pinning).
+    command: bin/venv-python -m pytest tests/test_ducklake_maintenance_smoke_handler.py -x -q
+    expected: All tests pass; the destructive-payload case asserts a 400 unknown-action response.
+    fix_if: >-
+      Dispatch admits a destructive action, env pinning is wrong, or the 400 path is not returned.
+    hermetic: false
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      The admin handler no longer dispatches the 4 smoke actions and still dispatches the operational
+      verbs.
+    command: bin/venv-python -m pytest tests/test_ducklake_maintenance_handler.py -x -q
+    expected: >-
+      Tests pass; assertions confirm merge/gc/hot_merge/breaker_probe are absent from the admin
+      dispatch and catalog_reinit/merge_ops/reconcile_columns/restore_drill remain.
+    fix_if: A smoke action is still routable on the admin function, or an operational verb was dropped.
+    hermetic: false
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      IAM grant invariant: github_ci_branch is granted invoke on the smoke function ARN and NOT on
+      the admin maintenance function ARN.
+    command: >-
+      grep -n 'ducklake_maintenance_smoke' terraform/personal/oidc.tf | grep -qi invoke
+      || grep -nA4 'DuckLakeInvokeCI\|MaintenanceSmokeInvokeCI' terraform/personal/oidc.tf | grep -q 'ducklake_maintenance_smoke'
+    expected: >-
+      The smoke function ARN appears in a github_ci_branch invoke statement; a manual read confirms
+      the admin ducklake_maintenance.arn is NOT added to any github_ci_branch invoke statement.
+    fix_if: >-
+      The admin maintenance ARN was granted to github_ci_branch (blast-radius widen -- the whole point
+      of the split is defeated), or the smoke ARN grant is missing.
+    hermetic: true
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Decision 129 conformance: no redundant per-ARN Lambda/EventBridge refresh-read grants were
+      added; the CI refresh-read coverage verifier passes.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      --pre passes including validate_ci_refresh_read_coverage (the new smoke role is enumerated in
+      IAMRolesRead; the function/rule are covered by the D129 account-wide prefixes -- no per-ARN
+      lambda/eventbridge additions).
+    fix_if: >-
+      The coverage verifier fails (an unmapped resource type or a redundant per-ARN grant); align with
+      Decision 129 pt1/pt4 by removing per-ARN lambda/eventbridge grants and mapping the role.
+    hermetic: false
+  - step: 7
+    phase: pre-deploy
+    action: build_lambda + config register the 5th ducklake function; smoke gates repointed to the smoke URL.
+    command: >-
+      grep -q 'ducklake_maintenance_smoke' scripts/build_lambda.py
+      && grep -q 'ducklake-maintenance-smoke.zip' scripts/build_lambda_config.py
+      && grep -q 'DUCKLAKE_MAINTENANCE_SMOKE_URL' scripts/ducklake_smoke/core.py
+      && grep -q 'maintenance_smoke' scripts/ducklake_smoke/lambda_maintenance_gates.py
+    expected: All four references present -- the build set, zip mapping, URL env, and gate repoint are wired.
+    fix_if: A wiring reference is missing; the CD channel would fail to build/deploy or resolve the smoke URL.
+    hermetic: true
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Re-adjudicate c6 (destructive GC guardrails pinned) -- constants unchanged and cleanup_all never
+      True in scheduled runs.
+    command: >-
+      grep -qE 'SNAPSHOT_RETAIN_DAYS: int = 30' src/common/ducklake_maintenance.py
+      && grep -qE 'FILE_CLEANUP_GRACE_DAYS: int = 7' src/common/ducklake_maintenance.py
+      && grep -qE 'SNAPSHOT_FLOOR: int = 2' src/common/ducklake_maintenance.py
+      && grep -qE '_DEFAULT_GC_BREAKER_FILE_FRACTION: float = 0.20' src/common/ducklake_maintenance.py
+      && ! grep -qE 'cleanup_all=True' src/common/ducklake_maintenance.py
+    expected: All guardrail constants match CD.33/Decision 81; cleanup_all=True appears nowhere.
+    fix_if: A guardrail drifted or cleanup_all=True is present -- do NOT relax to pass (Decision 55).
+    hermetic: true
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Re-adjudicate c5 (two singleton no-LLM cadences) and c1 (inlining disabled + sequence) --
+      reserved_concurrent_executions=1 on both maintenance functions; connection-level inlining=0.
+    command: >-
+      grep -q 'reserved_concurrent_executions' terraform/personal/ducklake_maintenance_smoke.tf
+      && grep -q 'reserved_concurrent_executions' terraform/personal/ducklake_maintenance.tf
+      && grep -q 'SET ducklake_default_data_inlining_row_limit=0' src/common/ducklake_runtime.py
+      && ! grep -rqiE 'litellm|anthropic|openai|gemini' src/lambdas/ducklake_maintenance_smoke/handler.py
+    expected: >-
+      Both functions pin singleton concurrency; inlining is disabled at the connection level; no LLM
+      client import in the smoke handler.
+    fix_if: A maintenance function lost its singleton cap, inlining re-enabled, or an LLM import leaked in.
+    hermetic: true
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Re-adjudicate c3 (cadence mechanism) and c7 (weekly catalog DR + freshness alarm) -- EventBridge
+      cadences on the correct functions; DR weekly with the 7-day alarm.
+    command: >-
+      grep -q 'ducklake_maintenance_merge_ops' terraform/personal/ducklake_maintenance.tf
+      && grep -qE 'ducklake_maintenance_(merge|gc|hot_merge)' terraform/personal/ducklake_maintenance_smoke.tf
+      && grep -q 'cron(0 3 ? \* SUN \*)' terraform/personal/ducklake_catalog_dr.tf
+      && grep -qE 'evaluation_periods  = 7' terraform/personal/ducklake_catalog_dr.tf
+    expected: >-
+      merge_ops stays on the admin fn; merge/gc/hot_merge are on the smoke fn; catalog DR is weekly
+      (Sunday 03:00 UTC) with evaluation_periods=7.
+    fix_if: A cadence is on the wrong function or the DR cadence/alarm drifted from Decision 88.
+    hermetic: true
+  - step: 11
+    phase: pre-deploy
+    action: Full fast presubmit passes on the branch diff (ruff, mypy, pytest, coverage, SLOC, roadmap referential guard, VP replay).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      --pre passes; validate_platform_roadmap accepts the closes_criteria refs (T2.18:c1/c3/c5/c6/c7/c9
+      all exist) and the Freshness-Gate criterion edits; test_coverage_checker passes for every modified source file.
+    fix_if: Any gate fails; fix forward (Decision 55) -- never relax a check to pass.
+    hermetic: false
+  - step: 12
+    phase: post-deploy
+    action: >-
+      CI-delegated terraform gate (Decision 119): the terraform-validate check and the speculative-plan
+      job (guard verdict) on the PR are green; the smoke role CREATE routes to tf-gated-apply.
+    command: >-
+      echo "CI-AUTHORITATIVE: confirm terraform-validate + speculative-plan (guard verdict) green via mcp__github__pull_request_read get_check_runs; the new smoke IAM role CREATE is guard-BLOCKED -> approve the tf-gated-apply Environment (benjamin-blake) so apply-sandbox applies the saved plan.bin"
+    expected: >-
+      terraform-validate green; speculative-plan posts the predicted guard verdict (BLOCKED on the new
+      IAM role); the gated-apply is approved and apply-sandbox writes a green convergence record.
+    fix_if: >-
+      terraform-validate fails (fix the .tf and re-push) or the guard verdict is unexpected (re-scope
+      the IAM delta); do NOT hand-apply from a laptop.
+    hermetic: false
+  - step: 13
+    phase: post-deploy
+    action: >-
+      Autonomous c9 gate: after the governed CD channel deploys the smoke function, the four
+      maintenance smoke gates pass (run by deploy-ducklake-lambdas.yml under github_ci_branch, or from
+      the admin container with the smoke URL resolved).
+    command: >-
+      bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-merge
+      && bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-gc
+      && bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-breaker
+      && bin/venv-python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-hot-merge
+    expected: >-
+      MAINTENANCE_MERGE OK, MAINTENANCE_GC OK (breaker not tripped, files stable), MAINTENANCE_BREAKER
+      OK (forced 500 trip), MAINTENANCE_HOT_MERGE OK -- all against the smoke catalog. Closes c9.
+    fix_if: >-
+      A gate fails or returns AccessDenied -- the CI invoke grant or the smoke function deploy is wrong;
+      the false-green deploy-record guard must also be green (source_git_sha == github.sha).
+    hermetic: false
+  - step: 14
+    phase: post-deploy
+    action: >-
+      The bundled Decision is authored in DECISIONS.md and written to ops_decisions via the portal
+      (never a direct warehouse write).
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
+    expected: >-
+      The new ## Decision NNN header (scope-by-worst-verb rule; amends Decision 81 cl.1 3->4 artifacts)
+      is present in DECISIONS.md and the backfill reports the ops_decisions row upserted.
+    fix_if: The header is malformed or the backfill errors; fix the DECISIONS.md entry and re-run.
+    hermetic: false
+  - step: 15
+    phase: post-deploy
+    action: >-
+      Roadmap bookkeeping applied and internally consistent: c9 flipped met (met_by this plan) after
+      the CD gate; c2 re-grounded (smoke-met, prod-GC->T2.26); c4/c8 re-homed to T2.26.
+    command: >-
+      grep -nA2 'id: c9' docs/ROADMAP-PLATFORM.yaml | grep -q 'status: met'
+      && bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml
+    expected: >-
+      c9 shows status met with a met_by pointer; the plan document validates (closes_criteria refs
+      resolve to real T2.18 criteria) and the c2/c4/c8 re-homing text names T2.26.
+    fix_if: A criterion flip is missing or a closes_criteria ref is dangling (validate_platform_roadmap fails).
+    hermetic: false
+constraints:
+  - >-
+    The smoke function's dispatch table MUST NOT contain any production-destructive/operational verb
+    (catalog_reinit, merge_ops, reconcile_columns, restore_drill, clone_catalog, catalog_stats). The
+    boundary is the resource shape + IAM, NOT an in-handler guard (an agent could edit a guard out).
+  - >-
+    github_ci_branch (and any CI identity) must NEVER be granted lambda:InvokeFunction on the admin
+    ducklake_maintenance ARN. CI invoke is scoped to the smoke function ARN only.
+  - >-
+    Do not relax any CD.33/Decision 81 guardrail constant (retain days, grace, floor, breaker
+    fraction/bytes, weekly cadence, cleanup_all=False) to make a gate pass (Decision 55).
+  - >-
+    Decisions are written ONLY via scripts.ops_data_portal (DECISIONS.md numbering + backfill to
+    ops_decisions); never a direct warehouse write, never a prose-doc edit (Decision 84/86/105).
+  - >-
+    terraform validate/plan/apply for terraform/personal are CI-delegated (Decision 119); local
+    terraform steps are fmt/grep only. Agents never self-direct terraform apply; the IAM role CREATE
+    is human-gated via tf-gated-apply (Decision 77/92/126).
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "Only modify files listed in scope."
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 non-blocking flags;
+    89/89 decisions triaged). CITE: dec-81, dec-79, dec-77, dec-92, dec-98, dec-129, dec-126, dec-125,
+    dec-84, dec-105, dec-101, dec-55, dec-86; RELATED: dec-128, dec-88, dec-62, dec-48, dec-104,
+    dec-117, dec-44.
+  - >-
+    gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<pending> after 0 round(s).
+  - >-
+    Decision-scout WARN (Decision 129): dropped the per-ARN Lambda/EventBridge refresh-read grants
+    (D129 pt1 already broadened LambdaRead/EventBridgeRead to agent-platform-* account-wide, and
+    validate_ci_refresh_read_coverage fails loud on unmapped types); only the new IAM role is
+    enumerated in IAMRolesRead (iam stays enumerated per D129 pt2 / dec-98). Folded into scope + VP6.
+  - >-
+    Decision-scout NOTE (Decision 81): the split makes the runtime artifact set four
+    (writer/reader/maintenance + maintenance_smoke) and a second maintenance singleton -- consistent
+    with dec-81 cl.1's own blast-radius/IAM-isolation rationale (extension, not reversal). The bundled
+    Decision explicitly amends dec-81 cl.1's enumeration and records reserved_concurrency=1 on both
+    maintenance functions.
+  - >-
+    Architectural rationale (Fable frontier-architecture consult): scope every identity by the worst
+    verb it can reach, and enforce that scope in a primitive OUTSIDE the agent's merge loop --
+    reversible-and-disposable verbs are agent-autonomous by default; irreversible or factory-state
+    verbs get their own resource so IAM (not handler code) can say no. lambda:InvokeFunction is
+    per-function not per-action, so the boundary is enforced by reshaping the resource (split), not by
+    an in-handler guard the agent-authored codebase could edit. The DuckLake catalog is factory state
+    (recs/decisions/operational memory) -- production-grade even pre-MVP; the always-on CI identity on
+    a PUBLIC repo is injection-adjacent (confused-deputy). This is the reason A (human-gated) and B-i
+    (grant CI invoke on the multi-tool) were rejected in favour of B-ii (split).
+  - >-
+    BUNDLED DECISION (draft -- authored at /implement, NOT during planning per dec-105). Title:
+    "Privileged-verb Lambda decomposition: scope identities by worst reachable verb; enforce the
+    boundary in a primitive outside the agent merge loop." Body: ratifies the one-line rule above;
+    realized by splitting ducklake_maintenance into a CI-invokable smoke-safe function (disposable
+    smoke catalog, smoke-scoped exec role) and an admin-gated singleton retaining the
+    production-destructive verbs. AMENDS Decision 81 cl.1 (runtime artifacts 3 -> 4;
+    reserved_concurrency=1 preserved on both maintenance functions). Reversal conditions: at MVP when
+    SIT/PROD accounts stand up (dec-77 platform train), the destructive function moves behind the
+    second-approver gate -- the split is a durable artifact, not throwaway; if per-action Lambda
+    authorization becomes available, the resource split may be revisited but the identity-scoping rule
+    stands. Re-check the max Decision number at /implement time (numbering race).
+  - >-
+    Freshness-Gate adjudication of T2.18 (all 9 criteria were status:open but the impl is essentially
+    complete): c1(mechanism)/c3/c5/c6/c7 = silently met (re-adjudicated by VP8-10); c2 = smoke-scoped
+    met (weekly gc scheduled + CI gc gate) with production destructive GC + N-cycle S3-stability owned
+    by T2.26 (rec-2113 start gate); c4 (ops_compaction retirement) owned by T2.26 c3 (BLOCKED on T2.36
+    telemetry retirement + T3.20/CD.40 ops_session_log); c8 final numeric co-tuning + real high-write
+    tables owned by T2.26 (telemetry not yet on DuckLake, T2.36); c9 = closed by this plan's split +
+    autonomous CI gate.
+  - >-
+    HARD BLOCK status: rec-2707 (Critical ci_rca) is CLOSED (PR #586); no open ci_rca recs at plan
+    time -- no deferral rationale required.
+  - >-
+    Deploy channel realized: .github/workflows/deploy-ducklake-lambdas.yml is the governed
+    code-deploy channel (landed T2.38, dec-125/126); the new function is code/infra-decoupled via
+    lifecycle ignore_changes=[source_code_hash].
+  - >-
+    Branch was 0 commits behind origin/main at planning time (main_freshness ok); no Scope-file
+    overlap with main since branch. convergence_health green, terraform_pending false.
+  - >-
+    The catalog_dr Lambda is already a SEPARATE function (ducklake_catalog_dr) -- out of scope here;
+    only the ducklake_maintenance multi-tool is split.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/trusting-faraday-rdy2u3)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision-scout CITE decisions read at /implement (esp. dec-81, dec-129, dec-92, dec-98, dec-77)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirm the max ## Decision NNN header in DECISIONS.md before authoring the bundled Decision (numbering race)
+  - Confirm /implement runs in an admin-profile container if invoking the smoke gates locally (else rely on the CD channel)
+execution_steps:
+  - >-
+    Create src/lambdas/ducklake_maintenance_smoke/{__init__.py,handler.py}: dispatch = {merge, gc,
+    breaker_probe, hot_merge} only, reusing src/common/ducklake_maintenance.py; env-pinned to the
+    smoke catalog; unknown/destructive action -> 400. Create the manifest.yaml (status active, deps +
+    extensions, no pgclient/catalog_dr).
+  - >-
+    Modify src/lambdas/ducklake_maintenance/handler.py to remove the 4 smoke actions from _ACTIONS
+    (keep the operational verbs); update its manifest.yaml notes.
+  - >-
+    Create terraform/personal/ducklake_maintenance_smoke.tf (smoke function + smoke-scoped exec role +
+    Function URL + re-targeted merge/gc/hot_merge EventBridge rules + breaker alarm + outputs;
+    ignore_changes=[source_code_hash]). Modify ducklake_maintenance.tf to drop those 3 rules and the
+    smoke-prefix S3 grant; keep merge_ops + the admin function + its Function URL.
+  - >-
+    Modify terraform/personal/oidc.tf: github_ci_branch invoke on the smoke ARN only; add the smoke
+    exec role to github_ci_apply IAMRolesRead (enumerated); NO per-ARN lambda/eventbridge refresh-read
+    (Decision 129).
+  - >-
+    Modify .github/workflows/deploy-ducklake-lambdas.yml (build/deploy the 5th fn + false-green guard
+    entry + post-deploy maintenance smoke steps); scripts/build_lambda.py + build_lambda_config.py
+    (5th fn); scripts/ducklake_smoke/core.py + lambda_maintenance_gates.py (smoke URL + gate repoint).
+  - >-
+    Create tests/test_ducklake_maintenance_smoke_handler.py; update tests/test_ducklake_maintenance_handler.py,
+    tests/test_ducklake_neon_smoke_test.py, tests/test_build_lambda_config.py. Ensure 100% coverage
+    for every modified/new source file (test_coverage_checker).
+  - >-
+    Author the bundled Decision in docs/DECISIONS.md (next free number, verified at execution time);
+    apply the Freshness-Gate bookkeeping to docs/ROADMAP-PLATFORM.yaml (flip c1/c3/c5/c6/c7 met with
+    met_by; re-ground c2; re-home c4/c8 to T2.26; re-ground c9; update files_in_scope + progress_note).
+  - >-
+    Execute the Verification Plan pre-deploy steps (loop until green). Push; open the PR; the
+    speculative-plan job + terraform-validate run. Approve the tf-gated-apply Environment for the new
+    IAM role; apply-sandbox applies the saved plan.bin.
+  - >-
+    After apply converges, deploy code via the governed CD channel; run the post-deploy VP steps
+    (12-15) -- the four smoke gates (c9), --backfill-decisions-md, and the roadmap-bookkeeping
+    verification. On the CD smoke green, flip c9 met.
+  - "Report: what was implemented, all VP results, and the Decision id filed."
+rollback: >-
+  Pre-apply: revert the branch (no infra changed). Post-apply: the smoke function + its role/URL/rules
+  are additive; to roll back, re-target the 3 EventBridge rules to the admin function, remove the
+  github_ci_branch smoke invoke grant + the smoke function/role (admin apply), and restore the 4 smoke
+  actions to the admin dispatch. The admin function retains full capability throughout, so maintenance
+  cadences never lapse. No warehouse rollback for the Decision (append-only; supersede via a new
+  Decision if reversed).
