@@ -22,6 +22,7 @@ try:
 
     _BOTO3_AVAILABLE = True
 except ImportError:
+    boto3 = None
     _BOTO3_AVAILABLE = False
 
 from scripts.aws_profile import resolve_aws_profile
