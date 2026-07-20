@@ -197,6 +197,10 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-writer",
       "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-reader",
       "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance",
+      # T2.18 c9 split gap (same class as rec-2688 for ducklake-deploy): the smoke exec role must be
+      # refresh-readable by github_ci_plan/drift once it enters terraform/personal state, or every
+      # subsequent plan against this module fails closed with AccessDenied.
+      "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance-smoke",
       # T2.43 gap (same class as rec-2688 for ducklake-deploy): these three prod-class execution
       # roles must be refresh-readable by github_ci_plan/drift once they enter terraform/personal
       # state, or every subsequent plan against this module fails closed with AccessDenied.
@@ -492,6 +496,22 @@ data "aws_iam_policy_document" "github_ci_branch" {
       "${aws_lambda_function.ducklake_writer.arn}:*",
       aws_lambda_function.ducklake_reader.arn,
       "${aws_lambda_function.ducklake_reader.arn}:*",
+    ]
+  }
+
+  statement {
+    # T2.18 c9 split (bundled Decision amending Decision 81 cl.1): deploy-ducklake-lambdas.yml's
+    # smoke job invokes the four maintenance smoke gates (--lambda-maintenance-merge/gc/breaker/
+    # hot-merge) post-deploy, the autonomous c9 gate. Scoped to the SMOKE function ARN ONLY -- this
+    # is the whole point of the split: github_ci_branch (the always-on public-repo CI identity) must
+    # NEVER be granted invoke on the admin ducklake_maintenance ARN (see DuckLakeInvokeCI above,
+    # which deliberately omits it, and ducklake_maintenance.tf, which grants no CI invoke at all).
+    sid     = "MaintenanceSmokeInvokeCI"
+    effect  = "Allow"
+    actions = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
+    resources = [
+      aws_lambda_function.ducklake_maintenance_smoke.arn,
+      "${aws_lambda_function.ducklake_maintenance_smoke.arn}:*",
     ]
   }
 
@@ -940,6 +960,9 @@ data "aws_iam_policy_document" "github_ci_ducklake_deploy" {
       aws_lambda_function.ducklake_reader.arn,
       aws_lambda_function.ducklake_maintenance.arn,
       aws_lambda_function.ducklake_catalog_dr.arn,
+      # T2.18 c9 split: the 5th DuckLake function. Without this the governed CD deploy
+      # (deploy-ducklake-lambdas.yml) AccessDenies on UpdateFunctionCode for the smoke function.
+      aws_lambda_function.ducklake_maintenance_smoke.arn,
     ]
   }
 

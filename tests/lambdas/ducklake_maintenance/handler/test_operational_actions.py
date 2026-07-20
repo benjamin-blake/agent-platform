@@ -109,14 +109,13 @@ def test_restore_drill_pg_dump_failure_loud_fails():
             h.action_restore_drill({"action": "restore_drill"}, None)
 
 
-def test_handler_connectionless_action_skips_open_connection():
-    with (
-        patch.object(h, "_open_connection") as open_mock,
-        patch.dict(h._ACTIONS, {"catalog_reinit": MagicMock(return_value={"ok": True})}),
-    ):
+def test_handler_dispatches_catalog_reinit_without_a_connection_arg():
+    """The handler never pre-opens a connection -- every action receives con=None (T2.18 c9 split)."""
+    action_mock = MagicMock(return_value={"ok": True})
+    with patch.dict(h._ACTIONS, {"catalog_reinit": action_mock}):
         r = h.handler({"action": "catalog_reinit", "data_path": "s3://b/ducklake/"})
     assert r["statusCode"] == 200
-    open_mock.assert_not_called()
+    assert action_mock.call_args.args[1] is None
 
 
 # ---------------------------------------------------------------------------
@@ -239,30 +238,23 @@ def test_action_merge_ops_emits_metrics():
     assert "MergeOpsTablesCount" in metric_names
 
 
-def test_action_merge_ops_handler_does_not_open_smoke_connection():
-    """Handler must NOT call _open_connection for merge_ops (action is connectionless)."""
-    with (
-        patch.object(h, "_open_connection") as open_mock,
-        patch.dict(
-            h._ACTIONS,
-            {
-                "merge_ops": MagicMock(
-                    return_value={
-                        "ok": True,
-                        "action": "merge_ops",
-                        "tables": [],
-                        "files_before": 0,
-                        "files_after": 0,
-                        "elapsed_ms": 1.0,
-                        "per_table": [],
-                    }
-                )
-            },
-        ),
-    ):
+def test_action_merge_ops_handler_receives_no_connection():
+    """Handler dispatches merge_ops with con=None -- the action opens its own connection."""
+    action_mock = MagicMock(
+        return_value={
+            "ok": True,
+            "action": "merge_ops",
+            "tables": [],
+            "files_before": 0,
+            "files_after": 0,
+            "elapsed_ms": 1.0,
+            "per_table": [],
+        }
+    )
+    with patch.dict(h._ACTIONS, {"merge_ops": action_mock}):
         r = h.handler({"action": "merge_ops", "data_path": "s3://b/ducklake/", "meta_schema": "ducklake_ops"})
     assert r["statusCode"] == 200
-    open_mock.assert_not_called()
+    assert action_mock.call_args.args[1] is None
 
 
 def test_action_merge_ops_no_destructive_primitives():
@@ -336,16 +328,14 @@ def test_action_catalog_stats_requires_meta_schema():
 
 
 def test_action_catalog_stats_is_connectionless_and_attach_free():
-    """The handler must NOT pre-open the smoke connection for catalog_stats (metadata-only, ATTACH-free)."""
+    """catalog_stats is metadata-only (ATTACH-free) -- the handler dispatches it with con=None."""
     with (
-        patch.object(h, "_open_connection") as open_mock,
         patch.object(h.rt, "fetch_dsn", return_value=_FULL_DSN),
         patch.object(h.maint, "catalog_stats", return_value={"ok": True, "catalog_metadata_bytes": 0}),
         patch.object(h, "_emit_maintenance_metric"),
     ):
         r = h.handler({"action": "catalog_stats", "meta_schema": "ducklake_ops"})
     assert r["statusCode"] == 200
-    open_mock.assert_not_called()
 
 
 def test_handler_catalog_stats_listed_in_actions():

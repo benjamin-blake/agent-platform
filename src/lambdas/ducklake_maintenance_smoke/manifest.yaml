@@ -1,0 +1,42 @@
+artifact: ducklake-maintenance-smoke.zip
+functions:
+  - agent-platform-ducklake-maintenance-smoke
+handlers:
+  - src/lambdas/ducklake_maintenance_smoke/handler.py
+includes:
+  - src/__init__.py
+  - src/common/ducklake_runtime.py
+  - src/common/ducklake_writes.py
+  - src/common/ducklake_tables.py
+  - src/common/ducklake_reads.py
+  - src/common/ducklake_metrics.py
+  - src/common/ducklake_scd2_schema.py
+  - src/common/ducklake_maintenance.py
+  - src/common/ducklake_spike.py  # transitive: ducklake_runtime.open_connection imports ducklake_spike
+  - src/common/ducklake_version.py  # UNCONDITIONAL: ducklake_runtime.__getattr__(PINNED_DUCKDB_VERSION) resolves via loader at import
+  - src/common/__init__.py
+  - src/lambdas/ducklake_maintenance_smoke/__init__.py
+  - src/lambdas/__init__.py
+  - scripts/__init__.py
+  - scripts/aws_profile.py
+assets:
+  - config/lambda/ducklake/field_semantics.yaml  # force_recreate_tables -> create_scd2_tables -> resolve_table_spec
+  - config/lambda/ducklake/version.yaml
+config: []
+pip_packages: []
+runtime_config: []
+status: active
+notes: >-
+  T2.18 c9 follow-on: smoke-safe CI-invokable sibling of ducklake_maintenance (bundled Decision
+  amending Decision 81 clause 1, runtime artifacts 3 -> 4). Dispatch table is EXACTLY {merge, gc,
+  breaker_probe, hot_merge} -- the four non-destructive/disposable-catalog cadences, sharing
+  src/common/ducklake_maintenance.py with the admin function. No production-destructive or
+  operational verb (catalog_reinit, merge_ops, reconcile_columns, restore_drill, clone_catalog,
+  catalog_stats) is reachable here -- excludes catalog_dr.py and the pgclient layer (restore_drill
+  stays admin-side). reserved_concurrent_executions=1 (singleton, same as the admin function).
+  Function URL is AWS_IAM; invoked by github_ci_branch (CI-scoped MaintenanceSmokeInvokeCI grant)
+  for the autonomous post-deploy smoke gate (c9). Env-pinned to the smoke catalog only
+  (DUCKLAKE_DATA_PATH/DUCKLAKE_META_SCHEMA default to ducklake_smoke); never reads data_path or
+  meta_schema from the event. duckdb (pinned via config/lambda/ducklake/version.yaml) +
+  psycopg2-binary + python-ulid live in the shared ducklake-deps layer; the ducklake/httpfs/postgres
+  extensions live in the shared ducklake-extensions layer (no pgclient layer attached).

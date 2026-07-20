@@ -56,6 +56,7 @@ class TestRunBuilds:
                     _FakePath(name="w.zip"),
                     _FakePath(name="r.zip"),
                     _FakePath(name="m.zip"),
+                    _FakePath(name="ms.zip"),
                     _FakePath(name="dr.zip"),
                 ],
             ),
@@ -66,7 +67,7 @@ class TestRunBuilds:
             patch("scripts.build_lambda.upload_to_s3") as mock_upload,
         ):
             bl._run_ducklake_build(_args(skip_upload=True))
-        assert mock_assert.call_count == 7  # 4 function zips + 3 layers
+        assert mock_assert.call_count == 8  # 5 function zips + 3 layers
         assert mock_upload.call_count == 0
 
     def test_run_ducklake_build_upload_and_deploy(self):
@@ -78,6 +79,7 @@ class TestRunBuilds:
                     _FakePath(name="w.zip"),
                     _FakePath(name="r.zip"),
                     _FakePath(name="m.zip"),
+                    _FakePath(name="ms.zip"),
                     _FakePath(name="dr.zip"),
                 ],
             ),
@@ -90,7 +92,7 @@ class TestRunBuilds:
             patch("scripts.build_lambda.update_lambda_functions") as mock_update,
         ):
             bl._run_ducklake_build(_args(skip_upload=False, deploy=True))
-        assert mock_upload.call_count == 7  # 4 function zips + 3 layers
+        assert mock_upload.call_count == 8  # 5 function zips + 3 layers
         mock_update.assert_called_once()
         assert mock_update.call_args.kwargs.get("only_ducklake") is True
 
@@ -99,7 +101,7 @@ class TestRunBuilds:
             patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
             patch(
                 "scripts.build_lambda.build_ducklake_function_package",
-                side_effect=[_FakePath(), _FakePath(), _FakePath(), _FakePath()],
+                side_effect=[_FakePath(), _FakePath(), _FakePath(), _FakePath(), _FakePath()],
             ),
             patch("scripts.build_lambda.build_ducklake_deps_layer", return_value=_FakePath()),
             patch("scripts.build_lambda.build_ducklake_extensions_layer", return_value=_FakePath()),

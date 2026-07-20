@@ -73,10 +73,18 @@ def test_handler_missing_action():
 def test_handler_lists_known_actions():
     r = h.handler({"action": "bad"})
     body = _response_body(r)
-    assert "merge" in body["actions"]
-    assert "gc" in body["actions"]
-    assert "breaker_probe" in body["actions"]
-    assert "hot_merge" in body["actions"]
+    assert "catalog_reinit" in body["actions"]
+    assert "restore_drill" in body["actions"]
+    assert "merge_ops" in body["actions"]
+    assert "catalog_stats" in body["actions"]
+    assert "reconcile_columns" in body["actions"]
+    assert "clone_catalog" in body["actions"]
+    # The 4 smoke actions moved to ducklake_maintenance_smoke (T2.18 c9 split) -- must NOT be
+    # reachable on the admin function (blast-radius invariant).
+    assert "merge" not in body["actions"]
+    assert "gc" not in body["actions"]
+    assert "breaker_probe" not in body["actions"]
+    assert "hot_merge" not in body["actions"]
 
 
 def test_handler_lists_new_operational_actions():
@@ -94,12 +102,9 @@ def test_handler_lists_new_operational_actions():
 
 def test_handler_maintenance_error_maps_to_500():
     raiser = MagicMock(side_effect=DuckLakeMaintenanceError("breaker"))
-    with patch.object(h, "_open_connection") as mock_open:
-        mock_con = MagicMock()
-        mock_open.return_value = mock_con
-        with patch.dict(h._ACTIONS, {"merge": raiser}):
-            with patch.object(h, "_emit_maintenance_metric"):
-                r = h.handler({"action": "merge"})
+    with patch.dict(h._ACTIONS, {"catalog_reinit": raiser}):
+        with patch.object(h, "_emit_maintenance_metric"):
+            r = h.handler({"action": "catalog_reinit"})
     assert r["statusCode"] == 500
     body = _response_body(r)
     assert body["ok"] is False
@@ -109,11 +114,8 @@ def test_handler_maintenance_error_maps_to_500():
 
 def test_handler_version_mismatch_maps_to_500():
     raiser = MagicMock(side_effect=VersionMismatchError("bad version"))
-    with patch.object(h, "_open_connection") as mock_open:
-        mock_con = MagicMock()
-        mock_open.return_value = mock_con
-        with patch.dict(h._ACTIONS, {"merge": raiser}):
-            r = h.handler({"action": "merge"})
+    with patch.dict(h._ACTIONS, {"catalog_reinit": raiser}):
+        r = h.handler({"action": "catalog_reinit"})
     assert r["statusCode"] == 500
     body = _response_body(r)
     assert body["error_type"] == "version_mismatch"
@@ -121,49 +123,11 @@ def test_handler_version_mismatch_maps_to_500():
 
 def test_handler_runtime_error_maps_to_500():
     raiser = MagicMock(side_effect=DuckLakeRuntimeError("runtime fail"))
-    with patch.object(h, "_open_connection") as mock_open:
-        mock_con = MagicMock()
-        mock_open.return_value = mock_con
-        with patch.dict(h._ACTIONS, {"merge": raiser}):
-            r = h.handler({"action": "merge"})
+    with patch.dict(h._ACTIONS, {"catalog_reinit": raiser}):
+        r = h.handler({"action": "catalog_reinit"})
     assert r["statusCode"] == 500
     body = _response_body(r)
     assert body["error_type"] == "runtime"
-
-
-def test_handler_connection_closed_on_success():
-    with patch.object(h, "_open_connection") as mock_open:
-        mock_con = MagicMock()
-        mock_open.return_value = mock_con
-        good = MagicMock(return_value={"ok": True, "action": "merge", "tables": [], "files_after_merge": 0, "elapsed_ms": 1.0})
-        with patch.dict(h._ACTIONS, {"merge": good}):
-            with patch.object(h, "_emit_maintenance_metric"):
-                h.handler({"action": "merge"})
-        mock_con.close.assert_called_once()
-
-
-def test_handler_connection_closed_on_error():
-    raiser = MagicMock(side_effect=DuckLakeMaintenanceError("trip"))
-    with patch.object(h, "_open_connection") as mock_open:
-        mock_con = MagicMock()
-        mock_open.return_value = mock_con
-        with patch.dict(h._ACTIONS, {"merge": raiser}):
-            with patch.object(h, "_emit_maintenance_metric"):
-                h.handler({"action": "merge"})
-        mock_con.close.assert_called_once()
-
-
-def test_handler_breaker_probe_via_handler_returns_500():
-    raiser = MagicMock(side_effect=DuckLakeMaintenanceError("tripped"))
-    with patch.object(h, "_open_connection") as mock_open:
-        mock_con = MagicMock()
-        mock_open.return_value = mock_con
-        with patch.dict(h._ACTIONS, {"breaker_probe": raiser}):
-            with patch.object(h, "_emit_maintenance_metric"):
-                r = h.handler({"action": "breaker_probe"})
-    assert r["statusCode"] == 500
-    body = _response_body(r)
-    assert body["breaker_tripped"] is True
 
 
 def test_handler_catalog_dr_error_maps_to_500():

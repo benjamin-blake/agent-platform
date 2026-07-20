@@ -72,11 +72,13 @@ _EXT_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0"}
 _DUCKLAKE_WRITER_FUNCTION = "agent-platform-ducklake-writer"
 _DUCKLAKE_READER_FUNCTION = "agent-platform-ducklake-reader"
 _DUCKLAKE_MAINTENANCE_FUNCTION = "agent-platform-ducklake-maintenance"
+_DUCKLAKE_MAINTENANCE_SMOKE_FUNCTION = "agent-platform-ducklake-maintenance-smoke"
 _DUCKLAKE_CATALOG_DR_FUNCTION = "agent-platform-ducklake-catalog-dr"
 _DUCKLAKE_FUNCTION_ZIP_KEYS = {
     _DUCKLAKE_WRITER_FUNCTION: "lambda-packages/ducklake-writer.zip",
     _DUCKLAKE_READER_FUNCTION: "lambda-packages/ducklake-reader.zip",
     _DUCKLAKE_MAINTENANCE_FUNCTION: "lambda-packages/ducklake-maintenance.zip",
+    _DUCKLAKE_MAINTENANCE_SMOKE_FUNCTION: "lambda-packages/ducklake-maintenance-smoke.zip",
     _DUCKLAKE_CATALOG_DR_FUNCTION: "lambda-packages/ducklake-catalog-dr.zip",
 }
 

@@ -143,6 +143,28 @@ def test_function_url_missing_raises(monkeypatch):
         smoke._function_url("writer")
 
 
+def test_function_url_maintenance_smoke_from_env(monkeypatch):
+    """T2.18 c9 split: the maintenance smoke gates resolve a DISTINCT env var from the admin
+    maintenance function's MAINTENANCE_URL_ENV."""
+    monkeypatch.setenv(smoke.MAINTENANCE_SMOKE_URL_ENV, "https://maintenance-smoke.lambda-url/")
+    assert smoke._function_url("maintenance_smoke") == "https://maintenance-smoke.lambda-url"
+
+
+def test_function_url_maintenance_smoke_terraform_output_name(monkeypatch):
+    """Falls back to `terraform output ducklake_maintenance_smoke_function_url` (matches the
+    terraform/personal/ducklake_maintenance_smoke.tf output name)."""
+    monkeypatch.delenv(smoke.MAINTENANCE_SMOKE_URL_ENV, raising=False)
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="https://maintenance-smoke.url\n", stderr="")
+
+    monkeypatch.setattr(smoke.subprocess, "run", fake_run)
+    assert smoke._function_url("maintenance_smoke") == "https://maintenance-smoke.url"
+    assert captured["cmd"][-1] == "ducklake_maintenance_smoke_function_url"
+
+
 def test_sigv4_invoke_signs(monkeypatch):
     captured = {}
 

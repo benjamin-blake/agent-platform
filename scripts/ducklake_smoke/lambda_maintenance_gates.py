@@ -1,8 +1,18 @@
-"""Maintenance + catalog-DR Function-URL gates for the DuckLake Neon smoke suite (T2.18 / FP-B).
+"""Maintenance + catalog-DR Function-URL gates for the DuckLake Neon smoke suite (T2.18 / FP-B;
+T2.18 c9 split, bundled Decision amending Decision 81 clause 1).
 
 Daily merge, weekly GC, the forced-threshold circuit breaker, the catalog DR dump, and the
 merge-only hot_merge gate. All call core._function_url / core._sigv4_invoke / core._ok_json
 through the module object (Decision 104) so each has one canonical patch target.
+
+The four maintenance gates (lambda_maintenance_merge/gc/breaker/hot_merge) resolve
+core._function_url("maintenance_smoke") -- the CI-invokable smoke sibling
+(src/lambdas/ducklake_maintenance_smoke/handler.py), NOT the admin ducklake_maintenance function.
+This is the autonomous c9 post-deploy gate: github_ci_branch holds an invoke grant scoped to the
+smoke function ARN only, so these gates now run unattended in the governed CD channel
+(.github/workflows/deploy-ducklake-lambdas.yml) rather than requiring agent_platform_admin.
+lambda_catalog_dr is unaffected -- ducklake_catalog_dr is already a separate function, out of
+scope for this split.
 """
 
 from __future__ import annotations
@@ -13,15 +23,16 @@ from src.common import ducklake_runtime
 
 
 def lambda_maintenance_merge(*, profile: str | None = None, region: str = "eu-west-2") -> None:
-    """T2.18 VP9: invoke merge on the smoke catalog, assert files_after_merge <= files_before.
+    """T2.18 c9: invoke merge on the smoke catalog, assert files_after_merge <= files_before.
 
-    The maintenance Lambda uses the smoke catalog (ducklake_smoke schema, smoke S3 path), which is
-    separate from the writer's production catalog (ducklake_ops). force_recreate_tables=True creates
-    the smoke DuckLake tables if absent, making this call idempotent on a fresh environment.
-    Requires agent_platform_admin (maintenance is break-glass on PlatformAdmin; PlatformDev only
-    holds InvokeFunction on writer + reader per platform_roles.tf).
+    The maintenance-smoke Lambda uses the smoke catalog (ducklake_smoke schema, smoke S3 path),
+    which is separate from the writer's production catalog (ducklake_ops). force_recreate_tables=
+    True creates the smoke DuckLake tables if absent, making this call idempotent on a fresh
+    environment. Invoked by github_ci_branch (CI-scoped MaintenanceSmokeInvokeCI grant) -- no
+    longer requires agent_platform_admin now that the smoke cadences run on their own CI-invokable
+    function (T2.18 c9 split).
     """
-    maint_url = core._function_url("maintenance")
+    maint_url = core._function_url("maintenance_smoke")
     body = core._ok_json(
         core._sigv4_invoke(maint_url, {"action": "merge", "force_recreate_tables": True}, profile=profile, region=region)
     )
@@ -40,15 +51,15 @@ def lambda_maintenance_merge(*, profile: str | None = None, region: str = "eu-we
 
 
 def lambda_maintenance_gc(*, profile: str | None = None, region: str = "eu-west-2") -> None:
-    """T2.18 VP10: invoke weekly GC; assert S3 object count stable/lower and breaker NOT tripped.
+    """T2.18 c9: invoke weekly GC; assert S3 object count stable/lower and breaker NOT tripped.
 
-    Invokes action=gc on the live maintenance Lambda. force_recreate_tables=True creates the smoke
-    DuckLake tables if absent (same idempotent-on-fresh-environment handling as
+    Invokes action=gc on the live maintenance-smoke Lambda. force_recreate_tables=True creates the
+    smoke DuckLake tables if absent (same idempotent-on-fresh-environment handling as
     lambda_maintenance_merge; rec-2115 gap-1) so this gate does not 502 on a fresh smoke catalog.
     Asserts ok=True, breaker_tripped=False, and files_after <= files_before (or files_before == 0
     when the smoke tables are empty).
     """
-    maint_url = core._function_url("maintenance")
+    maint_url = core._function_url("maintenance_smoke")
     body = core._ok_json(
         core._sigv4_invoke(maint_url, {"action": "gc", "force_recreate_tables": True}, profile=profile, region=region)
     )
@@ -71,14 +82,14 @@ def lambda_maintenance_gc(*, profile: str | None = None, region: str = "eu-west-
 
 
 def lambda_maintenance_breaker(*, profile: str | None = None, region: str = "eu-west-2") -> None:
-    """T2.18 VP11: forced-threshold circuit-breaker trip; assert loud-fail (5xx) and no deletion.
+    """T2.18 c9: forced-threshold circuit-breaker trip; assert loud-fail (5xx) and no deletion.
 
-    Invokes action=breaker_probe. Expects a 500 response with breaker_tripped=True. The
-    MaintenanceBreakerTrip metric must be emitted (asserted via the response payload, not
-    CloudWatch alarm state -- the alarm-state transition is timing-dependent and has no action
-    target in FP-A, so it is not the load-bearing assertion here per VP step 11).
+    Invokes action=breaker_probe on the maintenance-smoke Lambda. Expects a 500 response with
+    breaker_tripped=True. The MaintenanceBreakerTrip metric must be emitted (asserted via the
+    response payload, not CloudWatch alarm state -- the alarm-state transition is timing-dependent
+    and has no action target in FP-A, so it is not the load-bearing assertion here).
     """
-    maint_url = core._function_url("maintenance")
+    maint_url = core._function_url("maintenance_smoke")
     resp = core._sigv4_invoke(maint_url, {"action": "breaker_probe"}, profile=profile, region=region)
     body = resp.json()
     if resp.status_code == 200 and body.get("breaker_tripped") is False:
@@ -161,9 +172,9 @@ def lambda_catalog_dr(*, profile: str | None = None, region: str = "eu-west-2") 
 
 
 def lambda_maintenance_hot_merge(*, profile: str | None = None, region: str = "eu-west-2") -> None:
-    """T2.18 FP-B VP12: invoke hot_merge; assert files merged, nothing deleted (merge-only gate).
+    """T2.18 FP-B / c9: invoke hot_merge; assert files merged, nothing deleted (merge-only gate).
 
-    Invokes action=hot_merge on the live maintenance Lambda. Asserts:
+    Invokes action=hot_merge on the live maintenance-smoke Lambda. Asserts:
     - Response ok=True (200)
     - action == "hot_merge"
     - files_after <= files_before (merge can only reduce or hold file count)
@@ -173,7 +184,7 @@ def lambda_maintenance_hot_merge(*, profile: str | None = None, region: str = "e
     destructive call, the Lambda would have returned ok=False or a 5xx (DuckLakeMaintenanceError).
     We additionally assert the action field is "hot_merge" and not "gc".
     """
-    maint_url = core._function_url("maintenance")
+    maint_url = core._function_url("maintenance_smoke")
     body = core._ok_json(core._sigv4_invoke(maint_url, {"action": "hot_merge"}, profile=profile, region=region))
     if not body.get("ok"):
         raise core.SmokeTestFailure(f"MAINTENANCE_HOT_MERGE FAIL: {body}")

@@ -2,6 +2,94 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 143: Privileged-verb Lambda decomposition -- scope identities by worst reachable verb; enforce the boundary in a primitive outside the agent merge loop (amends Decision 81 cl.1) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-20
+**Warehouse ID:** dec-143 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+T2.18's `ducklake_maintenance` Lambda dispatched both the non-destructive smoke cadences
+(merge/gc/hot_merge/breaker_probe -- safe to run against the disposable smoke catalog) and the
+production-destructive/operational verbs (catalog_reinit, restore_drill, reconcile_columns,
+catalog_stats, clone_catalog, merge_ops) from one function behind one IAM execution role. c9 (an
+autonomous CD-invoked post-deploy smoke gate for the maintenance pipeline) required granting SOME
+CI identity `lambda:InvokeFunction` on this Lambda -- but `lambda:InvokeFunction` authorizes the
+whole function, not a single dispatched action, so granting invoke to the always-on public-repo CI
+identity (github_ci_branch) would also grant it reachability to catalog_reinit/restore_drill/
+clone_catalog against the production DuckLake catalog (recs/decisions/operational memory -- factory
+state, production-grade even pre-MVP). The DuckLake catalog's exposure on a public repo makes this
+confused-deputy-adjacent: an injection into the CI identity's context (a malicious PR body, a
+compromised dependency) could otherwise reach a production-destructive verb.
+
+**Decision:**
+1. **Scope every identity by the worst verb it can reach**, and enforce that scope in a primitive
+   OUTSIDE the agent's merge loop -- not an in-handler guard the agent-authored codebase could edit
+   out, but a resource-shape boundary (a separate Lambda + IAM execution role) that AWS IAM itself
+   enforces. `lambda:InvokeFunction` is per-function, not per-action, so the only way to give a CI
+   identity narrower reach than "everything this Lambda can do" is to put the narrower verb set on
+   its own function.
+2. **Realized by splitting** `ducklake_maintenance` into two runtime artifacts:
+   - `ducklake_maintenance_smoke` (new): CI-invokable, dispatch table EXACTLY {merge, gc,
+     breaker_probe, hot_merge}, env-pinned to the disposable smoke catalog (never reads
+     data_path/meta_schema from the event), smoke-prefix-scoped IAM execution role (no production
+     S3 access). `github_ci_branch` holds `lambda:InvokeFunction`/`InvokeFunctionUrl`/
+     `GetFunctionUrlConfig` on this function's ARN only (`MaintenanceSmokeInvokeCI`).
+   - `ducklake_maintenance` (retained, admin-gated): keeps the production-destructive and
+     operational verbs (catalog_reinit, restore_drill, reconcile_columns, catalog_stats,
+     clone_catalog) plus the scheduled `merge_ops` cadence. `github_ci_branch` is NEVER granted
+     invoke on this function's ARN -- admin-invoked only (`aws lambda invoke` under
+     `agent_platform_admin`), matching its pre-split posture.
+3. **Reversible-and-disposable verbs are agent-autonomous by default; irreversible or
+   factory-state verbs get their own resource** so IAM -- not handler code -- is the boundary that
+   says no. This is the general rule this split instantiates; it generalizes beyond DuckLake
+   maintenance to any future Lambda that mixes a CI-safe verb subset with a production-destructive
+   one.
+4. **Amends Decision 81 clause 1**: the CD.33 runtime-artifact enumeration (writer / reader /
+   maintenance) becomes FOUR artifacts (writer / reader / maintenance / maintenance_smoke).
+   `reserved_concurrent_executions=1` (singleton) is preserved on BOTH maintenance functions -- each
+   independently must not run concurrently with itself; this is not a shared concurrency budget
+   between them.
+5. **Closes T2.18 c9** (autonomous post-deploy smoke gate): the four maintenance smoke gates now
+   run unattended in the governed CD channel (`.github/workflows/deploy-ducklake-lambdas.yml`)
+   under `github_ci_branch`'s scoped invoke grant, rather than requiring an `agent_platform_admin`
+   session to invoke them by hand.
+
+**Rationale:**
+(Fable frontier-architecture consult, cited in `docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml`
+context.) Two alternatives were considered and rejected: (A) keep c9 human-gated (an operator
+invokes the smoke gates manually post-deploy) -- rejected because it re-introduces a
+human-in-the-critical-path dependency the self-improving loop's North Star is designed to
+eliminate. (B-i) grant `github_ci_branch` invoke on the existing multi-tool `ducklake_maintenance`
+function -- rejected because it grants CI reachability to catalog_reinit/restore_drill/
+clone_catalog against production, the exact confused-deputy exposure this Decision closes. (B-ii,
+adopted) split the function so the CI-safe verb subset is a materially different, narrower-privileged
+resource. The resource split is more durable than an in-handler action allowlist: a handler-level
+guard lives in the same agent-editable codebase as the verbs it's supposed to gate, so a future edit
+(or an injected instruction) could silently widen it; a separate Lambda + IAM role requires an
+out-of-band Terraform apply (human-gated for the exec-role CREATE, per T2.25/Decision 92 pt.5) to
+widen, which is a materially higher bar.
+
+**Reversal conditions:** At MVP, when the SIT/PROD accounts stand up (Decision 77's platform
+promotion train), the production-destructive `ducklake_maintenance` function moves behind a
+second-approver gate as part of that promotion -- the split performed here is a durable artifact
+this future state builds on, not throwaway scaffolding. If AWS Lambda ever ships per-action (not
+per-function) IAM authorization, the resource split may be revisited (a single function could
+re-consolidate behind per-action IAM conditions), but the identity-scoping RULE (clause 1 above)
+stands regardless of the enforcement primitive.
+
+**Related:** Decision 81 (CD.33 runtime architecture; clause 1 amended here), Decision 79 (per-Lambda
+packaging manifests + deploy gating -- the manifest/build/deploy wiring this split follows),
+Decision 92 + Decision 98 (IAM authority-budget / admin-create precedent -- the new exec role's
+CREATE is out-of-budget and requires `agent_platform_admin`), Decision 129 (data-plane resource-axis
+broadening -- the smoke function's refresh-read coverage rides the existing `agent-platform-*`
+prefix with no new grant), Decision 125 + Decision 126 (governed code-deploy channel + code/infra
+decoupling -- the smoke function's code deploys via the same `deploy-ducklake-lambdas.yml` channel),
+Decision 55 (loud-failure / no-workaround doctrine -- the split enforces the boundary structurally
+rather than papering over it with a guard).
+
+---
+
 ## Decision 142: CI-RCA fingerprint v2 (cause-anchored) + status-aware chain lifecycle replaces the CIRCA-03(a) step-name key and the rec-2644 close-then-recur revive path (Decided)
 
 **Status:** Decided

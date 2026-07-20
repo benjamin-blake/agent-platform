@@ -30,6 +30,10 @@ META_SCHEMA = ducklake_runtime.SMOKE_META_SCHEMA
 WRITER_URL_ENV = "DUCKLAKE_WRITER_URL"
 READER_URL_ENV = "DUCKLAKE_READER_URL"
 MAINTENANCE_URL_ENV = "DUCKLAKE_MAINTENANCE_URL"
+# T2.18 c9 split: the CI-invokable smoke sibling (github_ci_branch invoke grant scoped to this
+# function ARN only -- see MaintenanceSmokeInvokeCI in terraform/personal/oidc.tf). The four
+# maintenance smoke gates below resolve THIS url, never MAINTENANCE_URL_ENV (the admin function).
+MAINTENANCE_SMOKE_URL_ENV = "DUCKLAKE_MAINTENANCE_SMOKE_URL"
 CATALOG_DR_URL_ENV = "DUCKLAKE_CATALOG_DR_URL"
 
 
@@ -53,11 +57,13 @@ def _p95(values: list[float]) -> float:
 
 
 def _function_url(role: str) -> str:
-    """Resolve the writer/reader/maintenance/catalog_dr Function URL from env, then terraform output. Loud-fail if absent."""
+    """Resolve the writer/reader/maintenance/maintenance_smoke/catalog_dr Function URL from env,
+    then terraform output. Loud-fail if absent."""
     _env_map = {
         "writer": WRITER_URL_ENV,
         "reader": READER_URL_ENV,
         "maintenance": MAINTENANCE_URL_ENV,
+        "maintenance_smoke": MAINTENANCE_SMOKE_URL_ENV,
         "catalog_dr": CATALOG_DR_URL_ENV,
     }
     env_name = _env_map.get(role, f"DUCKLAKE_{role.upper()}_URL")

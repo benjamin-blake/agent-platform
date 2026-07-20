@@ -250,6 +250,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-writer",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-reader",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance",
+          # T2.18 c9 split (same class as ducklake-deploy/prod-deploy above): the smoke exec role
+          # must be refresh-readable, or every subsequent apply plan fails closed with AccessDenied.
+          "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-maintenance-smoke",
           "arn:aws:iam::${var.account_id}:role/agent-platform-scheduled-agent-dispatcher",
           "arn:aws:iam::${var.account_id}:role/agent-platform-findings-processor",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ops-compaction",
@@ -442,6 +445,9 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
           "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
+          # T2.18 c9 split: the smoke function's moved EventBridge rules need AddPermission too
+          # (separate root -- cannot use aws_lambda_function.*.arn interpolation here).
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance-smoke",
         ]
       },
       {
