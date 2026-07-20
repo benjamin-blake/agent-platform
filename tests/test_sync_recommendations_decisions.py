@@ -29,7 +29,10 @@ class TestReseedDecisionsCounter:
         """Calling with same max_id is swallowed when DynamoDB rejects (already at that value)."""
         mock_ddb = _make_mock_ddb(reject=True)
 
-        with patch("scripts.sync.recommendations.boto3") as mock_boto3:
+        with (
+            patch("scripts.sync.recommendations.boto3") as mock_boto3,
+            patch("scripts.sync.recommendations._BOTO3_AVAILABLE", True),
+        ):
             mock_boto3.Session.return_value.client.return_value = mock_ddb
             reseed_decisions_counter(50)
 
@@ -45,7 +48,10 @@ class TestReseedDecisionsCounter:
         """update_item is called with the correct value when counter advances."""
         mock_ddb = _make_mock_ddb(reject=False)
 
-        with patch("scripts.sync.recommendations.boto3") as mock_boto3:
+        with (
+            patch("scripts.sync.recommendations.boto3") as mock_boto3,
+            patch("scripts.sync.recommendations._BOTO3_AVAILABLE", True),
+        ):
             mock_boto3.Session.return_value.client.return_value = mock_ddb
             reseed_decisions_counter(100)
 
@@ -58,7 +64,10 @@ class TestReseedDecisionsCounter:
         """ConditionalCheckFailed from a lower max_id is swallowed; no exception propagates."""
         mock_ddb = _make_mock_ddb(reject=True)
 
-        with patch("scripts.sync.recommendations.boto3") as mock_boto3:
+        with (
+            patch("scripts.sync.recommendations.boto3") as mock_boto3,
+            patch("scripts.sync.recommendations._BOTO3_AVAILABLE", True),
+        ):
             mock_boto3.Session.return_value.client.return_value = mock_ddb
             reseed_decisions_counter(5)
 
@@ -76,7 +85,10 @@ class TestReseedRecommendationsCounter:
         """update_item targets the recommendations counter with a monotonic condition."""
         mock_ddb = _make_mock_ddb(reject=False)
 
-        with patch("scripts.sync.recommendations.boto3") as mock_boto3:
+        with (
+            patch("scripts.sync.recommendations.boto3") as mock_boto3,
+            patch("scripts.sync.recommendations._BOTO3_AVAILABLE", True),
+        ):
             mock_boto3.Session.return_value.client.return_value = mock_ddb
             reseed_recommendations_counter(1944)
 
@@ -92,7 +104,10 @@ class TestReseedRecommendationsCounter:
         """ConditionalCheckFailed from a lower max_id is swallowed; no exception propagates."""
         mock_ddb = _make_mock_ddb(reject=True)
 
-        with patch("scripts.sync.recommendations.boto3") as mock_boto3:
+        with (
+            patch("scripts.sync.recommendations.boto3") as mock_boto3,
+            patch("scripts.sync.recommendations._BOTO3_AVAILABLE", True),
+        ):
             mock_boto3.Session.return_value.client.return_value = mock_ddb
             reseed_recommendations_counter(5)
 
