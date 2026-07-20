@@ -40,8 +40,9 @@ scope:
     action: Modify
     purpose: >-
       Repoint save_plan off OpsWriter().write("ops_execution_plans", ...) onto
-      scripts.ops_portal.execution_plans.save_execution_plan(...). Producer is CD.17-frozen -> table lands
-      empty (priority_queue precedent).
+      scripts.ops_portal.execution_plans.save_execution_plan(...), DROPPING the old best-effort try/except-warn
+      wrapper so the portal write fails loud (Decision 84 I-4). Producer is CD.17-frozen -> table lands empty
+      (priority_queue precedent).
   - file: scripts/s3_log_store.py
     action: Modify
     purpose: Remove the ".execution-plans.jsonl" -> ops_execution_plans OpsWriter write-through routing sentinel.
@@ -77,8 +78,10 @@ scope:
   - file: docs/contracts/storage-substrate.yaml
     action: Modify
     purpose: >-
-      Update the ops_execution_plans declaration with the grain note (one row per plan revision) and the
-      expanded column shape; it already carries merge_key: rec_id.
+      Update the ops_execution_plans declaration: grain note (one row per plan revision) + expanded column
+      shape, AND flip the now-stale substrate/write_boundary/read_boundary/status fields off Iceberg/OpsWriter/
+      dormant onto the DuckLake closed-boundary values (VP step 6's `revision` grep does not catch these). It
+      already carries merge_key: rec_id.
   - file: docs/contracts/log-storage.yaml
     action: Modify
     purpose: Remove/re-ground the ".execution-plans.jsonl" -> ops_execution_plans routing mirror (write path retired).
@@ -89,6 +92,32 @@ scope:
       t2-26-migrate-ops-execution-plans); re-ground c2/c3/c8 text (execution_plans migrated; only
       ops_session_log (CD.40/T3.20-gated) remains; no live Iceberg table/view ever existed -- stale-ref
       correction); append a progress_note entry.
+  - file: tests/test_ops_portal_execution_plans.py
+    action: Create
+    purpose: >-
+      Unit tests for the new portal producer (projection: ExecutionPlan.to_dict() -> registered columns;
+      json.dumps steps/critique_history; planning_session_id opaque). Run by VP step 4.
+  - file: tests/s3_log_store/test_write_through_registry.py
+    action: Modify
+    purpose: >-
+      Retire/re-base test_append_jsonl_calls_ops_write_for_execution_plans_key -- it asserts the
+      .execution-plans.jsonl -> ops_execution_plans OpsWriter routing this plan removes.
+  - file: tests/ops_writer/test_write.py
+    action: Modify
+    purpose: >-
+      Re-base the ops_execution_plans example off the removed table -- its staging prefix flips dt= ->
+      trade_date= and the SCD2 created_timestamp mapping drops once it leaves _OPS_TABLE_NAMES.
+  - file: tests/ops_writer/test_compact.py
+    action: Modify
+    purpose: Re-base the ops_execution_plans compaction example off the removed table.
+  - file: tests/ops_writer/test_compact_edge_cases.py
+    action: Modify
+    purpose: Re-base the ops_execution_plans canonical-table examples off the removed table (pick a still-registered ops table).
+  - file: tests/test_ops_compaction_handler.py
+    action: Modify
+    purpose: >-
+      Verify the handler test still passes after ops_execution_plans leaves ops_writer.TABLE_NAMES; re-base
+      ONLY if it references the real TABLE_NAMES (its _VALID_TABLES is locally patched -- likely a no-op).
 bundled_recommendations: []
 infrastructure_dependencies:
   - >-
@@ -259,10 +288,31 @@ verification_plan:
     expected: "0 rows -- no _current view exists for execution_plans (create-fresh-on-DuckLake; nothing to drop)."
     fix_if: "A row returns -> an unexpected view exists; add an explicit drop mirroring null_resource.drop_ops_decisions_view (with the %{if var.aws_profile != \"\"} guard)."
     hermetic: false
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Affected-suite regression (runs pre-deploy, after the step-3/5 removals): the ops_writer /
+      s3_log_store / ops-compaction suites + the new producer test pass green once ops_execution_plans
+      leaves _OPS_TABLE_NAMES and the routing sentinel is gone. Explicit fast signal; validate --pre
+      (step 7) also selects these diff-aware.
+    command: "bin/venv-python -m pytest tests/ops_writer/ tests/s3_log_store/ tests/test_ops_compaction_handler.py tests/test_ops_portal_execution_plans.py -q"
+    expected: "All pass -- the removed-routing / dt=-prefix / SCD2 assertions were re-based off ops_execution_plans and the new producer test passes."
+    fix_if: "Failures -> a test still asserts the old ops_execution_plans OpsWriter routing/staging; re-base it to the DuckLake path (do not delete coverage wholesale)."
+    hermetic: false
+    graduation: not-applicable   # pytest suites under the standing suite gate (mirrors step 4); not a single-primitive kernel check
 constraints:
   - "No rescue agents or workaround loops (Decision 55). Writer errors FAIL LOUDLY; no offline outbox for execution_plans (Decision 84 I-4)."
   - "Single-Portal preserved: execution_plans writes transit a named portal producer (scripts/ops_portal/execution_plans.py), never a raw transport call (Decision 81 cl.4 / 84)."
   - "Deploy ONLY via the governed .github/workflows/deploy-ducklake-lambdas.yml channel (Decision 125/126, T2.38). Local build_lambda --ducklake-only --deploy is break-glass, not the VP default."
+  - >-
+    No redeploy of the data-pipeline / ops-compaction artifacts is required even though scripts/ops_writer.py
+    + scripts/s3_log_store.py are bundled into those two active artifacts: this is dead-code removal of a
+    dormant table with no live personal-account write path, ops-compaction is DEPRECATED and retires at T2.26,
+    and both are schedule-disabled. (Stated explicitly, not silently omitted.)
+  - >-
+    Fail-loud on the repointed write (Decision 84 I-4): the new save_execution_plan producer must NOT be
+    wrapped in the old best-effort try/except-warn OpsWriter guard -- a write that cannot complete fails at
+    the call site (no offline outbox).
   - "No terraform/personal edits: no _current view to drop, and the DuckLake functions are ignore_changes-decoupled (#544). No local terraform validate/plan/init (Decision 119, CI-delegated)."
   - "config/lambda/ducklake/field_semantics.yaml is GENERATED -- edit the .static.yaml sidecar and regenerate via scripts.schema_to_field_semantics; never hand-edit the generated file (drift gate)."
   - "planning_session_id stored as opaque VARCHAR carrying exactly what open_session mints; NO UUID/ULID translation table, NO dual id column (Decision 97 cl.4 / session-id.yaml). Do not gate on or pull in the open_session ULID flip -- out of scope."
@@ -275,7 +325,7 @@ context:
     ratified since pass 1 (dec-133/134/136..142) block or contradict this plan). CITE (verbatim ids):
     dec-84, dec-78, dec-81 (CD.33), dec-79, dec-48, dec-125, dec-126, dec-88, dec-117, dec-55; RELATED:
     dec-87, dec-107 (CD.34), dec-140, dec-136. (Decision 70 mis-cited as append-only/queue and dropped.)
-  - "gates: decision-scout=FLAGS_FOUND (2 passes, both NOTE flags resolved in-approach); plan-critique: r1 REVISE (rebase/baseline refresh), r2 REVISE (T3.21 graduation dispositions on pre-deploy VP steps + step-7 expected), r3 re-run pending"
+  - "gates: decision-scout=FLAGS_FOUND (2 passes, both NOTE flags resolved in-approach); plan-critique: r1 REVISE (rebase/baseline refresh), r2 REVISE (T3.21 graduation dispositions), r3 REVISE (test-surface scope-completeness: breaking ops_writer/s3_log_store tests + producer test added to scope, affected-suite VP step 14, storage-substrate field flip, fail-loud repoint); reached the 3-round convergence cap -> human-directed closeout"
   - >-
     Deploy-channel currency (scout NOTE 1): confirmed on rebased main -- .github/workflows/deploy-ducklake-lambdas.yml
     EXISTS and tier_item T2.38 is status:complete (c1-c4 met), with the config/lambda/ducklake/** push trigger +
@@ -361,9 +411,16 @@ execution_steps:
     planning_session_id opaque), routes action=write_ops via writer_transport._ducklake_write, then the local
     read-cache upsert. This is the Single-Portal-honoring producer.
   - >-
-    Repoint scripts/executor/plan.py::save_plan onto scripts.ops_portal.execution_plans.save_execution_plan(...);
-    remove the s3_log_store.py ".execution-plans.jsonl" routing sentinel + docs/contracts/log-storage.yaml mirror;
-    drop ops_execution_plans from scripts/ops_writer.py _OPS_TABLE_NAMES and _OPS_TABLE_DTYPES.
+    Repoint scripts/executor/plan.py::save_plan onto scripts.ops_portal.execution_plans.save_execution_plan(...)
+    WITHOUT the old best-effort try/except-warn wrapper (fail loud, Decision 84 I-4); remove the s3_log_store.py
+    ".execution-plans.jsonl" routing sentinel + docs/contracts/log-storage.yaml mirror; drop ops_execution_plans
+    from scripts/ops_writer.py _OPS_TABLE_NAMES and _OPS_TABLE_DTYPES.
+  - >-
+    Re-base the tests the removals break (they assert the retired surface): tests/s3_log_store/
+    test_write_through_registry.py (the execution_plans write-through assertion), tests/ops_writer/test_write.py
+    + test_compact.py + test_compact_edge_cases.py (the dt= staging prefix + SCD2 canonical-table examples), and
+    verify tests/test_ops_compaction_handler.py. Author tests/test_ops_portal_execution_plans.py for the new
+    producer. Run the affected suites green (VP step 14) before deploy.
   - >-
     DQ: add ops_execution_plans to _DUCKLAKE_OPS_TABLES in scripts/data_quality_execute.py (fix the stale
     comments); add an ops_execution_plans block to config/agent/data_quality/ops.yaml (rec_id not_null; status
