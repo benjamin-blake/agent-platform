@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2026-07-20 pr-conflict-wake-signal session: PR #632, filed rec-2735/2736)
+- `.github/workflows/pr-conflict-signal.yml`: new push:[main] + workflow_dispatch workflow polls open `claude/*` PR mergeability and posts an idempotent wake comment on any PR that turns `CONFLICTING` -- the push-to-main counterpart to `signal-green`, which cannot deliver this wake since a push to main fires no `pull_request` event on open PRs.
+- `.github/workflows/ci.yml`: `signal-green`'s comment step now retries `gh pr comment` up to 3 times.
+- `AGENTS.md`, `.claude/skills/implement/SKILL.md`: retired the manual-approval-gated `~1h` `send_later` CI-wait backstop now that both previously-undelivered wake events (CI success, merge-conflict transition) are event-driven comments.
+
 ### Added (2026-04-27 executor-supervision session: rec-325 PR #261, filed rec-517/518)
 - `.github/copilot-instructions.md`: Widened postflight mock-exhaustion Known Gotcha from `cleanup_after_merge()` scope to any function in `scripts/executor/postflight.py` (rec-325, PR #261). Supersedes rec-117.
 - `logs/.recommendations-log.jsonl`: Filed rec-517 (plan-guard staged-file blind spot — change `git diff --name-only` to `git diff --name-only HEAD`), rec-518 (step telemetry model field records hardcoded `deepseek.v3.2` for all Gemini runs since Decision 53).
