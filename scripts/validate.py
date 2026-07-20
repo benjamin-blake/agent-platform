@@ -67,6 +67,7 @@ from scripts.checks.ci_guards.validate_claude_p_retry_wrapper import (  # noqa: 
     validate_claude_p_retry_wrapper,  # noqa: F401
 )
 from scripts.checks.ci_guards.validate_ops_portal_patch_targets import validate_ops_portal_patch_targets  # noqa: F401,E402
+from scripts.checks.ci_guards.validate_pr_conflict_signal import validate_pr_conflict_signal  # noqa: F401,E402
 from scripts.checks.ci_guards.validate_workflow_agent_safety import validate_workflow_agent_safety  # noqa: F401,E402
 from scripts.checks.contracts._shared import _load_prompt_compliance  # noqa: F401,E402
 from scripts.checks.contracts.validate_claude_md_pointer_invariant import (  # noqa: E402
