@@ -93,7 +93,7 @@ verification_plan:
       If this step unexpectedly passes (exit 0), the branch's baseline no longer reproduces
       rec-2729 -- STOP and re-verify against origin/main before proceeding; do not treat a
       clean baseline as license to skip the fix.
-    hermetic: true
+    hermetic: false
     graduation: not-applicable
   - step: 2
     phase: pre-deploy
@@ -110,7 +110,7 @@ verification_plan:
       scripts.ops_portal.decisions import file_decision` remains elsewhere in the facade, or
       the submodule import itself was patched instead of the name) -- grep the facade file for
       any remaining eager import of the five names and remove it.
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: rec-2729-decisions-facade-seed-1323563830
   - step: 3
@@ -129,7 +129,7 @@ verification_plan:
       wasn't reset) means an eager binding still exists for one of the five names, or a sixth
       capturable symbol was missed -- re-grep the facade's scripts.ops_portal.decisions import
       block for any remaining eager `from ... import` form.
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: rec-2729-decisions-facade-seed-sweep
   - step: 4
@@ -151,7 +151,7 @@ verification_plan:
       static binding (e.g. it was added alongside the eager import rather than replacing it).
       If the identity assertion fails, the __getattr__ body is wrapping/copying the object
       instead of returning the submodule's live attribute directly.
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: rec-2729-facade-getattr-dict-absence
   - step: 5
@@ -167,7 +167,7 @@ verification_plan:
       means __getattr__ raises AttributeError instead of resolving, or resolves inconsistently
       between the hasattr() and import-statement access paths -- check the __getattr__ name
       list matches _REQUIRED_PUBLIC/_REQUIRED_PRIVATE exactly for those five entries.
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: rec-2729-facade-guard-suite-full
   - step: 6
@@ -187,7 +187,7 @@ verification_plan:
       whether the failure is in the changed facade file or a pre-existing unrelated flake (cross-
       reference against rec-2725's already-root-caused regressions before treating it as a new
       bug in this fix).
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       Duplicates the existing full-presubmit-tier pytest run (scripts/validate.py's
@@ -219,7 +219,7 @@ verification_plan:
       comment into a small helper module) rather than registering a budget raise; a raise
       requires a `# raise-approved: dec-NNN` marker naming a real Decision, which is not
       warranted for a bug fix of this size.
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: rec-2729-facade-sloc-budget
   - step: 8
@@ -230,7 +230,7 @@ verification_plan:
     command: bin/venv-python -m ruff check scripts/ops_data_portal.py tests/test_ops_portal_facade.py
     expected: "No lint errors reported."
     fix_if: "Fix any reported lint violations (e.g. unused imports from the removed eager binding, missing noqa on the intentionally-unused decisions module alias if flagged) and re-run."
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
       Duplicates the existing standing lint gate (scripts/validate.py's lint scaffolding runs
@@ -271,6 +271,7 @@ context:
   - "SLOC math (round 1 critique correction): scripts/ops_data_portal.py's true SLOC (per scripts/checks/sloc/sloc_limits.py's comment/blank-stripped formula, the same one validate_sloc_limits enforces) is 399 against the 500 limit -- 101 lines of headroom. Raw `wc -l`/file-line-count reports 499, a different and non-gating number; verification_plan step 7 measures the correct formula directly via the real validator function, not a proxy count."
   - "gates: decision-scout=FLAGS_FOUND (NOTE-severity, resolved in scope; no BLOCK); plan-critique=REVISE after round 1 (fixed: broken VP step 7 command referencing a nonexistent module, SLOC-headroom math corrected with the real validator formula, added VP step 9 for post-merge rec-2729 closure verification per the 12k closure-obligation gate, reclassified VP steps 6 and 8 from not-applicable to waive with substantive graduation_waiver_reason since both duplicate standing CI checks) -> PROCEED after round 2 (all four round-1 fixes independently re-verified; two non-blocking cosmetic nits found and fixed in passing: a duplicate graduation key on VP step 9, and a 100-vs-101 headroom wording inconsistency)"
   - "tests/test_ops_portal_facade.py's existing TestFacadeCompleteness/TestFacadeImportable suites already parametrize over the five names via _REQUIRED_PUBLIC/_REQUIRED_PRIVATE -- they exercise hasattr()/getattr() access, which PEP 562 __getattr__ satisfies identically to a static attribute for both access forms, so those existing tests require no modification, only the new guard class is additive."
+  - "CI-discovered environment gap (found on this PR's first pr-validate run, out of scope to fix here): all 8 pre-deploy VP steps were originally authored hermetic: true using bin/venv-python per the AGENTS.md local-invocation convention, but validate_vp_replay's independent re-execution runs inside the pr-validate job, which -- unlike ci-rca.yml/convergence-health.yml/cost-reconciliation.yml/dedup-probe.yml/rec-autoclose.yml, all of which explicitly `python -m venv .venv` before use -- never creates a .venv (it installs requirements-fast.txt/requirements-dev.txt directly to the runner's system Python via actions/setup-python). bin/venv-python unconditionally exits 1 when .venv/bin/python is absent (no system-python fallback), so every hermetic: true step failed replay with 'venv Python not found'. Reclassified all 8 to hermetic: false per the planning skill's own documented fallback ('steps that must invoke pytest... stay hermetic: false... excluded from replay with a printed reason, not silently skipped') -- this is a pr-validate provisioning gap affecting any plan using the mandated bin/venv-python form in a hermetic pre-deploy step, not specific to this plan's content; out of scope to fix .github/workflows/ci.yml from a plan-only PR, so not remediated here."
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/rec-2729-critical-bug-plan-yje3iz)
   - docs/PROJECT_CONTEXT.md read
