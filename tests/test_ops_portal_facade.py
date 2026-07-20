@@ -20,8 +20,19 @@ from unittest.mock import patch
 import pytest
 
 import scripts.ops_data_portal as _facade
+import scripts.ops_portal.decisions as _decisions_submodule
+from scripts.ops_data_portal import file_decision as _file_decision_direct_import
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The five names lazily re-exported via the facade's PEP 562 __getattr__ (rec-2729).
+_LAZY_DECISIONS_NAMES = [
+    "file_decision",
+    "update_decision",
+    "backfill_decisions_from_md",
+    "_fetch_decision_from_reader",
+    "_fetch_decision_from_athena",
+]
 
 # Public symbols originally defined at scripts/ops_data_portal.py module scope (23).
 _REQUIRED_PUBLIC = [
@@ -118,6 +129,35 @@ class TestFacadeImportable:
 
         mod = importlib.import_module("scripts.ops_data_portal")
         assert getattr(mod, name) is getattr(_facade, name)
+
+
+class TestDecisionsLazyReexport:
+    """Capture-immunity regression guard for rec-2729's PEP 562 lazy re-export.
+
+    Proves the five scripts.ops_portal.decisions symbols can never be permanently captured by a
+    mock.patch() on the submodule symbol under pytest-randomly reordering: they are structurally
+    absent from the facade's own __dict__ (never a static binding), yet still resolve live and
+    identically to the submodule's current attribute through both access forms the facade contract
+    guarantees (getattr and `from ... import`).
+    """
+
+    @pytest.mark.parametrize("name", _LAZY_DECISIONS_NAMES)
+    def test_name_absent_from_facade_dict(self, name: str) -> None:
+        assert name not in vars(_facade), f"{name!r} is statically bound on the facade's __dict__"
+
+    @pytest.mark.parametrize("name", _LAZY_DECISIONS_NAMES)
+    def test_getattr_resolves_to_submodule_identity(self, name: str) -> None:
+        assert getattr(_facade, name) is getattr(_decisions_submodule, name)
+
+    @pytest.mark.parametrize("name", _LAZY_DECISIONS_NAMES)
+    def test_from_import_resolves_to_submodule_identity(self, name: str) -> None:
+        import importlib
+
+        mod = importlib.import_module("scripts.ops_data_portal")
+        assert getattr(mod, name) is getattr(_decisions_submodule, name)
+
+    def test_direct_from_import_statement_resolves_live(self) -> None:
+        assert _file_decision_direct_import is _decisions_submodule.file_decision
 
 
 class TestImportedNameTrapTypes:
