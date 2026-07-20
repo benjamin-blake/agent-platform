@@ -53,6 +53,7 @@ from scripts.executor.jsonl_store import (
     Recommendation,
 )
 from scripts.executor.rec_write_guidance import validate_source
+from scripts.ops_portal import decisions as _decisions
 from scripts.ops_portal._common import _AWS_REGION, _REPO_ROOT, _SSO_PROFILE, ROOT  # noqa: F401
 from scripts.ops_portal.cache import (  # noqa: F401
     _append_to_local_jsonl,
@@ -86,13 +87,6 @@ from scripts.ops_portal.ci_rca_schema import (  # noqa: F401
     _validate_ci_rca_dispute,
 )
 from scripts.ops_portal.cli import main
-from scripts.ops_portal.decisions import (  # noqa: F401
-    _fetch_decision_from_athena,
-    _fetch_decision_from_reader,
-    backfill_decisions_from_md,
-    file_decision,
-    update_decision,
-)
 from scripts.ops_portal.maintenance_ops import (  # noqa: F401
     enqueue_findings,
     find_open_postmortem_for,
@@ -121,6 +115,28 @@ from scripts.ops_portal.writer_transport import (  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
+
+_LAZY_DECISIONS_NAMES = frozenset(
+    {
+        "file_decision",
+        "update_decision",
+        "backfill_decisions_from_md",
+        "_fetch_decision_from_reader",
+        "_fetch_decision_from_athena",
+    }
+)
+
+
+def __getattr__(name: str):
+    # PEP 562 lazy re-export (rec-2729): an eager `from ... import name` binds a value once, at
+    # this facade's first import -- under pytest-randomly, if that first import lands while a test
+    # has mock.patch()-ed the submodule symbol, the facade permanently captures the Mock for the
+    # rest of the session. Resolving via getattr() on _decisions at access time instead means every
+    # access re-reads the submodule's current attribute, so patches are always visible and reverted.
+    if name in _LAZY_DECISIONS_NAMES:
+        return getattr(_decisions, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _FEATURE_FLAGS_YAML = _REPO_ROOT / "config" / "feature_flags.yaml"
 
