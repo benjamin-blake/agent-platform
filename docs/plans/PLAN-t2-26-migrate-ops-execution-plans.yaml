@@ -1,0 +1,494 @@
+schema_version: 1
+slug: "t2-26-migrate-ops-execution-plans"
+intent: >-
+  Migrate the ops_execution_plans table onto the DuckLake closed writer/reader boundary -- the one
+  non-CD-gated table remaining in T2.26 -- so the last executor-owned ops write path leaves the dead
+  Iceberg/OpsWriter estate and the eventual ops_compaction retirement has one fewer blocker. Provisions
+  the table fresh on DuckLake (no live Iceberg source exists), repoints the frozen executor producer
+  through a named portal verb, and establishes the plan->telemetry-trace join the self-improvement loop
+  will need.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t2-26-migrate-ops-execution-plans.yaml
+phase: >-
+  Platform tier_item T2.26 (Deferred ops-table DuckLake migrations + ops_compaction retirement);
+  closes newly-added criterion T2.26:c9. Follow-on slice after the T2.19 recs cutover.
+closes_criteria:
+  - "T2.26:c9"
+scope:
+  - file: config/lambda/ducklake/field_semantics.static.yaml
+    action: Modify
+    purpose: >-
+      Expand the ops_execution_plans block from the minimal placeholder (rec_id, plan, status) to the
+      Fable-recommended shape -- promoted scalars rec_id[merge_key]/revision/status/model/tokens_used/
+      prompt_hash/slug/planning_session_id + steps/critique_history/plan_text as VARCHAR JSON, derived
+      ulid/created/last_updated -- and flip status: dormant -> live. This is the editable SoT; the .yaml
+      is generated from it.
+  - file: config/lambda/ducklake/field_semantics.yaml
+    action: Modify
+    purpose: >-
+      Regenerated from the static sidecar via scripts.schema_to_field_semantics (do-not-hand-edit; drift
+      gate --check must be clean). Bundled into ducklake_writer/reader zips -> triggers the governed deploy.
+  - file: scripts/ops_portal/execution_plans.py
+    action: Create
+    purpose: >-
+      Named portal producer (mirrors ops_portal/decisions.py): save_execution_plan(plan_dict) projects
+      ExecutionPlan.to_dict() onto the registered columns (steps/critique_history -> json.dumps;
+      planning_session_id carried opaque), routes action=write_ops via writer_transport, and does the local
+      read-cache upsert. Keeps execution_plans writes on the Single-Portal path (Decision 81 cl.4 / 84).
+  - file: scripts/executor/plan.py
+    action: Modify
+    purpose: >-
+      Repoint save_plan off OpsWriter().write("ops_execution_plans", ...) onto
+      scripts.ops_portal.execution_plans.save_execution_plan(...), DROPPING the old best-effort try/except-warn
+      wrapper so the portal write fails loud (Decision 84 I-4). Producer is CD.17-frozen -> table lands empty
+      (priority_queue precedent).
+  - file: scripts/s3_log_store.py
+    action: Modify
+    purpose: Remove the ".execution-plans.jsonl" -> ops_execution_plans OpsWriter write-through routing sentinel.
+  - file: scripts/ops_writer.py
+    action: Modify
+    purpose: Drop ops_execution_plans from _OPS_TABLE_NAMES and _OPS_TABLE_DTYPES (no Iceberg staging path survives).
+  - file: scripts/data_quality_execute.py
+    action: Modify
+    purpose: >-
+      Add ops_execution_plans to _DUCKLAKE_OPS_TABLES so its DQ checks route to the closed reader; correct
+      the stale "stays on Athena until T2.26" comments.
+  - file: config/agent/data_quality/ops.yaml
+    action: Modify
+    purpose: >-
+      Add an ops_execution_plans tables block: rec_id not_null, status accepted_values, (rec_id,revision)
+      uniqueness, and a revision-monotonic current-vs-history check (Fable guard against late-replay clobber).
+  - file: scripts/sync/ops.py
+    action: Modify
+    purpose: >-
+      Add ops_execution_plans to _TABLE_TO_LOCAL + _DUCKLAKE_MIGRATED_TABLES; add _coerce_ops_execution_plans_row
+      and a dispatch branch; update the stale "NOT migrated to the personal account" comment.
+  - file: docs/contracts/_joins.yaml
+    action: Modify
+    purpose: >-
+      Register the logical join (key session_id; from ops_execution_plans.planning_session_id; to
+      telemetry_sessions.session_id; cardinality many_to_one; soft/unenforced) -- the artifact->producing-run
+      linkage (OpenLineage Job/Run/Dataset pattern).
+  - file: docs/contracts/session-id.yaml
+    action: Modify
+    purpose: >-
+      Add ops_execution_plans to joins_using_this_key (a consumer of the session_id key via planning_session_id;
+      UUID4 grandfathered until open_session mints ULID, opaque-string carry).
+  - file: docs/contracts/storage-substrate.yaml
+    action: Modify
+    purpose: >-
+      Update the ops_execution_plans declaration: grain note (one row per plan revision) + expanded column
+      shape, AND flip the now-stale substrate/write_boundary/read_boundary/status fields off Iceberg/OpsWriter/
+      dormant onto the DuckLake closed-boundary values (VP step 6's `revision` grep does not catch these). It
+      already carries merge_key: rec_id.
+  - file: docs/contracts/log-storage.yaml
+    action: Modify
+    purpose: Remove/re-ground the ".execution-plans.jsonl" -> ops_execution_plans routing mirror (write path retired).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      c9 added at plan time (closure target). On VP pass: flip c9 open -> met (met_by:
+      t2-26-migrate-ops-execution-plans); re-ground c2/c3/c8 text (execution_plans migrated; only
+      ops_session_log (CD.40/T3.20-gated) remains; no live Iceberg table/view ever existed -- stale-ref
+      correction); append a progress_note entry.
+  - file: tests/test_ops_portal_execution_plans.py
+    action: Create
+    purpose: >-
+      Unit tests for the new portal producer (projection: ExecutionPlan.to_dict() -> registered columns;
+      json.dumps steps/critique_history; planning_session_id opaque). Run by VP step 4.
+  - file: tests/s3_log_store/test_write_through_registry.py
+    action: Modify
+    purpose: >-
+      Retire/re-base test_append_jsonl_calls_ops_write_for_execution_plans_key -- it asserts the
+      .execution-plans.jsonl -> ops_execution_plans OpsWriter routing this plan removes.
+  - file: tests/ops_writer/test_write.py
+    action: Modify
+    purpose: >-
+      Re-base the ops_execution_plans example off the removed table -- its staging prefix flips dt= ->
+      trade_date= and the SCD2 created_timestamp mapping drops once it leaves _OPS_TABLE_NAMES.
+  - file: tests/ops_writer/test_compact.py
+    action: Modify
+    purpose: Re-base the ops_execution_plans compaction example off the removed table.
+  - file: tests/ops_writer/test_compact_edge_cases.py
+    action: Modify
+    purpose: Re-base the ops_execution_plans canonical-table examples off the removed table (pick a still-registered ops table).
+  - file: tests/test_ops_compaction_handler.py
+    action: Modify
+    purpose: >-
+      Verify the handler test still passes after ops_execution_plans leaves ops_writer.TABLE_NAMES; re-base
+      ONLY if it references the real TABLE_NAMES (its _VALID_TABLES is locally patched -- likely a no-op).
+  - file: tests/test_schema_to_field_semantics.py
+    action: Modify
+    purpose: >-
+      test_dormant_tables_present (line ~225) asserts ops_execution_plans status == "dormant"; drop it from
+      the dormant tuple (it flips to live) so the generator test matches the new field_semantics.
+  - file: tests/sync/ops/test_sync_cli.py
+    action: Modify
+    purpose: >-
+      TestTelemetryMappings: drop ops_execution_plans from _REMOVED_OPS_TABLES (test_non_migrated_ops_tables_absent)
+      and add it to the expected _TABLE_TO_LOCAL + _DUCKLAKE_MIGRATED_TABLES set-equality (test_migrated_ops_tables_present).
+  - file: tests/test_data_quality_execute.py
+    action: Modify
+    purpose: >-
+      The exact-set assertion `_DUCKLAKE_OPS_TABLES == frozenset({recs,decisions,priority_queue})` (line ~345)
+      must add ops_execution_plans.
+  - file: tests/executor/plan/test_dataclasses.py
+    action: Modify
+    purpose: >-
+      test_save_and_load_roundtrip asserts OpsWriter.write("ops_execution_plans", ...) -- re-base to the new
+      save_execution_plan producer call; fix the patch.object(plan_mod, "OpsWriter") targets in the sibling
+      save_plan tests if the OpsWriter import is dropped.
+  - file: tests/execute_recommendation/test_plan_lifecycle.py
+    action: Modify
+    purpose: >-
+      TestSavePlan::test_save_plan calls the REAL save_plan with only PLANS_JSONL patched; the fail-loud repoint
+      makes it raise on the unresolvable writer URL -- patch scripts.ops_portal.execution_plans.save_execution_plan
+      (or writer_transport) so it stays green.
+  - file: scripts/checks/ops_governance/validate_warehouse_write_sources.py
+    action: Modify
+    purpose: >-
+      Precautionary: remove scripts/executor/plan.py's now-unused warehouse-write whitelist entry (line ~40)
+      once its OpsWriter().write("ops_execution_plans") is gone. No-op if the check does not fail on unused
+      entries; do NOT touch the separate s3_log_store queue-producer exemption (that stays until the queue repoint).
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    Governed deploy channel .github/workflows/deploy-ducklake-lambdas.yml (T2.38, landed) redeploys
+    ducklake_writer + ducklake_reader on merge to main (path filter includes config/lambda/ducklake/**).
+    No terraform/personal apply: the four DuckLake Lambdas are terraform_personal_ignore_changes_decoupled
+    post-#544 (Decision 125/126). The break-glass build_lambda --ducklake-only --deploy is NOT the VP default.
+  - >-
+    Neon DuckLake catalog: the physical ops_execution_plans_history / ops_execution_plans_current tables are
+    provisioned at runtime via the writer create_ops_tables action against the deployed writer Function URL
+    -- not a terraform step, not a neon_* op (so the Decision 77 fail-closed guard does not gate it).
+  - >-
+    Ordering: the redeployed reader must carry the expanded/live field_semantics BEFORE the post-deploy
+    reader/DQ/sync VP steps run (deploy -> provision -> readback).
+acceptance_criteria:
+  - >-
+    ops_execution_plans_history and ops_execution_plans_current are provisioned on the DuckLake catalog with
+    grain one-row-per-plan-revision (merge_key rec_id, current = latest revision); the reader serves the table
+    (empty on fresh provision, no TABLE_NOT_FOUND), and a direct save_execution_plan write-path smoke round-trips
+    a marker row through the deployed writer+reader (planning_session_id opaque, JSON blobs intact) -- proving
+    the migrated write path without relying on the CD.17-frozen executor.
+  - >-
+    The executor save_plan producer writes execution_plans via the named portal producer
+    (scripts/ops_portal/execution_plans.py -> write_ops); NO OpsWriter/Iceberg write path for
+    ops_execution_plans survives (grep-clean in plan.py, ops_writer._OPS_TABLE_NAMES, s3_log_store routing,
+    log-storage.yaml) -- replacement closure.
+  - >-
+    planning_session_id is a first-class opaque-VARCHAR soft-FK column to telemetry_sessions.session_id,
+    registered in docs/contracts/_joins.yaml and docs/contracts/session-id.yaml; no UUID/ULID translation
+    table or dual id column is introduced.
+  - >-
+    DQ checks for ops_execution_plans route to the ducklake reader (not Athena) and return PASS/WARN (no
+    FAIL/HARD_GATE); the (rec_id,revision) uniqueness and status accepted_values checks are defined.
+  - "scripts.sync.ops pull retrieves ops_execution_plans via the reader (the provisioned table, incl. any write-path smoke marker) and writes its local cache without error."
+  - >-
+    No ops_execution_plans_current Athena view exists in the personal account (information_schema.views query
+    returns 0 rows) -- c8's execution_plans half is satisfied with nothing to drop.
+  - >-
+    Roadmap bookkeeping: c9 flipped met (met_by: t2-26-migrate-ops-execution-plans); c2/c3/c8 re-grounded to
+    record execution_plans done + only ops_session_log (CD.40/T3.20-gated) remaining and the no-live-Iceberg
+    stale-reference correction.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: field_semantics.yaml is regenerated from the edited static sidecar (no drift).
+    command: "bin/venv-python -m scripts.schema_to_field_semantics --check"
+    expected: "Exit 0 / no drift -- the generated field_semantics.yaml matches the edited static sidecar."
+    fix_if: "Drift reported -> the sidecar was edited but not regenerated; run scripts.schema_to_field_semantics (no --check) then re-run."
+    hermetic: false
+    graduation: not-applicable   # invokes the already-registered field-semantics drift gate (schema_to_field_semantics --check); not a new kernel check
+  - step: 2
+    phase: pre-deploy
+    action: The resolved spec carries the expanded columns, merge_key rec_id, and status is live.
+    command: "bin/venv-python -c \"from src.common.ducklake_scd2_schema import resolve_table_spec, load_field_semantics; s=resolve_table_spec('ops_execution_plans'); cols=[c for c,_ in s.ordered_columns]; assert s.merge_key=='rec_id', s.merge_key; need={'rec_id','revision','status','model','tokens_used','prompt_hash','planning_session_id','steps','critique_history','plan_text'}; assert need<=set(cols), sorted(need-set(cols)); st=load_field_semantics()['ops_tables']['ops_execution_plans'].get('status','live'); assert st!='dormant', st; print('OK', st, cols)\""
+    expected: "Prints OK, a non-dormant status, and a column list containing every promoted scalar + the JSON blobs."
+    fix_if: "AssertionError -> columns not expanded, merge_key wrong, or status still dormant in the sidecar."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (command_exit_zero on resolve_table_spec), but the ops_execution_plans spec is already
+      under standing protection by the field-semantics drift gate (step 1) and the ducklake_writer schema-gate;
+      a dedicated column-presence registry check would duplicate that coverage.
+  - step: 3
+    phase: pre-deploy
+    action: No OpsWriter/Iceberg write path for ops_execution_plans remains (replacement closure, static).
+    command: "bin/venv-python -c \"import pathlib; t=pathlib.Path('scripts/executor/plan.py').read_text(); assert 'OpsWriter().write(\\\"ops_execution_plans\\\"' not in t, 'plan.py still writes via OpsWriter'; from scripts.ops_writer import _OPS_TABLE_NAMES; assert 'ops_execution_plans' not in _OPS_TABLE_NAMES, 'still in _OPS_TABLE_NAMES'; import scripts.s3_log_store as s; assert 'ops_execution_plans' not in set(getattr(s,'_OPS_TABLE_ROUTING',{}).values()), 's3_log_store still routes it'; print('OK')\""
+    expected: "OK -- plan.py no longer OpsWriter-writes execution_plans; it is absent from _OPS_TABLE_NAMES and the s3_log_store routing."
+    fix_if: "Assertion fails -> a residual Iceberg/OpsWriter write path survives; remove it."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (grep_count == 0 across the three OpsWriter write-path surfaces) and a genuine
+      no-resurrection guard -- but its correct durable form is TABLE-AGNOSTIC ("no migrated ops table is
+      re-added to the OpsWriter/Iceberg path", covering recs/decisions/priority_queue/execution_plans
+      uniformly), not a per-table grep. Graduating a single-table check here would proliferate near-duplicate
+      registry entries; the table-agnostic guard is a separate concern, out of this migration's scope.
+  - step: 4
+    phase: pre-deploy
+    action: Unit-test the new portal producer projection (dataclass -> registered columns, JSON blobs, opaque session id).
+    command: "bin/venv-python -m pytest tests/test_ops_portal_execution_plans.py -q"
+    expected: "Passing -- save_execution_plan projects rec_id/revision/status/model/tokens_used/prompt_hash/slug/planning_session_id and json.dumps(steps|critique_history); planning_session_id passes through as an opaque string."
+    fix_if: "Failing -> projection drops/renames a column or mis-serializes a JSON blob."
+    hermetic: false
+    graduation: not-applicable   # a pytest unit test (multi-assertion, needs the finished producer); runs under the existing suite gate, not a single-primitive kernel check
+  - step: 5
+    phase: pre-deploy
+    action: DQ and sync routing include ops_execution_plans on the DuckLake/reader path.
+    command: "bin/venv-python -c \"from scripts.data_quality_execute import _DUCKLAKE_OPS_TABLES; from scripts.sync.ops import _TABLE_TO_LOCAL,_DUCKLAKE_MIGRATED_TABLES; assert 'ops_execution_plans' in _DUCKLAKE_OPS_TABLES; assert 'ops_execution_plans' in _TABLE_TO_LOCAL and 'ops_execution_plans' in _DUCKLAKE_MIGRATED_TABLES; print('OK')\""
+    expected: "OK -- DQ routes execution_plans checks to the reader; sync pulls it from the reader with no Athena fallback."
+    fix_if: "Missing membership -> add to the named set(s)."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible membership assertion, but post-cutover the DQ/sync routing sets are stable config
+      already exercised functionally by the DQ runner (step 11) and sync pull (step 12); a standing membership
+      grep adds no durable protection beyond those functional checks.
+  - step: 6
+    phase: pre-deploy
+    action: The plan->telemetry-trace join and the grain note are registered in the contracts.
+    command: "bin/venv-python -c \"import pathlib; j=pathlib.Path('docs/contracts/_joins.yaml').read_text(); sid=pathlib.Path('docs/contracts/session-id.yaml').read_text(); ss=pathlib.Path('docs/contracts/storage-substrate.yaml').read_text(); assert 'ops_execution_plans.planning_session_id' in j, '_joins.yaml missing the join'; assert 'ops_execution_plans' in sid, 'session-id.yaml missing consumer'; assert 'revision' in ss, 'storage-substrate grain note missing'; print('OK')\""
+    expected: "OK -- planning_session_id -> telemetry_sessions.session_id join defined; session-id lists execution_plans; storage-substrate records the per-revision grain."
+    fix_if: "Missing -> register the join / consumer / grain note (telemetry correlation is a launch requirement, not polish)."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible grep, but _joins.yaml is a free-form registry the CD.25 drift gate deliberately skips,
+      and the join is an analytic-linkage doc entry with no runtime consumer until telemetry lands (T2.36,
+      not_started); a standing grep would guard a low-regression-risk documentation artifact.
+  - step: 7
+    phase: pre-deploy
+    action: Fast presubmit passes (schema, placement, closes_criteria integrity, graduation-completeness).
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "PASS -- plan_document schema, placement, closes_criteria [T2.26:c9] referential integrity, AND validate_graduation_completeness (every pre-deploy VP step carries a graduation disposition; the graduate step has its registry row on the implement PR) all green."
+    fix_if: "Failure -> address the named check; if closes_criteria fails, c9 is missing from docs/ROADMAP-PLATFORM.yaml; if graduation-completeness fails, a pre-deploy step lacks a disposition or the graduated check_id lacks its registry row."
+    hermetic: false
+    graduation: not-applicable   # runs validate --pre itself (the gate aggregator, incl. validate_graduation_completeness); cannot graduate itself
+  - step: 8
+    phase: post-deploy
+    action: The governed deploy channel redeployed writer+reader at the merge SHA (CI-delegated, Decision 119).
+    command: "aws s3api list-objects-v2 --bucket agent-platform-data-lake --prefix deploy-records/ducklake/ --profile agent_platform --query 'reverse(sort_by(Contents,&LastModified))[0].Key' --output text | xargs -I{} aws s3 cp s3://agent-platform-data-lake/{} - --profile agent_platform | bin/venv-python -c \"import sys,json; d=json.load(sys.stdin); print('deploy record source_git_sha=', d.get('source_git_sha'), 'functions=', d.get('functions') or d.get('deployed'))\""
+    expected: "Latest ducklake deploy record's source_git_sha == the plan's merge commit, listing writer + reader -- deploy-ducklake-lambdas.yml ran on merge (config/lambda/ducklake/** path filter)."
+    fix_if: "Stale/absent record -> the governed run did not complete; check/redispatch deploy-ducklake-lambdas.yml (workflow_dispatch). Do NOT fall back to local build_lambda --deploy except as acknowledged break-glass."
+    hermetic: false
+  - step: 9
+    phase: post-deploy
+    action: Provision the physical history/current tables via the writer create_ops_tables action.
+    command: "bin/venv-python -c \"from scripts.ops_portal.writer_transport import _ducklake_write; r=_ducklake_write('ops_execution_plans', {}, action='create_ops_tables'); print('provisioned:', r)\""
+    expected: "Writer returns the created tables (ops_execution_plans_history + ops_execution_plans_current)."
+    fix_if: "'unknown ops table' -> the reader/writer was not redeployed with the live field_semantics (step 8 failed); catalog error -> check Neon/writer perms."
+    hermetic: false
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Write-path smoke, driven DIRECTLY through the new portal producer (NOT the CD.17-frozen executor):
+      fresh table reads empty, then save_execution_plan writes a marker row that round-trips via the reader
+      with planning_session_id carried opaque and the JSON blobs intact. This is the real V3 proof that the
+      migrated write path + expanded schema work end-to-end against the deployed boundary (scout NOTE 2).
+    command: "bin/venv-python -c \"from scripts.ops_portal.execution_plans import save_execution_plan; from src.common.iceberg_reader import make_reader; r=make_reader(table='ops_execution_plans'); assert r.current_state('ops_execution_plans')==[], 'table not empty on fresh provision'; rec='rec-smoke-execplans'; save_execution_plan({'rec_id':rec,'revision':0,'status':'draft','model':'smoke','tokens_used':0,'prompt_hash':'0','slug':'smoke','planning_session_id':'smoke-session-ulid','steps':[],'critique_history':[],'plan_text':'smoke'}); rows=[x for x in r.current_state('ops_execution_plans') if x.get('rec_id')==rec]; assert rows and rows[0].get('planning_session_id')=='smoke-session-ulid', rows; print('OK: empty-on-provision then write-path roundtrip via portal producer', rows[0].get('rec_id'))\""
+    expected: >-
+      Empty on fresh provision; after the direct save_execution_plan call the marker row round-trips through
+      the deployed writer+reader with planning_session_id=='smoke-session-ulid' (opaque carry) and parseable
+      steps/critique_history. Fail-loud on any error (Decision 55).
+    fix_if: >-
+      Empty assert fails -> provisioning (step 9) did not run clean. Write/readback fails -> the deployed
+      boundary rejects the expanded schema (field_semantics not redeployed) or the producer projection drops
+      planning_session_id / mis-serializes a blob. The marker row (rec-smoke-execplans) is a harmless artifact
+      in this forward-substrate table -- leave it or supersede it via update_ops; the executor producer stays
+      dormant under CD.17.
+    hermetic: false
+  - step: 11
+    phase: post-deploy
+    action: DQ run for ops_execution_plans routes to the reader and passes.
+    command: "bin/venv-python -m scripts.data_quality_runner --table ops_execution_plans"
+    expected: "verdict PASS/WARN (empty-row WARN tolerated), backend=ducklake, no FAIL/HARD_GATE."
+    fix_if: "Athena backend used -> routing (_DUCKLAKE_OPS_TABLES) missed; HARD_GATE/FAIL -> schema/check mismatch."
+    hermetic: false
+  - step: 12
+    phase: post-deploy
+    action: sync pull retrieves execution_plans via the reader and writes the local cache.
+    command: "bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c \"from scripts.sync.ops import _TABLE_TO_LOCAL, _LOGS_DIR; import pathlib; p=_LOGS_DIR/_TABLE_TO_LOCAL['ops_execution_plans']; assert p.exists(), p; print('OK cache', p)\""
+    expected: "Pull completes with no reader-unreachable warning for execution_plans; its local cache file exists (0 rows)."
+    fix_if: "reader-unreachable / TABLE_NOT_FOUND -> provisioning or routing missing."
+    hermetic: false
+  - step: 13
+    phase: post-deploy
+    action: c8 execution_plans half -- confirm NO ops_execution_plans_current Athena view exists.
+    command: "bin/venv-python -c \"import awswrangler as wr; df=wr.athena.read_sql_query(\\\"SELECT table_name FROM information_schema.views WHERE table_schema='agent_platform' AND table_name='ops_execution_plans_current'\\\", database='agent_platform', workgroup='agent-platform-production'); assert df.empty, df.to_dict('records'); print('OK: no ops_execution_plans_current view')\""
+    expected: "0 rows -- no _current view exists for execution_plans (create-fresh-on-DuckLake; nothing to drop)."
+    fix_if: "A row returns -> an unexpected view exists; add an explicit drop mirroring null_resource.drop_ops_decisions_view (with the %{if var.aws_profile != \"\"} guard)."
+    hermetic: false
+  - step: 14
+    phase: pre-deploy
+    action: >-
+      Affected-suite regression (runs pre-deploy, after the step-3/5 removals): the ops_writer /
+      s3_log_store / ops-compaction suites + the new producer test pass green once ops_execution_plans
+      leaves _OPS_TABLE_NAMES and the routing sentinel is gone. Explicit fast signal; validate --pre
+      (step 7) also selects these diff-aware.
+    command: "bin/venv-python -m pytest tests/ops_writer/ tests/s3_log_store/ tests/test_ops_compaction_handler.py tests/test_ops_portal_execution_plans.py tests/test_schema_to_field_semantics.py tests/sync/ tests/executor/plan/ tests/execute_recommendation/test_plan_lifecycle.py tests/test_data_quality_execute.py tests/checks/ops_governance/test_validate_warehouse_write_sources.py -q"
+    expected: "All pass -- every test asserting the retired ops_execution_plans surface (OpsWriter routing, dt= staging, dormant status, sync/DQ set-equality, save_plan OpsWriter call) was re-based, and the new producer test passes. Backstop for the full test blast radius."
+    fix_if: "Failures -> a test still asserts the old ops_execution_plans OpsWriter/Iceberg/dormant/routing surface; re-base it to the DuckLake path (do not delete coverage wholesale). If a failing test is not yet enumerated in scope, it is an in-scope addition under this plan's test-rebasing intent (see execution_steps) -- add and re-base it."
+    hermetic: false
+    graduation: not-applicable   # pytest suites under the standing suite gate (mirrors step 4); not a single-primitive kernel check
+constraints:
+  - "No rescue agents or workaround loops (Decision 55). Writer errors FAIL LOUDLY; no offline outbox for execution_plans (Decision 84 I-4)."
+  - "Single-Portal preserved: execution_plans writes transit a named portal producer (scripts/ops_portal/execution_plans.py), never a raw transport call (Decision 81 cl.4 / 84)."
+  - "Deploy ONLY via the governed .github/workflows/deploy-ducklake-lambdas.yml channel (Decision 125/126, T2.38). Local build_lambda --ducklake-only --deploy is break-glass, not the VP default."
+  - >-
+    No redeploy of the data-pipeline / ops-compaction artifacts is required even though scripts/ops_writer.py
+    + scripts/s3_log_store.py are bundled into those two active artifacts: this is dead-code removal of a
+    dormant table with no live personal-account write path, ops-compaction is DEPRECATED and retires at T2.26,
+    and both are schedule-disabled. (Stated explicitly, not silently omitted.)
+  - >-
+    Fail-loud on the repointed write (Decision 84 I-4): the new save_execution_plan producer must NOT be
+    wrapped in the old best-effort try/except-warn OpsWriter guard -- a write that cannot complete fails at
+    the call site (no offline outbox).
+  - "No terraform/personal edits: no _current view to drop, and the DuckLake functions are ignore_changes-decoupled (#544). No local terraform validate/plan/init (Decision 119, CI-delegated)."
+  - "config/lambda/ducklake/field_semantics.yaml is GENERATED -- edit the .static.yaml sidecar and regenerate via scripts.schema_to_field_semantics; never hand-edit the generated file (drift gate)."
+  - "planning_session_id stored as opaque VARCHAR carrying exactly what open_session mints; NO UUID/ULID translation table, NO dual id column (Decision 97 cl.4 / session-id.yaml). Do not gate on or pull in the open_session ULID flip -- out of scope."
+  - "SLOC: scripts/executor/plan.py is a Decision-43 day-1-waived large file; the repoint is a small edit. If it or the new producer crosses budget, decompose (facade, Decision 128) -- do not raise the budget."
+  - "Status-Trusted-Never-Inferred: only /implement flips c9 open->met, on a verified VP pass; never infer met from prose or file existence."
+context:
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND, re-verified post-rebase (pass 1: 89 of 89 triaged;
+    pass 2 against the refreshed 102-decision DECISIONS.md: 102 of 102 triaged -- none of the 10 decisions
+    ratified since pass 1 (dec-133/134/136..142) block or contradict this plan). CITE (verbatim ids):
+    dec-84, dec-78, dec-81 (CD.33), dec-79, dec-48, dec-125, dec-126, dec-88, dec-117, dec-55; RELATED:
+    dec-87, dec-107 (CD.34), dec-140, dec-136. (Decision 70 mis-cited as append-only/queue and dropped.)
+  - "gates: decision-scout=FLAGS_FOUND (2 passes, both NOTE flags resolved in-approach); plan-critique: r1 REVISE (rebase/baseline refresh), r2 REVISE (T3.21 graduation dispositions), r3 REVISE (test-surface scope-completeness), reached the 3-round convergence cap -> human directed one confirmatory round then merge; r4 confirmatory REVISE (deeper sweep found the r3 test fix incomplete) -> closed out via an exhaustive test-blast-radius sweep (added tests/test_schema_to_field_semantics, tests/sync/ops/test_sync_cli, tests/test_data_quality_execute, tests/executor/plan/test_dataclasses, tests/execute_recommendation/test_plan_lifecycle + warehouse-write-source whitelist cleanup; VP step 14 broadened to run the full affected tree as backstop with residual in-scope authorization) -> human-directed merge"
+  - >-
+    Deploy-channel currency (scout NOTE 1): confirmed on rebased main -- .github/workflows/deploy-ducklake-lambdas.yml
+    EXISTS and tier_item T2.38 is status:complete (c1-c4 met), with the config/lambda/ducklake/** push trigger +
+    workflow_dispatch intact. The governed channel IS live; the "T2.38 pending" prose in Decision 126 pt3 /
+    AGENTS.md is stale drift (CD-prose-currency-sweep territory), not a real gate. build_lambda --ducklake-only
+    --deploy remains break-glass (human/admin-gated), named in VP step 8 fix_if -- never the default.
+  - >-
+    Frozen-producer V3 (scout NOTE 2): save_plan is CD.17-frozen, so V3 cannot be driven through a running
+    executor. Resolved by driving the write-path smoke DIRECTLY through the new portal producer
+    (save_execution_plan -> write_ops -> reader round-trip, VP step 10), fail-loud (Decision 55). This is
+    forward-substrate work with no live runtime consumer until executor re-enablement -- consistent with
+    Decision 84's other write-path migrations; the executor-side producer stays dormant.
+  - >-
+    Decision-scout NOTE flag 1 (Single-Portal, Decision 84 / 81 cl.4): resolved by routing the write through a
+    named portal producer (scripts/ops_portal/execution_plans.py), mirroring file_decision -> write_ops
+    (Decision 91), NOT a raw _ducklake_write from the executor.
+  - >-
+    Decision-scout NOTE flag 2 (Decision 87 table-identity): ops_execution_plans is the LEGACY executor
+    save-plan table (Decision 78 cl.2 / 84 I-4 migrate-scope), distinct in grain from the FUTURE
+    ops_plans/ops_plan_revisions entity whose git->warehouse authority flip is deferred to T4.x behind CD.17
+    (Decision 87 cl.6). This migration realizes pre-existing migrate-scope, NOT the deferred authority flip.
+  - >-
+    Telemetry-join design (Fable industry-best-practice pass): grain = one row per plan REVISION (versioned
+    document, not per-rec SCD); the SCD2 history ULID IS the referenceable plan-revision id; merge_key rec_id
+    gives current = latest revision (guard the current upsert monotonic on revision vs late replay -- enforced
+    as a DQ check, not a writer change). Column shape = tiered promotion (typed scalars for query/join keys +
+    steps/critique_history as JSON VARCHAR; no child tables). planning_session_id is a first-class soft-FK to
+    telemetry_sessions.session_id (OpenLineage Job/Run/Dataset + OTel span-link + Langfuse trace-linkage
+    precedent); reserve planning_observation_id for span-grain linkage later. UUID/ULID: opaque VARCHAR carry,
+    no translation table. Telemetry itself (T2.36) is not_started and gated BEHIND T2.26 -- this plan designs
+    the join key but does not build the telemetry side; the soft-FK must tolerate dangling refs.
+  - >-
+    Gating reality: T2.26 c2/c3/c7/c8 are transitively gated on ops_session_log's disposition (candidate
+    decision CD.40 pending, via T3.20) and c3 additionally on telemetry retirement (T2.36, which depends back
+    on T2.26 -- an ordering knot). This plan cannot close c2/c3/c7/c8; it closes the newly-added c9
+    (execution_plans slice) and is a precursor to the final session_log + ops_compaction plan once CD.40
+    ratifies. Starting is allowed under the Freshness Gate (bootstrap allowance); only COMPLETION of the
+    session_log-dependent criteria is CD.40-gated.
+  - >-
+    Stale-reference correction (Freshness Gate): the roadmap called execution_plans a "still-Iceberg ops
+    table" with a "_current view" to retire, but NO live Iceberg table or _current Athena view ever existed
+    for it in the personal account (create_ops_table_queries in terraform/personal/main.tf provisions only
+    recs/decisions/priority_queue; only unapplied legacy terraform/iceberg_tables.tf DDL + a dead OpsWriter
+    staging path reference it). The migration is create-fresh-on-DuckLake; c8's execution_plans half is a
+    no-op verification. c2/c3/c8 text re-grounded accordingly at /implement time.
+  - >-
+    rec-2707 DEFERRAL (HARD BLOCK escape valve): the open Critical ci-rca rec-2707 (missing test mock for
+    find_recent_ci_rca_rec_by_fingerprint in tests/test_ops_data_portal.py) is UNRELATED to this plan's scope
+    -- no same-file, same-Decision, or same-failure-category overlap (this plan touches no test in
+    test_ops_data_portal.py and no ci-rca surface). Deferred per human decision 2026-07-20 to a separate
+    focused session; note its back-validation link to rec-2643's claimed-but-unimplemented validate.py
+    stale-mock-target guard.
+  - >-
+    Baseline: planning spanned a multi-day gap, so by the plan-critique gate the branch was 48 commits
+    behind origin/main. Rebased onto origin/main (65a29eb) before finalization -- c9 replayed with NO
+    conflict (main's T2.26 exit_criteria block was unchanged; the 48-commit divergence was
+    CD-ratification/governance churn elsewhere: dec-133/134, CD.39/9/5/4/8). Overlapping scope files:
+    docs/ROADMAP-PLATFORM.yaml (c9 re-applied clean) and config/lambda/ducklake/field_semantics.yaml
+    (generated; not touched by the plan doc -- /implement regenerates it from the static sidecar). No
+    re-scoping was triggered by the rebase.
+  - >-
+    Deploy channel: the four DuckLake Lambdas are terraform_personal_ignore_changes_decoupled post-#544
+    (Decision 125/126, docs/contracts/build-lambda.yaml deploy_channels + environment-taxonomy.md section 5);
+    the governed deploy-ducklake-lambdas.yml (T2.38, landed and run-verified) is the sanctioned code-deploy path.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/ducklake-migrations-ops-compaction-vqdz7x)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant sections read (84, 81/CD.33, 78, 79, 87, 88, 95/96/97, 107/CD.34, 125/126, 55)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirm deploy-ducklake-lambdas.yml path filter includes config/lambda/ducklake/** (auto-deploy on merge); else plan a workflow_dispatch
+  - Confirm the writer_transport create_ops_tables invocation shape against the deployed writer (adapt step 9 command to the real helper if it differs)
+execution_steps:
+  - >-
+    Edit config/lambda/ducklake/field_semantics.static.yaml: expand the ops_execution_plans block to the
+    Fable shape (promoted scalars rec_id[merge_key]/revision/status/model/tokens_used/prompt_hash/slug/
+    planning_session_id + steps/critique_history/plan_text as VARCHAR JSON; derived ulid/created/last_updated),
+    keep merge_key rec_id and partition day(created_timestamp)/bucket(8,rec_id), flip status: dormant -> live.
+    Regenerate config/lambda/ducklake/field_semantics.yaml (scripts.schema_to_field_semantics) and confirm --check clean.
+  - >-
+    Create scripts/ops_portal/execution_plans.py (mirror ops_portal/decisions.py): save_execution_plan(plan_dict)
+    projects ExecutionPlan.to_dict() onto the registered columns (json.dumps steps/critique_history;
+    planning_session_id opaque), routes action=write_ops via writer_transport._ducklake_write, then the local
+    read-cache upsert. This is the Single-Portal-honoring producer.
+  - >-
+    Repoint scripts/executor/plan.py::save_plan onto scripts.ops_portal.execution_plans.save_execution_plan(...)
+    WITHOUT the old best-effort try/except-warn wrapper (fail loud, Decision 84 I-4); remove the s3_log_store.py
+    ".execution-plans.jsonl" routing sentinel + docs/contracts/log-storage.yaml mirror; drop ops_execution_plans
+    from scripts/ops_writer.py _OPS_TABLE_NAMES and _OPS_TABLE_DTYPES.
+  - >-
+    Re-base EVERY test that asserts the retired ops_execution_plans surface (this migration's test-rebasing
+    intent covers the whole blast radius; the enumerated set below is definitive from an exhaustive sweep, and
+    any residual a VP-step-14 run surfaces is an in-scope addition under this intent):
+    tests/s3_log_store/test_write_through_registry.py (write-through assertion),
+    tests/ops_writer/{test_write,test_compact,test_compact_edge_cases}.py (dt= staging prefix + SCD2 canonical
+    examples), tests/test_schema_to_field_semantics.py (dormant-status assertion), tests/sync/ops/test_sync_cli.py
+    (_TABLE_TO_LOCAL / _DUCKLAKE_MIGRATED_TABLES set-equality + _REMOVED_OPS_TABLES), tests/test_data_quality_execute.py
+    (_DUCKLAKE_OPS_TABLES frozenset), tests/executor/plan/test_dataclasses.py (OpsWriter.write assertion + patch
+    targets), tests/execute_recommendation/test_plan_lifecycle.py (real save_plan under fail-loud -> patch the new
+    producer). Verify tests/test_ops_compaction_handler.py (likely no-op). Author tests/test_ops_portal_execution_plans.py
+    for the new producer. Tidy the validate_warehouse_write_sources plan.py whitelist entry if unused. Run the full
+    affected tree green (VP step 14) before deploy.
+  - >-
+    DQ: add ops_execution_plans to _DUCKLAKE_OPS_TABLES in scripts/data_quality_execute.py (fix the stale
+    comments); add an ops_execution_plans block to config/agent/data_quality/ops.yaml (rec_id not_null; status
+    accepted_values; (rec_id,revision) uniqueness; revision-monotonic current-vs-history check).
+  - >-
+    sync: add ops_execution_plans to _TABLE_TO_LOCAL + _DUCKLAKE_MIGRATED_TABLES in scripts/sync/ops.py; add
+    _coerce_ops_execution_plans_row + a dispatch branch in _coerce_rows_list; update the stale migration comment.
+  - >-
+    Contracts: register the join in docs/contracts/_joins.yaml (key session_id; from
+    ops_execution_plans.planning_session_id; to telemetry_sessions.session_id; cardinality many_to_one; logical/
+    soft); add ops_execution_plans to docs/contracts/session-id.yaml joins_using_this_key; update
+    docs/contracts/storage-substrate.yaml with the grain note + expanded column shape.
+  - >-
+    Merge to main -> the governed deploy-ducklake-lambdas.yml redeploys writer+reader; then provision
+    ops_execution_plans_history/_current via the writer create_ops_tables action.
+  - >-
+    Roadmap bookkeeping (c9 already present): on a verified VP pass flip c9 open -> met (met_by:
+    t2-26-migrate-ops-execution-plans); re-ground c2/c3/c8 text (execution_plans migrated; only ops_session_log
+    (CD.40/T3.20-gated) remains; no live Iceberg table/view ever existed -- stale-ref correction); append a
+    progress_note entry. Do NOT flip any other criterion.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 failure STOP and RCA
+    (Decision 55), never work around a red boundary/deploy.
+  - "Report: what was implemented, deploy + provisioning results, VP step outcomes, and the c9 criterion flip."
+work_areas: []
+rollback: >-
+  Code-only rollback: revert the PR (restores the OpsWriter routing + dormant field_semantics); the revert
+  merge re-triggers deploy-ducklake-lambdas.yml to redeploy the reverted writer/reader. The provisioned empty
+  ops_execution_plans_history/_current tables are inert (the CD.17-frozen producer never writes them) and may
+  be left in place or dropped via a follow-up create_ops_tables/DROP -- no data loss (the table lands empty).
+  c9 stays open on revert.
