@@ -42,11 +42,16 @@ def lambda_maintenance_merge(*, profile: str | None = None, region: str = "eu-we
 def lambda_maintenance_gc(*, profile: str | None = None, region: str = "eu-west-2") -> None:
     """T2.18 VP10: invoke weekly GC; assert S3 object count stable/lower and breaker NOT tripped.
 
-    Invokes action=gc on the live maintenance Lambda. Asserts ok=True, breaker_tripped=False,
-    and files_after <= files_before (or files_before == 0 when the smoke tables are empty).
+    Invokes action=gc on the live maintenance Lambda. force_recreate_tables=True creates the smoke
+    DuckLake tables if absent (same idempotent-on-fresh-environment handling as
+    lambda_maintenance_merge; rec-2115 gap-1) so this gate does not 502 on a fresh smoke catalog.
+    Asserts ok=True, breaker_tripped=False, and files_after <= files_before (or files_before == 0
+    when the smoke tables are empty).
     """
     maint_url = core._function_url("maintenance")
-    body = core._ok_json(core._sigv4_invoke(maint_url, {"action": "gc"}, profile=profile, region=region))
+    body = core._ok_json(
+        core._sigv4_invoke(maint_url, {"action": "gc", "force_recreate_tables": True}, profile=profile, region=region)
+    )
     if not body.get("ok"):
         raise core.SmokeTestFailure(f"MAINTENANCE_GC FAIL: {body}")
     breaker_stats = body.get("breaker_stats", {})
