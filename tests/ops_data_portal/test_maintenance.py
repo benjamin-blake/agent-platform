@@ -228,9 +228,14 @@ class TestSelftests:
         import scripts.ops_data_portal as p
 
         written: dict = {}
-        monkeypatch.setattr(
-            _maintenance_ops_mod, "_ducklake_write", lambda t, r, *, action, profile=None: written.update(id=r["id"])
-        )
+        calls: list = []
+
+        def fake_write(t, r, *, action, profile=None):
+            calls.append(action)
+            written.update(id=r["id"])
+            return {"ok": True}
+
+        monkeypatch.setattr(_maintenance_ops_mod, "_ducklake_write", fake_write)
 
         class _Reader:
             def current_state(self, table, *, row_filter=None, **kw):
@@ -239,6 +244,38 @@ class TestSelftests:
         monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
         out = p.selftest_roundtrip()
         assert out["read_back"] is True and out["backend"] == "ducklake"
+        assert calls == ["write_ops", "update_ops"]
+
+    def test_selftest_roundtrip_purges_probe(self, monkeypatch) -> None:
+        """rec-2114: on successful read-back, selftest_roundtrip supersedes its own probe via a
+        direct writer update_ops call (caller-keyed test- keyspace, Decision 84 I-2 -- NOT
+        update_rec, which only accepts writer-allocated rec-NNN ids) so no open
+        test-roundtrip-<uuid> row lingers to fail the automatable not_null DQ check."""
+        import scripts.ops_data_portal as p
+
+        written: dict = {}
+        write_calls: list = []
+
+        def fake_write(t, r, *, action, profile=None):
+            write_calls.append((action, dict(r)))
+            written.update(id=r["id"])
+            return {"ok": True}
+
+        monkeypatch.setattr(_maintenance_ops_mod, "_ducklake_write", fake_write)
+
+        class _Reader:
+            def current_state(self, table, *, row_filter=None, **kw):
+                return [{"id": written["id"]}]
+
+        monkeypatch.setattr("src.common.iceberg_reader.make_reader", lambda **kw: _Reader())
+        out = p.selftest_roundtrip()
+
+        assert out["superseded"] is True
+        assert len(write_calls) == 2
+        supersede_action, supersede_record = write_calls[-1]
+        assert supersede_action == "update_ops"
+        assert supersede_record["id"] == written["id"]
+        assert supersede_record["status"] == "superseded"
 
     def test_selftest_roundtrip_loud_fails_when_not_read_back(self, monkeypatch) -> None:
         import scripts.ops_data_portal as p

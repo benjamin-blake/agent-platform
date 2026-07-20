@@ -78,7 +78,18 @@ def ops_read_your_write(*, profile: str | None = None, region: str = "eu-west-2"
         raise core.SmokeTestFailure(
             f"OPS_RYW FAIL: update_ops on absent rec returned {resp.status_code} (expected 409 referential)"
         )
-    print(f"OPS_RYW OK write+read+update reflected; absent-update referential=409 probe_id={probe_id}")
+
+    superseded = {
+        **updated,
+        "status": "superseded",
+        "resolution": "Superseded by --ops-read-your-write on successful read-back.",
+    }
+    core._ok_json(
+        core._sigv4_invoke(
+            writer_url, {"action": "update_ops", "table": table, "record": superseded}, profile=profile, region=region
+        )
+    )
+    print(f"OPS_RYW OK write+read+update reflected; absent-update referential=409 probe_id={probe_id} superseded=true")
 
 
 def ops_churn_regate(*, profile: str | None = None, region: str = "eu-west-2") -> None:

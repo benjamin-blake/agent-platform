@@ -57,6 +57,9 @@ def selftest_roundtrip(profile: Optional[str] = None) -> dict:
         "effort": "XS",
         "priority": "Low",
         "risk": "low",
+        # DQ-required NOT-NULL column (rec-2114): populated so the probe row is data-quality-clean
+        # while it persists, matching the ops_read_your_write probe's convention.
+        "automatable": False,
         "file": "scripts/ops_data_portal.py",
         "context": (
             "Selftest roundtrip probe written by --selftest-roundtrip to prove the active backend's "
@@ -75,7 +78,17 @@ def selftest_roundtrip(profile: Optional[str] = None) -> dict:
     read_back = bool(rows) and rows[0].get("id") == probe_id
     if not read_back:
         raise RuntimeError(f"selftest_roundtrip FAIL ({backend}): wrote {probe_id} but read-back returned {len(rows)} rows")
-    return {"backend": backend, "probe_id": probe_id, "read_back": True}
+
+    # SCD2 supersede via the writer on the caller-keyed test- keyspace (Decision 84 I-2 sanctioned
+    # exception; Decision 103/81). NOT via update_rec: its _fetch_rec_from_reader helper only
+    # accepts writer-allocated rec-NNN ids, and this is a caller-keyed test- probe id.
+    superseded_record = {
+        **record,
+        "status": "superseded",
+        "resolution": "Superseded by --selftest-roundtrip on successful read-back.",
+    }
+    _ducklake_write("ops_recommendations", superseded_record, action="update_ops", profile=profile)
+    return {"backend": backend, "probe_id": probe_id, "read_back": True, "superseded": True}
 
 
 def enqueue_findings(path: Path, profile: Optional[str] = None) -> dict:

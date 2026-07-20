@@ -44,6 +44,34 @@ def test_ops_read_your_write_ok(monkeypatch, capsys):
         assert written.get(col) is not None, f"probe missing DQ-required column {col!r}"
 
 
+def test_ops_read_your_write_supersedes_probe_on_success(monkeypatch, capsys):
+    """rec-2114: on success, ops_read_your_write supersedes its own test-ryw- probe via a final
+    update_ops call (status=superseded) so no open probe lingers to fail the automatable
+    not_null DQ check."""
+    monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
+    state = {"status": "open"}
+    update_statuses = []
+
+    def fake_invoke(url, payload, **kw):
+        action = payload["action"]
+        if action == "write_ops":
+            return _Resp(200, {"ok": True})
+        if action == "update_ops":
+            if payload["record"]["id"].startswith("test-absent"):
+                return _Resp(409, {"error_type": "referential"})
+            state["status"] = payload["record"]["status"]
+            update_statuses.append(payload["record"]["status"])
+            return _Resp(200, {"ok": True})
+        if action == "read_ops_current":
+            return _Resp(200, {"row_count": 1, "rows": [{"status": state["status"]}]})
+        return _Resp(200, {})
+
+    monkeypatch.setattr(core, "_sigv4_invoke", fake_invoke)
+    smoke.ops_read_your_write()
+    assert update_statuses[-1] == "superseded"
+    assert "superseded=true" in capsys.readouterr().out
+
+
 def test_ops_read_your_write_absent_not_409_fails(monkeypatch):
     monkeypatch.setattr(core, "_function_url", lambda role: f"https://{role}")
     state = {"status": "open"}
