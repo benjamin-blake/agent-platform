@@ -263,6 +263,39 @@ When a plan creates or modifies documentation artefacts, apply these rules:
 - **SLOC decompose-by-default (Decision 128):** when a scope file's projected change would cross its `config/sloc_budgets.yaml` budget (or past 500 SLOC if currently unregistered), plan the crossing as a decomposition step (facade package, Decision 80/104/124 pattern), not a budget raise. A raise is a deliberate, Decision-cited exception -- do not default to it, and do not plan a bare `--update-sloc-budgets` re-seed as the fix (Decision 128 / B2: it no longer auto-seeds new oversized files).
 
 
+## Data-Model Assessment (Workflow Step 4)
+Conduct this assessment if a table (DDL/schema), a `field_semantics` entry, or a warehouse write path is
+in scope. Generalizes Precision Context Injection (Decision 66) to the data-modeling layer -- surface
+the standard at design time, before the plan commits to a schema, not as a post-rejection error. Full
+rules and the write-mode table live in `docs/contracts/data-modeling-standard.yaml`; AGENTS.md carries
+the ambient summary. Walk order:
+
+1. **Grain**: state "one row per ___" in one sentence. If it cannot be stated, the design is not ready
+   for the remaining steps.
+2. **merge_key + history/current split**: identify the business key the table merges on, and whether
+   the table needs a Type-1 current projection alongside its history table (SCD2) or history-only
+   (append_only).
+3. **Identity**: ULID, minted once at the write boundary -- never client-side, never a natural-key
+   primary key.
+4. **Join / correlation keys**: identify session/trace FKs and cross-table join keys the new table
+   participates in; consult `docs/contracts/_joins.yaml`.
+5. **Write mode**: SCD2 (mutable-entity ops tables) vs append_only (insert-once event/telemetry tables)
+   -- grain-first, NOT "default to SCD2" (telemetry/event tables are insert-once append_only with no
+   SCD2 envelope, Decision 96).
+6. **Partitioning** (CD.9): every table is partitioned; name the partition column.
+7. **Reject-CRUD checklist**: no in-place UPDATE/DELETE as the default write path, no
+   one-row-per-entity mutation model, a read cache is never a write source (AGENTS.md
+   Warehouse-as-source-of-truth invariant).
+8. **Fable escalation**: for load-bearing/novel calls only -- a NEW table, a NEW identity scheme, or a
+   `merge_key` change -- dispatch a `model:"fable"` advice-consult per the `overseer` skill's Fable
+   Advice-Consult Protocol before committing the design. Routine, already-settled calls (an additional
+   column on an existing SCD2 table, a grain that matches an existing sibling table) do not need
+   escalation.
+
+**Framing reminder**: append-only/SCD2 as a family is the design default/prior, explicitly NOT a ban on
+sanctioned exceptional physical deletes (Decision 70) or lifecycle-closure paths (Decision 103).
+
+
 ## Main Divergence Assessment (Workflow Step 4)
 After Scope is identified, intersect the prospective Scope file list with `main_freshness.main_files_changed_since_branch` from the preflight report. If any Scope file appears in that list:
 

@@ -32,6 +32,8 @@ tables:
     write_boundary: ducklake_writer Lambda (action_write_ops) -- when executor resumes
     read_boundary: ducklake_reader Lambda (NAMED VERBS only)
     merge_key: rec_id
+    grain: one row per rec_id
+    write_mode: scd2
     field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_priority_queue
     read_engine_ref: docs/contracts/read-engine.yaml
     graduation_blocker: CD.17 reversal + executor resume
@@ -47,6 +49,7 @@ tables:
     write_boundary: ducklake_writer Lambda (action_write_ops) -- append events only; require_exists=True illegal
     read_boundary: direct DuckDB ATTACH (ops_smoke_events_history) -- no reader Lambda verb for current
     merge_key: event_id
+    grain: one row per event_id
     field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_smoke_events
     note: platform-generic append_only kernel proof (T1.14); no current_table in ScdTableSpec
 
@@ -60,6 +63,8 @@ tables:
     write_boundary: OpsWriter (scripts/ops_writer.py) -> S3 staging -> Iceberg via awswrangler
     read_boundary: DuckDBIcebergReader (primary) / Athena fallback (CD.8/CD.15 escape hatch)
     merge_key: session_id
+    grain: one row per session_id
+    write_mode: scd2
     field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_session_log
     migration_ref: tier_item T2.26
     disposition: T2.26 -- may retire per T-1.9; DuckLake migration or retirement TBD
@@ -71,6 +76,8 @@ tables:
     write_boundary: OpsWriter -> S3 staging -> Iceberg via awswrangler
     read_boundary: DuckDBIcebergReader / Athena fallback
     merge_key: rec_id
+    grain: one row per rec_id
+    write_mode: scd2
     field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_execution_plans
     migration_ref: tier_item T2.26
     disposition: T2.26 -- DuckLake migration pending executor resume

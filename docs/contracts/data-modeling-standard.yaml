@@ -1,0 +1,87 @@
+---
+# Data-modeling standard -- non-ritual index (Decision 86/127). NOT a Class A/B/C ritual contract:
+# no top-level contract:/class: key, so the CD.25 drift gate (validate_contract_drift) skips it,
+# per the read-engine.yaml / storage-substrate.yaml / telemetry-lexicon.yaml precedent.
+#
+# Generalizes Precision Context Injection (Decision 66) to the data-modeling layer: surface this
+# standard at agent reasoning/design time (AGENTS.md ambient rule + planning skill's Data-Model
+# Assessment), not as a post-rejection error. Root-caused from the T2.26 execution_plans planning
+# session, where a CRUD "one row per rec-revision, mutate in place" model nearly shipped before any
+# SCD2 decision loaded.
+#
+# This file ENUMERATES the standard's rules and a write-mode table, and INDEXES the existing
+# detailed sources rather than absorbing them -- see `indexes` below.
+#
+# Enforcement: scripts/checks/contracts/validate_data_model_standard.py (diff-aware backstop --
+# fires when this file or docs/contracts/storage-substrate.yaml changes).
+version: 1
+updated_at: "2026-07-20"
+updated_by: "PLAN-scd2-modeling-defaults"
+decisions_cited: [78, 81, 84, 95, 96, 97, 141, 66, 137]
+
+rules:
+  - id: grain-first
+    statement: >-
+      Name the table's grain -- "one row per ___" -- before choosing a write mode or a schema. If the
+      grain cannot be stated in one sentence, the design is not ready.
+  - id: identity-ulid-at-boundary
+    statement: >-
+      Identity is a ULID (Crockford base32), minted once at the write boundary (the writer Lambda /
+      module that owns the insert), never client-side and never a natural-key primary key. Propagated
+      to child rows as foreign keys, never re-derived downstream (mirrors Decision 97 / CD.33 clause 2).
+  - id: merge-on-business-key
+    statement: >-
+      SCD2 merge/upsert logic keys off the table's business key (e.g. rec_id, session_id), not a
+      surrogate row id. The business key identifies "the same real-world entity across revisions";
+      the surrogate/ULID identifies "this one row."
+  - id: partition-every-table
+    statement: >-
+      Every table is partitioned (CD.9) -- event-time for append_only tables, the appropriate
+      mutation/event time column for SCD2 history and current tables. No unpartitioned table.
+  - id: read-cache-never-write-source
+    statement: >-
+      A local read cache (e.g. logs/*.jsonl) is a derivative projection, never upstream of the
+      warehouse. Reading a cache and writing it back through a writer boundary is the CRUD
+      anti-pattern in lakehouse clothing (see AGENTS.md Warehouse-as-source-of-truth invariant).
+  - id: append-only-default-not-ban
+    statement: >-
+      append_only / SCD2 as a family is the design default and prior -- this is explicitly NOT a ban
+      on sanctioned exceptional physical deletes (Decision 70) or lifecycle-closure paths (Decision
+      103). Those remain legitimate, narrowly-scoped exceptions to the insert-only norm, not violations
+      of it.
+
+write_modes:
+  scd2:
+    shape: history table (every revision, append-only) + a Type-1 current table (one row per business key)
+    when_to_use: mutable-entity ops tables -- rows that get updated over their lifetime
+    example_tables: [ops_priority_queue, ops_session_log, ops_execution_plans]
+  append_only:
+    shape: history-only event journal; no current-table projection
+    when_to_use: insert-once event / telemetry data that is never mutated after the initial write
+    example_tables: [ops_smoke_events, telemetry_sessions, telemetry_observations, telemetry_transcripts, telemetry_agents]
+
+indexes:
+  # Pointers to the existing detailed sources this standard formalizes and names -- this file does
+  # NOT absorb their content.
+  - target: docs/contracts/storage-substrate.yaml
+    covers: per-table substrate, write/read boundary, merge_key, grain, write_mode (backfilled at T-scd2-modeling-defaults)
+  - target: docs/contracts/ops_recommendations.yaml
+    covers: Class A contract for ops_recommendations (SCD2 -- DuckLake-on-Neon sole backend, Decision 84)
+  - target: docs/contracts/ops_decisions.yaml
+    covers: Class A contract for ops_decisions (SCD2 -- rebuilt from DECISIONS.md)
+  - target: docs/contracts/telemetry_sessions.yaml
+    covers: Class A contract for telemetry_sessions (append_only, root of the trace tree)
+  - target: docs/contracts/telemetry_observations.yaml
+    covers: Class A contract for telemetry_observations (append_only, observation_type discriminator)
+  - target: docs/contracts/telemetry_transcripts.yaml
+    covers: Class A contract for telemetry_transcripts (append_only, large-text payload table)
+  - target: docs/contracts/telemetry_agents.yaml
+    covers: Class A contract for telemetry_agents (append_only, agent dimension)
+  - target: docs/contracts/ducklake_reader.yaml
+    covers: closed read boundary (NAMED VERBS only, Decision 84 I-3) for DuckLake-on-Neon tables
+  - target: docs/contracts/ducklake_writer.yaml
+    covers: closed write boundary (rec-id allocation in-transaction, Decision 84 I-2) for DuckLake-on-Neon tables
+  - target: docs/contracts/_joins.yaml
+    covers: cross-table join / correlation key reference (session/trace FKs) consulted by the Data-Model Assessment
+  - target: docs/contracts/telemetry-lexicon.yaml
+    covers: canonical telemetry vocabulary, identity scheme, and temporal/partition rules (Decisions 95/96/97) -- precedent for this file's non-ritual shape
