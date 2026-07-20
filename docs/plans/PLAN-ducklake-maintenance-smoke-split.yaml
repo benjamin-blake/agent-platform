@@ -117,14 +117,18 @@ scope:
     action: Modify
     purpose: >-
       Bump the hardcoded subprocess/upload mock call_count (4 function zips + 3 layers = 7 -> 5 + 3
-      = 8) in _run_ducklake_build assertions; the classic mock-exhaustion gotcha (PROJECT_CONTEXT.md)
-      -- without it --pre (VP12) fails.
+      = 8) at both == 7 asserts in _run_ducklake_build; AND extend the build_ducklake_function_package
+      side_effect lists from 4 to 5 _FakePath entries in ALL THREE _run_ducklake_build tests -- including
+      test_run_ducklake_build_bucket_missing_exits, which has no count assert but still consumes the
+      side_effect list (the classic mock-exhaustion gotcha, PROJECT_CONTEXT.md). Without both, --pre (VP12) fails.
   - file: docs/contracts/build-lambda.yaml
     action: Modify
     purpose: >-
       Register the smoke function -> ducklake-maintenance-smoke.zip mapping in
       ducklake_function_zip_keys (loaded at runtime by build_lambda_config._load_build_contract);
-      without it the deploy cannot resolve the function->zip mapping.
+      without it the deploy cannot resolve the function->zip mapping. Also add
+      ducklake-maintenance-smoke.zip to pipelines.ducklake.artifacts for artefact honesty (that list is
+      documentation -- the loader consumes only deploy_targets -- so it is non-load-bearing).
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
@@ -282,12 +286,16 @@ verification_plan:
       && grep -q 'DUCKLAKE_MAINTENANCE_SMOKE_URL' scripts/ducklake_smoke/core.py
       && grep -q 'maintenance_smoke' scripts/ducklake_smoke/lambda_maintenance_gates.py
       && grep -A15 'DucklakeUpdateFunctionCode' terraform/personal/oidc.tf | grep -q 'ducklake_maintenance_smoke'
-      && grep -q 'ducklake_maintenance_smoke' terraform/bootstrap/github_ci_apply.tf
+      && grep -q 'ducklake-maintenance-smoke' terraform/bootstrap/github_ci_apply.tf
     expected: >-
       Build set, config + contract zip mapping, URL env, and gate repoint are wired; the smoke function
       ARN is enumerated in the github_ci_ducklake_deploy UpdateFunctionCode grant (else the CD deploy
       AccessDenies) and in the bootstrap AddPermission + IAMRolesRead grants (else the EventBridge-invoke
-      permission cannot apply / the coverage verifier fails).
+      permission cannot apply / the coverage verifier fails). NOTE: terraform/bootstrap is a SEPARATE
+      root -- it cannot use aws_lambda_function.*.arn interpolation, so it enumerates the HYPHENATED
+      literal ARN (agent-platform-ducklake-maintenance-smoke); grep the hyphenated spelling there, the
+      underscore resource-reference spelling in oidc.tf. VP7 is the ONLY pre-deploy check of the bootstrap
+      AddPermission grant (the coverage verifier does not check WRITE grants).
     fix_if: >-
       A wiring or grant reference is missing -- the CD deploy would AccessDeny, the smoke URL would not
       resolve, the EventBridge permission would fail to apply, or validate_ci_refresh_read_coverage fails.
@@ -433,8 +441,10 @@ context:
     dec-84, dec-105, dec-101, dec-55, dec-86; RELATED: dec-128, dec-88, dec-62, dec-48, dec-104,
     dec-117, dec-44.
   - >-
-    gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=REVISE (round 1) -> all 5 blocking +
-    3 recommended fixes applied; re-run pending (target PROCEED).
+    gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique: round 1 REVISE (5 blocking + 3
+    recommended fixed), round 2 REVISE (1 blocking -- VP7 bootstrap grep must use the hyphenated literal
+    spelling since terraform/bootstrap cannot interpolate resource refs -- + 2 polish, all fixed); re-run
+    pending (target PROCEED).
   - >-
     Decision-scout WARN (Decision 129): dropped the per-ARN Lambda/EventBridge refresh-read grants
     (D129 pt1 already broadened LambdaRead/EventBridgeRead to agent-platform-* account-wide, and
@@ -484,8 +494,8 @@ context:
     code-deploy channel (landed T2.38, dec-125/126); the new function is code/infra-decoupled via
     lifecycle ignore_changes=[source_code_hash].
   - >-
-    STALENESS (corrected post-critique): main advanced DURING this session -- the branch is now behind
-    origin/main by ~13 Decisions (branch max dec-129 vs main max ~142) and ~918 roadmap lines. CRITICAL:
+    STALENESS (corrected post-critique): main advanced DURING this session -- the branch is now ~48
+    commits behind origin/main (branch max dec-129 vs main max dec-142; ~918 roadmap lines). CRITICAL:
     T2.18 and T2.26 exit_criteria are byte-identical on branch and main, so the bookkeeping targets stay
     valid; but /implement MUST `git fetch origin main && git rebase origin/main` BEFORE authoring, and the
     bundled Decision number is ~143 (NOT 130) -- re-check the max ## Decision NNN header at author time.
