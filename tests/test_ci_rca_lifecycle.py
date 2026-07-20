@@ -1,14 +1,15 @@
-"""Unit tests for scripts.ops_portal.ci_rca_lifecycle (ci-rca-identity-lifecycle, Decision 136).
+"""Unit tests for scripts.ops_portal.ci_rca_lifecycle (ci-rca-identity-lifecycle, Decision 142).
 
 Status-aware chain dedup, regression-vs-drop ancestry classification (mocked git ancestry)
-INCLUDING the legacy closed-head-with-no-fixed_by_sha fail-closed-to-regression case,
-regression-record fields, flake escalation, the timestamp-based inactivity-close predicate,
-stamp_fixed_by_sha, and escape-attribution.
+INCLUDING the legacy closed-head-with-no-fixed_by_sha fail-closed-to-regression case, the
+shallow-checkout guard-fetch belt, regression-record fields, flake escalation, the
+timestamp-based inactivity-close predicate, stamp_fixed_by_sha, and escape-attribution.
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -153,14 +154,21 @@ class TestClassifyClosedHead:
 
     def test_stale_rerun_drop_when_ancestor(self):
         head = ChainRecord(rec_id="rec-1", status="closed", fixed_by_sha="fixed_sha", last_touched="")
-        with patch("scripts.ops_portal.ci_rca_lifecycle._is_ancestor", return_value=True) as mock_ancestor:
+        with (
+            patch("scripts.ops_portal.ci_rca_lifecycle._ensure_ancestry_history") as mock_ensure,
+            patch("scripts.ops_portal.ci_rca_lifecycle._is_ancestor", return_value=True) as mock_ancestor,
+        ):
             verdict = classify_closed_head("failing_sha", head)
         assert verdict == "drop"
+        mock_ensure.assert_called_once_with("failing_sha", "fixed_sha", cwd=None)
         mock_ancestor.assert_called_once_with("failing_sha", "fixed_sha", cwd=None)
 
     def test_regression_when_not_ancestor(self):
         head = ChainRecord(rec_id="rec-1", status="closed", fixed_by_sha="fixed_sha", last_touched="")
-        with patch("scripts.ops_portal.ci_rca_lifecycle._is_ancestor", return_value=False):
+        with (
+            patch("scripts.ops_portal.ci_rca_lifecycle._ensure_ancestry_history"),
+            patch("scripts.ops_portal.ci_rca_lifecycle._is_ancestor", return_value=False),
+        ):
             verdict = classify_closed_head("failing_sha", head)
         assert verdict == "regression"
 
@@ -186,9 +194,101 @@ class TestClassifyClosedHead:
         transition -- only the two named string verdicts exist."""
         head_with_sha = ChainRecord(rec_id="rec-1", status="closed", fixed_by_sha="x", last_touched="")
         head_without_sha = ChainRecord(rec_id="rec-2", status="closed", fixed_by_sha=None, last_touched="")
-        with patch("scripts.ops_portal.ci_rca_lifecycle._is_ancestor", return_value=True):
+        with (
+            patch("scripts.ops_portal.ci_rca_lifecycle._ensure_ancestry_history"),
+            patch("scripts.ops_portal.ci_rca_lifecycle._is_ancestor", return_value=True),
+        ):
             assert classify_closed_head("s", head_with_sha) in ("drop", "regression")
         assert classify_closed_head("s", head_without_sha) in ("drop", "regression")
+
+
+class TestEnsureAncestryHistoryGuardFetch:
+    """Code-level guard-fetch belt (paired with ci-rca.yml's fetch-depth: 0): a shallow checkout
+    missing the connecting history between an old fixed_by_sha and a later failing_sha must not
+    silently misfile a stale-code rerun as a REGRESSION -- best-effort deepen before the real
+    ancestry check runs."""
+
+    def test_shallow_clone_missing_commit_triggers_unshallow_fetch(self):
+        """Simulates a shallow CI checkout: the first probed commit is already missing locally
+        (short-circuits the `and`, so the second commit is never separately probed), and the
+        guard performs a best-effort `git fetch --unshallow origin`."""
+        from scripts.ops_portal.ci_rca_lifecycle import _ensure_ancestry_history
+
+        probe_missing = MagicMock(returncode=1)
+        fetch_result = MagicMock(returncode=0)
+        with patch("subprocess.run", side_effect=[probe_missing, fetch_result]) as mock_run:
+            _ensure_ancestry_history("failing_sha", "fixed_sha", cwd="/repo")
+        assert mock_run.call_count == 2
+        fetch_call = mock_run.call_args_list[1]
+        assert fetch_call.args[0] == ["git", "fetch", "--unshallow", "origin"]
+        assert fetch_call.kwargs["cwd"] == "/repo"
+
+    def test_both_commits_already_present_skips_fetch(self):
+        """A full (non-shallow) checkout has both commits already -- no fetch is attempted."""
+        from scripts.ops_portal.ci_rca_lifecycle import _ensure_ancestry_history
+
+        probe_present = MagicMock(returncode=0)
+        with patch("subprocess.run", side_effect=[probe_present, probe_present]) as mock_run:
+            _ensure_ancestry_history("failing_sha", "fixed_sha", cwd="/repo")
+        assert mock_run.call_count == 2
+        for call in mock_run.call_args_list:
+            assert call.args[0][:2] == ["git", "cat-file"]
+
+    def test_only_one_commit_missing_still_triggers_fetch(self):
+        """Even a single missing endpoint (e.g. the older fixed_by_sha) is enough to deepen --
+        merge-base --is-ancestor needs the connecting history for BOTH ends."""
+        from scripts.ops_portal.ci_rca_lifecycle import _ensure_ancestry_history
+
+        probe_present = MagicMock(returncode=0)
+        probe_missing = MagicMock(returncode=1)
+        fetch_result = MagicMock(returncode=0)
+        with patch("subprocess.run", side_effect=[probe_present, probe_missing, fetch_result]) as mock_run:
+            _ensure_ancestry_history("failing_sha", "fixed_sha", cwd="/repo")
+        assert mock_run.call_count == 3
+
+    def test_missing_either_sha_short_circuits_without_probing(self):
+        from scripts.ops_portal.ci_rca_lifecycle import _ensure_ancestry_history
+
+        with patch("subprocess.run") as mock_run:
+            _ensure_ancestry_history("", "fixed_sha", cwd="/repo")
+            _ensure_ancestry_history("failing_sha", "", cwd="/repo")
+        mock_run.assert_not_called()
+
+    def test_classify_closed_head_calls_guard_before_ancestor_check(self):
+        """classify_closed_head wires the guard-fetch in ahead of the real ancestry call --
+        order matters, the history must be deepened BEFORE merge-base runs."""
+        call_order: list[str] = []
+        head = ChainRecord(rec_id="rec-1", status="closed", fixed_by_sha="fixed_sha", last_touched="")
+        with (
+            patch(
+                "scripts.ops_portal.ci_rca_lifecycle._ensure_ancestry_history",
+                side_effect=lambda *a, **k: call_order.append("ensure"),
+            ),
+            patch(
+                "scripts.ops_portal.ci_rca_lifecycle._is_ancestor",
+                side_effect=lambda *a, **k: call_order.append("ancestor") or True,
+            ),
+        ):
+            verdict = classify_closed_head("failing_sha", head)
+        assert verdict == "drop"
+        assert call_order == ["ensure", "ancestor"]
+
+    def test_real_repo_head_present_no_fetch_attempted(self):
+        """Against this repo's REAL (non-shallow) checkout, HEAD is trivially present -- the
+        guard must resolve that via the real `git cat-file` subprocess call and never reach a
+        real (network-dependent) `git fetch`. Companion to TestIsAncestorRealGit."""
+        from scripts.ops_portal.ci_rca_lifecycle import _ensure_ancestry_history
+
+        head = current_commit_sha()
+        assert head, "expected a real HEAD sha in this repo checkout"
+        original_run = subprocess.run
+
+        def _guard_no_fetch(cmd, *args, **kwargs):
+            assert cmd[:2] != ["git", "fetch"], "must not fetch when both commits are already present"
+            return original_run(cmd, *args, **kwargs)
+
+        with patch("subprocess.run", side_effect=_guard_no_fetch):
+            _ensure_ancestry_history(head, head)
 
 
 class TestFileRegressionRecord:

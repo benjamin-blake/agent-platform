@@ -136,6 +136,45 @@ def current_commit_sha(cwd: Optional[str] = None) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _commit_present(sha: str, cwd: Optional[str] = None) -> bool:
+    probe = subprocess.run(
+        ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=cwd,
+    )
+    return probe.returncode == 0
+
+
+def _ensure_ancestry_history(failing_sha: str, fixed_by_sha: str, cwd: Optional[str] = None) -> None:
+    """Best-effort: deepen a shallow checkout so `git merge-base --is-ancestor` between
+    `failing_sha` and `fixed_by_sha` can actually be resolved (code-level guard-fetch belt).
+
+    A shallow CI checkout (e.g. ci-rca.yml's bounded fetch-depth) can be missing the connecting
+    history between an old fix commit and a later failing commit entirely -- `git merge-base
+    --is-ancestor` then cannot resolve one side and returns non-zero, which
+    `classify_closed_head` reads as "not an ancestor" and misfiles a genuine stale-code rerun
+    as a brand-new REGRESSION instead of dropping it. Purely best-effort and silent: if this
+    deepen attempt doesn't fully resolve the object graph (offline sandbox, no `origin` remote,
+    a fetch failure), `classify_closed_head`'s own fail-closed-to-regression default still
+    applies exactly as before -- this never becomes a hard dependency of the classification.
+    """
+    if not failing_sha or not fixed_by_sha:
+        return
+    if _commit_present(failing_sha, cwd=cwd) and _commit_present(fixed_by_sha, cwd=cwd):
+        return
+    subprocess.run(
+        ["git", "fetch", "--unshallow", "origin"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=cwd,
+    )
+
+
 def classify_closed_head(failing_sha: str, head: ChainRecord, cwd: Optional[str] = None) -> str:
     """'drop' when `failing_sha` is an ancestor of head.fixed_by_sha (stale-code rerun of an
     already-fixed commit); 'regression' otherwise.
@@ -149,6 +188,7 @@ def classify_closed_head(failing_sha: str, head: ChainRecord, cwd: Optional[str]
         return _CLASSIFY_REGRESSION
     if not failing_sha:
         return _CLASSIFY_REGRESSION
+    _ensure_ancestry_history(failing_sha, head.fixed_by_sha, cwd=cwd)
     return _CLASSIFY_DROP if _is_ancestor(failing_sha, head.fixed_by_sha, cwd=cwd) else _CLASSIFY_REGRESSION
 
 

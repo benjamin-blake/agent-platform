@@ -1,4 +1,4 @@
-"""Unit tests for scripts.ci_rca.inactivity_sweep (ci-rca-identity-lifecycle, Decision 136).
+"""Unit tests for scripts.ci_rca.inactivity_sweep (ci-rca-identity-lifecycle, Decision 142).
 
 The pure filter/close helpers are tested directly (no live DuckLake reader or portal writes);
 run_sweep() and main() are tested with both list_open_ci_rca_recs and update_rec injected.

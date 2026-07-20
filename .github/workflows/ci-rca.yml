@@ -56,9 +56,13 @@ jobs:
           # to github.sha (the dispatched ref, e.g. main) -- an empty ref would silently checkout
           # the default branch; this makes that intent explicit.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          # fetch-depth: 2 is required so HEAD^ exists for git diff HEAD^ HEAD in the evidence
-          # bundle's merged-diff reconstruction (ci_rca_vacuous_pass.merged_diff_files).
-          fetch-depth: 2
+          # fetch-depth: 0 (full history) -- belt-and-suspenders alongside ci_rca_lifecycle's
+          # code-level guard-fetch (_ensure_ancestry_history). A bounded depth (formerly 2, kept
+          # only for HEAD^ in the evidence bundle's merged-diff reconstruction) left an older
+          # closed head's fixed_by_sha commit unreachable, so `git merge-base --is-ancestor`
+          # could not resolve it and classify_closed_head misfiled every stale-code rerun as a
+          # fresh REGRESSION instead of dropping it (ci-rca-identity-lifecycle post-merge fix).
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6

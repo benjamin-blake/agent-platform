@@ -7,7 +7,7 @@ was 501 SLOC (OVER the 500-SLOC budget) and is resolved by a PRIMARY concern-spl
 sibling classes across two modules (Decision 128 forbids a raise; Wave 1 OPEN-RISK-1
 precedent) rather than a config/sloc_budgets.yaml raise marker: TestCiRcaFingerprintDedup here
 keeps the guard/fingerprint/backstop/bump cohort. The closed-head regression-vs-drop cohort
-(ci-rca-identity-lifecycle, Decision 136 -- formerly the rec-2644 close-then-recur cohort) lives
+(ci-rca-identity-lifecycle, Decision 142 -- formerly the rec-2644 close-then-recur cohort) lives
 in the sibling class TestCiRcaClosedHeadRegression in test_ci_rca_close_then_recur.py. The rec-2707
 backstop-reader guard (_guard_live_reader, autouse) formerly duplicated verbatim into both sibling
 classes has since been retired (rec-2484): the global L1/L2 hermetic-AWS guard in the root

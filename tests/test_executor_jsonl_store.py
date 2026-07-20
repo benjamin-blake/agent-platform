@@ -10,7 +10,6 @@ import pytest
 from pydantic import ValidationError
 
 import scripts.executor.jsonl_store as store_mod
-import scripts.s3_log_store as s3_mod
 from scripts.executor.jsonl_store import (
     Recommendation,
     _atomic_write,
@@ -317,40 +316,53 @@ class TestS3Backend:
     """Tests for S3 backend in load_recommendation() and load_all_recommendations()."""
 
     def test_load_recommendation_uses_s3_when_backend_s3(self) -> None:
-        """load_recommendation() returns entry from S3 when S3 backend is active."""
+        """load_recommendation() returns entry from S3 when S3 backend is active.
+
+        jsonl_store.py does `from scripts.s3_log_store import get_backend, read_jsonl` --
+        both names are bound directly in jsonl_store's own module namespace, so the mock target
+        for load_recommendation()/load_all_recommendations() (defined in jsonl_store.py) is
+        store_mod (jsonl_store), never s3_mod (s3_log_store) itself. Patching s3_mod.get_backend
+        left the real, unpatched get_backend() in control -- which under the fast tier's
+        requirements-fast.txt (boto3 deliberately excluded, _BOTO3_AVAILABLE=False) always
+        returns 'local' regardless of S3_LOG_BUCKET, so this test only passed by accident on a
+        dev venv with boto3 installed and failed for real under CI's fast-tier pr-validate.
+        Fixed to mirror test_load_recommendation_last_wins_s3's already-correct store_mod
+        pattern below.
+        """
         s3_entries = [{"id": "rec-001", "status": "open"}, {"id": "rec-002", "status": "closed"}]
-        with patch.object(s3_mod, "get_backend", return_value="s3"):
-            with patch.object(s3_mod, "_get_s3_client") as mock_client:
-                body = "".join(json.dumps(e) + "\n" for e in s3_entries).encode()
-                mock_client.return_value.get_object.return_value = {"Body": type("B", (), {"read": lambda self: body})()}
-                with patch.dict("os.environ", {"S3_LOG_BUCKET": "test-bucket"}):
-                    result = load_recommendation("rec-001")
+        with (
+            patch.object(store_mod, "get_backend", return_value="s3"),
+            patch.object(store_mod, "read_jsonl", return_value=s3_entries),
+        ):
+            result = load_recommendation("rec-001")
         assert result is not None
         assert result["id"] == "rec-001"
 
     def test_load_recommendation_returns_none_for_missing_s3_entry(self) -> None:
         """load_recommendation() returns None when rec not in S3."""
         s3_entries = [{"id": "rec-001", "status": "open"}]
-        with patch.object(s3_mod, "get_backend", return_value="s3"):
-            with patch.object(s3_mod, "_get_s3_client") as mock_client:
-                body = "".join(json.dumps(e) + "\n" for e in s3_entries).encode()
-                mock_client.return_value.get_object.return_value = {"Body": type("B", (), {"read": lambda self: body})()}
-                with patch.dict("os.environ", {"S3_LOG_BUCKET": "test-bucket"}):
-                    result = load_recommendation("rec-999")
+        with (
+            patch.object(store_mod, "get_backend", return_value="s3"),
+            patch.object(store_mod, "read_jsonl", return_value=s3_entries),
+        ):
+            result = load_recommendation("rec-999")
         assert result is None
 
     def test_load_all_recommendations_uses_s3_when_backend_s3(self) -> None:
-        """load_all_recommendations() returns dict from S3 when S3 backend is active."""
+        """load_all_recommendations() returns dict from S3 when S3 backend is active.
+
+        See test_load_recommendation_uses_s3_when_backend_s3's docstring for why the mock
+        target must be store_mod (scripts.executor.jsonl_store), not s3_mod (scripts.s3_log_store).
+        """
         s3_entries = [
             {"id": "rec-001", "status": "open"},
             {"id": "rec-002", "status": "closed"},
         ]
-        with patch.object(s3_mod, "get_backend", return_value="s3"):
-            with patch.object(s3_mod, "_get_s3_client") as mock_client:
-                body = "".join(json.dumps(e) + "\n" for e in s3_entries).encode()
-                mock_client.return_value.get_object.return_value = {"Body": type("B", (), {"read": lambda self: body})()}
-                with patch.dict("os.environ", {"S3_LOG_BUCKET": "test-bucket"}):
-                    result = load_all_recommendations()
+        with (
+            patch.object(store_mod, "get_backend", return_value="s3"),
+            patch.object(store_mod, "read_jsonl", return_value=s3_entries),
+        ):
+            result = load_all_recommendations()
         assert "rec-001" in result
         assert "rec-002" in result
         assert result["rec-001"]["status"] == "open"

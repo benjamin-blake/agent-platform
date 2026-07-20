@@ -1,5 +1,5 @@
 """Tests for the closed-head regression-vs-drop routing in file_rec()'s write-time backstop
-(ci-rca-identity-lifecycle, Decision 136).
+(ci-rca-identity-lifecycle, Decision 142).
 
 Rewrite of the former rec-2644 close-then-recur coverage (its two revive-path helpers -- a
 status-flip mutator and its READ-ONLY recency finder -- are fully retired): a closed-head
