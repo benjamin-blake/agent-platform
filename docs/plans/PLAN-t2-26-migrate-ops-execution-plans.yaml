@@ -106,8 +106,10 @@ infrastructure_dependencies:
 acceptance_criteria:
   - >-
     ops_execution_plans_history and ops_execution_plans_current are provisioned on the DuckLake catalog with
-    grain one-row-per-plan-revision (merge_key rec_id, current = latest revision); reader current_state
-    returns a list (0 rows, empty) with no TABLE_NOT_FOUND.
+    grain one-row-per-plan-revision (merge_key rec_id, current = latest revision); the reader serves the table
+    (empty on fresh provision, no TABLE_NOT_FOUND), and a direct save_execution_plan write-path smoke round-trips
+    a marker row through the deployed writer+reader (planning_session_id opaque, JSON blobs intact) -- proving
+    the migrated write path without relying on the CD.17-frozen executor.
   - >-
     The executor save_plan producer writes execution_plans via the named portal producer
     (scripts/ops_portal/execution_plans.py -> write_ops); NO OpsWriter/Iceberg write path for
@@ -120,7 +122,7 @@ acceptance_criteria:
   - >-
     DQ checks for ops_execution_plans route to the ducklake reader (not Athena) and return PASS/WARN (no
     FAIL/HARD_GATE); the (rec_id,revision) uniqueness and status accepted_values checks are defined.
-  - "scripts.sync.ops pull retrieves ops_execution_plans via the reader (0 rows) and writes its local cache without error."
+  - "scripts.sync.ops pull retrieves ops_execution_plans via the reader (the provisioned table, incl. any write-path smoke marker) and writes its local cache without error."
   - >-
     No ops_execution_plans_current Athena view exists in the personal account (information_schema.views query
     returns 0 rows) -- c8's execution_plans half is satisfied with nothing to drop.
@@ -194,10 +196,22 @@ verification_plan:
     hermetic: false
   - step: 10
     phase: post-deploy
-    action: Reader readback -- current_state returns an empty list without error (provisioned, empty).
-    command: "bin/venv-python -c \"from src.common.iceberg_reader import make_reader; r=make_reader(table='ops_execution_plans'); rows=r.current_state('ops_execution_plans'); assert isinstance(rows, list); print('OK rows=', len(rows))\""
-    expected: "0 rows, no error -- the closed reader serves the provisioned empty table."
-    fix_if: "TABLE_NOT_FOUND -> provisioning (step 9) did not run; boundary error -> reader not redeployed."
+    action: >-
+      Write-path smoke, driven DIRECTLY through the new portal producer (NOT the CD.17-frozen executor):
+      fresh table reads empty, then save_execution_plan writes a marker row that round-trips via the reader
+      with planning_session_id carried opaque and the JSON blobs intact. This is the real V3 proof that the
+      migrated write path + expanded schema work end-to-end against the deployed boundary (scout NOTE 2).
+    command: "bin/venv-python -c \"from scripts.ops_portal.execution_plans import save_execution_plan; from src.common.iceberg_reader import make_reader; r=make_reader(table='ops_execution_plans'); assert r.current_state('ops_execution_plans')==[], 'table not empty on fresh provision'; rec='rec-smoke-execplans'; save_execution_plan({'rec_id':rec,'revision':0,'status':'draft','model':'smoke','tokens_used':0,'prompt_hash':'0','slug':'smoke','planning_session_id':'smoke-session-ulid','steps':[],'critique_history':[],'plan_text':'smoke'}); rows=[x for x in r.current_state('ops_execution_plans') if x.get('rec_id')==rec]; assert rows and rows[0].get('planning_session_id')=='smoke-session-ulid', rows; print('OK: empty-on-provision then write-path roundtrip via portal producer', rows[0].get('rec_id'))\""
+    expected: >-
+      Empty on fresh provision; after the direct save_execution_plan call the marker row round-trips through
+      the deployed writer+reader with planning_session_id=='smoke-session-ulid' (opaque carry) and parseable
+      steps/critique_history. Fail-loud on any error (Decision 55).
+    fix_if: >-
+      Empty assert fails -> provisioning (step 9) did not run clean. Write/readback fails -> the deployed
+      boundary rejects the expanded schema (field_semantics not redeployed) or the producer projection drops
+      planning_session_id / mis-serializes a blob. The marker row (rec-smoke-execplans) is a harmless artifact
+      in this forward-substrate table -- leave it or supersede it via update_ops; the executor producer stays
+      dormant under CD.17.
     hermetic: false
   - step: 11
     phase: post-deploy
@@ -231,10 +245,24 @@ constraints:
   - "Status-Trusted-Never-Inferred: only /implement flips c9 open->met, on a verified VP pass; never infer met from prose or file existence."
 context:
   - >-
-    Decision-scout verdict + CITE list: FLAGS_FOUND (Decisions triaged: 89 of 89). CITE (verbatim ids):
-    dec-84, dec-78, dec-81 (CD.33), dec-79, dec-125, dec-126, dec-88, dec-55. (Decision 70 was mis-cited as
-    append-only/queue and dropped -- it governs bootstrap-record deletion only.)
-  - "gates: decision-scout=FLAGS_FOUND (both NOTE flags resolved in-approach) after 1 round; plan-critique=<PENDING> after 0 round(s)"
+    Decision-scout verdict + CITE list: FLAGS_FOUND, re-verified post-rebase (pass 1: 89 of 89 triaged;
+    pass 2 against the refreshed 102-decision DECISIONS.md: 102 of 102 triaged -- none of the 10 decisions
+    ratified since pass 1 (dec-133/134/136..142) block or contradict this plan). CITE (verbatim ids):
+    dec-84, dec-78, dec-81 (CD.33), dec-79, dec-48, dec-125, dec-126, dec-88, dec-117, dec-55; RELATED:
+    dec-87, dec-107 (CD.34), dec-140, dec-136. (Decision 70 mis-cited as append-only/queue and dropped.)
+  - "gates: decision-scout=FLAGS_FOUND (2 passes, both NOTE flags resolved in-approach); plan-critique=REVISE round 1 (procedural: rebase + baseline refresh) -> re-run pending"
+  - >-
+    Deploy-channel currency (scout NOTE 1): confirmed on rebased main -- .github/workflows/deploy-ducklake-lambdas.yml
+    EXISTS and tier_item T2.38 is status:complete (c1-c4 met), with the config/lambda/ducklake/** push trigger +
+    workflow_dispatch intact. The governed channel IS live; the "T2.38 pending" prose in Decision 126 pt3 /
+    AGENTS.md is stale drift (CD-prose-currency-sweep territory), not a real gate. build_lambda --ducklake-only
+    --deploy remains break-glass (human/admin-gated), named in VP step 8 fix_if -- never the default.
+  - >-
+    Frozen-producer V3 (scout NOTE 2): save_plan is CD.17-frozen, so V3 cannot be driven through a running
+    executor. Resolved by driving the write-path smoke DIRECTLY through the new portal producer
+    (save_execution_plan -> write_ops -> reader round-trip, VP step 10), fail-loud (Decision 55). This is
+    forward-substrate work with no live runtime consumer until executor re-enablement -- consistent with
+    Decision 84's other write-path migrations; the executor-side producer stays dormant.
   - >-
     Decision-scout NOTE flag 1 (Single-Portal, Decision 84 / 81 cl.4): resolved by routing the write through a
     named portal producer (scripts/ops_portal/execution_plans.py), mirroring file_decision -> write_ops
