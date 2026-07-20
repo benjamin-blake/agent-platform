@@ -1,0 +1,285 @@
+schema_version: 2
+slug: rec-2729-facade-lazy-reexport
+intent: >-
+  Eliminate a Critical test-pollution bug (rec-2729) where scripts/ops_data_portal.py's eager
+  module-level re-export of five scripts.ops_portal.decisions symbols permanently captures a
+  mock.patch()-ed submodule symbol under pytest-randomly reordering, poisoning unrelated tests
+  and masking real Main Canary signal -- a direct correctness/reliability contribution to the
+  North Star's CI trustworthiness.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-rec-2729-facade-lazy-reexport.yaml
+phase: >-
+  Platform engineering hardening (test infrastructure correctness); not tied to a specific
+  platform_roadmap tier_item -- this is a bug-fix plan scoped directly from rec-2729 per the
+  Decision 67/CD.17 STRATEGIC-suspension window (single IMPLEMENTATION plan).
+scope:
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      Replace the eager `from scripts.ops_portal.decisions import (file_decision,
+      update_decision, backfill_decisions_from_md, _fetch_decision_from_reader,
+      _fetch_decision_from_athena)` block with an eager module import of the
+      scripts.ops_portal.decisions submodule itself (preserving the static import-graph edge
+      Decision 135's affected-set selector relies on) plus a module-level `__getattr__`
+      (PEP 562) that resolves those five names lazily via getattr() on the submodule at
+      attribute-access time. This means the five names are never bound as static facade
+      attributes and therefore cannot be permanently captured by a mock.patch() on the
+      submodule symbol. All other facade re-exports (subprocess/ET/DECISIONS_JSONL/
+      RECS_JSONL/Recommendation/validate_source traps, the other scripts.ops_portal.* eager
+      imports, file_rec/update_rec/propose_or_close_rec/sync/get_ci_rca_strict_mode function
+      bodies, main, ROOT) are unchanged -- this is the minimal fix for the reproduced bug
+      (Decision 55: root-cause fix, no broader speculative sweep beyond what rec-2729
+      reported and reproduced).
+  - file: tests/test_ops_portal_facade.py
+    action: Modify
+    purpose: >-
+      Add a TestDecisionsLazyReexport class with a capture-immunity regression guard: assert
+      the five names are absent from scripts.ops_data_portal.__dict__ (proving they cannot be
+      statically captured) while still resolving live and identically (via `is`) to
+      scripts.ops_portal.decisions.<name> through both getattr(module, name) and `from
+      scripts.ops_data_portal import name`. This is the deterministic proof that the fix
+      holds, independent of pytest-randomly's seed-dependent reproduction.
+bundled_recommendations:
+  - rec-2729
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    tests/ops_data_portal/test_decisions.py passes at the rec-2729 acceptance seed:
+    `bin/venv-python -m pytest tests/ops_data_portal/test_decisions.py
+    --randomly-seed=1323563830` exits 0 with all 11 tests passing.
+  - >-
+    tests/ops_data_portal/test_decisions.py passes across a spread of additional
+    pytest-randomly seeds (not just the one reproduction seed), demonstrating the fix is not
+    seed-specific.
+  - >-
+    The five names (file_decision, update_decision, backfill_decisions_from_md,
+    _fetch_decision_from_reader, _fetch_decision_from_athena) are absent from
+    scripts.ops_data_portal's own __dict__ (i.e. never a static facade attribute) yet remain
+    resolvable via both `scripts.ops_data_portal.<name>` and `from scripts.ops_data_portal
+    import <name>`, and resolve to the identical object as
+    scripts.ops_portal.decisions.<name> (or, for _fetch_decision_from_athena, the alias
+    target).
+  - >-
+    tests/test_ops_portal_facade.py's existing TestFacadeCompleteness and
+    TestFacadeImportable parametrized suites still pass unmodified for all _ALL_REQUIRED
+    names, including the five now-lazy ones -- proving the PEP 562 `__getattr__` satisfies
+    both the hasattr() and `from module import name` access patterns the facade contract
+    guarantees.
+  - >-
+    The full tests/ops_data_portal/ package and tests/test_ops_data_portal_decisions.py (the
+    legacy pre-split sibling, still patching scripts.ops_portal.decisions.* directly) pass
+    with pytest-randomly's default random order (no fixed seed), confirming no other test in
+    the package relies on the five names being eagerly bound on the facade.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the current bug reproduces on the unmodified branch tip before any code change,
+      establishing the pre-fix baseline.
+    command: >-
+      bin/venv-python -m pytest tests/ops_data_portal/test_decisions.py
+      --randomly-seed=1323563830 -q
+    expected: >-
+      Exit code 1; at least the 4 TestFileDecision tests fail with a leaked mock
+      (RuntimeError("writer down") or similar) propagating from
+      test_backfill_isolates_per_row_failures's file_decision patch.
+    fix_if: >-
+      If this step unexpectedly passes (exit 0), the branch's baseline no longer reproduces
+      rec-2729 -- STOP and re-verify against origin/main before proceeding; do not treat a
+      clean baseline as license to skip the fix.
+    hermetic: true
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      After editing scripts/ops_data_portal.py, re-run the exact rec-2729 acceptance seed to
+      confirm the fix resolves the reproduced failure.
+    command: >-
+      bin/venv-python -m pytest tests/ops_data_portal/test_decisions.py
+      --randomly-seed=1323563830 -q
+    expected: "Exit code 0; all 11 tests in the file pass."
+    fix_if: >-
+      If any TestFileDecision test still fails with a leaked-mock-style error, the __getattr__
+      resolution is not fully replacing the eager binding (e.g. a stray `from
+      scripts.ops_portal.decisions import file_decision` remains elsewhere in the facade, or
+      the submodule import itself was patched instead of the name) -- grep the facade file for
+      any remaining eager import of the five names and remove it.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: rec-2729-decisions-facade-seed-1323563830
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Sweep additional pytest-randomly seeds against the same test file to confirm the fix is
+      not seed-specific (the bug was probabilistic: ~4/5 seeds failed on the unmodified
+      baseline per rec-2729's filed evidence).
+    command: >-
+      for s in 1 42 777 20260717 999999; do bin/venv-python -m pytest
+      tests/ops_data_portal/test_decisions.py --randomly-seed=$s -q || exit 1; done
+    expected: "All 5 seed runs exit 0."
+    fix_if: >-
+      Any seed failing with a mock-leak-shaped error (a Mock/MagicMock object where a real
+      return value or exception was expected, or an assertion on a mocked call count that
+      wasn't reset) means an eager binding still exists for one of the five names, or a sixth
+      capturable symbol was missed -- re-grep the facade's scripts.ops_portal.decisions import
+      block for any remaining eager `from ... import` form.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: rec-2729-decisions-facade-seed-sweep
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Run the new capture-immunity regression guard added to tests/test_ops_portal_facade.py,
+      proving the five names are structurally absent from the facade's own __dict__ (not just
+      absent-under-this-particular-seed).
+    command: >-
+      bin/venv-python -m pytest tests/test_ops_portal_facade.py -k
+      TestDecisionsLazyReexport -v
+    expected: >-
+      All new test(s) in TestDecisionsLazyReexport pass, including an assertion that
+      "file_decision" not in scripts.ops_data_portal.__dict__ (and the same for the other four
+      names) and that scripts.ops_data_portal.file_decision is
+      scripts.ops_portal.decisions.file_decision (identity, not equality).
+    fix_if: >-
+      If the __dict__ absence assertion fails, the __getattr__ implementation still leaves a
+      static binding (e.g. it was added alongside the eager import rather than replacing it).
+      If the identity assertion fails, the __getattr__ body is wrapping/copying the object
+      instead of returning the submodule's live attribute directly.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: rec-2729-facade-getattr-dict-absence
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Run the full existing facade guard suite unmodified to prove the PEP 562 change does not
+      regress the documented facade contract (completeness, importability, patch-interception,
+      CLI stability) for any of the other ~40 required symbols.
+    command: bin/venv-python -m pytest tests/test_ops_portal_facade.py -q
+    expected: "All tests pass (pre-existing count plus the new TestDecisionsLazyReexport class)."
+    fix_if: >-
+      A TestFacadeCompleteness or TestFacadeImportable failure on one of the five lazy names
+      means __getattr__ raises AttributeError instead of resolving, or resolves inconsistently
+      between the hasattr() and import-statement access paths -- check the __getattr__ name
+      list matches _REQUIRED_PUBLIC/_REQUIRED_PRIVATE exactly for those five entries.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: rec-2729-facade-guard-suite-full
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Run the full tests/ops_data_portal/ package plus the legacy sibling
+      tests/test_ops_data_portal_decisions.py with pytest-randomly's default (unseeded)
+      ordering, confirming no other test anywhere in the two files depends on eager facade
+      binding of the five names.
+    command: >-
+      bin/venv-python -m pytest tests/ops_data_portal/ tests/test_ops_data_portal_decisions.py
+      -q
+    expected: "All tests pass."
+    fix_if: >-
+      A failure here that does not reproduce on a re-run indicates residual order-dependence
+      -- re-run with -p randomly --randomly-seed=last to capture the failing seed, then check
+      whether the failure is in the changed facade file or a pre-existing unrelated flake (cross-
+      reference against rec-2725's already-root-caused regressions before treating it as a new
+      bug in this fix).
+    hermetic: true
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm the facade's SLOC stays under its 500-line budget after the edit (the fix
+      shrinks the import block and adds a small __getattr__, net near-neutral or a decrease)
+      and that no scripts/ops_data_portal.py entry appears in config/sloc_budgets.yaml as a
+      raise-approved marker (none should be needed).
+    command: >-
+      bin/venv-python -m scripts.checks.hygiene.validate_sloc_limits scripts/ops_data_portal.py
+    expected: "PASS -- file is within its SLOC budget with no raise-approved marker required."
+    fix_if: >-
+      If this fails, the __getattr__ addition or guard-test scaffolding pushed the facade over
+      budget -- per Decision 128, decompose (do not raise the budget) if this occurs; but given
+      the change nets fewer lines than the eager import block, this is not expected to fire.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: rec-2729-facade-sloc-budget
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Run ruff formatting and lint checks on both changed files to confirm style compliance
+      (127-char line length, no emojis, ASCII hyphens).
+    command: bin/venv-python -m ruff check scripts/ops_data_portal.py tests/test_ops_portal_facade.py
+    expected: "No lint errors reported."
+    fix_if: "Fix any reported lint violations (e.g. unused imports from the removed eager binding, missing noqa on the intentionally-unused decisions module alias if flagged) and re-run."
+    hermetic: true
+    graduation: not-applicable
+constraints:
+  - "Only scripts/ops_data_portal.py and tests/test_ops_portal_facade.py may be modified (Scope table is exhaustive)."
+  - "No rescue agents or workaround loops (Decision 55) -- fix the capture mechanism structurally, do not paper over with fixture-level mock resets or forced test ordering."
+  - "Do not widen scope to the other scripts.ops_portal.* eager re-export blocks in the facade (cache.py, ci_rca_runtime.py, ci_rca_schema.py, maintenance_ops.py, risk_scoring.py, write_validators.py, writer_transport.py) -- rec-2729's filed evidence and this session's reproduction are scoped to the scripts.ops_portal.decisions block only; a broader sweep is out of scope for this plan (Option 1 from the /plan human confirmation)."
+  - "Preserve the static module-level import of the scripts.ops_portal.decisions submodule itself (not fully-deferred importlib inside __getattr__) so Decision 135's affected-set test selector's import-graph edge is retained."
+  - "Python 3.12+, type hints required per AGENTS.md code style; ruff line length 127; no comments beyond what documents non-obvious why (the __getattr__ mechanism itself warrants one short comment explaining the capture-avoidance rationale, consistent with the existing imported-name-trap comments in the same file)."
+context:
+  - "rec-2729 (Critical, bundled): scripts/ops_data_portal.py lines 85-91 do an eager module-level from-import of file_decision/update_decision/backfill_decisions_from_md/_fetch_decision_from_reader/_fetch_decision_from_athena from scripts.ops_portal.decisions. Discovered during the rec-2725 rescue (PLAN-rescue-canary-pytest-regressions); reproduced independently this session at seed 1323563830 (4/5 tests in tests/ops_data_portal/test_decisions.py fail with a leaked mock)."
+  - "Decision 124 governs the facade split (scripts/ops_data_portal.py as a thin facade over scripts.ops_portal.*) and explicitly documents that file_decision/update_decision/backfill_decisions_from_md moved to decisions.py with tests patching at the submodule path scripts.ops_portal.decisions.<sym> -- the fix keeps that patch-site contract unchanged; only the facade's own binding mechanism for those five names changes from eager to lazy."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (one NOTE-severity flag, no BLOCK). CITE: Decision 124, Decision 48, Decision 55, Decision 135. RELATED (context only, not cited as governing): Decision 84, Decision 104, Decision 69, Decision 88, Decision 128/130."
+  - "Decision 135 (NOTE flag, resolved in this plan's scope entry): a fully-deferred __getattr__ using importlib.import_module inside the function body would drop the static facade -> scripts.ops_portal.decisions import-graph edge that Decision 135's live affected-set test selector relies on for reverse-dependency selection. Resolution: keep an eager module-level import of the scripts.ops_portal.decisions submodule itself; __getattr__ only defers resolution of the five individual names via getattr() on that already-imported submodule object, not the submodule import itself."
+  - "Decision 48 confirms V2 is the correct verification tier: pure Python change, no Lambda handler, no Terraform, no cross-service contract -- scripts/ops_data_portal.py is not in any Lambda manifest's packaged-file set."
+  - "gates: decision-scout=FLAGS_FOUND (NOTE-severity, resolved in scope; no BLOCK); plan-critique=<pending, filled after Step 9>"
+  - "tests/test_ops_portal_facade.py's existing TestFacadeCompleteness/TestFacadeImportable suites already parametrize over the five names via _REQUIRED_PUBLIC/_REQUIRED_PRIVATE -- they exercise hasattr()/getattr() access, which PEP 562 __getattr__ satisfies identically to a static attribute for both access forms, so those existing tests require no modification, only the new guard class is additive."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/rec-2729-critical-bug-plan-yje3iz)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md not read in full by the planning agent (Decision-scout gate substitutes, per Step 3 of the plan workflow)
+  - Both scope files located and readable (scripts/ops_data_portal.py, tests/test_ops_portal_facade.py)
+  - Acceptance criteria understood and independently verifiable via the commands in verification_plan
+  - rec-2729's reproduction confirmed live on this branch before editing (verification_plan step 1)
+execution_steps:
+  - >-
+    In scripts/ops_data_portal.py, replace the eager `from scripts.ops_portal.decisions import
+    (_fetch_decision_from_athena, _fetch_decision_from_reader, backfill_decisions_from_md,
+    file_decision, update_decision)` block (lines ~85-91) with: (a) an eager `from
+    scripts.ops_portal import decisions as _decisions` (or equivalent) module import so the
+    static import-graph edge is preserved, and (b) a module-level `def __getattr__(name:
+    str):` function that returns `getattr(_decisions, name)` for exactly the five names
+    `{"file_decision", "update_decision", "backfill_decisions_from_md",
+    "_fetch_decision_from_reader", "_fetch_decision_from_athena"}` and raises AttributeError
+    for anything else (standard PEP 562 fallback semantics, matching what a normal
+    module-attribute lookup miss would raise). Add a short comment on the __getattr__
+    explaining it exists specifically to avoid eager-import mock-capture under
+    pytest-randomly (rec-2729), consistent with the file's existing imported-name-trap comment
+    style.
+  - >-
+    In tests/test_ops_portal_facade.py, add a `TestDecisionsLazyReexport` class with tests
+    asserting: (1) none of the five names are keys in `_facade.__dict__` directly (using
+    `vars(_facade)` or `_facade.__dict__`, not hasattr which would trigger __getattr__); (2)
+    `_facade.file_decision is decisions_submodule.file_decision` (and the same identity check
+    for the other four, with _fetch_decision_from_athena checked against the alias target)
+    where `decisions_submodule` is imported directly as `import scripts.ops_portal.decisions as
+    decisions_submodule` in the test file; (3) `from scripts.ops_data_portal import
+    file_decision` resolves to the same object as the getattr form (mirroring the existing
+    TestFacadeImportable pattern for consistency).
+  - >-
+    Execute the Verification Plan in order (steps 1-8): confirm baseline reproduction, confirm
+    fix at the acceptance seed, sweep additional seeds, run the new regression guard, run the
+    full facade guard suite, run the full ops_data_portal test package unseeded, confirm SLOC
+    budget compliance, run ruff. Loop on any failure per each step's fix_if guidance until all
+    pass; on an unrecoverable failure stop and file an RCA rec rather than working around it
+    (Decision 55).
+  - >-
+    Report: what was implemented (the PEP 562 lazy-reexport mechanism and the regression
+    guard), verification results (all 8 VP steps passing), and the rec-2729 closure evidence
+    (the exact acceptance command from the rec's filed acceptance field, re-run and passing).
+  - >-
+    Close rec-2729 via the ops portal after the fix lands and CI is green: `bin/venv-python -m
+    scripts.ops_data_portal --update-rec rec-2729 --status closed --resolution "Fixed via
+    PEP 562 lazy __getattr__ re-export in scripts/ops_data_portal.py; see PLAN-rec-2729-facade-
+    lazy-reexport.yaml and the merged PR."` (or via the squash-merge commit's `Resolves:
+    rec-2729` trailer per AGENTS.md Git-ops procedure, which triggers rec-autoclose.yml
+    automatically -- prefer the trailer over the manual command when merging via the standard
+    flow).
+work_areas: []
+rollback: >-
+  Revert the two-file diff (git revert the merge commit, or re-apply the prior eager
+  `from scripts.ops_portal.decisions import (...)` block). No data, schema, or infrastructure
+  state is touched by this change -- it is pure in-process Python re-export mechanism, so
+  rollback is a plain code revert with no follow-up cleanup required.
