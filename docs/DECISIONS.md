@@ -3204,8 +3204,8 @@ The pending CD.14 chose to *demote* INTENT docs to "non-authoritative detail-com
 
 **Status:** Decided
 **Date:** 2026-06-11
-**Warehouse ID:** dec-1091
-**Renumbering note:** originally recorded as "Decision 84" by PR #127, allocated concurrently with the DuckLake-consolidation Decision 84 on a diverged branch (both 2026-06-11). Renumbered 85 at merge -- the consolidation number is cross-referenced from deployed Lambda code, contracts, and warehouse rows, so it keeps 84. PR #127's commit message and the dec-1091 warehouse id predate the renumber and are unchanged.
+**Warehouse ID:** dec-085 (canonical; retired writer-era id reconciled per Decision 105)
+**Renumbering note:** originally recorded as "Decision 84" by PR #127, allocated concurrently with the DuckLake-consolidation Decision 84 on a diverged branch (both 2026-06-11). Renumbered 85 at merge -- the consolidation number is cross-referenced from deployed Lambda code, contracts, and warehouse rows, so it keeps 84. PR #127's commit message predates the renumber and is unchanged; the Warehouse ID line above is now reconciled to canonical dec-085 per Decision 105 (dec-1091 was the pre-reconciliation writer-era id).
 
 **Problem:**
 CD.22 (pending, gates T1.11) prescribed migrating planning artefacts from PLAN-*.md to PLAN-*.yaml with Pydantic structural validation -- the last narrative-markdown artefact class in the planning pipeline (CD.13). Decision 76 clause 3 hard-codes the plan handoff artefact as `PLAN-{slug}.md`, which the migration supersedes.
@@ -3227,6 +3227,7 @@ Historical PLAN-*.md files remain in the working tree and commit history; none a
 
 **Status:** Decided
 **Date:** 2026-06-11
+**Warehouse ID:** dec-084 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
 
 **Problem:**
 The T2.19 recs-first cutover left the ops store straddling two warehouses. The retained Iceberg copy stopped being a coherent rollback target the day writes moved to DuckLake (reads would time-travel while writes kept landing in DuckLake); the offline outbox inverted its purpose on ephemeral CC-web containers (gitignored pending files die with the container); client-side DynamoDB id allocation left the write boundary unable to police its own keyspace (a colliding write_ops create silently MERGEs); half-migrated read semantics produced the rec-2170 silent false zero; and preflight burned minutes polling Athena tables dead since the 2026-05-28 account migration.
@@ -3254,7 +3255,7 @@ queue current-state semantics referenced here are this decision's own `priority_
 
 **Status:** Decided
 **Date:** 2026-06-08
-**Warehouse ID:** dec-1090
+**Warehouse ID:** dec-083 (canonical; retired writer-era id reconciled per Decision 105)
 
 **Problem:**
 Decision 89 declared GitHub branch protection "permanently unavailable" for this repository under the free GitHub plan (private-repo restriction on `required_status_checks`). The repository was made public 2026-05-30 (Decision 73 / CD.21), removing that restriction. The `terraform/github/` human-gated local apply (CD.20 / T2.12) has since landed, activating the `main-protection` ruleset. Multiple instruction surfaces still assert the false "permanently unavailable" premise, misleading autonomous planning sessions.
@@ -3277,6 +3278,7 @@ The merge-gate design consequences of Decision 89 are PRESERVED, not overturned.
 
 **Status:** Decided
 **Date:** 2026-06-07
+**Warehouse ID:** dec-082 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
 
 **Problem:**
 T2.17 EC8 (churn commit-latency) was red after PR #89's Branch-P investigation. The gate was implemented
@@ -3345,7 +3347,7 @@ authority: CD.34 (Neon), not Decision 78 clause 3.
 
 **Status:** Decided
 **Date:** 2026-06-04
-**Warehouse ID:** dec-1089
+**Warehouse ID:** dec-081 (canonical; retired writer-era id reconciled per Decision 105)
 
 **Problem:**
 Decision 78 adopted DuckLake for the operational lakehouse but deferred the runtime architecture and four
@@ -3442,7 +3444,7 @@ CD.24 (per-Lambda manifests), OQ.7 / OQ.10 / OQ.11 (resolved), OQ.12 (left to T2
 
 **Status:** Decided
 **Date:** 2026-06-04
-**Warehouse ID:** dec-1088
+**Warehouse ID:** dec-080 (canonical; retired writer-era id reconciled per Decision 105)
 
 **Problem:**
 A first-principles design conversation proposed adopting Bazel to manage the `scripts/validate.py` monolith and the forthcoming CD.27 agent fleet. On a single-language (Python + Markdown), sub-scale (~36.5k first-party SLOC, one developer), agent-first repo with no compiled build, adopting a polyglot-scale build system risks frame-lock (Decision 75) and large ongoing BUILD-maintenance toil for benefits the repo largely already holds or has sequenced ahead in the roadmap.
@@ -3470,7 +3472,7 @@ At T4.1 concurrency = 1, the genuinely build-tool-only benefit (content-addresse
 
 **Status:** Decided
 **Date:** 2026-06-03
-**Warehouse ID:** dec-1086
+**Warehouse ID:** dec-079 (canonical; retired writer-era id reconciled per Decision 105)
 
 **Problem:**
 Blanket Lambda-deploy freeze (Decision 67) + whole-src/config copytrees in `build_lambda.py`: verification tier follows filesystem layout rather than the runtime import contract. Config bundled into inactive CLI Lambdas. Plans adding files under `src/` or `config/` incur blanket V3 + DEFERRED tax even when no Lambda handler imports the new code (T0.12 case). Lambda zips carry payload they do not need. Deploy boundary invisible to reviewers.
@@ -3500,7 +3502,7 @@ Only Decision 67's Lambda-deploy clause is lifted -- not its STRATEGIC-plan clau
 
 **Status:** Decided
 **Date:** 2026-06-02
-**Warehouse ID:** dec-1085
+**Warehouse ID:** dec-078 (canonical; retired writer-era id reconciled per Decision 105)
 
 **Problem:**
 The Iceberg-on-S3-metadata read path has proven operationally brittle for the ops/telemetry workload: the Athena-based reader is slow for interactive agent queries, the DuckDB-on-Iceberg snapshot read requires a full metadata scan on every invocation, and the staged CD.31 proposal formalises DuckLake v1.0 as the superior format for ops and telemetry tables -- a metadata-in-RDS-PostgreSQL + data-in-S3-Parquet open table format natively embedded in DuckDB that eliminates the Glue catalog dependency and enables sub-second DuckDB queries directly against S3 Parquet data. OQ.13 (the sole ratification-blocking open question, resolution_tier CD.31) is resolved here by generalising NS.1.
@@ -3527,7 +3529,7 @@ DuckLake v1.0 eliminates the Glue catalog dependency while preserving S3 as the 
 
 **Status:** Decided
 **Date:** 2026-05-30
-**Warehouse ID:** dec-1083 (warehouse title/number reconciliation to 77 is a follow-up via scripts.ops_data_portal; renumbered from 76 to resolve a parallel-authoring collision with the web-workflow-migration decision merged as Decision 76 in PR #10)
+**Warehouse ID:** dec-077 (canonical; retired writer-era id reconciled per Decision 105; renumbered from 76 to resolve a parallel-authoring collision with the web-workflow-migration decision merged as Decision 76 in PR #10)
 
 **Problem:**
 `docs/INTENT-ci-cd-architecture.md` section 6 and Decisions 24/73 affirm a PLATFORM sandbox -> SIT
@@ -3627,7 +3629,7 @@ OIDC CI), `docs/contracts/environment-taxonomy.md`, `docs/INTENT-ci-cd-architect
 
 **Status:** Decided
 **Date:** 2026-05-27
-**Warehouse ID:** dec-081
+**Warehouse ID:** dec-075 (canonical; retired writer-era id reconciled per Decision 105; corrects a prior display-layer double-claim of dec-081, which is Decision 81's canonical id)
 
 **Problem:**
 Architectural planning for the autonomous executor (CD.11, T4.1, `INTENT-provider-agnostic-executor.md` Stage 4) proposed Fargate, then Modal, then Fargate Spot via AWS Batch as candidate compute substrates -- all three options shared the unexamined assumption that the executor would be a monolithic Python process running an in-process agent loop. The Step Functions + per-step Lambda alternative -- which collapses 6 of T4.1's named subsystems into ~30 lines of Python, eliminates the substrate question entirely, aligns with NS.5 ("typed tools over HTTPS") and CD.10 ("Lambda per tool"), and uses primitives already in production (Decision 39 ratified Step Functions over Airflow; `terraform/data_pipeline.tf` ships a 5-Lambda Step Functions pipeline) -- was never raised during planning. It surfaced only when an outsider perspective, loaded without months of frame-locking context, asked "what if the executor isn't a long-running Python process?"
@@ -3712,6 +3714,8 @@ Two changes to restore and harden the harness:
 - Decision 68 (Self-Hosted Runner): terraform apply deferred due to pre-existing AMI drift triggering instance replacement; see Deferred note above.
 
 **Related:** Decision 68, Decision 72, Decision 73, failed ci-rca run `26287172232`, triggering CI run `26286390667`
+
+> **Update (2026-07-21):** The self-hosted EC2 runner substrate this decision hardens was retired 2026-05-28 per CD.21, ratified by Decision 112. CI now runs on GitHub-hosted OIDC runners. The `workflow_dispatch` escape hatch (item 2) survives unchanged in `.github/workflows/ci-rca.yml`.
 
 ---
 
@@ -3941,6 +3945,8 @@ The migration is an opportunity to improve the workflow architecture rather than
 
 **Related:** `docs/contracts/instruction-architecture.md`, `docs/INTENT-autonomous-improvement-control-plane.md`
 
+**Superseded by: Decision 76**
+
 ---
 
 ## Decision 59: Retrospective and Step Validation Move to Telemetry and State Machine (Decided)
@@ -4041,6 +4047,7 @@ Specific consequences:
 
 **Status:** Decided
 **Date:** 2026-05-09
+**Warehouse ID:** dec-089 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
 
 **Problem:**
 PLAN-validate-two-tier required enabling `required_status_checks` branch protection on `main` (validate-python + terraform-validate) as the enforcement mechanism for the two-tier validation model. The GitHub REST API (`PUT /branches/main/protection`) returns HTTP 403 on private repositories under the free GitHub plan. The repository will remain on the free plan; upgrading to GitHub Pro is not planned.
@@ -4281,6 +4288,8 @@ SDK is pip-installed into `data-pipeline.zip` (not the deps layer) using `--plat
 
 **Decision status:** Decided -- April 2026
 
+**Superseded by: Decision 116**
+
 ## Decision 48: Verification Tier Classification (Decided)
 
 **Decision:** Every implementation plan must declare a Verification Tier (V1, V2, or V3) based on the files in scope. The tier determines the minimum verification standard the plan's Ordered Execution Steps must meet.
@@ -4364,6 +4373,8 @@ Path updated by T-1.7 (config split). Mechanism unchanged.
 
 **Decision status:** Decided -- April 2026
 
+**Superseded by: Decision 117**
+
 ---
 
 ## Decision 43: Directed Growth Governance (Decided)
@@ -4377,7 +4388,7 @@ The autonomous, recursive self-improvement loop modifies prompts, scripts, and a
 
 | Dimension | Limit | Waiver pattern |
 |---|---|---|
-| Python file SLOC | 500 non-blank, non-comment lines | `# complexity-waiver: <decision-id>` anywhere in file |
+| Python file SLOC | 500 non-blank, non-comment lines | `# complexity-waiver: <decision-id>` anywhere in file. [Amendment 2026-07-21: amended by Decision 102 -- the complexity-waiver comment no longer authorises unbounded SLOC growth; decompose by default per Decision 128.] |
 | Cyclomatic complexity | 20 branch nodes per function | Same waiver comment in file |
 | `.prompt.md` file token budget | 3000 lines | `# complexity-waiver: <decision-id>` in frontmatter comment |
 | `.agent.md` file token budget | 1500 lines | Same |
@@ -4508,6 +4519,8 @@ Adopt a single migration path: Copilot SDK with Bedrock BYOK. Do not implement B
 **Related:** rec-186 (acceptance pre-flight), rec-184 (compound critique), Decision 39 (Step Functions orchestration)
 
 **Decision status:** Decided, deferred -- April 2026
+
+> **Update (2026-07-21):** Both migration triggers are now moot -- the Copilot SDK path was retired via Decision 116 (scheduled-agent provider routing) and Bedrock BYOK was retired via CD.28, ratified by Decision 122. Formal supersession of this entry is pending.
 
 ---
 
@@ -4644,6 +4657,8 @@ single-command session close.
 
 **Decision status:** Decided — April 2026
 
+> **Update (2026-07-21):** `copilot-instructions.md` and `implement.prompt.md` were deleted at T-1.13 (superseded by the `.claude/skills/` + `.claude/commands/` architecture, Decision 76/90); the ghost-file guard survives as the current enforcement mechanism.
+
 ---
 
 ## Decision 37: Lambda + GitHub Models API for Scheduled Agents (Decided)
@@ -4687,6 +4702,8 @@ recommendations/agent-recommendations.jsonl  ← agent-generated recs (agent-NNN
 
 **Decision status:** Decided — April 2026
 
+**Superseded by: Decision 116**
+
 ---
 
 
@@ -4721,54 +4738,7 @@ infrastructure changes.
 
 **Decision status:** Decided — April 2026
 
----
-
-## Decision 26: Workflow Cost Optimisation via 2-Chat Model and Automation (Agent-decided -- pending review)
-
-**Context:** The three-chat model (plan → implement → session_close) required re-serialization of conversation data between chats. Session close ran in isolation (Sonnet model, expensive) with no parent context, forcing manual context reconstruction. Pre-commit sanity was a separate agent invocation. Analysis showed that a merged architecture could eliminate serialization overhead and reduce token consumption by ~30%.
-
-**Decision:** Restructure to a 2-chat model (plan + implement/close merged) with local automation layers:
-
-**Architecture Changes:**
-1. **Chat 1: Plan** — Creates branch, writes plan, invokes plan-critique (Gemini), commits plan
-2. **Chat 2: Implement+Close** — Executes steps, closes session, auto-merges (all in parent context, no re-chat)
-3. **Local Automation Layers:**
-   - Pre-session: `scripts/session_preflight.py` (env check, recs, friction patterns)
-   - Post-session: `scripts/session_postflight.py --validate/--commit/--push/--log-housekeeping` (replaces agent-based steps)
-
-**Key Changes:**
-- Session close Phase is now integrated into `/implement` prompt (Steps 19-25 absorbed from deleted `session_close.prompt.md`)
-- `@retrospective` now runs on Haiku (not Sonnet) inside merged context — same task, lower cost, **better decision-making due to full context visibility**
-- Pre-commit sanity agent deleted; functionality moved to `session_postflight.py --pre-commit-sanity` (deterministic, no token cost)
-- `.github/prompts/plan.prompt.md` reduced from 418 to 281 lines (~33% trimming) — preflight output embedded directly, eliminates Steps 0-3b
-- `session_preflight.py` produces 12-field JSON report (`logs/.preflight-report.json`), eliminates per-chat environment re-validation
-
-**Cost Analysis:**
-- Previous: 1 Sonnet (plan-critique) + 2-3 Opus (implement) + 1 Sonnet (session_close) + 1 Opus (plan) + ~8 free GPT-4.1 agents = ~4 expensive chats per session
-- New: 1 Gemini (plan-critique) + 1 Opus (plan) + 1 Opus+Haiku (implement+close merged) + ~7 free GPT-4.1 agents = ~4 chats, but 33% fewer tokens in plan, Haiku cheaper than Sonnet, no serialization overhead
-- Estimated savings: ~15-20% per session (composition: -30% plan.prompt.md size, +20% Sonnet→Haiku savings, -5% parallelized validation)
-
-**Rationale:**
-- **No context loss:** Retrospective now sees full conversation history (no serialization), produces better decisions
-- **Lower cost:** Haiku + merged context is cheaper and more capable than Sonnet in isolation
-- **Simpler UX:** Users never invoke session_close separately; it happens inside /implement
-- **Parallelizable:** Concurrent feature planning now trivial (`git checkout main && /plan` while other feature in code review)
-- **Deterministic validation:** Local automation is faster, more reliable, and cheaper than agent wrapping
-- **Friction observability:** Clean sessions now recorded in log (previously silently skipped), enabling better cron analysis
-
-**Rejected alternatives:**
-- Single monolithic chat: Token limit exceeded for large implementations
-- Keep session_close agent: Higher cost (Sonnet), isolated context, forces re-serialization after merge
-- Validation-only agents before/after: Still requires agent invocation + token overhead; local scripting is 100x faster
-
-**Files Changed:**
-- Prompts: `plan.prompt.md` (-137 lines), `implement.prompt.md` (+integration of Steps 11-23), deleted `session_close.prompt.md`
-- Agents: `retrospective.agent.md` (Sonnet → Haiku), deleted `pre-commit-sanity.agent.md`
-- Scripts: New `session_preflight.py`, `session_postflight.py`; updated `run_retro_lite.py`, `session_metrics.py`, etc.
-- Tests: `test_session_preflight.py` (11), `test_session_postflight.py` (11), `test_session_metrics.py` (7), `test_run_retro_lite.py` (10)
-- Docs: Updated ARCHITECTURE.md, GETTING_STARTED.md, AGENT_WORKFLOW.md, copilot_instructions.md; added `.preflight-report.json` to .gitignore
-
-**Status:** Agent-decided — pending human review. Implementation verified: 130/130 tests pass, validate.py exit 0, all pre-commit hooks pass.
+[Amendment 2026-07-21: amended by Decision 77 clause 3 -- the unconditional "apply is never automatic" is scoped; sandbox auto-applies behind the deterministic guard (`scripts/terraform_apply_guard.py`) plus subagent plan review.]
 
 ---
 
@@ -4936,5 +4906,7 @@ Comprehensive test suite (5 tests) validated:
 - Manual merge only: adds friction, delays integration, provides no additional safety (CI is the gate)
 
 **Status:** Decided — March 2026
+
+**Superseded by: Decision 76**
 
 ---
