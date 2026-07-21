@@ -98,7 +98,8 @@ the wrong target.
   content-hash-gated SCD2 (Decision 134 cl.4): amendments are recorded as SCD2 versions. Q3's
   ask is to *extend* that existing SCD2 to version an intent field -- not to introduce SCD2.
 - **TRAP-7 -- the scout read-cost belongs to a parallel audit.** The `decision-scout` reads the
-  entire live file every `/plan` (~65-70k tokens). You MAY cite that cost as a driver/consequence
+  entire live file every `/plan` (~100k+ tokens for the ~400 KB file). You MAY cite that cost as a
+  driver/consequence
   of unbounded growth (consolidation shrinks it). You must NOT prescribe the context-window
   architecture, a scout pagination redesign, or a tool-backed read -- those belong to a separate,
   concurrently-commissioned agent-context-management audit. Name the overlap in
@@ -232,9 +233,11 @@ enough to consolidate, and is a consolidation mechanism warranted?
   standing consolidation lifecycle (a criterion + a tool) justified, or do ad-hoc supersessions
   suffice?
 - The mechanism recommendation MUST address **citation integrity**: live decisions are cited by
-  number ("Decision N", `dec-NNN`, `Resolves: dec-NNN` commit trailers) across CLAUDE.md/AGENTS.md,
-  contracts, skills, the scout, and roadmap entries, and TRAP-4 confirms no mechanical check guards
-  those inbound edges -- so any merge/retire that changes a `decision_id` can silently break them.
+  number ("Decision N", `dec-NNN`) across CLAUDE.md/AGENTS.md, contracts, skills, the scout, and
+  roadmap entries (note: the `Resolves:` commit-trailer convention closes *recommendations* --
+  `rec-NNNN`, AGENTS.md -- NOT decisions, so a commit trailer is not a decision-citation site), and
+  TRAP-4 confirms no mechanical check guards those inbound edges -- so any merge/retire that changes
+  a `decision_id` can silently break them.
   State how the mechanism preserves or rewrites inbound citations, or why an immutability-preserving
   supersede-in-place (compact the body to a pointer stub, keep the number) is preferable to a
   destructive merge that retires a number.
@@ -413,8 +416,10 @@ is a verdict.
   `Dq`-annotated (`Dq*` = the data-quality marker classes the file references; the comment explains
   why these fields omit them). `related_decisions_v2: list[str]` and `superseded_by` are typed
   relation fields -- weigh them when rating Q2's `relationship-graph` and
-  `machine-readable-frontmatter` properties. No *generated decision index / TOC* exists in the repo
-  (relevant to Q2's `generated-index` property).
+  `machine-readable-frontmatter` properties. No *generated consumer-facing decision index / TOC*
+  exists in the repo (relevant to Q2's `generated-index` property): the gitignored
+  `logs/.decisions-index.jsonl` is a full-record warehouse read-cache, NOT a lightweight TOC, and
+  the scout does not consume it -- so the `generated-index` property is genuinely absent.
 - `scripts/decisions_md.py:202-246` -- `parse_decisions_md` builds the per-entry dict;
   `context` (`:235`) extracts from `Rationale`/`Key details`/`Context`; `reversal_conditions`
   (`:238`) from `Reversal conditions`. `content_hash` (`:228`) is the SCD2 change key.
