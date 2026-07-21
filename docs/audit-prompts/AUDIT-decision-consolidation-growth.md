@@ -295,8 +295,11 @@ as one or more findings (marker/column/triage-bucket with acceptance criteria).
   (intent changed but rule text did not, or vice versa)?
 - Mechanically, when live entries are merged (retiring a `decision_id`), what does the
   content-hash-gated SCD2 backfill do with the retired row's warehouse lineage in `ops_decisions`
-  -- is provenance preserved, orphaned, or resurrected? (Trace `decisions_md.py:229,241`, not only
-  the human-facing provenance the second seed asks about.)
+  -- is provenance preserved, orphaned, or resurrected? Trace the BACKFILL/WRITER merge path
+  (`ops_data_portal --backfill-decisions-md`, the SCD2 upsert), NOT the parser: `decisions_md.py`
+  only first-occurrence-dedups (`:216`) and re-stamps `last_updated` (`:243`), emitting nothing for
+  a removed header, so the lineage answer lives on the write path. (Distinct from the human-facing
+  provenance the second seed asks about.)
 - What in this audit's remedies is authorable *now* vs blocked behind the Decision-67 STRATEGIC
   freeze / T1.5?
 
@@ -385,7 +388,11 @@ is a verdict.
   `context`, `related_decisions`, `raw_block`, `reversal_conditions`, `superseded_by`,
   `content_hash`, `created_timestamp`, `last_updated_timestamp`. No field named `intent`. The
   `raw_block` comment (`:41-46`) explains why parity fields are plain `str | None`, not
-  `Dq`-annotated.
+  `Dq`-annotated (`Dq*` = the data-quality marker classes the file references; the comment explains
+  why these fields omit them). `related_decisions_v2: list[str]` and `superseded_by` are typed
+  relation fields -- weigh them when rating Q2's `relationship-graph` and
+  `machine-readable-frontmatter` properties. No *generated decision index / TOC* exists in the repo
+  (relevant to Q2's `generated-index` property).
 - `scripts/decisions_md.py:202-246` -- `parse_decisions_md` builds the per-entry dict;
   `context` (`:235`) extracts from `Rationale`/`Key details`/`Context`; `reversal_conditions`
   (`:238`) from `Reversal conditions`. `content_hash` (`:228`) is the SCD2 change key.
@@ -425,7 +432,8 @@ Bound the corpus read hard. Reading all 103 entries in full is NOT required and 
   the seeds missed (e.g. adjacent numbers, shared title keywords). **Do NOT exceed 15.**
 - Read **up to 8** ratify-CD entries for DD-B (the "Ratify"-titled set, ~25 of them exist).
   **Do NOT exceed 8** -- this is a characterizing sample, not a full read.
-- State your coverage in `meta.contract_notes` ("read N of 103 in full; sampled M ratify-CD").
+- State your coverage in `meta.contract_notes` ("read N of <the re-derived live header count> in
+  full; sampled M ratify-CD").
 
 The five DD-A seed clusters (read in full; adjudicate; do not assume redundancy):
 - **Telemetry:** Decisions 95, 96, 97 (trace/observation model; temporal; identity).
@@ -445,7 +453,9 @@ Ratify-CD set, Decisions 106-141 whose titles begin "Ratify" (e.g. 136, 137, 140
 governing distinction or supersession-provenance edge would be *lost*?" If nothing is lost, the
 cluster leans `merge-into-one`/`compact-to-stub`; if a live clause or a provenance edge dies, it
 leans `keep-separate`. Tag each finding `evidence_kind: static` (from reading) or `observed` (from
-running the parser probe); an `observed` finding outranks a `static` one at equal severity.
+running the parser probe); an `observed` finding outranks a `static` one at equal severity -- use
+this ONLY to order `top_improvements` and to break ties for `highest_leverage_change`; it changes
+no `severity` value.
 
 ---
 
@@ -529,7 +539,7 @@ audit:
     - {surface, dimension: VD1..VD6, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|decision-N", note: ""}
   findings:
-    - {id: DCG-01, surface: <surface|shared>, question: Q1..Q4, dimension: VD1..VD6,
+    - {id: DCG-01, surface: <surface|shared>, question: Q1|Q2|Q3a|Q3b|Q3c|Q4, dimension: VD1..VD6,
        title, evidence: "file:line|decision-N", evidence_kind: static|observed,
        current_behavior, ideal_behavior, gap, compensating_controls_considered: "",
        change_type: add|rescope|enforce|unify|persist|clarify|retune_gate,
@@ -563,8 +573,15 @@ fill these fields.
   for not-a-defect dismissals that rest on a compensating control.)
 - `CONFIRMED` requires the behavior traced to file:line or an observed sampled artifact; anything
   less is `HYPOTHESIS`.
-- A `consolidation_clusters` entry with verdict `keep-separate` is a valid, expected outcome and
-  does NOT require a finding.
+- Every `consolidation_clusters` entry with an ACTIONABLE verdict (`merge-into-one`,
+  `supersede-and-archive`, or `compact-to-stub`) MUST have at least one corresponding `findings[]`
+  entry (question Q1) -- the proposed consolidation IS a change, so it is counted. A `keep-separate`
+  entry is the ONLY verdict that spawns no finding, and is a valid, expected outcome.
+- A finding's `dimension` is its PRIMARY dimension; when several apply (e.g. a growth finding
+  touching VD2 and VD5), name the primary and mention the others in `note`.
+- `summary` echoes only the three headline surface maturities named in the schema below;
+  `per_surface_assessment` is the system-of-record for all six surfaces' maturity -- a maturity
+  absent from `summary` is NOT "unrated".
 
 The companion `.md`: the executive layer a human reads first -- one-paragraph verdict, the Q1
 cluster table (cluster | members | verdict | one-line basis), the Q2 external-checklist scorecard,
@@ -628,7 +645,10 @@ checklist property (rate it `partial`, not `missed`); the framing here must not 
    (signing is unavailable in this harness; unsigned is expected). Then `git push -u origin HEAD`.
 5. Open the PR via `mcp__github__create_pull_request` (base=`main`, ready for review, NOT draft),
    title: `audit: decision-log consolidation + growth direction + semantic-intent capture`, body =
-   the `summary` block in a yaml fence + a 2-3 sentence lede naming the three axes.
+   the `summary` block in a yaml fence + a 2-3 sentence lede naming the three axes. **Degraded
+   path:** IF the GitHub MCP call is unavailable, confirm the branch is pushed, record in
+   `meta.contract_notes` that the PR was not opened (the human opens it), and END THE TURN -- never
+   loop-retry and never block.
 6. **END THE TURN.** Do not poll, do not merge, do not subscribe, do not self-approve.
 
 ---
