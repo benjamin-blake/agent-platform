@@ -22,8 +22,9 @@ scope:
     purpose: >-
       c1: add lifecycle { ignore_changes = [source_code_hash] } to the two aws_lambda_layer_version
       resources (ducklake_deps L53, ducklake_extensions L62), mirroring the rec-2646/rec-2654 pattern
-      already on the 6 aws_lambda_function resources in these files. Stops the per-rebuild spurious
-      layer-replace (zero diffs, zero gated routings). s3_key stays the fixed literal (unchanged).
+      already carried by all 8 aws_lambda_function resources across terraform/personal (the 3 in these
+      two scope files: writer, reader, catalog_dr). Stops the per-rebuild spurious layer-replace (zero
+      diffs, zero gated routings). s3_key stays the fixed literal (unchanged).
   - file: terraform/personal/ducklake_catalog_dr.tf
     action: Modify
     purpose: >-
@@ -51,15 +52,21 @@ scope:
       c3: at the three zip sites -- push-path byte-assert+upload (~L297-316), gated-apply
       byte-assert+upload (~L1004-1017), and the speculative-plan build+upload (~L699-754) -- export
       LAMBDA_ARTIFACT_SHA=<resolved PR-head-sha> (the same sha plan.bin is keyed by, tfplan/personal/
-      <pr-head-sha>.bin) and point the md5 compare + `aws s3 cp` at the per-sha key
-      s3://<bucket>/lambda-packages/<sha>/<name>, so a later PR's push cannot overwrite this PR's
-      reviewed artifacts (closes the stale-artifact-overwrite class).
+      <pr-head-sha>.bin), point ONLY the md5 byte-assert at the per-sha key
+      s3://<bucket>/lambda-packages/<sha>/<name>, and DUAL-WRITE the `aws s3 cp` upload to BOTH the
+      fixed key s3://<bucket>/lambda-packages/<name> AND the per-sha key. The per-sha byte-assert is
+      overwrite-immune so a later PR's push cannot skew this PR's reviewed artifacts (closes the
+      stale-artifact-overwrite class); the fixed-key write keeps terraform's static s3_key
+      genuine-republish read fed (else the fixed key, refreshed only by the PR speculative job, becomes
+      a shared object a concurrent PR could overwrite -> stale bytes on a genuine republish, unguarded
+      by the now-per-sha byte-assert).
   - file: .github/workflows/reconcile.yml
     action: Modify
     purpose: >-
-      c3: same content-addressed byte-assert+upload change at reconcile.yml's two zip sites (~L282-312,
-      ~L605-626), keyed by the red commit's originating PR-head-sha (reconcile already checks out the
-      red commit; use its resolved head sha).
+      c3: same dual-write change at reconcile.yml's two zip sites (~L282-312, ~L605-626) -- byte-assert
+      against the per-sha key, `aws s3 cp` dual-writing the fixed + per-sha key -- keyed by the red
+      commit's originating PR-head-sha (reconcile already checks out the red commit; use its resolved
+      head sha).
   - file: docs/contracts/environment-taxonomy.md
     action: Modify
     purpose: >-
@@ -117,11 +124,13 @@ acceptance_criteria:
     workflows (terraform-apply-sandbox.yml, reconcile.yml, terraform-drift.yml), and the lock pins the
     aws + null + kislerdm/neon providers.
   - >-
-    c3: build_lambda uploads each ducklake zip to a per-artifact-sha key lambda-packages/<sha>/<name>;
-    the terraform-apply-sandbox.yml and reconcile.yml byte-assert + upload steps compare and write the
-    per-sha key (immutable per PR head sha, so a later PR cannot overwrite a reviewed artifact); the
-    content-addressing does NOT alter terraform's static s3_key values (so it introduces no new
-    terraform diff and does not reintroduce the c1 layer-replace churn).
+    c3: build_lambda dual-writes each ducklake zip to BOTH the fixed key lambda-packages/<name> and a
+    per-artifact-sha key lambda-packages/<sha>/<name>; the terraform-apply-sandbox.yml and reconcile.yml
+    workflow steps dual-write the fixed + per-sha key and byte-assert against the per-sha key (immutable
+    per PR head sha, so a later PR cannot overwrite a reviewed artifact, while the fixed key stays fed
+    for terraform's genuine-republish read); the content-addressing does NOT alter terraform's static
+    s3_key values (so it introduces no new terraform diff and does not reintroduce the c1 layer-replace
+    churn).
   - >-
     rec-2755 (open, High -- "DuckLake shared layers lack rec-2646's ignore_changes decoupling") is
     resolved by c1 and closed via the Resolves: trailer at squash-merge.
@@ -158,7 +167,7 @@ verification_plan:
     action: >-
       c3 -- unit test the content-addressed upload key derivation (namespace sha -> per-sha key; unset
       namespace -> deterministic fallback), no S3 round-trip.
-    command: "bin/venv-python -m pytest tests/test_build_lambda_packaging.py -k content_address -q"
+    command: "bin/venv-python -m pytest tests/test_build_lambda_packaging.py::TestContentAddressedKey -q"
     expected: "The new content-address key-derivation test(s) pass."
     fix_if: >-
       Key derivation does not produce lambda-packages/<sha>/<name> for a set namespace, or the
@@ -183,14 +192,16 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      c3 -- confirm the two terraform CD workflows' zip byte-assert/upload steps are content-addressed
-      (reference the per-sha key namespace, not a bare lambda-packages/<name>).
+      c3 -- confirm the two terraform CD workflows' zip steps are content-addressed: the byte-assert
+      references the per-sha key namespace and the `aws s3 cp` dual-writes the fixed + per-sha key
+      (LAMBDA_ARTIFACT_SHA exported).
     command: >-
       bin/venv-python -c "import sys; a=open('.github/workflows/terraform-apply-sandbox.yml').read(); r=open('.github/workflows/reconcile.yml').read(); ok=('LAMBDA_ARTIFACT_SHA' in a) and ('lambda-packages/${' in a or 'lambda-packages/$' in a) and ('LAMBDA_ARTIFACT_SHA' in r); print('apply_ca=',('LAMBDA_ARTIFACT_SHA' in a),'reconcile_ca=',('LAMBDA_ARTIFACT_SHA' in r)); sys.exit(0 if ok else 1)"
     expected: "apply_ca= True reconcile_ca= True ; exit 0."
     fix_if: >-
-      A workflow still asserts/uploads at the fixed lambda-packages/<name> key -- update its
-      byte-assert md5 compare and `aws s3 cp` target to the per-sha key and export LAMBDA_ARTIFACT_SHA.
+      A workflow still byte-asserts at the fixed lambda-packages/<name> key -- point its byte-assert
+      md5 compare at the per-sha key, dual-write the `aws s3 cp` upload to the fixed + per-sha key, and
+      export LAMBDA_ARTIFACT_SHA.
     hermetic: false
     graduation: graduate
     graduation_check_id: "cd-zip-key-content-addressed"
@@ -210,7 +221,10 @@ verification_plan:
     phase: pre-deploy
     action: >-
       c2 -- confirm the personal lock is committed (git-tracked, not ignored) and pins the three
-      providers.
+      providers. Linux-runner provider coverage is evidenced by the green terraform-validate /
+      speculative-plan CI jobs, which run terraform init on ubuntu-latest against the committed lock (a
+      missing linux_amd64 hash would fail init there); no local -platform regeneration is needed unless
+      that CI init fails.
     command: >-
       git ls-files --error-unmatch terraform/personal/.terraform.lock.hcl >/dev/null 2>&1 && bin/venv-python -c "import sys; t=open('terraform/personal/.terraform.lock.hcl').read(); n=t.count('hashes = ['); prov=all(p in t for p in ['hashicorp/aws','hashicorp/null','kislerdm/neon']); print('provider_hash_blocks=',n,'all_providers=',prov); sys.exit(0 if n>=3 and prov else 1)"
     expected: "provider_hash_blocks >= 3 and all three providers pinned; exit 0."
@@ -286,10 +300,10 @@ constraints:
   - "Only modify files listed in scope; out-of-scope issues become recommendations, not inline fixes."
 context:
   - "Executes existing tier_item T2.42 (do NOT create a new tier_item); closes_criteria wires to T2.42 c1/c2/c3. c4 (rec-2659 build-step bash dedup) is DEFERRED to the next consolidation slice (D2), coordinating with T2.46 per Decision 144 pt7 -- explicitly OUT of scope here."
-  - "c1 design choice = ignore_changes-on-the-3-layer-versions (NOT create-before-destroy). Justification: the deterministic guard blocks any plan whose actions contain 'delete' (terraform_apply_guard.py L296-297; a layer replace surfaces ['create','delete']). ignore_changes removes the churn from terraform's view entirely -> ZERO diffs AND zero gated routings (both halves of the DEP-03 acceptance). create-before-destroy still surfaces a delete on every rebuild (source_code_hash keeps churning from non-reproducible zip bytes), so it (a) fails the 'zero diffs' half and (b) would require a guard allowlist carve-out that WEAKENS the delete rule. ignore_changes also reuses the exact rec-2646/rec-2654 pattern already proven on the 6 aws_lambda_function resources in these same files, and matches Decision 125/126's decoupling philosophy + the audit's own ideal_behavior ('ignore_changes extended to layers with content-addressed zips')."
-  - "How deploy-ducklake-lambdas.yml handles layers TODAY (examined per tasking): it deploys FUNCTION code only (update-function-code); its own comment (L50-51) states 'Layer version publishing stays with T2.42 -- no publish-version step is added here' and the ducklake-deploy OIDC role is UpdateFunctionCode-only. So layers are published by terraform apply today. ignore_changes keeps that clean boundary intact (no role widening). Genuine layer republishing still flows through terraform via the layer `description`, which interpolates local.ducklake_version (Decision 99 SSOT) for ducklake_deps/ducklake_extensions -> a duckdb version bump forces a new version + repoints functions with no code churn. RESIDUAL: ducklake_pgclient's description is static (not version-interpolated), so a genuine pg_dump bump would need an explicit description/marker bump OR the deploy-verb publish path. The FULL 'fold layer publishing into the T2.38 deploy verb so it needs no apply' option is a materially larger change (widens the UpdateFunctionCode-only OIDC role -> IAM, admin-gated per Decision 98; ignore_changes on function.layers) and is NOT needed to satisfy the acceptance criterion -- noted as an explicit follow-on, sequenced with the T2.38/T2.43 deploy-channel work, not this slice."
+  - "c1 design choice = ignore_changes-on-the-3-layer-versions (NOT create-before-destroy). Justification: the deterministic guard blocks any plan whose actions contain 'delete' (terraform_apply_guard.py L296-297; a layer replace surfaces ['create','delete']). ignore_changes removes the churn from terraform's view entirely -> ZERO diffs AND zero gated routings (both halves of the DEP-03 acceptance). create-before-destroy still surfaces a delete on every rebuild (source_code_hash keeps churning -- the byte-identical determinism tests show local rebuilds ARE reproducible, so the real recurring driver is cross-environment / stale-state hashing rather than local non-determinism; ignore_changes is cause-agnostic, so the fix is unchanged either way), so it (a) fails the 'zero diffs' half and (b) would require a guard allowlist carve-out that WEAKENS the delete rule. ignore_changes also reuses the exact rec-2646/rec-2654 pattern already proven on all 8 aws_lambda_function resources across terraform/personal (the 3 in these two scope files: writer, reader, catalog_dr), and matches Decision 125/126's decoupling philosophy + the audit's own ideal_behavior ('ignore_changes extended to layers with content-addressed zips')."
+  - "How deploy-ducklake-lambdas.yml handles layers TODAY (examined per tasking): it deploys FUNCTION code only (update-function-code); its own comment (L50-51) states 'Layer version publishing stays with T2.42 -- no publish-version step is added here' and the ducklake-deploy OIDC role is UpdateFunctionCode-only. So layers are published by terraform apply today. ignore_changes keeps that clean boundary intact (no role widening). Genuine layer republishing still flows through terraform via the layer `description`: a change that MOVES the interpolated description forces a new version + repoints functions with no code churn. ducklake_extensions is fully duckdb-version-driven (description = 'Baked DuckDB v${local.ducklake_version} ...', Decision 99 SSOT) -> any content change tracks a duckdb bump (safe). RESIDUAL (generalized): any layer whose content changes WITHOUT moving its interpolated description requires an explicit description/marker bump (or the deploy-verb publish path) to force republish -- ducklake_pgclient ALWAYS (its description is fully static, no interpolation, so a pg_dump bump silently freezes), and ducklake_deps on a NON-duckdb bump (its description interpolates local.ducklake_version ONLY, so a genuine psycopg2-binary / python-ulid / pyyaml bump with an unchanged duckdb version leaves the description unchanged, source_code_hash is ignored -> terraform publishes NO new layer version and the function keeps old deps silently). An inline comment on the deps + pgclient layer resources records this so a future maintainer isn't silently stale. The FULL 'fold layer publishing into the T2.38 deploy verb so it needs no apply' option is a materially larger change (widens the UpdateFunctionCode-only OIDC role -> IAM, admin-gated per Decision 98; ignore_changes on function.layers) and is NOT needed to satisfy the acceptance criterion -- noted as an explicit follow-on, sequenced with the T2.38/T2.43 deploy-channel work, not this slice."
   - "c2 reality: the un-ignore + commit half of c2 is ALREADY DONE -- terraform/personal/.terraform.lock.hcl is git-tracked, on disk, and .gitignore line '!terraform/personal/.terraform.lock.hcl' un-ignores it (landed incidentally in commit 0fec964 / PR #605, attributed to T2.16b/CD.34). This plan closes c2 by making the committed lock LOAD-BEARING (verified: CI terraform init carries no -upgrade, so the pin is honoured) and re-grounding the stale env-taxonomy.md section 6 (which still calls the un-ignore a follow-on TODO). No .gitignore edit is needed. Status is NOT flipped during planning (Status-Trusted-Never-Inferred); /implement flips T2.42:c2 on the VP pass."
-  - "c1<->c3 interaction (load-bearing): content-addressing (c3) is applied at the build/upload + byte-assert + deploy-consume boundary, NOT to terraform's static s3_key. Terraform's layer/function s3_key stays the fixed literal (bootstrap/initial-create + genuine-republish pointer). If the layer s3_key were made per-sha, every PR would churn it -> a layer replace -> defeating c1 (s3_key is NOT in ignore_changes). Keeping terraform's s3_key fixed while content-addressing only the deploy/review-integrity path is what makes c1 and c3 non-contradictory. build_lambda dual-writes (fixed key + per-sha key); the byte-assert compares the immutable per-sha object (overwrite-proof); the per-sha namespace = the PR-head-sha the terraform workflows already resolve for tfplan/personal/<pr-head-sha>.bin (no-TOCTOU alignment, Decision 92 Wave 2)."
+  - "c1<->c3 interaction (load-bearing): content-addressing (c3) is applied at the build/upload + byte-assert + deploy-consume boundary, NOT to terraform's static s3_key. Terraform's layer/function s3_key stays the fixed literal (bootstrap/initial-create + genuine-republish pointer). If the layer s3_key were made per-sha, every PR would churn it -> a layer replace -> defeating c1 (s3_key is NOT in ignore_changes). Keeping terraform's s3_key fixed while content-addressing only the deploy/review-integrity path is what makes c1 and c3 non-contradictory. Both build_lambda AND the workflow bash upload sites dual-write (fixed key + per-sha key): the fixed-key write keeps terraform's static-s3_key genuine-republish read fed (else the fixed key -- refreshed only by the PR speculative job -- becomes a shared object a concurrent PR could overwrite), while the byte-assert compares the immutable per-sha object (overwrite-proof); the per-sha namespace = the PR-head-sha the terraform workflows already resolve for tfplan/personal/<pr-head-sha>.bin (no-TOCTOU alignment, Decision 92 Wave 2)."
   - "The existing byte-assert (rec-2512) covers 7 of 8 artifacts (4 functions + 3 layers; maintenance-smoke.zip is omitted -- a pre-existing quirk, NOT fixed here). c3 changes only the KEY these are asserted/uploaded at; it does not alter the assert list."
   - "Decision-scout verdict: NO_FLAGS. CITE list (verbatim decision ids): Decision 144, Decision 126, Decision 125, Decision 92, Decision 77, Decision 119, Decision 55, Decision 101, Decision 84, Decision 83. RELATED: Decision 129, Decision 98, Decision 99, Decision 79, Decision 48, Decision 128, Decision 100. No CONTRADICT (checked incl. Decision 100 managed-service-native: ignore_changes / content-addressed S3 keys / provider lock are native terraform+S3 features, no client-tooling substitution). Decisions triaged: 104 of 104."
   - "gates: decision-scout=NO_FLAGS; plan-critique=deferred-to-overseer (overseer runs plan-critique as a separate lifted dispatch, per overseer subagent-dispatch mode)."
@@ -303,8 +317,9 @@ pre_implementation_checklist:
   - "rec-2755 relevance re-checked (open, High, 1:1 with c1) -> bundle + Resolves trailer"
 execution_steps:
   - "c1: add lifecycle { ignore_changes = [source_code_hash] } to ducklake_deps + ducklake_extensions (terraform/personal/ducklake_lambdas.tf) and ducklake_pgclient (terraform/personal/ducklake_catalog_dr.tf); keep each layer's s3_key literal unchanged. Carry a short comment citing rec-2646/2654 + Decision 126 pt3 (functions) extended to layers."
+  - "c1 (silent-freeze guard): on the ducklake_deps and ducklake_pgclient layer resources, add an inline comment recording that -- because source_code_hash is now ignored -- a genuine content bump that does NOT move the interpolated `description` publishes NO new layer version and silently keeps the old deps. Concretely: pgclient ALWAYS (its description is fully static), and deps on any NON-duckdb bump (psycopg2-binary / python-ulid / pyyaml, since its description interpolates local.ducklake_version only). Such a bump must therefore also bump the description/marker (or use the deploy-verb publish path). ducklake_extensions is duckdb-version-driven and needs no such note."
   - "c3: in scripts/build_lambda_deploy.py add a pure helper _artifact_s3_key(name, sha) -> 'lambda-packages/<sha>/<name>' (sha resolved from LAMBDA_ARTIFACT_SHA, else GITHUB_SHA, else a stable local fallback); use it in upload_to_s3 (dual-write: fixed key + per-sha key), update_lambda_functions, and publish_canary_layers. Thread the resolved namespace from scripts/build_lambda.py call sites. Keep terraform's static s3_key values untouched."
-  - "c3: edit .github/workflows/terraform-apply-sandbox.yml (push byte-assert+upload ~L297-316, gated byte-assert+upload ~L1004-1017, speculative build+upload ~L699-754) and .github/workflows/reconcile.yml (~L282-312, ~L605-626) to export LAMBDA_ARTIFACT_SHA=<resolved PR-head-sha> and target the per-sha key in the md5 compare + `aws s3 cp`. Do not add/remove any required status check."
+  - "c3: edit .github/workflows/terraform-apply-sandbox.yml (push byte-assert+upload ~L297-316, gated byte-assert+upload ~L1004-1017, speculative build+upload ~L699-754) and .github/workflows/reconcile.yml (~L282-312, ~L605-626) to export LAMBDA_ARTIFACT_SHA=<resolved PR-head-sha>, point ONLY the md5 byte-assert at the per-sha key, and DUAL-WRITE the `aws s3 cp` upload to BOTH the fixed key AND the per-sha key (the fixed-key write keeps terraform's genuine-republish s3_key read fed). Do not add/remove any required status check."
   - "c2: rewrite docs/contracts/environment-taxonomy.md section 6 to record the committed + un-ignored + no--upgrade-init (load-bearing) state; drop the 'RECOMMENDED follow-on' TODO framing."
   - "c3: add the content-address key-derivation unit test to tests/test_build_lambda_packaging.py."
   - "Execute the Verification Plan: run each pre-deploy step; loop until green; run `bin/venv-python -m scripts.validate --pre` (exit 0). Mark the post-deploy terraform/apply/rehearsal steps DEFERRED (CI + human-gated apply session). On an unrecoverable failure, stop and RCA (Decision 55) -- no workaround loop."
