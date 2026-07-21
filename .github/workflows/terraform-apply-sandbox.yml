@@ -285,9 +285,21 @@ jobs:
         # mismatch means the applied layer content would skew from the reviewed plan and must fail
         # closed rather than silently apply divergent bytes. workflow_dispatch (fresh plan) skips
         # the assert since there is no prior speculative-plan artifact to compare against.
+        #
+        # T2.42 c3 (DEP-03): the byte-assert reads the per-artifact-sha key
+        # (lambda-packages/<sha>/<name>, overwrite-immune per PR-head-sha) instead of the fixed
+        # key -- a later, concurrent PR's push can no longer skew this PR's reviewed artifact bytes
+        # out from under the assert. The upload dual-writes BOTH the fixed key (keeps terraform's
+        # static s3_key genuine-republish read fed) AND the per-sha key. LAMBDA_ARTIFACT_SHA is the
+        # PR-head-sha on push (same sha tfplan/personal/<sha>.bin is keyed by; resolved the same way
+        # as the "Fetch saved plan from S3" step below) and the dispatch commit sha on
+        # workflow_dispatch (no originating PR to resolve).
         if: success()
         env:
           BUCKET: agent-platform-data-lake
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
@@ -296,11 +308,22 @@ jobs:
           python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
           NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
           if [ "${{ github.event_name }}" = "push" ]; then
-            echo "Push path: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded S3 objects."
+            LAMBDA_ARTIFACT_SHA=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+            if [ -z "$LAMBDA_ARTIFACT_SHA" ] || [ "$LAMBDA_ARTIFACT_SHA" = "null" ]; then
+              echo "::error::No originating PR resolved for ${SHA}; cannot resolve the content-addressed artifact sha (Decision 77 no-TOCTOU)." >&2
+              exit 1
+            fi
+          else
+            LAMBDA_ARTIFACT_SHA="${SHA}"
+          fi
+          export LAMBDA_ARTIFACT_SHA
+          echo "Content-addressed artifact namespace: lambda-packages/${LAMBDA_ARTIFACT_SHA}/"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "Push path: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded per-sha S3 objects."
             for name in $NAMES; do
               local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
-              if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
-                echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing S3 object found (PR job did not upload it); failing closed (Decision 77 no-TOCTOU)." >&2
+              if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
+                echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing per-sha S3 object found (PR job did not upload it); failing closed (Decision 77 no-TOCTOU)." >&2
                 exit 1
               fi
               remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
@@ -309,11 +332,12 @@ jobs:
                 exit 1
               fi
             done
-            echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded artifacts."
+            echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded per-sha artifacts."
           fi
-          echo "Uploading DuckLake zips to s3://${BUCKET}/lambda-packages/..."
+          echo "Uploading DuckLake zips to s3://${BUCKET}/lambda-packages/ (fixed + per-sha dual-write)..."
           for name in $NAMES; do
             aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
+            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" --region eu-west-2
           done
 
       - name: Fetch saved plan from S3 (push -- apply-the-saved-plan path, T2.21)
@@ -703,7 +727,13 @@ jobs:
         # profile) under the github_ci_plan role (widened by terraform/personal/oidc.tf to grant
         # s3:GetObject on the pgclient/extensions vendored bundles and s3:PutObject on
         # lambda-packages/*).
+        #
+        # T2.42 c3 (DEP-03): LAMBDA_ARTIFACT_SHA pins upload_to_s3's per-sha dual-write to the SAME
+        # PR-head-sha "Persist saved plan to S3" (below) keys tfplan/personal/<sha>.bin by, so the
+        # apply-sandbox push-path byte-assert reads back exactly this job's uploaded bytes.
         if: success() && steps.oidc_plan.outcome == 'success'
+        env:
+          LAMBDA_ARTIFACT_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
@@ -992,9 +1022,19 @@ jobs:
         # byte-identical to those objects BEFORE re-uploading. A mismatch means the applied layer
         # content would skew from the reviewed plan and must fail closed rather than silently apply
         # divergent bytes (Decision 77 no-TOCTOU).
+        #
+        # T2.42 c3 (DEP-03): the byte-assert reads the per-artifact-sha key
+        # (lambda-packages/<sha>/<name>, overwrite-immune per PR-head-sha) instead of the fixed key.
+        # The upload dual-writes BOTH the fixed key (keeps terraform's static s3_key
+        # genuine-republish read fed) AND the per-sha key. LAMBDA_ARTIFACT_SHA is the PR-head-sha,
+        # resolved the same way as the "Fetch saved plan from S3 (gated-apply path, T2.22)" step below
+        # (this job is push-only, so a PR always resolves).
         if: success()
         env:
           BUCKET: agent-platform-data-lake
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
@@ -1002,11 +1042,17 @@ jobs:
           pip install pyyaml pydantic
           python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
           NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
-          echo "Gated-apply is push-only: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded S3 objects (Decision 77 no-TOCTOU)."
+          LAMBDA_ARTIFACT_SHA=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+          if [ -z "$LAMBDA_ARTIFACT_SHA" ] || [ "$LAMBDA_ARTIFACT_SHA" = "null" ]; then
+            echo "::error::No originating PR resolved for ${SHA}; cannot resolve the content-addressed artifact sha (Decision 77 no-TOCTOU)." >&2
+            exit 1
+          fi
+          export LAMBDA_ARTIFACT_SHA
+          echo "Gated-apply is push-only: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded per-sha S3 objects (Decision 77 no-TOCTOU)."
           for name in $NAMES; do
             local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
-            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
-              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing S3 object found (PR job did not upload it); failing closed (Decision 77 no-TOCTOU)." >&2
+            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing per-sha S3 object found (PR job did not upload it); failing closed (Decision 77 no-TOCTOU)." >&2
               exit 1
             fi
             remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
@@ -1015,10 +1061,11 @@ jobs:
               exit 1
             fi
           done
-          echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded artifacts."
-          echo "Uploading DuckLake zips to s3://${BUCKET}/lambda-packages/..."
+          echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded per-sha artifacts."
+          echo "Uploading DuckLake zips to s3://${BUCKET}/lambda-packages/ (fixed + per-sha dual-write)..."
           for name in $NAMES; do
             aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
+            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" --region eu-west-2
           done
 
       - name: Fetch saved plan from S3 (gated-apply path, T2.22)

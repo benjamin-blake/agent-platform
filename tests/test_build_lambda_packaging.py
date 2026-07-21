@@ -2,11 +2,13 @@
 
 import gzip
 import hashlib
+import json
 import types
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import scripts.build_lambda_deploy as bd
 import scripts.build_lambda_packaging as bm
 from scripts.build_lambda_config import LAMBDA_SIZE_LIMIT_BYTES, PINNED_DUCKDB_VERSION, PINNED_PG_MAJOR
 from src.common.ducklake_version import pinned_duckdb_version
@@ -447,3 +449,118 @@ class TestListBundle:
 
         out = capsys.readouterr().out.splitlines()
         assert out == ["a.py", "b.py"]
+
+
+class TestContentAddressedKey:
+    """T2.42 c3 (DEP-03): content-addressed S3 key derivation for the build/upload +
+    byte-assert + deploy-consume boundary (docs/plans/PLAN-terraform-t2-42-path-hardening.yaml).
+    No S3 round-trip -- subprocess.run is mocked throughout. Exercises scripts/build_lambda_deploy.py
+    directly (bd) since that is where the key-derivation helpers and their call sites live.
+    """
+
+    def test_artifact_s3_key_shape(self):
+        assert bd._artifact_s3_key("ducklake-deps-layer.zip", "abc123") == "lambda-packages/abc123/ducklake-deps-layer.zip"
+
+    def test_resolve_artifact_sha_prefers_lambda_artifact_sha(self, monkeypatch):
+        monkeypatch.setenv("LAMBDA_ARTIFACT_SHA", "explicit-sha")
+        monkeypatch.setenv("GITHUB_SHA", "gha-sha")
+        assert bd._resolve_artifact_sha() == "explicit-sha"
+
+    def test_resolve_artifact_sha_falls_back_to_github_sha(self, monkeypatch):
+        monkeypatch.delenv("LAMBDA_ARTIFACT_SHA", raising=False)
+        monkeypatch.setenv("GITHUB_SHA", "gha-sha")
+        assert bd._resolve_artifact_sha() == "gha-sha"
+
+    def test_resolve_artifact_sha_falls_back_to_local_when_unset(self, monkeypatch):
+        monkeypatch.delenv("LAMBDA_ARTIFACT_SHA", raising=False)
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        assert bd._resolve_artifact_sha() == "local"
+
+    def test_resolve_artifact_sha_empty_string_env_falls_through(self, monkeypatch):
+        """An empty-string env value is falsy -- falls through to the next precedence tier."""
+        monkeypatch.setenv("LAMBDA_ARTIFACT_SHA", "")
+        monkeypatch.setenv("GITHUB_SHA", "gha-sha")
+        assert bd._resolve_artifact_sha() == "gha-sha"
+
+    def test_upload_to_s3_dual_writes_fixed_and_per_sha_key(self, tmp_path):
+        zip_path = tmp_path / "ducklake-deps-layer.zip"
+        zip_path.write_bytes(b"z")
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            bd.upload_to_s3(zip_path, "my-bucket", "agent_platform", "eu-west-2", artifact_sha="sha123")
+        assert mock_run.call_count == 2
+        dests = [c[0][0][4] for c in mock_run.call_args_list]
+        assert dests == [
+            "s3://my-bucket/lambda-packages/ducklake-deps-layer.zip",
+            "s3://my-bucket/lambda-packages/sha123/ducklake-deps-layer.zip",
+        ]
+
+    def test_upload_to_s3_uses_resolved_sha_when_not_given(self, tmp_path, monkeypatch):
+        """empty/unset namespace falls back deterministically: no artifact_sha kwarg -> upload_to_s3
+        resolves it itself via _resolve_artifact_sha() (here, from the env var)."""
+        monkeypatch.setenv("LAMBDA_ARTIFACT_SHA", "envsha")
+        zip_path = tmp_path / "x.zip"
+        zip_path.write_bytes(b"z")
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            bd.upload_to_s3(zip_path, "b", "p", "eu-west-2")
+        dests = [c[0][0][4] for c in mock_run.call_args_list]
+        assert dests == ["s3://b/lambda-packages/x.zip", "s3://b/lambda-packages/envsha/x.zip"]
+
+    def test_update_lambda_functions_defaults_to_fixed_key(self):
+        """No artifact_sha given -> unchanged prior (fixed-key) behaviour, so a bare call (e.g. the
+        pre-existing tests/build_lambda_deploy/ suite) is unaffected by this change."""
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.return_value = types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": "sha"}), stderr="")
+            bd.update_lambda_functions("b", "p", "eu-west-2", only_ducklake=True)
+        update_calls = [c[0][0] for c in mock_run.call_args_list if "update-function-code" in c[0][0]]
+        assert update_calls
+        for cmd in update_calls:
+            key = cmd[cmd.index("--s3-key") + 1]
+            assert key.startswith("lambda-packages/") and key.count("/") == 1
+
+    def test_update_lambda_functions_reads_per_sha_key_when_given(self):
+        with patch("scripts.build_lambda.subprocess.run") as mock_run:
+            mock_run.return_value = types.SimpleNamespace(returncode=0, stdout=json.dumps({"CodeSha256": "sha"}), stderr="")
+            bd.update_lambda_functions("b", "p", "eu-west-2", only_ducklake=True, artifact_sha="sha456")
+        update_calls = [c[0][0] for c in mock_run.call_args_list if "update-function-code" in c[0][0]]
+        assert update_calls
+        for cmd in update_calls:
+            key = cmd[cmd.index("--s3-key") + 1]
+            assert key.startswith("lambda-packages/sha456/")
+
+    def test_publish_canary_layers_defaults_to_fixed_key(self):
+        seen_keys: list[str] = []
+
+        def fake_run(cmd, **kw):
+            layer_name = cmd[cmd.index("--layer-name") + 1]
+            seen_keys.append(cmd[cmd.index("--content") + 1])
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"LayerVersionArn": f"arn:aws:lambda:::layer:{layer_name}:1", "Version": 1}),
+                stderr="",
+            )
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd.publish_canary_layers(bucket="b", profile="p", region="r")
+        assert seen_keys
+        for content in seen_keys:
+            s3_key = content.split("S3Key=")[1]
+            assert s3_key.startswith("lambda-packages/") and s3_key.count("/") == 1
+
+    def test_publish_canary_layers_reads_per_sha_key_when_given(self):
+        seen_keys: list[str] = []
+
+        def fake_run(cmd, **kw):
+            layer_name = cmd[cmd.index("--layer-name") + 1]
+            seen_keys.append(cmd[cmd.index("--content") + 1])
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"LayerVersionArn": f"arn:aws:lambda:::layer:{layer_name}:1", "Version": 1}),
+                stderr="",
+            )
+
+        with patch("scripts.build_lambda.subprocess.run", side_effect=fake_run):
+            bd.publish_canary_layers(bucket="b", profile="p", region="r", artifact_sha="canarysha")
+        assert seen_keys
+        for content in seen_keys:
+            s3_key = content.split("S3Key=")[1]
+            assert s3_key.startswith("lambda-packages/canarysha/")
