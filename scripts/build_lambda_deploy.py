@@ -121,7 +121,7 @@ def update_lambda_functions(
         channel = "prod"
 
     for fn_name, fixed_s3_key in function_zip_map.items():
-        s3_key = _artifact_s3_key(fixed_s3_key.rsplit("/", 1)[-1], artifact_sha) if artifact_sha else fixed_s3_key
+        s3_key = _artifact_s3_key(fixed_s3_key.rsplit("/", 1)[-1], artifact_sha) if artifact_sha is not None else fixed_s3_key
         print(f"  Updating {fn_name}...")
         result = subprocess.run(
             [
@@ -323,7 +323,7 @@ def publish_canary_layers(
     arns: dict[str, str] = {}
     for layer_name in _build_ducklake_layer_names():
         zip_name = f"{layer_name}.zip"
-        s3_key = _artifact_s3_key(zip_name, artifact_sha) if artifact_sha else f"lambda-packages/{zip_name}"
+        s3_key = _artifact_s3_key(zip_name, artifact_sha) if artifact_sha is not None else f"lambda-packages/{zip_name}"
         result = subprocess.run(
             [
                 "aws",
