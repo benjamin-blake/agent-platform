@@ -226,7 +226,7 @@ verification_plan:
       missing linux_amd64 hash would fail init there); no local -platform regeneration is needed unless
       that CI init fails.
     command: >-
-      git ls-files --error-unmatch terraform/personal/.terraform.lock.hcl >/dev/null 2>&1 && bin/venv-python -c "import sys; t=open('terraform/personal/.terraform.lock.hcl').read(); n=t.count('hashes = ['); prov=all(p in t for p in ['hashicorp/aws','hashicorp/null','kislerdm/neon']); print('provider_hash_blocks=',n,'all_providers=',prov); sys.exit(0 if n>=3 and prov else 1)"
+      git ls-files --error-unmatch terraform/personal/.terraform.lock.hcl >/dev/null 2>&1 || { echo 'lock not git-tracked'; exit 1; }; n=$(grep -c 'hashes = \[' terraform/personal/.terraform.lock.hcl); grep -q 'hashicorp/aws' terraform/personal/.terraform.lock.hcl && grep -q 'hashicorp/null' terraform/personal/.terraform.lock.hcl && grep -q 'kislerdm/neon' terraform/personal/.terraform.lock.hcl && [ "${n:-0}" -ge 3 ] && echo "provider_hash_blocks= ${n} all_providers= True ; exit 0" || { echo "provider coverage incomplete (blocks=${n})"; exit 1; }
     expected: "provider_hash_blocks >= 3 and all three providers pinned; exit 0."
     fix_if: >-
       Lock not tracked or missing a provider hash block -- the lock must be committed and cover aws +
@@ -241,7 +241,7 @@ verification_plan:
       c2 -- confirm CI terraform init honours the committed lock (no -upgrade) in all three terraform
       workflows, so the pin is load-bearing rather than re-resolved on every run.
     command: >-
-      bin/venv-python -c "import re,sys,glob; bad=[]; [bad.append(f) for f in ['.github/workflows/terraform-apply-sandbox.yml','.github/workflows/reconcile.yml','.github/workflows/terraform-drift.yml'] for m in re.findall(r'terraform init[^\n]*', open(f).read()) if '-upgrade' in m]; print('init_with_upgrade=',bad); sys.exit(0 if not bad else 1)"
+      if grep 'terraform init' .github/workflows/terraform-apply-sandbox.yml .github/workflows/reconcile.yml .github/workflows/terraform-drift.yml | grep -qF -- '-upgrade'; then echo 'init_with_upgrade= FOUND -- a workflow re-resolves providers'; exit 1; else echo 'init_with_upgrade= [] ; exit 0 (no workflow re-resolves providers).'; exit 0; fi
     expected: "init_with_upgrade= [] ; exit 0 (no workflow re-resolves providers)."
     fix_if: "A workflow's terraform init carries -upgrade -- remove it so the committed lock pins versions."
     hermetic: true
