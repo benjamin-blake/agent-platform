@@ -1,0 +1,90 @@
+schema_version: 1
+slug: "decision-log-premise-integrity"
+intent: >-
+  Drive the 7-finding decision-log premise-integrity audit
+  (audits/decision-log-premise-integrity-8fb581e) to completion via three
+  sequential IMPLEMENTATION plans, per the operator-supplied decomposition and
+  keystone-first sequencing.
+wave_plan:
+  - wave: 1
+    slices: ["decisions-content-reconciliation"]
+    dispatch: serial
+    rationale: >-
+      DPI-02/03/05/07 -- all content edits to docs/DECISIONS.md and
+      DECISIONS_ARCHIVE.md. Keystone: waves 2 and 3 assume this end state
+      (victim-side annotations + the Decision-26 duplicate verdict must exist
+      before any archival move or guard lands).
+  - wave: 2
+    slices: ["decisions-archival-hygiene"]
+    dispatch: serial
+    rationale: >-
+      DPI-04 -- archive moves + lifecycle/status hygiene + archival-policy
+      reconciliation. depends_on wave 1 (needs the annotations and the
+      Decision-26 disposition before entries move) AND overlaps wave 1's
+      files_in_scope (same two decision files) -> serial after wave 1.
+  - wave: 3
+    slices: ["decisions-supersession-guard"]
+    dispatch: serial
+    rationale: >-
+      DPI-01/06 -- mechanical validate.py supersession-annotation guard. Lands
+      last so the new gate starts green over the final file layout instead of
+      going red mid-stream. Its tests parse the live decision files while wave 2
+      is still rearranging them -> serial after wave 2 (code, but data-coupled).
+slices:
+  - plan_slug: "decisions-content-reconciliation"
+    findings: ["DPI-02", "DPI-03", "DPI-05", "DPI-07"]
+    status: pending
+    plan_pr_url: null
+    pr_url: null
+    hand_back: null
+    bundled_recommendations_candidates: ["rec-2278", "rec-1964", "rec-2057"]
+  - plan_slug: "decisions-archival-hygiene"
+    findings: ["DPI-04"]
+    status: pending
+    plan_pr_url: null
+    pr_url: null
+    hand_back: null
+  - plan_slug: "decisions-supersession-guard"
+    findings: ["DPI-01", "DPI-06"]
+    status: pending
+    plan_pr_url: null
+    pr_url: null
+    hand_back: null
+autonomous_decision_log:
+  - timestamp: "2026-07-21"
+    decision: >-
+      At G0 the halt-on-open-ci_rca gate (Decision 73) fired on 3 critical recs
+      (rec-2743/2749/2754) unrelated to the audit. Verify-closed rec-2743 on
+      proof (DQ automatable [not_null] oracle passes non-vacuously, 0/939 rows);
+      escalated the other two rather than using /plan's deferral escape hatch.
+    rationale: >-
+      halt_on_open_ci_rca invariant -- the overseer halts new dispatch and
+      escalates to the human; it never uses the deferral escape hatch
+      autonomously. Closing a provably-resolved rec is sanctioned housekeeping
+      (preflight coaches verify-and-close), not an inline patch.
+  - timestamp: "2026-07-21"
+    decision: >-
+      Skipped the Fable advice-consult for the G1 decomposition shape.
+    rationale: >-
+      The operator supplied the full decomposition (finding->plan mapping,
+      serial sequencing, and the explicit parallel-vs-serial overlap analysis),
+      so this is already-settled operational sequencing, not an architecture the
+      overseer must choose. Per the Fable protocol's own carve-out, consulting
+      here would waste a dispatch for no new judgment.
+  - timestamp: "2026-07-21"
+    decision: >-
+      Division of labor (adapt verdict): dispatched /plan and /implement
+      subagents do the intellectual work (recon, draft, decision-scout /
+      plan-critique / code-review gates, live verification) and push + open
+      their PR; the long-running overseer session drives each PR to CI-green and
+      squash-merge via the Decision 76 event-driven flow.
+    rationale: >-
+      Background Agent-tool subagents run to completion and cannot be woken by
+      the CI-green webhook, so the sanctioned subscribe->end-turn->wake->merge
+      mechanism must live in the overseer session. Keeps the overseer as
+      router/merger with no file edits, consistent with the no_code_changes
+      invariant.
+gates:
+  g0_intake: confirmed
+  g1_decomposition: confirmed
+  g3_completion: pending
