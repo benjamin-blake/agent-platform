@@ -40,18 +40,22 @@ _LOGS_DIR = _REPO_ROOT / "logs"
 _OUTBOX_DIR = _LOGS_DIR / ".ops-outbox"
 
 # Maps Iceberg table name -> local JSONL file (relative to _LOGS_DIR)
-# Public-migration (2026-05-28): telemetry_* tables + ops_session_log / ops_execution_plans are
-# NOT migrated to the personal account. Their entries are removed so sync_ops.pull does not issue
-# TABLE_NOT_FOUND queries on every sync. Re-add if telemetry is reprovisioned.
+# Public-migration (2026-05-28): telemetry_* tables are NOT migrated to the personal account.
+# Their entries are removed so sync_ops.pull does not issue TABLE_NOT_FOUND queries on every sync.
+# Re-add if telemetry is reprovisioned. ops_execution_plans migrated at T2.26 (c9); ops_session_log
+# stays un-migrated pending its own CD.40/T3.20-gated disposition.
 _TABLE_TO_LOCAL: dict[str, str] = {
     "ops_recommendations": ".recommendations-log.jsonl",
     "ops_decisions": ".decisions-index.jsonl",
     "ops_priority_queue": "priority-queue/.priority-queue.jsonl",
+    "ops_execution_plans": ".execution-plans-index.jsonl",
 }
 
 # Tables on the DuckLake closed boundary: their outbox dirs are never drained to Iceberg
 # (stale-store hazard) and their pulls have no Athena fallback (Decision 84 I-1).
-_DUCKLAKE_MIGRATED_TABLES: frozenset[str] = frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
+_DUCKLAKE_MIGRATED_TABLES: frozenset[str] = frozenset(
+    {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_execution_plans"}
+)
 
 _DATABASE = "agent_platform"
 _WORKGROUP = "agent-platform-production"
@@ -219,6 +223,24 @@ def _coerce_ops_decisions_row(row: dict) -> dict:
         except (IndexError, ValueError):
             pass
 
+    return row
+
+
+def _coerce_ops_execution_plans_row(row: dict) -> dict:
+    """Decode the JSON-blob VARCHAR columns (steps/critique_history) back to native list objects.
+
+    The DuckLake reader returns BIGINT/VARCHAR scalar columns natively typed (unlike Athena's
+    blanket VarChar stringification), but steps/critique_history are VARCHAR columns carrying
+    json.dumps'd JSON (scripts/ops_portal/execution_plans.py) -- decode them for local-cache
+    consumers so the cache mirrors the pre-serialization ExecutionPlan shape.
+    """
+    for field_name in ("steps", "critique_history"):
+        raw = row.get(field_name)
+        if isinstance(raw, str):
+            try:
+                row[field_name] = json.loads(raw) if raw.strip() else []
+            except json.JSONDecodeError:
+                pass
     return row
 
 
@@ -421,6 +443,8 @@ def _coerce_rows_list(table: str, raw_rows: list[dict]) -> list[dict]:
             row = _coerce_ops_decisions_row(row)
         elif table == "ops_session_log":
             row = _coerce_ops_session_log_row(row)
+        elif table == "ops_execution_plans":
+            row = _coerce_ops_execution_plans_row(row)
         rows.append(row)
     if rejected_count:
         logger.warning(

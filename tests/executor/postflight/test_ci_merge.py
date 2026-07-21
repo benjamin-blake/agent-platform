@@ -4,6 +4,7 @@ cleanup_after_merge, finalize (rec-2709 Wave 5).
 
 from __future__ import annotations
 
+import itertools
 import json
 import subprocess
 from unittest.mock import MagicMock, patch
@@ -56,7 +57,10 @@ class TestWaitForCi:
         with (
             patch("subprocess.run", return_value=pending_result),
             patch("time.sleep"),
-            patch("time.time", side_effect=[0, 0, 61, 61]),
+            # itertools.repeat(61) (not a finite list) so an incidental extra time.time() call
+            # (e.g. from logging.LogRecord's own timestamp, per log line emitted) never raises
+            # StopIteration -- the test only cares that time appears to have passed the deadline.
+            patch("time.time", side_effect=itertools.chain([0, 0], itertools.repeat(61))),
         ):
             ok, reason = wait_for_ci("agent/my-branch", timeout=60, interval=5)
         assert ok is False
@@ -90,7 +94,8 @@ class TestWaitForCi:
         with (
             patch("subprocess.run", return_value=empty_result),
             patch("time.sleep"),
-            patch("time.time", side_effect=[0, 0, 0, 0, 61, 61]),
+            # itertools.repeat(61), same rationale as test_returns_timeout_when_time_runs_out above.
+            patch("time.time", side_effect=itertools.chain([0, 0, 0, 0], itertools.repeat(61))),
         ):
             ok, reason = wait_for_ci("agent/my-branch", timeout=60, interval=1)
         assert ok is False

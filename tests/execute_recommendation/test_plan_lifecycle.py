@@ -157,7 +157,10 @@ class TestSavePlan:
             plan_text="Test plan",
         )
 
-        with patch("scripts.executor.plan.PLANS_JSONL", plans_file):
+        with (
+            patch("scripts.executor.plan.PLANS_JSONL", plans_file),
+            patch("scripts.ops_portal.execution_plans.save_execution_plan"),
+        ):
             save_plan(plan)
 
         content = plans_file.read_text()

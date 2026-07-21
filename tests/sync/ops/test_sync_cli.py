@@ -145,9 +145,9 @@ class TestMain:
 class TestTelemetryMappings:
     """Telemetry + non-migrated ops tables were removed from the sync maps (public-migration).
 
-    Only ops_recommendations / ops_decisions / ops_priority_queue are migrated to the personal
-    account; telemetry_*, ops_session_log, and ops_execution_plans must NOT appear in the maps, or
-    sync_ops.pull would issue TABLE_NOT_FOUND queries on every sync.
+    ops_recommendations / ops_decisions / ops_priority_queue / ops_execution_plans (migrated at
+    T2.26 c9) are migrated to the personal account; telemetry_* and ops_session_log must NOT
+    appear in the maps, or sync_ops.pull would issue TABLE_NOT_FOUND queries on every sync.
     """
 
     _TELEMETRY_TABLES = [
@@ -159,7 +159,7 @@ class TestTelemetryMappings:
         "telemetry_transcripts",
         "telemetry_agent_invocations",
     ]
-    _REMOVED_OPS_TABLES = ["ops_session_log", "ops_execution_plans"]
+    _REMOVED_OPS_TABLES = ["ops_session_log"]
 
     def test_telemetry_tables_absent_from_maps(self):
         """No telemetry table is mapped (they are not migrated to the personal account)."""
@@ -169,18 +169,19 @@ class TestTelemetryMappings:
             assert table not in _TABLE_TO_LOCAL, f"{table} should be removed from _TABLE_TO_LOCAL"
 
     def test_non_migrated_ops_tables_absent(self):
-        """ops_session_log and ops_execution_plans are not migrated and must be absent."""
+        """ops_session_log is not migrated and must be absent."""
         from scripts.sync.ops import _TABLE_TO_LOCAL
 
         for table in self._REMOVED_OPS_TABLES:
             assert table not in _TABLE_TO_LOCAL
 
     def test_migrated_ops_tables_present(self):
-        """All three migrated tables are cached locally; the Athena view map is deleted (Decision 84 I-1)."""
+        """All four migrated tables are cached locally; the Athena view map is deleted (Decision 84 I-1)."""
         import scripts.sync.ops as sync_ops
 
-        assert set(sync_ops._TABLE_TO_LOCAL) == {"ops_recommendations", "ops_decisions", "ops_priority_queue"}
-        assert sync_ops._DUCKLAKE_MIGRATED_TABLES == frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
+        expected = {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_execution_plans"}
+        assert set(sync_ops._TABLE_TO_LOCAL) == expected
+        assert sync_ops._DUCKLAKE_MIGRATED_TABLES == frozenset(expected)
         # The Athena pull estate is gone: no view map, no per-table Athena pull.
         assert not hasattr(sync_ops, "_TABLE_TO_VIEW")
         assert not hasattr(sync_ops, "_pull_single_table_athena")

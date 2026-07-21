@@ -23,12 +23,12 @@ _TRANSIENT_HTTP_RE = re.compile(r"failed \(HTTP (?:502|503|504)\)")
 _OPS_TABLES: frozenset[str] = frozenset(
     {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_session_log", "ops_execution_plans"}
 )
-# RECS-FIRST SLICE: only ops_recommendations is migrated to DuckLake. Every other ops table stays on
-# Athena/Iceberg until their T2.26 disposition (Decision 84), so only this set routes to
-# the DuckLake reader when the flag is set.
 # Tables on the DuckLake closed boundary (Decision 84 I-1): their checks route to the reader.
-# ops_session_log / ops_execution_plans stay on the Athena views until their T2.26 disposition.
-_DUCKLAKE_OPS_TABLES: frozenset[str] = frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
+# ops_session_log is the only ops table remaining on Athena/Iceberg, pending its own T2.26
+# disposition (CD.40/T3.20-gated); ops_execution_plans migrated at T2.26 (c9).
+_DUCKLAKE_OPS_TABLES: frozenset[str] = frozenset(
+    {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_execution_plans"}
+)
 
 
 def _ops_backend() -> str:
@@ -97,9 +97,14 @@ def _is_reader_unavailable(exc: BaseException) -> bool:
 def _execute_check_ducklake(check: Check, reader: Any) -> CheckResult:
     """Execute a single ops-table check against DuckLake via the closed reader. DuckDB dialect.
 
-    `ulid_history_unique` runs over the history table (read_ops_history surface); the other checks run
-    over the current projection via query_ops. A cross-table relationships check cannot be expressed
-    through the single-`{tbl}` reader surface and is SKIPPED on this backend (priority_queue FK is
+    `ulid_history_unique` runs entirely over the history table (its whole SQL uses `{tbl}`, resolved
+    here to the history table via read_ops_history's naming). Any OTHER check's SQL may additionally
+    reference `{hist}` for a genuine cross-table current-vs-history expression (e.g. a composite
+    history-uniqueness check, or a current-regressed-behind-history guard): `{hist}` is resolved
+    client-side to the physical history table name before the query reaches query_ops, while `{tbl}`
+    (if also present) is left for query_ops/query_current's own server-side current-table
+    substitution -- so a single query can reference both tables at once. A cross-table `relationships`
+    check cannot be expressed even with this and is SKIPPED on this backend (priority_queue FK is
     dormant + unenforced).
     """
     start = time.time()
@@ -113,6 +118,10 @@ def _execute_check_ducklake(check: Check, reader: Any) -> CheckResult:
     table = check.table
     is_history = check.test_type == "ulid_history_unique"
     sql = check.sql if check.backend == "ducklake" else to_ducklake_sql(check.sql, table, "agent_platform")
+    if "{hist}" in sql:
+        from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415
+
+        sql = sql.replace("{hist}", f"ops_catalog.{resolve_table_spec(table).history_table}")
     try:
         if is_history:
             from src.common.ducklake_runtime import resolve_table_spec  # noqa: PLC0415

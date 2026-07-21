@@ -1,0 +1,55 @@
+# DQ Decision Manifest: ops_execution_plans
+# Per-field root cause classification and enforcement readiness.
+# Field semantics are canonical here and in config/agent/data_quality/ops.yaml (Decision 65).
+#
+# human_decision values: pending | approved | deferred | declined
+# enforcement_ready values: READY_NOW | NEEDS_TEMPORAL_GATE | NEEDS_WRITE_FIX |
+#   NEEDS_DATA_CORRECTION | NEEDS_PROTOTYPE | REMOVE_TEST | NO_TEST_NEEDED
+
+table: ops_execution_plans
+description: >-
+  Executor plan-revision log (SCD Type 2, one row per plan revision). Migrated onto the DuckLake
+  closed boundary at T2.26 (c9), create-fresh-on-DuckLake -- no prior data, no bootstrap cohort.
+bootstrap_anchor: '2026-07-21'
+last_updated: '2026-07-21'
+decisions_session: 't2-26-migrate-ops-execution-plans'
+
+fields:
+
+  rec_id:
+    root_cause_class: A
+    human_decision: approved
+    decided_date: '2026-07-21'
+    decided_action: >
+      not_null enforced with no temporal gate needed -- the table is provisioned empty (the
+      executor producer stays CD.17-frozen) and the schema gate already rejects a missing/null
+      merge key at write time (nullable: false in field_semantics), so no legacy null cohort can
+      ever exist. The two composite expression checks ((rec_id, revision) history-uniqueness and
+      the current-vs-history revision-monotonic guard) are likewise enforced with no gate: a
+      fresh table has no rows to violate either invariant, and both guard the write path itself
+      (duplicate replay / late-replay clobber) rather than remediating existing dirty data.
+    enforcement_ready: READY_NOW
+    phase4_session: complete
+    notes: >
+      Zero rows at provisioning time (no bootstrap cohort, unlike ops_recommendations/
+      ops_decisions which carry pre-enforcement legacy data). enforcement_ready is READY_NOW by
+      construction, not by remediation.
+    current_test: >-
+      not_null (enforced: true) + expression (rec_id, revision) history-uniqueness (enforced:
+      true) + expression current-vs-history revision-monotonic guard (enforced: true)
+    last_verdict: no data yet (table not provisioned until post-deploy)
+
+  status:
+    root_cause_class: A
+    human_decision: approved
+    decided_date: '2026-07-21'
+    decided_action: >
+      accepted_values enforced with no temporal gate -- the only writer is
+      scripts/ops_portal/execution_plans.py::save_execution_plan, which projects
+      ExecutionPlan.status (a fixed Python string literal set: draft, critique, approved,
+      superseded, failed, no_changes_needed) verbatim; no other write path exists post-migration.
+    enforcement_ready: READY_NOW
+    phase4_session: complete
+    notes: Zero rows at provisioning time; no legacy value drift possible on a fresh table.
+    current_test: "accepted_values (enforced: true)"
+    last_verdict: no data yet (table not provisioned until post-deploy)

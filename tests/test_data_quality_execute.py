@@ -342,7 +342,9 @@ def test_ops_backend_unconditionally_ducklake(monkeypatch):
 def test_ducklake_ops_tables_set():
     import scripts.data_quality_runner as dq
 
-    assert dq._DUCKLAKE_OPS_TABLES == frozenset({"ops_recommendations", "ops_decisions", "ops_priority_queue"})
+    assert dq._DUCKLAKE_OPS_TABLES == frozenset(
+        {"ops_recommendations", "ops_decisions", "ops_priority_queue", "ops_execution_plans"}
+    )
 
 
 def test_verdict_for_pass_fail_unenforced_hardgate():
@@ -378,6 +380,56 @@ def test_execute_check_ducklake_reader_none_is_error():
 
     check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
     assert _execute_check_ducklake(check, _Reader()).verdict == "ERROR"
+
+
+def test_execute_check_ducklake_hist_only_resolves_to_history_table():
+    """A check whose SQL references ONLY {hist} (no {tbl}) is resolved to the physical history table
+    client-side (rec-2756-adjacent: a genuine cross-table current-vs-history DQ check, T2.26 c9)."""
+    captured = {}
+
+    class _Reader:
+        def _invoke(self, payload):
+            captured["sql"] = payload["sql"]
+            return {"rows": [{"violation": 0}]}
+
+    check = Check(
+        "ops_execution_plans",
+        "rec_id",
+        "expression",
+        "SELECT COUNT(*) v FROM {hist} GROUP BY rec_id, revision HAVING COUNT(*) > 1",
+        "d",
+        backend="ducklake",
+    )
+    result = _execute_check_ducklake(check, _Reader())
+    assert result.verdict == "PASS"
+    assert "{hist}" not in captured["sql"]
+    assert "ops_catalog.ops_execution_plans_history" in captured["sql"]
+
+
+def test_execute_check_ducklake_hist_and_tbl_both_present():
+    """A check referencing BOTH {tbl} and {hist} resolves {hist} client-side while leaving {tbl}
+    for query_ops/query_current's own server-side current-table substitution."""
+    captured = {}
+
+    class _Reader:
+        def _invoke(self, payload):
+            captured["sql"] = payload["sql"]
+            return {"rows": [{"violation": 0}]}
+
+    check = Check(
+        "ops_execution_plans",
+        "revision",
+        "expression",
+        "SELECT COUNT(*) v FROM {tbl} cur JOIN {hist} h ON h.rec_id = cur.rec_id WHERE h.revision > cur.revision",
+        "d",
+        backend="ducklake",
+    )
+    result = _execute_check_ducklake(check, _Reader())
+    assert result.verdict == "PASS"
+    assert "{hist}" not in captured["sql"]
+    assert "ops_catalog.ops_execution_plans_history" in captured["sql"]
+    # {tbl} is left for query_ops's own server-side substitution -- still a literal placeholder here.
+    assert "{tbl}" in captured["sql"]
 
 
 def test_run_checks_routes_ducklake(monkeypatch):

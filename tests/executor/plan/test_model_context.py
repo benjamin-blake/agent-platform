@@ -342,6 +342,7 @@ class TestPlanningContextFileMode:
         with (
             patch.object(plan_mod, "llm_call", return_value=mock_result) as mock_call,
             patch.object(plan_mod, "load_prompt", return_value=("template", "hash")),
+            patch("scripts.ops_portal.execution_plans.save_execution_plan"),
         ):
             result = refine_plan(test_plan, test_critique, test_rec)
 

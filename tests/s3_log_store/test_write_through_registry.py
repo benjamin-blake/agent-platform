@@ -36,8 +36,9 @@ class TestOpsWriterWriteThrough:
         assert result is True
         mock_ops.write.assert_not_called()
 
-    def test_append_jsonl_calls_ops_write_for_execution_plans_key(self, monkeypatch, tmp_path):
-        """append_jsonl calls ops_writer.write for .execution-plans.jsonl key."""
+    def test_append_jsonl_does_not_route_execution_plans_key_to_ops_writer(self, monkeypatch, tmp_path):
+        """append_jsonl does NOT route .execution-plans.jsonl to ops_writer (routing removed at T2.26 c9:
+        execution_plans writes now transit scripts/ops_portal/execution_plans.py -> write_ops)."""
         import scripts.s3_log_store as store_mod_local
 
         log_dir = tmp_path / "logs"
@@ -55,7 +56,7 @@ class TestOpsWriterWriteThrough:
             result = append_jsonl(".execution-plans.jsonl", {"plan_id": "p-1"})
 
         assert result is True
-        mock_ops.write.assert_called_once_with("ops_execution_plans", {"plan_id": "p-1"})
+        mock_ops.write.assert_not_called()
 
     def test_append_jsonl_calls_ops_write_for_session_telemetry_key(self, monkeypatch, tmp_path):
         """append_jsonl calls ops_writer.write for .session-telemetry.jsonl key."""

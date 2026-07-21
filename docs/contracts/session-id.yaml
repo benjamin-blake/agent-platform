@@ -58,7 +58,9 @@ fields:
       ids are grandfathered and the format flips only when scripts/executor/telemetry.py::open_session is
       migrated to mint ULIDs -- a downstream code-migration concern, NOT a format change in this contract.
       ops_session_log is DORMANT/unprovisioned; its per-table contract tightens when the table is
-      provisioned.
+      provisioned. ops_execution_plans (T2.26 c9) consumes session_id via its planning_session_id
+      column (opaque-VARCHAR carry, not a renamed session_id column) -- a soft/unenforced FK that
+      must tolerate dangling references until telemetry (T2.36) lands.
     amendment_log:
       - date: "2026-06-24"
         semantic_break: false
@@ -90,6 +92,9 @@ joins_using_this_key:
   - session_id_join_telemetry_sessions_to_observations
   - session_id_join_telemetry_sessions_to_transcripts
   - session_id_join_telemetry_sessions_to_agents
+  # Landed at T2.26 (c9): ops_execution_plans consumes session_id via its planning_session_id column
+  # (opaque-VARCHAR soft-FK; the join must tolerate dangling refs until telemetry, T2.36, lands).
+  - planning_session_id_join_execution_plans_to_sessions
 governance_notes: >-
   Single-hop leaf invariant (no chained $ref; Class C contracts are leaf nodes,
   Invariant 5). The telemetry Class A contracts (T0.12.6) reference

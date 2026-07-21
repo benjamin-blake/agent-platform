@@ -25,7 +25,12 @@ class TestPull:
             from scripts.sync.ops import _rebuild_local_cache
 
             result = _rebuild_local_cache()
-        assert result == {"ops_recommendations": 0, "ops_decisions": 0, "ops_priority_queue": 0}
+        assert result == {
+            "ops_recommendations": 0,
+            "ops_decisions": 0,
+            "ops_priority_queue": 0,
+            "ops_execution_plans": 0,
+        }
 
     def test_pull_reader_path_writes_local_files(self, tmp_path):
         """Reader path: _rebuild_local_cache() uses reader rows directly when reader succeeds."""
