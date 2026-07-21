@@ -6,8 +6,9 @@ Loaded automatically when Claude reads or edits files in this directory. Univers
 
 The DuckLake Lambdas here (`ducklake_writer`, `ducklake_reader`, `ducklake_maintenance`,
 `ducklake_catalog_dr`) are `terraform/personal`-managed and now code/infra-DECOUPLED (#544:
-`lifecycle { ignore_changes = [source_code_hash] }`). The governed code-deploy channel landed at
-T2.38: `.github/workflows/deploy-ducklake-lambdas.yml`. Local `bin/venv-python -m
+`lifecycle { ignore_changes = [source_code_hash] }`). The governed code-deploy workflow is
+`.github/workflows/deploy-ducklake-lambdas.yml`; see `docs/contracts/deploy-paths.yaml` for the
+authoritative channel status. Local `bin/venv-python -m
 scripts.build_lambda --ducklake-only --deploy` is break-glass only, not the routine channel.
 
 No standing rationale here (Decision 86) — see `docs/contracts/environment-taxonomy.md` section 5

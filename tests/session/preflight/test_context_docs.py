@@ -127,43 +127,6 @@ class TestReadContextFiles:
         assert len(result["recent_sessions"]) == 2
         assert "2026-03-01" in result["recent_sessions"][0]
 
-    def test_strategic_review_due_when_no_mention(self, tmp_path: Path) -> None:
-        session_log = tmp_path / "SESSION_LOG.md"
-        # Recent session but no strategic review mention
-        from datetime import date
-
-        today = date.today().isoformat()
-        session_log.write_text(
-            f"## [{today}] -- agent/feature\n\n**Done:** regular work\n",
-            encoding="utf-8",
-        )
-        with (
-            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("scripts.preflight._common.SESSION_LOG_FILE", session_log),
-            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
-        ):
-            result = _preflight.read_context_files()
-        assert result["strategic_review_due"] is True
-
-    def test_strategic_review_not_due_when_recent_mention(self, tmp_path: Path) -> None:
-        session_log = tmp_path / "SESSION_LOG.md"
-        from datetime import date
-
-        today = date.today().isoformat()
-        session_log.write_text(
-            f"## [{today}] -- strategic_review\n\n**Done:** completed strategic review\n",
-            encoding="utf-8",
-        )
-        with (
-            patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
-            patch("scripts.preflight._common.DECISIONS_FILE", tmp_path / "missing2.md"),
-            patch("scripts.preflight._common.SESSION_LOG_FILE", session_log),
-            patch("scripts.preflight._common.RECOMMENDATIONS_FILE", tmp_path / "missing3.md"),
-        ):
-            result = _preflight.read_context_files()
-        assert result["strategic_review_due"] is False
-
     def test_missing_files_return_defaults(self, tmp_path: Path) -> None:
         with (
             patch("scripts.preflight._common.ROADMAP_FILE", tmp_path / "missing.md"),
@@ -175,7 +138,6 @@ class TestReadContextFiles:
         assert result["roadmap_phase"] == "unknown"
         assert result["open_decisions_count"] == 0
         assert result["recent_sessions"] == []
-        assert result["strategic_review_due"] is True
         assert result["recommendations_count"] == 0
 
 

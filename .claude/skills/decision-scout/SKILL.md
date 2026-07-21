@@ -1,19 +1,19 @@
 ---
 name: decision-scout
-description: "Use when: scope a proposed plan against active decisions, surface decision-contradiction flags before plan commitment, find related decisions a plan should cite. Mandatory pre-confirmation gate in /plan, runs in a fresh-context subagent so the full DECISIONS.md cost (currently >200KB) does not bloat the planning agent."
+description: "Use when: scope a proposed plan against active decisions, surface decision-contradiction flags before plan commitment, find related decisions a plan should cite. Mandatory pre-confirmation gate in /plan, runs in a fresh-context subagent so the full DECISIONS.md cost (large -- near its Decision 134 size ceiling) does not bloat the planning agent."
 required-context:
   - docs/DECISIONS.md
 ---
 
 ## Intent
 
-Given a proposed plan approach, surface every active decision that is relevant -- as context to cite, as a contradiction to resolve, or as a related-work pointer. The full `docs/DECISIONS.md` (currently >200KB) only enters this subagent's context, never the parent planning agent's; only the structured summary returns.
+Given a proposed plan approach, surface every active decision that is relevant -- as context to cite, as a contradiction to resolve, or as a related-work pointer. The full `docs/DECISIONS.md` (large -- near its Decision 134 size ceiling) only enters this subagent's context, never the parent planning agent's; only the structured summary returns.
 
 This is a BLOCKING gate before `/plan` Step 6 "Present Findings and Confirm". A superficial scan that misses a contradiction is worse than not running -- the parent agent and human both trust this output to be exhaustive.
 
 ### Why a subagent and not inline grep
 
-The naive alternative is to grep `docs/DECISIONS.md` from the planning agent for keywords from the proposed approach. That misses decisions that contradict implicitly (different vocabulary, similar concept) and forces the planning agent to load enough of DECISIONS.md to make a judgement -- the exact >200KB-file cost this gate exists to avoid.
+The naive alternative is to grep `docs/DECISIONS.md` from the planning agent for keywords from the proposed approach. That misses decisions that contradict implicitly (different vocabulary, similar concept) and forces the planning agent to load enough of DECISIONS.md to make a judgement -- the exact large-file cost (near its Decision 134 size ceiling) this gate exists to avoid.
 
 ### Lambda migration contract
 
@@ -25,7 +25,7 @@ When `docs/DECISIONS.md` is replaced by a Lambda-backed tool query (in-flight pe
 
 ### Phase 1: Load Inputs (MANDATORY)
 
-1. Read the **entire** `docs/DECISIONS.md` -- do not Read with offset/limit. A decision near the bottom of the file is just as likely to contradict the proposed approach as one near the top. (Post-Lambda-migration: call the decisions tool with no filter; pagination is acceptable only if the tool guarantees ordering by recency-of-relevance.) Before triage, run `rg -c "^## Decision " docs/DECISIONS.md` and record the count M -- this is the LIVE-FILE header count (currently 67), NOT the max decision number (which reflects archive entries and numbering gaps) and NOT inclusive of `docs/DECISIONS_ARCHIVE.md`, per Decision 105.
+1. Read the **entire** `docs/DECISIONS.md` -- do not Read with offset/limit. A decision near the bottom of the file is just as likely to contradict the proposed approach as one near the top. (Post-Lambda-migration: call the decisions tool with no filter; pagination is acceptable only if the tool guarantees ordering by recency-of-relevance.) Before triage, run `rg -c "^## Decision " docs/DECISIONS.md` and record the count M -- this is the LIVE-FILE header count, NOT the max decision number (which reflects archive entries and numbering gaps) and NOT inclusive of `docs/DECISIONS_ARCHIVE.md`, per Decision 105.
 
 2. Read the caller's input brief, which is mandated to include:
    - **Intent** (1-2 sentences from `/plan` Step 3 clarification)

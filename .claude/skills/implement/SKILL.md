@@ -470,7 +470,7 @@ Before filing, search for open recs targeting the same file with at least 3 keyw
 ## Commit Flows (Workflow Step 7 -- MANDATORY)
 **Once validation passes (Step 6), execute the appropriate commit flow autonomously. Do not stop to ask permission -- the plan was approved during /plan.**
 
-This workflow runs on Claude Code on the web: the harness assigned this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Decision 83 (2026-06-08) reversed Decision 89's "Branch Protection Not Available" premise -- branch protection is now LIVE. The squash-merge-after-CI gate design is PRESERVED (Decision 89 stays as audit history; Decision 83 amends its premise only). The transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
+This workflow runs on Claude Code on the web: the harness assigned this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Branch protection is LIVE, and the squash-merge-after-CI gate is the design: the transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
 
 ### Run the full gate locally first
 The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR.

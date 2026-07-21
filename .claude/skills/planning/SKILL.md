@@ -40,7 +40,6 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
   - If `non_automatable_softcap_breached` is true (count > 250), surface as a planning context note.
 - **`friction_patterns` non-empty** -- Surface repeated patterns as planning context.
 - **`metrics_anomalies` non-empty** -- Surface anomalies as planning context.
-- **`token_anomalies` non-empty** -- Surface as planning context: "Context file token warning: [file list] exceed the 50K token threshold."
 - **`data_quality.last_run.verdict == "FAIL"`** -- Surface as planning context: "Data quality checks failing ([N] failures across [tables]). Run `bin/venv-python -m scripts.data_quality_runner` for details." Non-blocking but relevant if the plan touches data pipelines or table schemas.
 - **`data_quality.last_run` is null** -- Note: "Data quality checks have never been run. After fixing the pipeline, run `bin/venv-python -m scripts.data_quality_runner` to establish a baseline." Non-blocking.
 - **`ci_rca_unresolved_recs` non-empty** -- **HARD BLOCK** at commitment time. `/plan` cannot scope unrelated work while any unresolved ci-rca rec exists. Proceed only to scope work that satisfies one of the three Related-Work conditions (see Step 8) OR has a logged deferral rationale in the new plan's Context section. (Legacy: if the report only has `ci_rca_recs` and no `ci_rca_unresolved_recs`, treat all entries as HARD BLOCK.) Full triage surfacing and the SOFT PROMPT / HARD ALERT classification is `/orient`'s responsibility -- run `/orient` for the full ci-rca visibility layer.
@@ -51,7 +50,7 @@ When reading `logs/.preflight-report.json`, apply these conditionals:
 
 The preflight `telemetry_health` section reports operational health of the telemetry and ops data pipelines:
 
-1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables died with the 2026-05-28 account migration, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (Decision 84 Phase 4 / tier_item T2.36). Until then, do not gate plans on session counts/staleness.
+1. **Telemetry store status** (stub, Decision 84): the old Athena telemetry tables are retired, so the preflight reports a single `telemetry-store: not migrated (Phase 4)` check with NO queries issued. Session metrics return when telemetry re-lands on DuckLake (Decision 84 Phase 4 / tier_item T2.36). Until then, do not gate plans on session counts/staleness.
 
 2. **Data quality coverage** (from `config/agent/data_quality/*.yaml`): how many declarative checks (not_null, unique, accepted_values, relationships, row_count, recency) are defined across how many tables. This answers: "Do we have visibility into data correctness?"
 
@@ -237,12 +236,7 @@ When a plan creates or modifies documentation artefacts, apply these rules:
 ## Infrastructure & Lambda Assessment (Workflow Step 4)
 **Infrastructure:** If `.tf` files are in scope, add an "Infrastructure Dependencies table" to the plan. Lambda handlers must accept a `force_{param}` event field. Pre-merge vs Post-deploy timing must be specified.
 
-**Speculative-plan expectations (CD.35 Wave 2 / T2.21, active):** When `.tf` files under `terraform/personal/` are in scope, the plan must account for the speculative-plan pipeline:
-- **Pre-merge (PR):** the `speculative-plan` job plans under `github_ci_plan`, posts a redacted diff + the guard's **predicted** verdict as a PR comment, and persists `plan.bin` to `s3://.../tfplan/personal/<pr-head-sha>.bin`. The predicted verdict is advisory; the merge-time guard re-run on the saved plan is authoritative.
-- **At merge (push to main):** the `apply-sandbox` job fetches the saved `plan.bin` reviewed on the PR and applies it -- **no re-plan** (Decision 77 no-TOCTOU). Apply is gated on the merge-time guard `success()` with no `continue-on-error`.
-- **Stale saved plan:** if the saved plan.bin is stale (Terraform detects state-serial mismatch), the apply exits non-zero, the convergence record goes red, and ci-rca files a `source=ci_rca` rec. Recovery is the `workflow_dispatch` acknowledge-and-retry (re-plans fresh, human-reviewed). **No silent re-plan-and-apply; the push path has no fallback.**
-- **IAM-sensitive diffs (guard exit 2):** the guard blocks IAM/trust/destroy changes from auto-applying. These land via `agent_platform_admin` human-gated apply (existing loop in `terraform/CLAUDE.md`). The speculative-plan job still runs and posts its comment; the predicted verdict will be BLOCKED.
-- **Convergence record `plan_sha`:** populated with `sha256(plan.bin)` on the push (saved-plan) path; null on `workflow_dispatch` (fresh plan).
+**Speculative-plan expectations (CD.35 Wave 2 / T2.21, active):** When `.tf` files under `terraform/personal/` are in scope, the plan must account for the speculative-plan pipeline: a PR-time plan is reviewed and saved, then re-applied at merge with no re-plan (Decision 77 no-TOCTOU), gated by the deterministic guard; IAM/trust/destroy diffs route to the human-gated path instead of auto-applying, and a stale saved plan recovers only via the human-reviewed acknowledge-and-retry path (never a silent re-plan-and-apply). `docs/contracts/environment-taxonomy.md` is the sole SoT for the full pipeline mechanics (guard classification, saved-plan persistence, convergence-record shape); tier_item T2.21 tracks the pipeline's own completion. Do not re-derive the mechanics here -- name the required checks and point to that contract.
 
 **Lambda Deployment:** Use the manifest-derived file patterns (`bin/venv-python -m scripts.lambda_manifest --list-patterns`) to determine which scope files are Lambda-packaged, and `compute_affected_artifacts(changed_files)` to identify which active artifact(s) are affected. For each affected active artifact (status: active in its `src/lambdas/<slug>/manifest.yaml`), the plan MUST include per-Lambda build, deploy, smoke-test, and model ID validation steps (V3). Stub artifacts (status: stub) require no deploy step -- V1 suffices. Note: `config/agent/` is NOT Lambda-packaged and does NOT trigger this assessment. If `.tf` modifies IAM, terraform apply must precede Lambda deploy. (CD.16 + Decision 79)
 
@@ -415,7 +409,7 @@ catches any resulting header mismatch, so shifting to the next free number at ex
 
 ## Decision Scout Gate (Workflow Step 6a, pre-presentation)
 
-This gate fires BEFORE Step 6b's presentation to the human. Its job is to surface any active decisions the proposed approach must cite, contradict, or pivot around -- without paying the cost of loading the full DECISIONS.md, currently >200KB, into the planning agent.
+This gate fires BEFORE Step 6b's presentation to the human. Its job is to surface any active decisions the proposed approach must cite, contradict, or pivot around -- without paying the cost of loading the full DECISIONS.md (large -- near its Decision 134 size ceiling) into the planning agent.
 
 **Example prompt body:**
 > "You are running the decision-scout gate in a fresh context window. Invoke the `decision-scout` skill via the Skill tool. The skill needs the following inputs (use them in your scout analysis):
