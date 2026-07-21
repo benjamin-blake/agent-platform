@@ -14,8 +14,9 @@ files are not documentation but load-bearing infrastructure.
 
 Audited surfaces (first-class): S1 the root ambient instruction file, S2 the per-directory
 instruction files, S3 the slash commands, S4 the skills, S5 the just-in-time loading primitives,
-S6 the size-governance pattern and the instruction-architecture contract, and S7 the
-designed-but-unbuilt roadmap end-state. Assess every surface across TWO horizons -- what is
+S6 the size-governance pattern and the instruction-architecture contract, S7 the
+designed-but-unbuilt roadmap end-state, and S8 the on-demand Layer-2 project-knowledge prose
+(`docs/PROJECT_CONTEXT.md`) that skills load via `required-context`. Assess every surface across TWO horizons -- what is
 buildable now inside the Anthropic Claude Code harness, and the repo's own AWS-native end-state
 (typed Lambda verbs, an agent SDK shim) -- and tag every finding with the horizon it targets.
 
@@ -40,8 +41,14 @@ Per-candidate adjudication enum, with its mapping to the output contract:
 - PLANNED but the owning roadmap item's remedy is insufficient or unbuilt for THIS surface ->
   `findings`, classification `planned-insufficient` or `planned-unbuilt`.
 - PLANNED and fully covered by the owning item -> `rejected_candidates` (name the item).
-- NOT-a-defect (a compensating control genuinely covers it) -> `rejected_candidates` (name the
-  control and why it property-matches).
+- NOT-a-defect -> `rejected_candidates`, in one of two sub-cases: (a) a compensating control
+  genuinely covers it -- name the control and why it property-matches; or (b) the absence is the
+  CORRECT design and no governance is warranted (e.g. the Q6(iv) steelman or the Q6(v)
+  prompt-caching argument applies) -- set `compensating_control: "none -- absence is correct by
+  design"` and `control_property_match: "n/a"`, and carry the full reasoning in `why_dismissed`. If
+  a dismissal also settles a surface's Q1 answer, record `no_change` in that surface's
+  `governance_verdict` (the candidate itself still lives in `rejected_candidates`, never in
+  `findings`).
 
 Severity is never inherited from this prompt's framing; you assign it after judgment (see SEVERITY
 + MATURITY). A candidate phrased here neutrally ("no size ceiling covers X") is not a claim that a
@@ -52,8 +59,9 @@ has failed" is measured against. Adjudicate EACH to a verdict (findings / reject
 the enum above; a candidate you dismiss must appear in `rejected_candidates`. This list is not
 exhaustive of what you may find -- surface new candidates in your own pass and adjudicate them too.
 Every candidate below is absence-shaped by construction ("no ceiling", "no validator", "assigns no
-responsibility"); an absence is a FACT, not a defect -- expect several to resolve to a `no_change`
-verdict or to `rejected_candidates`, and actively weigh the steelman in Q6(iv) before convicting.
+responsibility"); an absence is a FACT, not a defect -- expect several to resolve to `rejected_candidates` (and, where
+the same judgment settles a surface's Q1 answer, to a `no_change` governance_verdict), and actively
+weigh the steelman in Q6(iv) before convicting.
 
 - C1 AGENTS.md loads ambient (~8.3K tok) via the `@AGENTS.md` pointer; no registered size ceiling
   covers `.md` instruction prose (the SLOC/decisions/roadmap ceilings do not). (surface S1)
@@ -78,6 +86,9 @@ verdict or to `rejected_candidates`, and actively weigh the steelman in Q6(iv) b
   workflow methodology alongside embedded project/decision context. (S4)
 - C10 The aws-native end-state (T0.8 SDK shim, CD.10 typed verbs, Decision 91) names typed verbs but
   no JIT-context-retrieval verb and assigns no context-budget accounting responsibility. (S7)
+- C11 `docs/PROJECT_CONTEXT.md` (~10K tok) is the on-demand payload of `required-context` for
+  `/plan` and `/implement`; it is the largest single instruction-adjacent prose file and carries no
+  registered size ceiling. (S8, S5)
 
 ## READ FIRST -- DISAMBIGUATION TRAPS
 
@@ -107,6 +118,10 @@ each before it misdirects you:
 - The root `CLAUDE.md` is a POINTER (its entire content is `@AGENTS.md`), not instruction content.
   The L1 content lives in `AGENTS.md`. A finding proposing to inline content into root `CLAUDE.md`
   breaks a hard invariant (see do-not-flag).
+- `docs/PROJECT_CONTEXT.md` plays two roles. It is audited SURFACE S8 (its size and its governance),
+  AND -- via its sections 2 and 8 -- the AUTHORITY that describes the S7 end-state. Audit its
+  governance as S8; read its content as context for S7. Do not conflate "the file is large" (an S8
+  observation) with "the end-state it describes has a gap" (an S7 judgment).
 
 ## SCOPE
 
@@ -139,6 +154,11 @@ Audited surfaces, with state:
   `docs/PROJECT_CONTEXT.md` section 8 and the relevant `docs/ROADMAP-PLATFORM.yaml` tier items:
   T3.14 (context-budget metric, deferred), T0.8 (agent SDK shim), CD.10 / Decision 91 (typed
   Lambda verbs), Decision 86 (no standing prose-architecture docs).
+- S8 Layer-2 project-knowledge prose (BUILT) -- `docs/PROJECT_CONTEXT.md`, loaded ON-DEMAND (not
+  ambient) when a workflow or skill names it in `required-context` (e.g. `/plan`, `/implement`). It
+  is the largest single instruction-adjacent prose payload and carries no registered size ceiling;
+  assess it on the same dimensions as S1-S4. It is instruction-adjacent project knowledge (in
+  scope), distinct from the CONSUMED DATA files below (DECISIONS.md / ROADMAP / SESSION_LOG, out).
 
 Vocabulary. LAYERS L1-L5 are defined in `docs/contracts/instruction-architecture.yaml`. AMBIENT =
 loaded without an explicit invocation. ON-INVOCATION = loaded when a command or skill is called.
@@ -205,7 +225,7 @@ absolutes to pattern-match.
 Each question gets its own first-class answer slot in the output. Per-question verdict enum is
 pinned below; default where none is pinned is `sufficient` / `partial` / `insufficient`.
 
-- Q1 -- Should the agent-prose surfaces (S1-S4) carry an enforced SIZE/CONTEXT BUDGET analogous to
+- Q1 -- Should the agent-prose surfaces (S1-S4, and the on-demand S8) carry an enforced SIZE/CONTEXT BUDGET analogous to
   the per-file SLOC caps? If so, per surface: what UNIT (bytes / tokens / lines / reachable-set),
   what GRANULARITY (per-file / per-layer / per-always-on-set), and what MECHANISM (a `validate.py`
   check plus a budget registry with a raise-marker, mirroring `config/sloc_budgets.yaml`; a
@@ -216,7 +236,9 @@ pinned below; default where none is pinned is `sufficient` / `partial` / `insuff
   granularity you propose per surface is robust to this, or whether a per-load-set budget is
   required. Verdict enum: this question's per-surface answer is the `governance_verdict` decision
   block; the `question_answers` entry for Q1 summarises and points at that block. The prompt pins NO
-  gate-vs-advisory prior -- argue each surface.
+  gate-vs-advisory prior -- argue each surface. The specific numeric budget VALUE (an exact
+  byte/token ceiling relative to the model's context window) is a human-disposition call, not yours:
+  recommend the unit, granularity, and mechanism; do not pin the number.
 - Q2 -- Given the Anthropic harness, what is the sound mechanism for JUST-IN-TIME context loading,
   and what belongs ambient vs JIT? Assess the available harness levers concretely: SessionStart
   `additionalContext` injection, a `UserPromptSubmit` hook, PreToolUse context injection, subagent
@@ -259,7 +281,7 @@ pinned below; default where none is pinned is `sufficient` / `partial` / `insuff
 
 ## RUBRIC
 
-Rate each audited surface (S1-S7) on each dimension. Pinned enum: `strong` / `adequate` / `weak` /
+Rate each audited surface (S1-S8) on each dimension. Pinned enum: `strong` / `adequate` / `weak` /
 `absent` / `n/a`. `n/a` is correct and costless where a dimension does not structurally apply to a
 surface -- never manufacture a rating or a finding to fill a cell.
 
@@ -320,6 +342,7 @@ Sizes (bytes / lines, approximate; re-derive with `wc`):
   ~12,677 b; `decision-scout` ~8,230 b; `executor-rca` ~1,965 b. (~4 chars/token is a usable rough
   conversion; re-derive if you need precision.)
 - Slash commands (`.claude/commands/*.md`): 6 files, ~37,790 b total.
+- `docs/PROJECT_CONTEXT.md` (S8, Layer 2, on-demand) -- ~41,103 b / 404 L (~10K tok).
 - Context-only: `docs/DECISIONS.md` ~398,438 b, 103 live `## Decision` headers;
   `docs/ROADMAP-PLATFORM.yaml` ~745,247 b / 9,598 L; `docs/SESSION_LOG.md` ~68,031 b.
 
@@ -411,7 +434,7 @@ dissolves under the counterfactual is weaker than one that survives it.
 - P0 BASE. Derive the audited base sha and check out the audit branch off `origin/main` (MECHANICS
   steps 1-2) BEFORE any read, so every read and every size re-derivation in P1 is against the tree
   recorded in `meta.audited_commit`.
-- P1 READ. Read every S1-S6 surface and the S7 end-state anchors. Re-derive the size table.
+- P1 READ. Read every S1-S6 and S8 surface and the S7 end-state anchors. Re-derive the size table.
 - P2 TRACE. Adjudicate each candidate to a verdict by tracing it to file:line. Run DD-A, DD-B, DD-C.
 - P3 EMPIRICAL. Execute the bounded EMPIRICAL PASS.
 - P4 RATE. Fill the rubric (S x VD). Assign `n/a` where a dimension does not structurally apply.
@@ -457,13 +480,17 @@ DELIBERATE CONSTRAINTS -- DO NOT FLAG (each with its decision id):
 
 Write exactly two files. `audits/agent-context-governance-<sha>.yaml` (the structured audit) and
 `audits/agent-context-governance-<sha>.md` (a prose companion, <= ~1500 words, the executive layer
-a human reads first). `<sha>` is the audited base short sha (see MECHANICS). The YAML conforms to:
+a human reads first, in this order: (1) a 2-3 sentence verdict-first lede; (2) a per-surface
+maturity table for S1-S8; (3) the Q1 governance recommendation across the two horizons; (4) the
+highest-leverage change and the top findings; (5) what you did NOT find / candidates dismissed).
+The `.md` restates, never contradicts, the YAML; the YAML is authoritative on any mismatch.
+`<sha>` is the audited base short sha (see MECHANICS). The YAML conforms to:
 
 ```
 audit:
   meta: {audited_commit: <origin/main short sha>, base_branch: main,
          model: <your self-reported model name, free text>, methodology_version: 1,
-         scope_surfaces: [S1,S2,S3,S4,S5,S6,S7], degraded_dedup: false,
+         scope_surfaces: [S1,S2,S3,S4,S5,S6,S7,S8], degraded_dedup: false,
          contract_notes: "", stale_anchors: []}
   question_answers:
     - {q: Q1, verdict: see-governance_verdict, basis: [<finding ids>], prose: ""}
@@ -475,13 +502,13 @@ audit:
     - {q: Q6, answers: [{question, answer, basis: [<finding ids>]}]}
   per_surface_assessment:
     - {surface: S1, maturity: <derived>, strengths: "", top_gaps: [<finding ids>]}
-    # one per surface S1-S7
+    # one per surface S1-S8
   rubric_ratings:
     - {surface: S1, dimension: VD1, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
     # one row per (surface x dimension) you rate; n/a rows may be omitted or listed explicitly
   governance_verdict:
-    # Q1's per-surface actionable verdict. One entry per prose surface S1-S4 (S5-S7 optional).
+    # Q1's per-surface actionable verdict. One entry per prose surface S1-S4 and S8 (S5-S7 optional).
     # Each surface carries a per-horizon sub-verdict, because a surface's sound answer can differ by
     # horizon (e.g. present: measure_only_metric; aws-native: token_budget_gate). Set a horizon's
     # verdict to no_change if that horizon needs nothing; if the answer is identical across horizons,
@@ -496,7 +523,7 @@ audit:
       rationale: ""
       confidence: CONFIRMED|HYPOTHESIS
   findings:
-    - {id: ACG-01, surface: S1..S7|shared, question: Q1..Q6, dimension: VD1..VD7,
+    - {id: ACG-01, surface: S1..S8|shared, question: Q1..Q6, dimension: VD1..VD7,
        horizon: present|aws-native, title, evidence: "file:line|item-id",
        evidence_kind: static|observed, current_behavior, ideal_behavior, gap,
        compensating_controls_considered: "",
@@ -508,11 +535,13 @@ audit:
        effort: XS|S|M|L, depends_on: [ids],
        sequencing: {safe_to_queue_now: true|false, blocked_behind: [ids], note: ""}}
   rejected_candidates:
+    # For a candidate dismissed because governance is unwarranted (steelman / prompt-caching), set
+    # compensating_control: "none -- absence is correct by design" and control_property_match: "n/a".
     - {candidate, why_dismissed, compensating_control, control_property_match, decision_or_item_id}
   summary: {total_findings, novel_count, planned_insufficient_count, planned_unbuilt_count,
             top_improvements: [ids], highest_leverage_change: <id>,
             maturity_S1: <v>, maturity_S2: <v>, maturity_S3: <v>, maturity_S4: <v>,
-            maturity_S5: <v>, maturity_S6: <v>, maturity_S7: <v>}
+            maturity_S5: <v>, maturity_S6: <v>, maturity_S7: <v>, maturity_S8: <v>}
 ```
 
 COUNTING INVARIANT: `findings[]` is the SOLE enumerated list. `total_findings = len(findings) =
@@ -554,7 +583,7 @@ surface's maturity if its `surface` IS that surface, OR it is tagged `surface: s
 S1-S4 counts toward each of them). Pin these thresholds:
 - frontier = 0 critical AND 0 high findings for the surface AND -- for S7 only, the surface Q5 rates
   via its EXTERNAL CHECKLIST -- every checklist property `met` or `partial`, never `missed`. For
-  S1-S6, which the checklist does not rate, the top tier gates on finding counts alone.
+  S1-S6 and S8, which the checklist does not rate, the top tier gates on finding counts alone.
 - strong = 0 critical AND <= 1 high.
 - solid = <= 1 critical.
 - nascent = otherwise.
@@ -575,7 +604,10 @@ framing here must not foreclose it.
    comment fires only on `claude/*` PRs and is irrelevant here because you end your turn without
    merging. If a PreToolUse hook blocks the switch, stay on the current session branch, still write
    the two deliverables against the audited base, and note the deviation in `meta.contract_notes` --
-   the clean two-file diff is what matters, not the branch name.
+   the clean two-file diff is what matters, not the branch name. More generally, if any PreToolUse
+   guard blocks a step, record the exact block in `meta.contract_notes`; if it blocks writing a
+   deliverable itself and you cannot recover, stop and report the block in your final turn -- never
+   work around a guard.
 3. Repo-wide `validate --pre` is advisory outside CI. Your real pre-push gate is that both
    deliverables are well-formed (the YAML parses) AND the YAML satisfies the OUTPUT schema's COUNTING
    INVARIANT. Do NOT fix any unrelated `validate` failure -- record it in `meta.contract_notes` and
