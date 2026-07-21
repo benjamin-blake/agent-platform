@@ -9,6 +9,7 @@ the standalone `python -m` entry point.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,34 @@ class TestSurfaceResolution:
         paths = {f["path"] for f in report["S1"]["files"]}
         assert "CLAUDE.md" in paths
         assert "AGENTS.md" in paths
+
+    def test_s1_resolution_is_cycle_guarded(self, tmp_path: Path) -> None:
+        """A real @-import cycle (CLAUDE.md -> OTHER.md -> CLAUDE.md) must resolve each file
+        exactly once and terminate -- proves the docstring's 'cycle-guarded' claim rather than
+        just asserting it never happens to loop today (today's real CLAUDE.md/AGENTS.md pair
+        has no cycle at all)."""
+        claude_md = tmp_path / "CLAUDE.md"
+        other_md = tmp_path / "OTHER.md"
+        claude_md.write_text("@OTHER.md\n", encoding="utf-8")
+        other_md.write_text("@CLAUDE.md\n", encoding="utf-8")
+        with patch("scripts.preflight.prose_context._common.ROOT", tmp_path):
+            resolved = prose_context._resolve_s1_root_load_set()
+        assert sorted(p.name for p in resolved) == ["CLAUDE.md", "OTHER.md"]
+
+    def test_s1_resolution_dedupes_a_diamond_import_shape(self, tmp_path: Path) -> None:
+        """CLAUDE.md imports both X and Y; X also imports Y -- Y gets enqueued twice (once by
+        CLAUDE.md, once by X) before it is ever processed, so this exercises the SECOND
+        (post-dequeue) de-dup guard, distinct from the pairwise-cycle test above which only
+        ever exercises the pre-enqueue guard."""
+        claude_md = tmp_path / "CLAUDE.md"
+        x_md = tmp_path / "X.md"
+        y_md = tmp_path / "Y.md"
+        claude_md.write_text("@X.md\n@Y.md\n", encoding="utf-8")
+        x_md.write_text("@Y.md\n", encoding="utf-8")
+        y_md.write_text("no imports here\n", encoding="utf-8")
+        with patch("scripts.preflight.prose_context._common.ROOT", tmp_path):
+            resolved = prose_context._resolve_s1_root_load_set()
+        assert sorted(p.name for p in resolved) == ["CLAUDE.md", "X.md", "Y.md"]
 
     def test_s2_includes_known_non_root_claude_md_files(self) -> None:
         report = prose_context.measure_prose_context()
@@ -137,6 +166,22 @@ class TestFailOpen:
         # Unrelated surfaces are unaffected.
         assert report["S1"]["prose_bytes"] > 0
 
+    def test_measure_prose_context_survives_a_broken_measurement(self) -> None:
+        """Distinct from a broken RESOLVER (above): here _measure_surface itself raises after
+        the resolver already returned real paths, exercising the outer except branch that
+        falls back to _empty_surface() -- a different fail-open seam than the resolver one."""
+        with patch("scripts.preflight.prose_context._measure_surface", side_effect=RuntimeError("boom")):
+            report = prose_context.measure_prose_context()
+        for surface in _SURFACES:
+            assert report[surface] == prose_context._empty_surface(report[surface]["label"])
+
+    def test_read_bytes_returns_zero_for_unreadable_path(self, tmp_path: Path) -> None:
+        """Real (non-mocked) OSError trigger: read_bytes() on a directory raises
+        IsADirectoryError (an OSError subclass) -- confirms the fail-open return-0 branch."""
+        a_directory = tmp_path / "not_a_file"
+        a_directory.mkdir()
+        assert prose_context._read_bytes(a_directory) == 0
+
 
 class TestReportSectionBuilder:
     def test_build_report_section_shape(self) -> None:
@@ -150,14 +195,18 @@ class TestReportSectionBuilder:
 class TestFormatterAndStandaloneEntryPoint:
     def test_format_prints_exactly_one_summary_line_per_surface_class(self) -> None:
         text = prose_context.format_prose_context_report()
-        import re
-
         summary_lines = [ln for ln in text.splitlines() if re.match(r"^(S1|S2|S3|S4|S8) ", ln)]
         assert len(summary_lines) == 5
 
-    def test_print_prose_context_report_matches_vp_grep(self, capsys: pytest.CaptureFixture[str]) -> None:
-        import re
+    def test_format_shows_unknown_split_when_status_is_unknown(self) -> None:
+        """Directly constructed (no git dependency): exercises the formatter's 'split=unknown'
+        branch, which the live repo's own git history (everything churned) never reaches."""
+        surfaces = {s: prose_context._empty_surface(f"label-{s}") for s in _SURFACES}
+        text = prose_context.format_prose_context_report(surfaces)
+        assert text.count("split=unknown") == 5
+        assert "stable=" not in text
 
+    def test_print_prose_context_report_matches_vp_grep(self, capsys: pytest.CaptureFixture[str]) -> None:
         prose_context.print_prose_context_report()
         out = capsys.readouterr().out
         summary_lines = [ln for ln in out.splitlines() if re.match(r"^(S1|S2|S3|S4|S8) ", ln)]
@@ -174,8 +223,6 @@ class TestFormatterAndStandaloneEntryPoint:
             timeout=30,
         )
         assert result.returncode == 0
-        import re
-
         summary_lines = [ln for ln in result.stdout.splitlines() if re.match(r"^(S1|S2|S3|S4|S8) ", ln)]
         assert len(summary_lines) == 5
 
