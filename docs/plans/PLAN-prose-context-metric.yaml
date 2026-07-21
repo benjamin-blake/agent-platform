@@ -1,0 +1,290 @@
+schema_version: 1
+slug: "prose-context-metric"
+intent: >-
+  Ship deterministic, creds-free measurement of per-surface agent-prose context cost so the
+  self-improving loop can see (and later govern) how much instruction prose every session loads --
+  agent context is a first-class resource (Decision 110). This is the MEASUREMENT half of audit
+  findings ACG-05/ACG-06; the size ceiling/gate is a separate later slice (ACG-01), not this plan.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-prose-context-metric.yaml
+phase: >-
+  Platform audit agent-context-governance (audits/agent-context-governance-cdfda88.yaml), findings
+  ACG-05 (prose-context measurement) + ACG-06 (decisions-query verb ownership, aws-native bookkeeping).
+  Ships an independent, deferral-free prose-context measurement surface (a script + fail-open preflight
+  advisory); extends the DEFERRED T3.14 snapshot shape with prose fields and attaches the decisions-query
+  verb ownership to T1.5 c1 as roadmap bookkeeping. NO tier_item criterion is closed by this plan (the
+  gate on S1/S2/S4/S8 is the separate ACG-01 slice).
+scope:
+  - file: scripts/preflight/prose_context.py
+    action: Create
+    purpose: >-
+      New deterministic, creds-free, wc-class metric module (single file, <500 SLOC per Decision 128;
+      decompose into a scripts/preflight/prose_context/ facade package only if it ever crosses budget).
+      Placed in the existing scripts/preflight/ subpackage alongside context_docs.py so it mirrors that
+      file's fail-open advisory siblings (_check_endstate_drift / _scan_provisional_contracts) and avoids
+      a scripts_root_allowlist edit (it is not a depth-1 scripts/ root file). Exposes measure_prose_context()
+      (structured per-surface dict), a report-section builder, a formatter/printer, and a runnable
+      `python -m` main() that prints the prose-context section standalone. Never raises; no network/AWS.
+  - file: scripts/session/preflight.py
+    action: Modify
+    purpose: >-
+      Wire the metric into session preflight exactly as _check_endstate_drift is wired (import from
+      scripts.preflight.prose_context; add report["prose_context"] = measure_prose_context(); print the
+      per-surface advisory section). Fail-open: the metric never changes the preflight exit code
+      (Decision 62/CD.12 alarm-not-gate + Decision 59 deterministic advisory).
+  - file: tests/test_prose_context.py
+    action: Create
+    purpose: >-
+      V2 unit tests exercising real code paths (real repo tree, not mocks): S1 @-import transitive
+      resolution, per-surface bytes + ~bytes/4 token estimates for S1/S2/S3/S4/S8, stable-vs-churned
+      split arithmetic, fail-open behaviour on broken input/absent git, the report-section builder shape,
+      plus roadmap-edit assertions (T3.14 all-structured + prose fields + deferred/all-open; T1.5 c1 names
+      the decisions-query verb + decision-scout SKILL.md consumer spec).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Edit (a) T3.14: convert its 4 existing bare-string exit_criteria to structured {id,text,status,met_by}
+      objects (c1-c4, matching the loader's auto-numbering) per CD.39/Decision 136, and add new structured
+      criteria naming the per-surface prose fields in its snapshot shape; keep status deferred_post_mvp and
+      every criterion open (none met). Edit (b) T1.5: amend exit criterion c1 (append clause) to name the
+      decisions-query read verb + decision-scout's SKILL.md:18-20 migration contract as its consumer spec.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    scripts/preflight/prose_context.py deterministically reports, creds-free and local-file-only, per-surface
+    prose BYTES and ~bytes/4 token estimates for S1 (root ambient load-set), S2 (each non-root per-directory
+    CLAUDE.md), S3 (each .claude/commands/*.md), S4 (each .claude/skills/*/SKILL.md entry file), and S8
+    (docs/PROJECT_CONTEXT.md); the surface-set aligns to Decision 127's permanent prose classes a (S1+S2),
+    c (S3+S4) and the e-member docs/PROJECT_CONTEXT.md (S8).
+  - >-
+    The S1 unit is the resolved root ambient LOAD-SET: root CLAUDE.md plus its transitive @-imports (today
+    CLAUDE.md -> @AGENTS.md, so the set is {CLAUDE.md, AGENTS.md}); the metric resolves @-imports transitively
+    so the S1 unit is split-proof (Q1 transfer hazard), and AGENTS.md appears in the S1 member list.
+  - >-
+    The metric emits a stable-vs-churned byte split per surface from git edit-recency (cache-aware per audit
+    Q6v), and fails open to an 'unknown' split (never raises) when git history is unavailable (shallow clone).
+  - >-
+    `bin/venv-python -m scripts.preflight.prose_context` runs standalone (no creds) and prints exactly one
+    summary line per surface class for S1/S2/S3/S4/S8 with byte + token-estimate figures.
+  - >-
+    The session preflight report (logs/.preflight-report.json) carries a prose_context section and preflight
+    prints a per-surface prose-context advisory; the metric NEVER changes the preflight exit code
+    (fail-open advisory, Decision 62/CD.12 + Decision 59), mirroring context_docs.py's advisory pattern.
+  - >-
+    T3.14's four existing bare-string exit_criteria are converted to structured {id,text,status,met_by}
+    objects and new structured criteria name the per-surface prose fields (prose_bytes + token_estimate for
+    S1/S2/S3/S4/S8 plus the stable/churned split) in its snapshot shape; T3.14 stays status deferred_post_mvp
+    with every criterion status open (none met); no live not_started/in_progress item depends_on T3.14.
+  - >-
+    T1.5 exit criterion c1 names the decisions-query read verb (a NAMED_READS verb extending ducklake_reader
+    per Decision 91, NOT a new Lambda) with decision-scout's .claude/skills/decision-scout/SKILL.md:18-20
+    Lambda-migration contract as its consumer spec, so that skill's 'in-flight per project roadmap' reference
+    resolves to a real live item (T1.5); reserved T5.4 is not touched and T1.5's other criteria are unchanged.
+  - >-
+    `bin/venv-python -m scripts.validate --pre` is green: validate_platform_roadmap accepts both roadmap edits
+    (T3.14 has no bare-string criteria; T1.5's untouched `- id:` header means its remaining bare strings are
+    not force-converted), lint/mypy pass on the new module, and the plan schema validates.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the metric standalone (creds-free) and confirm it emits exactly one summary line per surface class
+      for S1/S2/S3/S4/S8 -- proves it computes real per-surface byte data over the live tree, not a stub.
+    command: 'bin/venv-python -m scripts.preflight.prose_context | grep -cE "^(S1|S2|S3|S4|S8) "'
+    expected: "Prints 5 (one summary line per surface class; per-file detail lines are indented and do not match)."
+    fix_if: >-
+      A count other than 5 means a surface class is missing, mislabeled, or per-file detail leaked to column 0;
+      fix the enumeration/output format so each class emits exactly one column-0 summary line.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "prose-context-surface-classes-eq-5"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the module unit + roadmap-edit assertion tests. Exercises S1 @-import transitive resolution
+      (AGENTS.md present), per-surface bytes>0 and token≈bytes/4, stable/churned split summing to the surface
+      total, fail-open on broken input, the report-section builder shape, and the T3.14/T1.5 roadmap edits.
+    command: "bin/venv-python -m pytest tests/test_prose_context.py -q"
+    expected: "All tests pass; assertions confirm the metric shape, fail-open behaviour, and both roadmap edits."
+    fix_if: >-
+      A failing assertion pinpoints the defect (missing surface, wrong token math, split mismatch, a raised
+      exception where fail-open is required, or a roadmap edit that did not land as specified). Fix and rerun.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "prose-context-metric-tests"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Behavioural proof that the preflight WIRING emits the section (not just the module): run session
+      preflight (degraded-mode tolerant -- the metric is creds-free and the report is written regardless of
+      warehouse reachability) and confirm the written report carries the prose_context section. Catches a
+      missing report["prose_context"] assignment that mypy/unit tests would not.
+    command: 'bin/venv-python -m scripts.session.preflight >/dev/null 2>&1 || true; grep -q ''"prose_context"'' logs/.preflight-report.json'
+    expected: "grep exits 0 -- logs/.preflight-report.json contains the prose_context section after preflight runs."
+    fix_if: >-
+      grep non-zero means preflight did not wire/write the section: confirm scripts/session/preflight.py
+      imports from scripts.preflight.prose_context, assigns report[\"prose_context\"], and prints the advisory
+      near the other advisory wiring (~line 425). Degraded mode (no creds) is expected and not a failure.
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Run the fast presubmit gate. Exercises validate_platform_roadmap over both roadmap edits (T3.14
+      bare-string conversion accepted; T1.5 not force-converted), the SLOC guards over both scripts/ files,
+      lint/mypy on the new module, and plan schema.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0; roadmap, SLOC, plan-schema, lint, and mypy checks all pass."
+    fix_if: >-
+      A roadmap-schema FAIL naming T1.5 'touched ... bare-string criteria' means the edit brushed the
+      `- id: T1.5` header line -- rework edit (b) as a pure append to c1's block-scalar text so the header
+      stays a context line. A SLOC FAIL on scripts/session/preflight.py means the wiring crossed 500 -- move
+      more logic into prose_context.py. Any lint/mypy/plan-schema failure is fixed on the branch and rerun.
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - >-
+    MEASUREMENT half only -- NO gate this slice. Do NOT add a validate.py check, a budget registry, or any
+    exit-code-bearing enforcement; the S1/S2/S4/S8 ceiling/gate is the separate ACG-01 slice. S3 is measured
+    only by design (Decision 127 strongest-layer surface; audit S3 governance_verdict = measure_only).
+  - >-
+    Creds-free, local-file-only, wc-class; the metric never raises (fail-open) and never changes the preflight
+    exit code (Decision 62/CD.12 alarm-not-gate, Decision 59 determinism, Decision 88 egress -- wc-class
+    local reads comply with the standing egress invariants).
+  - >-
+    No new standing prose doc (Decision 86): the deliverable is a script + fail-open advisory (a query-result
+    surfaced at preflight), never a stored human-readable artefact -- Decision 86 is SATISFIED, cite as compliant.
+  - >-
+    Keep scripts/preflight/prose_context.py under 500 SLOC (Decision 128); if it would cross budget, decompose
+    into a scripts/preflight/prose_context/ facade package (Decision 80/104/124 pattern) -- never a budget raise.
+  - >-
+    SLOC headroom: scripts/session/preflight.py is at 485/500 SLOC (unregistered). Keep the wiring to a thin
+    call -- import + report["prose_context"] assignment + one print-helper call, with ALL measure/format logic
+    in prose_context.py -- so it stays under the 500 threshold (Decision 128). If the addition would cross 500,
+    move more logic into prose_context.py (or decompose preflight.py); do NOT default to a budget raise.
+  - >-
+    Edit (b) is scoped to T1.5 c1 ONLY. Do NOT convert T1.5's other six bare-string criteria: amending c1's
+    folded block-scalar text does not add/remove the `- id: T1.5` header line, so validate_platform_roadmap's
+    touched-item regex (scripts/checks/roadmap/validate_platform_roadmap.py:85) does not flag T1.5 -- this is
+    the decision-scout WARN's scoping (conversion is scoped to T3.14 only). Append to c1; never rewrite it.
+  - >-
+    Do NOT mark any T3.14 criterion met; keep status deferred_post_mvp; do NOT add a depends_on edge to T3.14
+    or make any live not_started/in_progress item depend on it (Decision 93 deferral guardrails). The shipped
+    preflight advisory is framed as an INDEPENDENT surface, NOT T3.14's deliverable.
+  - >-
+    Do NOT add a live criterion to reserved T5.4 (Decision 93: reserved is non-reactivatable; the audit's
+    literal 'attach to T5.4' text is OVERRIDDEN by the decision-scout WARN -- doing so would escalate to BLOCK).
+  - >-
+    No `python -c` one-liners in VP commands (use `python -m` / pytest). No AWS account IDs, ARNs, secrets, or
+    internal hostnames anywhere (public-repo boundary, Decision 101). No rescue agents / workaround loops
+    (Decision 55).
+  - >-
+    Out of scope (finding-boundary): the planning/SKILL.md:43 token_anomalies dangling-consumer removal is
+    ACG-03's deliverable (its acceptance), not this slice; the S1/S2/S4/S8 budget registry + gate is ACG-01's.
+    No recs are bundled and no closure obligation is triggered (additive module + roadmap bookkeeping only).
+context:
+  - >-
+    Decision-scout gate (orchestrator-dispatched; NOT re-run here): verdict FLAGS_FOUND (1 WARN + NOTEs);
+    live '## Decision ' header count 104. CITE list (verbatim decision ids): Decision 86, Decision 127,
+    Decision 134, Decision 114, Decision 59, Decision 93, Decision 136, Decision 84, Decision 91.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+  - >-
+    WARN (Decision 134) RESOLVED -- verb-ownership re-home: the audit's literal 'attach the decisions-query
+    verb to T5.4' is overridden. T5.4 is status:reserved (tombstoned into T1.5 c1 per audit RMAP-05 /
+    Decision 134 clause 5; reserved is non-reactivatable per Decision 93). Edit (b) is re-homed to T1.5 c1 --
+    the live (not_started) owner of the decisions read-portal cutover that ALREADY names decision-scout +
+    preflight as consumers to repoint. decision-scout SKILL.md:18-20's 'in-flight per project roadmap' now
+    resolves to T1.5, not T5.4.
+  - >-
+    NOTE (Decision 136 / CD.39) RESOLVED -- structured exit-criteria: because edit (a) touches T3.14, all four
+    of its existing bare-string criteria are converted to {id,text,status,met_by} objects in the same edit and
+    the new prose criteria are authored in that shape. validate_platform_roadmap forbids a touched tier_item
+    from retaining bare-string criteria (Decision 136 ratifies CD.39).
+  - >-
+    NOTE (Decision 93) RESOLVED -- deferral guardrails: T3.14 stays deferred_post_mvp with its extended
+    criteria open; the preflight advisory ships as an independent surface (not T3.14's deliverable); no live
+    item depends_on T3.14; no T3.14 criterion is marked met.
+  - >-
+    Decision 127 (sanctioned-prose taxonomy): the metric's surface-set = the permanent prose classes it can
+    ever measure -- (a) universal/directory instruction files [S1 root ambient load-set + S2 per-directory
+    CLAUDE.md], (c) workflow surfaces [S3 .claude/commands + S4 .claude/skills/*/SKILL.md], and the (e)-member
+    docs/PROJECT_CONTEXT.md [S8]. Aligned to it by construction.
+  - >-
+    Decision 114 + Decision 43 (measurement-precedes-ceiling precedent / directed growth): this slice ships
+    measurement first; the byte ceiling and raise-marker gate are the separate ACG-01 slice, sized later off
+    this metric's numbers (the Decision 102/134 seed-at-current-size pattern).
+  - >-
+    Decision 84 + Decision 91 (named-verb read boundary): edit (b)'s decisions-query verb is a NAMED read that
+    EXTENDS ducklake_reader (Decision 91 NAMED_READS), NOT a new Lambda; T1.5 c1 already encodes the
+    portal-read end-state. If this metric ever PERSISTS, it routes through the ops portal (Decision 84), never
+    a local read-cache write -- T3.14's extended criteria already carry that clause.
+  - >-
+    Decision 62/CD.12 (alarm-not-gate / monitor-not-gate) + Decision 59 (determinism over LLM judgment): the
+    advisory is fail-open with no exit code, mirroring context_docs.py's _check_endstate_drift /
+    _scan_provisional_contracts (creds-free, never raises). Decision 88 (egress invariants): wc-class,
+    creds-free, local-file-only reads comply.
+  - >-
+    Decision 110 (agent-first; agent context is a first-class resource) is the driver; the audit re-derived
+    sizes by hand with wc (AGENTS.md ~33KB, PROJECT_CONTEXT.md ~41KB, skills ~206KB/9 files) because no such
+    metric exists -- this restores the metric the removed preflight token_anomalies key used to approximate.
+  - >-
+    Module-home rationale: scripts/preflight/prose_context.py (not scripts/ root) mirrors the fail-open
+    advisory siblings in the same subpackage and avoids a scripts_root_allowlist entry; it must not collide
+    with T3.14's separately-planned scripts/context_budget.py (the CODE-SLOC metric).
+  - >-
+    Branch cut fresh from origin/main (no scope-file overlap with main since branch point); no main-divergence
+    deferral needed. IMPLEMENTATION plan_type (STRATEGIC suspended per executor freeze; scope fits one plan).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/agent-context-governance-impl-a7rirp-s3-prose-context-metric-plan)
+  - docs/PROJECT_CONTEXT.md read (Layer-2 knowledge base; S8 is itself a measured surface)
+  - Relevant decisions read via decision-scout CITE list (86, 127, 134, 114, 59, 93, 136, 84, 91)
+  - scripts/preflight/context_docs.py read as the fail-open advisory pattern to mirror
+  - scripts/checks/roadmap/validate_platform_roadmap.py:76-97 read (CD.39 touched-item bare-string mechanic)
+  - T3.14 (deferred_post_mvp), T1.5 c1 (not_started), and T5.4 (reserved) located and re-verified in the roadmap
+  - All four scope files located and readable; acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create scripts/preflight/prose_context.py: (1) resolve the S1 root ambient load-set by parsing `^@<path>`
+    imports in root CLAUDE.md and recursing transitively (cycle-guarded); (2) enumerate S2 (non-root
+    **/CLAUDE.md, excluding .venv/untracked), S3 (.claude/commands/*.md), S4 (.claude/skills/*/SKILL.md entry
+    files), S8 (docs/PROJECT_CONTEXT.md); (3) per surface compute prose_bytes and token_estimate = bytes/4;
+    (4) compute a stable-vs-churned byte split from git edit-recency over a fixed lookback window, failing
+    open to 'unknown' when git is unavailable; (5) expose measure_prose_context() -> structured dict keyed by
+    surface class, a report-section builder, a formatter that prints one column-0 summary line per class
+    ("S1 ...".."S8 ...") with indented per-file detail, and a `python -m` main(). Never raise -- wrap all IO
+    fail-open like context_docs.py. Keep under 500 SLOC or decompose into a facade package (Decision 128).
+  - >-
+    Modify scripts/session/preflight.py with a THIN wiring only (preflight.py is at 485/500 SLOC): import from
+    scripts.preflight.prose_context, add report["prose_context"] = measure_prose_context() near the other
+    advisory wiring (~line 425), and call a print-helper that lives in prose_context.py (do NOT inline the
+    formatting here -- keep preflight.py under the 500 threshold). Do NOT alter the return/exit-code logic --
+    the advisory is fail-open.
+  - >-
+    Edit (a) docs/ROADMAP-PLATFORM.yaml T3.14: convert the 4 bare-string exit_criteria to structured objects
+    id c1-c4 (preserve original text + order to match the loader's auto-numbering), status: open, no met_by;
+    append new structured criteria (c5+) naming the per-surface prose fields (prose_bytes + token_estimate for
+    S1/S2/S3/S4/S8 and the stable/churned split) in the snapshot shape, produced by
+    scripts/preflight/prose_context.py and routed through the ops portal if persisted (Decision 84). Keep
+    status: deferred_post_mvp; every criterion status: open.
+  - >-
+    Edit (b) docs/ROADMAP-PLATFORM.yaml T1.5: append a clause to exit criterion c1's existing folded
+    block-scalar text naming the decisions-query read verb (a NAMED_READS verb extending ducklake_reader per
+    Decision 91, not a new Lambda) whose stable-interface consumer spec is decision-scout's
+    .claude/skills/decision-scout/SKILL.md:18-20 migration contract -- resolving that reference to T1.5. Do
+    NOT touch the `- id: T1.5` header line and do NOT convert T1.5's other bare-string criteria. Do NOT edit T5.4.
+  - >-
+    Create tests/test_prose_context.py covering the acceptance criteria (S1 transitive @-import resolution,
+    per-surface bytes/token math, stable/churned split arithmetic, fail-open, report-section shape) plus
+    roadmap-edit assertions (load the roadmap; assert T3.14 criteria are all structured with explicit ids,
+    include the prose fields, are all open, and T3.14 is deferred_post_mvp; assert T1.5 c1 text contains the
+    decisions-query verb + decision-scout SKILL.md consumer reference).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on any validate_platform_roadmap failure
+    naming T1.5 bare strings, rework edit (b) as a pure append. No workaround loops (Decision 55).
+  - 'Report: what was implemented, per-surface metric output, and verification results.'
+work_areas: []
+rollback: >-
+  Revert the four-file feat commit. The metric is a fail-open preflight advisory with no exit-code effect and
+  the roadmap edits are additive bookkeeping (no criterion closed), so revert is clean with no data/state to unwind.
