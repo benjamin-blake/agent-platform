@@ -251,13 +251,20 @@ property-matched compensating control):
      drivers" section, not only the ruling (MADR "Decision Drivers"). *(This overlaps Q3 -- assess
      here as a growth/template property, there as an intent-capture property.)*
   6. **Machine-readable front-matter** -- structured metadata (id, status, tags, supersedes)
-     addressable without prose parsing (MADR 3.0 YAML front-matter).
+     addressable without prose parsing (MADR 3.0 YAML front-matter). *(A `missed` here must NOT
+     become an "author structured front-matter now" remedy -- that re-litigates the ratified
+     prose-authoring choice, TRAP-2. The DAF-safe channel for this property is the generated index
+     of property 4, per NS-4; frame any remedy that way.)*
   7. **Superseded-record compaction / archival out of the hot path** -- dead or superseded records
      leave the active reasoning surface.
   8. **Periodic review / revisit cadence** -- records carry revisit conditions or dates and are
      actually revisited.
   9. **Relationship graph over prose** -- related/supersedes/amends edges are typed and traversable,
      not only mentioned in body text.
+- Use these exact `property` slugs (order matches 1-9) in the `external_checklist` output rows:
+  `immutability-supersession`, `one-decision-granularity`, `significance-gate`, `generated-index`,
+  `decision-drivers`, `machine-readable-frontmatter`, `superseded-compaction`, `revisit-cadence`,
+  `relationship-graph`.
 - Verdict: `sufficient | partial | insufficient`. The maturity top tier (Section 15) reads this
   `external_checklist` field as its single source.
 
@@ -273,7 +280,10 @@ as one or more findings (marker/column/triage-bucket with acceptance criteria).
 - **Q3c (scout):** should `decision-scout` gain an intent-alignment axis -- a triage bucket
   distinct from CONTRADICT that fires when a plan violates the *spirit* of the corpus without
   literally contradicting any single decision's text -- and how is it specified so it does not
-  collapse into noise?
+  collapse into noise? Address tractability: the scout already whole-file-reads 103 entries every
+  `/plan`; judge whether a second per-entry axis is workable at the current corpus size WITHOUT the
+  read-cost redesign TRAP-7 defers, or whether it depends on the intent field (Q3a) existing first
+  as the addressable anchor.
 
 **Q4 -- Questions the requester did not think to ask.** Answer AND extend these seeds (each with
 `basis` finding ids where applicable):
@@ -283,6 +293,10 @@ as one or more findings (marker/column/triage-bucket with acceptance criteria).
   supersession provenance the corpus relies on, and how is that reconciled?
 - If intent becomes first-class, does the SCD2 amendment history need an intent *drift* signal
   (intent changed but rule text did not, or vice versa)?
+- Mechanically, when live entries are merged (retiring a `decision_id`), what does the
+  content-hash-gated SCD2 backfill do with the retired row's warehouse lineage in `ops_decisions`
+  -- is provenance preserved, orphaned, or resurrected? (Trace `decisions_md.py:229,241`, not only
+  the human-facing provenance the second seed asks about.)
 - What in this audit's remedies is authorable *now* vs blocked behind the Decision-67 STRATEGIC
   freeze / T1.5?
 
@@ -310,7 +324,10 @@ deep-dive; every question is served by at least one dimension.
 
 Surfaces to rate: `DECISIONS.md-corpus`, `decision-entry.yaml`, `decisions_md.py+DecisionPayload`,
 `validate_decisions_size.py`, `decision-scout`, `Decision-105-ratification-lane`. Use `n/a`
-freely where a dimension does not apply to a surface (e.g. VD3 is `n/a` for the size guard).
+freely where a dimension does not apply to a surface (e.g. VD3 is `n/a` for the size guard). Emit
+an explicit `rubric_ratings` row for every (surface, dimension) pair you assess, INCLUDING an
+explicit `n/a` row where a dimension is structurally irrelevant -- do not silently omit a cell (an
+absent row is ambiguous between "n/a" and "forgotten").
 
 ---
 
@@ -357,8 +374,8 @@ is a verdict.
   bytes**. Highest number **143**; numbering has gaps (archived/renumbered entries).
 - `scripts/checks/decisions/validate_decisions_size.py:17-19` -- ceilings
   `_DECISIONS_LIVE_MAX_BYTES = 400_000`, `_DECISIONS_LIVE_MAX_H2 = 120`,
-  `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. Registered (`:64`) `owner="platform"`; the docstring
-  (`:1-9`) states it runs in both `--pre` and full tiers. `_RELIEF_VALVES` (`:21-25`) names
+  `_DECISIONS_COMBINED_MAX_BYTES = 700_000`. Registered (`:64`) `owner="platform"`; the function
+  docstring (`:64-74`) states it runs in both `--pre` and full tiers. `_RELIEF_VALVES` (`:21-25`) names
   archival (DPI-04) and "compact superseded decision bodies to pointer stubs."
 - `docs/contracts/decision-entry.yaml:39-56` -- `required_markers` = Status, Date, Decision;
   `optional_markers_fixed_spelling` = Problem, Rationale, Reversal conditions, Related, Warehouse
@@ -401,22 +418,28 @@ ceiling.
 Bound the corpus read hard. Reading all 103 entries in full is NOT required and is discouraged.
 
 - Read the **full header map** (one `rg -n '^## Decision '`) -- cheap, mandatory.
-- Read **in full** the seed clusters below (~35 entries total). These are candidates, not
-  confirmed overlaps -- adjudicate each.
+- Read **in full** the five DD-A seed clusters below (~25 entries total). The Ratify-CD set is NOT
+  one of these read-in-full clusters -- it is the DD-B sample, bounded by the third bullet. These
+  are candidates, not confirmed overlaps -- adjudicate each.
 - Sample **up to 15 ADDITIONAL** live entries not in a seed cluster, chosen to probe for overlap
   the seeds missed (e.g. adjacent numbers, shared title keywords). **Do NOT exceed 15.**
-- Read **up to 8** ratify-CD entries for DD-B (the "Ratify"-titled set). **Do NOT exceed 8.**
+- Read **up to 8** ratify-CD entries for DD-B (the "Ratify"-titled set, ~25 of them exist).
+  **Do NOT exceed 8** -- this is a characterizing sample, not a full read.
 - State your coverage in `meta.contract_notes` ("read N of 103 in full; sampled M ratify-CD").
 
-Seed clusters for DD-A (adjudicate; do not assume redundancy):
+The five DD-A seed clusters (read in full; adjudicate; do not assume redundancy):
 - **Telemetry:** Decisions 95, 96, 97 (trace/observation model; temporal; identity).
 - **DuckLake/ops-store:** Decisions 78, 81, 84, 88, 99, 107, 124.
 - **Size/structural governance:** Decisions 43, 102, 114, 128, 130, 134.
 - **Workflow architecture lineage:** Decisions 42, 90 (and 38, 57, 58, 59 as a supersession
-  chain -- immutability test).
+  chain -- immutability test). Boundary note: the merge/overlap verdict for this chain is Q1 (in
+  scope); a *missing supersession annotation* you may notice on it is DPI-01 (out of scope,
+  do-not-refile, TRAP-3). Keep the two distinct -- surface the merge verdict, reference (do not
+  re-file) the annotation gap.
 - **CI/validation tiering:** Decisions 60, 73, 135.
-- **Ratify-CD set (DD-B sample source):** Decisions 106-141 whose titles begin "Ratify"
-  (e.g. 136, 137, 140, 141).
+
+The DD-B sample source (NOT read in full -- sampled at <= 8 per the third bullet above): the
+Ratify-CD set, Decisions 106-141 whose titles begin "Ratify" (e.g. 136, 137, 140, 141).
 
 **Counterfactual test per candidate cluster:** "If these entries were merged into one, what
 governing distinction or supersession-provenance edge would be *lost*?" If nothing is lost, the
@@ -529,11 +552,15 @@ list; `total_findings = len(findings) = novel_count + planned_insufficient_count
 planned_unbuilt_count`; fully-covered candidates live in `rejected_candidates`, NOT findings;
 `rubric_ratings`, `question_answers`, and `consolidation_clusters` are systems-of-record
 referenced FROM findings, never re-counted; `top_improvements` and `highest_leverage_change` MUST
-be finding ids.
+be finding ids. **Zero-findings path (a valid outcome per Section 17):** if `total_findings == 0`,
+emit `top_improvements: []` and `highest_leverage_change: null` -- never manufacture a finding to
+fill these fields.
 
 - `control_property_match` is REQUIRED whenever a compensating control is the dismissal reason:
   name the property the control exercises, cite where it operates, and state why it would FAIL if
-  the defect were real.
+  the defect were real. (A "planned and fully covered by an owning item" dismissal instead names
+  `decision_or_item_id` and needs no `control_property_match`; the property-match requirement is
+  for not-a-defect dismissals that rest on a compensating control.)
 - `CONFIRMED` requires the behavior traced to file:line or an observed sampled artifact; anything
   less is `HYPOTHESIS`.
 - A `consolidation_clusters` entry with verdict `keep-separate` is a valid, expected outcome and
@@ -567,8 +594,11 @@ the control). The byte-ceiling guard does NOT property-match a *content-overlap*
 nor a missing intent field. State this explicitly wherever the guard is raised as a control.
 
 **Maturity** -- compute LAST, per surface, top-down, first match wins. Pin these thresholds:
-- **frontier** = 0 open critical AND 0 open high findings for the surface, AND every property in
-  Q2's `external_checklist` rated `met` or `partial` (never `missed`).
+- **frontier** = 0 open critical AND 0 open high findings for the surface. The Q2
+  `external_checklist` clause applies ONLY to the two surfaces Q2 governs -- `DECISIONS.md-corpus`
+  and `Decision-105-ratification-lane`: for those, frontier additionally requires every checklist
+  property rated `met` or `partial` (never `missed`). For every other surface, frontier gates on
+  the finding counts alone.
 - **strong** = 0 critical AND <= 1 high.
 - **solid** = <= 1 critical.
 - **nascent** = otherwise.
@@ -582,7 +612,10 @@ checklist property (rate it `partial`, not `missed`); the framing here must not 
 
 1. Derive the base ONCE: `git fetch origin main` then `git rev-parse --short origin/main`. This SHA
    IS the audited tree; use it in both deliverable filenames, the branch name, and
-   `meta.audited_commit`.
+   `meta.audited_commit`. **Degraded path:** IF `git fetch origin main` fails (the same creds/egress
+   outage Section 5 anticipates), fall back to `git rev-parse --short HEAD`, branch off `HEAD`
+   instead of `origin/main` in step 2, and record in `meta.contract_notes` that the base is local
+   HEAD, not a freshly-fetched `origin/main`.
 2. `git switch -c audit/decision-consolidation-growth-<sha> origin/main` -- so the PR diff is only
    your two files. (Deliberate, documented exception to the `claude/*` session-branch rule: the
    audit session needs a clean two-file diff off the audited base. The CI signal-green comment-wake
