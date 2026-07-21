@@ -754,7 +754,7 @@ When rolling back to a previous tag that doesn't include a resource created late
 
 **Goal:** Migrate the executor's LLM interface from raw Copilot CLI subprocess calls to the GitHub Copilot SDK with AWS Bedrock as the planning backend via BYOK, enabling structured output, prompt caching, and parallel planning.
 
-> **Note:** This is a deferred infrastructure track with no target date. Implementation is triggered by conditions defined in Decision 40. It does not block any feature phase.
+> **Note:** This is a deferred infrastructure track with no target date. Implementation was triggered by conditions defined in Decision 40, but those trigger conditions are now moot: the Copilot SDK path was retired via Decision 116 (superseding Decision 49) and Bedrock BYOK was retired via CD.28 (ratified by Decision 122). Formal supersession of Decision 40 is pending. It does not block any feature phase.
 
 > **Status:** Waiting. Re-evaluate when GitHub Copilot SDK reaches v1.0/stable, executor retry rate exceeds 40% sustained, or executor throughput becomes the North Star bottleneck.
 

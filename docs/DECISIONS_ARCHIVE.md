@@ -1403,6 +1403,8 @@ Suggestions surfaced by the cron review system that were reviewed by a human and
 
 ## Decision 26: Workflow Cost Optimisation (Decided)
 
+**Reconciliation note (2026-07-21):** a divergent live `docs/DECISIONS.md` duplicate ("Decision 26: Workflow Cost Optimisation via 2-Chat Model and Automation", Agent-decided -- pending review; two supersessions stale via Decision 42->90, its artefacts deleted at T-1.13) was reconciled into this canonical archived entry and removed from the live file (DPI-05). This archived entry is now the sole Decision 26 across both files.
+
 **Context:** The 3-chat workflow (/plan, /implement, /session_close) reloaded context files 3 times per cycle. Deterministic steps (venv check, git status, validation, CI polling) consumed expensive LLM tokens. Analysis scripts output to stdout only, preventing trend analysis over time.
 
 **Decision:** Merge to 2-chat workflow with deterministic offloading:
