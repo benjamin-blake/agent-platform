@@ -58,7 +58,7 @@ class TestOpsWriterCompactEdgeCases:
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
         ):
-            writer.compact("ops_execution_plans")  # trade_date=None
+            writer.compact("ops_priority_queue")  # trade_date=None
 
         # Verify the paginator was called with the today prefix
         paginate_call = mock_client.get_paginator.return_value.paginate.call_args[1]
@@ -127,7 +127,7 @@ class TestOpsWriterCompactEdgeCases:
         mock_client = MagicMock()
         mock_paginator = MagicMock()
         mock_paginator.paginate.return_value = [
-            {"Contents": [{"Key": "staging/ops_execution_plans/dt=2026-04-20/batch-abc.jsonl"}]}
+            {"Contents": [{"Key": "staging/ops_priority_queue/dt=2026-04-20/batch-abc.jsonl"}]}
         ]
         mock_client.get_paginator.return_value = mock_paginator
         line_bytes = json.dumps(entries[0]).encode("utf-8")
@@ -146,7 +146,7 @@ class TestOpsWriterCompactEdgeCases:
             patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr"),
         ):
-            count = writer.compact("ops_execution_plans", "2026-04-20")
+            count = writer.compact("ops_priority_queue", "2026-04-20")
 
         # Should still return 1 (row compacted), delete failure is non-fatal
         assert count == 1
@@ -155,7 +155,7 @@ class TestOpsWriterCompactEdgeCases:
 class TestCompactErrorPaths:
     """Tests for the split compact() error paths introduced by the pipeline consolidation."""
 
-    def _make_staging_client(self, tmp_path, records, table: str = "ops_execution_plans"):
+    def _make_staging_client(self, tmp_path, records, table: str = "ops_priority_queue"):
         """Return a mock S3 client that serves one staging file with *records*."""
         import io
 
@@ -182,7 +182,7 @@ class TestCompactErrorPaths:
             patch.object(writer, "_is_test_env", return_value=False),
             patch.object(writer, "_get_client", return_value=mock_client),
         ):
-            result = writer.compact("ops_execution_plans", "2026-05-09")
+            result = writer.compact("ops_priority_queue", "2026-05-09")
 
         assert result == 0
 
@@ -204,8 +204,8 @@ class TestCompactErrorPaths:
         ):
             mock_wr.catalog.get_table_types.return_value = {}
             mock_wr.athena.to_iceberg.side_effect = Exception("Unable to locate credentials")
-            with pytest.raises(RuntimeError, match="infrastructure failure for ops_execution_plans"):
-                writer.compact("ops_execution_plans", "2026-05-09")
+            with pytest.raises(RuntimeError, match="infrastructure failure for ops_priority_queue"):
+                writer.compact("ops_priority_queue", "2026-05-09")
 
     def test_compact_passes_boto3_session_to_to_iceberg(self):
         """compact() forwards _get_boto3_session() to wr.athena.to_iceberg."""
@@ -230,7 +230,7 @@ class TestCompactErrorPaths:
         ):
             mock_wr.catalog.get_table_types.return_value = {}
             mock_wr.athena.to_iceberg.side_effect = _capture
-            writer.compact("ops_execution_plans", "2026-05-09")
+            writer.compact("ops_priority_queue", "2026-05-09")
 
         assert captured_kwargs.get("boto3_session") is fake_session
 
@@ -249,7 +249,7 @@ class TestCompactErrorPaths:
             body = json.dumps({"id": "ep-001"}).encode("utf-8")
             mc = MagicMock()
             mc.get_paginator.return_value.paginate.return_value = [
-                {"Contents": [{"Key": "staging/ops_execution_plans/dt=2026-05-09/f.jsonl"}]}
+                {"Contents": [{"Key": "staging/ops_priority_queue/dt=2026-05-09/f.jsonl"}]}
             ]
             mc.get_object.return_value = {"Body": io.BytesIO(body)}
             mc.delete_object.return_value = {}
@@ -271,12 +271,12 @@ class TestCompactErrorPaths:
         ):
             mock_wr.catalog.get_table_types.return_value = {}
             mock_wr.athena.to_iceberg.side_effect = _capture
-            writer.compact("ops_execution_plans", "2026-05-09")
-            writer.compact("ops_execution_plans", "2026-05-09")
+            writer.compact("ops_priority_queue", "2026-05-09")
+            writer.compact("ops_priority_queue", "2026-05-09")
 
         assert len(seen_paths) == 2
         assert seen_paths[0] != seen_paths[1], "two compact calls must use distinct temp_paths"
         for p in seen_paths:
-            assert p.startswith("s3://my-bucket/tmp/compact-ops_execution_plans-")
+            assert p.startswith("s3://my-bucket/tmp/compact-ops_priority_queue-")
             assert p.endswith("/")
             assert p != "s3://my-bucket/tmp/", "temp_path must not be the bare tmp/ directory"

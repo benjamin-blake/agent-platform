@@ -38,6 +38,22 @@ tables:
     read_engine_ref: docs/contracts/read-engine.yaml
     graduation_blocker: CD.17 reversal + executor resume
 
+  ops_execution_plans:
+    substrate: DuckLake-on-Neon
+    status: live
+    reason: >-
+      T2.26 (c9): migrated onto the DuckLake closed writer/reader boundary. No live Iceberg table or
+      _current Athena view ever existed for this table in the personal account (create-fresh-on-
+      DuckLake); the executor producer stays CD.17-frozen so the table lands empty until resume.
+    write_boundary: ducklake_writer Lambda (action_write_ops, via scripts/ops_portal/execution_plans.py)
+    read_boundary: ducklake_reader Lambda (NAMED VERBS + query_ops)
+    merge_key: rec_id
+    grain: one row per plan revision (rec_id, revision); current = latest revision per rec_id
+    write_mode: scd2
+    field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_execution_plans
+    read_engine_ref: docs/contracts/read-engine.yaml
+    graduation_blocker: CD.17 reversal + executor resume (table lands empty until then)
+
   # ---------------------------------------------------------------------------
   # DuckLake append-only tables (event-journal write mode, T1.14)
   # ---------------------------------------------------------------------------
@@ -54,7 +70,8 @@ tables:
     note: platform-generic append_only kernel proof (T1.14); no current_table in ScdTableSpec
 
   # ---------------------------------------------------------------------------
-  # Iceberg/Athena tables pending T2.26 disposition
+  # Iceberg/Athena table pending its own T2.26 disposition (execution_plans migrated at c9;
+  # ops_session_log is the sole remaining Iceberg/Athena ops table, gated on CD.40/T3.20)
   # ---------------------------------------------------------------------------
   ops_session_log:
     substrate: Iceberg/Athena
@@ -67,20 +84,7 @@ tables:
     write_mode: scd2
     field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_session_log
     migration_ref: tier_item T2.26
-    disposition: T2.26 -- may retire per T-1.9; DuckLake migration or retirement TBD
-
-  ops_execution_plans:
-    substrate: Iceberg/Athena
-    status: dormant
-    reason: executor paused (CD.17); not provisioned in the personal account
-    write_boundary: OpsWriter -> S3 staging -> Iceberg via awswrangler
-    read_boundary: DuckDBIcebergReader / Athena fallback
-    merge_key: rec_id
-    grain: one row per rec_id
-    write_mode: scd2
-    field_semantics: config/lambda/ducklake/field_semantics.yaml#ops_tables.ops_execution_plans
-    migration_ref: tier_item T2.26
-    disposition: T2.26 -- DuckLake migration pending executor resume
+    disposition: T2.26 -- may retire per T-1.9; DuckLake migration or retirement gated on CD.40/T3.20
 
   # ---------------------------------------------------------------------------
   # Telemetry tables -- canonical 4-table trace/observation model (Decision 95);

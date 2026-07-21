@@ -45,7 +45,6 @@ from scripts.llm.utils import (  # noqa: F401  (re-exported for backward compat;
     LLMResponseError,
     build_context_path,
 )
-from scripts.ops_writer import OpsWriter
 
 logger = logging.getLogger(__name__)
 
@@ -184,14 +183,19 @@ class ExecutionPlan:
 
 
 def save_plan(plan: ExecutionPlan) -> None:
-    """Append plan to JSONL log."""
+    """Append plan to JSONL log and write it through to ops_execution_plans (Decision 84 I-4).
+
+    The portal write is fail-loud (no offline outbox): a write that cannot complete raises.
+    """
     with open(PLANS_JSONL, "a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(plan.to_dict()) + "\n")
     logger.info("Saved plan: %s revision %d (%s)", plan.rec_id, plan.revision, plan.status)
-    try:
-        OpsWriter().write("ops_execution_plans", plan.to_dict())
-    except Exception:  # noqa: BLE001
-        logger.warning("OpsWriter write-through failed for %s", plan.rec_id, exc_info=True)
+
+    from scripts.ops_portal.execution_plans import (
+        save_execution_plan,  # noqa: PLC0415  (Decision 80: executor may not import ops_portal at module scope)
+    )
+
+    save_execution_plan(plan.to_dict())
 
 
 def get_latest_plan(rec_id: str) -> Optional[ExecutionPlan]:

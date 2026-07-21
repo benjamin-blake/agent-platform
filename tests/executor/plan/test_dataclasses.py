@@ -88,11 +88,11 @@ class TestSavePlanAndGetLatestPlan:
         plan = self._make_plan()
         with (
             patch.object(plan_mod, "PLANS_JSONL", plans_jsonl),
-            patch.object(plan_mod, "OpsWriter") as mock_ops,
+            patch("scripts.ops_portal.execution_plans.save_execution_plan") as mock_save,
         ):
             save_plan(plan)
             result = get_latest_plan("rec-001")
-        mock_ops.return_value.write.assert_called_once_with("ops_execution_plans", plan.to_dict())
+        mock_save.assert_called_once_with(plan.to_dict())
         assert result is not None
         assert result.rec_id == "rec-001"
         assert result.status == "approved"
@@ -104,7 +104,7 @@ class TestSavePlanAndGetLatestPlan:
         plan_low = self._make_plan(revision=2)
         with (
             patch.object(plan_mod, "PLANS_JSONL", plans_jsonl),
-            patch.object(plan_mod, "OpsWriter"),
+            patch("scripts.ops_portal.execution_plans.save_execution_plan"),
         ):
             save_plan(plan1)
             save_plan(plan_low)
@@ -124,7 +124,7 @@ class TestSavePlanAndGetLatestPlan:
         plan = self._make_plan("rec-001")
         with (
             patch.object(plan_mod, "PLANS_JSONL", plans_jsonl),
-            patch.object(plan_mod, "OpsWriter"),
+            patch("scripts.ops_portal.execution_plans.save_execution_plan"),
         ):
             save_plan(plan)
             result = get_latest_plan("rec-999")

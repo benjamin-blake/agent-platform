@@ -37,7 +37,6 @@ def validate_warehouse_write_sources(failed: list[str]) -> None:
         scripts_dir / "sync" / "ops.py",
         scripts_dir / "ops_writer.py",
         scripts_dir / "s3_log_store.py",
-        scripts_dir / "executor" / "plan.py",
         _self_path,  # this module's own docstring demonstrates the write call and matches the rule
     }
 

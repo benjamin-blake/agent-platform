@@ -20,7 +20,7 @@ from tests.fixtures.ops_writer_helpers import make_writer as _make_writer
 class TestOpsWriterCompact:
     """Tests for OpsWriter.compact()."""
 
-    def _make_mock_client_with_staging(self, entries: list[dict], table: str = "ops_execution_plans") -> MagicMock:
+    def _make_mock_client_with_staging(self, entries: list[dict], table: str = "ops_priority_queue") -> MagicMock:
         """Build a mock boto3 client that returns *entries* as staging files."""
         mock_client = MagicMock()
 
@@ -57,13 +57,13 @@ class TestOpsWriterCompact:
             patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr") as mock_wr,
         ):
-            count = writer.compact("ops_execution_plans", "2026-04-20")
+            count = writer.compact("ops_priority_queue", "2026-04-20")
 
         assert count == 1
         mock_wr.athena.to_iceberg.assert_called_once()
         call_kwargs = mock_wr.athena.to_iceberg.call_args[1]
         assert call_kwargs["database"] == "agent_platform"
-        assert call_kwargs["table"] == "ops_execution_plans"
+        assert call_kwargs["table"] == "ops_priority_queue"
         assert call_kwargs["mode"] == "append"
         assert call_kwargs["workgroup"] == "agent-platform-production"
 
@@ -89,11 +89,11 @@ class TestOpsWriterCompact:
             patch.object(writer, "_get_boto3_session", return_value=MagicMock()),
             patch("scripts.ops_writer.wr"),
         ):
-            writer.compact("ops_execution_plans", "2026-04-20")
+            writer.compact("ops_priority_queue", "2026-04-20")
 
         mock_client.delete_object.assert_called_once_with(
             Bucket="my-bucket",
-            Key="staging/ops_execution_plans/dt=2026-04-20/batch-abc.jsonl",
+            Key="staging/ops_priority_queue/dt=2026-04-20/batch-abc.jsonl",
         )
 
     def test_compact_returns_zero_when_awswrangler_unavailable(self):
@@ -183,7 +183,7 @@ class TestOpsWriterCompact:
             patch.object(writer, "_is_test_env", return_value=False),
         ):
             with pytest.raises(RuntimeError, match="infrastructure failure"):
-                writer.compact("ops_execution_plans", "2026-04-20")
+                writer.compact("ops_priority_queue", "2026-04-20")
 
     def test_compact_drops_scd2_view_columns_before_iceberg(self):
         """compact() strips _rn and row_num from the DataFrame before calling to_iceberg."""
@@ -195,7 +195,7 @@ class TestOpsWriterCompact:
         mock_client = MagicMock()
         mock_s3_paginator = MagicMock()
         mock_s3_paginator.paginate.return_value = [
-            {"Contents": [{"Key": "staging/ops_execution_plans/dt=2026-04-20/batch-x.jsonl"}]}
+            {"Contents": [{"Key": "staging/ops_priority_queue/dt=2026-04-20/batch-x.jsonl"}]}
         ]
         mock_client.get_paginator.return_value = mock_s3_paginator
         mock_client.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=line_bytes))}
@@ -217,7 +217,7 @@ class TestOpsWriterCompact:
             patch("scripts.ops_writer.wr") as mock_wr,
         ):
             mock_wr.athena.to_iceberg.side_effect = _capture_df
-            writer.compact("ops_execution_plans", "2026-04-20")
+            writer.compact("ops_priority_queue", "2026-04-20")
 
         assert len(captured) == 1
         df = captured[0]
@@ -278,7 +278,6 @@ class TestOpsWriterCompactAllIncludesTelemetry:
         assert sorted(compact_calls) == sorted(TABLE_NAMES)
         assert len(TABLE_NAMES) == len(set(TABLE_NAMES))  # no duplicate table names
         required_tables = {
-            "ops_execution_plans",
             "ops_session_log",
             "ops_decisions",
             "ops_priority_queue",

@@ -222,9 +222,15 @@ class TestGenerateIntegration:
 
     def test_dormant_tables_present(self) -> None:
         doc = generate()
-        for tbl in ("ops_priority_queue", "ops_session_log", "ops_execution_plans"):
+        for tbl in ("ops_priority_queue", "ops_session_log"):
             assert tbl in doc["ops_tables"], f"{tbl} should be in ops_tables"
             assert doc["ops_tables"][tbl]["status"] == "dormant"
+
+    def test_execution_plans_live(self) -> None:
+        """ops_execution_plans migrated at T2.26 (c9): present, but no longer dormant."""
+        doc = generate()
+        assert "ops_execution_plans" in doc["ops_tables"], "ops_execution_plans should be in ops_tables"
+        assert doc["ops_tables"]["ops_execution_plans"]["status"] == "live"
 
     def test_smoke_section_present(self) -> None:
         doc = generate()

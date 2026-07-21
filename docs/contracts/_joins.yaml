@@ -74,6 +74,19 @@ joins:
       In-session structure: a node points to its enclosing node via parent_observation_id (NULL for a
       root observation). Self-join building the in-session half of the trace tree.
 
+  # --- planning_session_id: artifact -> producing-run linkage (OpenLineage Job/Run/Dataset) ---
+  planning_session_id_join_execution_plans_to_sessions:
+    key: session_id
+    from: ops_execution_plans.planning_session_id
+    to: telemetry_sessions.session_id
+    cardinality: many_to_one
+    description: >-
+      Correlates a plan revision (ops_execution_plans, T2.26) to the telemetry session that produced
+      it -- the artifact->producing-run linkage (OpenLineage Job/Run/Dataset pattern). Soft/unenforced:
+      planning_session_id is opaque-VARCHAR (UUID4 live format, ULID canonical target per Decision 97
+      cl.4; no translation table) and telemetry (T2.36) is not_started, so this join must tolerate
+      dangling references until the telemetry side lands.
+
   # --- registry_key: cross-system lineage (source-lineage.yaml) ---
   lineage_join_source_to_agent_type:
     key: registry_key

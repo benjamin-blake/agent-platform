@@ -28,11 +28,11 @@ _LOGS_DIR = _REPO_ROOT / "logs"
 # ---------------------------------------------------------------------------
 # OpsWriter write-through routing (Decision 50)
 # Best-effort: failures are logged and never propagate to callers.
-# ops_decisions write-through is the portal on the DuckLake boundary (Decision 84).
+# ops_decisions / ops_execution_plans write-through are the portal on the DuckLake boundary
+# (Decision 84; execution_plans migrated at T2.26 c9 via scripts/ops_portal/execution_plans.py).
 # ---------------------------------------------------------------------------
 
 _OPS_TABLE_ROUTING: dict[str, str] = {
-    ".execution-plans.jsonl": "ops_execution_plans",
     ".session-telemetry.jsonl": "ops_session_log",
 }
 _OPS_PRIORITY_QUEUE_KEY = "priority-queue/.priority-queue.jsonl"

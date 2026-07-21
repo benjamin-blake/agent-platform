@@ -100,12 +100,12 @@ class TestOpsWriterWrite:
             patch.object(writer, "_bucket", return_value="my-bucket"),
             patch.object(writer, "_is_test_env", return_value=False),
         ):
-            writer.write("ops_execution_plans", {"plan_id": "p-1"})
+            writer.write("ops_priority_queue", {"rec_id": "rec-1"})
 
         call_kwargs = writer._client.put_object.call_args[1]
         assert call_kwargs["Bucket"] == "my-bucket"
         key = call_kwargs["Key"]
-        assert key.startswith("staging/ops_execution_plans/dt=")
+        assert key.startswith("staging/ops_priority_queue/dt=")
         assert key.endswith(".jsonl")
         assert call_kwargs["ContentType"] == "application/x-ndjson"
 

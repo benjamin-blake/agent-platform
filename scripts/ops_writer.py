@@ -9,7 +9,7 @@ scripts/s3_log_store.py. Never raises exceptions to callers.
 
 See docs/contracts/ops_recommendations.yaml and docs/contracts/ops_decisions.yaml for
 the DuckLake-boundary Class A contracts. See docs/contracts/storage-substrate.yaml for
-the Iceberg-boundary tables (ops_session_log, ops_execution_plans) pending T2.26.
+the remaining Iceberg-boundary table (ops_session_log) pending its own T2.26 disposition.
 """
 
 from __future__ import annotations
@@ -74,9 +74,10 @@ except ImportError:  # pragma: no cover
 
 # Recognised table names (ops data store) -- see docs/contracts/storage-substrate.yaml
 # ops_recommendations is EXCLUDED: recs transit the DuckLake closed boundary (Decision 81 cl.7 /
-# T2.19 cutover). OpsWriter can no longer stage or compact recs to Iceberg.
+# T2.19 cutover). OpsWriter can no longer stage or compact recs to Iceberg. ops_execution_plans is
+# EXCLUDED as of T2.26 (c9): it also transits the DuckLake closed boundary now (scripts/ops_portal/
+# execution_plans.py -> write_ops); no Iceberg staging path survives for it.
 _OPS_TABLE_NAMES: list[str] = [
-    "ops_execution_plans",
     "ops_session_log",
     "ops_decisions",
     "ops_priority_queue",
@@ -96,7 +97,6 @@ _BUCKET_ENV_VAR = "S3_LOG_BUCKET"
 # object columns when the target type is an array<> variant -- these overrides
 # supply the schema explicitly so compaction succeeds even for all-null batches.
 _OPS_TABLE_DTYPES: dict[str, dict[str, str]] = {
-    "ops_execution_plans": {},
     "ops_session_log": {
         "recs_attempted": "array<string>",
         "recs_closed": "array<string>",
