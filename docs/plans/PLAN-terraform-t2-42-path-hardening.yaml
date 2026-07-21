@@ -1,0 +1,317 @@
+schema_version: 1
+slug: "terraform-t2-42-path-hardening"
+intent: >-
+  Close tier_item T2.42 criteria c1/c2/c3 (terraform-path hardening) so routine terraform/personal CD
+  stops emitting spurious aws_lambda_layer_version replace diffs (audit finding DEP-03) -- the top
+  generator of gated-apply routings -- pins provider versions to a reviewed lock, and content-addresses
+  uploaded Lambda zips; this de-noises the shared apply pipeline every other terraform/personal plan rides.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-t2-42-path-hardening.yaml
+phase: >-
+  Platform tier_item T2.42 (terraform-path hardening; Decision 126 pt5, audit DEP-03). Follow-on/execution
+  plan closing T2.42 c1 + c2 + c3. c4 (rec-2659 build-step bash dedup) is DEFERRED to the next
+  consolidation slice (coordinates with T2.46 per Decision 144 pt7); this plan does NOT touch c4.
+closes_criteria:
+  - "T2.42:c1"
+  - "T2.42:c2"
+  - "T2.42:c3"
+scope:
+  - file: terraform/personal/ducklake_lambdas.tf
+    action: Modify
+    purpose: >-
+      c1: add lifecycle { ignore_changes = [source_code_hash] } to the two aws_lambda_layer_version
+      resources (ducklake_deps L53, ducklake_extensions L62), mirroring the rec-2646/rec-2654 pattern
+      already on the 6 aws_lambda_function resources in these files. Stops the per-rebuild spurious
+      layer-replace (zero diffs, zero gated routings). s3_key stays the fixed literal (unchanged).
+  - file: terraform/personal/ducklake_catalog_dr.tf
+    action: Modify
+    purpose: >-
+      c1: add the same lifecycle { ignore_changes = [source_code_hash] } to the third layer resource
+      (ducklake_pgclient L180). s3_key unchanged.
+  - file: scripts/build_lambda_deploy.py
+    action: Modify
+    purpose: >-
+      c3: content-address the S3 upload key in upload_to_s3 (currently the fixed
+      "lambda-packages/{zip_path.name}") to a per-artifact-sha namespace
+      "lambda-packages/<sha>/{name}"; make update_lambda_functions + publish_canary_layers read the
+      same namespaced key. The namespace is resolved from an env var (LAMBDA_ARTIFACT_SHA, else
+      GITHUB_SHA, else a stable local fallback) -- callers pass the appropriate sha (below). Continue
+      writing the fixed-key object too (dual-write) so terraform's static s3_key initial-create /
+      genuine-layer-republish path stays valid.
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      c3: thread the resolved artifact-sha namespace to the upload_to_s3 call sites in
+      _run_ducklake_build (and _run_prod_build for parity); no behavioural change when the env is unset
+      (falls back to GITHUB_SHA / stable local value).
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      c3: at the three zip sites -- push-path byte-assert+upload (~L297-316), gated-apply
+      byte-assert+upload (~L1004-1017), and the speculative-plan build+upload (~L699-754) -- export
+      LAMBDA_ARTIFACT_SHA=<resolved PR-head-sha> (the same sha plan.bin is keyed by, tfplan/personal/
+      <pr-head-sha>.bin) and point the md5 compare + `aws s3 cp` at the per-sha key
+      s3://<bucket>/lambda-packages/<sha>/<name>, so a later PR's push cannot overwrite this PR's
+      reviewed artifacts (closes the stale-artifact-overwrite class).
+  - file: .github/workflows/reconcile.yml
+    action: Modify
+    purpose: >-
+      c3: same content-addressed byte-assert+upload change at reconcile.yml's two zip sites (~L282-312,
+      ~L605-626), keyed by the red commit's originating PR-head-sha (reconcile already checks out the
+      red commit; use its resolved head sha).
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      c2: re-ground section 6 ("Provider lock file consideration"), which still labels committing
+      terraform/personal/.terraform.lock.hcl a "RECOMMENDED (non-blocking, follow-on)" TODO. The lock
+      is already committed + un-ignored (landed incidentally in commit 0fec964 / PR #605) and CI
+      `terraform init` carries no -upgrade, so it is already load-bearing. Rewrite section 6 to record
+      the committed/pinned state and the no--upgrade init invariant; drop the stale "currently ignores"
+      / "RECOMMENDED follow-on" framing.
+  - file: tests/test_build_lambda_packaging.py
+    action: Modify
+    purpose: >-
+      c3: add a unit test for the content-addressed key derivation (given a namespace sha, upload_to_s3
+      targets lambda-packages/<sha>/<name>; empty/unset namespace falls back deterministically) so the
+      key scheme is regression-guarded without an S3 round-trip.
+bundled_recommendations:
+  - "rec-2755"
+infrastructure_dependencies:
+  - >-
+    APPLY MODEL (Decision 77/92): terraform/personal/*.tf edits (c1) are guard-classified and route to
+    the HUMAN-GATED path. The c1 lifecycle-only edit is state-management (no AWS resource mutation), so
+    the first plan after it should show no layer-replace on unchanged deps -- but the implementer APPLIES
+    NOTHING. The terraform/personal apply is DEFERRED to a human-directed session (batched with slice B's
+    deferred DEP-13). Workflow / script / doc edits (c2, c3) are effective on merge (no terraform apply).
+  - >-
+    Speculative-plan pipeline (Decision 92 Wave 2 / T2.21): the PR gets a speculative plan (guard-verdict
+    annotated) and at merge the SAME reviewed plan.bin is applied (no re-plan). The deterministic guard
+    (scripts/terraform_apply_guard.py) blocks any plan whose actions contain "delete" (L296) -- a layer
+    replace surfaces ["create","delete"], which is exactly what c1 removes. environment-taxonomy.md
+    Axis-A + Guard subsection is the sole SoT for classification; this plan names the checks, it does not
+    restate them.
+  - >-
+    CI-delegation (Decision 119/120): terraform/personal uses the third-party kislerdm/neon provider,
+    whose init github.com-egress-403s in a stock CC-web session. Local terraform VP steps are grep-only +
+    `terraform fmt -check` (only if terraform is present); `terraform validate`/`plan` are delegated to
+    the required terraform-validate CI job + the speculative-plan job (authoritative verifiers). No local
+    terraform init/validate/plan.
+  - >-
+    Governed deploy channel (deploy-ducklake-lambdas.yml, T2.38): consumes the content-addressed upload
+    path transparently via its own github.sha namespace (default env resolution); no edit and no smoke-gate
+    behaviour change required -- its post-deploy smoke gate is the deferred post-apply verifier for the
+    c3 deploy-path change. This plan changes NO DuckLake Lambda handler code, so Decision 79 per-Lambda
+    build/deploy/smoke steps are not triggered.
+acceptance_criteria:
+  - >-
+    c1: all three aws_lambda_layer_version resources (ducklake_deps, ducklake_extensions,
+    ducklake_pgclient) carry lifecycle { ignore_changes = [source_code_hash] }; a terraform plan on
+    unchanged layer deps produces ZERO aws_lambda_layer_version replace diffs and ZERO gated-apply
+    routings from this class (post-apply/rehearsal acceptance: ten consecutive CD runs / a rehearsal run
+    with plan inspection show no layer-replace -- DEFERRED to the human-gated apply session).
+  - >-
+    c2: docs/contracts/environment-taxonomy.md section 6 records terraform/personal/.terraform.lock.hcl
+    as committed + un-ignored (no longer a "RECOMMENDED follow-on" TODO); the committed lock is
+    load-bearing on the apply runner -- CI `terraform init` carries no -upgrade in all three terraform
+    workflows (terraform-apply-sandbox.yml, reconcile.yml, terraform-drift.yml), and the lock pins the
+    aws + null + kislerdm/neon providers.
+  - >-
+    c3: build_lambda uploads each ducklake zip to a per-artifact-sha key lambda-packages/<sha>/<name>;
+    the terraform-apply-sandbox.yml and reconcile.yml byte-assert + upload steps compare and write the
+    per-sha key (immutable per PR head sha, so a later PR cannot overwrite a reviewed artifact); the
+    content-addressing does NOT alter terraform's static s3_key values (so it introduces no new
+    terraform diff and does not reintroduce the c1 layer-replace churn).
+  - >-
+    rec-2755 (open, High -- "DuckLake shared layers lack rec-2646's ignore_changes decoupling") is
+    resolved by c1 and closed via the Resolves: trailer at squash-merge.
+  - >-
+    Local presubmit stays green: bin/venv-python -m scripts.validate --pre exits 0.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      c1 -- confirm each of the three aws_lambda_layer_version blocks carries
+      ignore_changes = [source_code_hash].
+    command: >-
+      bin/venv-python -c "import re,sys; t=open('terraform/personal/ducklake_lambdas.tf').read()+open('terraform/personal/ducklake_catalog_dr.tf').read(); blocks=re.findall(r'resource \"aws_lambda_layer_version\"[^{]*\{.*?\n\}', t, re.S); n=sum('ignore_changes' in b and 'source_code_hash' in b for b in blocks); print('layers_with_ignore=',len(blocks),n); sys.exit(0 if len(blocks)==3 and n==3 else 1)"
+    expected: "layers_with_ignore= 3 3 ; exit 0 (all three layer resources decoupled)."
+    fix_if: >-
+      Fewer than 3 matched, or n<3 -- a layer resource is missing the lifecycle block; add
+      lifecycle { ignore_changes = [source_code_hash] } to it.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "ducklake-layers-ignore-source-code-hash-eq-3"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      c1 -- terraform formatting (only if terraform is present; init/validate/plan are CI-delegated per
+      Decision 119). Never a local terraform init/validate/plan for this third-party-provider root.
+    command: >-
+      command -v terraform >/dev/null 2>&1 && terraform fmt -check -recursive terraform/personal || echo "terraform absent -- CI terraform-validate is the authoritative fmt/validate gate (Decision 119)"
+    expected: "fmt clean, or the CI-delegation notice printed; exit 0 either way."
+    fix_if: "fmt reports a diff -- run terraform fmt terraform/personal and recommit."
+    hermetic: false
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      c3 -- unit test the content-addressed upload key derivation (namespace sha -> per-sha key; unset
+      namespace -> deterministic fallback), no S3 round-trip.
+    command: "bin/venv-python -m pytest tests/test_build_lambda_packaging.py -k content_address -q"
+    expected: "The new content-address key-derivation test(s) pass."
+    fix_if: >-
+      Key derivation does not produce lambda-packages/<sha>/<name> for a set namespace, or the
+      fallback is non-deterministic -- fix upload_to_s3 key construction.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "build-lambda-content-addressed-key-test"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      c3 -- assert the content-addressed key function is importable and returns a per-sha key for a
+      sample sha (hermetic, in-process).
+    command: >-
+      bin/venv-python -c "import scripts.build_lambda_deploy as b; k=b._artifact_s3_key('ducklake-deps-layer.zip','abc123') if hasattr(b,'_artifact_s3_key') else None; print(k); assert k=='lambda-packages/abc123/ducklake-deps-layer.zip', k"
+    expected: "lambda-packages/abc123/ducklake-deps-layer.zip printed; exit 0."
+    fix_if: >-
+      Helper missing or wrong shape -- expose the key-derivation as a small pure helper (e.g.
+      _artifact_s3_key(name, sha)) used by upload_to_s3 / update_lambda_functions / publish_canary_layers.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "artifact-s3-key-content-addressed"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      c3 -- confirm the two terraform CD workflows' zip byte-assert/upload steps are content-addressed
+      (reference the per-sha key namespace, not a bare lambda-packages/<name>).
+    command: >-
+      bin/venv-python -c "import sys; a=open('.github/workflows/terraform-apply-sandbox.yml').read(); r=open('.github/workflows/reconcile.yml').read(); ok=('LAMBDA_ARTIFACT_SHA' in a) and ('lambda-packages/${' in a or 'lambda-packages/$' in a) and ('LAMBDA_ARTIFACT_SHA' in r); print('apply_ca=',('LAMBDA_ARTIFACT_SHA' in a),'reconcile_ca=',('LAMBDA_ARTIFACT_SHA' in r)); sys.exit(0 if ok else 1)"
+    expected: "apply_ca= True reconcile_ca= True ; exit 0."
+    fix_if: >-
+      A workflow still asserts/uploads at the fixed lambda-packages/<name> key -- update its
+      byte-assert md5 compare and `aws s3 cp` target to the per-sha key and export LAMBDA_ARTIFACT_SHA.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "cd-zip-key-content-addressed"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      c2 -- confirm section 6 of environment-taxonomy.md is re-grounded (no longer a "RECOMMENDED
+      (non-blocking, follow-on)" TODO; records the committed/pinned state).
+    command: >-
+      bin/venv-python -c "import re,sys; t=open('docs/contracts/environment-taxonomy.md').read(); sec=t.split('## 6.')[1].split('## 7.')[0]; stale='RECOMMENDED (non-blocking, follow-on): un-ignore and commit' in sec; committed=('committed' in sec.lower() and '.terraform.lock.hcl' in sec); print('stale_todo=',stale,'records_committed=',committed); sys.exit(0 if committed and not stale else 1)"
+    expected: "stale_todo= False records_committed= True ; exit 0."
+    fix_if: "Section 6 still carries the follow-on-TODO framing -- rewrite it to the committed/pinned state."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "env-taxonomy-section6-lockfile-committed"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      c2 -- confirm the personal lock is committed (git-tracked, not ignored) and pins the three
+      providers.
+    command: >-
+      git ls-files --error-unmatch terraform/personal/.terraform.lock.hcl >/dev/null 2>&1 && bin/venv-python -c "import sys; t=open('terraform/personal/.terraform.lock.hcl').read(); n=t.count('hashes = ['); prov=all(p in t for p in ['hashicorp/aws','hashicorp/null','kislerdm/neon']); print('provider_hash_blocks=',n,'all_providers=',prov); sys.exit(0 if n>=3 and prov else 1)"
+    expected: "provider_hash_blocks >= 3 and all three providers pinned; exit 0."
+    fix_if: >-
+      Lock not tracked or missing a provider hash block -- the lock must be committed and cover aws +
+      null + kislerdm/neon (regenerate with `terraform providers lock` including -platform=linux_amd64
+      if the linux runner hashes are absent).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "personal-lockfile-committed-three-providers"
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      c2 -- confirm CI terraform init honours the committed lock (no -upgrade) in all three terraform
+      workflows, so the pin is load-bearing rather than re-resolved on every run.
+    command: >-
+      bin/venv-python -c "import re,sys,glob; bad=[]; [bad.append(f) for f in ['.github/workflows/terraform-apply-sandbox.yml','.github/workflows/reconcile.yml','.github/workflows/terraform-drift.yml'] for m in re.findall(r'terraform init[^\n]*', open(f).read()) if '-upgrade' in m]; print('init_with_upgrade=',bad); sys.exit(0 if not bad else 1)"
+    expected: "init_with_upgrade= [] ; exit 0 (no workflow re-resolves providers)."
+    fix_if: "A workflow's terraform init carries -upgrade -- remove it so the committed lock pins versions."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "tf-init-honours-lock-no-upgrade"
+  - step: 9
+    phase: pre-deploy
+    action: "Local presubmit gate (advisory locally, authoritative in PR CI per Decision 73)."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0 (ruff/mypy/schema/sloc/graduation-completeness/vp-replay all green)."
+    fix_if: "Any --pre check fails -- fix and re-run; do not merge red."
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: post-deploy
+    action: >-
+      [DEFERRED-TO-CI] c1/c3 terraform authority: on the PR, the required terraform-validate check and
+      the speculative-plan job are green, and the speculative-plan PR comment shows NO
+      aws_lambda_layer_version replace on unchanged deps and NO gated routing from the layer class.
+    command: >-
+      echo "Verify via mcp github pull_request_read (get_status / get_check_runs): terraform-validate green; read the speculative-plan PR comment -- assert zero aws_lambda_layer_version create/delete (replace) entries and predicted verdict is not gated on the layer class."
+    expected: "terraform-validate green; speculative plan shows zero layer-replace; not routed to gated-apply by this class."
+    fix_if: >-
+      Speculative plan still shows a layer replace -- the ignore_changes block did not take; re-check the
+      lifecycle blocks. If routed to gated-apply for another reason, inspect the guard verdict comment.
+    graduation: not-applicable
+  - step: 11
+    phase: post-deploy
+    action: >-
+      [DEFERRED-TO-APPLY / REHEARSAL, human-gated session] c1 acceptance: across ten consecutive CD runs
+      (or a rehearsal run + plan inspection) with unchanged layer deps, zero aws_lambda_layer_version
+      replace diffs and zero gated-apply routings attributable to the layer class. Batched with slice B's
+      deferred DEP-13 apply.
+    command: >-
+      echo "Human-gated apply session: after the terraform/personal apply, run/inspect the sandbox CD (or terraform-apply-sandbox workflow_dispatch) N times on unchanged layer deps; confirm the convergence records show no layer replace and no gated routing from this class."
+    expected: "Ten clean runs (or a representative rehearsal) with zero layer-replace diffs / zero gated routings."
+    fix_if: "A layer still replaces -- diagnose whether s3_key or another non-ignored attribute is churning."
+    graduation: not-applicable
+  - step: 12
+    phase: post-deploy
+    action: "[POST-MERGE] Confirm rec-2755 is closed via the Resolves: trailer."
+    command: "bin/venv-python -m scripts.sync.ops pull && grep -o '\"id\": \"rec-2755\"[^}]*\"status\": \"[a-z]*\"' logs/.recommendations-log.jsonl"
+    expected: "rec-2755 status shows closed after the squash-merge (Resolves: rec-2755) + rec-autoclose."
+    fix_if: >-
+      Still open -- run bin/venv-python -m scripts.ops_data_portal --update-rec rec-2755 --status closed
+      --resolution 'c1 extended rec-2646/2654 ignore_changes to the 3 DuckLake layers (Decision 70/84 portal)'.
+    graduation: not-applicable
+constraints:
+  - "PUBLIC repo (Decision 101): the committed lock carries provider hashes only; content-addressed keys use a git sha -- no account IDs / ARNs / ExternalIds enter any committed file or PR."
+  - "Warehouse-SoT / Single-Portal (Decision 84): rec-2755 closes via the Resolves: trailer / ops portal; never edit logs/*.jsonl directly."
+  - "Apply model (Decision 77/92/126): the implementer APPLIES NOTHING for terraform/personal; agents never self-direct terraform apply. The apply is deferred to a human-directed session (batched with slice B's DEP-13)."
+  - "CI-delegation (Decision 119): no local terraform init/validate/plan for terraform/personal (kislerdm/neon egress-blocked); grep + fmt-check only, CI terraform-validate + speculative-plan are authoritative."
+  - "Branch protection (Decision 83): do not add or remove a required status check; edit only the existing byte-assert/upload steps in the CD workflows."
+  - "No rescue agents or workaround loops (Decision 55): on an unrecoverable V3/apply failure, stop and RCA -- do not hot-patch."
+  - "SLOC (Decision 128): edits are small; keep build_lambda.py / build_lambda_deploy.py under 500 -- no budget raise, no --update-sloc-budgets re-seed."
+  - "Only modify files listed in scope; out-of-scope issues become recommendations, not inline fixes."
+context:
+  - "Executes existing tier_item T2.42 (do NOT create a new tier_item); closes_criteria wires to T2.42 c1/c2/c3. c4 (rec-2659 build-step bash dedup) is DEFERRED to the next consolidation slice (D2), coordinating with T2.46 per Decision 144 pt7 -- explicitly OUT of scope here."
+  - "c1 design choice = ignore_changes-on-the-3-layer-versions (NOT create-before-destroy). Justification: the deterministic guard blocks any plan whose actions contain 'delete' (terraform_apply_guard.py L296-297; a layer replace surfaces ['create','delete']). ignore_changes removes the churn from terraform's view entirely -> ZERO diffs AND zero gated routings (both halves of the DEP-03 acceptance). create-before-destroy still surfaces a delete on every rebuild (source_code_hash keeps churning from non-reproducible zip bytes), so it (a) fails the 'zero diffs' half and (b) would require a guard allowlist carve-out that WEAKENS the delete rule. ignore_changes also reuses the exact rec-2646/rec-2654 pattern already proven on the 6 aws_lambda_function resources in these same files, and matches Decision 125/126's decoupling philosophy + the audit's own ideal_behavior ('ignore_changes extended to layers with content-addressed zips')."
+  - "How deploy-ducklake-lambdas.yml handles layers TODAY (examined per tasking): it deploys FUNCTION code only (update-function-code); its own comment (L50-51) states 'Layer version publishing stays with T2.42 -- no publish-version step is added here' and the ducklake-deploy OIDC role is UpdateFunctionCode-only. So layers are published by terraform apply today. ignore_changes keeps that clean boundary intact (no role widening). Genuine layer republishing still flows through terraform via the layer `description`, which interpolates local.ducklake_version (Decision 99 SSOT) for ducklake_deps/ducklake_extensions -> a duckdb version bump forces a new version + repoints functions with no code churn. RESIDUAL: ducklake_pgclient's description is static (not version-interpolated), so a genuine pg_dump bump would need an explicit description/marker bump OR the deploy-verb publish path. The FULL 'fold layer publishing into the T2.38 deploy verb so it needs no apply' option is a materially larger change (widens the UpdateFunctionCode-only OIDC role -> IAM, admin-gated per Decision 98; ignore_changes on function.layers) and is NOT needed to satisfy the acceptance criterion -- noted as an explicit follow-on, sequenced with the T2.38/T2.43 deploy-channel work, not this slice."
+  - "c2 reality: the un-ignore + commit half of c2 is ALREADY DONE -- terraform/personal/.terraform.lock.hcl is git-tracked, on disk, and .gitignore line '!terraform/personal/.terraform.lock.hcl' un-ignores it (landed incidentally in commit 0fec964 / PR #605, attributed to T2.16b/CD.34). This plan closes c2 by making the committed lock LOAD-BEARING (verified: CI terraform init carries no -upgrade, so the pin is honoured) and re-grounding the stale env-taxonomy.md section 6 (which still calls the un-ignore a follow-on TODO). No .gitignore edit is needed. Status is NOT flipped during planning (Status-Trusted-Never-Inferred); /implement flips T2.42:c2 on the VP pass."
+  - "c1<->c3 interaction (load-bearing): content-addressing (c3) is applied at the build/upload + byte-assert + deploy-consume boundary, NOT to terraform's static s3_key. Terraform's layer/function s3_key stays the fixed literal (bootstrap/initial-create + genuine-republish pointer). If the layer s3_key were made per-sha, every PR would churn it -> a layer replace -> defeating c1 (s3_key is NOT in ignore_changes). Keeping terraform's s3_key fixed while content-addressing only the deploy/review-integrity path is what makes c1 and c3 non-contradictory. build_lambda dual-writes (fixed key + per-sha key); the byte-assert compares the immutable per-sha object (overwrite-proof); the per-sha namespace = the PR-head-sha the terraform workflows already resolve for tfplan/personal/<pr-head-sha>.bin (no-TOCTOU alignment, Decision 92 Wave 2)."
+  - "The existing byte-assert (rec-2512) covers 7 of 8 artifacts (4 functions + 3 layers; maintenance-smoke.zip is omitted -- a pre-existing quirk, NOT fixed here). c3 changes only the KEY these are asserted/uploaded at; it does not alter the assert list."
+  - "Decision-scout verdict: NO_FLAGS. CITE list (verbatim decision ids): Decision 144, Decision 126, Decision 125, Decision 92, Decision 77, Decision 119, Decision 55, Decision 101, Decision 84, Decision 83. RELATED: Decision 129, Decision 98, Decision 99, Decision 79, Decision 48, Decision 128, Decision 100. No CONTRADICT (checked incl. Decision 100 managed-service-native: ignore_changes / content-addressed S3 keys / provider lock are native terraform+S3 features, no client-tooling substitution). Decisions triaged: 104 of 104."
+  - "gates: decision-scout=NO_FLAGS; plan-critique=deferred-to-overseer (overseer runs plan-critique as a separate lifted dispatch, per overseer subagent-dispatch mode)."
+  - "Branch created from origin/main (git fetch origin main; git checkout -b claude/terraform-t2-42-path-hardening origin/main). Overseer owns the merge; this session stops at PR-created."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/terraform-t2-42-path-hardening, from origin/main)"
+  - "docs/PROJECT_CONTEXT.md read (apply model, guard, deploy channels)"
+  - "DECISIONS.md read (144, 126, 125, 92, 77, 119, 55, 101, 84, 83 cited; 104/104 triaged by decision-scout)"
+  - "All files in scope located and readable (2 tf, 2 py, 2 workflow, 1 contract, 1 test)"
+  - "Acceptance criteria understood; c1 rehearsal + terraform apply are DEFERRED (human-gated)"
+  - "rec-2755 relevance re-checked (open, High, 1:1 with c1) -> bundle + Resolves trailer"
+execution_steps:
+  - "c1: add lifecycle { ignore_changes = [source_code_hash] } to ducklake_deps + ducklake_extensions (terraform/personal/ducklake_lambdas.tf) and ducklake_pgclient (terraform/personal/ducklake_catalog_dr.tf); keep each layer's s3_key literal unchanged. Carry a short comment citing rec-2646/2654 + Decision 126 pt3 (functions) extended to layers."
+  - "c3: in scripts/build_lambda_deploy.py add a pure helper _artifact_s3_key(name, sha) -> 'lambda-packages/<sha>/<name>' (sha resolved from LAMBDA_ARTIFACT_SHA, else GITHUB_SHA, else a stable local fallback); use it in upload_to_s3 (dual-write: fixed key + per-sha key), update_lambda_functions, and publish_canary_layers. Thread the resolved namespace from scripts/build_lambda.py call sites. Keep terraform's static s3_key values untouched."
+  - "c3: edit .github/workflows/terraform-apply-sandbox.yml (push byte-assert+upload ~L297-316, gated byte-assert+upload ~L1004-1017, speculative build+upload ~L699-754) and .github/workflows/reconcile.yml (~L282-312, ~L605-626) to export LAMBDA_ARTIFACT_SHA=<resolved PR-head-sha> and target the per-sha key in the md5 compare + `aws s3 cp`. Do not add/remove any required status check."
+  - "c2: rewrite docs/contracts/environment-taxonomy.md section 6 to record the committed + un-ignored + no--upgrade-init (load-bearing) state; drop the 'RECOMMENDED follow-on' TODO framing."
+  - "c3: add the content-address key-derivation unit test to tests/test_build_lambda_packaging.py."
+  - "Execute the Verification Plan: run each pre-deploy step; loop until green; run `bin/venv-python -m scripts.validate --pre` (exit 0). Mark the post-deploy terraform/apply/rehearsal steps DEFERRED (CI + human-gated apply session). On an unrecoverable failure, stop and RCA (Decision 55) -- no workaround loop."
+  - "Commit feat(terraform-t2-42-path-hardening): ...; open the PR; include the Resolves: rec-2755 trailer in the squash-merge commit body. APPLY NOTHING for terraform/personal."
+  - "Report: what was implemented, VP results, and the deferred (apply/rehearsal) items."
+rollback: >-
+  All edits are revertable by git revert with zero infra effect (no terraform apply is performed in this
+  plan). c1 lifecycle blocks are state-management only; c3 is additive key-namespacing with a fixed-key
+  dual-write fallback; c2 is doc-only. If the deferred terraform/personal apply later shows an unexpected
+  layer diff, revert the lifecycle blocks and re-open via a fresh PR (never a silent re-plan-and-apply).
