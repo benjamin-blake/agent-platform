@@ -61,7 +61,7 @@ class TestDecisionsSizeIssuesCombined:
     """_decisions_size_issues() combined live+archive-byte-ceiling boundary cases
     (_DECISIONS_COMBINED_MAX_BYTES), with neither the live-byte nor live-H2 ceiling breached."""
 
-    _LIVE_SIZE = 350_000  # comfortably under _DECISIONS_LIVE_MAX_BYTES (400_000)
+    _LIVE_SIZE = 350_000  # comfortably under _DECISIONS_LIVE_MAX_BYTES (500_000, Decision 145)
 
     def test_below_ceiling_returns_empty(self) -> None:
         live = "x" * self._LIVE_SIZE

@@ -7206,6 +7206,7 @@ tier_items:
     effort: M
     strategic: false
     status: not_started
+    progress_note: "2026-07-21: carries audit finding DEP-03 (spurious layer-replace diffs route to gated-apply on every rebuild recurrence -- destroy classification on non-content-addressed zips); c1 (layer replace policy / fold into the T2.38 deploy verb) and c3 (content-addressed zips) are DEP-03's remedy. Cross-ref Decision 144 and audits/terraform-deploy-redesign-b67955b.yaml. No new tier_item is needed for DEP-03."
 
   - id: T2.43
     tier: T2
@@ -7277,6 +7278,290 @@ tier_items:
     effort: L
     strategic: false
     status: complete
+
+  - id: T2.44
+    tier: T2
+    name: "Audit Phase-0 hardening: gated-reviewer validation, delete stale deploy.yml, fence PlatformDev off the anti-masking anchor (DEP-04/09/13)"
+    intent: |
+      Close the three Phase-0 findings from audits/terraform-deploy-redesign-b67955b.yaml that need
+      no architectural change, only hardening: an unvalidated (silently-no-op-able)
+      gated_apply_reviewer_user_ids variable (DEP-04, rec-2307), a stale duplicate deploy.yml
+      workflow left over from a prior deploy-model generation (DEP-09), and PlatformDev's implicit
+      reach into the convergence-record/tfplan/tfstate anti-masking anchor that a compromised or
+      injected CI context could otherwise abuse (DEP-13). Sequenced first as prerequisite hygiene
+      the later phases build on, not because it depends on them.
+    depends_on: []
+    files_in_scope:
+      - terraform/github/environments.tf
+      - terraform/github/variables.tf
+      - .github/workflows/deploy.yml  # delete (DEP-09)
+      - terraform/personal/platform_roles.tf
+      - terraform/CLAUDE.md
+      - tests/test_check_workflow_agent_safety.py  # workflow-fleet test; update after deploy.yml deletion
+    exit_criteria:
+      - id: c1
+        text: >-
+          terraform/github/environments.tf's gated_apply_reviewer_user_ids variable fails terraform
+          validation when left empty, so the tf-gated-apply Environment cannot silently no-op its
+          required-reviewer gate (DEP-04/rec-2307)
+        status: open
+      - id: c2
+        text: >-
+          .github/workflows/deploy.yml is deleted, the workflow-count/fleet test is updated to the
+          new workflow count, and the workflow-fleet test suite is green (DEP-09)
+        status: open
+      - id: c3
+        text: >-
+          PlatformDev's DailyOps policy carries an explicit Deny on convergence/personal/*,
+          tfplan/personal/* (write), and tfstate/personal/* (read+write); simulate-principal-policy
+          shows explicitDeny for each, and portal + runtime smoke are unaffected (DEP-13)
+        status: open
+      - id: c4
+        text: terraform/CLAUDE.md documents that ExternalId-based state recovery is admin-tier-only
+        status: open
+    related_decisions: [144, 113, 112, 83]
+    effort: S
+    strategic: false
+    status: not_started
+
+  - id: T2.45
+    tier: T2
+    name: "Guard resource-based-policy classification: route wildcard/external-principal grants to gated-apply (DEP-06)"
+    intent: |
+      scripts/terraform_apply_guard.py classifies IAM identity-policy diffs but does not yet
+      classify resource-based policies (Lambda permissions, S3/SNS/Secrets-Manager/Glue resource
+      policies) -- a wildcard or external-principal grant on one of these can currently guard-PASS
+      and auto-apply unreviewed (DEP-06). MUST land no later than T2.48's write-axis broadening,
+      which removes the accidental protection some of these types get today from sitting outside
+      the enumerated identity-policy allow-list -- widening the write surface without this guard
+      classification first would open the gap DEP-06 already names. T2.48 depends_on this item.
+    depends_on: []
+    files_in_scope:
+      - scripts/terraform_apply_guard.py
+      - tests/test_terraform_apply_guard.py
+    exit_criteria:
+      - id: c1
+        text: >-
+          A test plan adding an aws_lambda_permission resource with Principal "*" exits the guard
+          with code 2 (routes to gated-apply)
+        status: open
+      - id: c2
+        text: >-
+          The known-safe EventBridge AddPermission shape can still be classified in-budget
+          explicitly (no false-positive regression on the existing safe pattern)
+        status: open
+      - id: c3
+        text: >-
+          aws_lambda_permission, aws_s3_bucket_policy, aws_sns_topic_policy,
+          aws_secretsmanager_secret_policy, aws_lambda_function_url, and aws_glue_resource_policy
+          are each classified sensitive by the guard, or covered by a principal-wildcard rule
+        status: open
+    related_decisions: [144, 92, 77]
+    effort: S
+    strategic: false
+    status: not_started
+
+  - id: T2.46
+    tier: T2
+    name: "Apply-chain consolidation + saved-plan digest integrity (DEP-07/08)"
+    intent: |
+      terraform-apply-sandbox.yml and reconcile.yml duplicate the record-write / zip-assert /
+      init-retry / guard+review+apply sequence across two entry workflows with no shared
+      behavioral-contract test, so the two paths can drift (DEP-08, rec-2663). Separately, a saved
+      plan.bin object can be overwritten between PR review and merge-time apply with no integrity
+      check catching the substitution (DEP-07). Coordinates with T2.42 c4 (rec-2659, build-step
+      bash dedup only) rather than duplicating it -- the new reusable workflow this item adds
+      should subsume T2.42 c4's scope, not compete with it.
+    depends_on: []
+    files_in_scope:
+      - .github/workflows/terraform-apply-sandbox.yml
+      - .github/workflows/reconcile.yml
+      - .github/workflows/_terraform-apply-reusable.yml  # new reusable workflow; exact name TBD at implementation
+      - terraform/personal/oidc.tf
+    exit_criteria:
+      - id: c1
+        text: >-
+          record-write, zip-assert, init-retry, and guard+review+apply each exist exactly once (in
+          the new reusable workflow) and both entry workflows pass their behavioral contracts in a
+          forced-red rehearsal (DEP-08/rec-2663)
+        status: open
+      - id: c2
+        text: >-
+          Overwriting a saved plan object after PR review fails the merge-time fetch closed with a
+          digest mismatch -- sha256(plan.bin) is emitted in the PR comment and commit status and
+          verified at all three fetch sites (DEP-07)
+        status: open
+      - id: c3
+        text: The tfplan/personal S3 key is content-addressed by (pr, sha)
+        status: open
+    related_decisions: [144, 126, 77]
+    effort: M
+    strategic: false
+    status: not_started
+
+  - id: T2.47
+    tier: T2
+    name: "Recovery-path unification + routed-pending observability (DEP-10/11)"
+    intent: |
+      An admin-resolved recovery episode today requires more than the single input-free Reconcile
+      dispatch the heal button (T2.37) was designed to be the one answer for (DEP-10), and a
+      routed-pending episode (a change sitting in tf-gated-apply awaiting human review) is not
+      distinguished from genuine out-of-band drift in the health verdict or the drift rec (DEP-11).
+      Sequenced after T2.46 because DEP-10's unification is cheapest once the apply-chain
+      consolidation lands (shared recovery surface).
+    depends_on: [T2.46]
+    files_in_scope:
+      - .github/workflows/reconcile.yml
+      - .github/workflows/terraform-apply-sandbox.yml
+      - .github/workflows/terraform-drift.yml
+      - scripts/convergence_health.py
+    exit_criteria:
+      - id: c1
+        text: >-
+          A forced admin-resolved recovery episode clears via a single Reconcile dispatch, and
+          rec-2523/rec-2461/rec-2647 are updated or closed to the residual (DEP-10)
+        status: open
+      - id: c2
+        text: >-
+          A routed-pending episode shows pending-gated in the health verdict, and the drift rec
+          names the pending PR rather than describing an out-of-band-drift narrative (DEP-11)
+        status: open
+    related_decisions: [144, 126]
+    effort: M
+    strategic: false
+    status: not_started
+
+  - id: T2.48
+    tier: T2
+    name: "Phase-2 allow-list inversion: mandatory boundary on all agent-platform-* roles + per-service WRITE prefixes + authority-budget v2 (DEP-01/02, realizes Decision 144)"
+    intent: |
+      Realizes Decision 144's target model: invert github_ci_apply's authority from an enumerated
+      per-resource write allow-list to a broad-but-bounded deployer under the mandatory
+      agent-platform-github-ci-apply-boundary permissions boundary, extend Decision 129's
+      per-service agent-platform-* prefix from reads to writes, and widen the authority budget
+      (Decision 92 point 5) so create+update of inline policies/attachments on any
+      boundary-carrying agent-platform-* role is in-budget while role CREATE stays gated-but-
+      executable via tf-gated-apply. depends_on T2.45 so the guard classifies resource-based
+      policies before this write-surface broadening removes their accidental protection. c6 is the
+      home the plan-critique gate assigned the recurring Decision-92 ratchet-review (Finding 2) --
+      a scheduled measured act, not a Decision-body clause (Decision 86).
+    depends_on: [T2.45]
+    files_in_scope:
+      - terraform/bootstrap/github_ci_apply.tf
+      - terraform/bootstrap/authority_budget.json
+      - terraform/personal/oidc.tf
+      - terraform/personal/platform_roles.tf
+      - scripts/checks/iam_tf.py
+      - docs/contracts/environment-taxonomy.md
+      - docs/DECISIONS.md  # re-ground Decision 143's exec-role-CREATE mechanism text; record the 98/92 amendments as realized
+    exit_criteria:
+      - id: c1
+        text: >-
+          A PR adding a new agent-platform-* Lambda + log group + alarm auto-applies end-to-end
+          with zero AccessDenied and zero bootstrap edit (DEP-01)
+        status: open
+      - id: c2
+        text: >-
+          A PR creating a boundary-carrying agent-platform-* role routes to gated-apply and, on
+          approval, applies with zero AccessDenied without invoking the admin tier (DEP-02)
+        status: open
+      - id: c3
+        text: >-
+          The boundary is attached to all in-scope agent-platform-* CI + execution roles and to
+          PlatformDev (PlatformAdmin excluded), with the three self-protection denies carried
+          (verified via simulate-principal-policy)
+        status: open
+      - id: c4
+        text: >-
+          authority_budget.json is v2 and validate_authority_budget stays green with the
+          boundary-propagation condition, the self-ARN exclusion, and the self-protection denies
+          retained
+        status: open
+      - id: c5
+        text: validate_ci_refresh_read_coverage asserts WRITE coverage per managed resource type
+        status: open
+      - id: c6
+        text: >-
+          [recurring, measured] A periodic review of the per-change-class incident-free auto-apply
+          track record is scheduled as a standing measured act (e.g. surfaced each /orient or
+          preflight from the auto-apply telemetry), re-evaluating whether each widened
+          change-class should widen further or re-narrow -- so the Decision 92
+          widen-on-track-record ratchet does not stall at v2. This criterion is the schedule +
+          measurement source, kept out of the Decision 144/92 body per Decision 86 (plan-critique
+          Finding 2)
+        status: open
+    related_decisions: [144, 98, 92, 129, 94, 77]
+    effort: L
+    strategic: false
+    status: not_started
+
+  - id: T2.49
+    tier: T2
+    name: "CI/deploy role consolidation: one planner role + one code-deploy role (DEP-12)"
+    intent: |
+      Once T2.48's inversion lands, several of the 17 CI/deploy roles are redundant splits that
+      existed only to route around the old enumerated allow-list's blast radius. Consolidate the
+      plan and drift roles into one planner role and the two UpdateFunctionCode-only deploy roles
+      into one, preserving every existing capability split (pr-no-tfstate, apply-only-writer) as a
+      test invariant rather than a role-count accident.
+    depends_on: [T2.48]
+    files_in_scope:
+      - terraform/personal/oidc.tf
+      - terraform/bootstrap/github_ci_apply.tf
+    exit_criteria:
+      - id: c1
+        text: >-
+          Role census goes from 17 to 15 with all capability-split tests green (pr-no-tfstate,
+          apply-only-writer preserved)
+        status: open
+      - id: c2
+        text: >-
+          Plan and drift roles are merged into one planner role trusting both subs, with
+          convergence-write kept condition-scoped
+        status: open
+      - id: c3
+        text: >-
+          The two UpdateFunctionCode-only deploy roles are merged into one role scoped to
+          function:agent-platform-*
+        status: open
+    related_decisions: [144, 98, 125]
+    effort: S
+    strategic: false
+    status: not_started
+
+  - id: T2.50
+    tier: T2
+    name: "Protected amendment channel over the repo-side gate surface (DEP-05)"
+    intent: |
+      The repo-side gate files themselves (workflows, the guard script, the bootstrap/github
+      terraform roots) have no protected-path review requirement distinct from a routine PR, so an
+      agent (or a compromised/injected context) could in principle amend the gate that is supposed
+      to constrain it. Sequenced last (Phase 3): lands after T2.48 reshapes the gate-file
+      topology, so the protected-path list is defined against the post-inversion file set, not the
+      pre-inversion one.
+    depends_on: [T2.48]
+    files_in_scope:
+      - terraform/github/repo.tf
+      - .github/CODEOWNERS  # new, if used
+      - terraform/github/environments.tf
+      - terraform/github/variables.tf
+    exit_criteria:
+      - id: c1
+        text: >-
+          A probe PR touching a protected-path file (.github/workflows/terraform-*.yml,
+          reconcile.yml, scripts/terraform_apply_guard.py, terraform/bootstrap/**,
+          terraform/github/**) cannot merge without the human-review requirement, while routine
+          PRs are unaffected
+        status: open
+      - id: c2
+        text: >-
+          The existing admin-bypass actor is retained (non-wedging per Decision 83; no required
+          signatures or strict checks that wedge routine autonomy)
+        status: open
+    related_decisions: [144, 83, 92]
+    effort: S
+    strategic: false
+    status: not_started
 
   # ----- T3: Trust loop closure -----
   - id: T3.1

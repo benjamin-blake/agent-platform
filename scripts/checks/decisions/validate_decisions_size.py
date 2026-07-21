@@ -1,4 +1,5 @@
-"""DECISIONS.md / DECISIONS_ARCHIVE.md size governance (Decision 134; Decision-114 parity).
+"""DECISIONS.md / DECISIONS_ARCHIVE.md size governance (Decision 134; Decision-114 parity;
+live-byte ceiling raised 400_000 -> 500_000 by Decision 145, an arbitrary temporary stopgap).
 
 Ratifies a conscious ceiling + deterministic guard for the decision log, mirroring
 scripts/checks/roadmap/validate_platform_roadmap.py's _roadmap_size_issues() precedent
@@ -14,7 +15,9 @@ import re
 
 from scripts.checks import _common, registry
 
-_DECISIONS_LIVE_MAX_BYTES = 400_000
+# 500_000: arbitrary stopgap raise per Decision 145 (was 400_000); structural fix owned by
+# audits/decision-consolidation-growth-f79d6b5.yaml DCG-01/02/05
+_DECISIONS_LIVE_MAX_BYTES = 500_000
 _DECISIONS_LIVE_MAX_H2 = 120
 _DECISIONS_COMBINED_MAX_BYTES = 700_000
 
@@ -45,7 +48,8 @@ def _decisions_size_issues(
     if live_bytes > live_max_bytes:
         issues.append(
             f"  FAIL: docs/DECISIONS.md is {live_bytes} bytes, exceeding the {live_max_bytes}-byte "
-            f"live ceiling (Decision 134) -- relief valves: {_RELIEF_VALVES}"
+            f"live ceiling (Decision 134, raised 400_000->500_000 by the Decision 145 stopgap) -- "
+            f"relief valves: {_RELIEF_VALVES}"
         )
     if live_h2_count > live_max_h2:
         issues.append(
@@ -63,7 +67,8 @@ def _decisions_size_issues(
 
 @registry.register("validate_decisions_size", owner="platform")
 def validate_decisions_size(failed: list[str]) -> None:
-    """Enforce the Decision 134 size ceiling on docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md.
+    """Enforce the Decision 134 size ceiling (live-byte value amended by the Decision 145 stopgap
+    raise, 400_000 -> 500_000) on docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md.
 
     Cheap stat + header count -- registered in BOTH the --pre and full validate tiers. Guards
     the decision-scout subagent's mandatory whole-live-file read every /plan: live bytes, live
