@@ -1,0 +1,260 @@
+schema_version: 1
+slug: required-context-disposition
+intent: >-
+  Remove the contract-vs-reality contradiction in the agent instruction system (audit ACG-02)
+  by RETIRING the latent required-context frontmatter primitive, so the skills that steer every
+  planning/implementation session declare context truthfully and the skill-isolation harness has
+  one explicit context-injection path (--context) -- keeping the self-improving agent loop's
+  instruction surfaces trustworthy and low-drift.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-required-context-disposition.yaml
+phase: >-
+  Agent-context-governance audit (audits/agent-context-governance-cdfda88.yaml), finding ACG-02,
+  RETIRE disposition (the audit's recommended default). Instruction-architecture + .claude
+  interactive-layer hygiene (Decisions 76, 86). Audit-driven ad_hoc; no tier_item
+  (roadmap_crossref: novel). Soft-warn exception category: ad_hoc_rec.
+scope:
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Remove the required-context frontmatter key and its list items
+      (logs/.preflight-report.json, docs/PROJECT_CONTEXT.md); leave name/description/model and
+      the --- fences intact.
+  - file: .claude/skills/code-review/SKILL.md
+    action: Modify
+    purpose: Remove the required-context key and its items (docs/PROJECT_CONTEXT.md, docs/DECISIONS.md).
+  - file: .claude/skills/orient/SKILL.md
+    action: Modify
+    purpose: Remove the required-context key and its items (logs/.preflight-report.json, docs/ROADMAP-PLATFORM.yaml).
+  - file: .claude/skills/decision-scout/SKILL.md
+    action: Modify
+    purpose: Remove the required-context key and its item (docs/DECISIONS.md).
+  - file: .claude/skills/overseer/SKILL.md
+    action: Modify
+    purpose: >-
+      Remove the required-context key and its items (logs/.preflight-report.json,
+      docs/PROJECT_CONTEXT.md, AGENTS.md); leave model: opus[1m] intact.
+  - file: .claude/skills/audit-prompt/SKILL.md
+    action: Modify
+    purpose: Remove the required-context key and its item (docs/PROJECT_CONTEXT.md).
+  - file: .claude/skills/plan-critique/SKILL.md
+    action: Modify
+    purpose: Remove the required-context key and its item (docs/PROJECT_CONTEXT.md).
+  - file: .claude/skills/executor-rca/SKILL.md
+    action: Modify
+    purpose: Remove the required-context key and its item (docs/PROJECT_CONTEXT.md).
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      (a) Remove the required-context frontmatter key and its items; (b) rewrite the Critique-Gate
+      (Step 9) dispatch bullet (~line 540) to name the context files explicitly, dropping the
+      "required-context files per its frontmatter" pointer.
+  - file: docs/contracts/instruction-architecture.yaml
+    action: Modify
+    purpose: >-
+      Rewrite the layer-4 `contains` (line 61) to describe the live explicit body-instructed
+      loading discipline instead of mandating required-context; replace the "Missing
+      required-context in SKILL.md" anti-pattern row (100-102) with a truthful whole-file-load
+      anti-pattern; bump contract_version 1 -> 2; preserve the Decision-127 "Human runbook /
+      operator-prose doc" row and every other row unchanged.
+  - file: .claude/commands/develop-executor.md
+    action: Modify
+    purpose: >-
+      Step 2: add --context docs/PROJECT_CONTEXT.md to the run_skill invocation and note the
+      explicit-injection path (required-context auto-loading retired); leave Step 3 (file the rec)
+      and Step 4 (stop cleanly / Decision 55) untouched.
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: >-
+      Step 9 (~line 97): reword the retired term "required-context files" to "context files" so the
+      term leaves the live Layer-3 command surface (completeness of the retire; folded in after
+      tree verification, beyond the audit's six named targets).
+  - file: scripts/agent_development/run_skill.py
+    action: Modify
+    purpose: >-
+      Remove parse_required_context; add a pure resolve_context_paths(explicit) helper; build the
+      injected context solely from the --context flag; update the --context help text to name it the
+      explicit context-injection path.
+  - file: tests/test_run_skill.py
+    action: Create
+    purpose: >-
+      V2 unit test exercising resolve_context_paths (empty, order-preserving dedupe, single path)
+      plus a regression guard asserting parse_required_context is absent from the module.
+bundled_recommendations:
+  - rec-568
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "grep -rn 'required-context' .claude/skills/ returns zero matches (key removed from all 9 SKILL.md; no residual body reference in planning/SKILL.md)."
+  - "grep -rn 'required-context' .claude/ scripts/ docs/contracts/instruction-architecture.yaml returns zero matches (retired primitive unreachable across live interactive, code, and contract surfaces; historical mentions under docs/plans, audits, docs/audit-prompts, and docs/ROADMAP-PLATFORM.yaml are out of scope and untouched)."
+  - "docs/contracts/instruction-architecture.yaml: layer-4 `contains` no longer says 'must declare required-context frontmatter'; no anti-pattern row named 'Missing required-context in SKILL.md' remains; the Decision-127 'Human runbook / operator-prose doc' row is unchanged; contract_version == 2."
+  - ".claude/skills/planning/SKILL.md Critique-Gate dispatch names docs/PROJECT_CONTEXT.md and the targeted roadmap/decision projections explicitly and contains no 'per its frontmatter' phrase."
+  - ".claude/commands/develop-executor.md Step 2 run_skill command includes --context docs/PROJECT_CONTEXT.md; the Decision-55 'Do not attempt to repair the failure' stop-cleanly line in Step 4 is unchanged."
+  - "scripts/agent_development/run_skill.py contains no parse_required_context symbol and no 'required-context' string; context injection derives solely from the --context flag via resolve_context_paths."
+  - "bin/venv-python -m pytest tests/test_run_skill.py passes."
+  - "bin/venv-python -m scripts.validate --pre exits 0 (validate_prompt_compliance, validate_instruction_architecture_layers, validate_plan_documents, validate_graduation_completeness all green)."
+  - "rec-568 is closed as superseded (via the Resolves: rec-568 squash-merge trailer / rec-autoclose, or the ops_data_portal --update-rec fallback), with a resolution noting its code-review-via-run_skill premise is obsolete."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "Confirm zero required-context declarations remain in the skills surface (audit ACG-02 acceptance)."
+    command: |-
+      if grep -rn "required-context" .claude/skills/; then echo "FAIL: residual required-context"; exit 1; else echo "PASS: zero required-context in .claude/skills/"; fi
+    expected: "Exits 0 and prints PASS: zero required-context in .claude/skills/ (no grep matches)."
+    fix_if: "Any SKILL.md still declares the key, or planning/SKILL.md still references it -- remove the frontmatter block / rewrite the body reference."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: skills-required-context-count-eq-0
+  - step: 2
+    phase: pre-deploy
+    action: "Surface-retiring stale-reference sweep: the retired primitive is unreachable across all live interactive, code, and contract surfaces (closure obligation for the required-context -> --context cutover)."
+    command: |-
+      if grep -rn "required-context" .claude/ scripts/ docs/contracts/instruction-architecture.yaml; then echo "FAIL: residual on a live surface"; exit 1; else echo "PASS: retired primitive unreachable"; fi
+    expected: "Exits 0 and prints PASS: retired primitive unreachable (no matches across .claude/, scripts/, and the contract file)."
+    fix_if: "A live command/skill/code/contract surface still names the key -- remove it. Historical mentions under docs/plans, audits, and docs/audit-prompts are out of scope and expected to remain."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Superset of the graduated skills-required-context-count-eq-0 guard extended to scripts/ and
+      the contract; graduating both would register two overlapping standing grep guards for one
+      invariant. This broad sweep is the one-time surface-retiring closure-obligation proof of the
+      required-context -> --context cutover, not a distinct standing regression.
+  - step: 3
+    phase: pre-deploy
+    action: "Confirm the contract was rewritten truthfully: mandate gone, missing-required-context anti-pattern gone, Decision-127 human-runbook row preserved, contract_version bumped."
+    command: |-
+      f=docs/contracts/instruction-architecture.yaml
+      grep -q "must declare required-context" "$f" && { echo "FAIL: mandate remains"; exit 1; }
+      grep -q "Missing required-context in SKILL.md" "$f" && { echo "FAIL: anti-pattern remains"; exit 1; }
+      grep -q "Human runbook / operator-prose doc" "$f" || { echo "FAIL: Decision-127 row lost"; exit 1; }
+      grep -q "contract_version: 2" "$f" || { echo "FAIL: contract_version not bumped"; exit 1; }
+      echo "PASS: contract truthfully rewritten, Decision-127 row intact, version bumped"
+    expected: "Prints PASS: contract truthfully rewritten, Decision-127 row intact, version bumped and exits 0."
+    fix_if: "The mandate or the missing-required-context anti-pattern survives; or the Decision-127 human-runbook row was disturbed; or contract_version was not bumped to 2."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Compound multi-grep assertion on this session's specific contract-prose rewrite (mandate
+      removed, one anti-pattern row replaced, sibling Decision-127 row preserved, version bumped);
+      graduating it would ossify exact wording and churn on any future legitimate contract edit.
+      The durable retire invariant is the required-context==0 grep guard graduated at step 1.
+  - step: 4
+    phase: pre-deploy
+    action: "Confirm the planning Critique-Gate dispatch names its context files explicitly and drops the retired frontmatter pointer."
+    command: |-
+      sec=$(sed -n '/^## Critique Gate/,/^## Report Critique Gate/p' .claude/skills/planning/SKILL.md)
+      echo "$sec" | grep -q "per its frontmatter" && { echo "FAIL: stale frontmatter pointer remains"; exit 1; }
+      echo "$sec" | grep -q "docs/PROJECT_CONTEXT.md" || { echo "FAIL: PROJECT_CONTEXT not named"; exit 1; }
+      echo "$sec" | grep -q "Phase 1" || { echo "FAIL: plan-critique Phase 1 pointer lost"; exit 1; }
+      echo "PASS: critique-gate names context files explicitly"
+    expected: "Prints PASS: critique-gate names context files explicitly and exits 0."
+    fix_if: "The dispatch bullet still says 'per its frontmatter', or no longer names docs/PROJECT_CONTEXT.md / the plan-critique Phase 1 projection -- rewrite the bullet to name the files explicitly."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Positive prose-content check on the specific rewritten dispatch sentence; brittle to graduate
+      and would churn on legitimate rewording. The no-required-context invariant for
+      planning/SKILL.md is already graduated via step 1's skills-scope grep guard.
+  - step: 5
+    phase: pre-deploy
+    action: "Confirm develop-executor Step 2 injects context via --context and the Decision-55 stop-cleanly invariant is intact."
+    command: |-
+      grep -q -- "--context docs/PROJECT_CONTEXT.md" .claude/commands/develop-executor.md || { echo "FAIL: --context not passed"; exit 1; }
+      grep -q "Do not attempt to repair the failure" .claude/commands/develop-executor.md || { echo "FAIL: Decision-55 stop-cleanly line disturbed"; exit 1; }
+      echo "PASS: explicit --context injection; Decision-55 invariant intact"
+    expected: "Prints PASS: explicit --context injection; Decision-55 invariant intact and exits 0."
+    fix_if: "Step 2 run_skill invocation omits --context docs/PROJECT_CONTEXT.md, or the Step 4 stop-cleanly (Decision 55) line was altered/removed."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Single-occurrence command-wording guard on a Layer-3 command plus a presence check for the
+      Decision-55 stop-cleanly line; the durable code-side invariant (run_skill no longer
+      auto-injects frontmatter context, so callers must pass --context) is graduated via steps 6 and
+      7. Graduating the exact command string would churn on legitimate rewording.
+  - step: 6
+    phase: pre-deploy
+    action: "Confirm the frontmatter parser is removed from the skill-isolation harness."
+    command: |-
+      if grep -n "parse_required_context" scripts/agent_development/run_skill.py; then echo "FAIL: parser still present"; exit 1; else echo "PASS: frontmatter parser removed"; fi
+    expected: "Exits 0 and prints PASS: frontmatter parser removed (no grep match for parse_required_context)."
+    fix_if: "parse_required_context is still defined or called in run_skill.py -- remove it and route context solely through resolve_context_paths(args.context)."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: run-skill-parse-required-context-count-eq-0
+  - step: 7
+    phase: pre-deploy
+    action: "Exercise the new explicit-only context-injection path via its unit test."
+    command: bin/venv-python -m pytest tests/test_run_skill.py -q
+    expected: "All tests in tests/test_run_skill.py pass (resolve_context_paths empty/order-preserving-dedupe/single-path and the parse_required_context-removed regression guard); pytest exits 0."
+    fix_if: "A test fails -- resolve_context_paths does not dedupe/preserve order or still pulls frontmatter context, or parse_required_context was not removed."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: test-run-skill-context-injection
+  - step: 8
+    phase: pre-deploy
+    action: "Confirm the whole change is CI-clean, including the two contract validators and the plan-schema/graduation gates."
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "validate --pre exits 0; validate_prompt_compliance, validate_instruction_architecture_layers, validate_plan_documents, and validate_graduation_completeness all pass."
+    fix_if: "A layer-claims or prompt-compliance failure appears (inspect the appended failures), or the plan-schema/graduation gate reddens -- correct per the printed failure."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      command_exit_zero-shaped, but this step runs the entire validate --pre suite; graduating it
+      would register a kernel check that recursively invokes the full check runner (the planning
+      skill's explicit anti-recursion prohibition) and would duplicate every other gate. It is the
+      aggregate pre-merge gate, not a standing per-change regression primitive.
+  - step: 9
+    phase: post-deploy
+    action: "After the squash-merge, confirm rec-568 is closed (superseded)."
+    command: |-
+      bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1 || true
+      grep '"rec-568"' logs/.recommendations-log.jsonl | grep -q '"status": "closed"' && echo "CLOSED" || { echo "rec-568 still open"; exit 1; }
+    expected: "After the squash-merge (Resolves: rec-568) and a sync pull, rec-568 shows status closed; prints CLOSED."
+    fix_if: "rec-568 is still open post-merge -- run the fallback: bin/venv-python -m scripts.ops_data_portal --update-rec rec-568 --status closed --resolution 'superseded by required-context retirement: the code-review-via-run_skill --target path is dead (implement skill dispatches code-review via Agent+Skill; executor frozen); run_skill reduced to the executor-rca harness where --target is legitimately required'."
+constraints:
+  - "Only the 14 files listed in scope may be modified (planning invariant); out-of-scope bugs become recommendations via scripts/ops_data_portal.py, never inline fixes."
+  - "No rescue agents or workaround loops (Decision 55); the develop-executor Step 2 edit preserves the Step-4 stop-cleanly / no-inline-repair invariant."
+  - "Public repo (Decision 101): no AWS account IDs, ARNs, ExternalIds, credentials, internal hostnames, or trading alpha in any edit."
+  - "Do NOT create a new numbered Decision -- this is a truthful-contract edit (decision-scout CLEAN; Decision 86). Do NOT chase contract re-ratification: instruction-architecture.yaml has no class: field, so validate_contract_drift ignores it."
+  - "Do NOT disturb the Decision-127 'Human runbook / operator-prose doc' anti-pattern row (or any other row) in instruction-architecture.yaml."
+  - "rec-568 closes ONLY via the ops portal (--update-rec) or the Resolves: squash-merge trailer -- never a direct JSONL write (Decision 84 Single Portal Invariant)."
+  - "rec-568 is SUPERSEDED, not fixed: do NOT add a --target-optional code path to run_skill.py (its code-review consumer is dead; adding dead code violates no-gold-plating / the SLOC decompose ethos)."
+  - "run_skill.py stays under its 500-SLOC default budget (currently 137 SLOC; the change nets a decrease)."
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): CLEAN (CITE-only; no WARN/BLOCK). CITE: Decision 86 (governing -- INTENT-prose retired, forward-routing, collocate-semantics-with-enforcement; RETIRE advances it), Decision 127 (sanctioned-prose taxonomy; owns the instruction-architecture.yaml anti-pattern list -- preserve its human-runbook row), Decision 76 (.claude canonical interactive layer -- the 9 SKILL.md + develop-executor surface), Decision 84 (Single Portal / writer-owned keyspace -- close rec-568 via portal/Resolves, never direct JSONL). RELATED: Decision 66 (Precision Context Injection -- promoting --context as the explicit path is consonant), Decision 55 (RCA-First -- develop-executor Step-2 edit preserves stop-cleanly), Decision 132 (pre-deploy VP graduation dispositions), Decision 90 (four-tier workflow framing). Decision 58 is SUPERSEDED by 76 (historical only). Live '## Decision ' header count: 104."
+  - "gates: decision-scout=CLEAN (CITE-only, no WARN/BLOCK, orchestrator-dispatched pre-plan); plan-critique=PROCEED after 1 round (run inline via the Skill tool per the /overseer dispatch, which forbids async Agent sub-dispatch in this harness)."
+  - "CI-RCA HARD-BLOCK deferral (planning preflight): one unresolved ci-rca rec is open at authoring time -- rec-2762 (Critical: PLAN-ducklake-maintenance-smoke-split.yaml carries 5 malformed closes_criteria refs, a plan-schema regression in an unrelated DuckLake plan). This ACG-02 plan is unrelated by all three Related-Work tests (different file; no shared Decision; different failure category -- closes_criteria schema vs required-context primitive retirement). Deferred per the Related-Work deferral allowance; rec-2762 is owned by its own ci-rca remediation and must not be inline-patched here (Decision 55/72)."
+  - "rec-568 disposition = SUPERSEDE (not fix). rec-568 asks to (1) make run_skill.py --target optional and (2) fix the implement skill's code-review-via-run_skill call. But implement/SKILL.md:163,183 already dispatch code-review via the Agent tool + Skill (explicitly NOT run_skill.py), and the executor is frozen (Decision 67), so the code-review-via-run_skill path rec-568 targets is dead. This plan reduces run_skill.py to the executor-rca harness (single --target transcript + explicit --context) where --target is legitimately required; rec-568's fix is moot. Close as superseded via Resolves: rec-568."
+  - "Scope note: .claude/commands/plan.md was folded in beyond the audit's six named RETIRE targets after tree verification -- plan.md:97 uses the retired term 'required-context files' to describe the planning-skill Critique-Gate section being rewritten; reworded to 'context files' so the term leaves every live interactive surface (audit ACG-02 acceptance is scoped to .claude/skills/, but a clean retire removes the live Layer-3 reference too)."
+  - "contract_version bumped 1 -> 2 to mark the required-context retirement; NO re-ratification and NO new Decision (decision-scout CLEAN; a truthful-contract edit needs neither -- Decision 86). status/ratified_at/ratified_via are left as-is (the contract's structural ratification stands)."
+  - "executor-rca context parity: develop-executor Step 2 now passes --context docs/PROJECT_CONTEXT.md explicitly, preserving the context the retired frontmatter used to auto-inject; run_skill.py no longer auto-loads frontmatter context, so every caller supplies context via --context."
+  - "VP hermetic marking: this is a plan-only PR (implementation lands in a separate /implement PR), so every acceptance-style VP step asserts post-implementation state that is false on the plan-only tree. All pre-deploy steps are marked hermetic: false and are therefore correctly EXCLUDED from validate_vp_replay (reason not-hermetic) while still carrying VF-05 graduation dispositions. Three steps graduate to standing kernel guards: skills-required-context-count-eq-0, run-skill-parse-required-context-count-eq-0, test-run-skill-context-injection."
+  - "Retire is CI-safe (verified): no validator reads instruction-architecture.yaml's anti_patterns list or enforces required-context presence (grep-negative across scripts/checks/ + prompt_compliance.py); validate_instruction_architecture_layers only checks that layer content_locations resolve to files, and validate_prompt_compliance checks the machine-readable behavioural-invariant blocks -- neither is touched by the retire. No test imports parse_required_context."
+  - "Coverage gate (verified): scripts/agent_development/run_skill.py is coverage-UNMAPPED -- map_source_to_test() in scripts/test_coverage_checker.py returns None for it (agent_development is not one of the five whitelisted nested subpackages ci_rca/session/sync/roadmap/llm; same treatment as scripts/executor/**), so validate_test_coverage skips it (both check_test_file_exists and check_per_file_coverage short-circuit on a None mapping). The run_skill.py change therefore carries NO 100%-per-file-coverage obligation; tests/test_run_skill.py is added for V2 rigor (resolve_context_paths real-path coverage + parse_required_context-removed regression guard), not to satisfy the coverage gate."
+  - "Main divergence: branch created off origin/main at authoring time (main_freshness.status ok, commits_behind 0); no scope-file divergence."
+  - "Audit source: audits/agent-context-governance-cdfda88.yaml finding ACG-02 (medium), RETIRE branch (the audit's recommended default). roadmap_crossref: novel (no tier_item owns required-context disposition; rec-568 owns only the --target breakage)."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - "DECISIONS.md relevant sections read (Decisions 86, 127, 76, 84, 55, 66)"
+  - "All 14 scope files located and readable (13 existing + tests/test_run_skill.py new)"
+  - Acceptance criteria understood and verifiable
+  - "Confirmed no new numbered Decision is created and the Decision-127 anti-pattern row is preserved"
+execution_steps:
+  - "Confirm on the harness branch (not main) and that all 13 existing scope files are present/readable."
+  - "Remove the required-context: frontmatter key and its list items from all 9 .claude/skills/*/SKILL.md files (implement, code-review, orient, decision-scout, overseer, audit-prompt, plan-critique, executor-rca, planning), preserving name/description/model and the --- fences."
+  - "In .claude/skills/planning/SKILL.md Critique Gate (Step 9) dispatch bullet, replace 'The skill's required-context files per its frontmatter (...)' with an explicit naming: docs/PROJECT_CONTEXT.md (full read) plus targeted (not full-file) projections of the roadmap items and decision sections the plan names from docs/ROADMAP-PRODUCT.yaml / docs/ROADMAP-PLATFORM.yaml / docs/DECISIONS.md -- see the plan-critique skill's Phase 1."
+  - "In docs/contracts/instruction-architecture.yaml: (a) rewrite the layer-4 `contains` (line 61) to describe explicit body-instructed reads (docs/PROJECT_CONTEXT.md in full; targeted projections of the large roadmap/decision files) fed by the preflight cache, with no 'required-context' literal; (b) replace the 'Missing required-context in SKILL.md' anti-pattern row with a truthful anti-pattern on unconditional whole-file context loads (correct_location: targeted body-instructed reads / decision-scout subagent); (c) bump contract_version 1 -> 2; (d) leave the Decision-127 'Human runbook / operator-prose doc' row and every other row untouched."
+  - "In .claude/commands/develop-executor.md Step 2, add --context docs/PROJECT_CONTEXT.md to the run_skill invocation and note that context files are now supplied explicitly (required-context auto-loading retired); do NOT modify Step 3 or Step 4 (Decision 55 stop-cleanly)."
+  - "In .claude/commands/plan.md Step 9 (~line 97), reword 'required-context files' to 'context files'."
+  - "In scripts/agent_development/run_skill.py: delete parse_required_context; add resolve_context_paths(explicit_context: list[str] | None) -> list[str] (order-preserving dedupe of the explicit --context list only); replace the required_ctx+explicit_ctx assembly in main() with all_context_paths = resolve_context_paths(args.context); update the --context help text to name it the explicit context-injection path."
+  - "Create tests/test_run_skill.py asserting resolve_context_paths(None) == [], resolve_context_paths(['a','b','a']) == ['a','b'], resolve_context_paths(['docs/PROJECT_CONTEXT.md']) == ['docs/PROJECT_CONTEXT.md'], and that the run_skill module has no parse_required_context attribute."
+  - "Execute the Verification Plan -- run each pre-deploy step; loop until green; on unrecoverable failure stop and RCA (Decision 55), never inline-workaround."
+  - "Commit with feat(required-context-disposition): ...; include 'Resolves: rec-568' in the squash-merge body so rec-autoclose closes rec-568 as superseded (fallback: ops_data_portal --update-rec)."
+  - "Report: what was implemented, verification results, and the rec-568 closure disposition."
+work_areas: []
+rollback: >-
+  Revert the single squash-merge commit; the change is edits-only across instruction/contract/
+  dev-harness surfaces with one net-negative code delta and one new test -- no data, infra, or
+  deploy state to unwind. rec-568 can be reopened via ops_data_portal --update-rec rec-568
+  --status open if the supersession is later contested.
