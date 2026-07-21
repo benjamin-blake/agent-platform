@@ -47,6 +47,35 @@ Severity is never inherited from this prompt's framing; you assign it after judg
 + MATURITY). A candidate phrased here neutrally ("no size ceiling covers X") is not a claim that a
 ceiling SHOULD exist -- that is precisely the judgment you owe.
 
+THE CANDIDATES. This is the delimited candidate set that "a run that merely confirms the candidates
+has failed" is measured against. Adjudicate EACH to a verdict (findings / rejected_candidates) per
+the enum above; a candidate you dismiss must appear in `rejected_candidates`. This list is not
+exhaustive of what you may find -- surface new candidates in your own pass and adjudicate them too.
+
+- C1 AGENTS.md loads ambient (~8.3K tok) via the `@AGENTS.md` pointer; no registered size ceiling
+  covers `.md` instruction prose (the SLOC/decisions/roadmap ceilings do not). (surface S1)
+- C2 `required-context` frontmatter is declared in the skills; the only consumer that parses it is
+  `scripts/agent_development/run_skill.py`; establish whether the interactive Skill path reads it.
+  (S5, S4)
+- C3 Harness hooks perform setup + guarding; none injects context; no `UserPromptSubmit` hook is
+  wired. (S5)
+- C4 T3.14 ("context-budget metric") is scoped to reachable Python SLOC / import-surface / orphan
+  count and does not enumerate agent-prose token cost; `status: deferred_post_mvp`. (S7)
+- C5 Decision/CD citations appear inline across the prose surfaces; decision-scout externalises the
+  full decision log inside `/plan` only. (S1-S4, S5)
+- C6 Per-consumer size ceilings exist for the two largest data files (Decision 134, Decision 114);
+  no equivalent per-consumer ceiling covers the L1 ambient or the L3/L4 on-invocation prose
+  surfaces -- the precedent is not generalised. (S6, S1-S4)
+- C7 Per-directory CLAUDE.md files load ambient on directory touch; the largest is ~7.5K tok; the
+  set is unbudgeted. (S2)
+- C8 `docs/contracts/instruction-architecture.yaml` mandates the `required-context` declaration and
+  lists its absence as an anti-pattern, but no validator enforces its presence;
+  `validate_instruction_architecture_layers` checks only that content_locations resolve. (S6, S5)
+- C9 `planning` (~14K tok) and `implement` (~12K tok) are the largest L4 surfaces; they carry
+  workflow methodology alongside embedded project/decision context. (S4)
+- C10 The aws-native end-state (T0.8 SDK shim, CD.10 typed verbs, Decision 91) names typed verbs but
+  no JIT-context-retrieval verb and assigns no context-budget accounting responsibility. (S7)
+
 ## READ FIRST -- DISAMBIGUATION TRAPS
 
 Recon surfaced terms that name two different things and plausible-but-wrong audit targets. Resolve
@@ -87,7 +116,10 @@ Audited surfaces, with state:
 - S1 AGENTS.md (BUILT) -- root universal-rules file (Layer 1), loaded ambient every session via the
   `@AGENTS.md` pointer in root `CLAUDE.md`.
 - S2 Per-directory CLAUDE.md files (BUILT) -- `**/CLAUDE.md` (Layer 1), loaded ambient when their
-  directory is touched. In-tree set only; `.venv/` copies are third-party, out of scope.
+  directory is touched. In-tree set only; `.venv/` copies are third-party, out of scope. (The
+  "loaded when the directory is touched" load-trigger is a Claude Code harness behaviour, not a repo
+  artefact -- you can re-derive the file set and sizes from disk, but take the trigger itself as
+  stated; if a finding leans on it, record the assumption in `meta.contract_notes`.)
 - S3 Slash commands (BUILT) -- `.claude/commands/*.md` (Layer 3), loaded when the user invokes the
   command. Thin orchestration referencing skills.
 - S4 Skills (BUILT) -- `.claude/skills/*/SKILL.md` (Layer 4), loaded when the agent invokes the
@@ -130,8 +162,10 @@ every in-scope surface directly. Permitted setup commands:
 - `bin/venv-python -m scripts.session.preflight --roadmap-detail full` -- populates
   `logs/.preflight-report.json` and refreshes `logs/.recommendations-log.jsonl`. These caches feed
   DEDUP DISCIPLINE. IF this fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`,
-  mark every `roadmap_crossref` `confidence=HYPOTHESIS` and `dedup_hit_count=null`, and proceed
-  with static dedup against `docs/ROADMAP-PLATFORM.yaml` and `docs/DECISIONS.md` on disk.
+  set every finding's `confidence=HYPOTHESIS` and every `roadmap_crossref.dedup_hit_count=null`
+  (`null` is the sentinel for "dedup not run"; the schema default `dedup_hit_count: 0` means a
+  negative search WAS run and returned zero), and proceed with static dedup against
+  `docs/ROADMAP-PLATFORM.yaml` and `docs/DECISIONS.md` on disk.
 - Read-only shell for size re-derivation (`wc -c`, `wc -l`, `grep -c`) is permitted and expected.
 - Regenerating gitignored local caches is expected and does not breach the write boundary; never
   commit them.
@@ -171,9 +205,14 @@ pinned below; default where none is pinned is `sufficient` / `partial` / `insuff
   the per-file SLOC caps? If so, per surface: what UNIT (bytes / tokens / lines / reachable-set),
   what GRANULARITY (per-file / per-layer / per-always-on-set), and what MECHANISM (a `validate.py`
   check plus a budget registry with a raise-marker, mirroring `config/sloc_budgets.yaml`; a
-  measurement-only metric; or none)? Verdict enum: this question's per-surface answer is the
-  `governance_verdict` decision block; the `question_answers` entry for Q1 summarises and points at
-  that block. The prompt pins NO gate-vs-advisory prior -- argue each surface.
+  measurement-only metric; or none)? Address the TRANSFER HAZARD explicitly: SLOC caps a REACHABLE
+  set, but skills and CLAUDE.md files load WHOLE-file, so a naive per-file byte/token cap can be
+  gamed by splitting one surface into sub-files that all load together (false governance, and a
+  direct tension with the repo's own decompose-by-default posture) -- state whether the unit and
+  granularity you propose per surface is robust to this, or whether a per-load-set budget is
+  required. Verdict enum: this question's per-surface answer is the `governance_verdict` decision
+  block; the `question_answers` entry for Q1 summarises and points at that block. The prompt pins NO
+  gate-vs-advisory prior -- argue each surface.
 - Q2 -- Given the Anthropic harness, what is the sound mechanism for JUST-IN-TIME context loading,
   and what belongs ambient vs JIT? Assess the available harness levers concretely: SessionStart
   `additionalContext` injection, a `UserPromptSubmit` hook, PreToolUse context injection, subagent
@@ -206,7 +245,10 @@ pinned below; default where none is pinned is `sufficient` / `partial` / `insuff
   measurement DATA GAP -- does anything record per-session or per-surface token cost over time, the
   way telemetry records execution outcomes? (iii) If an agent EDITS its own instruction files
   (recursive self-improvement), what stops uncontrolled growth in the same edit that adds a rule?
-  Add any others recon in your own pass surfaces.
+  (iv) The STEELMAN AGAINST governing prose: could a token/size cap induce terser, less-correct
+  methodology, or could decompose-by-default fragment load-bearing context that must be read
+  together to be correct? Argue whether that harm is real and where it bounds any remedy you
+  propose. Add any others recon in your own pass surfaces.
 
 ## RUBRIC
 
@@ -276,9 +318,9 @@ Governance mechanisms (read each to confirm what it enforces):
   `# raise-approved: dec-NNN <reason>` marker. Enforced by
   `scripts/checks/sloc/sloc_limits.py` + `scripts/checks/sloc/validate_sloc_budget_raises.py`.
 - `scripts/checks/decisions/validate_decisions_size.py` -- byte + `## Decision` header + combined
-  ceilings on `docs/DECISIONS.md` (`_DECISIONS_LIVE_MAX_BYTES=400_000`, `_MAX_H2=120`,
-  `_COMBINED_MAX_BYTES=700_000`), sized explicitly to the decision-scout subagent's whole-file read
-  (Decision 134).
+  ceilings on `docs/DECISIONS.md` (`_DECISIONS_LIVE_MAX_BYTES=400_000`, `_DECISIONS_LIVE_MAX_H2=120`,
+  `_DECISIONS_COMBINED_MAX_BYTES=700_000`), sized explicitly to the decision-scout subagent's
+  whole-file read (Decision 134).
 - `scripts/checks/roadmap/validate_platform_roadmap.py` -- `_ROADMAP_MAX_LINES=10_000` line ceiling
   (Decision 114).
 - `scripts/checks/registry.py` -- tier ordering. `validate_decisions_size` runs in BOTH `--pre`
@@ -317,9 +359,11 @@ Roadmap / end-state (context-only, for Q5/DD-C):
   (typed Lambda verbs, agent SDK shim T0.8, CD.10, Decision 91). Decision 86 forbids new standing
   prose-architecture docs.
 
-Coupling counts (re-derive; grep `Decision [0-9]+|CD\.[0-9]+`): `AGENTS.md` ~50 refs / ~28 unique;
-`implement` ~59; `planning` ~49; `orient` ~28; `plan-critique` ~25; `overseer` ~11;
-`decision-scout` ~5; `code-review` ~2; `audit-prompt` ~0.
+Coupling counts (re-derive with exactly `grep -oE 'Decision [0-9]+|CD\.[0-9]+'`; a broader pattern
+that also counts tier ids `T[0-9]+\.[0-9]+` or the bare word "decision" yields higher numbers --
+use the pinned pattern): `AGENTS.md` ~50 refs / ~28 unique; `implement` ~39; `planning` ~40;
+`orient` ~26; `plan-critique` ~22; `overseer` ~11; `decision-scout` ~5; `code-review` ~2;
+`audit-prompt` ~0.
 
 ## EMPIRICAL PASS
 
@@ -369,7 +413,7 @@ Before filing ANY finding, search the ownership surfaces and record the result o
   `planned-unbuilt`) or belongs in `rejected_candidates` -- NOT a fresh `novel` discovery. A finding
   filed without a recorded negative search is a HYPOTHESIS; mark its `confidence` accordingly.
 - If `meta.degraded_dedup=true`, dedup against the on-disk roadmap/decisions only and set every
-  `dedup_hit_count=null`, `confidence=HYPOTHESIS`.
+  `roadmap_crossref.dedup_hit_count=null` and every finding's `confidence=HYPOTHESIS`.
 
 DELIBERATE CONSTRAINTS -- DO NOT FLAG (each with its decision id):
 
@@ -445,7 +489,10 @@ COUNTING INVARIANT: `findings[]` is the SOLE enumerated list. `total_findings = 
 novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered candidates live in
 `rejected_candidates`, NOT `findings`. `rubric_ratings`, `question_answers`, and `governance_verdict`
 are systems-of-record referenced FROM findings, never re-counted. `top_improvements` and
-`highest_leverage_change` MUST be finding ids.
+`highest_leverage_change` MUST be finding ids; if `findings` is empty, set `top_improvements: []`
+and `highest_leverage_change: null`. Each `governance_verdict` entry whose verdict is anything other
+than `no_change` MUST name a backing finding id in its `rationale` (the finding documents the gap
+the verdict acts on); a `no_change` verdict needs none.
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates, and state why it would FAIL if the
@@ -466,10 +513,13 @@ catch the break neither lowers severity nor justifies dismissal.
 - medium = redundancy / ambiguity / cross-layer bleed with a clear fix.
 - low = clarity / wording.
 
-MATURITY -- compute LAST, per surface, top-down, first match wins. Pin these thresholds:
-- frontier = 0 open critical AND 0 open high findings for the surface AND (for surfaces Q5 rates)
-  every EXTERNAL CHECKLIST property `met` or `partial`, never `missed`. For surfaces the checklist
-  does not rate, the top tier gates on finding counts alone.
+MATURITY -- compute LAST, per surface, top-down, first match wins. A finding counts toward a
+surface's maturity if its `surface` IS that surface, OR it is tagged `surface: shared` and its
+`evidence` materially implicates that surface (a `shared` finding implicating all prose surfaces
+S1-S4 counts toward each of them). Pin these thresholds:
+- frontier = 0 critical AND 0 high findings for the surface AND -- for S7 only, the surface Q5 rates
+  via its EXTERNAL CHECKLIST -- every checklist property `met` or `partial`, never `missed`. For
+  S1-S6, which the checklist does not rate, the top tier gates on finding counts alone.
 - strong = 0 critical AND <= 1 high.
 - solid = <= 1 critical.
 - nascent = otherwise.
@@ -500,7 +550,8 @@ framing here must not foreclose it.
 ## GUARDRAILS
 
 - Write boundary, restated as a closed list: the ONLY files you create or modify in the tree are
-  `audits/agent-context-governance-<sha>.yaml` and `audits/agent-context-governance-<sha>.md`.
+  `audits/agent-context-governance-<sha>.yaml` and `audits/agent-context-governance-<sha>.md`
+  (creating the `audits/` directory if it does not yet exist is part of writing them, not a breach).
   Regenerating gitignored caches per SETUP is not a breach; committing them is. Touch no audited
   surface, file no recommendation, edit no roadmap or decision.
 - Precision over volume. Fewer than ~6 surviving findings is a valid and honest result -- state it;
