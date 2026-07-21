@@ -10,26 +10,19 @@ import argparse
 import sys
 from pathlib import Path
 
-import yaml
 
+def resolve_context_paths(explicit_context: list[str] | None) -> list[str]:
+    """Order-preserving de-duplication of explicitly-supplied --context paths.
 
-def parse_required_context(skill_path: str | Path) -> list[str]:
-    content = Path(skill_path).read_text(encoding="utf-8")
-    if not content.startswith("---"):
-        return []
-    end_idx = content.find("---", 3)
-    if end_idx == -1:
-        return []
-    frontmatter = content[3:end_idx]
-    try:
-        data = yaml.safe_load(frontmatter)
-        if isinstance(data, dict) and "required-context" in data:
-            val = data["required-context"]
-            if isinstance(val, list):
-                return [str(v) for v in val]
-    except Exception:
-        pass
-    return []
+    Context injection is explicit-only: the retired frontmatter auto-loading primitive
+    is gone, so every caller names the context files it needs via --context (see
+    docs/contracts/instruction-architecture.yaml layer-4).
+    """
+    paths: list[str] = []
+    for c in explicit_context or []:
+        if c not in paths:
+            paths.append(c)
+    return paths
 
 
 # Add root to sys.path to allow running directly from CLI
@@ -51,7 +44,11 @@ def main() -> None:
     parser.add_argument("--skill", required=True, help="Name of the skill in .claude/skills/")
     parser.add_argument("--target", required=True, help="Path to the target file to evaluate")
     parser.add_argument("--model", help="Optional model override")
-    parser.add_argument("--context", nargs="*", help="Optional context files to include")
+    parser.add_argument(
+        "--context",
+        nargs="*",
+        help="Explicit context-injection path(s): repo-relative file(s) loaded into context (e.g. docs/PROJECT_CONTEXT.md).",
+    )
     parser.add_argument(
         "--session-id",
         dest="session_id",
@@ -81,12 +78,7 @@ def main() -> None:
     # Load the pure instructions from the skill file
     system_prompt = skill_path.read_text(encoding="utf-8")
 
-    required_ctx = parse_required_context(skill_path)
-    explicit_ctx = args.context or []
-    all_context_paths = []
-    for c in required_ctx + explicit_ctx:
-        if c not in all_context_paths:
-            all_context_paths.append(c)
+    all_context_paths = resolve_context_paths(args.context)
 
     context_text = ""
     if all_context_paths:

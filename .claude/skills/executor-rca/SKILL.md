@@ -1,8 +1,6 @@
 ---
 name: executor-rca
 description: Diagnose unrecoverable executor failures and generate recommendations for permanent fixes.
-required-context:
-  - docs/PROJECT_CONTEXT.md
 ---
 
 # Executor RCA Skill

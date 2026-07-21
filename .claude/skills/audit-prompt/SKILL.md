@@ -1,8 +1,6 @@
 ---
 name: audit-prompt
 description: "Use when: running the /audit workflow, composing an audit prompt for a high-capability model, building a read-only design-review brief. Methodology for authoring a self-contained, zero-ambiguity audit prompt that a fresh expensive-model session executes without clarification. The composing session does the cheap work (grep, anchors, dedup pointers); the prompt spends the executor's cognition on judgment only."
-required-context:
-  - docs/PROJECT_CONTEXT.md
 ---
 
 # Audit-Prompt Methodology

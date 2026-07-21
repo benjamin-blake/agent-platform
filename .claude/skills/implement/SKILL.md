@@ -2,9 +2,6 @@
 name: implement
 description: Deep methodology for executing implementation plans, including live verification protocols, strategic scoping gates, code review integration, and commit flows.
 model: sonnet
-required-context:
-  - logs/.preflight-report.json
-  - docs/PROJECT_CONTEXT.md
 ---
 
 # Implement Methodology & Rules
