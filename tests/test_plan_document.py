@@ -215,6 +215,39 @@ class TestClosesCriteria:
         with pytest.raises(ValidationError):
             PlanDocument.model_validate(d)
 
+    def test_closes_criteria_rejects_prose_with_whitespace(self) -> None:
+        """T-1.23 field_validator: narrative/prose entries belong in context:, not closes_criteria."""
+        d = _mutate(closes_criteria=["APPLY-PATH SPLIT (critical -- some narrative caveat)."])
+        with pytest.raises(ValidationError, match="contains whitespace"):
+            PlanDocument.model_validate(d)
+
+    def test_closes_criteria_rejects_missing_colon(self) -> None:
+        d = _mutate(closes_criteria=["T2.18c1"])
+        with pytest.raises(ValidationError, match="exactly one ':'"):
+            PlanDocument.model_validate(d)
+
+    def test_closes_criteria_rejects_multiple_colons(self) -> None:
+        d = _mutate(closes_criteria=["T2.18:c1:extra"])
+        with pytest.raises(ValidationError, match="exactly one ':'"):
+            PlanDocument.model_validate(d)
+
+    def test_closes_criteria_rejects_empty_item_id(self) -> None:
+        d = _mutate(closes_criteria=[":c1"])
+        with pytest.raises(ValidationError, match="must both be non-empty"):
+            PlanDocument.model_validate(d)
+
+    def test_closes_criteria_rejects_empty_crit_id(self) -> None:
+        d = _mutate(closes_criteria=["T2.18:"])
+        with pytest.raises(ValidationError, match="must both be non-empty"):
+            PlanDocument.model_validate(d)
+
+    def test_closes_criteria_accepts_real_world_token_shapes(self) -> None:
+        """Loose grammar: lettered criteria and hyphenated/triple-dotted/lettered-suffix item ids."""
+        tokens = ["T2.18:c1", "T4.12:cA", "T-1.20:c3", "T3.15.1:c4", "T2.25a:c2"]
+        d = _mutate(closes_criteria=tokens)
+        doc = PlanDocument.model_validate(d)
+        assert doc.closes_criteria == tokens
+
 
 class TestSchemaVersion2:
     """T3.17 (VF-04/VF-13): schema_version-2 phase enum, hermetic default, tier_waiver."""

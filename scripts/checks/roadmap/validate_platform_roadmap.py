@@ -29,7 +29,7 @@ def validate_platform_roadmap(failed: list[str]) -> None:
 
     Rejects structural drift: duplicate ids, dangling depends_on, dependency cycles,
     unknown gate-rule helpers, invalid filed_via, unsupported document version.
-    Added by T-1.5. Runs in full presubmit only (not --pre).
+    Added by T-1.5. Runs in both the --pre and full presubmit tiers (closes-criteria-integrity-guard).
 
     Extended by T-1.23: criteria-status integrity assertions.
       (i)  met criterion met_by resolves to a real docs/plans/PLAN-<slug>.yaml or a 40-hex sha.
