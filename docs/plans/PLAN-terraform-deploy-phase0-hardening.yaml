@@ -140,7 +140,11 @@ verification_plan:
     expected: "prints `DELETED` (the file is absent)."
     fix_if: "the file still exists -- delete it (retired-root HCL under terraform/ is untouched)."
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a single file_presence slot, but the durable invariant is already
+      covered by step 5's stale-reference sweep plus the existing validate_ci_rca_taxonomy coverage
+      check -- a standalone standing guard here would duplicate them.
   - step: 4
     phase: pre-deploy
     action: "DEP-09 -- confirm the orphaned `Deploy to AWS` entry is removed from the workflow_to_tier map."
@@ -148,7 +152,11 @@ verification_plan:
     expected: "prints `REMOVED` (no orphaned map entry pointing at the deleted workflow)."
     fix_if: "prints STILL_PRESENT -- delete the `Deploy to AWS: not_a_gate` line from config/ci_rca_taxonomy.yaml."
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a single grep_count slot, but the durable invariant is already covered
+      by step 5's stale-reference sweep plus the existing validate_ci_rca_taxonomy coverage check --
+      a standalone standing guard here would duplicate them.
   - step: 5
     phase: pre-deploy
     action: >-
@@ -175,7 +183,8 @@ verification_plan:
     expected: "all tests pass (`passed`); no test asserts a stale workflow name or hard-coded count."
     fix_if: "a test fails on a removed workflow name or count -- re-ground the assertion (the fleet tests are drift-immune by design; a failure signals a real coupling to fix)."
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: "duplicates already-graduated checks already in the standing suite"
   - step: 7
     phase: pre-deploy
     action: >-
@@ -311,6 +320,7 @@ context:
     Branch cut fresh from origin/main at authoring (git checkout -b claude/terraform-deploy-phase0-hardening
     origin/main); 0 commits behind. Scope is 5 files across three independent findings; near the
     >5-file STRATEGIC heuristic, authored as one IMPLEMENTATION plan per the freeze override.
+  - "Decision 125 point 2: deleting .github/workflows/deploy.yml (DEP-09) resolves Decision 125's code-deploy-channel conditional (\"extending deploy.yml if it already deploys Lambda code by the time P2 lands, else a new workflow\") to its 'else a new workflow' branch -- deploy.yml does not deploy Lambda code today."
 pre_implementation_checklist:
   - "Branch confirmed not on main (git branch --show-current)"
   - "docs/PROJECT_CONTEXT.md read"
