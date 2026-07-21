@@ -33,6 +33,7 @@ from scripts.preflight import (
     decision_conditions,
     env_git,
     priority_queue,
+    prose_context,
     recs_cache,
 )
 
@@ -429,6 +430,10 @@ def main(roadmap_detail: str = "slim") -> int:
         ids_note = f" (new ids: {new_ids})" if new_ids else ""
         _msg = f"Advisory: Platform End-State fingerprint stale -- roadmap has new tier_item IDs since the stamp.{ids_note}"
         print(_msg, file=sys.stderr)
+
+    # Fail-open prose-context advisory (Decision 110/62/59); never affects the exit code below.
+    report["prose_context"] = prose_context.measure_prose_context()
+    prose_context.print_prose_context_report(report["prose_context"])
 
     # Ensure logs/ directory exists
     PREFLIGHT_REPORT.parent.mkdir(parents=True, exist_ok=True)
