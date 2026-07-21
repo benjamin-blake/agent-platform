@@ -28,25 +28,62 @@ from scripts.build_lambda_config import (
 _DEPLOY_RECORD_BUCKET = "agent-platform-data-lake"
 
 
-def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str) -> None:
-    """Upload package to S3."""
-    s3_key = f"lambda-packages/{zip_path.name}"
-    subprocess.run(
-        [
-            "aws",
-            "s3",
-            "cp",
-            str(zip_path),
-            f"s3://{bucket}/{s3_key}",
-            "--region",
-            region,
-            *_aws_profile_args(profile),
-        ],
-        check=True,
-    )
+def _resolve_artifact_sha() -> str:
+    """Resolve the per-artifact-sha namespace for content-addressed S3 keys (T2.42 c3, DEP-03).
+
+    Precedence: ``LAMBDA_ARTIFACT_SHA`` (explicit override -- the terraform CD workflows export
+    this, set to the resolved PR-head-sha the same reviewed plan.bin is keyed by) -> ``GITHUB_SHA``
+    (the ambient value every GitHub Actions run sets, so the governed deploy-ducklake-lambdas.yml
+    channel resolves a namespace with no workflow edit) -> ``"local"`` (stable fallback for a
+    break-glass / non-CI build, so upload_to_s3 always has a deterministic per-sha key to write to).
+    """
+    return os.environ.get("LAMBDA_ARTIFACT_SHA") or os.environ.get("GITHUB_SHA") or "local"
 
 
-def update_lambda_functions(bucket: str, profile: str, region: str, *, only_ducklake: bool = False) -> None:
+def _artifact_s3_key(name: str, sha: str) -> str:
+    """Content-addressed per-artifact-sha S3 key: ``lambda-packages/<sha>/<name>`` (T2.42 c3).
+
+    Pure key construction -- callers resolve ``sha`` via ``_resolve_artifact_sha()`` (or pass an
+    explicit sha, e.g. reconcile.yml's red-commit-originating PR-head-sha). This namespace is used
+    only at the build/upload + byte-assert + deploy-consume boundary; terraform's own ``s3_key``
+    attribute values are NEVER made per-sha -- a churning s3_key would surface a layer/function
+    replace on every PR and defeat T2.42 c1's ignore_changes decoupling.
+    """
+    return f"lambda-packages/{sha}/{name}"
+
+
+def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str, *, artifact_sha: Optional[str] = None) -> None:
+    """Upload package to S3, dual-writing the fixed key AND a per-artifact-sha key (T2.42 c3, DEP-03).
+
+    The fixed key (``lambda-packages/<name>``) keeps terraform's static ``s3_key`` genuine-republish
+    read fed -- refreshed on every build, so a genuine layer/function content bump (one that moves
+    the resource's ``description`` / is not ignore_changes-suppressed) always finds current bytes
+    there. The per-sha key (``lambda-packages/<sha>/<name>``) is overwrite-immune per build/PR-head
+    sha: the CD byte-assert steps and the deploy-consume readers (``update_lambda_functions``,
+    ``publish_canary_layers``) read it so a later, concurrent build cannot skew this build's
+    reviewed artifact bytes. ``artifact_sha`` defaults to ``_resolve_artifact_sha()``
+    (``LAMBDA_ARTIFACT_SHA`` -> ``GITHUB_SHA`` -> ``"local"``).
+    """
+    sha = artifact_sha if artifact_sha is not None else _resolve_artifact_sha()
+    for s3_key in (f"lambda-packages/{zip_path.name}", _artifact_s3_key(zip_path.name, sha)):
+        subprocess.run(
+            [
+                "aws",
+                "s3",
+                "cp",
+                str(zip_path),
+                f"s3://{bucket}/{s3_key}",
+                "--region",
+                region,
+                *_aws_profile_args(profile),
+            ],
+            check=True,
+        )
+
+
+def update_lambda_functions(
+    bucket: str, profile: str, region: str, *, only_ducklake: bool = False, artifact_sha: Optional[str] = None
+) -> None:
     """Update Lambda function code to point at the latest S3 ZIPs.
 
     Uses ``aws lambda update-function-code`` with --s3-bucket and
@@ -60,6 +97,12 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
     CodeSha256 from each successful update and write a per-function deployment record (see
     ``_write_ducklake_deploy_record`` / ``read_deploy_record``): ``deploy-records/ducklake/*``
     for the DuckLake path, ``deploy-records/prod/*`` for the prod path (T2.43).
+
+    ``artifact_sha`` (T2.42 c3, DEP-03): when given, each function's code is read from the
+    per-artifact-sha key (``lambda-packages/<sha>/<name>``, overwrite-immune) instead of the fixed
+    key -- the deploy-consume boundary of the content-addressing scheme. Defaults to None (fixed-key
+    read, unchanged prior behaviour) so a bare call is unaffected; ``scripts/build_lambda.py``'s
+    orchestrators thread the build's resolved sha through explicitly.
 
     Ref: AWS CLI ``lambda update-function-code`` requires
     --function-name, --s3-bucket, --s3-key; optional --region and
@@ -77,7 +120,8 @@ def update_lambda_functions(bucket: str, profile: str, region: str, *, only_duck
         function_zip_map[ops["function"]] = ops["zip_key"]
         channel = "prod"
 
-    for fn_name, s3_key in function_zip_map.items():
+    for fn_name, fixed_s3_key in function_zip_map.items():
+        s3_key = _artifact_s3_key(fixed_s3_key.rsplit("/", 1)[-1], artifact_sha) if artifact_sha is not None else fixed_s3_key
         print(f"  Updating {fn_name}...")
         result = subprocess.run(
             [
@@ -253,7 +297,13 @@ def validate_bucket_exists(bucket: str, profile: str, region: str) -> bool:
     return result.returncode == 0
 
 
-def publish_canary_layers(*, bucket: str, profile: str = "agent_platform", region: str = "eu-west-2") -> dict[str, str]:
+def publish_canary_layers(
+    *,
+    bucket: str,
+    profile: str = "agent_platform",
+    region: str = "eu-west-2",
+    artifact_sha: Optional[str] = None,
+) -> dict[str, str]:
     """Publish the three DuckLake layer zips (already in S3) as new aws_lambda layer versions.
 
     Calls ``aws lambda publish-layer-version`` for each of the three DuckLake layers (deps, extensions,
@@ -262,12 +312,18 @@ def publish_canary_layers(*, bucket: str, profile: str = "agent_platform", regio
 
     Layer zips must already be in S3 (run ``--ducklake-only`` first). Fails closed if any publish
     fails. Returns the same ARN dict.
+
+    ``artifact_sha`` (T2.42 c3, DEP-03): when given, each layer is published from the
+    per-artifact-sha key (overwrite-immune) instead of the fixed key. Defaults to None (fixed-key
+    read, unchanged prior behaviour); ``scripts/build_lambda.py``'s
+    ``--ducklake-publish-canary-layers`` dispatch threads the resolved build sha through explicitly.
     """
     import json as _json  # noqa: PLC0415
 
     arns: dict[str, str] = {}
     for layer_name in _build_ducklake_layer_names():
-        s3_key = f"lambda-packages/{layer_name}.zip"
+        zip_name = f"{layer_name}.zip"
+        s3_key = _artifact_s3_key(zip_name, artifact_sha) if artifact_sha is not None else f"lambda-packages/{zip_name}"
         result = subprocess.run(
             [
                 "aws",

@@ -1130,3 +1130,64 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/test_prose_context.py
+  - check_id: ducklake-layers-ignore-source-code-hash-eq-3
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/ducklake_lambdas.tf
+    guard_symbol: aws_lambda_layer_version
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - sh
+      - -c
+      - |
+        awk '/^resource .aws_lambda_layer_version/{inblk=1;hasig=0;total++;next} inblk&&/^}/{if(hasig)withc++;inblk=0;next} inblk&&/ignore_changes/&&/source_code_hash/{hasig=1} END{exit (total==3 && withc==3)?0:1}' terraform/personal/ducklake_lambdas.tf terraform/personal/ducklake_catalog_dr.tf
+  - check_id: build-lambda-content-addressed-key-test
+    primitive_slot: test_selector
+    guard_target: scripts/build_lambda_deploy.py
+    guard_symbol: _artifact_s3_key
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_build_lambda_packaging.py::TestContentAddressedKey
+  - check_id: artifact-s3-key-content-addressed
+    primitive_slot: command_exit_zero
+    guard_target: scripts/build_lambda_deploy.py
+    guard_symbol: _artifact_s3_key
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - sh
+      - -c
+      - |
+        grep -qF 'def _artifact_s3_key' scripts/build_lambda_deploy.py && grep -qF 'lambda-packages/{sha}/{name}' scripts/build_lambda_deploy.py
+  - check_id: cd-zip-key-content-addressed
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/terraform-apply-sandbox.yml
+    guard_symbol: LAMBDA_ARTIFACT_SHA
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - sh
+      - -c
+      - |
+        grep -q LAMBDA_ARTIFACT_SHA .github/workflows/terraform-apply-sandbox.yml && grep -qF 'lambda-packages/$' .github/workflows/terraform-apply-sandbox.yml && grep -q LAMBDA_ARTIFACT_SHA .github/workflows/reconcile.yml
+  - check_id: env-taxonomy-section6-lockfile-committed
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/environment-taxonomy.md
+    guard_symbol: null
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - sh
+      - -c
+      - |
+        sec=$(awk '/^## 6\./{f=1} /^## 7\./{f=0} f' docs/contracts/environment-taxonomy.md); printf '%s' "$sec" | grep -qi committed && printf '%s' "$sec" | grep -qF '.terraform.lock.hcl' && ! printf '%s' "$sec" | grep -qF 'RECOMMENDED (non-blocking, follow-on): un-ignore and commit'

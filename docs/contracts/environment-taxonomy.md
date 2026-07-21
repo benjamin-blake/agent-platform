@@ -186,13 +186,21 @@ extends that SoT for the prod class, it does not compete with it.
 
 ## 6. Provider lock file consideration (apply-path supply chain)
 
-`.gitignore` currently ignores `.terraform.lock.hcl` (and `terraform/**/.terraform.lock.hcl`), so
-the GitHub-hosted apply runner resolves AWS provider versions fresh on every run. On the
-highest-privilege workflow (sandbox auto-apply) this is a version-drift / supply-chain surface.
+`terraform/personal/.terraform.lock.hcl` is git-tracked (committed) and load-bearing on the apply
+runner (T2.42 c2, DEP-03). `.gitignore` ignores `.terraform.lock.hcl` broadly
+(`terraform/**/.terraform.lock.hcl`) but carries an explicit un-ignore for this root
+(`!terraform/personal/.terraform.lock.hcl`) -- landed incidentally in commit 0fec964 / PR #605
+(T2.16b/CD.34). The committed lock pins the three providers this root depends on
+(`hashicorp/aws`, `hashicorp/null`, `kislerdm/neon`).
 
-RECOMMENDED (non-blocking, follow-on): un-ignore and commit
-`terraform/personal/.terraform.lock.hcl` so the apply runner pins provider versions to a reviewed
-lock. Until then, the deterministic guard plus subagent review are the compensating controls.
+The pin is load-bearing, not decorative: `terraform init` in all three workflows that touch this
+root (`terraform-apply-sandbox.yml`, `reconcile.yml`, `terraform-drift.yml`) carries no `-upgrade`
+flag, so every init -- on the highest-privilege sandbox auto-apply path included -- resolves
+provider versions from the committed lock rather than re-resolving fresh on every run. A provider
+version bump is therefore always an explicit, reviewed lock-file diff (`terraform providers lock`,
+committed in a PR), never silent drift picked up mid-run. The deterministic guard plus subagent
+review remain the compensating controls for what the lock does not cover (the plan content itself,
+not the provider binary supply chain).
 
 ## 7. Conformance
 

@@ -58,6 +58,8 @@ from scripts.build_lambda_config import (
     _build_size_limit_bytes,  # noqa: F401
 )
 from scripts.build_lambda_deploy import (
+    _artifact_s3_key,  # noqa: F401
+    _resolve_artifact_sha,  # noqa: F401
     _resolve_ducklake_profile,  # noqa: F401
     _write_ducklake_deploy_record,  # noqa: F401
     publish_canary_layers,  # noqa: F401
@@ -114,13 +116,17 @@ def _run_prod_build(args: argparse.Namespace) -> None:
             if not validate_bucket_exists(bucket, args.profile, args.region):
                 print(f"ERROR: S3 bucket does not exist: s3://{bucket}")
                 sys.exit(1)
+            # T2.42 c3 (DEP-03): resolve the artifact-sha namespace ONCE per build invocation and
+            # thread it to every upload/deploy call site, so the upload and the immediately-following
+            # deploy-consume read agree on the same per-sha key within this process.
+            artifact_sha = _resolve_artifact_sha()
             print(f"[3/4] Uploading to s3://{bucket}/lambda-packages/...")
             for artifact in (app_zip, ops_zip, layer_zip):
-                upload_to_s3(artifact, bucket, args.profile, args.region)
+                upload_to_s3(artifact, bucket, args.profile, args.region, artifact_sha=artifact_sha)
             print("  OK Uploaded to S3")
             if args.deploy:
                 print("[3b/4] Updating Lambda function code...")
-                update_lambda_functions(bucket, args.profile, args.region)
+                update_lambda_functions(bucket, args.profile, args.region, artifact_sha=artifact_sha)
                 print("  OK Lambda functions updated")
         else:
             print("[3/4] Skipping S3 upload (--skip-upload)")
@@ -176,16 +182,20 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
             if not validate_bucket_exists(bucket, args.profile, args.region):
                 print(f"ERROR: S3 bucket does not exist: s3://{bucket}")
                 sys.exit(1)
+            # T2.42 c3 (DEP-03): resolve the artifact-sha namespace ONCE per build invocation and
+            # thread it to every upload/deploy call site, so the upload and the immediately-following
+            # deploy-consume read agree on the same per-sha key within this process.
+            artifact_sha = _resolve_artifact_sha()
             print(f"[3/4] Uploading to s3://{bucket}/lambda-packages/...")
             for artifact in artifacts:
-                upload_to_s3(artifact, bucket, args.profile, args.region)
+                upload_to_s3(artifact, bucket, args.profile, args.region, artifact_sha=artifact_sha)
             print("  OK Uploaded to S3")
             if args.deploy:
                 print(
                     "[3b/4] Updating DuckLake Lambda function code "
                     "(writer + reader + maintenance + maintenance-smoke + catalog-dr)..."
                 )
-                update_lambda_functions(bucket, args.profile, args.region, only_ducklake=True)
+                update_lambda_functions(bucket, args.profile, args.region, only_ducklake=True, artifact_sha=artifact_sha)
                 print("  OK DuckLake Lambda functions updated")
         else:
             print("[3/4] Skipping S3 upload (--skip-upload)")
@@ -238,7 +248,7 @@ def main() -> None:
     if args.ducklake_publish_canary_layers:
         args.profile = _resolve_ducklake_profile(args.profile)
         bucket = args.bucket or resolve_bucket(args.profile)
-        publish_canary_layers(bucket=bucket, profile=args.profile, region=args.region)
+        publish_canary_layers(bucket=bucket, profile=args.profile, region=args.region, artifact_sha=_resolve_artifact_sha())
         return
 
     print("Lambda Package Builder (Manifest-Driven, CD.24)")

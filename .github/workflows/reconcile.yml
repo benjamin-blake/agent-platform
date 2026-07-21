@@ -287,18 +287,33 @@ jobs:
         # these same S3 keys with newer content), this assert correctly FAILS CLOSED rather than
         # silently applying content that no longer matches plan.bin's expectations -- the episode
         # is genuinely stale and needs a fresh PR/plan, not a Reconcile of the old one.
+        #
+        # T2.42 c3 (DEP-03): the byte-assert reads the per-artifact-sha key
+        # (lambda-packages/<sha>/<name>, overwrite-immune) instead of the fixed key. The upload
+        # dual-writes BOTH the fixed key (keeps terraform's static s3_key genuine-republish read
+        # fed) AND the per-sha key. LAMBDA_ARTIFACT_SHA is the red commit's originating PR-head-sha
+        # -- resolved the same way as the "Fetch saved plan from S3" step below, from the job-level
+        # RED_SHA env (not the dispatch ref's tip).
         if: success()
         env:
           BUCKET: agent-platform-data-lake
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           pip install pyyaml pydantic
           python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
           NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
+          LAMBDA_ARTIFACT_SHA=$(gh api "repos/${REPO}/commits/${RED_SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+          if [ -z "$LAMBDA_ARTIFACT_SHA" ] || [ "$LAMBDA_ARTIFACT_SHA" = "null" ]; then
+            echo "::error::No originating PR resolved for ${RED_SHA}; cannot resolve the content-addressed artifact sha (Decision 77 no-TOCTOU)." >&2
+            exit 1
+          fi
+          export LAMBDA_ARTIFACT_SHA
           for name in $NAMES; do
             local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
-            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
-              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing S3 object found; failing closed (Decision 77 no-TOCTOU)." >&2
+            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing per-sha S3 object found; failing closed (Decision 77 no-TOCTOU)." >&2
               exit 1
             fi
             remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
@@ -307,9 +322,10 @@ jobs:
               exit 1
             fi
           done
-          echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded artifacts."
+          echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded per-sha artifacts."
           for name in $NAMES; do
             aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
+            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" --region eu-west-2
           done
 
       - name: Fetch saved plan from S3 (no re-plan, T2.21 parity)
@@ -603,17 +619,31 @@ jobs:
           set -e
 
       - name: Build DuckLake lambda packages (rebuild + assert byte-identical)
+        # T2.42 c3 (DEP-03): the byte-assert reads the per-artifact-sha key
+        # (lambda-packages/<sha>/<name>, overwrite-immune) instead of the fixed key. The upload
+        # dual-writes BOTH the fixed key (keeps terraform's static s3_key genuine-republish read
+        # fed) AND the per-sha key. LAMBDA_ARTIFACT_SHA is the red commit's originating PR-head-sha
+        # -- resolved the same way as the "Fetch saved plan from S3" step below, from the job-level
+        # RED_SHA env (not the dispatch ref's tip).
         env:
           BUCKET: agent-platform-data-lake
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           pip install pyyaml pydantic
           python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
           NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
+          LAMBDA_ARTIFACT_SHA=$(gh api "repos/${REPO}/commits/${RED_SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+          if [ -z "$LAMBDA_ARTIFACT_SHA" ] || [ "$LAMBDA_ARTIFACT_SHA" = "null" ]; then
+            echo "::error::No originating PR resolved for ${RED_SHA}; cannot resolve the content-addressed artifact sha (Decision 77 no-TOCTOU)." >&2
+            exit 1
+          fi
+          export LAMBDA_ARTIFACT_SHA
           for name in $NAMES; do
             local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
-            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
-              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing S3 object found; failing closed (Decision 77 no-TOCTOU)." >&2
+            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
+              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing per-sha S3 object found; failing closed (Decision 77 no-TOCTOU)." >&2
               exit 1
             fi
             remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
@@ -624,6 +654,7 @@ jobs:
           done
           for name in $NAMES; do
             aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
+            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" --region eu-west-2
           done
 
       - name: Fetch saved plan from S3 (gated -- no re-plan)
