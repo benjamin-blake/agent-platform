@@ -1130,3 +1130,73 @@ entries:
     graduated_by: implement-agent
     check_spec:
       node_id: tests/test_prose_context.py
+  - check_id: ducklake-layers-ignore-source-code-hash-eq-3
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/ducklake_lambdas.tf
+    guard_symbol: aws_lambda_layer_version
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import re,sys; t=open('terraform/personal/ducklake_lambdas.tf').read()+open('terraform/personal/ducklake_catalog_dr.tf').read();
+        blocks=re.findall(r'resource "aws_lambda_layer_version"[^{]*\{.*?\n\}', t, re.S);
+        n=sum('ignore_changes' in b and 'source_code_hash' in b for b in blocks); print('layers_with_ignore=',len(blocks),n);
+        sys.exit(0 if len(blocks)==3 and n==3 else 1)
+  - check_id: build-lambda-content-addressed-key-test
+    primitive_slot: test_selector
+    guard_target: scripts/build_lambda_deploy.py
+    guard_symbol: _artifact_s3_key
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_build_lambda_packaging.py::TestContentAddressedKey
+  - check_id: artifact-s3-key-content-addressed
+    primitive_slot: command_exit_zero
+    guard_target: scripts/build_lambda_deploy.py
+    guard_symbol: _artifact_s3_key
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import scripts.build_lambda_deploy as b; k=b._artifact_s3_key('ducklake-deps-layer.zip','abc123')
+        if hasattr(b,'_artifact_s3_key') else None; print(k); assert k=='lambda-packages/abc123/ducklake-deps-layer.zip',
+        k
+  - check_id: cd-zip-key-content-addressed
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/terraform-apply-sandbox.yml
+    guard_symbol: LAMBDA_ARTIFACT_SHA
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - import sys; a=open('.github/workflows/terraform-apply-sandbox.yml').read();
+        r=open('.github/workflows/reconcile.yml').read(); ok=('LAMBDA_ARTIFACT_SHA'
+        in a) and ('lambda-packages/${' in a or 'lambda-packages/$' in a) and ('LAMBDA_ARTIFACT_SHA'
+        in r); print('apply_ca=',('LAMBDA_ARTIFACT_SHA' in a),'reconcile_ca=',('LAMBDA_ARTIFACT_SHA'
+        in r)); sys.exit(0 if ok else 1)
+  - check_id: env-taxonomy-section6-lockfile-committed
+    primitive_slot: command_exit_zero
+    guard_target: docs/contracts/environment-taxonomy.md
+    guard_symbol: null
+    plan_slug: terraform-t2-42-path-hardening
+    graduated_at: '2026-07-21'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bin/venv-python
+      - -c
+      - 'import re,sys; t=open(''docs/contracts/environment-taxonomy.md'').read(); sec=t.split(''##
+        6.'')[1].split(''## 7.'')[0]; stale=''RECOMMENDED (non-blocking, follow-on):
+        un-ignore and commit'' in sec; committed=(''committed'' in sec.lower() and ''.terraform.lock.hcl''
+        in sec); print(''stale_todo='',stale,''records_committed='',committed); sys.exit(0
+        if committed and not stale else 1)'

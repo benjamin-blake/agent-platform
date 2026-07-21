@@ -233,8 +233,15 @@ verification_plan:
       null + kislerdm/neon (regenerate with `terraform providers lock` including -platform=linux_amd64
       if the linux runner hashes are absent).
     hermetic: true
-    graduation: graduate
-    graduation_check_id: "personal-lockfile-committed-three-providers"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential admission gate ran (scripts.verification_graduation.run_differential):
+      REJECTED as tautological -- "revert did not produce FAIL". The lock's committed +
+      un-ignored + three-provider-pinned state predates this plan's diff entirely (landed
+      incidentally in commit 0fec964 / PR #605, per this plan's own context notes), so the
+      check passes identically on origin/main and HEAD -- this plan changes zero bytes of
+      terraform/personal/.terraform.lock.hcl. Un-graduatable by construction, not a
+      forgotten graduation.
   - step: 8
     phase: pre-deploy
     action: >-
@@ -245,8 +252,14 @@ verification_plan:
     expected: "init_with_upgrade= [] ; exit 0 (no workflow re-resolves providers)."
     fix_if: "A workflow's terraform init carries -upgrade -- remove it so the committed lock pins versions."
     hermetic: true
-    graduation: graduate
-    graduation_check_id: "tf-init-honours-lock-no-upgrade"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential admission gate ran (scripts.verification_graduation.run_differential):
+      REJECTED as tautological -- "revert did not produce FAIL". No terraform workflow's
+      `terraform init` carries -upgrade on origin/main either -- this plan's c3 edits touch
+      only the "Build DuckLake lambda packages" steps in these same workflow files, never
+      the `terraform init` invocations themselves, so this property is unchanged pre/post.
+      Un-graduatable by construction, not a forgotten graduation.
   - step: 9
     phase: pre-deploy
     action: "Local presubmit gate (advisory locally, authoritative in PR CI per Decision 73)."
