@@ -59,7 +59,8 @@ auto-apply (guard-consumption) landed in T2.25 -- see the Guard classification s
 **Guard classification -- in-budget vs out-of-budget (T2.25 / Decision 92 point 5 -- SOLE SoT):**
 
 The deterministic guard (`scripts/terraform_apply_guard.py`) narrows from blocking ALL IAM diffs
-to budget-based classification. Evaluation order: delete -> neon -> trust-diff -> IAM.
+to budget-based classification. Evaluation order: delete -> neon -> trust-diff -> IAM ->
+resource-policy.
 
 | classification | criteria | guard verdict |
 |----------------|----------|---------------|
@@ -68,6 +69,8 @@ to budget-based classification. Evaluation order: delete -> neon -> trust-diff -
 | trust-diff | `assume_role_policy` differs on ANY resource (checked BEFORE IAM) | exit 2 always, even on in-budget resource types |
 | destroy/replace | "delete" in actions | exit 2 always |
 | neon update/delete | non-create neon_* action | exit 2 always |
+| resource-policy safe shape | `aws_lambda_permission` change whose principal == `events.amazonaws.com` (exact) AND action == `lambda:InvokeFunction` (exact) AND `function_name` starts with `agent-platform-`, ALL THREE conjunctively -- the routine EventBridge-rule-invokes-Lambda wiring pattern | exit 0 (auto-apply, still subject to subagent review) |
+| resource-policy blocked | any non-inert change on `aws_lambda_permission`, `aws_s3_bucket_policy`, `aws_sns_topic_policy`, `aws_secretsmanager_secret_policy`, `aws_glue_resource_policy`, or `aws_lambda_function_url` that does not match the safe shape above (evaluated LAST, after IAM, so a delete or trust diff on one of these types is still caught by the earlier rows) | exit 2 -> tf-gated-apply Environment |
 
 The machine-readable budget table lives at `terraform/bootstrap/authority_budget.json`
 (override via `TF_AUTHORITY_BUDGET` env var for testing). Missing or unparseable table = fail
@@ -77,6 +80,32 @@ asserts the table stays in sync with the IAMRoleWriteBounded SCP in `terraform/b
 Conservative v1 narrowing: role CREATES stay gated (new trust surface). The ratchet widens
 on track record (Decision 92 point 5): budget amendments via the bootstrap tier only; subagent
 review advises, never locks.
+
+**Resource-based-policy classification (T2.45 / DEP-06):** the six types above -- Lambda
+permissions and the S3/SNS/Secrets-Manager/Glue resource policies plus Lambda function URLs --
+attach a policy directly to a non-IAM resource, so a wildcard or external-principal grant on one
+of them could previously guard-PASS unreviewed without ever touching an `aws_iam_*` type. The
+guard now fails closed on all six except the one known-safe `aws_lambda_permission` shape.
+
+- **Intentional over-block, expected to be a steady-state no-op (surfaced so a reviewer isn't
+  surprised):** a NEW S3-trigger `aws_lambda_permission` (principal `s3.amazonaws.com`, e.g. the
+  existing `aws_lambda_permission.s3_invoke_findings_processor` /
+  `s3_invoke_ops_compaction` pattern in `terraform/personal/prod_lambdas.tf`) or a NEW
+  `aws_lambda_function_url` now routes to `tf-gated-apply` on any non-inert change, since neither
+  matches the EventBridge safe shape and neither has an allowlisted shape of its own. This is a
+  deliberate over-block, not a bug: once such a resource is applied, the Lambda code/infra
+  decoupling principle (section 5 above, `ignore_changes = [source_code_hash]`) means a routine
+  code-only redeploy never produces a Terraform diff on it again -- so in steady state this gate
+  is a one-time review, not recurring friction.
+- **Known-incomplete allowlist:** the six `RESOURCE_POLICY_TYPES` are the resource-based-policy
+  types this repo has needed to date, not an exhaustive enumeration of every such AWS resource
+  type -- e.g. `aws_sqs_queue_policy` and `aws_kms_key_policy` are resource-based-policy types
+  outside this list today. Introducing one of those (or any other resource-based-policy type) in
+  `terraform/personal/` requires a deliberate guard extension (add it to `RESOURCE_POLICY_TYPES`
+  plus, if it needs one, its own allow-shape) -- it does NOT auto-inherit coverage, and until
+  extended, the guard's `IAM_SENSITIVE_TYPES`/resource-policy stages simply do not see it (fails
+  open to whatever the pre-T2.45 posture was for an unclassified type, i.e. auto-apply on a
+  non-IAM, non-neon, non-trust-diff change) -- the gap this contract note exists to flag.
 
 ### Axis B -- PRODUCT phase axis (strategy lifecycle)
 
