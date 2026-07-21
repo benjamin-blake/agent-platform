@@ -155,10 +155,13 @@ Audited surfaces, with state:
   T3.14 (context-budget metric, deferred), T0.8 (agent SDK shim), CD.10 / Decision 91 (typed
   Lambda verbs), Decision 86 (no standing prose-architecture docs).
 - S8 Layer-2 project-knowledge prose (BUILT) -- `docs/PROJECT_CONTEXT.md`, loaded ON-DEMAND (not
-  ambient) when a workflow or skill names it in `required-context` (e.g. `/plan`, `/implement`). It
-  is the largest single instruction-adjacent prose payload and carries no registered size ceiling;
-  assess it on the same dimensions as S1-S4. It is instruction-adjacent project knowledge (in
-  scope), distinct from the CONSUMED DATA files below (DECISIONS.md / ROADMAP / SESSION_LOG, out).
+  ambient) during workflows that consume it (e.g. `/plan`, `/implement`): it is declared in those
+  skills' `required-context` frontmatter and/or read explicitly by the command/skill body. Do NOT
+  treat "loads via required-context" as settled -- the exact load mechanism is itself part of what
+  Q4/DD-A establish. It is the largest single instruction-adjacent prose payload and carries no
+  registered size ceiling; assess it on the same dimensions as S1-S4. It is instruction-adjacent
+  project knowledge (in scope), distinct from the CONSUMED DATA files below (DECISIONS.md / ROADMAP /
+  SESSION_LOG, out).
 
 Vocabulary. LAYERS L1-L5 are defined in `docs/contracts/instruction-architecture.yaml`. AMBIENT =
 loaded without an explicit invocation. ON-INVOCATION = loaded when a command or skill is called.
@@ -580,7 +583,7 @@ catch the break neither lowers severity nor justifies dismissal.
 MATURITY -- compute LAST, per surface, top-down, first match wins. A finding counts toward a
 surface's maturity if its `surface` IS that surface, OR it is tagged `surface: shared` and its
 `evidence` materially implicates that surface (a `shared` finding implicating all prose surfaces
-S1-S4 counts toward each of them). Pin these thresholds:
+S1-S4 and S8 counts toward each of them). Pin these thresholds:
 - frontier = 0 critical AND 0 high findings for the surface AND -- for S7 only, the surface Q5 rates
   via its EXTERNAL CHECKLIST -- every checklist property `met` or `partial`, never `missed`. For
   S1-S6 and S8, which the checklist does not rate, the top tier gates on finding counts alone.
@@ -613,7 +616,9 @@ framing here must not foreclose it.
    INVARIANT. Do NOT fix any unrelated `validate` failure -- record it in `meta.contract_notes` and
    move on (write boundary).
 4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, `--no-gpg-sign` if signing is
-   unavailable. `git push -u origin HEAD`.
+   unavailable. `git push -u origin HEAD`. IF egress is down at push/PR time: commit locally, then
+   STOP and report in your final turn that the branch could not be pushed and the PR not opened --
+   do not loop or retry indefinitely. The two committed deliverables are the recoverable state.
 5. Open the PR via `mcp__github__create_pull_request` (base=main, ready for review, title
    `audit: agent context governance (L1-L4 instruction surfaces + JIT primitives)`, body = the
    `summary` block in a yaml fence plus a 2-3 sentence lede). Then END THE TURN -- do not poll, do
