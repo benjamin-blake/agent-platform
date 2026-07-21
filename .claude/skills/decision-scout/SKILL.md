@@ -1,8 +1,6 @@
 ---
 name: decision-scout
 description: "Use when: scope a proposed plan against active decisions, surface decision-contradiction flags before plan commitment, find related decisions a plan should cite. Mandatory pre-confirmation gate in /plan, runs in a fresh-context subagent so the full DECISIONS.md cost (large -- near its Decision 134 size ceiling) does not bloat the planning agent."
-required-context:
-  - docs/DECISIONS.md
 ---
 
 ## Intent

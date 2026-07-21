@@ -7,10 +7,6 @@ description: >-
   dispatch, autonomy-boundary policy, and the Fable advice-consult protocol. Use when running the
   /overseer workflow.
 model: opus[1m]
-required-context:
-  - logs/.preflight-report.json
-  - docs/PROJECT_CONTEXT.md
-  - AGENTS.md
 ---
 
 # Overseer Methodology & Rules

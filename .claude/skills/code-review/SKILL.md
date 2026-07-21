@@ -1,9 +1,6 @@
 ---
 description: "Use when: code review, quality check, review my code, check for issues, after implementing a feature. Performs a full repository code review and returns a structured findings report to the caller. The caller (.claude/commands/implement.md or the invoking agent) writes findings to logs/.recommendations-log.jsonl. Does not edit files directly."
 name: code-review
-required-context:
-  - docs/PROJECT_CONTEXT.md
-  - docs/DECISIONS.md
 ---
 
 ## Intent

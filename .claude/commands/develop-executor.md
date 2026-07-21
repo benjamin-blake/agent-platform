@@ -12,9 +12,9 @@ description: Supervisor workflow for developing the autonomous executor. Runs Ro
 - Read the most recent failure transcript in `logs/transcripts/` or the latest exception in `logs/.telemetry-process-events.jsonl` matching the context.
 
 ## 2. Execute RCA Skill
-- Run the Executor RCA skill in a fresh context to ensure unbiased diagnosis. This is intentionally a headless invocation via `run_skill.py` (not the in-session Skill tool), so the diagnosis is uncontaminated by this session's reasoning:
+- Run the Executor RCA skill in a fresh context to ensure unbiased diagnosis. This is intentionally a headless invocation via `run_skill.py` (not the in-session Skill tool), so the diagnosis is uncontaminated by this session's reasoning. Context is supplied explicitly via `--context` (frontmatter-based auto-loading is retired; every caller now names its own context files):
   ```bash
-  bin/venv-python -m scripts.agent_development.run_skill --skill executor-rca --target <path_to_failure_transcript> --model auto
+  bin/venv-python -m scripts.agent_development.run_skill --skill executor-rca --target <path_to_failure_transcript> --context docs/PROJECT_CONTEXT.md --model auto
   ```
 - Wait for the skill to output its root cause analysis and the generated recommendation JSON.
 

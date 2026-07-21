@@ -1,8 +1,6 @@
 ---
 name: plan-critique
 description: "Use when: critique a plan, challenge assumptions, review docs/plans/PLAN-{slug}.yaml before implementation. Mandatory gate between planning and implementation."
-required-context:
-  - docs/PROJECT_CONTEXT.md
 ---
 
 ## Intent

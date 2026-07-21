@@ -1,9 +1,6 @@
 ---
 name: orient
 description: Read-only orientation session. Surfaces in-progress/eligible work, CI-RCA triage, ranked what-to-work-on, and up to N disjoint /plan prompts with an overlap matrix and keystone-first sequencing. Chat reply only; writes nothing.
-required-context:
-  - logs/.preflight-report.json
-  - docs/ROADMAP-PLATFORM.yaml
 ---
 
 # Orient Methodology

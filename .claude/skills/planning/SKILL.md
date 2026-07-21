@@ -2,10 +2,6 @@
 name: planning
 description: Deep methodology and rules for software planning, complexity assessment, and verification tier design. Use this when running the /plan workflow or when architecting new features.
 model: opus[1m]
-required-context:
-  - logs/.preflight-report.json
-  - docs/PROJECT_CONTEXT.md
-  - docs/ROADMAP-PLATFORM.yaml
 ---
 
 # Planning Methodology & Rules
@@ -537,7 +533,7 @@ Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-crit
 - `prompt:` self-contained, mentions:
   - The absolute path to `docs/plans/PLAN-{slug}.yaml` (a `.md` path is deprecated -- surface a deprecation warning and proceed)
   - Instruction to invoke the `plan-critique` skill via the `Skill` tool against that path
-  - The skill's required-context files per its frontmatter (`docs/PROJECT_CONTEXT.md` full read; `docs/ROADMAP-PRODUCT.yaml`/`docs/ROADMAP-PLATFORM.yaml`/`docs/DECISIONS.md` targeted, not full-file -- see the `plan-critique` skill's Phase 1)
+  - Context files to load explicitly: `docs/PROJECT_CONTEXT.md` (full read) plus targeted (not full-file) projections of the roadmap items and decision sections the plan names from `docs/ROADMAP-PRODUCT.yaml` / `docs/ROADMAP-PLATFORM.yaml` / `docs/DECISIONS.md` -- see the `plan-critique` skill's Phase 1
   - For IMPLEMENTATION plans: instruction to also read every file in the plan's Scope table
   - Requirement to return the skill's structured output verbatim, including the final `Recommendation: PROCEED / REVISE` line
   - Forbid file edits
