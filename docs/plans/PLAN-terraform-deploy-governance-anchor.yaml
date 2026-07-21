@@ -11,7 +11,8 @@ verification_tier: V1
 plan_path: docs/plans/PLAN-terraform-deploy-governance-anchor.yaml
 phase: >-
   Platform tier T2 (agent-native Terraform CD hardening). Governance-anchor response to
-  audits/terraform-deploy-redesign-b67955b.yaml: authors Decision 144 + tier_items T2.44-T2.50.
+  audits/terraform-deploy-redesign-b67955b.yaml: authors Decision 144 (forward-direction anchor)
+  + Decision 145 (arbitrary stopgap raise of the DECISIONS.md byte ceiling) + tier_items T2.44-T2.50.
 scope:
   - file: docs/DECISIONS.md
     action: Modify
@@ -22,16 +23,38 @@ scope:
       pattern from reads to writes, excludes PlatformAdmin from boundary attachment, and retains
       Decisions 77 and 101 untouched. No edits to the Decision 98/92 body text (forward-direction
       amendments are stated only in the amending decision, per the Decision 126/143 precedent).
-      (2) Apply the Decision-134 size relief valve (compaction of superseded decision bodies to
-      header-preserving pointer stubs -- Decision 134 clause 2) to a human-confirmed set of
-      fully-superseded entries so live bytes stay <= ~392,000 after the addition (the file sits at
-      398,438 / 400,000 today; a new Decision breaches the ceiling without relief).
+      (2) Author a SECOND, standalone Decision (target number 145 -- the next free number after the
+      anchor) that records an ARBITRARY, TEMPORARY raise of the DECISIONS.md live byte ceiling from
+      400,000 to 500,000 as a stopgap, explicitly amends Decision 134 clause 2 (the clause that set
+      the 400,000 ceiling), and CITES the open, unactioned structural-fix audit
+      audits/decision-consolidation-growth-f79d6b5.yaml (findings DCG-01/DCG-02/DCG-05) as the real
+      remedy this only tides over. The file sits at 398,438 / 400,000 bytes today, so the two new
+      Decisions cannot land as pure additions under the old ceiling; the raise (not compaction) is
+      the sanctioned relief. No edits to the Decision 134 body text (same forward-direction
+      amendment convention).
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
       Register 7 new tier_items T2.44-T2.50 immediately after T2.43 (mapping DEP-04/09/13, DEP-06,
       DEP-07/08, DEP-10/11, DEP-01/02, DEP-12, DEP-05) and add a progress_note to T2.42 recording
-      that it already carries DEP-03 (no new tier_item for DEP-03).
+      that it already carries DEP-03 (no new tier_item for DEP-03). T2.48 additionally carries a
+      recurring-measured-review criterion (c6) for the per-change-class incident-free auto-apply
+      track record (Finding 2; keeps the widen-on-track-record model from stalling at v2).
+  - file: scripts/checks/decisions/validate_decisions_size.py
+    action: Modify
+    purpose: >-
+      Raise the live-byte ceiling constant _DECISIONS_LIVE_MAX_BYTES from 400_000 to 500_000 (the
+      arbitrary stopgap Decision 145 records), add an inline provenance comment on the constant
+      citing Decision 145 + the decision-consolidation-growth audit, and update the module
+      docstring / FAIL-message Decision citation to name the amendment. _DECISIONS_LIVE_MAX_H2 (120)
+      and _DECISIONS_COMBINED_MAX_BYTES (700_000) are UNCHANGED (live headers go 103 -> 105; combined
+      stays well under 700,000). No raise-marker guard exists for this ceiling (unlike SLOC's
+      validate_sloc_budget_raises + config/sloc_budgets.yaml), so the raise is a plain constant edit
+      recorded durably in Decision 145 + git. The sibling test
+      tests/checks/decisions/test_validate_decisions_size.py keys every assertion off the IMPORTED
+      constant (no hardcoded 400_000), so validate --pre and the size-check tests pass automatically
+      under the raise; its line-64 "(400_000)" comment becomes stale-but-non-blocking (implementer
+      MAY refresh it in the same touch -- cosmetic).
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -67,13 +90,22 @@ acceptance_criteria:
     docs/ROADMAP-PLATFORM.yaml's T2.42 carries a progress_note recording that it already owns audit
     finding DEP-03 (spurious layer-replace routing); no new tier_item is created for DEP-03.
   - >-
-    The new Decision text and tier_items contain no AWS account IDs, ARNs, or ExternalId VALUES
+    Both new Decisions' text and the tier_items contain no AWS account IDs, ARNs, or ExternalId VALUES
     (Decision 101 public-content boundary): roles are named by logical name, resources by prefix.
   - >-
-    docs/DECISIONS.md stays under the Decision-134 live ceiling (<= 400,000 bytes; target <= 392,000)
-    after the addition, achieved by compacting a human-confirmed set of fully-superseded decision
-    bodies to header-preserving pointer stubs; each stub retains its "## Decision NN:" header so all
-    number-based citations keep resolving.
+    docs/DECISIONS.md contains a SECOND new standalone Decision (target 145) that (a) states plainly
+    the byte-ceiling raise is an ARBITRARY, TEMPORARY stopgap, (b) EXPLICITLY amends Decision 134
+    clause 2 (the 400,000-byte ceiling clause) to a 500,000-byte ceiling, (c) CITES the open,
+    unactioned audits/decision-consolidation-growth-f79d6b5.yaml (DCG-01/DCG-02/DCG-05) as the
+    structural fix it only tides over, and (d) carries reversal conditions retiring/lowering the
+    ceiling once that structural mechanism lands or the scout moves to a portal read. Forward-direction
+    plain header (not a Decision-105 CD shape); no edit to the Decision 134 body.
+  - >-
+    scripts/checks/decisions/validate_decisions_size.py has _DECISIONS_LIVE_MAX_BYTES = 500_000
+    (raised from 400_000) with an inline comment citing Decision 145 + the decision-consolidation-growth
+    audit, and _DECISIONS_LIVE_MAX_H2 (120) and _DECISIONS_COMBINED_MAX_BYTES (700_000) unchanged;
+    docs/DECISIONS.md stays under the raised 500,000-byte live ceiling with BOTH new Decisions (144 +
+    145) added (no compaction of any superseded body occurs), and the live header count stays under 120.
   - >-
     bin/venv-python -m scripts.validate --pre exits 0 on the implementation branch
     (validate_decisions_size, validate_platform_roadmap referential integrity, DECISIONS.md
@@ -181,25 +213,52 @@ verification_plan:
   - step: 7
     phase: pre-deploy
     action: >-
-      Decision-134 size ceiling holds after the addition (the relief valve reclaimed enough headroom).
+      The stopgap Decision (target 145) exists, states the raise is arbitrary/temporary, amends
+      Decision 134 clause 2, and cites the decision-consolidation-growth audit as the structural fix.
     command: >-
-      B=$(wc -c < docs/DECISIONS.md) && echo "live bytes: $B" && [ "$B" -le 400000 ]
+      awk '/^## Decision [0-9]+: .*[Ss]topgap/{f=1} /^## Decision [0-9]+: .*byte ceiling/{f=1} f{print}
+      /^---$/{if(f)exit}' docs/DECISIONS.md > /tmp/dec145.txt && test -s /tmp/dec145.txt && head -1
+      /tmp/dec145.txt && grep -qi 'arbitrary' /tmp/dec145.txt && grep -qiE 'temporary|stopgap'
+      /tmp/dec145.txt && grep -q 'Decision 134' /tmp/dec145.txt && grep -q
+      'decision-consolidation-growth-f79d6b5' /tmp/dec145.txt && grep -qE '500,?000' /tmp/dec145.txt
     expected: >-
-      Prints the live byte count and exits 0 -- docs/DECISIONS.md is at or under the 400,000-byte
-      Decision-134 live ceiling despite the new Decision (superseded bodies compacted to stubs).
+      Prints the stopgap Decision header and exits 0 -- the block calls the raise arbitrary and
+      temporary, amends Decision 134 (clause 2), cites audits/decision-consolidation-growth-f79d6b5.yaml,
+      and names the 500,000 ceiling.
     fix_if: >-
-      Live bytes exceed 400,000 -- compact one or more additional fully-superseded decision bodies to
-      header-preserving pointer stubs (human-confirmed targets), or reduce Decision 144's length.
+      The header is missing, the arbitrary/temporary framing is absent, Decision 134 is not amended, or
+      the audit is not cited -- author the stopgap Decision per the DECISION-145 reference block.
     hermetic: false
     graduation: not-applicable
   - step: 8
     phase: pre-deploy
-    action: The full presubmit passes (size governance + roadmap referential integrity + DECISIONS.md structure + plan schema).
+    action: >-
+      The byte-limit constant is raised to 500_000 (with the Decision-145 provenance comment) and
+      docs/DECISIONS.md stays under the raised ceiling with BOTH new Decisions added; no superseded
+      body was compacted; live headers stay under 120.
+    command: >-
+      grep -qE '_DECISIONS_LIVE_MAX_BYTES = 500_000' scripts/checks/decisions/validate_decisions_size.py
+      && grep -qiE 'decision.?145|decision-consolidation-growth'
+      scripts/checks/decisions/validate_decisions_size.py && B=$(wc -c < docs/DECISIONS.md) && echo
+      "live bytes: $B" && [ "$B" -le 500000 ] && H=$(grep -cE '^## Decision [0-9]+:' docs/DECISIONS.md)
+      && echo "live headers: $H" && [ "$H" -le 120 ]
+    expected: >-
+      Exit 0 -- the constant reads 500_000 and carries the Decision-145 provenance citation; live bytes
+      are at or under 500,000 (both Decisions 144 + 145 present, no compaction); live headers stay <= 120.
+    fix_if: >-
+      The constant is not 500_000 / lacks the provenance comment -- edit validate_decisions_size.py per
+      execution step 1. If live bytes exceed 500,000 or headers exceed 120, tighten the two new Decision
+      bodies (do NOT compact superseded bodies -- that path is out of scope this PR).
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: The full presubmit passes (size governance under the raised ceiling + roadmap referential integrity + DECISIONS.md structure + plan schema).
     command: bin/venv-python -m scripts.validate --pre
     expected: >-
-      Exit 0 -- validate_decisions_size, validate_platform_roadmap (related_decisions [144] and the
-      new depends_on edges all resolve), the DECISIONS.md structure checks, and the plan-document
-      schema all pass.
+      Exit 0 -- validate_decisions_size passes under the raised 500,000-byte ceiling with both new
+      Decisions present, validate_platform_roadmap (related_decisions [144] and the new depends_on
+      edges all resolve), the DECISIONS.md structure checks, and the plan-document schema all pass.
     fix_if: >-
       A --pre check fails -- read the failing check name and fix the cited file (a size-ceiling
       breach, a dangling related_decisions/depends_on ref, a malformed Decision header, or a schema
@@ -207,7 +266,11 @@ verification_plan:
     hermetic: false
     graduation: not-applicable
 constraints:
-  - "Files strictly in scope: docs/DECISIONS.md and docs/ROADMAP-PLATFORM.yaml ONLY."
+  - >-
+    Files strictly in scope: docs/DECISIONS.md, docs/ROADMAP-PLATFORM.yaml, and
+    scripts/checks/decisions/validate_decisions_size.py ONLY. (The sibling test
+    tests/checks/decisions/test_validate_decisions_size.py needs no functional change -- it keys off
+    the imported constant; an optional stale-comment refresh on its line 64 is cosmetic.)
   - "audits/terraform-deploy-redesign-b67955b.yaml is READ-ONLY input -- do not edit it."
   - >-
     IMPLEMENTATION plan; no recommendations filed (STRATEGIC plans suspended per AGENTS.md;
@@ -223,31 +286,37 @@ constraints:
     changed). Decision 144 is a plain "## Decision NNN:" header, NOT a Decision-105 "state: ratified"
     CD entry.
   - >-
-    Decision-134 size ceiling (HARD): docs/DECISIONS.md is 398,438 / 400,000 bytes today (~1,562 B
-    headroom), so a new Decision cannot land as a pure addition. Relief valve IN SCOPE: compact a
-    human-confirmed set of FULLY-superseded decision bodies to header-preserving pointer stubs
-    (Decision 134 clause 2 sanctions this; the stub retains the "## Decision NN:" header + Status +
-    a one-line supersession pointer, so number-citations keep resolving and the DPI-04 victim->
-    superseder link is preserved/improved; this also satisfies Decision 105's R1 ratification grep,
-    which keys off the retained headers). BYTE MATH: to hit the <=392,000 B target AND absorb a
-    ~6-10 KB Decision 144, compaction must NET-REMOVE ~14 KB -- roughly 3-4 fully-dead bodies, not one
-    small stub. VICTIM-SELECTION HAZARD (decision-scout NOTE): header-preservation fixes NUMBER
-    citations but NOT live BODY/clause citations -- before compacting ANY candidate, grep the repo for
-    live reliance on that decision's BODY (not just its number) and exclude on any hit. Confirmed
-    MUST-EXCLUDES: Decision 44 (superseded by 117 but its boundary table is body-cited "unchanged" by
-    117/73/79), Decision 58 (superseded by 76 but its mirror rule is body-cited by 75), Decision 35
-    (scoped by 77, NOT superseded -- never a candidate), and Decision 40 (superseded by 122 but its
-    trigger conditions are cited as live by ROADMAP-PRODUCT.md). Scout-suggested safer candidates
-    (still require the body-citation grep + DPI-01/DPI-04 confirmation against
-    audits/decision-log-premise-integrity-8fb581e.yaml): 42, 49, 68, 71, 74, 89. Target-set selection
-    is a DPI-04 human disposition -- surface it for confirmation, do not choose unilaterally (see the
-    open question in context). Do NOT touch docs/DECISIONS_ARCHIVE.md (archival is DPI-04's
-    out-of-scope tool and a third file).
+    Decision-134 size ceiling (HARD, RAISED by the stopgap): docs/DECISIONS.md is 398,438 / 400,000
+    bytes today (~1,562 B headroom), so the two new Decisions (144 anchor ~6-10 KB + 145 stopgap
+    ~3-6 KB) cannot land as pure additions under the OLD ceiling. HUMAN-DISPOSED RELIEF (this PR):
+    raise the ceiling, do NOT compact. Change _DECISIONS_LIVE_MAX_BYTES from 400_000 to 500_000 in
+    scripts/checks/decisions/validate_decisions_size.py, recorded as its own reversal-conditioned
+    Decision 145. BYTE MATH: 398,438 + ~15 KB (both Decisions) ~= 413 KB, leaving ~87 KB headroom
+    under 500,000; combined live+archive ~= 507 KB stays under the 700,000 backstop; live headers go
+    103 -> 105, under the 120 ceiling. No superseded body is compacted, no DPI-04 victim-selection is
+    performed, and docs/DECISIONS_ARCHIVE.md is NOT touched. The 500,000-byte ceiling still fits the
+    decision-scout's whole-live-file read within the 200k-token window (~125k tokens < 200k), so
+    Decision 134's bridge-guard protected-consumer assumption still holds.
+  - >-
+    The raise is a CONSCIOUS, CITED, TEMPORARY stopgap -- not the fix and not a routine act. The
+    structural/architectural remedy is authored and unactioned in
+    audits/decision-consolidation-growth-f79d6b5.yaml (DCG-01 near-term relief sweep, DCG-02
+    number-preserving compact-to-stub + archival lifecycle, DCG-05 explicit significance gate on
+    inflow; all dedup_hit_count 0, unowned). Decision 145 MUST cite that audit and state the raise
+    tides over only until the mechanism is built. Per Decision 128 / decision-entry.yaml a ceiling
+    raise silently trades away the read-cost/portability guard, so it must be loud + Decision-cited
+    (this constraint), never a frictionless constant edit. validate_decisions_size carries NO
+    raise-marker guard (contrast validate_sloc_budget_raises + config/sloc_budgets.yaml's
+    "# raise-approved: dec-NNN"), so no marker is added; the durable record is Decision 145 + the
+    inline provenance comment + git history.
   - No rescue agents or workaround loops (Decision 55). No warehouse write during planning.
   - >-
     Numbering race: re-verify the max "## Decision NNN:" header at implement time -- a concurrent PR
-    may have claimed 144. If so, use the next free number and update every cross-reference (tier-item
-    related_decisions, T2.42 note). The VP greps key off the title "inversion", not the number.
+    may have claimed 144. The anchor takes the next free number and the stopgap takes anchor+1 (target
+    144 + 145). If they shift, update every cross-reference (tier-item related_decisions incl. T2.48's
+    [144,...], the T2.42 note, the Decision-145 amends-Decision-134 text, and the inline provenance
+    comment in validate_decisions_size.py). The VP greps key off the titles ("inversion" / "stopgap" /
+    "byte ceiling"), not the numbers.
 context:
   - >-
     Anchors the response to audits/terraform-deploy-redesign-b67955b.yaml (13 findings DEP-01..DEP-13;
@@ -285,29 +354,46 @@ context:
     than the Phase-2 widening) and T2.47->T2.46 (DEP-10 is cheapest after the DEP-08 consolidation).
     Both are audit-faithful sequencing; concurred by plan-critique.
   - >-
-    DECISION-134 BLOCK + PIVOT (decision-scout, round 1): docs/DECISIONS.md is at 398,438/400,000
-    bytes, so Decision 144 cannot be a pure addition. Resolved IN SCOPE via Decision 134 clause 2's
-    compaction-to-stub relief valve (header-preserving; targets human-confirmed, excluding the
-    DPI-04 still-cited-as-live set 35/40/44/58). OPEN QUESTION for the overseer/human: accept this
-    bundled in-place compaction, OR land a separate DPI-04-dispositioned archival PR first (cleaner,
-    keeps the anchor free of compaction, but needs file-scope beyond docs/DECISIONS.md).
+    DECISION-134 BLOCK -> RESOLVED BY HUMAN DISPOSITION (raise, not compact): docs/DECISIONS.md is at
+    398,438/400,000 bytes, so the anchor + stopgap cannot be pure additions under the old ceiling.
+    The plan-critique REVISE finding flagged the prior compaction approach's human-disposition fork;
+    the human decided to ARBITRARILY RAISE the ceiling (400,000 -> 500,000) as a stopgap, recorded as
+    its own Decision 145, rather than compact superseded bodies in this anchor PR. Compaction was
+    rejected here because victim-selection is a DPI-04 human disposition with a body-citation hazard
+    (a mis-compacted body-cited clause is wrong-but-trusted) and it couples an unrelated judgment-heavy
+    edit to the governance anchor. The structural fix (compaction lifecycle + significance gate) stays
+    owned by audits/decision-consolidation-growth-f79d6b5.yaml, which Decision 145 cites.
   - >-
-    OPEN QUESTION for the plan-critique gate (Fable design-consult suggestion): should the new
-    Decision ALSO register a "Decision 92 point-9 ratchet-review" recurring measured act (periodic
-    review of per-change-class incident-free auto-apply track record to decide further widening)?
-    Drafted WITHOUT it to avoid scope balloon; include only if plan-critique concurs it belongs.
+    RATCHET-REVIEW (plan-critique RESOLVED, Finding 2): the recurring "Decision 92 point-9
+    ratchet-review" (periodic review of per-change-class incident-free auto-apply track record to
+    decide further widening) is kept OUT of any Decision body (Decision 86 -- forward intent routes to
+    tier_items, not Decision prose). Instead it is scheduled as a recurring MEASURED act on tier_item
+    T2.48 (criterion c6), so the widen-on-track-record authority-budget model does not stall at v2.
+    Decision 144's body leaves the existing Decision 92 ratchet "UNCHANGED" (a reference to the
+    standing mechanism, not a newly-authored recurring review) -- consistent with this ruling.
   - >-
     Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (round 1 returned BLOCK
-    on the Decision-134 live-byte ceiling; pivoted to the in-scope compaction-to-stub relief valve;
-    round 2 cleared to FLAGS_FOUND with one residual NOTE -- the compaction victim-selection
-    body-citation hazard -- addressed by the must-excludes + body-citation-grep in the constraints).
-    CITE: Decision 134, 105, 92, 98, 129, 143, 94, 126, 77, 113, 83, 84, 86, 55, 72, 101, 100, 75.
-  - "gates: decision-scout=FLAGS_FOUND (2 rounds; 1 NOTE addressed); plan-critique=<verdict> after <N> round(s)"
+    on the Decision-134 live-byte ceiling; round 2 cleared to FLAGS_FOUND). The round-2 compaction
+    pivot and its residual victim-selection body-citation NOTE are now MOOT -- the plan-critique REVISE
+    disposition replaced compaction entirely with the human-disposed arbitrary ceiling raise (Decision
+    145), so no superseded body is compacted and no victim-selection occurs in this PR. CITE:
+    Decision 134, 128, 114, 105, 92, 98, 129, 143, 94, 126, 77, 113, 83, 84, 86, 55, 72, 101, 100, 75,
+    plus audits/decision-consolidation-growth-f79d6b5.yaml (DCG-01/02/05).
+  - >-
+    gates: decision-scout=FLAGS_FOUND (2 rounds; 1 NOTE addressed); plan-critique=REVISE after 1
+    round -> revised (both findings applied: byte-ceiling relief switched from compaction to an
+    arbitrary stopgap raise recorded as Decision 145 citing
+    audits/decision-consolidation-growth-f79d6b5.yaml; ratchet-review routed to T2.48 c6 per Decision
+    86). Overseer re-runs plan-critique on this revision.
 pre_implementation_checklist:
   - Branch confirmed not on main (harness claude/... branch)
   - Read audits/terraform-deploy-redesign-b67955b.yaml (findings DEP-01..DEP-13, Q7 blueprint, disposition)
-  - Read Decision 126 (forward-direction template), 129 (read pattern), 98 pt1, 92 pt5, 77, 101, 143, 134 (size ceiling)
-  - Re-verify the max "## Decision NNN:" header and the next free T2.4x ids before writing
+  - Read Decision 126 (forward-direction template), 129 (read pattern), 98 pt1, 92 pt5, 77, 101, 143, 134 (size ceiling clause 2)
+  - >-
+    Read audits/decision-consolidation-growth-f79d6b5.yaml (DCG-01/02/05 -- the structural byte-limit
+    fix Decision 145 stopgaps toward) and scripts/checks/decisions/validate_decisions_size.py (the
+    _DECISIONS_LIVE_MAX_BYTES constant to raise; confirm no raise-marker guard exists)
+  - Re-verify the max "## Decision NNN:" header (next two free numbers -- 144 anchor + 145 stopgap) and the next free T2.4x ids before writing
   - Both scope files located and readable
   - >-
     VP hermetic/graduation policy: every pre-deploy VP step is graduation=not-applicable (one-shot
@@ -315,27 +401,30 @@ pre_implementation_checklist:
     /implement CREATES/EDITS, so they cannot pass the plan-PR-tree vp-replay).
 execution_steps:
   - >-
-    Secure Decision-134 headroom (do this in the SAME PR, within docs/DECISIONS.md): compact a
-    human-confirmed set of FULLY-superseded decision bodies to header-preserving pointer stubs so
-    live bytes land <= ~392,000 (>=8 KB margin under the 400,000 ceiling). Byte math: net-remove
-    ~14 KB (~3-4 dead bodies) to absorb the ~6-10 KB Decision 144 plus the margin. Stub shape:
-    retain the "## Decision NN:" header + Status line + one line "Superseded by Decision MM (see
-    there for the live state)"; remove the superseded body only. Before compacting ANY candidate,
-    grep the repo for live reliance on that decision's BODY/clauses (not just its number) and skip on
-    any hit -- header-preservation only fixes number-citations. MUST-EXCLUDE (confirmed body-cited or
-    not-superseded): Decisions 35, 40, 44, 58. Scout-suggested safer candidates (still grep-verify +
-    confirm against DPI-01/DPI-04 in audits/decision-log-premise-integrity-8fb581e.yaml): 42, 49, 68,
-    71, 74, 89. Target-set selection is a DPI-04 human disposition -- confirm the set at the
-    overseer/human gate before removing any body. If the human prefers, substitute a separate
-    preceding DPI-04 archival PR and skip this step.
+    Secure byte-ceiling headroom by RAISING, not compacting (human-disposed; SAME PR). Edit
+    scripts/checks/decisions/validate_decisions_size.py: change _DECISIONS_LIVE_MAX_BYTES from
+    400_000 to 500_000; add an inline provenance comment on that line -- "# 500_000: arbitrary stopgap
+    raise per Decision 145 (was 400_000); structural fix owned by
+    audits/decision-consolidation-growth-f79d6b5.yaml DCG-01/02/05"; update the module docstring's
+    "(Decision 134 ...)" citation and the FAIL-message / _RELIEF_VALVES text to name Decision 145's
+    amendment of the ceiling. Leave _DECISIONS_LIVE_MAX_H2 (120) and _DECISIONS_COMBINED_MAX_BYTES
+    (700_000) unchanged. Do NOT edit the sibling test's logic (it keys off the imported constant);
+    optionally refresh its stale line-64 "(400_000)" comment. Do NOT compact any superseded decision
+    body and do NOT touch docs/DECISIONS_ARCHIVE.md -- compaction/archival stays the
+    decision-consolidation-growth + DPI-04 structural work, not this PR.
   - >-
-    Re-verify the next free Decision number (grep the max "## Decision NNN:" header; target is 144).
-    Author the new Decision at the TOP of docs/DECISIONS.md's decision list (newest-first, immediately
-    above "## Decision 143:") using the Decision-126 section template and the drafted content in the
-    DECISION-144 reference block below. Worded as an EXPLICIT amendment of Decision 98 point 1 and
-    Decision 92 point 5; extends Decision 129 reads->writes; EXCLUDES PlatformAdmin from boundary
-    attachment; RETAINS Decisions 77 and 101 untouched; forward-direction (a plain "## Decision NNN:"
-    header, not a Decision-105 CD shape). Do NOT edit the Decision 98/92 body text.
+    Re-verify the next two free Decision numbers (grep the max "## Decision NNN:" header; targets are
+    144 anchor + 145 stopgap). Author BOTH at the TOP of docs/DECISIONS.md's decision list in
+    newest-first order using the Decision-126 section template: FIRST the anchor Decision 144
+    immediately above "## Decision 143:" per the DECISION-144 reference block below, THEN the stopgap
+    Decision 145 immediately above the just-authored Decision 144 per the DECISION-145 reference block
+    below (final order top-to-bottom: 145, 144, 143). Decision 144 is worded as an EXPLICIT amendment
+    of Decision 98 point 1 and Decision 92 point 5; extends Decision 129 reads->writes; EXCLUDES
+    PlatformAdmin from boundary attachment; RETAINS Decisions 77 and 101 untouched; forward-direction
+    (a plain "## Decision NNN:" header, not a Decision-105 CD shape); do NOT edit the Decision 98/92
+    body text. Decision 145 records the arbitrary/temporary ceiling raise, amends Decision 134 clause
+    2, and cites audits/decision-consolidation-growth-f79d6b5.yaml; do NOT edit the Decision 134 body
+    text.
   - >-
     Register 7 new tier_items in docs/ROADMAP-PLATFORM.yaml immediately after T2.43's block (after its
     "status: complete" line, before the "# ----- T3:" comment) using the drafted TIER-ITEMS reference
@@ -348,7 +437,7 @@ execution_steps:
   - >-
     Execute the Verification Plan -- run each step; loop until all pass. On an unrecoverable failure,
     stop and RCA (Decision 55); do not workaround.
-  - "Report: the Decision number authored, the 7 tier_item ids, the compacted set, and verification results."
+  - "Report: the two Decision numbers authored (144 anchor + 145 stopgap), the raised ceiling value (500_000), the 7 tier_item ids, and verification results (no compaction performed)."
   - >-
     DECISION-144 reference block (author verbatim, adjusting only the number if 144 is taken):
     Title -- "Allow-list inversion: broad-but-bounded deployer under the mandatory permissions
@@ -450,6 +539,66 @@ execution_steps:
     own change stream), Decision 84 (authored here, backfilled to ops_decisions, never written
     directly).
   - >-
+    DECISION-145 reference block (author verbatim, adjusting only the number if 145 is taken -- use
+    anchor+1). Title -- "Arbitrary stopgap raise of the DECISIONS.md live byte ceiling (400,000 ->
+    500,000) pending the structural growth-direction mechanism (amends Decision 134 clause 2)".
+    Sections:
+    Problem -- docs/DECISIONS.md is at ~398,438 / 400,000 bytes (the Decision 134 clause 2 ceiling), so
+    the two forward-direction Decisions this wave adds (144 anchor + this one) cannot land as pure
+    additions. The STRUCTURAL fix -- a compaction-to-stub lifecycle, a significance gate on inflow, and
+    a near-term relief sweep -- is designed but UNBUILT and UNOWNED
+    (audits/decision-consolidation-growth-f79d6b5.yaml, findings DCG-01/DCG-02/DCG-05, all
+    dedup_hit_count 0). Decision 134 clause 2's own doctrine and decision-entry.yaml warn that raising
+    the ceiling silently trades away the read-cost guard the decision-scout depends on, so a raise must
+    be a conscious, cited, temporary act -- not a frictionless constant edit.
+    Decision (numbered) --
+    (1) Raise _DECISIONS_LIVE_MAX_BYTES in scripts/checks/decisions/validate_decisions_size.py from
+    400_000 to 500_000. This is an ARBITRARY, TEMPORARY stopgap chosen for headroom, not a re-derived
+    sizing. The 500,000-byte ceiling still fits the decision-scout's mandatory whole-live-file read
+    within the 200k-token context window (~500 KB ~= 125k tokens < 200k), so Decision 134's
+    bridge-guard protected-consumer assumption still holds; _DECISIONS_LIVE_MAX_H2 (120) and
+    _DECISIONS_COMBINED_MAX_BYTES (700,000) are UNCHANGED.
+    (2) AMENDS Decision 134 clause 2: the live-byte ceiling value is 500,000 (was 400,000); Decision
+    134 clause 2 otherwise STANDS (the dual guard, the 120-header ceiling, the 700,000 combined
+    backstop, and the relief-valve naming). No edit to the Decision 134 body text (forward-direction
+    amendment convention, Decision 126/143).
+    (3) This is a STOPGAP, NOT the fix. The structural/architectural remedy for unbounded decision-log
+    growth is authored and unactioned in audits/decision-consolidation-growth-f79d6b5.yaml: DCG-01
+    (near-term relief sweep -- human-disposed archival/compaction restoring >=20 KB headroom), DCG-02
+    (the number-preserving compact-to-stub + archival lifecycle: eligibility criterion, stub grammar,
+    terminal-SCD2 semantics), DCG-05 (an explicit significance gate shaping inflow). This raise buys
+    headroom until that mechanism is built and owned; it does not substitute for it and must not become
+    the standing response (the Decision 128 / decision-entry.yaml anti-pattern: a raise silently trades
+    away portability/read-cost governance).
+    (4) Records an inline provenance comment on the raised constant and updates the check's docstring /
+    FAIL-message Decision citation to name this amendment. No new raise-marker guard is added --
+    validate_decisions_size carries no raise-approval mechanism (contrast validate_sloc_budget_raises +
+    config/sloc_budgets.yaml's "# raise-approved: dec-NNN"), so the raise is a plain constant edit
+    recorded durably here and in git.
+    Reversal conditions -- Retire or lower this ceiling when the DCG structural mechanism lands (the
+    compaction lifecycle + significance gate reclaim live headroom, so the ceiling can return toward
+    400,000 or the guard retire per Decision 134's own reversal), or when the decision-scout moves to a
+    warehouse/portal read (Decision 134's protected consumer is gone), or when a 500,000-byte read no
+    longer fits the model context window. Re-decided, never silently renewed: a SECOND stopgap raise is
+    a signal the structural fix is overdue, not a routine act.
+    Rationale -- The alternative relief valve (compacting superseded decision bodies to stubs in this
+    same PR) was rejected for the anchor PR: victim-selection is a DPI-04 human disposition with a
+    body-citation hazard (a mis-compacted body-cited clause is wrong-but-trusted), and bundling it
+    couples an unrelated judgment-heavy edit to the governance anchor. A conscious, cited, temporary
+    ceiling raise is the lower-risk stopgap that keeps the anchor PR focused, provided it is recorded
+    as its own reversal-conditioned Decision (this one) naming the structural fix and the audit that
+    owns it. Per Decision 86 rationale lives here; per Decision 128 / decision-entry.yaml the raise is
+    loud and Decision-cited, not silent.
+    Related -- Decision 134 (clause 2 amended -- the ceiling this raises; its dual guard, header and
+    combined ceilings, and relief-valve doctrine retained), Decision 128 (the raise-is-a-silent-trade
+    anti-pattern consciously observed here -- loud + cited, not frictionless), Decision 114 (the
+    size-ceiling + reversal-conditions precedent Decision 134 mirrors), Decision 126 (forward-direction
+    amendment convention -- amend in the amending Decision, not the Decision 134 body), Decision 86
+    (rationale routes here, no new prose doc), Decision 84 (numbering authority + backfill ETL --
+    authored here, backfilled post-merge, never written directly),
+    audits/decision-consolidation-growth-f79d6b5.yaml (DCG-01/02/05 -- the structural fix this
+    stopgaps toward).
+  - >-
     TIER-ITEMS reference block (author each with fields: id, tier: T2, name, intent, depends_on,
     files_in_scope, exit_criteria [id/text/status: open], related_decisions, effort, strategic:
     false, status: not_started). CONTENT:
@@ -501,8 +650,15 @@ execution_steps:
     (PlatformAdmin excluded) with the three self-protection denies carried (simulate-principal-policy),
     c4 authority_budget.json is v2 and validate_authority_budget stays green with the
     boundary-propagation condition + self-ARN exclusion + self-protection denies retained, c5
-    validate_ci_refresh_read_coverage asserts WRITE coverage per managed resource type; related_decisions
-    [144,98,92,129,94,77]; effort L.
+    validate_ci_refresh_read_coverage asserts WRITE coverage per managed resource type, c6 a RECURRING
+    MEASURED review of the per-change-class incident-free auto-apply track record is scheduled as a
+    standing measured act (surfaced periodically -- e.g. each /orient or preflight -- from the
+    auto-apply telemetry; it re-evaluates whether each widened change-class has a clean incident-free
+    track record and whether to widen further or re-narrow, so the Decision 92 widen-on-track-record
+    ratchet does not stall at v2; the criterion is the SCHEDULE + measurement source, per Decision 86
+    kept OUT of the Decision-144/92 body); related_decisions [144,98,92,129,94,77]; effort L; intent
+    NOTES c6 is the home the plan-critique gate assigned the ratchet-review (Finding 2), deliberately
+    a tier_item measured act rather than a Decision-body clause.
     T2.49 "CI/deploy role consolidation: one planner role + one code-deploy role (DEP-12)"; depends_on
     [T2.48]; files terraform/personal/oidc.tf, terraform/bootstrap/github_ci_apply.tf; criteria c1 role
     census 17->15 with all capability-split tests green (pr-no-tfstate, apply-only-writer preserved),
@@ -524,7 +680,8 @@ execution_steps:
     (content-addressed zips) are DEP-03's remedy. Cross-ref Decision 144 and
     audits/terraform-deploy-redesign-b67955b.yaml. No new tier_item is needed for DEP-03."
 rollback: >-
-  Both edits are documentation changes on a single PR; revert the squash-merge commit to remove the
-  new Decision, tier_items T2.44-T2.50, and the T2.42 note (the compacted superseded-decision stubs
-  revert with the same commit). No warehouse write occurs until the post-merge ops_data_portal
-  --backfill-decisions-md ETL (out of this plan's scope).
+  All edits are on a single PR (two doc files + one constant in validate_decisions_size.py); revert
+  the squash-merge commit to remove Decision 144, Decision 145, tier_items T2.44-T2.50, the T2.42
+  note, and the byte-ceiling raise (which reverts to 400_000 with the commit). No superseded body was
+  compacted, so there are no stubs to restore. No warehouse write occurs until the post-merge
+  ops_data_portal --backfill-decisions-md ETL (out of this plan's scope).
