@@ -1,0 +1,182 @@
+schema_version: 1
+slug: "prose-truth-repair-residual"
+intent: >-
+  Residual sweep completing audit finding ACG-03 (audits/agent-context-governance-cdfda88.yaml):
+  fix the two remaining stale-prose instances the merged prose-truth-repair slice-1 plan did not
+  cover -- a stale DECISIONS.md byte literal in .claude/commands/plan.md and a stale
+  telemetry-migration-history narration in scripts/preflight/context_docs.py's
+  check_telemetry_health() docstring. Both replace an inline point-in-time fact with a pointer to
+  its living authority (the Decision 134 ceiling; Decision 84 / tier_item T2.36), per Decision 86
+  routing (rationale/history lives in Decisions, not inlined in prose or code).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-prose-truth-repair-residual.yaml
+phase: >-
+  Platform governance -- agent-context-governance audit remediation, ACG-03 residual. The merged
+  slice-1 plan (docs/plans/PLAN-prose-truth-repair.yaml) fixed the same two rot patterns
+  (">200KB"/"~230KB" DECISIONS.md size literals; the "died with the 2026-05-28 account migration"
+  telemetry narration) in decision-scout/SKILL.md, planning/SKILL.md, and plan-critique/SKILL.md,
+  but did not reach .claude/commands/plan.md or scripts/preflight/context_docs.py, which carry the
+  identical two patterns. No owning tier_item (ACG-03's roadmap_crossref classification is
+  "novel"); ships as a standalone IMPLEMENTATION plan (STRATEGIC suspended per Decision 67).
+scope:
+  - file: .claude/commands/plan.md
+    action: Modify
+    purpose: >-
+      ACG-03 rotting literal. Step 3 (~line 47) stated the DECISIONS.md size as "currently
+      >200KB" -- already stale at audit time (398KB measured) and now doubly stale since
+      Decision 145 (2026-07-21) raised the live ceiling to 500,000 bytes. Replace the byte literal
+      with a pointer to the Decision 134 ceiling, mirroring the exact phrasing the merged slice-1
+      plan applied to decision-scout/SKILL.md and planning/SKILL.md ("large -- near its Decision
+      134 size ceiling").
+  - file: scripts/preflight/context_docs.py
+    action: Modify
+    purpose: >-
+      ACG-03 E-relocation, residual instance. check_telemetry_health()'s docstring (~line 97)
+      narrated "the Athena telemetry tables died with the 2026-05-28 account migration" and that
+      "the previous implementation polled TABLE_NOT_FOUND for ~a minute every session" --
+      decision-history detail that belongs at its layer per Decision 86, not inlined in code.
+      Docstring-only: replace the narration with a pointer to Decision 84 / tier_item T2.36,
+      keeping the operative statement (reports not_migrated without issuing any query) intact. No
+      behavior or signature change.
+bundled_recommendations: []
+closes_criteria: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `grep -n ">200KB" .claude/commands/plan.md` returns no match, and the same sentence now
+    references "Decision 134" as a pointer (no fresh byte literal substituted in its place).
+  - >-
+    `grep -n "2026-05-28" scripts/preflight/context_docs.py` returns no match, and
+    `check_telemetry_health`'s docstring references "Decision 84" and "T2.36" in its place; the
+    function's return value, signature, and the existing test_context_docs.py::TestTelemetryHealth
+    suite are all unchanged.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      plan.md no longer states the DECISIONS.md size as a byte literal and instead points at the
+      Decision 134 ceiling.
+    command: >-
+      bash -c '! grep -n ">200KB" .claude/commands/plan.md && grep -q "Decision 134"
+      .claude/commands/plan.md && echo OK'
+    expected: "Prints OK: no >200KB literal in plan.md; a Decision 134 reference is present."
+    fix_if: "The literal survives, or no Decision 134 pointer was added -- fix the Step 3 sentence."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time literal removal on a single file the merged slice-1 plan already fixed everywhere
+      else it appeared; a standing repo-wide "no DECISIONS.md size literal" guard is the
+      ACG-01/ACG-05 prose-governance layer's remit (named in slice-1's own waivers), not this
+      two-file residual sweep.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      check_telemetry_health()'s docstring no longer narrates the 2026-05-28 Athena-migration
+      history and instead points at Decision 84 / tier_item T2.36.
+    command: >-
+      bash -c '! grep -n "2026-05-28" scripts/preflight/context_docs.py && grep -q "T2.36"
+      scripts/preflight/context_docs.py && echo OK'
+    expected: "Prints OK: no 2026-05-28 date literal remains; a T2.36 pointer is present."
+    fix_if: "The narration survives, or the T2.36 pointer is missing -- rewrite the docstring."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time docstring narration strip mirroring slice-1's identical waiver pattern for the
+      planning-skill instance of the same sentence; the systematic guard is out of this residual
+      slice's scope.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      check_telemetry_health()'s behavior and signature are unchanged after the docstring-only
+      edit (real code path, not just grep).
+    command: "bin/venv-python -m pytest tests/session/preflight/test_context_docs.py -q"
+    expected: >-
+      All tests pass, including TestTelemetryHealth::test_stub_returns_not_migrated_shape and
+      test_stub_makes_no_aws_calls, unmodified.
+    fix_if: "A test fails -- the edit touched behavior, not just the docstring; revert to a docstring-only change."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      test_selector-expressible, but this file already runs under validate --pre's pytest tier in
+      CI; a separate standing check would duplicate existing coverage (mirrors slice-1's step 11
+      waiver).
+  - step: 4
+    phase: pre-deploy
+    action: "Lint gate on the one modified Python file -- no new lint debt from the docstring edit."
+    command: "bin/venv-python -m ruff check scripts/preflight/context_docs.py"
+    expected: "ruff clean."
+    fix_if: "ruff flags an issue introduced by the docstring edit -- fix it."
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: "This plan document is schema-valid (PlanDocument) and the fast presubmit tier passes repo-wide."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0."
+    fix_if: "Any check fails -- fix the named check before proceeding."
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - "IMPLEMENTATION plan only -- STRATEGIC is suspended (Decision 67 / AGENTS.md Temporary Operational Constraints)."
+  - "Public repo (Decisions 73, 83, 101): no AWS account IDs/ARNs, IAM ExternalIds, secrets, or internal hostnames in either edited surface."
+  - >-
+    Decision 86 routing: relocate by POINTER (the Decision 134 ceiling; Decision 84 / T2.36) --
+    create NO new standing prose-architecture doc and add NO restated copy that becomes a second
+    surface to sync.
+  - "Docstring-only on scripts/preflight/context_docs.py: no behavior or signature change to check_telemetry_health()."
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "File NO recommendations from this plan; no Resolves: trailer (this residual bundles no recommendation)."
+  - "Never Edit/Write logs/.recommendations-log.jsonl or docs/DECISIONS.md directly (neither is touched by this plan)."
+context:
+  - >-
+    Completes audit finding ACG-03 (audits/agent-context-governance-cdfda88.yaml) alongside the
+    already-merged docs/plans/PLAN-prose-truth-repair.yaml, which fixed the identical two rot
+    patterns (a DECISIONS.md size literal; the telemetry-migration-history narration) in every
+    surface its scope named except these two files. Governing decisions (134, 86) were scouted and
+    critiqued in that slice-1 plan; this residual reuses that determination rather than re-running
+    decision-scout/plan-critique for an already-settled pointer-not-literal pattern applied to two
+    more instances of the same fix.
+  - >-
+    Decision 145 (2026-07-21, amends Decision 134 clause 2) just raised the DECISIONS.md live-byte
+    ceiling from 400,000 to 500,000 -- direct evidence for why plan.md must cite "the Decision 134
+    ceiling" as a pointer rather than any fresh byte number: a hardcoded figure would already be
+    wrong the day it is written, and would rot again at the next ceiling amendment. The fix
+    intentionally names no byte magnitude.
+  - >-
+    Decisions cited: 134 (DECISIONS.md byte/header ceiling -- the pointer target for the plan.md
+    fix), 145 (amends Decision 134 clause 2, live-byte ceiling now 500,000 -- confirms why a
+    pointer, not a literal, is correct here), 86 (forward-routing: history/rationale -> Decisions,
+    no restated inline narration), 84 (DuckLake consolidation -- canonical home for the telemetry
+    Athena-migration history the context_docs.py docstring previously narrated inline), and
+    tier_item T2.36 (the Phase-4 carrier for telemetry's DuckLake re-land). 67 (STRATEGIC freeze
+    active -- this ships as IMPLEMENTATION). 73/83/101 (public-repo boundary).
+  - >-
+    Scope is intentionally narrow (2 files): decision-scout and plan-critique already ran against
+    this exact fix pattern in the merged slice-1 plan and are deliberately not re-run here (per
+    this dispatch's explicit approach) -- the same two governing decisions apply unchanged to two
+    residual instances the prior sweep's grep sample missed.
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/agent-context-governance-impl-a7rirp-s1b-residual)"
+  - "Both target files located, read, and their exact stale text confirmed against audit finding ACG-03 before editing"
+  - "Acceptance criteria understood and independently verifiable via the VP grep/pytest steps"
+execution_steps:
+  - >-
+    .claude/commands/plan.md (Step 3, ~line 47): replace "that's the full DECISIONS.md, currently
+    >200KB, a cost the subagent avoids" with "that's the full DECISIONS.md (large -- near its
+    Decision 134 size ceiling), a cost the subagent avoids" -- the identical phrasing the merged
+    slice-1 plan used for decision-scout/SKILL.md and planning/SKILL.md.
+  - >-
+    scripts/preflight/context_docs.py (check_telemetry_health(), ~line 97): replace the docstring's
+    "the Athena telemetry tables died with the 2026-05-28 account migration, so the previous
+    implementation polled TABLE_NOT_FOUND for ~a minute every session" narration with a pointer --
+    "the Athena telemetry tables are retired ... Telemetry re-lands on DuckLake in consolidation
+    Phase 4 -- see Decision 84 / tier_item T2.36 for history and status." Keep the operative
+    "reports not_migrated WITHOUT issuing any query" statement and the function body/return dict
+    unchanged.
+  - "Execute the Verification Plan; on any failure, fix and re-run (Decision 55 -- no workaround loops)."
+work_areas: []
+rollback: >-
+  Both edits are prose/docstring-only changes on a feature branch with no behavior, schema, or
+  data-shape change. Revert the branch (git revert the squash-merge, or reset the branch
+  pre-merge) -- a pure git operation with no external side effects.
