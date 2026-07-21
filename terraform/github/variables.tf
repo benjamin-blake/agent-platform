@@ -25,4 +25,9 @@ variable "admin_bypass_actor_id" {
 variable "gated_apply_reviewer_user_ids" {
   description = "List of GitHub numeric user IDs required to approve the tf-gated-apply Environment gate before the gated-apply job may execute. Supplied at apply time -- never committed with a literal default. Resolve before applying: `gh api /user --jq .id` (authenticated as the reviewer) or the GitHub MCP get_me tool."
   type        = list(number)
+
+  validation {
+    condition     = length(var.gated_apply_reviewer_user_ids) > 0
+    error_message = "gated_apply_reviewer_user_ids must contain at least one GitHub numeric user id; an empty list silently disables the tf-gated-apply required-reviewer gate."
+  }
 }

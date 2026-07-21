@@ -193,6 +193,32 @@ resource "aws_iam_role_policy" "platform_dev_runtime" {
           aws_secretsmanager_secret.alpaca_live.arn,
         ]
       },
+      {
+        # DEP-13 (T2.44 / Decision 144 pt.3, pt.7): explicit Deny overriding the bucket-wide
+        # S3ReadWrite Allow above -- fences the ambient PlatformDev runtime identity (every CC-web
+        # session) off the convergence-record anti-masking anchor and the tfplan/tfstate prefixes,
+        # so the runtime identity cannot spoof a green convergence record or tamper with a saved
+        # plan.bin. Explicit Deny always overrides an Allow elsewhere in the same policy.
+        Sid    = "DenyStateAndConvergenceWrite"
+        Effect = "Deny"
+        Action = ["s3:PutObject", "s3:DeleteObject"]
+        Resource = [
+          "${aws_s3_bucket.data_lake.arn}/convergence/personal/*",
+          "${aws_s3_bucket.data_lake.arn}/tfplan/personal/*",
+          "${aws_s3_bucket.data_lake.arn}/tfstate/personal/*",
+        ]
+      },
+      {
+        # DEP-13 (T2.44 / Decision 113): deny tfstate READ too -- both ExternalIds (PlatformDev's
+        # own and PlatformAdmin's) live in tfstate's assume_role_policy trust documents, so a
+        # DEV-container key theft that only reaches PlatformDev must not be able to read them out
+        # of state and escalate to PlatformAdmin. ExternalId-based state recovery is admin-tier-only
+        # (see terraform/CLAUDE.md).
+        Sid      = "DenyStateRead"
+        Effect   = "Deny"
+        Action   = ["s3:GetObject"]
+        Resource = ["${aws_s3_bucket.data_lake.arn}/tfstate/personal/*"]
+      },
     ]
   })
 }

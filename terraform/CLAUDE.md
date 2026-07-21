@@ -62,6 +62,13 @@ are recoverable from the **remote Terraform state in S3**, which IS the source o
   (or a regenerated, still-gitignored tfvars) for `plan`.
 - **Never paste these values into chat, a PR, or any committed file** -- the ExternalIds are AssumeRole
   trust secrets and the account id is shape-blocked by the pre-commit `never-commit` hook.
+- **ExternalId-based state recovery is admin-tier-only (DEP-13 / T2.44 / Decision 144 pt.3):** the
+  recovery path above requires reading `tfstate/personal/*` directly, and only `PlatformAdmin` (the
+  `agent_platform_admin` profile) may do so. `PlatformDev` (the ambient `agent_platform` runtime
+  identity used by every CC-web session) is explicitly denied `s3:GetObject` on `tfstate/personal/*`
+  (the `DenyStateRead` statement in `terraform/personal/platform_roles.tf`'s DailyOps policy), so this
+  ExternalId recovery procedure is unreachable from the routine runtime identity by design -- it
+  requires deliberately assuming the admin tier.
 
 **Deployment model (Decision 126):** the PR -> CI apply pipeline below is the default, ambient
 path. Local/manual apply is operator-only break-glass, not a routine agent action -- see
