@@ -6209,7 +6209,10 @@ tier_items:
       - id: c2
         text: >-
           All remaining ops tables transit the closed boundary (or are retired per T-1.9); no backend flag
-          exists (Decision 84 I-1)
+          exists (Decision 84 I-1). Re-grounded 2026-07-21 (PLAN-t2-26-migrate-ops-execution-plans): three
+          of four tables now transit the closed boundary (ops_decisions, ops_priority_queue,
+          ops_execution_plans per c9) -- ops_session_log is the sole remaining table, blocked on the
+          CD.40/T3.20 retire-or-migrate disposition, not yet decided.
         status: open
       - id: c3
         text: >-
@@ -6219,7 +6222,11 @@ tier_items:
           c2 -- ops_compaction_handler also compacts telemetry staging (TABLE_NAMES parses both dt=
           ops keys and trade_date= telemetry keys), so full retirement requires telemetry retirement
           (T2.36 / Phase 4) in addition to c2; and c2's remaining ops_session_log half is itself gated
-          on T3.20 (retire-or-migrate) + the unratified CD.40.
+          on T3.20 (retire-or-migrate) + the unratified CD.40. Re-grounded 2026-07-21
+          (PLAN-t2-26-migrate-ops-execution-plans): ops_execution_plans migrated per c9 and never carried
+          an Iceberg write path to retire in the first place (create-fresh-on-DuckLake, see c9 note) --
+          this blocker's ops-side scope is now solely ops_session_log; the telemetry half (T2.36) is
+          unchanged.
         status: open
       - id: c4
         text: >-
@@ -6229,8 +6236,12 @@ tier_items:
         met_by: t2-26-drop-migrated-athena-views
       - id: c8
         text: >-
-          Retire the Athena _current views of the two still-Iceberg ops tables (the survivor surface
-          previously owned by T2.7, absorbed 2026-07-06 per RMAP-13)
+          Retire the Athena _current view of the one remaining still-Iceberg ops table, ops_session_log
+          (the survivor surface previously owned by T2.7, absorbed 2026-07-06 per RMAP-13). Re-grounded
+          2026-07-21 (PLAN-t2-26-migrate-ops-execution-plans, c9): the execution_plans half of this
+          criterion is a no-op -- no live Iceberg table or _current Athena view ever existed for it in the
+          personal account (see c9 note) -- so this criterion now closes solely on the ops_session_log
+          disposition (CD.40/T3.20).
         status: open
       - id: c5
         text: scripts/sync_athena_to_pgvector.py deleted; rg returns no references
@@ -6258,7 +6269,8 @@ tier_items:
           DDL + a dead OpsWriter staging path) -- so this is create-fresh-on-DuckLake, not migrate-from-Iceberg,
           and c8's execution_plans half is a no-op verification. c2/c3/c8 remain open on the ops_session_log
           half (CD.40 / T3.20 pending).
-        status: open
+        status: met
+        met_by: t2-26-migrate-ops-execution-plans
     related_candidate_decisions: [CD.31, CD.33, CD.34]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): decomposed per_table into atomic IMPLEMENTATION plans
@@ -6319,6 +6331,40 @@ tier_items:
         Re-verified post-apply: 0 rows for both views in information_schema.views; convergence
         record green (commit a92d2cb). c4 -> met (met_by: t2-26-drop-migrated-athena-views). Parent
         T2.26 stays in_progress -- c2/c3/c7 remain open.
+      - 2026-07-21 (PLAN-t2-26-migrate-ops-execution-plans, PRs #648 + #651): shipped c9. Expanded the
+        DuckLake field_semantics schema for ops_execution_plans (promoted scalars + steps/
+        critique_history JSON-blob columns; status dormant -> live); authored the named portal
+        producer scripts/ops_portal/execution_plans.py (write_ops, fail-loud, Single-Portal
+        preserved); repointed the executor's save_plan off OpsWriter/Iceberg onto that producer via a
+        function-local deferred import (Decision 80; .importlinter ignore_imports entry added since
+        static analysis can't distinguish deferred from module-level imports); retired the dead
+        Iceberg/OpsWriter write path for this table entirely (removed ops_execution_plans from
+        scripts/ops_writer.py and scripts/s3_log_store.py's routing table, and from
+        docs/contracts/log-storage.yaml); routed DQ (config/agent/data_quality/ops.yaml + a new
+        enforcement-readiness manifest) and sync.ops through the closed ducklake_reader; registered
+        planning_session_id as an opaque soft-FK to telemetry_sessions.session_id in _joins.yaml /
+        session-id.yaml. Pre-merge VP steps 1-7 and 14 passed on PR #648, gated behind the mandatory
+        anti-bias code-review pass (fixed one High finding -- the (rec_id, revision) uniqueness DQ
+        check was vacuous against the current-projection table; introduced a genuine {hist}/{tbl}
+        substitution primitive in data_quality_execute.py to check history-table uniqueness and add
+        the promised revision-monotonic guard -- and one Medium). Two live-infrastructure bugs
+        surfaced only by the post-deploy VP and were fixed as in-scope follow-ups (Decision 55/103: no
+        workaround, forward-fix only): (a) VP step 10's write-path smoke test 422'd on an unknown
+        `_contract_version` field -- the ducklake_writer handler unconditionally injects this field
+        for every ops table pre-schema-gate, but it was never registered for
+        ops_execution_plans; fixed by adding the column (PR #651); (b) after that fix deployed, the
+        same smoke test still failed with a live BinderException (`_contract_version` not found in
+        FROM clause) because the physical DuckLake tables had been created before the schema fix
+        landed -- fixed by force-recreating both tables via a direct SigV4-signed create_ops_tables
+        call (force_recreate_tables must be a top-level payload key; _project_ops_record() strips
+        non-schema flags nested under "record"). VP steps 8-13 then all confirmed PASS against the
+        redeployed, twice-fixed infrastructure: DQ verdict clean, sync.ops pull round-trips the table,
+        no ops_execution_plans_current Athena view exists, and the write/read path is live end-to-end.
+        c9 -> met (met_by: t2-26-migrate-ops-execution-plans). c2/c3/c8 re-grounded (text-only) to
+        reflect ops_session_log as the sole remaining ops table and to correct a stale reference (no
+        live Iceberg table or _current view ever existed for execution_plans in the personal account).
+        Parent T2.26 stays in_progress -- c2/c3/c7/c8 remain open, all gated on the ops_session_log
+        CD.40/T3.20 retire-or-migrate disposition (plus c3's T2.36 telemetry half).
 
   - id: T2.27
     tier: T2
