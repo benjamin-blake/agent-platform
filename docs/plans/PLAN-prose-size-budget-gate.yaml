@@ -1,0 +1,358 @@
+schema_version: 1
+slug: "prose-size-budget-gate"
+intent: >-
+  Cap unbounded growth of ambient agent-instruction prose by adding a per-surface byte-budget
+  registry (config/prose_budgets.yaml) plus a validate.py ratchet gate that mirrors the Decision
+  102/128/130 SLOC mechanism, over the Decision-127 prose classes -- realizing Decision 43's
+  prose-budget doctrine on the live .claude/**/CLAUDE.md / SKILL.md / docs/PROJECT_CONTEXT.md
+  surfaces so lower-tier models stay inside a portable context budget.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-prose-size-budget-gate.yaml
+phase: >-
+  Platform hardening -- agent-context governance audit (finding ACG-01, slice 4 / final).
+  Ambient-prose size-budget ratchet. No roadmap tier_item; audit-remediation. Realizes the
+  token/size-budget intent of rec-432 + rec-433 on live surfaces.
+scope:
+  - file: config/prose_budgets.yaml
+    action: Create
+    purpose: >-
+      Prose byte-budget registry (mirror of config/sloc_budgets.yaml). Nested block-style
+      budgets keyed by surface class: S1 (root ambient load-set aggregate), S2 (each non-root
+      **/CLAUDE.md), S4 (each .claude/skills/*/SKILL.md entry file), S8 (docs/PROJECT_CONTEXT.md).
+      S3 (.claude/commands/*.md) is MEASURED-only and gets NO entry. Every budget seeded at the
+      surface's CURRENT byte size (ratchet). DECISIONS.md / DECISIONS_ARCHIVE.md are deliberately
+      absent (governed by validate_decisions_size; see context).
+  - file: scripts/checks/prose/__init__.py
+    action: Create
+    purpose: Package marker for the new prose size-governance check domain (mirror scripts/checks/sloc/).
+  - file: scripts/checks/prose/prose_limits.py
+    action: Create
+    purpose: >-
+      validate_prose_limits(failed): reuse measure_prose_context() from
+      scripts/preflight/prose_context.py for byte measurement; enforce current<=budget per
+      registered surface (S1 aggregate; S2/S4/S8 per-file); FAIL on an unregistered measured
+      S2/S4 surface; dedup S1 load-set members out of the S2 per-file pass (split-proof). FAIL
+      message names relocate/defer/loud-raise relief valves -- never split/decompose.
+  - file: scripts/checks/prose/prose_budget_raises.py
+    action: Create
+    purpose: >-
+      validate_prose_budget_raises(failed, base_reader=None): self-contained mirror of
+      validate_sloc_budget_raises -- raw-text parse (preserve inline markers), diff
+      config/prose_budgets.yaml vs origin/main, FAIL any is_new/is_increase lacking a
+      `# raise-approved: dec-NNN <reason>` marker that names a real `## Decision NNN:` header;
+      decreases/removals pass; SKIP when origin/main is unreachable.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Three-step wiring (part 2): insert validate_prose_limits into BOTH pre_sequence() and
+      full_sequence() (adjacent to validate_sloc_limits), and validate_prose_budget_raises into
+      pre_sequence() only (adjacent to validate_sloc_budget_raises) -- mirroring the SLOC tier
+      placement exactly.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Three-step wiring (part 3): add facade re-export lines
+      `from scripts.checks.prose.prose_limits import validate_prose_limits  # noqa: F401,E402`
+      and the prose_budget_raises equivalent, near the sloc re-export block (~line 211), so the
+      globals()[name](failed) dispatch resolves and tests/test_checks_registry.py reachability
+      holds.
+  - file: tests/checks/prose/__init__.py
+    action: Create
+    purpose: Mirror-package marker (tests/checks/prose/ per the retired-grandfather mirror convention).
+  - file: tests/checks/prose/test_prose_limits.py
+    action: Create
+    purpose: >-
+      V2 unit tests for validate_prose_limits exercising REAL code paths against controlled tmp
+      fixtures (patch _common.ROOT + prose_context resolvers) plus a live-tree green-at-seed
+      smoke. NO pytest.importorskip / boto3 guard (slice-3 CI lesson, origin/main bf3fbf3).
+  - file: tests/checks/prose/test_prose_budget_raises.py
+    action: Create
+    purpose: >-
+      V2 unit tests for validate_prose_budget_raises: unmarked increase FAILS; new registration
+      FAILS; marker citing a real Decision header PASSES; marker citing a nonexistent header
+      FAILS; decrease/removal PASS; origin/main-unreachable SKIPs. NO importorskip guard.
+bundled_recommendations:
+  - rec-432
+  - rec-433
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    validate.py FAILS a PR that grows a registered prose surface past its budget WITHOUT a raise
+    marker: validate_prose_limits fails when current bytes > budget (agent grew the surface but
+    left the budget unchanged), and validate_prose_budget_raises fails when the budget line is
+    raised in config/prose_budgets.yaml with no `# raise-approved: dec-NNN` marker.
+  - >-
+    validate.py PASSES a budget raise whose entry line carries `# raise-approved: dec-NNN <reason>`
+    naming a real `## Decision NNN:` header in docs/DECISIONS.md (and validate_prose_limits passes
+    because current <= the raised budget).
+  - >-
+    config/prose_budgets.yaml gates S1, S2, S4, and S8, seeds every entry at the surface's current
+    byte size, and contains NO S3 (.claude/commands/*.md) gate entry; DECISIONS.md /
+    DECISIONS_ARCHIVE.md are absent.
+  - >-
+    validate_prose_limits derives all byte counts from measure_prose_context()
+    (scripts/preflight/prose_context.py) with no re-implemented measurement, and no file in the S1
+    root load-set is also gated as an S2 per-file entry (no double-count / contradictory
+    S1-vs-S2 pass-fail).
+  - >-
+    Every prose FAIL message names the relocate-to-L2/contracts (Decision 86), defer-to-uncapped-aux,
+    and loud-Decision-cited-raise relief valves, and never instructs splitting or decomposing a
+    surface into @-imported files (Decision 114/110 anti-fragmentation).
+  - >-
+    Both checks are reachable via validate.py's facade (tests/test_checks_registry.py green);
+    validate_prose_limits runs in BOTH the --pre and full tiers, validate_prose_budget_raises runs
+    in --pre, and the raise-guard SKIPs (non-failing) when origin/main is unreachable.
+  - >-
+    rec-432 and rec-433 are closed as realized (Resolves trailer -> rec-autoclose) and no longer
+    reference the deleted .github/*.prompt.md / *.agent.md surfaces.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run both new check-module unit suites. Coverage must include: S1 aggregate over-budget FAIL;
+      S2/S4 per-file over-budget FAIL; unregistered-S2/S4-surface FAIL; S1-member dedup (a
+      load-set file is never double-gated in S2); the FAIL-message relief-valve text asserts
+      relocate/defer/raise and asserts the strings "split" and "decompose" are ABSENT; raise-guard
+      unmarked-increase FAIL, new-registration FAIL, real-Decision-marker PASS, bad-Decision-marker
+      FAIL, decrease/removal PASS, origin/main-unreachable SKIP.
+    command: bin/venv-python -m pytest tests/checks/prose/test_prose_limits.py tests/checks/prose/test_prose_budget_raises.py -q
+    expected: >-
+      "N passed" with N>0 (a non-zero collected count -- guards against the collect-0 / exit-5
+      regression an errant importorskip guard causes).
+    fix_if: >-
+      Exit 5 / "no tests ran" (an importorskip or misplaced guard) or any assertion failure ->
+      remove the guard / fix the check logic; never silence with a skip.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      These are standing pytest regression guards living in tests/checks/prose/; the full suite
+      re-runs them every CI tier, so graduating the VP invocation would duplicate an
+      already-permanent check rather than add coverage.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the scripts/CLAUDE.md three-step wiring holds -- both new checks are registered,
+      tier-sequenced, and reachable as validate.py module globals (no KeyError at dispatch).
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q
+    expected: >-
+      Pass; the registry reachability assertions resolve validate_prose_limits and
+      validate_prose_budget_raises via getattr on the validate module.
+    fix_if: >-
+      hasattr/getattr failure on a prose check name -> the facade re-export line is missing from
+      scripts/validate.py; add it per the three-step.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      tests/test_checks_registry.py is an existing standing reachability guard that already
+      re-runs every CI tier; a graduated duplicate would add no independent regression coverage.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Green-at-seed proof (runs at /implement time, once scripts.checks.prose exists): with budgets
+      seeded at current sizes, validate_prose_limits reports zero violations against the live tree
+      (confirms the seed matches measured reality and the measurement reuse is wired).
+    command: bin/venv-python -c "from scripts.checks.prose.prose_limits import validate_prose_limits as v; fails=[]; v(fails); assert not fails, fails"
+    expected: Exit 0 with no violation appended to the failed list.
+    fix_if: >-
+      A violation is appended -> a seed value does not match the current measured bytes (re-run
+      `bin/venv-python -m scripts.preflight.prose_context` and reseed) or the S1/S2 dedup is wrong.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      hermetic:false because scripts.checks.prose does not exist on the plan-PR tree (it is a
+      Create in this plan), so a hermetic replay at plan-PR time would ModuleNotFoundError -- it
+      runs at /implement time once the module exists. waive (not graduate) because a standing
+      green-at-seed kernel check would duplicate validate_prose_limits itself, which already
+      enforces current<=budget every CI tier; this step is a one-time implement-time seed-correctness
+      proof, not a new standing guard.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Full fast-tier integration: the two new checks execute inside `validate --pre` and the tier
+      is green on this branch (proves registry ordering + facade dispatch end-to-end, not just in
+      isolation).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exit 0; stdout shows the prose limits section and the prose budget-raise guardrail section
+      having run.
+    fix_if: >-
+      KeyError on a prose check name (registry/facade mismatch) or a prose FAIL -> fix the wiring
+      or the offending surface/budget; do not add the check to ci.yml (validate.py is the SoT).
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: post-deploy
+    action: >-
+      Closure obligation: after squash-merge lands the `Resolves: rec-432, rec-433` trailer and
+      rec-autoclose fires, sync the read cache and confirm both recs are closed. This checks the
+      cache status only -- it does NOT probe the deleted .github/ prompt/agent paths the recs
+      originally named (precedent Decision 121 / rec-146, Decision 91).
+    command: bin/venv-python -m scripts.sync.ops pull && grep '"rec-432"' logs/.recommendations-log.jsonl | grep -q '"closed"' && grep '"rec-433"' logs/.recommendations-log.jsonl | grep -q '"closed"'
+    expected: Both greps exit 0 -- rec-432 and rec-433 are status=closed in the rebuilt cache.
+    fix_if: >-
+      Either rec still open -> the Resolves trailer or rec-autoclose did not fire; close manually
+      via `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed
+      --resolution "realized by prose size-budget gate; surface re-scoped .github/ -> live .claude/"`.
+constraints:
+  - IMPLEMENTATION plan; file NO new recommendations (out-of-scope bugs become recs, not inline fixes).
+  - >-
+    NO new numbered Decision. Operate under Decision 43 (prose-budget doctrine, now realized/completed
+    for the live prose surfaces -- parallel to how Decision 130 completed 43 for SLOC) + Decision
+    102/128/130 (registry + raise-gate + seed-at-current mechanism) + Decision 134 (S8 consumer-sized
+    framing) + Decision 86 (relief-valve routing) + Decision 114/110 (anti-fragmentation) + Decision
+    127 (prose taxonomy). Rationale: the mechanism is fully grounded in existing ratified Decisions,
+    so a new Decision is optional ratification, not required; and the concurrent DECISIONS.md
+    consolidation churn (live headers 104 -> 99) makes minting a new number a needless numbering-race
+    / rebase liability. See context for the divergence statement.
+  - >-
+    FAIL messages must NEVER instruct "decompose" / "split into a facade package" (that is the SLOC
+    relief valve and is WRONG for ambient prose -- @-importing a split CLAUDE.md fragments ambient
+    load, it does not reduce it; Decision 114/110). Cite Decision 128 ONLY for the marker mechanism.
+  - >-
+    Keep docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md OUT of config/prose_budgets.yaml -- they are
+    governed by validate_decisions_size (Decision 134/145); registering them here would put two guards
+    on one surface.
+  - >-
+    Both checks stay cheap/wc-class for the Decision 73 fast tier: a byte stat (reusing
+    measure_prose_context) plus one `git show origin/main:config/prose_budgets.yaml` text diff. The
+    raise-guard SKIPs (loud-but-non-wedging, Decision 55) when origin/main is unreachable -- advisory
+    locally, authoritative in CI (mirror validate_sloc_budget_raises / validate_vp_replay).
+  - >-
+    Split-proof the S1/S2 seam: subtract S1 root-load-set members from the S2 per-file pass so no file
+    is double-gated (contradictory S1-aggregate-vs-S2-per-file pass/fail). Today S1={CLAUDE.md,
+    AGENTS.md} and neither is a non-root CLAUDE.md, so the sets are already disjoint -- the dedup keeps
+    it correct if an @-import ever pulls a CLAUDE.md into the load-set.
+  - >-
+    New test files carry NO pytest.importorskip("boto3") or any collection-time skip guard: the check
+    modules are creds-free, and such a guard makes the isolated test collect 0 items / exit 5 under the
+    fast-tier graduated test_selector, reddening pr-validate even when local `validate --pre` is green
+    (origin/main commit bf3fbf3 fixed exactly this on slice 3).
+  - 100% coverage of the new check modules (tests/CLAUDE.md coverage policy; validate_test_coverage).
+  - >-
+    config/prose_budgets.yaml MUST be block-style (one `key: N` per line), so the raw-text raise-guard
+    parser sees each budget line; budget keys are globally unique across surface groups so the
+    raise-guard's flattened parse is lossless.
+  - Public repository; no AWS account IDs, ARNs, ExternalIds, secrets, or trading alpha in any artifact.
+  - No rescue agents or workaround loops (Decision 55); only modify files listed in Scope.
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): VERDICT FLAGS_FOUND (4 CONTRADICT,
+    all NOTE, no BLOCK). CITE: dec-43 (prose-budget doctrine, realized/completed by this slice),
+    dec-102 (SLOC waiver ratchet template), dec-128 (raise-gate + inline `# raise-approved: dec-NNN`
+    marker mechanism), dec-130 (whole-repo seed/grandfather-at-current), dec-134 (consumer-sized
+    ceiling + relief-valve-in-FAIL-message, S8 pattern), dec-114 (anti-fragmentation / kept
+    single-file, basis for never-split), dec-127 (prose taxonomy: S2/**CLAUDE.md, S4/SKILL.md,
+    S8/L2), dec-86 (relief-valve routing -- relocate to L2/contracts, no new standing prose doc),
+    dec-104 (@register + tier-insert + facade re-export three-step), dec-110 (prose-context metric
+    lineage / anti-fragmentation reinforcement).
+  - "gates: decision-scout=FLAGS_FOUND (orchestrator-dispatched, incorporated); plan-critique=PROCEED after 1 round"
+  - >-
+    CONTRADICT #1 resolution (LOAD-BEARING): Decision 128's SLOC relief valve is "decompose into a
+    facade package" -- WRONG for ambient prose. This plan cites 128 ONLY for the raise-marker
+    mechanism; the FAIL-message relief valves are relocate-to-L2/contracts (Decision 86),
+    defer-to-uncapped-aux-file, and a loud Decision-cited raise. The check must not emit "decompose"
+    or "split".
+  - >-
+    CONTRADICT #2 resolution: (a) DECISIONS.md + DECISIONS_ARCHIVE.md stay out of prose_budgets.yaml
+    (validate_decisions_size owns them -- no two-guards-one-surface). (b) Intentional divergence:
+    validate_decisions_size carries NO raise-marker (Decision 145 pt4), but prose_budgets ADDS one
+    (Decision 128 model). This is coherent -- prose_budgets is a multi-entry ratchet registry where a
+    per-surface raise is a local, reviewable event, whereas the decision log is a single monolith with
+    a consumer-sized ceiling and archival/compaction relief valves. Stated so the divergence reads
+    intentional, not accidental.
+  - >-
+    CONTRADICT #3 resolution: Decision 73 fast-tier -- validate_prose_limits registered in BOTH tiers
+    (like validate_sloc_limits); validate_prose_budget_raises in --pre (like validate_sloc_budget_raises),
+    both cheap (byte stat + one git-show diff), SKIP-on-unreachable.
+  - >-
+    CONTRADICT #4 resolution: S1 aggregate vs S2 per-file cannot double-count -- the gate subtracts S1
+    load-set members from the S2 pass. prose_context's S2 resolver already excludes the ROOT CLAUDE.md
+    by regex, so the sets are disjoint today; the explicit dedup keeps them disjoint under future
+    @-imports.
+  - >-
+    rec-432 (config token-budget thresholds) + rec-433 (a validate.py gate checking .github/*.prompt.md
+    / *.agent.md line counts) were both filed against the .github/ prompt/agent surfaces deleted at
+    T-1.13 and a never-created config/agent_governance.yaml. Their INTENT -- agent-prose size/token
+    budgets enforced by a validate.py gate -- is REALIZED here, re-scoped onto the live Decision-127
+    prose classes as config/prose_budgets.yaml + validate_prose_limits/validate_prose_budget_raises.
+    Closed as realized/satisfied via the Resolves trailer with a resolution note recording the surface
+    re-scope (dead .github/ -> live .claude/). No acceptance probe is run against the deleted paths
+    (precedent Decision 121 / rec-146, Decision 91).
+  - >-
+    Slice-3 dependency SATISFIED: scripts/preflight/prose_context.py and its measure_prose_context()
+    are already merged to origin/main (commit 02bddbf, PR #677). This plan reuses that metric for byte
+    measurement rather than re-implementing it.
+  - >-
+    ci-rca deferral: the one unresolved ci-rca rec at planning time (rec-2762 -- 5 malformed
+    closes_criteria refs in PLAN-ducklake-maintenance-smoke-split.yaml, a concurrent overseer slice)
+    is unrelated to this plan. It shares none of this plan's files, Decisions, or failure category
+    (no closes_criteria are declared here). Deferred with rationale per the /plan Related-Work gate.
+  - >-
+    Complexity: 9 scope files > the 5-file heuristic, but STRATEGIC classification is suspended under
+    the executor freeze -- authored as a single IMPLEMENTATION plan (freeze override).
+  - >-
+    Main divergence: branch was 0 commits behind origin/main at planning time (clean); no scope-file
+    overlap.
+  - >-
+    Test placement: `test_validate.py` retired from _RETIRING_GRANDFATHER_HOMES (rec-2709 Wave 1), so
+    scripts/checks/prose/*.py routes via the mirror convention to tests/checks/prose/test_*.py (sibling
+    of tests/checks/sloc/), each mirror package carrying an __init__.py.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (headers 43, 86, 102, 104, 110, 114, 127, 128, 130, 134 all present; live count 99)
+  - config/sloc_budgets.yaml, scripts/checks/sloc/sloc_limits.py, scripts/checks/sloc/validate_sloc_budget_raises.py read (templates)
+  - scripts/preflight/prose_context.py read (measure_prose_context reuse surface)
+  - scripts/checks/registry.py and scripts/validate.py facade re-export block located
+  - tests/checks/sloc/ mirror package inspected (test layout to mirror)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create config/prose_budgets.yaml. Re-run `bin/venv-python -m scripts.preflight.prose_context`
+    to capture CURRENT bytes, then write nested block-style budgets seeded at those values:
+    S1.root_ambient_load_set = the S1 aggregate; S2.<path> for each non-root CLAUDE.md;
+    S4.<skill-entry-path> for each .claude/skills/*/SKILL.md; S8."docs/PROJECT_CONTEXT.md". NO S3
+    entry. Header comment mirrors config/sloc_budgets.yaml and states: ratchet-DOWN-only, raises need
+    an inline `# raise-approved: dec-NNN <reason>` marker, DECISIONS.md is out (validate_decisions_size),
+    and the never-split relief-valve rule. Planning-time snapshot for the human gate: S1=33215;
+    S2 {config/CLAUDE.md 1820, docs/CLAUDE.md 3813, scripts/CLAUDE.md 2984, src/data/handlers/CLAUDE.md
+    4307, src/lambdas/CLAUDE.md 1313, terraform/CLAUDE.md 30497, terraform/bootstrap/CLAUDE.md 5151,
+    terraform/github/CLAUDE.md 5266, tests/CLAUDE.md 8696}; S4 {audit-prompt 25800, code-review 12609,
+    decision-scout 8265, executor-rca 1919, implement 47426, orient 23595, overseer 12722, plan-critique
+    17156, planning 54907}; S8 docs/PROJECT_CONTEXT.md 41229. Reseed to whatever the re-measure reports.
+  - >-
+    Create scripts/checks/prose/__init__.py and scripts/checks/prose/prose_limits.py. prose_limits
+    imports measure_prose_context from scripts.preflight.prose_context and yaml; _load_prose_budgets()
+    reads the nested registry; validate_prose_limits(failed) is @registry.register("validate_prose_limits",
+    owner="platform"): check S1 aggregate (report["S1"]["prose_bytes"] vs budget), then S2/S4 per-file
+    (report[surface]["files"]) skipping any path in the S1 member set and FAILing an unregistered
+    surface, then S8; append to failed on any current>budget; every FAIL message names the
+    relocate/defer/loud-raise relief valves and NEVER "split"/"decompose".
+  - >-
+    Create scripts/checks/prose/prose_budget_raises.py as a self-contained mirror of
+    scripts/checks/sloc/validate_sloc_budget_raises.py, pointed at config/prose_budgets.yaml: raw-text
+    line parser preserving inline `# raise-approved: dec-NNN` markers, _default_base_reader via
+    `git show origin/main:config/prose_budgets.yaml`, is_new/is_increase requires a marker naming a real
+    `## Decision NNN:` header, decreases/removals pass, SKIP when origin/main unreachable.
+    @registry.register("validate_prose_budget_raises", owner="platform").
+  - >-
+    Wire the three-step: in scripts/checks/registry.py insert _c("validate_prose_limits") into
+    pre_sequence() and full_sequence() (adjacent to validate_sloc_limits) and
+    _c("validate_prose_budget_raises") into pre_sequence() (adjacent to validate_sloc_budget_raises);
+    in scripts/validate.py add the two facade re-export lines near the sloc block.
+  - >-
+    Create tests/checks/prose/__init__.py, test_prose_limits.py, test_prose_budget_raises.py covering
+    every branch (100% of new module code) per VP step 1's enumerated cases, with NO importorskip /
+    collection-skip guard and >0 collected items.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
+  - >-
+    Squash-merge commit body includes `Resolves: rec-432, rec-433` (triggers rec-autoclose); then run
+    VP step 5 to confirm closure.
+  - "Report: what was implemented, verification results, and the final seeded budget values."
+work_areas: []
+rollback: >-
+  Additive gate. Revert the 9-file change (delete config/prose_budgets.yaml, scripts/checks/prose/,
+  tests/checks/prose/; undo the registry.py + validate.py inserts). No data migration, no infra, no
+  deployed artifact -- the revert fully removes the gate.
