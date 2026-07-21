@@ -1511,3 +1511,256 @@ Suggestions surfaced by the cron review system that were reviewed by a human and
 - Multi-model Bedrock: unnecessary complexity when single model meets all use cases
 
 **Status:** Decided -- April 2026
+
+---
+
+## Decision 71: cc-scheduled-agents Cron Mechanism is GitHub Actions on Self-Hosted Runner (Superseded by Decision 73)
+
+**Status:** Superseded by Decision 73
+**Superseded by:** Decision 73
+
+**Status:** Decided
+**Date:** 2026-05-09
+
+**Problem:**
+Parent plan PLAN-cc-scheduled-agents.md D15 specified the Anthropic-hosted `schedule` skill (CronCreate) as the cron mechanism for cc-scheduled-agents to avoid OIDC complexity and GitHub Actions billing. Decision 68 (self-hosted EC2 runner) resolved both concerns: CI minutes are free on the self-hosted runner, and `GITHUB_TOKEN` auto-injection by the GitHub Actions platform solves the credential problem that was the core unresolved risk (parent plan Q9).
+
+**Decision:**
+The cron mechanism for cc-scheduled-agents Phase 4 is a GitHub Actions scheduled workflow (`on: schedule: - cron: '0 8 * * *'`) running on `[self-hosted, linux]`. Claude Code CLI is invoked headlessly via `claude -p`. Auth uses `CLAUDE_CODE_OAUTH_TOKEN` (Max subscription, zero marginal API cost per invocation). The `schedule` skill (CronCreate) is not used for this project.
+
+**Consequences:**
+- Phase 3 (this plan) designs the agent for headless invocability via `claude -p --output-format json`.
+- Phase 4 writes `.github/workflows/scheduled-agents.yml`. That file is not in Phase 3 scope.
+- No Anthropic-hosted cron billing -- the scheduled workflow runs on the self-hosted EC2 runner.
+- `CLAUDE_CODE_OAUTH_TOKEN` must be stored as a GitHub Actions repository secret. Setup walkthrough added to `CLAUDE.md`.
+
+**Reverses:** Parent plan D15 (Anthropic-hosted `schedule` skill as cron mechanism).
+**Closes Open Questions:** Q9 (GitHub credentials in GH Actions = `GITHUB_TOKEN` auto-injected by platform).
+**Remaining Open Questions:** Q6, Q7, Q8, Q10 (deferred to Phases 4-5).
+**Related:** Decision 68 (Self-hosted EC2 runner), `docs/plans/PLAN-cc-scheduled-agents.md`
+
+> **2026-05 migration update:** The self-hosted runner substrate referenced here was retired 2026-05-28 (CD.21). cc-scheduled-agents migrated to Claude Code scheduled agents on GitHub-hosted runners; see Decision 73.
+
+---
+
+## Decision 68: Self-Hosted EC2 Runner as Canonical CI Execution Environment (Superseded by Decision 112)
+
+**Status:** Superseded by Decision 112
+**Superseded by:** Decision 112
+
+**Status:** Decided
+**Date:** 2026-05-08
+
+**Problem:**
+2000 min/month free tier exhausted at current PR velocity; branch protection disabled as workaround; cc-scheduled-agents Phase 4 blocked by per-run GitHub Actions billing (~23 CI minutes per agent PR).
+
+**Decision:**
+EC2 self-hosted runner (`t3.medium`, Ubuntu 22.04, `eu-west-2`) is the canonical CI execution environment. IAM instance role with `Ec2InstanceMetadata` credential delegation replaces the SSO profile requirement in CI. Cold-start only for Phase 1 (full checkout + pip install per job).
+
+Note: initially planned as `t3.small` (2 GB RAM) but upgraded to `t3.medium` (4 GB RAM) during initial deployment after mypy exhausted available memory and OOM-killed the runner process mid-job. The 2 GB headroom on `t3.medium` accommodates mypy + pytest + runner process without swap pressure.
+
+Warm runner is a named future phase requiring its own risk assessment: (a) hash-gate the venv against `requirements.txt` on every job pickup to prevent stale-dependency false-greens, (b) workspace reset on branch switch, (c) concurrency-safe workspace locking. Do not implement without this plan.
+
+SCD data transfer boundary: code execution moves to the project's EC2 instance. AWS credentials never leave the instance (instance metadata; no env var injection into GitHub). Job logs stream to GitHub's log storage -- equivalent posture to GitHub-hosted runners. Tests must never print classified data values (symbol lists, strategy names) to keep log content non-classified.
+
+**Consequences:**
+- Branch protection (`required_status_checks`) can be re-enabled on `main` after a 1-week runner stability observation window.
+- cc-scheduled-agents Phase 4 (daily cron auto-merge PRs) is unblocked.
+- Zero billed CI minutes for all branch builds and scheduled agent merges.
+
+**Related:** Decision 36 (AWS Auth -- no IAM users, no OIDC), Decision 37 (Lambda scheduled agents), Decision 60 (Two-tier validation architecture), `terraform/ec2_runner.tf`, `CLAUDE.md` runner ops runbook.
+
+> **2026-05 migration update:** The self-hosted EC2 runner described here was retired 2026-05-28 per CD.21. CI migrated to GitHub-hosted runners (`ubuntu-latest`) with OIDC to the personal account; see Decision 73. The EC2 Terraform definition is retained in `terraform/ec2_runner.tf` as an architectural artefact (no longer applied).
+
+---
+
+## Decision 49: Copilot SDK as Lambda Inference Provider (Superseded by Decision 116)
+
+**Status:** Superseded by Decision 116
+**Superseded by:** Decision 116
+
+**Decision:** The GitHub Copilot SDK (`github-copilot-sdk` v0.2.2) replaces AWS Bedrock as the inference provider for all Lambda-executed scheduled agents. Model IDs use Copilot SDK format (e.g., `claude-haiku-4.5`, `claude-sonnet-4.6`). Auth uses the existing Secrets Manager GitHub PAT.
+
+**Problem:**
+On April 2026, AWS Bedrock access was revoked in the sandbox account (REDACTED-ACCOUNT-ID) because the models were accepted without proper AI Steering Group approval. All 6 scheduled agents stopped functioning. The GitHub Models API (the previous fallback) lacks Claude and Gemini models -- only OpenAI, DeepSeek, and Grok models are available -- making it inadequate for quality-sensitive agents like rec-curator.
+
+**Why Copilot SDK over alternatives:**
+- **GitHub Models API:** No Claude, no Gemini. GPT-4.1-mini quality too low for rec-curator.
+- **Bedrock (restored):** Would require AI Steering Group re-approval. Timeline unknown.
+- **Copilot SDK:** Provides Claude Haiku 4.5 (0.33x multiplier), Sonnet 4.6 (1x), and other high-quality models. Uses existing GitHub PAT from Secrets Manager. Fits in Lambda zip (69 MB total). Confirmed working via live tests.
+
+**SDK architecture:**
+The SDK spawns a Copilot CLI subprocess via JSON-RPC. The CLI binary (~58 MB) is bundled in the pip wheel. Auth is via `SubprocessConfig(github_token=...)`. Sessions are created per-inference call with `tools=[]` to disable agent tool use.
+
+**Model mapping:**
+| Agent | Model | Multiplier |
+|-------|-------|------------|
+| doc-freshness, orphan-code, transcript-review, code-smell, prompt-quality | `claude-haiku-4.5` | 0.33x |
+| rec-curator | `claude-sonnet-4.6` | 1x |
+
+**Lambda packaging:**
+SDK is pip-installed into `data-pipeline.zip` (not the deps layer) using `--platform manylinux_2_28_x86_64`. The CLI binary at `copilot/bin/copilot` must have executable permissions (0o755) in the zip. Total SDK footprint: ~69 MB (binary 58 MB + Python 1.2 MB + pydantic 9 MB + dateutil 0.6 MB).
+
+**Constraints:**
+- SDK is Public Preview (v0.2.2) -- pin version in `build_lambda.py` to prevent breakage
+- `bedrock_client.py` is retained as dormant code -- available if Bedrock access is restored
+- Lambda memory may need increase from 512 MB to 1024 MB if CLI subprocess causes OOM
+- `_preload_rec_curator_context()` still required -- SDK `tools=[]` disables file reading
+
+**Related:** Decision 47 (superseded), Decision 40 (Copilot SDK for executor -- still deferred, separate concern), Decision 48 (V3 verification tier), `docs/contracts/inference-provider.md`
+
+**Decision status:** Decided -- April 2026
+
+**Superseded by: Decision 116**
+
+---
+
+## Decision 42: Three-Tier Workflow Architecture (Superseded by Decision 90)
+
+**Status:** Superseded by Decision 90
+**Superseded by:** Decision 90
+
+**Decision:** Separate the human-agent workflow into three tiers with distinct responsibilities: `/plan` (strategic), `/implement` (scoping), `/develop-executor` (autonomous execution). Non-automatable recommendations must be surfaced and discussed in `/plan`, not accumulated silently.
+
+**Problem:**
+- `/plan` was overloaded: produced strategic decisions AND detailed execution steps
+- `/implement` followed execution steps but had no scoping authority
+- Non-automatable recs accumulated without resolution path
+- Executor defaulted to single-rec mode, leaving throughput on the table
+
+**Architecture (three-tier):**
+```
+Human Intent
+     |
+     v
+/plan (STRATEGIC)
+  - Decisions + Work Areas
+  - Mandatory non-automatable rec discussion
+  - Output: PLAN-{slug}.md with Work Areas table
+     |
+     v
+/implement (SCOPING)
+  - Research each Work Area
+  - Break into atomic recs (effort <= M)
+  - Create briefing files for complex recs
+  - Output: Populated recommendations log
+     |
+     v
+/develop-executor (AUTONOMOUS)
+  - Compound execution (3-4 recs, effort <= M total)
+  - Files friction recs on failure
+  - Output: Code changes + PR
+     |
+     v
+Friction recs (automatable: false)
+     |
+     v
+Back to /plan preflight (mandatory discussion)
+```
+
+**Key design principles:**
+1. **Separation of concerns** -- each agent has one job, can be tuned independently
+2. **No open loops** -- every friction point has a resolution path
+3. **Non-automatable recs surface** -- preflight shows them, `/plan` must discuss before proceeding
+4. **Compound execution default** -- executor picks 3-4 recs (effort <= M, max 4) unless overridden
+5. **Stale rec detection** -- rec-curator flags `automatable: false` recs older than 30 days
+
+**Compound execution bounds:**
+- Effort weights: XS=0.5, S=1, M=2, L=4, XL=8
+- Max total effort per compound batch: M (=2)
+- Max recs per batch: 4
+- Prefer same-file recs (reduces merge conflicts)
+- Prefer recs with shared dependencies
+
+**Trade-offs accepted:**
+- `/plan` sessions may be longer due to mandatory non-automatable discussion
+- Compound execution may have harder-to-attribute failures (mitigated by per-rec telemetry)
+
+**Related:** Decision 38 (workflow consolidation), Decision 40 (Copilot SDK deferred)
+
+**Decision status:** Decided -- April 2026 (Superseded by Decision 90)
+
+---
+
+## Decision 40: Executor Platform Migration — Copilot SDK + Bedrock Planning (Superseded by Decision 122)
+
+**Status:** Superseded by Decision 122
+**Superseded by:** Decision 122
+
+**Decision:** Migrate the executor's LLM interface from raw Copilot CLI subprocess calls to the GitHub Copilot SDK, and adopt AWS Bedrock as the planning backend via the SDK's BYOK (Bring Your Own Key) capability. Implementation is deferred until the Copilot SDK reaches stable/v1.0 or a trigger condition is met.
+
+**Problem:**
+The executor (`scripts/execute_recommendation.py`) invokes the Copilot CLI via `subprocess.Popen` through `copilot_wrapper.py`. This works but has known friction:
+- ~2-5s subprocess startup overhead per call (no persistent server)
+- Plan output is prose, parsed by regex (`parse_steps_from_plan`), causing ~30% parsing failures that trigger costly retries
+- No prompt caching -- each call (plan, critique, refine) pays full context cost
+- No structured output enforcement -- the model can return any format
+- `_PLAN_EXCLUDED_TOOLS` is a workaround for agentic models treating `@file` context as implementation tasks
+- Sequential rec processing is slow; parallelisation is blocked by the subprocess model
+
+**Options considered:**
+- **AWS Bedrock direct (boto3 `converse` API):** Provides structured JSON output via `outputConfig.textFormat.jsonSchema`, prompt caching via `cachePoint` blocks in system prompts (5min/1h TTL), and multi-turn conversation in a single API call. Available in eu-west-2 with Claude Opus/Sonnet/Haiku. However, Bedrock is text-in/text-out -- no file system access, no tool use for implementation. Would require maintaining two separate LLM interfaces (Bedrock for planning, Copilot CLI for implementation).
+- **GitHub Copilot SDK (`github-copilot-sdk`, Python):** Released post-project-start, currently Public Preview (v0.2.2, 39 releases in 3 months). Replaces subprocess management with async JSON-RPC to a persistent CLI server. Provides session hooks (`on_pre_tool_use`, `on_post_tool_use`), custom tools, permission handling, and streaming. Crucially, supports BYOK with Anthropic provider type -- meaning Bedrock models can be accessed through the SDK, combining SDK session management with Bedrock's structured output and prompt caching. This eliminates the need for two separate interfaces.
+- **Stay on raw Copilot CLI:** Current approach. Works, is resilient, self-monitoring. Slow but stable. Compound execution and acceptance pre-flight (rec-186) mitigate the worst friction points.
+
+**Decision:**
+Adopt a single migration path: Copilot SDK with Bedrock BYOK. Do not implement Bedrock directly (avoids maintaining two LLM interfaces). Do not migrate now (SDK is unstable, API surface volatile). The current CLI-based system is adequate for the current phase of the project.
+
+**Cost analysis:** Opus via Copilot CLI has a 3x premium request multiplier. A plan+critique+refine cycle costs ~$0.36-0.90 in premium requests, comparable to Bedrock's ~$0.40 direct cost. Cost is not a driver for migration.
+
+**Trigger conditions for implementation (any one):**
+1. Copilot SDK reaches v1.0 or "stable" designation
+2. Executor retry rate exceeds 40% sustained over 2 weeks (structured output would eliminate parsing failures)
+3. Executor throughput becomes the bottleneck for North Star progress (i.e., Phase 2/3 are complete and rec velocity is the constraint)
+
+**Three-phase incremental migration (when triggered):**
+1. **P1: SDK adoption** -- Replace `copilot_wrapper.py` subprocess management with `CopilotClient` async context managers. Persistent server mode eliminates startup overhead. Session hooks replace `_PLAN_EXCLUDED_TOOLS` and `validate_response()`. Implementation stays on Copilot CLI tools.
+2. **P2: Bedrock planning backend** -- Configure BYOK with Anthropic provider for planning calls. Structured JSON output via `outputConfig.jsonSchema` eliminates `parse_steps_from_plan` regex. Prompt caching for system prompt + repo conventions. Critique loop runs as multi-turn conversation with cached prefix.
+3. **P3: Unified multi-rec planning** -- Bedrock planner receives rec clusters from rec-curator, produces single optimised plan with per-rec step tagging. Parallel planning via `asyncio` + SDK async sessions.
+
+**Trade-offs accepted:**
+- Deferring means continued ~30% plan parsing failure rate (mitigated by existing retry + escalation logic)
+- Deferring means no prompt caching (mitigated by the CLI's `--resume` session reuse)
+- Single migration path (SDK+BYOK) creates a dependency on GitHub shipping BYOK for Anthropic/Bedrock -- if this feature is dropped, fall back to direct Bedrock for planning only
+
+**Related:** rec-186 (acceptance pre-flight), rec-184 (compound critique), Decision 39 (Step Functions orchestration)
+
+**Decision status:** Decided, deferred -- April 2026
+
+> **Update (2026-07-21):** Both migration triggers are now moot -- the Copilot SDK path was retired via Decision 116 (scheduled-agent provider routing) and Bedrock BYOK was retired via CD.28, ratified by Decision 122. Formal supersession of this entry is pending.
+
+---
+
+## Decision 23: Parallel Workflow with Branch-Specific Plans (Superseded by Decision 76)
+
+**Status:** Superseded by Decision 76
+**Superseded by:** Decision 76
+
+**Context:** The planning-implement-close workflow required sequential execution: PLAN.md was gitignored and persisted across branches, causing wrong-plan-loaded bugs. Log files written during session_close were left uncommitted after the PR was already created.
+
+**Decision:** Move branch creation to the planning phase and use branch-specific tracked plan files:
+- `/plan` creates `agent/{slug}` branch and writes `PLAN-{slug}.md` (tracked)
+- `/implement` finds the plan file for the current branch (slug derived from branch name)
+- Session Close Phase within `/implement` auto-merges after CI passes, with tiered conflict resolution
+- Always branch from main (not from feature branches)
+
+**Conflict resolution tiers (simplified):**
+1. Auto-resolve: Append-only logs (SESSION_LOG.md, *.jsonl)
+2. Auto-resolve: Structured docs (RECOMMENDATIONS.md, DECISIONS.md) — merge rows/sections
+3. Escalate immediately: Code/config files (`.py`, `.tf`, `.prompt.md`) — human resolves
+
+**Rationale:**
+- Parallel features can now be planned while implementation is in-flight
+- Plan files are tracked per-branch, eliminating cross-branch contamination
+- Auto-merge on CI pass is safe because the Session Close Phase of `/implement` is reached only after all implementation steps and code review are complete
+- Tiered conflict resolution handles expected concurrent doc edits without human intervention
+- Always branching from main prevents dependency chains and isolates conflicts
+
+**Rejected alternatives:**
+- Branch from feature branches: creates dependency chains, must merge in order
+- Single PLAN.md with branch name in content: still gitignored, still cross-contaminates
+- Manual merge only: adds friction, delays integration, provides no additional safety (CI is the gate)
+
+**Status:** Decided — March 2026
+
+**Superseded by: Decision 76**
