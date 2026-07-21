@@ -1,0 +1,373 @@
+schema_version: 1
+slug: "terraform-deploy-phase0-hardening"
+intent: >-
+  Harden the Terraform deploy/IAM surface per the terraform-deploy-redesign audit's Phase-0
+  findings -- validate the gated-apply reviewer gate against an empty-list no-op (DEP-04), delete
+  the stale unguarded legacy deploy.yml apply path (DEP-09), and fence the ambient PlatformDev
+  runtime identity off the convergence-record/tfplan/tfstate anti-masking anchor and the
+  ExternalId-in-state escalation chain (DEP-13) -- realizing tier_item T2.44, the first hardening
+  prerequisite for Decision 144's allow-list inversion.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-deploy-phase0-hardening.yaml
+phase: >-
+  Platform tier_item T2.44 (Audit Phase-0 hardening: gated-reviewer validation, delete stale
+  deploy.yml, fence PlatformDev off the anti-masking anchor -- DEP-04/DEP-09/DEP-13); realizes
+  Decision 144 point 7's Phase-0 slice. No product-roadmap phase (platform-internal hardening).
+scope:
+  - file: terraform/github/variables.tf
+    action: Modify
+    purpose: >-
+      DEP-04 (c1): add a validation block to the gated_apply_reviewer_user_ids variable rejecting
+      an empty list, so the tf-gated-apply Environment gate cannot be silently no-opped by a
+      fat-fingered manual apply. Closes rec-2307.
+  - file: .github/workflows/deploy.yml
+    action: Delete
+    purpose: >-
+      DEP-09 (c2): remove the stale legacy workflow whose workflow_dispatch path runs
+      terraform apply -auto-approve on the retired root with no guard and no credentials step
+      (inert today, dispatchable, bypasses every control). Retired-root HCL under terraform/ stays
+      per CD.21/Decision 112 -- only the dead apply PATH is deleted.
+  - file: config/ci_rca_taxonomy.yaml
+    action: Modify
+    purpose: >-
+      DEP-09 (c2): remove the now-orphaned `Deploy to AWS: not_a_gate` entry from workflow_to_tier
+      after deploy.yml is deleted (no-drift hygiene, Decision 86). This is the real stale surface
+      the finding's "update the workflow-count test" points at -- see the DEP-09 re-grounding note
+      in context.
+  - file: terraform/personal/platform_roles.tf
+    action: Modify
+    purpose: >-
+      DEP-13 (c3): add two explicit Deny statements to PlatformDev's DailyOps inline policy
+      (aws_iam_role_policy.platform_dev_runtime) -- Deny s3:PutObject/DeleteObject on
+      convergence/personal/*, tfplan/personal/*, tfstate/personal/*, and Deny s3:GetObject on
+      tfstate/personal/* -- overriding the bucket-wide S3ReadWrite Allow so the runtime identity
+      cannot spoof the convergence anchor or read ExternalIds out of tfstate.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      DEP-13 (c4): document that ExternalId-based Terraform-state recovery is admin-tier-only
+      (PlatformDev is now explicitly denied tfstate read).
+bundled_recommendations:
+  - rec-2307
+closes_criteria:
+  - "T2.44:c1"
+  - "T2.44:c2"
+  - "T2.44:c3"
+  - "T2.44:c4"
+infrastructure_dependencies:
+  - >-
+    DEP-13 IAM apply model (terraform/personal/platform_roles.tf, aws_iam_role_policy.platform_dev_runtime /
+    DailyOps): an IAM inline-policy UPDATE on PlatformDev, a non-boundary, non-budget role. The
+    deterministic guard classifies it IAM_SENSITIVE and exits 2 (Decision 77). It lands via the
+    human-gated break-glass ADMIN tier under agent_platform_admin (admin_out_of_band in
+    docs/contracts/deploy-paths.yaml; Decision 120/126), NOT the tf-gated-apply Environment:
+    github_ci_apply lacks iam:PutRolePolicy on PlatformDev (outside IAMRoleWriteBounded's branch/pr
+    scope, Decision 98), so an Environment approval would then AccessDeny (approve-then-AccessDenied).
+    The agent runs terraform apply ONLY after the human reviews the plan output and explicitly directs
+    it (Decision 126). The trust policy (assume_role_policy) MUST show NO change at plan time (lockout
+    guard -- PlatformDev is the ambient runtime identity).
+  - >-
+    Speculative-plan pipeline (CD.35 Wave 2 / T2.21): the PR touches terraform/personal/** so the
+    speculative-plan job runs, posts a redacted diff + PREDICTED verdict = BLOCKED (IAM sensitive),
+    and persists plan.bin. The DEP-13 change is applied out-of-band under agent_platform_admin
+    coordinated with merge (mirrors the established platform_roles.tf out-of-band apply convention);
+    confirm global convergence (terraform plan -detailed-exitcode == 0) and a GREEN convergence
+    record after the admin apply. If the merge-time saved-plan apply reds on a stale-plan/serial
+    mismatch, recovery is the workflow_dispatch acknowledge-and-retry (re-plan fresh -> no-op ->
+    green) -- never a self-directed re-apply (Decision 55 / CD.35).
+  - >-
+    DEP-04 (terraform/github/variables.tf): terraform/github is manual-local-apply-only, human-gated,
+    NEVER CI (terraform/github/CLAUDE.md 'NEVER auto-apply' -- the guard is AWS-IAM-only and cannot
+    inspect github_* diffs). The validation block guards INPUT and takes effect at the next manual
+    plan/apply; no infra apply is required for it to be active. Behavioral verification (a plan with
+    an empty list failing) is operator-run and may require the ADMIN container, since the
+    integrations/github provider init can 403 on a stock CC-web session (Decision 119-class egress).
+  - >-
+    DEP-09 (.github/workflows/deploy.yml delete + config/ci_rca_taxonomy.yaml): no apply and no
+    Lambda deploy. The retired-root HCL under terraform/ is retained per CD.21/Decision 112; only the
+    dead, unguarded workflow file and its orphaned taxonomy map entry are removed.
+acceptance_criteria:
+  - >-
+    (T2.44 c1 / DEP-04) terraform/github/variables.tf rejects an empty gated_apply_reviewer_user_ids:
+    `terraform -chdir=terraform/github plan` with `gated_apply_reviewer_user_ids=[]` fails variable
+    validation, so the tf-gated-apply Environment required-reviewer gate cannot be silently no-opped;
+    rec-2307 is closed.
+  - >-
+    (T2.44 c2 / DEP-09) .github/workflows/deploy.yml is deleted, the orphaned `Deploy to AWS` entry
+    is removed from config/ci_rca_taxonomy.yaml's workflow_to_tier, no live workflow/script references
+    the deleted file, and the workflow-fleet + taxonomy test suite (tests/test_check_workflow_agent_safety.py,
+    tests/test_ci_rca_taxonomy.py, tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py) is green.
+  - >-
+    (T2.44 c3 / DEP-13) PlatformDev's DailyOps inline policy carries an explicit Deny on
+    s3:PutObject/DeleteObject for convergence/personal/*, tfplan/personal/*, tfstate/personal/* and
+    s3:GetObject for tfstate/personal/*; `aws iam simulate-principal-policy` returns explicitDeny for
+    each denied (action,resource) pair, while unrelated data-lake object IO and the ops-portal
+    file_rec/update_rec + runtime DuckLake reads (which transit the Function URLs, not these S3
+    prefixes) remain unaffected.
+  - >-
+    (T2.44 c4 / DEP-13) terraform/CLAUDE.md documents that ExternalId-based Terraform-state recovery
+    is admin-tier-only (PlatformDev is explicitly denied tfstate read).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      DEP-04 structural -- confirm the validation block on gated_apply_reviewer_user_ids exists in
+      terraform/github/variables.tf.
+    command: >-
+      grep -q 'length(var.gated_apply_reviewer_user_ids) > 0' terraform/github/variables.tf &&
+      grep -q 'validation {' terraform/github/variables.tf && echo VALIDATION_BLOCK_PRESENT
+    expected: "prints `VALIDATION_BLOCK_PRESENT` (the length(...) > 0 condition and a validation block are both present)."
+    fix_if: "the condition or the validation block is absent -- add the block to the variable declaration."
+    hermetic: false
+    graduation: not-applicable
+  - step: 2
+    phase: post-deploy
+    action: >-
+      DEP-04 behavioral (operator-run at the terraform/github manual apply; ADMIN container if the
+      integrations/github provider init 403s on CC-web) -- a plan with an empty reviewer list fails
+      variable validation.
+    command: >-
+      terraform -chdir=terraform/github init >/dev/null &&
+      terraform -chdir=terraform/github plan -var 'admin_bypass_actor_id=5'
+      -var 'gated_apply_reviewer_user_ids=[]'; echo "plan_exit=$?"
+    expected: "the plan exits non-zero (`plan_exit=1`) with a validation error naming gated_apply_reviewer_user_ids; an empty list is rejected before any apply."
+    fix_if: "the plan accepts the empty list (plan_exit=0) -- the validation block is missing or its condition is wrong."
+  - step: 3
+    phase: pre-deploy
+    action: "DEP-09 -- confirm .github/workflows/deploy.yml is deleted."
+    command: "test ! -f .github/workflows/deploy.yml && echo DELETED"
+    expected: "prints `DELETED` (the file is absent)."
+    fix_if: "the file still exists -- delete it (retired-root HCL under terraform/ is untouched)."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a single file_presence slot, but the durable invariant is already
+      covered by step 5's stale-reference sweep plus the existing validate_ci_rca_taxonomy coverage
+      check -- a standalone standing guard here would duplicate them.
+  - step: 4
+    phase: pre-deploy
+    action: "DEP-09 -- confirm the orphaned `Deploy to AWS` entry is removed from the workflow_to_tier map."
+    command: "grep -q 'Deploy to AWS' config/ci_rca_taxonomy.yaml && echo STILL_PRESENT || echo REMOVED"
+    expected: "prints `REMOVED` (no orphaned map entry pointing at the deleted workflow)."
+    fix_if: "prints STILL_PRESENT -- delete the `Deploy to AWS: not_a_gate` line from config/ci_rca_taxonomy.yaml."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible as a single grep_count slot, but the durable invariant is already covered
+      by step 5's stale-reference sweep plus the existing validate_ci_rca_taxonomy coverage check --
+      a standalone standing guard here would duplicate them.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      DEP-09 stale-reference sweep (Closure Obligation for the Delete row) -- no live workflow or
+      script references the deleted deploy.yml (the unrelated deploy-ducklake-lambdas.yml /
+      deploy-prod-lambdas.yml are excluded).
+    command: >-
+      if grep -rn 'deploy\.yml' .github/workflows config scripts | grep -vE 'deploy-ducklake-lambdas|deploy-prod-lambdas'
+      | grep -q .; then echo LIVE_REFS_REMAIN; else echo NO_LIVE_REFS; fi
+    expected: "prints `NO_LIVE_REFS` (the deleted apply path is unreachable from any live surface)."
+    fix_if: "prints LIVE_REFS_REMAIN -- a live surface still references deploy.yml; resolve it before merge."
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      DEP-09 -- the workflow-fleet + taxonomy-coverage test suite is green after the deletion. The
+      enumerate_workflow_names oracle is drift-immune and validate_ci_rca_taxonomy re-checks
+      workflow<->map coverage; agent-safety is re-checked over the live fleet.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py
+      tests/checks/ci_guards/test_validate_ci_rca_taxonomy.py
+      tests/test_check_workflow_agent_safety.py -q
+    expected: "all tests pass (`passed`); no test asserts a stale workflow name or hard-coded count."
+    fix_if: "a test fails on a removed workflow name or count -- re-ground the assertion (the fleet tests are drift-immune by design; a failure signals a real coupling to fix)."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: "duplicates already-graduated checks already in the standing suite"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      DEP-13 structural -- PlatformDev's DailyOps policy carries an explicit Deny covering the three
+      personal/ prefixes (write) and tfstate (read) in terraform/personal/platform_roles.tf.
+    command: >-
+      grep -qE 'Effect\s*=\s*"Deny"' terraform/personal/platform_roles.tf &&
+      grep -q 'convergence/personal/\*' terraform/personal/platform_roles.tf &&
+      grep -q 'tfplan/personal/\*' terraform/personal/platform_roles.tf &&
+      grep -q 'tfstate/personal/\*' terraform/personal/platform_roles.tf && echo DENY_PRESENT
+    expected: "prints `DENY_PRESENT` (a Deny effect and all three personal/ prefixes are present in the file)."
+    fix_if: "the Deny effect or any prefix is missing -- add the two Deny statements to aws_iam_role_policy.platform_dev_runtime."
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: post-deploy
+    action: >-
+      DEP-13 human-gated break-glass admin apply (admin_out_of_band). Under agent_platform_admin,
+      plan the DailyOps change, PRESENT the plan output to the human, and apply ONLY on explicit
+      human direction (Decision 126) -- never via the tf-gated-apply Environment.
+    command: >-
+      terraform -chdir=terraform/personal plan -target=aws_iam_role_policy.platform_dev_runtime;
+      # PRESENT plan to human; on explicit direction:
+      terraform -chdir=terraform/personal apply -target=aws_iam_role_policy.platform_dev_runtime
+    expected: "the plan shows ONLY the DailyOps inline-policy update adding the two Deny statements; assume_role_policy shows NO change; the human directs; apply succeeds under agent_platform_admin."
+    fix_if: "a trust-policy (assume_role_policy) diff appears -> STOP (lockout risk); or apply AccessDenies -> wrong profile (must be agent_platform_admin, not the gated-apply Environment / github_ci_apply)."
+  - step: 9
+    phase: post-deploy
+    action: >-
+      DEP-13 authoritative -- simulate-principal-policy shows explicitDeny for PlatformDev on the
+      denied (action, resource) pairs (account-less S3 bucket ARN; role ARN resolved at runtime, no
+      literals per Decision 101).
+    command: >-
+      PDEV=$(aws iam get-role --role-name PlatformDev --query Role.Arn --output text --profile agent_platform_admin);
+      aws iam simulate-principal-policy --policy-source-arn "$PDEV"
+      --action-names s3:PutObject s3:DeleteObject s3:GetObject
+      --resource-arns arn:aws:s3:::agent-platform-data-lake/convergence/personal/sandbox.json
+      arn:aws:s3:::agent-platform-data-lake/tfplan/personal/x.bin
+      arn:aws:s3:::agent-platform-data-lake/tfstate/personal/sandbox/terraform.tfstate
+      --profile agent_platform_admin
+      --query 'EvaluationResults[].{action:EvalActionName,resource:EvalResourceName,decision:EvalDecision}'
+    expected: "`explicitDeny` for PutObject/DeleteObject on convergence/personal, tfplan/personal, tfstate/personal AND for GetObject on tfstate/personal; a control GetObject on a non-state prefix (e.g. ducklake-*) remains `allowed`."
+    fix_if: "any denied pair returns allowed/implicitDeny -- the Deny statement's action or resource scoping is wrong; re-apply the corrected policy."
+  - step: 10
+    phase: post-deploy
+    action: >-
+      DEP-13 no-regression -- the ops portal (file_rec/update_rec) and runtime DuckLake reads still
+      succeed under agent_platform (PlatformDev); they transit the AWS_IAM Function URLs, not these
+      S3 prefixes, so the Deny must not touch them.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --file-rec ... &&
+      bin/venv-python -m scripts.ops_data_portal --update-rec <smoke-rec-id> --status closed --resolution "DEP-13 smoke" &&
+      bin/venv-python -m scripts.sync.ops pull
+    expected: "the file_rec write, the update_rec close, and the DuckLake reader pull all succeed (no 403) -- the S3 Deny does not reach the Function-URL path."
+    fix_if: "any portal write or DuckLake read 403s -- the Deny over-reached (scope it strictly to the three personal/ prefixes; the writer/reader ARNs and Function URLs must stay allowed)."
+  - step: 11
+    phase: pre-deploy
+    action: "DEP-13 (c4) -- terraform/CLAUDE.md documents that ExternalId state-recovery is admin-tier-only."
+    command: "grep -qiE 'admin-tier-only|admin tier only|admin-only' terraform/CLAUDE.md && grep -qi 'ExternalId' terraform/CLAUDE.md && echo NOTE_PRESENT"
+    expected: "prints `NOTE_PRESENT` (the CLAUDE.md ExternalId/state-recovery note is scoped admin-tier-only)."
+    fix_if: "the note is absent or does not scope ExternalId state-recovery to the admin tier -- add it."
+    hermetic: false
+    graduation: not-applicable
+  - step: 12
+    phase: post-deploy
+    action: >-
+      Closure Obligation -- rec-2307 (DEP-04) is closed via the ops portal (squash-merge
+      `Resolves: rec-2307` trailer -> rec-autoclose.yml, or the --update-rec fallback); never a
+      direct edit to the read cache (Decision 84/103).
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull &&
+      grep '"rec-2307"' logs/.recommendations-log.jsonl | grep -o '"status": "[^"]*"'
+    expected: "after the sync, rec-2307 shows `\"status\": \"closed\"`."
+    fix_if: "rec-2307 is still open -- add the Resolves: trailer to the squash-merge body, or run ops_data_portal --update-rec rec-2307 --status closed."
+constraints:
+  - >-
+    Decision 101 (public-repo boundary): no account IDs, account-bearing ARNs, or ExternalId values
+    in any committed file or in this plan. The Deny statements use ${aws_s3_bucket.data_lake.arn}
+    references; simulate-principal-policy uses the account-less s3 bucket ARN and resolves the role
+    ARN at runtime.
+  - >-
+    Decision 84 / Decision 103 (Single Portal Invariant, closure lifecycle): rec-2307 closes via the
+    ops portal Resolves: trailer or --update-rec, never a direct edit to logs/.recommendations-log.jsonl.
+  - >-
+    Decision 126 / 120 / 77: agents never self-direct a terraform apply; the DEP-13 admin apply runs
+    only after the human reviews the plan output and explicitly directs it. A trust-policy diff at
+    plan time -> STOP (lockout risk). NOT the tf-gated-apply Environment (approve-then-AccessDenied).
+  - >-
+    terraform/github must NEVER be added to any auto-apply workflow (terraform/github/CLAUDE.md 'NEVER
+    auto-apply' -- the guard is AWS-IAM-only and cannot inspect github_* diffs). It stays
+    manual-local-apply-only, human-gated.
+  - "No rescue agents or workaround loops (Decision 55); forward-fix only; only the 5 files in scope may be modified."
+context:
+  - >-
+    Anchors audits/terraform-deploy-redesign-b67955b.yaml Phase-0 (findings DEP-04 medium, DEP-09
+    low, DEP-13 high); realizes tier_item T2.44 (Decision 144 point 7 names T2.44 as the owner of
+    DEP-04/DEP-09/DEP-13). The four closes_criteria (T2.44:c1..c4) map 1:1 onto the four
+    acceptance_criteria. The three findings are independent verification tracks in one plan
+    (STRATEGIC suspended, Decision 67 -> single IMPLEMENTATION plan).
+  - >-
+    Decision 144 point 3: DEP-13 is the NAMED mechanism that hardens PlatformAdmin's reachability --
+    the mandatory boundary EXCLUDES PlatformAdmin, so DEP-13 severs the ExternalId-in-state
+    escalation path instead of relying on boundary attachment. Decision 113: the static-key
+    PlatformDev/PlatformAdmin two-principal split -- DEP-13 fences the ambient runtime identity
+    (every CC-web session) off the convergence anchor and off tfstate (where both ExternalIds live),
+    collapsing the DEV-container-key-theft -> PlatformAdmin -> iam:* takeover chain.
+  - >-
+    DEP-09 re-grounding (Freshness Gate stale-reference check): T2.44 c2 and the audit say "update
+    the workflow-count/fleet test", but empirically NO such count test exists --
+    tests/test_check_workflow_agent_safety.py::test_real_workflows_pass asserts check_workflow_agent_safety()
+    == [] (no count/list), and tests/test_ci_rca_taxonomy.py::test_real_workflows_dir compares against
+    a drift-immune line-scan oracle; both stay green after the deletion with NO edit. The real stale
+    surface is config/ci_rca_taxonomy.yaml's orphaned `Deploy to AWS: not_a_gate` entry.
+    validate_ci_rca_taxonomy only checks workflows->map (missing), not map->workflows (orphan), so the
+    orphan would not fail CI -- removal is no-drift hygiene (Decision 86). Scope reflects the real edit
+    (the taxonomy map), and tests/test_check_workflow_agent_safety.py is deliberately NOT in scope (no
+    edit needed; VP step 6 confirms it stays green).
+  - >-
+    DEP-13 apply model: the IAM change guard-BLOCKs (IAM_SENSITIVE, exit 2) and lands via the
+    human-gated break-glass ADMIN tier (agent_platform_admin, admin_out_of_band), coordinated with
+    merge so the merge-time terraform-apply-sandbox pipeline reconciles to a no-op; it must NOT route
+    through the tf-gated-apply Environment, which would approve-then-AccessDeny (github_ci_apply lacks
+    iam:PutRolePolicy on PlatformDev, Decision 98). Mirrors the established out-of-band apply
+    convention already recorded for platform_roles.tf. Stale-saved-plan recovery is dispatch-ack
+    (Decision 55 / CD.35), never a self-directed re-apply.
+  - >-
+    No Lambda artifacts affected: compute_affected_artifacts over the scope files is empty -- the
+    .tf/policy files and config/ci_rca_taxonomy.yaml are not Lambda-packaged (config/agent/ is not in
+    scope and is not Lambda-packaged either). No build/deploy/smoke-test steps required.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS. CITE: Decision 144, Decision 126, Decision 98, Decision 77, Decision 120, Decision 113, Decision 101, Decision 103, Decision 84, Decision 112. Decisions triaged 104 of 104 (inline scout, overseer subagent-dispatch mode)."
+  - "gates: decision-scout=NO_FLAGS (inline, 1 round, overseer subagent-dispatch mode); plan-critique=deferred to the overseer's post-return lifted fresh dispatch (not run in this authoring context, per the overseer override)."
+  - >-
+    Branch cut fresh from origin/main at authoring (git checkout -b claude/terraform-deploy-phase0-hardening
+    origin/main); 0 commits behind. Scope is 5 files across three independent findings; near the
+    >5-file STRATEGIC heuristic, authored as one IMPLEMENTATION plan per the freeze override.
+  - "Decision 125 point 2: deleting .github/workflows/deploy.yml (DEP-09) resolves Decision 125's code-deploy-channel conditional (\"extending deploy.yml if it already deploys Lambda code by the time P2 lands, else a new workflow\") to its 'else a new workflow' branch -- deploy.yml does not deploy Lambda code today."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (git branch --show-current)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "docs/DECISIONS.md read (inline decision-scout: 104 of 104 triaged; NO_FLAGS)"
+  - "All five files in scope located and readable; terraform/personal/platform_roles.tf DailyOps statement (aws_iam_role_policy.platform_dev_runtime) and terraform/github/variables.tf gated_apply_reviewer_user_ids variable confirmed present"
+  - "tier_item T2.44 exit_criteria c1-c4 read; acceptance_criteria map 1:1 onto closes_criteria"
+  - "rec-2307 confirmed open and relevant (target terraform/github/variables.tf; DEP-04 fix satisfies it)"
+  - "Acceptance criteria understood and independently verifiable"
+execution_steps:
+  - >-
+    terraform/github/variables.tf: add a validation block to the gated_apply_reviewer_user_ids
+    variable -- `validation { condition = length(var.gated_apply_reviewer_user_ids) > 0;
+    error_message = "gated_apply_reviewer_user_ids must contain at least one GitHub numeric user id;
+    an empty list silently disables the tf-gated-apply required-reviewer gate." }` (DEP-04, c1).
+  - >-
+    .github/workflows/deploy.yml: delete the file (DEP-09, c2). Do NOT touch the retired-root HCL
+    under terraform/ (retained per CD.21/Decision 112).
+  - >-
+    config/ci_rca_taxonomy.yaml: remove the `Deploy to AWS: not_a_gate` line from workflow_to_tier
+    (DEP-09, c2). Do NOT edit tests/test_check_workflow_agent_safety.py -- it is drift-immune and
+    needs no change (VP step 6 confirms the fleet + taxonomy suite stays green).
+  - >-
+    terraform/personal/platform_roles.tf: add two explicit Deny statements to the DailyOps inline
+    policy (aws_iam_role_policy.platform_dev_runtime) -- (a) Sid Deny s3:PutObject/s3:DeleteObject on
+    ${aws_s3_bucket.data_lake.arn}/convergence/personal/*, /tfplan/personal/*, /tfstate/personal/*;
+    (b) Sid Deny s3:GetObject on ${aws_s3_bucket.data_lake.arn}/tfstate/personal/* (DEP-13, c3).
+    Explicit Deny overrides the bucket-wide S3ReadWrite Allow.
+  - >-
+    terraform/CLAUDE.md: add a note (near the remote-state recovery description) that ExternalId-based
+    Terraform-state recovery is admin-tier-only -- PlatformDev is now explicitly denied tfstate read;
+    only PlatformAdmin (admin tier) may recover ExternalIds from state (DEP-13, c4).
+  - >-
+    DEP-13 apply (admin_out_of_band): under agent_platform_admin, run
+    terraform -chdir=terraform/personal plan -target=aws_iam_role_policy.platform_dev_runtime; PRESENT
+    the plan output to the human; on explicit human direction, apply. Confirm the trust policy is
+    unchanged, global convergence (terraform plan -detailed-exitcode == 0), and a green convergence
+    record. Never self-directed (Decision 126).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 failure
+    STOP and RCA (Decision 55), do not inline-patch.
+  - "Close rec-2307 via the squash-merge `Resolves: rec-2307` trailer (or the ops_data_portal --update-rec fallback)."
+  - >-
+    Report: what was implemented, VP results, and the simulate-principal-policy explicitDeny evidence
+    (redacted per Decision 101 -- no account id/ARN-with-account/ExternalId).
+rollback: >-
+  DEP-04: revert the validation block (the variable accepts any list again). DEP-09: `git revert`
+  restores deploy.yml and the taxonomy entry. DEP-13: revert the two Deny statements in
+  platform_roles.tf and admin-apply the removal under agent_platform_admin -- removing a Deny only
+  restores the prior broad S3 access (low risk, human-gated). All reversals are forward commits
+  (Decision 55; no history rewrite).
