@@ -2,6 +2,232 @@
 
 This document tracks key architectural and operational decisions that need to be made as the system evolves.
 
+## Decision 145: Arbitrary stopgap raise of the DECISIONS.md live byte ceiling (400,000 -> 500,000) pending the structural growth-direction mechanism (amends Decision 134 clause 2) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-21
+**Warehouse ID:** dec-145 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+docs/DECISIONS.md sits at 398,438 / 400,000 bytes (the Decision 134 clause 2 live-byte ceiling), so
+the two forward-direction Decisions this same wave adds (Decision 144's allow-list-inversion anchor,
+plus this one) cannot land as pure additions under the current ceiling. The STRUCTURAL fix -- a
+number-preserving compact-to-stub lifecycle, a significance gate on inflow, and a near-term relief
+sweep -- is designed but UNBUILT and UNOWNED: audits/decision-consolidation-growth-f79d6b5.yaml
+findings DCG-01 (near-term relief sweep), DCG-02 (compact-to-stub + archival lifecycle), and DCG-05
+(explicit significance gate on inflow) all carry dedup_hit_count 0. Decision 134 clause 2's own
+doctrine, and decision-entry.yaml, warn that raising the ceiling silently trades away the
+read-cost/portability guard the decision-scout subagent depends on (it reads the whole live file
+every /plan, uncached, within a 200k-token window) -- so a raise must be a conscious, cited,
+temporary act, never a frictionless constant edit.
+
+**Decision:**
+1. **Raise `_DECISIONS_LIVE_MAX_BYTES`** in `scripts/checks/decisions/validate_decisions_size.py`
+   from 400,000 to 500,000. This is an ARBITRARY, TEMPORARY stopgap sized for headroom, not a
+   re-derived sizing exercise. The 500,000-byte ceiling still fits the decision-scout's mandatory
+   whole-live-file read comfortably inside the 200k-token context window (~500 KB is ~125k tokens,
+   under 200k), so Decision 134's bridge-guard protected-consumer assumption still holds.
+   `_DECISIONS_LIVE_MAX_H2` (120) and `_DECISIONS_COMBINED_MAX_BYTES` (700,000) are UNCHANGED.
+2. **Amends Decision 134 clause 2:** the live-byte ceiling value is now 500,000 (was 400,000).
+   Decision 134 clause 2 otherwise STANDS unmodified -- the dual guard (byte ceiling + header-count
+   ceiling), the 700,000-byte combined backstop, and the relief-valve naming (archival per DPI-04;
+   compaction of superseded bodies to pointer stubs) are all retained as-is. No edit is made to the
+   Decision 134 body text itself (the forward-direction amendment convention of Decision 126/143:
+   amendments are stated only in the amending Decision).
+3. **This is a STOPGAP, NOT the fix.** The structural/architectural remedy for unbounded
+   decision-log growth is authored and unactioned in
+   `audits/decision-consolidation-growth-f79d6b5.yaml`: DCG-01 (a human-disposed near-term relief
+   sweep restoring >= 20 KB of headroom via archival/compaction), DCG-02 (the number-preserving
+   compact-to-stub + archival lifecycle: eligibility criterion, stub grammar, terminal-SCD2
+   semantics), and DCG-05 (an explicit significance gate shaping inflow so not every session-scale
+   decision becomes a permanent live header). This raise buys headroom only until that mechanism is
+   designed, built, and owned -- it does not substitute for it, and per the Decision 128 /
+   decision-entry.yaml anti-pattern (a raise silently trades away a portability/read-cost guard) it
+   must never become the standing response to future pressure on this ceiling.
+4. **Provenance recorded inline.** The raised constant in `validate_decisions_size.py` carries an
+   inline comment citing this Decision, and the module docstring / FAIL-message Decision citation is
+   updated to name this amendment. No new raise-marker guard is added -- unlike
+   `config/sloc_budgets.yaml`'s `# raise-approved: dec-NNN` convention enforced by
+   `validate_sloc_budget_raises`, `validate_decisions_size` carries no raise-approval mechanism of
+   its own, so the durable record of this raise is this Decision plus the inline comment plus git
+   history.
+
+**Reversal conditions:** Retire or lower this ceiling when the DCG structural mechanism (the
+compaction lifecycle + significance gate) lands and reclaims live headroom, so the ceiling can
+return toward 400,000 or the guard itself can retire per Decision 134's own reversal trigger; or
+when the decision-scout moves to a warehouse/portal read (Decision 134's protected consumer is
+gone); or when a 500,000-byte read no longer comfortably fits the operating model's context window.
+This is re-decided, never silently renewed: a SECOND stopgap raise on top of this one is itself a
+signal that the structural fix is overdue, not a routine act to repeat.
+
+**Rationale:**
+The alternative relief valve -- compacting superseded decision bodies to stubs in this same PR --
+was rejected for this anchor wave: victim-selection (which bodies to compact) is a DPI-04-class
+human disposition with a body-citation hazard (a mis-compacted body that some other Decision or
+tier_item cites by content becomes wrong-but-still-trusted), and bundling that judgment-heavy edit
+into the governance-anchor PR couples two unrelated concerns. A conscious, cited, temporary ceiling
+raise is the lower-risk stopgap for this PR, provided it is recorded as its own
+reversal-conditioned Decision naming both the structural fix and the audit that owns it -- which is
+what this Decision does. Per Decision 86, rationale lives here and forward intent lives in the
+audit/tier_items, not in a new prose document; per Decision 128 / decision-entry.yaml, the raise is
+loud and Decision-cited, never silent.
+
+**Related:** Decision 134 (clause 2 amended -- the ceiling this raises; its dual guard, header and
+combined ceilings, and relief-valve doctrine are otherwise retained), Decision 128 (the
+raise-is-a-silent-trade anti-pattern this Decision consciously avoids by being loud and cited rather
+than frictionless), Decision 114 (the size-ceiling + reversal-conditions precedent Decision 134
+itself mirrors), Decision 126 (the forward-direction amendment convention -- amend in the amending
+Decision, never the amended Decision's body), Decision 86 (rationale routes here; no new standing
+prose doc), Decision 84 (numbering authority + backfill ETL -- authored here, backfilled to
+`ops_decisions` post-merge, never written directly), `audits/decision-consolidation-growth-f79d6b5.yaml`
+(DCG-01/DCG-02/DCG-05 -- the structural fix this stopgap tides over until built).
+
+---
+
+## Decision 144: Allow-list inversion: broad-but-bounded deployer under the mandatory permissions boundary as the target Terraform deploy/IAM model (forward-direction; amends Decision 98 point 1 and Decision 92 point 5; extends Decision 129 from reads to writes) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-21
+**Warehouse ID:** dec-144 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+`github_ci_apply`'s WRITE authority is an enumerated per-resource allow-list that structurally lags
+the `terraform/personal` module: a guard-PASS change can still die `AccessDenied` at apply because
+the resource it touches was never individually added to the allow-list, latching the convergence
+record red on a change the guard already approved. Separately, the IAM-write authority budget
+(Decision 92 point 5) stops at branch/pr role policy updates and treats every new role as
+boundary-less by default, so a gated-apply for a new role can be human-approved and still fail
+AccessDenied at the AWS-IAM layer. Decision 129 already fixed exactly this shape for the READ axis
+-- an account-scoped `agent-platform-*` prefix ended a class that had recurred 15+ times in six
+weeks -- and deliberately left the WRITE axis enumerated for a later wave. The audit
+`audits/terraform-deploy-redesign-b67955b.yaml` traced both symptoms to one underlying cause, a
+multiple-compounding allow-list-IAM family (its highest-leverage finding, DEP-02): the binding
+constraint is the AWS-side identity policy, not the guard's plan-content budget, and enumeration
+cannot keep pace with a growing module. The target model that fixes this was never recorded
+anywhere as a single citable decision, so this Decision records it now, before it is realized,
+following the Decision 126 forward-direction precedent.
+
+**Decision:**
+1. **Target model.** Invert `github_ci_apply`'s authority from "enumerate what it may write" to a
+   broad-but-bounded deployer operating under an existing mandatory permissions boundary
+   (`agent-platform-github-ci-apply-boundary`): broad DataPlaneAllow wildcards on the managed
+   resource types, paired with `DenyIAMEscalation` (conditioned on boundary propagation),
+   `DenyBoundaryRemoval`, and `DenyBoundaryPolicyModification` -- a verified AWS-native SCP
+   substitute for an account that has no AWS Organizations layer yet. The deterministic guard and
+   the authority budget continue to carry danger classification in front of this identity; the full
+   CD.35 control theory (saved-plan no-TOCTOU, fail-closed guard, the server-side convergence
+   anchor, the Environment-gates-execution model, the bootstrap fixed point -- Decisions
+   77/92/119/120/126) is KEPT VERBATIM. This target is REALIZED by tier_item T2.48, not by this
+   Decision -- this Decision records the target and the rationale only.
+2. **Extends Decision 129 from reads to writes.** The same per-service, account-scoped
+   `agent-platform-*` prefix pattern Decision 129 applied to the read axis now applies to the WRITE
+   axis: `logs:CreateLogGroup`/`PutRetentionPolicy` on `/aws/lambda/agent-platform-*`, the Lambda
+   lifecycle verbs on `function:agent-platform-*`, `cloudwatch:PutMetricAlarm`/`DeleteAlarms` on the
+   `agent-platform-*`/`ducklake-*` alarm namespaces, EventBridge writes on `rule/agent-platform-*`,
+   and `iam:TagRole`/`UpdateRoleDescription` on `role/agent-platform-*`.
+   `validate_ci_refresh_read_coverage` is extended to also assert WRITE coverage per managed
+   resource type. Decision 129's reversal trigger (re-narrow on a non-`agent-platform-*` resource,
+   or on any over-grant incident) applies to the write axis exactly as it does to the read axis.
+3. **Mandatory boundary, with one explicit exclusion.** The boundary becomes MANDATORY on every
+   `agent-platform-*` CI and execution role and on `PlatformDev`. It EXCLUDES `PlatformAdmin`:
+   PlatformAdmin is the control identity that must remain able to amend the boundary itself, and
+   attaching `DenyBoundaryPolicyModification` to it would wedge the one identity capable of fixing
+   the boundary if it ever needs to change. PlatformAdmin's own reachability is hardened separately,
+   by DEP-13 (severing the ExternalId-in-state escalation path) rather than by boundary attachment
+   -- Decision 113's two-principal PlatformDev/PlatformAdmin split is unchanged by this Decision.
+4. **Amends Decision 98 point 1.** Decision 98 point 1 currently requires that new peer CI roles be
+   admin-provisioned in `terraform/personal/` via `agent_platform_admin` -- NOT minted by the
+   pipeline. This Decision amends that: the pipeline (`github_ci_apply`) MAY mint boundary-carrying
+   `agent-platform-*` roles via the gated `tf-gated-apply` Environment path, riding the Decision 94
+   trust of `environment:tf-gated-apply`. Because a new role now declares the mandatory boundary in
+   its own HCL, `iam:CreateRole` satisfies `IAMRoleCreateBounded`'s boundary-propagation condition
+   and the gated apply can succeed instead of AccessDenying. Admin-create via `agent_platform_admin`
+   REMAINS the path for non-prefixed roles and for bootstrap-tier roles (`terraform/bootstrap/**`
+   owns its own state, admin-only) -- Decision 98 points 2-4 are unchanged. Decision 143's
+   human-gate durability property is PRESERVED, not violated: role CREATE still routes through the
+   Environment's required-reviewer gate, a materially higher bar than an in-handler edit (Decision
+   143 clause 1 stands); only its exec-role-CREATE MECHANISM text (admin-create as the sole path) is
+   re-grounded to admin-create-or-gated-Environment-executable for boundary-carrying
+   `agent-platform-*` roles, effective when T2.48 lands.
+5. **Amends Decision 92 point 5 (authority-budget v2 direction).** Effective when T2.48's AWS-side
+   widening lands: create+update of inline policies/attachments on ANY boundary-carrying
+   `agent-platform-*` role becomes in-budget (today this is enumerated to exactly two named roles,
+   `agent-platform-github-ci-branch` and `agent-platform-github-ci-pr`). Role CREATE stays GATED --
+   it still routes to the `tf-gated-apply` Environment -- but becomes EXECUTABLE by the gated job
+   rather than AccessDenying. `IAMRoleWriteBounded`/`IAMRoleCreateBounded` widen their Resource match
+   to `role/agent-platform-*`, keeping the boundary-propagation condition, the self-ARN exclusion,
+   and all three boundary self-protection denies intact. The ratchet model itself -- autonomy earned
+   and revocable per change-class, budget amendments via the bootstrap tier only,
+   `validate_authority_budget`'s drift gate -- is UNCHANGED and now simply governs a wider set of
+   classes. This Decision records the target and the rationale ONLY: the actual guard-classification
+   and budget-rule change lands in `environment-taxonomy.md` and `authority_budget.json` at T2.48
+   (Decision 92 point 5 remains the sole SoT for the rule itself; this Decision's body is not a
+   competing enforcement surface, per Decision 86's no-drift principle).
+6. **Retains Decisions 77 and 101 untouched.** Decision 77 (single-account-until-`live_full`;
+   sandbox auto-apply behind the deterministic guard, itself the scoping of Decision 35's "apply is
+   never automatic") is not re-opened here -- only the authority model INSIDE the pipeline changes;
+   Decision 77's `live_full` trigger remains the named condition for the audit's conditional Phase 4
+   (AWS Organizations + org CloudTrail + SCP conversion), which is out of scope for this Decision.
+   Decision 101 (the public-content / confidential-data boundary) is likewise retained untouched:
+   this Decision names roles by logical name and resources by prefix throughout, with no account
+   IDs, ARNs, or ExternalId values anywhere in its text.
+7. **Sequencing.** Seven new tier_items carry the remaining audit work forward: T2.44 (Phase-0
+   hardening, DEP-04/DEP-09/DEP-13), T2.45 (guard resource-based-policy classification, DEP-06),
+   T2.46 (apply-chain consolidation + saved-plan digest integrity, DEP-07/DEP-08), T2.47
+   (recovery-path unification + routed-pending observability, DEP-10/DEP-11), T2.48 (this Decision's
+   Phase-2 inversion, DEP-01/DEP-02), T2.49 (CI/deploy role consolidation, DEP-12, `depends_on:
+   [T2.48]`), and T2.50 (protected amendment channel, DEP-05, sequenced last). Audit finding DEP-03
+   is already owned by the existing tier_item T2.42 (its c1/c3 criteria are DEP-03's remedy) and
+   gets no new tier_item. T2.48 additionally `depends_on: [T2.45]`, so the guard classifies
+   resource-based policies before the write surface broadens onto them.
+
+**Reversal conditions:** Inherits Decision 129's re-narrow trigger (re-narrow the prefix grant if
+the account ever hosts a non-`agent-platform-*` resource of a covered type, or on any incident
+showing an over-grant). If the bespoke pipeline this Decision extends ever proves unmaintainable at
+scale, re-evaluate against a managed reconciler per Decision 126's own reversal condition, scoped
+against the Decision 101 boundary. The Phase-4 multi-account posture supersedes this single-account
+boundary substitute only when Decision 77's `live_full` trigger fires -- not before.
+
+**Rationale:**
+Decision 129 already proved this pattern works for reads, ending a class that had recurred 15+
+times; the deny-list substrate this Decision proposes for writes -- a permissions boundary plus a
+boundary-propagation condition plus three self-protection denies -- is the same kind of verified
+AWS-native SCP substitute Decision 100/75 already commits this platform to preferring over vendored
+tooling, so this redesign is an INVERSION of material already on hand, not a greenfield build. The
+boundary is what makes "broad" safe: a broad deployer cannot escalate its own privileges
+(`DenyIAMEscalation`) and cannot detach or weaken its own cap
+(`DenyBoundaryRemoval`/`DenyBoundaryPolicyModification`). Recording the target model before it is
+realized follows the Decision 126 precedent exactly (record once, in one citable place, so the
+follow-on tier_items have a fixed point instead of each landing its own ad hoc framing); per
+Decision 86, rationale lives here and forward intent lives in the tier_items, with no new standing
+prose document. This is a forward-direction Decision, not a Decision-105 candidate-CD ratification,
+because the model it records is not realized end-to-end yet (the Decision 87 precedent: the
+CD-to-Decision ratification lane is for already-realized CDs). Authored with a Fable design-consult
+in the overseer run that produced this PR.
+
+**Related:** Decision 129 (per-service prefix pattern extended from reads to writes), Decision 98
+(point 1 amended, above), Decision 92 (point 5 amended, above; the ratchet model retained;
+`environment-taxonomy.md` stays the sole SoT for the rule itself), Decision 77 (retained untouched;
+its `live_full` trigger is the named condition for the audit's Phase 4, not re-opened here),
+Decision 101 (retained untouched; this Decision's public-content boundary compliance), Decision 126
+(the record-the-model-before-realization precedent this Decision follows; the CD.35 control theory
+it keeps verbatim), Decision 143 (worst-reachable-verb identity scoping -- complementary: the
+mandatory boundary now also covers exec roles, and role-create staying gated-via-Environment
+preserves 143's "materially higher bar than an in-handler edit" property; 143's admin-create-only
+mechanism text is re-grounded when T2.48 lands), Decision 94 (the `github_ci_apply` trust of
+`environment:tf-gated-apply` that the gated role-create path rides), Decision 113 (the static-key
+two-principal PlatformDev/PlatformAdmin split -- the boundary attaches to PlatformDev and explicitly
+excludes PlatformAdmin; DEP-13 severs PlatformAdmin's separate escalation path), Decision 100/75
+(managed-service-native primitives -- the boundary is this Decision's AWS-native SCP substitute),
+Decision 105 (the CD-ratification lane deliberately NOT used here; see Rationale), Decision 35
+("apply is never automatic" -- already scoped by Decision 77 and not re-opened by this Decision),
+Decision 83 (non-wedging branch protection; DEP-05/T2.50 retains the admin-bypass actor), Decision
+55/72 (RCA-first, forward-fix-the-generator -- the enumerated allow-list model this Decision retires
+fed its own recurring change-stream), Decision 84 (authored here, backfilled to `ops_decisions`
+post-merge, never written directly).
+
+---
+
 ## Decision 143: Privileged-verb Lambda decomposition -- scope identities by worst reachable verb; enforce the boundary in a primitive outside the agent merge loop (amends Decision 81 cl.1) (Decided)
 
 **Status:** Decided
