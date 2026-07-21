@@ -1,0 +1,421 @@
+schema_version: 1
+slug: "decisions-content-reconciliation"
+intent: >-
+  Restore premise-integrity and identifier-uniqueness to docs/DECISIONS.md -- the sole ETL source
+  for ops_decisions and the whole-file context every /plan decision-scout reads -- by backfilling
+  victim-side supersession/decay annotations (DPI-02), unifying the Warehouse ID display keyspace
+  onto the Decision-105 canonical rule (DPI-03), and resolving the duplicate Decision 26 (DPI-05),
+  so an agent reading any single entry is no longer told a rule or substrate that HEAD has inverted
+  or deleted.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-decisions-content-reconciliation.yaml
+phase: >-
+  Platform interim decision-log governance (audit decision-log-premise-integrity-8fb581e, findings
+  DPI-02/03/05, plus verify-only DPI-07). Content-reconciliation complement to the merged
+  PLAN-daf-authoring-grammar (#633), which landed the decision-entry.yaml grammar contract and the
+  DPI-07 archive h3->h2 promote and explicitly deferred the DPI-02/03/05 CONTENT work to a separate
+  plan (its constraint line: "Do NOT edit DECISIONS.md/ARCHIVE content EXCEPT the 3 archive header
+  promotes"). No tier_item owns these findings (audit roadmap_crossref: novel / planned-insufficient);
+  owner surface docs/DECISIONS.md is the T1.5 grandfathered retiring set.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      DPI-02: add victim-side annotations to 10 live dead-unannotated entries using the Decision-134
+      / decision-entry.yaml canonical shapes -- `**Superseded by: Decision N**` for full supersessions
+      (Decision 58<-76, 49<-116, 44<-117, 37<-116, 23<-76); a dated `> **Update (2026-07-21):**`
+      blockquote for substrate retirements / moot triggers (Decision 74<-CD.21, 38<-artifacts deleted
+      at T-1.13, 40<-triggers moot); a `[Amendment 2026-07-21: ...]` trailing bracket for partial/clause
+      amendments (Decision 35<-Decision 77 clause 3; Decision 43 SLOC-waiver row<-Decision 102).
+      DPI-03: rewrite the 8 non-canonical `**Warehouse ID:**` lines (Decisions 75,77,78,79,80,81,83,85)
+      to canonical dec-NNN keeping Decision-105-referencing provenance WITHOUT re-writing any 4-digit
+      literal; correct Decision 75's dec-081 double-claim to dec-075; add `**Warehouse ID:** dec-082`,
+      `dec-084`, `dec-089` lines to Decisions 82/84/89 (the D89 line satisfies rec-2278).
+      DPI-05: delete the live Decision 26 block (the pending-review 2-Chat duplicate, ~4166 bytes).
+  - file: docs/DECISIONS_ARCHIVE.md
+    action: Modify
+    purpose: >-
+      DPI-05: add a renumbering-note-style provenance line to the archived Decision 26 entry ("Workflow
+      Cost Optimisation (Decided)") recording that the divergent live pending-review duplicate was
+      reconciled into this canonical entry and removed from the live file (D85 renumbering-note precedent),
+      leaving exactly one Decision 26 across both files. DPI-07 is verify-only here (zero `### Decision`
+      h3 headers -- already resolved by #633; NO edit).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Fix the stale out-of-file citation in the T5.3 tier_item intent (currently "Per Decision 58,
+      .agents/ is the canonical interactive workflow layer") to annotate that Decision 58 is superseded
+      by Decision 76, mirroring the already-annotated citation at line ~3692 ("Decision 58 superseded by
+      Decision 76, reaffirmed by Decision 85"). In-place annotation only -- no new lines, no status flip.
+  - file: docs/ROADMAP-PRODUCT.md
+    action: Modify
+    purpose: >-
+      Fix the stale Decision-40 citation at the Phase Infra-Platform note ("Implementation is triggered
+      by conditions defined in Decision 40") to annotate that Decision 40's trigger conditions are moot
+      (Copilot SDK retired via Decisions 49->116; Bedrock retired via CD.28). This file is a
+      globally-SUPERSEDED recovery artefact; the annotation prevents a reader of the retained copy being
+      misled.
+  - file: docs/ROADMAP-PRODUCT.yaml
+    action: Modify
+    purpose: >-
+      Annotate the authoritative sibling citation (source_section "Copilot SDK migration P3", reason
+      block "deferred per Decision 40 + PIVOT") that Decision 40's trigger conditions are now moot, so
+      the authoritative roadmap surface is not left stale while the superseded .md copy is fixed.
+      Prose `reason:` block edit only. OPERATOR-VETOABLE scope extension beyond the brief's named .md.
+bundled_recommendations:
+  - rec-2278
+  - rec-1964
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    DPI-02: each of the 10 live victims (Decisions 23, 35, 37, 38, 40, 43, 44, 49, 58, 74) contains a
+    victim-side annotation whose text names its superseder/amender decision number or the 'moot' state,
+    in a Decision-134 canonical shape; Decision 26's premise-death is recorded in the archived entry
+    (its live duplicate is deleted per DPI-05, so 26 is excluded from the live-annotation set).
+  - >-
+    DPI-03: every `**Warehouse ID:**` line in docs/DECISIONS.md carries a canonical 3-digit `dec-NNN`
+    value; no `**Warehouse ID:**` line carries a 4-digit `dec-1NNN`; Decision 75's dec-081 double-claim
+    is corrected to dec-075; and Decisions 82, 84, 89 each now carry a `**Warehouse ID:**` line
+    (the Decision 89 line satisfies rec-2278).
+  - >-
+    DPI-05: exactly one Decision 26 entry exists across docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md
+    (the archived Decided entry, now carrying a provenance note); the live pending-review duplicate is
+    deleted.
+  - >-
+    DPI-07 (verify-only): `grep -c '^### Decision' docs/DECISIONS_ARCHIVE.md` == 0 (already resolved by
+    #633; this plan makes no archive header edits).
+  - >-
+    Stale out-of-file citations fixed: docs/ROADMAP-PLATFORM.yaml no longer carries the bare "Per
+    Decision 58, .agents/ is the canonical interactive workflow layer" phrasing (now annotated
+    superseded-by-76); docs/ROADMAP-PRODUCT.md and docs/ROADMAP-PRODUCT.yaml annotate Decision 40's
+    triggers as moot.
+  - >-
+    Size governance stays green: docs/DECISIONS.md remains under the 400,000-byte and 120-h2-header
+    Decision-134 ceiling (the DPI-05 deletion of ~4166 bytes more than offsets the DPI-02/03 additions;
+    net byte delta is negative).
+  - >-
+    `bin/venv-python -m scripts.validate --pre` is green on the branch and the plan document
+    schema-validates.
+  - >-
+    bundled_recommendations rec-2278 and rec-1964 close via the Resolves trailer post-merge (rec-1964
+    closed with proof: exactly one `## Decision 72:` header at HEAD).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      DPI-02: all 10 live victims carry a victim-side supersession/decay annotation naming the
+      superseder/amender number or the moot state.
+    command: >-
+      missing=""; for n in 23 35 37 38 40 43 44 49 58 74; do awk "/^## Decision $n:/{f=1;next}
+      /^## Decision [0-9]+:/{f=0} f" docs/DECISIONS.md | grep -qiE "superseded by|amended by|migration
+      update|moot|\*\*update \(|\[amendment" || missing="$missing $n"; done; test -z "$missing"
+    expected: >-
+      Exit 0 -- every one of the 10 victim blocks contains a Decision-134 canonical annotation
+      (**Superseded by:**, > **Update (...):**, or [Amendment ...: amended by ...]).
+    fix_if: >-
+      A victim number remains in $missing -- its block lacks the annotation; add the appropriate
+      canonical marker naming the superseder/amender.
+    hermetic: false
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      DPI-03: every Warehouse ID line is canonical 3-digit dec-NNN and no Warehouse ID line carries a
+      retired 4-digit dec-1NNN (oracle scoped to `**Warehouse ID:**` lines -- the audit's whole-file
+      variant is over-broad, see constraints).
+    command: >-
+      test -z "$(grep -nE '^\*\*Warehouse ID:\*\*' docs/DECISIONS.md | grep -vE 'dec-[0-9]{3}( |\)|$)')"
+      && ! grep -E '^\*\*Warehouse ID:\*\*' docs/DECISIONS.md | grep -qE 'dec-1[0-9]{3}'
+    expected: >-
+      Exit 0 -- every Warehouse ID line's value is dec-NNN (3-digit, followed by space, ')' or EOL) and
+      no Warehouse ID line shows a 4-digit dec-1NNN.
+    fix_if: >-
+      A Warehouse ID line still shows a 4-digit id or a non-canonical value (e.g. Decision 75 left at
+      dec-081).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A Warehouse-ID-line conformance assertion is kernel-expressible as a standing guard, but this plan
+      builds NO validate.py check by brief -- the durable check is deferred to the DPI-01/DPI-03-extension
+      follow-up plan. Graduating it here would pre-empt that scoped decision.
+  - step: 3
+    phase: pre-deploy
+    action: "DPI-03: Decisions 82, 84, 89 each carry a canonical Warehouse ID line (the D89 line = rec-2278)."
+    command: >-
+      for n in 82 84 89; do awk "/^## Decision $n:/{f=1;next} /^## Decision [0-9]+:/{f=0} f"
+      docs/DECISIONS.md | grep -qF "**Warehouse ID:** dec-0$n" || { echo "MISSING-$n"; exit 1; }; done
+    expected: "Exit 0 -- Decisions 82/84/89 each contain '**Warehouse ID:** dec-082/dec-084/dec-089'."
+    fix_if: "A MISSING-N is printed -- add the canonical Warehouse ID line to that entry."
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: "DPI-05: exactly one Decision 26 across both files -- zero live, one archived."
+    command: >-
+      test "$(grep -cE '^## Decision 26:' docs/DECISIONS.md)" -eq 0 && test "$(grep -cE '^## Decision
+      26:' docs/DECISIONS_ARCHIVE.md)" -eq 1
+    expected: "Exit 0 -- the live pending-review duplicate is deleted; the archived Decided entry remains (with a provenance note)."
+    fix_if: "The live duplicate is still present, or the archived entry was removed."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicate-decision-number detection is kernel-expressible but is the explicit deliverable of the
+      DPI-06 follow-up check plan (out of scope here per brief); graduating it now would pre-empt that
+      plan's scoped design.
+  - step: 5
+    phase: pre-deploy
+    action: "DPI-07 (verify-only): no h3 numbered decision headers remain in the archive (already resolved by #633 -- regression guard)."
+    command: test "$(grep -c '^### Decision' docs/DECISIONS_ARCHIVE.md)" -eq 0
+    expected: "Exit 0 -- zero '### Decision' headers in docs/DECISIONS_ARCHIVE.md."
+    fix_if: "An h3 numbered header reappeared (a regression of PLAN-daf-authoring-grammar #633); restore h2."
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Already graduated by PLAN-daf-authoring-grammar (#633) as check_id
+      archive-no-h3-numbered-decision-headers; this plan asserts it verify-only to prove no regression.
+      Re-graduating would duplicate that standing guard.
+  - step: 6
+    phase: pre-deploy
+    action: "Stale out-of-file citations annotated (ROADMAP-PLATFORM Decision 58; ROADMAP-PRODUCT.md + .yaml Decision 40)."
+    command: >-
+      ! grep -qE 'Per Decision 58, .?\.agents.? is the canonical interactive workflow layer\.'
+      docs/ROADMAP-PLATFORM.yaml && grep -qi 'moot' docs/ROADMAP-PRODUCT.md && grep -qi 'moot'
+      docs/ROADMAP-PRODUCT.yaml
+    expected: >-
+      Exit 0 -- the bare stale Decision-58 phrasing is gone from ROADMAP-PLATFORM.yaml (now annotated
+      superseded-by-76) and a 'moot' Decision-40 annotation is present in both ROADMAP-PRODUCT files.
+    fix_if: "A stale citation remains unannotated."
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: "Size governance: docs/DECISIONS.md stays under the Decision-134 400,000-byte / 120-h2 ceiling after the edits."
+    command: >-
+      test "$(wc -c < docs/DECISIONS.md)" -lt 400000 && test "$(grep -cE '^## Decision [0-9]+:'
+      docs/DECISIONS.md)" -le 120
+    expected: "Exit 0 -- live bytes < 400000 and live h2 header count <= 120 (the DPI-05 deletion is the relief valve)."
+    fix_if: >-
+      The byte ceiling is breached -- the DPI-05 live-Decision-26 deletion (~4166 bytes) must land to
+      offset the DPI-02/03 additions; keep annotations terse; do NOT raise the ceiling (Decision 134).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the standing validate_decisions_size check (Decision 134, already in --pre + full);
+      this step is an explicit visibility assertion of the size interaction, not a new guard.
+  - step: 8
+    phase: pre-deploy
+    action: "The fast presubmit gate is green on the branch (runs validate_decisions_size, validate_vp_replay, and all --pre checks)."
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "PASS -- all --pre-tier checks green including the Decision-134 size gate."
+    fix_if: "Any --pre check fails; diagnose and fix on the branch (never mark this step hermetic -- replay recursion)."
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: "The plan document itself schema-validates (PlanDocument, extra=forbid)."
+    command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-decisions-content-reconciliation.yaml
+    expected: "Schema validation passes."
+    fix_if: "A schema violation (unknown key, missing required field, bad enum)."
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Post-merge closure: after the Resolves trailer fires rec-autoclose, rec-2278 and rec-1964 read
+      status closed in the synced read-cache.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && grep -F '"rec-2278"' logs/.recommendations-log.jsonl |
+      grep -qi 'closed' && grep -F '"rec-1964"' logs/.recommendations-log.jsonl | grep -qi 'closed'
+    expected: "Both rec-2278 and rec-1964 show status closed after sync."
+    fix_if: >-
+      A rec is still open -- run the fallback bin/venv-python -m scripts.ops_data_portal --update-rec
+      rec-NNNN --status closed --resolution "...". Requires the agent_platform profile.
+  - step: 11
+    phase: post-deploy
+    action: >-
+      Post-merge ETL refresh (overseer-run): re-run the DECISIONS.md -> ops_decisions backfill so dec-026
+      reflects the reconciled (archived Decided) entry.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
+    expected: >-
+      Exit 0 -- ops_decisions re-derived from the reconciled file; dec-026 now upserts from the archived
+      Decided entry. The annotation/Warehouse-ID display edits are ETL-immune (parse keys on header
+      number; file_decision re-derives dec-{n:03d}), so no other keyspace row changes.
+    fix_if: "Backfill errors (creds/connectivity) -- confirm the agent_platform profile chain and re-run."
+constraints:
+  - >-
+    bundled_recommendations [rec-2278, rec-1964]: rec-2278 is satisfied by the Decision 89 Warehouse ID
+    line (DPI-03); rec-1964 is verified already-satisfied (exactly one `## Decision 72:` header at HEAD --
+    the branch-protection duplicate was renumbered to Decision 89 by the decision-taxonomy-hygiene change,
+    confirmed via rec-2278's own context) and is closed with that proof. rec-2057 is deliberately NOT
+    bundled: at HEAD its content is archived Decision 50/51/56/69 cross-references in DECISIONS_ARCHIVE.md,
+    which does NOT overlap this plan's live-Decision-37 work (the audit's "D37 facet" characterization does
+    not reproduce at HEAD).
+  - >-
+    Use ONLY the Decision-134 / docs/contracts/decision-entry.yaml canonical annotation shapes
+    (re-grounding the audit's pre-Decision-134 shape names): `**Superseded by: Decision N**` for full
+    supersessions; `> **Update (YYYY-MM-DD):**` blockquote for substrate retirement / moot; `[Amendment
+    YYYY-MM-DD: ...]` trailing bracket for partial/clause amendment. Do NOT invent a new shape.
+  - >-
+    Do NOT re-do DPI-07 (already resolved by #633); make no archive header edits beyond the Decision-26
+    merge provenance line.
+  - >-
+    Do NOT scrub the two legitimate historical 4-digit references in docs/DECISIONS.md -- Decision 105's
+    reconciliation body (~line 1931) and Decision 85's Renumbering note (~line 2982) cite the retired
+    writer-era ids as provenance and are NOT Warehouse ID lines. Rewritten Warehouse ID provenance
+    references Decision 105 WITHOUT re-writing any 4-digit literal (else the DPI-03 no-4-digit oracle,
+    scoped to Warehouse ID lines, would trip).
+  - >-
+    Build NO validate.py check (DPI-01 supersession-annotation invariant and DPI-06 duplicate-number
+    detection are follow-up plans) and perform NO archive moves beyond the Decision-26 disposition (DPI-04
+    is a follow-up plan).
+  - >-
+    File NO new recommendations (Decision 55): out-of-scope findings surface to the operator via this
+    plan's open-questions / Context, not via file_rec.
+  - >-
+    The Warehouse ID rewrites are display-layer only and provably ETL-immune (parse_decisions_md keys on
+    the header number, scripts/decisions_md.py; file_decision re-derives dec-{n:03d}); do not treat them
+    as a data-layer migration.
+  - >-
+    No em dashes (ASCII ' -- '), no emojis; keep annotations terse so docs/DECISIONS.md stays under the
+    400,000-byte / 120-h2 Decision-134 ceiling; bin/venv-python (never bare python); no `python -c` in VP
+    commands.
+  - "No rescue agents or workaround loops (Decision 55); out-of-scope bugs become recommendations, not inline fixes -- but see the NO-new-recs constraint above (this plan surfaces, does not file)."
+  - "Public-repo boundary (Decision 101): no AWS account ids / ARNs / ExternalIds / secrets in any edit or the PR body."
+context:
+  - >-
+    Decision-scout verdict: FLAGS_FOUND (Decisions triaged: 103 of 103, complete read). CITE list
+    (verbatim): Decision 134 (keystone -- size governance + the decision-entry.yaml canonical shapes;
+    use `**Superseded by: Decision N**` with the colon BEFORE "Decision" inside the bold, NOT
+    `**Superseded by:** Decision N`), Decision 105 (canonical dec-NNN keying + R1/R2/R3 guard, DPI-03/05),
+    Decision 84 (ETL source + backfill + numbering authority). Superseder numbers the annotations MUST
+    name (scout-verified): Decision 76 (victims 58, 23), Decision 116 (victims 49, 37), Decision 117
+    (victim 44), Decision 77 clause 3 (victim 35), Decision 102 (D43 SLOC row), Decision 112 (ratifies
+    CD.21 -- D74's killer), Decision 122 (ratifies CD.28 -- one of D40's two moot triggers, alongside
+    Decision 116). RELATED: Decision 128/102/130 (SLOC ratchet -- does NOT gate docs/DECISIONS.md; do
+    not mis-cite as the size guard -- Decision 134's byte guard governs), Decision 133/93 (D40 moot-trigger
+    neighbourhood; ROADMAP-PRODUCT.yaml is status:draft so the citation edit is safe), Decision 86/127
+    (no new prose docs -- satisfied), Decision 114 (ROADMAP-PLATFORM 10k-line guard -- trivially under).
+    Two NOTE flags (no BLOCK), both incorporated: (1) Decision-134 size proximity -- the DPI-05 deletion
+    is load-bearing for byte compliance (handled: VP steps 7-8, scope treats the deletion as required);
+    (2) DPI-03 oracle scoping + the D85 renumbering-note coherence fix (both handled below).
+  - "gates: decision-scout=FLAGS_FOUND (all NOTE, incorporated, no re-dispatch needed); plan-critique=PROCEED after 1 round (0 revise rounds)"
+  - >-
+    Freshness re-grounding (audit commit 8fb581e 2026-07-05 -> HEAD ec29259 2026-07-21): since the audit,
+    PLAN-daf-authoring-grammar (#633) landed docs/contracts/decision-entry.yaml (the authoring grammar),
+    promoted the DPI-07 archive h3->h2 headers (DPI-07 now RESOLVED -- verify-only here), and Decision 134
+    ratified a 400,000-byte / 120-h2 / 700,000-combined size ceiling enforced by validate_decisions_size
+    (--pre + full). Every audit line anchor shifted (live Decision 26 :3134->:4500; ROADMAP-PLATFORM
+    Decision 58 :7819->:9046; ROADMAP-PRODUCT.md Decision 40 :755->:757) and was re-verified at HEAD. All
+    11 audit victims + the 8 non-canonical Warehouse ID lines + the duplicate Decision 26 still reproduce.
+  - >-
+    Canonical-shape re-grounding: the audit named pre-Decision-134 shapes (D42 header status-suffix,
+    D68/D71 blockquote, inline note); this plan maps them onto the now-canonical decision-entry.yaml forms
+    (supersession_marker / blockquote_update / trailing_bracket). Intent preserved (name the superseder,
+    machine-parseable, populates the typed superseded_by field via decisions_md._SUPERSEDED_BY_RE);
+    spelling upgraded to current architecture per the planning Freshness Gate ("implementation follows the
+    CURRENT architecture, never the stale instruction").
+  - >-
+    Size interaction (scout flag 1, incorporated): docs/DECISIONS.md is 398,438 bytes at HEAD (only 1,562
+    under the 400,000 Decision-134 ceiling). The DPI-02/03 additions are ~+2,400 bytes -- which ALONE would
+    breach the ceiling (398,438 + 2,400 = 400,838 > 400,000). The DPI-05 deletion of the 4,166-byte live
+    Decision 26 block is therefore LOAD-BEARING: it MUST land in the SAME commit as the DPI-02/03 additions,
+    yielding ~396.7 KB (~3,300 bytes headroom). The size guard covers live AND archive AND combined; VP
+    step 8 (validate --pre -> validate_decisions_size) is the gate. Live h2 count 103 -> 102 (well under
+    120). This constraint did not exist at audit time.
+  - >-
+    Oracle corrections vs the audit: (a) DPI-03 -- the audit's whole-file `! grep -q 'dec-1[0-9]{3}'
+    docs/DECISIONS.md` is over-broad and ALREADY fails at HEAD (Decision 105's reconciliation body ~:1931
+    and Decision 85's renumbering note ~:2982 legitimately cite the retired 4-digit ids); this plan's
+    oracle is scoped to `**Warehouse ID:**` lines. (b) DPI-02 -- the audit's oracle iterates Decision 26,
+    but DPI-05 deletes live Decision 26; this plan excludes 26 from the live-annotation oracle (its
+    premise-death is recorded in the archived entry) and adds Decision 43 (whose `[Amendment ...: amended
+    by Decision 102 ...]` matches the marker set).
+  - >-
+    DPI-05 / rec-1964: the historical duplicate Decision 72 no longer reproduces (one `## Decision 72:` at
+    HEAD; the branch-protection duplicate was renumbered to Decision 89). parse_decisions_md still does
+    silent first-parsed-wins dedup (scripts/decisions_md.py:216-217) and keys on the header number, so
+    DPI-05's silent-drop mechanism is live and the post-merge --backfill-decisions-md re-derives dec-026
+    to the archived Decided entry.
+  - >-
+    OPERATOR-GATED ADJUDICATION 1 -- Decision 40. RECOMMENDED (drafted): annotate a `> **Update
+    (2026-07-21):**` blockquote recording the triggers are moot (Copilot SDK retired 49->116; Bedrock
+    retired CD.28) with formal supersession pending. ALTERNATIVE: author a NEW superseding Decision entry
+    per the DRAFT docs/INTENT-provider-agnostic-executor.md. Rationale for the recommendation: option A is
+    a substantive governance act (it would supersede Decision 40 AND CD.7) deserving deliberate
+    ratification; the INTENT draft that proposed it is itself marked DRAFT and predicated on a RETIRED
+    filing path (the log-decision Lambda T0.7b, superseded by the Decision-84 DECISIONS.md+backfill path);
+    Decision 86 is retiring the INTENT-doc approach. The blockquote is honest, reversible, byte-cheap, and
+    satisfies the acceptance oracle ('moot'). Operator confirms before merge.
+  - >-
+    OPERATOR-GATED ADJUDICATION 2 -- Decision 26 (DPI-05). RECOMMENDED (drafted): merge into the one
+    archived Decided entry + add a renumbering-note-style provenance line + delete the live pending-review
+    duplicate (the audit's likely disposition; D85 renumbering-note precedent). ALTERNATIVE: keep the live
+    copy authoritative (rejected -- its architecture is two supersessions stale via Decision 42->90 and its
+    artifacts were deleted at T-1.13). Operator confirms the exact merge fidelity before merge.
+  - >-
+    SCOPE NOTE (surfaced): the brief named docs/ROADMAP-PRODUCT.md:755, a globally-SUPERSEDED recovery
+    artefact; this plan ALSO annotates the authoritative sibling docs/ROADMAP-PRODUCT.yaml:4386 so the live
+    surface is not left stale while the retiring copy is fixed. The operator may drop the .yaml edit.
+  - >-
+    Decision 86: this plan writes NO new standing prose-architecture doc; every edit is to an existing
+    governance surface (DECISIONS.md / DECISIONS_ARCHIVE.md / the roadmaps).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/plan-decisions-content-reconciliation)
+  - docs/PROJECT_CONTEXT.md read on demand (workflow context)
+  - "Audit decision-log-premise-integrity-8fb581e.yaml + .md read in full (findings DPI-02/03/05/07)"
+  - "docs/contracts/decision-entry.yaml canonical shapes read; Decision 134 size ceiling read"
+  - All 5 scope files located; every audit anchor re-verified at HEAD (ec29259)
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    DECISIONS.md DPI-02 full supersessions -- add `**Superseded by: Decision N**` to the body of Decision
+    58 (N=76), Decision 49 (N=116), Decision 44 (N=117), Decision 37 (N=116), Decision 23 (N=76).
+  - >-
+    DECISIONS.md DPI-02 substrate/moot blockquotes -- add a dated `> **Update (2026-07-21):**` line naming
+    the killing event to Decision 74 (self-hosted runner retired per CD.21, ratified by Decision 112;
+    workflow_dispatch escape hatch survives in .github/workflows/ci-rca.yml), Decision 38
+    (copilot-instructions.md + implement.prompt.md deleted at T-1.13; ghost-file guard survives), and
+    Decision 40 (RECOMMENDED option: triggers moot -- Copilot SDK retired via Decision 116, Bedrock BYOK
+    retired via CD.28 ratified by Decision 122; formal supersession pending).
+  - >-
+    DECISIONS.md DPI-02 partial amendments -- add a `[Amendment 2026-07-21: amended by Decision N ...]`
+    trailing bracket to Decision 35 (amended by Decision 77 clause 3 -- the unconditional "no auto-apply"
+    is scoped; sandbox auto-applies behind the deterministic guard) and to the Decision 43 SLOC-waiver row
+    at line ~4154 (amended by Decision 102 -- the complexity-waiver comment no longer authorises unbounded
+    SLOC growth; decompose by default per Decision 128). Each bracket text contains "amended by Decision N".
+  - >-
+    DECISIONS.md DPI-03 -- rewrite the 8 non-canonical `**Warehouse ID:**` values to canonical dec-NNN:
+    Decision 85 dec-1091->dec-085, 83 dec-1090->dec-083, 81 dec-1089->dec-081, 80 dec-1088->dec-080, 79
+    dec-1086->dec-079, 78 dec-1085->dec-078, 77 dec-1083->dec-077 (preserve the existing "renumbered from
+    76 ... PR #10" provenance), 75 dec-081->dec-075 (correct the display-layer double-claim with Decision
+    81's id). Each rewritten line keeps a short "(canonical; retired writer-era id reconciled per Decision
+    105)" provenance that contains NO 4-digit literal. When flipping Decision 85's line, ALSO reconcile the
+    adjacent "**Renumbering note:**" (line ~2982) whose phrase "the dec-1091 warehouse id ... unchanged"
+    becomes incoherent -- reword to note the Warehouse ID line is now reconciled to the canonical dec-085
+    per Decision 105 (the dec-1091 provenance reference may remain; it is a renumbering-note literal, not a
+    Warehouse ID line, so the DPI-03 line-scoped oracle does not touch it).
+  - >-
+    DECISIONS.md DPI-03 -- add `**Warehouse ID:** dec-082`, `**Warehouse ID:** dec-084`, `**Warehouse ID:**
+    dec-089` lines to Decisions 82, 84, 89 in the same position the modern band uses (the D89 line closes
+    rec-2278).
+  - >-
+    DPI-05 -- delete the live Decision 26 block from docs/DECISIONS.md; add a renumbering-note-style
+    provenance line to the archived Decision 26 entry in docs/DECISIONS_ARCHIVE.md noting the divergent
+    live pending-review duplicate was reconciled here and removed (operator confirms merge fidelity).
+  - >-
+    ROADMAP-PLATFORM.yaml -- annotate the T5.3 intent's "Per Decision 58, .agents/ is the canonical ..."
+    citation to read that Decision 58 is superseded by Decision 76 (mirror the line ~3692 style). In-place,
+    no new lines.
+  - >-
+    ROADMAP-PRODUCT.md + ROADMAP-PRODUCT.yaml -- annotate the Decision-40 citations (the .md "triggered by
+    conditions defined in Decision 40" note and the .yaml "deferred per Decision 40 + PIVOT" reason block)
+    that Decision 40's trigger conditions are moot (Copilot SDK retired 49->116; Bedrock retired CD.28).
+  - "Execute the Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: what was reconciled, the two operator adjudications as executed, and verification results."
+work_areas: []
+rollback: >-
+  All edits are additive annotations, in-place display rewrites, and one block deletion (the live
+  Decision 26 duplicate, preserved in git history and superseded by the archived entry). Revert the
+  branch commit to restore the pre-reconciliation file; no code, schema, or check is touched, so a revert
+  is clean with no partial window.
