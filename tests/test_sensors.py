@@ -1,5 +1,6 @@
 """Unit tests for the verifier sensor suite."""
 
+import itertools
 import time
 from unittest.mock import MagicMock, patch
 
@@ -147,7 +148,11 @@ async def test_causal_chain_fail_timeout():
         patch("scripts.verifiers.causal_chain.emit_process_event"),
         patch("boto3.Session"),
         patch("asyncio.sleep", return_value=None),
-        patch("time.time", side_effect=[0, 200]),
+        # itertools.count with a step (200) larger than max_wait (180): guarantees elapsed exceeds
+        # max_wait between ANY two distinct time.time() calls, regardless of how many incidental
+        # extra calls (e.g. logging.LogRecord's own timestamp, per log line emitted) land before
+        # start_time is captured -- an exhaustible fixed-length side_effect list is fragile to that.
+        patch("time.time", side_effect=itertools.count(0, 200)),
     ):
         mock_query.return_value = pd.DataFrame([{"count": 0}])
         verifier = CausalChainVerifier()
