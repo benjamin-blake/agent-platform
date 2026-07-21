@@ -115,6 +115,31 @@ class PlanDocument(BaseModel):
             raise ValueError(f"Unsupported schema_version {v}. Supported: {sorted(_SUPPORTED_VERSIONS)}")
         return v
 
+    @field_validator("closes_criteria")
+    @classmethod
+    def _closes_criteria_tokens(cls, v: list[str]) -> list[str]:
+        # Loose shape check only -- reject prose, accept every real <item-id>:<crit-id> token
+        # (lettered criteria, hyphenated/triple-dotted/lettered-suffix item ids). Membership
+        # (does the ref actually exist) stays owned by validate_platform_roadmap.
+        for entry in v:
+            if any(ch.isspace() for ch in entry):
+                raise ValueError(
+                    f"closes_criteria entry {entry!r} is not a valid '<item-id>:<crit-id>' token "
+                    "(contains whitespace -- narrative/prose text belongs in context:, not closes_criteria)"
+                )
+            if entry.count(":") != 1:
+                raise ValueError(
+                    f"closes_criteria entry {entry!r} is not a valid '<item-id>:<crit-id>' token "
+                    "(must contain exactly one ':' separating item-id and crit-id)"
+                )
+            item_id, crit_id = entry.split(":", 1)
+            if not item_id or not crit_id:
+                raise ValueError(
+                    f"closes_criteria entry {entry!r} is not a valid '<item-id>:<crit-id>' token "
+                    "(item-id and crit-id must both be non-empty)"
+                )
+        return v
+
     @model_validator(mode="after")
     def _validate_document(self) -> PlanDocument:
         expected_path = f"docs/plans/PLAN-{self.slug}.yaml"

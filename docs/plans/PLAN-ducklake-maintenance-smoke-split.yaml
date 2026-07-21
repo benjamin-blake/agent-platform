@@ -152,45 +152,6 @@ closes_criteria:
   - "T2.18:c6"
   - "T2.18:c7"
   - "T2.18:c9"
-  - >-
-    APPLY-PATH SPLIT (critical -- github_ci_apply's own authority budget, not just the guard, decides
-    who can apply). These IAM changes are BEYOND github_ci_apply's bounded authority
-    (IAMRoleCreateBounded only mints boundary-carrying roles; IAMRoleWriteBounded scopes PutRolePolicy
-    to github-ci-branch/pr ONLY; DenyIAMEscalation) -- so tf-gated-apply/apply-sandbox CANNOT apply them
-    and they require agent_platform_admin (human-gated `-target` apply from the ADMIN container/operator,
-    same precedent as the github_ci_drift admin-create and the T2.43 prod exec roles / ducklake_maintenance.tf
-    APPLY POSTURE): (a) the new smoke exec role + inline policy (ducklake_maintenance_smoke.tf); (b) the
-    github_ci_ducklake_deploy DucklakeUpdateFunctionCode grant addition (oidc.tf); (c) the
-    github_ci_plan/github_ci_drift IAMPlatformRolesRead grant addition (oidc.tf); (d) the bootstrap
-    IAMRolesRead + lambda:AddPermission additions (terraform/bootstrap, already admin-only out-of-band).
-    The DEV /implement container LACKS agent_platform_admin -- the IAM-create portion is an operator/ADMIN
-    handoff, NOT a tf-gated-apply approval. IAM apply MUST precede the code deploy.
-  - >-
-    CD-applicable subset: the github_ci_branch MaintenanceSmokeInvokeCI grant is an in-budget
-    aws_iam_role_policy UPDATE on a managed boundary-carrying role (github-ci-branch is in
-    authority_budget.json in_budget_managed_roles; UPDATE in in_budget_actions), so per T2.25 / Decision
-    92 pt5 the guard classifies it IN-BUDGET and it AUTO-APPLIES behind the guard (exit 0) -- NOT
-    tf-gated-apply gated. The NON-IAM resources (the smoke function, Function URL, and the moved
-    EventBridge rules/targets/permissions) also auto-apply behind the guard on the apply-sandbox path
-    (Decision 77/92). The speculative-plan guard verdict on the PR is advisory.
-  - >-
-    EventBridge write-grant coverage (verify at /implement -- VP10 does NOT check this): github_ci_apply's
-    bootstrap EventBridgeWrite grant is ENUMERATED to the existing rule ARNs (no rule/agent-platform-*
-    wildcard, unlike the READ side). RECOMMENDED: keep the moved smoke rules' AWS `name` attributes equal
-    to the existing rule names (agent-platform-ducklake-maintenance-{merge,gc,hot_merge}) and move only
-    the terraform resource ADDRESS via `moved{}` -- the ARN is unchanged so the enumerated grant already
-    covers PutRule/PutTargets and the CD apply does not AccessDeny. If instead new AWS rule names are
-    chosen, the new rule ARNs MUST be added to the bootstrap EventBridgeWrite grant (another
-    agent_platform_admin bootstrap edit). This makes `moved{}` recommended, not merely optional.
-  - >-
-    Code deploy via the governed CD channel .github/workflows/deploy-ducklake-lambdas.yml (T2.38,
-    Decision 125/126); the new function carries lifecycle { ignore_changes = [source_code_hash] } so
-    code redeploys do not surface as a terraform diff on the IAM-gated apply path.
-  - >-
-    Provider-init egress: terraform/personal uses the kislerdm/neon third-party provider (github.com
-    checksum fetch blocked from a stock CC-web session, Decision 119) -- local terraform steps are
-    fmt/grep only; terraform validate/plan/apply are CI-delegated (terraform-validate check +
-    speculative-plan/apply-sandbox jobs are authoritative).
 acceptance_criteria:
   - >-
     A new smoke-safe Lambda ducklake_maintenance_smoke exists whose dispatch table is exactly
@@ -568,6 +529,45 @@ context:
     (ducklake_maintenance_smoke_merge/gc/hot_merge) and consider `moved{}` blocks to avoid a brief
     schedule gap. The gap is harmless (smoke/disposable tables), so `moved{}` is optional; VP10 asserts
     the admin-side removal to prevent a same-name collision at apply.
+  - >-
+    APPLY-PATH SPLIT (critical -- github_ci_apply's own authority budget, not just the guard, decides
+    who can apply). These IAM changes are BEYOND github_ci_apply's bounded authority
+    (IAMRoleCreateBounded only mints boundary-carrying roles; IAMRoleWriteBounded scopes PutRolePolicy
+    to github-ci-branch/pr ONLY; DenyIAMEscalation) -- so tf-gated-apply/apply-sandbox CANNOT apply them
+    and they require agent_platform_admin (human-gated `-target` apply from the ADMIN container/operator,
+    same precedent as the github_ci_drift admin-create and the T2.43 prod exec roles / ducklake_maintenance.tf
+    APPLY POSTURE): (a) the new smoke exec role + inline policy (ducklake_maintenance_smoke.tf); (b) the
+    github_ci_ducklake_deploy DucklakeUpdateFunctionCode grant addition (oidc.tf); (c) the
+    github_ci_plan/github_ci_drift IAMPlatformRolesRead grant addition (oidc.tf); (d) the bootstrap
+    IAMRolesRead + lambda:AddPermission additions (terraform/bootstrap, already admin-only out-of-band).
+    The DEV /implement container LACKS agent_platform_admin -- the IAM-create portion is an operator/ADMIN
+    handoff, NOT a tf-gated-apply approval. IAM apply MUST precede the code deploy.
+  - >-
+    CD-applicable subset: the github_ci_branch MaintenanceSmokeInvokeCI grant is an in-budget
+    aws_iam_role_policy UPDATE on a managed boundary-carrying role (github-ci-branch is in
+    authority_budget.json in_budget_managed_roles; UPDATE in in_budget_actions), so per T2.25 / Decision
+    92 pt5 the guard classifies it IN-BUDGET and it AUTO-APPLIES behind the guard (exit 0) -- NOT
+    tf-gated-apply gated. The NON-IAM resources (the smoke function, Function URL, and the moved
+    EventBridge rules/targets/permissions) also auto-apply behind the guard on the apply-sandbox path
+    (Decision 77/92). The speculative-plan guard verdict on the PR is advisory.
+  - >-
+    EventBridge write-grant coverage (verify at /implement -- VP10 does NOT check this): github_ci_apply's
+    bootstrap EventBridgeWrite grant is ENUMERATED to the existing rule ARNs (no rule/agent-platform-*
+    wildcard, unlike the READ side). RECOMMENDED: keep the moved smoke rules' AWS `name` attributes equal
+    to the existing rule names (agent-platform-ducklake-maintenance-{merge,gc,hot_merge}) and move only
+    the terraform resource ADDRESS via `moved{}` -- the ARN is unchanged so the enumerated grant already
+    covers PutRule/PutTargets and the CD apply does not AccessDeny. If instead new AWS rule names are
+    chosen, the new rule ARNs MUST be added to the bootstrap EventBridgeWrite grant (another
+    agent_platform_admin bootstrap edit). This makes `moved{}` recommended, not merely optional.
+  - >-
+    Code deploy via the governed CD channel .github/workflows/deploy-ducklake-lambdas.yml (T2.38,
+    Decision 125/126); the new function carries lifecycle { ignore_changes = [source_code_hash] } so
+    code redeploys do not surface as a terraform diff on the IAM-gated apply path.
+  - >-
+    Provider-init egress: terraform/personal uses the kislerdm/neon third-party provider (github.com
+    checksum fetch blocked from a stock CC-web session, Decision 119) -- local terraform steps are
+    fmt/grep only; terraform validate/plan/apply are CI-delegated (terraform-validate check +
+    speculative-plan/apply-sandbox jobs are authoritative).
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/trusting-faraday-rdy2u3)
   - docs/PROJECT_CONTEXT.md read

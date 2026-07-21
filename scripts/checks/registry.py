@@ -94,6 +94,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_workflow_agent_safety"),
         _c("validate_product_roadmap"),
         _c("validate_plan_documents"),
+        _c("validate_platform_roadmap"),
         _c("validate_tier_floor"),
         _c("validate_candidate_decision_ratification"),
         _c("validate_candidate_decision_supersession"),

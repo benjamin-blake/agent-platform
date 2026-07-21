@@ -71,6 +71,7 @@ REQUIRED_PRE_CHECKS: frozenset[str] = frozenset(
         "validate_workflow_agent_safety",
         "validate_product_roadmap",
         "validate_plan_documents",
+        "validate_platform_roadmap",
         "validate_tier_floor",
         "validate_candidate_decision_ratification",
         "validate_decisions_size",
