@@ -94,10 +94,9 @@ def read_context_files(open_recs_count: int | None = None) -> dict:
 
 
 def check_telemetry_health() -> dict:
-    """Telemetry health stub: the Athena telemetry tables died with the 2026-05-28 account
-    migration, so the previous implementation polled TABLE_NOT_FOUND for ~a minute every
-    session. Telemetry re-lands on DuckLake in consolidation Phase 4 (Decision 84); until
-    then this reports not_migrated WITHOUT issuing any query.
+    """Telemetry health stub: the Athena telemetry tables are retired, so this reports
+    not_migrated WITHOUT issuing any query. Telemetry re-lands on DuckLake in consolidation
+    Phase 4 -- see Decision 84 / tier_item T2.36 for history and status.
 
     Returns a dict compatible with ``print_telemetry_health()``.
     """

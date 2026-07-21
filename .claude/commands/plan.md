@@ -44,7 +44,7 @@ If the request references a recommendation ID, search `logs/.recommendations-log
 
 ## Step 3: Clarify the Request
 Decompose the input into Goal, Constraints, Acceptance criteria, Affected areas, and Phase alignment.
-If vague, ask 2-5 questions. Watch for ROADMAP misalignment (the platform/product roadmap state is already in the preflight JSON `next_eligible` / `strategic_pending` fields). Decision-contradiction checking is delegated to the `decision-scout` subagent gate in Step 6 -- do NOT read `docs/DECISIONS.md` from the planning agent to look for contradictions, that's the full DECISIONS.md, currently >200KB, a cost the subagent avoids.
+If vague, ask 2-5 questions. Watch for ROADMAP misalignment (the platform/product roadmap state is already in the preflight JSON `next_eligible` / `strategic_pending` fields). Decision-contradiction checking is delegated to the `decision-scout` subagent gate in Step 6 -- do NOT read `docs/DECISIONS.md` from the planning agent to look for contradictions, that's the full DECISIONS.md (large -- near its Decision 134 size ceiling), a cost the subagent avoids.
 Suggest 3-5 open recommendations from `logs/.recommendations-log.jsonl` that align with the current task.
 
 ## Step 4: Identify Affected Files
