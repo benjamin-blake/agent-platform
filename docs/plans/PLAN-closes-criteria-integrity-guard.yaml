@@ -160,7 +160,7 @@ verification_plan:
       rec-autoclose, and after a cache pull, rec-2749 is closed; and the Main Canary is green on the
       merge commit.
     command: >-
-      bin/venv-python -m scripts.sync.ops pull && grep '"id": "rec-2749"' logs/.recommendations-log.jsonl | grep -q '"status": "closed"'
+      bin/venv-python -m scripts.sync.ops sync && grep '"id": "rec-2749"' logs/.recommendations-log.jsonl | grep -q '"status": "closed"'
     expected: >-
       The cache line for rec-2749 shows status closed; separately, mcp__github__pull_request_read
       (get_check_runs) / the Main Canary run on the merge SHA shows the roadmap-integrity check green.
@@ -230,6 +230,16 @@ context:
   - >-
     dec-72 (RCA-as-plan-source): rec-2749 is source=ci_rca and is being reviewed in this /plan session
     before any patch, per the merge protocol -- not an inline hot-patch.
+  - >-
+    PR-description awareness note (plan-critique non-blocking): once validate_platform_roadmap runs at
+    --pre, any FUTURE PR that git-diff-touches a tier_item still carrying bare-string exit_criteria
+    (e.g. T-1.5, which the check's (ii) leg flags) will now fail pre-merge instead of only in canary.
+    This is the intended tightening (consistent with dec-136/CD.39) but widens the --pre surface for
+    unrelated roadmap edits -- surface it in the PR description so reviewers expect it. Separately, the
+    closes_criteria field_validator is a semantic tightening (retroactively rejects prose), not a purely
+    additive field like dec-132's graduation precedent; the no-schema_version-bump call is defensible
+    because the token shape was already a de-facto contract enforced post-merge by validate_platform_roadmap
+    and the co-land audit confirms zero existing plans break.
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/session-4g4qlh)
   - docs/PROJECT_CONTEXT.md read
