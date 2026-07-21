@@ -190,6 +190,12 @@ dormant_ops_tables:
       steps: {role: input, sql_type: VARCHAR, nullable: true}
       critique_history: {role: input, sql_type: VARCHAR, nullable: true}
       plan_text: {role: input, sql_type: VARCHAR, nullable: true}
+      # Required for ANY write_ops/file_ops write to land: the writer handler unconditionally
+      # injects _contract_version server-side (src/lambdas/ducklake_writer/handler.py
+      # action_write_ops/action_file_ops) before the schema gate validates the full record, for
+      # every ops table -- not just the Class A contract-backed ones. Discovered live (VP step 10
+      # write-path smoke, T2.26 c9): a write to a table missing this column 422s.
+      _contract_version: {role: input, sql_type: VARCHAR, nullable: true}
       created_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
       last_updated_timestamp: {role: derived, sql_type: "TIMESTAMP WITH TIME ZONE", nullable: false}
 
