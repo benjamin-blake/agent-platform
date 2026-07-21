@@ -111,12 +111,20 @@ trace, or you will burn cognition on the wrong object.
   Only `terraform/personal/` (live), `terraform/bootstrap/` (manual admin apply), and
   `terraform/github/` (manual local apply) are real apply targets. Do not grade legacy root files
   as live attack surface; a duplicated role NAME across the live and legacy states is a hygiene
-  observation, not a live privilege.
+  observation, not a live privilege. ONE EXCEPTION applies to the static-key `agent-service-account`
+  IAM user: its terraform resource sits in legacy-root `terraform/agent_auth.tf`
+  (declared-but-not-applied there, targeting a different account), yet the runtime credential CHAIN
+  it anchors is LIVE -- the personal-account `PlatformDev`/`PlatformAdmin` roles trust a user of that
+  name in the personal account, and the live user exists out-of-band (Decision 113; groups E/F).
+  Trace its actual live state; do not dismiss the static-key credential model as not-applied on the
+  strength of this rule.
 - Decision 35 ("no auto-apply; human-in-the-loop for apply") is SCOPED, not contradicted, by
   Decision 77 (sandbox DOES auto-apply behind the guard). Decision 24's multi-account model is
-  architecturally SUPERSEDED by the single-account model (Decision 77). Decision 36 ("OIDC-only,
-  no IAM users") applies to a different (company/work) account and does NOT govern the personal
-  account -- do not flag the personal-account static-key IAM user against Decision 36.
+  architecturally SUPERSEDED by the single-account model (Decision 77). A superseded,
+  company/work-account-scoped "OIDC-only, no IAM users" rule (in `docs/DECISIONS_ARCHIVE.md`, NOT
+  the active `docs/DECISIONS.md` that section 13's dedup greps) does NOT govern the personal account
+  -- do not flag the personal-account static-key IAM user as a "no IAM users" violation; the
+  static-key model is a live, decided choice (Decision 113, do-not-flag item 4).
 - Two roadmaps exist: `docs/ROADMAP-PLATFORM.yaml` (this audit) and `docs/ROADMAP-PRODUCT.yaml`
   (out of scope). "T-prefixed" tier items live in the platform roadmap.
 
@@ -134,7 +142,8 @@ this prompt; re-derive from the repo and record any non-resolving anchor in `met
   `.github/workflows/convergence-health.yml`, `.github/workflows/tf-gated-apply-prototype.yml`
   (the plan / apply / gate / drift / heal / convergence machinery). Built.
 - SURFACE iam-identities -- `terraform/personal/oidc.tf`, `terraform/personal/platform_roles.tf`,
-  `terraform/bootstrap/github_ci_apply.tf`, `terraform/personal/agent_auth.tf`,
+  `terraform/bootstrap/github_ci_apply.tf`, `terraform/agent_auth.tf` (legacy-root,
+  declared-but-not-applied -- see group E for its live-vs-defined status),
   `terraform/personal/prod_lambdas.tf`, `terraform/personal/ducklake_lambdas.tf` and siblings
   (the CI/deploy roles, runtime roles, Lambda execution roles, the OIDC provider, the permissions
   boundary). Built.
@@ -175,8 +184,9 @@ affected confidences, and proceed.
 2. Generate the dedup caches (DEDUP DISCIPLINE in section 13 depends on them):
    `bin/venv-python -m scripts.session.preflight --roadmap-detail full`
    This populates `logs/.preflight-report.json` and `logs/.recommendations-log.jsonl`.
-   IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, mark
-   every `roadmap_crossref` confidence `HYPOTHESIS` and every `dedup_hit_count=null`, and proceed
+   IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, set every
+   affected finding's `confidence` to `HYPOTHESIS` and its `roadmap_crossref.dedup_hit_count` to
+   `null`, and proceed
    using `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`, and any committed
    `logs/.recommendations-log.jsonl` read directly from disk instead.
 3. Read the in-scope surfaces (section 4) and the GROUNDING MAP anchors (section 10) directly from
@@ -540,9 +550,17 @@ E. THE IAM IDENTITY SET (re-derive counts and boundary presence)
 - `terraform/personal/platform_roles.tf`: `platform_dev` (PlatformDev, ~:32, no boundary),
   `platform_admin` (PlatformAdmin, ~:224, no boundary) whose inline policy `IAMFull` grants
   `Action="iam:*"` on `Resource="*"` (~:258-260).
-- `terraform/personal/agent_auth.tf`: an IAM user (`agent-service-account`) with an access key,
-  holding `sts:AssumeRole` on the PlatformDev + PlatformAdmin ARNs. This is the static-key
-  principal the runtime roles trust.
+- The static-key runtime identity: the personal-account `PlatformDev` and `PlatformAdmin` roles
+  (`terraform/personal/platform_roles.tf`, trust blocks ~:44 and ~:236) trust an IAM user
+  `agent-service-account` in the personal account (`var.account_id`) via an `sts:ExternalId`
+  condition. The terraform `aws_iam_user.agent_service_account` + `aws_iam_access_key` resource
+  (holding `sts:AssumeRole` on the PlatformDev + PlatformAdmin ARNs) sits in legacy-root
+  `terraform/agent_auth.tf` (~:30, `provider = aws.platform`), whose header states it is
+  declared-but-not-applied and targets a different account; the live personal-account user of that
+  name is maintained out-of-band (`terraform/CLAUDE.md` "Out-of-band IAM grants"). The static-key
+  credential chain (a single access key that can assume PlatformDev daily-ops AND PlatformAdmin
+  `iam:*`) is LIVE per Decision 113 regardless of which module's resource is applied. Re-derive the
+  actual live definition; do not treat this as legacy-root not-applied hygiene (see section 3).
 - Eight Lambda execution roles across `prod_lambdas.tf` / `ducklake_lambdas.tf` /
   `ducklake_maintenance*.tf` / `ducklake_catalog_dr.tf`, none carrying a boundary. Re-derive the
   full role census and how many of the total carry a permissions boundary.
@@ -553,7 +571,8 @@ F. THE APPLY MODEL + BREAK-GLASS TIER
   involved), `reconcile` (input-free heal action, landed), `admin_out_of_band` (human operator
   break-glass; quarantined procedure block).
 - `docs/contracts/environment-taxonomy.md` is the SoT for the guard classification and the Axis A
-  platform environment axis (bootstrap / sandbox / SIT / PROD); it states "role CREATES stay gated
+  platform environment axis (bootstrap / sandbox / SIT [System Integration Test, a future dedicated
+  account] / PROD); it states "role CREATES stay gated
   (new trust surface)".
 - `terraform/CLAUDE.md` documents the operator-only / break-glass local apply as covering "the
   guard-BLOCK / out-of-budget-IAM cases the CD pipeline cannot yet apply on its own", and (in the
@@ -570,7 +589,8 @@ G. ROADMAP STATE (re-derive statuses from `docs/ROADMAP-PLATFORM.yaml`)
   "terraform-path hardening: layer replace policy, committed provider lockfile, content-addressed
   zips, deduped build bash"), T5.2 (old-account teardown, `user_action_required`).
 
-H. OPEN RECOMMENDATIONS (verify each in `logs/.recommendations-log.jsonl`; titles are exact)
+H. OPEN RECOMMENDATIONS (verify each in `logs/.recommendations-log.jsonl`; titles quoted as
+   observed at compose time -- re-derive to confirm)
 - rec-2523 "Workflow deadlock: a guard-BLOCK red convergence record cannot be cleared by either
   automated path".
 - rec-2461 "workflow_dispatch acknowledge-and-retry cannot clear an out-of-budget red convergence
@@ -615,8 +635,8 @@ Sample real change history; observed findings outrank static ones at equal sever
   gated-apply, or fallen to admin break-glass?" Tag the aggregate in prose.
 - <= 15 open recommendations whose title matches the terraform/IAM/deploy/convergence/gated-apply
   territory (grep `logs/.recommendations-log.jsonl`). Use these to corroborate or refute candidate
-  findings; a live open rec on a candidate makes it `planned-insufficient` or
-  `planned-partially-addressed`, not `novel`.
+  findings; a live open rec on a candidate makes it `planned-insufficient` (an existing remedy that
+  does not fully resolve the issue is insufficient), not `novel`.
 
 Tag every finding's `evidence_kind` as `static` (from reading config/code) or `observed` (from
 sampled history/recs). If the sampling caps prevent full coverage, say so in prose -- never imply
@@ -693,7 +713,8 @@ COUNTING INVARIANT: `findings[]` is the SOLE enumerated list. `total_findings = 
 novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered candidates live in
 `rejected_candidates`, NOT findings. `rubric_ratings`, `question_answers`, and the `disposition`
 block are systems-of-record referenced FROM findings, never re-counted. `top_improvements` and
-`highest_leverage_change` MUST be finding ids.
+`highest_leverage_change` MUST be finding ids -- EXCEPT when `findings[]` is empty (a valid result,
+section 17): then set `top_improvements: []` and `highest_leverage_change: null`.
 
 ```yaml
 audit:
@@ -750,7 +771,9 @@ audit:
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates, and state why the control would
 FAIL if the defect were real. CONFIRMED requires the behavior traced to file:line or an observed
-sampled artifact; anything less is HYPOTHESIS.
+sampled artifact; anything less is HYPOTHESIS. A finding's `question` and `dimension` name the
+PRIMARY one it serves; a finding that bears on several may reference the others in its prose and in
+the relevant `question_answers[].basis`.
 
 ---
 
@@ -790,7 +813,10 @@ The frontier rating remains reachable where you argued a property-matched compen
    That sha is the audited tree and goes in the two filenames, the branch name, and
    `meta.audited_commit`.
 2. `git switch -c audit/terraform-deploy-redesign-<sha> origin/main` so the PR diff is only the two
-   deliverable files. This is a deliberate, documented exception to the AGENTS.md `claude/*`
+   deliverable files. (Degraded path: if `origin/main` cannot be resolved -- e.g. SETUP step 1's
+   fetch failed -- base the branch off `HEAD` instead and note in `meta.contract_notes` that the PR
+   diff may include commits beyond the two deliverables.) This is a deliberate, documented exception
+   to the AGENTS.md `claude/*`
    session-branch rule: this session needs a clean two-file diff off the audited base. No CI
    signal-green comment wake applies here -- you end your turn without merging; the human disposes.
 3. Repo-wide validation is advisory outside CI here: a clean YAML parse of the two deliverables is
