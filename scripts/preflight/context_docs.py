@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,9 +35,11 @@ def read_context_files(open_recs_count: int | None = None) -> dict:
 
     Returns:
         Dict with keys: roadmap_phase, open_decisions_count, recent_sessions,
-        strategic_review_due, recommendations_count.
+        recommendations_count.
     """
-    # roadmap_phase: extract current phase header from ROADMAP.md
+    # roadmap_phase: extract current phase header from ROADMAP_FILE (docs/ROADMAP-PRODUCT.yaml).
+    # The YAML has no "## Phase" markdown headers, so this resolves to "unknown" in production --
+    # an honest result; the phase-equivalent signal today is the platform `active_tier`.
     roadmap_phase = "unknown"
     if _common.ROADMAP_FILE.exists():
         content = _common.ROADMAP_FILE.read_text(encoding="utf-8")
@@ -73,27 +74,6 @@ def read_context_files(open_recs_count: int | None = None) -> dict:
                 entry += f" -- {done_line.strip()}"
             recent_sessions.append(entry)
 
-    # strategic_review_due: check last 30 days of SESSION_LOG for "strategic review"
-    strategic_review_due = True  # default: assume due until found
-    if _common.SESSION_LOG_FILE.exists():
-        content = _common.SESSION_LOG_FILE.read_text(encoding="utf-8")
-        now = datetime.now(timezone.utc)
-        cutoff = now.replace(tzinfo=timezone.utc)
-        date_matches = re.finditer(r"## \[(\d{4}-\d{2}-\d{2})\]", content)
-        for match in date_matches:
-            try:
-                session_date = datetime.strptime(match.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                age_days = (cutoff - session_date).days
-                if age_days <= _common.STRATEGIC_REVIEW_LOOKBACK_DAYS:
-                    # Check if there's a strategic review mention near this entry
-                    pos = match.start()
-                    snippet = content[pos : pos + 500].lower()
-                    if "strategic review" in snippet:
-                        strategic_review_due = False
-                        break
-            except ValueError:
-                continue
-
     # recommendations_count: use pre-computed count when available (avoids a second
     # open_recs verb call when main() already fetched the count in Phase B).
     if open_recs_count is not None:
@@ -109,7 +89,6 @@ def read_context_files(open_recs_count: int | None = None) -> dict:
         "roadmap_phase": roadmap_phase,
         "open_decisions_count": open_decisions_count,
         "recent_sessions": recent_sessions,
-        "strategic_review_due": strategic_review_due,
         "recommendations_count": recommendations_count,
     }
 
