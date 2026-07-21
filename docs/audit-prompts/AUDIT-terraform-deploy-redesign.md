@@ -371,7 +371,13 @@ finding ids, and prose. Every question is first-class.
 
 - Q1 ROOT CAUSE. Trace end-to-end WHY a routine infrastructure change can stall and require a
   human to run, or direct an agent to run, an admin-profile `terraform apply` to unblock. Follow a
-  concrete change through guard -> route -> gated-apply -> outcome. Decide the PRIMARY cause.
+  concrete change through guard -> route -> gated-apply -> outcome. Decide the PRIMARY cause. From
+  the section-11 sample, also state roughly what FRACTION of recent `terraform/personal` changes
+  auto-applied vs routed to gated/admin -- the datum that sizes the lived symptom ("deploys keep
+  needing admin"). Distinguish terraform-infrastructure-apply friction from Lambda code-deploy
+  friction (a separate, still-maturing code-deploy channel per Decision 125/126; name it if it
+  contributes to the "needs admin" experience, but do NOT deep-dive it -- it is out of scope,
+  section 4).
   Verdict enum: `allow-list-iam-model` | `unactioned-roadmap` | `design-flaw` |
   `implementation-defect` | `multiple-compounding`. If `multiple-compounding`, rank the
   contributors.
@@ -409,8 +415,10 @@ finding ids, and prose. Every question is first-class.
   Decision, flag it. Verdict enum for the question itself: `blueprint-provided`. The substance
   lives in `disposition` and prose.
 - Q8 INDUSTRY-PRACTICE RATING. Rate the current design against the EXTERNAL CHECKLIST below,
-  property by property, in this question's `external_checklist` field. This field is the SOLE
-  source the frontier maturity tier reads. A `partial` rating REQUIRES an argued, property-matched
+  property by property, in this question's `external_checklist` field. This field is the sole
+  INDUSTRY-PRACTICE input the frontier maturity tier reads; the per-surface finding-count conditions
+  (0 critical, 0 high) gate frontier INDEPENDENTLY (section 15). A `partial` rating REQUIRES an
+  argued, property-matched
   compensating control in its `evidence`. Verdict enum for the question: `strong` | `adequate` |
   `weak` (a roll-up of the checklist).
   EXTERNAL CHECKLIST (assess each as met | partial | missed):
@@ -441,7 +449,10 @@ finding ids, and prose. Every question is first-class.
     given the roles it can assume?
   - Does gated-apply actually remove the human from routine deploys, or merely relocate the click?
     The `tf-gated-apply` Environment sets `prevent_self_review = false`, so the solo developer
-    approves their OWN gated applies -- an approval click is still a human in the loop (the VD4 crux).
+    approves their OWN gated applies -- an approval click is still a human in the loop (the VD4
+    crux). Weigh the documented counter-rationale (`environments.tf` notes that
+    `prevent_self_review = true` would permanently WEDGE a sole-developer pipeline) before treating
+    this as a defect rather than a proportionate trade-off.
   - Add any others a principal reviewer would want answered.
 
 ---
@@ -688,10 +699,14 @@ Before filing ANY finding, grep the ownership surfaces and record the search on 
 - Record `roadmap_crossref.dedup_search_terms` and `dedup_hit_count` on every finding. A hit means
   the territory is owned: classify `planned-insufficient` (owner exists, remedy inadequate),
   `planned-unbuilt` (owner exists, not yet built), or move the candidate to `rejected_candidates`
-  (fully covered). A finding with NO recorded negative search is a HYPOTHESIS, not a CONFIRMED
-  finding.
-- If `meta.degraded_dedup=true` (SETUP step 2 failed), every `roadmap_crossref` is `HYPOTHESIS` and
-  `dedup_hit_count=null`.
+  (fully covered). Record the dedup search on every finding; a finding filed with NO recorded search
+  is unproven on novelty -- treat its `roadmap_crossref.classification` as unproven until you search.
+  (This novelty rule is SEPARATE from the section-14 `confidence` enum: `confidence` is CONFIRMED iff
+  the behavior is traced to file:line or an observed sample. A positive dedup hit sets
+  `classification` to `planned-*`; it does NOT downgrade a traced finding's `confidence`.)
+- If `meta.degraded_dedup=true` (SETUP step 2 failed), set every affected finding's `confidence` to
+  `HYPOTHESIS` and its `roadmap_crossref.dedup_hit_count` to `null` (affected = any finding whose
+  classification relied on the dedup grep).
 
 Deliberate-constraints do-not-flag list (do NOT report any of these as a fresh defect; each is a
 decided constraint with its id). Immunity is narrow -- see section 2: you MAY still rate these in
@@ -754,7 +769,8 @@ audit:
     - {q: Q7, verdict: blueprint-provided, basis: [], prose: ""}   # substance in `disposition`
     - {q: Q8, verdict: <strong|adequate|weak>, basis: [],
        external_checklist: [{property: XC1, rating: <met|partial|missed>, evidence: ""}, ...XC12],
-       prose: ""}   # external_checklist is the SOLE source the frontier maturity tier reads;
+       prose: ""}   # external_checklist is the sole INDUSTRY-PRACTICE input the frontier tier reads
+                     # (per-surface finding counts gate frontier independently, section 15);
                      # a `partial` REQUIRES a property-matched compensating control in `evidence`
     - {q: Q9, answers: [{question: "", answer: "", basis: []}, ...]}   # note the different shape
   per_surface_assessment:
@@ -823,8 +839,9 @@ Maturity -- compute LAST, per surface, top-down, first match wins. Pin these thr
   `external_checklist` is rated `missed` (the checklist is global; a single `missed` property means
   no surface reaches frontier -- this is deliberate).
 - strong = 0 critical AND <= 1 high.
-- solid = <= 1 critical.
-- nascent = otherwise.
+- solid = <= 1 critical AND <= 1 high.
+- nascent = otherwise (>= 2 critical, OR >= 2 high) -- an explicit high-count floor: for this
+  IAM/deploy audit, two unmitigated high findings do NOT read `solid`.
 
 Findings carry no open/closed status -- every finding is a fresh proposal, so all of a surface's
 findings count. A `surface: shared` finding counts toward the maturity of each surface its prose
