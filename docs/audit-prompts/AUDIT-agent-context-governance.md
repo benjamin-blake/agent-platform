@@ -51,6 +51,9 @@ THE CANDIDATES. This is the delimited candidate set that "a run that merely conf
 has failed" is measured against. Adjudicate EACH to a verdict (findings / rejected_candidates) per
 the enum above; a candidate you dismiss must appear in `rejected_candidates`. This list is not
 exhaustive of what you may find -- surface new candidates in your own pass and adjudicate them too.
+Every candidate below is absence-shaped by construction ("no ceiling", "no validator", "assigns no
+responsibility"); an absence is a FACT, not a defect -- expect several to resolve to a `no_change`
+verdict or to `rejected_candidates`, and actively weigh the steelman in Q6(iv) before convicting.
 
 - C1 AGENTS.md loads ambient (~8.3K tok) via the `@AGENTS.md` pointer; no registered size ceiling
   covers `.md` instruction prose (the SLOC/decisions/roadmap ceilings do not). (surface S1)
@@ -156,7 +159,8 @@ product axis; any trading-strategy content -- confidential and irrelevant.
 
 ## SETUP
 
-Work from a fresh clone at the audited base (see COMMIT / PR MECHANICS for how to derive it). Read
+Work from the audited base: derive it and check it out per COMMIT / PR MECHANICS steps 1-2 BEFORE
+reading anything (METHOD P0), so every read and size re-derivation is against the audited tree. Read
 every in-scope surface directly. Permitted setup commands:
 
 - `bin/venv-python -m scripts.session.preflight --roadmap-detail full` -- populates
@@ -248,7 +252,10 @@ pinned below; default where none is pinned is `sufficient` / `partial` / `insuff
   (iv) The STEELMAN AGAINST governing prose: could a token/size cap induce terser, less-correct
   methodology, or could decompose-by-default fragment load-bearing context that must be read
   together to be correct? Argue whether that harm is real and where it bounds any remedy you
-  propose. Add any others recon in your own pass surfaces.
+  propose. (v) Does PROMPT-CACHING change the cost calculus -- is the real per-session cost of
+  stably-cached always-on prose (AGENTS.md, per-directory CLAUDE.md) low enough that a raw
+  token/byte budget over-weights it, and should any budget or metric be cache-aware? Add any others
+  recon in your own pass surfaces.
 
 ## RUBRIC
 
@@ -280,7 +287,10 @@ Threads that need end-to-end tracing beyond a rubric cell.
 - DD-A (feeds Q4, VD5): `required-context` liveness. Enumerate every file that DECLARES it (grep
   the skills). Enumerate every consumer that READS it (grep the codebase for the parse). Determine
   whether any INTERACTIVE path (the Skill tool invocation) consumes it, or only a programmatic
-  harness. State the counterfactual: if the frontmatter were deleted from every skill, what
+  harness. The Skill tool's internal loading is closed harness behaviour; establish it by
+  absence-of-consumer reasoning over the repo (which files parse the frontmatter), and if you cannot
+  determine it conclusively, record the residual assumption in `meta.contract_notes` rather than
+  guessing. State the counterfactual: if the frontmatter were deleted from every skill, what
   interactive behaviour would change? The answer determines whether it is latent, vestigial, or
   live.
 - DD-B (feeds Q3, VD6): decision-citation load-bearingness. Sample the highest-citation surfaces.
@@ -365,6 +375,13 @@ use the pinned pattern): `AGENTS.md` ~50 refs / ~28 unique; `implement` ~39; `pl
 `orient` ~26; `plan-critique` ~22; `overseer` ~11; `decision-scout` ~5; `code-review` ~2;
 `audit-prompt` ~0.
 
+Load-cost note (neutral, for Q1/Q5/VD1): raw file size is not identical to marginal per-session
+token cost. Always-on ambient prose (S1, S2) is subject to the harness's prompt-caching -- a
+stably-unchanged ambient file's marginal cost across a session is lower than its byte count implies,
+while a file that changes every session is not cached across sessions. Whether this changes the cost
+model a budget or metric should use is a judgment you owe (Q1, Q6), not a settled fact; do not assume
+raw bytes are the cost, and do not assume caching makes size free.
+
 ## EMPIRICAL PASS
 
 Bounded, and observed findings outrank static ones at equal severity. Tag every finding's
@@ -391,6 +408,9 @@ dissolves under the counterfactual is weaker than one that survives it.
 
 ## METHOD
 
+- P0 BASE. Derive the audited base sha and check out the audit branch off `origin/main` (MECHANICS
+  steps 1-2) BEFORE any read, so every read and every size re-derivation in P1 is against the tree
+  recorded in `meta.audited_commit`.
 - P1 READ. Read every S1-S6 surface and the S7 end-state anchors. Re-derive the size table.
 - P2 TRACE. Adjudicate each candidate to a verdict by tracing it to file:line. Run DD-A, DD-B, DD-C.
 - P3 EMPIRICAL. Execute the bounded EMPIRICAL PASS.
@@ -462,9 +482,19 @@ audit:
     # one row per (surface x dimension) you rate; n/a rows may be omitted or listed explicitly
   governance_verdict:
     # Q1's per-surface actionable verdict. One entry per prose surface S1-S4 (S5-S7 optional).
-    S1: {verdict: token_budget_gate|measure_only_metric|jit_offload|layer_relocate|decompose|no_change,
-         horizon: present|aws-native, unit: "", granularity: "", mechanism: "", what_changes: "",
-         cost: "", rationale: "", confidence: CONFIRMED|HYPOTHESIS}
+    # Each surface carries a per-horizon sub-verdict, because a surface's sound answer can differ by
+    # horizon (e.g. present: measure_only_metric; aws-native: token_budget_gate). Set a horizon's
+    # verdict to no_change if that horizon needs nothing; if the answer is identical across horizons,
+    # state the same verdict in both.
+    S1:
+      present:    {verdict: token_budget_gate|measure_only_metric|jit_offload|layer_relocate|decompose|no_change,
+                   mechanism: "", what_changes: "", cost: "", backing_finding: <finding id|null>}
+      aws_native: {verdict: token_budget_gate|measure_only_metric|jit_offload|layer_relocate|decompose|no_change,
+                   mechanism: "", what_changes: "", cost: "", backing_finding: <finding id|null>}
+      unit: ""
+      granularity: ""
+      rationale: ""
+      confidence: CONFIRMED|HYPOTHESIS
   findings:
     - {id: ACG-01, surface: S1..S7|shared, question: Q1..Q6, dimension: VD1..VD7,
        horizon: present|aws-native, title, evidence: "file:line|item-id",
@@ -490,9 +520,14 @@ novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered
 `rejected_candidates`, NOT `findings`. `rubric_ratings`, `question_answers`, and `governance_verdict`
 are systems-of-record referenced FROM findings, never re-counted. `top_improvements` and
 `highest_leverage_change` MUST be finding ids; if `findings` is empty, set `top_improvements: []`
-and `highest_leverage_change: null`. Each `governance_verdict` entry whose verdict is anything other
-than `no_change` MUST name a backing finding id in its `rationale` (the finding documents the gap
-the verdict acts on); a `no_change` verdict needs none.
+and `highest_leverage_change: null`. Each per-horizon sub-verdict (`present` / `aws_native`) whose
+`verdict` is anything other than `no_change` MUST name a `backing_finding` id -- the finding
+documenting the gap it acts on; a `no_change` sub-verdict sets `backing_finding: null`.
+`per_surface_assessment[].maturity` is the system-of-record for each surface's maturity;
+`summary.maturity_<surface>` MUST equal it. A finding's `question` and `dimension` are
+single-valued: tag the PRIMARY one it serves and reference any others in the finding's prose
+(`gap` / `proposed_change`); a finding whose primary owner is the open-ended question tags
+`question: Q6`.
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates, and state why it would FAIL if the
@@ -531,15 +566,20 @@ framing here must not foreclose it.
 
 1. Derive the base ONCE: `git fetch origin main` then `git rev-parse --short origin/main`. This sha
    IS the audited tree; use it in both deliverable filenames, the branch name, and
-   `meta.audited_commit`.
+   `meta.audited_commit`. IF `git fetch` fails (offline / egress down): do NOT abort and do NOT fall
+   back to the session-branch `HEAD` -- use the existing local `origin/main` ref, and record in
+   `meta.contract_notes` that the base may be stale relative to the true remote tip.
 2. `git switch -c audit/agent-context-governance-<sha> origin/main` so the PR diff is exactly the
    two deliverable files. This is a deliberate, documented exception to the `claude/*` session-branch
    rule -- the audit session needs a clean two-file diff off the audited base; the CI signal-green
    comment fires only on `claude/*` PRs and is irrelevant here because you end your turn without
-   merging.
-3. Repo-wide `validate --pre` is advisory outside CI. A clean YAML parse of your two deliverables is
-   the real pre-push gate. Do NOT fix any unrelated `validate` failure -- record it in
-   `meta.contract_notes` and move on (write boundary).
+   merging. If a PreToolUse hook blocks the switch, stay on the current session branch, still write
+   the two deliverables against the audited base, and note the deviation in `meta.contract_notes` --
+   the clean two-file diff is what matters, not the branch name.
+3. Repo-wide `validate --pre` is advisory outside CI. Your real pre-push gate is that both
+   deliverables are well-formed (the YAML parses) AND the YAML satisfies the OUTPUT schema's COUNTING
+   INVARIANT. Do NOT fix any unrelated `validate` failure -- record it in `meta.contract_notes` and
+   move on (write boundary).
 4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, `--no-gpg-sign` if signing is
    unavailable. `git push -u origin HEAD`.
 5. Open the PR via `mcp__github__create_pull_request` (base=main, ready for review, title
