@@ -18,9 +18,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-boto3 = pytest.importorskip("boto3")
-
-from scripts.preflight import prose_context  # noqa: E402
+from scripts.preflight import prose_context
 
 ROOT = Path(__file__).resolve().parent.parent
 _SURFACES = ("S1", "S2", "S3", "S4", "S8")
