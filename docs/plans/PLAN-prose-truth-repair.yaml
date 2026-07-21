@@ -1,0 +1,457 @@
+schema_version: 1
+slug: "prose-truth-repair"
+intent: >-
+  Repair drifted/stale factual claims in ambient (L1) and on-invocation (L4) agent-instruction
+  prose so agents load one authoritative, non-contradictory governance state -- directly
+  advancing the self-improving loop's dependence on trustworthy instruction surfaces. Implements
+  audit findings ACG-03 and ACG-04 from audits/agent-context-governance-cdfda88.yaml.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-prose-truth-repair.yaml
+phase: >-
+  Platform governance -- agent-context-governance audit remediation (ACG-03 cross-layer
+  drift/freshness; ACG-04 PROJECT_CONTEXT context-budget stanza + preflight fields). No owning
+  tier_item (audit roadmap_crossref classified both findings "novel"); ships as a standalone
+  IMPLEMENTATION plan (STRATEGIC suspended per Decision 67).
+scope:
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      ACG-03 item 1 (the T2.38 contradiction, fixed first). Line ~34 "Lambda deploy channel"
+      bullet asserts the governed code-deploy CD channel is "still PENDING (tier_item T2.38)",
+      contradicting on-disk truth (.github/workflows/deploy-ducklake-lambdas.yml exists; roadmap
+      marks T2.38 complete; four contracts + src/lambdas/CLAUDE.md say it landed). Replace the
+      stale state assertion with the durable rule (governed channel exists; break-glass is the
+      non-default fallback) plus a pointer to the authoritative surface docs/contracts/deploy-paths.yaml.
+  - file: src/lambdas/CLAUDE.md
+    action: Modify
+    purpose: >-
+      ACG-03. Lines ~9-10 independently restate "The governed code-deploy channel landed at T2.38".
+      Reframe to a pointer: keep the directory-local operational fact (the workflow filename) but
+      attribute channel STATUS/authority to docs/contracts/deploy-paths.yaml so exactly one surface
+      owns the state and the others point.
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      ACG-04 (line 18 Context-budget stanza) + ACG-03 stale-ref items. (C-i) line ~212 "See
+      plan.prompt.md Step 4" -> re-point to the live surface (.claude/skills/planning/SKILL.md
+      "Infrastructure & Lambda Assessment"), plan.prompt.md deleted at T-1.13. (C-ii) line ~214
+      "Decision 49" -> "Decision 116 (supersedes Decision 49)" per src/data/handlers/CLAUDE.md.
+      (C-iii) line ~240 remove the dead "LLM_PROVIDER=bedrock" executor switch instruction
+      (Bedrock retired, CD.28 / Decision 122; the value now falls back to gemini per
+      test_llm_model_registry). (C-iv) line 18 rewrite to the LIVE governance model (Decision 134
+      DECISIONS.md byte/header ceiling + Decision 114 roadmap ceiling + SLOC budgets), naming no
+      nonexistent file (ROADMAP.md / ROADMAP_ARCHIVE.md) or nonexistent enforcer (strategic_review).
+  - file: .claude/skills/decision-scout/SKILL.md
+    action: Modify
+    purpose: >-
+      ACG-03 rotting literals. Line ~28 drop the "(currently 67)" live-header-count literal (103
+      measured) while KEEPING the runtime `rg -c "^## Decision " docs/DECISIONS.md` computation.
+      Lines ~3/10/16 replace the ">200KB" DECISIONS.md size literals (398KB measured) with a
+      reference to the live Decision 134 ceiling / a qualitative descriptor, so no hardcoded size
+      magnitude remains.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      ACG-03 + E-relocation. (B-iii) line ~43 remove the dangling `token_anomalies` preflight
+      conditional (key retired from preflight with no replacement -- nothing emits it). (B-ii)
+      line ~418 replace ">200KB" with the Decision 134 ceiling reference. (E-i) lines ~240-245
+      strip the inlined speculative-plan pipeline mechanics (plan.bin paths, apply-sandbox job,
+      guard exit codes) -- keep a methodology-level instruction and point to
+      docs/contracts/environment-taxonomy.md (the apply-model SoT, which already holds the detail)
+      + roadmap T2.21. (E-ii) line ~54 strip the Athena-migration history narration ("died with
+      the 2026-05-28 account migration") -- keep the "do not gate plans on session counts"
+      methodology and point to Decision 84 / tier_item T2.36.
+  - file: .claude/skills/plan-critique/SKILL.md
+    action: Modify
+    purpose: >-
+      ACG-03 rotting literal. Phase 1 step 4 (line ~26) replace the "~230KB" DECISIONS.md size
+      literal with the Decision 134 ceiling reference / a qualitative descriptor.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      ACG-03 E-relocation (iii). Commit Flows intro (line ~473) inlines Decision-89-vs-83
+      reversal history. Strip the history narration (fetch-not-inline) -- keep the operational
+      statement and the existing pointer to AGENTS.md `## Git-ops procedure`; the reversal
+      rationale is fetchable from Decision 83 / Decision 89 in DECISIONS.md (Decision 86: rationale
+      lives in Decisions).
+  - file: scripts/preflight/context_docs.py
+    action: Modify
+    purpose: >-
+      ACG-04 preflight fields. Retire the `strategic_review_due` computation (~lines 76-95) and its
+      return-dict key + docstring mention -- STRATEGIC review is frozen (Decision 67) and the flag
+      is emitted-but-unconsumed; also drop the now-unused `datetime`/`timezone` imports if they
+      become unused. Update the `roadmap_phase` source comment (~line 41) to name the real file
+      after the _common.ROADMAP_FILE re-point.
+  - file: scripts/preflight/_common.py
+    action: Modify
+    purpose: >-
+      ACG-04. Re-point the stale `ROADMAP_FILE` constant (~line 20) from docs/ROADMAP-PRODUCT.md
+      (SUPERSEDED per its own header, slated for deletion) to docs/ROADMAP-PRODUCT.yaml (the
+      durable canonical product roadmap) so preflight context fields derive from a file that exists
+      and persists. Constant name unchanged (all import/patch sites stay valid).
+  - file: tests/session/preflight/test_context_docs.py
+    action: Modify
+    purpose: >-
+      ACG-04. Remove the two `strategic_review_due` unit tests
+      (test_strategic_review_due_when_no_mention, test_strategic_review_not_due_when_recent_mention)
+      and the `strategic_review_due` assertion in test_missing_files_return_defaults, in tandem
+      with retiring the field. roadmap_phase tests are unaffected (they patch ROADMAP_FILE to a
+      synthetic markdown fixture).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    ACG-03/A (T2.38): `grep -nE "PENDING \(tier_item T2\.38\)|still PENDING" AGENTS.md` returns no
+    match; AGENTS.md and src/lambdas/CLAUDE.md both reference docs/contracts/deploy-paths.yaml for
+    channel status; docs/contracts/deploy-paths.yaml remains the single authoritative status
+    statement ("Two governed channels landed ... tier_item T2.38").
+  - >-
+    ACG-03/B (literals): `grep -rnE "2[03]0 ?KB|~230KB|>200KB|currently 67" .claude/` returns no
+    match; the runtime `rg -c "^## Decision " docs/DECISIONS.md` computation is retained in
+    decision-scout/SKILL.md.
+  - >-
+    ACG-03/B: `grep -c token_anomalies .claude/skills/planning/SKILL.md` returns 0.
+  - >-
+    ACG-03/E: planning/SKILL.md no longer inlines the speculative-plan mechanics (no "plan.bin" /
+    "apply-sandbox job" prose) and points to docs/contracts/environment-taxonomy.md; planning/SKILL.md
+    no longer inlines the telemetry Athena-migration date ("2026-05-28") and points to Decision 84 /
+    T2.36; implement/SKILL.md no longer narrates the Decision-89-vs-83 reversal and retains its
+    AGENTS.md `## Git-ops procedure` pointer.
+  - >-
+    ACG-04/C: docs/PROJECT_CONTEXT.md Rules section names no nonexistent file or enforcer --
+    `grep -nE "ROADMAP\.md|ROADMAP_ARCHIVE\.md|plan\.prompt\.md|strategic_review enforces|LLM_PROVIDER=bedrock" docs/PROJECT_CONTEXT.md`
+    returns no match; line 18 states the live governance (Decision 134/114 ceilings + SLOC budgets);
+    "Decision 116" is present (Decision 49 corrected).
+  - >-
+    ACG-04/D: preflight context fields derive from files that exist -- `ROADMAP_FILE` in
+    scripts/preflight/_common.py points at docs/ROADMAP-PRODUCT.yaml (which exists);
+    `grep -c strategic_review_due scripts/preflight/context_docs.py` returns 0; the preflight
+    context_docs test module passes.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      ACG-03/A -- AGENTS.md no longer asserts the T2.38 governed channel is PENDING, and both L1
+      surfaces point to the authoritative contract.
+    command: >-
+      bash -c '! grep -nE "PENDING \(tier_item T2\.38\)|still PENDING" AGENTS.md && grep -q
+      "deploy-paths.yaml" AGENTS.md && grep -q "deploy-paths.yaml" src/lambdas/CLAUDE.md && echo OK'
+    expected: "Prints OK: no PENDING-T2.38 assertion in AGENTS.md; both files reference deploy-paths.yaml."
+    fix_if: "AGENTS.md still says PENDING, or a surface lacks the deploy-paths.yaml pointer."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time contradiction removal (a single stale AGENTS.md assertion). Systematic freshness
+      guarding of cross-surface state is the explicit scope of sibling audit findings ACG-01/ACG-05
+      (prose-size/metric registry layer), not this repair slice; a per-string standing guard now
+      would be superseded by that layer. Matches the prose-currency-sweep precedent (graduated none).
+  - step: 2
+    phase: pre-deploy
+    action: "ACG-03/A -- deploy-paths.yaml remains the authoritative T2.38 landed-status statement."
+    command: >-
+      grep -nE "tier_item T2\.38.*deploy-ducklake-lambdas\.yml" docs/contracts/deploy-paths.yaml
+    expected: "Matches: the authoritative 'Two governed channels landed ... T2.38' status line is intact."
+    fix_if: "The authoritative status statement was removed or weakened; restore it."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Asserts an unchanged pre-existing contract line (deploy-paths.yaml is not edited by this plan);
+      a standing registry guard on a line this plan does not author adds no anti-regression value
+      beyond step 1, which owns the contradiction it removes.
+  - step: 3
+    phase: pre-deploy
+    action: "ACG-03/B -- no hardcoded DECISIONS.md size/count literal remains anywhere under .claude/."
+    command: >-
+      bash -c '! grep -rnE "2[03]0 ?KB|~230KB|>200KB|currently 67" .claude/ && echo OK'
+    expected: "Prints OK: zero hardcoded DECISIONS.md size (>200KB/~230KB) or count (currently 67) literals under .claude/."
+    fix_if: "A size/count literal survives in a skill; replace it with the Decision 134 ceiling reference or a qualitative descriptor."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (grep_count == 0) but deferred: a standing "no DECISIONS.md size/count
+      literal in .claude/" guard belongs to the ACG-01/ACG-05 prose-governance layer that owns
+      systematic anti-rot, not this one-time repair. Registering it here would duplicate that
+      pending layer's intended coverage. Mirrors the prose-currency-sweep waiver pattern.
+  - step: 4
+    phase: pre-deploy
+    action: "ACG-03/B -- decision-scout retains the RUNTIME rg header-count computation (only the stale literal is dropped)."
+    command: >-
+      grep -n 'rg -c "\^## Decision " docs/DECISIONS.md' .claude/skills/decision-scout/SKILL.md
+    expected: "Matches: the runtime `rg -c` computation instruction is preserved."
+    fix_if: "The runtime computation was removed along with the literal; restore the rg instruction."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Guards preservation of a specific instruction string during this one edit; not a durable
+      cross-repo invariant worth a standing registry row (the value is proving this plan did not
+      over-delete, a plan-scoped concern).
+  - step: 5
+    phase: pre-deploy
+    action: "ACG-03/B -- the retired token_anomalies preflight conditional is gone from planning/SKILL.md."
+    command: "bash -c '[ \"$(grep -c token_anomalies .claude/skills/planning/SKILL.md)\" = 0 ] && echo OK'"
+    expected: "Prints OK: zero token_anomalies references."
+    fix_if: "The dangling conditional survives; remove it."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (grep_count == 0) but a one-time removal of a dangling conditional; a
+      standing "no token_anomalies in planning skill" guard is low-value in isolation and belongs to
+      the ACG-01/ACG-05 prose-governance layer rather than this repair slice.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      ACG-03/E -- planning/SKILL.md relocates the speculative-plan mechanics (points to the
+      apply-model SoT, no inlined plan.bin/apply-sandbox prose) and the telemetry history.
+    command: >-
+      bash -c '! grep -nE "plan\.bin|apply-sandbox job" .claude/skills/planning/SKILL.md && !
+      grep -n "2026-05-28" .claude/skills/planning/SKILL.md && grep -q "environment-taxonomy.md"
+      .claude/skills/planning/SKILL.md && echo OK'
+    expected: "Prints OK: no inlined pipeline mechanics or Athena-migration date; environment-taxonomy.md pointer present."
+    fix_if: "Detailed mechanics or the migration date still inlined; strip to a pointer."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time relocation of two specific narration blocks; a standing grep guard on these exact
+      strings has low recurrence value versus the general literal guard (step 3) and would ossify
+      the current wording of a skill under active editorial change.
+  - step: 7
+    phase: pre-deploy
+    action: "ACG-03/E -- implement/SKILL.md strips the Decision-89-vs-83 reversal narration and keeps its git-ops pointer."
+    command: >-
+      bash -c '! grep -nE "reversed Decision 89|Decision 89.s .Branch Protection" .claude/skills/implement/SKILL.md
+      && grep -q "Git-ops procedure" .claude/skills/implement/SKILL.md && echo OK'
+    expected: "Prints OK: the reversal history is gone; the AGENTS.md Git-ops pointer remains."
+    fix_if: "The Decision-89-vs-83 narration survives, or the git-ops pointer was lost."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time narration strip; the durable git-ops authority already lives in AGENTS.md and a
+      standing guard on this specific removed sentence adds no cross-repo invariant.
+  - step: 8
+    phase: pre-deploy
+    action: "ACG-04/C -- PROJECT_CONTEXT.md Rules section names no nonexistent file or enforcer, and corrects Decision 49 -> 116."
+    command: >-
+      bash -c '! grep -nE "ROADMAP\.md|ROADMAP_ARCHIVE\.md|plan\.prompt\.md|strategic_review enforces|LLM_PROVIDER=bedrock"
+      docs/PROJECT_CONTEXT.md && grep -q "Decision 116" docs/PROJECT_CONTEXT.md && echo OK'
+    expected: "Prints OK: no dead file/enforcer references; Decision 116 present."
+    fix_if: "A dead reference (ROADMAP.md, ROADMAP_ARCHIVE.md, plan.prompt.md, strategic_review enforcer, Bedrock switch) survives, or Decision 49 was not corrected."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Kernel-expressible (grep_count == 0) but the step ANDs several dead-ref patterns plus a
+      presence check; a standing PROJECT_CONTEXT dead-ref guard is the ACG-01/ACG-05 layer's remit,
+      not this repair slice. Deferred to avoid duplicating that pending systematic coverage.
+  - step: 9
+    phase: pre-deploy
+    action: "ACG-04/C -- line 18 states the live governance model (Decision 134/114 ceilings + SLOC budgets)."
+    command: >-
+      bash -c 'grep -nE "Decision 134|Decision 114|SLOC" docs/PROJECT_CONTEXT.md | head -1 | grep -q . && echo OK'
+    expected: "Prints OK: the rewritten context-budget rule references the live ceilings/SLOC governance."
+    fix_if: "Line 18 still describes the retired 5-entry/open-decisions-only model instead of the live ceilings."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Presence-of-reference check for a one-time rewrite; the anti-regression value is covered by
+      step 8's dead-ref guard, and a standing guard requiring these tokens would ossify the stanza's wording.
+  - step: 10
+    phase: pre-deploy
+    action: "ACG-04/D -- ROADMAP_FILE points at an existing durable file and strategic_review_due is retired."
+    command: >-
+      bash -c 'grep -nE "ROADMAP_FILE *= .*ROADMAP-PRODUCT\.yaml" scripts/preflight/_common.py &&
+      test -f docs/ROADMAP-PRODUCT.yaml && [ "$(grep -c strategic_review_due scripts/preflight/context_docs.py)" = 0 ] && echo OK'
+    expected: "Prints OK: ROADMAP_FILE -> ROADMAP-PRODUCT.yaml (exists); zero strategic_review_due references in context_docs.py."
+    fix_if: "ROADMAP_FILE still points at ROADMAP-PRODUCT.md, the target file is missing, or strategic_review_due survives."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Compound assertion (ROADMAP_FILE target + file existence + strategic_review_due absence) that
+      is not a single canonical slot; the durable behaviour is already covered by the preflight
+      context_docs test module (step 11), so a separate standing grep guard is redundant.
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      ACG-04/D -- the preflight context_docs test module passes after retiring strategic_review_due
+      and re-pointing ROADMAP_FILE (real behaviour, not just grep).
+    command: "bin/venv-python -m pytest tests/session/preflight/test_context_docs.py -q"
+    expected: "All tests pass; no reference to the retired strategic_review_due field remains in the suite."
+    fix_if: "A test still asserts strategic_review_due, or read_context_files/_common changes broke a case."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      test_selector-expressible, but the preflight test suite already runs under validate --pre's
+      pytest tier in CI; registering this file-run as a separate standing check would duplicate that
+      existing coverage rather than add a new guard.
+  - step: 12
+    phase: pre-deploy
+    action: "Lint + coverage gate on the two modified Python files (no new lint debt, coverage checker satisfied)."
+    command: >-
+      bash -c 'bin/venv-python -m ruff check scripts/preflight/context_docs.py scripts/preflight/_common.py
+      tests/session/preflight/test_context_docs.py && bin/venv-python -m scripts.test_coverage_checker
+      --check-tests --files scripts/preflight/context_docs.py scripts/preflight/_common.py'
+    expected: "ruff clean (no unused-import debt from the removed block); coverage checker reports no missing test file."
+    fix_if: "ruff flags an unused import (drop it) or the coverage checker demands a test file (satisfy via the existing preflight test package)."
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - "IMPLEMENTATION plan only -- STRATEGIC is suspended (Decision 67 / AGENTS.md Temporary Operational Constraints)."
+  - "Public repo (Decisions 73, 83, 101): no AWS account IDs/ARNs, IAM ExternalIds, secrets, or internal hostnames in any edited surface."
+  - >-
+    Decision 86 routing: relocate by POINTER to existing authoritative homes (contracts, Decisions,
+    tier_items) -- create NO new standing prose-architecture doc and add NO restated copy that becomes
+    a second surface to sync. Every relocation target must already hold the content (verified: deploy-paths.yaml,
+    environment-taxonomy.md, Decision 84/T2.36, Decision 83/89, AGENTS.md Git-ops procedure).
+  - >-
+    Decision 114: never split a load-bearing file into co-loading parts; fetch-not-inline means point
+    to the authoritative home, not fragment the skill.
+  - "No rescue agents or workaround loops (Decision 55). Out-of-scope adjacent staleness becomes a note, not an inline fix."
+  - >-
+    File NO new recommendations. Neither rec-2163 nor rec-2379 is bundled (see open_questions);
+    remediation ships as this plan's steps only.
+  - "Never Edit/Write logs/.recommendations-log.jsonl or docs/DECISIONS.md directly (portal-only; not touched by this plan)."
+context:
+  - >-
+    Source of scope + acceptance: audits/agent-context-governance-cdfda88.yaml findings ACG-03
+    (surface: shared, VD4, CONFIRMED, effort M) and ACG-04 (surface: S8, VD2, CONFIRMED, effort XS),
+    plus governance_verdict S8 and question_answers Q6(vi). On-disk state was re-verified against the
+    current tree (line numbers shifted from the cdfda88 refs).
+  - >-
+    T2.38 authoritative-surface decision (scoped per Decision 126 pt2 / Decision 92 pt5): the
+    "authoritative surface" designation is for deploy-channel STATE/ROUTING ONLY, which is
+    docs/contracts/deploy-paths.yaml's legitimate job as the intent->trigger->recovery INDEX (it
+    already carries "Two governed channels landed ... T2.38"). It is NOT made a second source of
+    truth for apply-model/guard rules -- docs/contracts/environment-taxonomy.md remains the SOLE SoT
+    for those (Decision 92 pt5) and for the speculative-plan no-TOCTOU mechanism (Decision 77), and is
+    left untouched. AGENTS.md (L1) and src/lambdas/CLAUDE.md (L1) are converted from independent
+    state-assertions to POINTERS at deploy-paths.yaml -- restating "landed"/"pending" would recreate
+    the exact Decision-86 drift this slice fixes. The deploy MODEL is cited from Decisions 125/126;
+    current STATE is read from deploy-paths.yaml + Decision 143 (2026-07-20, which confirms
+    deploy-ducklake-lambdas.yml is OPERATIONAL and supersedes Decision 126 pt3's stale "T2.38 pending"
+    clause -- the freshest evidence that AGENTS.md's "still PENDING" is wrong). build-lambda.yaml
+    (machine-readable per-artifact `governed_channel:` data) and environment-taxonomy.md section 5
+    (the classification SoT build-lambda.yaml already defers to) are left as-is: structured, in-SoT,
+    non-contradictory contracts.
+  - >-
+    Relocation homes (fetch-not-inline, verified present): E-i speculative-plan -> environment-taxonomy.md
+    (Sandbox gated-apply path, saved plan.bin, Decision 77 no-TOCTOU) + roadmap T2.21; E-ii telemetry
+    history -> Decision 84 Phase 4 / tier_item T2.36; E-iii Decision-89-vs-83 -> Decision 83 & 89 in
+    DECISIONS.md + AGENTS.md `## Git-ops procedure` (already pointed to by implement/SKILL.md:473).
+  - >-
+    Decisions cited: 134 (DECISIONS.md byte/header ceiling 400_000b/120 H2 + validate_decisions_size --
+    cite the GUARD/CEILING, not a fresh byte literal, since the live file 389-398KB/103 headers climbs),
+    114 (ROADMAP 10,000-line anti-fragmentation ceiling precedent; do-not-split) with 128/102/130 (SLOC
+    budgets) -- together the "live governance model" the line-18 stanza is rewritten to; 116 (supersedes
+    Decision 49 -- scheduled-agent provider routing), Decision 122 (ratifies CD.28 -- Bedrock retired as
+    LLM substrate) with 121 (_VALID_PROVIDERS={gemini}; LLM_PROVIDER=bedrock falls back to gemini);
+    84 (DuckLake sole ops backend, Athena retired -- canonical home for the telemetry Athena-migration
+    history; T2.36 Phase-4 carrier), 77 + 92 pt5 (environment-taxonomy.md SOLE SoT for apply-model/guard
+    + speculative-plan no-TOCTOU -- the part-E relocation target, left as-is), 125/126 (DuckLake Lambda
+    code-deploy decoupling / deploy model) with 143 (2026-07-20 -- confirms deploy-ducklake-lambdas.yml
+    OPERATIONAL, supersedes 126 pt3's stale "T2.38 pending"; freshest part-A evidence), 126 pt2
+    (deploy-paths.yaml is the routing INDEX, never a second apply-model SoT -- see the scoped part-A note),
+    86 (forward-routing: rationale->Decisions, intent->tier_items, semantics->contracts; no new doc, no
+    restated copy), 127 (sanctioned-prose taxonomy -- all scope files are permanent sanctioned classes,
+    no allowlist violation), 105 (decision-scout live-file header-count semantics -- preserve the runtime
+    rg -c when dropping "currently 67"), 83 (branch protection active, amends Decision 89 -- canonical home
+    for the 89-vs-83 reversal narration, part E), 76/90 (.claude skills are the canonical interactive
+    layer -- supports the plan.prompt.md -> planning skill repoint), 133/108 (ROADMAP-PRODUCT.yaml is the
+    live product roadmap -- validates the _common.ROADMAP_FILE .md->.yaml re-point as durable), 67
+    (STRATEGIC freeze ACTIVE/reversible via CD.17/T4.2 -- strategic_review_due is a dead emitter during
+    the freeze; retire it cleanly, not as future-needed plumbing), 101 (public-content boundary -- when
+    correcting the Decision 49 reference, do NOT propagate any redacted-account-id placeholder), 73/83
+    (public repo).
+  - >-
+    scripts/preflight/_common.py and context_docs.py both map to None in test_coverage_checker
+    (excluded from the test-file-existence gate, like scripts/executor/**), so retiring the
+    strategic_review_due tests alongside the code needs no new test file; the roadmap_phase re-point
+    changes only a Path constant's default (tests patch the constant to synthetic markdown fixtures).
+  - >-
+    roadmap_phase note: after re-pointing ROADMAP_FILE to the YAML (which has no `## Phase` markdown
+    headers) the field resolves to "unknown" in production -- an honest result (the canonical product
+    roadmap is layer/tier-organised; the live phase-equivalent signal is the platform `active_tier`,
+    already surfaced by preflight). This is strictly better than today, where it reads a stale COMPLETED
+    phase from the superseded .md. Making roadmap_phase derive from active_tier is a redesign out of
+    scope for prose-truth-repair.
+  - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness.commits_behind=0); no scope-file divergence; no rebase needed."
+  - "Preflight: ci_rca_unresolved_recs empty (rec-2762 is on an unrelated plan file); no HARD BLOCK. creds ok, venv ok, ops_outbox empty."
+  - >-
+    Decision-scout verdict: FLAGS_FOUND (1 NOTE, no BLOCK/WARN -- safe to proceed). CITE list
+    (verbatim decision ids): Decision 134, 114, 128, 102, 130, 116, 122, 121, 84, 77, 92, 125, 126,
+    143, 86, 127, 105, 83, 76, 90, 133, 108, 67, 101. NOTE resolved in-plan: Decision 126 pt2
+    (deploy-paths.yaml is the routing INDEX, "never a second source of truth" for apply-model/guard) --
+    part A scopes the authoritative designation to deploy-channel STATE/ROUTING only, points-not-restates
+    from AGENTS.md/src, and leaves environment-taxonomy.md as the apply-model SoT; current state cited
+    from deploy-paths.yaml + Decision 143.
+  - >-
+    gates: decision-scout=FLAGS_FOUND (1 NOTE resolved, 1 round); plan-critique=PROCEED after 1 round
+    (run inline by the planning subagent because the harness forced the Agent dispatch async and an
+    in-turn synchronous result was required; one self-caught fix applied -- VP step 11 graduation
+    not-applicable -> waive, since a pytest file-run is test_selector-expressible and duplicates
+    existing CI pytest coverage). Fresh-context bias mitigated by adversarial application of every
+    Phase-2/2b check against the on-disk tree.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/agent-context-governance-impl-a7rirp-s1-prose-truth-repair-plan)
+  - docs/PROJECT_CONTEXT.md read
+  - "DECISIONS.md read (targeted: 134, 114, 116, 122, 86, 84, 77, 67)"
+  - All 10 files in scope located and readable; on-disk claims re-verified against current tree
+  - Acceptance criteria understood and independently verifiable via the VP grep/pytest steps
+  - "Confirm docs/contracts/deploy-paths.yaml authoritative status line is present before converting AGENTS.md/src to pointers"
+execution_steps:
+  - >-
+    AGENTS.md (~line 34): replace "the governed code-deploy CD channel itself is still PENDING
+    (tier_item T2.38); ... remains the interim break-glass path, not yet a routine default" with the
+    durable rule + pointer: the four DuckLake Lambdas deploy through a governed code-deploy CD channel;
+    `build_lambda --ducklake-only --deploy` is break-glass-only (non-default); see
+    docs/contracts/deploy-paths.yaml for authoritative channel status and build-lambda.yaml deploy_channels.
+    Preserve the existing "check deploy-paths.yaml then grep .github/workflows/" heuristic.
+  - >-
+    src/lambdas/CLAUDE.md (~lines 9-10): reframe the "landed at T2.38" independent assertion into a
+    pointer -- keep the workflow filename as directory-local operational context, attribute channel
+    STATUS/authority to docs/contracts/deploy-paths.yaml.
+  - >-
+    .claude/skills/decision-scout/SKILL.md: line ~28 delete the "(currently 67)" parenthetical, keep the
+    `rg -c "^## Decision " docs/DECISIONS.md` runtime computation and the "record the count M" instruction;
+    lines ~3/10/16 replace ">200KB" with a Decision 134 ceiling reference (e.g. "near its Decision 134
+    size ceiling") or a qualitative "large" -- no numeric magnitude.
+  - >-
+    .claude/skills/planning/SKILL.md: (B-iii) delete the line ~43 `token_anomalies` bullet; (B-ii) line
+    ~418 replace ">200KB" with the Decision 134 ceiling reference; (E-i) lines ~240-245 replace the
+    Pre-merge/At-merge/Stale-plan/IAM/Convergence bullet detail with a 1-2 sentence methodology
+    instruction + pointer to docs/contracts/environment-taxonomy.md (apply-model SoT) and roadmap T2.21;
+    (E-ii) line ~54 remove the "died with the 2026-05-28 account migration" history, keep "telemetry_health
+    is a stub; do not gate plans on session counts/staleness" + pointer to Decision 84 Phase 4 / T2.36.
+  - >-
+    .claude/skills/plan-critique/SKILL.md: line ~26 replace "the full ~230KB file" with a Decision 134
+    ceiling reference / "the large DECISIONS.md file" -- no numeric magnitude; keep the "decision-scout
+    already paid that cost" rationale.
+  - >-
+    .claude/skills/implement/SKILL.md: line ~473 strip the "Decision 83 (2026-06-08) reversed Decision
+    89's 'Branch Protection Not Available' premise ... Decision 89 stays as audit history" narration; keep
+    the operational statement (harness branch, no gh CLI, GitHub MCP transport per Decision 76) and the
+    existing AGENTS.md `## Git-ops procedure` pointer.
+  - >-
+    docs/PROJECT_CONTEXT.md: (C-iv) rewrite the line-18 Context-budget rule to the live model -- byte/header
+    ceilings on DECISIONS.md (Decision 134, validate_decisions_size) and the roadmap (Decision 114) plus
+    SLOC budgets (config/sloc_budgets.yaml), naming no ROADMAP.md/ROADMAP_ARCHIVE.md and no strategic_review
+    enforcer; (C-i) line ~212 re-point "plan.prompt.md Step 4" to ".claude/skills/planning/SKILL.md
+    (Infrastructure & Lambda Assessment)"; (C-ii) line ~214 change "Decision 49" to "Decision 116 (supersedes
+    Decision 49)"; (C-iii) line ~240 delete the "To switch the executor to Bedrock: LLM_PROVIDER=bedrock ..."
+    sentence.
+  - >-
+    scripts/preflight/_common.py: change `ROADMAP_FILE = ROOT / "docs" / "ROADMAP-PRODUCT.md"` to
+    `... / "ROADMAP-PRODUCT.yaml"`; leave STRATEGIC_REVIEW_LOOKBACK_DAYS as a benign export.
+  - >-
+    scripts/preflight/context_docs.py: delete the strategic_review_due computation block and its return-dict
+    key + docstring mention; update the roadmap_phase source comment (~line 41) to name ROADMAP-PRODUCT.yaml;
+    run `ruff check --fix` and drop `datetime`/`timezone` imports if the removal leaves them unused.
+  - >-
+    tests/session/preflight/test_context_docs.py: remove test_strategic_review_due_when_no_mention,
+    test_strategic_review_not_due_when_recent_mention, and the strategic_review_due assertion line in
+    test_missing_files_return_defaults; run `ruff check --fix` to catch F401.
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: what was implemented, verification results, and confirm no size/count literal or dead ref survives."
+work_areas: []
+rollback: >-
+  All edits are prose/config/constant/test changes on a feature branch; revert the branch (git revert
+  the squash-merge, or reset the branch pre-merge). No infra, no data, no deploy -- rollback is a pure
+  git operation with no external side effects.
