@@ -1,0 +1,284 @@
+schema_version: 1
+slug: "closes-criteria-integrity-guard"
+intent: >-
+  Restore the self-improving loop's green-main invariant by clearing the sole failing Main Canary
+  check (Platform roadmap criteria integrity, rec-2749) and hardening the plan-document schema +
+  check-tier wiring so the same malformation class fails pre-merge instead of only post-merge --
+  keeping the CI gate a trustworthy autonomous signal.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-closes-criteria-integrity-guard.yaml
+phase: >-
+  CI-RCA forward-fix for rec-2749 (source=ci_rca, Critical). No tier_item -- ci_rca soft-warn
+  exception category (names no roadmap item). Platform CI-integrity tooling; product phase unaffected.
+scope:
+  - file: docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml
+    action: Modify
+    purpose: >-
+      CORRECTIVE (Part A). Remove the 5 free-form narrative entries from closes_criteria (the current
+      lines 155-193: 'APPLY-PATH SPLIT...', 'CD-applicable subset:...', 'EventBridge write-grant
+      coverage...', 'Code deploy via the governed CD channel...', 'Provider-init egress:...') and
+      relocate that operator guidance VERBATIM into the plan's context: list (durable-half home per
+      dec-115; machine-parseable, no companion prose doc per dec-86). Keep closes_criteria as exactly
+      the 6 already-well-formed refs (T2.18:c1/c3/c5/c6/c7/c9). This clears all 5 validate_platform_roadmap
+      FAIL rows -> Main Canary green.
+  - file: scripts/roadmap/plan_document.py
+    action: Modify
+    purpose: >-
+      PREVENTIVE (Part B1). Add a Pydantic field_validator on closes_criteria (PlanDocument, currently
+      declared list[str] at line 99) that rejects any entry which is not a whitespace-free
+      '<item-id>:<crit-id>' token, raising a clear ValueError naming the offending value. LOOSE grammar
+      by design: it must reject prose (whitespace / missing colon) but MUST accept every real ref token
+      including lettered criteria (T4.12:cA) and hyphenated/triple-dotted/lettered item ids (T-1.20:c3,
+      T3.15.1:c4, T2.25a:c2) -- membership stays owned by validate_platform_roadmap. No schema_version
+      bump (additive validator; dec-132 precedent). Rides validate_plan_documents (already both tiers,
+      dec-85) so the catch lands at --pre.
+  - file: tests/test_plan_document.py
+    action: Modify
+    purpose: >-
+      Prove Part B1: a prose closes_criteria entry raises ValidationError with a clear message, and a
+      real-world token set (T2.18:c1, T4.12:cA, T-1.20:c3) validates. Use the existing _mutate() idiom
+      against the valid.yaml base (no new fixture file). 100% coverage of the new validator branches.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      PREVENTIVE (Part B2, human-requested complementary option). Add _c("validate_platform_roadmap")
+      to pre_sequence() (place adjacent to validate_plan_documents at line 96) so the FULL roadmap
+      referential check -- including closes_criteria membership (iii), met_by resolution (i), and the
+      diff-touched bare-string check (ii) -- runs pre-merge, catching well-formed-but-nonexistent refs
+      that the shape validator cannot. Cheap YAML+git-diff check, within the dec-60 fast-tier budget
+      (dec-134 precedent for both-tiering cheap checks). validate_platform_roadmap is already re-exported
+      in scripts/validate.py:193 (it is in full_sequence), so no dispatch/re-export edit is needed.
+  - file: scripts/checks/roadmap/validate_platform_roadmap.py
+    action: Modify
+    purpose: >-
+      Part B2 docstring correction only. Update the docstring line ("Added by T-1.5. Runs in full
+      presubmit only (not --pre).", currently line 33) to reflect that the check now runs in BOTH
+      tiers. No executable-code change.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Part B2 wiring proof. Add "validate_platform_roadmap" to REQUIRED_PRE_CHECKS (line ~66) so
+      test_pre_sequence_meets_required_floor locks in the new pre-tier membership. no-duplicate-in-pre
+      still holds (the check is not currently in pre_sequence).
+bundled_recommendations:
+  - "rec-2749"
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The Main Canary "Platform roadmap criteria integrity" check reports PASS (zero FAIL rows) on the
+    fixed docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml.
+  - >-
+    docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml closes_criteria contains ONLY the 6
+    well-formed tokens (T2.18:c1/c3/c5/c6/c7/c9); the 5 narrative caveats are preserved verbatim in
+    that plan's context: list (no information loss).
+  - >-
+    The PlanDocument schema rejects a prose closes_criteria entry with a clear ValueError, and accepts
+    valid tokens including lettered (T4.12:cA) and hyphenated (T-1.20:c3) refs (proven by unit tests).
+  - >-
+    validate_platform_roadmap is a member of registry.pre_sequence() and runs during
+    `scripts.validate --pre` (proven by the registry test and a passing --pre run).
+  - "bin/venv-python -m scripts.validate --pre passes on the branch diff."
+  - >-
+    rec-2749 is closed via the Resolves: trailer autoclose after the squash-merge (verified in the
+    local cache post-sync).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Part A + Part B1 accept-path: the fixed plan validates against the PlanDocument schema (the new
+      field_validator accepts the 6 pure-token closes_criteria refs; prose would be rejected).
+    command: >-
+      bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml
+    expected: >-
+      Exit 0 with a validation-OK message; no field_validator error on closes_criteria.
+    fix_if: >-
+      Non-zero exit -- either a narrative entry still remains in closes_criteria (finish the Part A
+      relocation) or the validator rejects a legitimate token (loosen the grammar; do NOT delete a
+      valid ref).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-shot proof of the corrective edit on a single specific plan file; the standing regression
+      guard is the plan_document field_validator plus validate_platform_roadmap-in-pre that this same
+      PR adds, so a per-file kernel check would duplicate the general guard.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Part B1 reject-path and real-grammar accept-path: prose is rejected with a clear error; lettered
+      (cA) and hyphenated (T-1.x) tokens pass.
+    command: bin/venv-python -m pytest tests/test_plan_document.py -x -q
+    expected: >-
+      All tests pass, including the new case asserting ValidationError on a whitespace/prose
+      closes_criteria entry and the case asserting T2.18:c1 / T4.12:cA / T-1.20:c3 validate.
+    fix_if: >-
+      The prose case does not raise, or a valid-token case fails -- adjust the field_validator grammar
+      to reject whitespace/prose only, never a real item:crit token.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The assertion is embodied by the committed unit tests, which run in every CI pytest pass and are
+      therefore already a standing regression guard; a verification_registry kernel entry would duplicate
+      that suite.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Part B2 wiring: validate_platform_roadmap is registered in pre_sequence() (and remains
+      non-duplicated), so the full roadmap referential check runs at --pre.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -x -q
+    expected: >-
+      Tests pass; test_pre_sequence_meets_required_floor confirms validate_platform_roadmap is in the
+      pre tier and test_pre_sequence_has_no_duplicate_checks still holds.
+    fix_if: >-
+      The floor test fails (add validate_platform_roadmap to REQUIRED_PRE_CHECKS and to pre_sequence())
+      or a duplicate is reported (it must appear exactly once in pre_sequence()).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The registry membership contract is asserted by the committed test_checks_registry.py cases, which
+      run in every CI pytest pass; duplicating them as a verification_registry kernel entry adds nothing.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      End-to-end integration: the fast presubmit passes on the branch diff, with validate_platform_roadmap
+      now executing in the --pre sequence AND reporting PASS on the fixed plan. This simultaneously proves
+      the CI-red is cleared and that this malformation class now fails pre-merge, not only in canary.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      --pre passes; the "=== Platform roadmap schema validation ===" section prints
+      "PASS: platform roadmap schema validation passed." (no FAIL rows), and the plan-document schema
+      validation section passes for all PLAN-*.yaml (whole-directory blast radius is green).
+    fix_if: >-
+      Any check fails -- fix forward (dec-55), never relax a check to pass. If an UNRELATED plan file now
+      fails (blast radius), that plan also carries a malformed closes_criteria ref; surface it and fix it
+      in this PR or file a follow-on rec -- do not weaken the validator.
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: post-deploy
+    action: >-
+      Closure Obligation: after the squash-merge (body carrying "Resolves: rec-2749") triggers
+      rec-autoclose, and after a cache pull, rec-2749 is closed; and the Main Canary is green on the
+      merge commit.
+    command: >-
+      bin/venv-python -m scripts.sync.ops sync && grep '"id": "rec-2749"' logs/.recommendations-log.jsonl | grep -q '"status": "closed"'
+    expected: >-
+      The cache line for rec-2749 shows status closed; separately, mcp__github__pull_request_read
+      (get_check_runs) / the Main Canary run on the merge SHA shows the roadmap-integrity check green.
+    fix_if: >-
+      rec-2749 is still open -- confirm the squash-merge body carried the exact "Resolves: rec-2749"
+      trailer; if the canary is still red, re-diagnose (a different check regressed) and forward-fix.
+    hermetic: false
+constraints:
+  - >-
+    The closes_criteria schema guard MUST reject whitespace/prose but MUST NOT reject any real
+    <item-id>:<crit-id> token -- including lettered criteria (cA-cF) and hyphenated / triple-dotted /
+    lettered-suffix item ids (T-1.x, T3.15.1, T2.25a). Over-strict grammar would redden unrelated plans
+    (decision-scout WARN; whole-directory blast radius per dec-85/dec-132).
+  - >-
+    Part A (corrective plan-file edit) and Part B (schema + registry guards) MUST co-land in the SAME PR,
+    so the whole-directory validate_plan_documents / validate_platform_roadmap pass is green at merge
+    (decision-scout WARN mitigation).
+  - >-
+    Preserve the 5 operator caveats VERBATIM by relocating them into the ducklake plan's context: list --
+    no deletion of the guidance, no new companion prose doc (dec-115 durable-half home; dec-86 agent-first).
+  - >-
+    Do NOT bump PlanDocument.schema_version -- the validator is additive (dec-132 precedent).
+  - >-
+    Registering validate_platform_roadmap at --pre must stay within the dec-60 fast-tier budget; it is a
+    cheap YAML load + local git-diff + glob (dec-134 precedent for both-tiering cheap checks). Do not add
+    any network/credential dependency.
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "Only modify files listed in scope."
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (1 WARN, no BLOCK; 103 of 103
+    decisions triaged). CITE: dec-136, dec-132, dec-85, dec-73, dec-55, dec-104; RELATED: dec-60, dec-128,
+    dec-130, dec-115, dec-86, dec-134, dec-72.
+  - >-
+    gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=PROCEED after 2 rounds (round 1
+    REVISE: VP5 closure command used invalid `scripts.sync.ops pull` -> fixed to `sync`; round 2 PROCEED,
+    only a cosmetic line-number note remaining).
+  - >-
+    Decision-scout WARN (dec-85 with dec-132): whole-directory blast radius -- validate_plan_documents
+    re-validates EVERY docs/plans/**/*.yaml in both tiers, so the new field_validator applies to all
+    plans, not just the fixed one. MITIGATED: (1) audited every PLAN-*.yaml this session -- only
+    PLAN-ducklake-maintenance-smoke-split.yaml is malformed (5 of 11 refs); (2) Part A co-lands in the
+    same PR so the whole-directory pass is green at merge; (3) the loose grammar cannot reject a valid
+    token; (4) VP2 pins the real token set (incl. cA, T-1.x). The same blast-radius note applies a
+    fortiori to Part B2 (validate_platform_roadmap in --pre); same mitigation -- main is green on that
+    check's (i)/(ii) portions today, so pre-registration surfaces no latent failure once (iii) is fixed.
+  - >-
+    CI-red evidence: Main Canary run 29824219438 on current main HEAD 43c392edb7 failed with the SOLE
+    failing check "Platform roadmap criteria integrity"; all other checks (tests, coverage, V3 harness,
+    pre-commit) passed. Reproduced locally: validate_platform_roadmap emits 5 FAIL rows on
+    PLAN-ducklake-maintenance-smoke-split.yaml (4 'unknown tier_item' from embedded ':' in narratives +
+    1 'not in <item-id>:<crit-id> format' for the colon-less narrative).
+  - >-
+    Root-cause / tier gap (rec-2749 context_v2): validate_platform_roadmap is registered in full_sequence
+    (registry.py:169) but NOT pre_sequence, so the closes_criteria cross-ref check never ran on the
+    plan's PR --pre gate; it passed --pre and broke only the post-merge full-tier canary. Part B2 closes
+    exactly this tier-misplacement.
+  - >-
+    Related-Work satisfaction (rec-2749 HARD BLOCK, ci_rca): this plan's scope includes the rec's
+    source_file (docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml) AND addresses the same failure
+    category -- both Related-Work conditions met; no deferral rationale required.
+  - >-
+    Grammar facts grounding the loose validator: platform tier_item id shapes are T-N.N, TN.N, TN.N.N,
+    TN.Na/b/c; criterion id shapes are cN and cA..cF (T4.12 uses lettered criteria). All closes_criteria
+    across every current plan reference PLATFORM tier_items only (no product-roadmap ids). A tight
+    ':c\\d+$' regex would wrongly reject T4.12:cA -- hence the loose 'reject-prose-only' shape.
+  - >-
+    Freshness: preflight main_freshness = 0 behind / 0 ahead on branch claude/session-4g4qlh; no rebase
+    needed. convergence_health green; terraform_pending false. No infra/Lambda/.tf in scope (V2).
+  - >-
+    dec-72 (RCA-as-plan-source): rec-2749 is source=ci_rca and is being reviewed in this /plan session
+    before any patch, per the merge protocol -- not an inline hot-patch.
+  - >-
+    PR-description awareness note (plan-critique non-blocking): once validate_platform_roadmap runs at
+    --pre, any FUTURE PR that git-diff-touches a tier_item still carrying bare-string exit_criteria
+    (e.g. T-1.5, which the check's (ii) leg flags) will now fail pre-merge instead of only in canary.
+    This is the intended tightening (consistent with dec-136/CD.39) but widens the --pre surface for
+    unrelated roadmap edits -- surface it in the PR description so reviewers expect it. Separately, the
+    closes_criteria field_validator is a semantic tightening (retroactively rejects prose), not a purely
+    additive field like dec-132's graduation precedent; the no-schema_version-bump call is defensible
+    because the token shape was already a de-facto contract enforced post-merge by validate_platform_roadmap
+    and the co-land audit confirms zero existing plans break.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/session-4g4qlh)
+  - docs/PROJECT_CONTEXT.md read
+  - Decision-scout CITE decisions read at /implement (esp. dec-136, dec-85, dec-132, dec-104)
+  - All 6 files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - Confirm only PLAN-ducklake-maintenance-smoke-split.yaml has malformed closes_criteria before adding the validator (co-land guarantee)
+execution_steps:
+  - >-
+    Part A: edit docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml -- delete the 5 narrative
+    closes_criteria entries and append their verbatim text as new context: list items; leave
+    closes_criteria as [T2.18:c1, T2.18:c3, T2.18:c5, T2.18:c6, T2.18:c7, T2.18:c9].
+  - >-
+    Part B1: add a field_validator("closes_criteria") to PlanDocument in scripts/roadmap/plan_document.py
+    that raises ValueError for any entry failing a loose '<item-id>:<crit-id>' token shape (reject
+    whitespace/prose; accept lettered + hyphenated + triple-dotted ids). No schema_version bump.
+  - >-
+    Part B2: add _c("validate_platform_roadmap") to pre_sequence() in scripts/checks/registry.py
+    (adjacent to validate_plan_documents); update the docstring line 32 in
+    scripts/checks/roadmap/validate_platform_roadmap.py to say it runs in both tiers.
+  - >-
+    Tests: add the reject-prose + accept-valid-token cases to tests/test_plan_document.py (100% coverage
+    of the new validator branches); add "validate_platform_roadmap" to REQUIRED_PRE_CHECKS in
+    tests/test_checks_registry.py.
+  - >-
+    Execute the Verification Plan pre-deploy steps 1-4 (loop until green). Commit with prefix
+    feat(closes-criteria-integrity-guard):. Rebase is not required (0 behind main) but run
+    `git fetch origin main && git rebase origin/main` before push per commit-flow policy; push; open the
+    PR ready-for-review; subscribe to PR activity and end the turn.
+  - >-
+    On green CI wake: squash-merge with the body carrying "Resolves: rec-2749"; run post-deploy VP step 5
+    (rec-2749 closed after sync; Main Canary green on the merge SHA); unsubscribe.
+  - "Report: what was implemented, all VP results, and confirmation that rec-2749 is closed and main is green."
+work_areas: []
+rollback: >-
+  Pure code/config/doc change -- no infrastructure touched. Revert the branch (pre-merge) or open a
+  revert PR (post-merge). The corrective plan-file edit and the schema/registry guards are independent
+  enough to revert individually if needed, but they are designed to co-land and co-revert.
