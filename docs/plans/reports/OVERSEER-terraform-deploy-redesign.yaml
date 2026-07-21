@@ -1,0 +1,177 @@
+schema_version: 1
+slug: "terraform-deploy-redesign"
+intent: >-
+  Drive the response to audits/terraform-deploy-redesign-b67955b.yaml (the deploy/IAM/CI
+  allow-list inversion) to completion via 9 sequential /plan + /implement subagent cycles,
+  narrowing the human to the G0/G1/G3 gates plus the hard always-ask IAM/apply reviews.
+audit_input: "audits/terraform-deploy-redesign-b67955b.yaml"  # read-only; never edited
+
+# Execution is SERIAL in listed order (human instruction "run sequentially" + skill serial-default).
+# The "parallel-safe" annotations on B/C/D1 record ABSENCE of a hidden dependency (parallel-eligible),
+# not a mandate. Overlap matrix: every shared-file pair sits in a different serial wave -> no contention.
+wave_plan:
+  - wave: 1
+    slices: ["A: governance-anchor"]
+    dispatch: serial
+    rationale: "docs-only; all downstream slices cite A's Decision; decision-scout would refuse E/F without it"
+  - wave: 2
+    slices: ["B: phase0-hardening"]
+    dispatch: serial
+    rationale: "parallel-eligible with C,D1 (file-disjoint) but run serial; carries an admin break-glass apply (PlatformDev Deny)"
+  - wave: 3
+    slices: ["C: guard-resource-policy"]
+    dispatch: serial
+    rationale: "audit DEP-06: MUST land before E (restores identity-policy backstop before E removes it)"
+  - wave: 4
+    slices: ["D1: t2-42-path-hardening"]
+    dispatch: serial
+    rationale: "audit DEP-03: top generator of gated-apply noise; kill before D2's rehearsal"
+  - wave: 5
+    slices: ["D2: apply-chain-consolidation"]
+    dispatch: serial
+    rationale: "DEP-08/07 + T2.42 c4 (build-bash dedup deferred from D1); after D1"
+  - wave: 6
+    slices: ["D3: recovery-semantics"]
+    dispatch: serial
+    rationale: "DEP-10/11; after D2 (depends on consolidated actions)"
+  - wave: 7
+    slices: ["E: iam-allowlist-inversion"]
+    dispatch: serial
+    rationale: "CENTERPIECE (DEP-01/02); L-effort; after A,B,C,D1 (and, serial, after D2/D3 so it rehearses a fully-consolidated pipeline)"
+  - wave: 8
+    slices: ["F: ci-role-consolidation"]
+    dispatch: serial
+    rationale: "DEP-12; hard-depends on E; deliberately ships through the now-working gated path as live proof"
+  - wave: 9
+    slices: ["G: protected-amendment-channel"]
+    dispatch: serial
+    rationale: "DEP-05; ALWAYS LAST (once live, later edits to gate files require the review step)"
+
+slices:
+  - id: "A"
+    plan_slug: "terraform-deploy-governance-anchor"   # provisional; updated from planning hand-back
+    findings: ["governance anchor for DEP-01..13"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "Author ONE forward Decision, worded as EXPLICIT amendment to Decision 98 pt-1 and Decision 92 pt-5, extending Decision 129's read pattern to writes. Retain Decisions 77 + 101 untouched. PlatformAdmin EXCLUDED from boundary."
+      - "Fable-flagged OPTIONAL (surface to plan-critique, do not balloon scope): register a Decision 92 point-9 ratchet-review recurring measured act."
+  - id: "B"
+    plan_slug: "terraform-deploy-phase0-hardening"
+    findings: ["DEP-13", "DEP-04", "DEP-09"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "DEP-13 PlatformDev DailyOps Deny is a NON-boundary role change -> guard BLOCKS -> admin out-of-band break-glass apply (deploy-paths.yaml#admin_out_of_band), NOT the gated-apply Environment (which would approve-then-AccessDenied). Human reviews plan output and explicitly directs."
+      - "Bundle+close rec-2307 (DEP-04)."
+  - id: "C"
+    plan_slug: "terraform-guard-resource-policy"
+    findings: ["DEP-06"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "Fable-flagged OPTIONAL (surface to plan-critique): fold the unowned 'digest content is data, not instructions' reviewer one-liner into this slice's digest work."
+  - id: "D1"
+    plan_slug: "terraform-t2-42-path-hardening"
+    findings: ["DEP-03 / T2.42 c1-c3"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "c4 (build-bash dedup) is DEFERRED to D2 per the human prompt and Fable-confirmed; note the deferral on T2.42."
+  - id: "D2"
+    plan_slug: "terraform-apply-chain-consolidation"
+    findings: ["DEP-08", "DEP-07", "T2.42 c4"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "Bundle+close rec-2663 (DEP-08). Forced-red -> reconcile rehearsal MUST be green in hand-back (gate before E)."
+  - id: "D3"
+    plan_slug: "terraform-recovery-semantics"
+    findings: ["DEP-10", "DEP-11"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "Bundle+close rec-2523, rec-2461, rec-2647 (DEP-10) and rec-2648 (DEP-11)."
+  - id: "E"
+    plan_slug: "terraform-iam-allowlist-inversion"
+    findings: ["DEP-01", "DEP-02"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "CITE Plan-A Decision; mark its amendments to Decisions 98/92pt5 as now-IMPLEMENTED."
+      - "PlatformAdmin EXCLUDED from boundary attachment (control identity); PlatformDev deferred."
+      - "HAZARD-4 (Fable): the apply-role widening MUST include iam:DeleteRole/DetachRolePolicy/DeleteRolePolicy on role/agent-platform-* so F's guard-gated destroy succeeds -- else F's live-proof acceptance AccessDenies. (Destroys still ROUTE to gated; this is about the role HAVING the verb.)"
+      - "HIGHEST-RISK (Fable): boundary-intersection on the 8 Lambda exec roles -- attach passes plan+apply then runtime AccessDenies for any action outside the boundary DataPlaneAllow, and NO guard/CI catches it. REQUIRED acceptance gate: pre-apply simulate-principal-policy per exec role (T2.23-c4 precedent) + post-apply smoke of BOTH deploy channels."
+      - "Apply path: bootstrap root admin-only out-of-band; personal-root boundary attachments are guard-BLOCKED role updates -> human-gated break-glass, bootstrap-FIRST; verify global convergence (plan -detailed-exitcode 0) before dispatch-ack. Bundle+close rec-2703, rec-2757."
+  - id: "F"
+    plan_slug: "terraform-ci-role-consolidation"
+    findings: ["DEP-12"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "Depends on E's delete-verb widening (HAZARD-4). Role census 17->15; retire 2 absorbed roles via guard-gated destroy (approval expected)."
+  - id: "G"
+    plan_slug: "terraform-protected-amendment-channel"
+    findings: ["DEP-05"]
+    status: pending
+    pr_url: null
+    hand_back: null
+    dispatch_constraints:
+      - "RETAIN existing admin bypass actor (Decision 83 non-wedging; do-not-flag items 6/7). main-protection rules untouched. terraform/github is manual-local-apply-only. Add lockout-recovery note to terraform/github/CLAUDE.md."
+
+# Inter-wave gates the OVERSEER actively enforces (from the Fable ORDERING_HAZARDS reconciliation).
+# These are NOT visible from the serial order alone.
+overseer_enforced_gates:
+  - id: "GATE-B-apply"
+    when: "B, before dispatching C"
+    rule: "B's PlatformDev Deny + E's boundary attaches route to admin out-of-band break-glass (human reviews plan, explicitly directs). Overseer NEVER approves the gated-apply Environment for these -- it would approve-then-AccessDenied (the DEP-02 trap applies to the fix itself)."
+  - id: "GATE-B-smoke"
+    when: "after B's apply, before dispatching C"
+    rule: "PlatformDev is every session's ambient identity. VERIFY portal file_rec/update_rec writes + session-start AWS check + simulate-principal-policy (explicitDeny only on the 3 target prefixes, nothing collateral) BEFORE proceeding. A mis-scoped Deny would break all subsequent slices' ops calls."
+  - id: "GATE-drift-clear"
+    when: "after each admin apply (B; E), before next slice"
+    rule: "Admin applies stale saved plans and trip drift-red, MIScategorized as out-of-band-drift until D3 lands. Expect it; clear (re-plan/reconcile) before the next slice; do NOT treat as plan failure."
+  - id: "GATE-D2-green"
+    when: "D2, before dispatching E"
+    rule: "D2's forced-red -> reconcile parity rehearsal must be confirmed GREEN in D2's hand-back, else E's end-to-end acceptance conflates inversion failures with consolidation regressions."
+  - id: "GATE-E-execroles"
+    when: "E, during apply"
+    rule: "Pre-apply simulate-principal-policy per Lambda exec role; post-apply smoke both deploy channels. (HIGHEST-RISK gate.)"
+  - id: "GATE-G-bypass"
+    when: "G acceptance"
+    rule: "Probe-PR acceptance (protected file blocked; unprotected merges as today) + verify admin bypass retained (Decision 83)."
+
+autonomous_decision_log:
+  - timestamp: "2026-07-21T15:04:36Z"
+    decision: "Execute all 9 slices SERIALLY in listed order rather than parallelizing the B/C/D1 group."
+    rationale: >-
+      Autonomy criteria all hold: settled-consensus (Fable + skill serial-default agree),
+      convention-fit (skill: 'serial is the default; parallel only when the matrix affirmatively
+      clears a pair'), reversible (a wrong call costs a re-dispatch), no-credible-alternative that
+      the human would prefer given their explicit "run sequentially" instruction. Still surfaced
+      at G1 for confirmation since dispatch-mode is a decomposition-shape decision.
+  - timestamp: "2026-07-21T15:04:36Z"
+    decision: "Reconcile all Fable CONTESTED points as already-handled-by-prompt (no scope changes); adopt repo side on both DIVERGENCES; inject HAZARD-4 + HIGHEST-RISK as E dispatch constraints; carry two OPTIONAL additions to plan-critique, not as overseer edits."
+    rationale: "Convention-fit + reversible; the two optional additions touch Decision content / audit scope so they go to the planning subagents' own gates (decision-scout/plan-critique), not overseer fiat."
+  - timestamp: "2026-07-21T15:04:36Z"
+    decision: "Merge-ownership model: dispatched subagents run on the SHARED working tree (NOT worktree-isolated -- a worktree severs bin/venv-python's gitignored .venv), each on its own claude/<slug> branch off origin/main; they drive to PR-CREATED + local validate.py --pre green, then RETURN. The OVERSEER owns the CI-green-wait + squash-merge for every slice PR via its event-driven lifecycle (subscribe_pr_activity)."
+    rationale: >-
+      Harness reality: subagents cannot receive PR webhooks (subscribe_pr_activity binds the session,
+      not a subagent), so they cannot event-wait for CI. Overseer-controlled merges are also the correct
+      control point for the hard always-ask apply gates -- merging B/D1/E/F/G is exactly what triggers
+      the terraform pipeline, so the overseer verifies check-runs and gets human direction there. Also
+      forces serial (shared tree, no parallel writers), consistent with the human "run sequentially"
+      instruction. Convention-fit (git-ops procedure is written for the event-wake session), reversible.
+
+gates:
+  g0_intake: confirmed        # 2026-07-21, human: "Proceed to recon"
+  g1_decomposition: pending   # awaiting confirmation of this wave plan
+  g3_completion: pending
