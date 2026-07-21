@@ -1,0 +1,399 @@
+schema_version: 1
+slug: decisions-archival-hygiene
+intent: >-
+  Implement audit finding DPI-04 -- lifecycle/status hygiene and archival-policy reconciliation for
+  docs/DECISIONS.md -- so the decision-scout hot-read path and the ops_decisions ETL source (Decision
+  84) reflect the Decision-84-era reality that this file is the canonical corpus, not an
+  open-decisions-only scratchpad. Wave 2 of the /overseer decision-log-premise-integrity run.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-decisions-archival-hygiene.yaml
+phase: >-
+  Audit-driven platform governance hygiene (DPI-04, audits/decision-log-premise-integrity-8fb581e.yaml);
+  no tier_item -- durable deferred follow-ups are routed to roadmap tier_items, not recs. Depends on Wave
+  1 (DPI-02/03/05, #665) already on main.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 146 (archival-policy governance) at the top; retitle the stale H1 "# Open Decisions"
+      -> "# Decisions" and reconcile the subtitle; remove the operator-confirmed archive-eligible entries
+      (23, 42, 49, 68, 71, 40); normalize the header status of Decisions 55, 70, 27 in place.
+  - file: docs/DECISIONS_ARCHIVE.md
+    action: Modify
+    purpose: >-
+      Append each moved entry (verbatim body preserved) with a "(Superseded by Decision NN)" header suffix
+      and top-of-body Status/Superseded-by markers per the archive's existing convention.
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      CONDITIONAL: only if the operator elects to archive Decision 24 -- update the live pointer at
+      PROJECT_CONTEXT.md:104 ("See Decision 24 in docs/DECISIONS.md") to name docs/DECISIONS_ARCHIVE.md.
+      Under the recommended plan (24 stays live) this file is untouched. NOTE: the audit's premise that
+      PROJECT_CONTEXT.md:18 asserts "keeps only open decisions" crediting strategic_review is STALE -- line
+      18 was already reconciled to the Decision-134 deterministic-guard framing, so no policy-text rewrite
+      is needed there.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The operator-confirmed archive-eligible entries (23, 42, 49, 68, 71, 40) are REMOVED from
+    docs/DECISIONS.md and PRESENT in docs/DECISIONS_ARCHIVE.md, each with an accurate "(Superseded by
+    Decision NN)" header suffix (23->76, 42->90, 49->116, 68->112, 71->73, 40->122). Decisions 24 and 89
+    remain in the live corpus (operator-confirmed EXCLUDE -- both still carry live citations; see context).
+  - >-
+    Decision 146 exists at the top of docs/DECISIONS.md with header suffix "(Decided)", a "**Warehouse ID:**
+    dec-146" line, and the canonical template sections (Status/Date/Warehouse ID/Problem/Decision/Rationale/
+    Related), recording the canonical-corpus + archival policy.
+  - The H1 of docs/DECISIONS.md is "# Decisions" (not "# Open Decisions") with the reconciled subtitle.
+  - >-
+    Decisions 55 and 70 carry an explicit "(Decided)" header status; Decision 27's header is normalized to
+    "(Decided)" (operator-confirmed; agent-decided provenance preserved in the body Status line). Decision 40
+    is ARCHIVED under "(Superseded by Decision 122)" (see the first criterion), not status-normalized in place.
+  - >-
+    scripts/decisions_md.py parses both files with NO duplicate decision numbers across the combined corpus,
+    every moved entry yielding a non-empty superseded_by, and Decision 146 present -- proving the moves are
+    warehouse-safe (number-keyed dec-NNN identity preserved; ETL dedupe first-parsed-wins not tripped).
+  - >-
+    validate_decisions_size passes all three ceilings (live < 500,000 bytes, live headers < 120, combined <
+    700,000 bytes) and validate --pre exits 0.
+  - No new recommendation is filed by this plan (durable follow-ups route to roadmap tier_items).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: >-
+      Confirm the 6 archive-eligible entries are GONE from the live file and PRESENT in the archive, and
+      that the excluded entries (24, 89) remain live. Asserts the move is complete on both sides -- if a
+      moved entry's live copy survives, the ETL dedupe (first-parsed-wins, live before archive) would
+      silently keep the stale live row and the size guard would not shrink.
+    command: >-
+      test "$(grep -cE '^## Decision (23|42|49|68|71|40):' docs/DECISIONS.md)" = "0" && test "$(grep -cE
+      '^## Decision (23|42|49|68|71|40):' docs/DECISIONS_ARCHIVE.md)" = "6" && test "$(grep -cE '^## Decision
+      (24|89):' docs/DECISIONS.md)" = "2" && echo OK
+    expected: OK
+    fix_if: >-
+      A candidate still appears in DECISIONS.md (move incomplete -> ETL keeps the stale live copy), is
+      missing from the archive, or an excluded entry (24/89) was moved against the recommendation.
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: >-
+      Confirm each archived entry carries its ACCURATE superseder suffix. 68 must cite Decision 112 (its
+      narrow runner-hosting supersession per Decision 112 line "narrowly supersedes Decision 68"), not
+      Decision 73 (which only acknowledges 68). 71's suffix is the operator-confirmable default -- 73 per
+      71's own Wave-1 footnote ("see Decision 73"); the operator may prefer 112 for consistency with 68, in
+      which case /implement updates this regex to match (same post-confirmation update granted for Decisions
+      27/40).
+    command: >-
+      grep -qE '^## Decision 23:.*\(Superseded by Decision 76\)' docs/DECISIONS_ARCHIVE.md && grep -qE
+      '^## Decision 42:.*\(Superseded by Decision 90\)' docs/DECISIONS_ARCHIVE.md && grep -qE '^## Decision
+      49:.*\(Superseded by Decision 116\)' docs/DECISIONS_ARCHIVE.md && grep -qE '^## Decision 68:.*\(Superseded
+      by Decision 112\)' docs/DECISIONS_ARCHIVE.md && grep -qE '^## Decision 71:.*\(Superseded by Decision
+      73\)' docs/DECISIONS_ARCHIVE.md && grep -qE '^## Decision 40:.*\(Superseded by Decision 122\)'
+      docs/DECISIONS_ARCHIVE.md && echo OK
+    expected: OK
+    fix_if: A suffix is missing or names the wrong superseder (esp. 68 -> must be 112, not 73; 40 -> 122).
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicate-number detection across live+archive is audit finding DPI-06's scope (a standing guard to be
+      built separately), not this plan's; this step is a one-time post-move parse assertion that also
+      duplicates the Decision-134 DAF-01 fidelity tripwire. Graduating it here would build DPI-06's guard
+      out of scope.
+    action: >-
+      WAREHOUSE-SAFETY PROOF. Parse both files via the real ETL (scripts.decisions_md): assert no duplicate
+      decision numbers across the combined corpus (the DPI-06 silent-first-wins hazard is avoided and
+      Decision 146's number is free across BOTH files per the Decision 105 ratification-guard target), each
+      moved entry yields a non-empty superseded_by, and Decision 146 parses.
+    command: >-
+      bin/venv-python -c "from scripts.decisions_md import parse_decisions_md, iter_decision_headings,
+      _DECISIONS_MD_PATHS; nums=[int(m.group(1)) for p in _DECISIONS_MD_PATHS if p.exists() for m in
+      iter_decision_headings(p.read_text(encoding='utf-8'))]; dups=sorted({n for n in nums if
+      nums.count(n)>1}); rows={r['decision_id']:r for r in parse_decisions_md()}; missing=[n for n in
+      (23,42,49,68,71,40) if not rows.get(n,{}).get('superseded_by')]; assert not dups, f'DUP numbers across
+      live+archive: {dups}'; assert not missing, f'moved entries missing superseded_by: {missing}'; assert
+      146 in rows, 'Decision 146 not parsed'; print('OK: no dup numbers; moves carry superseded_by; 146
+      present')"
+    expected: "OK: no dup numbers; moves carry superseded_by; 146 present"
+    fix_if: >-
+      A duplicate number exists (an entry was added to the archive without removing the live copy), a moved
+      entry lacks superseded_by (missing top marker), or 146 collides/was not added.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: >-
+      Confirm Decision 146 is present with its Warehouse ID line and that the H1 was retitled (the stale
+      "# Open Decisions" is gone and the file now opens "# Decisions").
+    command: >-
+      grep -qE '^## Decision 146:' docs/DECISIONS.md && grep -qE '^\*\*Warehouse ID:\*\* dec-146 '
+      docs/DECISIONS.md && test "$(head -1 docs/DECISIONS.md)" = "# Decisions" && ! grep -qxE '# Open
+      Decisions' docs/DECISIONS.md && echo OK
+    expected: OK
+    fix_if: 146 missing / wrong Warehouse ID id, or the H1 was not retitled.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: >-
+      Confirm the status normalizations landed: Decision 55 header carries "(Supersedes Decision 46)
+      (Decided)", Decision 70 header carries "(Decided)", and Decision 27 header carries "(Decided)"
+      (operator-confirmed). Decision 40 is ARCHIVED (verified by steps 1-3), not normalized in place.
+    command: >-
+      grep -qE '^## Decision 55:.*\(Supersedes Decision 46\) \(Decided\)' docs/DECISIONS.md && grep -qE
+      '^## Decision 70:.*\(Decided\)' docs/DECISIONS.md && grep -qE '^## Decision 27:.*\(Decided\)'
+      docs/DECISIONS.md && echo OK
+    expected: OK
+    fix_if: Decision 55, 70, or 27 header lacks the explicit "(Decided)" status token.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the standing validate_decisions_size guard (Decision 134 / Decision 145) already registered
+      in both the --pre and full tiers; asserted here as a move-safety confirmation of all three ceilings,
+      not a new regression guard.
+    action: >-
+      Confirm all three validate_decisions_size ceilings pass (live bytes, live H2 count, and the combined
+      live+archive backstop) after the moves + Decision 146 addition, by calling the check's own issue
+      function directly (hermetic; does NOT invoke validate --pre, so no replay recursion).
+    command: >-
+      bin/venv-python -c "from scripts.checks.decisions.validate_decisions_size import _decisions_size_issues;
+      from pathlib import Path; issues=_decisions_size_issues(Path('docs/DECISIONS.md').read_text(encoding='utf-8'),
+      Path('docs/DECISIONS_ARCHIVE.md').read_text(encoding='utf-8')); print(chr(10).join(issues) if issues
+      else 'OK: live + combined ceilings pass'); assert not issues"
+    expected: "OK: live + combined ceilings pass"
+    fix_if: >-
+      Any ceiling breached -- should not happen (moves reduce live bytes and header count; combined bytes are
+      roughly conserved plus the small Decision 146 addition).
+  - step: 7
+    phase: post-deploy
+    action: >-
+      OVERSEER-RUN post-merge ETL refresh: re-run the DECISIONS.md -> ops_decisions backfill so ops_decisions
+      reflects the resolutions -- Decision 146 is upserted and each moved entry is re-derived from the archive
+      file with its unchanged number-keyed dec-NNN identity (upsert-only, no row loss). Requires ducklake_writer
+      (agent_platform profile); not run at plan/implement-commit time.
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
+    expected: >-
+      Backfill completes; ops_decisions has a dec-146 row and the moved entries keep their dec-NNN keys with
+      the corrected superseded_by / status.
+    fix_if: >-
+      Backfill errors -- verify the assume-role chain (aws sts get-caller-identity --profile agent_platform)
+      and portal reachability; re-run. Do NOT re-stage from any logs/ read cache (warehouse-as-SoT invariant).
+constraints:
+  - >-
+    Files NO new recommendations (task constraint). Durable deferred follow-ups become roadmap tier_items,
+    not recs (e.g. reconciling the stale "Decision 40 supersession pending" citations in ROADMAP-PRODUCT.md:757
+    and INTENT-provider-agnostic-executor.md to Decision 122; a future automated archival-eligibility / DPI-06
+    duplicate-number guard).
+  - >-
+    Archive moves are OPERATOR-DISPOSED (the audit recommends, the operator disposes). The operator has
+    CONFIRMED at the overseer G3 gate: archive 6 entries (23, 42, 49, 68, 71, 40); exclude 24 and 89;
+    Decision 27 -> "(Decided)"; Decision 146 as drafted. /implement executes this confirmed set.
+  - >-
+    Immutability: each moved entry's original body is preserved VERBATIM; only the header suffix and a
+    top-of-body "**Status:** Superseded by Decision NN" + "**Superseded by:** Decision NN" marker pair are
+    added (ETL status extraction is first-**Status:**-wins, so the prepended marker sets the correct warehouse
+    status). No renumbering.
+  - >-
+    Warehouse-safe by construction: scripts/decisions_md.py parses BOTH files (_DECISIONS_MD_PATHS); entries
+    MOVE (never dropped), so no ops_decisions row is lost and the backfill is upsert-only. Never physically
+    delete an entry (Decision 70 keeps physical deletion exceptional; not engaged here).
+  - No edits to any code, schema, or .tf. Docs-only. Do not touch scripts/decisions_md.py or validate_decisions_size.py.
+  - >-
+    New/edited text uses ASCII hyphens, not em dashes (CLAUDE.md house style); preserved bodies of moved
+    entries keep their original punctuation.
+  - No rescue agents or workaround loops (Decision 55); on an unrecoverable VP failure, stop and RCA.
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (104 of 104 triaged). CITE:
+    Decision 84 (DECISIONS.md is the sole ops_decisions ETL source; backfill is the sanctioned write path),
+    Decision 86 (rationale routes to a numbered Decision, not a prose doc), Decision 105 (the
+    validate_candidate_decision_ratification R1/R2/R3 guard resolves "## Decision NNN:" headers across BOTH
+    DECISIONS.md and DECISIONS_ARCHIVE.md -- so archive moves keep ratification-guard resolution AND Decision
+    146's number must be free across BOTH files, verified by VP step 3), Decision 134 (size governance +
+    authoring template; its clause-2 message names "archival per DPI-04" as THE relief valve), Decision 145
+    (500,000 live-byte stopgap ceiling this plan operates under).
+  - >-
+    gates: decision-scout=FLAGS_FOUND (all flags resolved into the plan; see scout-resolution notes below);
+    plan-critique=PROCEED after 1 round (no blocking issues; every superseder attribution verified at source
+    -- 68->112, 24/89 exclusions, 40->122 confirmed; 3 non-blocking observations folded into this plan)
+  - >-
+    SCOUT-RESOLUTION notes (each FLAGS_FOUND flag adjudicated): (1) Decision 89 [WARN] -- 83 AMENDS 89's
+    premise but PRESERVES its merge-gate design (squash-after-CI is still the live model), so 89 is NOT
+    "fully superseded"; RESOLVED by EXCLUDING 89 from the archive (keep live), surfaced as an operator
+    question. (2) Decision 68 [WARN] -- superseder-of-record is Decision 112 (CD.21 ratifier: "narrowly
+    supersedes Decision 68 on the runner-hosting question only"), not Decision 73; RESOLVED by re-attributing
+    68 -> 112. (3) Decision 24 [NOTE] -- Decision 77 clause 2 AFFIRMS 24's promotion train as future-state
+    and cites 24 live, plus PROJECT_CONTEXT.md:104 cites it for the live "human-triggered promotion"
+    rationale; RESOLVED by EXCLUDING 24 (keep live), surfaced as an operator question. (4) Decision 71 [NOTE]
+    -- 73 only "acknowledges" 71; RESOLVED by keeping the "(Superseded by Decision 73)" suffix that 71's own
+    Wave-1 footnote declares ("see Decision 73"), with the CD.21/Decision 112 substrate-retirement context
+    noted; operator may prefer a 112 attribution. (5) Decision 146 completeness [NOTE] -- other
+    superseded-but-still-live-cited entries (44->117 cited by enforcement code, 58->76 cited by
+    ROADMAP-PLATFORM.yaml, 37->116) correctly STAY in the corpus under 146's live-citation clause; Decision
+    146 states archival is per-entry, operator-disposed, and this wave is a bounded subset. (6) Decision 40
+    [NOTE] -- Decision 122 ALREADY "Supersedes: Decision 40" (line 1583), so the task's "supersession pending"
+    premise is stale; surfaced as an operator question, and the OPERATOR CHOSE to ARCHIVE 40 under
+    "(Superseded by Decision 122)" (now in the 6-entry move set).
+  - >-
+    PRECONDITION VERIFIED at HEAD (f2453d9): Wave 1 (#665, DPI-02/03/05) merged; the live Decision 26
+    duplicate is deleted (grep '^## Decision 26:' docs/DECISIONS.md == 0); victim annotations present (23 body
+    "**Superseded by: Decision 76**", 42 body "(Superseded by Decision 90)", 49 body "**Superseded by:
+    Decision 116**", plus 44/58/37/40 annotations).
+  - >-
+    KEY SCOPE ADJUSTMENT: the audit's DPI-04 premise that PROJECT_CONTEXT.md:18 asserts "DECISIONS.md keeps
+    only open decisions" crediting strategic_review is STALE -- at HEAD line 18 is the Decision-134
+    deterministic-guard framing, so NO PROJECT_CONTEXT.md policy-text rewrite is needed. The strategic_review
+    enforcer prompt was deleted (T-1.13); only the advisory open-decisions counter in scripts/session/preflight.py
+    remains. The surviving stale surface is the DECISIONS.md H1/subtitle only.
+  - >-
+    FINAL archive-move list (OPERATOR-CONFIRMED at overseer G3): ARCHIVE 6 -- 23->76, 42->90, 49->116,
+    68->112, 71->73, 40->122; EXCLUDE 2 (keep live) -- 24 (Decision 77 future-state + PROJECT_CONTEXT live
+    cite), 89 (Decision 83 design-preserved). Decision 26 already resolved by Wave 1 (excluded). The operator
+    adjudicated all 4 open questions: 3 as drafted (the archive list, Decision 27 -> "(Decided)", Decision 146
+    as drafted); ONE change -- Decision 40 ARCHIVED under "(Superseded by Decision 122)" instead of kept-live.
+    No plan-critique re-run for this change: it applies the already-PROCEED-approved archival mechanism to one
+    more entry whose superseder (Decision 122:1583 "Supersedes: Decision 40") BOTH gates already verified at
+    source -- a scoped extension of the approved mechanism, not a re-architecture.
+  - >-
+    ETL semantics relied on (scripts/decisions_md.py): parse_decisions_md dedupes by decision_id
+    first-parsed-wins, files ordered live-then-archive (line 216-217); status = first "**Status:**" line else
+    the header's last parenthetical (line 221-226); superseded_by from "**Superseded by: Decision N**" /
+    "**Superseded by:** Decision N" (line 52-55). This is why the move must assert gone-from-live AND
+    in-archive (VP step 1) and why the prepended top Status marker sets the archived entry's warehouse status.
+  - >-
+    TANGLE noted: archived Decision 52 header claims "(Supersedes Decisions 37, 40, 49)"; Wave 1 chose Decision
+    116 as 49's operative superseder (used here). 49 is heavily cited in live code (scheduled_agent_handler.py,
+    inference-provider.yaml, src/data/handlers/CLAUDE.md) but ALL as "superseded by 116" framing (no
+    live-constraint assertion; the "See Decision 49" pointers name no file), so archiving 49 breaks nothing.
+  - >-
+    CI-RCA DEFERRAL (Related-Work HARD-BLOCK escape): 1 unresolved ci-rca rec (rec-2762, "malformed
+    closes_criteria in PLAN-ducklake-maintenance-smoke-split.yaml") is ORTHOGONAL to this plan -- different
+    scope file, different failure category (plan-schema validation), and this plan carries no closes_criteria.
+    Deferred to its own RCA-reviewed /plan session per Decision 72 (no inline patch without architectural
+    review).
+  - >-
+    Branched from origin/main at f2453d9 (0 behind, 0 ahead); no scope-file divergence. The archive-move
+    relief valve is Decision 145's named mechanism: current live 415,703 bytes / 104 headers (ceilings 500,000
+    / 120), so moves only add headroom.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md read
+  - Both audit files read (audits/decision-log-premise-integrity-8fb581e.yaml and .md)
+  - Operator has confirmed the final archive-move list, the Decision 27 / 40 dispositions, and the Decision 146 text (via the overseer G3 gate)
+  - >-
+    Re-verify at execution time that 146 is still the next free number across BOTH docs/DECISIONS.md AND
+    docs/DECISIONS_ARCHIVE.md (numbering-race note, Decision 105); shift to the next free number if a
+    concurrent PR claimed it.
+  - All files in scope located and readable; acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Retitle the H1 and subtitle of docs/DECISIONS.md (lines 1-3). OLD line 1 "# Open Decisions", OLD line 3
+    "This document tracks key architectural and operational decisions that need to be made as the system
+    evolves." NEW line 1 "# Decisions"; NEW line 3 "The canonical corpus of ratified architectural and
+    operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84).
+    Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146."
+  - >-
+    Insert Decision 146 at the TOP of docs/DECISIONS.md (after the retitled H1/subtitle, before Decision 145),
+    following the current authoring template. Exact text to insert (ASCII hyphens; adjust the number only if
+    the execution-time numbering re-check finds 146 taken):
+
+    "## Decision 146: DECISIONS.md is the canonical decision corpus, not an open-decisions-only file;
+    fully-superseded entries move to the archive (retitles the stale \"# Open Decisions\" H1; reconciles the
+    drifted archival policy to Decision-84-era reality) (Decided)
+
+
+    **Status:** Decided
+
+    **Date:** 2026-07-21
+
+    **Warehouse ID:** dec-146 (keyed on the decision number; synced to ops_decisions via `ops_data_portal
+    --backfill-decisions-md` post-merge, per Decision 84)
+
+
+    **Problem:** docs/DECISIONS.md opened with the H1 \"# Open Decisions\" and a subtitle framing it as
+    decisions \"that need to be made\" -- an open-decisions-only framing that predated Decision 84. Two facts
+    made it stale: (1) Decision 84 made this file the SOLE ETL source for the `ops_decisions` warehouse table,
+    so it is the canonical corpus of every ratified decision, not a scratchpad of pending ones; (2) the
+    archival policy PROJECT_CONTEXT.md once credited to a `strategic_review` enforcer never had a mechanical
+    enforcer -- the only surviving open-decisions signal is scripts/session/preflight.py's advisory counter,
+    and the strategic_review.prompt.md the policy named was deleted (T-1.13). Audit finding DPI-04
+    (audits/decision-log-premise-integrity-8fb581e.yaml) flagged the H1/subtitle drift and the
+    enforcer-that-does-not-exist. (PROJECT_CONTEXT.md's policy text was independently reconciled to the
+    Decision-134 deterministic-guard framing before this Decision.)
+
+
+    **Decision:** docs/DECISIONS.md is the canonical decision corpus -- the sole ETL source for `ops_decisions`
+    (Decision 84) -- holding ratified decisions regardless of lifecycle status. The H1 is retitled
+    \"# Decisions\". Fully-superseded entries move to docs/DECISIONS_ARCHIVE.md with a \"(Superseded by Decision
+    NN)\" header suffix per the archive's existing convention. \"Fully superseded\" is a per-entry test: a
+    repo-wide search for the decision number returns only its own entry plus already-annotated / superseded
+    mentions. An entry still cited as a LIVE constraint stays in the corpus -- so superseded-but-still-cited
+    entries (e.g. Decision 44 -> 117 cited by live enforcement code, Decision 58 -> 76 cited by
+    ROADMAP-PLATFORM.yaml, Decision 37 -> 116) remain until their citations retire, and archival proceeds in
+    bounded, operator-disposed waves rather than one sweep. Because scripts/decisions_md.py parses BOTH files
+    (`_DECISIONS_MD_PATHS`), an archive move is warehouse-safe: the entry keeps its number-keyed `dec-NNN`
+    identity, the backfill re-upserts it unchanged, and the move only relocates bytes out of the
+    decision-scout hot-read path. Archival is operator-disposed (the audit recommends candidates; the operator
+    confirms each move), NOT mechanically enforced -- there is no \"keeps-only-open\" guard and none is created
+    here. Live-file size pressure is governed by validate_decisions_size (Decision 134; ceiling raised to
+    500,000 by the Decision 145 stopgap), whose named relief valves are exactly this archival and
+    superseded-body compaction.
+
+
+    **Rationale:** The \"open decisions\" framing credited an enforcer that does not exist and contradicted the
+    post-Decision-84 reality that this file IS the warehouse's decision of record. Recording the correction as
+    a numbered Decision (not prose in PROJECT_CONTEXT.md) follows Decision 86: rationale lives in a numbered
+    Decision, collocated with the corpus it governs. Archival stays a judgment-based, operator-gated
+    disposition rather than an automated sweep because \"fully superseded\" is not mechanically decidable --
+    automated duplicate-number detection and any eligibility enforcer are separate, unbuilt scope (audit
+    DPI-06).
+
+
+    **Revisit condition:** if a mechanical archival-eligibility enforcer or duplicate-number guard (DPI-06) is
+    ever built, revisit the \"operator-disposed, not mechanically enforced\" clause.
+
+
+    **Related:** Decision 84 (sole ops_decisions ETL source), Decision 86 (rationale -> numbered Decision),
+    Decision 105 (ratification guard resolves headers across both files), Decision 134 (size governance +
+    authoring grammar), Decision 145 (byte-ceiling stopgap + archival as the named relief valve), audit DPI-04
+    (audits/decision-log-premise-integrity-8fb581e.yaml)."
+  - >-
+    For each OPERATOR-CONFIRMED archive candidate (23, 42, 49, 68, 71, 40): CUT the entry's full block (from
+    its "## Decision N:" header to just before the next "---"/header) out of docs/DECISIONS.md and APPEND it
+    to the end of docs/DECISIONS_ARCHIVE.md (after Decision 52 / EOF), each preceded by a "---" separator.
+    Transform on append: (a) add the header suffix "(Superseded by Decision NN)" using the accurate superseder
+    -- 23->76, 42->90, 49->116, 68->112, 71->73, 40->122 (Decision 40's header contains an em dash -- match the
+    ACTUAL source string when appending its suffix); (b) immediately after the header line, PREPEND the marker
+    pair "**Status:** Superseded by Decision NN" then "**Superseded by:** Decision NN" (this becomes the first
+    **Status:** line so the ETL records the correct warehouse status -- for Decision 40 this populates its
+    previously-empty superseded_by, satisfying plan-critique obs 2); (c) preserve the original body VERBATIM
+    below. Do NOT renumber.
+  - >-
+    Normalize the three in-place status headers in docs/DECISIONS.md (Decision 40 is ARCHIVED, not normalized
+    in place -- see the archive step above): Decision 55 header -> append " (Decided)" giving "(Supersedes
+    Decision 46) (Decided)"; Decision 70 header -> append " (Decided)"; Decision 27 header -> "(Decided)"
+    (operator-confirmed; replace "(Agent-decided -- approved)"; preserve the "Agent-decided -- approved by
+    test suite..." provenance in the body Status line, ASCII hyphens). NOTE (plan-critique obs 3): Decision
+    27's header contains an em dash -- match the ACTUAL em-dash source string when editing so the in-place
+    edit applies cleanly; write all replacement text with ASCII hyphens.
+  - >-
+    CONDITIONAL: only if the operator elected to archive Decision 24, update docs/PROJECT_CONTEXT.md:104 to
+    name docs/DECISIONS_ARCHIVE.md instead of docs/DECISIONS.md. Under the recommended plan (24 stays live),
+    make NO PROJECT_CONTEXT.md edit.
+  - >-
+    Execute the Verification Plan -- run each pre-deploy step; loop until pass; on an unrecoverable failure
+    stop and RCA (Decision 55). The post-deploy backfill (step 7) is run by the overseer post-merge.
+  - 'Report: what was moved/normalized, the operator-confirmed final list, and VP results.'
+work_areas: []
+rollback: >-
+  Docs-only change; revert the branch commit to restore prior state. ops_decisions is upsert-only and
+  number-keyed, so a revert followed by re-running `ops_data_portal --backfill-decisions-md` re-derives the
+  prior rows with no data loss (entries were moved between two ETL-parsed files, never physically deleted).
