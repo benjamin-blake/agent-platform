@@ -171,8 +171,9 @@ The last command populates `logs/.preflight-report.json` and `logs/.recommendati
 which the DEDUP DISCIPLINE (Section 13) reads.
 
 **Degraded path (mandatory dedup, no exceptions):** IF the cache-gen command fails (creds/egress
-down): do NOT abort -- set `meta.degraded_dedup=true`, mark every `roadmap_crossref` confidence
-`HYPOTHESIS` and every `dedup_hit_count` `null`, and proceed using `rg` over
+down): do NOT abort -- set `meta.degraded_dedup=true`, mark every affected finding's `confidence`
+`HYPOTHESIS` and every `roadmap_crossref.dedup_hit_count` `null` (null is legal in the degraded
+state, overriding the schema's example `0`), and proceed using `rg` over
 `logs/.recommendations-log.jsonl` (if present) and `docs/ROADMAP-PLATFORM.yaml` directly. A
 finding without a recorded dedup search is a HYPOTHESIS regardless.
 
@@ -230,6 +231,13 @@ enough to consolidate, and is a consolidation mechanism warranted?
 - Top-level Q1 verdict (the *mechanism* question): `warranted | partial | not-warranted` -- is a
   standing consolidation lifecycle (a criterion + a tool) justified, or do ad-hoc supersessions
   suffice?
+- The mechanism recommendation MUST address **citation integrity**: live decisions are cited by
+  number ("Decision N", `dec-NNN`, `Resolves: dec-NNN` commit trailers) across CLAUDE.md/AGENTS.md,
+  contracts, skills, the scout, and roadmap entries, and TRAP-4 confirms no mechanical check guards
+  those inbound edges -- so any merge/retire that changes a `decision_id` can silently break them.
+  State how the mechanism preserves or rewrites inbound citations, or why an immutability-preserving
+  supersede-in-place (compact the body to a pointer stub, keep the number) is preferable to a
+  destructive merge that retires a number.
 - Do NOT draft replacement decision text. The deliverable is the map, the per-cluster verdicts,
   and the mechanism recommendation -- the human authors merges later.
 
@@ -273,8 +281,13 @@ property-matched compensating control):
 as one or more findings (marker/column/triage-bucket with acceptance criteria).
 - **Q3a (record):** should a first-class *intent* element be added to the decision record -- an
   authoring marker in `decision-entry.yaml` and a column in `DecisionPayload` -- distinct from the
-  existing `problem`/`decision_text`/`context` fields? (Trace what those three already capture
-  before concluding intent is absent vs merely unlabeled.)
+  existing `problem`/`decision_text`/`context` fields? The NULL hypothesis is first-class and
+  co-equal with the pro-intent case: that `problem`/`decision_text`/`context`/`Rationale` ALREADY
+  carry intent and a dedicated field is ceremony -- trace what those capture and return `reject` if
+  the trace supports it. If you DO design the column, name its full acceptance surface: the
+  write-side `DecisionPayload` (`decision.py`), the read-side `Decision` model
+  (`scripts/executor/jsonl_store.py`, cited at `decision.py:7`), and the DQ home
+  `config/agent/data_quality/decisions/ops_decisions.yaml` (cited at `decision.py:45`).
 - **Q3b (SCD2):** should the content-hash-gated backfill version intent alongside the body, so an
   intent revision is an SCD2 version (riding D134 cl.4), and what is the grain?
 - **Q3c (scout):** should `decision-scout` gain an intent-alignment axis -- a triage bucket
@@ -331,6 +344,15 @@ freely where a dimension does not apply to a surface (e.g. VD3 is `n/a` for the 
 an explicit `rubric_ratings` row for every (surface, dimension) pair you assess, INCLUDING an
 explicit `n/a` row where a dimension is structurally irrelevant -- do not silently omit a cell (an
 absent row is ambiguous between "n/a" and "forgotten").
+
+Two in-scope files fold into these six surfaces (they get no separate surface id): a finding on
+`scripts/checks/decisions/validate_decision_entry_conformance.py` maps to the `decision-entry.yaml`
+surface (it enforces that contract), and a finding on `docs/DECISIONS_ARCHIVE.md` maps to
+`DECISIONS.md-corpus`. `surface: shared` is ONLY for a finding that genuinely spans multiple
+surfaces (e.g. the consolidation mechanism), never a catch-all for an unlisted surface. For
+maturity (Section 15), a `shared` critical/high finding counts against `DECISIONS.md-corpus` AND
+every other surface named in the finding's `note` (name them explicitly), so a cross-surface
+critical cannot leave a surface computing as `frontier`/`strong` by omission.
 
 ---
 
@@ -435,7 +457,11 @@ Bound the corpus read hard. Reading all 103 entries in full is NOT required and 
 - State your coverage in `meta.contract_notes` ("read N of <the re-derived live header count> in
   full; sampled M ratify-CD").
 
-The five DD-A seed clusters (read in full; adjudicate; do not assume redundancy):
+The five DD-A seed clusters (read in full; adjudicate; do not assume redundancy). These are
+merge-HYPOTHESES, not a pre-filtered merge list: at least one is expected to adjudicate
+`keep-separate` on trace (concern-separation and supersession-provenance are legitimate reasons to
+stay distinct -- the telemetry trio 95/96/97 is a deliberate calibration for exactly this). An
+all-`keep-separate` result is a valid, non-failing outcome.
 - **Telemetry:** Decisions 95, 96, 97 (trace/observation model; temporal; identity).
 - **DuckLake/ops-store:** Decisions 78, 81, 84, 88, 99, 107, 124.
 - **Size/structural governance:** Decisions 43, 102, 114, 128, 130, 134.
@@ -612,10 +638,10 @@ nor a missing intent field. State this explicitly wherever the guard is raised a
 
 **Maturity** -- compute LAST, per surface, top-down, first match wins. Pin these thresholds:
 - **frontier** = 0 open critical AND 0 open high findings for the surface. The Q2
-  `external_checklist` clause applies ONLY to the two surfaces Q2 governs -- `DECISIONS.md-corpus`
-  and `Decision-105-ratification-lane`: for those, frontier additionally requires every checklist
-  property rated `met` or `partial` (never `missed`). For every other surface, frontier gates on
-  the finding counts alone.
+  `external_checklist` clause applies ONLY to `DECISIONS.md-corpus` (the surface the 9-property
+  ADR-log checklist actually assesses): for it, frontier additionally requires every checklist
+  property rated `met` or `partial` (never `missed`). For every other surface -- including
+  `Decision-105-ratification-lane` -- frontier gates on the finding counts alone.
 - **strong** = 0 critical AND <= 1 high.
 - **solid** = <= 1 critical.
 - **nascent** = otherwise.
