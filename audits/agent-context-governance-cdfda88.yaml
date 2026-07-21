@@ -1,0 +1,1062 @@
+audit:
+  meta:
+    audited_commit: cdfda88
+    base_branch: main
+    model: "Claude Fable 5"
+    methodology_version: 1
+    scope_surfaces: [S1, S2, S3, S4, S5, S6, S7, S8]
+    degraded_dedup: false
+    contract_notes: >-
+      (1) The S2 load-trigger (per-directory CLAUDE.md loads on directory touch) is closed
+      harness behaviour, taken as stated per the prompt; findings leaning on it say so.
+      (2) The interactive Skill tool's internal loading is closed harness behaviour; the
+      DD-A conclusion that it does not consume required-context rests on
+      absence-of-consumer reasoning over the repo (no repo component parses the key into
+      the interactive path) plus the residual assumption that the harness skill loader
+      ignores unrecognised frontmatter keys. (3) Prompt-caching behaviour (Q6v) is
+      harness-side and not repo-derivable; the cost reasoning treats it as
+      directionally-true, not measured. (4) The clone is shallow (50 commits, 5 days of
+      history); churn figures (AGENTS.md edited 4x, .claude/skills/ 6x in the observable
+      window) are lower bounds over that window only. (5) The audit branch
+      audit/agent-context-governance-cdfda88 was created off origin/main without hook
+      interference; no PreToolUse guard blocked any step. (6) Repo-wide validate --pre was
+      not run (advisory outside CI per MECHANICS step 3); the pre-push gate applied was
+      YAML parse + counting invariant. (7) meta.model carries the harness marketing name;
+      the exact model id is withheld from repo artifacts per harness policy and reported
+      in the session chat.
+    stale_anchors: []
+  question_answers:
+    - q: Q1
+      verdict: see-governance_verdict
+      basis: [ACG-01]
+      prose: >-
+        Yes for the always-on and largest on-demand surfaces; measurement-first for the
+        thin ones. The repo has already answered the in-principle question three times:
+        Decision 43 ratified prose line-budgets (.prompt.md 3000 / .agent.md 1500),
+        Decision 134 sized a byte ceiling to a named consumer's whole-file read, and
+        Decision 128 chose decompose-by-default-with-loud-raises for code. What is missing
+        is not doctrine but carry-over: the Decision-43 prose rows and their enforcement
+        recs (rec-432/rec-433, both still open) are stranded on the .github/ surfaces
+        deleted at T-1.13, so no live prose surface is covered. TRANSFER HAZARD: SLOC caps
+        a reachable set, but S1/S2 load whole-file-plus-@-imports, so a per-file cap is
+        gameable by splitting into co-loading files -- for ambient surfaces the unit must
+        be the resolved LOAD-SET (file plus transitive @-imports). For S3/S4 the hazard
+        does not bite: a SKILL.md entry-file cap is robust because the legitimate
+        decompose-response (move detail to on-demand auxiliary files, contracts, or a
+        subagent) genuinely removes bytes from the invocation load rather than relocating
+        them within it. Unit: bytes (deterministic, wc-derivable, matching Decision 134),
+        with a ~4-chars/token conversion reported informationally. Mechanism: a budget
+        registry with an inline raise-approved decision marker mirroring
+        config/sloc_budgets.yaml, enforced from validate.py (single-SoT rule respected).
+        Numeric ceiling values are the human's call and are deliberately not proposed
+        here; seeding at current sizes (the Decision 102 pattern) makes the gate a
+        ratchet-plus-loud-raise rather than an immediate constraint.
+    - q: Q2
+      verdict: partial
+      basis: [ACG-02, ACG-06]
+      prose: >-
+        Lever by lever: SessionStart hooks are USED for setup only (4 hooks; none injects
+        instruction context; additionalContext unused but viable as a cheap surfacing
+        channel for a size/staleness digest). UserPromptSubmit is UNUSED and correctly so
+        -- per-prompt injection is an ambient tax, the exact wrong direction. PreToolUse
+        is USED for guards only; as a context-injection point it is structurally poor
+        (fires per tool call). Subagent offload is USED and load-bearing: decision-scout,
+        plan-critique, code-review, report-critique, and the overseer's read-nothing
+        router are a genuinely strong offload architecture. Explicit body-instructed
+        loading (commands/skills instructing full reads of PROJECT_CONTEXT.md and targeted
+        projections of the big data files, fed by the preflight cache) is the live JIT
+        mechanism -- but it is prose-enforced discipline, not a primitive: nothing checks
+        that a skill's loading instructions stay consistent (observed contradictions
+        between frontmatter payloads and body discipline, ACG-02). Within-skill
+        progressive disclosure (auxiliary files loaded on demand) is available in the
+        harness and used by zero skills. The harness constraint that pushes to the
+        aws-native horizon: the Skill loader is closed, so per-invocation conditional
+        loading can only be done by the model following instructions -- a typed
+        context-retrieval verb (the decision-scout migration contract) is the mechanized
+        end-state answer, and it currently has no owner (ACG-06). Ambient belongs: safety
+        rules, git-ops, portal invariants. JIT belongs: decision bodies, project state,
+        pipeline detail, runbooks.
+    - q: Q3
+      verdict: sufficient
+      basis: []
+      prose: >-
+        DD-B (20-citation sample across AGENTS.md, planning, implement): 18-19 of 20 are
+        PROVENANCE tags sitting next to an inline statement of the operative rule -- the
+        agent can act correctly from the inline rule; the id enables on-demand deepening.
+        1-2 are actionable-leaning (exception-gating cites like Decision 70/103 where the
+        sanctioned-exception detail lives only in the decision body; reversal triggers
+        like CD.17). Extrapolating that ~90/10 split repo-wide is a HYPOTHESIS. The
+        posture is sound: ids cost single-digit tokens each (~50 refs in AGENTS.md is
+        roughly 300 tokens); the bulk cost is the inline rules, which belong at their
+        layer; decision BODIES are already fetched JIT (decision-scout inside /plan,
+        rg-targeted reads at /implement Step 2 and plan-critique Phase 1). Stripping ids
+        would break live machinery (raise-marker validation, CITE lists, citation
+        integrity) to save almost nothing. The boundary: operative rule inline at the
+        layer that needs it, body on demand, and decision-HISTORY narration (e.g. the
+        Decision 89-vs-83 story in the implement skill) is the one strippable class --
+        folded into ACG-03's relocation rather than a standalone finding.
+    - q: Q4
+      verdict: insufficient
+      basis: [ACG-02]
+      prose: >-
+        DD-A: all 9 skills declare required-context; the ONLY parser is
+        scripts/agent_development/run_skill.py (parse_required_context, lines 16/84), a
+        programmatic fresh-context harness that the planning skill itself declares broken
+        (rec-568, open) and routes around via Agent+Skill dispatch -- while
+        develop-executor.md still instructs using it. No interactive component consumes
+        the key. Counterfactual: delete the frontmatter from every skill and interactive
+        behaviour is unchanged except planning/SKILL.md:546, whose critique-gate dispatch
+        text references "required-context files per its frontmatter" (the model, not the
+        harness, follows that pointer). Worse than latent, the declared payloads
+        contradict the refined body discipline: planning and orient declare full
+        docs/ROADMAP-PLATFORM.yaml (745 KB) and code-review declares full DECISIONS.md
+        (398 KB) while their bodies mandate targeted projections -- run_skill.py would
+        inject what the interactive path deliberately avoids. Meanwhile the contract
+        mandates the key (instruction-architecture.yaml:61) and lists its absence as an
+        anti-pattern (:100-102), and no validator enforces presence. As it stands the
+        primitive is not the right JIT foundation: either retire it (and fix
+        planning:546 / the run_skill references), or rescope it to typed load-directives
+        (path + mode: full|targeted|projection) that both the programmatic harness and
+        the skill bodies derive from, then enforce presence and shape.
+    - q: Q5
+      verdict: partial
+      basis: [ACG-05, ACG-06]
+      prose: >-
+        The designed end-state is strong on externalization and layering, absent on
+        prose-context accounting. Checklist below: (e) met; (b)(c)(d)(f)(h) partial with
+        argued controls; (a)(g) missed -- nothing in the end-state meters prose context
+        cost or detects loaded-but-unused prose (T3.14 is explicitly code-scoped; the
+        one prose metric that existed, preflight token_anomalies, was removed with "no
+        replacement"). The structural gap needs no new standing doc (Decision 86): it
+        needs T3.14's snapshot shape extended (or a sibling item) to enumerate per-surface
+        prose bytes/tokens, and a named owner for the decision-scout Lambda-migration
+        contract on the verb surface.
+      external_checklist:
+        - property: a
+          rating: missed
+          evidence: >-
+            Context-cost observability/metering: T3.14 enumerates reachable SLOC,
+            import-surface, orphan count only (roadmap, "Context-budget as a tracked
+            metric"); the prompt's own disambiguation pins that it does not cover prose.
+            token_anomalies was built (PLAN-infra-token-telemetry) and removed with no
+            replacement (PLAN-platform-telemetry-manual-workflow:152); no live preflight
+            key, no script (scripts/token_budget.py and scripts/context_budget.py both
+            absent).
+        - property: b
+          rating: partial
+          evidence: >-
+            Budget/quota enforcement: live, consumer-sized ceilings exist for the two
+            largest agent-loaded data files (validate_decisions_size 400KB/120-header
+            ceilings sized to decision-scout's whole-file read, Decision 134;
+            validate_platform_roadmap 10K-line ceiling, Decision 114) and per-file SLOC
+            budgets with a raise gate (Decisions 102/128/130). Property-match: these
+            controls exercise exactly the budget-enforcement property on agent-loaded
+            payloads and demonstrably gate growth (Decision 134 exists because DECISIONS.md
+            actually grew unboundedly). They do not cover any instruction-prose surface --
+            hence partial, and ACG-01.
+        - property: c
+          rating: partial
+          evidence: >-
+            JIT retrieval vs preloading: the end-state's named-verb closed boundary
+            (Decision 84 I-3, Decision 91) IS JIT retrieval for ops data, and decision-scout
+            carries an explicit tool-query migration contract. Instruction prose remains
+            fully preloaded (ambient or whole-file on invocation) with no retrieval design.
+        - property: d
+          rating: partial
+          evidence: >-
+            Layered/tiered context: the 5-layer contract with load-times and anti-patterns
+            (instruction-architecture.yaml) is a real tiering design; nothing mechanizes
+            promotion/demotion -- wrong-layer content is named as an anti-pattern but only
+            existence of content_locations is validated (check_layer_compliance,
+            prompt_compliance.py:88-106).
+        - property: e
+          rating: met
+          evidence: >-
+            Externalized/offloaded memory: warehouse-as-source-of-truth (Decision 84),
+            decision-scout subagent offload of a 398KB file, plan-critique/code-review
+            fresh-context gates, overseer read-nothing router with bounded hand-backs.
+            This is the design's showpiece and is live, not just designed.
+        - property: f
+          rating: partial
+          evidence: >-
+            Decomposition-under-a-cap: Decision 128 decompose-by-default with loud raises
+            is ratified and enforced for code (validate_sloc_budget_raises). No prose
+            analog is defined; the correct prose decompose-response (relocate to on-demand
+            aux files/contracts, never split-into-co-loading-parts) is undesigned.
+        - property: g
+          rating: missed
+          evidence: >-
+            Reachability/provenance for loaded-but-unused context: T3.12/T3.13 design a
+            code graph and dead-code detector (both deferred); nothing in the design
+            detects unused prose context (e.g. a gotcha for a retired substrate still
+            riding ambient in every session -- observed instances in PROJECT_CONTEXT.md
+            Known Gotchas: Copilot CLI, Gemini CLI, LLM_PROVIDER=bedrock switch
+            instructions vs CD.28 Bedrock-retired).
+        - property: h
+          rating: partial
+          evidence: >-
+            Progressive disclosure/summarization: decision-scout returns a bounded
+            structured summary (1200-word cap); the PROJECT_CONTEXT End-State section is a
+            designed summary-cache with a sha-fingerprint staleness check
+            (_check_endstate_drift, scripts/preflight/context_docs.py:218). But no skill
+            uses within-skill progressive disclosure (aux files), and the two largest
+            skills inline everything.
+    - q: Q6
+      answers:
+        - question: >-
+            (i) Does the two-tier presubmit even RUN in the interactive session, or is
+            prose governance only felt at PR CI -- and does the timing matter for a
+            self-improving loop?
+          answer: >-
+            It runs interactively: /implement executes validate --pre at Step 1 and full
+            validate at Step 6 before the commit flow, and the same commands are advisory
+            in any session (authoritative only on PR CI, Decision 73). So a prose-size
+            gate added to validate.py would be felt in-session before push, then
+            authoritatively at CI -- the same timing profile SLOC governance has, which
+            has proven adequate. The material gap is not timing but existence: today
+            nothing fires at any time for prose size. Timing matters only in one respect:
+            feedback lands after the prose is written, so the gate's failure message must
+            name the decompose/relocate relief valves (the Decision 134 pattern) to avoid
+            in-session thrash.
+          basis: [ACG-01]
+        - question: >-
+            (ii) Is there a measurement DATA GAP -- does anything record per-session or
+            per-surface token cost over time?
+          answer: >-
+            Yes, confirmed. No preflight key, script, or telemetry table records prose
+            context cost: token_anomalies was built and then removed with "no
+            replacement" while planning/SKILL.md:43 still instructs reacting to it; the
+            telemetry store is dead pending T2.36 (preflight reports "not migrated
+            (Phase 4)" without querying); even the designed telemetry model records
+            execution outcomes and executor LLM-call tokens, not interactive-surface
+            load cost. Embedded hand-stamped sizes rot as a direct consequence
+            (">200KB"/"~230KB" claims vs 398KB measured; "currently 67" headers vs 103).
+          basis: [ACG-05]
+        - question: >-
+            (iii) If an agent EDITS its own instruction files, what stops uncontrolled
+            growth in the same edit that adds a rule?
+          answer: >-
+            Structurally, nothing bounds size. File-COUNT growth is genuinely gated
+            (validate_prose_allowlist classifies every tracked .md; intent-doc-freeze
+            blocks new standing prose-architecture docs per Decision 86;
+            validate_placement gates homes) -- a real, property-scoped control worth
+            naming. But INFLATION of an existing sanctioned file has no gate: the
+            never_on_main and edit_scope_guard hooks gate branch and plan-scope, not
+            size; plan-critique's 12n decompose check covers scripts/src only; human PR
+            review is the sole backstop. In a repo whose stated loop is agents editing
+            these files, that is the exact gap Decision 43 closed for code.
+          basis: [ACG-01]
+        - question: >-
+            (iv) STEELMAN: could a token/size cap induce terser-less-correct methodology,
+            or could decompose-by-default fragment load-bearing context?
+          answer: >-
+            The fragmentation harm is real and the repo has already ruled on it: Decision
+            114 explicitly REJECTED splitting ROADMAP-PLATFORM.yaml into per-tier files
+            because N files an agent must reassemble is worse than one coherent load --
+            the same logic protects AGENTS.md and the big skills from naive splitting.
+            The terser-less-correct harm is bounded by the mechanism choice: a
+            raise-marker gate (NS-4 directed growth) never forbids growth, it prices it
+            at one reviewable line; SLOC history shows raises do land when justified
+            (Decision 128's own problem statement). So the steelman does not defeat
+            governance; it dictates its shape: budget the LOAD-SET not the file for
+            ambient surfaces, make the sanctioned decompose-response
+            relocation/deferral (aux files, contracts, offload) rather than
+            co-loading splits, and keep gate values generous. Where content must be read
+            together to be correct, the correct response under this design is a loud
+            raise, which is exactly what Decision 114 did for the roadmap.
+          basis: [ACG-01]
+        - question: >-
+            (v) Does PROMPT-CACHING change the cost calculus for always-on prose, and
+            should any budget or metric be cache-aware?
+          answer: >-
+            Caching changes the dollar calculus, not the capability calculus. It reduces
+            marginal input cost of stable ambient prefixes, so a raw byte budget
+            over-weights the PRICE of S1/S2 -- but it does nothing for context-window
+            occupancy or comprehension load, which is the load-bearing concern (Decision
+            128's model-portability rationale; the implement skill pins sonnet, not the
+            1M-window opus the session default uses). And cache stability is weaker than
+            it looks in a self-improving repo: AGENTS.md changed 4 times in the 5-day
+            observable history window -- every edit invalidates the prefix. Conclusion:
+            keep budgets byte-denominated (deterministic, occupancy-oriented); make the
+            METRIC cache-aware by reporting stable-vs-churning ambient bytes (edit
+            frequency per surface), which also feeds the staleness problem (ACG-03); let
+            the human set S1/S2 ceilings more generously than raw cost would suggest.
+          basis: [ACG-01, ACG-05]
+        - question: >-
+            (vi) [Added by this run] Is there FRESHNESS governance for the factual claims
+            ambient prose makes -- and should the End-State fingerprint pattern
+            generalize?
+          answer: >-
+            No, and yes. Duplicated project-state in ambient prose drifts silently:
+            observed contradiction on the DuckLake deploy channel (AGENTS.md says the
+            T2.38 channel is "still PENDING" while src/lambdas/CLAUDE.md says it "landed
+            at T2.38" and the roadmap marks T2.38 complete -- two L1 surfaces asserting
+            opposite states of a deploy-governance fact), stale embedded sizes and
+            counts, and an ancestral context-budget stanza (ACG-04). Exactly one
+            freshness mechanism exists and it works: the PROJECT_CONTEXT End-State
+            section's roadmap-tier-id sha fingerprint with a fail-open preflight
+            advisory (_check_endstate_drift) -- it flagged its own staleness during this
+            audit's preflight. Generalizing stamped-fact + preflight-advisory to other
+            duplicated ambient claims (or better, deduplicating the claims to pointers
+            per ACG-03) is a cheap, repo-idiomatic extension.
+          basis: [ACG-03, ACG-04]
+  per_surface_assessment:
+    - surface: S1
+      maturity: strong
+      strengths: >-
+        Pointer-invariant root (CLAUDE.md == @AGENTS.md, machine-enforced); genuinely
+        universal content for most sections; explicit on-demand pointer discipline
+        ("workflows load PROJECT_CONTEXT on demand; you don't need it ambiently");
+        canonical-authority sections (Git-ops) that other surfaces point at instead of
+        restating.
+      top_gaps: [ACG-01, ACG-03]
+    - surface: S2
+      maturity: strong
+      strengths: >-
+        Conditional-ambient trigger aligns cost with need; config/CLAUDE.md and
+        src/lambdas/CLAUDE.md are exemplary (short, pointer-first, Decision 86
+        no-standing-rationale discipline); terraform/CLAUDE.md quarantines its operator
+        procedure to a contract per Decision 127.
+      top_gaps: [ACG-01, ACG-03]
+    - surface: S3
+      maturity: strong
+      strengths: >-
+        Consistently thin orchestration: every command defers methodology to its skill
+        via the Skill tool and git-ops to AGENTS.md; smallest surface class (6 files,
+        ~37.8KB total); explicit do-not-restate pointers.
+      top_gaps: [ACG-01]
+    - surface: S4
+      maturity: strong
+      strengths: >-
+        The offload architecture lives here and is excellent: decision-scout (whole
+        398KB file confined to a subagent, bounded 1200-word return), plan-critique
+        targeted projections, overseer read-nothing router with bounded hand-backs,
+        code-review scoped-diff discipline. Behavioural-invariant blocks are
+        machine-verified (validate_prompt_compliance).
+      top_gaps: [ACG-01, ACG-03, ACG-02]
+    - surface: S5
+      maturity: frontier
+      strengths: >-
+        The live primitives are strong: 4-gate subagent offload pattern, preflight cache
+        as the session's context backbone, guard hooks fail-closed. Maturity is
+        count-derived per the pinned thresholds (one medium finding); note the VD5 row
+        is weak -- the declared frontmatter primitive is latent, which the pinned scale
+        does not weigh above medium severity.
+      top_gaps: [ACG-02]
+    - surface: S6
+      maturity: strong
+      strengths: >-
+        The governance pattern itself is proven and idiomatic where applied:
+        consumer-sized byte ceilings with named relief valves (Decision 134), line
+        ceiling (Decision 114), SLOC ratchet + loud-raise marker (102/128/130),
+        file-class allowlist and placement gates, machine-checked pointer invariant.
+        The pattern is ready to generalize -- the gap is coverage, not design.
+      top_gaps: [ACG-01, ACG-05]
+    - surface: S7
+      maturity: strong
+      strengths: >-
+        Named-verb closed boundary is a real JIT design for ops data; decision-scout
+        carries an explicit stable-interface migration contract; Decision 86 keeps the
+        end-state prose-lean by construction.
+      top_gaps: [ACG-06]
+    - surface: S8
+      maturity: strong
+      strengths: >-
+        On-demand load time is correct; the End-State section's sha-fingerprint
+        staleness check is the repo's one live prose-freshness mechanism and fired
+        correctly during this audit's preflight; Known Gotchas earn their tokens when
+        current.
+      top_gaps: [ACG-01, ACG-04, ACG-03]
+  rubric_ratings:
+    - {surface: S1, dimension: VD1, rating: absent, evidence: "scripts/checks/registry.py:85-240", note: "No check measures any prose surface; sizes elsewhere are hand-stamped and rot."}
+    - {surface: S1, dimension: VD2, rating: absent, evidence: "config/sloc_budgets.yaml; rec-432/rec-433 open", note: "Decision 43 prose budgets stranded on deleted .github/ surfaces; no live ceiling."}
+    - {surface: S1, dimension: VD3, rating: weak, evidence: "AGENTS.md Operational runbooks section", note: "Conditional-use runbooks (Lambda re-enable, OAuth rotation) and one-time setup ride always-on."}
+    - {surface: S1, dimension: VD4, rating: weak, evidence: "AGENTS.md Lambda-deploy bullet vs src/lambdas/CLAUDE.md vs roadmap T2.38", note: "Duplicated project-state in L1 with observed drift (stale PENDING claim)."}
+    - {surface: S1, dimension: VD5, rating: n/a, evidence: "", note: "S1 declares no JIT primitives."}
+    - {surface: S1, dimension: VD6, rating: adequate, evidence: "AGENTS.md header pointer to docs/PROJECT_CONTEXT.md; Git-ops canonical-authority pattern", note: "Points rather than inlines for L2; decision bodies fetched via scout/rg."}
+    - {surface: S1, dimension: VD7, rating: weak, evidence: "docs/PROJECT_CONTEXT.md section 8", note: "End-state keeps L1 ambient as-is; no accounting or retrieval provision."}
+    - {surface: S2, dimension: VD1, rating: absent, evidence: "scripts/checks/registry.py:85-240", note: "Unmeasured; 9 files, 63.1KB total, largest terraform/ 29.9KB."}
+    - {surface: S2, dimension: VD2, rating: absent, evidence: "no covering check", note: "Set unbudgeted (C7 confirmed as fact; governance verdict at Q1)."}
+    - {surface: S2, dimension: VD3, rating: adequate, evidence: "per-directory load trigger (harness; contract_notes 1)", note: "Directory-touch trigger aligns cost with need; terraform/ cost paid only for terraform work."}
+    - {surface: S2, dimension: VD4, rating: weak, evidence: "terraform/CLAUDE.md:261-322 out-of-band IAM grant history", note: "Decision-history/codification narrative (L2/decision-class) inlined; file acknowledges restatement-for-proximity drift risk at :5."}
+    - {surface: S2, dimension: VD5, rating: n/a, evidence: "", note: ""}
+    - {surface: S2, dimension: VD6, rating: adequate, evidence: "terraform/CLAUDE.md:102-104; config/CLAUDE.md", note: "Operator procedure quarantined to deploy-paths.yaml (Decision 127); config/ and src/lambdas/ exemplary pointer-first."}
+    - {surface: S2, dimension: VD7, rating: weak, evidence: "docs/PROJECT_CONTEXT.md section 8", note: "No end-state provision for per-directory prose."}
+    - {surface: S3, dimension: VD1, rating: absent, evidence: "scripts/checks/registry.py:85-240", note: "Unmeasured (37.8KB/6 files)."}
+    - {surface: S3, dimension: VD2, rating: absent, evidence: "no covering check", note: "Unbudgeted; smallest and thinnest class."}
+    - {surface: S3, dimension: VD3, rating: strong, evidence: ".claude/commands/*.md on_user_invocation", note: "Loads only when invoked; content is routing, not methodology."}
+    - {surface: S3, dimension: VD4, rating: strong, evidence: ".claude/commands/implement.md:229; orient.md:344; plan.md:501", note: "Every command defers to its skill and to AGENTS.md git-ops; minimal restatement."}
+    - {surface: S3, dimension: VD5, rating: adequate, evidence: "Skill tool invocation notes in each command", note: "The primitives S3 references (Skill tool, preflight) are live."}
+    - {surface: S3, dimension: VD6, rating: strong, evidence: "plan.md Steps 6a/9 subagent gates", note: "Commands encode the offload dispatches."}
+    - {surface: S3, dimension: VD7, rating: adequate, evidence: "thin surface", note: "Ports trivially to any harness/end-state."}
+    - {surface: S4, dimension: VD1, rating: absent, evidence: "scripts/checks/registry.py:85-240", note: "Unmeasured; 205.9KB/9 files; embedded self-referenced sizes rot (decision-scout '67' vs 103)."}
+    - {surface: S4, dimension: VD2, rating: absent, evidence: "rec-432/rec-433 open; no live check", note: "Largest and fastest-growing prose class, unbudgeted."}
+    - {surface: S4, dimension: VD3, rating: adequate, evidence: "on_skill_invocation; planning/SKILL.md 55.8KB monolith", note: "Right trigger, but whole-file: no skill uses aux-file progressive disclosure, so a small follow-on plan pays the full 14K-token planning load."}
+    - {surface: S4, dimension: VD4, rating: weak, evidence: "planning/SKILL.md:50-65,237-251,316-323; implement/SKILL.md:473,486-508", note: "L2-class project state (telemetry history, speculative-plan pipeline, egress gotchas, decision history) embedded in the two largest skills; observed in the bounded bleed inspection."}
+    - {surface: S4, dimension: VD5, rating: weak, evidence: "9x required-context declarations; run_skill.py sole parser; rec-568", note: "Declared payloads latent and partly contradictory with body discipline."}
+    - {surface: S4, dimension: VD6, rating: strong, evidence: "decision-scout/SKILL.md:10; overseer read-nothing; plan-critique Phase 1 targeted extraction", note: "The offload showpiece."}
+    - {surface: S4, dimension: VD7, rating: adequate, evidence: "decision-scout/SKILL.md:18-20 Lambda migration contract", note: "One skill carries an explicit stable-interface frontier contract; others silent."}
+    - {surface: S5, dimension: VD1, rating: n/a, evidence: "", note: "Primitives are mechanisms, not loaded surfaces."}
+    - {surface: S5, dimension: VD2, rating: n/a, evidence: "", note: ""}
+    - {surface: S5, dimension: VD3, rating: adequate, evidence: "preflight cache; 4 subagent gates", note: "Live primitives load right-time; the latent one (required-context) would load wrong (whole files)."}
+    - {surface: S5, dimension: VD4, rating: n/a, evidence: "", note: ""}
+    - {surface: S5, dimension: VD5, rating: weak, evidence: "run_skill.py:16,84; rec-568 open; .claude/settings.json hooks block", note: "required-context latent/vestigial in the interactive path; sole parser broken per open rec yet still referenced by develop-executor.md; hooks inject no context (setup+guards only, no UserPromptSubmit)."}
+    - {surface: S5, dimension: VD6, rating: adequate, evidence: "decision-scout dispatch in plan.md Step 6a", note: "Offload primitives live and routinely exercised."}
+    - {surface: S5, dimension: VD7, rating: weak, evidence: "CD.10/T0.8 scope", note: "No owner for evolving the primitives toward the verb layer."}
+    - {surface: S6, dimension: VD1, rating: weak, evidence: "validate_decisions_size.py:17-19 static ceilings", note: "Gates exist but nothing trends; no prose measurement anywhere in the check registry."}
+    - {surface: S6, dimension: VD2, rating: adequate, evidence: "validate_decisions_size; validate_platform_roadmap; sloc checks", note: "Proven pattern (consumer-sized ceiling + relief valves + raise marker) where applied; coverage gap is ACG-01."}
+    - {surface: S6, dimension: VD3, rating: n/a, evidence: "", note: ""}
+    - {surface: S6, dimension: VD4, rating: adequate, evidence: "docs/contracts/instruction-architecture.yaml layers+anti_patterns", note: "Contract itself is well-layered and machine-parseable."}
+    - {surface: S6, dimension: VD5, rating: weak, evidence: "instruction-architecture.yaml:61,100-102 vs grep of scripts/checks (no reader)", note: "Contract mandates required-context and calls its absence an anti-pattern; no validator enforces it -- the repo's collocate-semantics-with-enforcement principle violated by its own contract."}
+    - {surface: S6, dimension: VD6, rating: n/a, evidence: "", note: ""}
+    - {surface: S6, dimension: VD7, rating: weak, evidence: "contract verified_against block", note: "Contract silent on end-state loading/accounting."}
+    - {surface: S7, dimension: VD1, rating: absent, evidence: "roadmap T3.14 exit_criteria", note: "Snapshot shape enumerates code metrics only; no prose field."}
+    - {surface: S7, dimension: VD2, rating: weak, evidence: "T3.14 + Decision 128 scope", note: "End-state growth governance covers code and the two data files; prose unprovisioned."}
+    - {surface: S7, dimension: VD3, rating: adequate, evidence: "Decision 84 I-3 named verbs; Decision 91", note: "Verb-JIT for ops data is a genuine right-time design."}
+    - {surface: S7, dimension: VD4, rating: n/a, evidence: "", note: "End-state is a design, not a loaded surface."}
+    - {surface: S7, dimension: VD5, rating: n/a, evidence: "", note: ""}
+    - {surface: S7, dimension: VD6, rating: adequate, evidence: "PROJECT_CONTEXT.md section 2 (SDK shim, closed boundary)", note: "Ops data externalized; instruction context not."}
+    - {surface: S7, dimension: VD7, rating: weak, evidence: "CD.10 verb enumeration; T0.8 files_in_scope; decision-scout:18-20", note: "No JIT-context-retrieval verb, no context-accounting responsibility; the one migration contract has no owning item."}
+    - {surface: S8, dimension: VD1, rating: weak, evidence: "scripts/preflight/context_docs.py:218-268", note: "The End-State sha-fingerprint drift check is live (fired in this audit's preflight) but covers one section; no size measurement."}
+    - {surface: S8, dimension: VD2, rating: absent, evidence: "no covering check; 41.1KB/404L", note: "Largest single instruction-adjacent payload, full-read per /plan (plan.md:529) and /implement (implement.md:269), no ceiling (C11 confirmed as fact)."}
+    - {surface: S8, dimension: VD3, rating: adequate, evidence: "on-demand via explicit body instructions", note: "Right trigger; but consumers full-read it every workflow run, so size is the cost lever."}
+    - {surface: S8, dimension: VD4, rating: weak, evidence: "PROJECT_CONTEXT.md:8-22 Rules section; Known Gotchas retired-substrate entries", note: "L1 rules restated in L2; executor-era gotchas (Copilot CLI, Gemini CLI, Bedrock switch) ride every full read; instances partly owned by rec-2163/rec-2379."}
+    - {surface: S8, dimension: VD5, rating: n/a, evidence: "", note: ""}
+    - {surface: S8, dimension: VD6, rating: weak, evidence: "plan.md:529 'Read docs/PROJECT_CONTEXT.md fully'", note: "Nothing offloads or projects it; it is the one big file still consumed whole in-context by design."}
+    - {surface: S8, dimension: VD7, rating: adequate, evidence: "section 8 + fingerprint mechanism", note: "Carries the end-state authority with a working staleness marker."}
+  governance_verdict:
+    S1:
+      present:
+        verdict: token_budget_gate
+        mechanism: >-
+          Byte budget on the ROOT AMBIENT LOAD-SET (root CLAUDE.md plus transitive
+          @-imports, i.e. AGENTS.md today), registered in a budget registry mirroring
+          config/sloc_budgets.yaml with an inline raise-approved dec-NNN marker; enforced
+          by a validate.py check in both tiers (single-SoT rule). Resolving the @-import
+          closure is what makes the unit split-proof.
+        what_changes: >-
+          New check + registry entry seeded at current size; relief valves named in the
+          failure message (relocate runbooks/state to L2/contracts per ACG-03, or a loud
+          raise). No numeric ceiling proposed -- human disposition.
+        cost: "One S-effort check + registry; near-zero runtime (wc-class)."
+        backing_finding: ACG-01
+      aws_native:
+        verdict: token_budget_gate
+        mechanism: >-
+          Same gate carried forward; the load-set metric additionally feeds the extended
+          T3.14 snapshot (ACG-05) so ambient cost is trendable alongside reachable SLOC.
+        what_changes: "T3.14 snapshot shape gains prose fields at reactivation."
+        cost: "Marginal over the present-horizon gate."
+        backing_finding: ACG-01
+      unit: "bytes of the resolved load-set (report ~bytes/4 token estimate informationally)"
+      granularity: "per-load-set (one set: root ambient)"
+      rationale: >-
+        Always-on cost every session pays; whole-set loading makes per-file caps gameable
+        (Q1 transfer hazard), so the set is the unit. Caching lowers price, not occupancy
+        or comprehension load, and the file churns (4 edits in the 5-day window).
+      confidence: CONFIRMED
+    S2:
+      present:
+        verdict: token_budget_gate
+        mechanism: >-
+          Per-file byte budget for each **/CLAUDE.md in the same registry (no per-dir file
+          uses @-imports today, so file == load-set; the check should resolve imports
+          anyway to stay split-proof if that changes).
+        what_changes: "Registry rows seeded at current sizes; terraform/ enters at its current 29.9KB."
+        cost: "Shares the ACG-01 check."
+        backing_finding: ACG-01
+      aws_native:
+        verdict: token_budget_gate
+        mechanism: "Unchanged; per-directory files remain a harness-horizon surface."
+        what_changes: "None beyond present."
+        cost: "None beyond present."
+        backing_finding: ACG-01
+      unit: "bytes per resolved per-directory load-set"
+      granularity: "per-file (== per conditional-ambient load-set)"
+      rationale: >-
+        Conditional-ambient: right-time is already good; the risk is single-file
+        inflation (terraform/CLAUDE.md is 90% of the way to AGENTS.md's size), best
+        held by the same ratchet-plus-loud-raise.
+      confidence: CONFIRMED
+    S3:
+      present:
+        verdict: measure_only_metric
+        mechanism: >-
+          Include .claude/commands/*.md in the prose-size metric (ACG-05) with no gate;
+          escalate to the registry only if the trend breaks the thin-orchestration
+          pattern.
+        what_changes: "Metric rows only; no gate, no registry entries."
+        cost: "Zero beyond the metric."
+        backing_finding: ACG-01
+      aws_native:
+        verdict: no_change
+        mechanism: ""
+        what_changes: ""
+        cost: ""
+        backing_finding: null
+      unit: "bytes per file"
+      granularity: "per-file"
+      rationale: >-
+        Argued per surface as the prompt requires: S3 is the smallest class with the
+        strongest layer discipline (every command defers to skills/AGENTS.md); a gate
+        here adds friction where the observed failure mode (growth, bleed) has not
+        appeared. Measurement catches drift; the gate can follow evidence.
+      confidence: CONFIRMED
+    S4:
+      present:
+        verdict: token_budget_gate
+        mechanism: >-
+          Per-entry-file byte budget on .claude/skills/*/SKILL.md in the same registry
+          with raise markers. Robust to the transfer hazard because the sanctioned
+          decompose-response is genuine deferral: move deep/conditional sections to
+          auxiliary files the agent reads on demand (harness-native progressive
+          disclosure, used by zero skills today), to contracts, or behind a subagent --
+          each removes bytes from the invocation load. Splitting into co-loading parts is
+          not possible for skills (one SKILL.md loads per invocation).
+        what_changes: >-
+          Registry rows seeded at current sizes (planning 55.8KB, implement 47.7KB);
+          failure message names relocation/aux-file/offload valves plus the ACG-03
+          bleed-relocation targets.
+        cost: "Shares the ACG-01 check; relocation work itself is ACG-03."
+        backing_finding: ACG-01
+      aws_native:
+        verdict: token_budget_gate
+        mechanism: >-
+          Unchanged gate; the JIT half of the story (typed retrieval replacing embedded
+          project state) belongs to ACG-06's verb-surface rescope.
+        what_changes: "Skills shrink as embedded state moves behind verbs/contracts."
+        cost: "Covered by ACG-06 ownership."
+        backing_finding: ACG-01
+      unit: "bytes per SKILL.md entry file"
+      granularity: "per-file (entry file only; aux files deliberately uncapped)"
+      rationale: >-
+        Largest, fastest-growing class; loads whole on every workflow invocation; the
+        implement skill runs on a lower-tier model (sonnet pin) where comprehension
+        degradation is the Decision 128 rationale verbatim. Uncapping aux files makes
+        the budget push content toward on-demand loading rather than deletion --
+        directed growth, not prohibition.
+      confidence: CONFIRMED
+    S8:
+      present:
+        verdict: token_budget_gate
+        mechanism: >-
+          Consumer-sized byte ceiling on docs/PROJECT_CONTEXT.md in the same registry --
+          the Decision 134 pattern exactly: its binding consumers (/plan Step 2,
+          /implement Step 2, /audit Step 4, plan-critique Phase 1) full-read it, so the
+          ceiling is sized against that whole-file read, with relief valves (extract to
+          contracts per Decision 86 routing; retire dead gotchas -- rec-2163/rec-2379
+          already own instances).
+        what_changes: "Registry row + relief-valve message; ACG-04 cleans the stanza it replaces."
+        cost: "Shares the ACG-01 check."
+        backing_finding: ACG-01
+      aws_native:
+        verdict: token_budget_gate
+        mechanism: >-
+          Ceiling retained; content pressure continues outward to contracts/tier-items
+          per Decision 86 (no new extraction owner invented here).
+        what_changes: "None structural beyond present."
+        cost: "None beyond present."
+        backing_finding: ACG-01
+      unit: "bytes per file"
+      granularity: "per-file (single-file surface, sized to its full-read consumers)"
+      rationale: >-
+        Largest single on-demand payload (41.1KB, ~10K tokens), full-read by every
+        planning/implementation session; the repo's own precedent (Decision 134) is
+        precisely a consumer-sized ceiling for a file in this position.
+      confidence: CONFIRMED
+  findings:
+    - id: ACG-01
+      surface: shared
+      question: Q1
+      dimension: VD2
+      horizon: present
+      title: >-
+        No live agent-prose surface carries size/growth governance; the ratified
+        Decision-43 prose budgets and their enforcement recs are stranded on surfaces
+        deleted at T-1.13
+      evidence: >-
+        docs/DECISIONS.md '## Decision 43' structural-limits table (.prompt.md 3000 /
+        .agent.md 1500 line budgets); rec-432 + rec-433 (both open: config/agent_governance.yaml
+        + validate_agent_governance(), scoped to .github/ *.prompt.md/*.agent.md);
+        scripts/checks/prompts/validate_prompt_files.py:23-24 (globs the deleted
+        top-level .github/prompts/*.prompt.md -- now vacuous, and never had a line
+        check); scripts/checks/registry.py:85-240 (no size check names any .claude/ or
+        CLAUDE.md/AGENTS.md path); re-derived size table: AGENTS.md 33,176 b; per-dir
+        CLAUDE.md 63,148 b/9 files; commands 37,790 b/6; skills 205,853 b/9;
+        PROJECT_CONTEXT.md 41,103 b
+      evidence_kind: observed
+      current_behavior: >-
+        Python files, DECISIONS.md, and ROADMAP-PLATFORM.yaml are all ceiling-governed
+        (Decisions 102/128/130, 134, 114); every live instruction-prose surface
+        (S1-S4, S8) can grow without measurement or bound. File-COUNT is governed
+        (prose_allowlist, intent-doc-freeze, placement); file-SIZE is not. Candidates
+        C1, C6, C7, C9(size), C11(size) all trace to this one lapsed lineage.
+      ideal_behavior: >-
+        The Decision 102/128 mechanism generalized to prose: a budget registry +
+        validate.py check over the resolved load-sets, ratchet-down free, raises loud
+        and Decision-cited, relief valves naming relocation/deferral (never
+        co-loading splits, per the Decision 114 anti-fragmentation ruling).
+      gap: >-
+        Governance regressed rather than never existed: Decision 43 put prose in scope;
+        rec-432/433 were filed to enforce it; the surfaces migrated to .claude/
+        (Decision 76 / T-1.13) and neither the budgets nor the recs were re-pointed, so
+        enforcement never landed and the check that partially existed now scans an empty
+        glob. Counterfactual: halving every surface changes nothing structural -- the
+        absence of a bound, not today's sizes, is the defect; it survives the
+        counterfactual.
+      compensating_controls_considered: >-
+        Prompt-caching (lowers price, not occupancy; ambient files churn -- 4 AGENTS.md
+        edits in the 5-day window); opus[1m] session default (implement pins sonnet, so
+        the portability rationale of Decision 128 still binds); human PR review
+        (property-mismatched: the Decision 128 problem statement documents three
+        individually-reasonable raises accreting unreviewed for code -- same dynamic
+        applies to prose); file-count gates (govern proliferation, not inflation). None
+        property-matches growth-of-an-existing-file.
+      change_type: enforce
+      proposed_change: >-
+        Add a prose-size budget registry (sloc_budgets.yaml pattern, raise-approved
+        marker) + one validate.py check (both tiers) covering: root ambient load-set
+        (S1), per-directory CLAUDE.md files (S2), SKILL.md entry files (S4),
+        docs/PROJECT_CONTEXT.md (S8, consumer-sized per Decision 134); S3 measured
+        only. Seed budgets at current sizes; values are human disposition. Re-point or
+        close rec-432/rec-433 in the same change.
+      acceptance: >-
+        validate.py fails a PR that grows a registered prose load-set past its budget
+        without a raise marker; passes when the raise line cites a real Decision header;
+        rec-432/rec-433 no longer point at deleted surfaces.
+      severity: high
+      severity_rationale: >-
+        Materially degrades the agent-loading guarantee the repo itself declares
+        (NS-2/Decision 43): the surfaces that steer every session are the only
+        infrastructure class that can grow unboundedly and unmeasured, in a repo whose
+        loop has agents editing them; compensating controls judged property-mismatched.
+        Not critical: current sizes are moderate and no routine correctness failure is
+        the expected outcome today.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [rec-432, rec-433, Decision-43, Decision-128]
+        dedup_search_terms: ["token budget", "context budget", "size ceiling", "prose budget", "agent_governance", "sloc", "byte ceiling"]
+        dedup_hit_count: 2
+        note: >-
+          rec-432/rec-433 (open) own prose-budget enforcement but are unbuilt AND
+          mis-scoped to the deleted .github/ surfaces -- built as written they would
+          gate nothing live; Decision 43 owns the doctrine. T3.14 is explicitly
+          code-scoped (prompt disambiguation) and is not a hit.
+      effort: M
+      depends_on: []
+      sequencing:
+        safe_to_queue_now: true
+        blocked_behind: []
+        note: >-
+          Does not need ACG-05's metric first: seeding budgets at current sizes (the
+          Decision 102 precedent) works immediately; the metric refines values later.
+    - id: ACG-02
+      surface: S5
+      question: Q4
+      dimension: VD5
+      horizon: present
+      title: >-
+        required-context is a latent primitive: mandated by the contract, enforced by
+        no validator, parsed only by a harness the skills themselves call broken, and
+        its declared payloads contradict the skills' own loading discipline
+      evidence: >-
+        .claude/skills/*/SKILL.md (9/9 declare); scripts/agent_development/run_skill.py:16,84
+        (sole parser); rec-568 open ("run_skill.py --target required=True breaks
+        autonomous code-review invocation"); .claude/skills/planning/SKILL.md:538 ("it
+        is broken per rec-568; dispatch via Agent tool + Skill instead") vs
+        .claude/commands/develop-executor.md Step 2 (still instructs run_skill.py);
+        planning/SKILL.md:546 (only interactive reference to the frontmatter);
+        docs/contracts/instruction-architecture.yaml:61,100-102 (mandate +
+        anti-pattern); no reader in scripts/checks/ or scripts/validate.py (grep
+        negative); payload contradictions: planning/orient declare full
+        docs/ROADMAP-PLATFORM.yaml (745,247 b) and code-review declares full
+        docs/DECISIONS.md (398,438 b) while their bodies mandate targeted
+        projections/archive-section reads
+      evidence_kind: static
+      current_behavior: >-
+        DD-A counterfactual: deleting the frontmatter changes no interactive behaviour
+        except one dangling body reference (planning:546); the programmatic path that
+        reads it is broken per its own open rec; the contract mandates what nothing
+        enforces or consumes.
+      ideal_behavior: >-
+        Declaration, enforcement, and consumption agree: either the key is retired
+        (contract + planning:546 + develop-executor updated together) or it is rescoped
+        to typed load-directives (path + mode: full|targeted|projection) that both
+        run_skill.py and the skill bodies derive from, with presence/shape enforced
+        where the contract already promises it.
+      gap: >-
+        Three artifacts disagree about one primitive: contract says mandatory,
+        validators say nothing, the sole consumer is broken-and-routed-around while a
+        second command still routes to it. As declared, the payloads would inject
+        exactly the whole-file loads the interactive discipline was refined to avoid.
+      compensating_controls_considered: >-
+        The live body-instructed loading fully serves the interactive need (which is
+        why the latency is invisible); that control does not repair the
+        declared-vs-actual contradiction or the contract's unenforced mandate.
+      change_type: rescope
+      proposed_change: >-
+        Decide retire-vs-rescope once, then align all five touchpoints (frontmatter
+        payloads, instruction-architecture.yaml mandate + anti-pattern rows,
+        planning:546, develop-executor Step 2, run_skill.py per rec-568). If kept, add
+        the presence/shape check the contract already promises.
+      acceptance: >-
+        grep of the repo shows declaration, contract, and consumers agreeing: either
+        zero required-context keys and no contract mandate, or a validate.py check
+        enforcing presence+shape and payloads consistent with body discipline.
+      severity: medium
+      severity_rationale: >-
+        Declared-vs-actual ambiguity with a clear fix; can send an agent down the broken
+        run_skill path (develop-executor) or inject 745KB where the body wants a
+        projection, but the interactive workflows compensate today.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: [rec-568]
+        dedup_search_terms: ["required-context", "run_skill", "frontmatter", "skill loader"]
+        dedup_hit_count: 1
+        note: >-
+          rec-568 owns only the --target breakage, not the primitive's
+          latency/contradiction; no roadmap item or decision owns required-context
+          disposition.
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+    - id: ACG-03
+      surface: shared
+      question: Q6
+      dimension: VD4
+      horizon: present
+      title: >-
+        Duplicated project-state and decision-history in ambient/on-invocation prose
+        drifts observably; no freshness mechanism covers it (L1 surfaces currently
+        assert contradictory deploy-channel states)
+      evidence: >-
+        AGENTS.md Lambda-deploy-channel bullet ("governed code-deploy CD channel ...
+        still PENDING (tier_item T2.38)") vs src/lambdas/CLAUDE.md ("The governed
+        code-deploy channel landed at T2.38: .github/workflows/deploy-ducklake-lambdas.yml"
+        -- file exists on disk) vs docs/ROADMAP-PLATFORM.yaml:6971 ("T2.38 complete");
+        .claude/skills/decision-scout/SKILL.md:28 ("currently 67" live headers vs 103
+        measured); plan-critique/SKILL.md Phase 1 step 4 ("~230KB") and
+        decision-scout:10/planning:538 (">200KB") vs 398,438 b measured;
+        planning/SKILL.md:43 (token_anomalies key retired from preflight);
+        planning/SKILL.md:237-251 + implement/SKILL.md:473,486-508 (speculative-plan
+        pipeline detail and Decision 89-vs-83 history embedded in L4);
+        PROJECT_CONTEXT.md:212 ("See plan.prompt.md Step 4" -- surface deleted at
+        T-1.13), :214 ("Decision 49" vs Decision 116 supersession per
+        src/data/handlers/CLAUDE.md), :240 (Bedrock switch instructions vs CD.28
+        Bedrock-retired)
+      evidence_kind: observed
+      current_behavior: >-
+        The same fact (deploy-channel state, file sizes, header counts, pipeline shape)
+        is stated in 2-4 prose surfaces; updates land in one and not the others; agents
+        loading different surfaces receive contradictory governance-relevant state. The
+        one live freshness mechanism (End-State sha fingerprint + preflight advisory,
+        context_docs.py:218) covers a single PROJECT_CONTEXT section.
+      ideal_behavior: >-
+        State lives once at its layer (project state in L2/contracts/roadmap; L1/L4
+        carry pointers or durably-true rules); volatile facts that must ride prose are
+        either mechanically derived or stamped-and-checked in the End-State fingerprint
+        pattern; decision-history narration is fetched, not inlined.
+      gap: >-
+        The repo's own anti-pattern ("a second surface agents must sync ... drift by
+        design", AGENTS.md Agent-First section) is instantiated by its instruction
+        surfaces; counterfactual: cited-by-pointer content cannot self-contradict, so
+        the candidate dissolves under the pointer counterfactual -- confirming the
+        remedy, not the dismissal.
+      compensating_controls_considered: >-
+        terraform/CLAUDE.md's "root is authoritative if they drift" clause names the
+        risk but resolves nothing mechanically; per-instance drift recs exist
+        (rec-2163, rec-2379, rec-2270..2273, rec-2300, rec-2479, rec-2480, rec-2495)
+        -- point-fixes that do not touch the generating pattern; the End-State
+        fingerprint is property-matched but single-section.
+      change_type: unify
+      proposed_change: >-
+        Dedupe-to-pointer pass over the observed duplication set (deploy-channel state,
+        embedded sizes/counts, pipeline detail, decision history -> L2/contracts, with
+        L1/L4 pointers); fix the T2.38 contradiction as its first item; generalize the
+        stamped-fingerprint + preflight-advisory pattern to any volatile fact that must
+        remain inline (e.g. the decision-header count decision-scout depends on).
+      acceptance: >-
+        The T2.38 claim appears in exactly one governance surface; grep finds no
+        hardcoded DECISIONS.md size/count in .claude/ that disagrees with wc/rg
+        derivation; planning/SKILL.md no longer references the retired token_anomalies
+        key.
+      severity: medium
+      severity_rationale: >-
+        Cross-layer redundancy/drift with a clear fix; the T2.38 instance touches
+        deploy governance (an agent reading only AGENTS.md believes the governed
+        channel does not exist and reaches for break-glass) but per-instance blast
+        radius is bounded and human-gated paths remain.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: [rec-2163, rec-2379]
+        dedup_search_terms: ["stale", "drift", "AGENTS.md", "SKILL.md", "CLAUDE.md", "PROJECT_CONTEXT", "Bedrock"]
+        dedup_hit_count: 10
+        note: >-
+          Hits are per-instance drift recs (listed in compensating controls); none owns
+          the cross-surface duplication/freshness PATTERN, which is what this finding
+          assesses; the proposed change subsumes the instance class.
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Shrinks S1/S4/S8 ahead of ACG-01 budget seeding; pairs well but not blocking."}
+    - id: ACG-04
+      surface: S8
+      question: Q6
+      dimension: VD2
+      horizon: present
+      title: >-
+        PROJECT_CONTEXT.md's "Context budget" rule is an ancestral stanza: its file
+        references are dead, its claimed enforcer does not exist, and its claims
+        contradict the live governance model
+      evidence: >-
+        docs/PROJECT_CONTEXT.md:18 -- references ROADMAP.md and ROADMAP_ARCHIVE.md
+        (neither exists; docs/ has ROADMAP-PLATFORM.yaml / ROADMAP-PRODUCT.*), claims
+        "SESSION_LOG.md keeps only the last 5 entries" (68,031 b / 666 lines on disk),
+        "DECISIONS.md keeps only open decisions" (the live model is the Decision 134
+        byte/header ceiling + archive), and "strategic_review enforces this during
+        periodic checks" (no such enforcer; scripts/preflight/context_docs.py:76-95 only
+        computes a strategic_review_due lookback flag, and _common.py:20 still points
+        ROADMAP_FILE at docs/ROADMAP-PRODUCT.md)
+      evidence_kind: observed
+      current_behavior: >-
+        The one ambient statement of context-budget philosophy the repo has is stale in
+        every particular and cites a dead enforcement mechanism -- the audit's subject
+        matter, decayed in situ.
+      ideal_behavior: >-
+        The stanza either states the live governance truthfully (Decision 134/114
+        ceilings, SLOC budgets, and -- post-ACG-01 -- the prose registry) or is
+        replaced by a pointer to the enforcement (collocation principle).
+      gap: >-
+        An agent acting on this rule would mis-model the repo (e.g. expect a 5-entry
+        session log or an open-decisions-only DECISIONS.md); the claimed enforcer
+        cannot fire.
+      compensating_controls_considered: >-
+        None property-matches: no check validates PROJECT_CONTEXT claims against
+        reality (the End-State fingerprint covers a different section).
+      change_type: clarify
+      proposed_change: >-
+        Rewrite line 18 to the live model (or a pointer to the governing checks);
+        retire or re-point the strategic_review flag and the stale _common.ROADMAP_FILE
+        constant in the same pass.
+      acceptance: >-
+        PROJECT_CONTEXT.md names no nonexistent file or enforcer in its Rules section;
+        preflight context fields derive from files that exist.
+      severity: medium
+      severity_rationale: >-
+        Actively misinforming governance text in the highest-traffic on-demand file;
+        clear one-file fix, no correctness-bearing failure expected.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: novel
+        item_ids: []
+        dedup_search_terms: ["context budget", "strategic_review", "ROADMAP.md", "SESSION_LOG"]
+        dedup_hit_count: 0
+        note: "No rec, decision, or item owns this stanza; rec-2379 (adjacent staleness) does not cover it."
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+    - id: ACG-05
+      surface: S6
+      question: Q6
+      dimension: VD1
+      horizon: present
+      title: >-
+        Prose context cost is unmeasured everywhere -- and the one metric that existed
+        (preflight token_anomalies) was removed with "no replacement" while a skill
+        still instructs reacting to it
+      evidence: >-
+        logs/.preflight-report.json key set (no token_anomalies; verified live);
+        docs/plans/archive/PLAN-infra-token-telemetry.md (built run_token_budget() +
+        token_budget.py, 50K-token threshold); docs/plans/archive/PLAN-platform-telemetry-manual-workflow.md:152
+        ("token_anomalies ha[s] no replacement and should be removed");
+        scripts/token_budget.py and scripts/context_budget.py absent;
+        planning/SKILL.md:43 (dangling consumer); scripts/preflight/context_docs.py:117-129
+        (telemetry stub: store dead pending Decision 84 Phase 4 / T2.36); roadmap T3.14
+        snapshot shape (code metrics only, status deferred_post_mvp)
+      evidence_kind: observed
+      current_behavior: >-
+        Nothing records per-surface or per-session prose token cost, so there is no
+        trend to reason from, budget values would be set blind, and embedded size
+        claims rot unnoticed (ACG-03). The measurement regressed: it existed, was
+        removed as collateral of a telemetry rework, and left a dangling consumer.
+      ideal_behavior: >-
+        A deterministic, trendable prose-context snapshot (per-surface bytes/token
+        estimate, load-set resolved, stable-vs-churned split per Q6v) surfaced as a
+        preflight advisory -- the T3.14 shape extended to enumerate prose fields, per
+        that item's own "agent context is a first-class resource" driver.
+      gap: >-
+        T3.14 owns context-budget-as-metric but enumerates only reachable SLOC /
+        import-surface / orphan count; T2.36 owns telemetry re-landing but its model
+        records execution outcomes, not surface load cost. Neither, as written, would
+        produce the number this audit had to derive by hand with wc.
+      compensating_controls_considered: >-
+        The T3.14 deferral itself is a valid Decision 93 triage call (not flagged);
+        deferral of the code metric does not explain the prose scope omission, which
+        predates the deferral.
+      change_type: rescope
+      proposed_change: >-
+        Extend T3.14's exit criteria/snapshot shape with per-surface prose fields (or
+        add a sibling measurement item if the human prefers scope purity), and restore
+        a cheap preflight advisory now (wc-class, creds-free) so measurement does not
+        wait for post-MVP reactivation; remove or re-point planning/SKILL.md:43.
+      acceptance: >-
+        Preflight report carries a prose-context section listing per-surface bytes for
+        S1/S2/S3/S4/S8; T3.14 (or sibling) names prose fields in its snapshot shape;
+        no skill references token_anomalies.
+      severity: medium
+      severity_rationale: >-
+        Observability gap: no wrong outcome by itself, but it blinds ACG-01's value
+        calibration and lets ACG-03-class rot go undetected; clear cheap fix.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [T3.14, T2.36]
+        dedup_search_terms: ["token_anomalies", "token budget", "context_budget", "T3.14", "telemetry"]
+        dedup_hit_count: 2
+        note: >-
+          T3.14 (deferred, code-scoped) and T2.36 (telemetry re-land, outcome-scoped)
+          are the owning items; neither covers prose load cost -- classic
+          planned-insufficient.
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Natural precursor to tuning ACG-01 values; not a blocker for seeding them."}
+    - id: ACG-06
+      surface: S7
+      question: Q5
+      dimension: VD7
+      horizon: aws-native
+      title: >-
+        The aws-native end-state assigns no JIT-context-retrieval verb and no
+        context-budget accounting responsibility; the one anticipated hook
+        (decision-scout's Lambda migration contract) has no owning item on the verb
+        surface
+      evidence: >-
+        docs/ROADMAP-PLATFORM.yaml CD.10 (verb enumeration: log-rec, update-rec,
+        log-decision, query, list-tools+describe, maintenance -- ops-data only;
+        "illustrative, not canonical" per the F-008 amendment, but every named or
+        shipped verb is ops-data); Decision 91 (verbs extend ducklake_writer/reader
+        sets); T0.8 files_in_scope + exit_criteria (shim scope: URL discovery, sigv4,
+        retry, typed errors -- transport only); .claude/skills/decision-scout/SKILL.md:18-20
+        ("When docs/DECISIONS.md is replaced by a Lambda-backed tool query (in-flight
+        per project roadmap) ... this skill is the migration's stable interface" -- no
+        item id exists for that query verb); docs/PROJECT_CONTEXT.md section 8 (no
+        context-accounting responsibility)
+      evidence_kind: static
+      current_behavior: >-
+        The end-state mechanizes JIT retrieval for ops DATA (named verbs, closed
+        boundary) but leaves instruction/knowledge context on the preload model
+        forever: no decisions-query verb is owned anywhere despite decision-scout
+        promising to consume one, and no component of the designed platform is
+        responsible for knowing what context costs.
+      ideal_behavior: >-
+        The verb surface (extensible per Decision 91) names a decisions/knowledge query
+        verb with decision-scout's contract as its consumer spec (T5.4's
+        DECISIONS.md-retirement is the natural carrier), and context-cost accounting is
+        an enumerated responsibility of the metric layer (ACG-05's extended T3.14) --
+        so the frontier design closes, rather than inherits, the preload gap.
+      gap: >-
+        A designed self-improving platform whose agents' largest recurring read (the
+        decision log, 398KB, whole-read every /plan) has a promised-but-unowned
+        retrieval path, and whose end-state accounts for compute, spend, and egress
+        (Decision 88) but not context.
+      compensating_controls_considered: >-
+        decision-scout's stable-interface contract is a genuine partial control (the
+        swap is one step when the verb exists) -- it property-matches the migration
+        risk but not the ownership gap: nothing schedules the verb into existence.
+      change_type: rescope
+      proposed_change: >-
+        At the next roadmap-bookkeeping pass: attach the decisions-query verb to T5.4
+        (or a new tier item) citing decision-scout's contract as consumer; add
+        context-accounting to the extended T3.14 scope (ACG-05). Human disposition on
+        which carrier; no new standing doc (Decision 86 respected).
+      acceptance: >-
+        A tier item's exit criteria name the decisions-query verb with decision-scout
+        as consumer; the context metric item names prose fields; decision-scout:18-20's
+        "in-flight per project roadmap" resolves to a real item id.
+      severity: medium
+      severity_rationale: >-
+        Design-completeness gap in an unbuilt horizon -- no present harm, but it is the
+        frontier answer NS-5 asks for; a partial control (the stable interface) exists.
+      confidence: CONFIRMED
+      roadmap_crossref:
+        classification: planned-insufficient
+        item_ids: [CD.10, T0.8, Decision-91, T5.4]
+        dedup_search_terms: ["verb", "decisions query", "SDK shim", "T0.8", "CD.10", "lambda-backed tool query"]
+        dedup_hit_count: 4
+        note: >-
+          The owning artifacts exist (CD.10/Decision 91 verb surface, T0.8 shim, T5.4
+          DECISIONS.md retirement) and none enumerates the JIT-context verb or
+          accounting responsibility.
+      effort: S
+      depends_on: [ACG-05]
+      sequencing:
+        safe_to_queue_now: false
+        blocked_behind: [ACG-05]
+        note: >-
+          The accounting half lands cleanly as part of ACG-05's T3.14 rescope; the verb
+          half is a roadmap edit safe any time but best decided with it.
+  rejected_candidates:
+    - candidate: >-
+        C3 -- Harness hooks perform setup + guarding; none injects context; no
+        UserPromptSubmit hook is wired (implied gap: a context-injection hook is
+        missing).
+      why_dismissed: >-
+        Traced and confirmed as FACT (.claude/settings.json: 4 SessionStart setup
+        hooks, 3 PreToolUse guards, no UserPromptSubmit, no
+        additionalContext/hookSpecificOutput anywhere in .claude/hooks/) -- but the
+        absence is correct design, not a defect. A UserPromptSubmit injector taxes
+        EVERY prompt (ambient-cost-adding, the opposite of right-time loading);
+        PreToolUse fires per tool call and is structurally wrong for instruction
+        loading; the need those hooks would serve is already met by the preflight cache
+        + on-invocation skill loading + subagent offload. SessionStart additionalContext
+        remains a viable cheap channel for surfacing the ACG-05 metric digest -- an
+        enhancement path, not a gap; noted in Q2.
+      compensating_control: "none -- absence is correct by design"
+      control_property_match: "n/a"
+      decision_or_item_id: "Decision 88 (egress/cost budget ethos); Decision 59 (deterministic signals via preflight cache)"
+    - candidate: >-
+        C5 -- Decision/CD citations appear inline across the prose surfaces;
+        decision-scout externalises the full decision log inside /plan only (implied
+        gap: citations should be stripped and served JIT).
+      why_dismissed: >-
+        DD-B sample (20 citations across AGENTS.md/planning/implement): 18-19 are
+        provenance tags adjacent to an inline statement of the operative rule -- the
+        rule, not the citation, is the load-bearing content, and it belongs at its
+        layer; ids cost single-digit tokens each. Decision BODIES are already fetched
+        JIT by every consumer that needs them: decision-scout inside /plan (fresh
+        subagent), /implement Step 2 ("Read only the decisions cited in the plan
+        context ... via rg; do not load the full file"), plan-critique Phase 1 step 4
+        (targeted rg + conflict sweep). Stripping ids would break the raise-marker
+        validator, CITE lists, and Resolves-trailer machinery for a negligible token
+        saving. The residual improvement (pruning inline decision-HISTORY narration) is
+        folded into ACG-03's relocation.
+      compensating_control: >-
+        decision-scout offload + rg-targeted decision reads at /implement and
+        plan-critique
+      control_property_match: >-
+        Property: deliver decision CONTENT on demand without ambient cost. It operates
+        at plan.md Step 6a (subagent dispatch), implement.md Step 2, and
+        plan-critique Phase 1 step 4. Counterfactual applied to the control: if
+        citations were load-bearing-inline (i.e. agents could not act without the body
+        present), these fetch-on-demand mechanisms would fail their gates
+        (scout-missed contradictions, critique unable to verify conflicts) -- they
+        demonstrably do not; the gates function on fetched bodies, proving the inline
+        ids are pointers, not payloads.
+      decision_or_item_id: "Decision 84 I-3 (named-verb ethos); plan.md Step 6a; implement.md Step 2"
+  summary:
+    total_findings: 6
+    novel_count: 3
+    planned_insufficient_count: 3
+    planned_unbuilt_count: 0
+    top_improvements: [ACG-01, ACG-05, ACG-03]
+    highest_leverage_change: ACG-01
+    maturity_S1: strong
+    maturity_S2: strong
+    maturity_S3: strong
+    maturity_S4: strong
+    maturity_S5: frontier
+    maturity_S6: strong
+    maturity_S7: strong
+    maturity_S8: strong
