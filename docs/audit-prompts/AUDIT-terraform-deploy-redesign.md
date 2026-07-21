@@ -89,6 +89,11 @@ findings you discover independently:
 - CH8: the built pipeline may already be the right architecture with a few specific gaps (e.g. the
   out-of-budget red-record deadlock, group H) rather than an architecture that needs replacing.
   Hypothesis to hold open: a targeted-repair answer may beat a full-redesign answer.
+- CH9 (the opposite pole -- test it too): a control may be dangerously THIN or MISSING, not
+  overbuilt. Do not let the "is X excessive?" framing of CH1-CH8 blind you to a control that is too
+  weak (candidate leads: the permissions-boundary coverage in E; the empty-reviewer-list bypass and
+  the maskable apply-state in H). "The design is proportionate" and "a control is too thin" are BOTH
+  reachable, non-defect-or-defect outcomes to weigh.
 
 ---
 
@@ -190,8 +195,10 @@ affected confidences, and proceed.
    using `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`, and any committed
    `logs/.recommendations-log.jsonl` read directly from disk instead.
 3. Read the in-scope surfaces (section 4) and the GROUNDING MAP anchors (section 10) directly from
-   the working tree. Read-only git and file reads only. Do NOT run `terraform`, `aws`, or any
-   command that mutates state or calls a cloud API; this is a static + repo-history audit.
+   the working tree. Read-only git and file reads only. Beyond the SETUP commands in steps 1-2 (the
+   read-only `preflight` warehouse read is sanctioned), do NOT run `terraform`, `aws`, or any
+   command that mutates state or calls a cloud-infrastructure API; this is a static + repo-history
+   audit.
 
 ---
 
@@ -205,8 +212,9 @@ a bar you argue each surface against -- not a pattern to match. Where a clause d
 and name what meets its intent at this scale.
 
 The requester has explicitly licensed the redesign (Q7) to propose AMENDING standing repository
-Decisions where they are a root cause -- Decision 77 (single-account until product live_full) is
-specifically named as revisitable. When a redesign proposal would reverse or amend a standing
+Decisions where they are a root cause -- Decision 77 (single-account until the product reaches
+`live_full` -- its final phase, real capital at full allocation) is specifically named as
+revisitable. When a redesign proposal would reverse or amend a standing
 Decision, flag that explicitly in the proposal (name the decision id and why); never silently
 treat a decided constraint as a free defect, and never propose weakening the public-repo
 confidential-data boundary (Decision 101).
@@ -357,7 +365,8 @@ for Q8's external checklist mapping and the frontier maturity tier.
 
 ## 7. THE QUESTIONS
 
-Answer each in `question_answers[]` (section 14) with its pinned verdict, a `basis` list of
+Answer each in `question_answers[]` (section 14) with its pinned verdict (Q9 uses the verdict-less
+shape shown in the schema), a `basis` list of
 finding ids, and prose. Every question is first-class.
 
 - Q1 ROOT CAUSE. Trace end-to-end WHY a routine infrastructure change can stall and require a
@@ -430,6 +439,9 @@ finding ids, and prose. Every question is first-class.
     single-account risk it bounds (NS-6)?
   - What is the blast radius if the single static-key credential (agent runtime) is compromised,
     given the roles it can assume?
+  - Does gated-apply actually remove the human from routine deploys, or merely relocate the click?
+    The `tf-gated-apply` Environment sets `prevent_self_review = false`, so the solo developer
+    approves their OWN gated applies -- an approval click is still a human in the loop (the VD4 crux).
   - Add any others a principal reviewer would want answered.
 
 ---
@@ -456,8 +468,9 @@ does not structurally apply to a surface -- never manufacture a rating or a find
 - VD8 protected amendment channel: are the invariants themselves un-modifiable by the
   agent-reachable deploy identity, transitively? (serves Q7, Q8)
 
-Every question is served by at least one dimension; every dimension is referenced by at least one
-question or deep-dive.
+Every design-rating question (Q1-Q5, Q7, Q8) is served by at least one dimension, and every
+dimension is referenced by at least one question or deep-dive. Q6 (roadmap sufficiency) and Q9
+(open questions) are cross-cutting -- answered from the findings, not tied to a single dimension.
 
 ---
 
@@ -521,6 +534,13 @@ C. THE APPLY PIPELINE -- `.github/workflows/terraform-apply-sandbox.yml`
   same apply role (~:935), and applies the saved plan verbatim after reviewer approval
   (~:1052-1060). Its own comments reference a prior gated-apply run (run_attempt 2) that failed
   producing no RCA signal (~:1146-1158).
+- `.github/workflows/terraform-drift.yml` (re-derive line count) is a scheduled
+  (`cron: 17 * * * *`) plan-only drift detector under the `github_ci_drift` role: it runs
+  `terraform plan -detailed-exitcode` and, on drift, flips the convergence record red and files a
+  `tf_drift` rec. No apply step, no `environment:` gate.
+- `.github/workflows/convergence-health.yml` (re-derive line count) is a scheduled staleness sensor
+  under the `github_ci_branch` role: it reads the convergence record and queries Actions for stuck
+  gated approvals, filing/updating a `tf_convergence_stale` rec. Alarm-only, no apply.
 
 D. THE GATED-APPLY ENVIRONMENT + RECONCILE DUPLICATION
 - `terraform/github/environments.tf` (~:29-42): `github_repository_environment.tf_gated_apply`,
@@ -580,7 +600,8 @@ F. THE APPLY MODEL + BREAK-GLASS TIER
   refresh-read IAM grants (~:308-322).
 
 G. ROADMAP STATE (re-derive statuses from `docs/ROADMAP-PLATFORM.yaml`)
-- The CD.35 terraform-CI/CD wave is marked BUILT: T2.20-T2.25, T2.34, T2.35 (`status: complete`).
+- The CD.35 terraform-CI/CD wave (the agent-native terraform CI/CD initiative, ratified as
+  Decision 92) is marked BUILT: T2.20-T2.25, T2.34, T2.35 (`status: complete`).
   So the gated pipeline, guard, convergence anchor, drift alarm, bootstrap-root privilege tier,
   and authority budget all EXIST. Findings here are candidates for `planned-insufficient`, not
   `novel`.
@@ -714,7 +735,8 @@ novel_count + planned_insufficient_count + planned_unbuilt_count`. Fully-covered
 `rejected_candidates`, NOT findings. `rubric_ratings`, `question_answers`, and the `disposition`
 block are systems-of-record referenced FROM findings, never re-counted. `top_improvements` and
 `highest_leverage_change` MUST be finding ids -- EXCEPT when `findings[]` is empty (a valid result,
-section 17): then set `top_improvements: []` and `highest_leverage_change: null`.
+section 17): then set `top_improvements: []` and `highest_leverage_change: null`. Finding ids use
+the prefix `DEP-` with a zero-padded sequence (`DEP-01`, `DEP-02`, ...).
 
 ```yaml
 audit:
@@ -747,7 +769,9 @@ audit:
     # components: guard, authority-budget, convergence-anti-masking, drift-detector,
     # convergence-health-sensor, speculative-plan-saved-plan, tf-gated-apply-environment,
     # gated-apply-jobs, break-glass-admin-tier, ci-deploy-role-set, permissions-boundary-coverage,
-    # provider-mirror, bootstrap-github-manual-modules, workflow-fleet, static-key-runtime-identity
+    # bootstrap-github-manual-modules, workflow-fleet, static-key-runtime-identity
+    # (provider-mirror is do-not-flag item 15 -- mention it in prose if relevant, but it is not a
+    #  required disposition verdict; it is out of the deep-scope surface set.)
   findings:
     - {id: DEP-01, surface: <surface|shared>, question: Q1..Q9, dimension: VD1..VD8, title: "",
        evidence: "file:line|item-id", evidence_kind: <static|observed>, current_behavior: "",
@@ -795,12 +819,17 @@ cannot catch the break neither lowers severity nor justifies dismissal.
 
 Maturity -- compute LAST, per surface, top-down, first match wins. Pin these thresholds:
 
-- frontier = 0 open critical AND 0 open high findings on the surface, AND no property in Q8's
+- frontier = 0 critical AND 0 high findings on the surface, AND no property in Q8's
   `external_checklist` is rated `missed` (the checklist is global; a single `missed` property means
   no surface reaches frontier -- this is deliberate).
 - strong = 0 critical AND <= 1 high.
 - solid = <= 1 critical.
 - nascent = otherwise.
+
+Findings carry no open/closed status -- every finding is a fresh proposal, so all of a surface's
+findings count. A `surface: shared` finding counts toward the maturity of each surface its prose
+names as materially affected; a shared finding that names no specific surface counts against all
+five surfaces.
 
 The frontier rating remains reachable where you argued a property-matched compensating control
 (so a `partial` never blocks it) -- the framing here must not foreclose it.
