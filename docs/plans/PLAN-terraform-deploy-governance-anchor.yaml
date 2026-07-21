@@ -7,7 +7,7 @@ intent: >-
   build toward instead of each landing its own ad hoc framing. Unblocks routine autonomous
   infrastructure change (the deployment treadmill the audit traced), a direct North-Star enabler.
 plan_type: IMPLEMENTATION
-verification_tier: V1
+verification_tier: V2
 plan_path: docs/plans/PLAN-terraform-deploy-governance-anchor.yaml
 phase: >-
   Platform tier T2 (agent-native Terraform CD hardening). Governance-anchor response to
@@ -265,6 +265,20 @@ verification_plan:
       violation).
     hermetic: false
     graduation: not-applicable
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      V2 substantiation: sibling unit test for the byte-ceiling check passes under the raised
+      constant.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decisions_size.py
+    expected: >-
+      Exit 0 -- the test keys off the imported constant, so it passes under the raised limit.
+    fix_if: >-
+      The test fails -- check whether it hardcodes the old 400_000 value instead of importing
+      _DECISIONS_LIVE_MAX_BYTES (out of this plan's file scope; escalate rather than inline-patch),
+      or whether the raised constant/provenance comment in validate_decisions_size.py is malformed.
+    hermetic: false
+    graduation: not-applicable
 constraints:
   - >-
     Files strictly in scope: docs/DECISIONS.md, docs/ROADMAP-PLATFORM.yaml, and
@@ -396,9 +410,14 @@ pre_implementation_checklist:
   - Re-verify the max "## Decision NNN:" header (next two free numbers -- 144 anchor + 145 stopgap) and the next free T2.4x ids before writing
   - Both scope files located and readable
   - >-
-    VP hermetic/graduation policy: every pre-deploy VP step is graduation=not-applicable (one-shot
-    doc-content assertions, not reusable kernel verifiers) and hermetic=false (they grep files
-    /implement CREATES/EDITS, so they cannot pass the plan-PR-tree vp-replay).
+    VP hermetic/graduation policy: tier is V2 -- scope includes a Python source file
+    (scripts/checks/decisions/validate_decisions_size.py) carrying a behavior-affecting constant
+    change, so V2's "must exercise real code paths" is substantiated by VP step 10 (the sibling
+    unit test run against the imported constant), not by doc-content assertion alone. Steps 1-9
+    remain graduation=not-applicable (one-shot doc-content assertions, not reusable kernel
+    verifiers) and hermetic=false (they grep files /implement CREATES/EDITS, so they cannot pass
+    the plan-PR-tree vp-replay); step 10 is graduation=not-applicable (a pytest invocation, not
+    kernel-expressible) and hermetic=false per the planning skill's pytest-stays-false rule.
 execution_steps:
   - >-
     Secure byte-ceiling headroom by RAISING, not compacting (human-disposed; SAME PR). Edit
