@@ -118,9 +118,9 @@ trace, or you will burn cognition on the wrong object.
   as live attack surface; a duplicated role NAME across the live and legacy states is a hygiene
   observation, not a live privilege. ONE EXCEPTION applies to the static-key `agent-service-account`
   IAM user: its terraform resource sits in legacy-root `terraform/agent_auth.tf`
-  (declared-but-not-applied there, targeting a different account), yet the runtime credential CHAIN
-  it anchors is LIVE -- the personal-account `PlatformDev`/`PlatformAdmin` roles trust a user of that
-  name in the personal account, and the live user exists out-of-band (Decision 113; groups E/F).
+  (declared-but-not-applied there, per its header), yet the runtime credential CHAIN it anchors is
+  LIVE -- the personal-account `PlatformDev`/`PlatformAdmin` roles trust a user of that name in the
+  personal account, and the live user exists out-of-band (Decision 113; groups E/F).
   Trace its actual live state; do not dismiss the static-key credential model as not-applied on the
   strength of this rule.
 - Decision 35 ("no auto-apply; human-in-the-loop for apply") is SCOPED, not contradicted, by
@@ -192,8 +192,9 @@ affected confidences, and proceed.
    IF cache-gen fails (creds/egress down): do NOT abort -- set `meta.degraded_dedup=true`, set every
    affected finding's `confidence` to `HYPOTHESIS` and its `roadmap_crossref.dedup_hit_count` to
    `null`, and proceed
-   using `docs/ROADMAP-PLATFORM.yaml`, `docs/DECISIONS.md`, and any committed
-   `logs/.recommendations-log.jsonl` read directly from disk instead.
+   dedup against the tracked `docs/ROADMAP-PLATFORM.yaml` and `docs/DECISIONS.md` (always present),
+   plus `logs/.recommendations-log.jsonl` only IF it is present on disk -- it is a gitignored cache
+   that preflight / `sync` rebuilds from the warehouse, so a failed cache-gen may leave it absent.
 3. Read the in-scope surfaces (section 4) and the GROUNDING MAP anchors (section 10) directly from
    the working tree. Read-only git and file reads only. Beyond the SETUP commands in steps 1-2 (the
    read-only `preflight` warehouse read is sanctioned), do NOT run `terraform`, `aws`, or any
@@ -587,8 +588,9 @@ E. THE IAM IDENTITY SET (re-derive counts and boundary presence)
   condition. The terraform `aws_iam_user.agent_service_account` + `aws_iam_access_key` resource
   (holding `sts:AssumeRole` on the PlatformDev + PlatformAdmin ARNs) sits in legacy-root
   `terraform/agent_auth.tf` (~:30, `provider = aws.platform`), whose header states it is
-  declared-but-not-applied and targets a different account; the live personal-account user of that
-  name is maintained out-of-band (`terraform/CLAUDE.md` "Out-of-band IAM grants"). The static-key
+  declared-but-not-applied (citing CD.6 rebuild-not-migrate and T2.1 as the apply/import moment);
+  the live personal-account user of that name is maintained out-of-band (`terraform/CLAUDE.md`
+  "Out-of-band IAM grants"). The static-key
   credential chain (a single access key that can assume PlatformDev daily-ops AND PlatformAdmin
   `iam:*`) is LIVE per Decision 113 regardless of which module's resource is applied. Re-derive the
   actual live definition; do not treat this as legacy-root not-applied hygiene (see section 3).
@@ -810,7 +812,10 @@ audit:
 
 `control_property_match` is REQUIRED whenever a compensating control is the reason for dismissal:
 name the property the control exercises, cite where it operates, and state why the control would
-FAIL if the defect were real. CONFIRMED requires the behavior traced to file:line or an observed
+FAIL if the defect were real. A candidate dismissed purely because it is proportionate at this
+scale (NS-6), with no covering control, is a valid dismissal: record `why_dismissed:
+"proportionate-at-scale (NS-6)"`, `compensating_control: ""`, `control_property_match: "n/a"` --
+do not manufacture a control to fill the field. CONFIRMED requires the behavior traced to file:line or an observed
 sampled artifact; anything less is HYPOTHESIS. A finding's `question` and `dimension` name the
 PRIMARY one it serves; a finding that bears on several may reference the others in its prose and in
 the relevant `question_answers[].basis`.
