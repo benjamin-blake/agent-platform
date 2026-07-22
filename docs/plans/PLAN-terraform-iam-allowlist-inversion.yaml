@@ -1,0 +1,757 @@
+schema_version: 1
+slug: "terraform-iam-allowlist-inversion"
+intent: >-
+  Realize Decision 144's target IAM model (the audit's centerpiece, DEP-01/DEP-02): invert
+  github_ci_apply from an enumerated per-resource WRITE allow-list into a broad-but-bounded deployer
+  operating under the MANDATORY agent-platform-github-ci-apply-boundary, extend Decision 129's
+  per-service agent-platform-* prefix from reads to writes, attach the boundary to all in-scope
+  agent-platform-* CI + execution roles and PlatformDev (PlatformAdmin excluded), and retune the
+  authority budget to v2 -- so a guard-PASS agent-platform-* change auto-applies end-to-end instead
+  of dying AccessDenied, and a new boundary-carrying role ships through one gated approval instead of
+  the admin tier. This contributes to the North Star's self-improving loop by removing the dominant
+  source of human-in-the-loop deploy friction while keeping every CD.35 safety property verbatim.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-iam-allowlist-inversion.yaml
+phase: >-
+  Platform T2.48 (Phase-2 allow-list inversion, realizes Decision 144; depends_on T2.45 which
+  landed as slice C). Audit terraform-deploy-redesign slice E (CENTERPIECE) in the overseer run
+  OVERSEER-terraform-deploy-redesign; DEP-01 + DEP-02.
+scope:
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Invert the WRITE surface (DEP-01/DEP-02). (a) Broaden the enumerated WRITE Sids to the
+      per-service agent-platform-*/ducklake-* prefix pattern and ADD the currently-missing write
+      verbs: a new CloudWatchLogsWrite Sid (logs:CreateLogGroup/PutRetentionPolicy/TagLogGroup/
+      DeleteLogGroup/DeleteRetentionPolicy on log-group:/aws/lambda/agent-platform-*), a new
+      LambdaFunctionWrite Sid (lambda:CreateFunction/UpdateFunctionConfiguration/DeleteFunction/
+      TagResource/UntagResource/PutFunctionConcurrency/DeleteFunctionConcurrency on
+      function:agent-platform-*), broaden LambdaPermissionWrite/EventBridgeWrite/CloudWatchAlarmsWrite
+      from enumerated ARNs to function:agent-platform-*/rule:agent-platform-*/alarm namespaces
+      (agent-platform-* AND ducklake-*), and add iam:UpdateRoleDescription (rec-2757).
+      (b) HAZARD-4: add an IAMRoleDeleteBounded Sid granting iam:DeleteRole/DetachRolePolicy/
+      DeleteRolePolicy on role/agent-platform-* so slice F's guard-gated role destroys execute
+      instead of AccessDenying. (c) Widen IAMRoleCreateBounded + IAMRoleWriteBounded Resource to
+      role/agent-platform-* KEEPING the iam:PermissionsBoundary propagation condition. (d) Add an
+      explicit DenySelfInlinePolicyWrite Deny carving the apply role's own ARN
+      (role/agent-platform-github-ci-apply) out of the widened role/agent-platform-* write grant
+      (retain the T2.23 self-grant break). (e) Extend the boundary DataPlaneAllow with the 4 new iam
+      verbs it does not yet permit (iam:DeleteRole/DetachRolePolicy/DeleteRolePolicy/
+      UpdateRoleDescription) -- the boundary is a CEILING; a grant absent from it is silently denied.
+      Retain DenyIAMEscalation / DenyBoundaryRemoval / DenyBoundaryPolicyModification unchanged.
+  - file: terraform/bootstrap/authority_budget.json
+    action: Modify
+    purpose: >-
+      Retune to v2 (c4). in_budget_actions gains "create" (creating a NEW inline policy/attachment on
+      a boundary-carrying agent-platform-* role becomes in-budget, was update-only); the managed-role
+      set moves from the two enumerated roles to a boundary-carrying agent-platform-* prefix
+      (in_budget_managed_role_prefix) with an explicit self-exclusion of the apply role. Role CREATE
+      (aws_iam_role type) stays out-of-budget/gated -- only now EXECUTABLE by the gated job because
+      new roles declare the boundary. in_budget_resource_types unchanged (aws_iam_role_policy /
+      aws_iam_role_policy_attachment).
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Attach permissions_boundary = agent-platform-github-ci-apply-boundary to the 4 CI roles that
+      lack it: github_ci_plan, github_ci_drift, github_ci_ducklake_deploy, github_ci_prod_deploy
+      (branch/pr already carry it). Coverage 3/17 -> 7/17 for CI roles.
+  - file: terraform/personal/platform_roles.tf
+    action: Modify
+    purpose: >-
+      Attach the boundary to PlatformDev (aws_iam_role.platform_dev). EXPLICITLY do NOT attach it to
+      PlatformAdmin (aws_iam_role.platform_admin) -- PlatformAdmin is the control identity that must
+      remain able to amend the boundary; attaching DenyBoundaryPolicyModification to it would wedge
+      break-glass (Decision 144 pt.3). The two DEP-13 Deny statements (DenyStateAndConvergenceWrite,
+      DenyStateRead) are unaffected -- a boundary is a ceiling and an identity Deny always wins.
+  - file: terraform/personal/ducklake_lambdas.tf
+    action: Modify
+    purpose: Attach the boundary to the ducklake_writer + ducklake_reader execution roles.
+  - file: terraform/personal/ducklake_catalog_dr.tf
+    action: Modify
+    purpose: Attach the boundary to the ducklake_catalog_dr execution role.
+  - file: terraform/personal/ducklake_maintenance.tf
+    action: Modify
+    purpose: Attach the boundary to the ducklake_maintenance execution role.
+  - file: terraform/personal/ducklake_maintenance_smoke.tf
+    action: Modify
+    purpose: Attach the boundary to the ducklake_maintenance_smoke execution role.
+  - file: terraform/personal/prod_lambdas.tf
+    action: Modify
+    purpose: >-
+      Attach the boundary to the 3 prod execution roles: scheduled_agent_dispatcher,
+      findings_processor, ops_compaction. Total exec-role coverage 0/8 -> 8/8.
+  - file: scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py
+    action: Modify
+    purpose: >-
+      Extend the check's CONTRACT to also assert per-managed-resource-type WRITE coverage (c5,
+      Decision 144 pt.2). Because the module is already 478 SLOC, DECOMPOSE per Decision 128 rather
+      than raise: this file becomes a thin facade/orchestrator that imports the read-coverage map from
+      a new _read_coverage submodule and the new write-coverage map from a new _write_coverage
+      submodule; the registered check name validate_ci_refresh_read_coverage and its registry entry
+      are UNCHANGED. Every resulting file stays < 500 SLOC.
+  - file: scripts/checks/iam_tf/_write_coverage.py
+    action: Create
+    purpose: >-
+      New submodule (Decision 128 decomposition): the WRITE-coverage map (managed resource type ->
+      required write actions + resource-prefix, e.g. aws_lambda_function -> lambda:CreateFunction/
+      UpdateFunctionConfiguration on function:agent-platform-*; aws_cloudwatch_log_group ->
+      logs:CreateLogGroup/PutRetentionPolicy; aws_cloudwatch_metric_alarm -> cloudwatch:PutMetricAlarm;
+      aws_cloudwatch_event_rule -> events:PutRule; aws_iam_role -> boundary + IAMRoleCreateBounded)
+      and the assertion that github_ci_apply's inline policy covers each. An unmapped
+      apply-role-written type FAILS LOUD (mirrors the read-coverage loud-fail).
+  - file: scripts/checks/iam_tf/_read_coverage.py
+    action: Create
+    purpose: >-
+      New submodule (Decision 128 decomposition): the existing READ CHECKED_TYPES/ENUMERATED_IAM_TYPES/
+      TRANSITIVE_TYPES maps + read-assertion logic extracted verbatim from
+      validate_ci_refresh_read_coverage.py so the facade stays < 500 SLOC. Exact split boundary is an
+      implementation detail; the invariant is no file crosses 500 and behaviour is byte-equivalent.
+  - file: scripts/checks/iam_tf/validate_authority_budget.py
+    action: Modify
+    purpose: >-
+      Teach the drift gate the v2 budget shape: accept in_budget_managed_role_prefix (assert it maps
+      to the IAMRoleWriteBounded Resource role/agent-platform-* in the HCL) alongside/in place of the
+      enumerated in_budget_managed_roles; assert the apply-role self-exclusion (the widened prefix
+      necessarily matches agent-platform-github-ci-apply, so the check MUST verify the explicit
+      DenySelfInlinePolicyWrite carve-out exists in HCL, upgrading the old substring self-grant
+      guard); assert in_budget_actions == ["create","update"]. Stays < 500 SLOC (currently 72).
+  - file: docs/contracts/environment-taxonomy.md
+    action: Modify
+    purpose: >-
+      Update the Guard classification subsection (sole SoT, Decision 92 pt.5) to v2: in_budget_actions
+      == ["create","update"]; managed roles = boundary-carrying agent-platform-* prefix (not the
+      two-role list); replace the "Conservative v1 narrowing: role CREATES stay gated" note with
+      "role CREATE stays gated (routes to tf-gated-apply) but is now EXECUTABLE because new roles
+      declare the mandatory boundary". No new guard STAGE -- the guard code is unchanged; only the
+      budget it reads widens.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Governance bookkeeping sanctioned by Decision 144 pt.4/pt.5 (NOT a new Decision -- 144 is the
+      forward-direction record; E realizes it). Add a short realization annotation under Decision 98
+      point 1 and Decision 92 point 5 marking the amendments as now-IMPLEMENTED by T2.48, and
+      re-ground Decision 143's exec-role-CREATE MECHANISM text from "admin-create only / human-gated
+      for the exec-role CREATE" to "admin-create OR gated-Environment-executable for boundary-carrying
+      agent-platform-* roles" (143's identity-scoping RULE and its "materially higher bar than an
+      in-handler edit" property are preserved -- role CREATE still routes through the required-reviewer
+      Environment). Annotation only; no account IDs/ARNs (Decision 101).
+bundled_recommendations:
+  - rec-2703
+  - rec-2757
+closes_criteria:
+  - "T2.48:c1"
+  - "T2.48:c2"
+  - "T2.48:c3"
+  - "T2.48:c4"
+  - "T2.48:c5"
+  - "T2.48:c6"
+infrastructure_dependencies:
+  - >-
+    terraform/bootstrap/** is admin-only, NEVER auto-applied (terraform/bootstrap/CLAUDE.md). The
+    widened github_ci_apply.tf + authority_budget.json apply OUT-OF-BAND under agent_platform_admin,
+    and go FIRST (bootstrap before personal) so the apply role HAS the widened grants + the boundary
+    permits them before any personal-root boundary attachment relies on them.
+  - >-
+    terraform/personal/** boundary attachments are aws_iam_role UPDATEs -> IAM_SENSITIVE_TYPES ->
+    guard exit 2 (out-of-budget: aws_iam_role is not an in_budget_resource_type). They CANNOT ride the
+    tf-gated-apply Environment either, because github_ci_apply has no iam:PutRolePermissionsBoundary
+    on these 13 roles (only branch/pr) -- an Environment approval would approve-then-AccessDeny (the
+    DEP-02 trap applied to the fix itself). They therefore route to the admin out-of-band break-glass
+    path (deploy-paths.yaml#admin_out_of_band): a human reviews the plan and explicitly directs the
+    apply under agent_platform_admin. Overseer NEVER approves the gated Environment for these
+    (GATE-B-apply / GATE-E-execroles).
+  - >-
+    HIGHEST-RISK boundary-intersection gate (GATE-E-execroles): attaching the boundary can PASS
+    terraform plan+apply and THEN cause RUNTIME AccessDenied for any action the boundary DataPlaneAllow
+    does not cover -- no guard/CI catches this. REQUIRED pre-apply acceptance: aws iam
+    simulate-principal-policy per exec role (8) + PlatformDev + the 4 CI roles, enumerating each
+    principal's real runtime actions against the proposed boundary (T2.23 c4 precedent). REQUIRED
+    post-apply: smoke BOTH deploy channels (the four DuckLake Lambdas' governed code-deploy channel
+    deploy-ducklake-lambdas.yml + a routine terraform/personal infra auto-apply).
+  - >-
+    Lambda deploy channels (Decision 125): the four terraform_personal_filemd5_coupled DuckLake
+    Lambdas' CODE deploys via the governed deploy-ducklake-lambdas.yml channel (grep-only / CI-delegated,
+    NOT a local build_lambda --deploy). terraform apply must precede any Lambda code deploy
+    (terraform/CLAUDE.md IAM precedence). This plan changes IAM/config only (no source_code_hash);
+    exec-role function CODE is ignore_changes-decoupled and unaffected.
+  - >-
+    Provider-init egress (Decision 119): terraform/personal uses the third-party kislerdm/neon
+    provider; a stock CC-web session cannot terraform init/validate/plan it. Local terraform VP steps
+    are grep-only + terraform fmt -check (only if terraform present); terraform validate/plan/apply are
+    CI-delegated (the required terraform-validate check + the speculative-plan pipeline are the
+    authoritative verifiers). terraform/bootstrap is hashicorp/*-only and inits unconditionally under
+    the admin apply.
+acceptance_criteria:
+  - >-
+    (c1/DEP-01) A PR adding a new agent-platform-* Lambda + its log group + a CloudWatch alarm
+    auto-applies end-to-end through CD with ZERO AccessDenied and ZERO bootstrap grant edit.
+  - >-
+    (c2/DEP-02) A PR creating a boundary-carrying agent-platform-* role routes to tf-gated-apply and,
+    on approval, applies with ZERO AccessDenied WITHOUT invoking the admin tier.
+  - >-
+    (c3) The boundary is attached to all in-scope agent-platform-* CI + execution roles and to
+    PlatformDev, PlatformAdmin EXCLUDED, with DenyIAMEscalation + DenyBoundaryRemoval +
+    DenyBoundaryPolicyModification carried -- verified via aws iam simulate-principal-policy per
+    principal (every real runtime action allowed; escalation + boundary-removal denied).
+  - >-
+    (c4) authority_budget.json is v2 (in_budget_actions == ["create","update"]; boundary-carrying
+    agent-platform-* managed-role prefix; apply-role self-exclusion) and validate_authority_budget
+    stays green with the boundary-propagation condition, the self-ARN exclusion, and the three
+    self-protection denies retained.
+  - >-
+    (c5) validate_ci_refresh_read_coverage asserts WRITE coverage per managed resource type (an
+    apply-role-written type with no covering write grant fails loud), and no scripts/checks/iam_tf/
+    submodule exceeds 500 SLOC (Decision 128 decompose, not raise).
+  - >-
+    (c6) A periodic Decision-92 ratchet-review of the per-change-class incident-free auto-apply track
+    record is scheduled as a standing measured act (surfaced from auto-apply telemetry in /orient or
+    preflight). status:met means the recurring mechanism/schedule EXISTS and FIRES -- NOT that all
+    future reviews concluded (else T2.48 can never reach complete).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Boundary attached to the 4 previously-unbounded CI roles in oidc.tf (github_ci_plan,
+      github_ci_drift, github_ci_ducklake_deploy, github_ci_prod_deploy).
+    command: >-
+      test "$(grep -c 'permissions_boundary  *= .*agent-platform-github-ci-apply-boundary'
+      terraform/personal/oidc.tf)" -eq 6
+    expected: >-
+      6 permissions_boundary lines in oidc.tf (branch + pr existing, plus the 4 newly-attached CI
+      roles).
+    fix_if: >-
+      Count != 6 -- a CI role was missed or double-counted; grep the aws_iam_role blocks and confirm
+      each of the 6 personal-root CI roles carries the exact boundary ARN.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "ci-role-boundary-attach-count-eq-6"
+  - step: 2
+    phase: pre-deploy
+    action: PlatformDev carries the boundary; PlatformAdmin explicitly does NOT (control identity).
+    command: >-
+      grep -A3 'resource "aws_iam_role" "platform_dev"' terraform/personal/platform_roles.tf | grep -q
+      'permissions_boundary' && ! grep -A3 'resource "aws_iam_role" "platform_admin"'
+      terraform/personal/platform_roles.tf | grep -q 'permissions_boundary'
+    expected: platform_dev block contains permissions_boundary; platform_admin block does NOT.
+    fix_if: >-
+      PlatformAdmin gained a boundary (would wedge break-glass -- Decision 144 pt.3) or PlatformDev
+      lacks one; correct the attachment.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "platformdev-bounded-platformadmin-excluded"
+  - step: 3
+    phase: pre-deploy
+    action: All 8 Lambda execution roles carry the boundary (ducklake_* + prod_lambdas).
+    command: >-
+      test "$(grep -rl 'permissions_boundary  *= .*agent-platform-github-ci-apply-boundary'
+      terraform/personal/ducklake_lambdas.tf terraform/personal/ducklake_reader.tf
+      terraform/personal/ducklake_catalog_dr.tf terraform/personal/ducklake_maintenance.tf
+      terraform/personal/ducklake_maintenance_smoke.tf terraform/personal/prod_lambdas.tf 2>/dev/null
+      | wc -l)" -ge 4 && test "$(grep -rc 'permissions_boundary' terraform/personal/prod_lambdas.tf)"
+      -eq 3
+    expected: >-
+      The exec-role files carry boundary attachments; prod_lambdas.tf has exactly 3 (dispatcher,
+      findings, ops_compaction). (ducklake_reader is defined in ducklake_lambdas.tf; the -ge 4 tolerates
+      that file layout.)
+    fix_if: >-
+      An exec role is missing its boundary -- runtime AccessDenied risk after attach is not the issue
+      here (attach is additive), but a MISSING attach means 8/8 coverage is not met (c3). Add it.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "exec-role-boundary-attach-present"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      github_ci_apply gained the previously-missing WRITE verbs (DEP-01, rec-2703/rec-2757):
+      logs:CreateLogGroup, lambda:CreateFunction + UpdateFunctionConfiguration, cloudwatch:PutMetricAlarm,
+      events:PutRule, iam:UpdateRoleDescription.
+    command: >-
+      for a in 'logs:CreateLogGroup' 'lambda:CreateFunction' 'lambda:UpdateFunctionConfiguration'
+      'cloudwatch:PutMetricAlarm' 'events:PutRule' 'iam:UpdateRoleDescription'; do grep -q "$a"
+      terraform/bootstrap/github_ci_apply.tf || { echo "MISSING $a"; exit 1; }; done
+    expected: All six write verbs are present in the apply role's inline policy.
+    fix_if: >-
+      A verb is missing -- the DEP-01 write-surface inversion is incomplete; add the corresponding
+      broadened WRITE Sid scoped to the agent-platform-*/ducklake-* prefix.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "apply-role-write-verbs-present"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      HAZARD-4 (Fable, load-bearing for slice F): github_ci_apply grants iam:DeleteRole,
+      iam:DetachRolePolicy, iam:DeleteRolePolicy on role/agent-platform-*.
+    command: >-
+      for a in 'iam:DeleteRole' 'iam:DetachRolePolicy' 'iam:DeleteRolePolicy'; do grep -q "$a"
+      terraform/bootstrap/github_ci_apply.tf || { echo "MISSING $a"; exit 1; }; done && grep -q
+      'role/agent-platform-\*' terraform/bootstrap/github_ci_apply.tf
+    expected: >-
+      All three destroy verbs present, scoped to role/agent-platform-*. F's guard-gated role destroys
+      will execute (not AccessDeny) after approval.
+    fix_if: >-
+      A destroy verb is missing -- slice F's live-proof role-retirement acceptance would AccessDeny.
+      Add the IAMRoleDeleteBounded Sid.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "apply-role-hazard4-delete-verbs"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      IAMRoleCreateBounded + IAMRoleWriteBounded widened to Resource role/agent-platform-* with the
+      iam:PermissionsBoundary propagation condition RETAINED on both.
+    command: >-
+      awk '/Sid  *= *"IAMRole(Create|Write)Bounded"/{f=1} f&&/agent-platform-github-ci-apply-boundary/{c++}
+      END{exit !(c>=2)}' terraform/bootstrap/github_ci_apply.tf && test "$(grep -c 'role/agent-platform-\*'
+      terraform/bootstrap/github_ci_apply.tf)" -ge 2
+    expected: >-
+      Both bounded Sids reference the boundary ARN in their Condition and target role/agent-platform-*.
+    fix_if: >-
+      The propagation condition was dropped or the Resource was not widened -- an unbounded create/put
+      could slip through or the widening is incomplete. Restore the Condition and the prefix Resource.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "iam-bounded-sids-prefix-and-condition"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Self-ARN exclusion (audit Q7 "self-ARN exclusion kept" + T2.23 self-grant break): an explicit
+      Deny carves the apply role's own ARN out of the widened role/agent-platform-* inline-policy write.
+    command: >-
+      grep -q 'role/agent-platform-github-ci-apply"' terraform/bootstrap/github_ci_apply.tf && awk
+      '/Effect  *= *"Deny"/{d=1} d&&/agent-platform-github-ci-apply"/{print; found=1} END{exit !found}'
+      terraform/bootstrap/github_ci_apply.tf
+    expected: >-
+      A Deny statement names the apply role's own ARN (role/agent-platform-github-ci-apply) for the
+      inline-policy write actions.
+    fix_if: >-
+      No self-exclusion Deny -- the widened prefix would let the pipeline PutRolePolicy on itself,
+      breaking the T2.23 self-grant invariant. Add DenySelfInlinePolicyWrite.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "apply-role-self-exclusion-deny"
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Boundary DataPlaneAllow extended with the 4 new iam verbs it must permit as a ceiling
+      (DeleteRole/DetachRolePolicy/DeleteRolePolicy/UpdateRoleDescription); the 3 self-protection
+      Denies retained.
+    command: >-
+      awk '/aws_iam_policy" "github_ci_apply_boundary"/{b=1} b' terraform/bootstrap/github_ci_apply.tf
+      > /tmp/bnd.$$ ; for a in 'iam:DeleteRole' 'iam:DetachRolePolicy' 'iam:DeleteRolePolicy'
+      'iam:UpdateRoleDescription' 'DenyIAMEscalation' 'DenyBoundaryRemoval' 'DenyBoundaryPolicyModification';
+      do grep -q "$a" /tmp/bnd.$$ || { echo "MISSING $a"; rm -f /tmp/bnd.$$; exit 1; }; done; rm -f /tmp/bnd.$$
+    expected: >-
+      The boundary block lists the 4 new iam verbs in DataPlaneAllow and retains all 3 self-protection
+      Deny Sids. (Data-plane service wildcards s3/lambda/logs/events/cloudwatch already cover the
+      broadened data-plane writes -- only the new iam verbs need adding.)
+    fix_if: >-
+      A new iam verb is absent from the boundary -- the identity grant for it is silently DENIED by
+      the ceiling (the boundary-intersection trap). Add it to DataPlaneAllow.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "boundary-dataplane-new-iam-verbs"
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      authority_budget.json is v2 -- in_budget_actions includes "create", the managed-role set is a
+      boundary-carrying agent-platform-* prefix, and the apply role is self-excluded.
+    command: >-
+      grep -q '"create"' terraform/bootstrap/authority_budget.json && grep -q '"update"'
+      terraform/bootstrap/authority_budget.json && grep -Eq 'agent-platform-'
+      terraform/bootstrap/authority_budget.json
+    expected: >-
+      Budget lists create + update actions and the agent-platform-* managed-role prefix. (The
+      self-exclusion is asserted structurally by validate_authority_budget in step 12, not by this grep.)
+    fix_if: >-
+      "create" missing or the prefix absent -- budget v2 incomplete; c4 not met. Update the JSON.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "authority-budget-v2-create-and-prefix"
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Public-repo boundary (Decision 101): the touched terraform files contain NO bare 12-digit
+      account id and NO literal ExternalId -- account_id and every secret stay var-interpolated.
+    command: >-
+      ! grep -REn '[^0-9][0-9]{12}[^0-9]' terraform/bootstrap/github_ci_apply.tf
+      terraform/personal/oidc.tf terraform/personal/platform_roles.tf
+      terraform/bootstrap/authority_budget.json
+    expected: No bare 12-digit sequence in any touched IAM file (the never-commit hook shape-pattern).
+    fix_if: >-
+      A literal account id leaked -- replace with ${var.account_id}. NEVER commit a real id/ARN/ExternalId.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "iam-files-no-bare-account-id"
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      SLOC (Decision 128 decompose-by-default): no scripts/checks/iam_tf/ submodule exceeds 500 lines
+      after the read/write-coverage decomposition.
+    command: >-
+      test -z "$(find scripts/checks/iam_tf -maxdepth 1 -name '*.py' -exec wc -l {} + | awk '$1>500 && $2!="total"{print}')"
+    expected: >-
+      Every .py under scripts/checks/iam_tf/ is <= 500 lines (validate_ci_refresh_read_coverage.py was
+      478 pre-change and is decomposed into a facade + _read_coverage + _write_coverage).
+    fix_if: >-
+      A submodule crossed 500 -- decompose further (facade package, Decision 80/104/124), do NOT raise
+      the budget (Decision 128).
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "iam-tf-checks-under-500-sloc"
+  - step: 12
+    phase: pre-deploy
+    action: validate_authority_budget green against the v2 budget (self-exclusion + prefix asserted structurally).
+    command: bin/venv-python -m scripts.validate --only validate_authority_budget
+    expected: Exit 0; the drift gate confirms the v2 budget agrees with the HCL (prefix, self-exclusion, actions).
+    fix_if: >-
+      FAIL -- the budget and IAMRoleWriteBounded HCL are out of sync, or the self-exclusion Deny is
+      missing. Reconcile per the check's message.
+    hermetic: false
+    graduation: not-applicable
+  - step: 13
+    phase: pre-deploy
+    action: >-
+      validate_ci_refresh_read_coverage green with the extended WRITE-coverage assertion (c5) -- an
+      apply-role-written managed type with no covering write grant fails loud.
+    command: bin/venv-python -m scripts.validate --only validate_ci_refresh_read_coverage
+    expected: Exit 0; every managed resource type is classified for BOTH read and write coverage.
+    fix_if: >-
+      FAIL "unmapped write type" -- add the type to the _write_coverage map with its required write
+      actions + prefix, or add the missing grant to github_ci_apply.tf.
+    hermetic: false
+    graduation: not-applicable
+  - step: 14
+    phase: pre-deploy
+    action: Full fast-tier presubmit green (registry reachability for the decomposed check facade + all gates).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 on the working tree and committed state.
+    fix_if: Any check fails -- fix before commit (the plan PR itself must be green; see rec-2770 CI-safety note in context).
+    hermetic: false
+    graduation: not-applicable
+  - step: 15
+    phase: pre-deploy
+    action: >-
+      terraform fmt -check on the touched roots (formatting only; validate/plan are CI-delegated per
+      Decision 119 provider-init egress).
+    command: >-
+      command -v terraform >/dev/null 2>&1 && terraform fmt -check -recursive terraform/bootstrap
+      terraform/personal || echo "terraform absent -- CI terraform-validate + speculative-plan are authoritative"
+    expected: >-
+      fmt clean if terraform is present; otherwise the CI terraform-validate check and the
+      speculative-plan job are the authoritative verifiers (no local init/validate/plan).
+    fix_if: fmt reports a diff -- run terraform fmt on the touched files.
+    hermetic: false
+    graduation: not-applicable
+  - step: 16
+    phase: post-deploy
+    action: >-
+      BOOTSTRAP-FIRST (admin out-of-band, human-gated): human reviews `terraform -chdir=terraform/bootstrap
+      plan`; on approval applies the widened github_ci_apply.tf + authority_budget.json under
+      agent_platform_admin. Verify the new grants are live BEFORE any personal-root attach.
+    command: >-
+      aws iam get-role-policy --role-name agent-platform-github-ci-apply --policy-name
+      agent-platform-github-ci-apply --profile agent_platform_admin --query 'PolicyDocument' | grep -q
+      'iam:DeleteRole'
+    expected: >-
+      The live apply-role inline policy shows the widened write surface (e.g. iam:DeleteRole present).
+      Bootstrap goes FIRST so the apply role HAS the grants + the boundary permits them.
+    fix_if: >-
+      Grant absent live -- the bootstrap apply did not land or targeted the wrong root. Re-plan/apply
+      bootstrap before proceeding; NEVER attach the boundary to personal roles first.
+    hermetic: false
+  - step: 17
+    phase: post-deploy
+    action: >-
+      HIGHEST-RISK GATE (GATE-E-execroles, Fable, T2.23 c4 precedent): pre-apply
+      aws iam simulate-principal-policy per Lambda exec role (8) + PlatformDev + the 4 CI roles,
+      enumerating each principal's REAL runtime actions against the proposed boundary. Every action
+      must return allowed; escalation + boundary-removal must return denied.
+    command: >-
+      for R in agent-platform-ducklake-writer agent-platform-ducklake-reader
+      agent-platform-ducklake-catalog-dr agent-platform-ducklake-maintenance
+      agent-platform-ducklake-maintenance-smoke agent-platform-scheduled-agent-dispatcher
+      agent-platform-findings-processor agent-platform-ops-compaction PlatformDev; do aws iam
+      simulate-principal-policy --profile agent_platform_admin --policy-source-arn
+      "arn:aws:iam::$ACCT:role/$R" --permissions-boundary-policy-input-list "$BOUNDARY_DOC"
+      --action-names $RUNTIME_ACTIONS
+      --query 'EvaluationResults[?EvalDecision!=`allowed`]' --output text; done
+    expected: >-
+      Empty output for every principal (all enumerated runtime actions allowed under the boundary).
+      RUNTIME_ACTIONS is the exact set drawn from each role's own inline policy -- writer/reader/
+      maintenance/smoke/catalog-dr are s3 + logs + secrets-read + cloudwatch-metric; ops_compaction
+      adds athena + glue; PlatformDev adds athena + dynamodb + glue + lambda-invoke + ssm. ACCT,
+      BOUNDARY_DOC, and RUNTIME_ACTIONS are operator-supplied at run time (never committed).
+    fix_if: >-
+      ANY action returns implicitDeny/explicitDeny under the boundary -- the boundary DataPlaneAllow
+      does not cover that principal's runtime action (the intersection trap). STOP: widen the boundary
+      DataPlaneAllow to cover it (or, if out of the mandatory model, escalate) BEFORE attaching. Do
+      NOT attach a boundary that a live smoke will then break.
+    hermetic: false
+  - step: 18
+    phase: post-deploy
+    action: >-
+      PERSONAL-ROOT boundary attachments applied via human-gated break-glass (admin out-of-band;
+      github_ci_apply lacks iam:PutRolePermissionsBoundary on these 13 roles so the gated Environment
+      would approve-then-AccessDeny). Human reviews the plan: expect ~13 aws_iam_role UPDATEs, NO
+      destroy/replace.
+    command: >-
+      aws iam get-role --role-name agent-platform-ducklake-writer --profile agent_platform_admin
+      --query 'Role.PermissionsBoundary.PermissionsBoundaryArn' --output text | grep -q
+      'agent-platform-github-ci-apply-boundary'
+    expected: >-
+      Each of the 13 target roles (4 CI + PlatformDev + 8 exec) shows the boundary ARN live;
+      PlatformAdmin shows None. Apply plan showed zero destroy/replace.
+    fix_if: >-
+      A target role lacks the live boundary, or PlatformAdmin gained one -- reconcile via a further
+      admin apply; NEVER route these through the gated Environment (GATE-B-apply).
+    hermetic: false
+  - step: 19
+    phase: post-deploy
+    action: >-
+      Smoke CHANNEL 1 (boundary did not break Lambda runtime): re-run the governed
+      deploy-ducklake-lambdas.yml code-deploy channel post-attach, then invoke the reader + writer
+      smoke -- reader write is denied (closed-boundary proof), writer write succeeds.
+    command: >-
+      gh workflow run deploy-ducklake-lambdas.yml --ref main && echo "then confirm the post-deploy
+      smoke gate (reader write_denied=true, writer write_ok=true) in the run's smoke step"
+    expected: >-
+      Channel 1 deploy succeeds; reader/writer smoke passes with the boundary attached (no runtime
+      AccessDenied introduced by the intersection).
+    fix_if: >-
+      A DuckLake Lambda AccessDenies at runtime post-attach -- the simulate gate (step 17) missed an
+      action; detach or widen the boundary and re-simulate. This is the exact failure the gate exists
+      to prevent.
+    hermetic: false
+  - step: 20
+    phase: post-deploy
+    action: >-
+      Smoke CHANNEL 2 / c1 live-proof: a PR adding a NEW agent-platform-* Lambda + its log group + a
+      CloudWatch alarm auto-applies end-to-end through terraform-apply-sandbox with ZERO AccessDenied
+      and ZERO bootstrap edit.
+    command: >-
+      echo "Open a probe PR touching terraform/personal (new agent-platform-* function + log group +
+      alarm); confirm the apply-sandbox job applies green with no AccessDenied and no bootstrap grant edit"
+    expected: >-
+      The new-resource-class change rides the widened prefix grants and auto-applies (the DEP-01 class
+      is closed). Convergence record green.
+    fix_if: >-
+      AccessDenied on the new resource -- a write prefix is too narrow; extend the corresponding
+      broadened Sid (and _write_coverage map) and re-apply bootstrap.
+    hermetic: false
+  - step: 21
+    phase: post-deploy
+    action: >-
+      c2 live-proof (DEP-02): a PR CREATING a boundary-carrying agent-platform-* role routes to
+      tf-gated-apply and, on approval, applies with ZERO AccessDenied WITHOUT the admin tier. (Slice F
+      exercises this in production as its live proof; a probe PR may demonstrate it here.)
+    command: >-
+      echo "Open a probe PR creating an agent-platform-* role that declares permissions_boundary;
+      confirm guard routes to tf-gated-apply and the approved apply lands with no AccessDenied and no
+      agent_platform_admin invocation"
+    expected: The gated CreateRole succeeds (boundary-propagation condition satisfied by the role's own HCL).
+    fix_if: >-
+      Gated apply AccessDenies on CreateRole -- the role's HCL did not declare the boundary, or
+      IAMRoleCreateBounded's Resource/Condition is wrong. Fix and re-run the gated apply.
+    hermetic: false
+  - step: 22
+    phase: post-deploy
+    action: >-
+      Global convergence + drift-clear (GATE-drift-clear): after the admin applies, confirm an
+      untargeted `terraform plan -detailed-exitcode` exits 0 and the convergence record is green
+      before any dispatch-ack. Admin applies of stale saved plans trip drift-red (expected; clear it,
+      do not treat as plan failure).
+    command: >-
+      echo "CI-delegated: confirm the terraform-drift run (or a dispatched apply-sandbox re-plan)
+      reports exit 0 / no drift, and convergence/personal/sandbox.json status=green, before dispatching
+      the acknowledge-and-retry"
+    expected: Untargeted plan converges (exit 0); convergence record green; no lingering drift-red.
+    fix_if: >-
+      Drift-red persists -- run the dispatch-ack unlatch (workflow_dispatch naming the red commit)
+      after the ci-rca rec is reviewed; global plan must reach exit 0.
+    hermetic: false
+  - step: 23
+    phase: post-deploy
+    action: >-
+      c6 recurring ratchet-review mechanism exists and FIRES: the Decision-92 per-change-class
+      incident-free-track-record review is scheduled as a standing measured act (surfaced from
+      auto-apply telemetry in /orient or preflight). status:met == the schedule/measurement source is
+      live and fires, NOT that all future reviews concluded (carried A-code-review Low, else T2.48
+      never completes).
+    command: >-
+      echo "Confirm the ratchet-review surfaces in /orient (or preflight) reading from the auto-apply
+      telemetry -- the recurring mechanism EXISTS and has fired at least once"
+    expected: >-
+      The ratchet-review is a live recurring surface (schedule present + observed to fire once), kept
+      out of the Decision 144/92 body per Decision 86.
+    fix_if: >-
+      No recurring surface exists -- add the ratchet-review to the /orient or preflight surface reading
+      auto-apply telemetry; do NOT encode the schedule in a Decision body (Decision 86).
+    hermetic: false
+constraints:
+  - >-
+    Realize Decision 144 (broad-but-bounded deployer under the MANDATORY
+    agent-platform-github-ci-apply-boundary; extend Decision 129's per-service agent-platform-* prefix
+    from reads to writes). Retain the full CD.35 control theory VERBATIM (saved-plan no-TOCTOU,
+    fail-closed deterministic guard, server-side convergence anchor, Environment-gates-execution,
+    bootstrap fixed point -- Decisions 77/92/119/120/126). This plan changes the AUTHORITY MODEL
+    inside the pipeline; it changes no control-flow.
+  - >-
+    PlatformAdmin is EXCLUDED from the boundary attachment (control identity -- attaching
+    DenyBoundaryPolicyModification would wedge break-glass). PlatformDev boundary attachment is IN
+    scope; PlatformDev's own hardening beyond the boundary (the DEP-13 Denies) is already landed by
+    slice B and is retained untouched.
+  - >-
+    HAZARD-4 (Fable, MUST): the apply-role widening MUST grant iam:DeleteRole + iam:DetachRolePolicy +
+    iam:DeleteRolePolicy on role/agent-platform-* so slice F's guard-gated role destroys execute after
+    approval. Destroys still ROUTE to gated-apply (the guard is unchanged); this only gives the apply
+    role the VERB.
+  - >-
+    HIGHEST-RISK (Fable): the boundary-intersection on the 8 exec roles + PlatformDev can pass
+    plan+apply then RUNTIME-AccessDeny with NO guard/CI catch. The pre-apply simulate-principal-policy
+    per principal (step 17) AND the post-apply dual-channel smoke (steps 19-20) are REQUIRED acceptance
+    gates, not optional. Do not attach a boundary a live smoke would break.
+  - >-
+    Apply path is human-gated and DESIGN-ONLY in this plan (the plan PR applies nothing). Order:
+    bootstrap root FIRST (admin out-of-band); THEN personal-root boundary attachments via admin
+    out-of-band break-glass (guard-BLOCKED role updates; the gated Environment would
+    approve-then-AccessDeny). Verify global convergence (plan -detailed-exitcode == 0) before
+    dispatch-ack. Overseer NEVER approves the gated Environment for these (GATE-B-apply).
+  - >-
+    SLOC (Decision 128): decompose validate_ci_refresh_read_coverage.py (478 SLOC) into a facade +
+    submodules rather than raise its budget; every new/edited scripts/checks/iam_tf/ file stays < 500
+    SLOC. No bare --update-sloc-budgets re-seed.
+  - >-
+    CI-safety (rec-2770): every hermetic pre-deploy VP step and every graduated-check command is
+    pure-shell (grep/awk/find/test/git ls-files) -- NEVER bin/venv-python (CI has no .venv). The
+    validate.py-invoking VP steps are hermetic:false + graduation:not-applicable. Local validate --pre
+    (steps 12-14) correctly uses bin/venv-python because this session HAS a .venv.
+  - >-
+    Public-repo boundary (Decision 101): NO real AWS account IDs / ARNs / ExternalIds / secrets in the
+    plan or any committed file -- roles by logical name, resources by prefix, account_id and secrets
+    var-interpolated. Simulate-gate ACCT/BOUNDARY_DOC are operator-supplied at run time.
+  - No rescue agents or workaround loops (Decision 55); forward-fix, never inline hot-patch.
+context:
+  - >-
+    Decision-scout verdict + CITE list (ran INLINE per the overseer rec-2767 dispatch model; 99 of 99
+    decisions triaged): NO_FLAGS. CITE -- 144 (central; this slice REALIZES it), 129 (read->write
+    prefix pattern extended), 98 (point 1 amended -> realized: pipeline MAY mint boundary-carrying
+    agent-platform-* roles via gated Environment), 92 (point 5 amended -> realized: authority-budget
+    v2; ratchet model retained), 77 (RETAINED untouched -- guard classification + bootstrap fixed
+    point + apply-never-automatic preserved; only the authority model inside the pipeline changes),
+    101 (RETAINED untouched -- public-content boundary; prefixes + placeholders only), 143 (exec-role-
+    CREATE MECHANISM text re-grounded to gated-Environment-executable; identity-scoping RULE + higher-
+    bar property preserved), 126 (CD.35 control theory kept verbatim; forward-record precedent), 55/72
+    (RCA-first, forward-fix-the-generator -- the enumerated model fed its own change-stream), 83
+    (non-wedging branch protection; admin bypass retained -- G/T2.50 territory, untouched here), 84
+    (DECISIONS.md annotations backfill to ops_decisions post-merge, never written directly), 128 (SLOC
+    decompose-by-default -- the coverage check is decomposed, not raised), 94 (github_ci_apply trust of
+    environment:tf-gated-apply that the gated role-create rides), 113 (static-key two-principal split;
+    boundary on PlatformDev, PlatformAdmin excluded), 100/75 (managed-native SCP substitute), 105 (the
+    CD-ratification lane is deliberately NOT used -- 144 is forward-direction; no new Decision authored
+    here), 145 (DECISIONS.md byte ceiling 500k -- the annotations are small).
+  - "gates: decision-scout=NO_FLAGS (inline); plan-critique=<lifted, overseer-run after hand-back>"
+  - >-
+    Confirmed NO conflict with Decision 77 (guard/apply model retained -- the guard code is unchanged;
+    only the budget it reads widens; bootstrap stays admin-only-never-auto-apply) or Decision 101
+    (public boundary retained -- VP step 10 asserts no bare account id; all ARNs var-interpolated).
+    Both are explicitly retained-untouched by Decision 144 itself.
+  - >-
+    This is a DESIGN-DOC plan PR: it ships ONLY docs/plans/PLAN-terraform-iam-allowlist-inversion.yaml
+    and APPLIES NOTHING. The scope[] files are the IMPLEMENTATION surface a separate human-gated
+    /implement session will author + apply. All pre-deploy structural VP steps are hermetic:false
+    (the tf/check artifacts they assert do not exist on this plan-PR tree, so validate_vp_replay skips
+    them with a printed reason) but pure-shell + graduation:graduate (they become CI-run registry
+    regression checks at /implement time). This matches the D2/D3 sibling-slice pattern.
+  - >-
+    17-role census (audit Q3): boundary currently on 3/17 (apply, branch, pr). E attaches to 13 more
+    (github_ci_plan, github_ci_drift, github_ci_ducklake_deploy, github_ci_prod_deploy, PlatformDev, +
+    8 exec roles) -> 16/17. PlatformAdmin is the deliberate 1 exclusion. Empirical finding from reading
+    every exec-role + PlatformDev inline policy: ALL current runtime actions fall within the boundary
+    DataPlaneAllow service wildcards (s3/athena/glue/dynamodb/lambda/logs/events/sns/cloudwatch/
+    secretsmanager/ssm) -- NO managed-policy attachments, NO kms/ec2/xray/sts:AssumeRole identity
+    actions on any role (the sts:AssumeRole hits are all trust documents). So attachment is safe for
+    CURRENT actions; step 17's simulate gate PROVES it at apply time and guards future edits.
+  - >-
+    closes_criteria timing (Status-Trusted-Never-Inferred): c4 + c5 are static/unit-verifiable and
+    flip at the /implement CODE merge (budget v2 validator green; write-coverage verifier green).
+    c1/c2/c3 are live-proof and flip only after the human-gated apply + simulate gate + dual-channel
+    smoke (post-deploy V3). c6 flips when the recurring mechanism EXISTS and FIRES (not when all
+    reviews conclude). /implement flips criteria only on a verified VP pass.
+  - >-
+    Recs bundled: rec-2703 (github_ci_apply lacks WRITE on the 3 T2.43 prod-class resources) +
+    rec-2757 (still lacks UpdateRoleDescription/CreateLogGroup/PutMetricAlarm/PutRolePolicy-on-plan) --
+    both closed by the write-surface inversion at E's IMPLEMENTATION squash-merge (Resolves: trailer).
+  - >-
+    Carried A-code-review Lows on T2.48 addressed: (1) files_in_scope's flat scripts/checks/iam_tf.py
+    is stale -- this plan uses the real package submodules
+    scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py + validate_authority_budget.py (+ the
+    new _read_coverage/_write_coverage decomposition). (2) c6 is [recurring, measured] -- acceptance
+    criterion + VP step 23 explicitly note status:met means the mechanism EXISTS and FIRES, not that
+    all future reviews concluded.
+  - >-
+    ci_rca deferral (Related-Work gate): the one open Critical ci_rca rec-2762 (malformed
+    closes_criteria in the unrelated PLAN-ducklake-maintenance-smoke-split.yaml) shares no
+    file/Decision/failure-category with this IAM plan; the overseer ledger (autonomous_decision_log
+    2026-07-22) assessed it stale (main-validate green on main across the last pushes) and non-blocking
+    for E dispatch. Deferred with rationale here per the planning skill's Related-Work condition.
+  - >-
+    Overseer gates this slice feeds: GATE-D2-green (D2 forced-red -> reconcile rehearsal must be green
+    before E -- the overseer confirms pre-apply, else E's end-to-end acceptance conflates inversion vs
+    consolidation regressions); GATE-E-execroles (step 17, HIGHEST-RISK); GATE-B-apply (never approve
+    the gated Environment for the guard-BLOCKED attachments); GATE-drift-clear (step 22).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/terraform-iam-allowlist-inversion off origin/main)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (144 central; 98 pt1, 92 pt5, 129, 77, 101, 143 load-bearing)
+  - >-
+    GATE-D2-green confirmed by the overseer (D2 forced-red -> reconcile rehearsal GREEN) BEFORE the
+    E apply is dispatched
+  - All files in scope located and readable (every scope tf/check/doc file was read during planning)
+  - Acceptance criteria understood and verifiable (c1-c6 mapped 1:1 to VP steps 20/21/17/12/13/23)
+execution_steps:
+  - >-
+    terraform/bootstrap/github_ci_apply.tf -- invert the WRITE surface: broaden the enumerated WRITE
+    Sids to the agent-platform-*/ducklake-* prefix pattern; ADD CloudWatchLogsWrite + LambdaFunctionWrite
+    Sids and iam:UpdateRoleDescription (rec-2703/rec-2757, DEP-01); ADD IAMRoleDeleteBounded
+    (iam:DeleteRole/DetachRolePolicy/DeleteRolePolicy on role/agent-platform-*, HAZARD-4); widen
+    IAMRoleCreateBounded + IAMRoleWriteBounded Resource to role/agent-platform-* keeping the
+    iam:PermissionsBoundary Condition; ADD DenySelfInlinePolicyWrite carving out the apply role's own
+    ARN; extend the boundary DataPlaneAllow with the 4 new iam verbs; keep the 3 self-protection Denies.
+  - >-
+    terraform/bootstrap/authority_budget.json -- v2: in_budget_actions ["create","update"];
+    in_budget_managed_role_prefix "agent-platform-" with explicit apply-role self-exclusion;
+    in_budget_resource_types unchanged. Keep the _comment amend-only-via-bootstrap note.
+  - >-
+    terraform/personal/oidc.tf + platform_roles.tf + ducklake_lambdas.tf + ducklake_catalog_dr.tf +
+    ducklake_maintenance.tf + ducklake_maintenance_smoke.tf + prod_lambdas.tf -- add
+    permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+    to the 4 CI roles + PlatformDev + 8 exec roles (13 total). Do NOT touch platform_admin.
+  - >-
+    scripts/checks/iam_tf/ -- decompose validate_ci_refresh_read_coverage.py into a facade + new
+    _read_coverage.py + new _write_coverage.py (Decision 128), extend the check to assert WRITE
+    coverage per managed resource type (c5, loud-fail on an unmapped written type); update
+    validate_authority_budget.py for the v2 shape (prefix + self-exclusion + create action). Keep every
+    file < 500 SLOC and the registered check names unchanged (registry re-export lines in validate.py
+    intact).
+  - >-
+    docs/contracts/environment-taxonomy.md -- update the Guard classification subsection to v2
+    (in_budget_actions create+update; agent-platform-* boundary-carrying managed-role prefix; role
+    CREATE gated-but-executable). docs/DECISIONS.md -- add the 98pt1/92pt5 realization annotations +
+    re-ground Decision 143's exec-role-CREATE mechanism text (annotation only, no new Decision, no
+    account ids).
+  - >-
+    Execute the Verification Plan -- run pre-deploy steps 1-15 to green locally (validate --pre must
+    pass), then drive the human-gated apply sequence (steps 16-22, bootstrap-FIRST) with the
+    simulate-principal-policy gate (17) and dual-channel smoke (19-20) as REQUIRED gates; confirm c6
+    (23). On any unrecoverable V3 failure STOP and RCA (Decision 55) -- do not inline-patch.
+  - "Report: what was implemented, simulate-gate results per principal, dual-channel smoke results, convergence state, and which T2.48 criteria flipped."
+rollback: >-
+  The plan PR applies nothing -- reverting the plan commit is a clean no-op. For the IMPLEMENTATION
+  apply (separate human-gated session): IAM is declarative and reversible on the commit axis (Decision
+  55 forward-fix / Decision 92 XC10 rollback-proven). If a boundary attach breaks a runtime path that
+  the simulate gate missed, the admin detaches the boundary from the affected role
+  (iam:DeleteRolePermissionsBoundary under agent_platform_admin -- NOT the pipeline, which is denied by
+  DenyBoundaryRemoval) and re-simulates before re-attaching. The write-surface widening is additive;
+  narrowing back to enumerated ARNs is a bootstrap admin apply. Bundle-close of rec-2703/rec-2757 is
+  reversible via update_rec.
