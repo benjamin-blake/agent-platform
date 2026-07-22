@@ -17,7 +17,7 @@ def validate_scheduled_agent_logs(failed: list[str]) -> None:
     print("\n=== Scheduled agent log validation ===")
 
     result = _common.run(
-        ["git", "diff", "--name-only", "main...HEAD"],
+        ["git", "diff", "--name-only", "origin/main...HEAD"],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -26,7 +26,7 @@ def validate_scheduled_agent_logs(failed: list[str]) -> None:
     changed = [f for f in result.stdout.strip().splitlines() if f]
 
     if not changed:
-        print("No files changed relative to main -- skipping.")
+        print("No files changed relative to origin/main -- skipping.")
         return
 
     # Only engage when all changed files are under the logs/ hierarchy.
