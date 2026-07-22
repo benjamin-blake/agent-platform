@@ -1,0 +1,449 @@
+schema_version: 1
+slug: "terraform-recovery-semantics"
+intent: >-
+  Complete Decision 126's one-button recovery semantics on the D2-consolidated apply chain:
+  make a single input-free Reconcile dispatch clear an admin-resolved (stale-saved-plan)
+  episode (DEP-10), and make a routed-pending delta legible as pending-gated -- distinct from
+  out-of-band drift -- in the health verdict, the drift rec, and the PR advisory status (DEP-11).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-recovery-semantics.yaml
+phase: >-
+  Platform tier_item T2.47 (Recovery-path unification + routed-pending observability, DEP-10/11).
+  Sequenced after T2.46 (D2 apply-chain consolidation -- all criteria met, status-flip pending);
+  independent of and preceding T2.48 / Decision 144 (the allow-list-inversion target model). These
+  recovery changes are model-agnostic: they improve reconcile/drift/health regardless of whether
+  the deployer identity is enumerated (today) or broad-but-bounded (post-T2.48).
+closes_criteria:
+  - "T2.47:c1"
+  - "T2.47:c2"
+scope:
+  - file: .github/workflows/reconcile.yml
+    action: Modify
+    purpose: >-
+      DEP-10 -- add a stale-saved-plan fallthrough to the apply-reconcile job. When the verbatim
+      apply of the fetched (still-digest-verified) saved plan.bin fails with terraform's
+      stale-plan signature (state serial advanced by an out-of-band admin apply), do NOT latch
+      red; instead re-plan fresh in the same run, re-run the SAME deterministic-guard +
+      digest-fed subagent-review gate, and apply. Guard-PASS clears the record; guard-ROUTE
+      hands the fresh plan.bin to gated-apply-reconcile via a run-scoped GitHub Actions artifact
+      (+ sha256 job output verified on download -- no new IAM, no S3 write) so the out-of-budget
+      residual applies after one Environment approval in the same dispatch.
+  - file: .github/actions/write-convergence-record/action.yml
+    action: Modify
+    purpose: >-
+      DEP-11 -- on routed=true, replace the bare skip with a pending_gated MARKER merge: read the
+      existing record, set a non-status pending_gated object ({routed_at, run_url, commit_sha}),
+      keep status unchanged (green -- routed is not a failure, anti-masking preserved), write
+      back, and read-back-verify status is unchanged. All other skip conditions (refused /
+      still-actionable=false / review=starved) still skip verbatim. The two routed call sites
+      (apply-sandbox, apply-reconcile) get the marker for free; the gated sites write a fresh
+      record that naturally clears it.
+  - file: .github/workflows/terraform-drift.yml
+    action: Modify
+    purpose: >-
+      DEP-11 -- teach the exit-2 handler to recognise a pending_gated marker on the current
+      record: resolve the pending PR from the marker's commit_sha (add GH_TOKEN + a gh-api PR
+      lookup) and file the tf_drift rec with a pending-gated narrative NAMING that PR/run instead
+      of the out-of-band-drift narrative; stamp pending_gated.drift_flagged_at for idempotency
+      (skip re-filing on later ticks). Absent the marker, the existing out-of-band red-flip is
+      unchanged. Preserves the alarm-only invariant (never writes green; no terraform apply).
+  - file: scripts/convergence_health/assess.py
+    action: Modify
+    purpose: >-
+      DEP-11 -- add a pending_gated field to HealthVerdict and populate it from the record marker
+      in assess_health, so the health verdict distinguishes converged / pending-gated / red.
+      Keeps the submodule well under its 500-SLOC budget (Decision 128 -- no budget entry, no
+      raise, flat scripts/convergence_health.py not recreated).
+  - file: scripts/convergence_health/__main__.py
+    action: Modify
+    purpose: >-
+      DEP-11 -- include pending_gated (and the pending PR/run reference) in the printed
+      HealthVerdict JSON so the convergence-health sensor surfaces the pending-gated state.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      DEP-11 -- the advisory-status job reads the record already; add a pending_gated branch so
+      the advisory terraform-converged status DESCRIPTION reads pending-gated (naming the routed
+      commit) rather than a plain converged/green message. Advisory-only, non-required (Decision
+      83) -- unchanged status semantics, richer text.
+  - file: tests/convergence_health/test_assess.py
+    action: Modify
+    purpose: "DEP-11 -- unit tests for the pending_gated HealthVerdict field (present / absent / red-coexistence)."
+  - file: tests/convergence_health/test___main__.py
+    action: Modify
+    purpose: "DEP-11 -- assert the printed verdict JSON includes pending_gated."
+  - file: tests/test_terraform_drift_acceptance.py
+    action: Modify
+    purpose: >-
+      DEP-11 -- structural regression guard: terraform-drift.yml has a pending_gated branch that
+      names the pending PR, the out-of-band narrative stays gated behind marker-absence, and the
+      alarm-only invariants (no terraform apply, -detailed-exitcode, lock-skip) are preserved.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap reconciliation (carried A-code-review Low): replace T2.47's stale flat
+      files_in_scope entry scripts/convergence_health.py (now a package) with the actual touched
+      submodules (scripts/convergence_health/assess.py, scripts/convergence_health/__main__.py)
+      and add .github/actions/write-convergence-record/action.yml. Data-only re-grounding; no
+      criterion status flip (Status-Trusted-Never-Inferred -- /implement's bookkeeping walk flips
+      c1/c2 on a verified VP pass).
+bundled_recommendations:
+  - rec-2523
+  - rec-2461
+  - rec-2647
+  - rec-2648
+infrastructure_dependencies:
+  - >-
+    No .tf files in scope: no terraform plan/apply, no IAM change. All changes are workflow /
+    composite-action / CI-script edits that are EFFECTIVE ON MERGE (GitHub Actions reads them
+    from the repo) -- Decision 126 provision/reconcile model, applies-nothing in this plan.
+  - >-
+    No new AWS permissions. The DEP-10 fresh re-plan runs in reconcile.yml under the existing
+    github_ci_apply role (already plans+applies against the sandbox tfstate; Decision 92/94), the
+    routed-fresh handoff uses GitHub-native upload/download-artifact (workflow token, no S3/IAM),
+    and the DEP-11 pending_gated marker is written to the same convergence/personal/sandbox.json
+    object the apply and drift roles already read+write.
+  - >-
+    Recovery routing per Decision 126/77: guard-BLOCK (out-of-budget IAM/trust/destroy) on the
+    fresh re-plan routes to reconcile.yml's OWN gated-apply-reconcile job (environment
+    tf-gated-apply, dispatch-reachable -- the T2.37 fix), never a self-directed local apply.
+acceptance_criteria:
+  - >-
+    (T2.47:c1 / DEP-10) A forced admin-resolved recovery episode -- a red convergence record whose
+    saved plan.bin is now stale because an admin applied the delta out-of-band -- clears GREEN via
+    a SINGLE reconcile.yml workflow_dispatch: the run detects the stale plan, re-plans fresh,
+    passes the guard + digest-fed subagent review, applies (a no-op when the delta is fully
+    resolved), and writes green -- with no separate terraform-apply-sandbox acknowledge-and-retry
+    dispatch. rec-2523, rec-2461, rec-2647 are bundled and closed via the impl PR's Resolves trailer.
+  - >-
+    (T2.47:c2 / DEP-11) A routed-pending episode -- guard exit 2 leaves the record green plus a
+    pending_gated marker -- surfaces pending-gated in the convergence_health HealthVerdict and in
+    the PR advisory terraform-converged description, and the hourly terraform-drift rec NAMES the
+    pending PR / route run (pending-gated narrative) instead of the out-of-band-drift narrative.
+    rec-2648 is bundled and closed via the impl PR's Resolves trailer.
+  - >-
+    Invariants preserved and independently checkable: drift never writes the record green; a
+    genuine (non-stale) apply failure on the fresh re-plan still writes red; routed keeps status
+    green (marker is a non-status field); no terraform apply is added to terraform-drift.yml; no
+    new IAM; no SLOC budget raise and scripts/convergence_health.py (flat) is not recreated.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      DEP-10 -- reconcile.yml apply-reconcile has a stale-saved-plan fallthrough: the apply step
+      captures terraform's stale-plan signature and a fresh re-plan (terraform plan -out=plan.bin)
+      runs behind the STALE_PLAN_FRESH_REPLAN sentinel.
+    command: >-
+      f=.github/workflows/reconcile.yml; sig=$(grep -Eic 'saved plan is stale|plan file can no
+      longer be applied|state was changed' "$f"); mark=$(grep -c 'STALE_PLAN_FRESH_REPLAN' "$f");
+      rep=$(grep -Ec 'terraform plan .*-out=plan.bin' "$f"); echo "sig=$sig marker=$mark
+      replan=$rep"; [ "$sig" -ge 1 ] && [ "$mark" -ge 1 ] && [ "$rep" -ge 1 ]
+    expected: "sig>=1 marker>=1 replan>=1 ; exit 0 (stale detected + sentinel + fresh re-plan present)."
+    fix_if: >-
+      Any counter is 0 -- add the set+e stale-signature capture on the saved-plan apply, the
+      STALE_PLAN_FRESH_REPLAN marker, and the `terraform plan -out=plan.bin` fresh re-plan step.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "reconcile-stale-plan-fresh-replan-present"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      DEP-10 -- the fresh re-plan is GUARDED and REVIEWED before applying (no auto-apply without a
+      PROCEED): reconcile.yml references the deterministic-guard and subagent-plan-review composite
+      actions at least twice each (once for the saved plan, once for the fresh re-plan).
+    command: >-
+      f=.github/workflows/reconcile.yml; g=$(grep -c 'uses: ./.github/actions/deterministic-guard'
+      "$f"); r=$(grep -c 'uses: ./.github/actions/subagent-plan-review' "$f"); echo "guard=$g
+      review=$r"; [ "$g" -ge 2 ] && [ "$r" -ge 2 ]
+    expected: "guard>=2 review>=2 ; exit 0 (the fresh path re-uses the guard + digest-fed review gate)."
+    fix_if: >-
+      guard<2 or review<2 -- the fresh re-plan applies without re-running the guard/review; add a
+      second deterministic-guard + subagent-plan-review step gating the fresh apply.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "reconcile-fresh-replan-guarded-and-reviewed"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      DEP-10 -- routed-after-stale handoff: apply-reconcile uploads the fresh plan.bin as a
+      run-scoped artifact and gated-apply-reconcile downloads it (RECONCILE_FRESH_PLAN_ARTIFACT
+      sentinel), so an out-of-budget fresh residual applies verbatim after Environment approval in
+      the SAME dispatch (no re-plan post-approval, no new IAM).
+    command: >-
+      f=.github/workflows/reconcile.yml; up=$(grep -Ec 'actions/upload-artifact' "$f");
+      down=$(grep -Ec 'actions/download-artifact' "$f"); mark=$(grep -c
+      'RECONCILE_FRESH_PLAN_ARTIFACT' "$f"); echo "upload=$up download=$down marker=$mark"; [ "$up"
+      -ge 1 ] && [ "$down" -ge 1 ] && [ "$mark" -ge 1 ]
+    expected: "upload>=1 download>=1 marker>=1 ; exit 0 (fresh plan.bin handed to the gated job)."
+    fix_if: >-
+      Any counter is 0 -- add the upload-artifact (fresh plan.bin + sha256 job output) in
+      apply-reconcile and the download-artifact + digest-verify branch in gated-apply-reconcile,
+      both tagged RECONCILE_FRESH_PLAN_ARTIFACT.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "reconcile-fresh-plan-artifact-handoff"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      DEP-11 -- write-convergence-record writes a pending_gated marker on routed=true (non-status
+      merge, status preserved) instead of a bare skip.
+    command: >-
+      f=.github/actions/write-convergence-record/action.yml; pg=$(grep -c 'pending_gated' "$f");
+      routed=$(grep -c 'ROUTED' "$f"); echo "pending_gated=$pg routed_refs=$routed"; [ "$pg" -ge 1
+      ] && [ "$routed" -ge 1 ]
+    expected: "pending_gated>=1 routed_refs>=1 ; exit 0 (routed branch merges a pending_gated marker)."
+    fix_if: >-
+      pending_gated=0 -- the routed branch still bare-skips; change it to read the existing record,
+      set a pending_gated object, keep status unchanged, write back, and read-back-verify.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "write-convergence-record-pending-gated-marker"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      DEP-11 -- terraform-drift.yml recognises the pending_gated marker: it resolves + names the
+      pending PR (PENDING_GATED_DRIFT sentinel) and the out-of-band drift_reason is gated behind
+      marker-absence, not filed unconditionally.
+    command: >-
+      f=.github/workflows/terraform-drift.yml; pg=$(grep -c 'pending_gated' "$f"); mark=$(grep -c
+      'PENDING_GATED_DRIFT' "$f"); tok=$(grep -c 'GH_TOKEN' "$f"); echo "pending_gated=$pg
+      marker=$mark gh_token=$tok"; [ "$pg" -ge 1 ] && [ "$mark" -ge 1 ] && [ "$tok" -ge 1 ]
+    expected: "pending_gated>=1 marker>=1 gh_token>=1 ; exit 0 (drift branches on the marker + resolves the PR)."
+    fix_if: >-
+      Any counter is 0 -- add the pending_gated branch (PENDING_GATED_DRIFT), the GH_TOKEN + gh-api
+      PR lookup, and gate the out-of-band drift_reason/rec behind marker-absence.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "drift-pending-gated-narrative"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      DEP-11 -- the convergence_health verdict surfaces pending_gated: assess.py sets it on
+      HealthVerdict and __main__.py prints it in the verdict JSON.
+    command: >-
+      a=scripts/convergence_health/assess.py; m=scripts/convergence_health/__main__.py;
+      av=$(grep -c 'pending_gated' "$a"); mv=$(grep -c 'pending_gated' "$m"); echo "assess=$av
+      main=$mv"; [ "$av" -ge 1 ] && [ "$mv" -ge 1 ]
+    expected: "assess>=1 main>=1 ; exit 0 (verdict carries + prints pending_gated)."
+    fix_if: >-
+      Either is 0 -- add the pending_gated field to HealthVerdict/assess_health and include it in
+      __main__.py's printed verdict dict.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "convergence-health-verdict-pending-gated"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      DEP-11 -- the terraform-apply-sandbox advisory-status job surfaces pending-gated in the
+      terraform-converged status description.
+    command: >-
+      f=.github/workflows/terraform-apply-sandbox.yml; pg=$(grep -c 'pending_gated' "$f"); echo
+      "pending_gated=$pg"; [ "$pg" -ge 1 ]
+    expected: "pending_gated>=1 ; exit 0 (advisory description branches on the marker)."
+    fix_if: "pending_gated=0 -- add a pending_gated branch to the advisory-status DESC (status semantics unchanged, advisory-only)."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "advisory-status-pending-gated"
+  - step: 8
+    phase: pre-deploy
+    action: "DEP-11 -- convergence_health unit tests for the pending_gated verdict field pass."
+    command: "bin/venv-python -m pytest tests/convergence_health/test_assess.py tests/convergence_health/test___main__.py -q"
+    expected: "All tests pass; the new pending_gated cases (present / absent / red-coexistence / printed-json) are green."
+    fix_if: "A pending_gated test fails -- fix assess.py / __main__.py until the verdict carries and prints the marker as specified."
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: "DEP-11 -- the terraform-drift structural acceptance guard passes (pending-gated branch + alarm-only invariants)."
+    command: "bin/venv-python -m pytest tests/test_terraform_drift_acceptance.py -q"
+    expected: "All tests pass, including the new pending-gated structural assertions and the preserved no-terraform-apply / -detailed-exitcode / lock-skip guards."
+    fix_if: "A guard fails -- reconcile terraform-drift.yml with the alarm-only invariants and the pending-gated branch shape."
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: pre-deploy
+    action: "Full fast-tier presubmit is green (schema, hermeticity flags, graduation completeness, coverage, registry)."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "validate --pre passes; every pre-deploy step carries a graduation disposition and the plan/roadmap referential guards are green."
+    fix_if: "A check fails -- address the specific failure (do NOT weaken a check); re-run until green."
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: post-deploy
+    action: >-
+      DEP-10 acceptance (T2.47:c1, operator V3) -- force an admin-resolved episode: apply a small
+      sandbox delta out-of-band so the saved plan.bin goes stale and the record is red, then
+      dispatch reconcile.yml ONCE and confirm the record converges green in the same run with no
+      acknowledge-and-retry dispatch.
+    command: >-
+      gh workflow run reconcile.yml && sleep 5 && echo "watch the run to completion, then:" && aws
+      s3 cp s3://agent-platform-data-lake/convergence/personal/sandbox.json - --profile
+      agent_platform | grep -q '"status": "green"'
+    expected: "The single Reconcile run detects stale -> re-plans -> applies -> the convergence record reads green."
+    fix_if: "The record stays red or a second dispatch is needed -- inspect the run logs; the stale fallthrough or the fresh guard/review path is not wired end-to-end."
+    hermetic: false
+  - step: 12
+    phase: post-deploy
+    action: >-
+      DEP-11 acceptance (T2.47:c2, operator V3) -- with a routed-pending episode present (guard
+      exit 2, record green + pending_gated marker), confirm the health verdict shows pending_gated
+      and the hourly terraform-drift rec names the pending PR (not out-of-band drift).
+    command: >-
+      bin/venv-python -m scripts.convergence_health 2>&1 | grep -qi 'pending_gated' && echo
+      "verdict shows pending_gated; then confirm the newest tf_drift rec context names the pending PR/run"
+    expected: "The verdict JSON includes pending_gated=true and the drift rec context names the pending PR/route run URL, not the out-of-band-drift narrative."
+    fix_if: "The verdict omits pending_gated or the drift rec still says out-of-band drift -- fix the marker write / drift branch / verdict surfacing."
+    hermetic: false
+  - step: 13
+    phase: post-deploy
+    action: "Closure obligation -- after the impl PR merges with the Resolves trailer, the four bundled recs are closed."
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && for r in rec-2523 rec-2461 rec-2647 rec-2648; do
+      grep -h "\"$r\"" logs/.recommendations-log.jsonl | tail -1 | grep -q '"status": "closed"' &&
+      echo "$r closed" || echo "$r NOT closed"; done
+    expected: "All four recs report closed (via rec-autoclose from the Resolves trailer, or the update_rec fallback)."
+    fix_if: "A rec is still open -- close it via bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution '...' (Decision 70/103)."
+    hermetic: false
+constraints:
+  - >-
+    Decision 77 no-TOCTOU is preserved: the saved plan is applied VERBATIM first (no re-plan); the
+    fresh re-plan fires ONLY on the specific stale-plan signature and is itself guard-classified +
+    digest-fed-reviewed (auto) or Environment-approved (routed) in the same run -- the sanctioned
+    dispatch-ack/fresh-plan exception that already exists in terraform-apply-sandbox.yml, mirrored
+    into reconcile.yml. Never a silent re-plan-and-apply.
+  - >-
+    Anti-masking preserved (Decision 55 / Decision 92): stale != failure (a genuine non-stale apply
+    failure still writes red); routed keeps status green with a non-status pending_gated marker;
+    terraform-drift.yml NEVER writes the record green and adds no terraform apply (alarm-only).
+  - >-
+    Applies nothing (Decision 126): no .tf in scope, no terraform apply, no new IAM. Workflow /
+    action / CI-script edits are effective on merge. The routed-fresh handoff uses GitHub-native
+    artifacts (workflow token), not S3/IAM.
+  - >-
+    Portal-only rec writes (Decision 84): the drift pending-gated rec is filed via
+    scripts.ops_data_portal --file-rec (source tf_drift, executable --acceptance -- passes
+    lint_acceptance_command); rec closures go through the Resolves trailer / update_rec, never a
+    direct JSONL edit. No unilateral judgement-close (Decision 55/103).
+  - >-
+    SLOC (Decision 128): convergence_health is already a package; assess.py/__main__.py stay far
+    under the 500-SLOC limit -- no budget entry, no raise, and the flat scripts/convergence_health.py
+    is NOT recreated (keeps graduated checks convergence-health-py-budget-entry-removed and
+    convergence-health-monolith-file-absent green).
+  - >-
+    CI-safety (rec-2770): every pre-deploy step is hermetic:false (nothing for validate_vp_replay to
+    re-execute on this plan-only PR); every graduate step's command is pure-shell (grep/awk) so the
+    registry check runs venv-free in CI; pytest / validate steps are graduation:not-applicable.
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS. CITE:
+    Decision 126 (two-verb model + heal button + operator-only admin tier -- reconcile.yml IS the
+    heal button; DEP-10 makes "one input-free Reconcile" true for the dominant admin-resolved
+    episode), Decision 77 (no-TOCTOU / saved-plan / sandbox auto-apply -- the fresh re-plan is the
+    sanctioned dispatch-ack exception, saved path still verbatim), Decision 92 (CD.35 guard exit
+    codes + anti-masking + in/out-of-budget IAM; env-taxonomy sole SoT -- not restated here),
+    Decision 55 (RCA-first / anti-masking / forward-fix -- stale-fallthrough fires only on the
+    stale signature, genuine failures still red), Decision 94 (github_ci_apply trusts the
+    environment sub -- reused by gated-apply-reconcile, no new trust), Decision 103 (rec relevance
+    lifecycle -- recs close via the Resolves trailer), Decision 84 (DuckLake portal-only rec
+    writes), Decision 83 (advisory terraform-converged stays non-required), Decision 128 (SLOC
+    decompose-by-default -- submodules stay under budget), Decision 144 (allow-list-inversion
+    target model -- realized by T2.48, NOT this plan; these recovery changes are model-agnostic
+    and neither realize nor block it).
+  - >-
+    gates: decision-scout=NO_FLAGS (run INLINE in the planning context per the overseer rec-2767
+    dispatch model -- no child decision-scout subagent dispatched); plan-critique=deferred (the
+    /overseer run executes plan-critique lifted, after this bounded hand-back).
+  - >-
+    No decision contradiction found. Every change preserves the CD.35 control theory verbatim
+    (saved-plan no-TOCTOU, fail-closed guard, server-side convergence anchor, Environment-gates-
+    execution, bootstrap fixed point) and adds narrower classification/observability only.
+  - >-
+    Grounded on the D2 consolidation (T2.46, merged): the apply/reconcile chain now consumes
+    composite actions under .github/actions/ (deterministic-guard, subagent-plan-review,
+    fetch-saved-plan, write-convergence-record, build-ducklake-artifacts, terraform-init-retry,
+    materialise-tfvars). DEP-11's marker is written in the single write-convergence-record action
+    (both routed call sites inherit it); DEP-10's fresh path re-uses the deterministic-guard +
+    subagent-plan-review actions. fetch-saved-plan already fails closed on digest mismatch / missing
+    plan -- the stale case handled here is the state-serial-advance that only surfaces at
+    `terraform apply plan.bin` time.
+  - >-
+    Carried A-code-review Low reconciled: T2.47's files_in_scope listed the flat
+    scripts/convergence_health.py, which is now a package (assess.py|record.py|escalate.py|
+    approvals.py|code_drift.py|__main__.py). The scope table names the real submodules touched
+    (assess.py, __main__.py) and the plan re-grounds T2.47's files_in_scope as a data-only roadmap
+    edit (no criterion flip -- Status-Trusted-Never-Inferred).
+  - >-
+    Routed-after-stale design note: the fresh re-plan's guard-PASS path satisfies the T2.47:c1
+    acceptance (admin-resolved delta -> fresh plan empty/in-budget -> applies -> green). The
+    guard-ROUTE path (a fresh out-of-budget residual) is completed via the run-scoped artifact
+    handoff to gated-apply-reconcile so no episode strands, honouring DEP-10's "exactly one button
+    regardless of how the episode was resolved" -- using GitHub-native artifacts (no S3/IAM), with
+    the fresh plan.bin's sha256 passed as a job output and verified on download to preserve
+    plan/apply integrity across the two jobs.
+  - >-
+    Branch freshness: authored on claude/terraform-recovery-semantics off origin/main at planning
+    time; the impl agent rebases before pushing and hand-resolves any
+    config/agent/verification_registry/registry.yaml conflict by keeping BOTH sides' entries.
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/terraform-recovery-semantics)."
+  - "docs/PROJECT_CONTEXT.md read."
+  - "DECISIONS.md read (126, 77, 92, 55, 94, 103, 84, 83, 128, 144)."
+  - "All files in scope located and readable; D2 composite actions (write-convergence-record, deterministic-guard, subagent-plan-review, fetch-saved-plan) read."
+  - "audits/terraform-deploy-redesign-b67955b.yaml DEP-10 + DEP-11 finding text read; T2.47 exit criteria understood."
+  - "Acceptance criteria understood and verifiable (single-Reconcile clear; pending-gated legibility across verdict/drift-rec/advisory)."
+execution_steps:
+  - >-
+    reconcile.yml (DEP-10): in apply-reconcile, wrap the `terraform apply plan.bin` step with set+e
+    stderr capture; on a stale-plan signature (saved plan is stale / plan file can no longer be
+    applied / state was changed) set a stale flag under the STALE_PLAN_FRESH_REPLAN sentinel and do
+    NOT write red. Add a fresh re-plan step (terraform plan -out=plan.bin + terraform show -json
+    plan.bin > plan.json), a second deterministic-guard step on the fresh plan, a second
+    subagent-plan-review step (context: reconcile fresh re-plan), and a fresh `terraform apply
+    plan.bin` (guard-PASS). Route the fresh guard-ROUTE case: upload plan.bin as a run-scoped
+    artifact (RECONCILE_FRESH_PLAN_ARTIFACT) + emit its sha256 as a job output; set routed=true.
+  - >-
+    reconcile.yml gated-apply-reconcile (DEP-10): add a branch that, when a fresh-plan artifact is
+    present, downloads it, verifies sha256 against the job output, and applies it verbatim after
+    Environment approval; otherwise keep the existing fetch-saved-plan path. Feed the fresh apply's
+    outcome to write-convergence-record.
+  - >-
+    write-convergence-record/action.yml (DEP-11): replace the routed=true bare `exit 0` with a
+    pending_gated MARKER merge -- read the existing record, set pending_gated={routed_at, run_url,
+    commit_sha}, keep status unchanged, write back, read-back-verify status unchanged. Leave
+    refused / still-actionable / starved skips verbatim.
+  - >-
+    terraform-drift.yml (DEP-11): in the exit-2 handler, before the out-of-band red-flip, read the
+    current record's pending_gated marker; if present and not yet drift_flagged, add GH_TOKEN +
+    resolve the pending PR from pending_gated.commit_sha via gh api, file the tf_drift rec with a
+    pending-gated narrative naming that PR/run (PENDING_GATED_DRIFT), stamp
+    pending_gated.drift_flagged_at, and SKIP the out-of-band narrative. Absent/already-flagged
+    marker -> existing behaviour unchanged. Keep alarm-only (no terraform apply; status never green).
+  - >-
+    scripts/convergence_health/assess.py + __main__.py (DEP-11): add pending_gated to HealthVerdict,
+    populate from record.get('pending_gated') in assess_health, and include it in the printed
+    verdict JSON. Keep submodules under the 500-SLOC budget.
+  - >-
+    terraform-apply-sandbox.yml (DEP-11): in advisory-status, add a pending_gated branch to the
+    terraform-converged DESCRIPTION (naming the routed commit); status state semantics unchanged.
+  - >-
+    Tests: extend tests/convergence_health/test_assess.py + test___main__.py (pending_gated present/
+    absent/red-coexistence/printed-json) and tests/test_terraform_drift_acceptance.py (pending-gated
+    branch + preserved alarm-only invariants).
+  - >-
+    Roadmap: re-ground T2.47 files_in_scope (flat scripts/convergence_health.py -> assess.py +
+    __main__.py; add .github/actions/write-convergence-record/action.yml). No criterion flip.
+  - >-
+    Execute Verification Plan -- run each pre-deploy step; loop until green; run the post-deploy V3
+    acceptance (steps 11-12) and the rec-closure check (step 13). On an unrecoverable V3 failure,
+    stop and RCA (Decision 55).
+  - >-
+    Commit with feat(terraform-recovery-semantics): ...; squash-merge body carries
+    "Resolves: rec-2523, rec-2461, rec-2647, rec-2648".
+  - "Report: what was implemented, verification results, and the T2.47 c1/c2 closeout evidence."
+work_areas: []
+rollback: >-
+  Revert the implementation PR. All changes are effective-on-merge workflow/action/script edits
+  with no applied infrastructure state, so a revert fully restores the prior recovery behaviour;
+  the convergence record self-heals on the next apply/drift cycle.
