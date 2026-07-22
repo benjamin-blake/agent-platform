@@ -97,6 +97,45 @@ class TestMain:
         find_reconcile.assert_not_called()
         assert esc.call_args.kwargs["reconcile_in_flight"] is False
 
+    def test_main_prints_pending_gated_in_verdict_json(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """DEP-11 (T2.47): the printed HealthVerdict JSON must include pending_gated so the
+        convergence-health sensor surfaces a routed-pending episode."""
+        marker = {"routed_at": "2026-06-27T00:00:00Z", "run_url": "https://example.com/run/1", "commit_sha": "abc123"}
+        verdict = HealthVerdict(
+            status="green",
+            red_age_hours=0.0,
+            unapplied_backlog=0,
+            severity="none",
+            pending_gated=marker,
+        )
+        with (
+            patch("boto3.Session"),
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.__main__.assess_health", return_value=verdict),
+            patch("scripts.convergence_health.__main__.escalate", return_value={"action": "none", "rec_id": None}),
+        ):
+            rc = main()
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "pending_gated" in captured.out
+        assert "abc123" in captured.out
+
+    def test_main_prints_pending_gated_null_when_absent(self, capsys: pytest.CaptureFixture[str]) -> None:
+        verdict = self._verdict("green")
+        assert verdict.pending_gated is None
+        with (
+            patch("boto3.Session"),
+            patch("scripts.convergence_health.__main__.read_convergence_record", return_value={"status": "green"}),
+            patch("scripts.convergence_health.__main__.find_stuck_gated_approvals", return_value=[]),
+            patch("scripts.convergence_health.__main__.assess_health", return_value=verdict),
+            patch("scripts.convergence_health.__main__.escalate", return_value={"action": "none", "rec_id": None}),
+        ):
+            rc = main()
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert '"pending_gated": null' in captured.out
+
     def test_main_absent_record_skips_reconcile_lookup(self) -> None:
         with (
             patch("boto3.Session"),

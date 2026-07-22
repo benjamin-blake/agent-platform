@@ -1282,3 +1282,98 @@ entries:
       - -c
       - |
         bad=0; for f in .github/actions/*/action.yml; do grep -q 'using: *"\?composite' "$f" || { echo "not composite: $f"; bad=1; }; done; n=$(ls .github/actions/*/action.yml 2>/dev/null | wc -l | tr -d ' '); echo "actions=$n malformed=$bad"; [ "$n" -ge 6 ] && [ "$bad" -eq 0 ]
+  - check_id: reconcile-stale-plan-fresh-replan-present
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/reconcile.yml
+    guard_symbol: null
+    plan_slug: terraform-recovery-semantics
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=.github/workflows/reconcile.yml; sig=$(grep -Eic 'saved plan is stale|plan file can no longer be applied|state was changed' "$f"); mark=$(grep -c 'STALE_PLAN_FRESH_REPLAN' "$f"); rep=$(grep -Ec 'terraform plan .*-out=plan.bin' "$f"); echo "sig=$sig marker=$mark replan=$rep"; [ "$sig" -ge 1 ] && [ "$mark" -ge 1 ] && [ "$rep" -ge 1 ]
+  - check_id: reconcile-fresh-replan-guarded-and-reviewed
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/reconcile.yml
+    guard_symbol: null
+    plan_slug: terraform-recovery-semantics
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=.github/workflows/reconcile.yml; g=$(grep -c 'uses: ./.github/actions/deterministic-guard' "$f"); r=$(grep -c 'uses: ./.github/actions/subagent-plan-review' "$f"); echo "guard=$g review=$r"; [ "$g" -ge 2 ] && [ "$r" -ge 2 ]
+  - check_id: reconcile-fresh-plan-artifact-handoff
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/reconcile.yml
+    guard_symbol: null
+    plan_slug: terraform-recovery-semantics
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    # CARRY-1 (plan-critique): tightened beyond the plan's literal VP-3 command to ALSO require
+    # the sha256 job-output EMIT and the download-side VERIFY -- not merely artifact
+    # upload/download presence -- so the byte-integrity gate is enforced by this graduated check,
+    # not only design-mandated.
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=.github/workflows/reconcile.yml; up=$(grep -Ec 'actions/upload-artifact' "$f"); down=$(grep -Ec 'actions/download-artifact' "$f"); mark=$(grep -c 'RECONCILE_FRESH_PLAN_ARTIFACT' "$f"); emit=$(grep -c 'sha256=\$(sha256sum' "$f"); verify=$(grep -c 'FRESH_PLAN_SHA256' "$f"); echo "upload=$up download=$down marker=$mark emit=$emit verify=$verify"; [ "$up" -ge 1 ] && [ "$down" -ge 1 ] && [ "$mark" -ge 1 ] && [ "$emit" -ge 1 ] && [ "$verify" -ge 1 ]
+  - check_id: write-convergence-record-pending-gated-marker
+    primitive_slot: command_exit_zero
+    guard_target: .github/actions/write-convergence-record/action.yml
+    guard_symbol: null
+    plan_slug: terraform-recovery-semantics
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=.github/actions/write-convergence-record/action.yml; pg=$(grep -c 'pending_gated' "$f"); routed=$(grep -c 'ROUTED' "$f"); echo "pending_gated=$pg routed_refs=$routed"; [ "$pg" -ge 1 ] && [ "$routed" -ge 1 ]
+  - check_id: drift-pending-gated-narrative
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/terraform-drift.yml
+    guard_symbol: null
+    plan_slug: terraform-recovery-semantics
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=.github/workflows/terraform-drift.yml; pg=$(grep -c 'pending_gated' "$f"); mark=$(grep -c 'PENDING_GATED_DRIFT' "$f"); tok=$(grep -c 'GH_TOKEN' "$f"); echo "pending_gated=$pg marker=$mark gh_token=$tok"; [ "$pg" -ge 1 ] && [ "$mark" -ge 1 ] && [ "$tok" -ge 1 ]
+  - check_id: convergence-health-verdict-pending-gated
+    primitive_slot: command_exit_zero
+    guard_target: scripts/convergence_health
+    guard_symbol: HealthVerdict.pending_gated
+    plan_slug: terraform-recovery-semantics
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        a=scripts/convergence_health/assess.py; m=scripts/convergence_health/__main__.py; av=$(grep -c 'pending_gated' "$a"); mv=$(grep -c 'pending_gated' "$m"); echo "assess=$av main=$mv"; [ "$av" -ge 1 ] && [ "$mv" -ge 1 ]
+  - check_id: advisory-status-pending-gated
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/terraform-apply-sandbox.yml
+    guard_symbol: null
+    plan_slug: terraform-recovery-semantics
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=.github/workflows/terraform-apply-sandbox.yml; pg=$(grep -c 'pending_gated' "$f"); echo "pending_gated=$pg"; [ "$pg" -ge 1 ]

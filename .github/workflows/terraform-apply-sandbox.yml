@@ -652,9 +652,18 @@ jobs:
           else
             STATUS=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
             RED_COMMIT=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit_sha',''))")
+            # DEP-11 (T2.47): a routed-pending delta (guard exit 2, status stays green + a
+            # pending_gated marker) is a DIFFERENT truth than a plain converged green -- surface it
+            # in the description so a reader doesn't conflate "awaiting gated-apply approval" with
+            # "everything applied". Status semantics unchanged (still "success", non-required,
+            # Decision 83) -- richer text only.
+            PENDING_GATED_SHA=$(printf '%s' "$REC_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); pg=d.get('pending_gated') or {}; print(pg.get('commit_sha',''))")
             if [ "$STATUS" = "red" ]; then
               STATE="failure"
               DESC="main is non-converged (last sandbox apply RED at ${RED_COMMIT}). Advisory only -- not a required check."
+            elif [ -n "$PENDING_GATED_SHA" ]; then
+              STATE="success"
+              DESC="main is pending-gated (a routed change at ${PENDING_GATED_SHA} awaits gated-apply reviewer approval; not a failure). Advisory only."
             else
               STATE="success"
               DESC="main is converged (last sandbox apply GREEN). Advisory only."

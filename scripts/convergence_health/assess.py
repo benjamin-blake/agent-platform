@@ -29,6 +29,12 @@ class HealthVerdict:
     stuck_approvals: list[dict[str, Any]] = field(default_factory=list)
     severity: str = "none"  # "none" | "low" | "high"
     record_age_hours: float = 0.0
+    # DEP-11 (T2.47): the routed-pending marker from the convergence record (write-convergence-
+    # record's pending_gated merge), or None when absent. Orthogonal to severity/status -- a
+    # routed-pending episode leaves status green (anti-masking, Decision 55); this field is what
+    # lets the verdict, the drift rec, and the PR advisory status distinguish "pending-gated" from
+    # a genuinely converged green or a genuinely red episode.
+    pending_gated: Optional[dict[str, Any]] = None
 
 
 def escalation_action(over_threshold: bool, open_rec_exists: bool) -> str:
@@ -64,6 +70,7 @@ def assess_health(
             stuck_approvals=[],
             severity="none",
             record_age_hours=0.0,
+            pending_gated=None,
         )
 
     status = record.get("status", "unknown")
@@ -74,6 +81,7 @@ def assess_health(
         git_runner=git_runner,
     )
     approvals = stuck_approvals or []
+    pending_gated = record.get("pending_gated")
     stale_green_backlog = status == "green" and backlog > 0 and rec_age >= STALE_GREEN_BACKLOG_THRESHOLD_HOURS
 
     if approvals:
@@ -94,4 +102,5 @@ def assess_health(
         stuck_approvals=approvals,
         severity=severity,
         record_age_hours=round(rec_age, 2),
+        pending_gated=pending_gated,
     )
