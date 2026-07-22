@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 import scripts.ci_rca.taxonomy as taxonomy_mod  # noqa: E402
 from scripts.ci_rca.evidence import _compute_fingerprint, _slugify_workflow  # noqa: E402
+from scripts.ci_rca.fingerprint import compute_fingerprint_v2, error_signature_from_log_tail  # noqa: E402
 from scripts.ci_rca.taxonomy import (  # noqa: E402
     classify_failure,
     classify_failures,
@@ -173,6 +174,70 @@ MULTI_TAXONOMY["function_to_category"] = {
     "validate_iam_runner_policy": "iam_policy_gap",
 }
 
+FAILED_CHECKS_TAXONOMY = dict(MINIMAL_TAXONOMY)
+FAILED_CHECKS_TAXONOMY["function_to_category"] = {
+    "validate_sloc_limits": "sloc_violation",
+    "validate_platform_roadmap": "schema_drift",
+}
+
+
+class TestClassifyFailureFailedChecksBlock:
+    """rec-2762 / Decision 142 fingerprint-v2 classifier hardening: the authoritative "Failed
+    checks:" summary block (validate.py's own list of checks that actually FAILED) must win
+    over an arbitrary first-substring-hit against a validate_* name merely mentioned by a
+    PASSING check earlier in the same log."""
+
+    _LOG = (
+        "=== SLOC ===\n"
+        "  PASS: validate_sloc_limits ok\n"
+        "=== roadmap ===\n"
+        "  FAIL: PLAN-x.yaml: closes_criteria bad\n"
+        "\n"
+        "=== Validation Summary (scope: all) ===\n"
+        "Failed checks:\n"
+        "  - validate_platform_roadmap\n"
+    )
+
+    def test_failed_checks_block_wins_over_passing_mention(self, tmp_path):
+        """Fragmentation regression: a PASSING validate_sloc_limits mention earlier in the log
+        must not win over the authoritative block naming validate_platform_roadmap as the
+        check that actually failed (pre-fix behaviour returned sloc_violation here)."""
+        p = _write_taxonomy(tmp_path, FAILED_CHECKS_TAXONOMY)
+        cat, check, src = classify_failure(self._LOG, path=p)
+        assert cat == "schema_drift"
+        assert check == "validate_platform_roadmap"
+        assert src == "validate_failed_checks_block"
+
+    def test_failed_checks_block_classification_is_stable_across_calls(self, tmp_path):
+        """The same failure classified twice must yield an identical category -- the
+        fragmentation bug (rec-2749 vs rec-2762) came from the SAME underlying failure landing
+        on different categories across runs because the substring scan's winner depends on
+        func_map iteration order and which validate_* names happen to appear that run."""
+        p = _write_taxonomy(tmp_path, FAILED_CHECKS_TAXONOMY)
+        first = classify_failure(self._LOG, path=p)
+        second = classify_failure(self._LOG, path=p)
+        assert first == second == ("schema_drift", "validate_platform_roadmap", "validate_failed_checks_block")
+
+    def test_no_failed_checks_block_falls_back_to_substring_scan(self, tmp_path):
+        """No "Failed checks:" header present -- the prior substring-scan behaviour for
+        non-validate-summary logs is unchanged."""
+        p = _write_taxonomy(tmp_path, FAILED_CHECKS_TAXONOMY)
+        cat, check, src = classify_failure("validate_sloc_limits FAILED", path=p)
+        assert cat == "sloc_violation"
+        assert check == "validate_sloc_limits"
+        assert src == "function_to_category"
+
+    def test_failed_checks_block_with_unmapped_check_falls_through(self, tmp_path):
+        """A "Failed checks:" block naming a check absent from function_to_category falls
+        through to the lower-priority substring scan rather than erroring or dropping the
+        classification entirely."""
+        p = _write_taxonomy(tmp_path, FAILED_CHECKS_TAXONOMY)
+        log = "validate_sloc_limits ok\nFailed checks:\n  - validate_unmapped_check\n"
+        cat, check, src = classify_failure(log, path=p)
+        assert cat == "sloc_violation"
+        assert check == "validate_sloc_limits"
+        assert src == "function_to_category"
+
 
 class TestClassifyFailures:
     def test_single_match_returns_list_of_one(self, tmp_path):
@@ -231,6 +296,37 @@ class TestClassifyFailures:
         log = "validate_sloc_limits FAILED\nvalidate_sloc_limits also here\n"
         results = classify_failures(log, path=p)
         assert len(results) == 1
+
+    def test_failed_checks_block_enumerates_distinct_categories(self, tmp_path):
+        """Collision regression: two distinct failed checks named in the authoritative "Failed
+        checks:" block yield two distinct categories. This enumeration is bounded to the
+        authoritative block (each entry a genuine, independently-reported failure), so it does
+        not reintroduce the banned whole-log substring fan-out this module's docstring warns
+        against."""
+        p = _write_taxonomy(tmp_path, MULTI_TAXONOMY)
+        log = (
+            "validate_sloc_limits ok (passing mention earlier in the log)\n"
+            "Failed checks:\n"
+            "  - validate_sloc_limits\n"
+            "  - validate_iam_runner_policy\n"
+        )
+        results = classify_failures(log, path=p)
+        assert len(results) == 2
+        assert {r[0] for r in results} == {"sloc_violation", "iam_policy_gap"}
+        assert {r[1] for r in results} == {"validate_sloc_limits", "validate_iam_runner_policy"}
+        assert {r[2] for r in results} == {"validate_failed_checks_block"}
+
+    def test_failed_checks_block_absent_preserves_prior_fallback_singular(self, tmp_path):
+        """No "Failed checks:" block: classify_failures preserves the pre-fix single-call
+        fallback exactly -- distinguishes the new bounded-block enumeration from the old,
+        deliberately-banned whole-log substring fan-out (test_multiple_log_text_mentions_no_
+        longer_fan_out above stays green, covering the same invariant from the fan-out angle)."""
+        p = _write_taxonomy(tmp_path, MULTI_TAXONOMY)
+        log = "validate_sloc_limits FAILED\nvalidate_iam_runner_policy FAILED\n"
+        results = classify_failures(log, path=p)
+        assert len(results) == 1
+        cat, check, src = results[0]
+        assert src == "function_to_category"
 
 
 class TestJobsJsonPreference:
@@ -357,3 +453,49 @@ class TestConvergenceFingerprintDistinctness:
         fp_starved = _compute_fingerprint(slug, "subagent_starved", "subagent_starved")
         fp_env = _compute_fingerprint(slug, "terraform_error", "environment")
         assert len({fp_refused, fp_starved, fp_env}) == 3
+
+    def test_rec_2743_rec_2762_collision_pair_now_distinct_at_fingerprint_v2_level(self):
+        """Historical false-merge (rec-2762 plan investigation, Decision 142): rec-2743 (a DQ
+        'automatable' hard-gate failure, from the "Validate full tier (ruff, mypy, pytest, DQ
+        runner, verifier harness)" job's separate Verification Harness step) and rec-2762 (a
+        validate_platform_roadmap closes_criteria failure) both classified to
+        sloc_violation/validate_sloc_limits under the pre-fix whole-log substring scan -- both
+        logs mention validate_sloc_limits from an earlier PASSING validate.py step -- and
+        collided on the exact same fingerprint (446f8fe1...). Log text reconstructed from each
+        rec's context_v2_json proximate_cause (no raw CI log retained). Proves the hardened
+        classifier, run against the REAL config/ci_rca_taxonomy.yaml, now resolves the pair to
+        DISTINCT compute_fingerprint_v2 hashes."""
+        rec_2762_log = (
+            "=== SLOC ===\n"
+            "  PASS: validate_sloc_limits ok\n"
+            "=== roadmap ===\n"
+            "  FAIL: PLAN-ducklake-maintenance-smoke-split.yaml: closes_criteria entry has no "
+            "':' or resolves to an unknown tier_item id (5 FAIL rows)\n"
+            "\n"
+            "=== Validation Summary (scope: all) ===\n"
+            "Failed checks:\n"
+            "  - validate_platform_roadmap\n"
+        )
+        # rec-2743's failure is the DQ/Verification-Harness step, a distinct CI step from the
+        # validate.py invocation (which PASSED in that same job) -- so its log has no "Failed
+        # checks:" header, and the fix leaves this classification exactly as before.
+        rec_2743_log = (
+            "=== SLOC ===\n"
+            "  PASS: validate_sloc_limits ok\n"
+            "=== Verification Harness ===\n"
+            "[FAIL] (HARD_GATE) DataQualityVerifier: Data quality FAIL: 0 hard-gated, 1 failed, "
+            "0 errored, 1 warned.\n"
+            "ops_recommendations.automatable [not_null] FAIL (2 violation(s))\n"
+        )
+        slug = _slugify_workflow("Validate full tier (ruff, mypy, pytest, DQ runner, verifier harness)")
+
+        cat_2762, check_2762, _ = classify_failure(rec_2762_log, path=None)
+        cat_2743, check_2743, _ = classify_failure(rec_2743_log, path=None)
+        assert cat_2762 == "schema_drift"
+        assert cat_2743 == "sloc_violation"
+
+        sig_2762 = error_signature_from_log_tail(rec_2762_log, check_2762)
+        sig_2743 = error_signature_from_log_tail(rec_2743_log, check_2743)
+        fp_2762 = compute_fingerprint_v2(slug, cat_2762, sig_2762)
+        fp_2743 = compute_fingerprint_v2(slug, cat_2743, sig_2743)
+        assert fp_2762 != fp_2743
