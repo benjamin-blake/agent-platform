@@ -405,55 +405,30 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:ducklake-neon-catalog-dsn-*"]
       },
       {
-        # Neon provider API key secret (created out-of-band in Phase 0). Read-only -- lifecycle is
-        # human-owned. Per-service read-wildcard closure (PLAN-terraform-sandbox-convergence-closure):
-        # Describe*/Get* closes the iterative-discovery anti-pattern. ARN-scoped to this one secret.
-        Sid      = "SecretsManagerNeonAPIKeyRead"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
-        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:neon-api-key-*"]
-      },
-      {
-        # Tfvars sourcing: the apply job fetches terraform.personal.tfvars from this secret at apply
-        # time. Read-only -- lifecycle is human-owned.
-        # Per-service read-wildcard closure: Describe*/Get* closes the iterative-discovery anti-pattern.
-        Sid      = "SecretsManagerTfvarsRead"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:Describe*", "secretsmanager:Get*"]
-        Resource = ["arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-terraform-personal-tfvars-*"]
-      },
-      {
-        # Inference credential envelopes (DeepSeek + Anthropic) -- plan + apply time refresh-read.
-        # Read-only -- envelopes are admin-applied (inference_credentials.tf); CI must never write.
-        # Mirrors SecretsManagerNeonAPIKeyRead and SecretsManagerTfvarsRead precedents (rec-2305).
-        Sid    = "SecretsManagerInferenceCredentialsRead"
+        # Consolidated read-only Secrets Manager refresh-reads (Describe*/Get*) for every secret the
+        # apply role sources at plan/apply time. Merged from five per-secret statements into one
+        # (DEP-01 apply-inline-policy-size fix): the IAM inline-policy hard limit is 10,240 bytes and
+        # the enumerated five pushed the rendered policy to 10,534 B (LimitExceeded at apply, invisible
+        # to `terraform plan`). The grant set is UNCHANGED -- identical secretsmanager:Describe*/Get*
+        # actions over the union of the same ARNs, so IAM evaluates every request identically (a
+        # request is allowed iff its action is Describe*/Get* and its resource matches one ARN, in
+        # both forms). Each ARN's lifecycle is human-owned / out-of-band (Decision 37); CI reads
+        # these, never writes them. The writable DuckLake Neon DSN secret keeps its own statement
+        # above (it is not read-only). Per-service read-wildcard closure (rec-2305) is preserved.
+        #   neon-api-key-*                              : Neon provider API key (Phase 0 out-of-band).
+        #   agent-platform-terraform-personal-tfvars-* : tfvars sourcing at apply time.
+        #   agent-platform-deepseek/anthropic-api-key-*: inference credential envelopes (admin-applied).
+        #   agent-platform-broker-*                    : Alpaca paper+live broker envelopes (T2.14).
+        #   agent-platform-github-pat-*                : dispatcher/findings-processor PAT (T2.43).
+        Sid    = "SecretsManagerReadOnly"
         Effect = "Allow"
         Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
         Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:neon-api-key-*",
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-terraform-personal-tfvars-*",
           "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-deepseek-api-key-*",
           "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-anthropic-api-key-*",
-        ]
-      },
-      {
-        # Broker credential envelopes (Alpaca paper + live) -- plan + apply time refresh-read for
-        # secrets_manager_brokers.tf (T2.14). Mirrors SecretsManagerInferenceCredentialsRead.
-        # Read-only; values are out-of-band (Decision 37).
-        Sid    = "SecretsManagerBrokerCredentialsRead"
-        Effect = "Allow"
-        Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
-        Resource = [
           "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-broker-*",
-        ]
-      },
-      {
-        # T2.43 gap (Decision 129 / rec-2702): the scheduled-agent-dispatcher / findings-processor
-        # GitHub PAT secret -- read-only; the value is set out-of-band (Decision 37), this apply
-        # role owns the secret's lifecycle only. Mirrors oidc.tf's SecretsManagerGithubPatRead
-        # (github_ci_plan/drift already had this grant; only this cross-tier bootstrap copy lagged).
-        Sid    = "SecretsManagerGithubPatRead"
-        Effect = "Allow"
-        Action = ["secretsmanager:Describe*", "secretsmanager:Get*"]
-        Resource = [
           "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:agent-platform-github-pat-*",
         ]
       },
