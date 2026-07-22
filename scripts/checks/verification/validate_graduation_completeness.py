@@ -44,39 +44,15 @@ validate_verification_registry / VF-06).
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Callable
 
 from scripts.checks import _common, registry
 
-_PLAN_PATH_RE = re.compile(r"^docs/plans/PLAN-([^/]+)\.yaml$")
-_FEAT_COMMIT_RE = re.compile(r"^feat\(([^)]+)\):")
 _REGISTRY_REL_PATH = "config/agent/verification_registry/registry.yaml"
 
 LoadPlanFn = Callable[[str, Path], object]
 BaselineRegistryReaderFn = Callable[[Path], list[dict]]
-
-
-def _plan_paths_from_changed(changed_files: list[str]) -> list[str]:
-    return sorted(f for f in changed_files if _PLAN_PATH_RE.match(f))
-
-
-def _load_plan(rel_path: str, root: Path):
-    """Load a PlanDocument via scripts.roadmap.plan_document.load(), injecting repo root onto sys.path."""
-    root_str = str(root)
-    import sys as _sys  # noqa: PLC0415
-
-    injected = root_str not in _sys.path
-    if injected:
-        _sys.path.insert(0, root_str)
-    try:
-        from scripts.roadmap.plan_document import load  # noqa: PLC0415
-
-        return load(root / rel_path)
-    finally:
-        if injected and root_str in _sys.path:
-            _sys.path.remove(root_str)
 
 
 def _added_plan_paths(root: Path) -> set[str]:
@@ -90,12 +66,12 @@ def _added_plan_paths(root: Path) -> set[str]:
     )
     if result.returncode != 0:
         return set()
-    return {f for f in result.stdout.strip().splitlines() if _PLAN_PATH_RE.match(f)}
+    return {f for f in result.stdout.strip().splitlines() if _common.PLAN_PATH_RE.match(f)}
 
 
 def _plan_pr_leg(changed_files: list[str], root: Path, failed: list[str], load_plan: LoadPlanFn | None = None) -> None:
-    load_plan = load_plan or _load_plan
-    plan_files = _plan_paths_from_changed(changed_files)
+    load_plan = load_plan or _common.load_plan
+    plan_files = _common.plan_paths_from_changed(changed_files)
     if not plan_files:
         print("  PASS (plan-PR leg): no docs/plans/PLAN-*.yaml in the diff -- no-op.")
         return
@@ -136,38 +112,6 @@ def _plan_pr_leg(changed_files: list[str], root: Path, failed: list[str], load_p
             )
         else:
             print(f"  PASS (plan-PR leg): {plan_rel} -- all {len(pre_deploy_steps)} pre-deploy step(s) carry a disposition.")
-
-
-def _origin_main_reachable(root: Path) -> bool:
-    result = _common.run(
-        ["git", "rev-parse", "--verify", "-q", "origin/main"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        cwd=root,
-    )
-    return result.returncode == 0
-
-
-def _feat_commit_slugs(root: Path) -> list[str]:
-    """Ordered, de-duplicated slugs from feat({slug}) commit subjects in origin/main..HEAD."""
-    result = _common.run(
-        ["git", "log", "origin/main..HEAD", "--format=%s"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        cwd=root,
-    )
-    if result.returncode != 0:
-        return []
-    slugs: list[str] = []
-    seen: set[str] = set()
-    for line in result.stdout.strip().splitlines():
-        match = _FEAT_COMMIT_RE.match(line.strip())
-        if match and match.group(1) not in seen:
-            seen.add(match.group(1))
-            slugs.append(match.group(1))
-    return slugs
 
 
 def _current_registry_entries(root: Path) -> list[dict]:
@@ -221,14 +165,14 @@ def _implement_pr_leg(
     load_plan: LoadPlanFn | None = None,
     baseline_registry_reader: BaselineRegistryReaderFn | None = None,
 ) -> None:
-    load_plan = load_plan or _load_plan
+    load_plan = load_plan or _common.load_plan
     baseline_registry_reader = baseline_registry_reader or _default_baseline_registry_entries
 
-    if not _origin_main_reachable(root):
+    if not _common.origin_main_reachable(root):
         print("  SKIP (implement-PR leg): origin/main unreachable (advisory locally, authoritative in CI).")
         return
 
-    slugs = _feat_commit_slugs(root)
+    slugs = _common.feat_commit_slugs(root)
     if not slugs:
         print("  PASS (implement-PR leg): no feat({slug}) commit(s) in this diff -- no-op.")
         return
@@ -282,8 +226,8 @@ def validate_graduation_completeness(
     """Enforce the plan-declared VF-05 graduation obligation (T3.21) across both PR legs.
 
     changed_files / root / load_plan / baseline_registry_reader are test/dogfood injection
-    seams -- default to _common.get_changed_files(), _common.ROOT, this module's own
-    _load_plan, and a real `git show origin/main:...registry.yaml` reader respectively.
+    seams -- default to _common.get_changed_files(), _common.ROOT, _common.load_plan, and a
+    real `git show origin/main:...registry.yaml` reader respectively.
     """
     print("\n=== Verification graduation completeness (T3.21, VF-05 enforcement) ===")
     root = root if root is not None else _common.ROOT
