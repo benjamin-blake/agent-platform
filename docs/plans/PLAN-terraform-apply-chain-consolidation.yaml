@@ -1,0 +1,486 @@
+schema_version: 1
+slug: "terraform-apply-chain-consolidation"
+intent: >-
+  Consolidate the terraform apply chain so the safety-critical blocks (record-write x4, init-retry x5,
+  DuckLake build+byte-assert x5, guard/review/fetch/tfvars) each exist exactly once as composite actions
+  consumed by both entry workflows, and add saved-plan digest integrity so the applied plan.bin is
+  verified equal to the reviewed one -- killing anti-masking drift risk (DEP-08/rec-2663) and closing the
+  no-TOCTOU integrity gap (DEP-07) that every terraform/personal change rides, and proving clean reconcile
+  recovery (GATE-D2-green) before slice E rehearses the allow-list inversion on the consolidated pipeline.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-terraform-apply-chain-consolidation.yaml
+phase: >-
+  Platform tier_item T2.46 (apply-chain consolidation + saved-plan digest integrity, audit DEP-08/DEP-07)
+  plus T2.42 c4 (rec-2659 build-step bash dedup, DEFERRED from slice D1 to here per Decision 144 pt7 /
+  D1 hand-back). Slice D2 of the /overseer terraform-deploy-redesign run. Follow-on/execution plan closing
+  T2.46 c1+c2+c3 and T2.42 c4.
+closes_criteria:
+  - "T2.46:c1"
+  - "T2.46:c2"
+  - "T2.46:c3"
+  - "T2.42:c4"
+scope:
+  - file: .github/actions/terraform-init-retry/action.yml
+    action: Create
+    purpose: >-
+      DEP-08: the bounded-retry `terraform init` loop (transient registry.terraform.io 5xx / provider
+      download signatures, rec-2237/rec-2481) exists 5x today (terraform-apply-sandbox.yml apply-sandbox
+      ~L242, speculative-plan ~L687, gated-apply ~L983; reconcile.yml apply-reconcile ~L253,
+      gated-apply-reconcile ~L593). Extract verbatim to one composite action. Inputs: working-directory,
+      backend-config path. Preserves the transient-signature list and exponential backoff exactly.
+  - file: .github/actions/build-ducklake-artifacts/action.yml
+    action: Create
+    purpose: >-
+      DEP-08 + T2.42 c4: the "Build DuckLake lambda packages" step (pip install, build_lambda
+      --ducklake-only --skip-upload, LAMBDA_ARTIFACT_SHA resolution, Decision-77 byte-identity assert,
+      fixed+per-sha dual-write upload) exists 5x (sandbox ~L276/L720/L1012; reconcile ~L282/L621). This
+      composite action is the single copy; its body is a thin call into the new tested script
+      scripts/ci/ducklake_artifacts.py (c4 "extracted to tested scripts"). Inputs: event_name/mode
+      (assert vs upload-only vs skip-assert), artifact_sha, bucket. Preserves the DUCKLAKE_ZIP_MISMATCH
+      fail-closed and the fixed+per-sha dual-write (D1/rec-2755 content-addressing) exactly.
+  - file: .github/actions/materialise-tfvars/action.yml
+    action: Create
+    purpose: >-
+      DEP-08/rec-2663: the "Materialise tfvars from Secrets Manager" + "Mask secret-sourced tfvars values
+      in logs" + "Assert tfvars file is non-empty (fail-closed)" sequence exists 4-5x across both
+      workflows. Extract to one composite action (the rec-2285-fixed first-'='-split parse + ::add-mask::
+      + non-empty assert preserved verbatim). Inputs: working-directory.
+  - file: .github/actions/fetch-saved-plan/action.yml
+    action: Create
+    purpose: >-
+      DEP-08 + DEP-07: the "Fetch saved plan from S3" step exists at every apply fetch site (sandbox push
+      ~L343, sandbox gated ~L1071; reconcile auto ~L331, reconcile gated ~L660). ONE composite action for
+      all of them, and the single home for the DEP-07 digest verification: after `aws s3 cp` of the saved
+      plan.bin, recompute sha256 and compare to the reference digest emitted at persist time (via
+      scripts/ci/plan_digest.py verify) -- FAIL CLOSED on mismatch or missing reference before
+      `terraform show -json`. Inputs: sha-resolution mode (push/gated/reconcile), pr-number+head-sha,
+      working-directory. Preserves the fail-closed-on-absent-plan (Decision 77 no-TOCTOU) behaviour.
+  - file: .github/actions/deterministic-guard/action.yml
+    action: Create
+    purpose: >-
+      DEP-08: the three-way exit-code branch around scripts/terraform_apply_guard.py (exit 0 PASS / exit 2
+      routed=true / exit 1 fail-closed) exists in both sandbox apply-sandbox (~L382) and reconcile
+      apply-reconcile (~L360). One composite action; output `routed`. Path to the guard resolved via
+      ${{ github.workspace }}/scripts/terraform_apply_guard.py (composite-action path discipline).
+      Preserves Decision-92-pt1 authorization-division semantics (guard = plan-content policy, never the
+      authorization lock).
+  - file: .github/actions/subagent-plan-review/action.yml
+    action: Create
+    purpose: >-
+      DEP-08: the digest-fed subagent reviewer (guard --digest on stdin, claude_p_retry.sh, review_verdict.py
+      classification, single same-budget STARVED retry per T2.39 c2, outcome=proceed|revise|starved) exists
+      in both sandbox (~L409) and reconcile (~L382). One composite action; output `outcome`; secret passed
+      as a `with:` input claude_oauth_token (composite actions cannot read `secrets.*` directly). Preserves
+      the STARVED-no-latch anti-masking (Decision 55) exactly.
+  - file: .github/actions/write-convergence-record/action.yml
+    action: Create
+    purpose: >-
+      DEP-08 (the highest-risk block): the "Write convergence record (always-run, red-on-failure)" step
+      exists 4x (sandbox apply-sandbox ~L488, gated-apply ~L1109; reconcile apply-reconcile ~L451,
+      gated-apply-reconcile ~L685). One composite action carrying the always-run skip conditions verbatim
+      (REFUSED / ROUTED / STARVED skip; green iff apply success; CONVERGENCE_WRITE_VERIFY read-back verify;
+      plan_sha=sha256(plan.bin)). Inputs: refused, routed, review_outcome, apply_outcome, event_name, sha,
+      run_id, server_url, repo, convergence bucket/key. This is the exact code the audit warns "must not
+      drift" -- one copy is the point.
+  - file: scripts/ci/ducklake_artifacts.py
+    action: Create
+    purpose: >-
+      T2.42 c4 (rec-2659) + DEP-08: extract the DuckLake build byte-identity-assert + fixed/per-sha
+      dual-write loop out of inline workflow bash into a tested Python module (assert_and_upload(names,
+      artifact_sha, event_name, bucket, region)). The build-ducklake-artifacts composite action calls it.
+      Makes the Decision-77 byte-assert and the dual-write key scheme unit-testable (mismatch fails closed;
+      dual-write targets BOTH lambda-packages/<name> AND lambda-packages/<sha>/<name>). Under 500 SLOC.
+  - file: scripts/ci/plan_digest.py
+    action: Create
+    purpose: >-
+      DEP-07: the saved-plan digest emit/verify helper. emit(plan_bin) -> sha256 hex; verify(plan_bin,
+      reference) -> raise/exit-nonzero (FAIL CLOSED) on mismatch or empty/missing reference. Used by the
+      speculative-plan persist path (emit -> PR comment + commit status) and by the fetch-saved-plan action
+      (verify). Pure, in-process, unit-testable; no S3/network in the compare path. Under 500 SLOC.
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      DEP-08: replace the inline init-retry / build-ducklake / materialise-tfvars / fetch-saved-plan /
+      guard / review / record-write blocks in apply-sandbox, speculative-plan, and gated-apply jobs with
+      `uses: ./.github/actions/<name>` steps (job-level skeleton -- OIDC role, environment gate, triggers,
+      if-guards, concurrency -- STAYS inline where a solo operator reads it). DEP-07: in speculative-plan,
+      after "Persist saved plan to S3", emit sha256(plan.bin) into the PR comment AND post it as a
+      `terraform-plan-digest` commit status on the PR head sha (add `statuses: write` to the speculative-plan
+      job permissions). DEP-07 c3: content-address the tfplan key to tfplan/personal/<pr>/<sha>.bin at
+      persist + both fetch sites (stays within the existing tfplan/personal/* PutObject grant -> no IAM /
+      no apply). KEEP the ci-rca self-dispatch step and concurrency groups inline (test-guarded, not a
+      consolidation target).
+  - file: .github/workflows/reconcile.yml
+    action: Modify
+    purpose: >-
+      DEP-08: replace the inline shared blocks in apply-reconcile and gated-apply-reconcile with the same
+      `uses: ./.github/actions/<name>` steps, so reconcile stops re-implementing the guard->review->apply->
+      record chain (rec-2663). PRESERVE reconcile-unique skeleton steps verbatim: resolve-target job, "Checkout
+      the red commit", and "Re-verify the record is still red (race guard)" (scripts.ci.reconcile_target).
+      DEP-07 c3: content-address the tfplan key at reconcile's two fetch sites keyed by the red commit's
+      originating PR (pr,sha).
+  - file: tests/test_ducklake_artifacts.py
+    action: Create
+    purpose: >-
+      T2.42 c4: unit tests for scripts/ci/ducklake_artifacts.py -- byte-mismatch fails closed; on push the
+      assert runs and a missing per-sha object fails closed; the dual-write targets BOTH the fixed and
+      per-sha keys; workflow_dispatch skips the assert. No live S3 (boto3/subprocess mocked).
+  - file: tests/test_plan_digest.py
+    action: Create
+    purpose: >-
+      DEP-07: unit tests for scripts/ci/plan_digest.py -- emit returns the sha256 hex of the bytes; verify
+      passes on a matching reference; verify FAILS CLOSED on a mismatched reference and on an
+      empty/missing/whitespace reference (the substitution and the no-reference cases both fail closed).
+  - file: tests/verify_ci_workflow/test_apply_and_terraform.py
+    action: Modify
+    purpose: >-
+      DEP-08: update only the assertions that reached into inline step text now moved into composite actions
+      (e.g. a step-presence assertion that grepped the apply job body). PRESERVE and keep green the ci-rca
+      re-run-fallback assertions and the concurrency-group assertions (they encode behavioural contracts the
+      consolidation must not break); do NOT weaken them. If no assertion referenced moved inline text, this
+      file is untouched (leave out of the diff).
+bundled_recommendations:
+  - "rec-2663"
+  - "rec-2659"
+infrastructure_dependencies:
+  - >-
+    APPLIES NOTHING (Decision 77/92/126; overseer GATE-B-apply/GATE-drift-clear model): this slice edits
+    ONLY GitHub Actions composite actions, entry workflows, scripts, and tests -- all effective on merge.
+    NO terraform/personal or terraform/github .tf is edited. The DEP-07 c3 key refinement
+    (tfplan/personal/<pr>/<sha>.bin) stays inside the existing TfplanWrite grant (PutObject on
+    tfplan/personal/*, terraform/personal/oidc.tf) so it needs NO IAM change and NO terraform apply.
+    (T2.46 files_in_scope lists oidc.tf; this plan deliberately does NOT touch it -- justified in context.)
+  - >-
+    Speculative-plan / no-TOCTOU pipeline (Decision 77/92 Wave 2, T2.21): the consolidation KEEPS the
+    apply-the-saved-plan model verbatim -- PR-reviewed plan.bin persisted by head sha, re-applied at merge
+    with no re-plan, guard-classified. DEP-07 digest-verify STRENGTHENS this: the fetched plan.bin is now
+    proven byte-equal to the reviewed one before apply. docs/contracts/environment-taxonomy.md (Axis-A +
+    Guard subsection) remains the sole SoT for guard classification / saved-plan persistence / convergence
+    shape; this plan names the preserved checks, it does not restate them.
+  - >-
+    CI-delegation (Decision 119/120): terraform/personal uses the third-party kislerdm/neon provider
+    (github.com egress-blocked in CC-web). This plan runs NO local terraform init/validate/plan; the
+    workflow YAML edits are validated by the required terraform-validate / pr-validate CI jobs and the
+    plan-PR's own workflow-lint. Local VP is grep + pytest only.
+  - >-
+    No DuckLake handler code changes (Decision 79/125): this slice does not touch any Lambda handler under
+    src/lambdas/** -- it only relocates the existing build-invocation bash into a tested script + composite
+    action. So Decision-79 per-Lambda build/deploy/smoke steps are NOT triggered, and the
+    terraform_personal_filemd5_coupled deploy channel (T2.38) is unaffected (it resolves its own
+    github.sha namespace and consumes the same dual-write path transparently).
+acceptance_criteria:
+  - >-
+    T2.46 c1 (DEP-08/rec-2663): each of record-write, DuckLake build+byte-assert, terraform-init-retry, and
+    the guard+subagent-review+fetch chain exists EXACTLY ONCE (as a composite action under .github/actions/
+    or the tested script it calls), and BOTH entry workflows (terraform-apply-sandbox.yml, reconcile.yml)
+    consume those single copies via `uses: ./.github/actions/<name>`. The inline duplicate copies are gone
+    (their unique sentinels -- CONVERGENCE_WRITE_VERIFY, DUCKLAKE_ZIP_MISMATCH, the init transient-retry
+    marker -- appear 0 times in the two workflow files). Both entry workflows pass their behavioural
+    contracts (guard routing, anti-masking skip conditions, reconcile race guard, ci-rca fallback,
+    concurrency groups) -- verified in the forced-red rehearsal (c-14) + the contract test (VP-11).
+  - >-
+    T2.46 c2 (DEP-07): sha256(plan.bin) is emitted at persist time into BOTH the speculative-plan PR comment
+    AND a `terraform-plan-digest` commit status on the PR head sha; every saved-plan fetch site recomputes
+    sha256 of the fetched plan.bin and FAILS CLOSED on mismatch or missing reference before `terraform show`
+    / apply. Overwriting a saved plan object after PR review causes the merge-time fetch to fail closed with
+    a digest-mismatch marker (VP-15 live negative test).
+  - >-
+    T2.46 c3 (DEP-07): the tfplan/personal S3 key is content-addressed by (pr, sha)
+    (tfplan/personal/<pr>/<sha>.bin) at the persist site and at all fetch sites; the key change stays within
+    the existing tfplan/personal/* PutObject grant so no IAM change and no terraform apply is required.
+  - >-
+    T2.42 c4 (rec-2659): the DuckLake build+byte-identity-assert+dual-write workflow bash is extracted to the
+    tested module scripts/ci/ducklake_artifacts.py (unit-tested: mismatch fails closed; dual-write targets
+    fixed + per-sha keys) and its duplicate invocations are collapsed to the one build-ducklake-artifacts
+    composite action.
+  - >-
+    GATE-D2-green: a forced-red -> Reconcile parity rehearsal drives the convergence record red on a
+    converged commit, dispatches Reconcile through the CONSOLIDATED chain, and the record comes back GREEN
+    (clean recovery through the composite actions). Confirmed green in the implementation hand-back (VP-14).
+  - >-
+    rec-2663 (Medium, DEP-08) and rec-2659 (Low, T2.42 c4) are resolved by this slice and closed via the
+    Resolves: trailer at squash-merge.
+  - "Local presubmit stays green: bin/venv-python -m scripts.validate --pre exits 0."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      c1/DEP-08 -- the record-write block exists exactly once: its unique read-back sentinel
+      CONVERGENCE_WRITE_VERIFY appears 0 times inline in the two entry workflows and >=1 time in the
+      write-convergence-record composite action.
+    command: >-
+      inline=$(grep -Rh 'CONVERGENCE_WRITE_VERIFY' .github/workflows/terraform-apply-sandbox.yml
+      .github/workflows/reconcile.yml | wc -l | tr -d ' '); act=$(grep -c 'CONVERGENCE_WRITE_VERIFY'
+      .github/actions/write-convergence-record/action.yml 2>/dev/null || echo 0); echo
+      "inline=$inline action=$act"; [ "$inline" -eq 0 ] && [ "$act" -ge 1 ]
+    expected: "inline=0 action>=1 ; exit 0 (record-write is single-copy)."
+    fix_if: >-
+      inline>0 -- a record-write copy still lives in a workflow job; replace it with `uses:
+      ./.github/actions/write-convergence-record`. action=0 -- the action file is missing the block.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "convergence-record-write-single-copy"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      c1/DEP-08 -- the terraform-init-retry loop exists exactly once: its transient-retry marker appears 0
+      times inline in the two workflows and >=1 time in the terraform-init-retry composite action.
+    command: >-
+      inline=$(grep -Rh 'terraform init transient error' .github/workflows/terraform-apply-sandbox.yml
+      .github/workflows/reconcile.yml | wc -l | tr -d ' '); act=$(grep -c 'terraform init transient error'
+      .github/actions/terraform-init-retry/action.yml 2>/dev/null || echo 0); echo "inline=$inline
+      action=$act"; [ "$inline" -eq 0 ] && [ "$act" -ge 1 ]
+    expected: "inline=0 action>=1 ; exit 0 (init-retry is single-copy)."
+    fix_if: "inline>0 -- an init-retry copy remains inline; replace with the terraform-init-retry action."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "terraform-init-retry-single-copy"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      c1/c4/DEP-08 -- the DuckLake build+byte-assert exists exactly once: the DUCKLAKE_ZIP_MISMATCH
+      fail-closed marker appears 0 times inline in the two workflows, and the assert logic lives in the
+      tested module scripts/ci/ducklake_artifacts.py.
+    command: >-
+      inline=$(grep -Rh 'DUCKLAKE_ZIP_MISMATCH' .github/workflows/terraform-apply-sandbox.yml
+      .github/workflows/reconcile.yml | wc -l | tr -d ' '); scr=$(grep -c 'DUCKLAKE_ZIP_MISMATCH'
+      scripts/ci/ducklake_artifacts.py 2>/dev/null || echo 0); echo "inline=$inline script=$scr"; [
+      "$inline" -eq 0 ] && [ "$scr" -ge 1 ]
+    expected: "inline=0 script>=1 ; exit 0 (build+assert extracted to the tested script)."
+    fix_if: >-
+      inline>0 -- a build+assert copy remains inline; move it into scripts/ci/ducklake_artifacts.py behind
+      the build-ducklake-artifacts action. script=0 -- the assert logic is not in the module.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "ducklake-build-assert-single-copy"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      c1/DEP-08 -- BOTH entry workflows consume the shared composite actions (guard, review, fetch,
+      tfvars, init, build, record are referenced by `uses:` in each of the two workflows, proving the
+      guard+review+fetch chain is deduped not inlined).
+    command: >-
+      for wf in .github/workflows/terraform-apply-sandbox.yml .github/workflows/reconcile.yml; do n=$(grep
+      -c 'uses: ./.github/actions/' "$wf"); echo "$wf uses=$n"; [ "$n" -ge 5 ] || { echo "too few action
+      refs in $wf"; exit 1; }; done; for a in write-convergence-record deterministic-guard
+      subagent-plan-review fetch-saved-plan terraform-init-retry build-ducklake-artifacts; do grep -q
+      "uses: ./.github/actions/$a" .github/workflows/terraform-apply-sandbox.yml || { echo "sandbox missing
+      $a"; exit 1; }; done
+    expected: "each workflow shows uses>=5 and sandbox references every shared action; exit 0."
+    fix_if: "A workflow still inlines a shared block -- convert it to the matching `uses:` action reference."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "entry-workflows-consume-composite-actions"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      c2/DEP-07 -- the persist path EMITS the plan digest: the speculative-plan job computes sha256 of
+      plan.bin and posts it as a terraform-plan-digest commit status (and into the PR comment), and the
+      job carries `statuses: write`.
+    command: >-
+      a=.github/workflows/terraform-apply-sandbox.yml; emit=$(grep -Ec 'terraform-plan-digest' "$a");
+      sha=$(grep -Ec 'sha256sum|plan_digest' "$a"); stat=$(grep -c 'statuses: write' "$a"); echo
+      "digest_status=$emit sha=$sha statuses_write=$stat"; [ "$emit" -ge 1 ] && [ "$sha" -ge 1 ] && [
+      "$stat" -ge 1 ]
+    expected: "digest_status>=1 sha>=1 statuses_write>=1 ; exit 0 (digest emitted as a commit status)."
+    fix_if: >-
+      No terraform-plan-digest status emit -- add the sha256 emit + `gh api ... /statuses` post after
+      Persist; add `statuses: write` to the speculative-plan job permissions.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "plan-digest-emitted-as-commit-status"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      c2/DEP-07 -- the fetch-saved-plan action VERIFIES the digest and fails closed: it recomputes
+      sha256 of the fetched plan.bin and refuses on mismatch/missing reference (uses plan_digest.py verify).
+    command: >-
+      f=.github/actions/fetch-saved-plan/action.yml; ver=$(grep -Ec 'plan_digest|sha256sum' "$f"); fc=$(grep
+      -Eic 'mismatch|fail.?closed|DIGEST' "$f"); echo "verify=$ver failclosed=$fc"; [ "$ver" -ge 1 ] && [
+      "$fc" -ge 1 ]
+    expected: "verify>=1 failclosed>=1 ; exit 0 (fetch fails closed on digest mismatch)."
+    fix_if: "The fetch action does not recompute+compare the digest -- add the plan_digest.py verify call, fail closed."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "fetch-saved-plan-digest-verify"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      c3/DEP-07 -- the tfplan key is content-addressed by (pr, sha): the persist site and the fetch action
+      reference the tfplan/personal/<pr>/<sha> namespace (a slash after the pr segment), not the flat
+      tfplan/personal/<sha>.bin.
+    command: >-
+      hits=$(grep -REc 'tfplan/personal/\$\{?[A-Za-z_]*PR|tfplan/personal/[^"]*/\$'
+      .github/workflows/terraform-apply-sandbox.yml .github/workflows/reconcile.yml
+      .github/actions/fetch-saved-plan/action.yml | awk -F: '{s+=$2} END{print s+0}'); echo
+      "content_addressed_refs=$hits"; [ "$hits" -ge 2 ]
+    expected: "content_addressed_refs>=2 ; exit 0 (persist + fetch use the (pr,sha) key)."
+    fix_if: >-
+      The key is still flat tfplan/personal/<sha>.bin -- add the PR-number segment
+      (tfplan/personal/<pr>/<sha>.bin) at persist and every fetch site; keep it inside tfplan/personal/*.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "tfplan-key-content-addressed-pr-sha"
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      c1/DEP-08 -- every new composite action is well-formed: each .github/actions/*/action.yml declares
+      `using: composite`.
+    command: >-
+      bad=0; for f in .github/actions/*/action.yml; do grep -q 'using: *"\?composite' "$f" || { echo "not
+      composite: $f"; bad=1; }; done; n=$(ls .github/actions/*/action.yml 2>/dev/null | wc -l | tr -d ' ');
+      echo "actions=$n malformed=$bad"; [ "$n" -ge 6 ] && [ "$bad" -eq 0 ]
+    expected: "actions>=6 malformed=0 ; exit 0 (all composite actions well-formed)."
+    fix_if: "An action.yml is missing `runs: {using: composite}` -- fix its runs block."
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "composite-actions-well-formed"
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      c4 -- unit-test the extracted DuckLake build logic: byte-mismatch fails closed; push asserts and a
+      missing per-sha object fails closed; dual-write targets fixed + per-sha keys; dispatch skips the assert.
+    command: "bin/venv-python -m pytest tests/test_ducklake_artifacts.py -q"
+    expected: "All ducklake_artifacts tests pass (mismatch + missing-object fail closed; dual-write verified)."
+    fix_if: >-
+      A test fails -- the extraction changed byte-assert or dual-write behaviour; restore parity with the
+      original inline logic (fail closed on mismatch; write BOTH keys).
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      DEP-07 -- unit-test the digest helper: emit returns sha256 hex; verify passes on a match; verify FAILS
+      CLOSED on a mismatched reference AND on an empty/missing/whitespace reference.
+    command: "bin/venv-python -m pytest tests/test_plan_digest.py -q"
+    expected: "All plan_digest tests pass (match passes; substitution + no-reference both fail closed)."
+    fix_if: >-
+      verify does not raise/exit-nonzero on mismatch or empty reference -- tighten it to fail closed on both
+      the substituted-plan and the absent-reference cases.
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      c1/DEP-08 behavioural-contract regression -- the apply/terraform workflow contract test still passes:
+      the ci-rca re-run fallback step and the concurrency-group invariants survive the consolidation.
+    command: "bin/venv-python -m pytest tests/verify_ci_workflow/test_apply_and_terraform.py -q"
+    expected: "All test_apply_and_terraform tests pass (ci-rca fallback + concurrency contracts intact)."
+    fix_if: >-
+      A concurrency/ci-rca assertion fails -- the consolidation moved or dropped a test-guarded contract
+      step; restore it inline (these are NOT consolidation targets) rather than weakening the test.
+    hermetic: false
+    graduation: not-applicable
+  - step: 12
+    phase: pre-deploy
+    action: "Local presubmit gate (advisory locally, authoritative in PR CI per Decision 73)."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0 (ruff/mypy/schema/sloc/graduation-completeness/vp-replay all green)."
+    fix_if: "Any --pre check fails -- fix and re-run; do not merge red. VP-replay re-runs the hermetic pure-shell steps above in CI (no .venv)."
+    hermetic: false
+    graduation: not-applicable
+  - step: 13
+    phase: post-deploy
+    action: >-
+      [DEFERRED-TO-CI] plan-PR CI authority: the required pr-validate check is green and the workflow-lint /
+      actionlint job (if present) is green -- the composite actions and edited workflows parse and lint on CI.
+    command: >-
+      echo "Verify via mcp github pull_request_read (get_status / get_check_runs): pr-validate green and any
+      workflow-lint/actionlint job green on the plan PR."
+    expected: "pr-validate green; workflow YAML + composite actions lint clean on CI."
+    fix_if: "actionlint/pr-validate red -- fix the reported composite-action or workflow YAML error on the branch."
+    graduation: not-applicable
+  - step: 14
+    phase: post-deploy
+    action: >-
+      GATE-D2-green (operator-assisted, post-merge) -- FORCED-RED -> RECONCILE PARITY REHEARSAL that MUST come
+      back GREEN. On a converged commit with an available saved plan, write a synthetic RED convergence record
+      via the pipeline-writer/admin identity (T2.22 rehearsal precedent), dispatch reconcile.yml, and confirm
+      it walks the CONSOLIDATED chain -- race-guard re-verify -> fetch-saved-plan (+digest verify) ->
+      deterministic-guard -> subagent-plan-review -> terraform apply (no-op on converged state) ->
+      write-convergence-record -- and the convergence record READS GREEN afterward. Proves the consolidated
+      apply-chain recovers cleanly through the composite actions (so slice E's end-to-end acceptance cannot
+      conflate an inversion failure with a consolidation regression). APPLIES NOTHING NEW (the reconcile apply
+      is a no-op against the already-converged state).
+    command: >-
+      echo "Operator-assisted rehearsal: (1) pick a converged commit with a saved plan; (2) write a red
+      convergence record for it via the apply/drift identity; (3) gh workflow run reconcile.yml (input-free);
+      (4) confirm via mcp github get_check_runs the reconcile run is green AND read the convergence record ->
+      status=green. Record the run id + green record in the hand-back (GATE-D2-green)."
+    expected: "Reconcile run green; convergence record status=green after the rehearsal; consolidated chain executed in order."
+    fix_if: >-
+      Reconcile fails or the record stays red -- a composite action drifted from its inline original
+      (skip-condition, race-guard, or digest verify); diff the action against the pre-consolidation block and
+      restore parity. Do NOT hot-patch the record (Decision 55) -- fix the action and re-rehearse.
+    graduation: not-applicable
+  - step: 15
+    phase: post-deploy
+    action: >-
+      DEP-07 live negative test (operator-assisted) -- confirm the digest control FIRES: after a PR's
+      speculative plan is reviewed and its plan.bin persisted, overwrite the saved plan object in S3 with
+      different bytes, then drive the merge-time (or Reconcile) fetch and confirm it FAILS CLOSED with a
+      digest-mismatch marker rather than applying the substituted plan.
+    command: >-
+      echo "Operator-assisted: overwrite s3://.../tfplan/personal/<pr>/<sha>.bin with altered bytes, trigger
+      the fetch path, and confirm the run fails at fetch-saved-plan with a DIGEST mismatch (not an apply).
+      Restore/clean up the object afterward."
+    expected: "The fetch step fails closed on digest mismatch; no apply of the substituted plan occurs."
+    fix_if: "The substituted plan is fetched/applied -- the verify is not wired at that fetch site; ensure every fetch consumer uses the fetch-saved-plan action."
+    graduation: not-applicable
+  - step: 16
+    phase: post-deploy
+    action: "[POST-MERGE] Confirm rec-2663 and rec-2659 are closed via the Resolves: trailer + rec-autoclose."
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && grep -oE '"id": "rec-266[3]"[^}]*"status": "[a-z]*"|"id":
+      "rec-2659"[^}]*"status": "[a-z]*"' logs/.recommendations-log.jsonl
+    expected: "rec-2663 and rec-2659 both show status closed after the squash-merge (Resolves: rec-2663, rec-2659)."
+    fix_if: >-
+      Still open -- run bin/venv-python -m scripts.ops_data_portal --update-rec rec-2663 --status closed
+      --resolution '...' (and rec-2659) via the portal (Decision 70/84).
+    graduation: not-applicable
+constraints:
+  - "APPLIES NOTHING (Decision 77/92/126): no terraform/personal or terraform/github .tf is edited; all edits are workflow/action/script/test, effective on merge. Agents never self-direct terraform apply. The DEP-07 c3 key stays within the existing tfplan/personal/* grant -- no IAM, no apply. The overseer batches any human-gated apply separately; this slice triggers none."
+  - "CI-SAFETY (rec-2770, learned in D1): every hermetic:true pre-deploy VP step and every graduated-check registry `command` is PURE-SHELL (grep / git ls-files / wc / awk) -- never bin/venv-python. CI has no .venv, so validate_vp_replay re-runs the hermetic steps and the graduated checks there; a venv-python command passes locally + in code-review but fails in CI. pytest/validate steps are hermetic:false (not replayed)."
+  - "No-TOCTOU + anti-masking preserved verbatim (Decision 77/92/55): the composite actions carry the guard exit-code routing, the always-run record-write skip conditions (REFUSED/ROUTED/STARVED), the read-back verify, the reconcile race guard, and the STARVED-no-latch semantics UNCHANGED. Consolidation is a refactor, not a behaviour change."
+  - "Environment gate stays at the JOB level (Decision 92 pt3 / Decision 94): the tf-gated-apply Environment and OIDC role selection remain inline job-level keys in the entry workflows -- composite actions run inside the already-authorised job; they never carry or bury the authorization gate. (This is the core reason for choosing composite actions over a reusable workflow.)"
+  - "Branch protection (Decision 83): do NOT add or remove a required status check; the new terraform-plan-digest commit status is advisory/machine-verified at fetch, NOT a required PR check; terraform-converged stays advisory."
+  - "PUBLIC repo (Decision 101): composite actions, scripts, and the digest carry no account IDs / ARNs / ExternalIds; the speculative-plan PR-comment redaction self-check (12-digit account-number guard) is preserved verbatim. Commit statuses are publicly readable (simplifies the fetch-side digest read)."
+  - "SLOC (Decision 128): the two new scripts (ducklake_artifacts.py, plan_digest.py) stay under 500 SLOC; the workflows SHRINK. No budget raise, no --update-sloc-budgets re-seed."
+  - "Warehouse-SoT / Single-Portal (Decision 84): rec-2663 + rec-2659 close via the Resolves: trailer / ops portal; never edit logs/*.jsonl directly."
+  - "No rescue agents or workaround loops (Decision 55): on an unrecoverable V3/rehearsal failure, stop and RCA -- diff the drifted composite action against its inline original; never hot-patch the convergence record."
+  - "Only modify files listed in scope; out-of-scope issues become recommendations, not inline fixes."
+context:
+  - "Slice D2 of the /overseer terraform-deploy-redesign run (audit b67955b). Executes existing tier_items T2.46 (c1/c2/c3) + T2.42 (c4); do NOT create a new tier_item. closes_criteria wires to T2.46:c1/c2/c3 + T2.42:c4. T2.42 c4 was DEFERRED from slice D1 to here (D1 hand-back + Decision 144 pt7). Status flips happen in /implement on the VP pass, never here (Status-Trusted-Never-Inferred)."
+  - "MECHANISM CHOICE = composite actions (.github/actions/*/action.yml) + two tested scripts, NOT a single reusable workflow_call workflow. The audit (DEP-08 proposed_change) offered BOTH ('composite actions / a workflow_call workflow'); T2.46 c1 says 'in the new reusable workflow' but its binding requirement is 'each block exists exactly once + both entry workflows pass their behavioural contracts'. Composite actions satisfy that AND keep the Environment gate + OIDC role + trigger/if-guards + concurrency VISIBLE at the entry-workflow job level (a reusable workflow would bury the security-critical gated-apply Environment behind a conditional `environment:` input -- worse for a solo operator and higher-risk on the exact gate this run is hardening). The guard+review+apply 'chain' becomes a short, order-preserving sequence of `uses:` steps. This deviation is a judgment call for the (overseer-run) plan-critique gate to review."
+  - "T2.46 files_in_scope lists terraform/personal/oidc.tf; this plan deliberately does NOT touch it. Reason: the only oidc.tf-relevant change is the DEP-07 c3 key refinement, and tfplan/personal/<pr>/<sha>.bin stays inside the existing TfplanWrite grant (PutObject on tfplan/personal/*), so no IAM change is needed -- and touching terraform/personal would force a human-gated apply this slice must NOT trigger (constraint: applies nothing). Keeping oidc.tf out is what makes D2 fully code/workflow-effective-on-merge."
+  - "DEP-07 x DEP-08 synergy: consolidating the fetch into ONE fetch-saved-plan composite action means the digest verification is implemented ONCE and automatically covers every fetch site (sandbox push + gated; reconcile auto + gated) -- the audit's 'verify at all fetch sites' falls out of the consolidation for free. The digest REFERENCE is a terraform-plan-digest commit status keyed to the PR head sha (written once by the plan job's GITHUB_TOKEN with statuses:write); a same-repo PutObject attacker would have to forge the S3 object AND the commit status AND still pass guard+review -- the residual same-repo-actor surface is the one DEP-07 explicitly accepts."
+  - "Reconcile-unique steps PRESERVED (not consolidated): the resolve-target job, 'Checkout the red commit', and the 'Re-verify the record is still red (race guard)' step (scripts.ci.reconcile_target) are reconcile-only and stay in reconcile's skeleton. The ci-rca self-dispatch step ('gh workflow run ci-rca.yml -f run_id=...') and the concurrency groups stay INLINE in each workflow -- they are asserted verbatim by tests/verify_ci_workflow/test_apply_and_terraform.py and are NOT consolidation targets (VP-11 guards this)."
+  - "Decision-scout verdict: NO_FLAGS. CITE list (verbatim decision ids): Decision 144, Decision 126, Decision 125, Decision 77, Decision 119, Decision 92, Decision 84, Decision 101, Decision 55, Decision 83. RELATED (cited in-body, not load-bearing): Decision 129, Decision 128, Decision 94 (env-sub trust), Decision 74 (ci-rca dedup), Decision 76 (poll-free wake), Decision 73 (CI-authoritative presubmit), Decision 120 (escape hatch), Decision 100 (managed-service-native: composite actions + sha256 + commit statuses are native GitHub/hash features, no client-tooling substitution -> no contradiction). No CONTRADICT and no BLOCK: the consolidation REINFORCES Decision 77/92 (no-TOCTOU + anti-masking preserved verbatim; DEP-07 strengthens no-TOCTOU) and is orthogonal to Decision 144's inversion (slice E). Decisions triaged: 99 of 99 (docs/DECISIONS.md active set; low-numbered decisions archived in DECISIONS_ARCHIVE.md were not re-triaged -- none govern GitHub Actions structure or the apply pipeline)."
+  - "gates: decision-scout=NO_FLAGS (run INLINE in the author context per the overseer rec-2767 dispatch model); plan-critique=deferred-to-overseer (the overseer runs plan-critique as a separate lifted fresh-context dispatch AFTER this hand-back)."
+  - "Branch created from origin/main (git fetch origin main; git checkout -B claude/terraform-apply-chain-consolidation origin/main). Overseer owns the CI-green wait + squash-merge + the GATE-D2-green confirmation; this session stops at PR-created with a clean tree."
+  - "GATE-D2-green (overseer, before slice E): the forced-red -> Reconcile rehearsal (VP-14) MUST be confirmed GREEN in D2's IMPLEMENTATION hand-back. This planning session AUTHORS the named VP step; the later /implement subagent + overseer/human execute the live rehearsal (operator-assisted: writing a red record needs the pipeline-writer/admin identity)."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/terraform-apply-chain-consolidation, from origin/main)"
+  - "docs/PROJECT_CONTEXT.md read (apply model, guard, deploy channels, convergence anchor)"
+  - "DECISIONS.md read (144/126/125/77/119/92/84/101/55/83 cited; 99/99 active triaged by inline decision-scout)"
+  - "All files in scope located: 7 composite actions (new), 2 scripts (new), 2 workflows (modify), 2 tests (new), 1 contract test (modify-if-needed)"
+  - "Acceptance criteria understood; GATE-D2-green rehearsal (VP-14) + DEP-07 live negative (VP-15) are operator-assisted post-deploy"
+  - "rec-2663 (Medium, DEP-08) + rec-2659 (Low, c4) relevance re-checked: both open, 1:1 with this slice -> bundle + Resolves trailer"
+execution_steps:
+  - "Create scripts/ci/ducklake_artifacts.py: move the DuckLake build byte-identity-assert + fixed/per-sha dual-write loop out of the inline workflow bash into assert_and_upload(names, artifact_sha, event_name, bucket, region) (mismatch fails closed; on push the per-sha object must exist; dual-write BOTH keys; dispatch skips the assert). Keep the build invocation (build_lambda --ducklake-only --skip-upload) callable from the action."
+  - "Create scripts/ci/plan_digest.py: emit(path)->sha256 hex; verify(path, reference)->fail-closed (nonzero/raise) on mismatch or empty/missing reference. Pure, no S3 in the compare path."
+  - "Create the 7 composite actions under .github/actions/ (terraform-init-retry, build-ducklake-artifacts, materialise-tfvars, fetch-saved-plan[+digest verify], deterministic-guard[out: routed], subagent-plan-review[in: claude_oauth_token; out: outcome], write-convergence-record). Copy the inline block bodies VERBATIM (preserve every skip condition, transient signature, redaction, read-back verify); resolve repo-file paths via ${{ github.workspace }}."
+  - "Modify .github/workflows/terraform-apply-sandbox.yml: replace the inline shared blocks in apply-sandbox / speculative-plan / gated-apply with `uses: ./.github/actions/<name>` steps (pass secrets as `with:` inputs; keep OIDC role, environment, if-guards, concurrency, the ci-rca self-dispatch step INLINE). Add the DEP-07 emit (sha256 -> PR comment + terraform-plan-digest commit status; add `statuses: write` to the speculative-plan job). Content-address the tfplan key to tfplan/personal/<pr>/<sha>.bin at persist + both fetch sites."
+  - "Modify .github/workflows/reconcile.yml: replace the inline shared blocks in apply-reconcile / gated-apply-reconcile with the same `uses:` actions; PRESERVE resolve-target, checkout-red, and the race-guard re-verify verbatim; content-address reconcile's two fetch keys by the red commit's originating (pr, sha)."
+  - "Create tests/test_ducklake_artifacts.py and tests/test_plan_digest.py (per VP-9/VP-10). If (and only if) an assertion in tests/verify_ci_workflow/test_apply_and_terraform.py referenced inline text that moved into an action, update just that assertion; keep the ci-rca + concurrency assertions green and un-weakened."
+  - "Execute the Verification Plan: run each pre-deploy step (1-12); loop until green; run `bin/venv-python -m scripts.validate --pre` (exit 0). Mark VP-13 (CI), VP-14 (GATE-D2-green rehearsal), VP-15 (DEP-07 negative), VP-16 (rec close) as post-merge/operator-assisted. On an unrecoverable failure, stop and RCA (Decision 55) -- diff the drifted action against its inline original; no workaround loop."
+  - "Commit feat(terraform-apply-chain-consolidation): ...; open the PR; the squash-merge body carries `Resolves: rec-2663, rec-2659`. APPLY NOTHING."
+  - "Report: what was consolidated (block -> action census), the DEP-07 digest wiring, VP results, and the deferred operator-assisted items (GATE-D2-green rehearsal + DEP-07 negative test)."
+rollback: >-
+  Every edit is a GitHub Actions / script / test change revertable by git revert with ZERO infra effect (no
+  terraform apply is performed). The composite actions are behaviour-preserving refactors of existing inline
+  blocks; the DEP-07 digest emit/verify and (pr,sha) key are additive and fail-closed (a missing reference
+  fails closed, never opens). If the forced-red rehearsal (VP-14) or a fetch-digest check regresses, revert
+  the workflow `uses:` edits to restore the inline blocks (the actions can remain unused) and re-open via a
+  fresh PR -- never a silent re-plan-and-apply.
