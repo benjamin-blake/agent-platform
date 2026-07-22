@@ -277,6 +277,34 @@ class TestParseDecisionsMdMissingFile:
         assert parse_decisions_md(paths=[missing]) == []
 
 
+class TestParseDecisionsMdDuplicateDedup:
+    """The first-wins dedup at the `if decision_id in seen: continue` site (DPI-06) now emits a
+    stderr WARNING naming the dropped decision number -- behavior-preserving: the returned parse
+    result and the byte-reconstruction invariant are unchanged."""
+
+    def test_duplicate_number_emits_stderr_warning_and_keeps_first_entry(self, tmp_path: Path, capsys) -> None:
+        path = tmp_path / "DECISIONS.md"
+        path.write_text(
+            "## Decision 1: First entry (Decided)\n\n**Status:** Decided\n\n---\n\n"
+            "## Decision 1: Second entry (Decided)\n\n**Status:** Decided\n",
+            encoding="utf-8",
+        )
+        result = parse_decisions_md(paths=[path])
+        err = capsys.readouterr().err
+        assert "WARNING: duplicate decision number 1 in DECISIONS.md" in err
+        assert len(result) == 1
+        assert result[0]["title"] == "First entry"
+
+    def test_no_duplicate_across_files_emits_no_warning(self, tmp_path: Path, capsys) -> None:
+        live = tmp_path / "DECISIONS.md"
+        archive = tmp_path / "DECISIONS_ARCHIVE.md"
+        live.write_text("## Decision 1: Live entry (Decided)\n\n**Status:** Decided\n", encoding="utf-8")
+        archive.write_text("## Decision 2: Archive entry (Decided)\n\n**Status:** Decided\n", encoding="utf-8")
+        result = parse_decisions_md(paths=[live, archive])
+        assert capsys.readouterr().err == ""
+        assert len(result) == 2
+
+
 class TestReadJsonl:
     """read_jsonl -- a pre-existing local-JSONL reader retained on this module."""
 
