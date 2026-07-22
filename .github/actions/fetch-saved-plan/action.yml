@@ -1,0 +1,99 @@
+name: fetch-saved-plan
+description: >-
+  Fetch the saved terraform plan.bin from S3 (apply-the-saved-plan path, no re-plan -- Decision 77
+  no-TOCTOU), verify its DEP-07 sha256 digest against the terraform-plan-digest commit status
+  posted at persist time (FAIL CLOSED on mismatch or a missing reference, via
+  scripts/ci/plan_digest.py verify), and optionally materialise plan.json via `terraform show
+  -json` for a subsequent guard step. Single copy of the "Fetch saved plan from S3" step that
+  existed at every apply fetch site -- sandbox push, sandbox gated, reconcile auto, reconcile
+  gated (DEP-08) -- and the single home of the DEP-07 digest verification (T2.46 c2). The DEP-07
+  c3 key is content-addressed by (pr, sha): tfplan/personal/<pr>/<sha>.bin.
+
+inputs:
+  resolve-from-sha:
+    description: >-
+      The commit sha whose originating PR (number + head sha) to resolve via
+      `gh api commits/<sha>/pulls` -- github.sha for the sandbox call sites, the red commit sha
+      for Reconcile's call sites.
+    required: true
+  produce-plan-json:
+    description: >-
+      'true' to also run `terraform show -json plan.bin > plan.json` after fetching (needed by a
+      subsequent guard step); 'false' to fetch plan.bin only (the gated-apply paths, which apply
+      plan.bin verbatim with no re-guard).
+    required: false
+    default: "false"
+  working-directory:
+    description: "Terraform root module directory (plan.bin / plan.json land here)."
+    required: false
+    default: "terraform/personal"
+  bucket:
+    description: "S3 bucket the saved plan is persisted in."
+    required: false
+    default: "agent-platform-data-lake"
+
+outputs:
+  pr_head_sha:
+    description: "The resolved PR head sha (also the ref the digest commit-status was posted to)."
+    value: ${{ steps.resolve.outputs.pr_head_sha }}
+  pr_number:
+    description: "The resolved PR number (the tfplan key's (pr, sha) namespace)."
+    value: ${{ steps.resolve.outputs.pr_number }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve originating PR (number + head sha)
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        RESOLVE_FROM_SHA: ${{ inputs.resolve-from-sha }}
+      run: |
+        set -euo pipefail
+        PR_HEAD_SHA=$(gh api "repos/${REPO}/commits/${RESOLVE_FROM_SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+        PR_NUMBER=$(gh api "repos/${REPO}/commits/${RESOLVE_FROM_SHA}/pulls" --jq '.[0].number' 2>/dev/null || echo "")
+        if [ -z "$PR_HEAD_SHA" ] || [ "$PR_HEAD_SHA" = "null" ] || [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+          echo "::error::No originating PR resolved for ${RESOLVE_FROM_SHA}; failing closed (no saved plan -- recovery is the workflow_dispatch acknowledge-and-retry path)." >&2
+          exit 1
+        fi
+        echo "pr_head_sha=${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
+        echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+    - name: Fetch saved plan from S3 (content-addressed by pr, sha -- DEP-07 c3)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BUCKET: ${{ inputs.bucket }}
+        PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+        PR_HEAD_SHA: ${{ steps.resolve.outputs.pr_head_sha }}
+      run: |
+        set -euo pipefail
+        PLAN_OBJ="s3://${BUCKET}/tfplan/personal/${PR_NUMBER}/${PR_HEAD_SHA}.bin"
+        echo "Fetching saved plan: ${PLAN_OBJ}"
+        if ! aws s3 ls "$PLAN_OBJ" > /dev/null 2>&1; then
+          echo "::error::Saved plan object not found at ${PLAN_OBJ}; failing closed (no re-plan fallback)." >&2
+          exit 1
+        fi
+        aws s3 cp "$PLAN_OBJ" plan.bin
+
+    - name: Verify plan.bin digest (DEP-07 -- fail closed on mismatch or missing reference)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_HEAD_SHA: ${{ steps.resolve.outputs.pr_head_sha }}
+        PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+      run: |
+        set -euo pipefail
+        REFERENCE=$(gh api "repos/${REPO}/commits/${PR_HEAD_SHA}/status" --jq '.statuses[] | select(.context=="terraform-plan-digest") | .description' 2>/dev/null | head -n1 | sed 's/^sha256://')
+        python3 "${{ github.workspace }}/scripts/ci/plan_digest.py" verify plan.bin "${REFERENCE}"
+        echo "Fetched and digest-verified saved plan (pr=${PR_NUMBER} sha=${PR_HEAD_SHA})"
+
+    - name: Materialise plan.json (terraform show -json)
+      if: inputs.produce-plan-json == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform show -json plan.bin > plan.json

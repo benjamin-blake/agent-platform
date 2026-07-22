@@ -1,0 +1,55 @@
+name: terraform-init-retry
+description: >-
+  Bounded-retry `terraform init` (rec-2237/rec-2481 transient registry.terraform.io 5xx /
+  provider-download signatures). Single copy of the init-retry loop that existed 5x across
+  terraform-apply-sandbox.yml and reconcile.yml (DEP-08/rec-2663). Preserves the transient-
+  signature list and exponential backoff verbatim.
+
+inputs:
+  working-directory:
+    description: "Terraform root module directory."
+    required: false
+    default: "terraform/personal"
+  backend-config:
+    description: "Backend config file, relative to working-directory."
+    required: false
+    default: "backend-sandbox.hcl"
+
+runs:
+  using: composite
+  steps:
+    - name: Terraform init (S3 backend, sandbox)
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BACKEND_CONFIG: ${{ inputs.backend-config }}
+      run: |
+        # Bounded retry for transient registry.terraform.io 5xx (rec-2237) and provider-download
+        # network transients (rec-2481).
+        # Transient signatures (parity with _TRANSIENT_INIT_SIGNATURES in scripts/checks/_scaffolding.py):
+        #   "502", "Bad Gateway", "could not query provider registry", "failed after ",
+        #   "connection reset by peer", "i/o timeout", "TLS handshake timeout", "unexpected EOF"
+        set +e
+        attempt=1
+        while [ "$attempt" -le 3 ]; do
+          out=$(terraform init -input=false -backend-config="$BACKEND_CONFIG" 2>&1)
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "$out"
+            break
+          fi
+          if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
+            if [ "$attempt" -lt 3 ]; then
+              delay=$(( 2 ** attempt ))
+              echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
+              echo "$out" >&2
+              sleep "$delay"
+              attempt=$(( attempt + 1 ))
+              continue
+            fi
+          fi
+          echo "$out" >&2
+          set -e
+          exit "$rc"
+        done
+        set -e

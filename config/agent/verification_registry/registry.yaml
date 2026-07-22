@@ -1191,3 +1191,94 @@ entries:
       - -c
       - |
         sec=$(awk '/^## 6\./{f=1} /^## 7\./{f=0} f' docs/contracts/environment-taxonomy.md); printf '%s' "$sec" | grep -qi committed && printf '%s' "$sec" | grep -qF '.terraform.lock.hcl' && ! printf '%s' "$sec" | grep -qF 'RECOMMENDED (non-blocking, follow-on): un-ignore and commit'
+  - check_id: convergence-record-write-single-copy
+    primitive_slot: command_exit_zero
+    guard_target: .github/actions/write-convergence-record/action.yml
+    guard_symbol: null
+    plan_slug: terraform-apply-chain-consolidation
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        inline=$(grep -Rh 'CONVERGENCE_WRITE_VERIFY' .github/workflows/terraform-apply-sandbox.yml .github/workflows/reconcile.yml | wc -l | tr -d ' '); act=$(grep -c 'CONVERGENCE_WRITE_VERIFY' .github/actions/write-convergence-record/action.yml 2>/dev/null || echo 0); echo "inline=$inline action=$act"; [ "$inline" -eq 0 ] && [ "$act" -ge 1 ]
+  - check_id: terraform-init-retry-single-copy
+    primitive_slot: command_exit_zero
+    guard_target: .github/actions/terraform-init-retry/action.yml
+    guard_symbol: null
+    plan_slug: terraform-apply-chain-consolidation
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        inline=$(grep -Rh 'terraform init transient error' .github/workflows/terraform-apply-sandbox.yml .github/workflows/reconcile.yml | wc -l | tr -d ' '); act=$(grep -c 'terraform init transient error' .github/actions/terraform-init-retry/action.yml 2>/dev/null || echo 0); echo "inline=$inline action=$act"; [ "$inline" -eq 0 ] && [ "$act" -ge 1 ]
+  - check_id: ducklake-build-assert-single-copy
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci/ducklake_artifacts.py
+    guard_symbol: null
+    plan_slug: terraform-apply-chain-consolidation
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        inline=$(grep -Rh 'DUCKLAKE_ZIP_MISMATCH' .github/workflows/terraform-apply-sandbox.yml .github/workflows/reconcile.yml | wc -l | tr -d ' '); scr=$(grep -c 'DUCKLAKE_ZIP_MISMATCH' scripts/ci/ducklake_artifacts.py 2>/dev/null || echo 0); echo "inline=$inline script=$scr"; [ "$inline" -eq 0 ] && [ "$scr" -ge 1 ]
+  - check_id: entry-workflows-consume-composite-actions
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/terraform-apply-sandbox.yml
+    guard_symbol: null
+    plan_slug: terraform-apply-chain-consolidation
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        for wf in .github/workflows/terraform-apply-sandbox.yml .github/workflows/reconcile.yml; do n=$(grep -c 'uses: ./.github/actions/' "$wf"); echo "$wf uses=$n"; [ "$n" -ge 5 ] || { echo "too few action refs in $wf"; exit 1; }; done; for a in write-convergence-record deterministic-guard subagent-plan-review fetch-saved-plan terraform-init-retry build-ducklake-artifacts; do grep -q "uses: ./.github/actions/$a" .github/workflows/terraform-apply-sandbox.yml || { echo "sandbox missing $a"; exit 1; }; done
+  - check_id: plan-digest-emitted-as-commit-status
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/terraform-apply-sandbox.yml
+    guard_symbol: null
+    plan_slug: terraform-apply-chain-consolidation
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        a=.github/workflows/terraform-apply-sandbox.yml; emit=$(grep -Ec 'terraform-plan-digest' "$a"); sha=$(grep -Ec 'sha256sum|plan_digest' "$a"); stat=$(grep -c 'statuses: write' "$a"); echo "digest_status=$emit sha=$sha statuses_write=$stat"; [ "$emit" -ge 1 ] && [ "$sha" -ge 1 ] && [ "$stat" -ge 1 ]
+  - check_id: fetch-saved-plan-digest-verify
+    primitive_slot: command_exit_zero
+    guard_target: .github/actions/fetch-saved-plan/action.yml
+    guard_symbol: null
+    plan_slug: terraform-apply-chain-consolidation
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=.github/actions/fetch-saved-plan/action.yml; ver=$(grep -Ec 'plan_digest|sha256sum' "$f"); fc=$(grep -Eic 'mismatch|fail.?closed|DIGEST' "$f"); echo "verify=$ver failclosed=$fc"; [ "$ver" -ge 1 ] && [ "$fc" -ge 1 ]
+  - check_id: composite-actions-well-formed
+    primitive_slot: command_exit_zero
+    guard_target: .github/actions
+    guard_symbol: null
+    plan_slug: terraform-apply-chain-consolidation
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        bad=0; for f in .github/actions/*/action.yml; do grep -q 'using: *"\?composite' "$f" || { echo "not composite: $f"; bad=1; }; done; n=$(ls .github/actions/*/action.yml 2>/dev/null | wc -l | tr -d ' '); echo "actions=$n malformed=$bad"; [ "$n" -ge 6 ] && [ "$bad" -eq 0 ]
