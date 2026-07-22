@@ -179,6 +179,8 @@ from scripts.checks.ops_governance.validate_warehouse_write_sources import (  # 
 )
 from scripts.checks.product.trading.validate_broker_env_reads import validate_broker_env_reads  # noqa: F401,E402
 from scripts.checks.prompts.validate_prompt_files import KNOWN_MODELS, validate_prompt_files  # noqa: F401,E402
+from scripts.checks.prose.prose_budget_raises import validate_prose_budget_raises  # noqa: F401,E402
+from scripts.checks.prose.prose_limits import validate_prose_limits  # noqa: F401,E402
 from scripts.checks.roadmap.check_graduation_guard import (  # noqa: E402
     _check_graduation_guard,  # noqa: F401
     _extract_enforced_map,  # noqa: F401
