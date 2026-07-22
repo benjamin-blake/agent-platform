@@ -1,0 +1,45 @@
+name: deterministic-guard
+description: >-
+  Three-way exit-code branch around scripts/terraform_apply_guard.py (exit 0 PASS / exit 2
+  routed=true / exit 1 fail-closed). Single copy of the "Deterministic apply guard (fail-closed)"
+  step that existed in both terraform-apply-sandbox.yml (apply-sandbox) and reconcile.yml
+  (apply-reconcile) (DEP-08). Preserves Decision-92-pt1 authorization-division semantics (the
+  guard is a plan-content policy check, never the authorization lock). Path to the guard resolved
+  via ${{ github.workspace }} (composite-action path discipline).
+
+inputs:
+  working-directory:
+    description: "Terraform root module directory containing plan.json."
+    required: false
+    default: "terraform/personal"
+
+outputs:
+  routed:
+    description: "'true' when the guard exits 2 (out-of-budget IAM / trust diff / destroy) -- the caller routes to its gated-apply job. Empty/unset otherwise."
+    value: ${{ steps.guard.outputs.routed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Deterministic apply guard (fail-closed)
+      id: guard
+      # Exit codes: 0 = PASS (non-IAM or in-budget IAM, T2.25); apply proceeds. 2 = BLOCKED
+      # (out-of-budget IAM / trust diff / destroy); sets routed=true and exits 0 -- routing is
+      # not a failure, the caller's gated-apply job takes over and record-write SKIPS (Decision
+      # 55 anti-masking). 1 = internal guard error; fails closed.
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set +e
+        python3 "${{ github.workspace }}/scripts/terraform_apply_guard.py" plan.json
+        rc=$?
+        set -e
+        if [ "$rc" -eq 2 ]; then
+          echo "Guard BLOCKED (exit 2): out-of-budget IAM / trust diff / destroy; routing to the gated-apply job." >&2
+          echo "routed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ "$rc" -ne 0 ]; then
+          echo "Guard internal error (exit ${rc}); failing closed." >&2
+          exit 1
+        fi

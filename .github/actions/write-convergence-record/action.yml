@@ -1,0 +1,121 @@
+name: write-convergence-record
+description: >-
+  Always-run, red-on-failure convergence record write (CD.35 5.5 integrity anchor) with a
+  post-write read-back verify. Single copy of the highest-risk duplicated block -- it existed 4x
+  across terraform-apply-sandbox.yml (apply-sandbox, gated-apply) and reconcile.yml
+  (apply-reconcile, gated-apply-reconcile), DEP-08/rec-2663 -- "the exact code the audit warns
+  must not drift; one copy is the point." Carries the always-run skip conditions verbatim
+  (refused / still-actionable / routed / STARVED review), green iff apply succeeded, the
+  CONVERGENCE_WRITE_VERIFY read-back verify, and plan_sha=sha256(plan.bin).
+
+inputs:
+  sha:
+    description: "The commit_sha to record -- github.sha for the sandbox jobs, the red commit sha (RED_SHA) for Reconcile's jobs."
+    required: true
+  apply-outcome:
+    description: "steps.apply.outcome -- 'success' writes green, anything else writes red."
+    required: true
+  refused:
+    description: "'true' skips the write without overwriting (apply-sandbox's convergence precondition refused on a red record). Not applicable outside apply-sandbox."
+    required: false
+    default: "false"
+  still-actionable:
+    description: "'false' skips the write without overwriting (Reconcile's race-guard recheck found the target already resolved by another run). Not applicable outside apply-reconcile."
+    required: false
+    default: "true"
+  routed:
+    description: "'true' skips the write without overwriting (the guard routed to gated-apply; the gated-apply job writes the record after human approval instead)."
+    required: false
+    default: "false"
+  review-outcome:
+    description: "'starved' skips the write without overwriting (reviewer-infra failure, not a plan rejection or a genuine apply failure -- Decision 55 anti-masking)."
+    required: false
+    default: ""
+  plan-sha-mode:
+    description: >-
+      'event-gated' computes plan_sha via sha256sum only when plan.bin exists (and, for the
+      sandbox jobs, github.event_name == 'push' -- always true whenever gated-apply itself runs,
+      so this degenerates to an existence-only check there); missing plan.bin or a non-push event
+      yields plan_sha=null. Used by the two sandbox call sites. 'unchecked' computes plan_sha via
+      sha256sum with NO existence check (matches Reconcile's two call sites, which expect plan.bin
+      to already exist by this point -- an absent file fails the step under the shell's default
+      errexit, exactly as the original inline code did).
+    required: false
+    default: "event-gated"
+  working-directory:
+    description: "Directory containing plan.bin (for the plan_sha computation)."
+    required: false
+    default: "terraform/personal"
+  convergence-bucket:
+    description: "S3 bucket for the convergence record."
+    required: false
+    default: "agent-platform-data-lake"
+  convergence-key:
+    description: "S3 key for the convergence record."
+    required: false
+    default: "convergence/personal/sandbox.json"
+
+runs:
+  using: composite
+  steps:
+    - name: Write convergence record (always-run, red-on-failure)
+      shell: bash
+      env:
+        REFUSED: ${{ inputs.refused }}
+        STILL_ACTIONABLE: ${{ inputs.still-actionable }}
+        ROUTED: ${{ inputs.routed }}
+        REVIEW_OUTCOME: ${{ inputs.review-outcome }}
+        APPLY_OUTCOME: ${{ inputs.apply-outcome }}
+        SHA: ${{ inputs.sha }}
+        PLAN_SHA_MODE: ${{ inputs.plan-sha-mode }}
+        WORKDIR: ${{ inputs.working-directory }}
+        CONVERGENCE_BUCKET: ${{ inputs.convergence-bucket }}
+        CONVERGENCE_KEY: ${{ inputs.convergence-key }}
+        RUN_ID: ${{ github.run_id }}
+        SERVER_URL: ${{ github.server_url }}
+        REPO: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        if [ "$REFUSED" = "true" ]; then
+          echo "Precondition refused on a red record; NOT overwriting the convergence record (anchor integrity)."
+          exit 0
+        fi
+        if [ "$STILL_ACTIONABLE" != "true" ]; then
+          echo "This run's target was already stale (race guard); NOT overwriting the convergence record."
+          exit 0
+        fi
+        if [ "$ROUTED" = "true" ]; then
+          echo "Guard routed to the gated-apply job (IAM/trust/destroy diff): NOT overwriting convergence record (anti-masking, Decision 55)."
+          exit 0
+        fi
+        if [ "$REVIEW_OUTCOME" = "starved" ]; then
+          echo "Subagent reviewer STARVED (max-turns/no-verdict/API-exhausted after the same-budget retry): NOT overwriting the convergence record -- this is a reviewer-infra failure, not a plan rejection or a genuine apply failure (Decision 55 anti-masking, T2.39 c3)."
+          exit 0
+        fi
+        if [ "$APPLY_OUTCOME" = "success" ]; then
+          STATUS="green"
+        else
+          STATUS="red"
+        fi
+        TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+        if [ "$PLAN_SHA_MODE" = "unchecked" ]; then
+          PLAN_SHA=$(sha256sum "${WORKDIR}/plan.bin" | cut -d' ' -f1)
+        elif [ "${EVENT_NAME}" = "push" ] && [ -f "${WORKDIR}/plan.bin" ]; then
+          PLAN_SHA=$(sha256sum "${WORKDIR}/plan.bin" | cut -d' ' -f1)
+        else
+          PLAN_SHA=""
+        fi
+        export STATUS TS SHA RUN_ID RUN_URL PLAN_SHA
+        RECORD=$(python3 -c "import json,os; v=os.environ.get('PLAN_SHA',''); print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':v if v else None}))")
+        printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
+        echo "Wrote convergence record: ${RECORD}"
+        # rec-2211: post-write read-back -- re-GET the object and verify the written status
+        # matches the intended STATUS; fail the step on mismatch (write-verify, not assumed durable).
+        READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+        READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
+        if [ "$READBACK_STATUS" != "$STATUS" ]; then
+          echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != intended '${STATUS}'; record may be corrupt."
+          exit 1
+        fi
+        echo "Convergence record read-back verified: status=${READBACK_STATUS}"

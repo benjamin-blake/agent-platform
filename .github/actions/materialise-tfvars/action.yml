@@ -1,0 +1,62 @@
+name: materialise-tfvars
+description: >-
+  Materialise terraform.personal.tfvars from Secrets Manager, mask secret-sourced values in logs,
+  and assert the file is non-empty (fail-closed). Single copy of the "Materialise tfvars from
+  Secrets Manager" / "Mask secret-sourced tfvars values in logs" / "Assert tfvars file is
+  non-empty (fail-closed)" sequence that existed 4-5x across terraform-apply-sandbox.yml and
+  reconcile.yml (DEP-08/rec-2663). Preserves the rec-2285-fixed first-'='-split parse and the
+  ::add-mask:: / non-empty assert verbatim. Note: gated-apply-reconcile previously omitted the
+  masking step (a latent gap on a PUBLIC repo, Decision 101) -- applying this action there closes
+  it as a disclosed side effect of consolidation, not a scope violation.
+
+inputs:
+  working-directory:
+    description: "Directory to run from (the tfvars file is always written to terraform/personal/terraform.personal.tfvars regardless)."
+    required: false
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    - name: Materialise tfvars from Secrets Manager
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        aws secretsmanager get-secret-value \
+          --secret-id agent-platform-terraform-personal-tfvars \
+          --query SecretString --output text \
+          > terraform/personal/terraform.personal.tfvars
+
+    - name: Mask secret-sourced tfvars values in logs
+      # rec-2214: emit ::add-mask:: for account_id and the two ExternalId trust secrets BEFORE
+      # any downstream step writes plan.json / review.txt, so they are redacted in subsequent
+      # log output. rec-2285: split on first '=' only (line%%=* / line#*=) so values containing
+      # '=' are not truncated.
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r line; do
+          key=${line%%=*}
+          value=${line#*=}
+          key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
+          case "$key" in
+            account_id|platform_dev_external_id|platform_admin_external_id)
+              if [ -n "$value" ]; then
+                echo "::add-mask::${value}"
+              fi
+              ;;
+          esac
+        done < terraform/personal/terraform.personal.tfvars
+
+    - name: Assert tfvars file is non-empty (fail-closed)
+      # Fail-closed (Decision 77): a missing or empty tfvars file reds the run before plan.
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        test -s terraform/personal/terraform.personal.tfvars || {
+          echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
+          exit 1
+        }

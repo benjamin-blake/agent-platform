@@ -320,8 +320,20 @@ verification_plan:
       The key is still flat tfplan/personal/<sha>.bin -- add the PR-number segment
       (tfplan/personal/<pr>/<sha>.bin) at persist and every fetch site; keep it inside tfplan/personal/*.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: "tfplan-key-content-addressed-pr-sha"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential admission rejected as tautological: the check's regex
+      (tfplan/personal/\$\{?[A-Za-z_]*PR|tfplan/personal/[^"]*/\$) also matches origin/main's
+      pre-consolidation flat key ${PR_HEAD_SHA} -- [A-Za-z_]*PR matches an EMPTY prefix followed
+      by the literal "PR" that starts the variable name PR_HEAD_SHA itself, so the check passes
+      on origin/main too (fails on origin/main is required for admission; it did not). The
+      underlying feature (content-addressed tfplan/personal/<pr>/<sha>.bin key) is genuinely
+      implemented and verified live by this same command at implement time (VP7 in the compliance
+      table) -- only the check's DISCRIMINATIVE POWER as a standing regression guard failed, since
+      a future regression back to the flat key would not be caught by this pattern. A tighter
+      guard (e.g. asserting the literal path segment order tfplan/personal/<digits>/<sha> via a
+      structural match, not a variable-name substring) would need re-authoring from scratch and is
+      left for a follow-on rec rather than blocking this PR.
   - step: 8
     phase: pre-deploy
     action: >-

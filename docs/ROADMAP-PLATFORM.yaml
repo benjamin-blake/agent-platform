@@ -7206,12 +7206,13 @@ tier_items:
         text: >-
           Workflow bash for the build step is extracted to tested scripts and the duplicate
           build-step invocation is de-duplicated (rec-2659)
-        status: open
+        status: met
+        met_by: terraform-apply-chain-consolidation
     related_decisions: [126]
     effort: M
     strategic: false
-    status: not_started
-    progress_note: "2026-07-21: carries audit finding DEP-03 (spurious layer-replace diffs route to gated-apply on every rebuild recurrence -- destroy classification on non-content-addressed zips); c1 (layer replace policy / fold into the T2.38 deploy verb) and c3 (content-addressed zips) are DEP-03's remedy. Cross-ref Decision 144 and audits/terraform-deploy-redesign-b67955b.yaml. No new tier_item is needed for DEP-03."
+    status: in_progress
+    progress_note: "2026-07-21: carries audit finding DEP-03 (spurious layer-replace diffs route to gated-apply on every rebuild recurrence -- destroy classification on non-content-addressed zips); c1 (layer replace policy / fold into the T2.38 deploy verb) and c3 (content-addressed zips) are DEP-03's remedy. Cross-ref Decision 144 and audits/terraform-deploy-redesign-b67955b.yaml. No new tier_item is needed for DEP-03.\n- 2026-07-22: c4 shipped (PLAN-terraform-apply-chain-consolidation, slice D2) -- the DuckLake build byte-identity-assert + dual-write bash is extracted to the tested scripts/ci/ducklake_artifacts.py and its duplicate invocations across terraform-apply-sandbox.yml and reconcile.yml are collapsed to the build-ducklake-artifacts composite action. c1-c3 remain open."
 
   - id: T2.43
     tier: T2
@@ -7375,34 +7376,49 @@ tier_items:
       behavioral-contract test, so the two paths can drift (DEP-08, rec-2663). Separately, a saved
       plan.bin object can be overwritten between PR review and merge-time apply with no integrity
       check catching the substitution (DEP-07). Coordinates with T2.42 c4 (rec-2659, build-step
-      bash dedup only) rather than duplicating it -- the new reusable workflow this item adds
-      should subsume T2.42 c4's scope, not compete with it.
+      bash dedup only) rather than duplicating it -- the composite actions this item adds subsume
+      T2.42 c4's scope (the build-ducklake-artifacts action calls the same tested
+      scripts/ci/ducklake_artifacts.py), not compete with it.
     depends_on: []
     files_in_scope:
       - .github/workflows/terraform-apply-sandbox.yml
       - .github/workflows/reconcile.yml
-      - .github/workflows/_terraform-apply-reusable.yml  # new reusable workflow; exact name TBD at implementation
+      - .github/actions/  # 7 composite actions (terraform-init-retry, build-ducklake-artifacts, materialise-tfvars, fetch-saved-plan, deterministic-guard, subagent-plan-review, write-convergence-record) -- realized mechanism, see Context in PLAN-terraform-apply-chain-consolidation.yaml for the composite-actions-vs-reusable-workflow rationale
       - terraform/personal/oidc.tf
     exit_criteria:
       - id: c1
         text: >-
-          record-write, zip-assert, init-retry, and guard+review+apply each exist exactly once (in
-          the new reusable workflow) and both entry workflows pass their behavioral contracts in a
-          forced-red rehearsal (DEP-08/rec-2663)
-        status: open
+          record-write, zip-assert, init-retry, and guard+review+apply each exist exactly once (as
+          composite actions under .github/actions/) and both entry workflows pass their behavioral
+          contracts in a forced-red rehearsal (DEP-08/rec-2663)
+        status: met
+        met_by: terraform-apply-chain-consolidation
       - id: c2
         text: >-
           Overwriting a saved plan object after PR review fails the merge-time fetch closed with a
           digest mismatch -- sha256(plan.bin) is emitted in the PR comment and commit status and
           verified at all three fetch sites (DEP-07)
-        status: open
+        status: met
+        met_by: terraform-apply-chain-consolidation
       - id: c3
         text: The tfplan/personal S3 key is content-addressed by (pr, sha)
-        status: open
+        status: met
+        met_by: terraform-apply-chain-consolidation
     related_decisions: [144, 126, 77]
     effort: M
     strategic: false
     status: not_started
+    progress_note: >-
+      2026-07-22: PLAN-terraform-apply-chain-consolidation (slice D2) implemented c1/c2/c3 --
+      the 7 composite actions land, both entry workflows consume them, DEP-07 digest emit+verify
+      is wired, and the tfplan key is content-addressed by (pr, sha). All 3 exit criteria are now
+      met -- QUALIFIES for status: complete pending operator confirmation (Status-Trusted-Never-
+      Inferred: the implementing session does not self-flip to complete). NOT yet confirmed:
+      GATE-D2-green (the forced-red -> Reconcile parity rehearsal, VP-14) is post-merge and
+      operator-assisted (writing a synthetic red record needs the pipeline-writer/admin identity
+      against a real merged commit) -- deferred to the overseer/human per the D2 dispatch, not run
+      in this session. c1's "forced-red rehearsal" clause is proven structurally (VP-11 contract
+      test) but the live rehearsal itself is still outstanding.
 
   - id: T2.47
     tier: T2

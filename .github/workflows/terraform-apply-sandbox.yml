@@ -199,79 +199,36 @@ jobs:
         # grant) and write it to the gitignored terraform.personal.tfvars. Fail-closed: if the fetch
         # fails the step exits non-zero and blocks all downstream steps (no continue-on-error).
         if: success()
-        run: |
-          set -euo pipefail
-          # --output text with --query SecretString extracts the raw-body string (no JSON envelope).
-          aws secretsmanager get-secret-value \
-            --secret-id agent-platform-terraform-personal-tfvars \
-            --query SecretString --output text \
-            > terraform/personal/terraform.personal.tfvars
-
-      - name: Mask secret-sourced tfvars values in logs
-        # rec-2214: emit ::add-mask:: for account_id and the two ExternalId trust secrets BEFORE any
-        # step writes plan.json / review.txt, so they are redacted in all subsequent log output.
-        # rec-2285: split on first '=' only (line%%=* / line#*=) so values containing '=' are not
-        # truncated (the old IFS='=' read -r key value silently dropped everything after the second =).
-        if: success()
-        run: |
-          set -euo pipefail
-          while IFS= read -r line; do
-            key=${line%%=*}
-            value=${line#*=}
-            key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
-            case "$key" in
-              account_id|platform_dev_external_id|platform_admin_external_id)
-                if [ -n "$value" ]; then
-                  echo "::add-mask::${value}"
-                fi
-                ;;
-            esac
-          done < terraform/personal/terraform.personal.tfvars
-
-      - name: Assert tfvars file is non-empty (fail-closed)
-        # Fail-closed (Decision 77): a missing or empty tfvars file reds the run before plan.
-        # Never use continue-on-error here -- an empty file would pass plan with wrong defaults.
-        if: success()
-        run: |
-          test -s terraform/personal/terraform.personal.tfvars || {
-            echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
-            exit 1
-          }
+        uses: ./.github/actions/materialise-tfvars
 
       - name: Terraform init (S3 backend, sandbox)
         if: success()
-        working-directory: ${{ env.WORKDIR }}
+        uses: ./.github/actions/terraform-init-retry
+        with:
+          working-directory: ${{ env.WORKDIR }}
+
+      - name: Resolve DuckLake artifact sha (content-addressed key, T2.42 c3)
+        # PR-head-sha on push (same sha tfplan/personal/<pr>/<sha>.bin is keyed by; resolved the
+        # same way as the "Fetch saved plan from S3" step below) and the dispatch commit sha on
+        # workflow_dispatch (no originating PR to resolve).
+        id: artifact_sha
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          # Bounded retry for transient registry.terraform.io 5xx (rec-2237) and provider-download
-          # network transients (rec-2481).
-          # Transient signatures (parity with _TRANSIENT_INIT_SIGNATURES in scripts/checks/_scaffolding.py):
-          #   "502", "Bad Gateway", "could not query provider registry", "failed after ",
-          #   "connection reset by peer", "i/o timeout", "TLS handshake timeout", "unexpected EOF"
-          set +e
-          attempt=1
-          while [ "$attempt" -le 3 ]; do
-            out=$(terraform init -input=false -backend-config=backend-sandbox.hcl 2>&1)
-            rc=$?
-            if [ "$rc" -eq 0 ]; then
-              echo "$out"
-              break
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VALUE=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+            if [ -z "$VALUE" ] || [ "$VALUE" = "null" ]; then
+              echo "::error::No originating PR resolved for ${SHA}; cannot resolve the content-addressed artifact sha (Decision 77 no-TOCTOU)." >&2
+              exit 1
             fi
-            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
-              if [ "$attempt" -lt 3 ]; then
-                delay=$(( 2 ** attempt ))
-                echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
-                echo "$out" >&2
-                sleep "$delay"
-                attempt=$(( attempt + 1 ))
-                continue
-              fi
-            fi
-            echo "$out" >&2
-            set -e
-            exit "$rc"
-          done
-          set -e
+          else
+            VALUE="${SHA}"
+          fi
+          echo "value=${VALUE}" >> "$GITHUB_OUTPUT"
 
       - name: Build DuckLake lambda packages (rebuild before plan/apply, rec-2512)
         id: build_ducklake
@@ -290,86 +247,29 @@ jobs:
         # (lambda-packages/<sha>/<name>, overwrite-immune per PR-head-sha) instead of the fixed
         # key -- a later, concurrent PR's push can no longer skew this PR's reviewed artifact bytes
         # out from under the assert. The upload dual-writes BOTH the fixed key (keeps terraform's
-        # static s3_key genuine-republish read fed) AND the per-sha key. LAMBDA_ARTIFACT_SHA is the
-        # PR-head-sha on push (same sha tfplan/personal/<sha>.bin is keyed by; resolved the same way
-        # as the "Fetch saved plan from S3" step below) and the dispatch commit sha on
-        # workflow_dispatch (no originating PR to resolve).
+        # static s3_key genuine-republish read fed) AND the per-sha key.
         if: success()
-        env:
-          BUCKET: agent-platform-data-lake
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
-          # import-time deps directly, mirroring ci.yml's "Install validate.py import-time deps".
-          pip install pyyaml pydantic
-          python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
-          NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            LAMBDA_ARTIFACT_SHA=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
-            if [ -z "$LAMBDA_ARTIFACT_SHA" ] || [ "$LAMBDA_ARTIFACT_SHA" = "null" ]; then
-              echo "::error::No originating PR resolved for ${SHA}; cannot resolve the content-addressed artifact sha (Decision 77 no-TOCTOU)." >&2
-              exit 1
-            fi
-          else
-            LAMBDA_ARTIFACT_SHA="${SHA}"
-          fi
-          export LAMBDA_ARTIFACT_SHA
-          echo "Content-addressed artifact namespace: lambda-packages/${LAMBDA_ARTIFACT_SHA}/"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "Push path: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded per-sha S3 objects."
-            for name in $NAMES; do
-              local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
-              if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
-                echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing per-sha S3 object found (PR job did not upload it); failing closed (Decision 77 no-TOCTOU)." >&2
-                exit 1
-              fi
-              remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
-              if [ "$local_md5" != "$remote_md5" ]; then
-                echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: local=${local_md5} remote=${remote_md5}; applied layer content would skew from the reviewed plan.bin. Failing closed (Decision 77 no-TOCTOU)." >&2
-                exit 1
-              fi
-            done
-            echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded per-sha artifacts."
-          fi
-          echo "Uploading DuckLake zips to s3://${BUCKET}/lambda-packages/ (fixed + per-sha dual-write)..."
-          for name in $NAMES; do
-            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
-            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" --region eu-west-2
-          done
+        uses: ./.github/actions/build-ducklake-artifacts
+        with:
+          mode: ${{ github.event_name == 'push' && 'assert' || 'skip-assert' }}
+          artifact-sha: ${{ steps.artifact_sha.outputs.value }}
 
       - name: Fetch saved plan from S3 (push -- apply-the-saved-plan path, T2.21)
         id: fetch_plan
         # CD.35 Wave 2: on push to main, apply the SAME plan.bin reviewed on the PR (no re-plan).
-        # Resolve the originating PR head SHA from the merge commit, fetch the persisted tfplan
-        # object, and run terraform show -json to produce plan.json for the guard. Fail closed
-        # if no PR is found or no saved plan object exists -- recovery is the workflow_dispatch
-        # acknowledge-and-retry (dispatch re-plans fresh; push NEVER re-plans autonomously).
+        # Resolves the originating PR (number + head sha) from the merge commit, fetches the
+        # content-addressed tfplan/personal/<pr>/<sha>.bin object (DEP-07 c3), verifies its sha256
+        # digest against the terraform-plan-digest commit status (DEP-07 c2, fail-closed on
+        # mismatch/missing), and runs terraform show -json to produce plan.json for the guard.
+        # Fail closed if no PR is found or no saved plan object exists -- recovery is the
+        # workflow_dispatch acknowledge-and-retry (dispatch re-plans fresh; push NEVER re-plans
+        # autonomously).
         if: success() && github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set -euo pipefail
-          PR_HEAD_SHA=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
-          if [ -z "$PR_HEAD_SHA" ] || [ "$PR_HEAD_SHA" = "null" ]; then
-            echo "::error::No originating PR resolved for ${SHA}; failing closed (no saved plan -- recovery is workflow_dispatch ack)." >&2
-            exit 1
-          fi
-          PLAN_OBJ="s3://agent-platform-data-lake/tfplan/personal/${PR_HEAD_SHA}.bin"
-          echo "Fetching saved plan: ${PLAN_OBJ}"
-          if ! aws s3 ls "$PLAN_OBJ" > /dev/null 2>&1; then
-            echo "::error::Saved plan object not found at ${PLAN_OBJ}; failing closed (push path has no re-plan fallback)." >&2
-            exit 1
-          fi
-          aws s3 cp "$PLAN_OBJ" plan.bin
-          terraform show -json plan.bin > plan.json
-          echo "pr_head_sha=${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
-          echo "Fetched and verified saved plan from ${PLAN_OBJ}"
+        uses: ./.github/actions/fetch-saved-plan
+        with:
+          resolve-from-sha: ${{ github.sha }}
+          produce-plan-json: 'true'
+          working-directory: ${{ env.WORKDIR }}
 
       - name: Terraform plan (workflow_dispatch -- fresh plan)
         id: plan
@@ -390,21 +290,9 @@ jobs:
         #   exit 1 -- internal guard error; apply blocked, record_write writes red (fail-closed,
         #             Decision 77 / Decision 55 anti-masking)
         if: success()
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set +e
-          python ../../scripts/terraform_apply_guard.py plan.json
-          rc=$?
-          set -e
-          if [ "$rc" -eq 2 ]; then
-            echo "Guard BLOCKED (exit 2): out-of-budget IAM / trust diff / destroy; routing to gated-apply job." >&2
-            echo "routed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$rc" -ne 0 ]; then
-            echo "Guard internal error (exit ${rc}); failing closed." >&2
-            exit 1
-          fi
+        uses: ./.github/actions/deterministic-guard
+        with:
+          working-directory: ${{ env.WORKDIR }}
 
       - name: Subagent plan review (digest-fed, JSON-classified)
         # Second gate: only runs if the guard passed (not routed). rec-2658 forward-fix (T2.39):
@@ -423,57 +311,10 @@ jobs:
         # fails closed and reds the record, exactly as before.
         id: review
         if: success() && steps.guard.outputs.routed != 'true'
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set -uo pipefail
-          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
-            echo "Subagent review unavailable (no token); failing closed." >&2
-            echo "outcome=starved" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if ! command -v claude &> /dev/null; then
-            sudo npm install -g @anthropic-ai/claude-code@2.1.148 --omit=dev --omit=optional && sudo npm cache clean --force
-          fi
-
-          if ! python3 ../../scripts/terraform_apply_guard.py --digest plan.json > plan_digest.txt; then
-            echo "Failed to build the guard digest; failing closed (infra failure, not a plan rejection)." >&2
-            echo "outcome=starved" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          MAX_TURNS=5
-          PROMPT="Review the terraform plan digest below for the sandbox auto-apply pipeline. It has already passed the deterministic guard (no destroy, no out-of-budget IAM/trust change; may include in-budget IAM inline-policy or attachment UPDATEs on managed boundary-carrying CI roles per T2.25). The full plan is at plan.json (Read tool) if you genuinely need more detail than the digest provides. Confirm the plan is a safe, expected sandbox infrastructure change. Reply with exactly the single token PROCEED on its own line if safe to auto-apply, or REVISE followed by the reason if not."
-
-          cat plan_digest.txt | ${GITHUB_WORKSPACE}/scripts/ci/claude_p_retry.sh review.json -- \
-            --output-format json --allowedTools "Read" --max-turns "$MAX_TURNS" "$PROMPT" || true
-          VERDICT=$(python3 ${GITHUB_WORKSPACE}/scripts/ci/review_verdict.py review.json)
-
-          if [ "$VERDICT" = "STARVED" ]; then
-            echo "Reviewer STARVED on first attempt; retrying once at the SAME turn budget (${MAX_TURNS} -- never larger, T2.39 c2)." >&2
-            cat plan_digest.txt | ${GITHUB_WORKSPACE}/scripts/ci/claude_p_retry.sh review_retry.json -- \
-              --output-format json --allowedTools "Read" --max-turns "$MAX_TURNS" "$PROMPT" || true
-            VERDICT=$(python3 ${GITHUB_WORKSPACE}/scripts/ci/review_verdict.py review_retry.json)
-          fi
-
-          echo "Reviewer verdict: ${VERDICT}"
-          case "$VERDICT" in
-            PROCEED)
-              echo "outcome=proceed" >> "$GITHUB_OUTPUT"
-              exit 0
-              ;;
-            REVISE)
-              echo "Subagent returned REVISE; failing closed." >&2
-              echo "outcome=revise" >> "$GITHUB_OUTPUT"
-              exit 1
-              ;;
-            *)
-              echo "Subagent STARVED (max-turns/no-verdict/API-exhausted) after the same-budget retry; blocking apply WITHOUT latching the convergence record red." >&2
-              echo "outcome=starved" >> "$GITHUB_OUTPUT"
-              exit 1
-              ;;
-          esac
+        uses: ./.github/actions/subagent-plan-review
+        with:
+          claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          working-directory: ${{ env.WORKDIR }}
 
       - name: Terraform apply (same plan file the guard inspected)
         id: apply
@@ -496,56 +337,13 @@ jobs:
         # routed=true) is NOT a failure -- the record is not latched red on this path; the
         # gated-apply job writes the record after the human-approved apply (Decision 55 anti-masking).
         if: always()
-        env:
-          REFUSED: ${{ steps.precond.outputs.refused }}
-          ROUTED: ${{ steps.guard.outputs.routed }}
-          REVIEW_OUTCOME: ${{ steps.review.outputs.outcome }}
-          SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          SERVER_URL: ${{ github.server_url }}
-          REPO: ${{ github.repository }}
-          APPLY_OUTCOME: ${{ steps.apply.outcome }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "$REFUSED" = "true" ]; then
-            echo "Precondition refused on a red record; NOT overwriting the convergence record (anchor integrity)."
-            exit 0
-          fi
-          if [ "$ROUTED" = "true" ]; then
-            echo "Guard routed to gated-apply job (IAM/trust/destroy diff): NOT overwriting convergence record (anti-masking, Decision 55)."
-            exit 0
-          fi
-          if [ "$REVIEW_OUTCOME" = "starved" ]; then
-            echo "Subagent reviewer STARVED (max-turns/no-verdict/API-exhausted after the same-budget retry): NOT overwriting the convergence record -- this is a reviewer-infra failure, not a plan rejection or a genuine apply failure (Decision 55 anti-masking, T2.39 c3). A REVIEW_STARVED rec is filed by the CI-RCA path; the routine apply will retry on the next merge, or run Reconcile once the reviewer is healthy."
-            exit 0
-          fi
-          if [ "$APPLY_OUTCOME" = "success" ]; then
-            STATUS="green"
-          else
-            STATUS="red"
-          fi
-          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
-          # plan_sha: sha256 of the saved plan.bin applied on push (apply-the-saved-plan path, T2.21).
-          # Null on workflow_dispatch (dispatch uses a fresh plan not persisted to S3).
-          if [ "${EVENT_NAME}" = "push" ] && [ -f "${WORKDIR}/plan.bin" ]; then
-            PLAN_SHA=$(sha256sum "${WORKDIR}/plan.bin" | cut -d' ' -f1)
-          else
-            PLAN_SHA=""
-          fi
-          export STATUS TS SHA RUN_ID RUN_URL PLAN_SHA
-          RECORD=$(python3 -c "import json,os; v=os.environ.get('PLAN_SHA',''); print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':v if v else None}))")
-          printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
-          echo "Wrote convergence record: ${RECORD}"
-          # rec-2211: post-write read-back -- re-GET the object and verify the written status matches
-          # the intended STATUS; fail the step on mismatch (write-verify, not assumed durable).
-          READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
-          READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
-          if [ "$READBACK_STATUS" != "$STATUS" ]; then
-            echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != intended '${STATUS}'; record may be corrupt."
-            exit 1
-          fi
-          echo "Convergence record read-back verified: status=${READBACK_STATUS}"
+        uses: ./.github/actions/write-convergence-record
+        with:
+          sha: ${{ github.sha }}
+          apply-outcome: ${{ steps.apply.outcome }}
+          refused: ${{ steps.precond.outputs.refused }}
+          routed: ${{ steps.guard.outputs.routed }}
+          review-outcome: ${{ steps.review.outputs.outcome }}
 
       - name: Best-effort post-merge SHA->PR wake
         # CD.35 5.3 / Decision 76 (poll-free): the push event's workflow_run.pull_requests[] is
@@ -613,6 +411,7 @@ jobs:
       id-token: write       # OIDC for the plan role
       contents: read
       pull-requests: write  # post the speculative-plan comment
+      statuses: write       # DEP-07: post the terraform-plan-digest commit status
     env:
       AWS_DEFAULT_REGION: eu-west-2
       TF_VAR_aws_profile: ""
@@ -650,76 +449,17 @@ jobs:
 
       - name: Materialise tfvars from Secrets Manager
         if: success() && steps.oidc_plan.outcome == 'success'
-        run: |
-          set -euo pipefail
-          aws secretsmanager get-secret-value \
-            --secret-id agent-platform-terraform-personal-tfvars \
-            --query SecretString --output text \
-            > terraform/personal/terraform.personal.tfvars
-
-      - name: Mask secret-sourced tfvars values in logs
-        # rec-2285: split on first '=' only so values containing '=' are not truncated.
-        if: success() && steps.oidc_plan.outcome == 'success'
-        run: |
-          set -euo pipefail
-          while IFS= read -r line; do
-            key=${line%%=*}
-            value=${line#*=}
-            key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            value=$(printf '%s' "$value" | sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//')
-            case "$key" in
-              account_id|platform_dev_external_id|platform_admin_external_id)
-                if [ -n "$value" ]; then
-                  echo "::add-mask::${value}"
-                fi
-                ;;
-            esac
-          done < terraform/personal/terraform.personal.tfvars
-
-      - name: Assert tfvars file is non-empty (fail-closed)
-        if: success() && steps.oidc_plan.outcome == 'success'
-        run: |
-          test -s terraform/personal/terraform.personal.tfvars || {
-            echo "terraform.personal.tfvars is empty or missing -- check the agent-platform-terraform-personal-tfvars secret" >&2
-            exit 1
-          }
+        uses: ./.github/actions/materialise-tfvars
 
       - name: Terraform init (S3 backend, sandbox)
         if: success() && steps.oidc_plan.outcome == 'success'
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          # Bounded retry for transient registry.terraform.io 5xx and provider-download network
-          # transients (parity with scripts/checks/_scaffolding.py _TRANSIENT_INIT_SIGNATURES:
-          # 502 / Bad Gateway / could not query provider registry / failed after /
-          # connection reset by peer / i/o timeout / TLS handshake timeout / unexpected EOF).
-          set +e
-          attempt=1
-          while [ "$attempt" -le 3 ]; do
-            out=$(terraform init -input=false -backend-config=backend-sandbox.hcl 2>&1)
-            rc=$?
-            if [ "$rc" -eq 0 ]; then
-              echo "$out"
-              break
-            fi
-            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
-              if [ "$attempt" -lt 3 ]; then
-                delay=$(( 2 ** attempt ))
-                echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
-                echo "$out" >&2
-                sleep "$delay"
-                attempt=$(( attempt + 1 ))
-                continue
-              fi
-            fi
-            echo "$out" >&2
-            set -e
-            exit "$rc"
-          done
-          set -e
+        uses: ./.github/actions/terraform-init-retry
+        with:
+          working-directory: ${{ env.WORKDIR }}
 
       - name: Build DuckLake lambda packages (build + upload before plan, rec-2512)
         id: build_ducklake
-        # rec-2512: rebuild + upload the seven DuckLake artifacts BEFORE the speculative plan so the
+        # rec-2512: rebuild + upload the DuckLake artifacts BEFORE the speculative plan so the
         # reviewed plan.bin captures a real filemd5 (lambda-packages/ is gitignored -- without this,
         # filemd5() resolves to null and terraform never detects layer/function content changes) AND
         # the referenced S3 content actually exists for the apply-sandbox job to re-verify at merge
@@ -729,17 +469,13 @@ jobs:
         # lambda-packages/*).
         #
         # T2.42 c3 (DEP-03): LAMBDA_ARTIFACT_SHA pins upload_to_s3's per-sha dual-write to the SAME
-        # PR-head-sha "Persist saved plan to S3" (below) keys tfplan/personal/<sha>.bin by, so the
-        # apply-sandbox push-path byte-assert reads back exactly this job's uploaded bytes.
+        # PR-head-sha "Persist saved plan to S3" (below) keys tfplan/personal/<pr>/<sha>.bin by, so
+        # the apply-sandbox push-path byte-assert reads back exactly this job's uploaded bytes.
         if: success() && steps.oidc_plan.outcome == 'success'
-        env:
-          LAMBDA_ARTIFACT_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
-          # import-time deps directly, mirroring ci.yml's "Install validate.py import-time deps".
-          pip install pyyaml pydantic
-          python -m scripts.build_lambda --ducklake-only --profile "" --bucket agent-platform-data-lake
+        uses: ./.github/actions/build-ducklake-artifacts
+        with:
+          mode: upload-only
+          artifact-sha: ${{ github.event.pull_request.head.sha }}
 
       - name: Terraform speculative plan (-lock=false, read-only preview)
         id: spec_plan
@@ -773,16 +509,44 @@ jobs:
           fi
 
       - name: Persist saved plan to S3
-        # Keyed by PR head SHA: s3://agent-platform-data-lake/tfplan/personal/<sha>.bin.
-        # The apply job resolves this key at merge time via the merge commit's PR lookup.
+        # Content-addressed by (pr, sha) -- DEP-07 c3: s3://agent-platform-data-lake/tfplan/
+        # personal/<pr>/<sha>.bin. Stays inside the existing tfplan/personal/* PutObject grant (no
+        # IAM change, no apply). The apply job resolves this key at merge time via the merge
+        # commit's PR lookup (fetch-saved-plan composite action).
         if: success() && steps.oidc_plan.outcome == 'success'
         env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set -euo pipefail
+          aws s3 cp plan.bin "s3://agent-platform-data-lake/tfplan/personal/${PR_NUM}/${HEAD_SHA}.bin"
+          echo "Persisted saved plan to s3://agent-platform-data-lake/tfplan/personal/${PR_NUM}/${HEAD_SHA}.bin"
+
+      - name: Emit and post plan digest (DEP-07)
+        # T2.46 c2: sha256(plan.bin) is the reference every apply-time fetch site (fetch-saved-plan
+        # composite action) verifies the FETCHED plan.bin against before terraform show -json /
+        # apply -- FAILS CLOSED on mismatch or a missing reference. Posted as a commit status
+        # (advisory/machine-verified, NOT a required PR check -- Decision 83) keyed to the PR head
+        # sha, and echoed into the PR comment below for human visibility.
+        id: digest
+        if: success() && steps.oidc_plan.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euo pipefail
-          aws s3 cp plan.bin "s3://agent-platform-data-lake/tfplan/personal/${HEAD_SHA}.bin"
-          echo "Persisted saved plan to s3://agent-platform-data-lake/tfplan/personal/${HEAD_SHA}.bin"
+          DIGEST=$(python3 "${{ github.workspace }}/scripts/ci/plan_digest.py" emit plan.bin)
+          echo "sha256=${DIGEST}" >> "$GITHUB_OUTPUT"
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            --method POST \
+            --field state=success \
+            --field context=terraform-plan-digest \
+            --field description="sha256:${DIGEST}" \
+            --field target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "Posted terraform-plan-digest commit status for ${HEAD_SHA}: sha256:${DIGEST}"
 
       - name: Build and post PR comment (redacted plan + predicted verdict)
         # Post the speculative-plan diff + guard verdict as a PR comment. Scrub account_id and
@@ -795,6 +559,7 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PREDICTED_VERDICT: ${{ steps.pred_guard.outputs.verdict || 'UNKNOWN' }}
+          PLAN_DIGEST: ${{ steps.digest.outputs.sha256 || 'unavailable' }}
         working-directory: ${{ env.WORKDIR }}
         run: |
           set -euo pipefail
@@ -828,6 +593,7 @@ jobs:
           COMMENT="### Terraform Speculative Plan (CD.35 Wave 2 / T2.21)${_NL}"
           COMMENT+="${_NL}**Predicted guard verdict: ${PREDICTED_VERDICT}**${_NL}"
           COMMENT+="PR head SHA: \`${HEAD_SHA}\` -- this saved plan will be applied at merge (apply-the-saved-plan path).${_NL}"
+          COMMENT+="Saved-plan sha256 digest (DEP-07): \`${PLAN_DIGEST}\` -- verified at every merge-time fetch; fails closed on mismatch.${_NL}"
           COMMENT+="A stale saved plan fails closed at merge; recovery is the workflow_dispatch acknowledge-and-retry path.${_NL}"
           COMMENT+="${_NL}<details>${_NL}<summary>Terraform plan output (sensitive values redacted)</summary>${_NL}"
           COMMENT+="${_NL}\`\`\`${_NL}${PLAN_REDACTED}${_NL}\`\`\`${_NL}</details>"
@@ -981,120 +747,55 @@ jobs:
           python-version: '3.12'
 
       - name: Terraform init (S3 backend, sandbox)
-        working-directory: ${{ env.WORKDIR }}
+        uses: ./.github/actions/terraform-init-retry
+        with:
+          working-directory: ${{ env.WORKDIR }}
+
+      - name: Resolve DuckLake artifact sha (content-addressed key, T2.42 c3)
+        # This job is push-only (job-level if: github.event_name == 'push'), so a PR always
+        # resolves -- resolved the same way as the "Fetch saved plan" step below.
+        id: artifact_sha
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          # Bounded retry for transient registry.terraform.io 5xx (parity with apply-sandbox).
-          set +e
-          attempt=1
-          while [ "$attempt" -le 3 ]; do
-            out=$(terraform init -input=false -backend-config=backend-sandbox.hcl 2>&1)
-            rc=$?
-            if [ "$rc" -eq 0 ]; then
-              echo "$out"
-              break
-            fi
-            if echo "$out" | grep -qE '502|Bad Gateway|could not query provider registry|failed after |connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'; then
-              if [ "$attempt" -lt 3 ]; then
-                delay=$(( 2 ** attempt ))
-                echo "terraform init transient error (attempt ${attempt}/3); retrying in ${delay}s..." >&2
-                echo "$out" >&2
-                sleep "$delay"
-                attempt=$(( attempt + 1 ))
-                continue
-              fi
-            fi
-            echo "$out" >&2
-            set -e
-            exit "$rc"
-          done
-          set -e
+          set -euo pipefail
+          VALUE=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
+          if [ -z "$VALUE" ] || [ "$VALUE" = "null" ]; then
+            echo "::error::No originating PR resolved for ${SHA}; cannot resolve the content-addressed artifact sha (Decision 77 no-TOCTOU)." >&2
+            exit 1
+          fi
+          echo "value=${VALUE}" >> "$GITHUB_OUTPUT"
 
       - name: Build DuckLake lambda packages (rebuild before apply, PLAN-ducklake-source-hash-decouple)
         id: build_ducklake
-        # Mirrors apply-sandbox's "Build DuckLake lambda packages" step (L269): lambda-packages/ is
+        # Mirrors apply-sandbox's "Build DuckLake lambda packages" step: lambda-packages/ is
         # gitignored, so filemd5() in the terraform config silently resolves to null on a CI checkout
         # and terraform never detects layer/function content changes without a rebuild here. Forward
         # -looking defense-in-depth for a FUTURE gated-apply-routed change touching the layer
         # aws_lambda_layer_version source_code_hash values (function-level source_code_hash is now
-        # ignore_changes-decoupled; layers are not). This job is push-only (job-level if:
-        # github.event_name == 'push'), so the assert always runs: the plan.bin about to be applied
-        # was reviewed against the PR job's uploaded S3 objects -- assert the freshly rebuilt zips are
-        # byte-identical to those objects BEFORE re-uploading. A mismatch means the applied layer
-        # content would skew from the reviewed plan and must fail closed rather than silently apply
-        # divergent bytes (Decision 77 no-TOCTOU).
-        #
-        # T2.42 c3 (DEP-03): the byte-assert reads the per-artifact-sha key
-        # (lambda-packages/<sha>/<name>, overwrite-immune per PR-head-sha) instead of the fixed key.
-        # The upload dual-writes BOTH the fixed key (keeps terraform's static s3_key
-        # genuine-republish read fed) AND the per-sha key. LAMBDA_ARTIFACT_SHA is the PR-head-sha,
-        # resolved the same way as the "Fetch saved plan from S3 (gated-apply path, T2.22)" step below
-        # (this job is push-only, so a PR always resolves).
+        # ignore_changes-decoupled; layers are not). This job is push-only, so the assert always
+        # runs (mode: assert): the plan.bin about to be applied was reviewed against the PR job's
+        # uploaded S3 objects -- assert the freshly rebuilt zips are byte-identical to those
+        # objects BEFORE re-uploading (Decision 77 no-TOCTOU).
         if: success()
-        env:
-          BUCKET: agent-platform-data-lake
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          # This runner has no .venv (that's a CC-web-only convention); install build_lambda's
-          # import-time deps directly, mirroring ci.yml's "Install validate.py import-time deps".
-          pip install pyyaml pydantic
-          python -m scripts.build_lambda --ducklake-only --skip-upload --profile "" --bucket agent-platform-data-lake
-          NAMES="ducklake-writer.zip ducklake-reader.zip ducklake-maintenance.zip ducklake-catalog-dr.zip ducklake-deps-layer.zip ducklake-extensions-layer.zip ducklake-pgclient-layer.zip"
-          LAMBDA_ARTIFACT_SHA=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
-          if [ -z "$LAMBDA_ARTIFACT_SHA" ] || [ "$LAMBDA_ARTIFACT_SHA" = "null" ]; then
-            echo "::error::No originating PR resolved for ${SHA}; cannot resolve the content-addressed artifact sha (Decision 77 no-TOCTOU)." >&2
-            exit 1
-          fi
-          export LAMBDA_ARTIFACT_SHA
-          echo "Gated-apply is push-only: verifying rebuilt DuckLake zips are byte-identical to the PR-uploaded per-sha S3 objects (Decision 77 no-TOCTOU)."
-          for name in $NAMES; do
-            local_md5=$(md5sum "lambda-packages/${name}" | cut -d' ' -f1)
-            if ! aws s3 cp "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" "/tmp/existing-${name}" --region eu-west-2 > /dev/null 2>&1; then
-              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: no existing per-sha S3 object found (PR job did not upload it); failing closed (Decision 77 no-TOCTOU)." >&2
-              exit 1
-            fi
-            remote_md5=$(md5sum "/tmp/existing-${name}" | cut -d' ' -f1)
-            if [ "$local_md5" != "$remote_md5" ]; then
-              echo "::error::DUCKLAKE_ZIP_MISMATCH ${name}: local=${local_md5} remote=${remote_md5}; applied layer content would skew from the reviewed plan.bin. Failing closed (Decision 77 no-TOCTOU)." >&2
-              exit 1
-            fi
-          done
-          echo "DUCKLAKE_ZIP_IDEMPOTENT_OK: all seven rebuilt zips are byte-identical to the PR-uploaded per-sha artifacts."
-          echo "Uploading DuckLake zips to s3://${BUCKET}/lambda-packages/ (fixed + per-sha dual-write)..."
-          for name in $NAMES; do
-            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${name}" --region eu-west-2
-            aws s3 cp "lambda-packages/${name}" "s3://${BUCKET}/lambda-packages/${LAMBDA_ARTIFACT_SHA}/${name}" --region eu-west-2
-          done
+        uses: ./.github/actions/build-ducklake-artifacts
+        with:
+          mode: assert
+          artifact-sha: ${{ steps.artifact_sha.outputs.value }}
 
       - name: Fetch saved plan from S3 (gated-apply path, T2.22)
-        id: fetch_plan
-        # Resolve the PR head SHA from the merge commit and fetch plan.bin from S3.
-        # Same logic as apply-sandbox's "Fetch saved plan" step. No re-plan -- applies the
-        # guard-inspected plan verbatim (Decision 77 no-TOCTOU). Fail closed if no PR or no
-        # saved plan exists; recovery is the workflow_dispatch acknowledge-and-retry path.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        working-directory: ${{ env.WORKDIR }}
-        run: |
-          set -euo pipefail
-          PR_HEAD_SHA=$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].head.sha' 2>/dev/null || echo "")
-          if [ -z "$PR_HEAD_SHA" ] || [ "$PR_HEAD_SHA" = "null" ]; then
-            echo "::error::No originating PR resolved for ${SHA}; failing closed (no saved plan -- recovery is workflow_dispatch ack)." >&2
-            exit 1
-          fi
-          PLAN_OBJ="s3://agent-platform-data-lake/tfplan/personal/${PR_HEAD_SHA}.bin"
-          echo "Fetching saved plan: ${PLAN_OBJ}"
-          if ! aws s3 ls "$PLAN_OBJ" > /dev/null 2>&1; then
-            echo "::error::Saved plan object not found at ${PLAN_OBJ}; failing closed (no re-plan fallback)." >&2
-            exit 1
-          fi
-          aws s3 cp "$PLAN_OBJ" plan.bin
-          echo "pr_head_sha=${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
-          echo "Fetched saved plan from ${PLAN_OBJ}"
+        # Resolve the PR (number + head sha) from the merge commit and fetch the content-addressed
+        # plan.bin from S3 (DEP-07 c3), digest-verified (DEP-07 c2). Same logic as apply-sandbox's
+        # "Fetch saved plan" step. No re-plan -- applies the guard-inspected plan verbatim (Decision
+        # 77 no-TOCTOU). No plan.json needed here (no re-guard in this job).
+        uses: ./.github/actions/fetch-saved-plan
+        with:
+          resolve-from-sha: ${{ github.sha }}
+          produce-plan-json: 'false'
+          working-directory: ${{ env.WORKDIR }}
 
       - name: Terraform apply (gated -- plan.bin verbatim, no re-plan)
         id: apply
@@ -1135,36 +836,11 @@ jobs:
         # The job's own failure-path self-dispatch step (below, gated on run_attempt != '1') is the
         # reliable backstop for the re-run path; workflow_run remains the attempt-1 path.
         if: always()
-        env:
-          SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          SERVER_URL: ${{ github.server_url }}
-          REPO: ${{ github.repository }}
-          APPLY_OUTCOME: ${{ steps.apply.outcome }}
-        run: |
-          if [ "$APPLY_OUTCOME" = "success" ]; then
-            STATUS="green"
-          else
-            STATUS="red"
-          fi
-          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
-          if [ -f "${WORKDIR}/plan.bin" ]; then
-            PLAN_SHA=$(sha256sum "${WORKDIR}/plan.bin" | cut -d' ' -f1)
-          else
-            PLAN_SHA=""
-          fi
-          export STATUS TS SHA RUN_ID RUN_URL PLAN_SHA
-          RECORD=$(python3 -c "import json,os; v=os.environ.get('PLAN_SHA',''); print(json.dumps({'status':os.environ['STATUS'],'commit_sha':os.environ['SHA'],'run_id':os.environ['RUN_ID'],'run_url':os.environ['RUN_URL'],'timestamp':os.environ['TS'],'plan_sha':v if v else None}))")
-          printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
-          echo "Wrote convergence record: ${RECORD}"
-          READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
-          READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
-          if [ "$READBACK_STATUS" != "$STATUS" ]; then
-            echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != intended '${STATUS}'; record may be corrupt."
-            exit 1
-          fi
-          echo "Convergence record read-back verified: status=${READBACK_STATUS}"
+        uses: ./.github/actions/write-convergence-record
+        with:
+          sha: ${{ github.sha }}
+          apply-outcome: ${{ steps.apply.outcome }}
+          working-directory: ${{ env.WORKDIR }}
 
       - name: Best-effort post-merge SHA->PR wake
         # Best-effort wake to re-engage a held subscription after the gated apply completes.
