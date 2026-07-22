@@ -1,0 +1,134 @@
+schema_version: 1
+slug: "platform-roadmap-trim"
+intent: >-
+  Relieve docs/ROADMAP-PLATFORM.yaml (9996/10000 lines, guard is --pre-tier so the next
+  roadmap-touching PR fails CI) by compacting its terminal/dead content in place -- keeping the
+  single coherent agent-first file (Decision 110/114) rather than splitting or bare-raising the
+  ceiling -- so the roadmap stays load-cheap and forward-planning behaviour is unchanged.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-platform-roadmap-trim.yaml
+phase: >-
+  Platform roadmap governance -- direct response to Decision 114's reversal trigger firing (file
+  breaches the 10,000-line ceiling). User-explicit out-of-scope maintenance; Tier Item Freshness
+  Gate skipped (names no tier_item, matches the user_explicit_out_of_scope / ad_hoc exception).
+scope:
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Compact terminal/dead content in place. A1: for the 26 ratified/superseded candidate_decisions,
+      drop the redundant `detail`/`realization_evidence` prose (rationale already lives verbatim in
+      DECISIONS.md per Decision 86) -- KEEP `id`, `title`, `gates`, `state`, `ratified_as`,
+      `filed_via`, all supersession machine fields (`narrowly_supersedes`, `supersedes_*`, etc.), and
+      the literal "fully superseded by CD.NN" phrase in the detail of any superseder that carries it
+      (validate_candidate_decision_supersession reads it). A2: for the 93 completed/reserved
+      tier_items (89 complete + 4 reserved), drop `progress_note`/`note`/`decomposition_hints` and shorten `intent` to one line;
+      KEEP `id`, `tier`, `name`, `status`, `depends_on`, `completed_at`, `met_by`, and the entire
+      `exit_criteria` block byte-for-byte. Target 9996 -> ~7000-7600 lines.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Add Decision 147 (re-check the next free number at implement time -- numbers are not reserved at
+      draft time) recording Decision 114's reversal trigger firing and the chosen response: in-place
+      compaction of terminal content, single file preserved (NOT a per-tier split, NOT a bare ceiling
+      raise), the durable compaction norm, and reversal conditions. Draft text in context below.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "docs/ROADMAP-PLATFORM.yaml still loads and validates against the RoadmapDocument schema."
+  - "docs/ROADMAP-PLATFORM.yaml line count is under 7600 (>= 2400 lines of headroom below the 10,000 ceiling)."
+  - "validate_platform_roadmap passes: size guard, every met/rehomed criterion's met_by still resolves to a real plan/sha, no tier_item that appears as a diff-touched `- id:` line carries bare-string criteria, and all closes_criteria refs still resolve."
+  - "validate_candidate_decision_ratification and validate_candidate_decision_supersession pass (compressed ratified/superseded CDs retain every field the R1/R2/R3 and supersession guards read)."
+  - "Active-item eligibility is unchanged: compute_state_dict's next_eligible / in_progress / blocked / blocked_on_cd / ratifiable_cds / deferred_post_mvp projections are identical between origin/main's roadmap and the trimmed working tree."
+  - "Decision 147 (or the re-checked next free number) is present in docs/DECISIONS.md and cites Decision 114 by number."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "Roadmap still parses and validates against the RoadmapDocument Pydantic schema after the trim."
+    command: "bin/venv-python -m scripts.roadmap.platform_roadmap docs/ROADMAP-PLATFORM.yaml"
+    expected: "Prints 'PASS: ... validates against RoadmapDocument schema.' and exits 0."
+    fix_if: "Non-zero exit or a Pydantic/YAML error means a compression edit broke schema shape (dropped a required field, malformed YAML) -- restore the offending field."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: "The standing validate_platform_roadmap check already runs the loader/schema validation in both presubmit tiers; graduating a duplicate schema-load check would double-cover an existing regression guard."
+  - step: 2
+    phase: pre-deploy
+    action: "File is under the trim target, giving comfortable headroom below the 10,000-line ceiling."
+    command: "test $(wc -l < docs/ROADMAP-PLATFORM.yaml) -lt 7600"
+    expected: "Exit 0 (line count < 7600)."
+    fix_if: "Exit 1 means the trim did not remove enough dead prose -- extend A2 compression to more completed items or deepen A1 CD-detail removal."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: "The durable regression guard is the existing _ROADMAP_MAX_LINES=10000 ceiling in validate_platform_roadmap; the 7600 figure is a one-time trim goal for this session, not a standing threshold."
+  - step: 3
+    phase: pre-deploy
+    action: "Platform roadmap integrity guard passes in isolation (size + met_by resolution + no bare-string criteria on diff-touched items + closes_criteria integrity)."
+    command: "bin/venv-python -c \"from scripts.checks.roadmap.validate_platform_roadmap import validate_platform_roadmap as f; a=[]; f(a); import sys; print('OK' if not a else a); sys.exit(1 if a else 0)\""
+    expected: "Prints 'OK' and exits 0."
+    fix_if: "A FAIL listing a bare-string criterion means a completed item's `- id:` line entered the diff (item reordered/added/removed) -- revert to editing only non-id fields. A met_by failure means a met criterion lost its met_by -- restore it."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: "This step re-runs the already-registered validate_platform_roadmap standing check; it is a standing regression guard already, so a separate registry entry would duplicate it."
+  - step: 4
+    phase: pre-deploy
+    action: "Candidate-decision ratification and supersession guards pass after CD compression."
+    command: "bin/venv-python -c \"import sys; a=[]; from scripts.checks.roadmap.validate_candidate_decision_ratification import validate_candidate_decision_ratification as r; from scripts.checks.roadmap.validate_candidate_decision_supersession import validate_candidate_decision_supersession as s; r(a); s(a); print('OK' if not a else a); sys.exit(1 if a else 0)\""
+    expected: "Prints 'OK' and exits 0."
+    fix_if: "A ratification FAIL means a compressed ratified CD lost ratified_as/filed_via or its dec header no longer resolves -- restore the machine fields. A supersession FAIL means a superseder CD lost its 'fully superseded by CD.NN' detail phrase -- restore that phrase."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: "Both checks are already registered standing guards in the presubmit tiers; re-running them as a graduated check would duplicate existing coverage."
+  - step: 5
+    phase: pre-deploy
+    action: "Eligibility invariance -- the trim changed no forward-planning behaviour. Compute compute_state_dict on origin/main's roadmap vs the trimmed working tree and assert the active projections (6 keys) are identical. The 5 uncompared projection keys (strategic_pending/active_tier/realized_but_pending_cds/realization_candidates/gate_evaluations) are safe by construction -- the trim leaves status/depends_on/tier/exit_criteria and all pending CDs byte-identical. Graduation is not-applicable: this is a one-time base-vs-origin/main differential that becomes vacuous once origin/main IS the trimmed tree, so it cannot become a standing regression guard."
+    command: "bin/venv-python -c \"import subprocess,sys,json; from pathlib import Path; from scripts.platform_roadmap_state import compute_state_dict; base=subprocess.run(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'],capture_output=True,text=True).stdout; tmp=Path('docs/.roadmap-base-tmp.yaml'); tmp.write_text(base);\nimport atexit; atexit.register(lambda: tmp.exists() and tmp.unlink());\nkeys=('next_eligible','in_progress','blocked','blocked_on_cd','ratifiable_cds','deferred_post_mvp');\nproj=lambda sd:{k:sd.get(k) for k in keys};\nb=proj(compute_state_dict(tmp)); c=proj(compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml'))); tmp.unlink();\nprint('MATCH' if b==c else json.dumps({'base':b,'cur':c},indent=2,default=str)); sys.exit(0 if b==c else 1)\""
+    expected: "Prints 'MATCH' and exits 0."
+    fix_if: "A JSON diff (exit 1) means a compression edit altered an active item's eligibility -- most likely a status/depends_on field on a completed item was touched, or a completed `- id:` was removed and an active item's depends_on now dangles. Restore the dead item's status/depends_on/id verbatim."
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    action: "The new amending Decision (147 or the re-checked next free number) exists AND references Decision 114 within its own body (not merely somewhere in the file -- Decision 114's own header already contains the string)."
+    command: "bin/venv-python -c \"import re,sys; t=open('docs/DECISIONS.md').read(); secs=re.split(r'(?m)^## Decision (\\d+):', t); nums=[int(secs[i]) for i in range(1,len(secs),2)]; mx=max(nums); body=secs[2+2*nums.index(mx)]; ok = mx>=147 and 'Decision 114' in body; print('OK new Decision', mx, 'cites 114') if ok else print('FAIL: max Decision', mx, 'body cites 114:', 'Decision 114' in body); sys.exit(0 if ok else 1)\""
+    expected: "Prints 'OK new Decision <N> cites 114' and exits 0, where N is the highest Decision number (>=147) and its body contains 'Decision 114'."
+    fix_if: "Exit 1 means the amending Decision was not added, landed below 147, or its body does not reference Decision 114 -- add/fix it per the draft in context. The regex tolerates the numbering race landing above 147."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: "One-time presence check tied to this session's specific Decision number; not a durable regression guard once the Decision is merged."
+constraints:
+  - "Single-file principle preserved (Decisions 110, 114): do NOT split ROADMAP-PLATFORM.yaml into per-tier files and do NOT create an archive file -- this is Path A (in-place compaction), not Path C or D."
+  - "Do NOT raise _ROADMAP_MAX_LINES -- the ceiling stays 10,000 (Path A relieves by removing dead weight, not by raising the limit; Decision 128 anti-silent-raise posture)."
+  - "Edit ONLY fields inside completed/reserved tier_items; never add, remove, or reorder a `- id:` line and never alter an `exit_criteria` block. This keeps the 60 legacy bare-string-criteria items out of validate_platform_roadmap check (ii) (which fires only on `- id:` lines appearing as +/- in the diff)."
+  - "For ratified/superseded CDs, retain every field the ratification (Decision 105) and supersession (Decision 136-adjacent) guards read: state, ratified_as, filed_via, gates, narrowly_supersedes/supersedes_*, and the 'fully superseded by CD.NN' phrase where present."
+  - "No active content changes: pending CDs and non-terminal tier_items (not_started/in_progress) are left byte-identical."
+  - "No rescue agents or workaround loops (Decision 55)."
+  - "Only docs/ROADMAP-PLATFORM.yaml and docs/DECISIONS.md are in scope; the compaction-enforcement guard is deliberately deferred to follow-on rec-2781 (filed at plan time, source=planning) so the anti-regrowth follow-through is durably tracked, not just prose in Decision 147."
+context:
+  - "Diagnosis: file is 9996/10000 lines; ~52% (5181 lines) is terminal/dead content -- 4067 lines across 93 completed/reserved tier_items + 1114 lines across 26 ratified/superseded candidate_decisions. Active content is ~3945 lines."
+  - "The _ROADMAP_MAX_LINES guard runs in BOTH the --pre and full tiers (scripts/checks/registry.py lines 97 and 173), so a breach fails PR CI, not just post-merge -- hence the urgency."
+  - "Decision 114 reversal trigger: '.. when the file breaches the 10,000-line ceiling again, or when /plan-time load cost becomes prohibitive.' This plan is that revisit; it chooses in-place compaction over the per-tier split (rejected by 114/110) and over a bare ceiling raise (Decision 128 anti-pattern)."
+  - "Redundancy is provable: e.g. CD.21 stores its rationale in `detail`, again in `realization_evidence`, and again as Decision 112 in DECISIONS.md (ratified_as: dec-112). Decision 86 says that rationale belongs only in DECISIONS.md."
+  - "validate_platform_roadmap check (ii) touched-id semantics: touched_ids come from `^[+-]\\s+- id:` in `git diff origin/main` -- only items whose `- id:` line itself is added/removed. Editing a field inside an item leaves its `- id:` line as unchanged context, so legacy bare-string criteria on the 60 completed items are never challenged as long as their id lines and exit_criteria are untouched."
+  - "Decision 147 DRAFT (file at implement; re-check next free number, current max is 146): '## Decision 147: Respond to Decision 114 reversal trigger by compacting ROADMAP-PLATFORM.yaml terminal content in place (single file preserved). Decided. When the file reached 9996/10000, the reversal trigger in Decision 114 fired. Rather than the per-tier split (rejected by 114 as the anti-agent-first N-files-to-reassemble pattern, Decision 110) or a bare ceiling raise (the silent-trade anti-pattern, Decision 128), terminal/dead content is compacted in place: ratified/superseded candidate_decisions drop their `detail`/`realization_evidence` prose (already stored in DECISIONS.md per Decision 86, keeping the machine fields the ratification/supersession guards read), and completed/reserved tier_items drop `progress_note`/`note`/`decomposition_hints` and shorten `intent`, keeping id/status/depends_on/completed_at/met_by/exit_criteria intact so eligibility computation and the criteria-integrity guards are unaffected. The 10,000-line ceiling and single-file agent-first structure (Decision 110) are preserved. Durable norm: ratified CDs and completed tier_items are stored in compact form; their narrative lives in DECISIONS.md, not the roadmap. Reversal conditions: if the file breaches 10,000 again after compaction, escalate to lifecycle archival (a separate ROADMAP-PLATFORM-ARCHIVE.yaml with dependency-resolving stubs) or a consciously-cited, temporary, reversal-conditioned ceiling raise (mirroring Decision 145's DECISIONS.md-ceiling precedent) -- not another ad hoc trim. Related: 114, 110, 105, 136, 93, 108, 86, 84, 128, 145.'"
+  - "Numbering-race: decision numbers are not reserved at draft time; re-check the max `## Decision NNN:` header in DECISIONS.md at implement and shift to the next free number if 147 was claimed by a concurrent PR."
+  - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness: 0 behind, 0 ahead); no rebase needed."
+  - "VP hermeticity (VF-01 / rec-2770 CI-SAFETY): ALL pre-deploy VP steps are hermetic: false by design. This is a plan-only PR that merges to main BEFORE its /implement PR, so every VP step asserts post-trim state (size < 7600, eligibility invariance, Decision 147 present) that is false on the plan-only tree; and validate_vp_replay re-executes hermetic pre-deploy steps inside pr-validate, which has NO .venv, so any bin/venv-python step fails with 'venv Python not found'. Marking any step hermetic would (correctly) fail replay -- the steps run for real at /implement time. First pr-validate run on this PR (steps originally marked hermetic:true on 1/2/5/6) failed exactly this way; reclassified to hermetic:false per the planning skill's documented fallback (excluded from replay with a printed reason). The /implement agent must NOT flip them back to hermetic:true."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: dec-114, dec-110, dec-105, dec-136, dec-84, dec-86. RELATED: dec-134, dec-145, dec-93, dec-108, dec-85. Flags were WARN on the rejected Path C (per-tier split contradicts 114/110) and NOTE on the rejected Path B (bare ceiling raise vs Decision 128); recommended Path A carries no CONTRADICT. Decisions triaged: 99 of 99."
+  - "gates: decision-scout=FLAGS_FOUND (Path A clean, flags on unchosen B/C only); plan-critique=PROCEED after 1 round (4 non-blocking improvements incorporated: 87->93 count fix, hardened VP step 6 Decision-citation check, step 5 graduation rationale, and filed follow-on rec-2781 for the enforcement guard)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/platform-roadmap-trim-zwiz4k)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (Decision 114 and cited decisions)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - "docs/ROADMAP-PLATFORM.yaml (A1): iterate the 26 candidate_decisions whose state is ratified or superseded; replace each multi-line `detail:`/`realization_evidence:` prose block with either nothing or a one-line pointer to its `ratified_as` Decision. Preserve id/title/gates/state/ratified_as/filed_via, every supersession machine field, and any literal 'fully superseded by CD.NN' phrase. Leave all 14 pending CDs byte-identical."
+  - "docs/ROADMAP-PLATFORM.yaml (A2): iterate the 93 tier_items whose status is complete or reserved; delete `progress_note`, `note`, `decomposition_hints` and shorten `intent` to a single descriptive line. Do NOT touch the `- id:` line, `status`, `depends_on`, `completed_at`, `met_by`, or the `exit_criteria` block of any item. Leave all not_started/in_progress items byte-identical."
+  - "docs/DECISIONS.md: re-check the current max `## Decision NNN:` header; add the next free number (draft numbered 147) using the drafted text in context, citing Decision 114 by number and listing the related decisions."
+  - "Execute Verification Plan -- run each step; loop until pass. If step 5 (eligibility invariance) mismatches, a dead-item status/depends_on/id was disturbed -- restore it verbatim; do not adjust active items to make it pass (Decision 55, no workaround)."
+  - "Post-merge: run `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md` to sync the new Decision to ops_decisions (Decision 84)."
+  - "Report: lines removed, final line count, eligibility-invariance result, and the filed Decision number."
+work_areas: []
+rollback: >-
+  All removed content is preserved in git history and (for ratified CDs) in DECISIONS.md; revert the
+  single roadmap commit to restore verbatim. No data is destroyed -- only relocated/de-duplicated.
