@@ -1,0 +1,310 @@
+schema_version: 1
+slug: "vp-replay-hermetic-traps"
+intent: >-
+  Fix at root cause the two traps in the VF-01 hermetic VP-replay system that force agents to
+  mark plan verification steps hermetic:false -- restoring independent, machine-re-executed
+  verification (VF-01's core guarantee) as the default for feature-verification steps.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-vp-replay-hermetic-traps.yaml
+phase: >-
+  Platform engineering -- verification-system correctness (VF-01). Ad-hoc, user-initiated
+  (soft-warn category user_explicit_out_of_scope); names no tier_item, so the Tier Item
+  Freshness Gate is skipped. Mirrors the Decision 132 implement-PR resolution precedent.
+scope:
+  - file: bin/venv-python
+    action: Modify
+    purpose: >-
+      Trap B fix. When no .venv exists, fall back to a system python3/python on PATH that can
+      import a sentinel dep (probe importability); otherwise retain the current fail-loud error
+      (Decision 55). Makes the CLAUDE.md-mandated wrapper work in every venv-less context
+      (pr-validate, main-validate, terraform-validate, fresh containers), so hermetic steps that
+      invoke bin/venv-python execute correctly during replay. Preserve the OS-aware .venv branch
+      (Linux/macOS vs Windows) as the first choice.
+  - file: scripts/checks/_common.py
+    action: Modify
+    purpose: >-
+      Consolidate the plan-resolution helpers into their sole home (Decision 104): PLAN_PATH_RE,
+      plan_paths_from_changed, load_plan (currently duplicated in BOTH check modules) plus
+      feat_commit_slugs, origin_main_reachable (currently in validate_graduation_completeness only
+      -- validate_vp_replay gains feat-resolution new). Pick one consolidated PLAN_PATH_RE form
+      (graduation's has a capture group; vp_replay's does not; both use .match() for truthiness).
+      Reuse the existing origin/main / advisory-skip discipline (Decision 135).
+  - file: scripts/checks/verification/validate_vp_replay.py
+    action: Modify
+    purpose: >-
+      Trap A fix. Replace the plan-only-PR trigger with the Decision 132 two-leg model: a
+      plan-only PR (PLAN-{slug} in diff, no co-present feat({slug}) implementation) DEFERS replay
+      with a printed reason (no execution against an implementation-less tree); the implement PR
+      (or a co-present plan+code PR) resolves PLAN-{slug} from feat({slug}) commit subjects on
+      git log origin/main..HEAD, loads the plan from disk, and replays its hermetic pre-deploy
+      steps against the complete tree. Advisory-SKIP on unreachable origin/main or absent plan
+      (inherits Decision 132 limitation B). Consume the _common helpers. Keep PER_STEP_TIMEOUT /
+      MAX_AGGREGATE / MAX_REPLAYED budget guards (Decision 73).
+  - file: scripts/checks/verification/validate_graduation_completeness.py
+    action: Modify
+    purpose: >-
+      Consume the extracted _common helpers instead of its local duplicates (Decision 104
+      sole-home de-dup), preserving its existing injection seams (changed_files, root, load_plan,
+      baseline_registry_reader) so its behaviour and tests are unchanged.
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Update the Hermetic authoring (T3.15 / VF-01) guidance: hermetic:true is the correct
+      default for feature-verification pre-deploy steps again (they are replayed at implement
+      time, not plan time); stays false for network/creds/deploy/pytest steps; note that
+      bin/venv-python is now safe in hermetic steps (venv-less fallback). Document the plan-only
+      PR defer behaviour and the inherited feat({slug}) resolution seam.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append the forward Decision recording the new VF-01 replay-timing contract and the
+      hermetic-default reversal (amends Decision 104/132; see the drafted text in context).
+      Numbering re-checked at implement time (current max is 147).
+  - file: tests/checks/verification/test_validate_vp_replay.py
+    action: Modify
+    purpose: >-
+      This file ALREADY EXISTS (230 lines) and asserts the OLD behaviour (a plan in changed_files
+      is replayed directly). REWRITE those cases to the two-leg model -- plan-only PR DEFERS (no
+      execution), implement PR with a feat({slug}) commit replays hermetic steps against the tree
+      -- and add the new-leg cases: co-present plan+code replays; advisory-SKIP on unreachable
+      origin/main and on an absent plan; budget caps still honoured.
+  - file: tests/checks/verification/test_validate_graduation_completeness.py
+    action: Modify
+    purpose: >-
+      Behaviour-preservation guard for the helper extraction. This suite drives
+      validate_graduation_completeness through its PUBLIC seams (changed_files / root /
+      baseline_registry_reader) + real git fixtures, so the _common extraction is expected to
+      require NO change here; adjust only if a public seam actually shifts. Confirm it still passes.
+  - file: tests/test_venv_python.py
+    action: Create
+    purpose: >-
+      Wrapper-fallback test (new home; the wrapper's behaviour is unrelated to the vg materializer
+      tested by tests/test_verification_graduation.py). Invoke bin/venv-python via subprocess in a
+      temp repo: resolves .venv when present; falls back to a dep-bearing system python when the
+      .venv is absent; stays fail-loud / exit-1 when no interpreter can import the sentinel dep.
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      MANDATORY coverage home for scripts/checks/_common.py. The full-tier per-file 100%-coverage
+      gate (validate_test_coverage -> check_per_file_coverage) maps _common.py to THIS file via a
+      hard-coded branch and measures coverage running ONLY this file
+      (pytest tests/test_checks_registry.py --cov=scripts/checks/_common.py). Add direct unit tests
+      for the five new helpers (PLAN_PATH_RE, plan_paths_from_changed, load_plan, feat_commit_slugs,
+      origin_main_reachable) so _common.py stays at 100% -- transitive coverage from the check test
+      files does NOT count under the mapped command, and a shortfall reddens the POST-MERGE full
+      tier (auto-filing a critical ci-rca rec) even though --pre passes.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    bin/venv-python resolves .venv when present; when .venv is absent it execs a system
+    interpreter that can import the sentinel dep; when neither .venv nor any PATH interpreter can
+    import the sentinel it exits non-zero with the fail-loud message (Decision 55).
+  - >-
+    validate_vp_replay DEFERS (prints a reason, executes nothing) on a plan-only PR, and replays
+    a plan's hermetic pre-deploy steps against the complete tree when resolved from a feat({slug})
+    commit; it advisory-SKIPs (never fails) on unreachable origin/main or an absent plan.
+  - >-
+    The plan-resolution helpers live only in scripts/checks/_common.py; validate_vp_replay.py and
+    validate_graduation_completeness.py both consume them with no local duplicate definitions.
+  - >-
+    validate_graduation_completeness behaviour is unchanged after the helper extraction: its
+    authoritative suite tests/checks/verification/test_validate_graduation_completeness.py passes.
+  - >-
+    The planning skill's Hermetic authoring section states hermetic:true is the default for
+    feature-verification steps (replayed at implement time) and documents the plan-only defer plus
+    the feat({slug}) seam.
+  - >-
+    docs/DECISIONS.md carries the new forward Decision (amending 104/132) with reversal
+    conditions, and bin/venv-python -m scripts.validate --pre passes.
+  - >-
+    scripts/checks/_common.py stays at 100% coverage under its mapped full-tier command
+    (pytest tests/test_checks_registry.py --cov=scripts/checks/_common.py), so the post-merge
+    full tier does not redden on the new helpers.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Run the reworked two-leg replay unit tests, the graduation-completeness regression, and the wrapper-fallback test.
+    command: bin/venv-python -m pytest tests/checks/verification/test_validate_vp_replay.py tests/checks/verification/test_validate_graduation_completeness.py tests/test_venv_python.py -q
+    expected: All tests pass -- plan-only defer, implement-PR replay, co-present replay, advisory-SKIP paths, budget caps; graduation-completeness behaviour unchanged; wrapper .venv/fallback/fail-loud paths.
+    fix_if: A leg, regression, or wrapper path test fails, indicating the trigger, extraction, or fallback logic is wrong.
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Confirm the plan-resolution helpers are single-homed in _common (no local duplicates remain).
+    command: >-
+      test "$(grep -c 'def feat_commit_slugs\|def origin_main_reachable\|def plan_paths_from_changed'
+      scripts/checks/_common.py)" -ge 3 &&
+      ! grep -qE '^def _feat_commit_slugs|^def _origin_main_reachable' scripts/checks/verification/validate_vp_replay.py &&
+      ! grep -qE '^def _feat_commit_slugs|^def _origin_main_reachable' scripts/checks/verification/validate_graduation_completeness.py &&
+      echo SINGLE_HOMED
+    expected: Prints SINGLE_HOMED -- helpers defined in _common, not duplicated in either check.
+    fix_if: Non-zero exit -- a duplicate helper definition survives in a check module.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Doc-prose grep over the planning skill; anchor wording is expected to evolve, so a standing
+      grep guard on exact phrasing is brittle and low-value as a regression check.
+    action: Confirm the planning skill hermetic-authoring guidance was updated.
+    command: grep -q 'replayed at implement' .claude/skills/planning/SKILL.md && grep -q 'plan-only' .claude/skills/planning/SKILL.md && echo SKILL_OK
+    expected: Prints SKILL_OK.
+    fix_if: No output -- the hermetic-authoring guidance was not updated.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Confirm the forward Decision was appended to DECISIONS.md and synced to the warehouse.
+    command: grep -qE '^## Decision 14[89]|^## Decision 1[5-9][0-9]:' docs/DECISIONS.md && echo DECISION_PRESENT
+    expected: Prints DECISION_PRESENT -- the new Decision (>=148) is in DECISIONS.md; the implementer also runs ops_data_portal --backfill-decisions-md to sync ops_decisions.
+    fix_if: No output -- the forward Decision was not appended (or landed at an unexpected number; re-check the max header).
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Confirm _common.py stays at 100% under its mapped coverage command (full-tier gate, replicated here pre-merge).
+    command: bin/venv-python -m pytest tests/test_checks_registry.py --cov=scripts/checks/_common --cov-report=term-missing -q
+    expected: _common.py reports 100% coverage -- the five new helpers are exercised directly by tests/test_checks_registry.py.
+    fix_if: >-
+      _common.py is below 100% (uncovered lines listed) -- the new helpers are not directly tested
+      in test_checks_registry.py; transitive coverage from the check tests does NOT count here.
+      This must pass locally or the POST-MERGE full tier reddens even though --pre is green.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Run the fast presubmit tier over the whole change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 -- all --pre checks pass, including the reworked validate_vp_replay and validate_graduation_completeness.
+    fix_if: Any check fails; read output and fix the cited file before re-running.
+constraints:
+  - No rescue agents or workaround loops (Decision 55) -- forward-fix only.
+  - >-
+    Trap B must stay LOUD: bin/venv-python exits non-zero with the fail-loud message when neither
+    .venv nor any PATH interpreter can import the sentinel dep (Decision 55 -- do not silently
+    substitute a depless interpreter). Assert this path in the wrapper test.
+  - >-
+    Trap A must advisory-SKIP (never fail the build) on unreachable origin/main or an absent
+    PLAN-{slug}.yaml, mirroring Decision 132's disclosed residual limitations -- do not harden
+    these into failures.
+  - >-
+    The implement-time replay must stay within the Decision 73 fast-tier (--pre) budget: keep the
+    per-step timeout and aggregate wall-clock / step-count caps already in validate_vp_replay.
+  - >-
+    Plan-resolution helpers are single-homed in scripts/checks/_common.py (Decision 104); do not
+    leave or add duplicate definitions in the check modules.
+  - >-
+    Preserve validate_graduation_completeness's injection seams and behaviour -- this PR de-dups
+    its helpers, it does not change what it enforces.
+  - >-
+    The forward Decision is authored (DECISIONS.md append + ops_data_portal
+    --backfill-decisions-md) at /implement time behind the execution-time human gate, never during
+    planning; re-check the max Decision header before assigning its number (numbering-race note).
+context:
+  - >-
+    Root cause -- Trap A: validate_vp_replay replays a diff-added plan's hermetic pre-deploy steps
+    on the plan-only PR, where the implementation is absent by construction (two-PR plan/implement
+    flow, Decision 76), so feature-verification steps fail unless marked hermetic:false. Fix mirrors
+    Decision 132's implement-PR leg (feat({slug}) resolution + replay against the complete tree).
+  - >-
+    Root cause -- Trap B: bin/venv-python hard-fails without a .venv, but pr-validate / main-validate
+    / terraform-validate run venv-less (requirements-fast.txt into hosted Python, to avoid ~3GB of
+    torch/CUDA on disk). The mandated wrapper is thus incompatible with the CI jobs' deliberate
+    design. requirements-fast.txt ships pydantic + pyyaml, so hermetic one-liners run once the
+    wrapper resolves to the hosted interpreter.
+  - >-
+    Precedent to mirror: scripts/checks/verification/validate_graduation_completeness.py already
+    implements the exact feat({slug})->PLAN-{slug} resolution + advisory-SKIP semantics; this plan
+    extracts the shared helpers to _common and reuses them (no reinvention).
+  - >-
+    Citation corrections (decision-scout): bin/venv-python's fail-loud semantics are an AGENTS.md
+    shell-invocation rule, governed by NO numbered Decision -- so Trap B contradicts nothing. VF-01
+    is a roadmap/verification-framework item, not a numbered Decision; Decision 104 is the
+    check-registry / _common sole-home decision.
+  - >-
+    Inherited limitation (Decision 132 residual B): a code PR that omits the feat({slug}) commit
+    prefix escapes replay (advisory-SKIP, not fail). Documented in the planning skill, not papered
+    over.
+  - >-
+    This plan's OWN VP steps are all hermetic:false on purpose -- the fix is not merged when this
+    plan's PR runs, so the OLD replay logic still executes on the plan-only PR. Future plans get
+    honest hermetic feature-verification steps once this lands.
+  - >-
+    Drafted forward Decision (assign >=148 at implement time after re-checking the max header):
+    Title "VF-01 hermetic VP-replay: replay at implement-time, not plan-time; hermetic-default
+    restored". Body -- replay now resolves feat({slug}) commit subjects on git log
+    origin/main..HEAD, loads PLAN-{slug}.yaml, and replays hermetic pre-deploy steps against the
+    complete tree; plan-only PRs defer with a printed reason. Shared resolution helpers
+    consolidated into scripts/checks/_common.py (amends Decision 104's surface, mirrors Decision
+    132). bin/venv-python falls back to a sentinel-dep-importing system interpreter when .venv is
+    absent, staying fail-loud otherwise (Decision 55). Inherits Decision 132 limitation B.
+    Reversal conditions -- if the two-PR flow is replaced by co-present plan+code PRs the
+    plan-only defer branch becomes dead and replay can revert to diff-added triggering; if CI
+    adopts a universal .venv the wrapper fallback becomes redundant (harmless).
+  - "Decision-scout verdict + CITE list: FLAGS_FOUND (no BLOCK). CITE: dec-132, dec-104, dec-73, dec-55, dec-48. RELATED: dec-135, dec-85, dec-76, dec-109."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 3 rounds (r1: test-file Modify-not-Create, step-1 not-applicable, wrapper test rehomed; r2: added tests/test_checks_registry.py as _common.py's full-tier coverage home + per-file-coverage VP step; r3 PROCEED + minor accuracy fixes)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (via decision-scout subagent; CITE list resolved; max header = 147 at plan time)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Modify bin/venv-python: keep the OS-aware .venv path as first choice; if that binary is
+    absent, iterate candidate system interpreters (python3, python on PATH) and exec the first
+    that can import a sentinel dep (e.g. pydantic) via `<py> -c "import pydantic"`; if none
+    qualifies, print the existing fail-loud "venv Python not found ..." message and exit 1. Keep
+    it POSIX bash, cross-platform (Windows branch falls back to `python`/`py` on PATH). CAUTION:
+    the script uses `set -euo pipefail`, so guard each failing import probe (`|| true` or an `if`)
+    so `set -e` does not abort on the first non-qualifying candidate before the loop finishes.
+  - >-
+    Modify scripts/checks/_common.py: add PLAN_PATH_RE, plan_paths_from_changed(changed_files),
+    load_plan(rel_path, root), feat_commit_slugs(root), origin_main_reachable(root) -- lifted
+    verbatim from the two check modules -- as the single home. Preserve the sys.path injection in
+    load_plan and the git-command shape.
+  - >-
+    Modify scripts/checks/verification/validate_vp_replay.py: import the helpers from _common;
+    replace validate_vp_replay's body with a two-leg dispatch mirroring
+    validate_graduation_completeness -- plan-only-PR leg prints a DEFER line (plan in diff but no
+    feat({slug}) implementation resolvable) and replays nothing; implement-PR leg resolves
+    feat({slug}) slugs, loads each PLAN-{slug}.yaml from disk, and replays its hermetic pre-deploy
+    steps against the working tree with the existing timeout/aggregate/count budget guards and the
+    exit-code + backtick-literal matching rules. Advisory-SKIP on unreachable origin/main or absent
+    plan. Update the module docstring and the mirrored note referenced by the planning skill.
+  - >-
+    Modify scripts/checks/verification/validate_graduation_completeness.py: delete its local
+    PLAN_PATH_RE / _plan_paths_from_changed / _load_plan / _feat_commit_slugs /
+    _origin_main_reachable and import them from _common, keeping all injection seams and behaviour.
+  - >-
+    Modify .claude/skills/planning/SKILL.md Hermetic authoring section per the scope purpose
+    (hermetic:true default for feature-verification steps replayed at implement time; false for
+    network/creds/deploy/pytest; bin/venv-python now safe; plan-only defer; feat({slug}) seam).
+  - >-
+    Append the forward Decision to docs/DECISIONS.md (re-check the max `## Decision NNN:` header
+    first; assign the next free number >=148) using the drafted title/body/reversal-conditions in
+    context, then run bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md to sync
+    ops_decisions.
+  - >-
+    Rewrite tests/checks/verification/test_validate_vp_replay.py (exists, 230 lines, tests OLD
+    behaviour) to the two-leg model + new-leg cases; create tests/test_venv_python.py for the
+    wrapper .venv/fallback/fail-loud subprocess cases; run
+    tests/checks/verification/test_validate_graduation_completeness.py to confirm the helper
+    extraction is behaviour-preserving (expected: no edit needed). Add DIRECT unit tests for the
+    five new _common helpers to tests/test_checks_registry.py -- that is _common.py's hard-coded
+    coverage home, and the full-tier per-file gate measures coverage running ONLY that file, so
+    transitive coverage from the check test files does NOT count. Do not add them to the vg
+    materializer suite.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Revert is clean: restore the four Python/skill files, bin/venv-python, and the DECISIONS.md
+  append, and delete the new test file. The forward Decision, if already backfilled, is retired by
+  a follow-up DECISIONS.md amendment + --backfill-decisions-md (never a raw ops_decisions delete).
+  No infrastructure or schema state is touched.
