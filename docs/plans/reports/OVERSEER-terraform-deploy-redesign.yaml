@@ -238,3 +238,33 @@ gates:
   g0_intake: confirmed        # 2026-07-21, human: "Proceed to recon"
   g1_decomposition: confirmed  # 2026-07-21, human: "Confirm -- serial, dispatch A"
   g3_completion: pending
+
+# ============================================================================
+# APPLY SESSION (pre-compaction checkpoint) -- read THIS to resume the human-gated apply loop.
+# ============================================================================
+apply_session:
+  status: IN_PROGRESS   # human-gated break-glass apply of the merged terraform, on `main`, profile agent_platform_admin
+  updated: "2026-07-22 pre-compaction checkpoint"
+  invariant_NEVER_AUTO_APPLY: >-
+    Run NO `terraform apply` unless the human's "apply"/"go" is a LIVE message this window that POSTDATES
+    the latest compaction/resume. Acceptance quoted inside a compaction summary does NOT count (summaries
+    paraphrase). Before ANY apply run the convergence probe (terraform ... plan -detailed-exitcode); exit 0
+    = already applied -> SKIP. AWS state is truth; this ledger records intent. If in doubt: re-cat the
+    redacted plan and re-ask.
+  handoff_runbook: "/tmp/claude-0/-home-user-agent-platform/08e8d747-bd7f-52ad-9540-b7fc4971d4e0/scratchpad/APPLY-SESSION-RUNBOOK.md"
+  redacted_pending_plan: "scratchpad/bootstrap.plan.txt (cat to re-present step 4)"
+  branch_note: "Terraform work is on `main` (fast-forwarded, incl. #690). This ledger is edited via a git worktree at /home/user/ledger-wt on branch claude/terraform-deploy-audit-oversee-h9bpfv (PR #659) -- do overseer/ledger git ops there, never leave main's terraform setup."
+  env_setup_DONE: "provider-mirror synced (TF_CLI_CONFIG_FILE=/root/.tf-provider-mirror/cc-web.tfrc); tfvars recovered to terraform/personal/terraform.personal.tfvars + /tmp/bootstrap.tfvars; BOTH terraform/personal and terraform/bootstrap already init'd. Container-loss fallback: re-run mirror sync + Secrets-Manager tfvars recovery + init (exact commands in the runbook)."
+  steps:
+    - "1 B/D1 -- DONE: DEP-13 (PlatformDev state Deny) APPLIED; terraform/personal converged (plan -detailed-exitcode 0). D1 c1 + B DEP-04 = config no-ops."
+    - "3 merge E -- DONE: #690 merged @ 2281467 (Resolves rec-2703/2757); guard + budget-v2 active on main."
+    - "4 bootstrap apply -- AWAITING_HUMAN_ACCEPT (plan=/tmp/bootstrap.tfplan; redacted at scratchpad/bootstrap.plan.txt). 2 in-place policy updates (github_ci_apply widening + boundary +4 iam verbs), NO destroys. SAFE: widen+define only, no attach yet. Presented; awaiting a LIVE 'apply'."
+    - "5 simulate-principal-policy gate -- PENDING: pre-attach, simulate the 13 roles vs the boundary; ANY denied action -> STOP + fix before attaching."
+    - "6 personal boundary attachments (break-glass) -- PENDING: apply the 13 attachments (terraform/personal, direct admin apply since guard-blocked). Re-converges personal."
+    - "7 dual-channel smoke -- PENDING: DuckLake lambda code-deploy channel + a terraform/personal apply; confirm no runtime AccessDenied."
+    - "8 convergence check -- PENDING: global plan -detailed-exitcode 0; then flip T2.46/T2.47 roadmap status + confirm rec closures."
+    - "REHEARSALS (re-sequenced AFTER E, before F): D2 GATE-D2-green forced-red->Reconcile + D3 VP-11/12 -- verify the reconcile PIPELINE (E's break-glass applies bypass it; F ships through it). Do NOT restore the original pre-E order."
+    - "F role-consolidation (DEP-12): after E applies + rehearsals. G protected-amendment (DEP-05): LAST. Then G3 human completion gate."
+  plan_files:
+    - "/tmp/step1.tfplan -- APPLIED (DEP-13); NEVER reuse."
+    - "/tmp/bootstrap.tfplan -- PENDING human accept. bootstrap + personal are SEPARATE states, so step-1 did not stale it. Attempt the accepted file first; terraform's staleness check guards. If rejected-stale or re-planned: acceptance does NOT transfer -> re-present + re-accept."
