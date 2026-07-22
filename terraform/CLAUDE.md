@@ -113,7 +113,7 @@ The operator-recovery procedure itself is quarantined at
 **Apply posture (record-backed sandbox CD, CD.35 / T2.20 Wave 1):** sandbox CD auto-apply
 (`.github/workflows/terraform-apply-sandbox.yml`; push-to-main touching `terraform/personal/**` auto-applies
 behind the guard + subagent plan review). It sources all no-default root-module variables from the
-`agent-platform-terraform-personal-tfvars` Secrets Manager secret: the apply role's `SecretsManagerTfvarsRead`
+`agent-platform-terraform-personal-tfvars` Secrets Manager secret: the apply role's `SecretsManagerReadOnly`
 grant fetches the secret body to `terraform.personal.tfvars`, which is passed to `terraform plan` via
 `-var-file`. New no-default variables only require updating that secret -- no per-variable workflow edit.
 `TF_VAR_aws_profile=""` is the sole remaining env override (blanks the named-profile default so the OIDC
@@ -314,9 +314,9 @@ model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supers
 
 - **DuckLake IAM read-wildcard closure (PLAN-terraform-sandbox-convergence-closure, 2026-06-18; SSM List* completion PLAN-ci-apply-ssm-list-closure rec-2276, 2026-06-18, `github_ci_apply` inline policy, out-of-band admin apply):**
   The iterative-discovery anti-pattern for `github_ci_apply` refresh-READ grants (rec-2223 round, rec-2251 round) is
-  permanently closed. Eight READ-only Sids use per-service wildcards (`Describe*/List*` or `Get*/List*`) scoped to the
+  permanently closed. Seven READ-only Sids use per-service wildcards (`Describe*/List*` or `Get*/List*`) scoped to the
   same resource ARNs as before: `CloudWatchLogsRead`, `LambdaRead`, `EventBridgeRead`, `SNSRead`, `CloudWatchAlarmsRead`,
-  `SecretsManagerNeonAPIKeyRead`, `SecretsManagerTfvarsRead`, `SSMParameterRead`. WRITE Sids (`EventBridgeWrite`,
+  `SecretsManagerReadOnly`, `SSMParameterRead`. WRITE Sids (`EventBridgeWrite`,
   `CloudWatchAlarmsWrite`, `LambdaPermissionWrite`, `SSMFeatureFlagsManage`, `ConvergenceRecordWrite`,
   `IAMRoleReconcile`, `OIDCProviderReconcile`) remain enumerated and ARN-scoped (no wildcards). IAM read Sids
   (`IAMRolesRead`) remain enumerated per Decision 35 (policy defined in `terraform/bootstrap/github_ci_apply.tf`).
@@ -324,8 +324,8 @@ model (PlatformDev + PlatformAdmin codification, Decision-57 SSO-recovery supers
   closure shipped `Get*/Describe*`; `ssm:ListTagsForResource` is a `List*`-class action the AWS provider calls
   on every `aws_ssm_parameter` refresh, surfaced by rec-2276 as a missed gap on the first apply-sandbox run
   under the `github_ci_apply` CI identity -- the SSM List* completion round landed with rec-2276).
-  All eight READ Sids now use per-service wildcards covering all refresh-read actions (`Describe*/List*` or
-  `Get*/List*` for seven Sids; `Get*/Describe*/List*` for `SSMParameterRead`); no further iterative-discovery
+  All seven READ Sids now use per-service wildcards covering all refresh-read actions (`Describe*/List*` or
+  `Get*/List*` for six Sids; `Get*/Describe*/List*` for `SSMParameterRead`); no further iterative-discovery
   rounds are expected.
 
 ## Athena workgroup rules
