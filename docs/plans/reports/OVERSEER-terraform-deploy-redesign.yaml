@@ -94,8 +94,12 @@ slices:
     plan_slug: "terraform-apply-chain-consolidation"
     findings: ["DEP-08", "DEP-07", "T2.42 c4"]
     status: planning
-    pr_url: null
-    hand_back: null
+    pr_url: "plan #682 (created, unmerged; lifted plan-critique pending)"
+    hand_back: "PLAN AUTHORED (PROCEED). Plan #682 @ 11e3a36. decision-scout INLINE NO_FLAGS (99/99 triaged; reinforces 77/92, orthogonal to 144). validate --pre PASS. 16 VP steps (12 pre + 4 post; VP-14=GATE-D2-green forced-red->Reconcile parity rehearsal, VP-15=DEP-07 live negative, VP-16=rec-close). closes_criteria T2.46:c1/c2/c3 + T2.42:c4; bundles rec-2663 + rec-2659. Mechanism: duplicated safety blocks -> single composite actions under .github/actions/ consumed by BOTH terraform-apply-sandbox.yml + reconcile.yml (DEP-08); saved-plan integrity via sha256(plan.bin) digest+commit-status verified once in the shared fetch action, fail-closed on mismatch/missing (DEP-07); build+assert bash -> tested scripts/ci/ducklake_artifacts.py (c4). Applies NOTHING (no .tf edits). CI-safety rec-2770 honoured (all 8 structural VP steps hermetic:false + pure-shell). 3 open questions routed to lifted plan-critique."
+    critique_open_questions:
+      - "MECHANISM: composite actions vs the single reusable workflow_call workflow that T2.46 c1 / the audit disposition name. Author justified (keeps tf-gated-apply Environment + OIDC role visible at job level; satisfies 'each block exactly once + contracts pass'). plan-critique adjudicates whether the deviation is acceptable."
+      - "SCOPE: plan EXCLUDES terraform/personal/oidc.tf (which T2.46 files_in_scope lists) -- DEP-07 c3 tfplan key claimed to stay within the EXISTING tfplan/personal/* PutObject grant (NO IAM change), keeping D2 fully code/workflow-effective-on-merge with zero applies. plan-critique must VERIFY this load-bearing claim -- if an IAM change IS needed it reroutes to gated-apply (a hard-always-ask)."
+      - "OPERATOR-ASSISTED: VP-14 (GATE-D2-green) + VP-15 (DEP-07 negative) need pipeline-writer/admin identity to force a red convergence record (T2.22 rehearsal precedent) -- overseer/human confirms the rehearsal GREEN at D2 IMPL hand-back before dispatching E; not fully autonomous."
     dispatch_constraints:
       - "Bundle+close rec-2663 (DEP-08). Forced-red -> reconcile rehearsal MUST be green in hand-back (gate before E)."
       - "CI-SAFETY (rec-2770, learned in D1): any VP-replay hermetic pre-deploy step AND any verification-registry graduated-check `command` MUST be pure-shell (git ls-files / grep / awk) -- never bin/venv-python. CI has no .venv, so a venv-python command passes locally + in code-review but fails in CI (VP-replay error / 'does not pass on HEAD'). Applies to D2-G."
