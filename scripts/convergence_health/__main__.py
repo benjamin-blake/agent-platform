@@ -54,6 +54,7 @@ def main(profile: Optional[str] = None) -> int:
                     'unapplied_backlog': verdict.unapplied_backlog,
                     'stuck_approvals': len(verdict.stuck_approvals),
                     'severity': verdict.severity,
+                    'pending_gated': verdict.pending_gated,
                 }
             )
         }"

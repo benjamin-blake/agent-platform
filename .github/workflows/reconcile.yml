@@ -19,6 +19,17 @@ name: reconcile
 #               Subsumes the routed case that previously stranded a dispatch-triggered
 #               acknowledge-and-retry (rec-2647/rec-2523 dispatch-vs-push deadlock, T2.37 c3).
 #
+# DEP-10 (T2.47) -- stale-saved-plan fallthrough: if the verbatim apply of the saved plan.bin
+# hits terraform's stale-plan signature (state serial advanced by an out-of-band admin apply
+# since the plan was captured), apply-reconcile does NOT latch red. It re-plans fresh in this
+# SAME run (STALE_PLAN_FRESH_REPLAN), re-runs the SAME deterministic-guard + digest-fed
+# subagent-plan-review gate against the fresh plan, and applies on guard-PASS -- so "it is red"
+# still clears via exactly ONE Reconcile dispatch regardless of whether the episode needs the
+# saved plan or a fresh one. A fresh guard-ROUTE (out-of-budget residual) hands the fresh
+# plan.bin to gated-apply-reconcile below via a run-scoped GitHub Actions artifact
+# (RECONCILE_FRESH_PLAN_ARTIFACT) with its sha256 passed as a job output and verified again on
+# download, so the byte-integrity guarantee crosses the job boundary without new IAM/S3.
+#
 # Green/absent convergence record -> clean no-op: resolve-target resolves nothing actionable, the
 # apply/gated-apply jobs are skipped entirely, and the record is never written (T2.37 c1).
 #
@@ -143,7 +154,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      routed: ${{ steps.guard.outputs.routed }}
+      routed: ${{ steps.resolved.outputs.routed }}
+      # fresh_plan_pending: 'true' iff the DEP-10 stale fallthrough's fresh re-plan was itself
+      # guard-ROUTEd (out-of-budget residual) -- gated-apply-reconcile downloads the
+      # RECONCILE_FRESH_PLAN_ARTIFACT in that case instead of fetch-saved-plan.
+      fresh_plan_pending: ${{ steps.upload_fresh_plan_sha256.outcome == 'success' }}
+      fresh_plan_sha256: ${{ steps.upload_fresh_plan_sha256.outputs.sha256 }}
     permissions:
       id-token: write
       contents: read
@@ -270,7 +286,7 @@ jobs:
           produce-plan-json: 'true'
           working-directory: ${{ env.WORKDIR }}
 
-      - name: Deterministic apply guard (fail-closed)
+      - name: Deterministic apply guard (fail-closed) -- saved plan
         id: guard
         # SAME three-way exit code contract as terraform-apply-sandbox.yml's guard step: 0 = PASS
         # (apply proceeds below), 2 = BLOCKED (routed=true, routes to gated-apply-reconcile, NOT a
@@ -280,7 +296,7 @@ jobs:
         with:
           working-directory: ${{ env.WORKDIR }}
 
-      - name: Subagent plan review (digest-fed, JSON-classified)
+      - name: Subagent plan review (digest-fed, JSON-classified) -- saved plan
         # IDENTICAL contract to terraform-apply-sandbox.yml's review step (T2.39): digest on
         # stdin, --allowedTools Read, --output-format json classified via review_verdict.py, a
         # STARVED verdict retries once at the SAME turn budget, and a still-STARVED outcome after
@@ -297,26 +313,137 @@ jobs:
           working-directory: ${{ env.WORKDIR }}
           context-description: "a Reconcile heal-button re-apply of a previously red sandbox commit (${{ env.RED_SHA }})"
 
-      - name: Terraform apply (same plan file the guard inspected)
+      - name: Terraform apply (same plan file the guard inspected) -- saved plan
         id: apply
+        # DEP-10 STALE_PLAN_FRESH_REPLAN: Decision 77 no-TOCTOU is preserved -- the saved plan is
+        # applied VERBATIM first, no re-plan up front. Only on terraform's specific stale-plan
+        # signature (state serial advanced by an out-of-band admin apply since the plan was
+        # captured) do we set stale=true and exit 0 (a genuine non-stale failure still exits
+        # non-zero here, which fails this step and short-circuits the fresh-replan steps below via
+        # their `success()` guards, falling through to the always-run record write as RED --
+        # unchanged from the pre-DEP-10 contract).
         if: success() && steps.guard.outputs.routed != 'true'
         working-directory: ${{ env.WORKDIR }}
+        run: |
+          set +e
+          STDERR_FILE=$(mktemp)
+          terraform apply -input=false -lock-timeout=120s plan.bin 2>"$STDERR_FILE"
+          rc=$?
+          STDERR_CONTENT=$(cat "$STDERR_FILE")
+          rm -f "$STDERR_FILE"
+          set -e
+          printf '%s\n' "$STDERR_CONTENT" >&2
+          if [ "$rc" -eq 0 ]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if printf '%s' "$STDERR_CONTENT" | grep -Eiq 'saved plan is stale|plan file can no longer be applied|state was changed'; then
+            echo "::notice::STALE_PLAN_FRESH_REPLAN -- saved plan.bin is stale (state serial advanced out-of-band since it was captured); falling through to a fresh guarded+reviewed re-plan in this SAME run (the sanctioned dispatch-ack exception, Decision 77)." >&2
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "stale=false" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Fresh re-plan (STALE_PLAN_FRESH_REPLAN fallthrough)
+        id: replan
+        # Fires ONLY on the specific stale-plan signature above -- never a silent re-plan-and-apply
+        # (plan constraint). Re-plans against whatever the dispatch ref's tree looks like now
+        # (same as terraform-apply-sandbox.yml's existing dispatch-ack re-plan exception), then
+        # re-guards and re-reviews it below before ever applying.
+        if: success() && steps.apply.outputs.stale == 'true'
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform plan -input=false -lock-timeout=120s -var-file=terraform.personal.tfvars -out=plan.bin
+          terraform show -json plan.bin > plan.json
+
+      - name: Deterministic apply guard (fail-closed) -- fresh re-plan
+        id: guard_fresh
+        if: success() && steps.apply.outputs.stale == 'true'
+        uses: ./.github/actions/deterministic-guard
+        with:
+          working-directory: ${{ env.WORKDIR }}
+
+      - name: Subagent plan review (digest-fed, JSON-classified) -- fresh re-plan
+        # Re-runs the SAME digest-fed review gate against the FRESH plan -- guard-PASS never
+        # auto-applies without an explicit PROCEED here either.
+        id: review_fresh
+        if: success() && steps.apply.outputs.stale == 'true' && steps.guard_fresh.outputs.routed != 'true'
+        uses: ./.github/actions/subagent-plan-review
+        with:
+          claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          working-directory: ${{ env.WORKDIR }}
+          context-description: "a Reconcile fresh re-plan after the saved plan went stale (STALE_PLAN_FRESH_REPLAN) for a previously red sandbox commit (${{ env.RED_SHA }})"
+
+      - name: Terraform apply (fresh re-plan, guard-PASS)
+        id: apply_fresh
+        if: success() && steps.apply.outputs.stale == 'true' && steps.guard_fresh.outputs.routed != 'true'
+        working-directory: ${{ env.WORKDIR }}
         run: terraform apply -input=false -lock-timeout=120s plan.bin
+
+      - name: Emit fresh plan.bin sha256 (RECONCILE_FRESH_PLAN_ARTIFACT sha256 job-output EMIT)
+        # CARRY-1: the byte-integrity gate that crosses the job boundary to gated-apply-reconcile
+        # must be independently checkable, not merely "an artifact exists" -- this job output is
+        # verified again on download below (VERIFY, symmetric with this EMIT).
+        id: upload_fresh_plan_sha256
+        if: success() && steps.apply.outputs.stale == 'true' && steps.guard_fresh.outputs.routed == 'true'
+        run: echo "sha256=$(sha256sum ${{ env.WORKDIR }}/plan.bin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload fresh plan.bin as a run-scoped artifact (RECONCILE_FRESH_PLAN_ARTIFACT)
+        # guard-ROUTE on the fresh re-plan (out-of-budget IAM/trust/destroy residual): hand the
+        # fresh plan.bin to gated-apply-reconcile below via a GitHub-native run-scoped artifact
+        # (workflow token only -- no new IAM, no S3 write) so the episode completes in this SAME
+        # dispatch after one Environment approval, instead of stranding.
+        if: success() && steps.apply.outputs.stale == 'true' && steps.guard_fresh.outputs.routed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconcile-fresh-plan-${{ github.run_id }}
+          path: ${{ env.WORKDIR }}/plan.bin
+          retention-days: 1
+
+      - name: Resolve final routing + apply outcome (saved-plan vs fresh-replan)
+        id: resolved
+        # Single place that collapses the two possible paths (verbatim saved-plan apply, or the
+        # DEP-10 stale fallthrough's fresh re-plan) into the routed/apply-outcome/review-outcome
+        # triple the record-write step below consumes -- so write-convergence-record's contract
+        # (skip on routed, green iff apply succeeded) is satisfied identically regardless of which
+        # path this run actually took.
+        if: always()
+        run: |
+          STALE="${{ steps.apply.outputs.stale }}"
+          GUARD_ROUTED="${{ steps.guard.outputs.routed }}"
+          GUARD_FRESH_ROUTED="${{ steps.guard_fresh.outputs.routed }}"
+          if [ "$STALE" = "true" ]; then
+            if [ "$GUARD_FRESH_ROUTED" = "true" ]; then
+              echo "routed=true" >> "$GITHUB_OUTPUT"
+              echo "apply_outcome=skipped" >> "$GITHUB_OUTPUT"
+              echo "review_outcome=" >> "$GITHUB_OUTPUT"
+            else
+              echo "routed=false" >> "$GITHUB_OUTPUT"
+              echo "apply_outcome=${{ steps.apply_fresh.outcome }}" >> "$GITHUB_OUTPUT"
+              echo "review_outcome=${{ steps.review_fresh.outputs.outcome }}" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "routed=${GUARD_ROUTED:-false}" >> "$GITHUB_OUTPUT"
+            echo "apply_outcome=${{ steps.apply.outcome }}" >> "$GITHUB_OUTPUT"
+            echo "review_outcome=${{ steps.review.outputs.outcome }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Write convergence record (always-run, red-on-failure)
         id: record_write
         # IDENTICAL contract to terraform-apply-sandbox.yml's record-write step: skips the S3
         # write (does not overwrite) when this run was already a stale no-op (recheck), the guard
         # routed, or the reviewer was STARVED. green iff apply succeeded; red on any genuine
-        # non-success (guard internal error / an explicit REVISE / apply failure).
+        # non-success (guard internal error / an explicit REVISE / apply failure). Consumes the
+        # RESOLVED triple above so the saved-plan and fresh-replan paths share one write.
         if: always()
         uses: ./.github/actions/write-convergence-record
         with:
           sha: ${{ env.RED_SHA }}
-          apply-outcome: ${{ steps.apply.outcome }}
+          apply-outcome: ${{ steps.resolved.outputs.apply_outcome }}
           still-actionable: ${{ steps.recheck.outputs.still_actionable }}
-          routed: ${{ steps.guard.outputs.routed }}
-          review-outcome: ${{ steps.review.outputs.outcome }}
+          routed: ${{ steps.resolved.outputs.routed }}
+          review-outcome: ${{ steps.resolved.outputs.review_outcome }}
           plan-sha-mode: unchecked
           working-directory: ${{ env.WORKDIR }}
 
@@ -326,9 +453,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          ROUTED: ${{ steps.guard.outputs.routed }}
-          REVIEW_OUTCOME: ${{ steps.review.outputs.outcome }}
-          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          ROUTED: ${{ steps.resolved.outputs.routed }}
+          REVIEW_OUTCOME: ${{ steps.resolved.outputs.review_outcome }}
+          APPLY_OUTCOME: ${{ steps.resolved.outputs.apply_outcome }}
+          STALE: ${{ steps.apply.outputs.stale }}
         run: |
           PR_NUM=$(gh api "repos/${REPO}/commits/${RED_SHA}/pulls" --jq '.[0].number' 2>/dev/null || echo "")
           if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
@@ -336,11 +464,19 @@ jobs:
             exit 0
           fi
           if [ "$ROUTED" = "true" ]; then
-            MSG="Reconcile routed ${RED_SHA} to the tf-gated-apply job in reconcile.yml (out-of-budget IAM / trust / destroy diff). Pending reviewer approval in GitHub Actions -- the convergence record is unchanged until the gated apply completes."
+            if [ "$STALE" = "true" ]; then
+              MSG="Reconcile detected the saved plan.bin was stale for ${RED_SHA} (STALE_PLAN_FRESH_REPLAN), re-planned fresh, and routed the fresh plan to the tf-gated-apply job in reconcile.yml (out-of-budget IAM / trust / destroy). Pending reviewer approval in GitHub Actions -- the convergence record keeps its pending_gated marker until the gated apply completes."
+            else
+              MSG="Reconcile routed ${RED_SHA} to the tf-gated-apply job in reconcile.yml (out-of-budget IAM / trust / destroy diff). Pending reviewer approval in GitHub Actions -- the convergence record is unchanged until the gated apply completes."
+            fi
           elif [ "$REVIEW_OUTCOME" = "starved" ]; then
             MSG="Reconcile's subagent reviewer was STARVED for ${RED_SHA} (max-turns/no-verdict after retry); apply was blocked and the convergence record was NOT touched. Re-dispatch Reconcile once the reviewer is healthy."
           elif [ "$APPLY_OUTCOME" = "success" ]; then
-            MSG="Reconcile converged GREEN for ${RED_SHA}; convergence record updated."
+            if [ "$STALE" = "true" ]; then
+              MSG="Reconcile detected the saved plan.bin was stale for ${RED_SHA} (STALE_PLAN_FRESH_REPLAN), re-planned fresh in the same run, and converged GREEN; convergence record updated."
+            else
+              MSG="Reconcile converged GREEN for ${RED_SHA}; convergence record updated."
+            fi
           else
             MSG="Reconcile did NOT converge (RED) for ${RED_SHA}. Inspect this run's logs directly (ci-rca does not watch reconcile.yml)."
           fi
@@ -436,9 +572,38 @@ jobs:
           mode: assert
           artifact-sha: ${{ steps.artifact_sha.outputs.value }}
 
+      - name: Download fresh plan.bin artifact (RECONCILE_FRESH_PLAN_ARTIFACT handoff)
+        # DEP-10: the stale-fallthrough's fresh re-plan was guard-ROUTEd in apply-reconcile --
+        # download the SAME plan.bin it uploaded rather than re-fetching the (now-stale) saved
+        # plan from S3. GitHub-native artifact transport only (workflow token) -- no new IAM/S3.
+        if: needs.apply-reconcile.outputs.fresh_plan_pending == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: reconcile-fresh-plan-${{ github.run_id }}
+          path: ${{ env.WORKDIR }}
+
+      - name: Verify downloaded fresh plan.bin sha256 (RECONCILE_FRESH_PLAN_ARTIFACT sha256 download-side VERIFY)
+        # CARRY-1: symmetric with apply-reconcile's EMIT -- re-derive the artifact's sha256 here
+        # and compare against the job output it emitted, so byte-integrity across the job
+        # boundary is independently checkable, not merely "an artifact was downloaded".
+        if: needs.apply-reconcile.outputs.fresh_plan_pending == 'true'
+        working-directory: ${{ env.WORKDIR }}
+        env:
+          FRESH_PLAN_SHA256: ${{ needs.apply-reconcile.outputs.fresh_plan_sha256 }}
+        run: |
+          set -euo pipefail
+          ACTUAL=$(sha256sum plan.bin | cut -d' ' -f1)
+          if [ "$ACTUAL" != "$FRESH_PLAN_SHA256" ]; then
+            echo "::error::RECONCILE_FRESH_PLAN_ARTIFACT sha256 mismatch: expected ${FRESH_PLAN_SHA256}, got ${ACTUAL}. Refusing to apply a possibly-corrupted plan." >&2
+            exit 1
+          fi
+          echo "RECONCILE_FRESH_PLAN_ARTIFACT sha256 verified: ${ACTUAL}"
+
       - name: Fetch saved plan from S3 (gated -- no re-plan)
         # Content-addressed by (pr, sha) -- DEP-07 c3, digest-verified -- DEP-07 c2. No plan.json
-        # needed here (no re-guard in this job).
+        # needed here (no re-guard in this job). Skipped when the fresh-replan artifact above
+        # already supplied plan.bin (DEP-10 stale fallthrough's routed residual).
+        if: needs.apply-reconcile.outputs.fresh_plan_pending != 'true'
         uses: ./.github/actions/fetch-saved-plan
         with:
           resolve-from-sha: ${{ env.RED_SHA }}

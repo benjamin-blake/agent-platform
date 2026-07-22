@@ -125,3 +125,47 @@ class TestAssessHealth:
         assert v.unapplied_backlog == 1
         assert v.record_age_hours < ch.STALE_GREEN_BACKLOG_THRESHOLD_HOURS
         assert v.severity == "none"
+
+    # DEP-11 (T2.47): pending_gated HealthVerdict field -- present / absent / red-coexistence.
+
+    def test_pending_gated_absent_by_default(self) -> None:
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": ""}
+        v = assess_health(rec, git_runner=lambda cmd: "")
+        assert v.pending_gated is None
+
+    def test_pending_gated_none_when_record_is_none(self) -> None:
+        v = assess_health(None)
+        assert v.pending_gated is None
+
+    def test_pending_gated_present_when_marker_in_record(self) -> None:
+        marker = {"routed_at": "2026-06-27T00:00:00Z", "run_url": "https://example.com/run/1", "commit_sha": "abc123"}
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": "", "pending_gated": marker}
+        v = assess_health(rec, git_runner=lambda cmd: "")
+        assert v.pending_gated == marker
+
+    def test_pending_gated_does_not_force_high_severity_on_its_own(self) -> None:
+        """A routed-pending marker alone (no stuck_approvals) must not escalate severity --
+        pending-gated is a distinct, non-failure state (Decision 55 anti-masking); only the
+        SEPARATE stuck-approval sensor (T2.35) escalates on staleness."""
+        marker = {"routed_at": "2026-06-27T00:00:00Z", "run_url": "https://example.com/run/1", "commit_sha": "abc123"}
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": "", "pending_gated": marker}
+        v = assess_health(rec, git_runner=lambda cmd: "")
+        assert v.pending_gated is not None
+        assert v.severity == "none"
+
+    def test_pending_gated_coexists_with_red_status(self) -> None:
+        """red-coexistence: pending_gated is orthogonal to status -- a record can carry both a
+        red status (e.g. a later out-of-band drift) and a leftover pending_gated marker."""
+        now = datetime(2026, 6, 27, 3, 0, tzinfo=timezone.utc)
+        marker = {"routed_at": "2026-06-26T00:00:00Z", "run_url": "https://example.com/run/2", "commit_sha": "def456"}
+        rec = {
+            "status": "red",
+            "timestamp": "2026-06-27T00:00:00Z",
+            "drift_detected_at": "2026-06-27T00:00:00Z",
+            "commit_sha": "",
+            "pending_gated": marker,
+        }
+        v = assess_health(rec, git_runner=lambda cmd: "", now=now)
+        assert v.status == "red"
+        assert v.severity == "low"
+        assert v.pending_gated == marker

@@ -85,7 +85,38 @@ runs:
           exit 0
         fi
         if [ "$ROUTED" = "true" ]; then
-          echo "Guard routed to the gated-apply job (IAM/trust/destroy diff): NOT overwriting convergence record (anti-masking, Decision 55)."
+          # DEP-11 (T2.47): routed is NOT a failure -- merge a non-status pending_gated MARKER
+          # instead of a bare skip, so a routed-pending episode is legible as pending-gated
+          # (distinct from out-of-band drift) in convergence_health, the drift rec, and the PR
+          # advisory status. Status is read-modify-written UNCHANGED (anti-masking, Decision 55);
+          # only the pending_gated field is added/refreshed. Absent status defaults to green
+          # (pass-on-absent convention, matches terraform-drift.yml's prior_status read) so a
+          # first-ever routed episode still produces a well-formed record.
+          echo "Guard routed to the gated-apply job (IAM/trust/destroy diff): merging a pending_gated MARKER (non-status field) -- status stays unchanged (anti-masking, Decision 55); routed is not a failure."
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          EXISTING=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "{}")
+          PRIOR_STATUS=$(printf '%s' "$EXISTING" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','green'))" 2>/dev/null || echo "green")
+          RECORD=$(EXISTING="$EXISTING" TS="$TS" RUN_URL="$RUN_URL" SHA="$SHA" python3 -c "
+        import json, os
+        existing = json.loads(os.environ.get('EXISTING', '{}') or '{}')
+        existing.setdefault('status', 'green')
+        existing['pending_gated'] = {
+            'routed_at': os.environ['TS'],
+            'run_url': os.environ['RUN_URL'],
+            'commit_sha': os.environ['SHA'],
+        }
+        print(json.dumps(existing))
+        ")
+          printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
+          echo "Wrote pending_gated marker (status unchanged): ${RECORD}"
+          READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+          READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
+          if [ "$READBACK_STATUS" != "$PRIOR_STATUS" ]; then
+            echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != prior status '${PRIOR_STATUS}' after pending_gated marker merge; status must stay unchanged on a routed (non-failure) episode."
+            exit 1
+          fi
+          echo "Convergence record read-back verified: status unchanged (${READBACK_STATUS}), pending_gated marker present."
           exit 0
         fi
         if [ "$REVIEW_OUTCOME" = "starved" ]; then
