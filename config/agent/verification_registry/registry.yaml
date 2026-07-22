@@ -1377,3 +1377,32 @@ entries:
       - -c
       - |
         f=.github/workflows/terraform-apply-sandbox.yml; pg=$(grep -c 'pending_gated' "$f"); echo "pending_gated=$pg"; [ "$pg" -ge 1 ]
+  - check_id: ci-rca-classify-failed-checks-block
+    primitive_slot: command_exit_zero
+    guard_target: scripts/ci_rca/taxonomy.py
+    guard_symbol: classify_failure
+    plan_slug: ci-rca-classify-failure-dedup-fix
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - python
+      - -c
+      - |
+        import sys
+        sys.path.insert(0, ".")
+        from scripts.ci_rca.taxonomy import classify_failure
+        log = (
+            "=== SLOC ===\n"
+            "  PASS: validate_sloc_limits ok\n"
+            "=== roadmap ===\n"
+            "  FAIL: PLAN-x.yaml: closes_criteria bad\n"
+            "\n"
+            "=== Validation Summary (scope: all) ===\n"
+            "Failed checks:\n"
+            "  - validate_platform_roadmap\n"
+        )
+        cat, chk, src = classify_failure(log, None, None)
+        print(cat, chk, src)
+        assert cat == "schema_drift", cat
+        assert chk == "validate_platform_roadmap", chk
