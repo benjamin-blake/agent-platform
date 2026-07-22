@@ -66,18 +66,32 @@ _SWITCH_CREATE_FLAGS = {"-c", "-C"}
 # it's a list, delete, rename, or inspection invocation. Presence of any
 # of these disqualifies the command from the branch-creation pattern.
 _BRANCH_DENY_FLAGS = {
-    "-d", "-D", "--delete",
-    "-m", "-M", "--move",
-    "-c", "-C", "--copy",
-    "-a", "--all",
-    "-r", "--remotes",
-    "-v", "-vv", "--verbose",
-    "-l", "--list",
+    "-d",
+    "-D",
+    "--delete",
+    "-m",
+    "-M",
+    "--move",
+    "-c",
+    "-C",
+    "--copy",
+    "-a",
+    "--all",
+    "-r",
+    "--remotes",
+    "-v",
+    "-vv",
+    "--verbose",
+    "-l",
+    "--list",
     "--show-current",
-    "-u", "--set-upstream-to",
+    "-u",
+    "--set-upstream-to",
     "--unset-upstream",
-    "--contains", "--no-contains",
-    "--merged", "--no-merged",
+    "--contains",
+    "--no-contains",
+    "--merged",
+    "--no-merged",
     "--edit-description",
 }
 
@@ -134,7 +148,7 @@ def _strip_env_prefix(segment: str) -> str:
         match = _ENV_PREFIX_RE.match(segment)
         if not match:
             return segment
-        segment = segment[match.end():]
+        segment = segment[match.end() :]
 
 
 def _tokenize(segment: str) -> list[str] | None:
@@ -147,7 +161,7 @@ def _tokenize(segment: str) -> list[str] | None:
 def _extract_checkout_switch(rest: list[str], create_flags: set[str]) -> tuple[str, str | None] | None:
     for i, tok in enumerate(rest):
         if tok in create_flags:
-            positional = [t for t in rest[i + 1:] if not t.startswith("-")]
+            positional = [t for t in rest[i + 1 :] if not t.startswith("-")]
             if not positional:
                 return None
             name = positional[0]

@@ -209,9 +209,9 @@ Canonical authority for all agent and session git-ops. All other surfaces (skill
 - **Commit-flow time (implementing)**: DO auto-rebase before pushing. After the local commit: `git fetch origin main && git rebase origin/main` -- STOP on conflict, surface to the human. If the branch was already pushed, use `--force-with-lease` (never `--force`).
 
 ### Local main sync
-See `docs/contracts/git-cache-hygiene.yaml` -- `session_start_sync_main.sh` sync,
-`fresh_branch_base.py` branch guard, feature-branch-divergence procedure, "origin/main is itself
-a cache" principle.
+`session_start_sync_main.sh` syncs local main -> origin/main. `fresh_branch_base.py`
+refreshes/blocks branch cuts off stale main. origin/main is itself a cache (Decision 84); no
+signing hook, rebase is safe.
 
 ### Push -> PR -> CI -> merge flow
 1. `git push -u origin HEAD` (harness `claude/...` branch)
