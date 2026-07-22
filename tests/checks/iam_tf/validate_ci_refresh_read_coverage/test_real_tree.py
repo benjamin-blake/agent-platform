@@ -41,6 +41,36 @@ resource "aws_iam_role_policy" "github_ci_apply" {{
         Resource = [
           "arn:aws:events:eu-west-2:1234567890:rule/agent-platform-known-rule"
         ]
+      }},
+      {{
+        Sid    = "LambdaFunctionWrite"
+        Effect = "Allow"
+        Action = ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"]
+        Resource = ["arn:aws:lambda:eu-west-2:1234567890:function:agent-platform-*"]
+      }},
+      {{
+        Sid    = "CloudWatchLogsWrite"
+        Effect = "Allow"
+        Action = ["logs:CreateLogGroup", "logs:PutRetentionPolicy"]
+        Resource = ["arn:aws:logs:eu-west-2:1234567890:log-group:/aws/lambda/agent-platform-*"]
+      }},
+      {{
+        Sid    = "CloudWatchAlarmsWrite"
+        Effect = "Allow"
+        Action = ["cloudwatch:PutMetricAlarm"]
+        Resource = ["arn:aws:cloudwatch:eu-west-2:1234567890:alarm:agent-platform-*"]
+      }},
+      {{
+        Sid    = "EventBridgeWrite"
+        Effect = "Allow"
+        Action = ["events:PutRule"]
+        Resource = ["arn:aws:events:eu-west-2:1234567890:rule/agent-platform-*"]
+      }},
+      {{
+        Sid    = "IAMRoleCreateBounded"
+        Effect = "Allow"
+        Action = ["iam:CreateRole"]
+        Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
       }}
       {extra_statements}
     ]

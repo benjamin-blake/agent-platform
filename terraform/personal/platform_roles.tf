@@ -31,6 +31,14 @@
 
 resource "aws_iam_role" "platform_dev" {
   name                 = "PlatformDev"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+  # DEP-02 / Decision 144 (T2.48): PlatformDev carries the MANDATORY boundary (broad-but-bounded
+  # runtime identity). PlatformAdmin is DELIBERATELY EXCLUDED (control identity that must remain able
+  # to amend the boundary; attaching DenyBoundaryPolicyModification to it would wedge break-glass --
+  # Decision 144 pt.3 / Decision 113 two-principal split). PlatformDev's own DEP-13 Denies
+  # (DenyStateAndConvergenceWrite / DenyStateRead, slice B) are unaffected -- a boundary is a ceiling
+  # and an identity Deny always wins. PlatformDev bounding caps its FUTURE runtime to the boundary's
+  # DataPlaneAllow service set until a boundary amendment widens it (design note, Decision 144 pt.7).
   max_session_duration = 36000 # 10h; matches duration_seconds in ~/.aws/config so CC-web sessions run unattended
   description          = "Daily agent ops (runtime): Athena query, S3 read/write on the data lake, DynamoDB counters, Glue read"
 

@@ -333,8 +333,13 @@ adopted) split the function so the CI-safe verb subset is a materially different
 resource. The resource split is more durable than an in-handler action allowlist: a handler-level
 guard lives in the same agent-editable codebase as the verbs it's supposed to gate, so a future edit
 (or an injected instruction) could silently widen it; a separate Lambda + IAM role requires an
-out-of-band Terraform apply (human-gated for the exec-role CREATE, per T2.25/Decision 92 pt.5) to
-widen, which is a materially higher bar.
+out-of-band Terraform apply (admin-create OR -- for a boundary-carrying `agent-platform-*` role --
+gated-Environment-executable through the required-reviewer `tf-gated-apply` Environment; the exec-role
+CREATE mechanism was re-grounded by Decision 144 / T2.48 from "admin-create only / human-gated per
+T2.25/Decision 92 pt.5" to "admin-create OR gated-Environment-executable for boundary-carrying
+agent-platform-* roles") to widen, which is a materially higher bar than an in-handler edit -- role
+CREATE still routes through the required-reviewer Environment (the identity-scoping RULE in clause 1
+and this higher-bar property are preserved verbatim).
 
 **Reversal conditions:** At MVP, when the SIT/PROD accounts stand up (Decision 77's platform
 promotion train), the production-destructive `ducklake_maintenance` function moves behind a
@@ -2625,12 +2630,21 @@ role ARN, meaning every future `github_ci_apply` pipeline plan would fail Access
 1. New peer CI roles (convergence-writer + any future equivalent) are admin-provisioned in
    `terraform/personal/` via `agent_platform_admin` with `-target` apply -- NOT minted by the
    pipeline (`github_ci_apply`). This is the same pattern used for branch/pr/plan roles.
+   > **Amended -> realized by Decision 144 / T2.48 (2026-07-22):** the pipeline MAY now mint
+   > boundary-carrying `agent-platform-*` roles through the gated `tf-gated-apply` Environment
+   > (`IAMRoleCreateBounded` widened to `role/agent-platform-*` under the boundary-propagation
+   > condition; role CREATE still ROUTES to the gated Environment -- gated-but-executable, no longer
+   > admin-tier-only). The admin-create path remains valid for non-`agent-platform-*` roles and break-glass.
 2. After admin-create, the new role's ARN is added to `IAMRolesRead` in
    `terraform/bootstrap/github_ci_apply.tf` as a read-only refresh grant
    (`iam:GetRole/GetRolePolicy/ListRolePolicies/ListAttachedRolePolicies` only). This grant does
    NOT widen the IAM-WRITE budget (`IAMRoleWriteBounded` / `IAMRoleCreateBounded` unchanged).
 3. In-budget IAM auto-apply (the pipeline minting roles under the permissions boundary) remains
    gated to T2.25 and is out of scope here.
+   > **Realized by Decision 144 / T2.48 (2026-07-22):** authority-budget v2 makes a CREATE of an inline
+   > policy/attachment on a boundary-carrying `agent-platform-*` role in-budget (auto-apply); role CREATE
+   > (the `aws_iam_role` type) stays gated but is now executable by the gated job because new roles
+   > declare the mandatory boundary.
 4. Procedure: (a) present `terraform plan` to the human (Decision 77); (b) admin-apply; (c) verify
    global convergence (`terraform plan -detailed-exitcode` exits 0) BEFORE any dispatch-ack; (d)
    add the ARN to `IAMRolesRead` in the bootstrap root and admin-apply that root separately.
@@ -3004,6 +3018,14 @@ Wave 1 (T2.20) is SHIPPED. The following Wave-1-established architecture is rati
 5. **Authority-budget + ratchet model (CD.35 points 6-9, IMPLEMENTED by T2.25 / 2026-06-29):**
    an explicit permissions boundary on github_ci_apply plus boundary-propagation condition keys
    and deterministic in-budget/out-of-budget diff classification shipped in T2.25.
+   > **Widened -> realized by Decision 144 / T2.48 (2026-07-22):** `authority_budget.json` is now v2 --
+   > `in_budget_actions` is `["create","update"]` (create newly in-budget) and the managed-role set is
+   > the boundary-carrying `agent-platform-*` prefix (`in_budget_managed_role_prefix`), not the
+   > branch/pr enumeration -- extending Decision 129's per-service prefix from reads to writes. The
+   > guard's in-budget predicate (`_classify_iam_change`) widened to READ the v2 shape (subset-match on
+   > actions + prefix-match on the target role + explicit apply-role self-exclusion); NO new
+   > classification stage, fail-closed control theory retained. The concrete v1 example below (action
+   > set `["update"]`, branch/pr roles) is retained as historical context.
 
    Concrete in-budget classification (machine-readable: `terraform/bootstrap/authority_budget.json`):
    - **In-budget** (auto-apply, still subject to subagent review): resource type

@@ -116,6 +116,29 @@ scope:
       necessarily matches agent-platform-github-ci-apply, so the check MUST verify the explicit
       DenySelfInlinePolicyWrite carve-out exists in HCL, upgrading the old substring self-grant
       guard); assert in_budget_actions == ["create","update"]. Stays < 500 SLOC (currently 72).
+  - file: scripts/terraform_apply_guard.py
+    action: Modify
+    purpose: >-
+      Widen the in-budget predicate (_classify_iam_change) to READ the authority_budget v2 shape --
+      REQUIRED for budget v2 to function (the implementer surfaced that the v1 guard classifies BOTH
+      creates and updates as out-of-budget against a v2 budget, regressing T2.25 auto-apply and
+      defeating c1/c2; scope added post-block with human authorization). Change: in_budget_actions from
+      exact list-equality to SUBSET membership (a lone ["create"] or ["update"] is in-budget; a
+      ["delete","create"] replace is not); in_budget_managed_roles exact-membership to
+      in_budget_managed_role_prefix PREFIX-match; PLUS an explicit apply-role self-exclusion (the
+      widened agent-platform-* prefix matches agent-platform-github-ci-apply itself, so a write on the
+      apply role routes to gated -- the guard-side counterpart to DenySelfInlinePolicyWrite). Predicate
+      widening only: NO new classification stage; evaluation order + missing-budget fail-closed +
+      saved-plan no-TOCTOU control theory (Decision 77/92/126) retained verbatim.
+  - file: tests/test_terraform_apply_guard.py
+    action: Modify
+    purpose: >-
+      Update _BUDGET to the v2 shape and prove the four correctness properties: (1) in-budget UPDATE on
+      github_ci_branch/pr STILL auto-applies (T2.25 preserved via subset-match); (2) in-budget CREATE of
+      an inline policy on an agent-platform-* role auto-applies (budget-v2 goal via prefix-match); (3) an
+      inline-policy write targeting agent-platform-github-ci-apply itself does NOT auto-apply
+      (self-exclusion -> gated); (4) aws_iam_role CREATE / trust-diff / destroy / out-of-budget still
+      route to gated (fail-closed control theory retained -- Decision 77/92).
   - file: docs/contracts/environment-taxonomy.md
     action: Modify
     purpose: >-
@@ -123,8 +146,10 @@ scope:
       == ["create","update"]; managed roles = boundary-carrying agent-platform-* prefix (not the
       two-role list); replace the "Conservative v1 narrowing: role CREATES stay gated" note with
       "role CREATE stays gated (routes to tf-gated-apply) but is now EXECUTABLE because new roles
-      declare the mandatory boundary". No new guard STAGE -- the guard code is unchanged; only the
-      budget it reads widens.
+      declare the mandatory boundary". The guard's in-budget PREDICATE (_classify_iam_change) widens
+      to read the authority_budget v2 shape (subset-match on actions + prefix-match on the role + an
+      explicit apply-role self-exclusion) -- NO new classification STAGE; the fail-closed control
+      theory (evaluation order, missing-budget fail-closed, saved-plan no-TOCTOU) is retained verbatim.
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
@@ -245,7 +270,7 @@ verification_plan:
     action: All 8 Lambda execution roles carry the boundary (ducklake_* + prod_lambdas).
     command: >-
       test "$(grep -rl 'permissions_boundary  *= .*agent-platform-github-ci-apply-boundary'
-      terraform/personal/ducklake_lambdas.tf terraform/personal/ducklake_reader.tf
+      terraform/personal/ducklake_lambdas.tf
       terraform/personal/ducklake_catalog_dr.tf terraform/personal/ducklake_maintenance.tf
       terraform/personal/ducklake_maintenance_smoke.tf terraform/personal/prod_lambdas.tf 2>/dev/null
       | wc -l)" -ge 4 && test "$(grep -rc 'permissions_boundary' terraform/personal/prod_lambdas.tf)"
@@ -381,8 +406,13 @@ verification_plan:
     fix_if: >-
       A literal account id leaked -- replace with ${var.account_id}. NEVER commit a real id/ARN/ExternalId.
     hermetic: false
-    graduation: graduate
-    graduation_check_id: "iam-files-no-bare-account-id"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential admission REJECTED as tautological -- origin/main's touched IAM files ALSO contain no
+      bare 12-digit account id (the public-repo boundary is a standing repo invariant, not a
+      this-change property), so the check passes on both trees and cannot graduate into a differential
+      regression guard. The invariant is already defended repo-wide by the never-commit pre-commit hook
+      and validate.py's account-id shape checks.
   - step: 11
     phase: pre-deploy
     action: >-
@@ -397,12 +427,16 @@ verification_plan:
       A submodule crossed 500 -- decompose further (facade package, Decision 80/104/124), do NOT raise
       the budget (Decision 128).
     hermetic: false
-    graduation: graduate
-    graduation_check_id: "iam-tf-checks-under-500-sloc"
+    graduation: waive
+    graduation_waiver_reason: >-
+      Differential admission REJECTED as tautological -- on origin/main every scripts/checks/iam_tf/*.py
+      is already <= 500 SLOC (the pre-decomposition validate_ci_refresh_read_coverage.py was 478), so the
+      check passes on both trees and cannot graduate into a differential regression guard. The <=500-SLOC
+      invariant is already defended repo-wide by validate_sloc_limits (--pre + full tiers).
   - step: 12
     phase: pre-deploy
     action: validate_authority_budget green against the v2 budget (self-exclusion + prefix asserted structurally).
-    command: bin/venv-python -m scripts.validate --only validate_authority_budget
+    command: bin/venv-python -m scripts.checks.iam_tf.validate_authority_budget
     expected: Exit 0; the drift gate confirms the v2 budget agrees with the HCL (prefix, self-exclusion, actions).
     fix_if: >-
       FAIL -- the budget and IAMRoleWriteBounded HCL are out of sync, or the self-exclusion Deny is
@@ -414,7 +448,7 @@ verification_plan:
     action: >-
       validate_ci_refresh_read_coverage green with the extended WRITE-coverage assertion (c5) -- an
       apply-role-written managed type with no covering write grant fails loud.
-    command: bin/venv-python -m scripts.validate --only validate_ci_refresh_read_coverage
+    command: bin/venv-python -m scripts.checks.iam_tf.validate_ci_refresh_read_coverage
     expected: Exit 0; every managed resource type is classified for BOTH read and write coverage.
     fix_if: >-
       FAIL "unmapped write type" -- add the type to the _write_coverage map with its required write
@@ -471,17 +505,23 @@ verification_plan:
       for R in agent-platform-ducklake-writer agent-platform-ducklake-reader
       agent-platform-ducklake-catalog-dr agent-platform-ducklake-maintenance
       agent-platform-ducklake-maintenance-smoke agent-platform-scheduled-agent-dispatcher
-      agent-platform-findings-processor agent-platform-ops-compaction PlatformDev; do aws iam
+      agent-platform-findings-processor agent-platform-ops-compaction PlatformDev
+      agent-platform-github-ci-plan agent-platform-github-ci-drift
+      agent-platform-github-ci-ducklake-deploy agent-platform-github-ci-prod-deploy; do aws iam
       simulate-principal-policy --profile agent_platform_admin --policy-source-arn
       "arn:aws:iam::$ACCT:role/$R" --permissions-boundary-policy-input-list "$BOUNDARY_DOC"
       --action-names $RUNTIME_ACTIONS
       --query 'EvaluationResults[?EvalDecision!=`allowed`]' --output text; done
     expected: >-
-      Empty output for every principal (all enumerated runtime actions allowed under the boundary).
-      RUNTIME_ACTIONS is the exact set drawn from each role's own inline policy -- writer/reader/
-      maintenance/smoke/catalog-dr are s3 + logs + secrets-read + cloudwatch-metric; ops_compaction
-      adds athena + glue; PlatformDev adds athena + dynamodb + glue + lambda-invoke + ssm. ACCT,
-      BOUNDARY_DOC, and RUNTIME_ACTIONS are operator-supplied at run time (never committed).
+      [DEFERRED-TO-HUMAN -- real-AWS simulate under agent_platform_admin] Empty output for every
+      principal (all enumerated runtime actions allowed under the boundary). RUNTIME_ACTIONS is the
+      EXHAUSTIVE set drawn from each role's own inline policy: writer/reader/maintenance/smoke/
+      catalog-dr are s3 + logs + secrets-read (Neon DSN GetSecretValue) + cloudwatch PutMetricData;
+      ops_compaction adds athena + glue; PlatformDev adds athena + dynamodb + glue + lambda InvokeFunction
+      + ssm GetParameter + secrets-read (inference + broker envelopes GetSecretValue -- M3); the 4
+      CI roles are s3 (tfstate/tfplan/lambda-packages/convergence) + lambda InvokeFunction /
+      lambda:UpdateFunctionCode + the ci_full_refresh_read surface (M3 -- CI-role enumeration completed).
+      ACCT, BOUNDARY_DOC, and RUNTIME_ACTIONS are operator-supplied at run time (never committed).
     fix_if: >-
       ANY action returns implicitDeny/explicitDeny under the boundary -- the boundary DataPlaneAllow
       does not cover that principal's runtime action (the intersection trap). STOP: widen the boundary
@@ -587,6 +627,45 @@ verification_plan:
     fix_if: >-
       No recurring surface exists -- add the ratchet-review to the /orient or preflight surface reading
       auto-apply telemetry; do NOT encode the schedule in a Decision body (Decision 86).
+    hermetic: false
+  - step: 24
+    phase: post-deploy
+    action: >-
+      M3 (budget-v2 in-budget PutRolePolicy proof): after the bootstrap + personal applies, a PR that
+      EDITS an inline policy on a boundary-carrying agent-platform-* role (an aws_iam_role_policy
+      UPDATE) auto-applies via terraform-apply-sandbox with ZERO gated-apply -- the guard classifies it
+      in-budget under budget v2 (subset-match ["update"] + prefix-match role/agent-platform-*, the apply
+      role self-excluded). Proves the guard predicate widening works end-to-end, not just in unit tests.
+    command: >-
+      echo "[DEFERRED-TO-HUMAN] Open a probe PR editing an inline-policy statement on an
+      agent-platform-* boundary-carrying role (NOT the apply role); confirm terraform-apply-sandbox's
+      guard exits 0 (in-budget) and the change auto-applies with no tf-gated-apply approval"
+    expected: >-
+      The in-budget inline-policy UPDATE auto-applies (guard exit 0); a control PR editing the apply
+      role's OWN inline policy routes to gated (self-exclusion holds). Budget-v2 auto-apply proven live.
+    fix_if: >-
+      The in-budget update routes to gated -- the guard predicate widening did not land (or the budget
+      is not v2). Re-check _classify_iam_change subset/prefix logic + authority_budget.json v2.
+    hermetic: false
+  - step: 25
+    phase: post-deploy
+    action: >-
+      M4 (bundled-rec closure): rec-2703 + rec-2757 (github_ci_apply missing the T2.43 prod-class WRITE
+      verbs + UpdateRoleDescription/CreateLogGroup/PutMetricAlarm) are the write-surface gaps this slice
+      closes. Confirm they close via the Resolves: trailer at the human-session squash-merge (the
+      overseer adds "Resolves: rec-2703, rec-2757" at merge -- NOT this impl PR).
+    command: >-
+      grep -A3 'bundled_recommendations:' docs/plans/PLAN-terraform-iam-allowlist-inversion.yaml |
+      grep -q 'rec-2703' && grep -A3 'bundled_recommendations:'
+      docs/plans/PLAN-terraform-iam-allowlist-inversion.yaml | grep -q 'rec-2757' && echo "both recs
+      bundled -- close via Resolves: at merge"
+    expected: >-
+      Both rec-2703 and rec-2757 are in bundled_recommendations; rec-autoclose closes them after the
+      human-session squash-merge carries the Resolves: trailer. Post-merge: confirm both show
+      status=closed via `bin/venv-python -m scripts.ops_data_portal --sync` then grep the cache.
+    fix_if: >-
+      A rec is not bundled -- add it to bundled_recommendations so the Resolves: trailer closes it; or
+      (post-merge) close directly via ops_data_portal --update-rec if autoclose did not fire.
     hermetic: false
 constraints:
   - >-

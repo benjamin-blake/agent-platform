@@ -119,9 +119,11 @@ resource "aws_cloudwatch_log_group" "ops_compaction" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "scheduled_agent_dispatcher" {
-  name               = local.scheduled_agent_dispatcher_function
-  description        = "Execution role for the scheduled-agent-dispatcher Lambda (T2.43)"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  # Decision 144 (T2.48): mandatory broad-but-bounded exec-identity boundary (16/17 roles; PlatformAdmin excluded).
+  name                 = local.scheduled_agent_dispatcher_function
+  description          = "Execution role for the scheduled-agent-dispatcher Lambda (T2.43)"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+  assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy" "scheduled_agent_dispatcher" {
@@ -170,9 +172,11 @@ resource "aws_iam_role_policy" "scheduled_agent_dispatcher" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "findings_processor" {
-  name               = local.findings_processor_function
-  description        = "Execution role for the findings-processor Lambda (T2.43)"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  # Decision 144 (T2.48): mandatory broad-but-bounded exec-identity boundary (16/17 roles; PlatformAdmin excluded).
+  name                 = local.findings_processor_function
+  description          = "Execution role for the findings-processor Lambda (T2.43)"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+  assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy" "findings_processor" {
@@ -228,9 +232,11 @@ resource "aws_iam_role_policy" "findings_processor" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "ops_compaction" {
-  name               = local.ops_compaction_function
-  description        = "Execution role for the ops-compaction Lambda (T2.43)"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  # Decision 144 (T2.48): mandatory broad-but-bounded exec-identity boundary (16/17 roles; PlatformAdmin excluded).
+  name                 = local.ops_compaction_function
+  description          = "Execution role for the ops-compaction Lambda (T2.43)"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+  assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy" "ops_compaction" {

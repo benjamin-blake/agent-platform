@@ -278,14 +278,28 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         ]
       },
       {
+        # DEP-01 (Decision 144, rec-2757): apply-phase iam:UpdateRoleDescription on agent-platform-*
+        # roles. The enumerated model lacked this verb entirely, so a description drift on any
+        # agent-platform-* role (an aws_iam_role UPDATE, which the guard routes to gated-apply)
+        # AccessDenied. UpdateRoleDescription is a NON-escalating, non-trust, non-inline-policy role
+        # write (a cosmetic attribute), so it carries no PermissionsBoundary propagation condition and
+        # no self-exclusion (a self-description edit is harmless). Scoped to role/agent-platform-*.
+        Sid      = "IAMRoleDescriptionWrite"
+        Effect   = "Allow"
+        Action   = ["iam:UpdateRoleDescription"]
+        Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-*"]
+      },
+      {
         # In-budget CreateRole: the pipeline may only create roles that carry the authority budget
         # (T2.23 EC4). iam:PermissionsBoundary propagation condition forces the budget ARN to be
         # specified on every role the pipeline creates. An unbounded role-create is implicitly denied
-        # -- no unconditional Allow for iam:CreateRole exists in this policy.
+        # -- no unconditional Allow for iam:CreateRole exists in this policy. DEP-02 / Decision 144:
+        # Resource narrowed from role/* to role/agent-platform-* (the pipeline mints only
+        # boundary-carrying agent-platform-* roles; PlatformDev/PlatformAdmin are admin-created).
         Sid      = "IAMRoleCreateBounded"
         Effect   = "Allow"
         Action   = ["iam:CreateRole"]
-        Resource = ["arn:aws:iam::${var.account_id}:role/*"]
+        Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-*"]
         Condition = {
           StringEquals = {
             "iam:PermissionsBoundary" = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
@@ -293,13 +307,18 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         }
       },
       {
-        # In-budget PutRolePolicy/AttachRolePolicy: scoped to pipeline-managed CI roles (branch + pr).
-        # The apply role's own ARN is excluded (self-grant break). Condition: target role must carry
-        # the authority budget. The machine-readable mirror of these roles + resource types lives in
-        # terraform/bootstrap/authority_budget.json (T2.25 / Decision 92 point 5). The guard
-        # (scripts/terraform_apply_guard.py) reads that table and auto-applies in-budget inline-policy
-        # / attachment UPDATEs on these managed roles; role CREATES and out-of-budget changes still
-        # route to the gated-apply Environment. Defense-in-depth at the IAM layer (T2.23 EC4).
+        # In-budget PutRolePolicy/AttachRolePolicy. DEP-02 / Decision 144: Resource widened from the
+        # two enumerated CI roles (branch + pr) to the boundary-carrying agent-platform-* prefix,
+        # extending Decision 129's per-service agent-platform-* read prefix to writes. The apply role's
+        # own ARN -- which the widened prefix now matches -- is carved out by the explicit
+        # DenySelfInlinePolicyWrite Deny below (retains the T2.23 self-grant break). Condition: target
+        # role must carry the authority budget (propagation). The machine-readable mirror of the
+        # managed-role prefix + resource types + actions lives in terraform/bootstrap/authority_budget.json
+        # v2 (Decision 92 point 5). The guard (scripts/terraform_apply_guard.py) reads that table and
+        # auto-applies in-budget inline-policy / attachment CREATE+UPDATE on managed boundary-carrying
+        # agent-platform-* roles (self-excluding the apply role); role CREATES, trust diffs, destroys,
+        # and out-of-budget changes still route to the gated-apply Environment. Defense-in-depth at the
+        # IAM layer (T2.23 EC4).
         Sid    = "IAMRoleWriteBounded"
         Effect = "Allow"
         Action = [
@@ -308,14 +327,51 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "iam:PutRolePermissionsBoundary"
         ]
         Resource = [
-          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-branch",
-          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-pr",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-*",
         ]
         Condition = {
           StringEquals = {
             "iam:PermissionsBoundary" = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
           }
         }
+      },
+      {
+        # HAZARD-4 (Fable, load-bearing for slice F): apply-phase iam:DeleteRole / DetachRolePolicy /
+        # DeleteRolePolicy on agent-platform-* roles so slice F's guard-gated role RETIREMENTS execute
+        # (not AccessDeny) after human approval. Destroys still ROUTE to gated-apply (the guard is
+        # unchanged and always gates a delete); this only gives the apply role the VERB. The apply
+        # role's own ARN is carved out of DeleteRolePolicy/DetachRolePolicy by DenySelfInlinePolicyWrite
+        # below (self-DoS break). Scoped to role/agent-platform-*; the boundary DataPlaneAllow is
+        # extended with these three iam verbs (a grant absent from the ceiling is silently denied).
+        Sid    = "IAMRoleDeleteBounded"
+        Effect = "Allow"
+        Action = [
+          "iam:DeleteRole",
+          "iam:DetachRolePolicy",
+          "iam:DeleteRolePolicy"
+        ]
+        Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-*"]
+      },
+      {
+        # T2.23 self-grant break, retained under the widened agent-platform-* prefix (audit Q7). The
+        # widened role/agent-platform-* write grants above MATCH the apply role's own ARN
+        # (agent-platform-github-ci-apply), so this explicit Deny carves that ARN out of the
+        # inline-policy write + attach + boundary-set actions (escalation break) AND -- carry M1 --
+        # DeleteRolePolicy/DetachRolePolicy on self (self-DoS break). Explicit Deny in the identity
+        # policy overrides the Allow. DeleteRole-on-self is intentionally NOT listed: deleting the apply
+        # role is self-destruction (fail-safe, admin-recoverable, and guard-gated), not an escalation.
+        # This is the identity-side counterpart to the guard's apply-role self-exclusion
+        # (scripts/terraform_apply_guard.py _classify_iam_change) -- two independent layers.
+        Sid    = "DenySelfInlinePolicyWrite"
+        Effect = "Deny"
+        Action = [
+          "iam:PutRolePolicy",
+          "iam:AttachRolePolicy",
+          "iam:PutRolePermissionsBoundary",
+          "iam:DeleteRolePolicy",
+          "iam:DetachRolePolicy"
+        ]
+        Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-apply"]
       },
       {
         Sid    = "OIDCProviderReconcile"
@@ -411,6 +467,24 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = ["*"]
       },
       {
+        # DEP-01 (Decision 144, rec-2757): apply-phase CREATE / MODIFY / DESTROY of the agent-platform-*
+        # Lambda log groups. The enumerated model lacked logs:CreateLogGroup entirely (log groups were
+        # admin-created via PlatformAdmin's LambdaLogGroupManagement), so a PR adding a NEW agent-platform-*
+        # Lambda + its log group AccessDenied on CreateLogGroup. Scoped to the /aws/lambda/agent-platform-*
+        # log-group prefix (mirrors PlatformAdmin's LambdaLogGroupManagement). logs:* in the boundary
+        # DataPlaneAllow already permits these verbs.
+        Sid    = "CloudWatchLogsWrite"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:PutRetentionPolicy",
+          "logs:DeleteRetentionPolicy",
+          "logs:TagLogGroup",
+          "logs:DeleteLogGroup"
+        ]
+        Resource = ["arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/aws/lambda/agent-platform-*"]
+      },
+      {
         # Per-service read-wildcard closure: lambda:Get*/List* covers the full refresh-read set
         # incl. GetFunctionConcurrency / GetRuntimeManagementConfig. Do not prune.
         # Resource axis (Decision 129 / T2.43 rec-2702 anti-recurrence): the function
@@ -432,8 +506,11 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         ]
       },
       {
-        # apply-phase MODIFY needs AddPermission on the four ducklake functions (EventBridge grants
-        # the rule trigger invocation right on the function resource policy at apply time).
+        # apply-phase MODIFY needs AddPermission on agent-platform-* functions (EventBridge / S3 grant
+        # the trigger invocation right on the function resource policy at apply time). DEP-01 / Decision
+        # 144: broadened from the enumerated ducklake ARNs to the account-wide function:agent-platform-*
+        # prefix so a future agent-platform-* function auto-covers without a bootstrap out-of-band grant
+        # edit (mirrors the LambdaRead resource-axis broadening / rec-2702 anti-recurrence).
         Sid    = "LambdaPermissionWrite"
         Effect = "Allow"
         Action = [
@@ -441,13 +518,30 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "lambda:RemovePermission"
         ]
         Resource = [
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-catalog-dr",
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-writer",
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-reader",
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance",
-          # T2.18 c9 split: the smoke function's moved EventBridge rules need AddPermission too
-          # (separate root -- cannot use aws_lambda_function.*.arn interpolation here).
-          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-ducklake-maintenance-smoke",
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-*",
+        ]
+      },
+      {
+        # DEP-01 (Decision 144, rec-2703): apply-phase CREATE / MODIFY / DESTROY of an agent-platform-*
+        # Lambda function. The enumerated model lacked these entirely (functions were admin-created via
+        # PlatformAdmin), so a PR adding a NEW agent-platform-* Lambda AccessDenied on CreateFunction.
+        # The broad-but-bounded deployer now creates + configures + retires agent-platform-* functions
+        # under the MANDATORY boundary. Scoped to function:agent-platform-* (covers agent-platform-*
+        # AND the agent-platform-ducklake-* naming). Data-plane wildcard lambda:* in the boundary
+        # DataPlaneAllow already permits these verbs (only new iam verbs need adding to the boundary).
+        Sid    = "LambdaFunctionWrite"
+        Effect = "Allow"
+        Action = [
+          "lambda:CreateFunction",
+          "lambda:UpdateFunctionConfiguration",
+          "lambda:DeleteFunction",
+          "lambda:TagResource",
+          "lambda:UntagResource",
+          "lambda:PutFunctionConcurrency",
+          "lambda:DeleteFunctionConcurrency"
+        ]
+        Resource = [
+          "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-*",
         ]
       },
       {
@@ -489,7 +583,10 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         ]
       },
       {
-        # apply-phase MODIFY/CREATE needs PutRule/PutTargets on ducklake EventBridge rules.
+        # apply-phase MODIFY/CREATE/DESTROY needs PutRule/PutTargets on agent-platform-* EventBridge
+        # rules. DEP-01 / Decision 144: broadened from the five enumerated ducklake rule ARNs to the
+        # account-wide rule/agent-platform-* prefix so a future agent-platform-* rule auto-covers
+        # without a bootstrap grant edit (mirrors the EventBridgeRead resource-axis broadening).
         Sid    = "EventBridgeWrite"
         Effect = "Allow"
         Action = [
@@ -503,11 +600,7 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "events:DisableRule"
         ]
         Resource = [
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-catalog-dr",
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge",
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-gc",
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-hot-merge",
-          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-ducklake-maintenance-merge-ops",
+          "arn:aws:events:${var.aws_region}:${var.account_id}:rule/agent-platform-*",
         ]
       },
       {
@@ -536,7 +629,11 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = ["*"]
       },
       {
-        # apply-phase MODIFY needs PutMetricAlarm on the three ducklake alarms.
+        # apply-phase MODIFY/CREATE/DESTROY needs PutMetricAlarm on the agent-platform alarms.
+        # DEP-01 / Decision 144: broadened from the three enumerated ducklake-* alarm ARNs to the
+        # agent-platform-* AND ducklake-* alarm namespaces (the current alarms are named ducklake-*,
+        # NOT agent-platform-*, so BOTH prefixes are required; a future agent-platform-* alarm
+        # auto-covers). cloudwatch:* in the boundary DataPlaneAllow already permits these verbs.
         Sid    = "CloudWatchAlarmsWrite"
         Effect = "Allow"
         Action = [
@@ -546,9 +643,8 @@ resource "aws_iam_role_policy" "github_ci_apply" {
           "cloudwatch:UntagResource"
         ]
         Resource = [
-          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-catalog-dr-freshness",
-          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-maintenance-circuit-breaker",
-          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-writer-errors",
+          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:agent-platform-*",
+          "arn:aws:cloudwatch:${var.aws_region}:${var.account_id}:alarm:ducklake-*",
         ]
       },
       {
@@ -630,7 +726,16 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
           "iam:CreateRole",
           "iam:PutRolePolicy",
           "iam:AttachRolePolicy",
-          "iam:PutRolePermissionsBoundary"
+          "iam:PutRolePermissionsBoundary",
+          # DEP-01 / HAZARD-4 (Decision 144): the boundary is a CEILING -- the 4 new iam verbs the
+          # widened identity policy grants (IAMRoleDeleteBounded's three destroy verbs +
+          # IAMRoleDescriptionWrite's UpdateRoleDescription) must ALSO be permitted here, or they are
+          # silently denied by the intersection. DenyIAMEscalation below still narrows the
+          # create/put/attach write actions at the call site; the destroy verbs are gated by the guard.
+          "iam:DeleteRole",
+          "iam:DetachRolePolicy",
+          "iam:DeleteRolePolicy",
+          "iam:UpdateRoleDescription"
         ]
         Resource = ["*"]
       },

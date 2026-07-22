@@ -64,7 +64,7 @@ resource-policy.
 
 | classification | criteria | guard verdict |
 |----------------|----------|---------------|
-| in-budget | resource type in `in_budget_resource_types`, action set == `in_budget_actions` (["update"]), target role name in `in_budget_managed_roles` | exit 0 (auto-apply, still subject to subagent review) |
+| in-budget | resource type in `in_budget_resource_types`, every action in `in_budget_actions` (`["create","update"]`, subset-matched), target role name matches `in_budget_managed_role_prefix` (`agent-platform-`) with the apply role self-excluded | exit 0 (auto-apply, still subject to subagent review) |
 | out-of-budget | any IAM-sensitive type+action not matching all three in-budget criteria | exit 2 -> tf-gated-apply Environment |
 | trust-diff | `assume_role_policy` differs on ANY resource (checked BEFORE IAM) | exit 2 always, even on in-budget resource types |
 | destroy/replace | "delete" in actions | exit 2 always |
@@ -77,9 +77,20 @@ The machine-readable budget table lives at `terraform/bootstrap/authority_budget
 closed (all IAM treated as out-of-budget, Decision 77). `scripts/validate.py:validate_authority_budget`
 asserts the table stays in sync with the IAMRoleWriteBounded SCP in `terraform/bootstrap/github_ci_apply.tf`.
 
-Conservative v1 narrowing: role CREATES stay gated (new trust surface). The ratchet widens
-on track record (Decision 92 point 5): budget amendments via the bootstrap tier only; subagent
-review advises, never locks.
+Budget v2 (Decision 144 / T2.48): `in_budget_actions` is `["create","update"]` (a NEW inline
+policy/attachment on a boundary-carrying agent-platform-* role now auto-applies; was update-only),
+and the managed-role set is the boundary-carrying `agent-platform-*` prefix
+(`in_budget_managed_role_prefix`), not the two-role enumeration -- extending Decision 129's
+per-service agent-platform-* read prefix to writes. The guard's in-budget predicate
+(`_classify_iam_change`) widens to READ the v2 budget shape (subset-match on actions; prefix-match on
+the target role) with an explicit apply-role self-exclusion (the widened prefix matches
+`agent-platform-github-ci-apply` itself, so a write on the apply role routes to gated -- the
+guard-side counterpart to `DenySelfInlinePolicyWrite`). This is a predicate widening only: NO new
+classification stage, and the CD.35 fail-closed control theory (saved-plan no-TOCTOU, evaluation
+order, missing-budget = fail-closed) is retained verbatim. Role CREATE (`aws_iam_role` type) stays
+gated (routes to tf-gated-apply -- a new trust surface) but is now EXECUTABLE by the gated job
+because new roles declare the mandatory boundary. The ratchet widens on track record (Decision 92
+point 5): budget amendments via the bootstrap tier only; subagent review advises, never locks.
 
 **Resource-based-policy classification (T2.45 / DEP-06):** the six types above -- Lambda
 permissions and the S3/SNS/Secrets-Manager/Glue resource policies plus Lambda function URLs --

@@ -51,11 +51,20 @@ Detection contract (against `terraform show -json`, iterating .resource_changes[
     it is normalised via json.loads before comparison (key-order/whitespace differences do not
     cause nuisance trips). Trust check runs BEFORE IAM classification (T2.25) so a trust diff on
     a managed role is always gated, never slips through as an in-budget update.
-  - PASS (in-budget) if .type is in in_budget_resource_types, .change.actions == in_budget_actions
-    (["update"]), AND the target role name (.change.after.role or .change.before.role) is in
-    in_budget_managed_roles (T2.25 / Decision 92 point 5). Budget table loaded from
-    terraform/bootstrap/authority_budget.json (override via TF_AUTHORITY_BUDGET env var). Missing
-    or unparseable table = fail closed (all IAM treated as out-of-budget, Decision 77).
+  - PASS (in-budget) if .type is in in_budget_resource_types, every .change.actions entry is an
+    in_budget_action (SUBSET membership, budget v2 -- ["create","update"] admits a lone
+    ["create"] or ["update"]; a replace pair such as ["delete","create"] is never a subset and
+    stays gated), AND the target role (.change.after.role or .change.before.role) is a managed
+    boundary-carrying role -- matched against in_budget_managed_role_prefix (a boundary-carrying
+    agent-platform-* prefix, budget v2 / Decision 92 point 5 / Decision 144), with a fail-safe
+    fallback to the v1 enumerated in_budget_managed_roles when no prefix is present. The apply
+    role itself (agent-platform-github-ci-apply) is ALWAYS self-excluded: the widened prefix
+    matches its own name, so an inline-policy write on it must never auto-apply -- the guard-side
+    counterpart to github_ci_apply.tf's DenySelfInlinePolicyWrite (T2.23 self-grant break). Budget
+    table loaded from terraform/bootstrap/authority_budget.json (override via TF_AUTHORITY_BUDGET
+    env var). Missing or unparseable table = fail closed (all IAM treated as out-of-budget,
+    Decision 77). This is a predicate widening to read the v2 budget shape -- NO new classification
+    stage; the fail-closed control theory is retained verbatim.
   - BLOCK if .type is IAM-sensitive AND .change.actions is not ["no-op"]/["read"] AND not in-budget.
   - RESOURCE-POLICY stage (T2.45 / DEP-06), evaluated LAST (after IAM classification, so a delete
     or trust diff on one of these types is still caught by the earlier rules above): a non-inert
@@ -110,6 +119,12 @@ _NEON_SAFE_ACTIONS = (["create"], ["no-op"], ["read"])
 
 # Default path for the authority budget table (T2.25 / Decision 92 point 5). Override via TF_AUTHORITY_BUDGET.
 _BUDGET_DEFAULT_PATH = Path(__file__).parent.parent / "terraform" / "bootstrap" / "authority_budget.json"
+
+# The apply role's own name. Under budget v2 the in_budget_managed_role_prefix (agent-platform-)
+# matches this name, so _classify_iam_change self-excludes it: the pipeline must never auto-apply an
+# inline-policy write on itself (guard-side counterpart to github_ci_apply.tf's DenySelfInlinePolicyWrite,
+# preserving the T2.23 self-grant break / Decision 144).
+_APPLY_ROLE_NAME = "agent-platform-github-ci-apply"
 
 # Resource-based-policy types (T2.45 / DEP-06): unlike an identity policy (IAM_SENSITIVE_TYPES),
 # these attach a policy directly to a non-IAM resource and can grant an external/wildcard
@@ -181,9 +196,17 @@ def _load_budget() -> Optional[dict]:
 def _classify_iam_change(change_entry: dict, budget: Optional[dict]) -> bool:
     """Return True if this IAM change is in-budget (safe to auto-apply without gated-apply).
 
-    In-budget = resource type in in_budget_resource_types, action set equals in_budget_actions
-    (["update"]), and the target role name is in in_budget_managed_roles. Missing budget or
-    missing role attribute returns False (fail-closed).
+    In-budget = resource type in in_budget_resource_types, every action in the change is an
+    in_budget_action (SUBSET membership, budget v2 -- ["create","update"] admits a lone ["create"]
+    or ["update"]; a replace pair such as ["delete","create"] is never a subset and stays gated),
+    and the target role is a managed boundary-carrying role. The managed-role test reads the
+    budget-v2 in_budget_managed_role_prefix (a boundary-carrying agent-platform-* prefix) and falls
+    back to the v1 enumerated in_budget_managed_roles when no prefix is present (fail-safe on a
+    rollback to a v1 budget). The apply role itself is ALWAYS self-excluded -- the widened prefix
+    matches agent-platform-github-ci-apply, so an inline-policy write on it routes to gated-apply
+    (guard-side counterpart to github_ci_apply.tf's DenySelfInlinePolicyWrite). Missing budget or
+    missing role attribute returns False (fail-closed). This widens the in-budget predicate to read
+    the v2 budget shape; it adds no new classification stage and retains fail-closed control theory.
     """
     if budget is None:
         return False
@@ -191,13 +214,21 @@ def _classify_iam_change(change_entry: dict, budget: Optional[dict]) -> bool:
     if rtype not in budget.get("in_budget_resource_types", []):
         return False
     change = change_entry.get("change") or {}
-    if change.get("actions") != budget.get("in_budget_actions", []):
+    actions = change.get("actions") or []
+    if not actions or not set(actions).issubset(set(budget.get("in_budget_actions", []))):
         return False
     after = change.get("after") or {}
     before = change.get("before") or {}
     role = after.get("role") or before.get("role")
     if not role:
         return False
+    # Apply-role self-exclusion: the widened agent-platform-* prefix matches the apply role's own
+    # name, so a write on it must gate (guard-side counterpart to DenySelfInlinePolicyWrite).
+    if role == _APPLY_ROLE_NAME:
+        return False
+    prefix = budget.get("in_budget_managed_role_prefix")
+    if prefix:
+        return role.startswith(prefix)
     return role in budget.get("in_budget_managed_roles", [])
 
 
