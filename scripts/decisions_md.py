@@ -214,6 +214,11 @@ def parse_decisions_md(paths: Optional[list[Path]] = None) -> list[dict]:
         for m, full_block in _iter_decision_sections(content):
             decision_id = int(m.group(1))
             if decision_id in seen:
+                print(
+                    f"WARNING: duplicate decision number {decision_id} in {md_path.name}; keeping "
+                    "first-parsed entry, dropping this occurrence",
+                    file=sys.stderr,
+                )
                 continue
             raw_title = m.group(2).strip()
             title = re.sub(r"\s*\(.*?\)\s*$", "", raw_title).strip()

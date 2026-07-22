@@ -218,6 +218,14 @@ OWNER_EXPECTATIONS: dict[str, tuple[str, bool]] = {
 }
 
 
+class TestCheckValidation:
+    """Check.__post_init__'s owner validation (the _VALID_OWNERS guard)."""
+
+    def test_invalid_owner_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="owner must be one of"):
+            registry.Check(name="bogus_check", owner="not-a-real-owner")
+
+
 class TestSequenceInvariants:
     """Growth-safe successor to the Decision 104 frozen-baseline oracle (see module
     docstring supersession note). A per-tier required-check membership floor plus a

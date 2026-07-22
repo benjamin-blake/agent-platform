@@ -89,6 +89,9 @@ from scripts.checks.decisions.validate_decision_entry_conformance import (  # no
     validate_decision_entry_conformance,
 )
 from scripts.checks.decisions.validate_decisions_size import validate_decisions_size  # noqa: F401,E402
+from scripts.checks.decisions.validate_supersession_annotations import (  # noqa: F401,E402
+    validate_supersession_annotations,
+)
 
 # scripts.checks.deps.affected_tests is DELIBERATELY NOT imported at module scope here (unlike
 # every other facade re-export above): it imports networkx at ITS OWN module scope (Decision 80's
