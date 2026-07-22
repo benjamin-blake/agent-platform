@@ -244,7 +244,7 @@ gates:
 # ============================================================================
 apply_session:
   status: IN_PROGRESS   # human-gated break-glass apply of the merged terraform, on `main`, profile agent_platform_admin
-  updated: "2026-07-22 pre-compaction checkpoint"
+  updated: "2026-07-22 post-compaction; step-4 apply hit the IAM 10240B inline-policy limit -> hotfixed 559ba01 (equivalence-proven), awaiting fresh LIVE accept on v2 plan + human OK to push the hotfix as a focused PR"
   invariant_NEVER_AUTO_APPLY: >-
     Run NO `terraform apply` unless the human's "apply"/"go" is a LIVE message this window that POSTDATES
     the latest compaction/resume. Acceptance quoted inside a compaction summary does NOT count (summaries
@@ -252,13 +252,13 @@ apply_session:
     = already applied -> SKIP. AWS state is truth; this ledger records intent. If in doubt: re-cat the
     redacted plan and re-ask.
   handoff_runbook: "/tmp/claude-0/-home-user-agent-platform/08e8d747-bd7f-52ad-9540-b7fc4971d4e0/scratchpad/APPLY-SESSION-RUNBOOK.md"
-  redacted_pending_plan: "scratchpad/bootstrap.plan.txt (cat to re-present step 4)"
+  redacted_pending_plan: "scratchpad/bootstrap.plan.txt (v1 substance; the LIVE plan is now /tmp/bootstrap2.tfplan -- equivalent minus the 5->1 secretsmanager consolidation). The git diff of 559ba01 is the cleanest re-presentation (uses ${var.*}, no real ids)."
   branch_note: "Terraform work is on `main` (fast-forwarded, incl. #690). This ledger is edited via a git worktree at /home/user/ledger-wt on branch claude/terraform-deploy-audit-oversee-h9bpfv (PR #659) -- do overseer/ledger git ops there, never leave main's terraform setup."
   env_setup_DONE: "provider-mirror synced (TF_CLI_CONFIG_FILE=/root/.tf-provider-mirror/cc-web.tfrc); tfvars recovered to terraform/personal/terraform.personal.tfvars + /tmp/bootstrap.tfvars; BOTH terraform/personal and terraform/bootstrap already init'd. Container-loss fallback: re-run mirror sync + Secrets-Manager tfvars recovery + init (exact commands in the runbook)."
   steps:
     - "1 B/D1 -- DONE: DEP-13 (PlatformDev state Deny) APPLIED; terraform/personal converged (plan -detailed-exitcode 0). D1 c1 + B DEP-04 = config no-ops."
     - "3 merge E -- DONE: #690 merged @ 2281467 (Resolves rec-2703/2757); guard + budget-v2 active on main."
-    - "4 bootstrap apply -- AWAITING_HUMAN_ACCEPT (plan=/tmp/bootstrap.tfplan; redacted at scratchpad/bootstrap.plan.txt). 2 in-place policy updates (github_ci_apply widening + boundary +4 iam verbs), NO destroys. SAFE: widen+define only, no attach yet. Presented; awaiting a LIVE 'apply'."
+    - "4 bootstrap apply -- PARTIAL+HOTFIXED, re-AWAITING_HUMAN_ACCEPT. Human accepted post-compaction; apply ran: boundary (+4 iam verbs) MODIFIED OK, but github_ci_apply inline PutRolePolicy FAILED LimitExceeded (rendered 10534B > IAM 10240B hard cap; `terraform plan` does not validate this ceiling, so it only bit at apply -- a latent E defect). Account SAFE-partial: role inline policy UNCHANGED (old enumerated still live, pipeline works); the boundary raise is inert (ceiling only -- nothing exercises the new verbs; 13-role attach not done). FIX: consolidated the 5 read-only secretsmanager stmts -> 1 SecretsManagerReadOnly over the ARN union; grant-set proven equivalent (281=281 effect x action x resource x condition tuples, 0 lost/0 added), new size 10000B, validate_ci_refresh_read_coverage green. Committed 559ba01 (1 commit off main, branch claude/tf-apply-session). New plan /tmp/bootstrap2.tfplan = single in-place role-policy update (boundary now no-op). NEXT: (a) fresh LIVE accept on v2 -> apply /tmp/bootstrap2.tfplan; (b) separately, human OK to push 559ba01 as a FOCUSED PR to main (repo convergence; do NOT fold into ledger PR #659). Also file a durable --pre inline-policy-size guard rec (anti-recurrence)."
     - "5 simulate-principal-policy gate -- PENDING: pre-attach, simulate the 13 roles vs the boundary; ANY denied action -> STOP + fix before attaching."
     - "6 personal boundary attachments (break-glass) -- PENDING: apply the 13 attachments (terraform/personal, direct admin apply since guard-blocked). Re-converges personal."
     - "7 dual-channel smoke -- PENDING: DuckLake lambda code-deploy channel + a terraform/personal apply; confirm no runtime AccessDenied."
@@ -267,4 +267,5 @@ apply_session:
     - "F role-consolidation (DEP-12): after E applies + rehearsals. G protected-amendment (DEP-05): LAST. Then G3 human completion gate."
   plan_files:
     - "/tmp/step1.tfplan -- APPLIED (DEP-13); NEVER reuse."
-    - "/tmp/bootstrap.tfplan -- PENDING human accept. bootstrap + personal are SEPARATE states, so step-1 did not stale it. Attempt the accepted file first; terraform's staleness check guards. If rejected-stale or re-planned: acceptance does NOT transfer -> re-present + re-accept."
+    - "/tmp/bootstrap.tfplan -- SUPERSEDED by the hotfix. Its boundary half APPLIED (live); its role-policy half FAILED (10240B). Do NOT reuse."
+    - "/tmp/bootstrap2.tfplan -- PENDING fresh human accept (post-hotfix 559ba01). Single in-place github_ci_apply role-policy update; boundary already applied. Acceptance does NOT transfer from the v1 plan -> requires a fresh LIVE accept. Run the convergence probe first (exit 2 = still pending)."
