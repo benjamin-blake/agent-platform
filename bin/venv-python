@@ -2,22 +2,45 @@
 # OS-aware venv Python resolver. Picks .venv/bin/python on Linux/macOS or
 # .venv/Scripts/python.exe on Windows (MINGW/MSYS/CYGWIN). Used by all harness
 # call sites so the repo works on both the Windows VM and Linux containers (CD.2).
+#
+# venv-less fallback (Decision 148): pr-validate / main-validate / terraform-validate
+# run venv-less (requirements-fast.txt into a hosted interpreter, to avoid ~3GB of
+# torch/CUDA on disk), so a hard .venv-or-fail-loud wrapper was incompatible with
+# those CI jobs' deliberate design. When .venv is absent, fall back to the first
+# PATH interpreter that can import the sentinel dep (pydantic, shipped by both
+# requirements.txt and requirements-fast.txt); if none qualifies, stay fail-loud
+# (Decision 55) -- never silently substitute a depless interpreter.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SENTINEL_DEP="pydantic"
 
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         PYTHON="$REPO_ROOT/.venv/Scripts/python.exe"
+        FALLBACK_CANDIDATES=(python py)
         ;;
     *)
         PYTHON="$REPO_ROOT/.venv/bin/python"
+        FALLBACK_CANDIDATES=(python3 python)
         ;;
 esac
 
 if [ ! -f "$PYTHON" ]; then
-    echo "ERROR: venv Python not found at $PYTHON -- run: pip install -r requirements.txt in $REPO_ROOT" >&2
-    exit 1
+    RESOLVED=""
+    for candidate in "${FALLBACK_CANDIDATES[@]}"; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            if "$candidate" -c "import $SENTINEL_DEP" >/dev/null 2>&1; then
+                RESOLVED="$candidate"
+                break
+            fi
+        fi
+    done
+    if [ -z "$RESOLVED" ]; then
+        echo "ERROR: venv Python not found at $PYTHON, and no PATH interpreter can import '$SENTINEL_DEP' -- run: pip install -r requirements.txt in $REPO_ROOT" >&2
+        exit 1
+    fi
+    PYTHON="$RESOLVED"
 fi
 
 exec "$PYTHON" "$@"

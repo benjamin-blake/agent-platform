@@ -323,17 +323,16 @@ When writing Verification Plan steps, ask: "If this feature had a subtle bug (wr
 - Terraform-only: "Confirm `terraform apply` succeeded" -- infrastructure existing is not enough
 - Prose-only VP step: VP step describes what to check but has no executable command -- the implement agent will substitute a weaker check
 
-**Hermetic authoring (T3.15 / VF-01):** author `pre-deploy` VP steps hermetic where possible --
-narrow, deterministic, creds-free commands with no network or AWS calls -- and mark them
-`hermetic: true`. The `validate_vp_replay` check (`--pre` tier) independently re-executes every
-`phase: pre-deploy` + `hermetic: true` step of a diff-added/modified PLAN-*.yaml, so a hermetic
-pre-deploy step that fails on the PR tree cannot go green on self-report alone -- this is the
-independent re-execution of the per-change proof named in VF-01 /
-`docs/INTENT-verification-system.md`. Never mark a step hermetic if its command transitively
-invokes `scripts/validate.py --pre` or the full check sequence -- the replay would recurse into
-itself. Steps that must invoke pytest, deploy infrastructure, or otherwise cannot run hermetically
-stay `hermetic: false` (the default) and are excluded from replay with a printed reason, not
-silently skipped.
+**Hermetic authoring (T3.15 / VF-01, amended by Decision 148):** `hermetic: true` is the correct
+default again for `pre-deploy` feature-verification steps -- narrow, deterministic, creds-free
+commands. Steps are replayed at implement time by `validate_vp_replay`, not plan time: a
+plan-only PR defers with a printed reason (no `feat({slug})` commit -- Decision 76); the implement
+PR resolves `PLAN-{slug}.yaml` from `feat({slug})` commits on `git log origin/main..HEAD` and
+replays its hermetic steps against the complete tree. Advisory-SKIPs on unreachable `origin/main`
+or an absent plan (Decision 132 limitation B). `bin/venv-python` is now safe here -- it falls back
+to a sentinel-dep-importing interpreter when `.venv` is absent, resolving in venv-less CI too.
+Never mark a step hermetic if it invokes `scripts/validate.py --pre` (recursion). Steps needing
+pytest/deploys stay `hermetic: false`, excluded with a printed reason.
 
 **Graduation disposition authoring (T3.21, enforced VF-05):** every `phase: pre-deploy` VP step
 must carry a `graduation` field -- one of `graduate`, `waive`, or `not-applicable`.

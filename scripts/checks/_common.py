@@ -12,12 +12,16 @@ at module scope).
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent.parent
 PYTHON = sys.executable  # Use same interpreter that's running this script
+
+PLAN_PATH_RE = re.compile(r"^docs/plans/PLAN-([^/]+)\.yaml$")
+_FEAT_COMMIT_RE = re.compile(r"^feat\(([^)]+)\):")
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -109,3 +113,56 @@ def get_status_aware_diff() -> list[tuple[str, str]]:
                 entries.append(("??", path))
 
     return entries
+
+
+def plan_paths_from_changed(changed_files: list[str]) -> list[str]:
+    return sorted(f for f in changed_files if PLAN_PATH_RE.match(f))
+
+
+def load_plan(rel_path: str, root: Path):
+    """Load a PlanDocument via scripts.roadmap.plan_document.load(), injecting repo root onto sys.path."""
+    root_str = str(root)
+    import sys as _sys  # noqa: PLC0415
+
+    injected = root_str not in _sys.path
+    if injected:
+        _sys.path.insert(0, root_str)
+    try:
+        from scripts.roadmap.plan_document import load  # noqa: PLC0415
+
+        return load(root / rel_path)
+    finally:
+        if injected and root_str in _sys.path:
+            _sys.path.remove(root_str)
+
+
+def feat_commit_slugs(root: Path) -> list[str]:
+    """Ordered, de-duplicated slugs from feat({slug}) commit subjects in origin/main..HEAD."""
+    result = run(
+        ["git", "log", "origin/main..HEAD", "--format=%s"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=root,
+    )
+    if result.returncode != 0:
+        return []
+    slugs: list[str] = []
+    seen: set[str] = set()
+    for line in result.stdout.strip().splitlines():
+        match = _FEAT_COMMIT_RE.match(line.strip())
+        if match and match.group(1) not in seen:
+            seen.add(match.group(1))
+            slugs.append(match.group(1))
+    return slugs
+
+
+def origin_main_reachable(root: Path) -> bool:
+    result = run(
+        ["git", "rev-parse", "--verify", "-q", "origin/main"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=root,
+    )
+    return result.returncode == 0

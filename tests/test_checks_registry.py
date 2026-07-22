@@ -23,11 +23,13 @@ dispatch loop) is untouched; only this file's oracle shape changes.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).parent.parent
 
@@ -517,3 +519,86 @@ class TestCommonPrimitives:
         with patch("scripts.checks._common.run", side_effect=mock_run), patch("scripts.checks._common.ROOT", tmp_path):
             entries = _common.get_status_aware_diff()
         assert entries == []
+
+    def test_plan_paths_from_changed_filters_and_sorts(self) -> None:
+        result = _common.plan_paths_from_changed(
+            ["docs/plans/PLAN-b.yaml", "scripts/foo.py", "docs/plans/PLAN-a.yaml", "docs/plans/nested/PLAN-c.yaml"]
+        )
+        assert result == ["docs/plans/PLAN-a.yaml", "docs/plans/PLAN-b.yaml"]
+
+    def test_load_plan_loads_via_roadmap_plan_document(self, tmp_path: Path) -> None:
+        slug = "common-helper-fixture"
+        plans_dir = tmp_path / "docs" / "plans"
+        plans_dir.mkdir(parents=True)
+        plan_dict = {
+            "schema_version": 2,
+            "slug": slug,
+            "intent": "Fixture plan for _common.load_plan direct coverage.",
+            "plan_type": "IMPLEMENTATION",
+            "verification_tier": "V2",
+            "plan_path": f"docs/plans/PLAN-{slug}.yaml",
+            "phase": "Test fixture",
+            "scope": [{"file": "scripts/dummy.py", "action": "Modify", "purpose": "fixture"}],
+            "acceptance_criteria": ["dummy criterion"],
+            "verification_plan": [
+                {
+                    "step": 1,
+                    "phase": "pre-deploy",
+                    "hermetic": True,
+                    "action": "dummy",
+                    "command": "true",
+                    "expected": "n/a",
+                    "fix_if": "n/a",
+                }
+            ],
+            "execution_steps": ["dummy step"],
+        }
+        (plans_dir / f"PLAN-{slug}.yaml").write_text(yaml.dump(plan_dict), encoding="utf-8")
+
+        doc = _common.load_plan(f"docs/plans/PLAN-{slug}.yaml", tmp_path)
+        assert doc.slug == slug
+        assert str(tmp_path) not in sys.path  # injected then cleaned up
+
+    def _git_repo_with_feat_commits(self, repo: Path) -> None:
+        def _git(args: list[str]) -> None:
+            result = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8")
+            assert result.returncode == 0, f"git {args} failed: {result.stderr}"
+
+        _git(["init", "-q"])
+        _git(["config", "user.email", "test@example.com"])
+        _git(["config", "user.name", "Test"])
+        (repo / "base.txt").write_text("base\n", encoding="utf-8")
+        _git(["add", "-A"])
+        _git(["commit", "-q", "-m", "base"])
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, encoding="utf-8"
+        ).stdout.strip()
+        _git(["update-ref", "refs/remotes/origin/main", base_sha])
+
+        (repo / "alpha_first.txt").write_text("x\n", encoding="utf-8")
+        _git(["add", "-A"])
+        _git(["commit", "-q", "-m", "feat(alpha): first commit"])
+        (repo / "alpha_second.txt").write_text("y\n", encoding="utf-8")
+        _git(["add", "-A"])
+        _git(["commit", "-q", "-m", "feat(alpha): duplicate slug, deduped"])
+        (repo / "unrelated.txt").write_text("z\n", encoding="utf-8")
+        _git(["add", "-A"])
+        _git(["commit", "-q", "-m", "docs: unrelated non-feat commit"])
+
+    def test_feat_commit_slugs_dedupes_ordered_and_ignores_non_feat(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._git_repo_with_feat_commits(repo)
+
+        assert _common.feat_commit_slugs(repo) == ["alpha"]
+
+    def test_origin_main_reachable_true_with_ref(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._git_repo_with_feat_commits(repo)
+
+        assert _common.origin_main_reachable(repo) is True
+
+    def test_feat_commit_slugs_and_origin_main_reachable_false_without_repo(self, tmp_path: Path) -> None:
+        assert _common.feat_commit_slugs(tmp_path) == []
+        assert _common.origin_main_reachable(tmp_path) is False
