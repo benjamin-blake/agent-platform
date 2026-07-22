@@ -48,7 +48,7 @@ verification_plan:
     command: "bin/venv-python -m scripts.roadmap.platform_roadmap docs/ROADMAP-PLATFORM.yaml"
     expected: "Prints 'PASS: ... validates against RoadmapDocument schema.' and exits 0."
     fix_if: "Non-zero exit or a Pydantic/YAML error means a compression edit broke schema shape (dropped a required field, malformed YAML) -- restore the offending field."
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: "The standing validate_platform_roadmap check already runs the loader/schema validation in both presubmit tiers; graduating a duplicate schema-load check would double-cover an existing regression guard."
   - step: 2
@@ -57,7 +57,7 @@ verification_plan:
     command: "test $(wc -l < docs/ROADMAP-PLATFORM.yaml) -lt 7600"
     expected: "Exit 0 (line count < 7600)."
     fix_if: "Exit 1 means the trim did not remove enough dead prose -- extend A2 compression to more completed items or deepen A1 CD-detail removal."
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: "The durable regression guard is the existing _ROADMAP_MAX_LINES=10000 ceiling in validate_platform_roadmap; the 7600 figure is a one-time trim goal for this session, not a standing threshold."
   - step: 3
@@ -84,7 +84,7 @@ verification_plan:
     command: "bin/venv-python -c \"import subprocess,sys,json; from pathlib import Path; from scripts.platform_roadmap_state import compute_state_dict; base=subprocess.run(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'],capture_output=True,text=True).stdout; tmp=Path('docs/.roadmap-base-tmp.yaml'); tmp.write_text(base);\nimport atexit; atexit.register(lambda: tmp.exists() and tmp.unlink());\nkeys=('next_eligible','in_progress','blocked','blocked_on_cd','ratifiable_cds','deferred_post_mvp');\nproj=lambda sd:{k:sd.get(k) for k in keys};\nb=proj(compute_state_dict(tmp)); c=proj(compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml'))); tmp.unlink();\nprint('MATCH' if b==c else json.dumps({'base':b,'cur':c},indent=2,default=str)); sys.exit(0 if b==c else 1)\""
     expected: "Prints 'MATCH' and exits 0."
     fix_if: "A JSON diff (exit 1) means a compression edit altered an active item's eligibility -- most likely a status/depends_on field on a completed item was touched, or a completed `- id:` was removed and an active item's depends_on now dangles. Restore the dead item's status/depends_on/id verbatim."
-    hermetic: true
+    hermetic: false
     graduation: not-applicable
   - step: 6
     phase: pre-deploy
@@ -92,7 +92,7 @@ verification_plan:
     command: "bin/venv-python -c \"import re,sys; t=open('docs/DECISIONS.md').read(); secs=re.split(r'(?m)^## Decision (\\d+):', t); nums=[int(secs[i]) for i in range(1,len(secs),2)]; mx=max(nums); body=secs[2+2*nums.index(mx)]; ok = mx>=147 and 'Decision 114' in body; print('OK new Decision', mx, 'cites 114') if ok else print('FAIL: max Decision', mx, 'body cites 114:', 'Decision 114' in body); sys.exit(0 if ok else 1)\""
     expected: "Prints 'OK new Decision <N> cites 114' and exits 0, where N is the highest Decision number (>=147) and its body contains 'Decision 114'."
     fix_if: "Exit 1 means the amending Decision was not added, landed below 147, or its body does not reference Decision 114 -- add/fix it per the draft in context. The regex tolerates the numbering race landing above 147."
-    hermetic: true
+    hermetic: false
     graduation: waive
     graduation_waiver_reason: "One-time presence check tied to this session's specific Decision number; not a durable regression guard once the Decision is merged."
 constraints:
@@ -112,6 +112,7 @@ context:
   - "Decision 147 DRAFT (file at implement; re-check next free number, current max is 146): '## Decision 147: Respond to Decision 114 reversal trigger by compacting ROADMAP-PLATFORM.yaml terminal content in place (single file preserved). Decided. When the file reached 9996/10000, the reversal trigger in Decision 114 fired. Rather than the per-tier split (rejected by 114 as the anti-agent-first N-files-to-reassemble pattern, Decision 110) or a bare ceiling raise (the silent-trade anti-pattern, Decision 128), terminal/dead content is compacted in place: ratified/superseded candidate_decisions drop their `detail`/`realization_evidence` prose (already stored in DECISIONS.md per Decision 86, keeping the machine fields the ratification/supersession guards read), and completed/reserved tier_items drop `progress_note`/`note`/`decomposition_hints` and shorten `intent`, keeping id/status/depends_on/completed_at/met_by/exit_criteria intact so eligibility computation and the criteria-integrity guards are unaffected. The 10,000-line ceiling and single-file agent-first structure (Decision 110) are preserved. Durable norm: ratified CDs and completed tier_items are stored in compact form; their narrative lives in DECISIONS.md, not the roadmap. Reversal conditions: if the file breaches 10,000 again after compaction, escalate to lifecycle archival (a separate ROADMAP-PLATFORM-ARCHIVE.yaml with dependency-resolving stubs) or a consciously-cited, temporary, reversal-conditioned ceiling raise (mirroring Decision 145's DECISIONS.md-ceiling precedent) -- not another ad hoc trim. Related: 114, 110, 105, 136, 93, 108, 86, 84, 128, 145.'"
   - "Numbering-race: decision numbers are not reserved at draft time; re-check the max `## Decision NNN:` header in DECISIONS.md at implement and shift to the next free number if 147 was claimed by a concurrent PR."
   - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness: 0 behind, 0 ahead); no rebase needed."
+  - "VP hermeticity (VF-01 / rec-2770 CI-SAFETY): ALL pre-deploy VP steps are hermetic: false by design. This is a plan-only PR that merges to main BEFORE its /implement PR, so every VP step asserts post-trim state (size < 7600, eligibility invariance, Decision 147 present) that is false on the plan-only tree; and validate_vp_replay re-executes hermetic pre-deploy steps inside pr-validate, which has NO .venv, so any bin/venv-python step fails with 'venv Python not found'. Marking any step hermetic would (correctly) fail replay -- the steps run for real at /implement time. First pr-validate run on this PR (steps originally marked hermetic:true on 1/2/5/6) failed exactly this way; reclassified to hermetic:false per the planning skill's documented fallback (excluded from replay with a printed reason). The /implement agent must NOT flip them back to hermetic:true."
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: dec-114, dec-110, dec-105, dec-136, dec-84, dec-86. RELATED: dec-134, dec-145, dec-93, dec-108, dec-85. Flags were WARN on the rejected Path C (per-tier split contradicts 114/110) and NOTE on the rejected Path B (bare ceiling raise vs Decision 128); recommended Path A carries no CONTRADICT. Decisions triaged: 99 of 99."
   - "gates: decision-scout=FLAGS_FOUND (Path A clean, flags on unchosen B/C only); plan-critique=PROCEED after 1 round (4 non-blocking improvements incorporated: 87->93 count fix, hardened VP step 6 Decision-citation check, step 5 graduation rationale, and filed follow-on rec-2781 for the enforcement guard)"
 pre_implementation_checklist:
