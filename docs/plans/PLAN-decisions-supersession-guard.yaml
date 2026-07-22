@@ -1,0 +1,372 @@
+schema_version: 1
+slug: decisions-supersession-guard
+intent: >-
+  Build the mechanical supersession-annotation invariant (audit findings DPI-01 + DPI-06 + the DPI-03
+  Warehouse-ID extension) as a new FULL-tier CI check, so a superseding Decision that ships without a
+  forward pointer on its victim FAILS the post-merge full tier (RCA-looped per Decision 72), not a
+  pre-merge block, instead of silently regrowing the corpse pile. Wave 3 (final) of the /overseer
+  decision-log-premise-integrity run. Scope precision (plan-critique finding 12k): the open point-fix recs
+  rec-2057/2058/2059/917/918 are NOT retired by this guard -- they remain OPEN and OUT OF SCOPE, a
+  different staleness class (stale cross-references [2057/2058], old file-path refs [917 ->
+  config/executor_capabilities.yaml, 918 -> config/data_quality/], IAM-user refs [2059]) that a
+  supersession-EDGE guard neither checks nor fixes; they are named only illustratively as broader
+  manual-annotation friction, and bundled_recommendations stays empty.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-decisions-supersession-guard.yaml
+phase: >-
+  Audit-driven platform governance hygiene (DPI-01/DPI-06/DPI-03-extension,
+  audits/decision-log-premise-integrity-8fb581e.yaml); no tier_item -- durable deferred follow-ups route
+  to roadmap tier_items, not recs. Wave 3 (final) of the decision-log-premise-integrity /overseer run;
+  depends on Waves 1 (#665, DPI-02/03/05) and 2 (#676, DPI-04 + Decision 146) already on main.
+scope:
+  - file: scripts/checks/decisions/validate_supersession_annotations.py
+    action: Create
+    purpose: >-
+      The new FULL-tier check (owner=platform). Parses docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md via
+      the shared scripts.decisions_md grammar and runs three sub-checks: (1) supersession-annotation
+      invariant (DPI-01), (2) duplicate-number detection (DPI-06 part a), (3) Warehouse-ID line
+      conformance (DPI-03 extension). Exposes a pure extract_supersession_edges(root) helper for the
+      non-vacuity test and a root= injection seam for synthetic fixtures. Must stay < 500 SLOC (Decision
+      128 -- decompose into a facade package if it would exceed, never raise the budget).
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Insert _c("validate_supersession_annotations") into full_sequence() immediately after
+      _c("validate_decision_entry_conformance") (group the decision checks). FULL tier only -- NOT added
+      to pre_sequence() (a supersession-annotation sweep need not gate the fast edit loop; it belongs with
+      the other decision-corpus governance checks that run full).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the facade re-export line (Decision 104 dispatch requirement) after the validate_decisions_size
+      import, so globals()[name](failed) resolves the new check and tests/test_checks_registry.py
+      reachability passes. Never add the check to .github/workflows/ci.yml -- validate.py is the single
+      source of truth (Decision 73).
+  - file: config/decision_supersession_waivers.yaml
+    action: Create
+    purpose: >-
+      The waiver allowlist. Pre-populated with the non-binding supersession edges (clause-level amends /
+      partial or scoped supersessions / one citation false-positive) so the supersession sub-check starts
+      GREEN over the post-Wave-1/2 files WITHOUT any docs/DECISIONS.md content edit. Also carries an
+      (initially empty) live_archive_pair_allowlist for the DPI-06 live/archive WARN.
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      Add a logged stderr WARNING at parse_decisions_md's first-wins dedup site (currently the silent
+      `if decision_id in seen: continue`) naming the dropped decision number, so every backfill surfaces
+      duplicate-number collisions instead of masking them (DPI-06). Behavior-preserving: the returned
+      parse list and the byte-reconstruction invariant (Decision 134 DAF-01) are unchanged.
+  - file: tests/checks/decisions/test_validate_supersession_annotations.py
+    action: Create
+    purpose: >-
+      Unit tests at the Decision-131 mirror path (tests/test_validate.py is retired). Synthetic tmp_path
+      fixtures exercise every branch to 100% per-file coverage (validate_test_coverage); plus a
+      non-vacuity test that runs extract_supersession_edges over the REAL repo files and asserts > 0 edges
+      WITHOUT asserting an absolute count (test-count-coupling anti-pattern).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    bin/venv-python -m scripts.validate exits 0 at HEAD WITH validate_supersession_annotations registered
+    and running in the FULL tier -- i.e. the guard starts GREEN over the post-Wave-1/2 decision files.
+  - >-
+    The check enumerates > 0 supersession edges over the real docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md
+    (non-vacuity; ~30 at authoring time), proven by a non-vacuity test that asserts > 0 without asserting an
+    absolute count.
+  - >-
+    validate_supersession_annotations is a module-level global of scripts/validate.py (facade re-export
+    present) AND appears in registry.full_sequence(); the tests/test_checks_registry.py reachability tests
+    pass.
+  - >-
+    config/decision_supersession_waivers.yaml waives exactly the non-binding edges (clause-level amends /
+    partial or scoped supersessions / the one citation false-positive) so the supersession sub-check is
+    green; every waiver names a real (superseder, victim) edge that the extractor produces, each with a
+    human-readable reason.
+  - >-
+    The duplicate-number sub-check FAILs on a live-file duplicate number and WARNs (allowlistable) on a
+    live/archive pair (0 of each at HEAD -> green). The Warehouse-ID sub-check FAILs any "**Warehouse ID:**
+    dec-NNN" line whose value != dec-{header:03d} (0 nonconforming at HEAD -> green).
+  - >-
+    scripts/decisions_md.py parse_decisions_md emits a stderr WARNING naming the dropped decision number
+    whenever its first-wins dedup discards an entry, with the returned parse result unchanged.
+  - >-
+    The new check file is < 500 SLOC (Decision 128; no budget raise, no decompose required at ~200 SLOC);
+    tests live at tests/checks/decisions/test_validate_supersession_annotations.py (Decision 131 mirror
+    convention) with 100% per-file coverage.
+  - No new recommendation is filed by this plan (durable deferred follow-ups route to roadmap tier_items).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The check IS the standing regression guard (registered in registry.full_sequence() and run by every
+      full-tier validate); a separately-graduated kernel slot asserting "the guard is green" would
+      duplicate the registered check itself. hermetic:false because the module does not exist at
+      plan-commit time and the step imports it + reads the repo decision files.
+    action: >-
+      Prove the guard starts GREEN and is non-vacuous over the REAL decision files: call the check's pure
+      extractor (assert > 0 edges) and its validate entrypoint (assert failed == []).
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from
+      scripts.checks.decisions.validate_supersession_annotations import extract_supersession_edges,
+      validate_supersession_annotations; edges=extract_supersession_edges(Path('.')); assert len(edges)>0,
+      'vacuous extractor'; failed=[]; validate_supersession_annotations(failed); assert failed==[], failed;
+      print(f'OK: {len(edges)} edges, guard green')"
+    expected: "OK: <N> edges, guard green (N ~30 at authoring)"
+    fix_if: >-
+      failed is non-empty -> an unwaived unannotated edge, a live duplicate number, or a nonconforming
+      Warehouse-ID line survives; add the missing waiver (clause/partial/citation edge) or fix the check.
+      len(edges)==0 -> the extractor regex or block-splitter regressed (vacuous guard).
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      tests/test_checks_registry.py already provides the standing reachability guard for every registered
+      check (name in a tier sequence AND a global of scripts.validate); a new graduated slot would
+      duplicate it. hermetic:false because it imports the not-yet-existing module.
+    action: >-
+      Confirm the Decision-104 registration is complete on all three touch points: the check name is in
+      registry.full_sequence() AND is a module-level global of scripts.validate (facade re-export).
+    command: >-
+      bin/venv-python -c "from scripts.checks import registry; import scripts.validate as v;
+      names=[s.name for s in registry.full_sequence()]; assert 'validate_supersession_annotations' in
+      names, 'not in full_sequence'; assert hasattr(v,'validate_supersession_annotations'), 'not
+      re-exported in validate.py'; print('OK: registered + re-exported')"
+    expected: "OK: registered + re-exported"
+    fix_if: >-
+      Not in full_sequence -> add _c("validate_supersession_annotations") to registry.full_sequence().
+      Not re-exported -> add the "from scripts.checks.decisions.validate_supersession_annotations import
+      validate_supersession_annotations  # noqa: F401,E402" line to scripts/validate.py.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The check's unit suite is a committed permanent asset run by the standing pytest tier and guarded by
+      validate_test_coverage (100% per-file coverage on the changed check); a graduated verifier slot would
+      duplicate it. hermetic:false because the suite does not exist at plan-commit time.
+    action: >-
+      Run the new check's unit suite (the regression teeth): unannotated full-supersession FAILs;
+      victim-annotated PASSes; header "(Superseded by Decision N)" PASSes; a waived edge PASSes; a live
+      duplicate number FAILs; a live/archive pair WARNs (no fail); a nonconforming Warehouse-ID line FAILs;
+      the decisions_md dedup emits a stderr warning; and the non-vacuity test asserts > 0 real edges.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_supersession_annotations.py -q
+    expected: All tests pass (green).
+    fix_if: >-
+      A teeth test fails -> the sub-check logic or waiver-loading is wrong. The dedup-warning test fails ->
+      the scripts/decisions_md.py stderr print is missing/misplaced. The non-vacuity test fails -> the
+      extractor is vacuous over the real files.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      validate_sloc_limits already enforces the 500-SLOC ceiling in both tiers; this is a one-time
+      authoring confirmation, not a new standing guard. hermetic:false because the file does not exist at
+      plan-commit time.
+    action: >-
+      Confirm the new check file is < 500 SLOC (Decision 128 -- if it would exceed, decompose into a facade
+      package, never raise the budget).
+    command: >-
+      bin/venv-python -c "import pathlib; n=sum(1 for l in
+      pathlib.Path('scripts/checks/decisions/validate_supersession_annotations.py').read_text().splitlines()
+      if l.strip() and not l.strip().startswith('#')); assert n<500, n; print(f'OK: {n} SLOC')"
+    expected: "OK: <N> SLOC (N < 500)"
+    fix_if: >-
+      N >= 500 -> decompose into a facade package (__init__.py re-exporting the public surface, cohesive
+      submodules each under budget), per Decision 80/104/124; do NOT raise the config/sloc_budgets.yaml
+      budget.
+constraints:
+  - >-
+    Files NO new recommendations (task constraint). Durable deferred follow-ups become roadmap tier_items,
+    not recs -- specifically the DPI-06 part-b --reconcile orphan-row report mode (surfaced as an
+    operator-actioned tier_item; see context and the hand-back open_questions).
+  - >-
+    The guard MUST start GREEN over the post-Wave-1/2 files. Full supersessions are ALREADY victim-annotated
+    (Wave 1 DPI-02 -> the 15 green edges); clause-level / partial / citation edges are WAIVED in
+    config/decision_supersession_waivers.yaml. This plan makes NO docs/DECISIONS.md content edits --
+    annotation was Wave 1's scope; do NOT re-annotate here (no unplanned scope creep).
+  - >-
+    New check < 500 SLOC (Decision 128): if the implementation would exceed, DECOMPOSE into a facade
+    package (Decision 80/104/124 pattern); do NOT raise the budget and do NOT run a bare
+    --update-sloc-budgets re-seed.
+  - >-
+    Decision 104 registry pattern: the check is added in THREE places (module @registry.register,
+    registry.full_sequence() insertion, scripts/validate.py facade re-export). NEVER add it to
+    .github/workflows/ci.yml -- validate.py is the single source of truth (Decision 73).
+  - >-
+    Tests at the mirror path tests/checks/decisions/test_validate_supersession_annotations.py (Decision 131
+    amends Decision 104; tests/test_validate.py retired, _RETIRING_GRANDFATHER_HOMES empty). AVOID absolute
+    header/edge-count assertions (test-count-coupling anti-pattern, validate_test_count_coupling); assert
+    non-vacuity (> 0 edges) instead so future archive moves cannot break the suite.
+  - >-
+    The check parses BOTH docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md via the shared scripts.decisions_md
+    grammar (iter_decision_headings / _iter_decision_sections, the #{2,3} regex from Decision 134's DAF-03
+    consolidation) -- never a hand-rolled header regex, so it stays in lockstep with the ETL and the R1
+    ratification guard (Decision 105).
+  - >-
+    The scripts/decisions_md.py edit is a stderr WARNING ONLY at the existing first-wins dedup -- the
+    returned parse list, status/superseded_by extraction, and byte-reconstruction invariant (Decision 134
+    DAF-01) are unchanged.
+  - >-
+    ASCII hyphens, not em dashes (house style). No eval/exec (use only stdlib re + yaml.safe_load). Never
+    raise during module import (defer validation to the check call). No rescue agents or workaround loops
+    (Decision 55); on an unrecoverable VP failure, stop and RCA.
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (2 NOTE, no BLOCK), run by the
+    /overseer coordinator out-of-band (this planning leaf subagent has NO nested-Agent dispatch tool: the
+    Skill tool loads decision-scout inline, and select:Agent / select:Task / 5 further ToolSearch probes all
+    miss). Both NOTE flags are resolved in-plan (see the Decision-73 and Decision-146 ACK notes below). CITE
+    list: Decision 104 (owner-tagged check registry), 131 (test mirror convention, amends 104), 132
+    (verification-graduation is an enforced pre-merge obligation governing this plan's VP graduation
+    dispositions), 128 (SLOC decompose-by-default), 134 (decision authoring grammar + DAF-03 shared parser +
+    size governance), 84 (DECISIONS.md is the sole ops_decisions ETL source), 105 (ratification guard
+    resolves headers across both files), 146 (canonical-corpus + archival policy; its revisit condition names
+    a DPI-06 duplicate-number guard, which this plan builds), 86 (machine-parseable config over prose docs),
+    73 (validate.py is the authoritative gate), 55 (RCA-first).
+  - "gates: decision-scout=FLAGS_FOUND (2 NOTE resolved in-plan: D73 tier-placement ACK + D146 revisit-scope ACK); plan-critique=REVISE -> PROCEED after 1 round (2 metadata fixes applied: intent reworded to not claim rec-retirement [finding 12k]; VP step 3 graduation not-applicable -> waive [finding 12o])"
+  - >-
+    Decision-scout NOTE (Decision 73) ACK: the check's FULL-tier-only registration (added to
+    registry.full_sequence(), deliberately NOT to pre_sequence()) is intentional -- it does a heavier
+    both-file parse and is grouped with the other decision-corpus full-tier checks
+    (validate_decision_entry_conformance, validate_decisions_size). "FAILS CI" therefore means the POST-MERGE
+    full tier plus the ci_rca forward-fix loop (Decision 72), NOT a pre-merge --pre block -- consistent with
+    Decision 73 (validate.py is the authoritative gate; the full tier is the post-merge authority).
+  - >-
+    Decision-scout NOTE (Decision 146) ACK: this plan MEETS Decision 146's Revisit condition -- it builds the
+    DPI-06 duplicate-number guard that 146 anticipated ("if a mechanical archival-eligibility enforcer or
+    duplicate-number guard (DPI-06) is ever built, revisit"). The guard enforces ONLY the forward-pointer
+    (supersession-annotation) and duplicate-number invariants plus Warehouse-ID conformance; it does NOT
+    implement, and MUST NOT be extended into, the "keeps-only-open" archival-eligibility enforcer that
+    Decision 146 explicitly reserves as operator-disposed. Archival eligibility stays a human judgment call.
+  - >-
+    CI-RCA DEFERRAL (Related-Work HARD-BLOCK escape): 1 unresolved ci-rca rec (rec-2762, "malformed
+    closes_criteria in PLAN-ducklake-maintenance-smoke-split.yaml") is ORTHOGONAL to this plan -- different
+    scope file, different failure category (plan-schema validation), and this plan carries NO
+    closes_criteria. Deferred to its own RCA-reviewed /plan session per Decision 72 (the same deferral Wave
+    2 recorded).
+  - >-
+    PRECONDITION VERIFIED at HEAD (origin/main 3f3228c = Wave 2 #676): Waves 1 (#665, DPI-02/03/05) and 2
+    (#676, DPI-04 + Decision 146) both merged; bin/venv-python -m scripts.validate exits 0 (baseline green
+    BEFORE the new check).
+  - >-
+    EMPIRICAL PROTOTYPE (read-only, over the post-Wave-1/2 files): the extractor enumerates 30 unique
+    superseder->victim edges; 15 are already victim-annotated (green): 117->44, 116->49, 112->68, 102->43,
+    90->42, 83->89, 78->50, 78->56, 78->51, 78->69, 76->58, 76->23, 55->46, 50->45, 126->120; 15 are
+    unannotated (red) -- all clause-level amends / partial or scoped supersessions / one citation
+    false-positive; 0 live-file duplicate numbers; 0 live/archive number pairs; 71 Warehouse-ID lines, 0
+    nonconforming. So the duplicate-number and Warehouse-ID sub-checks start green immediately; the
+    supersession sub-check starts green via the waiver file.
+  - >-
+    WAIVER SET (15 edges, superseder->victim). 13 unambiguous clause/partial/scoped/citation edges:
+    145->134 (amends cl.), 144->98 (amends point), 144->92 (amends point), 143->81 (amends cl.1), 135->73
+    (amends 2nd aspect), 132->104 (amends; extends the registry), 131->104 (amends; per-package conftest),
+    126->125 (amends point), 104->80 (partially supersedes point), 85->76 (amends clause), 76->89 (amends
+    clause 4), 54->52 (supersedes-for-scope; archive), 53->52 (partially supersedes; archive). TWO were
+    operator-flagged and are now OPERATOR-CONFIRMED WAIVE (rulings recorded at the overseer gate): 128->102
+    with reason "clause-level SLOC-policy-default amend; Decision 102's waiver-ratchet enforcement
+    (validate_sloc_budget_raises) still stands", and 85->58 with reason "false positive: the phrase 'Decision
+    76 supersedes Decision 58' is CITED inside Decision 85's rationale; Decision 85 does not supersede
+    Decision 58, and the real D76->D58 edge is separately annotated". Both reasons are written verbatim into
+    config/decision_supersession_waivers.yaml at /implement time.
+  - >-
+    ANNOTATION MODEL the guard encodes: FULL supersessions annotate the victim (Wave 1 DPI-02 already did
+    this -> the 15 green edges); clause-level amendments are WAIVED (this plan). Going forward the guard
+    FAILs the next FULL supersession that ships without a victim pointer -- exactly the invariant DPI-01
+    specifies. Waiving 15 of 30 edges is BY DESIGN, not a workaround: it makes the operator's "these clause
+    amends are non-binding" ruling explicit and auditable rather than baking it into regex cleverness.
+  - >-
+    CHECK DESIGN: reuse scripts.decisions_md._iter_decision_sections to build number->block; edge regex
+    (?:Supersedes|supersedes|amends|Amends|partially supersedes)\s+Decision\s+(\d+) with the containing
+    block's number as superseder and the captured number as victim; annotation test = the victim's block
+    contains the plain string "Decision {superseder}" OR the victim header carries "(Superseded by Decision
+    {superseder})"; edges listed in config/decision_supersession_waivers.yaml are skipped. Documented,
+    spec-accepted regex limits: the PLURAL form "Supersedes Decisions N, M" is NOT matched (single-number
+    form only), and the block-owner=superseder heuristic can mis-attribute a cited edge (handled by the
+    waiver file). Stale waivers (a waived edge that later gets annotated) are a WARN, not a FAIL, to avoid
+    waiver-rot build breaks.
+  - >-
+    DEFERRED DPI-06 part b (--reconcile orphan-row report mode for ops_data_portal backfill_decisions_from_md,
+    report-only; physical deletion stays human-gated per Decision 70/103): NOT built here; recorded as a
+    DEFERRED roadmap tier_item, NOT a rec -- the /overseer files it at the G3 gate. docs/ROADMAP-PLATFORM.yaml
+    is deliberately kept OUT of scope -- it is bundled into the ACTIVE data-pipeline Lambda
+    (compute_affected_artifacts), so editing it would force spurious V3 build/deploy/smoke-test steps; the
+    tier_item is a human-confirmed roadmap-bookkeeping edit (planning-skill roadmap-edit rule).
+  - >-
+    Branched from origin/main at 3f3228c (0 behind, 0 ahead; no scope-file divergence). V2: the 6 scope
+    files affect 0 Lambda artifacts (compute_affected_artifacts == {}); no .tf. Coverage: the new check needs
+    a root= injection seam (mirrors validate_decision_entry_conformance) so synthetic tmp_path fixtures reach
+    100% per-file coverage (validate_test_coverage, full tier).
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md read
+  - Both audit files read (audits/decision-log-premise-integrity-8fb581e.yaml and .md)
+  - >-
+    scripts/checks/registry.py, the scripts/validate.py facade re-export block, and the sibling check
+    scripts/checks/decisions/validate_decision_entry_conformance.py read (the Decision-104 registration
+    pattern + the root= injection-seam precedent)
+  - scripts/decisions_md.py read (the shared #{2,3} grammar helpers and the first-wins dedup site)
+  - >-
+    Re-run the read-only prototype over HEAD to confirm the current edge / green / waiver counts before
+    writing the waiver file (the set may shift if main advanced); drop any waiver whose edge became
+    annotated
+  - Decision-scout (FLAGS_FOUND) and plan-critique (REVISE->PROCEED) verdicts recorded in context; both gate NOTE/REVISE items resolved (done at plan authoring)
+  - All files in scope located and readable; acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create config/decision_supersession_waivers.yaml with schema {waivers: [{superseder: int, victim: int,
+    reason: str}], live_archive_pair_allowlist: []}. Pre-populate with the 15 waiver edges from the prototype
+    (13 confirmed + the 2 operator-flagged), each with a human-readable reason naming why the victim's core
+    stands (clause/point amend, partial/scoped supersession, or citation false-positive). Re-derive the set
+    from a fresh prototype run at execution time; if an edge became annotated (green) since planning, drop its
+    waiver. live_archive_pair_allowlist stays empty (0 pairs at HEAD).
+  - >-
+    Create scripts/checks/decisions/validate_supersession_annotations.py: (a) a pure
+    extract_supersession_edges(root) helper returning the list of (superseder, victim, file) tuples via
+    scripts.decisions_md._iter_decision_sections over both files + the edge regex; (b) helpers for
+    duplicate-number detection (live dup -> FAIL, live/archive pair -> WARN unless allowlisted) and
+    Warehouse-ID conformance (line value == dec-{header:03d}); (c) the
+    @registry.register("validate_supersession_annotations", owner="platform") entrypoint
+    validate_supersession_annotations(failed, root=None) that loads the waiver YAML (root/config/...),
+    applies the three sub-checks, prints per-issue lines, and appends a single summary string to failed on
+    any FAIL (WARNs print only). root defaults to _common.ROOT (test-injection seam, mirroring
+    validate_decision_entry_conformance). Keep < 500 SLOC; decompose into a facade package if it would exceed.
+  - >-
+    Register in scripts/checks/registry.py: insert _c("validate_supersession_annotations") into
+    full_sequence() immediately after _c("validate_decision_entry_conformance"). Do NOT add it to
+    pre_sequence().
+  - >-
+    Add the facade re-export to scripts/validate.py after the validate_decisions_size import:
+    "from scripts.checks.decisions.validate_supersession_annotations import validate_supersession_annotations
+    # noqa: F401,E402".
+  - >-
+    Edit scripts/decisions_md.py parse_decisions_md: at the first-wins dedup (the `if decision_id in seen:
+    continue` around line 216), add before the continue a
+    `print(f"WARNING: duplicate decision number {decision_id} in {md_path.name}; keeping first-parsed entry,
+    dropping this occurrence", file=sys.stderr)` (sys is already imported). Leave the returned list and the
+    byte-reconstruction invariant untouched.
+  - >-
+    Create tests/checks/decisions/test_validate_supersession_annotations.py (mirror path): synthetic tmp_path
+    fixtures (write DECISIONS.md + DECISIONS_ARCHIVE.md + a waiver YAML under root, call with root=tmp_path)
+    exercising -- unannotated full-supersession FAILs; victim-annotated (plain "Decision N") PASSes; header
+    "(Superseded by Decision N)" PASSes; a waived edge PASSes; a live-file duplicate number FAILs; a
+    live/archive pair WARNs (no fail) and is silenced by the allowlist; a nonconforming Warehouse-ID line
+    FAILs and a conforming one passes; plus a non-vacuity test that runs extract_supersession_edges over the
+    REAL repo files and asserts > 0 (NO absolute count), and a capsys test that parse_decisions_md emits the
+    dedup stderr warning on a duplicate. Target 100% per-file coverage of the new check.
+  - >-
+    Execute the Verification Plan -- run each pre-deploy step; loop until pass; run
+    bin/venv-python -m scripts.validate --pre and confirm exit 0 (guard green). On an unrecoverable failure,
+    stop and RCA (Decision 55) -- never patch around a red gate.
+  - "Report: the check design, the final waiver set (with any execution-time delta from the prototype), edge/green counts, and VP results."
+work_areas: []
+rollback: >-
+  Code + config + tests change on the feature branch; revert the branch commit to remove the check, the
+  waiver file, the registry.full_sequence() line, the validate.py facade re-export, the decisions_md.py
+  stderr warning, and the tests. No data, warehouse, or infrastructure state is touched (the check is
+  read-only; the decisions_md.py edit is a stderr print with no effect on the parse result). No migration.
