@@ -1,0 +1,248 @@
+schema_version: 1
+slug: "main-cache-hygiene"
+intent: >-
+  Eliminate stale-git-cache drift in the ephemeral CC-web container so multi-branch agent
+  workflows (e.g. /overseer) always branch off fresh remote main -- protecting model-portable,
+  correct agent git-ops from silently operating against a stale local main ref.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-main-cache-hygiene.yaml
+phase: >-
+  Platform engineering -- agent git-ops cache hygiene. Ad-hoc, user-initiated (soft-warn
+  category user_explicit_out_of_scope); names no tier_item, so the Tier Item Freshness Gate is
+  skipped. Extends the existing SessionStart cache-self-heal surface (session_start_sync_deps,
+  session_start_precommit, session_start_ensure_github_mcp).
+scope:
+  - file: .claude/hooks/session_start_sync_main.sh
+    action: Create
+    purpose: >-
+      SessionStart hook that force-syncs the local main ref to origin/main each session
+      (git fetch origin main, best-effort, then git branch -f main origin/main). Non-fatal.
+  - file: .claude/hooks/fresh_branch_base.py
+    action: Create
+    purpose: >-
+      PreToolUse Bash-matcher guard (sibling to never_on_main.py, augments not replaces it)
+      that ensures new branches are cut off fresh remote main. Detects git checkout -b/-B,
+      git switch -c/-C, git branch <new> [<start>] whose start-point resolves to local main;
+      just-in-time refreshes local main to origin/main and allows (off-main), or blocks with
+      guidance to use origin/main as start-point (on-main, ref not force-updatable).
+  - file: .claude/settings.json
+    action: Modify
+    purpose: >-
+      Register session_start_sync_main.sh in the SessionStart array and fresh_branch_base.py
+      in the existing PreToolUse Edit|Write|MultiEdit|NotebookEdit|Bash hooks array.
+  - file: scripts/checks/misc/validate_scheduled_agent_logs.py
+    action: Modify
+    purpose: >-
+      Repoint the change-detection diff from local main...HEAD to origin/main...HEAD
+      (Decision 135), fixing the "fatal: no merge base" silent-skip caused by a diverged
+      local main; update the two "relative to main" print strings accordingly.
+  - file: AGENTS.md
+    action: Modify
+    purpose: >-
+      Add a "Local main sync" note to ## Git-ops procedure; document the branch-off-remote-main
+      guard; clarify the feature-branch-divergence procedure (no signing hook exists ->
+      rebase-at-commit-flow is correct/safe; not automated); document the "origin/main is
+      itself a cache -- fetch immediately before any main-dependent op" principle as an analogy
+      to (not shared governance with) the Decision 84 eliminate-stale-caches invariant.
+  - file: tests/hooks/test_fresh_branch_base.py
+    action: Create
+    purpose: >-
+      Unit tests for the fresh_branch_base.py git-command parser and decision logic.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A deliberately-diverged local main (set behind origin/main) is force-synced to exactly
+    origin/main after running session_start_sync_main.sh, and the hook exits 0 even when the
+    git fetch cannot reach the remote.
+  - >-
+    fresh_branch_base.py fires (refresh-and-allow off main; block-with-guidance on main) for
+    git checkout -b/-B, git switch -c/-C, and git branch <new> <start> whose start-point
+    resolves to local main, and does NOT fire when branching off the session branch or when an
+    explicit origin/main start-point is given -- keyed on start-point, never on branch name.
+  - >-
+    scripts/checks/misc/validate_scheduled_agent_logs.py diffs against origin/main...HEAD (no
+    remaining local main...HEAD reference), so the check no longer errors with "no merge base"
+    on a diverged local main.
+  - >-
+    Both new hooks are registered in .claude/settings.json (valid JSON) and bin/venv-python -m
+    scripts.validate --pre passes.
+  - >-
+    AGENTS.md ## Git-ops procedure documents the local-main sync, the branch-off-remote-main
+    guard, the feature-branch-divergence clarification, and the origin/main-is-a-cache principle.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Force-sync a deliberately-diverged local main via the SessionStart hook.
+    command: >-
+      git branch -f main "$(git rev-parse origin/main^)" && bash
+      .claude/hooks/session_start_sync_main.sh >/dev/null 2>&1; [ "$(git rev-parse main)" =
+      "$(git rev-parse origin/main)" ] && echo SYNCED
+    expected: Prints SYNCED (local main now equals origin/main); command exit 0.
+    fix_if: >-
+      Prints nothing / non-zero, or the hook aborts the shell -- means the branch -f did not run
+      (e.g. fetch failure was treated as fatal, or main was force-updated while checked out).
+  - step: 2
+    phase: pre-deploy
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "fresh-branch-base-unit"
+    action: Run the PreToolUse branch-guard unit suite (parser + decision paths).
+    command: bin/venv-python -m pytest tests/hooks/test_fresh_branch_base.py -q
+    expected: All tests pass -- fires on branch-off-local-main, silent on branch-off-session-branch and explicit origin/main start-point, on-main block path, fetch-failure non-fatal.
+    fix_if: A parsing or decision-path test fails, indicating the guard mis-classifies a branch-creation command.
+  - step: 3
+    phase: pre-deploy
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "sched-agent-log-uses-origin-main"
+    action: Confirm the scheduled-agent-log check no longer references the local main ref.
+    command: >-
+      grep -n 'main\.\.\.HEAD' scripts/checks/misc/validate_scheduled_agent_logs.py; if
+      grep -q 'origin/main\.\.\.HEAD' scripts/checks/misc/validate_scheduled_agent_logs.py &&
+      ! grep -q '[^/]main\.\.\.HEAD' scripts/checks/misc/validate_scheduled_agent_logs.py; then
+      echo REPOINTED; fi
+    expected: Prints REPOINTED; no bare (non-origin) main...HEAD occurrence remains.
+    fix_if: Prints nothing -- a local main...HEAD reference survives the repoint.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Prove origin/main...HEAD has a merge base on the current tree (the repoint fixes the fatal).
+    command: git fetch origin main --quiet 2>/dev/null; git diff --name-only origin/main...HEAD >/dev/null 2>&1 && echo MERGEBASE_OK
+    expected: Prints MERGEBASE_OK -- origin/main...HEAD resolves cleanly (unlike the diverged local main...HEAD, which errors "no merge base").
+    fix_if: Non-zero / no output -- origin/main is unavailable in this context; the check needs its own fetch guard before the diff.
+  - step: 5
+    phase: pre-deploy
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "main-hygiene-hooks-registered"
+    action: Confirm both new hooks are registered and settings.json is valid JSON.
+    command: >-
+      bin/venv-python -c "import json,pathlib; d=json.loads(pathlib.Path('.claude/settings.json').read_text());
+      ss=[h['command'] for g in d['hooks']['SessionStart'] for h in g['hooks']];
+      pt=[h['command'] for g in d['hooks']['PreToolUse'] for h in g['hooks']];
+      assert any('session_start_sync_main' in c for c in ss), 'sync-main hook not registered';
+      assert any('fresh_branch_base' in c for c in pt), 'branch-guard not registered';
+      print('REGISTERED')"
+    expected: Prints REGISTERED.
+    fix_if: AssertionError or JSON parse error -- a hook is unregistered or settings.json is malformed.
+  - step: 6
+    phase: pre-deploy
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Doc-presence grep over AGENTS.md prose; the anchor phrasing is expected to evolve, so a
+      standing grep guard on the exact wording is brittle and low-value as a regression check.
+    action: Confirm the AGENTS.md git-ops additions are present.
+    command: >-
+      grep -q 'session_start_sync_main' AGENTS.md && grep -q 'origin/main is itself a cache'
+      AGENTS.md && echo DOCS_OK
+    expected: Prints DOCS_OK.
+    fix_if: No output -- an AGENTS.md documentation section is missing.
+  - step: 7
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Run the fast presubmit tier over the whole change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 -- all --pre checks pass, including the repointed scheduled-agent-log check.
+    fix_if: Any check fails; read output and fix the cited file before re-running.
+constraints:
+  - No rescue agents or workaround loops (Decision 55) -- forward-fix only.
+  - >-
+    fresh_branch_base.py AUGMENTS, never modifies or replaces, never_on_main.py (Decision 138 --
+    add-a-layer posture). It is a separate PreToolUse hook, not an edit to the ratified intercept.
+  - >-
+    The branch guard is keyed strictly on start-point resolution (resolves-to-local-main), never
+    on branch name -- must not reintroduce the agent/{slug} naming removed by Decision 76
+    (Decision 25 is superseded context only).
+  - >-
+    AGENTS.md must frame "origin/main is itself a cache" as an ANALOGY to the Decision 84
+    eliminate-stale-caches principle, not a claim that git refs and the warehouse share
+    enforcement or governance.
+  - >-
+    No new standing prose-architecture doc (Decision 86) -- all documentation lands as edits to
+    AGENTS.md ## Git-ops procedure, the declared canonical authority for agent/session git-ops.
+  - >-
+    Do NOT add any automated feature-branch rebase/pull hook -- the assessment-time (do-not-rebase)
+    vs commit-flow-time (do-rebase) phase distinction in AGENTS.md is deliberate; feature-branch
+    updates remain a documented, phase-aware, human-judgement procedure.
+  - session_start_sync_main.sh must always exit 0 (advisory, like session_start_sync_deps.sh) so a network-blocked fetch never blocks session start.
+context:
+  - >-
+    Root cause observed live this session: local main (65a29eb) is diverged from origin/main
+    (d7e02f5) 50/50 with NO merge base -- git diff main...HEAD returns "fatal: no merge base",
+    causing validate_scheduled_agent_logs.py to silently skip. This is the squash-merge signature
+    (Decision 76: GitHub squash-merges server-side, so feature commits never land on main history).
+  - >-
+    Correct sync primitive is git branch -f main origin/main (NOT git pull) -- local main is not
+    fast-forwardable. Safe by construction: committing to local main is forbidden (CLAUDE.md hard
+    rule + never_on_main.py PreToolUse + Decision 138), so local main never holds real work.
+  - >-
+    No commit-signing hook exists in this repo (only inactive .git/hooks/*.sample); the sole active
+    git hook is pre-commit. Decision 83's main-protection ruleset carries no required_signatures by
+    design. So "rebase to main" does not inadvertently re-sign or rewrite protected history.
+  - >-
+    Durable principle: origin/main is itself a cache, only as fresh as the last git fetch. The
+    branch guard therefore fetches just-in-time at branch-cut rather than trusting the SessionStart
+    snapshot; consumers that read main should fetch immediately before use (as the implement skill's
+    rebase step already does).
+  - >-
+    metrics.py already reads origin/main (git show origin/main:tests/); executor scripts that read
+    local main are frozen (Decision 67) and out of scope. The only active broken consumer is
+    validate_scheduled_agent_logs.py.
+  - "Decision-scout verdict + CITE list: FLAGS_FOUND (no BLOCK). CITE: dec-76, dec-83, dec-84, dec-135, dec-138. RELATED (awareness only): dec-89, dec-25, dec-113, dec-127, dec-86."
+  - "gates: decision-scout=FLAGS_FOUND (2 passes: initial + expanded-scope re-run); plan-critique=<pending>"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (via decision-scout subagent; CITE list resolved)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create .claude/hooks/session_start_sync_main.sh (bash, set -uo pipefail, always exit 0):
+    guard it is inside a git repo and that origin/main resolves; best-effort git fetch origin
+    main (swallow failure, non-fatal); if the current branch is NOT main, run
+    git branch -f main origin/main; log a one-line [session_start_sync_main] status. Mirror the
+    style of .claude/hooks/session_start_sync_deps.sh.
+  - >-
+    Create .claude/hooks/fresh_branch_base.py (PreToolUse Bash matcher, sibling to
+    never_on_main.py): read the hook JSON on stdin, extract the Bash command, strip leading
+    NAME=value env assignments; parse git checkout -b/-B, git switch -c/-C, and
+    git branch <new> [<start>] to resolve the branch start-point. If the start-point is an
+    explicit local 'main' OR is implicit and HEAD is 'main': off-main -> run
+    git fetch origin main (best-effort) then git branch -f main origin/main and ALLOW; on-main ->
+    BLOCK with a message instructing git checkout -b <name> origin/main. Non-git and
+    non-branch-creating commands, branch-off-session-branch, and explicit origin/main start-points
+    pass through untouched. Non-fatal on any git error. Keep well under the 500-SLOC budget.
+  - >-
+    Modify .claude/settings.json: add session_start_sync_main.sh to the SessionStart hooks array
+    and fresh_branch_base.py (bin/venv-python invocation) to the existing PreToolUse
+    Edit|Write|MultiEdit|NotebookEdit|Bash hooks array, after never_on_main.py.
+  - >-
+    Modify scripts/checks/misc/validate_scheduled_agent_logs.py: change the git diff --name-only
+    argument from main...HEAD to origin/main...HEAD, and update the two user-facing strings that
+    say "relative to main" to "relative to origin/main". Preserve all downstream logic.
+  - >-
+    Modify AGENTS.md ## Git-ops procedure: add the "Local main sync" note (force-sync at session
+    start; why force not pull; scripts diff origin/main per Decision 135), the branch-off-remote-main
+    guard note, the feature-branch-divergence clarification (no signing hook; rebase-at-commit-flow
+    correct/safe; not automated -- phase distinction), and the origin/main-is-a-cache principle
+    framed as an analogy to Decision 84. Keep additions terse and machine-oriented.
+  - >-
+    Create tests/hooks/test_fresh_branch_base.py exercising: fires on git checkout -b foo main,
+    git switch -c foo main, git branch foo main, and implicit-from-main; does NOT fire on
+    git checkout -b foo origin/main, git checkout -b foo <feature-branch>, or non-branch git
+    commands; on-main block path returns a block decision; malformed/empty command is a safe no-op.
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)
+  - 'Report: what was implemented, verification results'
+work_areas: []
+rollback: >-
+  Revert is clean and low-risk: remove the two new hook files, revert the .claude/settings.json
+  and validate_scheduled_agent_logs.py changes, and revert the AGENTS.md edits. No data, schema,
+  or infrastructure state is touched.
