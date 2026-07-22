@@ -21,8 +21,8 @@ scope:
       DECISIONS.md per Decision 86) -- KEEP `id`, `title`, `gates`, `state`, `ratified_as`,
       `filed_via`, all supersession machine fields (`narrowly_supersedes`, `supersedes_*`, etc.), and
       the literal "fully superseded by CD.NN" phrase in the detail of any superseder that carries it
-      (validate_candidate_decision_supersession reads it). A2: for the 87 completed/reserved
-      tier_items, drop `progress_note`/`note`/`decomposition_hints` and shorten `intent` to one line;
+      (validate_candidate_decision_supersession reads it). A2: for the 93 completed/reserved
+      tier_items (89 complete + 4 reserved), drop `progress_note`/`note`/`decomposition_hints` and shorten `intent` to one line;
       KEEP `id`, `tier`, `name`, `status`, `depends_on`, `completed_at`, `met_by`, and the entire
       `exit_criteria` block byte-for-byte. Target 9996 -> ~7000-7600 lines.
   - file: docs/DECISIONS.md
@@ -80,7 +80,7 @@ verification_plan:
     graduation_waiver_reason: "Both checks are already registered standing guards in the presubmit tiers; re-running them as a graduated check would duplicate existing coverage."
   - step: 5
     phase: pre-deploy
-    action: "Eligibility invariance -- the trim changed no forward-planning behaviour. Compute compute_state_dict on origin/main's roadmap vs the trimmed working tree and assert the active projections are identical."
+    action: "Eligibility invariance -- the trim changed no forward-planning behaviour. Compute compute_state_dict on origin/main's roadmap vs the trimmed working tree and assert the active projections (6 keys) are identical. The 5 uncompared projection keys (strategic_pending/active_tier/realized_but_pending_cds/realization_candidates/gate_evaluations) are safe by construction -- the trim leaves status/depends_on/tier/exit_criteria and all pending CDs byte-identical. Graduation is not-applicable: this is a one-time base-vs-origin/main differential that becomes vacuous once origin/main IS the trimmed tree, so it cannot become a standing regression guard."
     command: "bin/venv-python -c \"import subprocess,sys,json; from pathlib import Path; from scripts.platform_roadmap_state import compute_state_dict; base=subprocess.run(['git','show','origin/main:docs/ROADMAP-PLATFORM.yaml'],capture_output=True,text=True).stdout; tmp=Path('docs/.roadmap-base-tmp.yaml'); tmp.write_text(base);\nimport atexit; atexit.register(lambda: tmp.exists() and tmp.unlink());\nkeys=('next_eligible','in_progress','blocked','blocked_on_cd','ratifiable_cds','deferred_post_mvp');\nproj=lambda sd:{k:sd.get(k) for k in keys};\nb=proj(compute_state_dict(tmp)); c=proj(compute_state_dict(Path('docs/ROADMAP-PLATFORM.yaml'))); tmp.unlink();\nprint('MATCH' if b==c else json.dumps({'base':b,'cur':c},indent=2,default=str)); sys.exit(0 if b==c else 1)\""
     expected: "Prints 'MATCH' and exits 0."
     fix_if: "A JSON diff (exit 1) means a compression edit altered an active item's eligibility -- most likely a status/depends_on field on a completed item was touched, or a completed `- id:` was removed and an active item's depends_on now dangles. Restore the dead item's status/depends_on/id verbatim."
@@ -88,10 +88,10 @@ verification_plan:
     graduation: not-applicable
   - step: 6
     phase: pre-deploy
-    action: "Decision 147 (or the re-checked next free number) is present in DECISIONS.md and cites Decision 114."
-    command: "grep -qE '^## Decision 14[7-9]:' docs/DECISIONS.md && grep -q 'Decision 114' docs/DECISIONS.md"
-    expected: "Exit 0 -- a new Decision header (147+) exists and the body references Decision 114."
-    fix_if: "Exit 1 means the amending Decision was not added or does not cite 114 -- add it per the draft in context."
+    action: "The new amending Decision (147 or the re-checked next free number) exists AND references Decision 114 within its own body (not merely somewhere in the file -- Decision 114's own header already contains the string)."
+    command: "bin/venv-python -c \"import re,sys; t=open('docs/DECISIONS.md').read(); secs=re.split(r'(?m)^## Decision (\\d+):', t); nums=[int(secs[i]) for i in range(1,len(secs),2)]; mx=max(nums); body=secs[2+2*nums.index(mx)]; ok = mx>=147 and 'Decision 114' in body; print('OK new Decision', mx, 'cites 114') if ok else print('FAIL: max Decision', mx, 'body cites 114:', 'Decision 114' in body); sys.exit(0 if ok else 1)\""
+    expected: "Prints 'OK new Decision <N> cites 114' and exits 0, where N is the highest Decision number (>=147) and its body contains 'Decision 114'."
+    fix_if: "Exit 1 means the amending Decision was not added, landed below 147, or its body does not reference Decision 114 -- add/fix it per the draft in context. The regex tolerates the numbering race landing above 147."
     hermetic: true
     graduation: waive
     graduation_waiver_reason: "One-time presence check tied to this session's specific Decision number; not a durable regression guard once the Decision is merged."
@@ -102,7 +102,7 @@ constraints:
   - "For ratified/superseded CDs, retain every field the ratification (Decision 105) and supersession (Decision 136-adjacent) guards read: state, ratified_as, filed_via, gates, narrowly_supersedes/supersedes_*, and the 'fully superseded by CD.NN' phrase where present."
   - "No active content changes: pending CDs and non-terminal tier_items (not_started/in_progress) are left byte-identical."
   - "No rescue agents or workaround loops (Decision 55)."
-  - "Only docs/ROADMAP-PLATFORM.yaml and docs/DECISIONS.md are in scope; the compaction-enforcement guard is deliberately deferred to a follow-on rec."
+  - "Only docs/ROADMAP-PLATFORM.yaml and docs/DECISIONS.md are in scope; the compaction-enforcement guard is deliberately deferred to follow-on rec-2781 (filed at plan time, source=planning) so the anti-regrowth follow-through is durably tracked, not just prose in Decision 147."
 context:
   - "Diagnosis: file is 9996/10000 lines; ~52% (5181 lines) is terminal/dead content -- 4067 lines across 93 completed/reserved tier_items + 1114 lines across 26 ratified/superseded candidate_decisions. Active content is ~3945 lines."
   - "The _ROADMAP_MAX_LINES guard runs in BOTH the --pre and full tiers (scripts/checks/registry.py lines 97 and 173), so a breach fails PR CI, not just post-merge -- hence the urgency."
@@ -113,7 +113,7 @@ context:
   - "Numbering-race: decision numbers are not reserved at draft time; re-check the max `## Decision NNN:` header in DECISIONS.md at implement and shift to the next free number if 147 was claimed by a concurrent PR."
   - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness: 0 behind, 0 ahead); no rebase needed."
   - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND. CITE: dec-114, dec-110, dec-105, dec-136, dec-84, dec-86. RELATED: dec-134, dec-145, dec-93, dec-108, dec-85. Flags were WARN on the rejected Path C (per-tier split contradicts 114/110) and NOTE on the rejected Path B (bare ceiling raise vs Decision 128); recommended Path A carries no CONTRADICT. Decisions triaged: 99 of 99."
-  - "gates: decision-scout=FLAGS_FOUND (Path A clean, flags on unchosen B/C only); plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND (Path A clean, flags on unchosen B/C only); plan-critique=PROCEED after 1 round (4 non-blocking improvements incorporated: 87->93 count fix, hardened VP step 6 Decision-citation check, step 5 graduation rationale, and filed follow-on rec-2781 for the enforcement guard)"
 pre_implementation_checklist:
   - Branch confirmed not on main (claude/platform-roadmap-trim-zwiz4k)
   - docs/PROJECT_CONTEXT.md read
