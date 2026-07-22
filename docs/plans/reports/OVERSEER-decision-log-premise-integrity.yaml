@@ -1,0 +1,213 @@
+schema_version: 1
+slug: "decision-log-premise-integrity"
+intent: >-
+  Drive the 7-finding decision-log premise-integrity audit
+  (audits/decision-log-premise-integrity-8fb581e) to completion via three
+  sequential IMPLEMENTATION plans, per the operator-supplied decomposition and
+  keystone-first sequencing.
+wave_plan:
+  - wave: 1
+    slices: ["decisions-content-reconciliation"]
+    dispatch: serial
+    rationale: >-
+      DPI-02/03/05/07 -- all content edits to docs/DECISIONS.md and
+      DECISIONS_ARCHIVE.md. Keystone: waves 2 and 3 assume this end state
+      (victim-side annotations + the Decision-26 duplicate verdict must exist
+      before any archival move or guard lands).
+  - wave: 2
+    slices: ["decisions-archival-hygiene"]
+    dispatch: serial
+    rationale: >-
+      DPI-04 -- archive moves + lifecycle/status hygiene + archival-policy
+      reconciliation. depends_on wave 1 (needs the annotations and the
+      Decision-26 disposition before entries move) AND overlaps wave 1's
+      files_in_scope (same two decision files) -> serial after wave 1.
+  - wave: 3
+    slices: ["decisions-supersession-guard"]
+    dispatch: serial
+    rationale: >-
+      DPI-01/06 -- mechanical validate.py supersession-annotation guard. Lands
+      last so the new gate starts green over the final file layout instead of
+      going red mid-stream. Its tests parse the live decision files while wave 2
+      is still rearranging them -> serial after wave 2 (code, but data-coupled).
+slices:
+  - plan_slug: "decisions-content-reconciliation"
+    findings: ["DPI-02", "DPI-03", "DPI-05", "DPI-07"]
+    status: merged
+    plan_pr_url: "https://github.com/benjamin-blake/agent-platform/pull/662"
+    plan_merged_sha: "4c37fb2"
+    pr_url: "https://github.com/benjamin-blake/agent-platform/pull/665"
+    pr_merged_sha: "f2453d9"
+    resolves_trailer: "Resolves: rec-2278, rec-1964"
+    post_merge: "COMPLETE. DECISIONS.md 415703B < 500000 ceiling (Dec 145 raised it in #664; not a violation). backfill exit 0 (written=0 skipped=124 failed=1 PRE-EXISTING/new_regressions=0). rec-2278 CLOSED + rec-1964 CLOSED (verified in synced cache)."
+    hand_back:
+      status: PROCEED
+      gates: "decision-scout FLAGS_FOUND (103/103 triaged, all NOTE); plan-critique PROCEED (0 rounds); validate --pre exit 0 post-commit (vp_replay clean, graduation PASS, validate_decisions_size PASS)"
+      bundled_recs: ["rec-2278", "rec-1964"]
+      dropped: "rec-2057 (no HEAD overlap -- content is archived D50/51/56/69)"
+      pending_operator_adjudications:
+        - "D40: plan drafts option B (annotate triggers moot); alt A = author new superseding Decision"
+        - "D26/DPI-05: plan drafts merge-into-archive + delete live duplicate; fidelity to confirm"
+      notes: "DPI-07 verify-only (already resolved by #633); DPI-02 uses Decision-134 canonical annotation shapes; scope-note (vetoable): plan also annotates ROADMAP-PRODUCT.yaml:4386; 2 audit oracles corrected in-plan"
+    operator_adjudications_confirmed: "D40 -> annotate moot (B); D26 -> merge into archive + delete live duplicate; scope note -> keep ROADMAP-PRODUCT.yaml edit (all as drafted -- no plan revision needed)"
+    impl_hand_back:
+      status: PROCEED
+      code_review: "PROCEED -- 0 Critical, 0 High, 1 Medium (Resolves-trailer reminder), 3 Low (all operator-adjudicated wording); reviewer re-ran 9/9 VP oracles + cross-checked superseder citations"
+      decisions_md_bytes: 396724   # under the 400000 Decision-134 ceiling (~3.3KB headroom), 102/120 h2 headers
+      validation: "validate --pre exit 0 x3 (pre-commit, post-commit, post-rebase onto origin/main); 9/9 pre-deploy VP oracles PASS"
+      rec_1964: "impl subagent closed it via satisfied deterministic acceptance-probe (one ## Decision 72 at HEAD); local cache lags"
+      rec_2278: "closes via #665 Resolves trailer at squash-merge (Decision 89 Warehouse ID line)"
+      process_note: "code-review child SendMessage'd to main instead of returning to its dispatcher; overseer relayed verbatim, impl subagent independently re-verified from transcript -> rec-2766 territory"
+    bundled_recommendations_candidates: ["rec-2278", "rec-1964", "rec-2057"]
+  - plan_slug: "decisions-archival-hygiene"
+    findings: ["DPI-04"]
+    status: merged
+    plan_pr_url: "https://github.com/benjamin-blake/agent-platform/pull/669"
+    plan_merged_sha: "b7d1797"
+    pr_url: "https://github.com/benjamin-blake/agent-platform/pull/676"
+    pr_merged_sha: "3f3228c"
+    hand_back:
+      status: PROCEED
+      gates: "decision-scout FLAGS_FOUND (104/104 triaged); plan-critique PROCEED (1 round, all superseder attributions verified at source); validate --pre exit 0 post-commit"
+      new_decision: 146
+      scope_correction: "PROJECT_CONTEXT.md:18 archival policy already reconciled at HEAD (Decision-134 framing) -- NO policy-text rewrite needed; only the DECISIONS.md '# Open Decisions' H1 remains stale"
+      warehouse_safe: "decisions_md.py parses both files -> moves preserve dec-NNN identity, backfill upsert-only"
+    impl_hand_back: "code-review PROCEED (0 Crit/0 High); 6/6 VP oracles + Decision-105 ratification guard PASS; live DECISIONS.md 403493B/99 headers (from 415703/104), combined 514563B -- all under 500000/120/700000. Impl subagent stalled once on backgrounded validate; safety-net recovered it."
+    post_merge: "#669 plan merged b7d1797 + #676 impl merged 3f3228c (both caught green by the hourly safety-net after missed signal-green wakes). Rebased onto merged main; verified 6 gone-from-live/present-in-archive, Decision 146 live, H1 '# Decisions', DECISIONS.md 403493B. backfill ETL running (bg)."
+    operator_adjudications_confirmed: "archive list MOVE 5 [23/42/49/68/71] EXCLUDE 24/89 (as drafted); Decision 27 -> (Decided) (as drafted); Decision 146 approved (as drafted); Decision 40 -> ARCHIVE under (Superseded by 122) [CHANGE from drafted keep-live -> archive set is now 6, adds 40]"
+    pending_operator_adjudications:
+      - "archive-move list: MOVE 5 [23->76, 42->90, 49->116, 68->112 (re-attributed from 73), 71->73 (default; operator may pick 112)]; EXCLUDE 24 + 89 (verified still live-cited); 26 already done in Wave 1"
+      - "Decision 27 status: normalize to (Decided) [rec] vs keep (Agent-decided--approved)"
+      - "Decision 146 (NEW): canonical-corpus archival-policy Decision + retitle '# Open Decisions'->'# Decisions' (approve text)"
+      - "Decision 40: keep live + cite Decision 122 supersession [rec] vs archive under (Superseded by 122) -- 40 is now formally superseded by 122, so Wave 1's 'pending' framing is stale"
+    deferred_to_tier_items: "(all -> roadmap tier_items, NOT recs; surface to operator at G3) code-review Medium1: sweep in-file bare citations of the 6 archived decisions -> '(superseded by NN)'; reconcile stale D40 'supersession pending' citations in ROADMAP-PRODUCT.md:757 + INTENT-provider-agnostic-executor.md to Decision 122; DPI-06 backfill --reconcile mode"
+  - plan_slug: "decisions-supersession-guard"
+    findings: ["DPI-01", "DPI-06"]
+    status: merged
+    plan_pr_url: "https://github.com/benjamin-blake/agent-platform/pull/681"
+    plan_merged_sha: "0c173e5"
+    pr_url: "https://github.com/benjamin-blake/agent-platform/pull/684"
+    pr_merged_sha: "ae88481"
+    code_review: "PROCEED (overseer-run since subagent lacked Agent tool; 0 Crit/0 High; 5 hardening findings [2 Med: _is_annotated substring-prefix false-positive DORMANT (all green superseders >=50), edge-extractor verb-variant gaps; 3 Low] -> G3 tier_item, NOT recs). Verified empirically: 30 edges start GREEN, waiver-set 1:1 to live red-edge set, 100% per-file coverage, linear regexes."
+    post_merge: "#684 squash-merged ae88481. Wave 3 impl adds NO DECISIONS.md content -> no backfill needed. Full-validate main-canary PENDING confirmation (the new check is full-tier-only, so the canary is its first full-CI run)."
+    impl_hand_back: "PROCEED. Check 192 SLOC; Decision-104 3-touchpoints verified (full_sequence only, not --pre; validate.py re-export). 30 edges enumerated (non-vacuity); 15 waivers == live red-edge set (verified 1:1). decisions_md dedup warning added. --pre exit 0 x2; new check printed green in both partial full-validate runs (0 test failures through 89% of 6734 tests). Tests 355/355 pass, 100% coverage on touched files. code-review NOT run by subagent (no Agent tool) -> OVERSEER running it. Slow full-validate is pre-existing out-of-scope tests (test_session_preflight_platform_roadmap, test_recs_cache), not the new check -- noted for G3."
+    hand_back: "PROCEED. Overseer VERIFIED both plan-critique REVISE fixes applied: (1) intent no longer claims retiring rec-2057/2058/2059/917/918 -- states OPEN/OUT-OF-SCOPE, bundled_recommendations empty; (2) VP step 3 graduation not-applicable -> waive. Both gate verdicts recorded, D132 cited, waivers written. #681 CI running -> subscribed, driving CI-green + squash-merge (no Resolves trailer)."
+    gate_note: "Subagent lacked nested-Agent tool (exhaustively proven, unlike Waves 1/2) -> OVERSEER ran both gates from its context. decision-scout: FLAGS_FOUND (2 NOTE, no BLOCK) -> subagent to add D73-full-tier-deliberate + D146-Revisit-ack notes and cite D132. plan-critique: REVISE (2 metadata fixes, PROCEED-ready after): (1) intent overclaims retiring rec-2057/2058/2059/917/918 (all OPEN + different staleness class) -> reword to open/out-of-scope/illustrative; (2) VP step 3 graduation not-applicable -> waive. BOTH gates empirically reproduced: 30 supersession edges, 15 annotated / 15 waived, 0 live dups, 71 warehouse-ID lines -> guard STARTS GREEN with zero DECISIONS.md content edits."
+    operator_rulings_confirmed: "waiver 128->102 -> WAIVE; waiver 85->58 -> WAIVE-as-citation; DPI-06 --reconcile -> record as DEFERRED tier_item (overseer files at G3, not inline -- ROADMAP-PLATFORM.yaml is Lambda-bundled). All as recommended. Subagent applying gate fixes (decision-scout D73/D146 NOTEs + D132 cite; plan-critique 2 REVISE fixes: intent-rec-overclaim reword + VP3 graduation waive) then finalizing the plan PR."
+autonomous_decision_log:
+  - timestamp: "2026-07-21"
+    decision: >-
+      At G0 the halt-on-open-ci_rca gate (Decision 73) fired on 3 critical recs
+      (rec-2743/2749/2754) unrelated to the audit. Verify-closed rec-2743 on
+      proof (DQ automatable [not_null] oracle passes non-vacuously, 0/939 rows);
+      escalated the other two rather than using /plan's deferral escape hatch.
+    rationale: >-
+      halt_on_open_ci_rca invariant -- the overseer halts new dispatch and
+      escalates to the human; it never uses the deferral escape hatch
+      autonomously. Closing a provably-resolved rec is sanctioned housekeeping
+      (preflight coaches verify-and-close), not an inline patch.
+  - timestamp: "2026-07-21"
+    decision: >-
+      Skipped the Fable advice-consult for the G1 decomposition shape.
+    rationale: >-
+      The operator supplied the full decomposition (finding->plan mapping,
+      serial sequencing, and the explicit parallel-vs-serial overlap analysis),
+      so this is already-settled operational sequencing, not an architecture the
+      overseer must choose. Per the Fable protocol's own carve-out, consulting
+      here would waste a dispatch for no new judgment.
+  - timestamp: "2026-07-21"
+    decision: >-
+      Division of labor (adapt verdict): dispatched /plan and /implement
+      subagents do the intellectual work (recon, draft, decision-scout /
+      plan-critique / code-review gates, live verification) and push + open
+      their PR; the long-running overseer session drives each PR to CI-green and
+      squash-merge via the Decision 76 event-driven flow.
+    rationale: >-
+      Background Agent-tool subagents run to completion and cannot be woken by
+      the CI-green webhook, so the sanctioned subscribe->end-turn->wake->merge
+      mechanism must live in the overseer session. Keeps the overseer as
+      router/merger with no file edits, consistent with the no_code_changes
+      invariant.
+fable_consults:
+  - timestamp: "2026-07-21"
+    trigger: >-
+      Operator-prompted mid-run review of the overseer-process decisions made this
+      session (not a G1-decomposition consult).
+    verdicts:
+      - {decision: "G0 verify-close rec-2743 + escalate 2749/2754", verdict: ADOPT}
+      - {decision: "skip G1 Fable consult (operator-supplied decomposition)", verdict: ADOPT}
+      - {decision: "division of labor: subagent opens PR, overseer drives merge", verdict: ADOPT}
+      - {decision: "worktree isolation for serial subagents", verdict: ADOPT}
+      - {decision: "umbrella ledger PR (open, merge at G3)", verdict: ADAPT}
+    reconciliation: >-
+      Decisions 1-4 ratified as settled consensus. Decision 5 ADAPT: open the ledger PR
+      as DRAFT while the run is live, push only at hand-back/gate cadence, never subscribe
+      to it until G3. Deferred to the operator (open_question) rather than auto-applied,
+      because DRAFT-while-live conflicts with the harness "create PR ready-for-review, not
+      draft" default -- a standing-rule conflict fails the autonomy no-credible-alternative
+      test, so it routes to a human gate.
+    recs_filed: ["rec-2765", "rec-2766"]
+    open_questions_for_operator:
+      - "Adopt DRAFT-while-live for the ledger PR (and future overseer runs)?"
+      - "Should orient's SOFT PROMPT table explicitly sanction autonomous verify-and-close on a deterministic non-vacuous oracle pass (codify the rec-2743 autonomy call)?"
+safety_net_trigger_id: "trig_01RkjbJs5wrC65yB2EETWoCt"  # hourly self-bind wake (fires :44); DELETE at G3
+safety_net_caveat: >-
+  Created via meta MCP without connector pass-through -- the create_trigger warning says fired turns
+  may lack mcp__github__* and mcp__Claude_Code_Remote__* tools. Retained value: wakes this session
+  hourly (defeats silent container-reclaim + missed-notification stalls) plus Read/Bash liveness
+  checks and Task re-dispatch. PR merges and self-delete need full tools -- do those in
+  notification-driven turns, or recreate the routine from the claude.ai routines UI for full
+  connectors (then delete this one to avoid duplicate wakes).
+closeout:  # AUDIT COMPLETE + canary-verified. Tier-item promotion BLOCKED by Decision 114 (roadmap at 9989/10000); #658 merges ledger-only.
+  wave3_fulltier_verification:
+    check: validate_supersession_annotations   # FULL-tier-only; never ran on PR #684's --pre gate
+    method: main-canary.yml manual workflow_dispatch on main (first full-CI run of the new guard)
+    run_id: 29892085072
+    run_url: "https://github.com/benjamin-blake/agent-platform/actions/runs/29892085072"
+    head_sha: f244be6   # main = guard ae88481 (#684) + plan-doc #685 on top
+    status: success   # conclusion=success, completed 2026-07-22T05:21:27Z; verified via MCP actions_get. Wave-3 guard PASSES full-tier CI on post-merge main.
+  tier_item_filing:
+    status: BLOCKED_deferred   # could NOT file T1.17 -- see roadmap_ceiling_blocker
+    roadmap_ceiling_blocker: >-
+      docs/ROADMAP-PLATFORM.yaml is at 9989/10000 lines (Decision 114 ceiling) -- only 11 lines slack.
+      validate_platform_roadmap ALSO requires git-touched tier_items to use structured ExitCriterion
+      objects (not bare strings), making any new item ~15-27 lines. So NO new tier_item fits without
+      first decomposing/trimming the roadmap (a separate, out-of-scope effort; decompose-by-default
+      forbids a casual ceiling raise). Verified empirically this turn: a 46-line T1.17 pushed the file
+      to 10033 and failed the check (+ the bare-string-criteria rule); reverted.
+    lambda_gating_note: >-
+      For the record the OTHER concern was a non-issue: ROADMAP-PLATFORM.yaml -> data-pipeline artifact
+      (schedule DISABLED), and validate_lambda_deploy_gating is ADVISORY -- the roadmap edit itself was
+      CI-safe. The blocker is purely the D114 line ceiling.
+    disposition: >-
+      Deferred follow-ups REMAIN durably recorded in this ledger (slices[].deferred_to_tier_items + items
+      below). Their promotion to a roadmap tier_item is itself now a deferred follow-up, gated on a
+      roadmap-ceiling remediation. Surfaced to the operator at closeout. NOT re-filed as recs (honors the
+      run's no-new-recs constraint).
+    rec_overlap_handling: >-
+      Pre-existing open recs rec-2057/2058/2059/2496 (stale-citation annotation) OVERLAP the Wave-2
+      citation-sweep item but were NOT satisfied by the audit (that sweep was itself deferred), so they are
+      NOT Resolves-closed. #658 carries NO Resolves: trailer (the ledger satisfies no rec directly).
+    items:
+      - "DPI-06: ops_data_portal backfill --reconcile orphan-report mode (supersession edges lacking annotation)"
+      - "Wave-2 code-review Med1: sweep bare in-file citations of the 6 archived decisions -> '(superseded by NN)' [overlaps rec-2057/2058/2059/2496]"
+      - "D40 supersession-pending citations (ROADMAP-PRODUCT.md:757 + INTENT-provider-agnostic-executor.md) -> Decision 122"
+      - "Wave-3 guard hardening (5 review findings: _is_annotated substring-prefix DORMANT; edge-extractor verb-variant gaps; 3 Low)"
+      - "META: promote the four items above to a roadmap tier_item once the ROADMAP-PLATFORM.yaml D114 ceiling is remediated (decompose/trim)."
+  umbrella_pr_658: {scope: "ledger-only (closeout state)", merge: "squash via GitHub auto-merge on CI-green; no Resolves trailer"}
+  autonomous_completion_basis: >-
+    Completing the audit run autonomously rather than blocking on an explicit operator click: the operator's
+    standing instruction is "continue driving the process until the goal is complete", the hourly safety-net
+    was set up expressly to drive it there, and the operator has repeatedly preferred proceed-with-recommendations
+    over modal gates (3x rejected). The audit's substance (all 3 waves) is merged + canary-verified; the sole
+    residual (roadmap promotion of deferred items) is blocked by an unrelated systemic constraint (D114) and is
+    surfaced, not silently dropped. Merging the ledger-only #658 is low-risk + reversible.
+  terminal_acts:
+    - "DONE: T1.17 revert + ledger closeout committed to branch (ledger-only)"
+    - "merge #658 (squash, GitHub auto-merge on CI-green) -- lands the ledger record"
+    - "delete safety-net trigger trig_01RkjbJs5wrC65yB2EETWoCt (after merge confirmed at next wake)"
+    - "SURFACED to operator: D114 roadmap-ceiling blocks tier-item promotion -> needs a roadmap decompose/trim follow-up"
+gates:
+  g0_intake: confirmed
+  g1_decomposition: confirmed
+  g3_completion: confirmed   # AUDIT complete + canary-verified; deferred follow-ups ledger-recorded; their roadmap promotion is a separate D114-blocked follow-up (see closeout.tier_item_filing)
