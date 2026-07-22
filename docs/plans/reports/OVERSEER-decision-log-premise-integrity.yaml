@@ -158,6 +158,40 @@ safety_net_caveat: >-
   checks and Task re-dispatch. PR merges and self-delete need full tools -- do those in
   notification-driven turns, or recreate the routine from the claude.ai routines UI for full
   connectors (then delete this one to avoid duplicate wakes).
+closeout:  # G3-prep: all 3 waves merged (Wave1 #665->f2453d9, Wave2 #676->3f3228c, Wave3 #684->ae88481); remaining = verification + formal completion acts
+  wave3_fulltier_verification:
+    check: validate_supersession_annotations   # FULL-tier-only; never ran on PR #684's --pre gate
+    method: main-canary.yml manual workflow_dispatch on main (first full-CI run of the new guard)
+    run_id: 29892085072
+    run_url: "https://github.com/benjamin-blake/agent-platform/actions/runs/29892085072"
+    head_sha: f244be6   # main = guard ae88481 (#684) + plan-doc #685 on top
+    status: in_flight   # triggered 2026-07-22T04:49:50Z; ETA ~30min; result checked at next wake via MCP
+    polling_note: >-
+      Direct GitHub REST is blocked in-session (403 "GitHub access is not enabled"; API only via the
+      github MCP server), so no background curl-poll is possible -- completion is confirmed on the next
+      re-invocation (hourly safety-net :44 or an operator turn). Prior confidence HIGH: waivers built
+      1:1 to the live red-edge set (starts green), and Wave-3 impl's local --pre + isolated check +
+      targeted tests all passed.
+  tier_item_filing:
+    mechanical_q_resolved: >-
+      docs/ROADMAP-PLATFORM.yaml -> data-pipeline artifact (status active BUT schedule DISABLED per
+      Decision 61/37/116, functions future-state/not-deployed); validate_lambda_deploy_gating is
+      ADVISORY (reports affected artifacts, does NOT fail the PR). So the roadmap edit is safe on the
+      --pre gate and needs no Lambda deploy for closeout (repo-read consumers: planning skill,
+      preflight, plan.md, validate.py). Answers the pre-compaction "subagent-vs-direct / how" open
+      question: file direct, on-branch.
+    plan: file at canary-green closeout, on this designated branch, expanding #658 to "ledger + deferred-work tier_items"
+    durable_record: slices[].deferred_to_tier_items (already captured -- no data-loss risk if deferred)
+    items:
+      - "DPI-06: ops_data_portal backfill --reconcile orphan-report mode (supersession edges lacking annotation)"
+      - "Wave-2 code-review Med1: sweep bare in-file citations of the 6 archived decisions -> '(superseded by NN)'"
+      - "D40 supersession-pending citations (ROADMAP-PRODUCT.md:757 + INTENT-provider-agnostic-executor.md) -> Decision 122"
+      - "Wave-3 guard hardening (5 review findings: _is_annotated substring-prefix DORMANT; edge-extractor verb-variant gaps; 3 Low)"
+  umbrella_pr_658: {mergeable_state: clean, scope: ledger-only, merge_gate: "canary-green THEN operator G3 sign-off"}
+  formal_completion_acts_held_for_g3:
+    - "merge #658 (squash) -- lands ledger + tier_items"
+    - "delete safety-net trigger trig_01RkjbJs5wrC65yB2EETWoCt"
+    - "set gates.g3_completion: confirmed"
 gates:
   g0_intake: confirmed
   g1_decomposition: confirmed
