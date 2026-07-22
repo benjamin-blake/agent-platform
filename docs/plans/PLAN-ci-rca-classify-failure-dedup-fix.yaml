@@ -1,0 +1,245 @@
+schema_version: 1
+slug: "ci-rca-classify-failure-dedup-fix"
+intent: >-
+  Resolve the sole open CI-RCA rec (rec-2762) and eliminate its underlying cause -- a
+  non-deterministic failure-category classifier that fragments/collides the v2 fingerprint and
+  defeats cross-commit dedup -- hardening the CI-RCA self-healing loop toward reliable
+  review-once / fix-once operation.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-classify-failure-dedup-fix.yaml
+phase: >-
+  Platform CI-RCA reliability (Decision 142 fingerprint-v2 classification). No product roadmap
+  phase / tier_item -- this is a ci_rca soft-warn exception (source=ci_rca rec, Decision 72), so
+  the Tier Item Freshness Gate is skipped.
+scope:
+  - file: scripts/ci_rca/taxonomy.py
+    action: Modify
+    purpose: >-
+      Add a classification priority that reads validate.py's authoritative "Failed checks:"
+      summary block and maps each named check through function_to_category, ABOVE the existing
+      whole-log func_map substring scan -- so a validate.py aggregate failure is categorized by
+      the check that actually FAILED, not by an arbitrary first-substring-hit against a
+      validate_* name that merely appears in a passing check's output.
+  - file: tests/test_ci_rca_taxonomy.py
+    action: Modify
+    purpose: >-
+      Add regression tests for the fragmentation case (same failure -> stable schema_drift), the
+      collision case (distinct failed checks -> distinct categories, proven at the
+      compute_fingerprint_v2 level on the rec-2743/rec-2762 pair), and preservation of the existing
+      fallback when no "Failed checks:" block is present.
+bundled_recommendations:
+  - "rec-2762"
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    classify_failure classifies a validate.py failure by the authoritative "Failed checks:"
+    summary block: a log where validate_platform_roadmap is the only named failed check (but an
+    earlier-PASSING validate_sloc_limits is mentioned in the log) classifies as schema_drift,
+    NOT sloc_violation.
+  - >-
+    classify_failures returns one correctly-categorized entry per named failed check in the
+    "Failed checks:" block, so two distinct failed checks in one run yield two distinct
+    categories; proven end-to-end by a compute_fingerprint_v2 distinctness assertion on the
+    historical rec-2743 / rec-2762 collision pair (they resolve to DISTINCT fingerprints, no
+    false-merge).
+  - >-
+    When no "Failed checks:" block is present (non-validate logs: pytest/junit, collection,
+    terraform), classify_failure/classify_failures behave exactly as before (existing tests stay
+    green).
+  - >-
+    rec-2762 is closed via the Decision 103 deterministic-satisfied path with a resolution
+    recording the probe proof, AND context_v2_json.fixed_by_sha == 7410076928e76f017902b07ce8523f2fad72077c
+    (PR #654 merge SHA, Decision 142 pt 4a) so a future canary fingerprint match resolves via
+    ancestry 'drop', not a spurious REGRESSION.
+  - >-
+    rec-2762's own acceptance criterion (0 FAIL rows on docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml
+    under validate --pre) holds at HEAD.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Deterministic anti-regression proof of the classifier fix: a synthetic validate.py log
+      that mentions a PASSING validate_sloc_limits earlier but names validate_platform_roadmap in
+      its "Failed checks:" block must classify as schema_drift (pre-fix behaviour returns
+      sloc_violation via the arbitrary substring scan).
+    command: |-
+      bin/venv-python -c 'import sys; sys.path.insert(0,"."); from scripts.ci_rca.taxonomy import classify_failure; log="=== SLOC ===\n  PASS: validate_sloc_limits ok\n=== roadmap ===\n  FAIL: PLAN-x.yaml: closes_criteria bad\n\n=== Validation Summary (scope: all) ===\nFailed checks:\n  - validate_platform_roadmap\n"; cat,chk,src=classify_failure(log,None,None); print(cat,chk,src); assert cat=="schema_drift",cat; assert chk=="validate_platform_roadmap",chk'
+    expected: >-
+      Prints "schema_drift validate_platform_roadmap <source>" and exits 0.
+    fix_if: >-
+      Returns sloc_violation or code_regression (the pre-fix whole-log substring-scan behaviour is
+      still winning) -- the "Failed checks:" block parse is not taking priority over Priority 3.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "ci-rca-classify-failed-checks-block"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Full unit coverage for the hardened classifier, including the fragmentation regression
+      (same failure -> stable category), the collision regression (distinct failed checks ->
+      distinct categories), and the no-block fallback path.
+    command: bin/venv-python -m pytest tests/test_ci_rca_taxonomy.py -q
+    expected: All tests pass, including the newly added regression cases.
+    fix_if: Any test fails -- the fix is incomplete or broke an existing classification path.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The new cases run under the standing full pytest suite executed by validate.py's full tier;
+      a separately-graduated test-selector check would duplicate that existing standing coverage.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm rec-2762's own acceptance criterion holds at HEAD (the closes_criteria root cause is
+      already fixed by PR #654) before closing it as deterministically satisfied.
+    command: |-
+      bin/venv-python -m scripts.validate --pre 2>&1 | grep -c 'FAIL: PLAN-ducklake-maintenance-smoke-split.yaml'
+    expected: Prints 0 (no FAIL rows on the target plan file).
+    fix_if: >-
+      Nonzero -- the closes_criteria failure is somehow present at HEAD; do NOT close rec-2762 as
+      satisfied, re-investigate (the duplicate hypothesis would be wrong).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step re-checks an invariant already enforced by the standing validate_platform_roadmap
+      check that PR #654 registered into pre_sequence(); graduating this grep_count-shaped command
+      would duplicate that existing standing coverage.
+  - step: 4
+    phase: post-deploy
+    action: >-
+      Close rec-2762 via the Decision 103 deterministic-satisfied path and stamp fixed_by_sha =
+      PR #654 merge SHA (Decision 142 pt 4a), then verify the read cache shows it closed. MUST use
+      the explicit portal path -- do NOT add a "Resolves: rec-2762" trailer to the merge commit
+      (that would stamp THIS PR's SHA as fixed_by_sha, losing #654's accurate provenance).
+    command: |-
+      bin/venv-python -c 'from scripts.ops_data_portal import propose_or_close_rec, sync; propose_or_close_rec("rec-2762","satisfied","Deterministic satisfaction: validate --pre yields 0 FAIL rows on docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml at HEAD. closes_criteria root cause fixed by PR #654 (7410076). rec-2762 was a duplicate of the rec-2743/rec-2749 fingerprint chain, filed by a canary re-run before #654 merged.",deterministic=True); from scripts.ops_portal.ci_rca_lifecycle import stamp_fixed_by_sha; stamp_fixed_by_sha("rec-2762","7410076928e76f017902b07ce8523f2fad72077c"); sync()' && grep '"rec-2762"' logs/.recommendations-log.jsonl | tail -1 | grep -q '"status": "closed"'
+    expected: >-
+      rec-2762 status=closed with the satisfaction resolution and context_v2_json.fixed_by_sha set
+      to 7410076...; the grep returns exit 0 (cache shows closed).
+    fix_if: >-
+      Portal write fails (fail loud per Decision 84 I-4 -- re-file after restoring connectivity;
+      never fabricate the close) or the cache still shows rec-2762 open after sync.
+constraints:
+  - No rescue agents or workaround loops (Decision 55). The classifier fix is deterministic
+    in-code and never LLM-authored (Decision 55 / Decision 142).
+  - Do NOT relax validate_platform_roadmap or any other check to make a gate pass (Decision 55).
+  - The fix must NOT change classification behaviour for non-validate logs (junit/pytest,
+    collection_error, terraform log-tail) -- those paths stay exactly as-is.
+  - Keep scripts/ci_rca/taxonomy.py under its 500-SLOC default budget (currently ~143 SLOC / 181
+    physical lines); decompose rather than raise if a change would cross it (Decision 128).
+  - Corrected failure_category values need NO warehouse migration -- Decision 142's "v2" salt
+    keeps the keyspace disjoint from v1 by construction.
+  - Close rec-2762 ONLY via propose_or_close_rec(satisfied, deterministic=True) + explicit
+    stamp_fixed_by_sha(#654 SHA); do NOT add a Resolves-trailer for rec-2762 (see VP step 4).
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND; CITE = Decision 142, Decision 103, Decision 72, Decision 55, Decision 132, Decision 128."
+  - "gates: decision-scout=FLAGS_FOUND (flags 1-3 adopted); plan-critique=PROCEED after 2 rounds (round-1 REVISE fixes applied: VP-step-3 graduation waive; sync() portal call; docstring-update + fingerprint-distinctness execution steps; run_summary prior-art + reversed-invariant context)"
+  - >-
+    rec-2762 is a stale DUPLICATE of the rec-2743 -> rec-2749 fingerprint chain -- all three
+    describe the same failure: validate_platform_roadmap emitting 5 FAIL rows on
+    docs/plans/PLAN-ducklake-maintenance-smoke-split.yaml (closes_criteria carried narrative prose
+    instead of <item-id>:<crit-id> refs). That CI failure was ALREADY fixed on main by PR #654
+    (7410076, "Resolves: rec-2749"): narrative entries relocated to context:, a
+    PlanDocument.closes_criteria field_validator added (scripts/roadmap/plan_document.py:118), and
+    validate_platform_roadmap registered into pre_sequence() (scripts/checks/registry.py:97).
+  - >-
+    rec-2762 was filed 2026-07-21T13:37 -- BEFORE #654 merged at 14:49 -- by a second canary run
+    against the still-unfixed main, and orphaned open only because #654's Resolves trailer named
+    just rec-2749. The preflight "preventive_action did not hold" back-validation flag is a
+    file-only false match (Decision 55 candidate, not confirmed), refuted by the timeline and by
+    empirical verification (validate --pre = 0 FAILs at HEAD; field_validator present; check in
+    pre_sequence).
+  - >-
+    Underlying cause of the orphan: scripts/ci_rca/taxonomy.py classify_failure falls back to a
+    substring scan of function_to_category keys over the ENTIRE job log (Priority 3), returning
+    the first arbitrary hit. A full validate.py log mentions many validate_* names from PASSING
+    checks, so the same closes_criteria failure was labelled sloc_violation (rec-2749) vs
+    code_regression (rec-2762). failure_category feeds compute_fingerprint_v2, so the identical
+    cause fragmented into two fingerprints -> newest_open_in_chain could not match rec-2762 to
+    open rec-2749 -> the agent re-filed. The same weakness caused a false-MERGE: rec-2743 (a DQ
+    'automatable' check failure) shares rec-2762's exact fingerprint 446f8fe1.
+  - >-
+    FLAG 1 (Decision 103) adopted: close rec-2762 via the deterministic-satisfied path
+    (propose_or_close_rec satisfied, with the validate --pre probe as recorded proof), NOT a bare
+    LLM-asserted 'duplicate' direct-close (a semantic verdict that Decision 103 routes through
+    close_proposed).
+  - >-
+    FLAG 2 (Decision 142 pt 3/4a) adopted: stamp fixed_by_sha = #654 merge SHA on close. A closed
+    CI-RCA head with no fixed_by_sha FAILS CLOSED to REGRESSION on a future fingerprint match --
+    stamping the fix commit lets ancestry classify a future canary re-run as 'drop'.
+  - >-
+    FLAG 3 adopted: Decision 70 dropped from citations (it governs physical deletion of bootstrap
+    records only, not lifecycle closure -- the miscite corrected in Decision 103/142). Closure
+    authority is Decision 103.
+  - >-
+    Invariant being scoped around (NOT contradicted): classify_failures was deliberately changed
+    in a 2026-07 incident (documented in its docstring, taxonomy.py:112-124, + regression test
+    test_multiple_log_text_mentions_no_longer_fan_out) to STOP enumerating failures from arbitrary
+    whole-log func_map substring hits, which had fanned one failure into 6 bundles and defeated
+    dedup. This plan re-enables per-check enumeration ONLY from the AUTHORITATIVE "Failed checks:"
+    summary block (genuinely-failed checks), and the no-block path still collapses to a single
+    classify_failure() call -- so the old "log-text enumeration is unreliable" assumption (true for
+    substring hits) is not violated. The classify_failures docstring MUST be updated to reflect
+    this bounded enumeration path (see execution steps), else it will contradict the new behaviour.
+  - >-
+    Hermeticity note (VF-01): all pre-deploy VP steps (1-3) are hermetic: false ON PURPOSE.
+    validate_vp_replay re-executes hermetic pre-deploy steps against the PR TREE, but this is a
+    plan PR whose tree does NOT yet contain the classify_failure fix -- step 1 asserts the
+    post-fix result (schema_drift), which is absent until /implement lands the code, so a
+    hermetic step 1 could never pass replay on this PR. Steps 2 (pytest) and 3 (validate --pre)
+    are non-hermetic by the standard rules (pytest / validate-recursion). Net: replay excludes
+    all steps for this plan (correct), and steps 1-3 run at /implement time once the fix exists.
+  - >-
+    Prior-art acknowledgement: scripts/executor/run_summary.py:_extract_validation_failed_checks
+    already parses the same "Failed checks:" block. This plan deliberately re-implements a small
+    parser in taxonomy.py rather than importing it -- a ci_rca -> executor import would cross the
+    executor self-modification boundary and create undesirable coupling. The two parsers stay
+    independent by design.
+  - >-
+    Out of scope: the preflight convergence RCA gap alert (terraform-apply-sandbox red 9.31h,
+    commit 43c392e) is a separate subsystem (terraform recovery, being worked in #685) and is not
+    an open CI-RCA rec -- deliberately not folded into this focused plan.
+  - >-
+    V2/IMPLEMENTATION is consistent with Decision 142's own record that scripts/ci_rca +
+    ops_data_portal.py resolve to compute_affected_artifacts -> {} (no Lambda packaging, no
+    terraform).
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (Decision 142, 103, 72, 55, 132, 128 via decision-scout)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Modify scripts/ci_rca/taxonomy.py: add a helper that parses the "Failed checks:" summary
+    block (lines of the form "  - <check_name>" following a "Failed checks:" header) and returns
+    the named failed checks; wire a new classification priority ABOVE the Priority-3 whole-log
+    func_map substring scan in both classify_failure and classify_failures so a validate.py
+    failure is categorized by the authoritative failed check(s) mapped through
+    function_to_category. Leave the jobs-JSON, junit, collection_error, and terraform log-tail
+    paths untouched. Also UPDATE the classify_failures docstring (taxonomy.py:112-124) to describe
+    the new authoritative-"Failed checks:"-block enumeration path, keeping the 2026-07 anti-fan-out
+    invariant explicit (whole-log substring enumeration stays banned; only the authoritative block
+    enumerates).
+  - >-
+    Modify tests/test_ci_rca_taxonomy.py: add (a) a fragmentation regression test (log with a
+    passing validate_sloc_limits mention + "Failed checks: - validate_platform_roadmap" ->
+    schema_drift, stable), (b) a collision regression test (two distinct checks in the block ->
+    two distinct categories), (c) a fallback test (no "Failed checks:" block -> prior behaviour
+    unchanged, incl. test_multiple_log_text_mentions_no_longer_fan_out staying green), and (d) an
+    end-to-end compute_fingerprint_v2 distinctness assertion proving the historical rec-2743 /
+    rec-2762 collision pair now resolves to DISTINCT fingerprints once each is classified by its
+    real failed check (precedent: TestConvergenceFingerprintDistinctness).
+  - >-
+    Execute the Verification Plan pre-deploy steps (1-3); loop until pass. On an unrecoverable
+    failure, stop and RCA (Decision 55) -- do not paper over.
+  - >-
+    Run VP step 4 (post-deploy): close rec-2762 as deterministically satisfied and stamp
+    fixed_by_sha = #654 SHA; verify closed in the read cache.
+  - "Report: the classifier change, unit-test results, and the rec-2762 closure + fixed_by_sha proof."
+work_areas: []
+rollback: >-
+  Revert the taxonomy.py + test changes with git revert (pure code, no schema/warehouse coupling).
+  The rec-2762 closure is a warehouse state change; if it must be undone, re-open via the portal
+  with a documented reason (Decision 103) -- but the deterministic satisfaction proof makes
+  reversal unlikely.
