@@ -64,9 +64,11 @@ resource "aws_cloudwatch_log_group" "ducklake_maintenance_smoke" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "ducklake_maintenance_smoke" {
-  name               = "agent-platform-ducklake-maintenance-smoke"
-  description        = "Maintenance smoke singleton: S3 RW+Delete on the SMOKE prefix ONLY, Neon DSN read, maintenance metrics"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  # Decision 144 (T2.48): mandatory broad-but-bounded exec-identity boundary (16/17 roles; PlatformAdmin excluded).
+  name                 = "agent-platform-ducklake-maintenance-smoke"
+  description          = "Maintenance smoke singleton: S3 RW+Delete on the SMOKE prefix ONLY, Neon DSN read, maintenance metrics"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+  assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy" "ducklake_maintenance_smoke" {

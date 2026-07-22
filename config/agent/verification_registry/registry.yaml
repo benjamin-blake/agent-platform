@@ -1406,3 +1406,112 @@ entries:
         print(cat, chk, src)
         assert cat == "schema_drift", cat
         assert chk == "validate_platform_roadmap", chk
+  # --- Graduated by PLAN-terraform-iam-allowlist-inversion (T2.48 / Decision 144) ---
+  - check_id: ci-role-boundary-attach-count-eq-6
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/oidc.tf
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - test "$(grep -c 'permissions_boundary *= .*agent-platform-github-ci-apply-boundary' terraform/personal/oidc.tf)" -eq 6
+  - check_id: platformdev-bounded-platformadmin-excluded
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/platform_roles.tf
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - grep -A3 'resource "aws_iam_role" "platform_dev"' terraform/personal/platform_roles.tf | grep -q 'permissions_boundary' && ! grep -A3 'resource "aws_iam_role" "platform_admin"' terraform/personal/platform_roles.tf | grep -q 'permissions_boundary'
+  - check_id: exec-role-boundary-attach-present
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/prod_lambdas.tf
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - test "$(grep -rl 'permissions_boundary *= .*agent-platform-github-ci-apply-boundary' terraform/personal/ducklake_lambdas.tf terraform/personal/ducklake_catalog_dr.tf terraform/personal/ducklake_maintenance.tf terraform/personal/ducklake_maintenance_smoke.tf terraform/personal/prod_lambdas.tf 2>/dev/null | wc -l)" -ge 4 && test "$(grep -rc 'permissions_boundary' terraform/personal/prod_lambdas.tf)" -eq 3
+  - check_id: apply-role-write-verbs-present
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - for a in 'logs:CreateLogGroup' 'lambda:CreateFunction' 'lambda:UpdateFunctionConfiguration' 'cloudwatch:PutMetricAlarm' 'events:PutRule' 'iam:UpdateRoleDescription'; do grep -q "$a" terraform/bootstrap/github_ci_apply.tf || { echo "MISSING $a"; exit 1; }; done
+  - check_id: apply-role-hazard4-delete-verbs
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - for a in 'iam:DeleteRole' 'iam:DetachRolePolicy' 'iam:DeleteRolePolicy'; do grep -q "$a" terraform/bootstrap/github_ci_apply.tf || { echo "MISSING $a"; exit 1; }; done && grep -q 'role/agent-platform-\*' terraform/bootstrap/github_ci_apply.tf
+  - check_id: iam-bounded-sids-prefix-and-condition
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - awk '/Sid *= *"IAMRole(Create|Write)Bounded"/{f=1} f&&/agent-platform-github-ci-apply-boundary/{c++} END{exit !(c>=2)}' terraform/bootstrap/github_ci_apply.tf && test "$(grep -c 'role/agent-platform-\*' terraform/bootstrap/github_ci_apply.tf)" -ge 2
+  - check_id: apply-role-self-exclusion-deny
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - grep -q 'role/agent-platform-github-ci-apply"' terraform/bootstrap/github_ci_apply.tf && awk '/Effect *= *"Deny"/{d=1} d&&/agent-platform-github-ci-apply"/{print; found=1} END{exit !found}' terraform/bootstrap/github_ci_apply.tf
+  - check_id: boundary-dataplane-new-iam-verbs
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - awk '/aws_iam_policy" "github_ci_apply_boundary"/{b=1} b' terraform/bootstrap/github_ci_apply.tf > /tmp/bnd.$$ ; for a in 'iam:DeleteRole' 'iam:DetachRolePolicy' 'iam:DeleteRolePolicy' 'iam:UpdateRoleDescription' 'DenyIAMEscalation' 'DenyBoundaryRemoval' 'DenyBoundaryPolicyModification'; do grep -q "$a" /tmp/bnd.$$ || { echo "MISSING $a"; rm -f /tmp/bnd.$$; exit 1; }; done; rm -f /tmp/bnd.$$
+  - check_id: authority-budget-v2-create-and-prefix
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/authority_budget.json
+    guard_symbol: null
+    plan_slug: terraform-iam-allowlist-inversion
+    graduated_at: '2026-07-22'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - grep -q '"create"' terraform/bootstrap/authority_budget.json && grep -q '"update"' terraform/bootstrap/authority_budget.json && grep -Eq 'agent-platform-' terraform/bootstrap/authority_budget.json

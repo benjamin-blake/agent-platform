@@ -1,18 +1,26 @@
-"""Branch-level tests for the private parse/resolve helpers in
-scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py (rec-2702 anti-recurrence,
-PLAN-ci-apply-grant-coupling). Concern-split module (rec-2709 Wave 1) -- see
-test_end_to_end.py and test_real_tree.py for the other two modules of this package."""
+"""Tests for the read-coverage submodule (Decision 128 decomposition of validate_ci_refresh_read_coverage).
+
+Mirror of scripts/checks/iam_tf/_read_coverage.py. Relocated from the pre-decomposition package's
+test_helpers.py (the helpers moved into _read_coverage), importing the helpers directly from the
+submodule, plus direct tests for _classify / _resolve_resource_name / _check_resource so the extracted
+module is independently covered."""
+
+from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from scripts.checks.iam_tf.validate_ci_refresh_read_coverage import (
+from scripts.checks.iam_tf._read_coverage import (
+    CHECKED_TYPES,
     _action_matches,
+    _check_resource,
+    _classify,
     _extract_bracket_block,
     _extract_capitalized_field,
     _literal_or_prefix_match,
     _parse_bootstrap_statements,
+    _resolve_resource_name,
     _resolve_role_statements,
     _resolve_value,
     _resource_covered,
@@ -21,12 +29,8 @@ from scripts.checks.iam_tf.validate_ci_refresh_read_coverage import (
 )
 
 
-class TestValidateCiRefreshReadCoverageHelpers:
-    """Branch-level tests for the private helpers in validate_ci_refresh_read_coverage.py
-    (rec-2702 anti-recurrence, PLAN-ci-apply-grant-coupling). End-to-end / acceptance-shaped
-    tests live in tests/test_validate_ci_refresh_read_coverage.py; this class exists so this
-    module's own coverage (measured via this file, per the scripts/checks/** convention) is
-    complete."""
+class TestReadCoverageHelpers:
+    """Branch-level tests for the private parse/resolve/match helpers in _read_coverage.py."""
 
     def test_extract_bracket_block_unbalanced_raises(self) -> None:
         with pytest.raises(ValueError, match="Unbalanced brackets"):
@@ -56,6 +60,28 @@ resource "aws_iam_role_policy" "github_ci_apply" {
 }
 """
         assert _parse_bootstrap_statements(text, "github_ci_apply") == []
+
+    def test_parse_bootstrap_statements_parses_statements(self) -> None:
+        text = """
+resource "aws_iam_role_policy" "github_ci_apply" {
+  name = "x"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "LambdaRead"
+        Effect = "Allow"
+        Action = ["lambda:Get*"]
+        Resource = ["arn:aws:lambda:eu-west-2:1234567890:function:agent-platform-known-fn"]
+      }
+    ]
+  })
+}
+"""
+        stmts = _parse_bootstrap_statements(text, "github_ci_apply")
+        assert len(stmts) == 1
+        assert stmts[0]["sid"] == "LambdaRead"
+        assert stmts[0]["actions"] == ["lambda:Get*"]
 
     def test_resolve_value_none_input_returns_none(self) -> None:
         assert _resolve_value(None, {}, {}) is None
@@ -98,29 +124,17 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         assert _literal_or_prefix_match("agent-platform-new-fn", raw) is False
 
     def test_literal_or_prefix_match_enumerated_iam_substring_collision_rejected(self) -> None:
-        """H-finding (code-review 2026-07-15): a short enumerated role name that is a substring
-        PREFIX of a longer, unrelated enumerated ARN must NOT be reported as covered -- the match
-        is `/`/`:`-segment boundary-anchored, not raw substring containment (Decision 35/98/55)."""
         raw = '"arn:aws:iam::1234567890:role/agent-platform-github-ci-prod-deploy"'
-        # 'agent-platform-github-ci-pr' is a literal substring of '...-prod-deploy' but NOT a
-        # whole ARN segment -- must be rejected under the enumerated-IAM (literal_only) path.
         assert _literal_or_prefix_match("agent-platform-github-ci-pr", raw, literal_only=True) is False
-        # ...while the correctly-enumerated exact ARN still matches.
         exact = '"arn:aws:iam::1234567890:role/agent-platform-github-ci-pr"'
         assert _literal_or_prefix_match("agent-platform-github-ci-pr", exact, literal_only=True) is True
 
     def test_literal_or_prefix_match_secrets_manager_suffix(self) -> None:
-        """A Secrets-Manager `<name>-*` ARN (the `*` stands in for SM's random 6-char suffix)
-        covers the resource named `<name>` -- the suffix direction, boundary-anchored so a
-        shorter unrelated name does not match a longer secret stub."""
         raw = '"arn:aws:secretsmanager:eu-west-2:1234567890:secret:agent-platform-github-pat-*"'
         assert _literal_or_prefix_match("agent-platform-github-pat", raw) is True
-        # A shorter unrelated name must NOT match the longer secret stub (strict `<name><sep>` shape).
         assert _literal_or_prefix_match("agent-platform-github", raw) is False
 
     def test_literal_or_prefix_match_empty_stub_wildcard_skipped(self) -> None:
-        """A wildcard entry whose pre-`*` part collapses to nothing after stripping separators
-        (e.g. a bare `/*`) yields no stub -- it is skipped, never a spurious prefix match."""
         assert _literal_or_prefix_match("agent-platform-anything", '"/*"') is False
 
     def test_action_matches_wildcard_pattern_matches_literal_action(self) -> None:
@@ -137,6 +151,22 @@ resource "aws_iam_role_policy" "github_ci_apply" {
     def test_resource_covered_no_matching_action(self) -> None:
         statements = [{"actions": ["s3:GetObject"], "resources_raw": '"*"'}]
         assert _resource_covered("aws_sns_topic", "alerts", "agent-platform-alerts", ("sns:Get*",), statements) is False
+
+    def test_resource_covered_wildcard_branch(self) -> None:
+        statements = [{"actions": ["logs:Describe*"], "resources_raw": '"*"'}]
+        assert _resource_covered("aws_cloudwatch_log_group", "any", None, ("logs:Describe*",), statements) is True
+
+    def test_resource_covered_literal_name_match(self) -> None:
+        statements = [
+            {
+                "actions": ["lambda:Get*"],
+                "resources_raw": '"arn:aws:lambda:eu-west-2:1234567890:function:agent-platform-known-fn"',
+            }
+        ]
+        assert (
+            _resource_covered("aws_lambda_function", "known_fn", "agent-platform-known-fn", ("lambda:Get*",), statements)
+            is True
+        )
 
     def test_resolve_role_statements_missing_drift_returns_none(self) -> None:
         oidc_text = """
@@ -160,6 +190,41 @@ data "aws_iam_policy_document" "github_ci_plan" {
 }
 """
         assert _resolve_role_statements(oidc_text) is None
+
+    def test_resolve_role_statements_success_returns_plan_and_drift(self) -> None:
+        oidc_text = """
+data "aws_iam_policy_document" "ci_full_refresh_read" {
+  statement {
+    sid       = "LambdaRead"
+    effect    = "Allow"
+    actions   = ["lambda:Get*"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "github_ci_plan" {
+  name   = "test-plan"
+  role   = "test-plan-role"
+  policy = data.aws_iam_policy_document.github_ci_plan.json
+}
+
+data "aws_iam_policy_document" "github_ci_plan" {
+  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
+}
+
+resource "aws_iam_role_policy" "github_ci_drift" {
+  name   = "test-drift"
+  role   = "test-drift-role"
+  policy = data.aws_iam_policy_document.github_ci_drift.json
+}
+
+data "aws_iam_policy_document" "github_ci_drift" {
+  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
+}
+"""
+        result = _resolve_role_statements(oidc_text)
+        assert result is not None
+        assert set(result) == {"plan", "drift"}
 
     def test_scan_resources_finds_s3_bucket_and_locals(self, tmp_path: Path) -> None:
         personal_dir = tmp_path / "terraform" / "personal"
@@ -196,26 +261,85 @@ data "aws_secretsmanager_secret_version" "neon_api_key" {
         assert ("data:aws_secretsmanager_secret_version", "neon_api_key", "neon.tf") in resources
         assert attr_index[("data:aws_secretsmanager_secret_version", "neon_api_key")]["secret_id"] == '"neon-api-key"'
 
-    def test_resource_covered_wildcard_branch(self) -> None:
-        statements = [{"actions": ["logs:Describe*"], "resources_raw": '"*"'}]
-        assert _resource_covered("aws_cloudwatch_log_group", "any", None, ("logs:Describe*",), statements) is True
+
+class TestClassifyAndResolveName:
+    def test_classify_checked_type(self) -> None:
+        spec, literal_only = _classify("aws_lambda_function")
+        assert spec is CHECKED_TYPES["aws_lambda_function"]
+        assert literal_only is False
+
+    def test_classify_enumerated_iam_type_is_literal_only(self) -> None:
+        spec, literal_only = _classify("aws_iam_role")
+        assert spec is not None
+        assert literal_only is True
+
+    def test_classify_unmapped_returns_none(self) -> None:
+        spec, literal_only = _classify("aws_kms_key")
+        assert spec is None
+        assert literal_only is False
 
     def test_resolve_resource_name_none_for_wildcard_only_spec(self) -> None:
-        """A wildcard-only type (e.g. aws_cloudwatch_log_group) has no name_attrs -- resolution
-        short-circuits to None rather than attempting attribute extraction."""
-        from scripts.checks.iam_tf.validate_ci_refresh_read_coverage import _resolve_resource_name
-
         spec = {"read_actions": ("logs:Describe*", "logs:List*"), "name_attrs": None}
         assert _resolve_resource_name("aws_cloudwatch_log_group", "any", spec, {}, {}) is None
 
-    def test_resource_covered_literal_name_match(self) -> None:
-        statements = [
-            {
-                "actions": ["lambda:Get*"],
-                "resources_raw": '"arn:aws:lambda:eu-west-2:1234567890:function:agent-platform-known-fn"',
-            }
-        ]
+    def test_resolve_resource_name_resolves_literal(self) -> None:
+        spec = CHECKED_TYPES["aws_lambda_function"]
+        attr_index = {("aws_lambda_function", "fn"): {"function_name": '"agent-platform-fn"'}}
+        assert _resolve_resource_name("aws_lambda_function", "fn", spec, {}, attr_index) == "agent-platform-fn"
+
+    def test_resolve_resource_name_strips_oidc_url_scheme(self) -> None:
+        spec = CHECKED_TYPES["aws_iam_openid_connect_provider"]
+        attr_index = {("aws_iam_openid_connect_provider", "gh"): {"url": '"https://token.actions.githubusercontent.com"'}}
         assert (
-            _resource_covered("aws_lambda_function", "known_fn", "agent-platform-known-fn", ("lambda:Get*",), statements)
-            is True
+            _resolve_resource_name("aws_iam_openid_connect_provider", "gh", spec, {}, attr_index)
+            == "token.actions.githubusercontent.com"
         )
+
+    def test_resolve_resource_name_unresolvable_returns_none(self) -> None:
+        spec = CHECKED_TYPES["aws_lambda_function"]
+        attr_index = {("aws_lambda_function", "fn"): {"function_name": "local.undefined"}}
+        assert _resolve_resource_name("aws_lambda_function", "fn", spec, {}, attr_index) is None
+
+
+class TestCheckResource:
+    _KEY = "k:"
+
+    def _covered_apply_stmts(self, resource: str) -> dict:
+        return {"apply": [{"actions": ["lambda:Get*", "lambda:List*"], "resources_raw": f'"{resource}"'}]}
+
+    def test_transitive_type_not_checked(self) -> None:
+        findings, was_checked = _check_resource("aws_lambda_permission", "perm", "f.tf", {}, {}, {"apply": []}, self._KEY)
+        assert findings == []
+        assert was_checked is False
+
+    def test_unmapped_type_fails_loud(self) -> None:
+        findings, was_checked = _check_resource("aws_kms_key", "k", "f.tf", {}, {}, {"apply": []}, self._KEY)
+        assert was_checked is False
+        assert len(findings) == 1
+        assert "unmapped resource type" in findings[0]
+
+    def test_unresolvable_name_reports_finding(self) -> None:
+        attr_index = {("aws_lambda_function", "fn"): {"function_name": "local.undefined"}}
+        findings, was_checked = _check_resource("aws_lambda_function", "fn", "f.tf", {}, attr_index, {"apply": []}, self._KEY)
+        assert was_checked is False
+        assert len(findings) == 1
+        assert "could not resolve a name/id" in findings[0]
+
+    def test_covered_resource_no_findings(self) -> None:
+        resource = "arn:aws:lambda:eu-west-2:1234567890:function:agent-platform-fn"
+        attr_index = {("aws_lambda_function", "fn"): {"function_name": '"agent-platform-fn"'}}
+        findings, was_checked = _check_resource(
+            "aws_lambda_function", "fn", "f.tf", {}, attr_index, self._covered_apply_stmts(resource), self._KEY
+        )
+        assert findings == []
+        assert was_checked is True
+
+    def test_uncovered_resource_reports_finding(self) -> None:
+        attr_index = {("aws_lambda_function", "fn"): {"function_name": '"agent-platform-fn"'}}
+        role_statements = {"apply": [{"actions": ["s3:GetObject"], "resources_raw": '"*"'}]}
+        findings, was_checked = _check_resource(
+            "aws_lambda_function", "fn", "f.tf", {}, attr_index, role_statements, self._KEY
+        )
+        assert was_checked is True
+        assert len(findings) == 1
+        assert "is not refresh-read-covered" in findings[0]

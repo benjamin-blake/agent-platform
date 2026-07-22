@@ -119,9 +119,11 @@ resource "aws_cloudwatch_log_group" "ducklake_catalog_dr" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "ducklake_catalog_dr" {
-  name               = "agent-platform-ducklake-catalog-dr"
-  description        = "Catalog DR Lambda: Neon DSN read, DR bucket Put/List, DuckLakeCatalogDR metrics"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  # Decision 144 (T2.48): mandatory broad-but-bounded exec-identity boundary (16/17 roles; PlatformAdmin excluded).
+  name                 = "agent-platform-ducklake-catalog-dr"
+  description          = "Catalog DR Lambda: Neon DSN read, DR bucket Put/List, DuckLakeCatalogDR metrics"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+  assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy" "ducklake_catalog_dr" {

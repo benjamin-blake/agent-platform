@@ -135,9 +135,11 @@ data "aws_iam_policy_document" "lambda_assume" {
 }
 
 resource "aws_iam_role" "ducklake_writer" {
-  name               = "agent-platform-ducklake-writer"
-  description        = "Write-scoped DuckLake runtime: S3 RW on ducklake/ + smoke prefixes, Neon DSN read, metrics"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  # Decision 144 (T2.48): mandatory broad-but-bounded exec-identity boundary (16/17 roles; PlatformAdmin excluded).
+  name                 = "agent-platform-ducklake-writer"
+  description          = "Write-scoped DuckLake runtime: S3 RW on ducklake/ + smoke prefixes, Neon DSN read, metrics"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+  assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy" "ducklake_writer" {
@@ -203,9 +205,11 @@ resource "aws_iam_role_policy" "ducklake_writer" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "ducklake_reader" {
-  name               = "agent-platform-ducklake-reader"
-  description        = "Read-scoped DuckLake runtime: S3 GetObject on ducklake/ + smoke prefixes only, Neon DSN read"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  # Decision 144 (T2.48): mandatory broad-but-bounded exec-identity boundary (16/17 roles; PlatformAdmin excluded).
+  name                 = "agent-platform-ducklake-reader"
+  description          = "Read-scoped DuckLake runtime: S3 GetObject on ducklake/ + smoke prefixes only, Neon DSN read"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
+  assume_role_policy   = data.aws_iam_policy_document.lambda_assume.json
 }
 
 resource "aws_iam_role_policy" "ducklake_reader" {

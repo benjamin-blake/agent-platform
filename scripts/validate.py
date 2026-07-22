@@ -129,6 +129,7 @@ from scripts.checks.hygiene.validate_subprocess_encoding import validate_subproc
 from scripts.checks.hygiene.validate_sys_executable import validate_sys_executable  # noqa: F401,E402
 from scripts.checks.hygiene.validate_test_count_coupling import validate_test_count_coupling  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_authority_budget import validate_authority_budget  # noqa: F401,E402
+from scripts.checks.iam_tf.validate_boundary_attached import validate_boundary_attached  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_ci_refresh_read_coverage import (  # noqa: F401,E402
     validate_ci_refresh_read_coverage,
 )

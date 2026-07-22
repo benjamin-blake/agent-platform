@@ -228,12 +228,14 @@ def test_trust_changed_handles_non_dict_states() -> None:
 # else (wrong type, wrong action, unmanaged role, no budget) blocks.
 # ---------------------------------------------------------------------------
 
+# Budget v2 (Decision 144 / T2.48): boundary-carrying agent-platform-* managed-role PREFIX
+# (not the v1 two-role enumeration) + in_budget_actions ["create","update"] (subset-matched).
 _BUDGET = {
-    "schema_version": 1,
+    "schema_version": 2,
     "boundary_policy_name": "agent-platform-github-ci-apply-boundary",
-    "in_budget_managed_roles": ["agent-platform-github-ci-branch", "agent-platform-github-ci-pr"],
+    "in_budget_managed_role_prefix": "agent-platform-",
     "in_budget_resource_types": ["aws_iam_role_policy", "aws_iam_role_policy_attachment"],
-    "in_budget_actions": ["update"],
+    "in_budget_actions": ["create", "update"],
 }
 
 
@@ -316,20 +318,60 @@ def test_trust_diff_on_managed_role_type_still_blocks(tmp_path: Path, monkeypatc
     assert main([_write(tmp_path, plan)]) == 2
 
 
-def test_iam_create_on_in_budget_type_still_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Creates are not in in_budget_actions (["update"]) -- role CREATES stay gated (new trust surface).
+def test_in_budget_inline_policy_create_on_agent_platform_role_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Budget v2 (Decision 144): CREATE of a new inline policy on a boundary-carrying agent-platform-*
+    # role is now in-budget (subset-match ["create"] + prefix-match) -> auto-apply (exit 0).
+    monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(_make_budget_file(tmp_path)))
+    plan = {"resource_changes": [_rc("aws_iam_role_policy", ["create"], after={"role": "agent-platform-x", "policy": "{}"})]}
+    assert evaluate_plan(plan, _BUDGET) == []
+    assert main([_write(tmp_path, plan)]) == 0
+
+
+def test_aws_iam_role_create_still_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Role CREATE (aws_iam_role type) stays gated under v2: aws_iam_role is NOT an in_budget_resource_type
+    # (Decision 144: gated-but-executable, never auto-applied).
+    monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(_make_budget_file(tmp_path)))
+    plan = {"resource_changes": [_rc("aws_iam_role", ["create"], after={"name": "agent-platform-x"})]}
+    findings = evaluate_plan(plan, _BUDGET)
+    assert len(findings) == 1 and "out-of-budget" in findings[0]["reason"]
+    assert main([_write(tmp_path, plan)]) == 2
+
+
+def test_apply_role_self_exclusion_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # SECURITY-CRITICAL (Decision 144, guard-side counterpart to DenySelfInlinePolicyWrite): the
+    # widened agent-platform-* prefix MATCHES agent-platform-github-ci-apply, so an inline-policy
+    # write on the apply role's own ARN must NEVER auto-apply -- it routes to gated (T2.23 self-grant
+    # break). Both UPDATE and CREATE on the apply role gate.
     budget_path = _make_budget_file(tmp_path)
     monkeypatch.setenv("TF_AUTHORITY_BUDGET", str(budget_path))
-    plan = {
-        "resource_changes": [
-            _rc(
-                "aws_iam_role_policy",
-                ["create"],
-                after={"role": "agent-platform-github-ci-branch", "policy": "{}"},
-            )
-        ]
+    for actions in (["update"], ["create"]):
+        change = _rc(
+            "aws_iam_role_policy",
+            actions,
+            before={"role": "agent-platform-github-ci-apply", "policy": "{}"},
+            after={"role": "agent-platform-github-ci-apply", "policy": '{"Version":"2012-10-17"}'},
+        )
+        assert _classify_iam_change(change, _BUDGET) is False
+        findings = evaluate_plan({"resource_changes": [change]}, _BUDGET)
+        assert len(findings) == 1
+        assert "out-of-budget" in findings[0]["reason"]
+
+
+def test_classify_non_subset_action_is_out_of_budget() -> None:
+    # Actions not a subset of in_budget_actions (e.g. a bare delete) -> out-of-budget.
+    assert _classify_iam_change(_rc("aws_iam_role_policy", ["delete"], after={"role": "agent-platform-x"}), _BUDGET) is False
+
+
+def test_classify_v1_budget_uses_enumerated_fallback() -> None:
+    # A v1 budget (no in_budget_managed_role_prefix) falls back to enumerated in_budget_managed_roles.
+    v1 = {
+        "in_budget_resource_types": ["aws_iam_role_policy"],
+        "in_budget_actions": ["update"],
+        "in_budget_managed_roles": ["agent-platform-github-ci-branch"],
     }
-    assert main([_write(tmp_path, plan)]) == 2
+    hit = _rc("aws_iam_role_policy", ["update"], after={"role": "agent-platform-github-ci-branch"})
+    assert _classify_iam_change(hit, v1) is True
+    assert _classify_iam_change(_rc("aws_iam_role_policy", ["update"], after={"role": "unlisted"}), v1) is False
 
 
 def test_fail_closed_on_missing_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

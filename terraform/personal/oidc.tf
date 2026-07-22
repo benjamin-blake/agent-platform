@@ -705,8 +705,9 @@ resource "aws_iam_role_policy" "github_ci_pr" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_plan" {
-  name        = "agent-platform-github-ci-plan"
-  description = "GitHub Actions speculative-plan (CD.35 Wave 2 / T2.21): PR context, tfstate-read + tfplan-write via OIDC"
+  name                 = "agent-platform-github-ci-plan"
+  description          = "GitHub Actions speculative-plan (CD.35 Wave 2 / T2.21): PR context, tfstate-read + tfplan-write via OIDC"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -808,8 +809,9 @@ resource "aws_iam_role_policy" "github_ci_plan" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_drift" {
-  name        = "agent-platform-github-ci-drift"
-  description = "GitHub Actions drift detector (CD.35 Wave 5 / T2.24): scheduled alarm-only, refs/heads/main via OIDC"
+  name                 = "agent-platform-github-ci-drift"
+  description          = "GitHub Actions drift detector (CD.35 Wave 5 / T2.24): scheduled alarm-only, refs/heads/main via OIDC"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -920,8 +922,9 @@ resource "aws_iam_role_policy" "github_ci_drift" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_ducklake_deploy" {
-  name        = "agent-platform-github-ci-ducklake-deploy"
-  description = "GitHub Actions governed DuckLake Lambda code deploy (T2.38 / Decision 125/126): refs/heads/main via OIDC"
+  name                 = "agent-platform-github-ci-ducklake-deploy"
+  description          = "GitHub Actions governed DuckLake Lambda code deploy (T2.38 / Decision 125/126): refs/heads/main via OIDC"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -1046,8 +1049,9 @@ resource "aws_iam_role_policy" "github_ci_ducklake_deploy" {
 # ---------------------------------------------------------------------------
 
 resource "aws_iam_role" "github_ci_prod_deploy" {
-  name        = "agent-platform-github-ci-prod-deploy"
-  description = "GitHub Actions governed prod-class Lambda code deploy (T2.43 / Decision 125/126): refs/heads/main via OIDC"
+  name                 = "agent-platform-github-ci-prod-deploy"
+  description          = "GitHub Actions governed prod-class Lambda code deploy (T2.43 / Decision 125/126): refs/heads/main via OIDC"
+  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
