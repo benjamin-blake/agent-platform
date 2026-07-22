@@ -36,7 +36,7 @@ scope:
     purpose: >-
       Repoint the change-detection diff from local main...HEAD to origin/main...HEAD
       (Decision 135), fixing the "fatal: no merge base" silent-skip caused by a diverged
-      local main; update the two "relative to main" print strings accordingly.
+      local main; update the single "relative to main" print string (line 29) accordingly.
   - file: AGENTS.md
     action: Modify
     purpose: >-
@@ -99,14 +99,16 @@ verification_plan:
     hermetic: true
     graduation: graduate
     graduation_check_id: "sched-agent-log-uses-origin-main"
-    action: Confirm the scheduled-agent-log check no longer references the local main ref.
+    action: Confirm the scheduled-agent-log check no longer references the local main ref and the print string is updated.
     command: >-
-      grep -n 'main\.\.\.HEAD' scripts/checks/misc/validate_scheduled_agent_logs.py; if
-      grep -q 'origin/main\.\.\.HEAD' scripts/checks/misc/validate_scheduled_agent_logs.py &&
-      ! grep -q '[^/]main\.\.\.HEAD' scripts/checks/misc/validate_scheduled_agent_logs.py; then
+      if grep -q 'origin/main\.\.\.HEAD' scripts/checks/misc/validate_scheduled_agent_logs.py &&
+      ! grep -q '[^/]main\.\.\.HEAD' scripts/checks/misc/validate_scheduled_agent_logs.py &&
+      grep -q 'relative to origin/main' scripts/checks/misc/validate_scheduled_agent_logs.py; then
       echo REPOINTED; fi
-    expected: Prints REPOINTED; no bare (non-origin) main...HEAD occurrence remains.
-    fix_if: Prints nothing -- a local main...HEAD reference survives the repoint.
+    expected: Prints REPOINTED -- diff arg uses origin/main...HEAD, no bare (non-origin) main...HEAD remains, and the "relative to origin/main" print string is updated.
+    fix_if: >-
+      Prints nothing -- a local main...HEAD reference or the stale "relative to main" print
+      string survives the repoint.
   - step: 4
     phase: pre-deploy
     hermetic: false
@@ -193,10 +195,14 @@ context:
     rebase step already does).
   - >-
     metrics.py already reads origin/main (git show origin/main:tests/); executor scripts that read
-    local main are frozen (Decision 67) and out of scope. The only active broken consumer is
-    validate_scheduled_agent_logs.py.
+    local main (e.g. postflight_gates.py's main..HEAD) are frozen (Decision 67) and out of scope.
+    The only active broken consumer is validate_scheduled_agent_logs.py.
+  - >-
+    The existing test tests/checks/misc/test_validate_scheduled_agent_logs.py is unaffected by the
+    repoint (its mock_run ignores the git command argument) and needs no change -- noted here for
+    completeness; it is intentionally not in scope.
   - "Decision-scout verdict + CITE list: FLAGS_FOUND (no BLOCK). CITE: dec-76, dec-83, dec-84, dec-135, dec-138. RELATED (awareness only): dec-89, dec-25, dec-113, dec-127, dec-86."
-  - "gates: decision-scout=FLAGS_FOUND (2 passes: initial + expanded-scope re-run); plan-critique=<pending>"
+  - "gates: decision-scout=FLAGS_FOUND (2 passes: initial + expanded-scope re-run); plan-critique=PROCEED after 1 round"
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -220,14 +226,21 @@ execution_steps:
     BLOCK with a message instructing git checkout -b <name> origin/main. Non-git and
     non-branch-creating commands, branch-off-session-branch, and explicit origin/main start-points
     pass through untouched. Non-fatal on any git error. Keep well under the 500-SLOC budget.
+    NOTE: this is a side-effecting PreToolUse hook (it mutates git state -- fetch + branch -f --
+    before allowing), a novel pattern vs the pure allow/block never_on_main.py; document that
+    explicitly in the guard's tests and the AGENTS.md note, and bound the network cost (best-effort
+    fetch, non-fatal) so a slow/offline remote never stalls or fails the branch-cut.
   - >-
     Modify .claude/settings.json: add session_start_sync_main.sh to the SessionStart hooks array
     and fresh_branch_base.py (bin/venv-python invocation) to the existing PreToolUse
     Edit|Write|MultiEdit|NotebookEdit|Bash hooks array, after never_on_main.py.
   - >-
     Modify scripts/checks/misc/validate_scheduled_agent_logs.py: change the git diff --name-only
-    argument from main...HEAD to origin/main...HEAD, and update the two user-facing strings that
-    say "relative to main" to "relative to origin/main". Preserve all downstream logic.
+    argument from main...HEAD to origin/main...HEAD, and update the single user-facing string
+    (line 29) that says "relative to main" to "relative to origin/main". Preserve all downstream
+    logic. Acceptable equivalent: migrate the caller onto _common.get_changed_files() /
+    get_status_aware_diff() (the Decision 135 origin/main primitives already in scripts/checks/
+    _common.py) instead of the raw git command -- if taken, adjust VP step 3's grep accordingly.
   - >-
     Modify AGENTS.md ## Git-ops procedure: add the "Local main sync" note (force-sync at session
     start; why force not pull; scripts diff origin/main per Decision 135), the branch-off-remote-main
