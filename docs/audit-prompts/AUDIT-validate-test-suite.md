@@ -63,7 +63,10 @@ collision itself should be reconciled. Keep those two roles distinct.
 
 Also plausible-but-wrong targets: the CI-RCA machinery (`.github/workflows/ci-rca.yml` and
 `scripts/ci_rca/**`) is OUT of scope -- it is the post-merge failure CONSUMER, referenced only as
-context for Q4. The terraform/deploy/reconcile/drift workflows are OUT of scope entirely.
+context for Q4. The terraform APPLY/PLAN/reconcile/drift workflows and the terraform CONFIGURATION
+they check are OUT of scope. IN scope, and ONLY as tier/cost/structure (never the terraform content
+itself), is `validate.py`'s terraform-gate WIRING: the `--terraform-only` mode (S1) and the
+`terraform-validate` CI job that invokes it (S5) -- you assess how that gate sits in the CI path.
 
 ## SCOPE
 
@@ -122,9 +125,10 @@ Run these once, from the repo root, before auditing. They are read-only or cache
    refreshes `logs/.recommendations-log.jsonl` (the recommendations read cache) from the
    warehouse. DEDUP DISCIPLINE depends on that cache being present.
    - Degraded path: IF this fails on credentials/egress, do NOT abort. Set
-     `meta.degraded_dedup=true`, mark every finding's `roadmap_crossref.confidence=HYPOTHESIS`
-     with `dedup_hit_count=null`, and proceed using only the on-disk `docs/DECISIONS.md`,
-     `docs/ROADMAP-PLATFORM.yaml`, and `audits/*.yaml` for dedup.
+     `meta.degraded_dedup=true`, set every finding's top-level `confidence=HYPOTHESIS` and its
+     `roadmap_crossref.dedup_hit_count=null` (null is permitted in degraded mode), and proceed
+     using only the on-disk `docs/DECISIONS.md`, `docs/ROADMAP-PLATFORM.yaml`, and `audits/*.yaml`
+     for dedup.
 3. For any empirical timing (EMPIRICAL PASS), use `bin/venv-python` for all Python invocations,
    never bare `python`. If a heavy dependency is missing in your environment and blocks a timing
    run, record it in `meta.contract_notes` and fall back to static reasoning for that item -- do
@@ -170,7 +174,7 @@ not pattern-match.
   otherwise not earning their place against CD.29's curated-asset bar? Same question for the test
   suite: redundant, tautological, or dead tests. Verdict: `sufficient | partial | insufficient`
   (is the corpus curated?). For every check you would change, emit a row in the `check_disposition`
-  block with verdict `keep | merge | delete | rescope`.
+  block, setting its `redundancy_verdict` to `keep | merge | delete | rescope`.
 
 - Q2 -- Tier placement. Is each check and each pytest invocation in the correct tier(s)? Examine
   specifically: checks that run in BOTH `pre_sequence()` and `full_sequence()` (double execution --
@@ -179,14 +183,16 @@ not pattern-match.
   cheap and deterministic enough to shift into `--pre`?); checks that run in the FAST tier only
   (absent from the authoritative post-merge tier -- is that intended?); and any check dispatched
   more than once in a sequence. Verdict: `sufficient | partial | insufficient`. For every check you
-  would move, emit a `check_disposition` row with verdict
-  `keep-tier | promote-to-pre | demote-to-full | add-to-full | dedupe`.
+  would move, emit a `check_disposition` row, setting its `tier_verdict` to
+  `keep-tier | promote-to-pre | demote-to-full | add-to-full | dedupe` (the same row also carries the
+  Q1 `redundancy_verdict` when a check needs both).
 
 - Q3 -- CI wall-clock. Where does CI wall-clock time actually go across the two tiers, and what are
   the highest-leverage reductions that do NOT lose coverage? Ground this in measured or sampled
   timing (EMPIRICAL PASS), not intuition. Consider at least: the full-tier pytest invocation's
   parallelism vs the fast-tier's; non-diff-aware checks executing in full during `--pre`; any check
-  that makes network calls; and CI cache effectiveness (key vs installed set). Verdict:
+  that makes network calls; CI cache effectiveness (key vs installed set); and workflow-level
+  concurrency control (whether superseded in-progress runs are cancelled or keep consuming minutes). Verdict:
   `sufficient | partial | insufficient` on current time-efficiency; put the specific reductions in
   findings with measured evidence where you have it.
 
@@ -201,7 +207,9 @@ not pattern-match.
 - Q5 -- Coverage and robustness (industry checklist). Where can a defect merge undetected? Assess
   the validation path property-by-property against this EXTERNAL CHECKLIST of established CI/test
   practices, rating each `met | partial | missed` with evidence in the `external_checklist` field
-  of this question's answer (this field is the SOLE input to the maturity top tier):
+  of this question's answer (this is a single GLOBAL checklist for the whole validation path; it is
+  the SOLE input to the maturity top tier's practice-coverage condition -- it does not by itself set
+  maturity, since per-surface critical/high counts also gate the top tier; see SEVERITY + MATURITY):
   (a) code-coverage gate exists and is enforced at merge, over the code that matters;
   (b) static type checking gates merges (or its advisory status is a deliberate, owned choice);
   (c) integration-marked tests run in some automated tier;
@@ -243,7 +251,8 @@ not pattern-match.
   re-export line); (5) `scripts/validate_telemetry.py`'s relationship to the presubmit gate; (6) the
   checks that run in the fast tier but not the post-merge tier; (7) the pip cache key vs the set the
   fast job installs; (8) whether the fast-tier budget assertion, which runs last, can prevent a slow
-  run or only report it after the fact.
+  run or only report it after the fact; (9) whether the validation workflows cancel superseded
+  in-progress runs (`concurrency` / `cancel-in-progress`) or let them run to completion.
 
 ## RUBRIC
 
@@ -340,8 +349,8 @@ whole-repo size governance), Decision 131 (test mirror convention), Decision 132
 graduation; VP-replay), Decision 27 (`setup.py`'s git-bash venv role), CD.29 (curated/deduplicated
 validation asset), CD.30 (diff-line-coverage ratchet). Roadmap: T3.7 (mutation testing +
 deterministic dead-test detection + diff-coverage ratchet), T2.15 (CI verification-coverage
-restoration), T3.6 (test-suite hermeticity audit, complete), T2.36 (selection-manifest DuckLake
-registration, deferred), KG.13 / T3.11 c5 (Bazel/Pants selection+coverage cache, deferred with an
+restoration), T3.6 (test-suite hermeticity audit, complete), T2.36 (Decision 135 defers the selection-manifest's
+DuckLake/named-verb registration to this item), KG.13 / T3.11 c5 (Bazel/Pants selection+coverage cache, deferred with an
 armed revisit trigger), T-1.24 (`scripts/ops` nesting).
 
 ## EMPIRICAL PASS
@@ -351,7 +360,8 @@ Observed evidence outranks static reasoning at equal severity; tag each finding
 - Time the full pytest suite once with `--durations=25` to identify the slowest tests; record the
   top entries, not the whole output.
 - Measure per-tier and, where cheap, per-check wall-clock (e.g. run `--pre` on a representative diff
-  and read the printed per-phase timings; run the full tier once). One run each; do not benchmark
+  you construct per DD-A and read the printed per-phase timings; run the full tier once). One run
+  each; do not benchmark
   repeatedly.
 - Diff the registered check set against the union of `pre_sequence()` + `full_sequence()` to find any
   registered-but-undispatched or dispatched-but-unregistered name (mind that a scaffold may dispatch
@@ -442,16 +452,20 @@ audit:
     - {q: Q6, verdict: sufficient|partial|insufficient, basis: [<ids>], prose: ""}
     - {q: Q7, verdict: sufficient|partial|insufficient, basis: [<ids>], prose: ""}
     - {q: Q8, answers: [{question: "", answer: "", basis: [<ids>]}]}
-  per_surface_assessment:
+  per_surface_assessment:   # maturity enum: frontier|strong|solid|nascent (see SEVERITY + MATURITY)
     - {surface: S1, maturity: <derived>, strengths: "", top_gaps: [<ids>]}
     # ... one per surface S1..S6
   rubric_ratings:
     - {surface: S1, dimension: VD1, rating: strong|adequate|weak|absent|n/a,
        evidence: "file:line|item-id", note: ""}
     # ... every applicable surface x dimension cell
-  check_disposition:   # Q1 + Q2; one row per check you would change (omit keep/keep-tier no-ops)
-    - {check: <name>, verdict: keep|merge|delete|rescope|keep-tier|promote-to-pre|demote-to-full|add-to-full|dedupe,
-       target: "<merge-into / new-tier / n/a>", rationale: "", confidence: CONFIRMED|HYPOTHESIS}
+  check_disposition:   # Q1 + Q2; one row per check you would change (omit checks left fully
+                       # unchanged). A check may carry BOTH a redundancy verdict (Q1) and a tier
+                       # verdict (Q2); put n/a on the axis that does not apply.
+    - {check: <name>, redundancy_verdict: keep|merge|delete|rescope|n/a,
+       tier_verdict: keep-tier|promote-to-pre|demote-to-full|add-to-full|dedupe|n/a,
+       target: "<merge-into / new-tier / n/a>", rationale: "", finding_ids: [<ids>],
+       confidence: CONFIRMED|HYPOTHESIS}
   naming_reconciliation:   # Q6; one row per collision
     - {collision: "coverage"|"validate", verdict: reconcile|disambiguate-in-place|leave-as-is,
        mechanism: "", blast_radius: "", cost: "", rationale: "", confidence: CONFIRMED|HYPOTHESIS}
@@ -477,7 +491,7 @@ audit:
   summary: {total_findings: 0, novel_count: 0, planned_insufficient_count: 0,
             planned_unbuilt_count: 0, top_improvements: [<ids>], highest_leverage_change: <id>,
             maturity_S1: "", maturity_S2: "", maturity_S3: "", maturity_S4: "",
-            maturity_S5: "", maturity_S6: ""}
+            maturity_S5: "", maturity_S6: ""}   # each maturity_*: frontier|strong|solid|nascent
 ```
 
 COUNTING INVARIANT: `findings[]` is the SOLE enumerated list.
@@ -507,8 +521,10 @@ Assign severity AFTER judgment, by defect class -- never inherit it from this br
 - low = clarity / wording / cosmetic naming.
 
 Maturity: compute LAST, per surface, top-down, first match wins. Pin these thresholds:
-- frontier = 0 open critical AND 0 open high on that surface AND (for surfaces bearing on Q5) every
-  `external_checklist` property rated met or partial, never missed.
+- frontier = 0 open critical AND 0 open high on that surface AND every `external_checklist`
+  property (Q5's single global checklist for the whole validation path) rated met or partial, never
+  missed. The global checklist gates the frontier tier for EVERY surface; the critical/high counts
+  are per-surface.
 - strong = 0 critical AND <= 1 high.
 - solid = <= 1 critical.
 - nascent = otherwise.
@@ -519,7 +535,10 @@ framing here must not foreclose it.
 
 1. Derive the base ONCE: `git fetch origin main`, then `git rev-parse --short origin/main`. That
    tree IS the audited tree; use its short SHA in the two deliverable filenames, the branch name,
-   and `meta.audited_commit`.
+   and `meta.audited_commit`. If `git fetch` fails, retry a few times with backoff; if it still
+   fails, proceed against the already-known `origin/main` ref and note it in `meta.contract_notes`.
+   On a re-run where the branch or the two deliverable files already exist, reuse the same branch
+   and filenames, overwrite the deliverables, and push with `--force-with-lease`.
 2. `git switch -c audit/validate-test-suite-<sha> origin/main` -- a deliberate exception to the
    session-branch convention so the PR diff is exactly the two deliverable files off the audited
    base.
@@ -529,7 +548,8 @@ framing here must not foreclose it.
    `meta.contract_notes` and do NOT fix it (write boundary).
 4. Commit with `user.name=Claude`, `user.email=noreply@anthropic.com`, `--no-gpg-sign` if signing
    is unavailable. `git push -u origin HEAD`.
-5. Open the PR via `mcp__github__create_pull_request` (base `main`, ready for review, title
+5. Open the PR via `mcp__github__create_pull_request` (owner/repo from `git remote get-url origin`;
+   base `main`, ready for review, title
    `audit: validate.py / check corpus / test suite / fast-tier selection / requirements
    (S1-S6)`, body = the `summary` block in a yaml fence plus a 2-3 sentence lede). Then END THE
    TURN -- do not poll, do not merge, do not subscribe, do not self-approve.
