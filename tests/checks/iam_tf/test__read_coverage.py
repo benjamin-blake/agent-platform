@@ -83,6 +83,77 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         assert stmts[0]["sid"] == "LambdaRead"
         assert stmts[0]["actions"] == ["lambda:Get*"]
 
+    def test_parse_bootstrap_statements_resolves_hoisted_local(self) -> None:
+        """rec-2793 hoist pattern (github_ci_apply.tf): `policy = local.X` referencing a
+        `locals { X = jsonencode({ Statement = [...] }) }` block elsewhere in the file (the
+        lifecycle-precondition-cannot-reference-self workaround)."""
+        text = """
+locals {
+  github_ci_apply_policy_json = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "LambdaRead"
+        Effect = "Allow"
+        Action = ["lambda:Get*"]
+        Resource = ["arn:aws:lambda:eu-west-2:1234567890:function:agent-platform-known-fn"]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "github_ci_apply" {
+  name   = "x"
+  role   = "y"
+  policy = local.github_ci_apply_policy_json
+}
+"""
+        stmts = _parse_bootstrap_statements(text, "github_ci_apply")
+        assert len(stmts) == 1
+        assert stmts[0]["sid"] == "LambdaRead"
+        assert stmts[0]["actions"] == ["lambda:Get*"]
+
+    def test_parse_bootstrap_statements_hoisted_local_undefined_returns_empty(self) -> None:
+        """The `policy = local.X` reference exists but no `X = jsonencode({...})` assignment is
+        found anywhere in the file -- fails closed (empty), not an exception."""
+        text = """
+resource "aws_iam_role_policy" "github_ci_apply" {
+  name   = "x"
+  role   = "y"
+  policy = local.nonexistent_policy_json
+}
+"""
+        assert _parse_bootstrap_statements(text, "github_ci_apply") == []
+
+    def test_parse_bootstrap_statements_hoisted_local_missing_statement_returns_empty(self) -> None:
+        """The referenced local exists but its jsonencode(...) body has no Statement key."""
+        text = """
+locals {
+  github_ci_apply_policy_json = jsonencode({
+    Version = "2012-10-17"
+  })
+}
+
+resource "aws_iam_role_policy" "github_ci_apply" {
+  name   = "x"
+  role   = "y"
+  policy = local.github_ci_apply_policy_json
+}
+"""
+        assert _parse_bootstrap_statements(text, "github_ci_apply") == []
+
+    def test_parse_bootstrap_statements_neither_inline_nor_local_returns_empty(self) -> None:
+        """Neither an inline Statement array nor a `policy = local.X` indirection -- e.g. a
+        `policy = data.aws_iam_policy_document.x.json` reference (not this parser's shape)."""
+        text = """
+resource "aws_iam_role_policy" "github_ci_apply" {
+  name   = "x"
+  role   = "y"
+  policy = data.aws_iam_policy_document.github_ci_apply.json
+}
+"""
+        assert _parse_bootstrap_statements(text, "github_ci_apply") == []
+
     def test_resolve_value_none_input_returns_none(self) -> None:
         assert _resolve_value(None, {}, {}) is None
 
@@ -168,7 +239,10 @@ resource "aws_iam_role_policy" "github_ci_apply" {
             is True
         )
 
-    def test_resolve_role_statements_missing_drift_returns_none(self) -> None:
+    def test_resolve_role_statements_missing_planner_returns_none(self) -> None:
+        """T2.49 / DEP-12: github_ci_plan + github_ci_drift merged into the single
+        github_ci_planner role -- when its role-policy block is entirely absent, resolution
+        fails (the negative branch of the (now single-entry) resolution loop)."""
         oidc_text = """
 data "aws_iam_policy_document" "ci_full_refresh_read" {
   statement {
@@ -177,21 +251,11 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
     actions   = ["lambda:Get*"]
     resources = ["*"]
   }
-}
-
-resource "aws_iam_role_policy" "github_ci_plan" {
-  name   = "test-plan"
-  role   = "test-plan-role"
-  policy = data.aws_iam_policy_document.github_ci_plan.json
-}
-
-data "aws_iam_policy_document" "github_ci_plan" {
-  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
 }
 """
         assert _resolve_role_statements(oidc_text) is None
 
-    def test_resolve_role_statements_success_returns_plan_and_drift(self) -> None:
+    def test_resolve_role_statements_success_returns_planner(self) -> None:
         oidc_text = """
 data "aws_iam_policy_document" "ci_full_refresh_read" {
   statement {
@@ -202,29 +266,19 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
   }
 }
 
-resource "aws_iam_role_policy" "github_ci_plan" {
-  name   = "test-plan"
-  role   = "test-plan-role"
-  policy = data.aws_iam_policy_document.github_ci_plan.json
+resource "aws_iam_role_policy" "github_ci_planner" {
+  name   = "test-planner"
+  role   = "test-planner-role"
+  policy = data.aws_iam_policy_document.github_ci_planner.json
 }
 
-data "aws_iam_policy_document" "github_ci_plan" {
-  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
-}
-
-resource "aws_iam_role_policy" "github_ci_drift" {
-  name   = "test-drift"
-  role   = "test-drift-role"
-  policy = data.aws_iam_policy_document.github_ci_drift.json
-}
-
-data "aws_iam_policy_document" "github_ci_drift" {
+data "aws_iam_policy_document" "github_ci_planner" {
   source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
 }
 """
         result = _resolve_role_statements(oidc_text)
         assert result is not None
-        assert set(result) == {"plan", "drift"}
+        assert set(result) == {"planner"}
 
     def test_scan_resources_finds_s3_bucket_and_locals(self, tmp_path: Path) -> None:
         personal_dir = tmp_path / "terraform" / "personal"

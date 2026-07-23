@@ -330,8 +330,8 @@ iteration (the Platform-MVP boundary, Decision 93):
 ### 5. Infrastructure-as-code and convergence (CD.35 waves, Decision 92/94)
 - All infra is Terraform under terraform/personal/ (full re-deploy in personal account, not state
   migration; CD.6). Apply is agent-native CI/CD, never from a laptop:
-  - PRs run a speculative terraform plan under a least-privilege github_ci_plan role (refs/pull/*
-    trust, read-only state, fork-safe).
+  - PRs run a speculative terraform plan under the planner's PR-sub (refs/pull/* trust,
+    read-only state, fork-safe).
   - Routine merges to main auto-apply the SAVED plan.bin behind a deterministic guard
     (scripts/terraform_apply_guard.py, fail-closed on any IAM/trust/destroy diff) plus
     subagent plan review.
@@ -347,9 +347,9 @@ iteration (the Platform-MVP boundary, Decision 93):
     auto-apply (guard-consumption) is pending T2.25. CI-role IAM is DRY-composed with
     invoke-implies-permission to prevent drift (T2.34).
 - IAM/OIDC roles: runtime agent_platform / agent_platform_admin; CI agent-platform-github-ci-branch
-  / -pr; apply-path github_ci_plan / github_ci_apply / convergence-writer (admin-created per
-  Decision 98). Lambda code deploys are decoupled from infra applies (ignore_changes =
-  [source_code_hash]).
+  / -pr; apply-path github_ci_apply / github_ci_planner (T2.49 merged plan+drift; main-sub is
+  convergence-writer) / github_ci_deploy. Lambda deploys decouple from infra applies
+  (ignore_changes = [source_code_hash]).
 
 ### 6. CI/CD and governance
 - Two-tier presubmit (Decision 60/73): validate.py --pre (diff-aware, authoritative on PR CI) +

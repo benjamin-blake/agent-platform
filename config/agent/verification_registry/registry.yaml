@@ -721,18 +721,6 @@ entries:
       pattern: ducklake_code_drift
       operator: gte
       count: 1
-  - check_id: ducklake-deploy-role-defined
-    primitive_slot: grep_count
-    guard_target: terraform/personal/oidc.tf
-    guard_symbol: null
-    plan_slug: ducklake-governed-deploy-channel
-    graduated_at: '2026-07-13'
-    graduated_by: implement-agent
-    check_spec:
-      path: terraform/personal/oidc.tf
-      pattern: github_ci_ducklake_deploy
-      operator: gte
-      count: 1
   - check_id: deploy-ducklake-lambdas-workflow-present
     primitive_slot: file_presence
     guard_target: .github/workflows/deploy-ducklake-lambdas.yml
@@ -1558,3 +1546,90 @@ entries:
         assert any("session_start_sync_main" in c for c in ss), "sync-main hook not registered"
         assert any("fresh_branch_base" in c for c in pt), "branch-guard not registered"
         print("REGISTERED")
+  - check_id: no-retired-ci-role-in-live-surfaces
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/oidc.tf
+    guard_symbol: null
+    plan_slug: ci-deploy-role-consolidation
+    graduated_at: '2026-07-23'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        targets=".github/workflows .github/actions docs/contracts/deploy-paths.yaml docs/contracts/build-lambda.yaml config/agent/verification_registry/registry.yaml terraform/CLAUDE.md src/data/handlers/CLAUDE.md docs/PROJECT_CONTEXT.md"; hits=$(grep -REc 'agent-platform-github-ci-(plan|drift|ducklake-deploy|prod-deploy)\b' $targets 2>/dev/null | awk -F: '{s+=$2} END{print s+0}'); echo "retired_role_refs_live=$hits"; [ "$hits" -eq 0 ]
+  - check_id: planner-role-dual-sub-session-partition
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/oidc.tf
+    guard_symbol: github_ci_planner
+    plan_slug: ci-deploy-role-consolidation
+    graduated_at: '2026-07-23'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=terraform/personal/oidc.tf; def=$(grep -c 'resource "aws_iam_role" "github_ci_planner"' "$f"); prsub=$(grep -c 'pull_request' "$f"); mainsub=$(grep -c 'refs/heads/main' "$f"); sess=$(grep -c 'sts:RoleSessionName' "$f"); echo "planner=$def pr_sub=$prsub main_sub=$mainsub session_cond=$sess"; [ "$def" -ge 1 ] && [ "$sess" -ge 2 ] && [ "$prsub" -ge 1 ] && [ "$mainsub" -ge 1 ]
+  - check_id: planner-convergence-writer-isolation
+    primitive_slot: test_selector
+    guard_target: scripts/checks/iam_tf/validate_convergence_writer_isolation.py
+    guard_symbol: validate_convergence_writer_isolation
+    plan_slug: ci-deploy-role-consolidation
+    graduated_at: '2026-07-23'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/iam_tf/test_validate_convergence_writer_isolation.py
+  - check_id: deploy-role-updatefunctioncode-prefix
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/oidc.tf
+    guard_symbol: github_ci_deploy
+    plan_slug: ci-deploy-role-consolidation
+    graduated_at: '2026-07-23'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=terraform/personal/oidc.tf; def=$(grep -c 'resource "aws_iam_role" "github_ci_deploy"' "$f"); pfx=$(grep -c 'function:agent-platform-\*' "$f"); other=$(grep -oE 'lambda:[A-Za-z]+' "$f" | grep -v 'lambda:UpdateFunctionCode' | grep -vE 'lambda:(Invoke|Get|List)' | sort -u | wc -l | tr -d ' '); echo "deploy=$def prefix=$pfx other_lambda_writes=$other"; [ "$def" -ge 1 ] && [ "$pfx" -ge 1 ]
+  - check_id: ci-read-grant-lists-post-merge
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/oidc.tf
+    guard_symbol: IAMCIRolesRead
+    plan_slug: ci-deploy-role-consolidation
+    graduated_at: '2026-07-23'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        new=$(grep -REc 'role/agent-platform-github-ci-(planner|deploy)"' terraform/personal/oidc.tf terraform/bootstrap/github_ci_apply.tf | awk -F: '{s+=$2} END{print s+0}'); old=$(grep -REc 'role/agent-platform-github-ci-(plan|drift|ducklake-deploy|prod-deploy)"' terraform/personal/oidc.tf terraform/bootstrap/github_ci_apply.tf | awk -F: '{s+=$2} END{print s+0}'); echo "new_arn_refs=$new retired_arn_refs=$old"; [ "$new" -ge 4 ] && [ "$old" -eq 0 ]
+  - check_id: iam-inline-policy-bytesize-precondition
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/oidc.tf
+    guard_symbol: null
+    plan_slug: ci-deploy-role-consolidation
+    graduated_at: '2026-07-23'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        pre=$(grep -REc 'precondition' terraform/personal/oidc.tf terraform/bootstrap/github_ci_apply.tf | awk -F: '{s+=$2} END{print s+0}'); lim=$(grep -REc '10240' terraform/personal/oidc.tf terraform/bootstrap/github_ci_apply.tf | awk -F: '{s+=$2} END{print s+0}'); echo "preconditions=$pre limit_10240=$lim"; [ "$pre" -ge 3 ] && [ "$lim" -ge 3 ]
+  - check_id: coverage-verifier-planner-repointed
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/iam_tf/_read_coverage.py
+    guard_symbol: null
+    plan_slug: ci-deploy-role-consolidation
+    graduated_at: '2026-07-23'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        f=scripts/checks/iam_tf/_read_coverage.py; planner=$(grep -c 'github_ci_planner' "$f"); stale=$(grep -Ec '_(PLAN|DRIFT)_ROLE_POLICY_NAME *= *"github_ci_(plan|drift)"' "$f"); echo "planner_ref=$planner stale_constants=$stale"; [ "$planner" -ge 1 ] && [ "$stale" -eq 0 ]

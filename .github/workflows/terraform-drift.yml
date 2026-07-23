@@ -21,10 +21,17 @@ name: terraform-drift
 # Design invariants:
 #   - NO terraform apply step (alarm-only; Decision 55/92).
 #   - Drift NEVER writes the record green -- green is written solely by a converged apply.
-#   - github_ci_drift is least-privilege: tfstate READ + scoped .tflock write + convergence
-#     read+write + ducklake-WRITER invoke ONLY. No state-object write, no tfplan, no IAM.
-#   - The new github_ci_drift role is guard-BLOCKED (IAM CreateRole, exit 2) and must be
-#     created via the human-gated apply BEFORE the first real scheduled run.
+#   - T2.49 / DEP-12 (Decision 144): this job now assumes the merged planner role
+#     (agent-platform-github-ci-planner, plan+drift c2) via its main-sub trust statement,
+#     using the RESERVED role-session-name (local.convergence_writer_session_name in
+#     terraform/personal/oidc.tf) -- the one session identity the planner's
+#     ConvergenceRecordWrite aws:userid condition accepts. This single assumption serves BOTH
+#     the terraform plan (refresh-read/tfstate-read/.tflock) and the convergence-record write.
+#     Least-privilege, unchanged from the pre-merge shape: tfstate READ + scoped .tflock write +
+#     convergence read+write + ducklake-WRITER invoke ONLY. No state-object write, no tfplan
+#     write, no IAM.
+#   - The planner role is guard-BLOCKED (IAM CreateRole, exit 2) and must be created via the
+#     human-gated apply BEFORE the first real scheduled run.
 #   - continue-on-error on the assume-role step covers the bootstrap window (role does not
 #     yet exist until the gated apply lands; pre-apply ticks no-op instead of erroring).
 #   - Serialisation with apply: via the native S3 lock only (NOT a shared GHA concurrency group
@@ -69,16 +76,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Configure AWS credentials (OIDC -- drift role, main only)
-        # Bootstrap-window guard: before the gated apply creates agent-platform-github-ci-drift,
-        # the assume-role fails. continue-on-error keeps the job from failing; subsequent steps
-        # gate on steps.oidc_drift.outcome == 'success' and are skipped when creds are absent,
-        # so the job ends green-with-skipped rather than hard-failing during the bootstrap window.
+      - name: Configure AWS credentials (OIDC -- planner role, main-sub, RESERVED session)
+        # T2.49 / DEP-12 (Decision 144): repointed from the retired github_ci_drift role to the
+        # merged agent-platform-github-ci-planner (plan+drift, c2). role-session-name is set to
+        # the RESERVED value -- it MUST equal local.convergence_writer_session_name in
+        # terraform/personal/oidc.tf verbatim (coupled site 4/4; see that local's comment for the
+        # other 3 sites). This is the ONE session identity the planner's main-sub trust statement
+        # accepts AND the ONE identity its ConvergenceRecordWrite aws:userid condition allows --
+        # a mismatch here fails assume-role loudly rather than silently losing convergence-write.
+        # Bootstrap-window guard: before the gated apply creates the planner role, the assume-role
+        # fails. continue-on-error keeps the job from failing; subsequent steps gate on
+        # steps.oidc_drift.outcome == 'success' and are skipped when creds are absent, so the job
+        # ends green-with-skipped rather than hard-failing during the bootstrap window.
         id: oidc_drift
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-drift
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-planner
+          role-session-name: tf-drift-convergence-writer
           aws-region: eu-west-2
 
       - name: Read pinned Terraform version

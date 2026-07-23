@@ -127,7 +127,7 @@ SAME reviewed plan.bin is applied -- not a re-plan.
 
 **Speculative-plan job** (`speculative-plan` in `terraform-apply-sandbox.yml`):
 - Triggers on `pull_request` paths `terraform/personal/**`; same-repo fork-gated (`if: head.repo.full_name == github.repository`).
-- Assumes `agent-platform-github-ci-plan` (tfstate-read, tfplan-write; no convergence write, no tfstate write/delete).
+- Assumes `agent-platform-github-ci-planner`'s PR-sub statement (tfstate-read, tfplan-write; no convergence write, no tfstate write/delete; T2.49 merged plan+drift into one dual-sub role).
 - Runs `terraform plan -lock=false` (read-only; the plan role cannot take the S3 native lock).
 - Runs the unmodified guard to capture the **PREDICTED** verdict (advisory; the merge-time verdict is authoritative).
 - Persists `plan.bin` to `s3://agent-platform-data-lake/tfplan/personal/<pr-head-sha>.bin`.
@@ -153,16 +153,15 @@ SAME reviewed plan.bin is applied -- not a re-plan.
 - Recovery: `workflow_dispatch` acknowledge-and-retry (re-plans fresh, human-reviewed). NO silent re-plan-and-apply; the push path has no fallback.
 
 **tfplan/personal/ S3 prefix**:
-- `s3://agent-platform-data-lake/tfplan/personal/<pr-head-sha>.bin` -- write-IAM is `github_ci_plan` only; read is `github_ci_apply` via its existing `DataLakeObjectIO` bucket-wide grant.
+- `s3://agent-platform-data-lake/tfplan/personal/<pr-head-sha>.bin` -- write-IAM is the planner role's PR-sub statement only; read is `github_ci_apply` via its existing `DataLakeObjectIO` bucket-wide grant.
 - Objects are inert once the speculative-plan job is removed; prune optionally.
 
-**Capability split (github_ci_pr vs github_ci_plan)**:
+**Capability split (github_ci_pr vs the planner role's PR-sub statement)**:
 - `github_ci_pr`: athena/iceberg reads, convergence record read, DuckLake invoke. **No tfstate read** (fork-safe; `simulate-principal-policy` returns implicitDeny on `s3:GetObject tfstate/...`).
-- `github_ci_plan`: tfstate READ, tfplan WRITE, full refresh-read surface (mirrors apply-role plan-time reads). No convergence write, no tfstate write/delete, no DeleteObject anywhere.
-- Fork gating: enforced at the WORKFLOW JOB level (`if: head.repo.full_name == github.repository`) -- NOT the OIDC trust condition. Trust mirrors `github_ci_pr` (pull_request sub). The job gate + read-only policy together give the desired fork isolation.
+- Planner PR-sub (T2.49 merged plan+drift): tfstate READ, tfplan WRITE, full refresh-read surface (mirrors apply-role plan-time reads). No convergence write (see Convergence anchor below), no tfstate write/delete, no DeleteObject anywhere.
+- Fork gating: enforced at the WORKFLOW JOB level (`if: head.repo.full_name == github.repository`) -- NOT the OIDC trust condition. Trust mirrors `github_ci_pr` (pull_request sub) plus a `sts:RoleSessionName` partition (Convergence anchor below). The job gate + read-only policy together give the desired fork isolation.
 
-**Role creation is guard-BLOCKED**:
-- `github_ci_plan` is a new IAM role -- the guard exits 2 (IAM_SENSITIVE_TYPES). It lands via `agent_platform_admin` apply BEFORE the first PR that exercises the speculative-plan job. The job's `continue-on-error` on the assume-role step covers the bootstrap window.
+**Role creation is guard-BLOCKED (gated-apply, T2.48 c2 / T2.49):** `github_ci_planner` (T2.49 / DEP-12: replaces `github_ci_plan` + `github_ci_drift`) is IAM-sensitive -- the guard exits 2 and routes to the `tf-gated-apply` Environment (Decision 92; approve in GitHub Actions). Slice E's T2.48 inversion made gated `iam:CreateRole` executable for a new boundary-carrying `agent-platform-*` role -- planner + deploy both declare the mandatory boundary in HCL, so the gated create succeeds with no admin-apply detour. The speculative-plan and drift workflows' `continue-on-error` on the assume-role step covers any residual bootstrap window.
 
 ### Alarm-only scheduled drift detection (CD.35 Wave 5 / T2.24)
 
@@ -180,11 +179,11 @@ out-of-band infra drift without auto-applying.
   occurs (drift != error).
 
 **Native-lock coexistence:** the drift plan runs `-lock=true -lock-timeout=120s`. The
-`github_ci_drift` role has `s3:PutObject + s3:DeleteObject` scoped to the EXACT lock object key
-`tfstate/personal/sandbox/terraform.tfstate.tflock` (terraform's conditional-put acquire + delete
-release), and NO write on the state object `terraform.tfstate` itself. Serialisation with apply
-is via the native S3 lock only -- there is no shared GHA concurrency group between
-`terraform-drift` and `terraform-apply-sandbox`.
+planner role's main-sub statement has `s3:PutObject + s3:DeleteObject` scoped to the EXACT lock
+object key `tfstate/personal/sandbox/terraform.tfstate.tflock` (terraform's conditional-put
+acquire + delete release), and NO write on the state object `terraform.tfstate` itself.
+Serialisation with apply is via the native S3 lock only -- there is no shared GHA concurrency
+group between `terraform-drift` and `terraform-apply-sandbox`.
 
 **Drift signal (ec=2):** on a green->red transition:
 1. Merge-write the convergence record red (preserves all existing fields; adds `drift_detected_at`,
@@ -198,35 +197,20 @@ until the apply-dispatch unlatch clears it.
 
 **Drift NEVER writes the record green.** Green is written solely by a converged apply
 (`terraform-apply-sandbox`), so a clean drift cycle can never mask a prior apply-failure red.
-The convergence writer set is now `{github_ci_apply (Wave 1), github_ci_drift (Wave 5)}`.
+The convergence writer set is now `{github_ci_apply (Wave 1), github_ci_planner main-sub (T2.49, reserved session only)}`.
 
 **Recovery -- dispatch-ack unlatch:** resolve the drift by running `terraform-apply-sandbox`
 via `workflow_dispatch` (naming the red commit or the open rec id in `acknowledge_red_commit`).
 A successful apply writes green; close the `tf_drift` rec via the `Resolves:` trailer or
 `update_rec` portal call.
 
-**github_ci_drift IAM (least-privilege):** tfstate READ + scoped `.tflock` PutObject/DeleteObject +
-`convergence/personal/*` GetObject/PutObject + ducklake-WRITER InvokeFunction/InvokeFunctionUrl
-(NOT the reader; Decision 84 closed boundary) + same refresh-time read surface as
-`github_ci_plan`. No state-object write, no tfplan, no resource mutation, no IAM write.
-
-**Role creation is guard-BLOCKED (admin-create path -- Decision 98):** `github_ci_drift` is a new
-IAM role -- the guard exits 2 (IAM_SENSITIVE_TYPES). The T2.23 authority budget (IAMRoleCreateBounded)
-scopes in-budget CreateRole to branch+pr only, so the gated-apply pipeline CANNOT mint a new peer CI
-role. The ONLY working create path for `github_ci_drift` is `agent_platform_admin` (-target apply of
-`terraform/personal/oidc.tf`). Procedure:
-(1) Probe whether `github_ci_plan`'s `IAMCIRolesRead` already includes the drift ARN:
-    `aws iam get-role-policy --role-name agent-platform-github-ci-plan --policy-name agent-platform-github-ci-plan --profile agent_platform_admin | python3 -c "import sys,json,urllib.parse; d=json.load(sys.stdin); s=next(x for x in json.loads(urllib.parse.unquote(d['PolicyDocument']))['Statement'] if x.get('Sid')=='IAMCIRolesRead'); print('PRESENT' if any('drift' in r for r in s['Resource']) else 'ABSENT')"`
-(2) Always include `aws_iam_role.github_ci_drift` and `aws_iam_role_policy.github_ci_drift`; include
-    `-target=aws_iam_role_policy.github_ci_plan` ONLY if the probe returned ABSENT (the failed
-    apply may have landed it; a PRESENT result means a no-op target is harmless but not required).
-(3) Present the plan to the human (Decision 77), apply under `agent_platform_admin`.
-(4) Add the drift ARN to `IAMRolesRead` in `terraform/bootstrap/github_ci_apply.tf`
-    (read-only refresh grant; does NOT widen the IAM-WRITE budget) and admin-apply that root
-    separately.
-(5) Verify global convergence (untargeted `terraform plan -detailed-exitcode` exits 0) BEFORE
-    dispatching the acknowledge-and-retry.
-The workflow carries `continue-on-error` on the assume-role step to cover the bootstrap window.
+**Planner main-sub IAM (least-privilege, T2.49 absorbed drift's capabilities):** tfstate READ +
+scoped `.tflock` PutObject/DeleteObject + `convergence/personal/*` GetObject/PutObject
+(fail-closed, aws:userid-conditioned -- see Convergence anchor below) + ducklake-WRITER
+InvokeFunction/InvokeFunctionUrl (NOT the reader; Decision 84 closed boundary) + same
+refresh-time read surface as the PR-sub statement. No state-object write, no tfplan, no resource
+mutation, no IAM write. Role creation is covered by the single "Role creation is guard-BLOCKED"
+note above (Speculative plan section) -- one gated-apply create serves both subs.
 
 **Drift recs vs ci-rca recs:** drift recs use `source=tf_drift` and are filed DIRECTLY via the
 ops portal (no ci-rca agent). ci-rca's model is log-RCA over a FAILED CI run; drift is a
@@ -239,14 +223,23 @@ The server-side anti-masking anchor. All four pieces live in `terraform-apply-sa
 - **Durable record:** `s3://agent-platform-data-lake/convergence/personal/sandbox.json`
   (`{status, commit_sha, run_id, run_url, timestamp, plan_sha}`; `plan_sha` is null until Wave 2 saved
   plans). Its OWN S3 prefix, **outside `tfstate/`**, so the read-only PR role reads it without ever seeing
-  tfstate. Write-IAM is the **sanctioned writer set {github_ci_apply, github_ci_drift} among the CI
-  roles** -- enforced in `oidc.tf` / `terraform/bootstrap/github_ci_apply.tf` by `ConvergenceRecordWrite`
-  on each writer (apply: Wave 1; drift: Wave 5 / T2.24), the explicit `DenyConvergenceRecordWrite` on
-  `github_ci_branch` (ci-rca / `agent/*` CI keep read, never write/delete the record), and the PR role's
-  read-only `S3ReadConvergenceRecord`. This is the integrity anchor -- a commit status alone is spoofable.
-  (The residual admin / `platform_breakglass` write path is not yet IAM-fenced; full privilege-tiering --
-  the pipeline's own IAM to a bootstrap root -- landed at Wave 4 / T2.23 (`terraform/bootstrap/`).
-  "Unbypassable" is scoped to merge-path CI actors, per CD.35 5.5d.)
+  tfstate. Write-IAM is the **sanctioned writer set {github_ci_apply, github_ci_planner main-sub} among
+  the CI roles** -- T2.49 / DEP-12 merged the former `github_ci_drift` writer into `github_ci_planner`'s
+  main-sub statement, enforced in `oidc.tf` / `terraform/bootstrap/github_ci_apply.tf` by
+  `ConvergenceRecordWrite` on each writer (apply: Wave 1; planner: T2.49, fail-closed), the explicit
+  `DenyConvergenceRecordWrite` on `github_ci_branch` (ci-rca / `agent/*` CI keep read, never write/delete
+  the record), and the PR role's read-only `S3ReadConvergenceRecord`. This is the integrity anchor -- a
+  commit status alone is spoofable. (The residual admin / `platform_breakglass` write path is not yet
+  IAM-fenced; full privilege-tiering -- the pipeline's own IAM to a bootstrap root -- landed at Wave 4 /
+  T2.23 (`terraform/bootstrap/`). "Unbypassable" is scoped to merge-path CI actors, per CD.35 5.5d.)
+  **c2 doc-truthfulness (T2.49 hardening item 2): two DIFFERENT protections, don't conflate.**
+  The trust-policy `sts:RoleSessionName` partition (main-sub StringEquals / pr-sub
+  StringNotEquals the reserved `local.convergence_writer_session_name`) IS human-gate-protected
+  (a trust edit is IAM-sensitive, guard-BLOCKs to `tf-gated-apply`). BUT `ConvergenceRecordWrite`'s
+  `aws:userid` condition lives in the planner's INLINE policy -- an in-budget UPDATE on a
+  boundary-carrying role AUTO-APPLIES (Decision 92 pt5 / T2.25), NOT the human gate. Its real
+  protection is the standing check `scripts/checks/iam_tf/validate_convergence_writer_isolation.py`
+  (`validate --pre`/full), which asserts the condition holds and no 2nd unconditioned Allow exists.
 - **Red-record refusal = the SOLE hard block.** The apply job's read-precondition refuses (emits the
   distinguishable marker `CONVERGENCE_RED`, exits non-zero, and does **NOT** overwrite the record) when the
   record is red. Unbypassable by any merge-path actor. An **absent** record = first-apply-allowed

@@ -82,23 +82,13 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
   }
 }
 
-resource "aws_iam_role_policy" "github_ci_plan" {
-  name   = "test-plan"
-  role   = "test-plan-role"
-  policy = data.aws_iam_policy_document.github_ci_plan.json
+resource "aws_iam_role_policy" "github_ci_planner" {
+  name   = "test-planner"
+  role   = "test-planner-role"
+  policy = data.aws_iam_policy_document.github_ci_planner.json
 }
 
-data "aws_iam_policy_document" "github_ci_plan" {
-  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
-}
-
-resource "aws_iam_role_policy" "github_ci_drift" {
-  name   = "test-drift"
-  role   = "test-drift-role"
-  policy = data.aws_iam_policy_document.github_ci_drift.json
-}
-
-data "aws_iam_policy_document" "github_ci_drift" {
+data "aws_iam_policy_document" "github_ci_planner" {
   source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
 }
 """
@@ -154,7 +144,10 @@ class TestValidateCiRefreshReadCoverageEndToEnd:
         assert len(failed) == 1
         assert "no statements parsed from the github_ci_apply policy" in failed[0]
 
-    def test_oidc_missing_drift_role_fails_loud(self, tmp_path: Path) -> None:
+    def test_oidc_missing_planner_role_fails_loud(self, tmp_path: Path) -> None:
+        """T2.49 / DEP-12: github_ci_plan + github_ci_drift merged into the single
+        github_ci_planner role -- when its role-policy block is entirely absent from oidc.tf,
+        resolution fails loud."""
         broken_oidc = """
 data "aws_iam_policy_document" "ci_full_refresh_read" {
   statement {
@@ -164,23 +157,13 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
     resources = ["*"]
   }
 }
-
-resource "aws_iam_role_policy" "github_ci_plan" {
-  name   = "test-plan"
-  role   = "test-plan-role"
-  policy = data.aws_iam_policy_document.github_ci_plan.json
-}
-
-data "aws_iam_policy_document" "github_ci_plan" {
-  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
-}
 """
         _write_ci_refresh_read_fixture(tmp_path, oidc_body=broken_oidc)
         failed: list[str] = []
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_ci_refresh_read_coverage(failed)
         assert len(failed) == 1
-        assert "could not resolve github_ci_plan/github_ci_drift role policies" in failed[0]
+        assert "could not resolve github_ci_planner role policy" in failed[0]
 
     def test_no_resources_discovered_fails_loud(self, tmp_path: Path) -> None:
         _write_ci_refresh_read_fixture(tmp_path)
@@ -234,7 +217,7 @@ resource "aws_kms_key" "unclassified" {
 
     def test_iam_role_enumerated_and_uncovered_names_the_role(self, tmp_path: Path) -> None:
         """An aws_iam_role not literally enumerated in any role policy's iam:GetRole grant fails,
-        naming the role and the (apply/plan/drift) policy it is missing from."""
+        naming the role and the (apply/planner) policy it is missing from."""
         resources_body = """
 resource "aws_iam_role" "orphan_role" {
   name = "agent-platform-orphan-role"
@@ -244,7 +227,7 @@ resource "aws_iam_role" "orphan_role" {
         failed: list[str] = []
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_ci_refresh_read_coverage(failed)
-        assert len(failed) == 3  # apply, plan, drift
+        assert len(failed) == 2  # apply, planner (T2.49 / DEP-12: plan+drift merged, 3 -> 2)
         for f in failed:
             assert "aws_iam_role" in f
             assert "orphan_role" in f
@@ -285,28 +268,19 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {{
   }}
 }}
 
-resource "aws_iam_role_policy" "github_ci_plan" {{
-  name   = "test-plan"
-  role   = "test-plan-role"
-  policy = data.aws_iam_policy_document.github_ci_plan.json
+resource "aws_iam_role_policy" "github_ci_planner" {{
+  name   = "test-planner"
+  role   = "test-planner-role"
+  policy = data.aws_iam_policy_document.github_ci_planner.json
 }}
 
-data "aws_iam_policy_document" "github_ci_plan" {{
-  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
-}}
-
-resource "aws_iam_role_policy" "github_ci_drift" {{
-  name   = "test-drift"
-  role   = "test-drift-role"
-  policy = data.aws_iam_policy_document.github_ci_drift.json
-}}
-
-data "aws_iam_policy_document" "github_ci_drift" {{
+data "aws_iam_policy_document" "github_ci_planner" {{
   source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
 }}
 """
         # The resource role `agent-platform-known-fn` is a substring prefix of the enumerated
-        # `agent-platform-known-fn-role`, but is NOT itself enumerated -- must fail in all 3 roles.
+        # `agent-platform-known-fn-role`, but is NOT itself enumerated -- must fail in both roles
+        # (T2.49 / DEP-12: plan+drift merged into the single planner role, 3 -> 2).
         resources_body = """
 resource "aws_iam_role" "collide_role" {
   name = "agent-platform-known-fn"
@@ -319,7 +293,7 @@ resource "aws_iam_role" "collide_role" {
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_ci_refresh_read_coverage(failed)
         collide_findings = [f for f in failed if "collide_role" in f]
-        assert len(collide_findings) == 3, failed  # apply, plan, drift -- not silently covered
+        assert len(collide_findings) == 2, failed  # apply, planner -- not silently covered
 
     def test_oidc_provider_url_resolves_to_host(self, tmp_path: Path) -> None:
         """aws_iam_openid_connect_provider's `url` attribute is resolved and the scheme stripped
@@ -382,23 +356,13 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
   }
 }
 
-resource "aws_iam_role_policy" "github_ci_plan" {
-  name   = "test-plan"
-  role   = "test-plan-role"
-  policy = data.aws_iam_policy_document.github_ci_plan.json
+resource "aws_iam_role_policy" "github_ci_planner" {
+  name   = "test-planner"
+  role   = "test-planner-role"
+  policy = data.aws_iam_policy_document.github_ci_planner.json
 }
 
-data "aws_iam_policy_document" "github_ci_plan" {
-  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
-}
-
-resource "aws_iam_role_policy" "github_ci_drift" {
-  name   = "test-drift"
-  role   = "test-drift-role"
-  policy = data.aws_iam_policy_document.github_ci_drift.json
-}
-
-data "aws_iam_policy_document" "github_ci_drift" {
+data "aws_iam_policy_document" "github_ci_planner" {
   source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
 }
 """

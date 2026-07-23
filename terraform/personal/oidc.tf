@@ -12,6 +12,16 @@
 
 locals {
   github_repo = "benjamin-blake/agent-platform"
+
+  # T2.49 c2 hardening item 3 (single-source, DEP-12 / Decision 144): the RESERVED session-name
+  # that discriminates the planner role's fail-closed convergence-write path. Referenced at
+  # EXACTLY 4 coupled sites -- changing this value requires updating all four in the same commit:
+  #   1. github_ci_planner trust, main-sub statement: sts:RoleSessionName StringEquals (below)
+  #   2. github_ci_planner trust, pr-sub statement:   sts:RoleSessionName StringNotEquals (below)
+  #   3. github_ci_planner policy, ConvergenceRecordWrite: aws:userid StringLike "*:<this>" (below)
+  #   4. .github/workflows/terraform-drift.yml: configure-aws-credentials role-session-name (a
+  #      workflow literal outside Terraform's reach -- MUST equal this value verbatim)
+  convergence_writer_session_name = "tf-drift-convergence-writer"
 }
 
 resource "aws_iam_openid_connect_provider" "github_actions" {
@@ -155,11 +165,13 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
     # Scoped to the managed CI roles -- read-only (no PutRolePolicy / UpdateAssumeRolePolicy).
     # Literal ARNs per the IAMPlatformRolesRead convention (refresh-read grants do not create
     # Terraform dependency edges onto the resources they read). Decision 35/98: enumerated,
-    # never a service or path wildcard on iam: read actions. ducklake-deploy (T2.38) is listed
-    # so github_ci_plan/drift can refresh-read it once it enters terraform/personal state --
-    # the github_ci_plan/drift analogue of the bootstrap IAMRolesRead grant github_ci_apply gets
-    # (rec-2688; mirrors how github-ci-drift's own ARN was added here when T2.24 landed).
-    # prod-deploy (T2.43) is listed the same way for the same reason.
+    # never a service or path wildcard on iam: read actions. T2.49 / DEP-12 (Decision 144): the
+    # four retired CI roles (plan, drift, ducklake-deploy, prod-deploy) are replaced by two
+    # merged roles -- planner (plan+drift) and deploy (ducklake-deploy+prod-deploy) -- so this
+    # list shrinks by two entries (net -2, helps the rec-2793 headroom). planner/deploy are
+    # listed so github_ci_apply can refresh-read them once they enter terraform/personal state,
+    # the same class of grant the retired roles had (rec-2688; mirrors how github-ci-drift's own
+    # ARN was added here when T2.24 landed).
     sid    = "IAMCIRolesRead"
     effect = "Allow"
     actions = [
@@ -172,10 +184,8 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-branch",
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-pr",
       "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-apply",
-      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-plan",
-      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-drift",
-      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-ducklake-deploy",
-      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-prod-deploy"
+      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-planner",
+      "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-deploy"
     ]
   }
 
@@ -686,33 +696,72 @@ resource "aws_iam_role_policy" "github_ci_pr" {
 # github_ci_drift added below (CD.35 Wave 5 / T2.24).
 
 # ---------------------------------------------------------------------------
-# Plan role (speculative-plan PR job, CD.35 Wave 2 / T2.21): pull_request sub.
+# Planner role (dual-sub speculative-plan + drift, T2.49 c2 / DEP-12 / Decision 144): merges
+# github_ci_plan (PR-sub, CD.35 Wave 2 / T2.21) + github_ci_drift (main-sub, CD.35 Wave 5 /
+# T2.24) into ONE identity trusting BOTH subs, partitioned by sts:RoleSessionName so
+# convergence-write stays fail-closed and non-spoofable (Decision 92 pt2).
 #
 # This role is IAM-SENSITIVE -- the deterministic guard (scripts/terraform_apply_guard.py)
-# BLOCKS its creation (exit 2) and it lands via the human-gated agent_platform_admin apply
-# (Decision 77). Auto-apply is only possible AFTER the role exists; speculative-plan jobs
-# opened before the admin apply carry continue-on-error on the assume-role step.
+# BLOCKS its creation (exit 2) and it lands via the human-gated tf-gated-apply Environment
+# (Decision 77/92). The speculative-plan job's assume-role step carries continue-on-error to
+# cover any residual bootstrap window; the drift workflow's assume-role step does the same.
 #
-# Capability split vs github_ci_pr:
-#   github_ci_pr  -- athena/iceberg read, convergence record read, DuckLake invoke. NO tfstate.
-#   github_ci_plan -- tfstate READ (real plan), tfplan WRITE (persist saved plan), same refresh-
-#                     read surface as github_ci_apply during plan. No convergence write. No
-#                     tfstate write or delete. Fork-gated at the WORKFLOW JOB level (if: guard),
-#                     not the trust condition -- trust mirrors github_ci_pr (pull_request sub).
+# Trust partition (the fail-closed discriminator, Decision 92 pt2):
+#   - MAIN-sub statement: sub=refs/heads/main AND sts:RoleSessionName StringEquals the
+#     RESERVED session-name (local.convergence_writer_session_name) -- ONLY the scheduled
+#     drift workflow (which sets this exact role-session-name) can satisfy this statement.
+#   - PR-sub statement: sub in {pull_request, ref:refs/pull/*} AND sts:RoleSessionName
+#     StringNotEquals the reserved name -- a PR-context assumption can NEVER present the
+#     reserved session-name (the speculative-plan workflow sets a distinct, non-reserved
+#     value), so it structurally cannot satisfy the main-sub statement either.
+# A PR-context assumption therefore cannot obtain the reserved session-name under ANY
+# statement -- the trust half of the fail-closed guarantee. The permission half (below) adds
+# the aws:userid condition on ConvergenceRecordWrite so even a hypothetical main-sub session
+# that omits the reserved name gains no convergence-write eligibility.
 #
-# The plan role is the ONLY PR-context tfstate-read path (fork isolation: the guard at the job
-# level + same-repo if: block fork access; github_ci_pr is explicitly denied tfstate by design).
+# Capability union (plan + drift, unconditioned except ConvergenceRecordWrite):
+#   from github_ci_plan  -- TfplanWrite, DucklakeBuildInputsRead, DucklakeLambdaPackagesWrite.
+#   from github_ci_drift -- TfstateNativeLockFile, DuckLakeWriterInvoke (writer-only, Decision
+#                            84 closed boundary), ConvergenceRecordWrite (now FAIL-CLOSED,
+#                            aws:userid-conditioned -- see validate_convergence_writer_isolation
+#                            for the standing semantic check).
+# Same refresh-read surface as before (ci_full_refresh_read, composed below) -- unchanged.
 # ---------------------------------------------------------------------------
 
-resource "aws_iam_role" "github_ci_plan" {
-  name                 = "agent-platform-github-ci-plan"
-  description          = "GitHub Actions speculative-plan (CD.35 Wave 2 / T2.21): PR context, tfstate-read + tfplan-write via OIDC"
+resource "aws_iam_role" "github_ci_planner" {
+  name                 = "agent-platform-github-ci-planner"
+  description          = "GitHub Actions dual-sub planner (T2.49 c2 / DEP-12): merges speculative-plan (PR) + drift (main) via OIDC"
   permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
+        # Main-sub: the scheduled/dispatch drift workflow ONLY. Requires the RESERVED
+        # session-name (site 1/4, local.convergence_writer_session_name) -- the sole
+        # session-name this role's ConvergenceRecordWrite condition (below) accepts.
+        Sid    = "AssumeMainReservedSession"
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github_actions.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+            "sts:RoleSessionName"                     = local.convergence_writer_session_name
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
+          }
+        }
+      },
+      {
+        # PR-sub: the speculative-plan job. Trust mirrors github_ci_pr's sub condition, PLUS
+        # StringNotEquals the reserved session-name (site 2/4) -- a PR-context assumption can
+        # never present the one session-name that satisfies the main-sub statement above or the
+        # ConvergenceRecordWrite permission condition below (non-spoofable, Decision 92 pt2).
+        Sid    = "AssumePrNonReservedSession"
         Effect = "Allow"
         Principal = {
           Federated = aws_iam_openid_connect_provider.github_actions.arn
@@ -722,10 +771,10 @@ resource "aws_iam_role" "github_ci_plan" {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
+          StringNotEquals = {
+            "sts:RoleSessionName" = local.convergence_writer_session_name
+          }
           StringLike = {
-            # Trust mirrors github_ci_pr (pull_request sub). Fork gating is enforced at the
-            # workflow JOB level (speculative-plan if: head.repo.full_name == github.repository),
-            # not the trust condition -- consistent with how advisory-status is fork-gated.
             "token.actions.githubusercontent.com:sub" = [
               "repo:${local.github_repo}:pull_request",
               "repo:${local.github_repo}:ref:refs/pull/*"
@@ -737,16 +786,16 @@ resource "aws_iam_role" "github_ci_plan" {
   })
 }
 
-data "aws_iam_policy_document" "github_ci_plan" {
+data "aws_iam_policy_document" "github_ci_planner" {
   # DRY composition (T2.34): the shared 20-statement refresh-read surface, not re-declared
-  # inline. ci_full_refresh_read itself composes ci_ssm_refresh_read.
+  # inline -- identical to the pre-merge plan/drift roles. ci_full_refresh_read itself
+  # composes ci_ssm_refresh_read.
   source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
 
   statement {
-    # Persist plan.bin keyed by PR head SHA for the apply-the-saved-plan merge path (T2.21).
-    # github_ci_apply's existing DataLakeObjectIO grant covers the read at merge time.
-    # No convergence/personal/* grant -- the plan role never touches the convergence record.
-    # No DeleteObject anywhere.
+    # From github_ci_plan: persist plan.bin keyed by PR head SHA for the apply-the-saved-plan
+    # merge path (T2.21). No convergence/personal/* grant here -- ConvergenceRecordWrite below
+    # is the sole, conditioned allow on that prefix.
     sid       = "TfplanWrite"
     effect    = "Allow"
     actions   = ["s3:GetObject", "s3:PutObject"]
@@ -754,10 +803,7 @@ data "aws_iam_policy_document" "github_ci_plan" {
   }
 
   statement {
-    # rec-2512: fetch the vendored pg_dump/pg_restore bundle + pinned DuckLake extensions at
-    # build time (`scripts.build_lambda --ducklake-only`, run before `terraform plan` so
-    # filemd5() sees real content instead of resolving to null on lambda-packages/, which is
-    # gitignored). Read-only -- these are operator-seeded vendored artefacts, never written by CI.
+    # From github_ci_plan: vendored DuckLake build inputs (read-only, rec-2512).
     sid     = "DucklakeBuildInputsRead"
     effect  = "Allow"
     actions = ["s3:GetObject"]
@@ -768,86 +814,16 @@ data "aws_iam_policy_document" "github_ci_plan" {
   }
 
   statement {
-    # rec-2512: upload the seven rebuilt DuckLake zips so the reviewed plan.bin's filemd5
-    # corresponds to real S3 content, and so the apply-sandbox job's byte-identical re-upload at
-    # merge time has the PR-job artifact to compare against (Decision 77 no-TOCTOU). No
-    # DeleteObject -- mirrors the plan role's no-delete-anywhere posture.
+    # From github_ci_plan: upload the rebuilt DuckLake zips (rec-2512). No DeleteObject.
     sid       = "DucklakeLambdaPackagesWrite"
     effect    = "Allow"
     actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.data_lake.arn}/lambda-packages/*"]
   }
-}
-
-resource "aws_iam_role_policy" "github_ci_plan" {
-  name   = "agent-platform-github-ci-plan"
-  role   = aws_iam_role.github_ci_plan.id
-  policy = data.aws_iam_policy_document.github_ci_plan.json
-}
-
-# ---------------------------------------------------------------------------
-# Drift role (alarm-only scheduled drift detection, CD.35 Wave 5 / T2.24):
-# refs/heads/main sub (scheduled + dispatch run on main, same as github_ci_branch).
-#
-# This role is IAM-SENSITIVE -- the deterministic guard (scripts/terraform_apply_guard.py)
-# BLOCKS its creation (exit 2) and it lands via the human-gated apply path (tf-gated-apply
-# GitHub Environment or agent_platform_admin, Decision 77/92). The scheduled drift workflow
-# carries continue-on-error on the assume-role step to cover the bootstrap window (no role
-# exists until the gated apply lands; pre-apply ticks no-op rather than erroring).
-#
-# Capability split vs github_ci_plan:
-#   github_ci_plan  -- tfstate READ + tfplan WRITE + same refresh-read surface. No convergence write.
-#   github_ci_drift -- tfstate READ + scoped .tflock write (native-lock coexistence) +
-#                      convergence/personal/* read+write (joins apply as sanctioned writer) +
-#                      ducklake-WRITER invoke ONLY (not the reader; Decision 84 closed boundary) +
-#                      same refresh-read surface as plan during plan. NO tfstate write (state object),
-#                      NO tfplan write, NO resource mutation, NO IAM write.
-#
-# Trust mirrors github_ci_branch: StringEquals aud + StringLike sub refs/heads/main.
-# NO environment sub (Decision 94 applies only to github_ci_apply's gated-environment invocation;
-# drift is scheduled, not gated-environment-invoked).
-# ---------------------------------------------------------------------------
-
-resource "aws_iam_role" "github_ci_drift" {
-  name                 = "agent-platform-github-ci-drift"
-  description          = "GitHub Actions drift detector (CD.35 Wave 5 / T2.24): scheduled alarm-only, refs/heads/main via OIDC"
-  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Federated = aws_iam_openid_connect_provider.github_actions.arn
-        }
-        Action = "sts:AssumeRoleWithWebIdentity"
-        Condition = {
-          StringEquals = {
-            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          }
-          StringLike = {
-            # Mirrors github_ci_branch (scheduled + dispatch jobs run on main, not in a PR context).
-            # NO environment sub: drift is not gated-environment-invoked (Decision 94).
-            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
-          }
-        }
-      }
-    ]
-  })
-}
-
-data "aws_iam_policy_document" "github_ci_drift" {
-  # DRY composition (T2.34): the shared 20-statement refresh-read surface, not re-declared
-  # inline. ci_full_refresh_read itself composes ci_ssm_refresh_read.
-  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
 
   statement {
-    # Native S3 locking coexistence (use_lockfile): terraform plan -lock=true acquires the
-    # native lock by writing a sibling .tflock object and releases it on plan completion.
-    # Scoped to the EXACT lock object key -- NO write on the state object terraform.tfstate
-    # itself. A lock held by an in-flight apply -> plan fails to acquire -> "Error acquiring
-    # the state lock" -> skip-this-cycle (exit 0, no alarm).
+    # From github_ci_drift: native S3 locking coexistence. Scoped to the EXACT lock object key
+    # -- NO write on the state object terraform.tfstate itself.
     sid     = "TfstateNativeLockFile"
     effect  = "Allow"
     actions = ["s3:PutObject", "s3:DeleteObject"]
@@ -857,25 +833,8 @@ data "aws_iam_policy_document" "github_ci_drift" {
   }
 
   statement {
-    # CD.35 / T2.24 convergence record write: drift joins the sanctioned writer set {apply,
-    # drift}. On a green->red transition the drift workflow merge-writes the record (preserves
-    # all fields; sets status=red + drift reason marker + run_url + detected_at). Read is
-    # needed to check prior_status before deciding whether to flip (dedup: one red = one
-    # signal). Drift NEVER writes the record green -- green is written solely by a converged
-    # apply (T2.20 anti-masking anchor). No DeleteObject on the convergence prefix.
-    sid       = "ConvergenceRecordWrite"
-    effect    = "Allow"
-    actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
-  }
-
-  statement {
-    # Decision 84 closed reader/writer boundary: drift invokes the WRITER ONLY (to file the
-    # drift rec via the ops portal). The reader is explicitly excluded -- drift never reads
-    # the ops data directly. lambda:InvokeFunction is the action the Function-URL IAM
-    # authorizer actually checks; InvokeFunctionUrl retained for AWS-doc alignment.
-    # GetFunctionUrlConfig lets the runner resolve the URL via the AWS API when
-    # DUCKLAKE_WRITER_URL env is not set (the CI case) -- mirrors the branch role pattern.
+    # From github_ci_drift: WRITER-only invoke (Decision 84 closed reader/writer boundary) --
+    # files the drift rec via the ops portal. The reader is explicitly excluded.
     sid     = "DuckLakeWriterInvoke"
     effect  = "Allow"
     actions = ["lambda:InvokeFunction", "lambda:InvokeFunctionUrl", "lambda:GetFunctionUrlConfig"]
@@ -884,46 +843,76 @@ data "aws_iam_policy_document" "github_ci_drift" {
       "${aws_lambda_function.ducklake_writer.arn}:*",
     ]
   }
+
+  statement {
+    # c2 FAIL-CLOSED convergence write (Decision 92 pt2, hardening item 1): the SOLE allow on
+    # convergence/personal/* in this policy, conditioned on aws:userid matching the RESERVED
+    # session (site 3/4, local.convergence_writer_session_name) -- default-deny for every other
+    # session identity. Combined with the trust partition above, a PR-context assumption can
+    # neither obtain the reserved session-name nor satisfy this condition. Standing semantic
+    # check: scripts/checks/iam_tf/validate_convergence_writer_isolation.py asserts this is the
+    # ONLY convergence-write Allow and that it carries this exact condition (grep-presence
+    # cannot see a second, unconditioned Allow added alongside this one -- the semantic check
+    # can). Drift NEVER writes the record green -- green is written solely by a converged apply
+    # (T2.20 anti-masking anchor).
+    sid       = "ConvergenceRecordWrite"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.data_lake.arn}/convergence/personal/*"]
+    condition {
+      test     = "StringLike"
+      variable = "aws:userid"
+      values   = ["*:${local.convergence_writer_session_name}"]
+    }
+  }
 }
 
-resource "aws_iam_role_policy" "github_ci_drift" {
-  name   = "agent-platform-github-ci-drift"
-  role   = aws_iam_role.github_ci_drift.id
-  policy = data.aws_iam_policy_document.github_ci_drift.json
+resource "aws_iam_role_policy" "github_ci_planner" {
+  name   = "agent-platform-github-ci-planner"
+  role   = aws_iam_role.github_ci_planner.id
+  policy = data.aws_iam_policy_document.github_ci_planner.json
+
+  lifecycle {
+    precondition {
+      # rec-2793 (DEP-01 anti-recurrence): AWS excludes whitespace from the 10,240 B inline-
+      # policy limit, so measure the WHITESPACE-STRIPPED/minified rendering, not the raw
+      # (pretty-printed) data-source .json string.
+      condition     = length(jsonencode(jsondecode(data.aws_iam_policy_document.github_ci_planner.json))) <= 10240
+      error_message = "github_ci_planner inline policy exceeds the 10,240 B IAM inline-policy limit (whitespace-stripped measure, rec-2793). Move a statement to a customer-managed policy or trim grants."
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
-# DuckLake deploy role (governed code-deploy channel, T2.38 / Decision 125/126):
-# refs/heads/main sub (push-triggered governed deploy workflow only).
+# Deploy role (governed code-deploy channel, T2.49 c3 / DEP-12 / Decision 144): merges
+# github_ci_ducklake_deploy (T2.38) + github_ci_prod_deploy (T2.43) into ONE role scoped to
+# lambda:UpdateFunctionCode on the account-wide function:agent-platform-* prefix (Decision
+# 129/144 pt2) -- covers all 8 functions (5 ducklake + 3 prod) without per-function
+# enumeration, so a future agent-platform-* function auto-covers.
 #
 # This role is IAM-SENSITIVE -- the deterministic guard (scripts/terraform_apply_guard.py)
-# BLOCKS its creation (exit 2) and it lands via the human-gated admin-create path (Decision 98),
-# mirroring github_ci_plan / github_ci_drift. The governed deploy workflow
-# (.github/workflows/deploy-ducklake-lambdas.yml) carries continue-on-error on the assume-role
-# step to cover the bootstrap window (no role exists until the admin-create apply lands;
-# pre-apply pushes no-op rather than erroring).
+# BLOCKS its creation (exit 2) and it lands via the human-gated tf-gated-apply Environment
+# (Decision 77/92). Both governed deploy workflows carry continue-on-error on the assume-role
+# step to cover any residual bootstrap window.
 #
-# Capability shape (deliberately narrow -- "UpdateFunctionCode-only" is the literal invariant):
-#   - lambda:UpdateFunctionCode on the four ducklake function ARNs ONLY. No
+# Capability shape (deliberately narrow -- "UpdateFunctionCode-only" is the literal invariant,
+# unchanged from the two roles it merges):
+#   - lambda:UpdateFunctionCode on function:agent-platform-* ONLY. No
 #     UpdateFunctionConfiguration, no InvokeFunction*, no PublishVersion, no AddPermission, no
 #     other lambda: action.
-#   - S3: GetObject/PutObject on lambda-packages/* (build + upload the zips), PutObject on
-#     deploy-records/ducklake/* (c3 deploy-record write -- this role never reads its own records
-#     back; convergence-health/drift tooling reads via github_ci_branch's existing bucket-wide
-#     read grant), and GetObject on the two vendored build-input prefixes (ducklake-pgclient/*,
-#     ducklake-extensions/*) that `build_lambda --ducklake-only` reads at build time -- mirrors
-#     github_ci_plan's DucklakeBuildInputsRead precedent, needed because build+deploy share one
-#     identity here.
+#   - S3: GetObject/PutObject on lambda-packages/* (build + upload), PutObject on BOTH
+#     deploy-records/ducklake/* and deploy-records/prod/* (union of the two deploy-record
+#     prefixes), GetObject on the two vendored build-input prefixes, ListBucket (head-bucket).
 #   - No terraform:*, no iam:* of any kind.
 #
 # Trust mirrors github_ci_branch/github_ci_drift: StringEquals aud + StringLike sub
-# refs/heads/main ONLY (no agent/*, no pull/*, no environment sub -- this role is never assumed
-# from a PR or a gated Environment).
+# refs/heads/main ONLY (no agent/*, no pull/*, no environment sub -- this role is never
+# assumed from a PR or a gated Environment).
 # ---------------------------------------------------------------------------
 
-resource "aws_iam_role" "github_ci_ducklake_deploy" {
-  name                 = "agent-platform-github-ci-ducklake-deploy"
-  description          = "GitHub Actions governed DuckLake Lambda code deploy (T2.38 / Decision 125/126): refs/heads/main via OIDC"
+resource "aws_iam_role" "github_ci_deploy" {
+  name                 = "agent-platform-github-ci-deploy"
+  description          = "GitHub Actions governed Lambda code deploy (T2.49 c3 / DEP-12): merges ducklake + prod deploy via OIDC"
   permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
 
   assume_role_policy = jsonencode({
@@ -948,34 +937,21 @@ resource "aws_iam_role" "github_ci_ducklake_deploy" {
   })
 }
 
-data "aws_iam_policy_document" "github_ci_ducklake_deploy" {
+data "aws_iam_policy_document" "github_ci_deploy" {
   statement {
-    # c1: the ONLY Lambda action this role grants -- UpdateFunctionCode on the four ducklake
-    # function ARNs. No lambda-config (UpdateFunctionConfiguration), no invoke, no
-    # publish-version/add-permission. Resource references (not literal ARNs): this role's whole
-    # purpose is deploying these functions' code, so a real Terraform dependency edge is correct
-    # here (unlike the refresh-read fragments above, which deliberately avoid one).
-    sid     = "DucklakeUpdateFunctionCode"
-    effect  = "Allow"
-    actions = ["lambda:UpdateFunctionCode"]
-    resources = [
-      aws_lambda_function.ducklake_writer.arn,
-      aws_lambda_function.ducklake_reader.arn,
-      aws_lambda_function.ducklake_maintenance.arn,
-      aws_lambda_function.ducklake_catalog_dr.arn,
-      # T2.18 c9 split: the 5th DuckLake function. Without this the governed CD deploy
-      # (deploy-ducklake-lambdas.yml) AccessDenies on UpdateFunctionCode for the smoke function.
-      aws_lambda_function.ducklake_maintenance_smoke.arn,
-    ]
+    # The ONLY Lambda action this role grants -- UpdateFunctionCode on the account-wide
+    # function:agent-platform-* prefix (Decision 129/144 pt2), covering all 8 functions (the
+    # five ducklake + three prod functions) without per-function enumeration. No lambda-config,
+    # no invoke, no publish-version/add-permission.
+    sid       = "DeployUpdateFunctionCode"
+    effect    = "Allow"
+    actions   = ["lambda:UpdateFunctionCode"]
+    resources = ["arn:aws:lambda:${var.aws_region}:${var.account_id}:function:agent-platform-*"]
   }
 
   statement {
-    # build_lambda's validate_bucket_exists runs `aws s3api head-bucket` before uploading (the
-    # --deploy path does NOT pass --skip-upload), and head-bucket requires bucket-level
-    # s3:ListBucket. github_ci_plan gets this via DataLakeBucketRead in ci_full_refresh_read; this
-    # role composes no shared fragment, so grant it explicitly. Bucket-level ONLY (resource is the
-    # bucket ARN, no /*): head-bucket needs the bucket resource, not object resources. Without it
-    # the first governed deploy fails closed with a misleading "bucket does not exist" (rc 1).
+    # build_lambda's validate_bucket_exists runs `aws s3api head-bucket` before uploading;
+    # bucket-level ONLY (no /*). Mirrors github_ci_ducklake_deploy's DataLakeHeadBucket.
     sid       = "DataLakeHeadBucket"
     effect    = "Allow"
     actions   = ["s3:ListBucket"]
@@ -983,28 +959,31 @@ data "aws_iam_policy_document" "github_ci_ducklake_deploy" {
   }
 
   statement {
-    # Build + upload the four function zips (and three layer zips, when rebuilt) to
-    # lambda-packages/. Matches github_ci_plan's DucklakeLambdaPackagesWrite scope.
-    sid       = "DucklakeLambdaPackagesReadWrite"
+    # Build + upload every function zip (and layer zips, when rebuilt) to lambda-packages/.
+    # Union of DucklakeLambdaPackagesReadWrite + ProdLambdaPackagesReadWrite (identical scope).
+    sid       = "LambdaPackagesReadWrite"
     effect    = "Allow"
     actions   = ["s3:GetObject", "s3:PutObject"]
     resources = ["${aws_s3_bucket.data_lake.arn}/lambda-packages/*"]
   }
 
   statement {
-    # c3: write the per-function deployment record (function -> CodeSha256 -> source git SHA).
-    sid       = "DeployRecordWrite"
-    effect    = "Allow"
-    actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.data_lake.arn}/deploy-records/ducklake/*"]
+    # Union of the two deploy-record prefixes: write the per-function deployment record
+    # (function -> CodeSha256 -> source git SHA) for BOTH the ducklake and prod classes.
+    sid     = "DeployRecordWrite"
+    effect  = "Allow"
+    actions = ["s3:PutObject"]
+    resources = [
+      "${aws_s3_bucket.data_lake.arn}/deploy-records/ducklake/*",
+      "${aws_s3_bucket.data_lake.arn}/deploy-records/prod/*",
+    ]
   }
 
   statement {
-    # Vendored build inputs `build_lambda --ducklake-only` reads at build time (pg_dump/pg_restore
-    # bundle + pinned DuckLake extensions). Read-only -- operator-seeded, never written by CI.
-    # Mirrors github_ci_plan's DucklakeBuildInputsRead: build+deploy share one identity here, so
-    # this role needs the same build-time reads plan does. Do NOT narrow S3 to lambda-packages/*
-    # only -- the first governed deploy would fail AccessDenied at build time.
+    # Vendored build inputs `build_lambda --ducklake-only` reads at build time. Read-only --
+    # operator-seeded, never written by CI. Matches github_ci_ducklake_deploy's
+    # DucklakeBuildInputsRead (the prod build path does not need this prefix, but sharing one
+    # identity means it is granted here too -- read-only, no broader blast radius created).
     sid     = "DucklakeBuildInputsRead"
     effect  = "Allow"
     actions = ["s3:GetObject"]
@@ -1015,116 +994,17 @@ data "aws_iam_policy_document" "github_ci_ducklake_deploy" {
   }
 }
 
-resource "aws_iam_role_policy" "github_ci_ducklake_deploy" {
-  name   = "agent-platform-github-ci-ducklake-deploy"
-  role   = aws_iam_role.github_ci_ducklake_deploy.id
-  policy = data.aws_iam_policy_document.github_ci_ducklake_deploy.json
-}
+resource "aws_iam_role_policy" "github_ci_deploy" {
+  name   = "agent-platform-github-ci-deploy"
+  role   = aws_iam_role.github_ci_deploy.id
+  policy = data.aws_iam_policy_document.github_ci_deploy.json
 
-# ---------------------------------------------------------------------------
-# Prod-class deploy role (governed code-deploy channel, T2.43 / Decision 125/126):
-# refs/heads/main sub (push-triggered governed deploy workflow only). Mirrors
-# github_ci_ducklake_deploy exactly, scoped to the three T2.43 prod functions instead.
-#
-# This role is IAM-SENSITIVE -- the deterministic guard (scripts/terraform_apply_guard.py)
-# BLOCKS its creation (exit 2) and it lands via the human-gated admin-create path (Decision 98),
-# mirroring github_ci_plan / github_ci_drift / github_ci_ducklake_deploy. The governed deploy
-# workflow (.github/workflows/deploy-prod-lambdas.yml) carries continue-on-error on the assume-role
-# step to cover the bootstrap window (no role exists until the admin-create apply lands; pre-apply
-# pushes no-op rather than erroring).
-#
-# Capability shape (deliberately narrow -- "UpdateFunctionCode-only" is the literal invariant):
-#   - lambda:UpdateFunctionCode on the three prod function ARNs ONLY. No
-#     UpdateFunctionConfiguration, no InvokeFunction*, no PublishVersion, no AddPermission, no
-#     other lambda: action.
-#   - S3: GetObject/PutObject on lambda-packages/* (build + upload the zips) and PutObject on
-#     deploy-records/prod/* (deploy-record write -- this role never reads its own records back;
-#     convergence-health/drift tooling reads via github_ci_branch's existing bucket-wide read
-#     grant).
-#   - No terraform:*, no iam:* of any kind.
-#
-# Trust mirrors github_ci_branch/github_ci_drift/github_ci_ducklake_deploy: StringEquals aud +
-# StringLike sub refs/heads/main ONLY (no agent/*, no pull/*, no environment sub -- this role is
-# never assumed from a PR or a gated Environment).
-# ---------------------------------------------------------------------------
-
-resource "aws_iam_role" "github_ci_prod_deploy" {
-  name                 = "agent-platform-github-ci-prod-deploy"
-  description          = "GitHub Actions governed prod-class Lambda code deploy (T2.43 / Decision 125/126): refs/heads/main via OIDC"
-  permissions_boundary = "arn:aws:iam::${var.account_id}:policy/agent-platform-github-ci-apply-boundary"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Federated = aws_iam_openid_connect_provider.github_actions.arn
-        }
-        Action = "sts:AssumeRoleWithWebIdentity"
-        Condition = {
-          StringEquals = {
-            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          }
-          StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${local.github_repo}:ref:refs/heads/main"
-          }
-        }
-      }
-    ]
-  })
-}
-
-data "aws_iam_policy_document" "github_ci_prod_deploy" {
-  statement {
-    # The ONLY Lambda action this role grants -- UpdateFunctionCode on the three prod function
-    # ARNs. No lambda-config (UpdateFunctionConfiguration), no invoke, no publish-version/
-    # add-permission. Resource references (not literal ARNs): this role's whole purpose is
-    # deploying these functions' code, so a real Terraform dependency edge is correct here
-    # (unlike the refresh-read fragments above, which deliberately avoid one).
-    sid     = "ProdUpdateFunctionCode"
-    effect  = "Allow"
-    actions = ["lambda:UpdateFunctionCode"]
-    resources = [
-      aws_lambda_function.scheduled_agent_dispatcher.arn,
-      aws_lambda_function.findings_processor.arn,
-      aws_lambda_function.ops_compaction.arn,
-    ]
+  lifecycle {
+    precondition {
+      # rec-2793 (DEP-01 anti-recurrence): whitespace-stripped/minified measure (see
+      # github_ci_planner's precondition above for the AWS whitespace-exclusion rationale).
+      condition     = length(jsonencode(jsondecode(data.aws_iam_policy_document.github_ci_deploy.json))) <= 10240
+      error_message = "github_ci_deploy inline policy exceeds the 10,240 B IAM inline-policy limit (whitespace-stripped measure, rec-2793). Move a statement to a customer-managed policy or trim grants."
+    }
   }
-
-  statement {
-    # build_lambda's validate_bucket_exists runs `aws s3api head-bucket` before uploading (the
-    # --deploy path does NOT pass --skip-upload), and head-bucket requires bucket-level
-    # s3:ListBucket. Bucket-level ONLY (resource is the bucket ARN, no /*): head-bucket needs the
-    # bucket resource, not object resources. Without it the first governed deploy fails closed
-    # with a misleading "bucket does not exist" (rc 1). Mirrors github_ci_ducklake_deploy's
-    # DataLakeHeadBucket.
-    sid       = "DataLakeHeadBucket"
-    effect    = "Allow"
-    actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.data_lake.arn]
-  }
-
-  statement {
-    # Build + upload the three function zips (and the data-pipeline-deps layer zip, when rebuilt)
-    # to lambda-packages/. Matches github_ci_ducklake_deploy's DucklakeLambdaPackagesReadWrite scope.
-    sid       = "ProdLambdaPackagesReadWrite"
-    effect    = "Allow"
-    actions   = ["s3:GetObject", "s3:PutObject"]
-    resources = ["${aws_s3_bucket.data_lake.arn}/lambda-packages/*"]
-  }
-
-  statement {
-    # Write the per-function deployment record (function -> CodeSha256 -> source git SHA).
-    sid       = "DeployRecordWrite"
-    effect    = "Allow"
-    actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.data_lake.arn}/deploy-records/prod/*"]
-  }
-}
-
-resource "aws_iam_role_policy" "github_ci_prod_deploy" {
-  name   = "agent-platform-github-ci-prod-deploy"
-  role   = aws_iam_role.github_ci_prod_deploy.id
-  policy = data.aws_iam_policy_document.github_ci_prod_deploy.json
 }

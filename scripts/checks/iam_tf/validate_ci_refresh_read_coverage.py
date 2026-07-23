@@ -40,10 +40,11 @@ from scripts.checks.iam_tf._write_coverage import check_write_coverage
 def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
     """Whole-module refresh-read + write coverage gate (rec-2702 anti-recurrence + Decision 144 c5).
 
-    READ half (unchanged): every grant-requiring resource across terraform/personal/*.tf must be
-    refresh-read-covered in ALL THREE plan-capable role policies -- github_ci_apply
-    (terraform/bootstrap/github_ci_apply.tf), github_ci_plan + github_ci_drift
-    (terraform/personal/oidc.tf). A resource of a type this module does not classify FAILS LOUD.
+    READ half (unchanged behaviour; T2.49 / DEP-12 collapsed the role identity 3->2): every
+    grant-requiring resource across terraform/personal/*.tf must be refresh-read-covered in
+    BOTH plan-capable role policies -- github_ci_apply (terraform/bootstrap/github_ci_apply.tf)
+    + github_ci_planner, the merged plan+drift role (terraform/personal/oidc.tf). A resource of
+    a type this module does not classify FAILS LOUD.
 
     WRITE half (Decision 144 / T2.48 c5, DEP-01): github_ci_apply's inline policy must WRITE-cover
     every apply-role-written managed type (aws_lambda_function / aws_cloudwatch_log_group /
@@ -81,13 +82,13 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
         print("  FAIL: could not parse the apply role's inline policy statements -- has the HCL shape changed?")
         return
 
-    plan_drift_statements = _resolve_role_statements(oidc_text)
-    if plan_drift_statements is None:
-        failed.append(f"{key} could not resolve github_ci_plan/github_ci_drift role policies in {oidc_tf.name}")
-        print("  FAIL: could not resolve the plan/drift role policy documents -- has the HCL shape changed?")
+    planner_statements = _resolve_role_statements(oidc_text)
+    if planner_statements is None:
+        failed.append(f"{key} could not resolve github_ci_planner role policy in {oidc_tf.name}")
+        print("  FAIL: could not resolve the planner role policy document -- has the HCL shape changed?")
         return
 
-    role_statements: dict[str, list[dict]] = {ROLE_APPLY: apply_statements, **plan_drift_statements}
+    role_statements: dict[str, list[dict]] = {ROLE_APPLY: apply_statements, **planner_statements}
 
     resources, locals_map, attr_index = _scan_resources(personal_dir)
     if not resources:
@@ -106,7 +107,7 @@ def validate_ci_refresh_read_coverage(failed: list[str]) -> None:
 
     if not any(f.startswith(key) for f in failed):
         print(
-            f"  PASS: all {checked} grant-requiring resources are refresh-read-covered in apply/plan/drift, "
+            f"  PASS: all {checked} grant-requiring resources are refresh-read-covered in apply/planner, "
             f"and github_ci_apply write-covers all {write_types} apply-role-written managed types."
         )
 

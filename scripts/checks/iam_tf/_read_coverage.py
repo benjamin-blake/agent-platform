@@ -92,10 +92,11 @@ _PERSONAL_DIR_REL = Path("terraform") / "personal"
 _BOOTSTRAP_TF_REL = Path("terraform") / "bootstrap" / "github_ci_apply.tf"
 
 ROLE_APPLY = "apply"
-ROLE_PLAN = "plan"
-ROLE_DRIFT = "drift"
-_PLAN_ROLE_POLICY_NAME = "github_ci_plan"
-_DRIFT_ROLE_POLICY_NAME = "github_ci_drift"
+ROLE_PLANNER = "planner"
+# T2.49 / DEP-12 (Decision 144): github_ci_plan + github_ci_drift merged into the single
+# dual-sub github_ci_planner role (c2) -- the plan-capable role set goes 3 (apply/plan/drift)
+# -> 2 (apply/planner). The coverage-parity contract is unchanged, only the role identity is.
+_PLANNER_ROLE_POLICY_NAME = "github_ci_planner"
 
 # ---------------------------------------------------------------------------
 # Bootstrap (jsonencode, capitalized-key) statement parsing.
@@ -108,6 +109,11 @@ _DRIFT_ROLE_POLICY_NAME = "github_ci_drift"
 # ---------------------------------------------------------------------------
 
 _SID_CAP_RE = re.compile(r'Sid\s*=\s*"([^"]*)"')
+# rec-2793 hoist pattern (github_ci_apply.tf): `policy = local.<name>` referencing a
+# `locals { <name> = jsonencode({ ... Statement = [...] ... }) }` block elsewhere in the file --
+# the lifecycle-precondition-cannot-reference-self workaround. _parse_bootstrap_statements falls
+# back to resolving this indirection when the Statement array is not inline in the resource body.
+_POLICY_LOCAL_REF_RE = re.compile(r"policy\s*=\s*local\.(\w+)")
 
 
 def _extract_bracket_block(text: str, open_idx: int) -> str:
@@ -164,9 +170,21 @@ def _parse_bootstrap_statements(text: str, role_policy_resource_name: str) -> li
         return []
     body = _vir._extract_block(text, m.end() - 1)
     stmt_m = re.search(r"Statement\s*=\s*\[", body)
-    if not stmt_m:
-        return []
-    array_text = _extract_bracket_block(body, stmt_m.end() - 1)
+    if stmt_m:
+        array_text = _extract_bracket_block(body, stmt_m.end() - 1)
+    else:
+        # Not inline -- try the rec-2793 hoisted-local indirection (see _POLICY_LOCAL_REF_RE).
+        local_m = _POLICY_LOCAL_REF_RE.search(body)
+        if not local_m:
+            return []
+        assign_m = re.search(rf"\b{re.escape(local_m.group(1))}\s*=\s*jsonencode\s*\(\s*\{{", text)
+        if not assign_m:
+            return []
+        local_body = _vir._extract_block(text, assign_m.end() - 1)
+        local_stmt_m = re.search(r"Statement\s*=\s*\[", local_body)
+        if not local_stmt_m:
+            return []
+        array_text = _extract_bracket_block(local_body, local_stmt_m.end() - 1)
     statements = []
     for obj_body in _split_top_level_objects(array_text):
         sid_m = _SID_CAP_RE.search(obj_body)
@@ -405,7 +423,7 @@ def _resolve_role_statements(oidc_text: str) -> dict[str, list[dict]] | None:
     docs = _vir._parse_policy_documents(oidc_text)
     role_policy_map = _vir._parse_role_policy_map(oidc_text)
     result: dict[str, list[dict]] = {}
-    for role_key, doc_resource_name in ((ROLE_PLAN, _PLAN_ROLE_POLICY_NAME), (ROLE_DRIFT, _DRIFT_ROLE_POLICY_NAME)):
+    for role_key, doc_resource_name in ((ROLE_PLANNER, _PLANNER_ROLE_POLICY_NAME),):
         doc_name = role_policy_map.get(doc_resource_name)
         if not doc_name:
             return None
