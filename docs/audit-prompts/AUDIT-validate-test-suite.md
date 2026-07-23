@@ -51,12 +51,17 @@ are BOTH (a) navigation hazards for this audit AND (b) a first-class audit subje
 the disambiguation below to avoid MISreading a surface during recon; answer Q6 on whether the
 collision itself should be reconciled. Keep those two roles distinct.
 
-- "coverage" names TWO unrelated mechanisms. (1) pytest-cov CODE coverage: `[tool.coverage.*]` in
-  `pyproject.toml`, driven by the full-tier `pytest --cov=src`. (2) VERIFIER coverage: the
-  `--coverage` CLI flag, `run_coverage_check()` in `scripts/checks/_scaffolding.py`,
-  `validate_test_coverage` in the check corpus, and `scripts/verifiers/` -- an advisory report of
-  scope files lacking a registered verifier. These are different subsystems; a claim about one is
-  not a claim about the other.
+- "coverage" is an OVERLOADED name -- enumerate every coverage-named surface yourself before
+  answering Q6; this brief pins no count. The two genuinely-confusable ones in this audit's scope
+  are (1) pytest-cov CODE coverage: `[tool.coverage.*]` in `pyproject.toml`, driven by the
+  full-tier `pytest --cov=src`; and (2) VERIFIER coverage: the `--coverage` CLI flag,
+  `run_coverage_check()` in `scripts/checks/_scaffolding.py`, `validate_test_coverage` in the check
+  corpus, and `scripts/verifiers/` -- an advisory report of scope files lacking a registered
+  verifier. Those two are different subsystems; a claim about one is not a claim about the other.
+  The registry ALSO carries domain-qualified "coverage"-named checks that are NOT about test/code
+  coverage (e.g. `validate_ci_refresh_read_coverage` = IAM read-grant completeness,
+  `validate_lambda_manifest_coverage` = manifest presence) -- Q6 decides for itself which
+  coverage-named surfaces genuinely collide and which are benign domain qualifiers.
 - "validate" names FOUR things. (1) `scripts/validate.py` -- the presubmit gate, IN SCOPE. (2) the
   `validate_*` / `check_*` modules under `scripts/checks/**` -- the checks, IN SCOPE. (3)
   `scripts/validate_telemetry.py` -- a standalone Athena telemetry-schema script, NOT wired into
@@ -258,7 +263,10 @@ not pattern-match.
   checks that run in the fast tier but not the post-merge tier; (7) the pip cache key vs the set the
   fast job installs; (8) whether the fast-tier budget assertion, which runs last, can prevent a slow
   run or only report it after the fact; (9) whether the validation workflows cancel superseded
-  in-progress runs (`concurrency` / `cancel-in-progress`) or let them run to completion.
+  in-progress runs (`concurrency` / `cancel-in-progress`) or let them run to completion; (10) the
+  trust/permissions posture of `pr-validate` -- it derives the affected-set and runs pytest over an
+  untrusted PR diff under `contents: read` with no secrets/OIDC: is that blast radius acceptable,
+  and does the `hashFiles('requirements.txt')` cache key vs the fast-install set matter here?
 
 ## RUBRIC
 
