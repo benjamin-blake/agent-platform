@@ -135,11 +135,13 @@ Run these once, from the repo root, before auditing. They are read-only or cache
 2. `bin/venv-python -m scripts.session.preflight` -- populates `logs/.preflight-report.json` and
    refreshes `logs/.recommendations-log.jsonl` (the recommendations read cache) from the
    warehouse. DEDUP DISCIPLINE depends on that cache being present.
-   - Degraded path: IF this fails on credentials/egress, do NOT abort. Set
-     `meta.degraded_dedup=true`, set every finding's top-level `confidence=HYPOTHESIS` and its
+   - Degraded path: IF this fails for ANY reason (credentials, egress, a bug, disk), do NOT abort.
+     Set `meta.degraded_dedup=true`, set every finding's top-level `confidence=HYPOTHESIS` and its
      `roadmap_crossref.dedup_hit_count=null` (null is permitted in degraded mode), and proceed
-     using only the on-disk `docs/DECISIONS.md`, `docs/ROADMAP-PLATFORM.yaml`, and `audits/*.yaml`
-     for dedup.
+     using only the on-disk `docs/DECISIONS.md`, `docs/ROADMAP-PLATFORM.yaml`, `audits/*.yaml`, and
+     whatever `logs/.recommendations-log.jsonl` already exists on disk (possibly stale) -- both for
+     dedup AND for the Q4 recall grep in EMPIRICAL PASS. If that recs cache is stale or absent,
+     downgrade Q4's verdict confidence and record it in `meta.contract_notes`.
 3. For any empirical timing (EMPIRICAL PASS), use `bin/venv-python` for all Python invocations,
    never bare `python`. If a heavy dependency is missing in your environment and blocks a timing
    run, record it in `meta.contract_notes` and fall back to static reasoning for that item -- do
@@ -382,7 +384,8 @@ Observed evidence outranks static reasoning at equal severity; tag each finding
   a check outside the sequences).
 - Grep `logs/.recommendations-log.jsonl` for at most 20 recent `source=ci_rca` recommendations;
   classify how many trace to a fast-tier escape (a test that failed only post-merge that an affected-set
-  channel could have selected). This is your empirical recall signal for Q4.
+  channel could have selected). This is your empirical recall signal for Q4 (in `degraded_dedup`
+  mode, grep whatever on-disk recs cache exists and downgrade Q4 confidence per SETUP).
 - Sample at most 10 recent `main-validate` runs and at most 15 recent merged `claude/*` PR
   `pr-validate` runs from Actions history: read step summaries and the uploaded `pytest-junit` /
   `selection-manifest` artifacts, NOT full logs.
@@ -513,7 +516,12 @@ COUNTING INVARIANT: `findings[]` is the SOLE enumerated list.
 Fully-covered candidates live in `rejected_candidates`, never in `findings`. `rubric_ratings`,
 `question_answers`, `check_disposition`, `naming_reconciliation`, and `requirements_options` are
 systems-of-record referenced FROM findings, never re-counted. `top_improvements` and
-`highest_leverage_change` MUST be finding ids.
+`highest_leverage_change` MUST be finding ids. A finding names exactly ONE primary `question` and
+ONE primary `dimension` -- the axis that most directly frames the defect. A single check that
+warrants BOTH a Q1 redundancy disposition AND a Q2 tier disposition is still ONE finding (pick the
+primary question); its `check_disposition` row carries both `redundancy_verdict` and `tier_verdict`,
+so the second axis lives there, not in a second finding -- do NOT split one check's two dispositions
+into two findings (that double-counts). File two findings only for two genuinely independent defects.
 
 `control_property_match` / `compensating_controls_considered`: whenever a compensating control is
 your reason to dismiss or downgrade, name the property the control exercises, cite where it operates
