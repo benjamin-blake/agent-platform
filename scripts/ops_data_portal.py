@@ -419,13 +419,18 @@ def _fetch_rec_from_reader(rec_id: str, profile: Optional[str] = None) -> Option
     return _sanitize_athena_record(coerced) if coerced is not None else None
 
 
+_UPDATE_CONTENT_VALIDATED_FIELDS = frozenset({"context", "title", "acceptance", "file"})
+
+
 def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> bool:
     """Merge update fields into an existing recommendation and write via the DuckLake closed boundary.
 
     Reads the current record via DuckLake reader (ducklake backend) or DuckDBIcebergReader
     (iceberg rollback). Raises RuntimeError if the warehouse is unreachable. Merges updates,
-    validates the merged record, routes the write to _ducklake_write, writes through to local
-    JSONL, then triggers _sync_table to refresh the read cache.
+    validates the merged record -- including, for any updated field in
+    _UPDATE_CONTENT_VALIDATED_FIELDS, the same write-time content-quality gate file_rec applies
+    (Decision 66) -- routes the write to _ducklake_write, writes through to local JSONL, then
+    triggers _sync_table to refresh the read cache.
 
     Args:
         rec_id: Recommendation ID to update (e.g. 'rec-042').
@@ -436,7 +441,8 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
         True on success.
 
     Raises:
-        ValueError: If 'status' in updates is not a valid status value.
+        ValueError: If 'status' in updates is not a valid status value, or an updated
+            content-validated field (context/title/acceptance/file) fails its write-time gate.
         ValidationError: If the merged record fails schema validation.
         RuntimeError: If Athena is unreachable for the read step or compaction fails.
     """
@@ -453,6 +459,10 @@ def update_rec(rec_id: str, updates: dict, profile: Optional[str] = None) -> boo
         )
     merged = {**existing, **updates}
     merged["id"] = rec_id  # always preserve the ID
+
+    for _col, _validator in _load_write_time_validators("ops_recommendations"):
+        if _col in updates and _col in _UPDATE_CONTENT_VALIDATED_FIELDS:
+            _validator(merged[_col], _col)
 
     Recommendation.model_validate(merged)  # raises on failure
 

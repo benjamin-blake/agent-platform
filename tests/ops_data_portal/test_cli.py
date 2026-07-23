@@ -85,6 +85,29 @@ class TestCLI:
         captured = capsys.readouterr()
         assert "rec-042" in captured.out
 
+    def test_cli_update_rec_context(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """CLI --update-rec --context routes the new context into the update_rec write payload."""
+        existing = {**_VALID_FIELDS, "id": "rec-042", "date": "2026-01-01"}
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+        recs_file.write_text(json.dumps(existing) + "\n", encoding="utf-8")
+        new_context = "Updated context via the CLI --update-rec path -- this replacement clears the 80-char floor."
+
+        with (
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import main
+
+            rc = main(["--update-rec", "rec-042", "--context", new_context])
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "rec-042" in captured.out
+        _, call_rec = mock_dl_write.call_args[0]
+        assert call_rec["context"] == new_context
+
     def test_cli_enqueue_findings_dispatches(self, tmp_path: Path) -> None:
         """CLI --enqueue-findings calls enqueue_findings with the given path and profile."""
         jsonl_file = tmp_path / "findings.jsonl"

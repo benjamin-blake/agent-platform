@@ -134,7 +134,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     rec = parser.add_argument_group("--file-rec fields")
     rec.add_argument("--title")
     rec.add_argument("--file", dest="target_file")
-    rec.add_argument("--context", dest="rec_context")
+    rec.add_argument("--context", dest="rec_context", help="Context text; also applies to --update-rec")
     rec.add_argument("--acceptance")
     rec.add_argument("--effort", choices=["XS", "S", "M", "L", "XL"])
     rec.add_argument("--priority", choices=["Critical", "High", "Medium", "Low"])
@@ -238,6 +238,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             val = getattr(args, field, None)
             if val is not None:
                 updates[field] = val
+        if args.rec_context is not None:
+            updates["context"] = args.rec_context
         if not updates:
             print("ERROR: --update-rec requires at least one update field (e.g. --status)", file=sys.stderr)
             return 1
