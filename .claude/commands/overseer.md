@@ -14,10 +14,11 @@ argument-hint: [roadmap tier_item id | audit slug | free-form multi-step intent]
 by decomposing it into one or more `/plan` + `/implement` cycles and dispatching each as a
 fresh-context subagent, largely unattended between the G0/G1/G3 human gates. The overseer never
 writes source code itself -- every file change happens inside a dispatched planning or
-implementation subagent, each running its own full gate stack (decision-scout, plan-critique,
-code-review, live verification) unmodified.
+implementation subagent. Each gate (decision-scout, plan-critique, code-review) runs unmodified but
+overseer-dispatched as a fresh sibling, never inline in the author subagent (Design B).
 
-*Note: For the full methodology (read-nothing router discipline, bounded hand-back schema, ledger
+*Note: For the full methodology (read-nothing router discipline, the Design-B gate-request
+trampoline, division of labor, liveness/watchdog resilience, bounded hand-back schema, ledger
 schema, overlap-matrix procedure, autonomy-boundary policy, the Fable advice-consult protocol, and
 the Decision 67/55/73/90 guardrails), invoke your `overseer` skill via the Skill tool. This command
 is a thin lifecycle sequence; the skill owns HOW.*

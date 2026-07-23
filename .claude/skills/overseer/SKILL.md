@@ -13,12 +13,12 @@ model: opus[1m]
 
 You are using this skill to augment the `/overseer` workflow (Layer 3 command; this skill is its
 Layer 4 methodology). The overseer is an orchestration meta-layer, NOT a fifth workflow tier
-(Decision 90): it composes the existing `/plan` and `/implement` subagents -- each running its own
-full gate stack unmodified -- to drive a roadmap item, audit, or multi-slice body of work to
-completion, narrowing the human to intake (G0), decomposition (G1), and completion (G3). The overseer
-never edits source code, terraform, or Python itself; every file change happens inside a dispatched
-subagent. Detailed schemas/recipes live in `docs/contracts/overseer-dispatch.yaml` (Decision 86/127
-relief valve) -- this file is the anchor+pointer index; load the contract for mechanism detail.
+(Decision 90): it composes `/plan` and `/implement` -- their gates (decision-scout, plan-critique,
+code-review) run unmodified but overseer-dispatched, NEVER inline in the author -- to drive a
+roadmap item, audit, or multi-slice body of work to completion, narrowing the human to intake (G0),
+decomposition (G1), and completion (G3). The overseer never edits source code, terraform, or Python
+itself; every file change happens inside a dispatched subagent. Detailed schemas/recipes live in
+`docs/contracts/overseer-dispatch.yaml` -- this file is the anchor+pointer index.
 
 ## Behavioural Invariants
 ```yaml
