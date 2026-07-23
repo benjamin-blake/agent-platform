@@ -36,7 +36,7 @@ _MOVED_CALLERS: dict[str, tuple[str, frozenset[str]]] = {
     ),
     "backfill_decisions_from_md": (
         "scripts.ops_portal.decisions",
-        frozenset({"_sync_table"}),
+        frozenset({"_sync_table", "_assert_no_orphaned_current_rows"}),
     ),
 }
 

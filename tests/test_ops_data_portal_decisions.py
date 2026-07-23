@@ -315,6 +315,7 @@ class TestBackfillFidelityTripwire:
             patch("scripts.ops_portal.decisions._sync_table"),
             patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
             patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
@@ -365,6 +366,7 @@ class TestBackfillFidelityTripwire:
             patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
             patch("scripts.ops_portal.decisions._live_decision_ids", return_value={63}),
             patch("scripts.decisions_md.parse_decisions_md", return_value=[baselined_entry]),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
@@ -389,6 +391,7 @@ class TestBackfillFidelityTripwire:
             patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
             patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
             patch("scripts.decisions_md.parse_decisions_md", return_value=unkeyed_entries),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
@@ -410,6 +413,7 @@ class TestBackfillFidelityTripwire:
             patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
             patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
             patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
@@ -445,6 +449,7 @@ class TestBackfillContentHashSkipGate:
             patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=existing_row),
             patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
             patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
@@ -466,6 +471,7 @@ class TestBackfillContentHashSkipGate:
             patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=existing_row),
             patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
             patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
@@ -487,6 +493,7 @@ class TestBackfillContentHashSkipGate:
             patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
             patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
             patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
