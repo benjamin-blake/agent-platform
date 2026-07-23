@@ -20,14 +20,17 @@ Answer Q1..Q8 (THE QUESTIONS). Rate every surface against the rubric. File findi
 OUTPUT contract. The deliverables are exactly two files: `audits/validate-test-suite-<sha>.yaml`
 and `audits/validate-test-suite-<sha>.md`, where `<sha>` is the short SHA of the audited
 `origin/main` tip (see COMMIT / PR MECHANICS). You draft; a human disposes of the PR. The ONLY
-files you create or modify in the repository tree are those two deliverables; regenerating
-gitignored local caches per SETUP is expected and is not a breach (never commit them).
+files you COMMIT or include in the PR are those two deliverables; regenerating gitignored local
+caches per SETUP, and constructing TRANSIENT uncommitted working-tree diffs to MEASURE the fast
+tier (DD-A / EMPIRICAL PASS; reverted after), are expected and are not breaches (never commit them).
 
 ## CANDIDATE OBSERVATIONS ARE NOT VERDICTS
 
-This brief hands you FACTS and CANDIDATE hypotheses. It never hands you verdicts. ASSUME NO
-CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT to file:line or to an observed artifact. A run that
-merely confirms the candidates below has failed. Several candidates will turn out to be
+This brief hands you FACTS and CANDIDATE hypotheses. It never hands you verdicts. There is no
+separate numbered candidate list: the candidates you must adjudicate ARE the neutrally-stated facts
+in the GROUNDING MAP, the specific sub-questions inside THE QUESTIONS, and the Q8 seed list. ASSUME
+NO CANDIDATE IS A REAL DEFECT UNTIL YOU TRACE IT to file:line or to an observed artifact. A run that
+merely confirms those candidates has failed. Several candidates will turn out to be
 deliberate, already-owned by a roadmap item, or covered by a compensating control; your job is to
 find those and reject them with the control named.
 
@@ -107,7 +110,10 @@ Out of scope, one line each: trading/product code; terraform and all deploy/reco
 workflows; the CI-RCA subsystem internals; the verifier-harness internals (`scripts/verifiers/`);
 ops-portal / warehouse internals; the CONTENT of `.importlinter` contracts (Decision 80
 architecture) -- the check's wiring/tier/cost is in scope, the contract graph is not; the security
-CONTENT of detect-secrets / the shape denylist -- their runtime cost in the tier is in scope.
+CONTENT of detect-secrets / the shape denylist -- their runtime cost in the tier is in scope; the
+GHAS / SAST security workflows (`codeql.yml`, `ghas-probe.yml`) -- owned by Decision 83, a
+security-scanning concern distinct from the test/validation gate (you MAY name SAST as a
+compensating control in Q5, but do not audit these workflows).
 
 TRUST-NOTHING: obtain every file, line number, count, and size by reading the repository at your
 audited commit. Every anchor in the GROUNDING MAP is a lead, not evidence -- re-derive it. Record
@@ -520,7 +526,10 @@ Assign severity AFTER judgment, by defect class -- never inherit it from this br
 - medium = redundancy / miscategorization / drift-risk / ambiguity with a clear fix.
 - low = clarity / wording / cosmetic naming.
 
-Maturity: compute LAST, per surface, top-down, first match wins. Pin these thresholds:
+Maturity: compute LAST, per surface, top-down, first match wins. A finding tagged `surface: shared`
+counts toward the critical/high tally of EVERY surface whose behavior it degrades (name those
+surfaces in the finding's `gap`); a shared finding that degrades the whole validation path
+indivisibly counts against all six surfaces. Pin these thresholds:
 - frontier = 0 open critical AND 0 open high on that surface AND every `external_checklist`
   property (Q5's single global checklist for the whole validation path) rated met or partial, never
   missed. The global checklist gates the frontier tier for EVERY surface; the critical/high counts
@@ -529,7 +538,9 @@ Maturity: compute LAST, per surface, top-down, first match wins. Pin these thres
 - solid = <= 1 critical.
 - nascent = otherwise.
 The top rating stays reachable where you argued a property-matched compensating control -- the
-framing here must not foreclose it.
+framing here must not foreclose it. `summary.maturity_S1..S6` restate the
+`per_surface_assessment[].maturity` values verbatim -- same value per surface, never a second
+derivation.
 
 ## COMMIT / PR MECHANICS
 
@@ -556,10 +567,13 @@ framing here must not foreclose it.
 
 ## GUARDRAILS
 
-- Write boundary, closed list: the only files you create or modify in the tree are
+- Write boundary, closed list: the only files you COMMIT or include in the PR are
   `audits/validate-test-suite-<sha>.yaml` and `.md`. Regenerating gitignored caches per SETUP is
-  expected; never commit them. Never edit `validate.py`, a check, a workflow, a requirements file,
-  or anything else in scope -- you review, you do not repair.
+  expected; never commit them. Never COMMIT an edit to `validate.py`, a check, a workflow, a
+  requirements file, or anything else in scope -- you review, you do not repair. Constructing a
+  TRANSIENT, uncommitted working-tree diff purely to measure the fast tier (DD-A / EMPIRICAL PASS)
+  is permitted and is NOT a breach: make the edit, run the measurement, then revert it (`git stash`
+  or `git checkout --`); it is never committed and never enters the PR.
 - Precision over volume. Fewer than ~10 surviving findings is a valid result -- state it plainly; do
   not pad. A rejected candidate with a named property-matched control is worth more than a
   speculative finding.
