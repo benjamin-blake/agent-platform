@@ -134,6 +134,9 @@ from scripts.checks.iam_tf.validate_boundary_attached import validate_boundary_a
 from scripts.checks.iam_tf.validate_ci_refresh_read_coverage import (  # noqa: F401,E402
     validate_ci_refresh_read_coverage,
 )
+from scripts.checks.iam_tf.validate_convergence_writer_isolation import (  # noqa: F401,E402
+    validate_convergence_writer_isolation,
+)
 from scripts.checks.iam_tf.validate_environment_taxonomy import validate_environment_taxonomy  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_iam_runner_policy import validate_iam_runner_policy  # noqa: F401,E402
 from scripts.checks.iam_tf.validate_invoke_implies_resolve import (  # noqa: F401,E402

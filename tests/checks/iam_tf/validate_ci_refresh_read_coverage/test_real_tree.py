@@ -114,23 +114,13 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {{
   {extra_statements}
 }}
 
-resource "aws_iam_role_policy" "github_ci_plan" {{
-  name   = "test-plan"
-  role   = "test-plan-role"
-  policy = data.aws_iam_policy_document.github_ci_plan.json
+resource "aws_iam_role_policy" "github_ci_planner" {{
+  name   = "test-planner"
+  role   = "test-planner-role"
+  policy = data.aws_iam_policy_document.github_ci_planner.json
 }}
 
-data "aws_iam_policy_document" "github_ci_plan" {{
-  source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
-}}
-
-resource "aws_iam_role_policy" "github_ci_drift" {{
-  name   = "test-drift"
-  role   = "test-drift-role"
-  policy = data.aws_iam_policy_document.github_ci_drift.json
-}}
-
-data "aws_iam_policy_document" "github_ci_drift" {{
+data "aws_iam_policy_document" "github_ci_planner" {{
   source_policy_documents = [data.aws_iam_policy_document.ci_full_refresh_read.json]
 }}
 """
@@ -173,8 +163,9 @@ class TestValidateCiRefreshReadCoverage:
     """Tests for validate_ci_refresh_read_coverage() (rec-2702 anti-recurrence)."""
 
     def test_real_tree_passes(self) -> None:
-        """The real repo tree, post Phase 1+2 grant broadening: zero coverage gaps across all
-        three plan-capable role policies (apply, plan, drift)."""
+        """The real repo tree, post Phase 1+2 grant broadening (T2.49 / DEP-12 collapsed
+        plan+drift into the single planner role): zero coverage gaps across both plan-capable
+        role policies (apply, planner)."""
         failed: list[str] = []
         validate_ci_refresh_read_coverage(failed)
         assert failed == []
@@ -189,8 +180,8 @@ class TestValidateCiRefreshReadCoverage:
         assert failed == []
 
     def test_uncovered_lambda_function_and_secret_fail_with_precise_message(self, tmp_path: Path) -> None:
-        """An aws_lambda_function and an aws_secretsmanager_secret with no matching grant in any
-        of the three role policies FAIL, naming the resource, its resolved name, and the role."""
+        """An aws_lambda_function and an aws_secretsmanager_secret with no matching grant in
+        either role policy FAIL, naming the resource, its resolved name, and the role."""
         _write_fixture(
             tmp_path,
             extra_resources="""
@@ -207,11 +198,12 @@ resource "aws_secretsmanager_secret" "gap_secret" {
         with patch("scripts.checks._common.ROOT", tmp_path):
             validate_ci_refresh_read_coverage(failed)
 
-        # Each gap resource must be flagged against all three roles (apply, plan, drift).
+        # Each gap resource must be flagged against both roles (apply, planner; T2.49 / DEP-12
+        # collapsed plan+drift into the single planner role, so 3 -> 2).
         fn_findings = [f for f in failed if "gap_fn" in f]
         secret_findings = [f for f in failed if "gap_secret" in f]
-        assert len(fn_findings) == 3, fn_findings
-        assert len(secret_findings) == 3, secret_findings
+        assert len(fn_findings) == 2, fn_findings
+        assert len(secret_findings) == 2, secret_findings
         for f in fn_findings:
             assert "aws_lambda_function" in f
             assert "agent-platform-gap-fn" in f

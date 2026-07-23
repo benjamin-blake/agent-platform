@@ -395,11 +395,13 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Speculative-plan job: pull_request ONLY, same-repo gated (CD.35 Wave 2 / T2.21).
-  # Plans under github_ci_plan (tfstate-read, tfplan-write), captures the guard's PREDICTED
+  # Plans under the planner role's PR-sub statement (tfstate-read, tfplan-write; T2.49 / DEP-12
+  # merged plan+drift into agent-platform-github-ci-planner), captures the guard's PREDICTED
   # verdict, persists plan.bin keyed by PR head SHA for apply-the-saved-plan at merge, and
   # posts a redacted diff + verdict as a PR comment. Fork PRs are excluded via the job-level
-  # if: guard (fork OIDC cannot assume github_ci_plan; the trust + job gate together enforce
-  # the capability split from github_ci_pr which has NO tfstate read).
+  # if: guard (fork OIDC cannot assume the planner role's non-reserved-session PR-sub statement;
+  # the trust + job gate together enforce the capability split from github_ci_pr which has NO
+  # tfstate read).
   # Decision 83 / CD.20: the speculative-plan PR comment is advisory -- do NOT add it to
   # required_status_checks (would wedge autonomous fix-merges once any record is red).
   # ---------------------------------------------------------------------------
@@ -408,7 +410,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      id-token: write       # OIDC for the plan role
+      id-token: write       # OIDC for the planner role (PR-sub, non-reserved session)
       contents: read
       pull-requests: write  # post the speculative-plan comment
       statuses: write       # DEP-07: post the terraform-plan-digest commit status
@@ -420,16 +422,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Configure AWS credentials (OIDC -- plan role, PR only)
-        # Best-effort: before the admin apply creates agent-platform-github-ci-plan (bootstrap
-        # window), the assume-role fails. continue-on-error keeps the job from failing; subsequent
-        # steps gate on steps.oidc_plan.outcome == 'success' and are skipped when creds are absent,
-        # so the job ends green-with-skipped rather than hard-failing during the bootstrap window.
+      - name: Configure AWS credentials (OIDC -- planner role, PR-sub, non-reserved session)
+        # T2.49 / DEP-12 (Decision 144): repointed from the retired github_ci_plan role to the
+        # merged agent-platform-github-ci-planner (plan+drift, c2). role-session-name is
+        # set EXPLICITLY to a NON-reserved value -- it must NOT equal
+        # local.convergence_writer_session_name (terraform/personal/oidc.tf), which the planner's
+        # pr-sub trust statement StringNotEquals-enforces. A mismatch (someone accidentally
+        # reusing the reserved name here) fails loudly at assume-role time rather than silently
+        # widening this PR-context job's blast radius. Best-effort: before the gated apply creates
+        # the planner role (bootstrap window), the assume-role fails. continue-on-error keeps the
+        # job from failing; subsequent steps gate on steps.oidc_plan.outcome == 'success' and are
+        # skipped when creds are absent, so the job ends green-with-skipped rather than
+        # hard-failing during the bootstrap window.
         id: oidc_plan
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-plan
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-planner
+          role-session-name: terraform-plan-pr
           aws-region: eu-west-2
 
       - name: Read pinned Terraform version
@@ -464,9 +474,9 @@ jobs:
         # filemd5() resolves to null and terraform never detects layer/function content changes) AND
         # the referenced S3 content actually exists for the apply-sandbox job to re-verify at merge
         # time. Profile-less env-credential path (this GitHub-hosted OIDC runner has no named AWS
-        # profile) under the github_ci_plan role (widened by terraform/personal/oidc.tf to grant
+        # profile) under the planner role's PR-sub statement (T2.49 / DEP-12: grants
         # s3:GetObject on the pgclient/extensions vendored bundles and s3:PutObject on
-        # lambda-packages/*).
+        # lambda-packages/*, same as the retired github_ci_plan).
         #
         # T2.42 c3 (DEP-03): LAMBDA_ARTIFACT_SHA pins upload_to_s3's per-sha dual-write to the SAME
         # PR-head-sha "Persist saved plan to S3" (below) keys tfplan/personal/<pr>/<sha>.bin by, so
@@ -479,8 +489,9 @@ jobs:
 
       - name: Terraform speculative plan (-lock=false, read-only preview)
         id: spec_plan
-        # -lock=false: github_ci_plan has no tfstate PutObject, so it cannot take the native S3
-        # lock. The merge-time apply under github_ci_apply still locks normally.
+        # -lock=false: the planner role's PR-sub statement has no tfstate PutObject, so it cannot
+        # take the native S3 lock (T2.49 / DEP-12: same as the retired github_ci_plan). The
+        # merge-time apply under github_ci_apply still locks normally.
         if: success() && steps.oidc_plan.outcome == 'success'
         working-directory: ${{ env.WORKDIR }}
         run: |

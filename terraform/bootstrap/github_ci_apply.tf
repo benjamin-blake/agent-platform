@@ -68,11 +68,11 @@ resource "aws_iam_role" "github_ci_apply" {
   })
 }
 
-resource "aws_iam_role_policy" "github_ci_apply" {
-  name = "agent-platform-github-ci-apply"
-  role = aws_iam_role.github_ci_apply.id
-
-  policy = jsonencode({
+# rec-2793 (DEP-01 anti-recurrence): hoisted out of the aws_iam_role_policy resource's inline
+# `policy = jsonencode({...})` attribute so the lifecycle precondition below can self-reference
+# the rendered JSON (a precondition cannot reference `self` -- that is postcondition-only).
+locals {
+  github_ci_apply_policy_json = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -223,12 +223,11 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         # (IAMRoleWriteBounded / IAMRoleCreateBounded) is unchanged -- in-budget role-create remains
         # gated to T2.25. New peer CI roles are admin-provisioned in terraform/personal and added
         # here as read-only grants; the pipeline does not mint them.
-        # T2.38 / Decision 98: github-ci-ducklake-deploy added the same way -- read-only refresh
-        # grant only, admin-created in terraform/personal/oidc.tf, no IAM-write budget change.
-        # T2.43 / Decision 98: github-ci-prod-deploy + the three prod execution roles
-        # (scheduled-agent-dispatcher, findings-processor, ops-compaction) added the same way --
-        # read-only refresh grant only, admin-created in terraform/personal/prod_lambdas.tf +
-        # oidc.tf, no IAM-write budget change (mirrors the T2.38 rec-2688 reconcile).
+        # T2.49 / DEP-12 (Decision 144): the four retired CI roles (plan, drift, ducklake-deploy,
+        # prod-deploy) are replaced by two merged roles -- planner (plan+drift) and deploy
+        # (ducklake-deploy+prod-deploy) -- so this list shrinks by two entries (net -2, helps the
+        # rec-2793 headroom). Same read-only refresh-grant class as the retired roles had; the
+        # pipeline does not mint them (admin-provisioned in terraform/personal/oidc.tf).
         Sid    = "IAMRolesRead"
         Effect = "Allow"
         Action = [
@@ -240,10 +239,8 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = [
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-branch",
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-pr",
-          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-plan",
-          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-drift",
-          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-ducklake-deploy",
-          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-prod-deploy",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-planner",
+          "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-deploy",
           "arn:aws:iam::${var.account_id}:role/PlatformDev",
           "arn:aws:iam::${var.account_id}:role/PlatformAdmin",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ducklake-catalog-dr",
@@ -657,6 +654,22 @@ resource "aws_iam_role_policy" "github_ci_apply" {
       }
     ]
   })
+}
+
+resource "aws_iam_role_policy" "github_ci_apply" {
+  name   = "agent-platform-github-ci-apply"
+  role   = aws_iam_role.github_ci_apply.id
+  policy = local.github_ci_apply_policy_json
+
+  lifecycle {
+    precondition {
+      # rec-2793 (DEP-01 anti-recurrence): AWS excludes whitespace from the 10,240 B inline-
+      # policy limit, so measure the WHITESPACE-STRIPPED/minified rendering (a raw
+      # whitespace-inclusive length() false-fails here: ~10,534 B raw, deploys fine minified).
+      condition     = length(jsonencode(jsondecode(local.github_ci_apply_policy_json))) <= 10240
+      error_message = "github_ci_apply inline policy exceeds the 10,240 B IAM inline-policy limit (whitespace-stripped measure, rec-2793). Move a statement to a customer-managed policy or trim grants."
+    }
+  }
 }
 
 resource "aws_iam_policy" "github_ci_apply_boundary" {
