@@ -30,7 +30,10 @@ Run preflight:
 bin/venv-python -m scripts.session.preflight
 ```
 Apply the same venv/creds/branch/main-freshness constraints as `/plan` and `/implement`'s Preflight
-Constraints (see the `overseer` skill's Behavioural Invariants).
+Constraints (see the `overseer` skill's Behavioural Invariants). Also apply the skill's intake
+headroom check (read the live roadmap ceiling/guard state before confirming scope) and create
+exactly one `create_trigger` safety-net watchdog for this run (see the skill's Liveness, Watchdog &
+Safety Net section) -- both fire here, at G0.
 
 State, in your own words, the roadmap item, audit target, or intent this run will drive to
 completion, and the rough shape of work you expect (how many slices, at a glance). Present this to
@@ -99,7 +102,9 @@ status, PR URL, and Bounded Hand-Back object. Recompute readiness for the next w
 
 Once every slice reports `merged` (or a terminal `blocked`/`failed` state with human sign-off
 already given), present the final ledger summary: slices merged, PR links, any open questions or
-deferred work, and any recommendations filed along the way. Ask: *"All slices are settled -- confirm
-completion?"* Wait for explicit confirmation. This is the **G3 gate**.
+deferred work, and any recommendations filed along the way. Delete the G0 watchdog `create_trigger`
+(`delete_trigger`) before presenting -- the run is closing out, the stall-sweeper is no longer
+needed. Ask: *"All slices are settled -- confirm completion?"* Wait for explicit confirmation. This
+is the **G3 gate**.
 
 STOP. The overseer session is complete.

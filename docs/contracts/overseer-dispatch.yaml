@@ -85,12 +85,20 @@ gate_request_trampoline:
     when: "at write-ahead time (see pending_gates below), before the gate subagent is
       dispatched."
     format: "<slug>-<gate>-r<round>-<8hex>, e.g. terraform-deploy-redesign-decision-scout-r1-a1b2c3d4"
-    provenance: "the overseer passes gate_run_id into the fresh gate subagent's dispatch prompt
-      with an instruction to echo it back verbatim in its own final report's evidence. This is
-      the ONE non-optional piece of the trampoline: it is the only check that a subagent did not
-      silently run a bias gate inline instead of requesting it -- a gate verdict arriving without
-      a matching, overseer-minted gate_run_id is not trustworthy and must be re-dispatched
-      properly rather than accepted."
+    provenance: "the overseer's dispatch prompt to the gate subagent has TWO parts, never merged:
+      (1) the gate skill's own unmodified invocation instruction (verbatim per
+      decision-scout/plan-critique/code-review's existing dispatch shape in
+      planning/SKILL.md or implement/SKILL.md -- their `## Decision Scout Report` /
+      plan-critique / code-review output formats are NOT extended with a gate_run_id or
+      evidence field, preserving the bit-for-bit gate-contract constraint), PLUS (2) a
+      trailing, out-of-band instruction appended by the overseer itself, outside the gate
+      skill's own methodology: 'After producing that structured report, append one final
+      line to your response: gate_run_id: <the exact value below>.' The overseer parses that
+      trailing line from the subagent's raw response text -- it is never a field inside the
+      gate skill's own report schema. This is the ONE non-optional piece of the trampoline: it
+      is the only check that a subagent did not silently run a bias gate inline instead of
+      requesting it -- a gate response with no trailing gate_run_id line, or a mismatched one,
+      is not trustworthy and must be re-dispatched properly rather than accepted."
   pending_gates:
     write_ahead: "the overseer appends {gate, round, gate_run_id, slice, requested_at} to the
       ledger's pending_gates list BEFORE dispatching the gate subagent -- never after. This makes
@@ -157,8 +165,9 @@ trampoline_sequence:
           GATE_REQUEST(gate=decision-scout, round=1, inputs={intent, approach, scope, tier,
           cited_decisions}) and pauses."
         - "2. Overseer write-ahead-records the pending_gates entry, mints gate_run_id, dispatches
-          a fresh sibling subagent to run the Decision Scout Gate exactly per planning/SKILL.md,
-          instructing it to echo gate_run_id in its final evidence."
+          a fresh sibling subagent to run the Decision Scout Gate exactly per planning/SKILL.md
+          (unmodified), plus the trailing gate_run_id-echo instruction per
+          gate_request_trampoline.gate_run_id.provenance above."
         - "3. Overseer receives the scout verdict (NO_FLAGS | FLAGS_FOUND | BLOCK) with matching
           gate_run_id, resumes the paused planning subagent via SendMessage with the verdict and
           CITE list."
@@ -172,7 +181,8 @@ trampoline_sequence:
         - "1. Planning subagent writes the plan file, reaches Step 9, and returns
           GATE_REQUEST(gate=plan-critique, round=1, inputs={plan_path}) and pauses."
         - "2. Overseer write-ahead-records, mints gate_run_id, dispatches a fresh sibling per
-          planning/SKILL.md's Critique Gate section."
+          planning/SKILL.md's Critique Gate section (unmodified) plus the trailing
+          gate_run_id-echo instruction (see provenance above)."
         - "3. Overseer resumes the planning subagent via SendMessage with the critique output and
           Recommendation (PROCEED | REVISE)."
         - "4. On PROCEED: the planning subagent commits, pushes, opens the plan-approval PR
@@ -183,13 +193,16 @@ trampoline_sequence:
       fires_at: "implementation subagent's own /implement Step 5, immediately after the Live
         Verification Protocol passes."
       flow:
-        - "1. Implementation subagent's VP Compliance Gate shows all-PASS; it returns
-          GATE_REQUEST(gate=code-review, round=1, inputs={branch, plan_path}) and pauses (tier_item
-          bookkeeping proceeds in parallel exactly as implement/SKILL.md already specifies -- this
-          gate-request does not change that parallel-with-code-review state machine, only who
-          dispatches the review)."
+        - "1. Implementation subagent's VP Compliance Gate shows all-PASS; tier_item bookkeeping
+          (implement/SKILL.md's parallel-with-code-review state machine) still runs to completion
+          in the SAME author-subagent turn BEFORE the GATE_REQUEST is returned -- gate-request
+          mode changes who dispatches the review, not the bookkeeping-before-dispatch ordering;
+          it removes the concurrency (author and reviewer no longer run at the same time under
+          Design B, since the author fully pauses on GATE_REQUEST). The author then returns
+          GATE_REQUEST(gate=code-review, round=1, inputs={branch, plan_path}) and pauses."
         - "2. Overseer write-ahead-records, mints gate_run_id, dispatches a fresh sibling per
-          implement/SKILL.md's Code Review Protocol section."
+          implement/SKILL.md's Code Review Protocol section (unmodified) plus the trailing
+          gate_run_id-echo instruction (see provenance above)."
         - "3. Overseer resumes the implementation subagent via SendMessage with the findings and
           Verdict (PROCEED | REVISE)."
         - "4. On PROCEED: the implementation subagent commits, pushes, opens the implementation PR
