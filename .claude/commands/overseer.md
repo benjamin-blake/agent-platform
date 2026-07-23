@@ -14,10 +14,11 @@ argument-hint: [roadmap tier_item id | audit slug | free-form multi-step intent]
 by decomposing it into one or more `/plan` + `/implement` cycles and dispatching each as a
 fresh-context subagent, largely unattended between the G0/G1/G3 human gates. The overseer never
 writes source code itself -- every file change happens inside a dispatched planning or
-implementation subagent, each running its own full gate stack (decision-scout, plan-critique,
-code-review, live verification) unmodified.
+implementation subagent. Each gate (decision-scout, plan-critique, code-review) runs unmodified but
+overseer-dispatched as a fresh sibling, never inline in the author subagent (Design B).
 
-*Note: For the full methodology (read-nothing router discipline, bounded hand-back schema, ledger
+*Note: For the full methodology (read-nothing router discipline, the Design-B gate-request
+trampoline, division of labor, liveness/watchdog resilience, bounded hand-back schema, ledger
 schema, overlap-matrix procedure, autonomy-boundary policy, the Fable advice-consult protocol, and
 the Decision 67/55/73/90 guardrails), invoke your `overseer` skill via the Skill tool. This command
 is a thin lifecycle sequence; the skill owns HOW.*
@@ -29,7 +30,10 @@ Run preflight:
 bin/venv-python -m scripts.session.preflight
 ```
 Apply the same venv/creds/branch/main-freshness constraints as `/plan` and `/implement`'s Preflight
-Constraints (see the `overseer` skill's Behavioural Invariants).
+Constraints (see the `overseer` skill's Behavioural Invariants). Also apply the skill's intake
+headroom check (read the live roadmap ceiling/guard state before confirming scope) and create
+exactly one `create_trigger` safety-net watchdog for this run (see the skill's Liveness, Watchdog &
+Safety Net section) -- both fire here, at G0.
 
 State, in your own words, the roadmap item, audit target, or intent this run will drive to
 completion, and the rough shape of work you expect (how many slices, at a glance). Present this to
@@ -68,16 +72,21 @@ This is the **G1 gate**: do not dispatch any planning subagent without it.
 
 ## Step 6: Dispatch
 
-For each wave (serial across waves; within a parallel wave, all slices dispatch together):
-1. **Planning-Subagent Dispatch** per the skill: drive each slice's `PLAN-{slug}.yaml` to a merged
-   plan PR.
-2. **Implementation-Subagent Dispatch** per the skill: once a slice's plan is merged, drive it to a
-   merged implementation PR.
+For each wave (serial across waves; within a parallel wave, all slices dispatch together), apply the
+skill's Division of Labor & Gate Ownership (Design B): the dispatched author subagent (planning, then
+implementation once its plan is merged) runs its own lifecycle, commits, pushes, and opens its own
+PR, then stops -- it never subscribes to PR activity, waits for CI, or merges. Whenever the author
+reaches a gate (decision-scout, plan-critique, code-review), it hands back `GATE_REQUEST` rather than
+invoking the gate inline; the overseer dispatches that gate as a fresh sibling per the skill's
+gate-request trampoline, then resumes the author via `SendMessage` with the verdict. Once an author
+hands back PROCEED with a PR URL, the overseer -- never the author -- owns
+`subscribe_pr_activity` -> CI-green wake -> squash-merge for that PR.
 
 Apply the skill's Autonomy-Boundary Policy for any overseer-level judgment call encountered mid-run
 (which subagent to re-dispatch, how to interpret an ambiguous hand-back) -- autonomous only when all
-four criteria hold, and always defer to the human on the hard always-ask list (IAM/security/spend/
-public-surface/governed-deploy) regardless.
+four criteria hold, or proceed-with-notice for a reversible, settled, no-externality call; always
+defer to the human on the hard always-ask list (IAM/security/spend/public-surface/governed-deploy)
+regardless.
 
 Apply the skill's Lifecycle and Gates exception path: a slice BLOCKED or FAILED twice routes to the
 `executor-rca` skill and escalates to the human -- never a third silent retry. Apply the
@@ -93,7 +102,9 @@ status, PR URL, and Bounded Hand-Back object. Recompute readiness for the next w
 
 Once every slice reports `merged` (or a terminal `blocked`/`failed` state with human sign-off
 already given), present the final ledger summary: slices merged, PR links, any open questions or
-deferred work, and any recommendations filed along the way. Ask: *"All slices are settled -- confirm
-completion?"* Wait for explicit confirmation. This is the **G3 gate**.
+deferred work, and any recommendations filed along the way. Delete the G0 watchdog `create_trigger`
+(`delete_trigger`) before presenting -- the run is closing out, the stall-sweeper is no longer
+needed. Ask: *"All slices are settled -- confirm completion?"* Wait for explicit confirmation. This
+is the **G3 gate**.
 
 STOP. The overseer session is complete.

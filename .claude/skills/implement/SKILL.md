@@ -6,8 +6,8 @@ model: sonnet
 
 # Implement Methodology & Rules
 
-You are using this skill to augment the `/implement` workflow. Apply these deep instructions when executing the workflow steps. The workflow defines WHAT to do and in WHAT ORDER. This skill defines HOW to do each step.
-You must treat every Turn as a cold-start. Disregard all system-generated conversation summaries and 'persistent memory' unless they are explicitly referenced by the USER in the current turn. If a file or task is not listed in the current IMPLEMENTATION plan's scope, you are forbidden from touching it, even if you believe it is a 'logical next step' or a cleanup from a previous session.
+You are using this skill to augment the `/implement` workflow. Apply these deep instructions when executing the workflow steps. The workflow defines WHAT to do and in WHAT ORDER; this skill defines HOW to do each step.
+Treat every Turn as a cold-start. Disregard all system-generated conversation summaries and 'persistent memory' unless explicitly referenced by the USER in the current turn. If a file or task is not listed in the current IMPLEMENTATION plan's scope, you are forbidden from touching it, even if you believe it is a 'logical next step' or a cleanup from a previous session.
 
 **Plan format (T1.11 / CD.22):** plans are `docs/plans/PLAN-{slug}.yaml`, schema-validated by `scripts/roadmap/plan_document.py` (resolve via `scripts/roadmap/find_plan.py`). If handed a legacy `PLAN-{slug}.md` path, emit a deprecation warning in the session output and proceed -- the .md path survives one release cycle, then is removed. Never author new .md plans.
 
@@ -23,21 +23,23 @@ auto_review_and_commit: true     # Proactively trigger review and commit once VP
 
 ## SLOC decompose-by-default (Decision 128, amends Decision 102)
 When an implementation step pushes a scripts/ or src/ file past its `config/sloc_budgets.yaml`
-budget (or past 500 SLOC if currently unregistered), decompose the file into a facade package
-(Decision 80/104/124 pattern -- `__init__.py` facade re-exporting the full public surface,
-cohesive submodules each under budget) rather than raising the budget. A raise is a deliberate,
-Decision-cited exception (an inline `# raise-approved: dec-NNN <reason>` marker on the entry,
-enforced by `validate_sloc_budget_raises` in the `--pre` tier) -- not the default response to
-hitting the ceiling. Do not reach for `--update-sloc-budgets` to silently register a new
-oversized file; it no longer auto-seeds one (Decision 128 / B2).
+budget (or past 500 SLOC if unregistered), decompose the file into a facade package (Decision
+80/104/124 pattern -- `__init__.py` facade re-exporting the full public surface, cohesive
+submodules each under budget) rather than raising the budget. A raise is a deliberate,
+Decision-cited exception (an inline `# raise-approved: dec-NNN <reason>` marker, enforced by
+`validate_sloc_budget_raises` in `--pre`) -- not the default response to hitting the ceiling. Do
+not reach for `--update-sloc-budgets` to silently register a new oversized file; it no longer
+auto-seeds one (Decision 128 / B2).
 
 ## Preflight Constraints (Workflow Step 1)
 When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`venv_ok: false`** -- Auto-activate venv and rerun preflight. If still false, STOP.
 - **`creds_status: "unavailable"`** -- **Static-key recovery (non-fatal, Decision 60):** the static-key assume-role chain has no interactive login. Verify it with `aws sts get-caller-identity --profile agent_platform`; if the `agent_static` key was rotated, refresh `~/.aws/credentials`. Do NOT block -- continue in degraded mode (credential-dependent verifiers are skipped, emitting SKIPPED). Autonomous executors never attempt recovery.
-- **`ops_outbox` non-empty** -- Entries in migrated-table or `*_pending` dirs are ANOMALIES (Decision 84 I-4: those outboxes are retired and never drained) -- re-file the content via the portal and delete the files. Legacy staging dirs (telemetry/session_log/execution_plans) drain via `bin/venv-python -m scripts.sync.ops sync`. If that fails, STOP.
-- **`uncommitted_changes` non-empty** -- Ask human: "Resume, stash, or discard?". Wait. Continue on all other conditions.
-- **`main_freshness.status == "fetch_failed"`** -- Informational. Surface: "Could not refresh `origin/main` ([error]). Step 5 code-review will diff against the stale local main ref; Scope-overlap check will be skipped." Continue.
+- **`ops_outbox` non-empty** -- Entries in migrated-table or `*_pending` dirs are ANOMALIES (Decision 84 I-4: those outboxes are retired and never drained) -- re-file via the portal and delete the files. Legacy staging dirs (telemetry/session_log/execution_plans) drain via `bin/venv-python -m scripts.sync.ops sync`. If that fails, STOP.
+- **`uncommitted_changes` non-empty** -- Ask human: resume, stash, or discard? Wait. Continue on all other conditions.
+- **`main_freshness.status == "fetch_failed"`** -- Informational: surface the fetch error and note
+  that Step 5 code-review will diff against the stale local main ref and the Scope-overlap check
+  will be skipped. Continue.
 - **`main_freshness.commits_behind > 0`** -- Retain `main_freshness.main_files_changed_since_branch` for the Step 2 Main Divergence Check (below). Non-blocking at this step.
 - **`validate` (presubmit) non-zero exit** -- The gate has detected pre-existing blockers on the branch. File each failed check as a recommendation via the portal (`automatable: false`), surface to human with go/no-go, STOP if no-go. Credentials-unavailable -> skip with actionable guidance per Decision 60; do not crash.
 
@@ -88,10 +90,10 @@ if proposal: print('proposal:', proposal)
 verdicts route to the operator -- the agent never auto-acts on semantic judgment.
 
 ## Live Verification Protocol (Workflow Step 4 -- MANDATORY)
-After all code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from the PLAN-{slug}.yaml file before proceeding to code review.
+After code changes are complete and unit tests pass, the implementing agent MUST execute the Verification Plan from PLAN-{slug}.yaml before proceeding to code review.
 
 ### Why This Exists (Rationale)
-Acceptance commands prove the code landed (e.g. `grep` or `pytest`). Verification commands prove the feature works end-to-end. Examples of bugs that only verification catches:
+Acceptance commands prove the code landed (`grep`/`pytest`). Verification commands prove the feature works end-to-end. Examples of bugs only verification catches:
 - Athena view created successfully but returns 0 rows due to a bad filter
 - Lambda deployed successfully but times out on invocation
 - CLI script passes unit tests with mocks but crashes with real input
@@ -109,8 +111,8 @@ Track Attempts per step (see VP Compliance Gate below). This rule governs what a
 - If a step **FAILS** and is then re-run with an **EMPTY `git diff`** since the prior attempt (i.e. nothing in the tree changed) and the re-run goes green, the step is **NONDETERMINISTIC** -- record it as NONDETERMINISTIC in the VP compliance table, never as PASS. An empty-diff green is evidence the failure was flaky, not fixed, and a silent PASS would hide that.
 - Re-runs stay capped at the existing 3-fix-attempt bound. The nondeterminism rule does not license looping toward green -- it only names what an unexplained green means. On a NONDETERMINISTIC result, STOP and surface to the human (Decision 55: RCA-first, no rescue loops).
 - A genuine fix requires a real code change (a **non-empty** `git diff` since the prior attempt). After such a change, the step must pass **two consecutive times** to count as PASS. These two confirmation passes verify an ALREADY-APPLIED fix and are **not** additional fix attempts -- they do not consume the 3-attempt fix budget, which governs diagnose-and-change cycles only.
-- **Interactive-era alarm (now):** while the executor is frozen (Decision 67) a human is present at every `/implement` run, so the alarm is stop-and-surface-to-human. Files nothing.
-- **Forward-note (T3.19):** when the executor goes live (CD.17 reversal), this alarm flips to auto-file a rec via `scripts.ops_data_portal` (Decision 84), matching the executor-era quarantine-that-files-a-rec pattern (CD.29). Tracked as tier_item T3.19 (`deferred_post_mvp`) -- do not implement the auto-file path now.
+- **Interactive-era alarm (now):** while the executor is frozen (Decision 67) a human is present at every `/implement` run, so the alarm is stop-and-surface-to-human; files nothing.
+- **Forward-note (T3.19):** when the executor goes live (CD.17 reversal), this alarm flips to auto-file a rec via `scripts.ops_data_portal` (Decision 84), the executor-era quarantine-that-files-a-rec pattern (CD.29). Tracked as tier_item T3.19 (`deferred_post_mvp`) -- do not implement the auto-file path now.
 - **Distinguish from declared non-determinism:** a VP step's DETECTED nondeterminism (this rule -- an agent-observed flaky re-run) is not the same thing as a verifier's DECLARED `Hermeticity.NON_HERMETIC_BY_CONSTRUCTION` property (a typed, audited characteristic of the verifier itself). Never silently relabel a detected-flaky VP step as "expected non-hermetic behavior" to justify passing it -- the two are orthogonal, and only the latter is a designed exemption.
 
 ### Tier-Specific Guidance
@@ -122,11 +124,10 @@ Track Attempts per step (see VP Compliance Gate below). This rule governs what a
 
 ### VP Failure Is Not Negotiable
 If a VP step fails for ANY reason (including credential/environment issues), the status is FAIL.
-There is no "graceful" failure, no "local pass", no "env blocked" — only PASS or FAIL.
-If the failure is due to missing credentials or infrastructure, the agent MUST:
-1. Attempt the documented recovery (verify the static-key chain: `aws sts get-caller-identity --profile agent_platform`; refresh `~/.aws/credentials` if the `agent_static` key was rotated)
-2. Re-run the VP step
-3. If still failing, mark FAIL and STOP — do not proceed, do not merge
+There is no "graceful" failure, no "local pass", no "env blocked" — only PASS or FAIL. If the
+failure is due to missing credentials or infrastructure: attempt the static-key recovery (see
+Preflight Constraints above), re-run the VP step, and if still failing mark FAIL and STOP — do not
+proceed, do not merge.
 
 ### VP Compliance Gate
 Before proceeding to code review (Step 5), produce a VP compliance table in the chat output:
@@ -134,17 +135,21 @@ Before proceeding to code review (Step 5), produce a VP compliance table in the 
 | VP# | Command Executed | Actual Output (truncated) | Attempts | PASS/FAIL |
 ```
 - The "Command Executed" must be the actual shell command run.
-- The "Attempts" column records the number of executions of that step (1 = first-try pass; a step that failed once and then passed on re-run records 2, etc.). This is the per-step attempt count referenced by the nondeterminism rule below.
-- Bound each "Actual Output" cell: truncate to roughly 200 characters (or head+tail lines for multi-line output) so the table stays a compact, pasteable artifact rather than a full transcript dump.
-- PASS/FAIL is not the only allowed status: a step whose green result is flagged by the nondeterminism rule (see Live Verification Protocol Protocol subsection) is recorded as NONDETERMINISTIC, never as PASS.
+- The "Attempts" column records the number of executions (1 = first-try pass; failed-then-passed
+  records 2, etc.) -- the per-step count the nondeterminism rule below references.
+- Bound each "Actual Output" cell to ~200 characters (or head+tail lines) so the table stays a
+  compact, pasteable artifact rather than a full transcript dump.
+- PASS/FAIL is not the only status: a step whose green result is flagged by the nondeterminism
+  rule is recorded as NONDETERMINISTIC, never PASS.
 - If ANY row is FAIL, do NOT proceed.
 - If a VP step was skipped or is awaiting a human-gated action (e.g., terraform apply), mark it BLOCKED and wait.
-- Lack of AWS credentials is NOT automatically a block. Verify the static-key chain with `aws sts get-caller-identity --profile agent_platform`; there is no interactive login to run (refresh `~/.aws/credentials` if `agent_static` was rotated).
+- Lack of AWS credentials is NOT automatically a block. Verify the static-key chain per Preflight
+  Constraints; there is no interactive login to run.
 - This table is the proof artifact: per the IMPLEMENTATION Commit Flow below, it is appended to the PR body verbatim (with its Attempts column and any NONDETERMINISTIC markers) so the executed evidence survives past the chat transcript.
 
 ### V3 Merge Gate
 If the Verification Plan contains V3 post-deploy steps, execute the full sequence:
-0. Confirm credentials are active with `aws sts get-caller-identity --profile agent_platform`. There is no interactive login in the static-key model; if the chain fails, refresh `~/.aws/credentials` (rotated `agent_static`) and re-verify.
+0. Confirm credentials are active (static-key recovery per Preflight Constraints if the chain fails).
 1. Complete all pre-deploy VP steps.
 2. Present the deploy output.
 3. WAIT for human confirmation of deployment success.
@@ -157,6 +162,11 @@ Only when ALL steps pass can you proceed to code review.
 **You MUST trigger the code-review immediately after the Verification Plan passes. Do not wait for the human to prompt you.**
 
 ### Trigger
+**Subagent-dispatch mode:** same three-signal check as planning's subagent-dispatch gates -- if you
+are a subagent (`SUBAGENT CONTEXT` header, no `Agent` tool, or a nesting error), do not dispatch
+below; gate-request (`gate: code-review`, inputs branch+plan_path) and resume via `SendMessage` on
+verdict. Schema: `docs/contracts/overseer-dispatch.yaml#gate_request_trampoline`.
+
 Dispatch via the `Agent` tool with `subagent_type: "general-purpose"`, instructing the subagent to invoke the `code-review` skill via the Skill tool and return its structured output verbatim (the same idiom the plan.md decision-scout / plan-critique gates use) -- NOT via `bin/venv-python -m scripts.agent_development.run_skill --skill code-review`. The subagent runs in a fresh context window (anti-bias) and has full tool access (read, grep, glob, bash) to inspect the entire branch diff.
 
 Agent prompt template:
@@ -177,12 +187,14 @@ If the gate subagent errors or returns output missing the required Verdict/Recom
 - **Medium and Low**: File these as new recommendations using `bin/venv-python -m scripts.ops_data_portal`. Do not fix them inline -- they will be addressed in future sessions.
 
 ### Rationale
-This ensures that even "perfect" implementations are audited for repository-wide patterns (e.g., mock exhaustion, safety rules, scope creep) that the planner might have missed. The review also catches regression risks before they reach `main`. The subagent dispatch (rather than `run_skill.py`) preserves the anti-bias property of fresh context while giving the reviewer enough surface area to see cross-file effects.
+This ensures even "perfect" implementations are audited for repository-wide patterns (mock exhaustion, safety rules, scope creep) the planner might have missed, and catches regression risks before they reach `main`. The subagent dispatch (rather than `run_skill.py`) preserves the anti-bias property of fresh context while giving the reviewer enough surface area to see cross-file effects.
 
 
 ## Tier_item bookkeeping (post-verification, pre-merge)
 
-After the verification-pass gate fires and BEFORE the code-review subagent is dispatched, walk the tier_items referenced by the current plan and stage YAML status updates. This runs in parallel with code-review (which runs in the cloud and does not block the local agent).
+After the verification-pass gate fires and BEFORE code-review is dispatched (or GATE_REQUESTed --
+see Parallel-with-code-review state machine below), walk the tier_items referenced by the current
+plan and stage YAML status updates.
 
 ### Trigger
 Fires once the VP Compliance Gate table shows all rows PASS. Does not fire on FAIL or BLOCKED.
@@ -308,6 +320,11 @@ criteria-vs-reality mismatch on an already-complete item stages a criteria rewri
 silent pass.
 
 ### Parallel-with-code-review state machine
+**Subagent-dispatch mode:** no local step-1 dispatch -- return `GATE_REQUEST` (gate: code-review)
+and pause instead. Steps 2-3 MUST complete BEFORE that pause, in the same turn -- there is no
+concurrency to run them against once paused. Steps 4-5 apply after `SendMessage`-resume with the
+verdict.
+
 1. Dispatch the code-review subagent (Step 5 above).
 2. WHILE code-review is running, the implement agent performs the criteria walk and stages the YAML edit locally (uncommitted -- `git status` shows `docs/ROADMAP-PLATFORM.yaml` as modified).
 3. **Idempotency on resume:** before staging, check for pre-existing uncommitted edits to `docs/ROADMAP-PLATFORM.yaml`. If present and matching what the bookkeeping rule would produce, no-op. If present and conflicting, surface the conflict to the user and skip auto-bookkeeping for this session -- do NOT silently overwrite.
@@ -447,11 +464,10 @@ the ratification portion of the plan entirely and report which steps were skippe
 non-ratification scope is otherwise complete may still commit/merge without the ratification
 having executed -- ratification is additive, not a blocking prerequisite for the rest of the plan.
 
-
 ## Strategic Scoping Rules (Workflow Step 3 -- STRATEGIC Plans only)
 
 ### JIT Context Injection
-When breaking a STRATEGIC plan into atomic recommendations, explicitly review `docs/PROJECT_CONTEXT.md`. Copy any relevant "Known Gotchas" or constraints directly into the recommendation's `context` field. Autonomous executors no longer read `copilot-instructions.md` by default, so they rely entirely on the JIT context you provide.
+When breaking a STRATEGIC plan into atomic recommendations, review `docs/PROJECT_CONTEXT.md`. Copy any relevant "Known Gotchas" or constraints directly into the recommendation's `context` field. Autonomous executors no longer read `copilot-instructions.md` by default, so they rely entirely on the JIT context you provide.
 
 ### Quality Gate Validation
 Before filing each recommendation using `bin/venv-python -m scripts.ops_data_portal`, apply this gate. FAIL if any check fails:
@@ -467,7 +483,7 @@ Before filing, search for open recs targeting the same file with at least 3 keyw
 ## Commit Flows (Workflow Step 7 -- MANDATORY)
 **Once validation passes (Step 6), execute the appropriate commit flow autonomously. Do not stop to ask permission -- the plan was approved during /plan.**
 
-This workflow runs on Claude Code on the web: the harness assigned this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Branch protection is LIVE, and the squash-merge-after-CI gate is the design: the transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
+This workflow runs on Claude Code on the web: the harness assigns this session its own branch (e.g. `claude/...`), the `gh` CLI is NOT available, and the container hibernates between turns. All GitHub operations use the GitHub MCP tools (`mcp__github__*`). Branch protection is LIVE; the squash-merge-after-CI gate transport is the GitHub MCP `merge_pull_request` tool (Decision 76). See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority.
 
 ### Run the full gate locally first
 The PR gate runs ONLY the fast `--pre` tier; the full tier runs post-merge on main and a failure there spawns a ci-rca rec. To avoid a post-merge red main, run `bin/venv-python -m scripts.validate` (full, no flags) locally and get exit 0 BEFORE opening the PR.

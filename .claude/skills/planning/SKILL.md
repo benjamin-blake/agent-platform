@@ -23,24 +23,32 @@ never_on_main: true                # no file edits while on main branch
 When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`venv_ok: false`** -- Verify `bin/venv-python -c "import sys; print(sys.executable)"` resolves to the venv interpreter and rerun preflight. If still false, STOP.
 - **`creds_status: "unavailable"`** -- **Static-key recovery (non-fatal, Decision 60):** the static-key assume-role chain has no interactive login. Verify it with `aws sts get-caller-identity --profile agent_platform`; if the `agent_static` key was rotated, refresh `~/.aws/credentials`. Do NOT block -- continue in degraded mode (credential-dependent verifiers are skipped, emitting SKIPPED). Autonomous executors never attempt recovery.
-- **`log_sync_result.status == "committed"`** -- Print: "Session logs synced to main ([N] file(s) committed)." Continue.
+- **`log_sync_result.status == "committed"`** -- Print a one-line confirmation naming the file
+  count committed to main. Continue.
 - **`log_sync_result.status == "conflict"`** -- STOP. Print error and require human resolution.
-- **`uncommitted_changes` non-empty** -- Ask human: "Resume, stash, or discard?". Wait.
-- **`main_freshness.status == "fetch_failed"`** -- Informational. Surface: "Could not refresh `origin/main` ([error]). Critique and Scope-overlap checks will use the stale local main ref." Continue.
-- **`main_freshness.commits_behind > 20`** -- Surface as planning context warning: "Branch is N commits behind `origin/main`. Plan-critique (Step 9) reads `docs/PROJECT_CONTEXT.md`, `DECISIONS.md`, and `ROADMAP-PLATFORM.yaml` from the working tree; if these have moved on main, the critique evaluates against stale context. Recommend rebasing before continuing." Non-blocking but prompt the human to decide.
+- **`uncommitted_changes` non-empty** -- Ask human: resume, stash, or discard? Wait.
+- **`main_freshness.status == "fetch_failed"`** -- Informational: surface the fetch error and note
+  that Critique and Scope-overlap checks will use the stale local main ref. Continue.
+- **`main_freshness.commits_behind > 20`** -- Non-blocking planning-context warning: N commits
+  behind `origin/main`; Step 9 plan-critique reads PROJECT_CONTEXT/DECISIONS/ROADMAP-PLATFORM from
+  the working tree, so a stale tree means a stale critique -- recommend rebasing, let the human decide.
 - **`main_freshness.commits_behind > 0`** -- Retain `main_freshness.main_files_changed_since_branch` for the Step 4 Main Divergence Assessment. Non-blocking at this step.
 - **`cron_review_fresh: false`** -- Note to human (non-blocking).
 - **`ops_outbox` non-empty** -- Entries in migrated-table or `*_pending` dirs are ANOMALIES (Decision 84 I-4: those outboxes are retired and never drained) -- re-file the content via the portal and delete the files. Legacy staging dirs (telemetry/session_log/execution_plans) drain via `bin/venv-python -m scripts.sync.ops sync`. If that fails, STOP.
 - **`open_recommendations > 0`** -- Surface counts and ask whether to address. Wait.
 - **`non_automatable_recommendations > 0`** -- Informational. Surface counts; do not require per-rec discussion. Individual review is suspended per Decision 73 until CD.17 / T4.2 reverses (Decision 67's Lambda-deploy clause was lifted by Decision 79; the STRATEGIC clause survives).
   - If `non_automatable_softcap_breached` is true (count > 250), surface as a planning context note.
-- **`friction_patterns` non-empty** -- Surface repeated patterns as planning context.
-- **`metrics_anomalies` non-empty** -- Surface anomalies as planning context.
-- **`data_quality.last_run.verdict == "FAIL"`** -- Surface as planning context: "Data quality checks failing ([N] failures across [tables]). Run `bin/venv-python -m scripts.data_quality_runner` for details." Non-blocking but relevant if the plan touches data pipelines or table schemas.
-- **`data_quality.last_run` is null** -- Note: "Data quality checks have never been run. After fixing the pipeline, run `bin/venv-python -m scripts.data_quality_runner` to establish a baseline." Non-blocking.
+- **`friction_patterns`, `metrics_anomalies` non-empty** -- Surface as planning context.
+- **`data_quality.last_run.verdict == "FAIL"`** -- Surface as planning context: N failures across
+  named tables; run `bin/venv-python -m scripts.data_quality_runner` for details. Non-blocking but
+  relevant if the plan touches data pipelines or table schemas.
+- **`data_quality.last_run` is null** -- Note that DQ checks have never run; after fixing the
+  pipeline, run the same command to establish a baseline. Non-blocking.
 - **`ci_rca_unresolved_recs` non-empty** -- **HARD BLOCK** at commitment time. `/plan` cannot scope unrelated work while any unresolved ci-rca rec exists. Proceed only to scope work that satisfies one of the three Related-Work conditions (see Step 8) OR has a logged deferral rationale in the new plan's Context section. (Legacy: if the report only has `ci_rca_recs` and no `ci_rca_unresolved_recs`, treat all entries as HARD BLOCK.) Full triage surfacing and the SOFT PROMPT / HARD ALERT classification is `/orient`'s responsibility -- run `/orient` for the full ci-rca visibility layer.
 - **`ci_rca_likely_resolved_recs`, `ci_rca_liveness_alert`, `forward_fix_recursion_alert`** -- Full triage (SOFT PROMPT, HARD ALERT, forward-fix recursion) is surfaced by `/orient`. If still unresolved when `/plan` runs, apply the close or triage guidance from the orient skill.
-- **`budget_bypass_alert` non-null** -- **Informational**. Surface the count and recent bypass reasons as planning context: "Fast-tier budget bypassed N times in 7 days." Repeated `--ignore-budget` use indicates fast-tier drift and likely warrants a planning session to revisit the budget or identify which check is slow.
+- **`budget_bypass_alert` non-null** -- **Informational.** Surface the bypass count and recent
+  reasons as planning context. Repeated `--ignore-budget` use indicates fast-tier drift and likely
+  warrants revisiting the budget or identifying the slow check.
 
 ### What Telemetry Health Represents
 
@@ -222,15 +230,13 @@ When a plan creates or modifies documentation artefacts, apply these rules:
   and `semantics` metadata fields directly to the column entry in ops.yaml or
   telemetry.yaml. These fields are ignored by the DQ runner and consumed by agents.
   Do not create a separate briefing doc for the same information.
-- Decision 86 routing rule -- no new standing prose-architecture docs under docs/:
-  route forward intent to tier_items, rationale to Decisions, field semantics to contracts.
-  Creating a new docs/INTENT-*.md or any equivalent standing prose-architecture doc is
-  forbidden. The validate.py intent-doc-freeze guard enforces this on-disk.
-  Existing INTENT docs are grandfathered via docs/intent-migration/MANIFEST.yaml and
-  retire as extraction waves complete.
+- Decision 86 routing rule -- no new standing prose-architecture docs under docs/: route forward
+  intent to tier_items, rationale to Decisions, field semantics to contracts. A new
+  docs/INTENT-*.md or equivalent is forbidden; validate.py's intent-doc-freeze guard enforces this
+  on-disk. Existing INTENT docs are grandfathered via docs/intent-migration/MANIFEST.yaml.
 
 ## Infrastructure & Lambda Assessment (Workflow Step 4)
-**Infrastructure:** If `.tf` files are in scope, add an "Infrastructure Dependencies table" to the plan. Lambda handlers must accept a `force_{param}` event field. Pre-merge vs Post-deploy timing must be specified.
+**Infrastructure:** If `.tf` files are in scope, add an "Infrastructure Dependencies table" to the plan. Lambda handlers must accept a `force_{param}` event field. Pre-merge vs post-deploy timing must be specified.
 
 **Speculative-plan expectations (CD.35 Wave 2 / T2.21, active):** When `.tf` files under `terraform/personal/` are in scope, the plan must account for the speculative-plan pipeline: a PR-time plan is reviewed and saved, then re-applied at merge with no re-plan (Decision 77 no-TOCTOU), gated by the deterministic guard; IAM/trust/destroy diffs route to the human-gated path instead of auto-applying, and a stale saved plan recovers only via the human-reviewed acknowledge-and-retry path (never a silent re-plan-and-apply). `docs/contracts/environment-taxonomy.md` is the sole SoT for the full pipeline mechanics (guard classification, saved-plan persistence, convergence-record shape); tier_item T2.21 tracks the pipeline's own completion. Do not re-derive the mechanics here -- name the required checks and point to that contract.
 
@@ -315,13 +321,12 @@ as the authoritative verifiers, never a local `terraform validate`/`init`/`plan`
 **VP Design Rationale:**
 When writing Verification Plan steps, ask: "If this feature had a subtle bug (wrong column name, missing permission, off-by-one filter), would this step catch it?" If no, the step is too shallow.
 
-**Anti-patterns to reject:**
-- Structural-only: `grep -q "def my_function" src/module.py` -- proves existence, not function
-- Test-only: "Run pytest" -- proves mocked paths work, not the real integration
-- Existence-only: "Confirm the Athena view was created" -- does not confirm it returns correct data
-- Import-only: "Confirm `import module` succeeds" -- loading without error is not verification
-- Terraform-only: "Confirm `terraform apply` succeeded" -- infrastructure existing is not enough
-- Prose-only VP step: VP step describes what to check but has no executable command -- the implement agent will substitute a weaker check
+**Anti-patterns to reject:** structural-only (`grep -q "def my_function" src/module.py` proves
+existence, not function); test-only ("Run pytest" proves mocked paths, not real integration);
+existence-only ("Confirm the Athena view was created" doesn't confirm correct data); import-only
+("Confirm `import module` succeeds" isn't verification); terraform-only ("Confirm `terraform
+apply` succeeded" -- infra existing isn't enough); prose-only (no executable command -- the
+implement agent will substitute a weaker check).
 
 **Hermetic authoring (T3.15 / VF-01, amended by Decision 148):** `hermetic: true` is the correct
 default again for `pre-deploy` feature-verification steps -- narrow, deterministic, creds-free
@@ -377,8 +382,7 @@ this drafting step must satisfy.
 **Protocol:**
 1. Confirm the CD's `realization_evidence` (or equivalent corroborating evidence gathered this
    session) actually establishes the gated work is realized/live -- do not draft a ratification for
-   a forward-intent CD (Decision 55: no unilateral judgement calls; a CD with no realization
-   evidence is not a ratification candidate, full stop).
+   a forward-intent CD (Decision 55: no unilateral judgement calls; no evidence, no candidacy).
 2. Add a **ratification block** to the plan (own section, distinct from `scope`/`execution_steps`)
    containing:
    - The full drafted Decision text (title, body, any amendments to other Decisions/CDs it
@@ -391,8 +395,8 @@ this drafting step must satisfy.
      ops_decisions:dec-NNN` (canonical shape; same NNN in both fields) on the target CD entry.
 3. This is a DRAFT only. Do not run the portal write or the roadmap flip during `/plan` --
    Decision 105 / the plan's own constraints reserve execution for `/implement` behind an
-   execution-time human confirmation gate. Planning-time writes here would make the Step 6b
-   confirmation gate meaningless (the write would already be done before the human signs off).
+   execution-time human confirmation gate. Planning-time writes would make Step 6b's confirmation
+   gate meaningless (the write already done before the human signs off).
 4. The Step 6b Confirmation Gate (below) and the Critique Gate (Workflow Step 9) ARE the human
    sign-off on the drafted Decision text -- do not add a separate approval step. If Decision-Scout
    (Step 6a) flags a contradiction with the drafted text, resolve it before presenting.
@@ -416,7 +420,12 @@ This gate fires BEFORE Step 6b's presentation to the human. Its job is to surfac
 >
 > Return the skill's `## Decision Scout Report` output verbatim, including the final `Verdict:` line. Do not edit any files."
 
-**Dispatch shape:**
+**Subagent-dispatch mode:** if you are a subagent (`SUBAGENT CONTEXT` header, or no `Agent` tool, or
+a nesting error), do not dispatch inline -- gate-request (status `GATE_REQUEST`, `gate:
+decision-scout`) and resume via `SendMessage` on verdict. See the overseer skill's
+subagent-dispatch division of labor; schema: `docs/contracts/overseer-dispatch.yaml#gate_request_trampoline`.
+
+**Dispatch shape (non-subagent runs):**
 - `subagent_type: "general-purpose"` (needs `Skill`, `Read` access)
 - `description: "Decision scout gate"`
 - `prompt:` a self-contained brief per the example above, supplying Intent (Step 3), Proposed approach (Steps 3-5 synthesis), Scope file list (Step 4), Verification Tier (Step 5), and any decision IDs already cited by the human. Instruct the subagent to invoke the `decision-scout` skill via the `Skill` tool and return the structured `## Decision Scout Report` output verbatim.
@@ -435,6 +444,9 @@ Do not loop more than 3 times. If the gate keeps returning BLOCK after 3 revisio
 ## Confirmation Gate (Workflow Step 6b)
 Wait for explicit 'write the plan' (or clear equivalent) before proceeding. Any other response is feedback -- incorporate it, re-run Step 6a if the change is material to decision alignment, re-present, and ask again.
 IT IS **CRITICAL** THAT YOU DO NOT PROCEED UNTIL THE HUMAN CONFIRMS THE PLAN.
+**If you are a subagent** (no direct chat turn with the human to wait on), obtain this SAME
+confirmation via the `AskUserQuestion` tool -- it blocks for a real human reply regardless of
+caller; this checkpoint needs no overseer mediation (not a bias-fresh-context gate).
 
 ## Create Branch (Workflow Step 7)
 See AGENTS.md `## Git-ops procedure` as the canonical git-ops authority for branching topology (DEV vs ADMIN containers, AWS profiles, harness branch vs never agent/).
@@ -524,6 +536,10 @@ Apply this check when writing the PLAN file. It is CONDITIONAL -- additive plans
 ## Critique Gate (Workflow Step 9)
 **DO NOT output the completion message until this step completes.**
 
+**Subagent-dispatch mode:** same three-signal check as the Decision Scout Gate above -- if
+triggered, do not invoke `plan-critique` inline (same-context bias); return `GATE_REQUEST`
+(`gate: plan-critique`) and resume via `SendMessage` on verdict.
+
 Launch a zero-context Claude subagent via the `Agent` tool to run the `plan-critique` skill in a fresh context window. The fresh-context requirement is non-negotiable: it eliminates the cognitive bias the planning agent has from authoring the artefact. Do NOT invoke the `plan-critique` skill in the current session via the `Skill` tool (same context = same bias). Do not use `scripts.agent_development.run_skill` -- it is broken per rec-568; dispatch the gate via the `Agent` tool + `Skill` instead.
 
 **Invocation shape:**
@@ -565,13 +581,11 @@ This gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY
 
    For non-technical reports, pick perspectives that maximise differentiation (e.g. quantitative-rigour reviewer + narrative-clarity reviewer; or domain-A specialist + domain-B specialist). The principle is: orthogonal lenses surface more issues than two clones of the same lens.
 
-3. **Each agent prompt MUST:**
-   - Identify the deliverable file(s) under critique by absolute path
-   - Specify the perspective explicitly
-   - Specify supporting files to read freely (PROJECT_CONTEXT, sibling INTENT docs, relevant source code)
-   - Require structured output: Strengths (brief) / Concrete Issues or Risk Findings (numbered, specific, with file:line refs and severity) / Recommended Revisions / Verdict (PROCEED | REVISE | BLOCK)
-   - Forbid the agent from editing files
-   - Cap response length (~800-900 words) to keep findings focused
+3. **Each agent prompt MUST:** identify the deliverable file(s) by absolute path; specify the
+   perspective explicitly; name supporting files to read freely (PROJECT_CONTEXT, sibling INTENT
+   docs, relevant source); require structured output (Strengths / Concrete Issues or Risk
+   Findings with file:line refs and severity / Recommended Revisions / Verdict PROCEED | REVISE |
+   BLOCK); forbid file edits; cap response length (~800-900 words).
 
 4. **Synthesize findings.** When both agents return, identify consensus issues (cited by both -- highest priority) vs unique findings (one perspective only -- second priority). Cluster by severity.
 
@@ -588,12 +602,12 @@ This gate reviews the PLAN artefact, not the report deliverable. For REPORT-ONLY
    Do not loop indefinitely. After 3 rounds without convergence, escalate to the human for a decision call -- continued iteration typically signals either a structural issue with the deliverable's scope or diminishing returns.
 
 **Anti-patterns to reject:**
-- Single critique agent: misses orthogonal issues by definition
-- Same perspective twice: produces duplicate findings, wastes tokens
-- Sequential critiques: parallel critiques fire in roughly the same wall-clock window and surface independent findings faster
-- "Tell the agent what to look for": biases the critique. The agent should investigate fresh; the prompt frames perspective, not findings.
-- Skipping the re-critique after revision: a revision that "addresses" finding X may introduce finding Y; only a fresh critique catches it
-- Auto-accepting PROCEED on round 1 without reading findings: if both agents return PROCEED with shallow strengths and no issues, the prompts may have been too generic -- consider re-launching with sharper perspectives
+- Single critique agent (misses orthogonal issues by definition); same perspective twice
+  (duplicate findings, wasted tokens); sequential critiques (parallel surfaces findings faster);
+  "tell the agent what to look for" (biases the critique -- frame perspective, not findings);
+  skipping the re-critique after revision (a fix for X may introduce Y); auto-accepting PROCEED on
+  round 1 without reading findings (shallow strengths + no issues may mean prompts were too
+  generic -- relaunch with sharper perspectives).
 
 **When to skip Step 10 entirely** (human override):
 The human may explicitly state "skip report critique" after this step's purpose has been surfaced. This is logged in the PLAN's Known Gaps. Default is MANDATORY -- the gate fires unless explicitly waived.
