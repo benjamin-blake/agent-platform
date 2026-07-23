@@ -182,6 +182,48 @@ class TestUpdateRec:
         with pytest.raises(ValueError, match="Invalid status"):
             update_rec("rec-042", {"status": "done"})
 
+    def test_update_rec_context_replace(self, tmp_path: Path) -> None:
+        """update_rec() with a >=80-char context writes it through via action=update_ops."""
+        existing = {**_VALID_FIELDS, "id": "rec-042", "date": "2026-01-01"}
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+        recs_file.write_text(json.dumps(existing) + "\n", encoding="utf-8")
+        new_context = "Replacement context for rec-042 -- long enough to clear the 80-stripped-char write-time floor."
+
+        with (
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._ducklake_write", return_value={"ok": True}) as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import update_rec
+
+            result = update_rec("rec-042", {"context": new_context})
+
+        assert result is True
+        call_table, call_rec = mock_dl_write.call_args[0]
+        assert call_table == "ops_recommendations"
+        assert call_rec["context"] == new_context
+        assert mock_dl_write.call_args.kwargs["action"] == "update_ops"
+
+    def test_update_rec_context_too_short_rejected(self, tmp_path: Path) -> None:
+        """update_rec() raises ValueError referencing context when the new context is <80 stripped chars."""
+        existing = {**_VALID_FIELDS, "id": "rec-042", "date": "2026-01-01"}
+        recs_file = tmp_path / ".recommendations-log.jsonl"
+        recs_file.write_text(json.dumps(existing) + "\n", encoding="utf-8")
+
+        with (
+            patch("scripts.ops_data_portal._fetch_rec_from_reader", return_value=dict(existing)),
+            patch("scripts.ops_data_portal._ducklake_write") as mock_dl_write,
+            patch("scripts.ops_data_portal._sync_table"),
+            patch("scripts.ops_data_portal.RECS_JSONL", recs_file),
+        ):
+            from scripts.ops_data_portal import update_rec
+
+            with pytest.raises(ValueError, match="context"):
+                update_rec("rec-042", {"context": "too short"})
+
+        mock_dl_write.assert_not_called()
+
     def test_update_rec_absent_rec_loud_fails(self, tmp_path: Path) -> None:
         """update_rec() loud-fails on an absent rec (referential, CD.33 cl.8 / D-5).
 
