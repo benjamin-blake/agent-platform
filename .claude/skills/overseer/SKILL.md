@@ -36,15 +36,15 @@ halt_on_open_ci_rca: true        # halts new dispatch while any open source=ci_r
 Stay cheap enough to drive a multi-wave run without exhausting the window. Read only: the preflight
 cache (incl. the headroom check below), the targeted roadmap projection, and the Bounded Hand-Back
 objects dispatched subagents return. Never read full source files, `docs/DECISIONS.md`, or a
-subagent's raw transcript directly -- those reads happen inside the dispatched subagent's own fresh
+subagent's raw transcript -- those reads happen inside the dispatched subagent's own fresh
 context. Any judgment call needing a file read belongs inside a subagent dispatch, not here.
 
 **Intake headroom check (G0):** before confirming scope, read the LIVE roadmap ceiling/guard state
-(Decision 114) -- never a hardcoded number. See `overseer-dispatch.yaml#intake_headroom_check`.
+(Decision 114), never a hardcoded number. See `overseer-dispatch.yaml#intake_headroom_check`.
 
 ## Bounded Hand-Back Schema
 
-Every subagent dispatched (planning, implementation, gate, Fable advice, RCA) returns exactly this
+Every subagent dispatched (planning, implementation, gate, Fable advice, RCA) returns at least this
 shape:
 ```yaml
 status: PROCEED | REVISE | BLOCKED | FAILED | GATE_REQUEST
@@ -54,11 +54,12 @@ evidence: [verifiable proof pointers -- VP compliance table, PR number, commit s
 decisions: [decision ids cited or newly ratified]
 open_questions: [unresolved items requiring human input, or empty]
 ```
-`GATE_REQUEST` is never terminal: it means the author subagent paused mid-lifecycle to request an
-overseer-dispatched gate (decision-scout, plan-critique, code-review) via
-`overseer-dispatch.yaml#gate_request_trampoline`; the slice's ledger status stays
-planning/implementing through it. Never accept pasted file contents, diffs, or raw transcripts in a
-hand-back. A hand-back missing `status`, or otherwise malformed, has NOT completed -- re-dispatch.
+`GATE_REQUEST` is never terminal: the author paused mid-lifecycle to request an overseer-dispatched
+gate (decision-scout, plan-critique, code-review). It EXTENDS this shape with `gate`/`round`/
+`inputs` (reusing `artifacts`, never a separate field) per
+`overseer-dispatch.yaml#gate_request_trampoline`; ledger status stays planning/implementing
+through it. Never accept pasted file contents, diffs, or raw transcripts. A hand-back missing
+`status`, or otherwise malformed, has NOT completed -- re-dispatch.
 
 ## Overseer Ledger Schema
 
@@ -102,8 +103,8 @@ status from PR state via the GitHub MCP tools; on disagreement, PR state wins. S
   sign-off), present the ledger summary, delete the G0 watchdog trigger, get explicit sign-off.
 
 **Blocked/failed-twice:** never a silent third retry -- routes to `executor-rca` with a concrete
-artifact (transcript, output file, a targeted re-dispatch to reproduce, or the original SUBAGENT
-CONTEXT + prompt); escalate to the human with the RCA findings (Decision 55, one level up). See
+artifact (transcript, output file, a re-dispatch to reproduce, or the original SUBAGENT CONTEXT +
+prompt); escalate to the human with the RCA findings (Decision 55, one level up). See
 `overseer-dispatch.yaml#executor_rca_feed`.
 
 **Halt-on-open-ci_rca (Decision 73):** before any new-slice dispatch, check `ci_rca_unresolved_recs`
@@ -140,7 +141,7 @@ At G1, decompose into slices (each = one eventual `PLAN-{slug}.yaml`). For every
 - Any overlap, or a `depends_on` edge -> different waves, SERIAL (dependency's wave merges first).
 
 Serial is the default; parallel only when the matrix affirmatively clears a pair. A parallel wave
-requires one git worktree per agent, disjoint scopes per slice's plan Scope table, and a FIXED merge
+requires one worktree per agent, disjoint scopes per slice's plan Scope table, and a FIXED merge
 order declared before dispatch.
 
 ## Liveness, Watchdog & Safety Net
@@ -148,7 +149,7 @@ order declared before dispatch.
 Diagnose aliveness via `ls -laL` on the transcript symlink (TARGET mtime, not the symlink's own
 near-constant mtime): a **watchdog**/**heartbeat** check reads this against expected stage duration
 to avoid a false-stall false positive. On a confirmed death signature, **restart** with a fresh
-subagent seeded from the ledger's last artifacts_written (counts against the two-attempt cap). On an
+subagent seeded from the ledger's last hand-back `artifacts` (counts against the two-attempt cap). On an
 ambiguous **stall**, send exactly ONE SendMessage nudge before treating a further silent window as
 death. The **safety-net** watchdog is exactly one `create_trigger` at G0 and one `delete_trigger` at
 G3 -- a stall-sweeper only, never a CI-poll substitute (Decision 76 carve-around: subagent death
@@ -159,7 +160,7 @@ emits no event, unlike the already-covered CI/merge-conflict signals; never allo
 ## Bounded In-Loop Validation
 
 Each dispatched implementation subagent already runs `validate --pre` before opening its PR
-(implement/SKILL.md Commit Flows); the overseer does not re-run full unflagged `validate` itself --
+(implement/SKILL.md Commit Flows); the overseer never re-runs full unflagged `validate` itself --
 that duplicates the author's own gate and violates Read-Nothing Router Discipline. See
 `overseer-dispatch.yaml#bounded_validation`.
 
@@ -175,7 +176,7 @@ externality even if wrong -> proceed without a synchronous reply, but ALWAYS pos
 ledger and chat output -- never silent, never blocking. Never applies to the always-ask list below or
 an open critical ci_rca halt. See `overseer-dispatch.yaml#autonomy_tiers`.
 
-**Hard always-ask list (no override, ever):** IAM/security changes, spend impact, any public-surface
+**Hard always-ask list (no override, ever):** IAM/security, spend impact, any public-surface
 artefact change (PUBLIC-repository boundary, AGENTS.md), any governed-deploy action.
 
 ## Fable Advice-Consult Protocol
@@ -198,10 +199,10 @@ session. See `overseer-dispatch.yaml#model_namespace_note`.
 ## Decision Guardrails
 
 - **Decision 67:** interactive, human-gated CC-web orchestration -- NOT
-  `scripts/execute_recommendation.py`. Never consumes the rec queue; dispatches IMPLEMENTATION only.
+  `scripts/execute_recommendation.py`. Never consumes the rec queue; IMPLEMENTATION only.
 - **Decision 55/72:** a red build, or a slice BLOCKED/FAILED twice, never an inline patch or silent
   retry -- routes to `executor-rca` and escalates.
 - **Decision 73:** see Lifecycle and Gates -- halt-on-open-ci_rca is a hard dispatch block.
 - **Decision 76:** the safety-net watchdog is the sole sanctioned trigger exception -- see Liveness.
-- **Decision 90:** composes `/plan`/`/implement` as-is -- no new tier, no new plan type, no bypass.
+- **Decision 90:** composes `/plan`/`/implement` as-is -- no new tier, no plan type, no bypass.
 - **Decision 115/87:** ledger durable-resume SoT precedent -- see Overseer Ledger Schema.

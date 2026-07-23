@@ -62,18 +62,24 @@ gate_request_trampoline:
     field, alongside the existing PROCEED | REVISE | BLOCKED | FAILED. A GATE_REQUEST hand-back
     is never terminal for a slice; the slice's ledger status stays planning/implementing through
     it."
-  request_schema:
-    status: GATE_REQUEST
-    gate: "decision-scout | plan-critique | code-review"
-    round: "1-based count of how many times this gate has been requested for this slice (mirrors
-      each gate's own convergence-rule counter)."
-    inputs: "gate-specific prompt inputs the overseer must relay verbatim into the fresh gate
-      subagent's dispatch prompt -- e.g. for decision-scout: intent, proposed approach, scope
-      files, verification tier, explicitly cited decisions; for plan-critique: the plan file
-      path; for code-review: the branch and plan file path."
-    artifacts_written: "paths already committed and pushed by the author subagent (plan file,
-      branch head) so the gate subagent reads current on-disk/on-PR state, never a chat-pasted
-      body."
+  request_schema: "a GATE_REQUEST hand-back is the SAME six-field Bounded Hand-Back shape
+    (status/summary/artifacts/evidence/decisions/open_questions) EXTENDED with three
+    trampoline-specific fields -- it is a strict superset, never a replacement shape, so the
+    overseer's existing malformed-hand-back re-dispatch rule still applies unchanged. The three
+    extension fields:
+    gate (decision-scout | plan-critique | code-review),
+    round (1-based count of how many times this gate has been requested for this slice, mirrors
+    each gate's own convergence-rule counter),
+    inputs (gate-specific prompt inputs the overseer must relay verbatim into the fresh gate
+    subagent's dispatch prompt -- e.g. for decision-scout: intent, proposed approach, scope
+    files, verification tier, explicitly cited decisions; for plan-critique: the plan file path;
+    for code-review: the branch and plan file path).
+    The base shape's own `artifacts` field (NOT a separate `artifacts_written` field -- there is
+    only one artifacts field, reused here) carries the paths already committed and pushed by the
+    author subagent (plan file, branch head), so the gate subagent reads current on-disk/on-PR
+    state, never a chat-pasted body; `summary`/`evidence`/`decisions`/`open_questions` may be
+    minimal (e.g. summary: \"requesting <gate> gate\") since the substantive payload for a
+    GATE_REQUEST is the three extension fields plus `artifacts`, not those four."
   gate_run_id:
     minted_by: overseer
     when: "at write-ahead time (see pending_gates below), before the gate subagent is
@@ -105,8 +111,8 @@ gate_request_trampoline:
     fallback_is_optimization_not_requirement: "SendMessage-resume is an optimization over
       artifact re-dispatch, not a correctness requirement. If the author subagent is
       unrecoverable (dead per the liveness diagnostic, expired, or restarted), the overseer
-      falls back to a FRESH dispatch seeded from the ledger's artifacts_written + the gate
-      verdict -- this works because the artifact-first yield already made all needed state
+      falls back to a FRESH dispatch seeded from the ledger's last hand-back `artifacts` + the
+      gate verdict -- this works because the artifact-first yield already made all needed state
       durable on disk/PR, not trapped in the dead subagent's context."
 
 subagent_detection:
@@ -212,7 +218,7 @@ liveness:
     reported in its ledger hand_back and the expected duration for that stage before concluding
     death."
   restart_recovery: "on a confirmed death signature, the overseer re-dispatches a FRESH subagent
-    seeded from the ledger's last known artifacts_written + status for that slice -- never a
+    seeded from the ledger's last known hand-back `artifacts` + status for that slice -- never a
     rescue-in-place resume of a dead session. This is the same re-dispatch mechanism as an
     ordinary GATE_REQUEST re-dispatch, just triggered by liveness failure instead of a returned
     verdict. A restart-death re-dispatch counts as one of the plan's existing two BLOCKED/FAILED
