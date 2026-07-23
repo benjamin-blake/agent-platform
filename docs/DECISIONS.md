@@ -2,6 +2,30 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 149: Number-preserving decision-compaction lifecycle -- compact-in-place stub grammar, never-remove-headers, and the DCG-03 orphan-divergence guard (DCG-02/DCG-03, compact-in-place sibling of Decision 146's archival policy) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-23
+**Warehouse ID:** dec-149 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 145's stopgap ceiling raise (400,000 -> 500,000 bytes) bought headroom but explicitly named the un-built structural fix as audits/decision-consolidation-growth-f79d6b5.yaml's DCG-01/DCG-02/DCG-05: a number-preserving compact-to-stub lifecycle, so the live corpus can shed fully-superseded bodies without breaking the ~12,103 unguarded inbound "Decision N" citations or orphaning a warehouse current-projection row (DCG-03: if a header were ever removed from both files, its ops_decisions current row would be served forever in its last state with no signal it was retired). Decision 146 (the archival sibling, landed first) covers entries with no live citations outside the corpus; it explicitly carves out entries "still cited as a LIVE constraint" (its own worked example: Decision 44 -> 117) as staying in the corpus, with no compaction mechanism yet built for them.
+
+**Decision:**
+1. **Compaction lifecycle.** `docs/contracts/decision-entry.yaml` gains a `compaction:` section: an eligibility criterion (an entry compacts only when its ENTIRE body is superseded/inert and the superseder restates/subsumes every live clause; direction-consistency -- only the superseded victim compacts, never the superseder, per the archived-52-supersedes-live-37/40 inversion), a stub grammar (the header line and its ORIGINAL parenthetical are unchanged; the body carries `**Status:** Superseded`, an ISO `**Date:**`, a non-empty one-line `**Decision:**`, and the exact `**Superseded by: Decision N**` marker), and a never-remove-headers rule (number retirement and destructive merges are permanently out of the mechanism's vocabulary). An operator `procedure:` block (Decision 127 pattern) names the archive-vs-compact branch: archive whole per Decision 146 when nothing live cites the number by name; compact in place only when it can't.
+2. **First exercised compaction: Decision 44.** Its ~40-line boundary-pattern-table body is replaced with a conforming stub. The table itself has lived in `config/agent/executor/capabilities.yaml` since Decision 117; the stub stays in DECISIONS.md (not archived) because `capabilities.yaml` and `scripts/checks/executor/validate_executor_boundary.py` still cite "Decision 44" by name.
+3. **DCG-03 orphan-divergence guard.** `scripts/ops_portal/decisions.py`'s `backfill_decisions_from_md` gains `_assert_no_orphaned_current_rows()`: bulk-reads the `ops_decisions` current projection via the closed Decision-84-I-3 named-verb boundary (`reader.current_state('ops_decisions')`, no caller SQL, no new Lambda verb), diffs it against `scripts.decisions_md.decision_header_numbers()` (both files), and raises `RuntimeError` loudly (Decision 55) on any current-projection id with no matching header that is not in the checked-in allowlist-diff baseline, `config/agent/data_quality/decisions/orphan_baseline.yaml` (mirrors the sibling `fidelity_baseline.yaml` pattern). The baseline seeds exactly one entry, `dec-010` -- a pre-existing leaked "Test Decision" warehouse row with no header ever written in either file and zero citations, discovered during this Decision's implementation. It is allowlisted (Decision 55: a loud, cited allowlist entry, never a silently-dropped assertion) rather than physically deleted in this same change; its physical removal (a Decision-70-sanctioned exception) is tracked separately by rec-2814, out of this Decision's scope. The dec-010 discovery itself was surfaced to the operator as a hand-back, not filed as a recommendation, per this plan's default no-new-recommendations stance; rec-2814 is a deliberate, sanctioned exception to that default, filed at the operator's explicit direction at plan approval (the Step 6b confirmation) specifically to carry the deferred physical-removal follow-up forward.
+4. **`decision-entry.yaml` doc-drift fix.** `size_governance.live_max_bytes` is corrected from a stale 400000 to 500000 -- the value `scripts/checks/decisions/validate_decisions_size.py` has actually enforced since Decision 145. This Decision does not itself lower the enforced ceiling; it only reconciles this file's documentation to the validator it describes.
+
+**Rationale:**
+This Decision is the structural mechanism Decision 145's own reversal conditions name ("when the DCG structural mechanism... lands and reclaims live headroom") -- it is authored as the owner of eventually triggering that reversal, not as the reversal itself: the compaction exercised here nets only a small live-byte reclaim (Decision 44's body shrank by roughly 2KB, largely offset by this entry), so the 500,000-byte ceiling stays exactly where Decision 145 set it. A future archival/compaction wave using this mechanism is what will actually reclaim enough headroom to revisit Decision 145's ceiling. Per Decision 86, rationale lives here and forward intent lives in the audit/contract, not in a new prose document -- `decision-entry.yaml` carries the mechanism's grammar and procedure, this Decision carries the why. The orphan baseline is an allowlist-diff, not a zero-assertion, because a zero-assertion would wedge on the pre-existing dec-010 orphan on the very first real backfill after this guard lands -- Decision 55 requires the divergence be loud and disposed (allowlisted with a reason, or fixed), never silently tolerated by weakening the guard itself.
+
+**Reversal conditions:** Revisit if a future clause-parity merge tool is built (the audit explicitly recommends against one now; keep-separate verdicts show no redundancy pressure justifying it), or if the orphan baseline ever grows past a small, explainable handful (a growing baseline is a signal the guard's assumption -- that orphans are rare, disposed exceptions -- no longer holds and the write path itself needs an audit, not a bigger allowlist).
+
+**Related:** Decision 145 (the stopgap ceiling raise this mechanism is the eventual structural reverser of), Decision 146 (the archival sibling -- compact-in-place is the branch for entries that cannot archive), Decision 134 (the size-governance ceilings and authoring grammar this extends), Decision 117 (Decision 44's superseder -- the capabilities.yaml SSOT this compaction points at), Decision 84 (the DuckLake closed-boundary reader the divergence guard reads through, and the ETL this compaction feeds), Decision 55 (loud-fail / no silent counters -- governs both the divergence guard's RuntimeError and the allowlist-not-silent-drop choice for dec-010), Decision 70 (the physical-deletion sanctioned-exception path dec-010's eventual cleanup, rec-2814, will use), Decision 147 (adjacent in-place-compaction precedent -- ROADMAP-PLATFORM.yaml terminal-content compaction in a single preserved file, 2026-07-22), audits/decision-consolidation-growth-f79d6b5.yaml (DCG-02/DCG-03, the findings this Decision closes).
+
+---
+
 ## Decision 148: VF-01 hermetic VP-replay: replay at implement-time, not plan-time; hermetic-default restored (amends Decision 104, mirrors Decision 132) (Decided)
 
 **Status:** Decided
@@ -4330,41 +4354,10 @@ The rec-curator pipeline (rec-448 through rec-451) shipped with passing acceptan
 
 ## Decision 44: Executor Self-Modification Boundary (Decided)
 
-**Decision:** The executor (`scripts/execute_recommendation.py` and its submodules) must not modify files within its own machinery boundary. Recommendations targeting boundary files must have `automatable: false` and be implemented via `/plan` -> `/implement`.
+**Status:** Superseded
+**Date:** 2026-04
 
-**Problem:**
-The executor generates code via LLM calls to implement recommendations. When the target files ARE the executor itself (or its prompts, instructions, or tests), the system is modifying the code that controls its own behaviour. This creates:
-- (a) **Silent behavioural regression risk** -- a bad edit to `step_runner.py` affects all future recs
-- (b) **Unreliable failure diagnosis** -- the diagnostic tooling may itself be broken
-- (c) **Untestable changes** -- executor tests run inside the executor, creating circular validation
-
-**Boundary table:**
-
-| File pattern | Route | Reason |
-|---|---|---|
-| `scripts/execute_recommendation.py` | `/plan` -> `/implement` | The orchestrator itself |
-| `scripts/executor/*.py` | `/plan` -> `/implement` | Executor submodules |
-| `config/agent/executor/prompts/*.prompt.md` | `/plan` -> `/implement` | Executor prompts |
-| `config/agent/executor/instructions/executor-*.instructions.md` | `/plan` -> `/implement` | Supervisor/executor instructions |
-| `.github/prompts/develop-executor.prompt.md` | `/plan` -> `/implement` | Supervisor prompt |
-| `scripts/copilot_wrapper.py` | `/plan` -> `/implement` | LLM interface layer |
-| `tests/test_execute_recommendation.py` | `/plan` -> `/implement` | Executor test infrastructure |
-| `tests/test_executor_*.py` | `/plan` -> `/implement` | Executor submodule tests |
-| `tests/test_copilot_wrapper.py` | `/plan` -> `/implement` | LLM interface tests |
-| Everything else | Executor (`automatable: true`) | Normal product code |
-
-Path updated by T-1.7 (config split). Mechanism unchanged.
-
-**Enforcement:**
-1. `validate_executor_boundary()` in `validate.py` -- rejects open recs with boundary file + `automatable: true`
-2. `copilot-instructions.md` Known Gotchas documents the rule for all agents
-3. `select_next_batch()` in `execute_recommendation.py` already excludes `automatable: false` recs from batch selection
-
-**Exceptions:** None. If an executor boundary file needs changing, it goes through `/plan` -> `/implement`. The human reviews the plan and the implementation directly. `--fast` mode is not available for boundary files.
-
-**Related:** Decision 42 (Three-Tier Workflow Architecture), Decision 43 (Directed Growth Governance)
-
-**Decision status:** Decided -- April 2026
+**Decision:** Superseded by Decision 117, which names `config/agent/executor/capabilities.yaml` as the code-level SSOT for the executor self-modification boundary table this entry originally defined; kept live here rather than archived because `capabilities.yaml` and `scripts/checks/executor/validate_executor_boundary.py` still cite "Decision 44" by name (Decision 146's still-cited-live-constraint carve-out; first exercised compaction under the DCG-02/DCG-03 lifecycle, docs/contracts/decision-entry.yaml's `compaction:` section).
 
 **Superseded by: Decision 117**
 

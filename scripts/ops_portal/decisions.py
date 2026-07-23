@@ -12,6 +12,13 @@ ducklake_reader boundary to decide whether a write is needed -- the write source
 DECISIONS.md, never a read cache), and a per-run fidelity tripwire that fails loudly on a
 NEW live-h2 entry with an empty decision_text or a non-ISO decided_date, checked against the
 checked-in allowlist at config/agent/data_quality/decisions/fidelity_baseline.yaml.
+
+DCG-03 divergence guard (PLAN-dcg-compaction-lifecycle, Decision 149): the backfill also
+asserts every ops_decisions current-projection id has a matching '## Decision N:' header in
+docs/DECISIONS.md or docs/DECISIONS_ARCHIVE.md (scripts.decisions_md.decision_header_numbers()),
+via an allowlist-diff baseline at config/agent/data_quality/decisions/orphan_baseline.yaml
+(mirrors the fidelity_baseline.yaml pattern). Raises RuntimeError loudly (Decision 55) on any
+NEW orphan -- a warehouse current row with no backing header and not in the baseline.
 """
 
 from __future__ import annotations
@@ -19,7 +26,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import yaml
 
@@ -28,6 +35,9 @@ from scripts.ops_portal._common import ROOT
 from scripts.ops_portal.cache import _refresh_cache_after_write, _sanitize_athena_record, _sync_table
 from scripts.ops_portal.write_validators import _load_write_time_validators
 from scripts.ops_portal.writer_transport import _ducklake_write
+
+if TYPE_CHECKING:
+    from src.common.iceberg_reader import Reader
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +58,7 @@ _DECISION_BACKFILL_COLS = (
 )
 
 _FIDELITY_BASELINE_PATH = ROOT / "config" / "agent" / "data_quality" / "decisions" / "fidelity_baseline.yaml"
+_ORPHAN_BASELINE_PATH = ROOT / "config" / "agent" / "data_quality" / "decisions" / "orphan_baseline.yaml"
 
 _ISO_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}(?:-\d{2})?")
 
@@ -88,6 +99,76 @@ def _fidelity_issue(entry: dict) -> Optional[str]:
     if decided_date and not _ISO_DATE_PREFIX_RE.match(decided_date):
         return "non_iso_decided_date"
     return None
+
+
+def _load_orphan_baseline() -> set[str]:
+    """Load the checked-in known-orphaned current-row allowlist (DCG-03 / Decision 149).
+
+    Allowlist-diff, not a zero-assertion: a pre-existing, investigated, disposed orphan (e.g.
+    dec-010, a leaked test row with no header ever written) never trips the divergence guard.
+    Mirrors _load_fidelity_baseline's shape and read-then-set-comprehension pattern.
+    """
+    if not _ORPHAN_BASELINE_PATH.exists():
+        return set()
+    doc = yaml.safe_load(_ORPHAN_BASELINE_PATH.read_text(encoding="utf-8")) or {}
+    return {str(e["decision_id"]) for e in doc.get("known_orphaned_current_rows", [])}
+
+
+def _orphaned_current_ids(current_ids: set[str], header_numbers: set[int], baseline: set[str]) -> set[str]:
+    """Pure DCG-03 diff: current-projection ids with no matching header, minus the baseline.
+
+    Args:
+        current_ids: 'dec-NNN' ids present in the ops_decisions current projection.
+        header_numbers: bare ints from scripts.decisions_md.decision_header_numbers() (every
+            '## Decision N:' header across docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md).
+        baseline: the checked-in allowlist from _load_orphan_baseline().
+
+    Never mutates its inputs. Returns exactly the NEW-orphan set (headered or baselined ids are
+    never included, regardless of which set(s) they appear in).
+    """
+    headered_ids = {f"dec-{n:03d}" for n in header_numbers}
+    return (set(current_ids) - headered_ids) - set(baseline)
+
+
+def _assert_no_orphaned_current_rows(profile: Optional[str] = None, reader: Optional[Reader] = None) -> None:
+    """DCG-03 divergence guard: raise RuntimeError loudly on any NEW orphaned current row.
+
+    An "orphan" is an ops_decisions current-projection row (identified by its 'id' column) with
+    no matching '## Decision N:' header in docs/DECISIONS.md or docs/DECISIONS_ARCHIVE.md, and
+    not present in the checked-in config/agent/data_quality/decisions/orphan_baseline.yaml
+    allowlist. If a header were ever removed from both files without a replacement, its
+    warehouse current row would otherwise be served forever in its last state with no signal it
+    was retired -- this guard makes that latent hazard loud instead (Decision 55).
+
+    reader is an injectable seam (mirrors _load_fidelity_baseline's baseline_reader /
+    validate_decision_entry_conformance's root+baseline_reader precedent) so a synthetic test
+    can inject a fake reader without live DuckLake credentials. Defaults to
+    make_reader(profile=profile) -- the closed Decision 84 I-3 named-verb boundary
+    (reader.current_state, no caller SQL, no new Lambda verb).
+    """
+    from scripts.decisions_md import decision_header_numbers  # noqa: PLC0415
+
+    active_reader = reader
+    if active_reader is None:
+        from src.common.iceberg_reader import make_reader  # noqa: PLC0415
+
+        active_reader = make_reader(profile=profile)
+
+    current_rows = active_reader.current_state("ops_decisions")
+    current_ids = {row["id"] for row in current_rows if row.get("id")}
+
+    baseline = _load_orphan_baseline()
+    header_numbers = decision_header_numbers()
+
+    orphans = _orphaned_current_ids(current_ids, header_numbers, baseline)
+    if orphans:
+        raise RuntimeError(
+            f"[PORTAL] DCG-03 divergence guard: {len(orphans)} NEW orphaned ops_decisions "
+            f"current-projection row(s) with no matching DECISIONS.md/DECISIONS_ARCHIVE.md header "
+            f"and absent from the checked-in baseline ({_ORPHAN_BASELINE_PATH}): {sorted(orphans)}. "
+            "Investigate before allowlisting -- a genuine orphan is never silently baselined "
+            "(Decision 55)."
+        )
 
 
 def file_decision(
@@ -194,7 +275,7 @@ def update_decision(decision_id: str, updates: dict, profile: Optional[str] = No
     return True
 
 
-def backfill_decisions_from_md(profile: Optional[str] = None) -> dict:
+def backfill_decisions_from_md(profile: Optional[str] = None, orphan_reader: Optional[Reader] = None) -> dict:
     """ETL DECISIONS.md -> ops_decisions (premise P3: the markdown is the source of truth).
 
     Idempotent: each entry is a caller-keyed write_ops upsert on dec-{n:03d}. Differential
@@ -204,6 +285,13 @@ def backfill_decisions_from_md(profile: Optional[str] = None) -> dict:
     Raises RuntimeError (fidelity tripwire) if a NEW live-h2 entry (not in the checked-in
     fidelity_baseline.yaml allowlist) parses to an empty decision_text or a non-ISO
     decided_date -- this is a loud-fail check, not a silent counter (Decision 55).
+
+    Also raises RuntimeError (DCG-03 divergence guard, Decision 149) if the ops_decisions
+    current projection contains a NEW orphan -- a row with no matching header in either
+    DECISIONS.md or DECISIONS_ARCHIVE.md and absent from the checked-in
+    orphan_baseline.yaml allowlist -- via _assert_no_orphaned_current_rows(). orphan_reader
+    is an injectable seam for that guard (see its docstring); None uses the live DuckLake
+    reader.
 
     Returns:
         {"written": N, "failed": M, "skipped": K}
@@ -269,5 +357,7 @@ def backfill_decisions_from_md(profile: Optional[str] = None) -> dict:
             f"regression(s) not present in the checked-in baseline ({_FIDELITY_BASELINE_PATH}): "
             f"{regressions}. written={written} failed={failed} skipped={skipped}"
         )
+
+    _assert_no_orphaned_current_rows(profile=profile, reader=orphan_reader)
 
     return {"written": written, "failed": failed, "skipped": skipped}

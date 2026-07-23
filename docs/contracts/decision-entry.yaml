@@ -98,13 +98,97 @@ decided_date_form: >-
   condition is met") is never harvested as a date (DAF-01 fix). New entries should always carry
   an explicit "**Date:**" marker rather than relying on the fallback.
 
+compaction:
+  # Number-preserving decision-compaction lifecycle (audit findings DCG-02/DCG-03,
+  # audits/decision-consolidation-growth-f79d6b5.yaml; PLAN-dcg-compaction-lifecycle). The named
+  # relief valve for live-file size pressure alongside archival (Decision 146) -- for entries
+  # that cannot archive because live code/contracts still cite the number by name. First
+  # exercised on Decision 44 (its boundary-pattern table now lives in
+  # config/agent/executor/capabilities.yaml per Decision 117, but capabilities.yaml and
+  # scripts/checks/executor/validate_executor_boundary.py still cite "Decision 44" by name, so
+  # the entry cannot move to the archive).
+  eligibility_criterion: >-
+    An entry compacts only when its ENTIRE body is superseded/inert AND the superseder restates
+    or subsumes every live clause the entry ever carried -- a partial supersession (the
+    superseder settles only some of the victim's clauses) is never eligible; the surviving live
+    clauses keep the entry full-bodied. Direction-consistency: only the SUPERSEDED VICTIM
+    compacts, never the superseder -- see the archived-52-supersedes-live-37/40 inversion
+    (audits/decision-consolidation-growth-f79d6b5.yaml Q4 extension, used there as criterion
+    evidence for this rule) for the failure mode this guards against: a superseder that itself
+    goes inert/compacted while its victim stays full-bodied and live inverts the reader's
+    expectation of which entry carries the authority.
+  stub_grammar:
+    # Non-negotiable shape for a compacted stub. A compaction is a FULL body replacement, never
+    # a partial edit -- verify no pre-compaction marker line (e.g. an old non-conforming fused
+    # "Decision status: Decided -- <date>" line) survives the edit for a first-match regex to
+    # latch onto.
+    header: >-
+      The '## Decision N: <original title>' header line is UNCHANGED, INCLUDING its original
+      parenthetical (e.g. '(Decided)'). Do NOT adopt the archive-move '(Superseded by Decision
+      NN)' header suffix on a live-file stub -- that suffix is the DECISIONS_ARCHIVE.md move
+      convention (Decision 146), and reusing it here would mint a second, silently-diverging
+      live convention (the Decision 128/145 silent-trade anti-pattern). scripts.decisions_md's
+      parse_decisions_md() status derivation prefers the body '**Status:**' marker over the
+      header-parenthetical fallback, so the header staying '(Decided)' does not contradict the
+      body saying Superseded -- the body marker is the parser's source of truth once present.
+    body_markers:
+      - "**Status:** Superseded"
+      - "**Date:** <ISO YYYY-MM or YYYY-MM-DD>"
+      - "**Decision:** <non-empty one-line pointer to the superseding Decision N and, where
+        applicable, the code-level artefact that now carries the content>"
+      - "**Superseded by: Decision N**"
+    marker_spelling: >-
+      The '**Superseded by: Decision N**' marker uses the EXACT spelling already pinned by this
+      file's supersession_marker key above -- never the historical '**Superseded by:** Decision
+      N' fallback form on a newly-compacted stub.
+    never_remove_headers: >-
+      A compaction NEVER removes the '## Decision N:' heading, and never retires or reuses the
+      number. Number retirement and destructive merges (deleting/rewriting a header, or
+      hand-merging two entries into one) are permanently out of this mechanism's vocabulary --
+      ~12,103 unguarded inbound 'Decision N' citations across the repo depend on every number
+      staying resolvable to a header in one of the two files. Rationale trace (DCG-03,
+      audits/decision-consolidation-growth-f79d6b5.yaml Q4): if a header ever disappeared from
+      both files, its ops_decisions CURRENT-projection row would remain forever in its last
+      state with no signal it was retired -- the backfill's divergence guard
+      (scripts/ops_portal/decisions.py::_assert_no_orphaned_current_rows) makes that latent
+      hazard a loud, mechanical failure instead (Decision 55), but the guard is a backstop, not
+      a license -- the header itself must never be removed.
+  procedure:
+    description: >-
+      Operator/agent steps for retiring a fully-superseded decision body: either archive it
+      whole (when nothing live still cites the number by name) or compact it in place to a stub
+      (when it cannot archive). Both branches are number-preserving; neither is a substitute for
+      the other.
+    steps:
+      - "Confirm eligibility: the entry's ENTIRE body is superseded/inert and the superseder
+        restates/subsumes every live clause (see eligibility_criterion above). If only part of
+        the body is dead, do not compact or archive -- leave the entry full-bodied."
+      - "Archive-vs-compact branch: if nothing outside DECISIONS.md/DECISIONS_ARCHIVE.md still
+        cites the entry's number by name in a live, non-historical context (code comments,
+        docstrings, other contracts), move the whole entry to docs/DECISIONS_ARCHIVE.md per
+        Decision 146's archival policy -- this is the preferred, lower-effort path. If live
+        code/contracts still cite the number by name (e.g. a code comment reading '(Decision
+        N)'), archiving would strand that citation pointing at a file most agents don't read by
+        default -- compact in place instead (stay in DECISIONS.md, follow stub_grammar above)."
+      - "Compacting in place: replace the entry's ENTIRE body (everything between the header
+        line and the closing '---') with the stub_grammar shape above. This is a full-body
+        replacement, not a partial edit -- verify no pre-compaction marker line survives."
+      - "Run bin/venv-python -m scripts.validate --pre and confirm the DECISIONS size,
+        decision-entry conformance, and supersession-annotation guards all pass."
+      - "Run bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md so the
+        content_hash change is detected and a terminal Superseded SCD2 version is written to
+        ops_decisions; the prior full-body version is retained as history (the warehouse is the
+        provenance archive -- git history retains it too)."
+
 size_governance:
   # Decision 134 / Decision-114 parity ceilings (enforced by
   # scripts/checks/decisions/validate_decisions_size.py, both --pre and full tiers). Documented
   # here for authors: approaching these ceilings is a signal to archive superseded entries
-  # (DPI-04's dispositions) or compact superseded bodies to pointer stubs, not to raise the
-  # ceiling.
-  live_max_bytes: 400000
+  # (DPI-04's dispositions) or compact superseded bodies to pointer stubs (see compaction: above),
+  # not to raise the ceiling. live_max_bytes reflects the Decision 145 stopgap raise (400000 ->
+  # 500000, amending Decision 134 clause 2); the validator constant is the SoT if this value ever
+  # drifts from it again.
+  live_max_bytes: 500000
   live_max_h2_headers: 120
   combined_max_bytes: 700000
 

@@ -1,0 +1,33 @@
+# Checked-in allowlist-diff baseline for the DCG-03 divergence guard
+# (scripts/ops_portal/decisions.py::_assert_no_orphaned_current_rows, wired into
+# backfill_decisions_from_md). PLAN-dcg-compaction-lifecycle / Decision 149 /
+# audits/decision-consolidation-growth-f79d6b5.yaml DCG-03.
+#
+# NOT a zero-assertion: this is an allowlist-diff, mirroring the sibling fidelity_baseline.yaml
+# pattern in this same module. The guard bulk-reads the ops_decisions current projection via the
+# closed Decision-84-I-3 named-verb boundary (reader.current_state('ops_decisions')), diffs it
+# against scripts.decisions_md.decision_header_numbers() (every '## Decision N:' header across
+# docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md), and raises RuntimeError loudly (Decision 55) on
+# any current-projection id that is neither headered nor listed below.
+#
+# Do not add a NEW entry here to silence a real regression -- a genuinely NEW orphan (a header
+# removed, or a row written without ever authoring the corresponding DECISIONS.md entry) is
+# exactly the DCG-03 defect this guard exists to catch loudly. Only a pre-existing, investigated,
+# and disposed orphan belongs here.
+known_orphaned_current_rows:
+  - decision_id: "dec-010"
+    reason: >-
+      Leaked "Test Decision" warehouse row (title "Test Decision", decision_text "We decided to
+      test this.", content_hash None, created 2026-07-10) with no "## Decision 10:" header ever
+      written in docs/DECISIONS.md or docs/DECISIONS_ARCHIVE.md, and zero inbound "Decision 10"
+      citations anywhere in the repo. Discovered during PLAN-dcg-compaction-lifecycle's
+      implementation (Decision 149). Baselined per Decision 55 (a loud, cited allowlist entry,
+      never a silently-dropped assertion) rather than physically deleted in that same change so
+      the DCG-03 guard would not wedge the first real backfill on a pre-existing orphan. Physical
+      removal (a Decision-70-sanctioned exception) is tracked separately by rec-2814 -- out of
+      Decision 149's scope. Shrink this list to empty once rec-2814 lands. Provenance note: the
+      dec-010 discovery itself was surfaced to the operator as a hand-back, not filed as a
+      recommendation, per this plan's default no-new-recommendations stance; rec-2814 is a
+      deliberate, sanctioned exception to that default, filed at the operator's explicit
+      direction at plan approval (the Step 6b confirmation) specifically to carry this
+      physical-removal follow-up forward.

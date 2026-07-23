@@ -180,11 +180,13 @@ class TestBackfillDecisionsFromMd:
             patch("scripts.ops_portal.decisions.file_decision", return_value="dec-084") as mock_fd,
             patch("scripts.ops_portal.decisions._sync_table") as mock_sync,
             patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows") as mock_orphan_guard,
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 
             result = backfill_decisions_from_md()
 
+        mock_orphan_guard.assert_called_once()
         assert result == {"written": 1, "failed": 0, "skipped": 1}
         mock_fd.assert_called_once()
         fields = mock_fd.call_args.args[0]
@@ -204,6 +206,7 @@ class TestBackfillDecisionsFromMd:
             patch("scripts.decisions_md.parse_decisions_md", return_value=entries),
             patch("scripts.ops_portal.decisions.file_decision", side_effect=RuntimeError("writer down")),
             patch("scripts.ops_portal.decisions._sync_table") as mock_sync,
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
         ):
             from scripts.ops_data_portal import backfill_decisions_from_md
 

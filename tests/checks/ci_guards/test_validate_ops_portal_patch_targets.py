@@ -45,6 +45,24 @@ class TestValidateOpsPortalPatchTargets:
             violations = _ops_portal_patch_violations([path])
         assert violations == []
 
+    def test_ops_portal_patch_targets_flags_stale_orphan_guard_patch(self, tmp_path: Path) -> None:
+        """rec-2637 failure mode for the DCG-03 guard: a test exercising backfill_decisions_from_md
+        that patches scripts.ops_data_portal._assert_no_orphaned_current_rows (the facade
+        namespace) must be flagged -- the caller resolves that symbol at its own submodule scope
+        (scripts.ops_portal.decisions), so the facade patch never intercepts the call."""
+        body = (
+            "from unittest.mock import patch\n"
+            "def test_x():\n"
+            "    with patch('scripts.ops_data_portal._assert_no_orphaned_current_rows'):\n"
+            "        backfill_decisions_from_md()\n"
+        )
+        path = self._write(tmp_path, "test_d.py", body)
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            violations = _ops_portal_patch_violations([path])
+        assert len(violations) == 1
+        assert "backfill_decisions_from_md" in violations[0]
+        assert "_assert_no_orphaned_current_rows" in violations[0]
+
     def test_ops_portal_patch_targets_facade_resident_caller_not_flagged(self, tmp_path: Path) -> None:
         """file_rec is facade-resident -- patching scripts.ops_data_portal for the same
         symbol name a moved caller also uses must NOT be flagged (caller-aware)."""
