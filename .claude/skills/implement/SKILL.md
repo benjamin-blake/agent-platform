@@ -35,9 +35,11 @@ oversized file; it no longer auto-seeds one (Decision 128 / B2).
 When reading `logs/.preflight-report.json`, apply these conditionals:
 - **`venv_ok: false`** -- Auto-activate venv and rerun preflight. If still false, STOP.
 - **`creds_status: "unavailable"`** -- **Static-key recovery (non-fatal, Decision 60):** the static-key assume-role chain has no interactive login. Verify it with `aws sts get-caller-identity --profile agent_platform`; if the `agent_static` key was rotated, refresh `~/.aws/credentials`. Do NOT block -- continue in degraded mode (credential-dependent verifiers are skipped, emitting SKIPPED). Autonomous executors never attempt recovery.
-- **`ops_outbox` non-empty** -- Entries in migrated-table or `*_pending` dirs are ANOMALIES (Decision 84 I-4: those outboxes are retired and never drained) -- re-file the content via the portal and delete the files. Legacy staging dirs (telemetry/session_log/execution_plans) drain via `bin/venv-python -m scripts.sync.ops sync`. If that fails, STOP.
-- **`uncommitted_changes` non-empty** -- Ask human: "Resume, stash, or discard?". Wait. Continue on all other conditions.
-- **`main_freshness.status == "fetch_failed"`** -- Informational. Surface: "Could not refresh `origin/main` ([error]). Step 5 code-review will diff against the stale local main ref; Scope-overlap check will be skipped." Continue.
+- **`ops_outbox` non-empty** -- Entries in migrated-table or `*_pending` dirs are ANOMALIES (Decision 84 I-4: those outboxes are retired and never drained) -- re-file via the portal and delete the files. Legacy staging dirs (telemetry/session_log/execution_plans) drain via `bin/venv-python -m scripts.sync.ops sync`. If that fails, STOP.
+- **`uncommitted_changes` non-empty** -- Ask human: resume, stash, or discard? Wait. Continue on all other conditions.
+- **`main_freshness.status == "fetch_failed"`** -- Informational: surface the fetch error and note
+  that Step 5 code-review will diff against the stale local main ref and the Scope-overlap check
+  will be skipped. Continue.
 - **`main_freshness.commits_behind > 0`** -- Retain `main_freshness.main_files_changed_since_branch` for the Step 2 Main Divergence Check (below). Non-blocking at this step.
 - **`validate` (presubmit) non-zero exit** -- The gate has detected pre-existing blockers on the branch. File each failed check as a recommendation via the portal (`automatable: false`), surface to human with go/no-go, STOP if no-go. Credentials-unavailable -> skip with actionable guidance per Decision 60; do not crash.
 
@@ -122,11 +124,10 @@ Track Attempts per step (see VP Compliance Gate below). This rule governs what a
 
 ### VP Failure Is Not Negotiable
 If a VP step fails for ANY reason (including credential/environment issues), the status is FAIL.
-There is no "graceful" failure, no "local pass", no "env blocked" — only PASS or FAIL.
-If the failure is due to missing credentials or infrastructure, the agent MUST:
-1. Attempt the documented recovery (verify the static-key chain: `aws sts get-caller-identity --profile agent_platform`; refresh `~/.aws/credentials` if the `agent_static` key was rotated)
-2. Re-run the VP step
-3. If still failing, mark FAIL and STOP — do not proceed, do not merge
+There is no "graceful" failure, no "local pass", no "env blocked" — only PASS or FAIL. If the
+failure is due to missing credentials or infrastructure: attempt the static-key recovery (see
+Preflight Constraints above), re-run the VP step, and if still failing mark FAIL and STOP — do not
+proceed, do not merge.
 
 ### VP Compliance Gate
 Before proceeding to code review (Step 5), produce a VP compliance table in the chat output:
@@ -139,12 +140,13 @@ Before proceeding to code review (Step 5), produce a VP compliance table in the 
 - PASS/FAIL is not the only allowed status: a step whose green result is flagged by the nondeterminism rule (see Live Verification Protocol Protocol subsection) is recorded as NONDETERMINISTIC, never as PASS.
 - If ANY row is FAIL, do NOT proceed.
 - If a VP step was skipped or is awaiting a human-gated action (e.g., terraform apply), mark it BLOCKED and wait.
-- Lack of AWS credentials is NOT automatically a block. Verify the static-key chain with `aws sts get-caller-identity --profile agent_platform`; there is no interactive login to run (refresh `~/.aws/credentials` if `agent_static` was rotated).
+- Lack of AWS credentials is NOT automatically a block. Verify the static-key chain per Preflight
+  Constraints; there is no interactive login to run.
 - This table is the proof artifact: per the IMPLEMENTATION Commit Flow below, it is appended to the PR body verbatim (with its Attempts column and any NONDETERMINISTIC markers) so the executed evidence survives past the chat transcript.
 
 ### V3 Merge Gate
 If the Verification Plan contains V3 post-deploy steps, execute the full sequence:
-0. Confirm credentials are active with `aws sts get-caller-identity --profile agent_platform`. There is no interactive login in the static-key model; if the chain fails, refresh `~/.aws/credentials` (rotated `agent_static`) and re-verify.
+0. Confirm credentials are active (static-key recovery per Preflight Constraints if the chain fails).
 1. Complete all pre-deploy VP steps.
 2. Present the deploy output.
 3. WAIT for human confirmation of deployment success.
@@ -157,6 +159,11 @@ Only when ALL steps pass can you proceed to code review.
 **You MUST trigger the code-review immediately after the Verification Plan passes. Do not wait for the human to prompt you.**
 
 ### Trigger
+**Subagent-dispatch mode:** same three-signal check as planning's subagent-dispatch gates -- if you
+are a subagent (`SUBAGENT CONTEXT` header, no `Agent` tool, or a nesting error), do not dispatch
+below; gate-request (`gate: code-review`, inputs branch+plan_path) and resume via `SendMessage` on
+verdict. Schema: `docs/contracts/overseer-dispatch.yaml#gate_request_trampoline`.
+
 Dispatch via the `Agent` tool with `subagent_type: "general-purpose"`, instructing the subagent to invoke the `code-review` skill via the Skill tool and return its structured output verbatim (the same idiom the plan.md decision-scout / plan-critique gates use) -- NOT via `bin/venv-python -m scripts.agent_development.run_skill --skill code-review`. The subagent runs in a fresh context window (anti-bias) and has full tool access (read, grep, glob, bash) to inspect the entire branch diff.
 
 Agent prompt template:

@@ -68,16 +68,21 @@ This is the **G1 gate**: do not dispatch any planning subagent without it.
 
 ## Step 6: Dispatch
 
-For each wave (serial across waves; within a parallel wave, all slices dispatch together):
-1. **Planning-Subagent Dispatch** per the skill: drive each slice's `PLAN-{slug}.yaml` to a merged
-   plan PR.
-2. **Implementation-Subagent Dispatch** per the skill: once a slice's plan is merged, drive it to a
-   merged implementation PR.
+For each wave (serial across waves; within a parallel wave, all slices dispatch together), apply the
+skill's Division of Labor & Gate Ownership (Design B): the dispatched author subagent (planning, then
+implementation once its plan is merged) runs its own lifecycle, commits, pushes, and opens its own
+PR, then stops -- it never subscribes to PR activity, waits for CI, or merges. Whenever the author
+reaches a gate (decision-scout, plan-critique, code-review), it hands back `GATE_REQUEST` rather than
+invoking the gate inline; the overseer dispatches that gate as a fresh sibling per the skill's
+gate-request trampoline, then resumes the author via `SendMessage` with the verdict. Once an author
+hands back PROCEED with a PR URL, the overseer -- never the author -- owns
+`subscribe_pr_activity` -> CI-green wake -> squash-merge for that PR.
 
 Apply the skill's Autonomy-Boundary Policy for any overseer-level judgment call encountered mid-run
 (which subagent to re-dispatch, how to interpret an ambiguous hand-back) -- autonomous only when all
-four criteria hold, and always defer to the human on the hard always-ask list (IAM/security/spend/
-public-surface/governed-deploy) regardless.
+four criteria hold, or proceed-with-notice for a reversible, settled, no-externality call; always
+defer to the human on the hard always-ask list (IAM/security/spend/public-surface/governed-deploy)
+regardless.
 
 Apply the skill's Lifecycle and Gates exception path: a slice BLOCKED or FAILED twice routes to the
 `executor-rca` skill and escalates to the human -- never a third silent retry. Apply the

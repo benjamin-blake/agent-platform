@@ -3,9 +3,9 @@ name: overseer
 description: >-
   Deep methodology for the orchestration meta-layer that composes /plan and /implement subagents
   to drive an entire platform roadmap item or audit to completion largely unattended -- read-nothing
-  router discipline, bounded hand-back schema, YAML ledger schema, overlap-matrix serial/parallel
-  dispatch, autonomy-boundary policy, and the Fable advice-consult protocol. Use when running the
-  /overseer workflow.
+  router discipline, the Design-B gate-request trampoline, division of labor, liveness/watchdog
+  resilience, autonomy calibration, and the Fable advice-consult protocol. Use when running the
+  /overseer workflow. Detail: docs/contracts/overseer-dispatch.yaml.
 model: opus[1m]
 ---
 
@@ -14,54 +14,56 @@ model: opus[1m]
 You are using this skill to augment the `/overseer` workflow (Layer 3 command; this skill is its
 Layer 4 methodology). The overseer is an orchestration meta-layer, NOT a fifth workflow tier
 (Decision 90): it composes the existing `/plan` and `/implement` subagents -- each running its own
-full gate stack (decision-scout, plan-critique, code-review, live verification) unmodified -- to
-drive an entire roadmap item, audit, or multi-slice body of work to completion, narrowing the human
-to the intake (G0), decomposition (G1), and completion (G3) gates. The overseer session itself never
-edits source code, terraform, or Python; every file change happens inside a dispatched subagent.
+full gate stack unmodified -- to drive a roadmap item, audit, or multi-slice body of work to
+completion, narrowing the human to intake (G0), decomposition (G1), and completion (G3). The overseer
+never edits source code, terraform, or Python itself; every file change happens inside a dispatched
+subagent. Detailed schemas/recipes live in `docs/contracts/overseer-dispatch.yaml` (Decision 86/127
+relief valve) -- this file is the anchor+pointer index; load the contract for mechanism detail.
 
 ## Behavioural Invariants
 ```yaml
 # Machine-readable invariants verified by scripts/prompt_compliance.py
 preflight_run: true              # session_preflight.py must run at intake (G0)
 never_on_main: true              # no file edits while on main branch
-no_code_changes: true            # the overseer itself never edits source; writes happen only inside dispatched /plan and /implement subagents
-meta_layer_not_tier: true        # composes the existing four-tier workflow (Decision 90); introduces no fifth tier
-no_rescue_loops: true            # CI failures route to ci_rca + human escalation, never inline-patched (Decision 55/72)
-halt_on_open_ci_rca: true        # halts new dispatch while any open source=ci_rca critical rec exists (Decision 73)
+no_code_changes: true            # writes happen only inside dispatched /plan and /implement subagents
+meta_layer_not_tier: true        # composes the four-tier workflow (Decision 90); no fifth tier
+no_rescue_loops: true            # CI failures route to ci_rca + human escalation (Decision 55/72)
+halt_on_open_ci_rca: true        # halts new dispatch while any open source=ci_rca critical rec exists
 ```
 
 ## Read-Nothing Router Discipline
 
-The overseer's own context must stay cheap enough to drive a multi-wave, multi-slice run without
-exhausting its window. It reads only: the preflight cache, the targeted roadmap projection (a single
-tier_item or audit slug), and the Bounded Hand-Back objects returned by its own dispatched subagents.
-It never reads full source files, `docs/DECISIONS.md`, or a subagent's raw transcript directly --
-those reads happen inside the dispatched subagent's own fresh context, and only the bounded summary
-returns. The overseer acts as router and reconciler, not as a doer: if a judgment call requires
-reading a file to resolve, that read belongs inside a subagent dispatch, not in this session.
+Stay cheap enough to drive a multi-wave run without exhausting the window. Read only: the preflight
+cache (incl. the headroom check below), the targeted roadmap projection, and the Bounded Hand-Back
+objects dispatched subagents return. Never read full source files, `docs/DECISIONS.md`, or a
+subagent's raw transcript directly -- those reads happen inside the dispatched subagent's own fresh
+context. Any judgment call needing a file read belongs inside a subagent dispatch, not here.
+
+**Intake headroom check (G0):** before confirming scope, read the LIVE roadmap ceiling/guard state
+(Decision 114) -- never a hardcoded number. See `overseer-dispatch.yaml#intake_headroom_check`.
 
 ## Bounded Hand-Back Schema
 
-Every subagent the overseer dispatches (planning, implementation, Fable advice, RCA) returns exactly
-this shape and nothing more:
+Every subagent dispatched (planning, implementation, gate, Fable advice, RCA) returns exactly this
+shape:
 ```yaml
-status: PROCEED | REVISE | BLOCKED | FAILED
+status: PROCEED | REVISE | BLOCKED | FAILED | GATE_REQUEST
 summary: <=150 words, prose synthesis of what happened
 artifacts: [file paths touched/created, e.g. docs/plans/PLAN-{slug}.yaml, or a PR URL]
-evidence: [verifiable proof pointers -- VP compliance table, PR number, commit sha]
+evidence: [verifiable proof pointers -- VP compliance table, PR number, commit sha, gate_run_id]
 decisions: [decision ids cited or newly ratified]
 open_questions: [unresolved items requiring human input, or empty]
 ```
-Do not ask a subagent to paste back file contents, full diffs, or raw transcripts -- only this
-bounded object. If a subagent returns output missing `status` or otherwise not shaped like this, the
-dispatch has NOT completed -- re-dispatch; never proceed on an incomplete hand-back (mirrors the
-planning skill's "missing Verdict line" precedent for the decision-scout and plan-critique gates).
+`GATE_REQUEST` is never terminal: it means the author subagent paused mid-lifecycle to request an
+overseer-dispatched gate (decision-scout, plan-critique, code-review) via
+`overseer-dispatch.yaml#gate_request_trampoline`; the slice's ledger status stays
+planning/implementing through it. Never accept pasted file contents, diffs, or raw transcripts in a
+hand-back. A hand-back missing `status`, or otherwise malformed, has NOT completed -- re-dispatch.
 
 ## Overseer Ledger Schema
 
-Runtime artefact: `docs/plans/reports/OVERSEER-{slug}.yaml`, created by the overseer AT EXECUTION
-TIME (not shipped by any plan that merely stands up this skill/command). Machine-parseable YAML per
-the Agent-First Repository rule -- no narrative companion document.
+Runtime artefact: `docs/plans/reports/OVERSEER-{slug}.yaml`, created AT EXECUTION TIME. Machine-
+parseable YAML (Agent-First Repository rule) -- no narrative companion doc.
 ```yaml
 schema_version: 1
 slug: "{slug}"
@@ -75,135 +77,131 @@ wave_plan:
 slices:
   - plan_slug: "{slug-a}"
     status: pending | planning | plan_merged | implementing | verifying | merged | blocked | failed
-    pr_url: null  # or the merged PR URL once known
-    hand_back: null  # most recent Bounded Hand-Back object from this slice's subagent
+    pr_url: null
+    hand_back: null       # most recent Bounded Hand-Back object from this slice's subagent
+    pending_gates: []     # write-ahead GATE_REQUEST entries; see contract#pending_gates
 autonomous_decision_log:
   - timestamp: "<ISO date>"
     decision: what was decided without asking the human
-    rationale: which autonomy-boundary criterion applied
-gates:
-  g0_intake: pending
-  g1_decomposition: pending
-  g3_completion: pending
+    rationale: which autonomy-boundary criterion applied (or "proceed-with-notice")
+gates: {g0_intake: pending, g1_decomposition: pending, g3_completion: pending}
 ```
-Update the ledger after every subagent hand-back and every gate confirmation. This is the single
-source of truth for "where is this run" -- on resume, the overseer reconstructs state from this file,
-never from chat history (cold-start discipline, mirroring the `implement` skill's
-treat-every-turn-as-cold-start rule).
+**Persistence:** the live ledger is a **scratchpad** working copy (fast, no per-update commit) -- NOT
+**durable** across full session loss. The durable cross-session resume source of truth is each
+slice's actual GitHub PR/merge state (Decision 115/87), not this file: on cold resume, reconstruct
+status from PR state via the GitHub MCP tools; on disagreement, PR state wins. See
+`overseer-dispatch.yaml#ledger_persistence`.
 
 ## Lifecycle and Gates
 
-- **G0 Intake (human-gated):** the human states the roadmap item, audit target, or intent; the
-  overseer runs preflight and confirms scope, then gets explicit human go-ahead before any subagent
-  dispatch.
-- **G1 Decomposition (human-gated):** after recon and the Fable advice-consult, the overseer presents
-  the proposed wave plan (slices, overlap matrix, serial/parallel split per wave) and gets explicit
-  human confirmation before dispatching any planning subagent.
-- **G3 Completion (human-gated):** once every slice reports a terminal state (merged, or
-  blocked/failed with prior human sign-off), the overseer presents the final ledger summary and gets
-  explicit human sign-off before closing the run. There is no separately numbered G2 -- G1 and G3
-  bracket the unattended dispatch/aggregate loop, which runs without its own numbered gate.
+- **G0 Intake (human-gated):** state the target; run preflight (incl. headroom); confirm scope; get
+  explicit go-ahead before any dispatch. Create exactly one `create_trigger` safety-net watchdog here.
+- **G1 Decomposition (human-gated):** after recon and the Fable advice-consult, present the wave plan
+  (slices, overlap matrix, serial/parallel per wave); get explicit confirmation before dispatching.
+- **G3 Completion (human-gated):** once every slice is terminal (merged, or blocked/failed with prior
+  sign-off), present the ledger summary, delete the G0 watchdog trigger, get explicit sign-off.
 
-**Blocked/failed-twice exception path:** a slice that comes back BLOCKED or FAILED twice (two
-dispatch attempts) never gets a silent third retry. It routes to the `executor-rca` skill for
-root-cause diagnosis, and the overseer escalates that slice to the human with the RCA findings --
-the same Decision 55 RCA-first pattern the rest of the platform uses, applied one level up the stack.
+**Blocked/failed-twice:** never a silent third retry -- routes to `executor-rca` with a concrete
+artifact (transcript, output file, a targeted re-dispatch to reproduce, or the original SUBAGENT
+CONTEXT + prompt); escalate to the human with the RCA findings (Decision 55, one level up). See
+`overseer-dispatch.yaml#executor_rca_feed`.
 
-**Halt-on-open-ci_rca gate (Decision 73):** before dispatching any new slice -- at G1 or mid-run --
-the overseer checks `ci_rca_unresolved_recs` in the preflight cache. If any open `source=ci_rca`
-critical rec exists, the overseer halts new dispatch and escalates to the human; it does not
-dispatch unrelated slices past the hard block.
+**Halt-on-open-ci_rca (Decision 73):** before any new-slice dispatch, check `ci_rca_unresolved_recs`
+in the preflight cache; an open critical rec halts new dispatch -- never overridden, not even by
+proceed-with-notice.
+
+## Division of Labor & Gate Ownership (Design B)
+
+**Division of labor:** the author subagent (planning or implementation) runs its own lifecycle,
+commits, pushes, opens its own PR, and stops -- hands the PR back via PROCEED. **Gate ownership**
+never lives with the author: the overseer dispatches EVERY decision-scout, plan-critique, and
+code-review as a fresh sibling, and owns subscribe_pr_activity -> CI-green -> squash-merge, waiting
+in the **foreground** of its own turn (never `run_in_background` for a gate or merge-wait) and
+resuming the paused author via **SendMessage** once a verdict lands. Full tables + the composed
+gate-request-trampoline sequence (which gate fires at which /plan or /implement step, and how it
+interleaves with PR-open/merge): `overseer-dispatch.yaml#division_of_labor` / `#trampoline_sequence`.
+
+**Subagent-dispatch detection:** every author-subagent prompt opens with the exact SUBAGENT CONTEXT
+header from `overseer-dispatch.yaml#subagent_detection` (tool-roster absence + injected header +
+error-fallback on a nesting error), so the subagent GATE_REQUESTs rather than running a gate inline.
+
+**Planning-subagent dispatch:** `Agent`, `model: "opus"` (matches `planning`'s `opus[1m]` pin -- see
+Model Namespace Note); invoke `planning` via `Skill`, following its gate-section subagent-dispatch
+conditional.
+
+**Implementation-subagent dispatch:** `Agent`, `model: "sonnet"` (matches `implement`'s pin); invoke
+`implement` via `Skill`, following the same conditional in its code-review gate section.
 
 ## Overlap-Matrix Serial/Parallel Decision Procedure
 
-At G1, decompose the target into slices (each slice = one eventual `PLAN-{slug}.yaml`). For every
-pair of slices, compare `files_in_scope` and `depends_on` edges to build an overlap matrix (same
-shape as the `orient` skill's overlap matrix):
-- Disjoint `files_in_scope` and no `depends_on` edge between a pair -> eligible for the SAME wave,
-  dispatched in PARALLEL.
-- Any file overlap, or a `depends_on` edge -> different waves, SERIAL (the dependency's wave runs
-  and merges first).
+At G1, decompose into slices (each = one eventual `PLAN-{slug}.yaml`). For every pair, compare
+`files_in_scope` and `depends_on` (same shape as `orient`'s overlap matrix):
+- Disjoint scope, no `depends_on` edge -> SAME wave, PARALLEL.
+- Any overlap, or a `depends_on` edge -> different waves, SERIAL (dependency's wave merges first).
 
-Serial is the default. Parallel dispatch is chosen only when the matrix affirmatively clears a pair
--- never as a default optimization. Any parallel wave of code-writing subagents requires (Decision
-25): one dedicated git worktree per agent, disjoint file scopes enforced by each slice's own plan
-Scope table, and a FIXED merge order declared in the wave_plan entry before dispatch, not decided
-after the fact.
+Serial is the default; parallel only when the matrix affirmatively clears a pair. A parallel wave
+requires one git worktree per agent, disjoint scopes per slice's plan Scope table, and a FIXED merge
+order declared before dispatch.
+
+## Liveness, Watchdog & Safety Net
+
+Diagnose aliveness via `ls -laL` on the transcript symlink (TARGET mtime, not the symlink's own
+near-constant mtime): a **watchdog**/**heartbeat** check reads this against expected stage duration
+to avoid a false-stall false positive. On a confirmed death signature, **restart** with a fresh
+subagent seeded from the ledger's last artifacts_written (counts against the two-attempt cap). On an
+ambiguous **stall**, send exactly ONE SendMessage nudge before treating a further silent window as
+death. The **safety-net** watchdog is exactly one `create_trigger` at G0 and one `delete_trigger` at
+G3 -- a stall-sweeper only, never a CI-poll substitute (Decision 76 carve-around: subagent death
+emits no event, unlike the already-covered CI/merge-conflict signals; never allowlist
+`mcp__Claude_Code_Remote__*`). Both re-dispatch paths are BOUNDED DETERMINISTIC recovery (Decision
+55), never an LLM-judgement rescue. See `overseer-dispatch.yaml#liveness` / `#safety_net`.
+
+## Bounded In-Loop Validation
+
+Each dispatched implementation subagent already runs `validate --pre` before opening its PR
+(implement/SKILL.md Commit Flows); the overseer does not re-run full unflagged `validate` itself --
+that duplicates the author's own gate and violates Read-Nothing Router Discipline. See
+`overseer-dispatch.yaml#bounded_validation`.
 
 ## Autonomy-Boundary Policy
 
-An overseer-level judgment call (which slice to dispatch next, how to reconcile a Fable divergence
-flag, whether a hand-back's `open_questions` blocks the wave) is made AUTONOMOUSLY only when ALL
-four criteria hold:
-1. **Settled-consensus** -- the Fable advice-consult and the repo's existing decisions agree; no
-   contested-practice flag applies to this point.
-2. **Convention-fit** -- the choice matches an existing repo pattern (a precedent skill, command, or
-   decision already resolves it this way).
-3. **Reversible** -- a wrong call costs at most a re-dispatch, never a merged artefact that must be
-   unwound.
-4. **No-credible-alternative** -- there is no second reasonable design the human would plausibly
-   prefer.
+An overseer-level call is made AUTONOMOUSLY only when ALL four hold: **settled-consensus** (Fable +
+existing decisions agree), **convention-fit**, **reversible** (worst case a re-dispatch, never an
+unmerged-artefact cleanup), **no-credible-alternative**. Otherwise present 2-3 options and wait. Log
+every autonomous decision (and which criteria it met) to `autonomous_decision_log`.
 
-If any criterion fails, the overseer does not decide alone: it presents 2-3 concrete options with a
-recommendation and waits for the human. Every autonomous decision (and which criteria it satisfied)
-is logged to the ledger's `autonomous_decision_log`.
+**Proceed-with-notice (low-stakes tier):** reversible + settled-consensus + no plausible negative
+externality even if wrong -> proceed without a synchronous reply, but ALWAYS post a notice to the
+ledger and chat output -- never silent, never blocking. Never applies to the always-ask list below or
+an open critical ci_rca halt. See `overseer-dispatch.yaml#autonomy_tiers`.
 
-**Hard always-ask list (no autonomy-boundary override, ever):** IAM/security-relevant changes,
-anything with real spend impact, any change to a public-surface artefact (the PUBLIC-repository
-confidentiality boundary, per AGENTS.md), and any governed-deploy action (terraform apply routing,
-Lambda deploy channel, gated-apply approval). These always route to a human gate regardless of how
-settled the four autonomy criteria look.
+**Hard always-ask list (no override, ever):** IAM/security changes, spend impact, any public-surface
+artefact change (PUBLIC-repository boundary, AGENTS.md), any governed-deploy action.
 
 ## Fable Advice-Consult Protocol
 
-Before each major design decision (the G1 decomposition shape; any point where the overseer itself
-must choose an architecture rather than sequence already-known work), dispatch a fresh-context
-subagent via the `Agent` tool with `model: "fable"` (Fable 5). The Fable subagent:
-- Is free to read the repo (Read/Grep/Glob) for grounding, but edits nothing.
-- Separates its advice into "settled consensus" (industry-standard practice, low-risk to adopt
-  as-is) versus "contested" (multiple valid approaches, where the repo's existing convention should
-  usually win).
-- Explicitly flags any point where general best practice diverges from this repo's existing
-  pattern, stating which side it recommends and why.
+Before each major design decision, dispatch a fresh-context subagent (`Agent`, `model: "fable"`). It
+reads (Read/Grep/Glob) but edits nothing, separating advice into "settled consensus" vs "contested"
+(flagging where practice diverges from this repo's convention). Reconcile via **adopt** / **adapt** /
+**reject**, logged to the ledger. Triggers beyond G1 decomposition: **workflow-adaptation** (adapting
+the overseer's own dispatch workflow to a gap in methodology) and **rec-synthesis** (reconciling a
+cluster of related recs into one slice boundary, vs. sequencing already-atomic work). See
+`overseer-dispatch.yaml#fable_triggers`.
 
-Reconcile each flagged point via one of three verdicts: **adopt** (take the Fable suggestion as-is),
-**adapt** (blend it with the existing repo convention), or **reject** (keep the repo convention, log
-why). Record the reconciliation in the ledger's context. Invoke once per major design decision --
-not once per slice and not on every wave; re-consulting on already-settled operational sequencing
-wastes a dispatch for no new judgment.
+## Model Namespace Note
 
-## Planning-Subagent Dispatch
-
-Per slice: dispatch via the `Agent` tool with `model: "opus"` (matches the `planning` skill's
-`opus[1m]` pin), instructing the subagent to invoke the `planning` skill via the `Skill` tool exactly
-as `/plan` would, running the FULL `/plan` lifecycle itself (decision-scout gate, plan-critique gate)
-to produce a merged `docs/plans/PLAN-{slug}.yaml`. This is not a shortcut around planning rigor --
-the human's G1 confirmation authorizes the decomposition, not a skipped critique. The subagent
-returns the Bounded Hand-Back once its plan PR is merged to main (or BLOCKED/FAILED with the
-convergence-rule escalation already applied inside its own gate loop).
-
-## Implementation-Subagent Dispatch
-
-Per slice, once its plan is merged: dispatch via the `Agent` tool with `model: "sonnet"` (matches the
-`implement` skill's pin), instructing the subagent to invoke the `implement` skill via the `Skill`
-tool against the merged `docs/plans/PLAN-{slug}.yaml`, running the full Live Verification Protocol,
-the code-review gate, and the Decision 76 event-driven GitHub MCP commit flow (`subscribe_pr_activity`,
-wait for the CI-green signal, squash-merge) -- never a sleep/poll loop. The subagent returns the
-Bounded Hand-Back once the slice's PR is merged, or with status BLOCKED/FAILED and an RCA pointer if
-it could not complete.
+A skill-frontmatter `model:` pin (e.g. `opus[1m]` above) is a different **namespace** from the Agent
+tool's `model` **enum** (`sonnet | opus | haiku | fable`) -- a context-window-suffixed pin is **not a
+valid** Agent-tool value. Dispatch with the enum; the frontmatter pin governs only this skill's own
+session. See `overseer-dispatch.yaml#model_namespace_note`.
 
 ## Decision Guardrails
 
-- **Decision 67 (executor freeze):** the overseer is an interactive, human-gated CC-web
-  orchestration meta-layer -- NOT `scripts/execute_recommendation.py`. It never consumes the
-  recommendation queue and dispatches only IMPLEMENTATION-type plans, staying within the freeze's
-  scope (the freeze targets the autonomous Lambda executor, not this interactive surface).
-- **Decision 55/72 (RCA-first, no rescue loops):** a red build, or a slice BLOCKED/FAILED twice,
-  never gets an inline patch or a silent retry from the overseer -- it routes to `executor-rca` and
-  escalates to the human.
-- **Decision 73 (halt-on-open-ci_rca):** see Lifecycle and Gates above -- an open critical ci_rca
-  rec is a hard dispatch block, not a soft warning.
-- **Decision 90 (four-tier workflow; meta-layer, not a fifth tier):** the overseer composes `/plan`
-  and `/implement` exactly as they already exist; it introduces no new workflow tier, no new plan
-  type, and no bypass of either subagent's own gates. AGENTS.md's "Skills and slash commands" section
-  registers `/overseer` explicitly as a meta-layer for this reason.
+- **Decision 67:** interactive, human-gated CC-web orchestration -- NOT
+  `scripts/execute_recommendation.py`. Never consumes the rec queue; dispatches IMPLEMENTATION only.
+- **Decision 55/72:** a red build, or a slice BLOCKED/FAILED twice, never an inline patch or silent
+  retry -- routes to `executor-rca` and escalates.
+- **Decision 73:** see Lifecycle and Gates -- halt-on-open-ci_rca is a hard dispatch block.
+- **Decision 76:** the safety-net watchdog is the sole sanctioned trigger exception -- see Liveness.
+- **Decision 90:** composes `/plan`/`/implement` as-is -- no new tier, no new plan type, no bypass.
+- **Decision 115/87:** ledger durable-resume SoT precedent -- see Overseer Ledger Schema.

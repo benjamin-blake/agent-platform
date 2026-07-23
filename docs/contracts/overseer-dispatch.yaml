@@ -1,0 +1,348 @@
+# Contract: Overseer Dispatch Model (Design B -- uniform gate-request trampoline)
+#
+# Decision 86/127 relief valve: holds the detailed dispatch model for the /overseer
+# orchestration meta-layer (Decision 90) so .claude/skills/overseer/SKILL.md stays inside its
+# prose budget and loads this contract on demand instead of inlining the detail. Not a Class
+# A/B/C ritual contract -- no top-level contract:/class: block (free-form registry per Decision
+# 118, same precedent as file-router.yaml / deploy-paths.yaml).
+#
+# Origin: three live overseer runs (agent-context-governance, decision-log-premise-integrity,
+# terraform-deploy-redesign) surfaced 16 recommendations against the originally-filed Design A
+# (subagents inline their own gates). A Fable advice-consult adopted Design B instead: the
+# overseer dispatches ALL gates (decision-scout, plan-critique, code-review) as fresh sibling
+# subagents; a dispatched author subagent NEVER runs a gate inline via the Skill tool. Same
+# intent as the filed recs (remove nesting, preserve gate isolation) via a stronger mechanism.
+#
+# Transport-agnosticism (Fable Q4): subagent ids and SendMessage handles are transport metadata
+# carried ALONGSIDE the schemas below, never fields inside them -- this keeps the schema stable
+# across the future durable-Lambda migration, where "dispatch a subagent" stops meaning an
+# in-session Agent-tool call.
+
+schema_version: 1
+decision: Decision-90
+
+division_of_labor:
+  author_subagent:
+    role: "The dispatched /plan or /implement subagent (Planning-Subagent Dispatch /
+      Implementation-Subagent Dispatch in the overseer skill)."
+    produces: "One merged artefact per slice: a merged PLAN-{slug}.yaml (planning subagent) or a
+      merged implementation PR (implementation subagent)."
+    responsibilities:
+      - "Runs its own lifecycle (clarify, context, scope, write -- or implement, verify) exactly
+        as /plan or /implement would standalone."
+      - "Commits and pushes its own artefact."
+      - "Opens its own PR (plan-approval PR or implementation PR)."
+      - "Whenever its lifecycle reaches a gate (decision-scout, plan-critique, code-review), it
+        NEVER invokes the gate skill inline via the Skill tool. It returns a GATE_REQUEST
+        hand-back (see gate_request_trampoline below) and pauses."
+      - "Stops at PR-open. It does not subscribe to PR activity, does not wait for CI, and does
+        not merge -- it hands the PR back to the overseer via the Bounded Hand-Back schema
+        (status PROCEED, artifacts=[PR URL])."
+    stops_at: "PR-open. Everything from subscribe_pr_activity onward belongs to the overseer."
+  overseer:
+    role: "The orchestrating session (this skill)."
+    owns:
+      - "ALL gate dispatch: every decision-scout, plan-critique, and code-review invocation for
+        every slice is a fresh sibling subagent the overseer itself dispatches -- gate ownership
+        never lives with the author subagent."
+      - "The full subscribe_pr_activity -> CI-green-wake -> confirm-check-runs ->
+        squash-merge flow (Decision 76 event-driven flow; run_in_background: false is not
+        relevant here -- the point is the overseer, not the author subagent, holds the
+        subscription and does the waiting) for every slice's PR, in the foreground of its own
+        turn, resuming the paused author subagent via SendMessage once each gate verdict or
+        merge lands."
+      - "The ledger (docs/plans/reports/OVERSEER-{slug}.yaml), the liveness watchdog, the
+        safety-net trigger, and all human-gated checkpoints (G0/G1/G3)."
+    never: "Never edits source code, terraform, or Python directly, and never runs a gate's own
+      methodology itself (Skill tool) in the overseer's own context -- gates always run in a
+      dispatched sibling, per the Read-Nothing Router Discipline this contract complements."
+
+gate_request_trampoline:
+  additional_status: "GATE_REQUEST -- a new value for the Bounded Hand-Back schema's `status`
+    field, alongside the existing PROCEED | REVISE | BLOCKED | FAILED. A GATE_REQUEST hand-back
+    is never terminal for a slice; the slice's ledger status stays planning/implementing through
+    it."
+  request_schema:
+    status: GATE_REQUEST
+    gate: "decision-scout | plan-critique | code-review"
+    round: "1-based count of how many times this gate has been requested for this slice (mirrors
+      each gate's own convergence-rule counter)."
+    inputs: "gate-specific prompt inputs the overseer must relay verbatim into the fresh gate
+      subagent's dispatch prompt -- e.g. for decision-scout: intent, proposed approach, scope
+      files, verification tier, explicitly cited decisions; for plan-critique: the plan file
+      path; for code-review: the branch and plan file path."
+    artifacts_written: "paths already committed and pushed by the author subagent (plan file,
+      branch head) so the gate subagent reads current on-disk/on-PR state, never a chat-pasted
+      body."
+  gate_run_id:
+    minted_by: overseer
+    when: "at write-ahead time (see pending_gates below), before the gate subagent is
+      dispatched."
+    format: "<slug>-<gate>-r<round>-<8hex>, e.g. terraform-deploy-redesign-decision-scout-r1-a1b2c3d4"
+    provenance: "the overseer passes gate_run_id into the fresh gate subagent's dispatch prompt
+      with an instruction to echo it back verbatim in its own final report's evidence. This is
+      the ONE non-optional piece of the trampoline: it is the only check that a subagent did not
+      silently run a bias gate inline instead of requesting it -- a gate verdict arriving without
+      a matching, overseer-minted gate_run_id is not trustworthy and must be re-dispatched
+      properly rather than accepted."
+  pending_gates:
+    write_ahead: "the overseer appends {gate, round, gate_run_id, slice, requested_at} to the
+      ledger's pending_gates list BEFORE dispatching the gate subagent -- never after. This makes
+      a mid-dispatch crash or compaction observable on resume: a pending_gates entry with no
+      matching gate-verdict ledger update means the dispatch needs to be re-driven, not silently
+      dropped."
+    resolution: "on receiving the gate subagent's verdict (with matching gate_run_id), the
+      overseer removes the entry from pending_gates and records the verdict against the slice."
+  artifact_first_yield: "the gate-requesting author subagent's payload is the artifact path(s)
+    it already committed and pushed, never a pasted-in-context body -- so the fresh gate
+    subagent's own read (Skill-tool invocation of decision-scout/plan-critique/code-review)
+    pulls current state directly, exactly as it would if dispatched standalone by /plan or
+    /implement."
+  resume_mechanism:
+    sendmessage_resume: "once the overseer has the gate verdict, it resumes the ORIGINAL paused
+      author subagent via SendMessage (not a fresh re-dispatch) so the author's context and
+      working tree state carry forward untouched."
+    fallback_is_optimization_not_requirement: "SendMessage-resume is an optimization over
+      artifact re-dispatch, not a correctness requirement. If the author subagent is
+      unrecoverable (dead per the liveness diagnostic, expired, or restarted), the overseer
+      falls back to a FRESH dispatch seeded from the ledger's artifacts_written + the gate
+      verdict -- this works because the artifact-first yield already made all needed state
+      durable on disk/PR, not trapped in the dead subagent's context."
+
+subagent_detection:
+  purpose: "the three-signal stack a dispatched author subagent uses to know it must
+    GATE_REQUEST rather than run a gate inline."
+  signals:
+    - name: tool_roster_absence
+      description: "the Agent tool is absent from the dispatched subagent's own available tool
+        roster -- a fresh general-purpose subagent dispatched by the overseer cannot itself call
+        Agent, so it structurally cannot nest a further dispatch. Cheapest signal to check;
+        survives even if prompt content is lost to compaction."
+    - name: injected_header
+      description: "the overseer injects an exact SUBAGENT CONTEXT header as the first line(s)
+        of every author-subagent dispatch prompt. Its presence is the primary declarative
+        signal."
+      exact_header: |
+        SUBAGENT CONTEXT: You are a dispatched subagent running under /overseer orchestration.
+        You do not have Agent tool access. Any gate you would normally run inline via the Skill
+        tool (decision-scout, plan-critique, code-review) must instead be requested via a
+        GATE_REQUEST hand-back to the orchestrator -- never run inline.
+    - name: error_fallback
+      description: "if a subagent nonetheless attempts a nested Agent-tool dispatch and receives
+        a nesting error (or any error consistent with 'Agent tool unavailable' / 'nesting not
+        permitted'), it treats this as an authoritative third signal and switches to
+        gate-request mode for the remainder of its run, even if the injected header was somehow
+        stripped or missed."
+  precedence: "tool-roster absence first (no dependency on prompt content surviving
+    compaction), then the injected header (primary declarative signal), then error-fallback
+    (last-resort recovery for when both proactive checks failed to prevent an inline attempt)."
+
+trampoline_sequence:
+  description: "the COMPOSED end-to-end sequence, not merely the ingredient list -- where each
+    GATE_REQUEST fires, how the overseer resumes the paused author, and how these mid-lifecycle
+    pauses interleave with the terminal author-opens-PR / overseer-owns-merge division of
+    labor."
+  stages:
+    - gate: decision-scout
+      fires_at: "planning subagent's own /plan Step 6a, before its Step 6b presentation."
+      flow:
+        - "1. Planning subagent completes Steps 1-5 (clarify, context, approach, scope,
+          verification tier). Reaching Step 6a, subagent_detection fires; it returns
+          GATE_REQUEST(gate=decision-scout, round=1, inputs={intent, approach, scope, tier,
+          cited_decisions}) and pauses."
+        - "2. Overseer write-ahead-records the pending_gates entry, mints gate_run_id, dispatches
+          a fresh sibling subagent to run the Decision Scout Gate exactly per planning/SKILL.md,
+          instructing it to echo gate_run_id in its final evidence."
+        - "3. Overseer receives the scout verdict (NO_FLAGS | FLAGS_FOUND | BLOCK) with matching
+          gate_run_id, resumes the paused planning subagent via SendMessage with the verdict and
+          CITE list."
+        - "4. Planning subagent applies its own existing Verdict handling (Step 6b presentation
+          on NO_FLAGS/FLAGS_FOUND, or GATE_REQUEST round=2 after a BLOCK pivot, up to the
+          existing 3-round convergence cap)."
+    - gate: plan-critique
+      fires_at: "planning subagent's own /plan Step 9, after Step 6b human confirmation and the
+        plan write."
+      flow:
+        - "1. Planning subagent writes the plan file, reaches Step 9, and returns
+          GATE_REQUEST(gate=plan-critique, round=1, inputs={plan_path}) and pauses."
+        - "2. Overseer write-ahead-records, mints gate_run_id, dispatches a fresh sibling per
+          planning/SKILL.md's Critique Gate section."
+        - "3. Overseer resumes the planning subagent via SendMessage with the critique output and
+          Recommendation (PROCEED | REVISE)."
+        - "4. On PROCEED: the planning subagent commits, pushes, opens the plan-approval PR
+          itself, and hands back PROCEED with the PR URL -- this is the terminal author-side
+          step; the overseer takes it from there (subscribe -> CI-green -> squash-merge). On
+          REVISE: subagent revises and re-requests (round=2), up to the existing 3-round cap."
+    - gate: code-review
+      fires_at: "implementation subagent's own /implement Step 5, immediately after the Live
+        Verification Protocol passes."
+      flow:
+        - "1. Implementation subagent's VP Compliance Gate shows all-PASS; it returns
+          GATE_REQUEST(gate=code-review, round=1, inputs={branch, plan_path}) and pauses (tier_item
+          bookkeeping proceeds in parallel exactly as implement/SKILL.md already specifies -- this
+          gate-request does not change that parallel-with-code-review state machine, only who
+          dispatches the review)."
+        - "2. Overseer write-ahead-records, mints gate_run_id, dispatches a fresh sibling per
+          implement/SKILL.md's Code Review Protocol section."
+        - "3. Overseer resumes the implementation subagent via SendMessage with the findings and
+          Verdict (PROCEED | REVISE)."
+        - "4. On PROCEED: the implementation subagent commits, pushes, opens the implementation PR
+          itself, and hands back PROCEED with the PR URL -- terminal author-side step. On REVISE:
+          it fixes Critical/High findings and re-requests (round=2)."
+  interleave_with_pr_lifecycle: "these mid-lifecycle GATE_REQUEST pauses are orthogonal to, and
+    precede, the terminal division-of-labor split. The author subagent still authors, commits,
+    pushes, and opens the PR itself (post-plan-critique for planning; post-code-review for
+    implementation), then hands back to the overseer at that single terminal point. The
+    overseer's gate dispatches during Steps 6a/9/5 never touch git state; only the terminal
+    PR-open (author) and subscribe/merge (overseer) steps do. A GATE_REQUEST pause is never
+    itself a hand-back terminus -- the ledger's slice status stays planning/implementing through
+    it; only PROCEED/REVISE/BLOCKED/FAILED and the eventual merged state change slice status."
+
+liveness:
+  diagnostic: "ls -laL <transcript-symlink-path> reports the TARGET file's mtime (the -L flag
+    dereferences the symlink; a plain ls -la on the symlink itself reports the symlink's own
+    near-constant creation time, which is useless as a liveness signal)."
+  death_signature: "a transcript target mtime older than the stall threshold AND no
+    corresponding TaskOutput/notification arriving is the death signature -- the dispatched
+    subagent's underlying process/container died or was reclaimed without emitting a terminal
+    event."
+  false_stall_warning: "a subagent that is merely slow (a long-running V3 deploy step, a long
+    code-review pass) also shows an aging transcript mtime between its own writes. Do not treat
+    a single stale-mtime read as death -- cross-check against the gate/stage the subagent last
+    reported in its ledger hand_back and the expected duration for that stage before concluding
+    death."
+  restart_recovery: "on a confirmed death signature, the overseer re-dispatches a FRESH subagent
+    seeded from the ledger's last known artifacts_written + status for that slice -- never a
+    rescue-in-place resume of a dead session. This is the same re-dispatch mechanism as an
+    ordinary GATE_REQUEST re-dispatch, just triggered by liveness failure instead of a returned
+    verdict. A restart-death re-dispatch counts as one of the plan's existing two BLOCKED/FAILED
+    attempts before executor-rca escalation."
+  stall_nudge: "on an ambiguous stall (transcript aging, no death signature, no new ledger update
+    past the expected duration for the current stage) the overseer sends ONE SendMessage nudge
+    (a cheap re-orientation, not new instructions) before considering it stalled further; if a
+    second stall window elapses with no response, treat it as a death signature and restart."
+  deterministic_recovery_framing: "restart-death re-dispatch and the stall-nudge are BOUNDED
+    deterministic recovery for a well-understood failure class (Decision 55) -- never an
+    LLM-judgement rescue loop. The bound: at most one nudge per stall episode; restart-death
+    always counts against the existing two-attempt cap."
+
+safety_net:
+  trigger_lifecycle: "exactly one create_trigger call at G0 (intake) and exactly one
+    delete_trigger call at G3 (completion) per overseer run -- never a per-interval polling
+    trigger. Decision 76 / the AGENTS.md send_later/trigger retirement scopes that retirement to
+    CI-wait/merge-conflict, both now event-covered surfaces; subagent DEATH emits no event of
+    its own, which is the genuinely uncovered gap this one watchdog closes."
+  carve_around_decision_76: "decision-scout flagged [WARN] that this re-introduces a self-bind
+    trigger; accepted with the explicit carve-around above -- constrained to G0-create/G3-teardown
+    only, no polling, the per-call approval prompt accepted as cost, and mcp__Claude_Code_Remote__*
+    is never allowlisted (AGENTS.md: an ask-tier rule outranks allow; CC-web ignores
+    bypassPermissions from settings for this tool family)."
+  heartbeat_preamble: "pointer-not-payload: the trigger's fired-turn prompt is a short
+    re-orientation preamble (ledger file path + 'read it and resume') plus a ledger pointer,
+    never a full intent restatement -- keeps the fired turn cheap even after a compaction."
+  cheap_path: "if the ledger shows the run already progressing normally (a slice updated more
+    recently than the trigger interval), the fired turn replies HEARTBEAT-OK and takes no
+    action -- the expected, common case, not an error path."
+  fired_turn_connector_note: "the fired turn is a real conversational turn with full tool
+    access (mcp__Claude_Code_Remote__* included) -- not a restricted/sandboxed callback; the
+    per-run G0/G3 approval prompts are accepted by the human as the cost of this watchdog
+    (plan-critique gate PROCEED note)."
+
+nesting_depth_hook_deferral:
+  decision: "Fable Q3: the nesting-depth PreToolUse hook is NOT built."
+  reason: "CC-web exposes no reliable subagent-depth signal to hooks -- a depth-blind hook would
+    block the overseer's own top-level dispatches indistinguishably from a genuine nested-dispatch
+    attempt."
+  preconditions_for_revisit:
+    - "CC-web (or the underlying harness) exposes a reliable, hook-readable subagent-depth
+      signal (e.g. an env var or context field a PreToolUse hook can read to distinguish depth-0
+      overseer dispatch from depth-1+ nested dispatch)."
+    - "A second, independent instance of accidental gate-inlining-via-nesting is observed in
+      production (the three-signal subagent_detection stack plus error_fallback are judged
+      sufficient absent that evidence)."
+
+autonomy_tiers:
+  proceed_with_notice:
+    description: "a LOW-STAKES autonomy tier narrower than the existing four-criteria
+      autonomy-boundary policy. For a decision that is reversible, settled-consensus, AND has no
+      plausible negative externality even if wrong (e.g. cosmetic ledger formatting, choosing
+      between two equally-valid prose orderings), the overseer proceeds WITHOUT waiting for a
+      synchronous human reply, but ALWAYS posts an explicit notice to the ledger's
+      autonomous_decision_log and to human-visible chat output describing what it did and why --
+      so the human can override on their own schedule instead of blocking the run."
+    distinguishing_test: "differs from the existing autonomy-boundary policy's silent-autonomous
+      path by ALWAYS surfacing a notice (never silent), and from a human-gated decision by NOT
+      blocking for a reply. Never applies to the hard always-ask list (IAM/security, spend
+      impact, public-surface artefacts, governed-deploy actions) -- those stay synchronous
+      regardless."
+    never_overrides: "an open critical source=ci_rca rec (Decision 73 halt-on-open-ci_rca) is
+      never proceed-with-notice-eligible -- the halt stays a hard block even for a
+      low-stakes-looking dispatch decision."
+
+fable_triggers:
+  existing: "before each major design decision (the G1 decomposition shape; any point where the
+    overseer itself must choose an architecture rather than sequence already-known work)."
+  broadened:
+    workflow_adaptation: "whenever the overseer must adapt its OWN dispatch workflow to a
+      situation the existing methodology does not explicitly cover (an unusual liveness-failure
+      pattern, a slice whose overlap-matrix classification is genuinely ambiguous) -- consult
+      Fable before improvising a one-off workaround."
+    rec_synthesis: "whenever the overseer must synthesize or reconcile a cluster of related
+      recommendations into a coherent slice boundary (as opposed to sequencing already-atomic,
+      already-scoped work) -- this synthesis judgment gets the same settled-vs-contested
+      treatment as a G1 decomposition-shape call."
+
+ledger_persistence:
+  working_copy: "the overseer maintains its live OVERSEER-{slug}.yaml working copy in the
+    session scratchpad during the run (fast, no commit-per-update overhead) -- NOT durable
+    across a full session loss."
+  durable_resume_sot: "the durable, cross-session source of truth for 'where is this run' is NOT
+    the scratchpad ledger -- it is the actual PR/merge state on GitHub (each slice's open PR and
+    its review/CI state, or its merged commit), per Decision 115 (transient handoffs ride PR
+    descriptions) and Decision 87. On a cold resume (new session, scratchpad lost), the overseer
+    reconstructs slice status by querying each slice's PR state via the GitHub MCP tools, not by
+    trusting a stale local ledger file."
+  reconciliation: "if the scratchpad ledger and the GitHub PR state disagree (e.g. the ledger
+    shows a slice 'implementing' but its PR is actually merged), GitHub PR state wins -- rewrite
+    the ledger to match, never the reverse."
+
+executor_rca_feed:
+  when: "a slice comes back BLOCKED or FAILED twice (the plan's existing two-attempt cap)."
+  artifact: "dispatch the executor-rca skill with ONE of: the dead/failed subagent's transcript
+    (if recoverable), its last artifact output file, a fresh re-dispatch specifically to
+    reproduce and capture the failure, or -- if none of those are available -- the SUBAGENT
+    CONTEXT + prompt the overseer originally dispatched, so the RCA has SOME concrete evidence to
+    diagnose against rather than a bare 'it failed twice' summary."
+  escalation: "the overseer surfaces the RCA findings to the human alongside the slice's
+    BLOCKED/FAILED status -- the existing Lifecycle-and-Gates escalation path; named here only to
+    specify which artifact feeds it."
+
+model_namespace_note:
+  distinction: "the skill-frontmatter `model:` field (e.g. `opus[1m]` on the overseer skill
+    itself, or `opus` / `sonnet` / `fable` used when describing which model a dispatch should
+    run) is a DIFFERENT NAMESPACE from the Agent tool's `model` parameter, which is a fixed enum
+    (sonnet | opus | haiku | fable). A frontmatter pin like `opus[1m]` is NOT a valid value for
+    the Agent tool's model parameter -- there are no context-window-suffix variants in that
+    enum. When dispatching, pass the Agent tool's own enum values; the frontmatter pin governs
+    which model runs the CURRENT skill's own session, not what gets passed to a nested Agent
+    call."
+
+intake_headroom_check:
+  when: "G0 intake, before confirming scope with the human."
+  what: "read the LIVE roadmap ceiling/guard state (Decision 114) -- not a hardcoded number -- to
+    confirm the targeted roadmap item or audit has headroom under the current ceiling before
+    committing to a multi-slice run. A run that would push past the ceiling mid-flight is a G0
+    finding to surface to the human, not a mid-run surprise."
+  source: "the same preflight/platform_roadmap projection the Read-Nothing Router Discipline
+    already loads at G0 -- no new read surface."
+
+bounded_validation:
+  what: "each dispatched implementation subagent already runs `bin/venv-python -m
+    scripts.validate --pre` per implement/SKILL.md's Commit Flows section before opening its PR
+    -- the overseer does not additionally run the FULL (unflagged) validate tier itself; that
+    would duplicate work the author subagent already owns and would violate the Read-Nothing
+    Router Discipline by pulling repo-wide state into the overseer's own context."
+  why_bounded: "the overseer's own in-loop check, when it wants a cheap sanity read (e.g. before
+    confirming a G1 wave plan against a possibly-stale branch), is limited to reading the
+    preflight cache and PR/CI status -- never re-running the full validate suite locally in the
+    overseer's own session."
