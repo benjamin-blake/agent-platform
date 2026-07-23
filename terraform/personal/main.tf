@@ -9,6 +9,9 @@
 # permissionless agent_platform (PlatformDev) runtime role cannot. Runtime stays agent_platform.
 # The account ID is supplied at apply time via the gitignored terraform.personal.tfvars; it is
 # never a committed literal (PLAN Step 11b parameterisation invariant).
+#
+# CD-path rehearsal marker (D2/D3 reconcile parity rehearsal, OVERSEER terraform-deploy-redesign):
+# transient no-op removed in the EP2 PR -- exercises the personal CD path to prove reconcile.yml.
 
 terraform {
   # use_lockfile (native S3 state locking, no DynamoDB lock table) requires Terraform 1.10+.
