@@ -1,0 +1,242 @@
+schema_version: 1
+slug: "overseer-improvements"
+intent: >-
+  Harden the /overseer orchestration meta-layer (Decision 90) by codifying the subagent-dispatch
+  division of labor, liveness/resilience protocol, and autonomy calibration that three live
+  overseer runs surfaced -- so the platform's highest-leverage "drive a whole roadmap item to
+  completion unattended" workflow runs reliably instead of re-improvising harness workarounds
+  every run. Resolves 16 filed overseer-improvement recommendations.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-overseer-improvements.yaml
+phase: >-
+  Platform workflow tooling: /overseer orchestration meta-layer hardening (Decision 90). Ad-hoc,
+  rec-driven (16 workflow-audit / code-review / manual findings from 3 live overseer runs:
+  agent-context-governance, decision-log-premise-integrity, terraform-deploy-redesign); not tied
+  to a roadmap tier_item.
+scope:
+  - file: docs/contracts/overseer-dispatch.yaml
+    action: Create
+    purpose: >-
+      New machine-parseable contract (Decision 86/127 relief valve) holding the detailed overseer
+      dispatch model so the SKILL.md stays lean and loads it on demand: the subagent-vs-overseer
+      division-of-labor tables, the gate-request trampoline schema (GATE_REQUEST status,
+      gate_run_id provenance, write-ahead pending_gates, artifact-first yield, SendMessage-resume
+      as an optimization over artifact re-dispatch), the three-signal subagent-detection stack,
+      the liveness/watchdog/stall recipe, the safety-net trigger recipe, the hook-deferral record
+      (two preconditions), the proceed-with-notice autonomy tier, the broadened Fable triggers,
+      the ledger persistence model, and the executor-rca artifact feed. Schema kept
+      transport-agnostic (subagent ids / SendMessage handles ride alongside payloads, never inside
+      them) to survive the future durable-Lambda migration.
+  - file: .claude/skills/overseer/SKILL.md
+    action: Modify
+    purpose: >-
+      Point the dispatch / ledger / liveness / autonomy / Fable sections at the new contract;
+      retain load-bearing invariants and every rec-mandated anchor phrase; add the exact injected
+      SUBAGENT CONTEXT header, the proceed-with-notice tier, the liveness/watchdog/stall/restart/
+      safety-net anchors, the scratchpad-vs-durable persistence note, the executor-rca+transcript
+      RCA note, the model-namespace/enum note, the headroom intake check, the validate --pre
+      bounded-validation note, and the division-of-labor / gate-ownership / subagent-dispatch
+      anchors. Held at or below its current 12722-byte prose budget by relocating detail to the
+      contract and tightening existing prose (no budget raise, per human decision).
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Add the subagent-mode gate-request conditional to the decision-scout gate AND plan-critique
+      gate sections (if in SUBAGENT CONTEXT / the Agent tool is absent, hand back a GATE_REQUEST
+      with the exact gate prompt and pause; never run the gate inline via the Skill tool;
+      error-fallback on a nesting error). Add the subagent-dispatch anchor.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Add the same subagent-mode gate-request conditional to the code-review gate section. Add the
+      subagent-dispatch anchor.
+  - file: .claude/commands/overseer.md
+    action: Modify
+    purpose: >-
+      Light alignment of the Step 6 Dispatch language so the thin lifecycle matches the codified
+      division of labor: the dispatched subagent stops at PR-open and hands gates/PR back; the
+      overseer owns all gate dispatch and the subscribe -> CI-green -> squash-merge flow.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Add a route for the new docs/contracts/overseer-dispatch.yaml contract, and resolve the
+      docs/plans/reports/ double-registration (rec-2727) by documenting the shared-directory
+      overlap as intentional -- the overseer-ledger runtime class and the report-deliverables plan
+      class are distinct doc classes co-hosted in one directory -- via a cross-reference note on
+      both routes.
+  - file: config/prose_budgets.yaml
+    action: Modify
+    purpose: >-
+      Reseed the S4 .claude/skills/overseer/SKILL.md entry to the exact final byte count of the
+      edited skill (ratchet down/flat; validate_prose_limits requires current == budget). No
+      raise-approved marker is added -- the entry only decreases or holds.
+bundled_recommendations:
+  - rec-2726
+  - rec-2727
+  - rec-2728
+  - rec-2763
+  - rec-2764
+  - rec-2765
+  - rec-2766
+  - rec-2767
+  - rec-2776
+  - rec-2777
+  - rec-2778
+  - rec-2784
+  - rec-2785
+  - rec-2786
+  - rec-2787
+  - rec-2788
+infrastructure_dependencies: []
+acceptance_criteria:
+  - "rec-2726: overseer SKILL.md specifies the executor-rca escalation artifact (executor-rca + one of transcript / output-file / re-dispatch / subagent context)."
+  - "rec-2727: file-router.yaml documents the docs/plans/reports/ shared-directory overlap as intentional and routes the new overseer-dispatch contract."
+  - "rec-2728: overseer SKILL.md clarifies the skill-frontmatter model pin vs Agent-tool model enum are different namespaces (namespace / enum / not a valid)."
+  - "rec-2763: overseer SKILL.md mandates foreground gates and the orchestrator-owned wake (run_in_background + foreground + SendMessage)."
+  - "rec-2764: overseer SKILL.md specifies the ledger persistence model (scratchpad working copy + durable PR/merge-state resume SoT)."
+  - "rec-2765: overseer SKILL.md codifies the subagent-vs-overseer division of labor for the PR merge flow ('division of labor')."
+  - "rec-2766: overseer SKILL.md distinguishes SendMessage-resume from re-dispatch for non-terminal gate pauses ('SendMessage')."
+  - "rec-2767: the subagent-dispatch anchor appears in all three of overseer, planning, and implement SKILL.md files."
+  - "rec-2776: overseer SKILL.md carries the liveness diagnostic, restart-death recovery, and watchdog/heartbeat spec (watchdog|heartbeat + liveness + restart)."
+  - "rec-2777: overseer SKILL.md broadens the Fable-consult triggers (workflow-adaptation + rec-synthesis)."
+  - "rec-2778: overseer SKILL.md adds the proceed-with-notice autonomy tier (proceed-with-notice / low-stakes)."
+  - "rec-2784: overseer SKILL.md codifies overseer-side gate ownership ('gate ownership')."
+  - "rec-2785: overseer SKILL.md adds a stalled-subagent liveness/nudge protocol ('stall')."
+  - "rec-2786: overseer SKILL.md mandates bounded in-loop validation ('validate --pre')."
+  - "rec-2787: overseer SKILL.md codifies the safety-net trigger recipe ('safety-net')."
+  - "rec-2788: overseer SKILL.md adds a roadmap-ceiling headroom check at intake ('headroom')."
+  - "Design B is realized: the gate-request trampoline, gate_run_id provenance, write-ahead pending_gates, artifact-first yield, and three-signal subagent detection are all present in the new contract."
+  - "The nesting-depth hook is NOT built; the contract records the deferral with its two named preconditions."
+  - ".claude/skills/overseer/SKILL.md is <= 12722 bytes and config/prose_budgets.yaml's overseer entry equals that exact byte count (no raise marker)."
+  - "bin/venv-python -m scripts.validate --pre passes."
+  - "All 16 bundled recommendations show status closed after the Resolves: trailer merge and an ops sync."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: "Confirm the new overseer-dispatch contract exists, parses as YAML, and carries the load-bearing Design-B sections (not a stub)."
+    command: "bin/venv-python -c \"import yaml; yaml.safe_load(open('docs/contracts/overseer-dispatch.yaml'))\" && grep -qi 'gate_run_id' docs/contracts/overseer-dispatch.yaml && grep -qi 'pending_gates' docs/contracts/overseer-dispatch.yaml && grep -qiE 'GATE_REQUEST|gate-request' docs/contracts/overseer-dispatch.yaml && grep -qi 'artifact-first' docs/contracts/overseer-dispatch.yaml && grep -qi 'SUBAGENT CONTEXT' docs/contracts/overseer-dispatch.yaml && grep -qi 'liveness' docs/contracts/overseer-dispatch.yaml"
+    expected: "The contract loads as valid YAML and contains gate_run_id, pending_gates, GATE_REQUEST/gate-request, artifact-first, SUBAGENT CONTEXT, and liveness -- proving the trampoline schema, detection stack, and liveness recipe are present."
+    fix_if: "Missing file, YAML parse error, or a missing anchor means the contract was not authored or is a stub -- author the full Design-B contract per execution step 1."
+    hermetic: true
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: "Verify the Area 1 division-of-labor anchors in the overseer skill (recs 2763, 2765, 2766, 2784)."
+    command: "grep -qi 'division of labor' .claude/skills/overseer/SKILL.md && grep -qi 'gate ownership' .claude/skills/overseer/SKILL.md && grep -qi 'run_in_background' .claude/skills/overseer/SKILL.md && grep -qi 'foreground' .claude/skills/overseer/SKILL.md && grep -q 'SendMessage' .claude/skills/overseer/SKILL.md"
+    expected: "All five anchors present: 'division of labor' (rec-2765), 'gate ownership' (rec-2784), run_in_background + foreground (rec-2763), SendMessage (rec-2763/2766)."
+    fix_if: "A missing anchor means that area's methodology was not written into the skill -- add the concise section + pointer per execution step 2."
+    hermetic: true
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: "Verify the subagent-dispatch anchor is present in all three skills (rec-2767)."
+    command: "grep -q 'subagent-dispatch' .claude/skills/overseer/SKILL.md && grep -q 'subagent-dispatch' .claude/skills/planning/SKILL.md && grep -q 'subagent-dispatch' .claude/skills/implement/SKILL.md"
+    expected: "'subagent-dispatch' appears in overseer, planning, and implement SKILL.md (rec-2767 acceptance)."
+    fix_if: "A missing anchor means the subagent-dispatch adaptations were not codified into that skill -- add them per execution steps 2-4."
+    hermetic: true
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: "Verify the subagent-mode gate-request conditional is wired into the planning and implement gate sections (Design B / Fable Q3.5)."
+    command: "grep -qiE 'SUBAGENT CONTEXT|if you are a subagent|dispatched subagent' .claude/skills/planning/SKILL.md && grep -qi 'gate-request' .claude/skills/planning/SKILL.md && grep -qiE 'SUBAGENT CONTEXT|if you are a subagent|dispatched subagent' .claude/skills/implement/SKILL.md && grep -qi 'gate-request' .claude/skills/implement/SKILL.md"
+    expected: "Both planning and implement carry the subagent-context detection and the gate-request hand-back conditional."
+    fix_if: "A missing pattern means a gate can still be run inline by a subagent -- add the conditional to the decision-scout + plan-critique sections (planning) and the code-review section (implement)."
+    hermetic: true
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: "Verify the Area 2 liveness / watchdog / stall / safety-net anchors in the overseer skill (recs 2776, 2785, 2787)."
+    command: "grep -qiE 'watchdog|heartbeat' .claude/skills/overseer/SKILL.md && grep -qi 'liveness' .claude/skills/overseer/SKILL.md && grep -qi 'restart' .claude/skills/overseer/SKILL.md && grep -qi 'stall' .claude/skills/overseer/SKILL.md && grep -qi 'safety-net' .claude/skills/overseer/SKILL.md"
+    expected: "watchdog/heartbeat + liveness + restart (rec-2776), stall (rec-2785), safety-net (rec-2787) all present."
+    fix_if: "A missing anchor means the resilience protocol was not summarized in the skill -- add the concise section + contract pointer per execution step 2."
+    hermetic: true
+    graduation: not-applicable
+  - step: 6
+    phase: pre-deploy
+    action: "Verify the Area 3 ledger-persistence anchors and the Area 1 bounded-validation anchor (recs 2764, 2786)."
+    command: "grep -qi 'scratchpad' .claude/skills/overseer/SKILL.md && grep -qi 'durable' .claude/skills/overseer/SKILL.md && grep -q 'validate --pre' .claude/skills/overseer/SKILL.md"
+    expected: "scratchpad + durable (rec-2764 persistence model) and 'validate --pre' (rec-2786 bounded in-loop validation) present."
+    fix_if: "A missing anchor means that concern was not addressed in the skill -- add per execution step 2."
+    hermetic: true
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: "Verify the Area 4/5/6 anchors in the overseer skill (recs 2777, 2778, 2726, 2728, 2788)."
+    command: "grep -qiE 'workflow-adaptation|workflow adaptation' .claude/skills/overseer/SKILL.md && grep -qiE 'rec-synthesis|rec synthesis' .claude/skills/overseer/SKILL.md && grep -qiE 'proceed-with-notice|low-stakes' .claude/skills/overseer/SKILL.md && grep -qi 'executor-rca' .claude/skills/overseer/SKILL.md && grep -qiE 'transcript|output.file|re-dispatch|subagent context' .claude/skills/overseer/SKILL.md && grep -qiE 'namespace|enum|not a valid' .claude/skills/overseer/SKILL.md && grep -qi 'headroom' .claude/skills/overseer/SKILL.md"
+    expected: "workflow-adaptation + rec-synthesis (rec-2777); proceed-with-notice|low-stakes (rec-2778); executor-rca + transcript/output-file/re-dispatch/subagent-context (rec-2726); namespace|enum|not a valid (rec-2728); headroom (rec-2788)."
+    fix_if: "A missing anchor means that rec's concern was not addressed -- add per execution step 2."
+    hermetic: true
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: "Verify the file-router change: the new contract is routed and the docs/plans/reports/ overlap is documented as intentional (rec-2727)."
+    command: "grep -q 'overseer-dispatch.yaml' docs/contracts/file-router.yaml && grep -qiE 'intentional|co-host|also hosts|two doc class|multiple doc class|distinct.*doc class' docs/contracts/file-router.yaml"
+    expected: "file-router.yaml routes docs/contracts/overseer-dispatch.yaml and carries an explicit note that docs/plans/reports/ intentionally co-hosts the overseer-ledger and report-deliverables classes."
+    fix_if: "Missing route or note -- add the contract route and the intentional-overlap cross-reference per execution step 6."
+    hermetic: true
+    graduation: not-applicable
+  - step: 9
+    phase: pre-deploy
+    action: "Confirm the overseer skill stayed within its prose budget and the budget entry was reseeded to the exact final byte count (no raise)."
+    command: "b=$(wc -c < .claude/skills/overseer/SKILL.md); budg=$(grep -E 'skills/overseer/SKILL.md:' config/prose_budgets.yaml | grep -oE '[0-9]+' | head -1); test \"$b\" -le 12722 && test \"$b\" = \"$budg\""
+    expected: "overseer/SKILL.md is <= 12722 bytes and config/prose_budgets.yaml's overseer entry equals that exact byte count."
+    fix_if: "If the skill exceeds 12722, relocate more detail into the contract and tighten prose -- do NOT add a raise marker (out of scope per human decision); escalate if it cannot fit. If the budget entry != byte count, reseed it to match."
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: "The byte-budget ceiling is already a standing regression guard -- validate_prose_limits enforces current == budget for every S4 SKILL.md every run. Graduating a per-plan duplicate would double-register the same invariant in the verification registry. This step is only the plan-local confirmation that the no-raise constraint held for this specific edit."
+  - step: 10
+    phase: pre-deploy
+    action: "Run the authoritative fast-tier gate to confirm no placement / prose-budget / plan-schema / prompt-compliance regression."
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "validate --pre reports PASS (file-router placement incl. the new contract route, prose limits, prose-budget-raises with no unmarked increase, plan_document schema, prompt_compliance, prose allowlist all green)."
+    fix_if: "Any failing check -- read its message and fix the offending file; a prose-budget-raises failure means the overseer entry increased without a marker (relocate more to the contract instead)."
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: post-deploy
+    action: "After the Resolves: trailer squash-merge and an ops sync, confirm all 16 bundled recommendations are closed."
+    command: "bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c \"import json; ids={'rec-2726','rec-2727','rec-2728','rec-2763','rec-2764','rec-2765','rec-2766','rec-2767','rec-2776','rec-2777','rec-2778','rec-2784','rec-2785','rec-2786','rec-2787','rec-2788'}; rows={r['id']: r for r in map(json.loads, (l for l in open('logs/.recommendations-log.jsonl') if l.strip())) if r.get('id') in ids}; missing=[i for i in sorted(ids) if rows.get(i, {}).get('status') != 'closed']; print('still-open:', missing); raise SystemExit(1 if missing else 0)\""
+    expected: "The ops cache shows status=closed for all 16 recs (rec-autoclose.yml consumed the Resolves: trailer)."
+    fix_if: "Any rec still open -- confirm the squash-merge body carried the exact 'Resolves: rec-NNNN, ...' trailer; fall back to the manual ops_data_portal --update-rec closure per AGENTS.md."
+constraints:
+  - "No rescue agents or workaround loops (Decision 55/72). Restart-death re-dispatch and stall SendMessage-nudge are bounded DETERMINISTIC recovery for a well-understood failure class -- never an LLM-judgement rescue."
+  - ".claude/skills/overseer/SKILL.md must NOT exceed its current 12722-byte prose budget. Achieve anchor coverage by relocating detail to docs/contracts/overseer-dispatch.yaml and tightening existing prose. A prose-budget raise (raise-approved marker) is OUT OF SCOPE per human decision; if the anchors cannot fit, STOP and escalate -- never silently raise."
+  - "Only modify files listed in scope. Methodology stays in sanctioned surfaces only -- SKILL.md prose (class-(c), Decision 127) and machine-parseable docs/contracts/*.yaml (Decision 86). No new docs/ prose-architecture doc."
+  - "Do NOT build the nesting-depth PreToolUse hook (Fable Q3): CC-web exposes no reliable subagent-depth signal to hooks and a depth-blind hook would block the overseer's own dispatches. Record the deferral + its two preconditions in the contract; do not add a hook file to scope."
+  - "Keep the gate-request schema transport-agnostic: subagent ids and SendMessage handles are transport metadata carried alongside the payload, never fields inside it (Fable Q4, minimizes durable-Lambda migration rework)."
+  - "The liveness watchdog uses exactly one create_trigger at G0 and one delete_trigger at G3; it is a stall-sweeper only, never a CI-poll substitute (Decision 76 + the AGENTS.md send_later/trigger retirement). Do NOT allowlist mcp__Claude_Code_Remote__* (dead per AGENTS.md; each call costs a manual approval by design)."
+  - "Preserve the three gate contracts (decision-scout, plan-critique, code-review) bit-for-bit. This plan changes WHO dispatches each gate and WHEN, never the gate's own internal methodology."
+context:
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (101/101 triaged). CITE: Decision 90 (overseer is a meta-layer; gates stay intact), Decision 67 (executor + STRATEGIC freeze; overseer stays IMPLEMENTATION-only; executor-rca here is subagent-failure RCA, not the frozen autonomous executor), Decision 73 (two-tier presubmit; validate --pre IS the fast-tier gate; proceed-with-notice must not override the open-ci_rca planning block), Decision 86 (methodology in SKILL.md/contracts, no new prose doc), Decision 114 (roadmap ceiling; headroom check reads the LIVE ceiling/guard, not a hardcoded number), Decision 115 (transient handoffs ride PR descriptions -- precedent for the PR/merge-state resume SoT). Related: 87, 127, 147, 133/144."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round."
+  - "Decision-scout flags folded in: Decision 76 [WARN] -- the watchdog re-introduces a self-bind trigger; NOT a block. Proceed with an explicit carve-around: the send_later/trigger retirement is scoped to CI-wait/merge-conflict (both event-covered), but subagent DEATH emits no event -- a genuinely uncovered gap. Constrain to G0-create/G3-teardown, no per-interval polling, accept the per-call approval, do not allowlist the MCP. Decision 55 [NOTE] -- frame re-dispatch/nudge as bounded deterministic recovery, not LLM rescue."
+  - "Fable advice-consult (model: fable) outcome, adopted: Design B (uniform gate-request trampoline -- the overseer dispatches ALL gates as fresh siblings; a subagent NEVER runs a gate) over the originally-filed Design A (inline decision-scout). Rationale: the 'context-cost gates may inline' line is non-durable and the context argument flips (a sibling scout keeps DECISIONS.md out of BOTH author and overseer). Hardening kit adopted: GATE_REQUEST hand-back status, artifact-first yield, write-ahead pending_gates + heartbeat re-drive, overseer-minted gate_run_id verdict provenance (the one non-optional piece -- it is the only check on a subagent silently running a bias gate inline), convergence counters on the overseer. Three-signal subagent detection adopted (tool-roster absence, injected SUBAGENT CONTEXT header, error-fallback). Compaction heartbeat adopted as pointer-not-payload (re-orientation preamble + ledger pointer + HEARTBEAT-OK cheap path, not a full intent restatement)."
+  - "DIVERGENCE FROM FILED RECS (intentional, Fable-endorsed): recs 2767 (point 1) and 2784 literally proposed inlining decision-scout in the author subagent (Design A). This plan adopts Design B (lift ALL gates to overseer-dispatched siblings) instead -- same intent (remove nesting, preserve isolation) via a stronger mechanism. The recs' acceptance greps still pass (their anchor phrases remain in the skill); only the internal mechanism improved. Flagged here so the plan-critique gate does not read the divergence as a miss."
+  - "Scout correction adopted: do NOT cite Decision 25 (local-dev git worktrees) as the isolation model for CC-web Agent-tool parallel dispatch -- it is a different mechanism. The overseer skill's parallel-wave text is corrected accordingly; serial remains the default."
+  - "Plan-critique gate PROCEED notes (non-blocking, carried for /implement's code-review gate): (1) the new contract must specify the COMPOSED end-to-end GATE_REQUEST trampoline SEQUENCE (fire points, resume mechanism, interleave with PR-open/merge), not merely the ingredient list -- see execution step 1; (2) extend the overseer Bounded Hand-Back Schema to add the GATE_REQUEST status and rewrite the Planning-/Implementation-Subagent Dispatch sections for Design B, leaving NO stale PROCEED|REVISE|BLOCKED|FAILED-only schema or 'subagent runs its own gates' text behind -- see execution step 2; (3) the slimmed SKILL.md must still read as coherent standalone methodology (a real anchor+pointer index), never grep-bait to satisfy the VP greps -- treat this and byte-fit as genuine code-review criteria; (4) the two per-run G0/G3 trigger-approval prompts are accepted by the human as the cost of the subagent-death watchdog."
+  - "Verification tier is V1: the artifacts are methodology docs (SKILL.md markdown, a .yaml contract, file-router/prose-budget config). The VP's python/network calls (yaml parse, validate --pre, ops sync) are verification tooling, not an integration surface being built."
+  - "Branch was 0 commits behind origin/main at planning time (preflight main_freshness.status=ok); no Main Divergence Assessment overlap. Convergence-health was red 41.72h at preflight (pre-existing, unrelated to this doc-only change)."
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via the decision-scout gate (CITE list in context; full-file read delegated to the scout)
+  - All six existing files in scope located and readable; the seventh (overseer-dispatch.yaml) is a Create
+  - Acceptance criteria understood and verifiable (grep-based + validate --pre + post-merge closure)
+  - Fable Design-B guidance, the hardening kit, and the divergence-from-recs note understood (context)
+execution_steps:
+  - "Create docs/contracts/overseer-dispatch.yaml: author the full Design-B dispatch model as machine-parseable YAML -- division-of-labor tables (author produces artifact + commits + pushes + opens PR + hands back; overseer owns all gate dispatch + subscribe_pr_activity -> CI-green -> squash-merge); the gate-request trampoline schema (GATE_REQUEST status with gate/round/inputs/artifacts_written; overseer-minted gate_run_id echoed back in the final hand-back; write-ahead pending_gates recorded before dispatch; artifact-first yield; SendMessage-resume as an optimization over artifact re-dispatch); the three-signal subagent detection (tool-roster absence, exact injected SUBAGENT CONTEXT header text, error-fallback on a nesting error); the liveness recipe (ls -laL on the transcript symlink TARGET mtime, death signature, false-stall warning, restart re-dispatch, stall SendMessage-nudge); the heartbeat/safety-net trigger recipe (one create_trigger at G0, one delete_trigger at G3, pointer-not-payload re-orientation preamble, HEARTBEAT-OK cheap path, fired-turn connector-tool note); the hook-deferral record with its two preconditions; the proceed-with-notice autonomy tier; the broadened Fable triggers; the ledger persistence model; and the executor-rca artifact feed. Keep the gate-request schema transport-agnostic. Specify the COMPOSED end-to-end trampoline SEQUENCE (not just the ingredient list): where each GATE_REQUEST fires (decision-scout at /plan Step 6a, plan-critique at /plan Step 9, code-review at /implement), how the overseer resumes the paused author via SendMessage after each verdict, and how these mid-lifecycle pauses interleave with the terminal author-opens-PR / overseer-owns-merge division of labor -- so a run does not re-improvise the ordering."
+  - "Rewrite .claude/skills/overseer/SKILL.md: replace the now-infeasible 'subagent runs the full lifecycle itself' text (Planning-/Implementation-Subagent Dispatch sections) with the Design-B division of labor, leaving NO stale 'subagent runs its own gates' text behind; extend the Bounded Hand-Back Schema to add the GATE_REQUEST status (leave no stale PROCEED|REVISE|BLOCKED|FAILED-only copy in either the skill or its relocated contract form); ensure the slimmed skill still reads as coherent standalone methodology (an anchor+pointer index), not grep-bait; point the dispatch/ledger/liveness/autonomy/Fable sections at the new contract; retain the load-bearing invariants and EVERY rec-mandated anchor phrase verbatim (division of labor, gate ownership, subagent-dispatch, run_in_background, foreground, SendMessage, scratchpad, durable, watchdog/heartbeat, liveness, restart, stall, safety-net, validate --pre, workflow-adaptation, rec-synthesis, proceed-with-notice, executor-rca + transcript, namespace/enum, headroom); add the exact SUBAGENT CONTEXT header; add the Decision 76 watchdog carve-around, the Decision 55 deterministic-recovery framing, and the Decision 115/87 persistence cites; correct the Decision 25 parallel-dispatch reference. Relocate enough detail to the contract and tighten existing prose to hold net bytes <= 12722."
+  - "Edit .claude/skills/planning/SKILL.md: add the subagent-mode gate-request conditional to BOTH the decision-scout gate and the plan-critique gate sections (in SUBAGENT CONTEXT / Agent tool absent -> emit a GATE_REQUEST hand-back with the exact gate prompt and pause; never run the gate inline via the Skill tool; on a nesting error, switch to gate-request, never inline). Add the subagent-dispatch anchor."
+  - "Edit .claude/skills/implement/SKILL.md: add the same subagent-mode gate-request conditional to the code-review gate section. Add the subagent-dispatch anchor."
+  - "Edit .claude/commands/overseer.md: align the Step 6 Dispatch bullets with the codified division of labor (subagent stops at PR-open and hands gates/PR back; overseer owns gate dispatch + subscribe -> CI-green -> squash-merge)."
+  - "Edit docs/contracts/file-router.yaml: add a route entry for docs/contracts/overseer-dispatch.yaml (topic + description), and add a cross-reference note to BOTH the overseer-ledger and report-deliverables routes documenting that docs/plans/reports/ intentionally co-hosts the two distinct doc classes."
+  - "Reseed config/prose_budgets.yaml: set the .claude/skills/overseer/SKILL.md S4 entry to the exact `wc -c` byte count of the final skill file. If that count exceeds 12722, STOP and escalate -- do NOT add a raise-approved marker."
+  - "Validate: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-overseer-improvements.yaml; then execute Verification Plan steps 1-10; loop until each passes; on an unrecoverable failure, stop and RCA (Decision 55) rather than patching around it."
+  - "Commit with a feat(overseer-improvements) message whose body carries 'Resolves: rec-2726, rec-2727, rec-2728, rec-2763, rec-2764, rec-2765, rec-2766, rec-2767, rec-2776, rec-2777, rec-2778, rec-2784, rec-2785, rec-2786, rec-2787, rec-2788'; push; open the PR; run the event-driven CI -> squash-merge flow; then verify VP step 11 (post-merge rec closure)."
+  - "Report: files changed, VP results (steps 1-11), the final overseer/SKILL.md byte count vs budget, and the rec-closure confirmation."
+work_areas: []
+rollback: >-
+  Revert the feat(overseer-improvements) commit. The change is documentation-only (skill markdown,
+  a YAML contract, and two config files) with no runtime, schema, or data effect; reverting fully
+  restores the prior overseer methodology. The 16 recs reopen if their closure is also reverted.
