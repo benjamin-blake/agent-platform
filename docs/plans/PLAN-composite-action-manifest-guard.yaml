@@ -1,0 +1,265 @@
+schema_version: 1
+slug: "composite-action-manifest-guard"
+intent: >-
+  Close the pre-merge enforcement gap that let an unescaped GitHub Actions template expression in a
+  composite-action metadata field wedge the terraform apply/reconcile chain (rec-2795), by adding a
+  deterministic validate.py guard that lints every .github/actions/**/action.yml manifest for
+  template expressions in load-time metadata positions (rec-2796). Restores fail-fast-at-PR-time for
+  composite-action manifests, so a latent load-time failure can no longer escape to first dispatch.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-composite-action-manifest-guard.yaml
+phase: >-
+  Platform engineering -- CI presubmit correctness. Resolves ci-rca rec-2795 (symptom, already
+  point-fixed) + workflow-audit rec-2796 (the structural guard). Soft-warn category ci_rca; names no
+  tier_item, so the Tier Item Freshness Gate is skipped. Complementary to (not colliding with) the
+  OVERSEER terraform-deploy-redesign program, which filed rec-2796 delegating this guard.
+scope:
+  - file: scripts/checks/ci_guards/validate_composite_action_manifests.py
+    action: Create
+    purpose: >-
+      The guard. A pure `_scan_manifest(data)` core deep-copies the parsed manifest, removes the only
+      legal `${{ }}` positions (the entire `runs:` subtree and each `outputs.<id>.value` composite
+      output binding), then walks the remainder and returns a violation (dotted field path + offending
+      snippet) for every metadata string still containing `${{`. The registered
+      `validate_composite_action_manifests(failed)` globs `.github/actions/**/action.{yml,yaml}` under
+      `_common.ROOT`, loads each via yaml.safe_load (a parse error records a distinct failure without
+      raising -- rec-2027 pattern), calls `_scan_manifest`, prints PASS/FAIL per manifest, and appends
+      distinct labels. Imports ROOT from `_common` (no local ROOT recompute).
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Insert `_c("validate_composite_action_manifests")` into BOTH pre_sequence() and full_sequence(),
+      adjacent to the existing ci_guards cluster (after validate_ci_workflow_guards /
+      validate_pr_conflict_signal). Growth-safe membership floors mean tests/test_checks_registry.py
+      needs no baseline edit.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add one facade re-export line in the ci_guards import block:
+      `from scripts.checks.ci_guards.validate_composite_action_manifests import
+      validate_composite_action_manifests  # noqa: F401,E402`. Required by the Decision-104
+      globals()[name] dispatch; without it `validate --pre` KeyErrors on the check name.
+  - file: tests/checks/ci_guards/test_validate_composite_action_manifests.py
+    action: Create
+    purpose: >-
+      Mirror-convention test home (map_source_to_test resolves the new check here). Drives
+      `_scan_manifest` directly with synthetic dicts for each fail case and each legal-exempt case,
+      an integration pass-path against the real tree, a fail-path via an injected synthetic bad
+      manifest, and an unparseable-YAML case. Metadata-expression tests are named so
+      `pytest -k action_metadata_expr` selects them (rec-2796 acceptance). Gives 100% coverage of the
+      new module under its mapped per-file coverage command.
+bundled_recommendations:
+  - rec-2795
+  - rec-2796
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    validate_composite_action_manifests parses every .github/actions/**/action.{yml,yaml} and flags
+    any `${{ }}` template expression in a load-time metadata position (top-level
+    name/description/author/branding, inputs.*.description, inputs.*.default, outputs.*.description),
+    while exempting the only legal expression positions (the entire `runs:` subtree and each
+    `outputs.<id>.value`).
+  - >-
+    The guard passes cleanly (no failures) on the current tree's 7 composite-action manifests, AND
+    flags a manifest reproducing the pre-#702 deterministic-guard content (a literal
+    `${{ github.workspace }}` in `description:`) -- the rec-2795 regression fixture.
+  - >-
+    The guard is registered in both registry.pre_sequence() and registry.full_sequence() and
+    facade-re-exported in scripts/validate.py, verified by tests/test_checks_registry.py (facade
+    reachability + membership floors); `bin/venv-python -m scripts.validate --pre` exits 0.
+  - >-
+    tests/checks/ci_guards/test_validate_composite_action_manifests.py exists, contains at least one
+    test selectable by `pytest -k action_metadata_expr` (rec-2796 acceptance), and yields 100%
+    coverage of the new module under its mapped per-file coverage command.
+  - >-
+    rec-2795 and rec-2796 close via the `Resolves:` trailer on merge (rec-autoclose), with the
+    point-fix #702/46b9fd9 preserved -- the deterministic-guard description carries no `${{ }}`.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Run the new guard's unit tests -- fail paths, legal-exempt paths, the rec-2795 regression fixture, integration pass/fail, and unparseable-YAML handling.
+    command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_composite_action_manifests.py -q
+    expected: >-
+      All pass -- `${{ }}` in description/name/inputs.*.description/inputs.*.default/outputs.*.description
+      is flagged (including the literal `${{ github.workspace }}`-in-description fixture); `${{ }}` under
+      `runs:` and in `outputs.*.value` is exempt; the whole-tree scan is clean; an unparseable manifest
+      records a failure without raising.
+    fix_if: A case fails -- the legal-position allowlist (runs / outputs.value) or the metadata walk is wrong.
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The guard is itself a permanent pre/full-tier registry check (validate_composite_action_manifests)
+      that scans the whole tree every run; a graduated kernel check re-invoking it would duplicate that
+      standing gate rather than add independent regression coverage.
+    action: Confirm the guard reports zero violations against the real repository tree (no false positives on the 7 current manifests).
+    command: bin/venv-python -c "from scripts.checks.ci_guards.validate_composite_action_manifests import validate_composite_action_manifests as v; f=[]; v(f); assert not f, f; print('MANIFESTS_CLEAN')"
+    expected: Prints MANIFESTS_CLEAN (exit 0) -- every legitimate `${{ }}` in the current manifests sits in a legal position.
+    fix_if: Non-zero exit with a violation list -- a legal position is being mis-flagged; tighten the runs/outputs.value exemption.
+  - step: 3
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Run rec-2796's acceptance command verbatim.
+    command: bin/venv-python -m pytest tests -k action_metadata_expr -q
+    expected: Selects and passes the action-metadata-expression test(s) -- satisfies rec-2796's acceptance selector.
+    fix_if: No tests selected (the -k name is not present) or a selected test fails.
+  - step: 4
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Confirm the three-point registry wiring via the derived facade + membership-floor oracle.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q
+    expected: >-
+      Passes -- TestFacadeCompleteness (parametrized over registry.all_checks()) resolves
+      validate_composite_action_manifests via getattr AND `from scripts.validate import`; the pre/full
+      membership floors and default-owner=platform assertions hold.
+    fix_if: >-
+      A facade test fails for validate_composite_action_manifests -- the registry entry or the
+      validate.py re-export line is missing/misspelled.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Confirm the new module is at 100% coverage under its mapped full-tier per-file command (replicated here pre-merge).
+    command: bin/venv-python -m pytest tests/checks/ci_guards/test_validate_composite_action_manifests.py --cov=scripts/checks/ci_guards/validate_composite_action_manifests --cov-report=term-missing -q
+    expected: The module reports 100% coverage -- every branch (parse-error path, per-position flag, legal exemptions, empty-manifest) is exercised.
+    fix_if: >-
+      Below 100% (uncovered lines listed) -- add the missing case. Must pass locally or the POST-MERGE
+      full tier reddens even though --pre is green.
+  - step: 6
+    phase: pre-deploy
+    hermetic: false
+    graduation: not-applicable
+    action: Run the fast presubmit tier over the whole change.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0 -- the new guard runs in the pre sequence and passes alongside every other --pre check.
+    fix_if: Any check fails; read the output and fix the cited file before re-running.
+  - step: 7
+    phase: post-deploy
+    action: After merge (Resolves trailer -> rec-autoclose), confirm both bundled recs are closed in the synced cache.
+    command: |-
+      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json; st={r['id']: r['status'] for r in (json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip())}; assert st.get('rec-2795')=='closed' and st.get('rec-2796')=='closed', {k: st.get(k) for k in ('rec-2795','rec-2796')}; print('RECS_CLOSED')"
+    expected: Prints RECS_CLOSED -- rec-autoclose closed rec-2795 and rec-2796 via the ops portal.
+    fix_if: >-
+      Either rec is not closed -- the Resolves trailer was omitted/misspelled in the squash body; close
+      via the fallback `ops_data_portal --update-rec <id> --status closed --resolution "..."`.
+constraints:
+  - No rescue agents or workaround loops (Decision 55) -- forward-fix only; this plan IS the RCA-prescribed structural prevention.
+  - >-
+    Pure-Python guard, no external actionlint binary (Decision 80 do-less / tool-free): PyYAML only,
+    which ships in requirements-fast so hermetic replay and venv-less CI (terraform-validate) both
+    resolve. rec-2796's preventive ask explicitly permits an equivalent validator.
+  - >-
+    The guard must NOT flag legal expression positions: the entire `runs:` subtree and each
+    `outputs.<id>.value` composite output binding (e.g. deterministic-guard outputs.routed.value).
+    Verified: all `${{ }}` in the 7 current manifests sit only in legal positions.
+  - >-
+    Whole-tree scan of .github/actions/**/action.{yml,yaml} (not diff-aware) -- 7 tiny files, well
+    within the Decision 73 fast-tier budget. Never mark the `validate --pre` VP step hermetic (recursion).
+  - >-
+    Three-point registry wiring (Decision 104): module under scripts/checks/ci_guards/ + @register +
+    both sequences in registry.py + facade re-export in validate.py. No local ROOT recompute
+    (test_no_checks_module_recomputes_root).
+  - >-
+    Mirror test placement (Decision 131): tests/checks/ci_guards/test_validate_composite_action_manifests.py;
+    no cross-test imports; 100% per-file coverage under the mapped command.
+  - >-
+    Do NOT modify the deterministic-guard manifest or any composite action, and do NOT touch
+    terraform/IAM or the apply chain -- the point-fix #702/46b9fd9 stands; this plan is additive
+    enforcement only, with no overlap with the OVERSEER terraform-deploy-redesign program.
+  - >-
+    Public repo (Decision 101): test fixtures are synthetic placeholder manifests -- no real account
+    IDs/ARNs/ExternalIds/secrets.
+  - >-
+    Guard scope is composite-action manifests only; .github/workflows/*.yml expression linting is
+    explicitly out of scope (much larger legal-expression surface; a separable follow-on if wanted).
+context:
+  - >-
+    Root cause -- #683 (D2 apply-chain consolidation) shipped a literal `${{ github.workspace }}` in
+    the deterministic-guard composite action's `description:` metadata. GitHub evaluates named-value
+    contexts (github.*, env.*) at action LOAD time, before any step runs, and `github` is unbound in
+    composite-action metadata -- so the manifest failed to load, wedging terraform-apply-sandbox +
+    reconcile (shared per DEP-08) for ~2 days (2026-07-21..07-23) and orphaning the convergence record
+    red. No pre-merge gate lints composite-action manifests: validate.py covers .github/workflows/*.yml
+    (verify_ci_workflow.py) but nothing parses .github/actions/**/action.yml.
+  - >-
+    Symptom point-fixed by PR #702 (46b9fd9, on main; CI/convergence green). This plan adds the
+    RCA-prescribed structural anti-recurrence guard -- it does not touch the (already-fixed) manifest.
+  - >-
+    Recs -- bundles rec-2795 (ci_rca, Critical: the symptom incident, already point-fixed) and rec-2796
+    (workflow-audit, Medium: the structural guard's literal ask -- "This rec adds the anti-recurrence
+    guard"). rec-2796's acceptance `pytest tests -k action_metadata_expr` is satisfied by VP step 3.
+  - >-
+    Non-collision with OVERSEER terraform-deploy-redesign (verified 2026-07-23): the overseer FILED
+    rec-2796 delegating this guard; its open PRs -- #659 (adds only the run-ledger YAML), #703 (a 3-line
+    terraform/personal/main.tf reconcile-rehearsal no-op), #701 (overseer skill) -- touch none of this
+    plan's 4 scope files nor any composite manifest. The allowlist->denylist IAM inversion (Decision
+    144, DEP-01/02; merged via #690 + hotfix #698) is a terraform/IAM change and never touched
+    .github/actions/.
+  - >-
+    Design -- structural inversion: the only legal `${{ }}` positions are the entire `runs:` subtree
+    and each `outputs.<id>.value`; flag `${{ }}` in every other (metadata) position. Broader than
+    rec-2796's name/description ask (also covers inputs.*.description, inputs.*.default,
+    outputs.*.description) -- a strict superset. Verified green on all 7 current manifests.
+  - >-
+    Scout NOTE flags resolved pre-write: (1) tests/test_checks_registry.py uses growth-safe membership
+    floors + registry-derived facade parametrization (rec-2673/2674 supersession), so adding a check
+    needs no baseline edit and is auto-verified there; (2) map_source_to_test resolves the new check to
+    the mirror path tests/checks/ci_guards/ (test_validate.py retired from _RETIRING_GRANDFATHER_HOMES),
+    so the full-tier per-file coverage gate maps there, not to tests/test_validate.py.
+  - "Decision-scout verdict + CITE list: FLAGS_FOUND (no BLOCK; 101/101 triaged). CITE: dec-104, dec-80, dec-132, dec-148, dec-131, dec-128, dec-73, dec-72, dec-55, dec-48. RELATED: dec-114, dec-142, dec-92, dec-126, dec-77, dec-100, dec-83, dec-84, dec-103, dec-67, dec-85, dec-101."
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=pending"
+  - >-
+    Main divergence: branch was 0 behind / 0 ahead of origin/main at plan time; main_files_changed_since_branch
+    was empty -- no scope-file overlap.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (via decision-scout subagent; CITE list resolved; 101/101 triaged)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Create scripts/checks/ci_guards/validate_composite_action_manifests.py. Implement a pure
+    `_scan_manifest(data: dict) -> list[str]`: guard `isinstance(data, dict)`; deep-copy; `pop("runs",
+    None)`; if `outputs` is a dict, `pop("value", None)` from each output entry that is a dict; then
+    recursively walk the remainder (dicts, lists, str leaves) accumulating a violation string
+    "<dotted.path>: <first ${{...}} snippet>" for every str containing "${{". The registered function
+    `@registry.register("validate_composite_action_manifests", owner="platform") def
+    validate_composite_action_manifests(failed)` globs both action.yml and action.yaml under
+    `_common.ROOT / ".github" / "actions"`, loads each with yaml.safe_load inside try/except (parse
+    error -> print FAIL + append a distinct "composite-action manifest: <rel> unparseable" label,
+    continue -- do not raise), calls `_scan_manifest`, prints PASS/FAIL per manifest, and appends one
+    distinct label per violation. Import ROOT/glob helpers from `_common`; never recompute ROOT locally.
+  - >-
+    Register in scripts/checks/registry.py: add `_c("validate_composite_action_manifests")` to BOTH
+    pre_sequence() and full_sequence(), placed just after the ci_guards cluster
+    (validate_ci_workflow_guards / validate_pr_conflict_signal) in each.
+  - >-
+    Add the facade re-export line to scripts/validate.py's ci_guards import block (alphabetical:
+    after validate_claude_p_retry_wrapper, before validate_ops_portal_patch_targets):
+    `from scripts.checks.ci_guards.validate_composite_action_manifests import
+    validate_composite_action_manifests  # noqa: F401,E402`.
+  - >-
+    Create tests/checks/ci_guards/test_validate_composite_action_manifests.py. Cover: (a) `_scan_manifest`
+    fail cases -- `${{ }}` in top-level description (the exact "Path to the guard resolved via
+    ${{ github.workspace }} (composite-action path discipline)." string), name, inputs.*.description,
+    inputs.*.default, outputs.*.description; (b) legal-exempt cases -- `${{ }}` in outputs.*.value and
+    under runs.steps.*.{run,with,env,working-directory} yields no violation; (c) integration: the real
+    validate_composite_action_manifests leaves `failed == []` on the current tree, and appends a failure
+    when a synthetic bad manifest is injected (patch the glob/loader seam or use tmp_path); (d) an
+    unparseable-YAML manifest records a failure without raising. Name the metadata-expression tests
+    (class or functions) with `action_metadata_expr` so `pytest -k action_metadata_expr` selects them.
+    Ensure 100% coverage of the module. No imports from other test_* modules (Decision 131).
+  - Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55).
+  - "Report: what was implemented and verification results. Squash-merge body includes `Resolves: rec-2795, rec-2796`."
+work_areas: []
+rollback: >-
+  Revert is clean: delete the new check module and its test, remove the two registry sequence entries
+  and the single facade re-export line. No infrastructure, schema, terraform, or composite-action
+  manifest is touched; the point-fix #702/46b9fd9 is independent and unaffected.
