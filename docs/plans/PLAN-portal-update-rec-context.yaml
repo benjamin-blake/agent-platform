@@ -120,8 +120,11 @@ constraints:
   - Preserve referential existence -- update_rec still loud-fails an absent rec (CD.33 cl.8 / D-5).
   - >-
     Scope the update-time content gate to the {context, title, acceptance, file} allowlist so
-    status / resolution / execution_* updates are never newly rejected (Decision 63). Verified:
-    those fields carry no write_time validators in config/agent/data_quality/ops.yaml today.
+    status / resolution / execution_* updates are never newly rejected (Decision 63). The allowlist
+    EXCLUSION is the mechanism, not validator-absence: status carries a not_null write_time
+    validator (ops.yaml lines 104-106), so _load_write_time_validators DOES yield a status
+    validator -- it is kept un-applied by excluding status from the allowlist. Only resolution and
+    execution_* genuinely have no write_time validators.
   - >-
     Reuse the facade-imported validators (_load_write_time_validators, _validate_context_length,
     already imported at ops_data_portal.py:48,104-108); add no new guidance plumbing -- Decision 66
@@ -139,17 +142,24 @@ context:
   - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<pending Step 9>"
   - >-
     Decision 63 flag resolved in-design -- the content gate is scoped to the {context, title,
-    acceptance, file} allowlist; resolution/execution_* have no write_time validators in ops.yaml,
-    so no update that passes today is newly rejected.
+    acceptance, file} allowlist. status carries a not_null write_time validator (ops.yaml 104-106)
+    but is excluded from the allowlist; resolution/execution_* have no write_time validators. So no
+    update that passes today (status/resolution/execution edits) is newly rejected -- the allowlist
+    exclusion, not validator absence, is what guarantees it.
   - >-
     Decision 66 Tier-A flag resolved by reuse -- get_rec_write_guidance()/--guidance is field-keyed
     and already returns context semantics, so the update path inherits Tier-A guidance with no new
     plumbing; the rejection message itself carries the semantic prompt. Deliberate, Decision-66-aware choice.
   - >-
-    update_rec's Python API already merges arbitrary fields and is already used to edit context
-    (jsonl_store.py:266 postmortem dedup, which appends and stays >=80 chars -- unaffected by the
-    new gate). The gaps this plan closes are (a) CLI exposure of --context on the update path and
-    (b) applying the write-time content gate on update so the edit is not a quality bypass.
+    update_rec's Python API already merges arbitrary fields and is already used to edit context by
+    several callers -- jsonl_store.py:266 (postmortem dedup, appends and stays >=80 chars),
+    cost_reconciliation.py:478, and convergence_health/code_drift.py:149/320 + escalate.py:208
+    (context refreshes). All are safe under the new gate by construction: each builds context via
+    the same fields/builder path that feeds file_rec's >=80-char branch, so the refreshed context
+    is already >=80; jsonl_store.py:214's reset path touches only execution_* (excluded). The gaps
+    this plan closes are (a) CLI exposure of --context on the update path and (b) applying the
+    write-time content gate on update so the edit is not a quality bypass.
+    test_update_rec_context_replace serves as the generic regression for this existing-caller shape.
   - >-
     ci-rca HARD BLOCK deferral -- open rec-2795 (deterministic-guard action.yml, unescaped
     ${{ github.workspace }}) is unrelated to this plan (different file, failure category, and
