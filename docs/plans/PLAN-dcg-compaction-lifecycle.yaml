@@ -1,0 +1,274 @@
+schema_version: 1
+slug: "dcg-compaction-lifecycle"
+intent: >-
+  Build the number-preserving decision-compaction lifecycle designed by audit findings DCG-02/DCG-03
+  (audits/decision-consolidation-growth-f79d6b5.yaml) so the decision corpus can shed fully-superseded
+  bodies without breaking the ~12,103 number-keyed inbound citations or orphaning warehouse current
+  rows -- keeping the decision-scout hot-read cheap and the size ceiling a signal-to-act rather than a
+  wall the ratification (Decision 145) forbids raising.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-dcg-compaction-lifecycle.yaml
+phase: >-
+  Audit-driven platform governance (DCG-02/DCG-03, audits/decision-consolidation-growth-f79d6b5.yaml,
+  Q1 verdict partial). No tier_item -- audit follow-ups route to Decisions/contracts, not recs (Decision
+  86); soft-warn category (audit-driven), so the Tier Item Freshness Gate is skipped. Sibling of the
+  merged DPI-04 archival work (PLAN-decisions-archival-hygiene / Decision 146): this is the compact-in-place
+  branch of the same lifecycle for entries that cannot archive because live code cites them.
+scope:
+  - file: docs/contracts/decision-entry.yaml
+    action: Modify
+    purpose: >-
+      Add a `compaction:` section (eligibility criterion: an entry compacts only when its ENTIRE body is
+      superseded/inert AND the superseder restates/subsumes every live clause; superseders never compact
+      -- direction-consistency, citing the archived-D52-supersedes-live-D37/40 inversion the audit's Q4
+      extension flags; stub grammar: keep the number, the `## Decision N:` header WITH ITS ORIGINAL
+      PARENTHETICAL (do NOT adopt the archive-move `(Superseded by Decision NN)` suffix -- scout Flag 1),
+      `**Status:** Superseded`, an ISO `**Date:**`, a NON-EMPTY one-line `**Decision:**`, and the exact
+      `**Superseded by: Decision N**` spelling already pinned in this file; never-remove-headers rule with
+      DCG-03's trace as rationale -- number retirement and destructive merges are out of the mechanism's
+      vocabulary). Add an operator `procedure:` block (Decision 127 pattern) for performing a compaction,
+      including the archive-vs-compact branch (archive per Decision 146 when the entry can move; compact
+      in place only when still-cited live code pins it). Bump the stale `size_governance.live_max_bytes`
+      400000 -> 500000 (Decision 145 drift; scout Flag 2).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      First exercised compaction: replace Decision 44's ~40-line dead body (its boundary-pattern table now
+      lives in config/agent/executor/capabilities.yaml per Decision 117, the code-level SSOT) with a
+      conforming stub -- header parenthetical stays `(Decided)`, body carries `**Status:** Superseded`,
+      `**Date:** 2026-04`, a one-line `**Decision:**` pointer, and the already-present
+      `**Superseded by: Decision 117**`. Add the governing Decision (drafted as Decision 149; RE-CHECK the
+      max `## Decision N:` header at implement time -- current max is 148 and a concurrent PR may claim 149)
+      recording the mechanism, citing Decision 145 as the stopgap it is the structural owner of eventually
+      reversing and Decision 146 as the archive sibling.
+  - file: config/agent/data_quality/decisions/orphan_baseline.yaml
+    action: Create
+    purpose: >-
+      Checked-in allowlist-diff baseline for the DCG-03 divergence guard (mirrors the sibling
+      fidelity_baseline.yaml pattern in the same module). Seeds `known_orphaned_current_rows:` with dec-010
+      -- a leaked "Test Decision" warehouse row (content_hash None, no header ever, zero citations) that a
+      zero-assertion guard would wedge the backfill on. The guard fails loud only on a NEW orphan.
+  - file: scripts/ops_portal/decisions.py
+    action: Modify
+    purpose: >-
+      Add the DCG-03 guard: `_load_orphan_baseline()` (reads orphan_baseline.yaml), a pure
+      `_orphaned_current_ids(current_ids, header_numbers, baseline)` helper, and
+      `_assert_no_orphaned_current_rows(...)` which bulk-reads the ops_decisions current projection via the
+      existing closed-boundary `reader.current_state("ops_decisions")` (Decision 84 I-3; no new Lambda verb,
+      no caller SQL), computes orphans = current_ids - decision_header_numbers() - baseline, and raises
+      RuntimeError LOUDLY (Decision 55) on any NEW orphan. Call it inside backfill_decisions_from_md with an
+      injectable reader seam (mirrors the existing baseline_reader / root injection precedents) for the
+      synthetic test. decisions.py is client-side portal code (NOT Lambda-packaged) -- no deploy.
+  - file: tests/ops_data_portal/test_decisions_divergence_guard.py
+    action: Create
+    purpose: >-
+      Synthetic-removed-header test proving the loud failure: inject a fake reader whose
+      current_state("ops_decisions") returns a current row for a non-baselined decision_id with no header ->
+      assert RuntimeError raised. Plus a baselined-orphan-tolerated case (dec-010 present + all headed ids ->
+      no raise) and a direct unit test of the pure `_orphaned_current_ids` helper.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/contracts/decision-entry.yaml carries a `compaction:` section (eligibility criterion, stub grammar,
+    never-remove-headers rule) and an operator `procedure:` block; its `size_governance.live_max_bytes` reads
+    500000.
+  - >-
+    Decision 44 in docs/DECISIONS.md is a conforming stub: header parenthetical still `(Decided)`; body has
+    `**Status:** Superseded`, an ISO `**Date:**`, a non-empty one-line `**Decision:**`, and the exact
+    `**Superseded by: Decision 117**`; the prior ~40-line body is gone. parse_decisions_md() yields dec-044
+    status=Superseded, superseded_by=dec-117, non-empty decision_text, ISO decided_date.
+  - >-
+    Decisions 42 and 49 remain headers in docs/DECISIONS_ARCHIVE.md (already archived under Decision 146; not
+    rewritten by this plan), and every pre-existing "Decision 42/44/49" citation still resolves to a live
+    header (42/49 in the archive, 44 in the live file as a stub).
+  - >-
+    scripts/ops_portal/decisions.py's backfill asserts every ops_decisions current-projection decision_id has
+    a header (allowlist-diff over orphan_baseline.yaml) and raises RuntimeError loudly on a NEW orphan; the
+    synthetic removed-header test proves the loud failure and the baselined dec-010 case is tolerated.
+  - "bin/venv-python -m scripts.validate --pre is green (DECISIONS size governance, decision-entry conformance, supersession-annotation guard)."
+  - >-
+    bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md runs green, writing a status=Superseded
+    terminal SCD2 version for dec-044 (content_hash changed by the stub edit) with the prior full-body version
+    retained as SCD2 history; the pre-existing dec-010 orphan is tolerated (baselined) and no NEW orphan fires.
+  - >-
+    A governing Decision (149, subject to the implement-time numbering re-check) records the mechanism and
+    cites Decision 145 as the stopgap this lifecycle is the structural owner of eventually reversing.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Run the DCG-03 divergence-guard unit tests (synthetic NEW orphan raises loudly; baselined dec-010 tolerated; pure helper unit).
+    command: "bin/venv-python -m pytest tests/ops_data_portal/test_decisions_divergence_guard.py -q"
+    expected: >-
+      All tests pass. The synthetic case (fake reader returns a non-baselined, header-less decision_id) asserts
+      RuntimeError is raised; the tolerated case (dec-010 baselined + all headed ids) asserts no raise; the
+      pure _orphaned_current_ids helper returns exactly the NEW-orphan set.
+    fix_if: >-
+      Guard stays silent on a non-baselined orphan (the DCG-03 defect uncaught), or raises on a baselined/headed
+      id (false positive), or the injectable reader seam is not honoured by the test.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The test is a committed pytest regression guard already executed by the full validate tier's pytest run --
+      it is a standing guard by construction; registering it as a separate CANONICAL_SLOTS kernel check
+      duplicates that coverage without adding a new regression surface.
+  - step: 2
+    phase: pre-deploy
+    action: Assert the compacted Decision 44 stub parses to the required terminal shape.
+    command: "bin/venv-python -c \"from scripts.decisions_md import parse_decisions_md; r={x['decision_id']:x for x in parse_decisions_md()}[44]; assert r['status']=='Superseded', r['status']; assert r['superseded_by']=='dec-117', r['superseded_by']; assert r['decision_text'].strip(), 'empty decision_text'; assert r['decided_date'].startswith('2026'), r['decided_date']; print('D44 stub OK', r['status'], r['superseded_by'])\""
+    expected: "Prints 'D44 stub OK Superseded dec-117'; no AssertionError."
+    fix_if: >-
+      status != Superseded (the `**Status:**` marker is missing or spelled wrong), superseded_by != dec-117
+      (the `**Superseded by: Decision 117**` marker was dropped/mangled), empty decision_text (fidelity-tripwire
+      risk), or a non-ISO decided_date.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time correctness assertion on the first compacted stub. The durable guard for stub fidelity is the
+      backfill's EXISTING per-run fidelity tripwire (empty decision_text / non-ISO decided_date on a live-h2
+      entry), not a new kernel slot.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm every pre-existing Decision 42/44/49 citation still resolves to a live header in the expected file.
+    command: "bin/venv-python -c \"from scripts.decisions_md import decision_header_numbers as H; n=H(); assert {42,44,49} <= n, sorted(n); import pathlib; live=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8'); arch=pathlib.Path('docs/DECISIONS_ARCHIVE.md').read_text(encoding='utf-8'); assert '## Decision 44:' in live, 'D44 not live'; assert '## Decision 42:' in arch and '## Decision 49:' in arch, 'D42/49 not archived'; print('citations resolve: 44 live, 42/49 archive')\""
+    expected: "Prints 'citations resolve: 44 live, 42/49 archive'."
+    fix_if: >-
+      Decision 44 lost its live header (a number-keyed citation would dangle), or Decision 42/49 is missing from
+      the archive -- the never-remove-headers rule was violated.
+    hermetic: true
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: Run the fast presubmit gate; the size, conformance, and supersession-annotation guards must pass.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: >-
+      Green. DECISIONS size governance PASS (live bytes < 500000; live headers <= 120 -- 102 after adding
+      Decision 149). Decision-entry authoring-grammar conformance PASS (Decision 149, the only genuinely-new
+      number, carries Status/Date/Decision; Decision 44 is grandfathered by the number-based baseline).
+      Supersession-annotation guard PASS (Decision 44 still annotated -- its block still contains
+      "Decision 117" via the retained `**Superseded by: Decision 117**` marker).
+    fix_if: >-
+      Size breach; conformance FAIL on Decision 149 (a required marker missing); or supersession-annotation FAIL
+      (the stub dropped the Decision 117 forward pointer).
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: post-deploy
+    action: Run the DECISIONS.md -> ops_decisions backfill against the live DuckLake warehouse (needs agent_platform creds).
+    command: "bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md"
+    expected: >-
+      Exit 0. The run writes >=1 row including dec-044 (its content_hash changed by the stub edit), failed=0,
+      and neither the fidelity tripwire nor the new DCG-03 divergence tripwire fires (dec-010 is tolerated via
+      the orphan baseline; no NEW orphan exists).
+    fix_if: >-
+      The divergence RuntimeError fires (dec-010 was not baselined, or a genuine NEW orphan exists -- investigate
+      and DO NOT silence a real one); the fidelity tripwire fires (the D44 stub parsed to empty decision_text or
+      a non-ISO date); or the reader/writer Function URLs are unreachable (degraded -- refresh the agent_static
+      key per AGENTS.md, do not treat as a code failure).
+    hermetic: false
+  - step: 6
+    phase: post-deploy
+    action: Confirm the warehouse current projection now records dec-044 as the terminal Superseded version.
+    command: "bin/venv-python -c \"from src.common.iceberg_reader import make_reader; r=make_reader().named('decision_by_id', id='dec-044')[0]; assert r['status']=='Superseded', r['status']; assert r.get('superseded_by')=='dec-117', r.get('superseded_by'); print('dec-044 terminal:', r['status'], r.get('superseded_by'))\""
+    expected: "Prints 'dec-044 terminal: Superseded dec-117'. The prior status=Decided full-body version is retained as SCD2 history (append-only), and in git history."
+    fix_if: >-
+      The current projection still shows status Decided (the content_hash skip-gate did not detect the stub edit
+      -- confirm the raw_block actually changed) or superseded_by is unset (the marker did not parse to dec-117).
+    hermetic: false
+constraints:
+  - "IMPLEMENTATION plan type only -- STRATEGIC classification is frozen (Decision 67 / AGENTS.md Temporary Operational Constraints)."
+  - "File NO recommendations for any audit finding -- this plan series is the sole vehicle (per the overseer objective). Surface unrelated discoveries via overseer hand-back, not the rec portal."
+  - "Never-remove-headers (DCG-03): a stub keeps the parser emitting; number retirement and destructive merges are out of the mechanism's vocabulary (~12,103 unguarded inbound 'Decision N' citations)."
+  - "Direction-consistency: only the superseded victim compacts; superseders never compact (the archived-52-supersedes-live-37/40 inversion is what criterion-free archival produces)."
+  - "Do NOT reuse the archive-move header suffix '(Superseded by Decision NN)' on the live stub -- silently minting a new live convention is the Decision 128/145 silent-trade anti-pattern (scout Flag 1). Decision 44's header parenthetical stays '(Decided)'."
+  - "Reader is the Decision 84 I-3 closed named-verb boundary: use reader.current_state('ops_decisions') / named verbs only, no caller SQL, no new Lambda verb."
+  - "Loud-fail, no silent counters or retry-into-green (Decision 55); allowlist dec-010, never silently drop it."
+  - "No new standing prose-architecture docs (Decision 86): extend decision-entry.yaml for both the compaction: section and the procedure: block."
+  - "Stay out of DPI-owned territory beyond what the compaction itself requires: DPI-01 (victim-side annotation) and DPI-04 (archive-coherence reconciliation) are not re-litigated; the D44 supersession annotation is retained because the stub grammar mandates it, not as a DPI-01 sweep."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (101 of 101 triaged; no BLOCK).
+    CITE: Decision 134, Decision 145, Decision 146, Decision 117, Decision 84, Decision 55, Decision 86,
+    Decision 127. Both CONTRADICT flags resolved in this plan: (Flag 1, Decision 146 WARN) the live stub keeps
+    its original `(Decided)` header parenthetical and carries the superseded signal in the body
+    `**Status:** Superseded` + `**Superseded by: Decision 117**` marker -- NOT the archive header suffix; (Flag 2,
+    Decision 145 NOTE) decision-entry.yaml's stale size_governance.live_max_bytes is bumped 400000 -> 500000 in
+    this same PR. RELATED: Decision 90 (IMPLEMENTATION framing), Decision 105 (R1 NOT engaged -- Decision 149 is a
+    fresh forward Decision, not a CD ratification), Decision 128 (SLOC: decisions.py ~211 SLOC unregistered,
+    ample headroom under 500; new test file fresh), Decision 131 (tests/ops_data_portal/ already homes this
+    module's tests), Decision 70 (physical-deletion-exceptional -- background for allowlisting dec-010),
+    Decision 116 (recorded superseder of already-archived Decision 49).
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<pending>"
+  - >-
+    ci-rca HARD-BLOCK deferral (Related-Work Check): the sole unresolved ci-rca rec, rec-2795
+    (.github/actions/deterministic-guard/action.yml manifest-load failure), is already OWNED by the merged
+    PLAN-composite-action-manifest-guard (its intent literally reads "Resolves ci-rca rec-2795"). This plan
+    shares none of its files, Decision Record, or failure category (composite-action manifest lint). Deferred
+    with rationale per the Related-Work Check; not bundled (no recs for this plan).
+  - >-
+    Main-divergence (assessment time): branch was 1 commit behind origin/main; the only overlapping file was
+    terraform/personal/main.tf, which is NOT in this plan's scope -- no scope conflict. No assessment-time
+    rebase needed; commit-flow auto-rebase applies at push per AGENTS.md git-ops.
+  - >-
+    KEY DISCOVERY (surfaced to overseer, NOT filed as a rec): dec-010 is a pre-existing orphan in the
+    ops_decisions current projection -- a leaked "Test Decision" row (title "Test Decision", decision_text
+    "We decided to test this.", content_hash None, created 2026-07-10, no header ever in either file, zero
+    citations). The DCG-03 guard is therefore an allowlist-diff (baseline dec-010), not a zero-assertion, or it
+    would wedge the first real backfill. Recommended follow-up: physically delete dec-010 from the warehouse
+    (Decision 70 sanctioned exception) so the baseline can later shrink to empty; out of THIS plan's scope.
+  - >-
+    Freshness Gate skipped: this names no tier_item (audit-driven follow-up, like the merged DPI sibling plans);
+    soft-warn category. Numbering-race: governing Decision drafted as 149 (current max header is 148) -- re-check
+    the max `## Decision N:` at implement time and shift to the next free number if a concurrent PR claimed it
+    (the supersession-annotation + conformance guards catch any mismatch).
+  - >-
+    Not T1.5-gated: the stub grammar and the terminal-SCD2-version semantics ride the interim prose+ETL substrate
+    and survive the portal flip unchanged (audit Q4: authorable now as IMPLEMENTATION work).
+  - >-
+    Step 6b confirmation note: the inline human-confirmation gate could not be self-served -- AskUserQuestion is
+    unavailable inside overseer subagents (harness constraint; the tool call returned "not available inside
+    subagents"). Two design forks were resolved on scout-aligned defaults and are surfaced for the human at the
+    plan-approval PR (the sanctioned human gate before /implement, owned by the orchestrator): (a) D44 header
+    stays `(Decided)` [scout Flag 1] vs a deliberately-distinct `(Superseded)` spelling; (b) dec-010 baselined
+    [Decision 55 non-silent] vs physically deleted [Decision 70]. Both defaults are the lower-risk, precedent-
+    matching choice; the alternatives are noted so the human can redirect on review.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/dcg-compaction-lifecycle-f98xza)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md relevant entries read (44, 117, 145, 146, 134, 55, 84, 86, 127)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "Re-check max '## Decision N:' header before authoring the governing Decision (drafted 149; max was 148)"
+execution_steps:
+  - >-
+    docs/contracts/decision-entry.yaml: add the `compaction:` section (eligibility_criterion, stub_grammar with
+    the exact marker set and the '(Decided)-header, body-Status:Superseded' form, never_remove_headers rule with
+    the DCG-03 backfill-orphan trace) and an operator `procedure:` block (Decision 127 pattern; include the
+    archive-vs-compact branch tied to Decision 146). Bump size_governance.live_max_bytes 400000 -> 500000.
+  - >-
+    docs/DECISIONS.md: compact Decision 44 to the conforming stub (keep header '(Decided)'; body =
+    `**Status:** Superseded`, `**Date:** 2026-04`, one-line `**Decision:**` pointer to Decision 117 /
+    capabilities.yaml + why it stays live, and the existing `**Superseded by: Decision 117**`). Then add the
+    governing Decision (re-checked number, drafted 149) with Status/Date/Decision/Problem/Rationale/Related
+    markers, citing Decisions 145 (stopgap it reverses), 146 (archive sibling), 134, 117, 84, 55.
+  - >-
+    config/agent/data_quality/decisions/orphan_baseline.yaml: create the allowlist-diff baseline with
+    `known_orphaned_current_rows:` seeded by dec-010 and an honest reason (leaked test artifact; slated for
+    Decision 70 physical-delete cleanup outside this plan).
+  - >-
+    scripts/ops_portal/decisions.py: add `_load_orphan_baseline()`, the pure `_orphaned_current_ids(...)`, and
+    `_assert_no_orphaned_current_rows(...)` (bulk read via reader.current_state('ops_decisions'); raise
+    RuntimeError loudly on any NEW orphan). Wire the call into backfill_decisions_from_md with an injectable
+    reader seam.
+  - >-
+    tests/ops_data_portal/test_decisions_divergence_guard.py: create the synthetic removed-header test (fake
+    reader -> RuntimeError), the baselined-dec-010 tolerated test, and the pure-helper unit test.
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and RCA (Decision 55)."
+  - "Report: what was implemented, verification results, and the dec-010 physical-delete follow-up for overseer hand-back."
+work_areas: []
+rollback: >-
+  All changes are on the session branch; revert the branch to drop them. The dec-044 warehouse write is SCD2
+  append-only -- re-running --backfill-decisions-md after reverting docs/DECISIONS.md restores dec-044's prior
+  status=Decided as a new terminal version (no destructive undo needed; history is preserved either way).
