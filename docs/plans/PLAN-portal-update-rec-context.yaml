@@ -40,7 +40,9 @@ scope:
     action: Modify
     purpose: >-
       Update the context field's populated_by provenance note to record that update_rec now also
-      enforces the length gate. Provenance note only -- not a second home for the rule (Decision 65/86).
+      enforces the length gate, attributing enforcement to write_validators.py::_validate_context_length
+      (NOT rec_write_guidance.py, which is the Tier-A pre-write guidance surface). Provenance note
+      only -- not a second home for the rule (Decision 65/86).
 bundled_recommendations: []
 infrastructure_dependencies: []
 acceptance_criteria:
@@ -139,7 +141,7 @@ context:
     cl.8 -- referential existence + SCD2 append-only history that makes the current-state REPLACE
     correct), Decision 124 (facade layout the change edits; validators are facade-imported and
     patch-intercepted in tests).
-  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<pending Step 9>"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 rounds"
   - >-
     Decision 63 flag resolved in-design -- the content gate is scoped to the {context, title,
     acceptance, file} allowlist. status carries a not_null write_time validator (ops.yaml 104-106)
@@ -153,13 +155,15 @@ context:
   - >-
     update_rec's Python API already merges arbitrary fields and is already used to edit context by
     several callers -- jsonl_store.py:266 (postmortem dedup, appends and stays >=80 chars),
-    cost_reconciliation.py:478, and convergence_health/code_drift.py:149/320 + escalate.py:208
-    (context refreshes). All are safe under the new gate by construction: each builds context via
-    the same fields/builder path that feeds file_rec's >=80-char branch, so the refreshed context
-    is already >=80; jsonl_store.py:214's reset path touches only execution_* (excluded). The gaps
-    this plan closes are (a) CLI exposure of --context on the update path and (b) applying the
-    write-time content gate on update so the edit is not a quality bypass.
-    test_update_rec_context_replace serves as the generic regression for this existing-caller shape.
+    cost_reconciliation.py:478, convergence_health/code_drift.py:149/320 + escalate.py:208,
+    ci_rca/probe_health.py:238, and preflight/ci_rca_gauges.py:405 (context refreshes). This list is
+    illustrative, not exhaustive -- the safety property is STRUCTURAL: every such caller builds
+    context via the same builder that feeds its own file_rec >=80-char branch, so a <80 context
+    would already fail today and the new update gate rejects nothing these callers pass.
+    jsonl_store.py:214's reset path touches only execution_* (excluded). The gaps this plan closes
+    are (a) CLI exposure of --context on the update path and (b) applying the write-time content gate
+    on update so the edit is not a quality bypass. test_update_rec_context_replace is the generic
+    regression for this shape.
   - >-
     ci-rca HARD BLOCK deferral -- open rec-2795 (deterministic-guard action.yml, unescaped
     ${{ github.workspace }}) is unrelated to this plan (different file, failure category, and
@@ -202,7 +206,15 @@ execution_steps:
     match="context"), and assert _ducklake_write was not called).
   - >-
     docs/contracts/ops_recommendations.yaml -- amend the context column's populated_by to note that
-    update_rec also enforces the >=80-char gate (provenance note only; the rule's SoT stays ops.yaml).
+    update_rec also enforces the >=80-char gate, attributing enforcement to
+    write_validators.py::_validate_context_length (the rule's SoT stays ops.yaml; provenance note
+    only). Do NOT inline-fix the adjacent pre-existing drift on line 271 (context.description says
+    "Minimum 50 characters" but the enforced gate is >=80 stripped chars) -- file a rec instead (next step).
+  - >-
+    File a follow-up recommendation (scripts.ops_data_portal.file_rec; source injected from
+    AGENT_TYPE) for the pre-existing docs/contracts/ops_recommendations.yaml:271 drift --
+    context.description says "Minimum 50 characters" while the enforced gate is >=80 stripped chars
+    -- per the out-of-scope-bugs-become-recs rule (AGENTS.md). Do not inline-fix it in this plan's scope.
   - >-
     Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop
     cleanly and RCA (Decision 55), never inline-patch around a gate.
