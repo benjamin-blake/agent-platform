@@ -1,0 +1,633 @@
+schema_version: 1
+slug: "ci-deploy-role-consolidation"
+intent: >-
+  Execute audit finding DEP-12 / roadmap T2.49 under Decision 144: consolidate the four consolidatable
+  CI/deploy IAM roles into two -- merge github_ci_plan + github_ci_drift into one dual-sub planner role and
+  github_ci_ducklake_deploy + github_ci_prod_deploy into one code-deploy role scoped to
+  function:agent-platform-* -- taking the live role census from 17 to 15 while preserving every capability
+  split (pr-no-tfstate, apply-only-writer, drift-only-convergence-writer) as a test/simulate invariant rather
+  than a role-count accident. Slice F of the /overseer terraform-deploy-redesign run (audit b67955b); provides
+  T2.48 c2 (new-role gated-apply proof) and VP-12 (pending_gated legibility on the natural guard-BLOCK).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-deploy-role-consolidation.yaml
+phase: >-
+  Platform tier_item T2.49 (CI/deploy role consolidation, audit DEP-12), depends_on T2.48 (slice E inversion,
+  APPLIED). Slice F of the /overseer terraform-deploy-redesign run. Follow-on/execution plan closing
+  T2.49 c1 + c2 + c3.
+closes_criteria:
+  - "T2.49:c1"
+  - "T2.49:c2"
+  - "T2.49:c3"
+scope:
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      c2 (planner merge): create aws_iam_role.github_ci_planner (name agent-platform-github-ci-planner,
+      boundary-carrying) with a TWO-statement dual-sub web-identity trust -- (main) Allow when
+      sub=refs/heads/main AND sts:RoleSessionName StringEquals the reserved drift session-name; (pr) Allow when
+      sub in {pull_request, ref:refs/pull/*} AND sts:RoleSessionName StringNotEquals that reserved name. Its
+      inline policy = the shared ci_full_refresh_read doc + the UNION of the two roles' read/plan-time
+      statements (TfplanWrite, DucklakeBuildInputsRead, DucklakeLambdaPackagesWrite from plan;
+      TfstateNativeLockFile, DuckLakeWriterInvoke from drift) UNCONDITIONED, PLUS ConvergenceRecordWrite as a
+      FAIL-CLOSED ALLOW (GetObject+PutObject on convergence/personal/*) CONDITIONED on aws:userid StringLike
+      "*:<reserved-drift-session>" -- the sole allow for that resource, so any non-drift session is
+      implicitly denied (Decision 92 pt2). SINGLE-SOURCE (hardening item 3): the reserved session-name is a
+      `local` (local.convergence_writer_session_name) whose comment enumerates its 4 coupled sites -- trust
+      StringEquals (main-sub), trust StringNotEquals (pr-sub), the aws:userid permission condition, and the drift
+      workflow's role-session-name (a workflow literal that MUST equal the local's value). c3 (deploy merge): create aws_iam_role.github_ci_deploy (name
+      agent-platform-github-ci-deploy, boundary-carrying, trust sub=refs/heads/main only) granting
+      lambda:UpdateFunctionCode on function:agent-platform-* (Decision 129/144 pt2 prefix; covers all 8
+      functions) and the UNION of the two deploy roles' S3 grants (DataLakeHeadBucket, LambdaPackagesReadWrite,
+      DeployRecordWrite on deploy-records/ducklake/* AND deploy-records/prod/*, DucklakeBuildInputsRead); NO
+      other lambda action, no iam:*, no terraform:*. DESTROY github_ci_plan, github_ci_drift,
+      github_ci_ducklake_deploy, github_ci_prod_deploy and their role_policy resources. Update the
+      IAMCIRolesRead resource list inside ci_full_refresh_read: remove the 4 retired role ARNs, add the 2 new
+      (net -2). rec-2793: add a lifecycle precondition asserting length(<rendered policy json>) <= 10240 to the
+      planner + deploy aws_iam_role_policy resources (DEP-01 anti-recurrence). ARNs stay ${var.account_id}-
+      templated (Decision 101).
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Decision 98 pt2 read-grant reconcile: in the IAMRolesRead statement, remove the 4 retired CI role ARNs
+      (agent-platform-github-ci-plan, -drift, -ducklake-deploy, -prod-deploy) and add the 2 new
+      (agent-platform-github-ci-planner, -deploy) -- net -2 ARNs, so this bootstrap inline policy SHRINKS (helps
+      the rec-2793 headroom). rec-2793 (the rec's cited file): add a lifecycle precondition asserting the
+      github_ci_apply inline policy rendered length <= 10240 (hoist the jsonencode(...) to a local if needed for
+      self-reference). ADMIN-APPLY-ONLY root (agent_platform_admin, out-of-band; never a CD path).
+  - file: .github/workflows/terraform-apply-sandbox.yml
+    action: Modify
+    purpose: >-
+      Repoint the speculative-plan job's role-to-assume from agent-platform-github-ci-plan to
+      agent-platform-github-ci-planner, and set its configure-aws-credentials role-session-name to a NON-reserved
+      value (must NOT equal the reserved drift session-name -- the planner pr-sub trust StringNotEquals enforces
+      this, so a mismatch fails at assume time, loud). Update the bootstrap-window continue-on-error comment/gate
+      to name the planner role. No other job changes.
+  - file: .github/workflows/terraform-drift.yml
+    action: Modify
+    purpose: >-
+      Repoint the drift job's role-to-assume from agent-platform-github-ci-drift to
+      agent-platform-github-ci-planner AND set configure-aws-credentials role-session-name to the RESERVED drift
+      session-name (identical string to the planner trust StringEquals and the ConvergenceRecordWrite aws:userid
+      condition) -- this single assumption serves both the terraform plan (refresh-read/tfstate-read/.tflock) and
+      the convergence-record write. Update the bootstrap-window continue-on-error comment/gate to name the
+      planner role.
+  - file: .github/workflows/deploy-ducklake-lambdas.yml
+    action: Modify
+    purpose: >-
+      Repoint role-to-assume from agent-platform-github-ci-ducklake-deploy to agent-platform-github-ci-deploy.
+      Reconcile the operator-owned provisioned-gate variable (DUCKLAKE_DEPLOY_ROLE_PROVISIONED) to the merged
+      role's provisioning signal (rename to a shared DEPLOY_ROLE_PROVISIONED, or keep both vars pointing at the
+      one role -- name the choice in the diff); update the fail-loud error string to the merged role name.
+  - file: .github/workflows/deploy-prod-lambdas.yml
+    action: Modify
+    purpose: >-
+      Repoint role-to-assume from agent-platform-github-ci-prod-deploy to agent-platform-github-ci-deploy.
+      Reconcile the PROD_DEPLOY_ROLE_PROVISIONED provisioned-gate variable the same way as the ducklake deploy
+      workflow (shared signal or both->one-role); update the fail-loud error string to the merged role name.
+  - file: scripts/checks/iam_tf/_read_coverage.py
+    action: Modify
+    purpose: >-
+      Decision 129 coverage-verifier lockstep: this module hard-codes _PLAN_ROLE_POLICY_NAME="github_ci_plan"
+      and _DRIFT_ROLE_POLICY_NAME="github_ci_drift" (lines ~97-98) and resolves both oidc.tf policy docs.
+      Collapse the plan+drift dual-resolution to a single planner role (github_ci_planner) whose refresh-read
+      surface must cover github_ci_apply's -- the parity contract is unchanged, only the role identity is. Stays
+      under 500 SLOC (currently 413; Decision 128 -- decompose if it would cross, never raise).
+  - file: scripts/checks/iam_tf/validate_ci_refresh_read_coverage.py
+    action: Modify
+    purpose: >-
+      Update the check's role references and the "could not resolve github_ci_plan/github_ci_drift role
+      policies" failure text (lines ~45, ~86) to the single planner role. COUNT-COUPLING: the module docstring
+      at ~line 44 ("refresh-read-covered in ALL THREE plan-capable role policies -- github_ci_apply / plan /
+      drift") -> "BOTH ... -- github_ci_apply + planner" (the plan-capable set goes 3 -> 2). Behaviour (assert
+      planner covers apply's refresh-read set) preserved. Currently 121 SLOC; stays well under 500.
+  - file: tests/checks/iam_tf/test__read_coverage.py
+    action: Modify
+    purpose: >-
+      Update the embedded fixture HCL blocks (resource/data "github_ci_plan"/"github_ci_drift") and any
+      assertions to the planner role, keeping the coverage-parity and ARN-prefix-collision test intent
+      (the agent-platform-github-ci-prod-deploy longer-ARN case at ~line 127 stays a valid prefix-collision
+      fixture or is repointed to the deploy role). COUNT-COUPLING: line ~227 `assert set(result) ==
+      {"plan","drift"}` -> `== {"planner"}`. Preserve every existing negative/positive assertion's meaning.
+  - file: tests/checks/iam_tf/validate_ci_refresh_read_coverage/test_real_tree.py
+    action: Modify
+    purpose: >-
+      Update the fixture HCL (github_ci_plan/github_ci_drift blocks) to the planner role so the real-tree
+      end-to-end coverage assertion exercises the post-merge shape. COUNT-COUPLING: lines ~213-214
+      `assert len(fn_findings) == 3` / `assert len(secret_findings) == 3` (apply, plan, drift) -> `== 2`
+      (apply, planner).
+  - file: tests/checks/iam_tf/validate_ci_refresh_read_coverage/test_end_to_end.py
+    action: Modify
+    purpose: >-
+      Update the fixtures and the "could not resolve github_ci_plan/github_ci_drift role policies" assertion
+      (~line 183) to the planner role. COUNT-COUPLING: line ~247 `assert len(failed) == 3  # apply, plan, drift`
+      and ~322 `assert len(collide_findings) == 3 ... # apply, plan, drift` -> `== 2  # apply, planner`.
+      Preserve the resolve-failure + prefix-collision negative tests (now keyed on the planner policy).
+  - file: scripts/checks/iam_tf/validate_convergence_writer_isolation.py
+    action: Create
+    purpose: >-
+      HUMAN-RATIFICATION HARDENING item 1 (the non-negotiable, Decision 92 pt2): a pure-Python JSON-SEMANTIC
+      STANDING check in the iam_tf family (mirrors validate_invoke_implies_resolve.py -- regex-parse the
+      github_ci_planner aws_iam_policy_document, resolve source_policy_documents, inspect each statement's
+      actions/resources/condition). ASSERTS: (a) EVERY statement granting s3:PutObject on convergence/personal/*
+      in the planner policy carries the aws:userid condition keyed to the reserved-session local, AND (b) NO
+      unconditioned convergence-write Allow exists in the planner policy (closes the blind spot grep-presence
+      cannot see -- a SECOND unconditioned Allow added alongside the good one); also assert the branch role
+      retains DenyConvergenceRecordWrite and github_ci_pr stays read-only on convergence. @register-decorated;
+      under 500 SLOC.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Register validate_convergence_writer_isolation in the ordered iam_tf tier sequences (both --pre and full
+      tiers, alongside validate_boundary_attached / validate_invoke_implies_resolve /
+      validate_ci_refresh_read_coverage) via `_c("validate_convergence_writer_isolation")`. +1 line; approx_sloc
+      207, headroom 293 to 500.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the required facade re-export `from scripts.checks.iam_tf.validate_convergence_writer_isolation import
+      validate_convergence_writer_isolation  # noqa: F401,E402` (scripts/CLAUDE.md: dispatch is globals()[name],
+      so without this line validate --pre KeyErrors on the check). +1 line; approx_sloc 422, headroom 78 -- no
+      raise, no decompose.
+  - file: tests/checks/iam_tf/test_validate_convergence_writer_isolation.py
+    action: Create
+    purpose: >-
+      Unit tests for the semantic check (family match): POSITIVE (a planner policy with the aws:userid-conditioned
+      convergence-write passes) + the load-bearing NEGATIVES that grep cannot catch (a SECOND, UNCONDITIONED
+      convergence PutObject Allow FAILS; a conditioned-but-wrong-session-key FAILS; a missing branch
+      DenyConvergenceRecordWrite FAILS). This test file is the node_id for VP-3's graduated test_selector row.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      HARD FIX (c1 self-consistency): the graduated check `ducklake-deploy-role-defined` (~line 724) greps
+      oidc.tf for the symbol `github_ci_ducklake_deploy` (grep_count >= 1) -- F retires that symbol, so the
+      check would assert a NOW-FALSE invariant contradicting c1. SUPERSEDE it: remove the
+      `ducklake-deploy-role-defined` entry (VP-4's new `deploy-role-updatefunctioncode-prefix` graduated check is
+      its successor for the merged role). `deploy-ducklake-lambdas-workflow-present` (file_presence) stays valid
+      (the workflow persists; only its assumed role changes). Also RECEIVES the new graduated-check rows for the
+      graduate-disposition VP steps at implement time (graduation-completeness) -- including VP-3's test_selector
+      row (primitive_slot: test_selector, node_id = the validate_convergence_writer_isolation test; 47
+      test_selector precedents already exist).
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Re-ground the admin-create runbook (the IAMCIRolesRead / IAMRolesRead reconcile probe steps ~L218-224 and
+      any prose enumerating the retired CI roles) to the post-merge role set (planner, deploy) so the next
+      operator following it does not recreate the retired roles. Narrow edit -- role-name re-grounding only, no
+      procedural rewrite beyond the merged names.
+  - file: docs/contracts/deploy-paths.yaml
+    action: Modify
+    purpose: >-
+      Live-surface re-ground (~line 36 status prose): the two governed-deploy channels name
+      agent-platform-github-ci-ducklake-deploy and agent-platform-github-ci-prod-deploy and the
+      DUCKLAKE_DEPLOY_ROLE_PROVISIONED / PROD_DEPLOY_ROLE_PROVISIONED variables -> the merged
+      agent-platform-github-ci-deploy role and the reconciled provisioned-variable name(s). Contract text only;
+      the intent->trigger->recovery index is unchanged.
+  - file: docs/contracts/build-lambda.yaml
+    action: Modify
+    purpose: >-
+      Live-surface re-ground: the deploy_channels governed_channel comments (~lines 92, 98) name the two
+      retired deploy roles -> the merged agent-platform-github-ci-deploy role. UpdateFunctionCode-only shape
+      description preserved.
+  - file: src/data/handlers/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Live ambient-surface re-ground (~lines 19, 26): the prod-class deploy runbook names
+      agent-platform-github-ci-prod-deploy -> agent-platform-github-ci-deploy (parity with the terraform/CLAUDE.md
+      re-ground). Role-name only.
+  - file: docs/PROJECT_CONTEXT.md
+    action: Modify
+    purpose: >-
+      Live governance-surface re-ground: the IaC/convergence section names github_ci_plan (~line 333, the
+      speculative-plan role) and lists "apply-path github_ci_plan / github_ci_apply / convergence-writer" (~line
+      350). Re-ground github_ci_plan -> the dual-sub planner and note the planner now carries the fail-closed
+      convergence-write (absorbing the drift "convergence-writer" leg). Description text only; no schema.
+bundled_recommendations:
+  - "rec-2793"
+infrastructure_dependencies:
+  - >-
+    APPLY MODEL (Decision 77/92/126): terraform/personal/oidc.tf carries aws_iam_role CREATE (planner, deploy) +
+    DESTROY (4 retired) + trust + inline-policy diffs -- ALL IAM-SENSITIVE. The deterministic guard
+    (scripts/terraform_apply_guard.py) exits 2 on these (delete + trust + IAM classes) -> routed=true -> the
+    change lands via the tf-gated-apply GitHub Environment (human approval at apply). The DEV /implement
+    container CANNOT self-apply this; the saved-plan no-TOCTOU model applies (PR-time plan reviewed + persisted,
+    applied verbatim at the gated merge job). This slice is authored APPLIES-NOTHING-IN-SESSION; the
+    overseer/human batches the gated apply.
+  - >-
+    BOOTSTRAP root (terraform/bootstrap/github_ci_apply.tf): IAMRolesRead ARN swap + the rec-2793 byte-size
+    precondition are ADMIN-APPLY-ONLY (agent_platform_admin, out-of-band). This root is never a CD/auto-apply
+    path. It is a SEPARATE apply from the personal-root gated apply.
+  - >-
+    STAGED create-before-destroy ordering (avoids a refresh-read AccessDenied window): the merged roles must
+    exist AND appear in BOTH refresh-read grant lists (oidc IAMCIRolesRead + bootstrap IAMRolesRead) before the
+    retired roles are removed from the lists and destroyed. Recommended two-pass sequence the overseer/human
+    runs: (pass 1) admin-apply bootstrap adding planner+deploy ARNs (superset, retired ARNs retained) + gated-
+    apply personal creating planner+deploy, updating oidc IAMCIRolesRead to the superset, repointing the 4
+    workflows; verify convergence green + drift/plan/deploy jobs assume cleanly; (pass 2) gated-apply personal
+    destroying the 4 retired roles + shrinking oidc IAMCIRolesRead to new-only, then admin-apply bootstrap
+    shrinking IAMRolesRead to new-only. The COMMITTED .tf is the END STATE (merged roles, new-only grants); the
+    superset is a transient operator step, not a committed intermediate.
+  - >-
+    T2.48 c2 + VP-12: F's CreateRole for planner+deploy is the first gated-apply role-create AFTER slice E's
+    inversion -- because both new roles DECLARE the mandatory boundary in HCL, the gated job's iam:CreateRole
+    succeeds (E made new-role creation executable through the gated path, replacing the Decision 98
+    admin-create-then-AccessDenied failure the audit observed at T2.24). The guard-BLOCK (exit 2) that routes F
+    is the natural pending_gated legibility demonstration (VP-12).
+  - >-
+    CI-delegation (Decision 119/120): terraform/personal + terraform/bootstrap use the third-party kislerdm/neon
+    provider (github.com egress-blocked in CC-web), so this plan runs NO local terraform init/validate/plan. Local
+    terraform VP is grep + `terraform fmt -check` ONLY (fmt needs no provider install); terraform validate/plan is
+    delegated to the required terraform-validate CI job + the speculative-plan job (authoritative verifiers).
+  - >-
+    No Lambda handler code change (Decision 79/125): scope touches no src/lambdas/** handler and no
+    terraform/personal-managed Lambda source; the merged DEPLOY role's UpdateFunctionCode is its runtime purpose,
+    not a code change in this slice. So Decision-79 per-Lambda build/deploy/smoke steps are NOT triggered and the
+    terraform_personal_filemd5_coupled deploy channel (T2.38/T2.43) is unaffected. scripts/checks/iam_tf and the
+    workflows are not Lambda-packaged (confirmed via lambda_manifest patterns).
+  - >-
+    SLICE E IS LIVE (overseer-confirmed, this session): T2.48's inversion was APPLIED in AWS -- the bootstrap
+    github_ci_apply policy now carries IAMRoleCreateBounded/IAMRoleDeleteBounded (PR #698) and the 13 personal
+    boundary attachments converged (both roots green). F's gated iam:CreateRole/DeleteRole authority is therefore
+    LIVE. The roadmap T2.48 `status: not_started` is ONLY an un-flipped status field (a pending G3 edit,
+    Status-Trusted-Never-Inferred) -- NOT a signal E is un-applied; do NOT block F on the roadmap status field.
+  - >-
+    PLANNER POLICY SIZE (rec-2793 / the critique's byte-overflow guard): the merged planner inline policy is the
+    UNION of github_ci_plan + github_ci_drift's ~20-statement ci_full_refresh_read + the fail-closed
+    ConvergenceRecordWrite -- SIZE IT EARLY (VP-7) against the 10,240 B inline limit (expected ~7-8.5 KB, since it
+    lacks github_ci_apply's large write surface, so ~1.7-3 KB headroom). The rec-2793 lifecycle precondition is the
+    apply-time safety net; VP-7 catches an overflow at implement time. FALLBACK if it overflows: move the
+    drift-specific leg (ConvergenceRecordWrite + DuckLakeWriterInvoke + TfstateNativeLockFile) to a customer-MANAGED
+    policy attached to the planner (separate from the inline aggregate), keeping convergence-write FAIL-CLOSED; or
+    the census-16 separate-writer topology (re-ground c1 15->16 as a human-ratifiable roadmap edit).
+acceptance_criteria:
+  - >-
+    T2.49 c1 (census): the live CI/deploy role set goes 7 -> 5 (apply, branch, pr, planner, deploy) and total
+    live agent-platform-* + platform roles go 17 -> 15; the 4 retired roles (github_ci_plan, github_ci_drift,
+    github_ci_ducklake_deploy, github_ci_prod_deploy) are absent from oidc.tf, both refresh-read grant lists, and
+    ALL live enforcement/contract/ambient surfaces (workflows, actions, verification registry, deploy contracts,
+    ambient CLAUDE.md, PROJECT_CONTEXT). Capability splits preserved and simulate-verified: github_ci_pr still
+    reads NO tfstate; github_ci_apply is still the sole convergence-GREEN writer; the planner has
+    tfstate-read+tfplan-write; the deploy role is UpdateFunctionCode-only.
+  - >-
+    T2.49 c2 (planner merge, FAIL-CLOSED convergence): plan+drift are one planner role trusting BOTH subs
+    (pull_request + refs/pull/* AND refs/heads/main). Convergence-write is condition-scoped FAIL-CLOSED: an
+    ALLOW on s3:PutObject convergence/personal/* conditioned on the reserved drift session identity (aws:userid),
+    default-deny for every other session; and the pr-sub trust statement StringNotEquals the reserved session-name
+    so a PR-context assumption structurally CANNOT obtain convergence-write (non-spoofable -- defeating it needs an
+    IAM trust-policy change, itself guard-BLOCKed/gated). simulate-principal-policy proves ALLOW in the
+    drift-session context and (implicit/explicit) DENY in a pr-typical session context (Decision 92 pt2).
+  - >-
+    T2.49 c3 (deploy merge): github_ci_ducklake_deploy + github_ci_prod_deploy are one github_ci_deploy role
+    granting lambda:UpdateFunctionCode on function:agent-platform-* (covers all 8 functions) and NO other lambda
+    action; the union S3 grants (lambda-packages RW, deploy-records/ducklake/* + /prod/* writes, build-input
+    reads, head-bucket) are preserved; both deploy workflows assume it and their governed-deploy behaviour is
+    unchanged.
+  - >-
+    rec-2793 (High, open): a Terraform lifecycle precondition asserting rendered-inline-policy byte length <=
+    10240 is present on github_ci_apply's policy resource AND on the two new merged-role policy resources; F net
+    SHRINKS github_ci_apply's policy (-2 ARNs) so its rendered size stays under the ceiling with reported
+    headroom. rec-2793 is closed via the Resolves: trailer at squash-merge (Decision 84 portal path, never a
+    direct cache edit).
+  - >-
+    c2 SEMANTIC ISOLATION (hardening item 1): validate_convergence_writer_isolation -- a standing validate.py
+    check (registered in scripts/checks/registry.py + scripts/validate.py, runs every --pre; graduated via
+    test_selector) -- asserts EVERY convergence/personal/* PutObject Allow in github_ci_planner carries the
+    aws:userid condition keyed to the reserved-session local AND that NO unconditioned convergence-write Allow
+    exists (plus branch DenyConvergenceRecordWrite intact, pr read-only). Its NEGATIVE unit fixtures (a 2nd
+    unconditioned Allow; a wrong-session-key) FAIL the check -- proving it catches the blind spot grep-presence
+    misses. This is the real control for the permission-side condition, which auto-applies (in-budget) rather
+    than routing to the human gate.
+  - >-
+    Decision 129 coverage verifier stays GREEN post-merge: _read_coverage.py + validate_ci_refresh_read_coverage.py
+    are updated to the single planner role, their unit tests pass, and validate_ci_refresh_read_coverage +
+    validate_boundary_attached + validate_authority_budget all pass in `bin/venv-python -m scripts.validate --pre`
+    (exit 0). The new roles carry the mandatory boundary (validate_boundary_attached, regex-based, auto-covers
+    them).
+  - "Local presubmit stays green: bin/venv-python -m scripts.validate --pre exits 0 (ruff/mypy/schema/sloc/graduation-completeness/vp-replay)."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      c1/c3 REPO-WIDE surface-retiring sweep across LIVE surfaces -- the four retired role names appear 0 times in
+      any enforcement/config/contract/ambient-doc surface: .github/workflows, .github/actions, the two governed
+      deploy contracts (deploy-paths.yaml, build-lambda.yaml), the verification registry, terraform/CLAUDE.md,
+      src/data/handlers/CLAUDE.md, and PROJECT_CONTEXT.md. (Grandfathered narrative -- historical docs/plans/*.yaml,
+      completed ROADMAP tier_item text, DECISIONS.md, audits/ -- is deliberately EXCLUDED; those legitimately name
+      the retired roles as history.)
+    command: >-
+      targets=".github/workflows .github/actions docs/contracts/deploy-paths.yaml docs/contracts/build-lambda.yaml
+      config/agent/verification_registry/registry.yaml terraform/CLAUDE.md src/data/handlers/CLAUDE.md
+      docs/PROJECT_CONTEXT.md"; hits=$(grep -REc
+      'agent-platform-github-ci-(plan|drift|ducklake-deploy|prod-deploy)\b' $targets 2>/dev/null | awk -F:
+      '{s+=$2} END{print s+0}'); echo "retired_role_refs_live=$hits"; [ "$hits" -eq 0 ]
+    expected: "retired_role_refs_live=0 ; exit 0 (no live enforcement/contract/ambient surface names a retired role)."
+    fix_if: >-
+      hits>0 -- a live surface still names a retired role; repoint it to agent-platform-github-ci-planner (plan/
+      drift) or agent-platform-github-ci-deploy (ducklake/prod deploy). Comments must name the merged role, not
+      the retired full name. (The \b anchor excludes -planner/-deploy from matching.)
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "no-retired-ci-role-in-live-surfaces"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      c2 -- the planner role exists with a DUAL-SUB trust and a session-name partition: its assume_role_policy
+      references BOTH the pull_request sub and the refs/heads/main sub, and carries an sts:RoleSessionName
+      condition (the fail-closed discriminator).
+    command: >-
+      f=terraform/personal/oidc.tf; def=$(grep -c 'resource "aws_iam_role" "github_ci_planner"' "$f"); prsub=$(grep
+      -c 'pull_request' "$f"); mainsub=$(grep -c 'refs/heads/main' "$f"); sess=$(grep -c 'sts:RoleSessionName'
+      "$f"); echo "planner=$def pr_sub=$prsub main_sub=$mainsub session_cond=$sess"; [ "$def" -ge 1 ] && [
+      "$sess" -ge 2 ] && [ "$prsub" -ge 1 ] && [ "$mainsub" -ge 1 ]
+    expected: "planner>=1, session_cond>=2 (StringEquals on main stmt + StringNotEquals on pr stmt), both subs present; exit 0."
+    fix_if: >-
+      planner=0 -- the merged role is not defined. session_cond<2 -- the trust is missing the RoleSessionName
+      partition (main-sub StringEquals reserved + pr-sub StringNotEquals reserved) that makes convergence-write
+      non-spoofable.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "planner-role-dual-sub-session-partition"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      c2 FAIL-CLOSED convergence guard -- JSON-SEMANTIC STANDING CHECK (human-ratification item 1, UPGRADES the
+      former grep-presence check into the strongest real control): validate_convergence_writer_isolation asserts
+      EVERY s3:PutObject on convergence/personal/* in the github_ci_planner policy carries the aws:userid
+      condition keyed to the reserved session, AND no UNCONDITIONED convergence-write Allow exists (catches a
+      SECOND unconditioned Allow added alongside the good one -- the blind spot a grep cannot see). Graduated via
+      test_selector (47 precedents; the graduation layer runs it via sys.executable pytest) so it is a standing
+      regression guard.
+    command: "bin/venv-python -m pytest tests/checks/iam_tf/test_validate_convergence_writer_isolation.py -q"
+    expected: >-
+      The semantic test passes: the conditioned-convergence-write fixture passes; the NEGATIVE fixtures (a 2nd
+      unconditioned Allow; a wrong-session-key condition; a missing branch DenyConvergenceRecordWrite) all FAIL
+      the check. The real planner passes.
+    fix_if: >-
+      The check flags the real planner -- an unconditioned convergence Allow slipped in (FAIL-OPEN, contradicts
+      Decision 92 pt2); remove it or add the aws:userid condition. If a negative fixture does NOT fail, the check
+      is too weak (grep-equivalent) -- strengthen it to inspect per-statement conditions. Do NOT downgrade to a
+      grep.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "planner-convergence-writer-isolation"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      c3 -- the merged deploy role is UpdateFunctionCode-only on the function prefix: github_ci_deploy grants
+      lambda:UpdateFunctionCode on function:agent-platform-* and NO other lambda action.
+    command: >-
+      f=terraform/personal/oidc.tf; def=$(grep -c 'resource "aws_iam_role" "github_ci_deploy"' "$f");
+      pfx=$(grep -c 'function:agent-platform-\*' "$f"); other=$(grep -oE 'lambda:[A-Za-z]+' "$f" | grep -v
+      'lambda:UpdateFunctionCode' | grep -vE 'lambda:(Invoke|Get|List)' | sort -u | wc -l | tr -d ' '); echo
+      "deploy=$def prefix=$pfx other_lambda_writes=$other"; [ "$def" -ge 1 ] && [ "$pfx" -ge 1 ]
+    expected: >-
+      deploy>=1 and prefix>=1 ; exit 0 (deploy role defined, UpdateFunctionCode on function:agent-platform-*;
+      reviewer confirms no UpdateFunctionConfiguration/PublishVersion/AddPermission on the deploy role).
+    fix_if: >-
+      deploy=0 -- the merged deploy role is not defined. prefix=0 -- it still enumerates literal function ARNs
+      instead of the function:agent-platform-* prefix (Decision 129/144 pt2).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "deploy-role-updatefunctioncode-prefix"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Decision 98 pt2 -- both refresh-read grant lists are reconciled: agent-platform-github-ci-planner and
+      -deploy are present, and the 4 retired role ARNs are absent, in BOTH oidc.tf IAMCIRolesRead and bootstrap
+      IAMRolesRead.
+    command: >-
+      new=$(grep -REc 'role/agent-platform-github-ci-(planner|deploy)"' terraform/personal/oidc.tf
+      terraform/bootstrap/github_ci_apply.tf | awk -F: '{s+=$2} END{print s+0}'); old=$(grep -REc
+      'role/agent-platform-github-ci-(plan|drift|ducklake-deploy|prod-deploy)"' terraform/personal/oidc.tf
+      terraform/bootstrap/github_ci_apply.tf | awk -F: '{s+=$2} END{print s+0}'); echo "new_arn_refs=$new
+      retired_arn_refs=$old"; [ "$new" -ge 4 ] && [ "$old" -eq 0 ]
+    expected: "new_arn_refs>=4 (planner+deploy in each of the 2 lists) and retired_arn_refs=0 ; exit 0."
+    fix_if: >-
+      retired_arn_refs>0 -- a retired ARN remains in a grant list; remove it. new_arn_refs<4 -- planner/deploy
+      not yet added to both IAMCIRolesRead and IAMRolesRead.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "ci-read-grant-lists-post-merge"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      rec-2793 -- the byte-size lifecycle precondition (<=10240) is present on the github_ci_apply policy and on
+      the two new merged-role policies (DEP-01 inline-policy-size anti-recurrence).
+    command: >-
+      pre=$(grep -REc 'precondition' terraform/personal/oidc.tf terraform/bootstrap/github_ci_apply.tf | awk -F:
+      '{s+=$2} END{print s+0}'); lim=$(grep -REc '10240' terraform/personal/oidc.tf
+      terraform/bootstrap/github_ci_apply.tf | awk -F: '{s+=$2} END{print s+0}'); echo "preconditions=$pre
+      limit_10240=$lim"; [ "$pre" -ge 3 ] && [ "$lim" -ge 3 ]
+    expected: "preconditions>=3 and limit_10240>=3 ; exit 0 (guard on github_ci_apply + planner + deploy policies)."
+    fix_if: >-
+      preconditions<3 or limit_10240<3 -- add `lifecycle { precondition { condition = ... <= 10240, error_message
+      = ... } }` to each of the three aws_iam_role_policy resources. CRITICAL (round-2 caveat): measure the
+      WHITESPACE-STRIPPED rendering -- AWS excludes whitespace from the 10,240 B inline-policy limit, so use
+      `length(jsonencode(jsondecode(data.aws_iam_policy_document.X.json))) <= 10240` (or an equivalent minified
+      form), NOT the raw whitespace-inclusive `length(data.aws_iam_policy_document.X.json)` which FALSE-FAILS on
+      github_ci_apply (~10,534 B raw but deploys fine minified). Hoist jsonencode to a local where self-reference
+      is awkward.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "iam-inline-policy-bytesize-precondition"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      rec-2793 EARLY SIZING (the critique's byte-overflow guard) -- render the MERGED PLANNER inline policy
+      (ci_full_refresh_read UNION + the fail-closed ConvergenceRecordWrite + the drift/plan-time statements) and
+      assert its WHITESPACE-STRIPPED rendered byte length <= 10240 (AWS excludes whitespace from the limit; same
+      minified measure as the rec-2793 precondition) with headroom reported, so a byte-overflow is caught at
+      plan/implement time, NOT at gated-apply. Expected ~7-8.5 KB: ci_full_refresh_read is the shared bulk
+      github_ci_apply also carries within its ~10,534 B RAW (deploys fine minified), plus only ~6 small
+      statements, WITHOUT github_ci_apply's large write surface (~1.7-3 KB headroom).
+    command: >-
+      echo "Render the planner aws_iam_role_policy JSON and measure the WHITESPACE-STRIPPED byte length (AWS
+      excludes whitespace from the 10,240 B limit): bytes=$(<render> | jq -c . | wc -c); echo
+      planner_policy_bytes=$bytes; test $bytes -le 10240. Report headroom=$((10240-bytes)). Use the SAME minified
+      measure as the rec-2793 precondition -- jsonencode(jsondecode(...))."
+    expected: "planner_policy_bytes <= 10240 with reported headroom (expected ~1.7-3 KB)."
+    fix_if: >-
+      bytes > 10240 -- FALLBACK (do NOT dead-end at gated-apply): move the drift-specific leg
+      (ConvergenceRecordWrite + DuckLakeWriterInvoke + TfstateNativeLockFile) into a customer-MANAGED policy
+      attached to the planner (managed-policy budget is separate from the inline aggregate), keeping
+      convergence-write FAIL-CLOSED; OR fall back to the census-16 topology (a separate main-sub-only
+      convergence-writer role) and re-ground c1 15->16 as an explicit human-ratifiable roadmap edit.
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Decision 129 -- the coverage verifier no longer hard-codes the retired plan/drift names: _read_coverage.py
+      references the planner role and NOT github_ci_plan/github_ci_drift as live role-policy names.
+    command: >-
+      f=scripts/checks/iam_tf/_read_coverage.py; planner=$(grep -c 'github_ci_planner' "$f"); stale=$(grep -Ec
+      '_(PLAN|DRIFT)_ROLE_POLICY_NAME *= *"github_ci_(plan|drift)"' "$f"); echo "planner_ref=$planner
+      stale_constants=$stale"; [ "$planner" -ge 1 ] && [ "$stale" -eq 0 ]
+    expected: "planner_ref>=1 and stale_constants=0 ; exit 0 (verifier collapsed to the single planner role)."
+    fix_if: >-
+      stale_constants>0 -- the module still resolves github_ci_plan/github_ci_drift; repoint to the single
+      planner role-policy name (coverage-parity contract unchanged).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "coverage-verifier-planner-repointed"
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Decision 129 -- the coverage verifier + its tests pass against the post-merge planner shape (unit level,
+      real code path).
+    command: "bin/venv-python -m pytest tests/checks/iam_tf/test__read_coverage.py tests/checks/iam_tf/validate_ci_refresh_read_coverage/ -q"
+    expected: "All _read_coverage + validate_ci_refresh_read_coverage tests pass with the planner role."
+    fix_if: >-
+      A test fails -- a fixture still uses github_ci_plan/github_ci_drift or an assertion expects the old
+      resolve-failure text; update fixtures/assertions to the planner role, preserving each test's original
+      positive/negative intent.
+    hermetic: false
+    graduation: not-applicable
+  - step: 10
+    phase: pre-deploy
+    action: >-
+      Terraform hygiene (Decision 119 -- fmt needs no provider): the two edited .tf roots are canonically
+      formatted.
+    command: "terraform fmt -check -diff terraform/personal/oidc.tf terraform/bootstrap/github_ci_apply.tf"
+    expected: "Exit 0 (no formatting diff on the edited files)."
+    fix_if: "Non-zero -- run `terraform fmt terraform/personal/oidc.tf terraform/bootstrap/github_ci_apply.tf` and re-commit."
+    hermetic: false
+    graduation: not-applicable
+  - step: 11
+    phase: pre-deploy
+    action: >-
+      Full local presubmit gate (advisory locally, authoritative in PR CI per Decision 73): schema, SLOC,
+      graduation-completeness, and the iam_tf checks (validate_ci_refresh_read_coverage / validate_boundary_attached
+      / validate_authority_budget) are green.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0 (all --pre checks green; the merged roles pass coverage + boundary-attached; no SLOC raise)."
+    fix_if: >-
+      Any --pre check fails -- fix and re-run; do not open the PR red. VP-replay re-runs the hermetic pure-shell
+      steps above in CI (no .venv).
+    hermetic: false
+    graduation: not-applicable
+  - step: 12
+    phase: post-deploy
+    action: >-
+      VP-12 (guard classification / pending_gated legibility) -- the deterministic guard classifies F's
+      terraform/personal plan as IAM-SENSITIVE and routes it to gated-apply: on the PR's saved plan JSON,
+      scripts/terraform_apply_guard.py exits 2 (routed=true), not 0.
+    command: >-
+      echo "On the speculative-plan PR: fetch the saved plan.bin, run scripts/terraform_apply_guard.py against
+      `terraform show -json`, confirm exit code 2 (IAM_SENSITIVE: role create+destroy+trust) and routed=true in
+      the PR guard comment. Record the guard verdict + PR run id in the hand-back (VP-12)."
+    expected: "Guard exit 2, routed=true, pending_gated surfaced on the PR -- F does NOT auto-apply."
+    fix_if: >-
+      Guard exits 0 -- the plan was misclassified as non-IAM (a real guard bug); do NOT auto-apply. Stop and RCA
+      (Decision 55); the IAM create/destroy MUST route to the gated Environment.
+    graduation: not-applicable
+  - step: 13
+    phase: post-deploy
+    action: >-
+      T2.48 c2 (new-role gated-apply proof, operator-assisted) -- the tf-gated-apply Environment approval executes
+      iam:CreateRole for planner + deploy WITHOUT AccessDenied (E's inversion made gated CreateRole executable
+      because both new roles declare the mandatory boundary), and the staged create-before-destroy ordering
+      completes.
+    command: >-
+      echo "Operator-assisted gated apply (two-pass, per infrastructure_dependencies): approve the tf-gated-apply
+      Environment; confirm CreateRole for agent-platform-github-ci-planner + -deploy succeed (no AccessDenied),
+      the 4 retired roles are destroyed in pass 2, and the bootstrap IAMRolesRead admin-apply lands. Record the
+      gated run ids + CreateRole success in the hand-back."
+    expected: "Gated CreateRole succeeds for both new roles; retired roles destroyed; no admin-create fallback needed (T2.48 c2)."
+    fix_if: >-
+      CreateRole AccessDenies -- the boundary is not declared on the new role in HCL (Decision 98/144); add the
+      permissions_boundary and re-plan. Do NOT fall back to admin-create (that would refute the c2 proof).
+    graduation: not-applicable
+  - step: 14
+    phase: post-deploy
+    action: >-
+      c2 FAIL-CLOSED + non-spoofable proof (creds-gated) -- simulate-principal-policy on the deployed planner
+      role shows s3:PutObject convergence/personal/sandbox.json ALLOWED in the reserved drift-session context and
+      DENIED in a PR-typical session context.
+    command: >-
+      echo "aws iam simulate-principal-policy --policy-source-arn <planner-arn> --action-names s3:PutObject
+      --resource-arns arn:aws:s3:::<data-lake>/convergence/personal/sandbox.json --context-entries
+      ContextKeyName=aws:userid,ContextKeyValues=<roleid>:<reserved-drift-session>,ContextKeyType=string ->
+      allowed; repeat with a non-reserved session value -> implicitDeny. Also confirm github_ci_pr has NO
+      tfstate GetObject and github_ci_apply remains the sole convergence-GREEN writer. Record results in the
+      hand-back (Decision 92 pt2)."
+    expected: "PutObject convergence/* ALLOWED for the drift session, DENIED for a non-reserved session; pr-no-tfstate + apply-only-writer preserved."
+    fix_if: >-
+      Convergence PutObject is allowed in a non-reserved session -- the condition is fail-open; tighten the
+      ALLOW aws:userid condition and re-apply (gated). Do NOT ship a fail-open convergence write.
+    graduation: not-applicable
+  - step: 15
+    phase: post-deploy
+    action: >-
+      c1 census (creds-gated) -- the live role census is 15: the 4 retired CI roles are gone and planner+deploy
+      exist.
+    command: >-
+      echo "aws iam list-roles --query 'Roles[?starts_with(RoleName, \`agent-platform-github-ci-\`)].RoleName'
+      -> {branch, pr, apply, planner, deploy} (5, no plan/drift/ducklake-deploy/prod-deploy); total live
+      agent-platform-* + PlatformDev/PlatformAdmin = 15. Record the count in the hand-back (c1)."
+    expected: "5 github-ci-* roles (no retired), 15 total live roles; c1 satisfied."
+    fix_if: "A retired role still exists -- the pass-2 destroy did not land; re-run the gated destroy apply."
+    graduation: not-applicable
+  - step: 16
+    phase: post-deploy
+    action: "[POST-MERGE] Confirm rec-2793 is closed via the Resolves: trailer + rec-autoclose."
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && grep -oE '"id": "rec-2793"[^}]*"status": "[a-z]*"'
+      logs/.recommendations-log.jsonl
+    expected: "rec-2793 shows status closed after the squash-merge (Resolves: rec-2793)."
+    fix_if: >-
+      Still open -- run bin/venv-python -m scripts.ops_data_portal --update-rec rec-2793 --status closed
+      --resolution '...' via the portal (Decision 70/84); never edit logs/*.jsonl directly.
+    graduation: not-applicable
+constraints:
+  - "APPLIES-NOTHING-IN-SESSION (Decision 77/92/126): the /implement DEV container edits the .tf/.yml/.py/.md and opens the PR; it NEVER self-applies. terraform/personal IAM create+destroy routes to the tf-gated-apply Environment (human approval); terraform/bootstrap is admin-apply-only (agent_platform_admin). Agents never self-direct terraform apply (the sole exception is the human-gated break-glass tier)."
+  - "FAIL-CLOSED convergence write (Decision 92 pt2, decision-scout WARN resolved): the merged planner's convergence-write is a default-deny ALLOW conditioned on the reserved drift session identity (aws:userid) + a trust-policy sts:RoleSessionName partition, so a PR-context assumption of the planner CANNOT write the anti-masking record. A prior fail-OPEN design (Deny keyed on the plan session-name) was rejected. This c2 design is surfaced as an explicit human-ratifiable decision in context (see the Decision-92 entry)."
+  - "CI-SAFETY (rec-2770): every hermetic:true pre-deploy VP step and every COMMAND-slot graduated check is PURE-SHELL (grep/awk/wc) -- never bin/venv-python -- because CI replays them without a .venv. EXCEPTION: test_selector graduated checks (like VP-3's) run pytest via sys.executable, which the graduation layer supports (47 precedents), so VP-3 is hermetic:false + graduate-via-test_selector, not a pure-shell command. pytest/validate/fmt/aws/simulate VP steps are hermetic:false (not command-replayed)."
+  - "PUBLIC repo (Decision 101): no account IDs, ARNs-with-account-id, or ExternalIds in the committed .tf/.yml/.md/.py or this plan -- roles named by logical name / prefix; HCL uses ${var.account_id}. The pre-commit never-commit hook backstops."
+  - "Decision 129 coverage parity preserved: the planner's refresh-read surface must still COVER github_ci_apply's; the verifier update is a role-identity repoint, not a coverage relaxation. Decision 35: iam: read grants stay enumerated literal ARNs (IAMCIRolesRead/IAMRolesRead), never a wildcard."
+  - "Decision 143 (worst-reachable-verb): the deploy role's UpdateFunctionCode widening to function:agent-platform-* is sanctioned by Decision 144 pt2 (prefix model); its worst reachable verb is UpdateFunctionCode on agent-platform-* functions -- the role's sole purpose, under the mandatory boundary, no config/invoke/publish."
+  - "SLOC (Decision 128): _read_coverage.py (413) + validate_ci_refresh_read_coverage.py (121) stay under 500 after edits; the .tf files are not SLOC-governed. No budget raise, no --update-sloc-budgets re-seed."
+  - "rec-2793 MEASUREMENT (round-2 critique caveat, load-bearing): the byte-size precondition + VP-7 sizing MUST measure the WHITESPACE-STRIPPED/minified policy rendering -- AWS excludes whitespace from the 10,240 B IAM inline-policy limit. Use length(jsonencode(jsondecode(data.aws_iam_policy_document.X.json))) <= 10240 (or an equivalent minified form) for github_ci_apply AND the two new merged-role policies. A naive raw length(data...json) (whitespace-inclusive) FALSE-FAILS on github_ci_apply (~10,534 B raw, deploys fine minified ~<=10,240)."
+  - "Warehouse-SoT / Single-Portal (Decision 84): rec-2793 closes via the Resolves: trailer / ops portal at squash-merge; never edit logs/*.jsonl directly."
+  - "No rescue agents or workaround loops (Decision 55): on a gated-apply AccessDenied or a fail-open simulate result, STOP and RCA -- fix the HCL (boundary/condition) and re-apply through the gate; never hot-patch a role out-of-band or ship a fail-open condition."
+  - "Only modify files listed in scope; out-of-scope issues become recommendations via scripts/ops_data_portal.py, not inline fixes."
+context:
+  - "Slice F of the /overseer terraform-deploy-redesign run (audit b67955b, Decision 144). Executes existing tier_item T2.49 (c1/c2/c3); do NOT create a new tier_item. closes_criteria wires to T2.49:c1/c2/c3. depends_on T2.48 = slice E (APPLIED: github_ci_apply is the inverted broad-but-bounded deployer under agent-platform-github-ci-apply-boundary, boundary on 13 roles; D2/D3 reconcile pipeline proven). Status flips happen in /implement on the VP pass, never here (Status-Trusted-Never-Inferred)."
+  - "EXPLICIT c2 DESIGN DECISION for human ratification (Decision 92 pt2 -- decision-scout FLAGS_FOUND WARN): merging plan(speculative,PR-sub) + drift(main-sub) into one planner identity that also holds convergence-write would collapse Decision 92 pt2's physically-isolated, fail-CLOSED anti-masking guarantee if convergence-write were unconditioned or fail-open. RESOLUTION (fail-closed, non-spoofable, single-role -> preserves c1's census 15 and c2's single-planner wording): (a) the planner trust has two web-identity statements partitioned by sts:RoleSessionName -- the main/refs-heads-main statement Allows ONLY the reserved drift session-name (StringEquals), the pull_request statement StringNotEquals it; (b) ConvergenceRecordWrite is the ONLY allow on convergence/personal/* and is conditioned on aws:userid StringLike the reserved drift session -- default-deny for every other session. A PR-context assumption therefore cannot obtain the reserved session-name (trust denies) nor match the write condition (permission denies); DOC-TRUTHFULNESS (human-ratification item 2 -- NO overclaiming): the two halves have DIFFERENT protection. The TRUST-partition half (sts:RoleSessionName in the assume_role_policy) IS human-gate-protected -- a trust-policy edit is IAM-sensitive, guard-BLOCKs (exit 2), routes to the tf-gated-apply Environment. BUT the PERMISSION-side aws:userid condition lives in the planner's INLINE policy, and in-budget inline-policy UPDATEs on boundary-carrying roles AUTO-APPLY under the in-budget classifier (deterministic guard + subagent review, Decision 92 pt5 / T2.25) -- NOT the human gate. So removing/weakening the permission-side condition, or adding a 2nd unconditioned Allow, would ride AUTO-APPLY; its REAL protection is the deterministic JSON-SEMANTIC standing check (validate_convergence_writer_isolation, hardening item 1) + the subagent review, NOT the human gate. That semantic check is the strongest real control while the human gate is soft, so it ships IN slice F. The OIDC sub is unavailable as a permission-policy condition key, which is why the session-name (trust-partitioned) is the discriminator rather than the sub directly. The audit-sanctioned alternative ('accept the marginal widening + re-ground c2') was NOT taken -- fail-closed isolation is preserved. RESIDUAL (unchanged from status quo, surfaced per the round-1 critique): any MAIN-context principal that assumes the planner with the reserved session-name gains convergence-write eligibility, and the main-sub StringEquals forces any FUTURE main-context planner consumer into that reserved session-name (a latent footgun) -- both stay WITHIN the established merge-path-CI-actor trust boundary (identical to today's drift role's convergence-write reach), NO blast-radius widening. DEFERRED BACKLOG (Fable's honest price of admission, logged as recs): rec-2816 (Critical) -- gated-approval legibility, the biggest finding, human-committed immediately after this remediation; F's OWN gated apply is the pilot for the approval-verification checklist. rec-2817 (High) -- an auto-apply budget carve-out that routes the planner's convergence-conditioned inline-policy edits to the gate (closing the item-2 permission-side auto-apply gap), HARD-SEQUENCED AFTER rec-2816; the in-slice semantic check (item 1) is the INTERIM control until it lands. rec-2818 (Medium) -- Option-B physical separation (a separate main-sub-only convergence-writer role), the abstract-best design, deferred and already F's VP-7 overflow fallback. Overseer: put this design + residual + backlog in front of the human at the plan-PR."
+  - "Tier Item Freshness Gate (T2.49): (1) silent-completion -- NOT complete (4 separate roles live in oidc.tf; c1/c2/c3 open); (2) stale-reference -- T2.49 files_in_scope lists only oidc.tf + github_ci_apply.tf, but the merge necessarily repoints the 4 workflows that assume the retired roles, updates the Decision-129 coverage verifier that hard-codes the plan/drift names (+3 tests), retires/repoints a stale graduated registry check (ducklake-deploy-role-defined), and re-grounds five live doc surfaces naming the retired roles (terraform/CLAUDE.md, src/data/handlers/CLAUDE.md, docs/contracts/deploy-paths.yaml, docs/contracts/build-lambda.yaml, docs/PROJECT_CONTEXT.md) -- all INCLUDED in scope as the true blast radius (re-grounding note broadened by the round-1 critique), not scope creep; (3) supersession -- none; (4) gating decisions 144/98/125 ratified, T2.48 satisfied by slice E (LIVE-applied this session)."
+  - "CI-RCA HARD BLOCK deferral (preflight ci_rca_unresolved_recs = rec-2762): rec-2762 (Critical, 'PLAN-ducklake-maintenance-smoke-split.yaml carries 5 malformed closes_criteria refs') is UNRELATED to slice F -- different file (a DuckLake maintenance plan doc), different failure category (closes_criteria schema/validate false-negative), no shared Decision Record. This plan satisfies none of the three Related-Work conditions and DEFERS rec-2762 with this logged rationale (planning-skill preflight rule): slice F is a scheduled decomposition of the Decision-144 audit response and does not touch the ducklake-maintenance-smoke plan; rec-2762 is tracked for a separate ci-rca /plan session."
+  - "Main divergence: this branch was cut FRESH from origin/main (git fetch origin main; git checkout -B claude/ci-deploy-role-consolidation origin/main), so the planning-time overlap the preflight flagged (terraform-apply-sandbox.yml, reconcile.yml changed on main by slice D2) is resolved -- the plan is authored against current main. terraform-drift.yml + the 2 deploy workflows were not touched by recent main commits."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (1 WARN on the c2 fail-open convergence design, resolved to the fail-closed design above; decisions triaged 101/101). CITE: Decision 144, Decision 129, Decision 92, Decision 98, Decision 94, Decision 77, Decision 126, Decision 125, Decision 35, Decision 101, Decision 119, Decision 120, Decision 84, Decision 55. RELATED (cited in-body, not required): Decision 143 (worst-reachable-verb -- deploy widening sanctioned by 144 pt2), Decision 128 (SLOC), Decision 67 (IMPLEMENTATION-type correct), Decision 113 (static-key runtime, untouched). Decision 83 DEMOTED (F changes no branch protection)."
+  - "gates: decision-scout=FLAGS_FOUND (1 round, WARN resolved to fail-closed c2 before plan write); plan-critique=REVISE round 1 (architecture AFFIRMED -- fail-closed c2 validated sound + non-spoofable; 6 additive revisions applied: registry stale-check fix, 4 live-surface re-grounds, broadened repo-wide sweep, early planner-policy sizing + fallback, coverage-test 3->2 count-coupling, E-is-live note), round 2 pending -- the overseer runs the round-2 critique after this hand-back."
+  - "Closure obligations: rec-resolving (rec-2793 bundled + VP-16 verifies close via Resolves trailer) AND surface-retiring (4 roles X->Y merged; VP-1 sweeps ALL live surfaces -- workflows, actions, contracts, registry, ambient CLAUDE.md, PROJECT_CONTEXT -- for the retired role names + VP-5 the grant-list ARNs, and VP-15 confirms the AWS roles are gone). Both satisfied."
+  - "TWO-PR MODEL (Design-B) x graduation-completeness: the plan PR (#710) is PLAN-DOC-ONLY (its diff is docs/plans/PLAN-ci-deploy-role-consolidation.yaml alone -- NO check code, NO registry rows). EVERY graduated VP step here -- including VP-3 (planner-convergence-writer-isolation) -- is plan-SPECIFIED (graduation_check_id + disposition) and IMPLEMENTED new-in-diff by the SEPARATE /implement feat PR. VP-3's item-1 artifacts (the check module scripts/checks/iam_tf/validate_convergence_writer_isolation.py, its scripts/checks/registry.py + scripts/validate.py registration, the test, AND the config/agent/verification_registry/registry.yaml test_selector row) are created ENTIRELY in the /implement feat PR, so graduation-completeness's implement-PR leg sees VP-3's registry row as new-in-diff and PASSES -- identical treatment to the other 6 graduated checks. Nothing about item 1 lands in the plan PR except its specification."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/ci-deploy-role-consolidation, cut from origin/main)"
+  - "docs/PROJECT_CONTEXT.md read (apply model, guard classification, deploy channels, convergence anchor, boundary)"
+  - "DECISIONS.md read (144/129/92/98/94/77/126/125/35/101/119/120/84/55 cited; 101/101 triaged by the decision-scout gate)"
+  - "All files in scope located and readable: oidc.tf, github_ci_apply.tf, 4 workflows, 2 coverage verifiers, 3 coverage tests, registry.yaml, terraform/CLAUDE.md, src/data/handlers/CLAUDE.md, deploy-paths.yaml, build-lambda.yaml, PROJECT_CONTEXT.md, + hardening item 1: validate_convergence_writer_isolation.py, scripts/checks/registry.py, scripts/validate.py, test_validate_convergence_writer_isolation.py (21 files)"
+  - "Acceptance criteria understood; the guard-classification (VP-12), gated CreateRole (T2.48 c2, VP-13), simulate fail-closed proof (VP-14), and census (VP-15) are operator-assisted post-deploy; rec-close is VP-16"
+  - "rec-2793 (High, open, file github_ci_apply.tf) relevance re-checked: open, 1:1 with F's byte-guard scope -> bundle + Resolves trailer"
+  - "Reserved drift session-name single-sourced as a `local` (local.convergence_writer_session_name) used identically across its 4 coupled sites: planner main-sub trust StringEquals, pr-sub trust StringNotEquals, ConvergenceRecordWrite aws:userid StringLike, and (as a matching workflow literal) the drift workflow role-session-name (hardening item 3)"
+  - "Human ratified c2 = Option A + 3 in-slice hardening additions (JSON-semantic standing check validate_convergence_writer_isolation; doc-truthfulness re the auto-applying permission-side condition; single-source local) + logged deferred recs rec-2816/2817/2818. The semantic check family-matches validate_invoke_implies_resolve.py; test_selector graduation has 47 precedents"
+execution_steps:
+  - "terraform/personal/oidc.tf: create github_ci_planner (dual-sub trust with the sts:RoleSessionName partition; union read/plan policy UNCONDITIONED; ConvergenceRecordWrite as the fail-closed aws:userid-conditioned ALLOW) and github_ci_deploy (main-sub; UpdateFunctionCode on function:agent-platform-*; union S3 grants). Destroy the 4 retired roles + their role_policy resources. Update IAMCIRolesRead (remove 4 retired ARNs, add planner+deploy). Add the rec-2793 byte-size lifecycle precondition to the planner + deploy role_policy resources."
+  - "terraform/bootstrap/github_ci_apply.tf: swap the 4 retired ARNs for planner+deploy in IAMRolesRead; add the rec-2793 byte-size precondition on the github_ci_apply inline policy (hoist jsonencode to a local if needed). IMPLEMENTATION NOTE (round-2 caveat): the precondition MUST measure the WHITESPACE-STRIPPED/minified rendering -- length(jsonencode(jsondecode(<policy>.json))) <= 10240 -- because AWS excludes whitespace from the inline-policy limit; the raw whitespace-inclusive length false-fails on github_ci_apply (~10,534 B raw) even after the -2 ARN shrink. Admin-apply-only root."
+  - "Repoint the 4 workflows: terraform-apply-sandbox.yml (speculative-plan -> planner, non-reserved session-name), terraform-drift.yml (-> planner, RESERVED drift session-name), deploy-ducklake-lambdas.yml + deploy-prod-lambdas.yml (-> github_ci_deploy, reconcile the *_ROLE_PROVISIONED vars + fail-loud strings)."
+  - "Update the Decision-129 coverage verifier: _read_coverage.py (collapse plan+drift dual-resolution to the single planner role) + validate_ci_refresh_read_coverage.py (role refs + failure text; 'ALL THREE' -> 'BOTH' docstring), keeping the coverage-parity contract. Update the 3 tests' fixtures/assertions to the planner role incl. the 3->2 count-coupling, preserving each test's positive/negative intent. Keep both modules under 500 SLOC."
+  - "Add the JSON-semantic standing check (hardening item 1): create scripts/checks/iam_tf/validate_convergence_writer_isolation.py (@register; parse the github_ci_planner policy statements a la validate_invoke_implies_resolve.py; assert every convergence PutObject Allow is aws:userid-conditioned to local.convergence_writer_session_name, NO unconditioned Allow, branch Deny intact, pr read-only); register it in scripts/checks/registry.py (both tiers) + the scripts/validate.py facade re-export; create tests/checks/iam_tf/test_validate_convergence_writer_isolation.py (positive + the 2nd-unconditioned-Allow / wrong-session-key / missing-Deny NEGATIVES). Single-source the reserved session-name as local.convergence_writer_session_name across its 4 coupled sites (item 3). In terraform/CLAUDE.md's convergence-anchor section, state plainly (item 2 doc-truthfulness) that the permission-side aws:userid condition AUTO-APPLIES under the in-budget classifier and its real protection is this semantic check + subagent review, NOT the human gate (only the trust-partition half is human-gated)."
+  - "terraform/CLAUDE.md: re-ground the admin-create runbook role names to planner/deploy (narrow role-name edit)."
+  - "config/agent/verification_registry/registry.yaml: SUPERSEDE the stale graduated check `ducklake-deploy-role-defined` (it greps the retired github_ci_ducklake_deploy symbol -> would assert a now-false invariant contradicting c1; VP-4's `deploy-role-updatefunctioncode-prefix` is its successor), and add the new graduated-check rows for the graduate VP steps -- including VP-3's test_selector row (node_id = the validate_convergence_writer_isolation test)."
+  - "Re-ground the 4 remaining LIVE surfaces that name the retired roles to planner/deploy (role-name text only): docs/contracts/deploy-paths.yaml (both deploy roles + provisioned var names), docs/contracts/build-lambda.yaml (both deploy roles), src/data/handlers/CLAUDE.md (prod-deploy role), docs/PROJECT_CONTEXT.md (github_ci_plan + the convergence-writer apply-path label)."
+  - "Execute the Verification Plan: run pre-deploy steps 1-11 (hermetic greps + early planner-policy sizing VP-7 + pytest + fmt + validate --pre); loop until green. Mark VP-12..VP-15 (guard classification, gated CreateRole, simulate fail-closed, census) and VP-16 (rec close) as operator-assisted post-deploy/post-merge. On an unrecoverable gated-apply or fail-open result, STOP and RCA (Decision 55) -- fix the HCL and re-apply through the gate; never out-of-band."
+  - "Commit feat(ci-deploy-role-consolidation): ...; open the PR (base main). The squash-merge body carries `Resolves: rec-2793`. APPLY NOTHING in-session; the overseer/human batches the staged gated + admin applies."
+  - "Report: the role census (17->15), the fail-closed c2 design + non-spoofability argument, VP results, and the deferred operator-assisted items (gated CreateRole = T2.48 c2, simulate fail-closed proof, census)."
+work_areas: []
+rollback: >-
+  The committed edits (.tf / .yml / .py / .md) are revertable by `git revert` with ZERO infra effect until a
+  gated apply is approved. Because F is authored applies-nothing-in-session, reverting the PR before any gated
+  apply leaves the live roles untouched. If a gated apply has landed and a regression surfaces, roll forward
+  (Decision 55) through the same gated path: re-create the retired roles' capabilities on the merged roles or
+  re-apply the prior role definitions via a fresh gated apply -- never an out-of-band admin edit. The staged
+  create-before-destroy ordering means a failed pass 2 leaves the (working) superset state, which is safe to
+  hold until the destroy is retried.
