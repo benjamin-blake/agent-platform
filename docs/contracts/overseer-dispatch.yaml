@@ -100,11 +100,18 @@ gate_request_trampoline:
       requesting it -- a gate response with no trailing gate_run_id line, or a mismatched one,
       is not trustworthy and must be re-dispatched properly rather than accepted."
   pending_gates:
-    write_ahead: "the overseer appends {gate, round, gate_run_id, slice, requested_at} to the
-      ledger's pending_gates list BEFORE dispatching the gate subagent -- never after. This makes
-      a mid-dispatch crash or compaction observable on resume: a pending_gates entry with no
-      matching gate-verdict ledger update means the dispatch needs to be re-driven, not silently
-      dropped."
+    write_ahead: "the overseer appends {gate, round, gate_run_id, slice, requested_at, inputs} to
+      the ledger's pending_gates list BEFORE dispatching the gate subagent -- never after. The
+      `inputs` field is REQUIRED here (not merely in the request_schema payload): for
+      decision-scout specifically, its inputs (intent, approach, scope, tier, cited_decisions) are
+      free text with no artifact on disk yet at Step 6a (the plan file doesn't exist until Step
+      8), so they are NOT recoverable via artifact_first_yield on a crash -- pending_gates is the
+      only durable-enough-to-survive-resume copy. (plan-critique's and code-review's inputs are
+      already artifact paths -- plan_path / branch -- so persisting them here is a consistency
+      convenience, not a hard requirement, for those two gates.) This makes a mid-dispatch crash
+      or compaction genuinely RE-DRIVABLE on resume, not merely observable: a pending_gates entry
+      with no matching gate-verdict ledger update means re-dispatch the gate using this entry's
+      own `inputs` verbatim, never re-deriving them from the (possibly-gone) author subagent."
     resolution: "on receiving the gate subagent's verdict (with matching gate_run_id), the
       overseer removes the entry from pending_gates and records the verdict against the slice."
   artifact_first_yield: "the gate-requesting author subagent's payload is the artifact path(s)
@@ -234,8 +241,13 @@ liveness:
     seeded from the ledger's last known hand-back `artifacts` + status for that slice -- never a
     rescue-in-place resume of a dead session. This is the same re-dispatch mechanism as an
     ordinary GATE_REQUEST re-dispatch, just triggered by liveness failure instead of a returned
-    verdict. A restart-death re-dispatch counts as one of the plan's existing two BLOCKED/FAILED
-    attempts before executor-rca escalation."
+    verdict. TWO SEPARATE counters, never conflated: an AUTHOR restart-death counts as one of the
+    plan's existing two BLOCKED/FAILED attempts (it is evidence about that slice's own
+    difficulty) before executor-rca escalation. A GATE subagent restart-death is pure
+    infrastructure flakiness, not a content-quality signal about the author's work -- it gets its
+    own separate 2-attempt counter PER (gate, round); exhausting it escalates as an infra RCA
+    (executor-rca with the liveness diagnostic as evidence) WITHOUT incrementing or affecting the
+    author's own BLOCKED/FAILED count."
   stall_nudge: "on an ambiguous stall (transcript aging, no death signature, no new ledger update
     past the expected duration for the current stage) the overseer sends ONE SendMessage nudge
     (a cheap re-orientation, not new instructions) before considering it stalled further; if a
@@ -320,7 +332,14 @@ ledger_persistence:
     its review/CI state, or its merged commit), per Decision 115 (transient handoffs ride PR
     descriptions) and Decision 87. On a cold resume (new session, scratchpad lost), the overseer
     reconstructs slice status by querying each slice's PR state via the GitHub MCP tools, not by
-    trusting a stale local ledger file."
+    trusting a stale local ledger file. SCOPE CAVEAT: this SoT covers the POST-artifact-write
+    portion of a slice's lifecycle only (once a plan file or branch exists to query against). A
+    full session loss DURING the pre-PR-open gate-request sequence (interleave_with_pr_lifecycle
+    -- decision-scout/plan-critique fire before the plan file is committed) has NO durable,
+    PR-observable signal to distinguish progress among the three gates; only the (non-durable)
+    scratchpad pending_gates entries covered that window, and they are gone too. Recovery in that
+    specific case is to restart the slice's gate sequence from decision-scout round 1 -- bounded,
+    non-destructive cost (no merged artefact to unwind), not a gap requiring a new mechanism."
   reconciliation: "if the scratchpad ledger and the GitHub PR state disagree (e.g. the ledger
     shows a slice 'implementing' but its PR is actually merged), GitHub PR state wins -- rewrite
     the ledger to match, never the reverse."

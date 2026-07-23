@@ -16,8 +16,8 @@ Layer 4 methodology). The overseer is an orchestration meta-layer, NOT a fifth w
 (Decision 90): it composes `/plan` and `/implement` -- their gates (decision-scout, plan-critique,
 code-review) run unmodified but overseer-dispatched, NEVER inline in the author -- to drive a
 roadmap item, audit, or multi-slice body of work to completion, narrowing the human to intake (G0),
-decomposition (G1), and completion (G3). The overseer never edits source code, terraform, or Python
-itself; every file change happens inside a dispatched subagent. Detailed schemas/recipes live in
+decomposition (G1), and completion (G3). The overseer never edits source, terraform, or Python
+itself; every change happens inside a dispatched subagent. Detailed schemas/recipes live in
 `docs/contracts/overseer-dispatch.yaml` -- this file is the anchor+pointer index.
 
 ## Behavioural Invariants
@@ -45,8 +45,8 @@ call needing a file read belongs inside a subagent dispatch, not here.
 ## Bounded Hand-Back Schema
 
 Every subagent dispatched (planning, implementation, Fable advice, RCA) returns at least this
-shape -- EXCEPT a gate subagent (decision-scout/plan-critique/code-review), which returns its own
-unmodified report format, never this shape (see gate_run_id.provenance in the contract):
+shape -- EXCEPT a gate subagent, which returns its own unmodified report, never this shape (see
+gate_run_id.provenance):
 ```yaml
 status: PROCEED | REVISE | BLOCKED | FAILED | GATE_REQUEST
 summary: <=150 words, prose synthesis of what happened
@@ -59,8 +59,8 @@ open_questions: [unresolved items requiring human input, or empty]
 gate (decision-scout, plan-critique, code-review). It EXTENDS this shape with `gate`/`round`/
 `inputs` (reusing `artifacts`, never a separate field) per
 `overseer-dispatch.yaml#gate_request_trampoline`; ledger status stays planning/implementing
-through it. Never accept pasted file contents, diffs, or raw transcripts. A hand-back missing
-`status`, or otherwise malformed, has NOT completed -- re-dispatch.
+through it. Never accept pasted contents, diffs, or raw transcripts. A hand-back missing `status`,
+or otherwise malformed, has NOT completed -- re-dispatch.
 
 ## Overseer Ledger Schema
 
@@ -70,7 +70,7 @@ parseable YAML (Agent-First Repository rule) -- no narrative companion doc.
 schema_version: 1
 slug: "{slug}"
 intent: >-
-  1-2 sentences: the roadmap item, audit, or body of work this run is driving to completion.
+  1-2 sentences: the roadmap item, audit, or work this run drives to completion.
 wave_plan:
   - wave: 1
     slices: ["{slug-a}", "{slug-b}"]
@@ -89,10 +89,10 @@ autonomous_decision_log:
 gates: {g0_intake: pending, g1_decomposition: pending, g3_completion: pending}
 ```
 **Persistence:** the live ledger is a **scratchpad** working copy (fast, no per-update commit) -- NOT
-**durable** across full session loss. The durable cross-session resume source of truth is each
-slice's actual GitHub PR/merge state (Decision 115/87), not this file: on cold resume, reconstruct
-status from PR state via the GitHub MCP tools; on disagreement, PR state wins. See
-`overseer-dispatch.yaml#ledger_persistence`.
+**durable** across full session loss. The durable cross-session resume SoT is each slice's actual
+GitHub PR/merge state (Decision 115/87), not this file: on cold resume, reconstruct status from PR
+state via the GitHub MCP tools; on disagreement, PR state wins. See
+`overseer-dispatch.yaml#ledger_persistence` (incl. the pre-PR-open scope caveat).
 
 ## Lifecycle and Gates
 
@@ -116,14 +116,13 @@ proceed-with-notice.
 
 **Division of labor:** the author subagent (planning or implementation) runs its own lifecycle,
 commits, pushes, opens its own PR, and stops -- hands the PR back via PROCEED. `/plan`'s own Step
-6b human-confirmation checkpoint (distinct from the 3 GATE_REQUEST gates below) is satisfied
-directly by the author's own `AskUserQuestion` tool call to the human -- no overseer mediation, not
-a bias-fresh-context concern. **Gate ownership** never lives with the author: the overseer
-dispatches EVERY decision-scout, plan-critique, and code-review as a fresh sibling, and owns
-subscribe_pr_activity -> CI-green -> squash-merge, waiting in the **foreground** of its own turn
-(never `run_in_background`) and resuming the paused author via **SendMessage** on verdict. Full
-tables + the composed trampoline sequence: `overseer-dispatch.yaml#division_of_labor` /
-`#trampoline_sequence`.
+6b confirmation (distinct from the 3 GATE_REQUEST gates below) is satisfied directly via the
+author's own `AskUserQuestion` tool call -- no overseer mediation needed. **Gate ownership** never
+lives with the author: the overseer dispatches EVERY decision-scout, plan-critique, and code-review
+as a fresh sibling, and owns subscribe_pr_activity -> CI-green -> squash-merge, waiting in the
+**foreground** of its own turn (never `run_in_background`) and resuming the paused author via
+**SendMessage** on verdict. Full tables + the composed trampoline sequence:
+`overseer-dispatch.yaml#division_of_labor` / `#trampoline_sequence`.
 
 **Subagent-dispatch detection:** every author-subagent prompt opens with the exact SUBAGENT CONTEXT
 header from `overseer-dispatch.yaml#subagent_detection` (tool-roster absence + injected header +
@@ -152,14 +151,15 @@ before dispatch.
 Diagnose aliveness (author OR gate subagent) via `ls -laL` on the transcript symlink (TARGET mtime,
 not the symlink's own near-constant mtime): a **watchdog**/**heartbeat** check reads this against
 expected stage duration to avoid a false-stall false positive. On a confirmed death signature,
-**restart** the dead one (author or gate) fresh from the ledger's last hand-back `artifacts` (counts
-against the two-attempt cap). On an ambiguous **stall**, send exactly ONE SendMessage nudge before
-treating a further silent window as death. The **safety-net** watchdog is exactly one
-`create_trigger` at G0 and one `delete_trigger` at G3 -- a stall-sweeper only, never a CI-poll
-substitute (subagent death emits no event, unlike the already-covered CI/merge-conflict signals;
-never allowlist `mcp__Claude_Code_Remote__*`). Both re-dispatch paths are BOUNDED DETERMINISTIC
-recovery (Decision 55), never an LLM-judgement rescue. See `overseer-dispatch.yaml#liveness` /
-`#safety_net`.
+**restart** the dead one fresh from the ledger's last hand-back `artifacts` -- TWO SEPARATE, never
+conflated counters: an author death counts against its own two-attempt cap (content-quality
+signal); a gate death gets its OWN per-(gate,round) cap (pure infra flakiness). On an ambiguous
+**stall**, send exactly ONE SendMessage nudge before treating a further silent window as death. The
+**safety-net** watchdog is exactly one `create_trigger` at G0 and one `delete_trigger` at G3 -- a
+stall-sweeper only, never a CI-poll substitute (subagent death emits no event, unlike the
+already-covered CI/merge-conflict signals; never allowlist `mcp__Claude_Code_Remote__*`). Both
+re-dispatch paths are BOUNDED DETERMINISTIC recovery (Decision 55), never an LLM-judgement rescue.
+See `overseer-dispatch.yaml#liveness` / `#safety_net`.
 
 ## Bounded In-Loop Validation
 
@@ -204,9 +204,9 @@ session. See `overseer-dispatch.yaml#model_namespace_note`.
 
 - **Decision 67:** human-gated CC-web orchestration -- NOT `scripts/execute_recommendation.py`.
   Never consumes the rec queue; IMPLEMENTATION only.
-- **Decision 55/72:** BLOCKED/FAILED twice never gets an inline patch/silent retry -- routes to
+- **Decision 55/72:** BLOCKED/FAILED twice never an inline patch/silent retry -- routes to
   `executor-rca` and escalates.
 - **Decision 73:** see Lifecycle and Gates -- halt-on-open-ci_rca is a hard dispatch block.
 - **Decision 76:** the safety-net watchdog is the sole sanctioned trigger exception.
-- **Decision 90:** composes `/plan`/`/implement` as-is -- no new tier, no plan type, no bypass.
-- **Decision 115/87:** ledger durable-resume SoT precedent.
+- **Decision 90:** composes `/plan`/`/implement` as-is -- no new tier, plan type, or bypass.
+- **Decision 115/87:** ledger durable SoT precedent.
