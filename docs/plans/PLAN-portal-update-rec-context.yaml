@@ -1,0 +1,226 @@
+schema_version: 1
+slug: "portal-update-rec-context"
+intent: >-
+  Let agents correct a recommendation's context after filing, through the same governed portal
+  write path and the same write-time quality gate a new rec must clear -- keeping the executor's
+  primary planning field accurate as understanding evolves, which sharpens the recommendation
+  feedback loop at the heart of the self-improvement North Star.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-portal-update-rec-context.yaml
+phase: >-
+  Platform / operational data backbone -- ops portal agent surface (update_rec write path).
+  User-directed enhancement matching the soft-warn 'user_explicit_out_of_scope' / 'ad_hoc_rec'
+  exception (names no tier_item), so the Tier Item Freshness Gate is skipped.
+scope:
+  - file: scripts/ops_portal/cli.py
+    action: Modify
+    purpose: >-
+      Collect context (from the existing --context flag, dest rec_context) into the --update-rec
+      updates dict so `--update-rec rec-NNN --context "..."` writes new context; note in help that
+      --context also applies to --update-rec. The six existing update fields are unchanged.
+  - file: scripts/ops_data_portal.py
+    action: Modify
+    purpose: >-
+      In update_rec(), run the already-imported ops.yaml write-time content validators against
+      changed fields, scoped to an agent-authored content allowlist {context, title, acceptance,
+      file}, before Recommendation.model_validate(merged). A context edit then meets file_rec's
+      not-null + 80-stripped-char bar; status/resolution/execution updates are untouched. The
+      referential loud-fail and status check are preserved.
+  - file: tests/ops_data_portal/test_cli.py
+    action: Modify
+    purpose: Add test_cli_update_rec_context -- --update-rec ... --context routes new context into the write payload.
+  - file: tests/ops_data_portal/test_rec_write.py
+    action: Modify
+    purpose: >-
+      Add test_update_rec_context_replace (>=80-char happy path, asserts update_ops write carries
+      the new context) and test_update_rec_context_too_short_rejected (<80 stripped -> ValueError),
+      plus reaffirm the existing status+execution update path is unchanged.
+  - file: docs/contracts/ops_recommendations.yaml
+    action: Modify
+    purpose: >-
+      Update the context field's populated_by provenance note to record that update_rec now also
+      enforces the length gate, attributing enforcement to write_validators.py::_validate_context_length
+      (NOT rec_write_guidance.py, which is the Tier-A pre-write guidance surface). Provenance note
+      only -- not a second home for the rule (Decision 65/86).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNN --context "<>=80 stripped
+    chars>"` sets the rec's current-projection context to the new value by appending a new SCD2
+    version row (action=update_ops); the writer dedupes on id and the reader serves the latest.
+  - >-
+    update_rec() with a context of <80 stripped characters raises ValueError referencing context
+    (the same gate file_rec applies) -- the update path is not a quality-gate bypass.
+  - >-
+    Updates that touch only status / resolution / execution_* continue to succeed unchanged -- the
+    new content gate is scoped to the {context, title, acceptance, file} allowlist (Decision 63-safe).
+  - >-
+    docs/contracts/ops_recommendations.yaml context.populated_by reflects that update_rec enforces
+    the length gate.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: CLI routes --context into update_rec's updates for the --update-rec action.
+    command: bin/venv-python -m pytest tests/ops_data_portal/test_cli.py::TestCLI::test_cli_update_rec_context -q
+    expected: >-
+      PASS -- rc==0 and the mocked _ducklake_write receives the new context in the merged
+      ops_recommendations payload.
+    fix_if: >-
+      rc!=0 or the write payload lacks the new context -- the --update-rec loop did not collect
+      args.rec_context into updates.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      test_selector-expressible, but its standing regression home is the pytest suite that
+      validate.py already runs; a separate verifier-registry entry would duplicate that coverage.
+  - step: 2
+    phase: pre-deploy
+    action: update_rec enforces the not-null + 80-char content gate on a context edit and writes a valid one.
+    command: bin/venv-python -m pytest "tests/ops_data_portal/test_rec_write.py::TestUpdateRec::test_update_rec_context_too_short_rejected" "tests/ops_data_portal/test_rec_write.py::TestUpdateRec::test_update_rec_context_replace" -q
+    expected: >-
+      PASS -- a <80-stripped-char context raises ValueError matching "context"; a >=80-char context
+      is written via action=update_ops with the new value.
+    fix_if: >-
+      Short context is accepted (gate not wired into update_rec) or a valid context is rejected
+      (allowlist/validator misapplied).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      test_selector-expressible, but graduating it duplicates the standing pytest suite validate.py
+      already runs; the gate's SoT is ops.yaml (Decision 65), not a separate registry check.
+  - step: 3
+    phase: pre-deploy
+    action: The content gate does NOT newly reject status/execution-only updates (Decision 63 guard).
+    command: bin/venv-python -m pytest tests/ops_data_portal/test_rec_write.py::TestUpdateRec::test_update_rec_success -q
+    expected: PASS -- the pre-existing status+execution_result update path succeeds unchanged; no content validator is applied to those fields.
+    fix_if: The existing update test regresses -- the validation loop was not scoped to the {context, title, acceptance, file} allowlist.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Regression assertion on an existing test; its standing home is the pytest suite validate.py
+      runs. A registry check would duplicate it.
+  - step: 4
+    phase: pre-deploy
+    action: Fast presubmit tier is green -- coverage for both modified source files, SLOC within budget, no direct-write governance violation.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: exit 0 -- diff-aware coverage passes for cli.py and ops_data_portal.py, SLOC under 500 for both, and ops-governance write-source guards stay green.
+    fix_if: Coverage gap (extend tests), SLOC breach (decompose -- not expected, both far under budget), or a governance flag (a write bypassed the portal).
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - >-
+    SCD2 append-only, NOT CRUD -- a context update appends a new version row via
+    action=update_ops; the ducklake_writer dedupes on the business key (id) and the reader's
+    current projection serves the latest. The prior context version is retained in history; there
+    is no in-place mutation and no destructive overwrite (Decision 81 / CD.33, data-modeling-standard).
+  - >-
+    Single Portal Invariant -- all writes transit ops_data_portal -> ducklake_writer; never edit
+    logs/.recommendations-log.jsonl directly. The write fails loudly at the call site with no
+    offline outbox (Decision 84 I-2/I-4, Decision 55).
+  - Preserve referential existence -- update_rec still loud-fails an absent rec (CD.33 cl.8 / D-5).
+  - >-
+    Scope the update-time content gate to the {context, title, acceptance, file} allowlist so
+    status / resolution / execution_* updates are never newly rejected (Decision 63). The allowlist
+    EXCLUSION is the mechanism, not validator-absence: status carries a not_null write_time
+    validator (ops.yaml lines 104-106), so _load_write_time_validators DOES yield a status
+    validator -- it is kept un-applied by excluding status from the allowlist. Only resolution and
+    execution_* genuinely have no write_time validators.
+  - >-
+    Reuse the facade-imported validators (_load_write_time_validators, _validate_context_length,
+    already imported at ops_data_portal.py:48,104-108); add no new guidance plumbing -- Decision 66
+    Tier A is satisfied by the field-keyed get_rec_write_guidance()/--guidance surface.
+  - No rescue agents or workaround loops (Decision 55). Only modify files listed in scope.
+  - Every modified source file needs a test file with 100% coverage of new code (test_coverage_checker).
+context:
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND (2 NOTE flags, no BLOCK). CITE = Decision 66
+    (Precision Context Injection -- this extends its Tier-B write-time rejection to the update
+    path), Decision 84 (Single Portal / writer-owned write path), Decision 81 (ratifies CD.33
+    cl.8 -- referential existence + SCD2 append-only history that makes the current-state REPLACE
+    correct), Decision 124 (facade layout the change edits; validators are facade-imported and
+    patch-intercepted in tests).
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 rounds"
+  - >-
+    Decision 63 flag resolved in-design -- the content gate is scoped to the {context, title,
+    acceptance, file} allowlist. status carries a not_null write_time validator (ops.yaml 104-106)
+    but is excluded from the allowlist; resolution/execution_* have no write_time validators. So no
+    update that passes today (status/resolution/execution edits) is newly rejected -- the allowlist
+    exclusion, not validator absence, is what guarantees it.
+  - >-
+    Decision 66 Tier-A flag resolved by reuse -- get_rec_write_guidance()/--guidance is field-keyed
+    and already returns context semantics, so the update path inherits Tier-A guidance with no new
+    plumbing; the rejection message itself carries the semantic prompt. Deliberate, Decision-66-aware choice.
+  - >-
+    update_rec's Python API already merges arbitrary fields and is already used to edit context by
+    several callers -- jsonl_store.py:266 (postmortem dedup, appends and stays >=80 chars),
+    cost_reconciliation.py:478, convergence_health/code_drift.py:149/320 + escalate.py:208,
+    ci_rca/probe_health.py:238, and preflight/ci_rca_gauges.py:405 (context refreshes). This list is
+    illustrative, not exhaustive -- the safety property is STRUCTURAL: every such caller builds
+    context via the same builder that feeds its own file_rec >=80-char branch, so a <80 context
+    would already fail today and the new update gate rejects nothing these callers pass.
+    jsonl_store.py:214's reset path touches only execution_* (excluded). The gaps this plan closes
+    are (a) CLI exposure of --context on the update path and (b) applying the write-time content gate
+    on update so the edit is not a quality bypass. test_update_rec_context_replace is the generic
+    regression for this shape.
+  - >-
+    ci-rca HARD BLOCK deferral -- open rec-2795 (deterministic-guard action.yml, unescaped
+    ${{ github.workspace }}) is unrelated to this plan (different file, failure category, and
+    Decision) and fails all three Related-Work conditions. Deferred per human direction
+    (2026-07-23): another agent is actively resolving rec-2795.
+  - >-
+    Main advanced (0c03f49 -> 46b9fd9) during planning; scope files were not among the changed
+    files, so no assessment-time rebase is required. The /implement session auto-rebases before push.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/portal-update-rec-context-7ouwf2)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via decision-scout subagent (not read wholesale by the planner)
+  - All files in scope located and readable (cli.py, ops_data_portal.py, both test files, ops_recommendations.yaml)
+  - ops.yaml write-time validator set confirmed -- resolution/execution_* carry none
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/ops_portal/cli.py -- in the `if args.update_rec:` block, extend the field-collection so
+    context is picked up: keep the existing loop over [status, execution_result, execution_date,
+    execution_branch, execution_pr_url, resolution], then additionally map args.rec_context ->
+    updates["context"] when set (the flag's argparse dest differs from the JSON key). Add a help
+    note that --context also applies to --update-rec. Do not change the "at least one update field" guard.
+  - >-
+    scripts/ops_data_portal.py -- in update_rec(), after building `merged` and before
+    Recommendation.model_validate(merged), add a module-level frozenset
+    _UPDATE_CONTENT_VALIDATED_FIELDS = {"context", "title", "acceptance", "file"} and run:
+    for _col, _validator in _load_write_time_validators("ops_recommendations"): if _col in updates
+    and _col in _UPDATE_CONTENT_VALIDATED_FIELDS: _validator(merged[_col], _col). Keep the existing
+    invalid-status check and the referential loud-fail intact. Update the docstring to state the
+    update path enforces the same content gate as file_rec for the allowlisted fields.
+  - >-
+    tests/ops_data_portal/test_cli.py -- add test_cli_update_rec_context: patch _fetch_rec_from_reader
+    (return an existing valid rec), _ducklake_write, _sync_table, RECS_JSONL; run
+    main(["--update-rec", "rec-042", "--context", "<>=80 stripped chars>"]); assert rc==0 and the
+    _ducklake_write payload's context equals the new value.
+  - >-
+    tests/ops_data_portal/test_rec_write.py -- under TestUpdateRec add test_update_rec_context_replace
+    (>=80-char context -> update_ops write carries the new context) and
+    test_update_rec_context_too_short_rejected (context="too short" -> pytest.raises(ValueError,
+    match="context"), and assert _ducklake_write was not called).
+  - >-
+    docs/contracts/ops_recommendations.yaml -- amend the context column's populated_by to note that
+    update_rec also enforces the >=80-char gate, attributing enforcement to
+    write_validators.py::_validate_context_length (the rule's SoT stays ops.yaml; provenance note
+    only). Do NOT inline-fix the adjacent pre-existing drift on line 271 (context.description says
+    "Minimum 50 characters" but the enforced gate is >=80 stripped chars) -- file a rec instead (next step).
+  - >-
+    File a follow-up recommendation (scripts.ops_data_portal.file_rec; source injected from
+    AGENT_TYPE) for the pre-existing docs/contracts/ops_recommendations.yaml:271 drift --
+    context.description says "Minimum 50 characters" while the enforced gate is >=80 stripped chars
+    -- per the out-of-scope-bugs-become-recs rule (AGENTS.md). Do not inline-fix it in this plan's scope.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop
+    cleanly and RCA (Decision 55), never inline-patch around a gate.
+  - "Report: what was implemented and the verification results (each VP step's outcome)."
+work_areas: []
+rollback: >-
+  Revert the branch commits; update_rec and the CLI return to status/resolution/execution-only. No
+  data migration is needed -- SCD2 history is append-only, so any context edits filed before the
+  revert remain as superseded version rows in history and require no unwinding.
