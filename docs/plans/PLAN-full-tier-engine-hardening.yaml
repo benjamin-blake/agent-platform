@@ -278,6 +278,34 @@ verification_plan:
     hermetic: false
     graduation: not-applicable
   - step: 8
+    phase: pre-deploy
+    action: >-
+      Retirement confirmation -- the deleted tests/validate/test_budget_rec_filing.py is gone,
+      unreferenced outside the new mirror home, and both relocated classes are present in
+      tests/checks/test__budget_recs.py. Guards the silent-double-run gap: validate_test_coverage
+      (source->test existence only), validate_placement, and no-cross-test-imports do NOT flag a
+      stranded old test file, so a skipped delete would double-run TestBudgetBreachRecFiling and
+      TestBudgetRecFilingCiGuard from both locations undetected.
+    command: >-
+      test ! -f tests/validate/test_budget_rec_filing.py && ! rg -l
+      'test_budget_rec_filing|TestBudgetBreachRecFiling' tests/ scripts/ --glob
+      '!tests/checks/test__budget_recs.py' && rg -q 'class TestBudgetBreachRecFiling'
+      tests/checks/test__budget_recs.py && rg -q 'class TestBudgetRecFilingCiGuard'
+      tests/checks/test__budget_recs.py && echo "retirement confirmed: old file gone, no stray
+      refs, both classes relocated"
+    expected: 'Prints "retirement confirmed: old file gone, no stray refs, both classes relocated"; exit 0.'
+    fix_if: >-
+      The old file still exists, a test_budget_rec_filing / TestBudgetBreachRecFiling reference
+      lingers in tests/ or scripts/ (a stranded double-run source), or a relocated class is missing
+      from tests/checks/test__budget_recs.py -- complete the delete + relocate before merge.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time retirement / stale-reference sweep tied to this session's transient repo state (the
+      specific file deleted by this decomposition); it is not a durable regression guard, so a
+      permanent kernel command_exit_zero row asserting the file's non-existence would be meaningless
+      after this PR lands.
+  - step: 9
     phase: post-deploy
     action: Closure obligation -- confirm bundled recs close on merge via the Resolves trailer.
     command: >-
