@@ -497,3 +497,135 @@ class TestS3UploadSuccess:
         captured = capsys.readouterr()
         assert "uploaded to s3://some-bucket/ci/selection/abc123/selection-manifest.json" in captured.out
         assert len(put_calls) == 1
+
+
+class TestTestsTreeHelperImportClosure:
+    """VTS-01: a changed tests-tree helper (tests/fixtures/*.py) is now an import-closure candidate."""
+
+    def test_fixtures_helper_change_selects_direct_importer(self, tmp_path: Path) -> None:
+        """Covers both the ast.ImportFrom and ast.Import branches of _module_imports_any."""
+        _write(tmp_path, "tests/fixtures/ducklake_fakes.py", "def make_fake():\n    return 1\n")
+        _write(
+            tmp_path,
+            "tests/test_uses_fake.py",
+            "from tests.fixtures.ducklake_fakes import make_fake\n\ndef test_x():\n    make_fake()\n",
+        )
+        _write(
+            tmp_path,
+            "tests/test_bare_import.py",
+            "import tests.fixtures.ducklake_fakes\n\ndef test_x():\n    tests.fixtures.ducklake_fakes.make_fake()\n",
+        )
+        _write(tmp_path, "tests/test_unrelated.py", "def test_y():\n    assert True\n")
+        result = at.derive_affected_tests([("M", "tests/fixtures/ducklake_fakes.py")], repo_root=tmp_path)
+        assert "tests/test_uses_fake.py" in result["selected"]
+        assert result["manifest"]["provenance"]["tests/test_uses_fake.py"] == "import_closure_direct"
+        assert "tests/test_bare_import.py" in result["selected"]
+        assert "tests/test_unrelated.py" not in result["selected"]
+
+    def test_predicate_and_empty_channel_branches(self, tmp_path: Path) -> None:
+        rejected = ["tests/conftest.py", "tests/pkg/conftest.py", "tests/test_something.py", "scripts/foo.py"]
+        assert not any(at._is_changed_tests_helper_py(p) for p in rejected)
+        assert at._is_changed_tests_helper_py("tests/fixtures/helper.py")
+        assert at._tests_tree_import_closure_channel([], tmp_path) == set()
+        assert at._tests_tree_import_closure_channel(["tests/fixtures/ghost.py"], tmp_path) == set()
+
+
+class TestDeletedModuleStructuralRecall:
+    """VTS-02: a deleted module's path-mention-free importer is selected structurally."""
+
+    def test_deletion_selects_path_mention_free_importer_precisely(self, tmp_path: Path) -> None:
+        """Must not match doomed_sibling (trailing word char) or doomed.child (trailing '.')."""
+        _write(
+            tmp_path,
+            "tests/test_structural_importer.py",
+            "import scripts.doomed\n\ndef test_x():\n    scripts.doomed.run()\n",
+        )
+        _write(
+            tmp_path,
+            "tests/test_sibling.py",
+            "import scripts.doomed_sibling\n\ndef test_x():\n    scripts.doomed_sibling.run()\n",
+        )
+        _write(
+            tmp_path,
+            "tests/test_submodule_user.py",
+            "import scripts.doomed.child\n\ndef test_x():\n    scripts.doomed.child.run()\n",
+        )
+        result = at.derive_affected_tests([("D", "scripts/doomed.py")], repo_root=tmp_path)
+        assert "tests/test_structural_importer.py" in result["selected"]
+        assert result["manifest"]["provenance"]["tests/test_structural_importer.py"] == "data_edge"
+        assert "tests/test_sibling.py" not in result["selected"]
+        assert "tests/test_submodule_user.py" not in result["selected"]
+        assert at._deleted_py_dotted_patterns([("D", "docs/some.yaml")], tmp_path) == []
+
+
+class TestRootConftestForcesFullScope:
+    """VTS-03: a changed root/autouse conftest forces its subtree into protected/uncapped."""
+
+    def test_autouse_and_plain_sub_conftests_get_different_channel_treatment(self, tmp_path: Path) -> None:
+        """Autouse sub-conftest -> protected/uncapped; plain sub-conftest -> ordinary/cappable."""
+        _write(
+            tmp_path,
+            "tests/autouse_pkg/conftest.py",
+            "import pytest\n\n\n@pytest.fixture(autouse=True)\ndef _setup():\n    yield\n",
+        )
+        _write(tmp_path, "tests/autouse_pkg/test_a.py", "def test_a():\n    assert True\n")
+        _write(tmp_path, "tests/plain_pkg/conftest.py", "")
+        for i in range(3):
+            _write(tmp_path, f"tests/plain_pkg/test_{i}.py", f"def test_{i}():\n    assert True\n")
+        diff = [("M", "tests/autouse_pkg/conftest.py"), ("M", "tests/plain_pkg/conftest.py")]
+        result = at.derive_affected_tests(diff, repo_root=tmp_path, cap=2)
+        manifest = result["manifest"]
+        assert "tests/autouse_pkg/test_a.py" in result["selected"]
+        assert manifest["provenance"]["tests/autouse_pkg/test_a.py"] == "conftest_subtree_forced"
+        assert manifest["full_suite_forced"] is False
+        assert manifest["capped"] is True
+        assert len(manifest["deferred"]) == 2
+
+    def test_rec_2725_incident_replay_real_repo(self) -> None:
+        """rec-2725 victim (deferred pre-fix, past the 35-module alphabetical keep window)."""
+        result = at.derive_affected_tests([("M", "tests/conftest.py")])
+        manifest = result["manifest"]
+        assert manifest["capped"] is False
+        assert manifest["deferred"] == []
+        assert manifest["full_suite_forced"] is True
+        assert "tests/ops_data_portal/test_decisions.py" in result["selected"]
+
+
+class TestResidueChannelPriorityOrdering:
+    """VTS-04 M2: residue truncates by channel priority (mirror_map < conftest_subtree <
+    transitive), not alphabetically -- a higher-signal hit survives even sorting later."""
+
+    def test_full_priority_ordering_mirror_then_conftest_then_transitive(self, tmp_path: Path) -> None:
+        """cap=2 keeps mirror+conftest, defers transitive; cap=1 keeps mirror only -- proves the
+        strict pairwise ordering. Also carries the dec-142 coherence assertion (compute_escape_class
+        reads ONLY manifest['selected']/['deferred'] as flat, disjoint path-string lists)."""
+        from scripts.ops_portal.ci_rca_lifecycle import compute_escape_class
+
+        _write(tmp_path, "scripts/base.py", "def do():\n    pass\n")
+        _write(tmp_path, "scripts/mid.py", "from scripts.base import do\n\ndef mid():\n    do()\n")
+        _write(tmp_path, "tests/test_aaa_transitive.py", "from scripts.mid import mid\n\ndef test_x():\n    mid()\n")
+        _write(tmp_path, "tests/bbb_pkg/conftest.py", "")
+        _write(tmp_path, "tests/bbb_pkg/test_b.py", "def test_b():\n    assert True\n")
+        _write(tmp_path, "scripts/zzz_mirror_source.py", "def something():\n    pass\n")
+        _write(tmp_path, "tests/test_zzz_mirror_source.py", "def test_x():\n    assert True\n")
+        diff = [("M", "scripts/base.py"), ("M", "tests/bbb_pkg/conftest.py"), ("M", "scripts/zzz_mirror_source.py")]
+
+        with patch("scripts.test_coverage_checker.ROOT", tmp_path):
+            result_cap2 = at.derive_affected_tests(diff, repo_root=tmp_path, cap=2)
+            result_cap1 = at.derive_affected_tests(diff, repo_root=tmp_path, cap=1)
+
+        manifest = result_cap2["manifest"]
+        assert set(result_cap2["selected"]) == {"tests/test_zzz_mirror_source.py", "tests/bbb_pkg/test_b.py"}
+        assert manifest["provenance"]["tests/test_zzz_mirror_source.py"] == "mirror_map"
+        assert manifest["provenance"]["tests/bbb_pkg/test_b.py"] == "conftest_subtree"
+        assert manifest["deferred"] == ["tests/test_aaa_transitive.py"]
+
+        assert result_cap1["selected"] == ["tests/test_zzz_mirror_source.py"]
+        assert set(result_cap1["manifest"]["deferred"]) == {"tests/bbb_pkg/test_b.py", "tests/test_aaa_transitive.py"}
+
+        selected, deferred = manifest["selected"], manifest["deferred"]
+        assert isinstance(selected, list) and all(isinstance(x, str) for x in selected)
+        assert isinstance(deferred, list) and all(isinstance(x, str) for x in deferred)
+        assert set(selected).isdisjoint(deferred)
+        assert compute_escape_class(deferred[0] + "::test", manifest) == "capped"
+        assert compute_escape_class("tests/never_selected.py::test", manifest) == "no-edge"
