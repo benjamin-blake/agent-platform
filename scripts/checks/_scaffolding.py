@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from scripts.checks import _common
+from scripts.checks._budget_recs import _file_budget_breach_rec, _file_budget_bypass_rec  # noqa: F401
 from scripts.checks._terraform import (  # noqa: F401
     _TERRAFORM_ROOTS,
     _TRANSIENT_INIT_SIGNATURES,
@@ -95,123 +96,11 @@ def run_precommit_checks(failed: list[str], *, all_files: bool, files: list[str]
 def run_lint_checks(failed: list[str], files: list[str] | None = None) -> None:
     if files is not None and not files:
         return
-    targets: list[str] = [f for f in files if f.endswith(".py")] if files is not None else ["src/", "tests/"]
+    targets: list[str] = [f for f in files if f.endswith(".py")] if files is not None else ["src/", "tests/", "scripts/"]
     if not targets:
         return
     _common.invoke_step("Lint (ruff check)", [_common.PYTHON, "-m", "ruff", "check"] + targets, failed)
     _common.invoke_step("Format check (ruff format)", [_common.PYTHON, "-m", "ruff", "format", "--check"] + targets, failed)
-
-
-def _file_budget_breach_rec(elapsed_s: float, diff_manifest: list[str], dominant_phase: str | None) -> None:
-    elapsed_min = elapsed_s / 60
-    manifest_summary = ", ".join(diff_manifest[:20]) + ("..." if len(diff_manifest) > 20 else "")
-
-    if os.environ.get("CI") == "true":
-        # CI-guard (Decision 84 I-4): the pr-validate CI job installs requirements-fast.txt (no
-        # python-ulid) and has no AWS credentials, so file_rec's portal write can never complete
-        # there -- it previously raised a swallowed ModuleNotFoundError inside the bare except
-        # below. Skip the write and print the full diagnostic LOUDLY instead: this is a no-op-plus
-        # -loud-log, never a silent `if CI: return` (Decision 55) and never a buffered/replayed
-        # outbox entry (Decision 84 I-4 -- nothing is staged for later delivery).
-        message = (
-            f"WARNING: fast-tier budget breach ({elapsed_min:.1f}m, limit 5m): dominant_phase="
-            f"{dominant_phase or 'unknown'}, diff ({len(diff_manifest)} files): {manifest_summary}. Rec NOT filed (CI)."
-        )
-        print(message, file=sys.stderr)
-        # CI-native diagnosability (no portal, no outbox -- Decision 84 I-4): mirror to the job's
-        # step summary; falls back to the stderr print above if unset.
-        if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
-            with open(summary_path, "a", encoding="utf-8") as f:
-                f.write(f"\n## Fast-tier budget breach\n\n{message}\n")
-        return
-
-    try:
-        from scripts.ops_data_portal import file_rec  # noqa: PLC0415
-
-        branch_r = _common.run(
-            ["git", "branch", "--show-current"], capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT
-        )
-        branch = branch_r.stdout.strip() or "unknown"
-        context = (
-            f"Fast-tier budget breach: {elapsed_min:.1f} min elapsed (limit 5 min). "
-            f"Branch: {branch}. Dominant phase: {dominant_phase or 'unknown'}. "
-            f"Diff manifest ({len(diff_manifest)} files): {manifest_summary}. "
-            f"Investigate which check caused the overrun and move it to the full tier or optimise it."
-        )
-        file_rec(
-            {
-                "title": f"Fast-tier budget breach ({elapsed_min:.1f} min) on {branch}",
-                "file": "scripts/validate.py",
-                "status": "open",
-                "source": "budget_breach",
-                "effort": "S",
-                "priority": "Medium",
-                "context": context,
-                "acceptance": "bin/venv-python -m scripts.validate --pre",
-                "risk": "low",
-                "automatable": False,
-            }
-        )
-    except Exception:  # noqa: BLE001
-        import traceback  # noqa: PLC0415
-
-        print(
-            f"WARNING: budget breach rec filing failed (NOT filed; no outbox -- re-file manually): {traceback.format_exc()}",
-            file=sys.stderr,
-        )
-
-
-def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], reason: str | None) -> None:
-    manifest_summary = ", ".join(diff_manifest[:20]) + ("..." if len(diff_manifest) > 20 else "")
-    elapsed_part = f"{elapsed_s / 60:.1f} min" if elapsed_s is not None else "unknown"
-
-    if os.environ.get("CI") == "true":
-        # Defensive-only: validate.py's CI guard already hard-rejects --ignore-budget when
-        # CI=="true" before this helper can be reached in the integrated flow. Kept for parity
-        # with _file_budget_breach_rec and to cover any direct/test invocation (Decision 55: no
-        # silent skip, never a buffered outbox -- Decision 84 I-4).
-        print(
-            f"WARNING: fast-tier budget bypass rec NOT filed (CI environment, no portal access): "
-            f"Elapsed: {elapsed_part}. Reason: {reason or 'none provided'}. "
-            f"Diff manifest ({len(diff_manifest)} files): {manifest_summary}.",
-            file=sys.stderr,
-        )
-        return
-
-    try:
-        from scripts.ops_data_portal import file_rec  # noqa: PLC0415
-
-        branch_r = _common.run(
-            ["git", "branch", "--show-current"], capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT
-        )
-        branch = branch_r.stdout.strip() or "unknown"
-        context = (
-            f"Fast-tier budget assertion bypassed via --ignore-budget on branch {branch}. "
-            f"Elapsed: {elapsed_part}. Reason: {reason or 'none provided'}. "
-            f"Diff manifest ({len(diff_manifest)} files): {manifest_summary}. "
-            f"Repeated bypass (>= 3 in 7 days) triggers a soft alert in session_preflight."
-        )
-        file_rec(
-            {
-                "title": f"Fast-tier budget bypassed on {branch}",
-                "file": "scripts/validate.py",
-                "status": "open",
-                "source": "budget_bypass",
-                "effort": "S",
-                "priority": "Low",
-                "context": context,
-                "acceptance": "bin/venv-python -m scripts.validate --pre",
-                "risk": "low",
-                "automatable": False,
-            }
-        )
-    except Exception:  # noqa: BLE001
-        import traceback  # noqa: PLC0415
-
-        print(
-            f"WARNING: budget bypass rec filing failed (NOT filed; no outbox -- re-file manually): {traceback.format_exc()}",
-            file=sys.stderr,
-        )
 
 
 def _mirror_budget_notice_to_summary(title: str, message: str) -> None:
@@ -225,6 +114,17 @@ def _mirror_budget_notice_to_summary(title: str, message: str) -> None:
 def _build_unit_test_cmd() -> list[str]:
     """Return the pytest command for the 'Unit tests + coverage' step.
 
+    VTS-10/13 (audit validate-test-suite-4df4d48): full-tier parity with the fast tier's
+    _PYTEST_FLAGS -- adds -n auto (xdist parallelism) and the SAME fixed --randomly-seed in place
+    of "last" (rec-2653: a fixed integer seed overrides pyproject.toml's addopts
+    "--randomly-seed=last" so every -n auto worker resolves an identical collection order on a
+    cold .pytest_cache; validate_hermeticity_flags' widened guard and VP step 6's 5x consecutive
+    xdist-collection check both key off this same fixed seed) and --timeout/--timeout-method
+    (120s -- wider than the fast tier's 60s, since the full suite includes heavier/
+    integration-adjacent units the fast tier's requirements-fast.txt excludes). This is a
+    fast->full parity fix, not a double-add: distinct from A.1/Decision 153's
+    _mirror_budget_notice_to_summary and the budget-assertion branch, left untouched here.
+
     --junitxml (ci-rca-identity-lifecycle): emits a junit XML report both tiers' full-suite run
     can hand to scripts.ci_rca.evidence for v2 fingerprint cause-group parsing on a post-merge
     failure. Additive to the hermeticity flags (validate_hermeticity_flags checks presence only).
@@ -237,10 +137,15 @@ def _build_unit_test_cmd() -> list[str]:
         "-v",
         "-m",
         "not integration",
+        "-n",
+        "auto",
+        "--timeout",
+        "120",
+        "--timeout-method=thread",
+        f"--randomly-seed={_PYTEST_RANDOMLY_SEED}",
         "--cov=src",
         "--cov-report=term-missing",
         "--disable-socket",
-        "--randomly-seed=last",
         "--junitxml=logs/debug/pytest-junit.xml",
     ]
 

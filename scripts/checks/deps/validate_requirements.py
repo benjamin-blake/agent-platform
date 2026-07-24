@@ -35,6 +35,7 @@ def validate_requirements(failed: list[str]) -> None:
         return
 
     errors: list[str] = []
+    warnings: list[str] = []
     for pkg in packages:
         # Validate package name is safe before issuing subprocess (defence-in-depth)
         if not re.match(r"^[A-Za-z0-9_-]+$", pkg):
@@ -53,14 +54,23 @@ def validate_requirements(failed: list[str]) -> None:
         if result.returncode != 0:
             stderr = result.stderr.lower()
             if any(word in stderr for word in ("connection", "timeout", "network", "unreachable")):
-                errors.append(f"{pkg} — network error checking PyPI (retry or check connectivity)")
+                # VTS-14 (audit validate-test-suite-4df4d48): a PyPI/network outage must not
+                # redden post-merge main (the wedging class this finding removes) -- demote to a
+                # loud warning. Typo / genuinely-not-found detection below is unaffected and stays
+                # a hard failure.
+                warnings.append(f"{pkg} — network error checking PyPI (retry or check connectivity)")
             else:
                 errors.append(f"{pkg} — not found on PyPI (pip index versions returned non-zero)")
+
+    if warnings:
+        print("Requirements validation warnings (network -- not treated as failures):")
+        for w in warnings:
+            print(f"  - {w}")
 
     if errors:
         print("Requirements validation errors:")
         for e in errors:
             print(f"  - {e}")
         failed.append("Requirements validation")
-    else:
+    elif not warnings:
         print(f"All {len(packages)} packages in requirements.txt found on PyPI.")

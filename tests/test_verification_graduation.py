@@ -32,6 +32,7 @@ _GRADUATION_DEPS = (
     "scripts/checks/__init__.py",
     "scripts/checks/_common.py",
     "scripts/checks/_scaffolding.py",
+    "scripts/checks/_budget_recs.py",
     "scripts/checks/_terraform.py",
     "scripts/checks/registry.py",
     "scripts/checks/verification/__init__.py",
