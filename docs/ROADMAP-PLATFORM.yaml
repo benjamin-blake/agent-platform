@@ -1206,8 +1206,11 @@ candidate_decisions:
       links, or a non-internet-facing front) -- an added defense-in-depth layer on the same
       pattern, a conscious pause rather than an auto-inherited grant.
 
-      Advice-consulted (model:fable) 2026-07-24; kept UNRATIFIED (Decision 105) -- realizes only
-      when T2.51 is built (deferred_post_mvp).
+      Advice-consulted (model:fable) 2026-07-24; kept UNRATIFIED (Decisions 105, 150) -- CD.41 is a
+      durable, reversal-relevant commitment (not a deflected class under Decision 150's significance
+      bar), correctly routed as a pending CD that ratifies to a numbered Decision when T2.51 is
+      built (deferred_post_mvp). The numbered-Decision-now vehicle (Decisions 126/144) is not taken
+      because T2.51, its sole tenant, is deferred.
     gates: [T2.51]
     state: pending
     filed_via: pending_log_decision_lambda
@@ -1216,13 +1219,19 @@ candidate_decisions:
         In-AWS signing only: the presigned URL is minted by an in-account Lambda using its
         execution-role STS creds; the Cloudflare Worker / Access config holds ZERO AWS material.
       - >-
-        Dual enforcement: the in-AWS endpoint rejects any request lacking a valid
-        Cf-Access-Jwt-Assertion (verified against the Access JWKS + AUD), so AWS is a real gate
-        even if the redirect URL leaks.
+        Two URLs, two protections (do not conflate). The Access-gated Lambda ENDPOINT is JWT
+        dual-gated: the Lambda independently validates the Cf-Access-Jwt-Assertion (JWKS signature;
+        pin iss = Access team domain + aud; enforce RS256 / reject alg:none; check exp) and rejects
+        anything without it, so a leaked endpoint URL is not a bypass. If the endpoint is a Function
+        URL with AuthType:NONE, lock its origin to Cloudflare (IP-allowlist / Tunnel / mTLS) as
+        defense-in-depth.
       - >-
-        Presigned GET: TTL <= 5 min, single self-contained no-store object; bucket
-        Block-Public-Access stays on. A CloudTrail S3 data-event alert on the dashboard prefix
-        flags unexpected principals.
+        The minted presigned S3 URL is a self-authenticating BEARER CAPABILITY -- S3 honours it
+        with no Access JWT, and Cloudflare observes it once in the 302 Location header (replayable
+        until expiry by any observer). Its ONLY controls are TTL <= 5 min + single-object + no-store
+        + Block-Public-Access + a CloudTrail S3 data-event alert on the dashboard prefix -- NOT the
+        JWT. The presign Lambda's execution role may s3:GetObject the dashboard prefix ONLY; served
+        objects carry Referrer-Policy: no-referrer (+ CSP) to curb Referer leakage.
       - "Cloudflare Access app: single allowed email, short session, Access logging enabled."
       - >-
         Extending the pattern to catastrophic-consequence data (trading alpha / performance /
@@ -1231,7 +1240,7 @@ candidate_decisions:
       - >-
         Reversal: fall back to an AWS-native front (CloudFront + Cognito / Amplify) -- a read-only
         projection, so migration is plumbing with zero data movement. Cites Decisions 73, 83, 101,
-        100, 75, 55, 98, 144, 126, 105.
+        100, 75, 55, 98, 144, 126, 105, 150.
 
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
@@ -5288,8 +5297,8 @@ tier_items:
       A private, unified view of variable operational vendor spend (AWS + Anthropic API + DeepSeek
       API + Neon) so the platform's cost structure stays legible as it scales. Confidential cost
       data RESTS in the personal AWS account (private S3); the dashboard is a read-only PROJECTION.
-      The bookmarkable experience (open costs.theseus.support -> authenticate -> view) uses
-      Cloudflare Access ONLY for auth: an in-AWS Lambda verifies the Access token and mints a
+      The bookmarkable experience (open a private Access-gated subdomain of theseus.support ->
+      authenticate -> view) uses Cloudflare Access ONLY for auth: an in-AWS Lambda verifies the Access token and mints a
       <=5-min presigned GET (its own execution-role creds), and the browser loads the artifact
       DIRECTLY from S3 -- no AWS credential leaves AWS and the payload never transits Cloudflare
       (the CD.41 invariant). The public theseus.support / Semanto surface stays public and never
@@ -5311,26 +5320,30 @@ tier_items:
           A net-new read-only AWS cost role granting ce:GetCostAndUsage is provisioned in
           terraform/personal (gated apply; IAM-sensitive, Decision 98/144) and can read the
           month-to-date bill by service; no measured cost figure is ever committed to the repo
-          (Decisions 73/83/101). Open question at build: whether the ce: role falls under the
-          Decision 129/144 read-coverage verifier.
+          (Decisions 73/83/101). A fresh source Decision records the programmatic AWS-infra Cost
+          Explorer read (a new source choice, NOT a CD.28 reversal). Open question at build: whether
+          the ce: role falls under the Decision 129/144 read-coverage verifier.
         status: open
       - id: c2
         text: >-
           A scheduled daily job pulls AWS Cost Explorer plus the per-vendor billing/usage APIs
           (Anthropic usage API; DeepSeek; Neon via its billing/management HTTPS API, NEVER a
-          DuckLake catalog query -- Decision 88) into a private-S3 snapshot at grain
-          one-row-per-vendor-per-day (append-only, event-time-partitioned). A stale/absent snapshot
-          or an unparseable source fails loud / files a rec, never silently shows stale-as-current
+          DuckLake catalog query -- Decision 88) into a private-S3 snapshot at grain one row per
+          vendor per cost-date per as-of/pull-date (append-only, event-time-partitioned; CE
+          current-month figures are provisional and get restated). A stale/absent snapshot or an
+          unparseable source fails loud / files a rec, never silently shows stale-as-current
           (Decision 55/62)
         status: open
       - id: c3
         text: >-
           A rendered static projection (spend by vendor AND its trend over time) is served via the
-          CD.41 pattern: Cloudflare Access authenticates costs.theseus.support; an in-AWS Lambda
-          verifies the Access JWT and mints a <=5-min presigned GET; the browser loads directly
-          from S3. No AWS credential leaves AWS; the payload never transits Cloudflare; the Lambda
-          dual-gates on the JWT. The renderer is unconstrained (static pre-rendered is the MVP
-          instance, not a pattern constraint)
+          CD.41 pattern: Cloudflare Access authenticates a private Access-gated subdomain of
+          theseus.support; an in-AWS Lambda verifies the Access JWT (JWKS/iss/aud/exp) and mints a
+          <=5-min single-object presigned GET (a TTL-bounded bearer capability -- S3 does not check
+          the JWT). The browser loads directly from S3. No AWS credential leaves AWS; the payload
+          never transits Cloudflare (only the short-lived capability pointer does, once). The
+          renderer is unconstrained (static pre-rendered is the MVP instance, not a pattern
+          constraint)
         status: open
       - id: c4
         text: >-

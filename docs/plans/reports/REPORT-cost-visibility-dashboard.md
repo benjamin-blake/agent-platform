@@ -59,8 +59,9 @@ time; it is not worth building to itemise today's flat spread of single-digit-do
 - **Live:** the monthly `cost_reconciliation` job (`scripts/cost_reconciliation.py` +
   `config/agent/cost_reconciliation.yaml` + `.github/workflows/cost-reconciliation.yml`). It is an
   **anomaly alarm** (alarm-not-gate, Decision 55): it ingests a **manually-exported** USD invoice
-  snapshot from `s3://.../cost-invoices/<month>.json`, evaluates five thresholds, and files/closes
-  recs. It models DeepSeek + Anthropic + AWS; it does **not** model Neon.
+  snapshot from `s3://.../cost-invoices/<month>.json`, evaluates its cost-reevaluation triggers
+  (five, plus a telemetry-discrepancy check pending T2.36), and files/closes recs. It models
+  DeepSeek + Anthropic + AWS; it does **not** model Neon.
 - **Not live:** `terraform/cost_monitoring.tf` (AWS Budgets + Cost Anomaly Detection + a CloudWatch
   cost dashboard) sits at the **legacy repo root** and is **not applied** (only `terraform/personal/`
   is live). So there are currently **no** AWS-native budget or anomaly alerts running, and the
@@ -115,8 +116,12 @@ data and every credential inside AWS**. It is codified as **CD.41** (Section 5.3
    APIs (Anthropic usage API; DeepSeek; **Neon via its billing/management HTTPS API, not a catalog
    query**). Provider credentials live in Secrets Manager (the T0.4 pattern).
 3. **Snapshot (grain-first)** - the pulled figures append to a private-S3 store, **grain: one row
-   per vendor per day**, append-only, event-time-partitioned. Retention keeps a rolling window so
-   the projection can show a **trend** (see 5.2), not just a point-in-time slice. Never the repo.
+   per vendor per cost-date per as-of/pull-date**, append-only, event-time-partitioned. The
+   as-of/pull-date is load-bearing: Cost Explorer current-month figures are *provisional* and get
+   restated as usage finalizes, so a plain "one row per vendor per day" would force either a
+   duplicate row (breaking the grain) or a mutation (breaking append-only). Retention keeps a
+   rolling window so the projection can show a **trend** (see point 4), not just a point-in-time
+   slice. Never the repo.
 4. **Projection** - a renderer turns the snapshot history into a small static dashboard: spend by
    vendor **and its trend over time** (the two-whales lens of Section 2). Loud-fail, never silent
    substitution (Decision 55): each line is labelled by source (`measured` vs
@@ -135,19 +140,34 @@ the pattern.
 
 ### 5.2 Access plane (the bookmarkable experience) - option 2b
 
-- `costs.theseus.support` (a private subdomain, separate from the public marketing site) is gated
-  by **Cloudflare Access** (Zero-Trust: the owner's single email via Google / one-time-PIN).
-- Behind it, an **in-AWS Lambda** verifies the `Cf-Access-Jwt-Assertion` against the Access JWKS +
-  AUD, then mints a **<=5-minute presigned S3 GET** using its **own execution-role STS creds** and
-  302-redirects. The browser fetches the artifact **directly from S3** (AWS <-> browser).
+- A **private, Cloudflare-Access-gated subdomain** of theseus.support (e.g. a `costs.*` host,
+  separate from the public marketing site) is gated by **Cloudflare Access** (Zero-Trust: the
+  owner's single email via Google / one-time-PIN).
+- Behind it, an **in-AWS Lambda** verifies the `Cf-Access-Jwt-Assertion` (validate the signature
+  against the Access JWKS; pin `iss` = the Access team domain and `aud` = the app AUD; enforce
+  RS256 / reject `alg:none`; check `exp`), then mints a **<=5-minute presigned S3 GET** using its
+  **own execution-role STS creds** (scoped to the dashboard prefix only) and 302-redirects. The
+  browser fetches the artifact **directly from S3** (AWS <-> browser).
 - **No AWS credential ever rests outside AWS.** The Lambda signs in-account; Cloudflare holds zero
-  AWS material. **Dual enforcement:** the Lambda independently rejects any request without a valid
-  Access JWT, so AWS is a real gate even if the redirect URL leaks - Cloudflare is UX, not the sole
-  control.
+  AWS material.
 
-Experience: bookmark `costs.theseus.support`, open, Access login (cached thereafter), view. The
-confidential figures **never transit Cloudflare** - it sees the auth event and a short-lived,
-single-object, read-only capability redirect, nothing more.
+**Two URLs, two different protections - do not conflate:**
+- The **Lambda endpoint** (the Access-gated host) is **JWT dual-gated**: the Lambda independently
+  rejects any request without a valid Access JWT, so a leaked *endpoint* URL is not a bypass and
+  AWS is a real gate even if Cloudflare's decision is wrong. (If the endpoint is a Function URL
+  with `AuthType: NONE` so Cloudflare can reach it, the JWT is then the *sole* barrier on its
+  `*.on.aws` name - so lock the origin to Cloudflare as defense-in-depth: IP-allowlist its ranges,
+  a Cloudflare Tunnel, or mTLS.)
+- The **minted presigned S3 URL** is a **self-authenticating bearer capability**: S3 honours it
+  with **no** Access JWT. Cloudflare necessarily observes it once in the 302 `Location` header, and
+  anyone who observes it (edge, browser history, Referer) can replay the single-object GET until it
+  expires. Its only controls are **TTL <= 5 min + single-object + `no-store` + Block-Public-Access
+  + a CloudTrail data-event alert** - NOT the JWT.
+
+Experience: bookmark the host, open, Access login (cached thereafter), view. The confidential
+**figures** never transit Cloudflare; what passes through it, once, is a short-lived, single-use
+capability *pointer* to them - bounded as above, and acceptable only because Cloudflare is already
+the trusted auth front (Fable ranked this residual negligible: minutes, one object, read-only).
 
 ### 5.3 The boundary carve-out (CD.41) - fenced on the invariant, not the data
 
@@ -161,6 +181,10 @@ dashboard is its first tenant), not a cost-only exception that would force a sec
 > AWS independently re-verifies the Access token. Any implementation breaking (a)/(b)/(c) - a
 > Cloudflare Worker holding an AWS key, Cloudflare terminating TLS on the payload ("2a"), or the
 > data resting on Cloudflare - is out of scope and requires a fresh Decision.
+
+Invariant (b) is about the confidential **payload** (which flows AWS->browser and never transits
+Cloudflare); the short-lived capability *pointer* does pass through Cloudflare once (5.2), bounded
+by TTL/scope. CD.41 (a)'s "rests" wording is load-bearing and must not be loosened to "transits".
 
 Because the fence is on the safe *shape*, the precedent cannot be cited to justify the unsafe
 variants for hotter data. The one thing genuinely different about higher-consequence data (trading
@@ -189,9 +213,12 @@ plumbing with zero data movement.
 | A0 - private S3 + presigned/console only | AWS | Degenerate fallback - no bookmarkable URL; presigned links under temp creds expire in hours. |
 
 **Open question (build time):** a multi-file static-site renderer needs its serving reconciled
-with invariant (b) - the clean single-object presigned redirect does not cover a multi-asset site,
-so a multi-file build is served from a direct-from-AWS origin (e.g. CloudFront/OAC) that still
-keeps the payload off Cloudflare. Resolve when the renderer is chosen; it does not change CD.41.
+with invariant (b), and the tension is real, not just deferred. The single-object presigned
+redirect does not cover a multi-asset site; but the naive fix (CloudFront/OAC *behind* Cloudflare
+Access) **breaks (b)** - Cloudflare would proxy every asset byte. Keeping (b) forces the asset
+origin onto a *non-Cloudflare-proxied* hostname, which then loses the Access gate and requires
+re-implementing auth at the edge (a CloudFront Function JWT check, or signed cookies). Resolve when
+the renderer is chosen; the invariant, not the mechanism, is what CD.41 fixes.
 
 ### 5.5 Side-benefit
 
@@ -238,7 +265,10 @@ tracking of the Claude Code subscription.
 
 Public-content / confidential-data boundary: **73, 83, 101** (curated public portal, **111/CD.20**)
 - no cost figures in the repo; the public domain never carries cost data. Boundary carve-out for
-the private dashboard: **CD.41** (new, invariant-fenced, reversible; Fable-advice-consulted).
+the private dashboard: **CD.41** (new, invariant-fenced, reversible; Fable-advice-consulted), routed
+as a pending CD that ratifies to a numbered Decision at build per Decisions **105/150** (the
+significance bar - CD.41 is a durable, reversal-relevant commitment, and Decision **126** already
+contemplates scoping a managed third party against the boundary).
 Agent-first / prose taxonomy: **86, 127** (this report is the allowed spike-note class; forward
 intent lives in T2.51, not restated here). Deferred-item governance: **93** (activation trigger is
 narrative, not a `depends_on` edge). Structured criteria: **136/CD.39**. Roadmap ceiling: **114**.
