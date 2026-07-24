@@ -64,6 +64,17 @@ scope:
       against recs_rows_cache, store it in the report dict, and print a one-line breach-rate
       summary (count + dominant phase). ~7 SLOC added (488 -> ~495, stays under 500 -- no
       decomposition needed).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Repoint the 3 graduated-check rows whose check_spec.node_id hardcodes the retired
+      tests/validate/test_budget_rec_filing.py (check_ids budget-breach-priority-survives-real-validator,
+      budget-bypass-priority-survives-real-validator, fast-tier-budget-rec-filing-ci-guard). Without
+      this they go silently dangling on delete -- validate_verification_registry re-executes only
+      newly-ADDED check_ids (matches by check_id), and guard_target-driven orphan detection is T3.7
+      deferred_post_mvp. node_id file prefix -> tests/checks/test__budget_recs.py::; guard_target ->
+      scripts/checks/_budget_recs.py (the file the guarded logic moves to). config/agent is not
+      Lambda-bundled (config/CLAUDE.md), so no deploy step -- V2 unaffected.
   - file: tests/checks/test__budget_recs.py
     action: Create
     purpose: >-
@@ -144,6 +155,12 @@ acceptance_criteria:
     decomposition landed with no config/sloc_budgets.yaml raise), and every existing
     patch("validate._file_budget_breach_rec")/patch("validate._file_budget_bypass_rec") target and
     `from scripts.checks._scaffolding import _file_budget_breach_rec` import still resolves.
+  - >-
+    config/agent/verification_registry/registry.yaml contains no tests/validate/test_budget_rec_filing.py
+    reference: the 3 graduated rows (budget-breach-priority-survives-real-validator,
+    budget-bypass-priority-survives-real-validator, fast-tier-budget-rec-filing-ci-guard) have node_id
+    repointed to tests/checks/test__budget_recs.py:: and guard_target repointed to
+    scripts/checks/_budget_recs.py, with check_ids and guard_symbols unchanged.
   - >-
     Five consecutive `pytest tests/ -n auto --randomly-seed=20260710 --collect-only -m "not
     integration"` runs complete with exit 0 and none prints "Different tests were collected between
@@ -280,31 +297,34 @@ verification_plan:
   - step: 8
     phase: pre-deploy
     action: >-
-      Retirement confirmation -- the deleted tests/validate/test_budget_rec_filing.py is gone,
-      unreferenced outside the new mirror home, and both relocated classes are present in
-      tests/checks/test__budget_recs.py. Guards the silent-double-run gap: validate_test_coverage
-      (source->test existence only), validate_placement, and no-cross-test-imports do NOT flag a
-      stranded old test file, so a skipped delete would double-run TestBudgetBreachRecFiling and
-      TestBudgetRecFilingCiGuard from both locations undetected.
+      Retirement + registry-repoint confirmation -- the deleted tests/validate/test_budget_rec_filing.py
+      is gone and unreferenced in tests/+scripts/, both relocated classes are present in
+      tests/checks/test__budget_recs.py, AND config/agent/verification_registry/registry.yaml no longer
+      references the retired path (its 3 graduated rows are repointed). Guards two silent gaps at once:
+      the double-run gap (validate_test_coverage checks source->test existence only; validate_placement
+      and no-cross-test-imports do not flag a stranded old test file) and the dangling-node_id gap
+      (validate_verification_registry re-executes only newly-ADDED check_ids, so a stale node_id is
+      never re-run).
     command: >-
       test ! -f tests/validate/test_budget_rec_filing.py && ! rg -l
       'test_budget_rec_filing|TestBudgetBreachRecFiling' tests/ scripts/ --glob
-      '!tests/checks/test__budget_recs.py' && rg -q 'class TestBudgetBreachRecFiling'
+      '!tests/checks/test__budget_recs.py' && ! rg -q 'tests/validate/test_budget_rec_filing\.py'
+      config/agent/verification_registry/registry.yaml && rg -q 'class TestBudgetBreachRecFiling'
       tests/checks/test__budget_recs.py && rg -q 'class TestBudgetRecFilingCiGuard'
-      tests/checks/test__budget_recs.py && echo "retirement confirmed: old file gone, no stray
-      refs, both classes relocated"
-    expected: 'Prints "retirement confirmed: old file gone, no stray refs, both classes relocated"; exit 0.'
+      tests/checks/test__budget_recs.py && echo "retirement + registry repoint confirmed"
+    expected: 'Prints "retirement + registry repoint confirmed"; exit 0.'
     fix_if: >-
-      The old file still exists, a test_budget_rec_filing / TestBudgetBreachRecFiling reference
-      lingers in tests/ or scripts/ (a stranded double-run source), or a relocated class is missing
-      from tests/checks/test__budget_recs.py -- complete the delete + relocate before merge.
+      The old file still exists, a test_budget_rec_filing / TestBudgetBreachRecFiling reference lingers
+      in tests/ or scripts/, a tests/validate/test_budget_rec_filing.py path still appears in the
+      verification registry (a dangling graduated node_id), or a relocated class is missing from
+      tests/checks/test__budget_recs.py -- complete the delete + relocate + registry repoint before merge.
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      A one-time retirement / stale-reference sweep tied to this session's transient repo state (the
-      specific file deleted by this decomposition); it is not a durable regression guard, so a
-      permanent kernel command_exit_zero row asserting the file's non-existence would be meaningless
-      after this PR lands.
+      A one-time retirement / stale-reference + registry-repoint sweep tied to this session's transient
+      repo state (the file deleted and the 3 rows repointed by this decomposition); it is not a durable
+      regression guard, so a permanent kernel command_exit_zero row asserting the old path's absence
+      would be meaningless after this PR lands.
   - step: 9
     phase: post-deploy
     action: Closure obligation -- confirm bundled recs close on merge via the Resolves trailer.
@@ -360,6 +380,19 @@ context:
     VTS-20 dedupe prior art: Decision 142 (CI-RCA reader-verb dedupe, deterministic-in-code) -- the
     closest structural precedent for a non-LLM reader-based update-instead-of-insert. Update path
     files nothing new (matches the human's scope note).
+  - >-
+    Verification-registry coupling (round-2 critique fix): 3 graduated rows in
+    config/agent/verification_registry/registry.yaml hardcode the retired test path
+    tests/validate/test_budget_rec_filing.py and would go silently dangling on delete --
+    validate_verification_registry re-executes only newly-ADDED check_ids (confirmed
+    scripts/checks/verification/validate_verification_registry.py:34-48 _added_entries matches by
+    check_id), and guard_target-driven re-execution / orphan detection is T3.7 deferred_post_mvp. Fix:
+    repoint node_id -> tests/checks/test__budget_recs.py and guard_target -> scripts/checks/_budget_recs.py.
+    guard_target DECISION (judgment): it moves to _budget_recs.py because guard_target is provenance for
+    the source whose behavior the check guards, and the guarded logic (_file_budget_breach_rec /
+    _file_budget_bypass_rec + the VTS-20 dedupe) physically relocates there; leaving it on the facade
+    _scaffolding.py would decouple the guard from the code it protects and miss it once T3.7 wires
+    guard_target-driven re-execution. guard_symbol is unchanged (symbol names preserved across the move).
   - >-
     ci_rca deferral (planning HARD-BLOCK exception): the one open ci_rca rec, rec-2836 (terraform
     init kislerdm/neon 504 flake on scripts/checks/_terraform.py, Critical), is a distinct
@@ -441,6 +474,18 @@ execution_steps:
     (network-demotion + not-found); create tests/session/preflight/test_alerts.py (breach summary);
     create tests/validate/test_lint_targets.py (scripts/ in run_lint_checks targets); adjust
     tests/validate/test_budget.py only as validate_placement/validate_test_coverage require.
+  - >-
+    config/agent/verification_registry/registry.yaml (Modify): repoint the 3 graduated rows that
+    reference the retired test file. For check_ids budget-breach-priority-survives-real-validator,
+    budget-bypass-priority-survives-real-validator, and fast-tier-budget-rec-filing-ci-guard: (a) change
+    each check_spec.node_id file prefix from tests/validate/test_budget_rec_filing.py:: to
+    tests/checks/test__budget_recs.py:: (keep the ::Class::method segments verbatim -- the relocation
+    MUST preserve class names TestBudgetBreachRecFiling / TestBudgetRecFilingCiGuard and the 3 referenced
+    methods so the node_ids resolve), and (b) repoint guard_target from scripts/checks/_scaffolding.py to
+    scripts/checks/_budget_recs.py. Leave guard_symbol (_file_budget_breach_rec / _file_budget_bypass_rec)
+    and every other field unchanged; preserve the YAML >- folded-scalar form. Do NOT rename the check_ids
+    (a rename makes validate_verification_registry treat the row as newly-added and demand a
+    fail-on-revert differential).
   - >-
     Execute the Verification Plan -- run each step; loop until pass. VP step 6 (5 consecutive green
     xdist collections) is a hard gate before merge (rec-2653 class). On an unrecoverable failure,
