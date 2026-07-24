@@ -43,12 +43,6 @@ scope:
       Add a VTS-04 M1 replay: a batch whose last file has a real collection ERROR plus a
       trailing short-summary section carrying an unrelated 'No module named' line must route
       the last file to runnable (redden), not mis-defer it.
-  - file: tests/validate/test_pytest_diff_reactive.py
-    action: Modify
-    purpose: >-
-      Regression surface only -- exercised by the full-file VP regression run to confirm the
-      M1 attribution change does not disturb the reactive heavy-dep fallback path. Edited only
-      if a new reactive-path assertion is warranted; otherwise left unchanged.
 bundled_recommendations:
   - rec-2731
   - rec-2737
@@ -195,7 +189,13 @@ verification_plan:
       no longer flat disjoint lists of path strings (a shape change that would silently break
       Decision 142 escape attribution).
     hermetic: true
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      The dec-142 coherence property (compute_escape_class reads only flat, disjoint
+      selected/deferred path-string lists) is command_output_matches/command_exit_zero-shaped,
+      but it is permanently guarded by the dec-142 coherence assertion added to
+      tests/checks/deps/test_affected_tests.py -- run every full tier and re-selected whenever
+      affected_tests.py is edited -- so a kernel row would duplicate that standing suite guard.
   - step: 7
     phase: pre-deploy
     action: >-
@@ -220,7 +220,7 @@ verification_plan:
       Closure obligation -- after the implement PR merges with a 'Resolves: rec-2731, rec-2737'
       trailer, confirm both bundled recs are closed in the synced cache.
     command: >-
-      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; st={r['id']:r.get('status') for r in rows if r.get('id') in ('rec-2731','rec-2737')}; assert st.get('rec-2731')=='closed' and st.get('rec-2737')=='closed', st; print('rec-2731/rec-2737 closed')"
+      bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; st={r['id']:r.get('status') for r in rows if r.get('id') in ('rec-2731','rec-2737')}; assert st.get('rec-2731')=='closed' and st.get('rec-2737')=='closed', st; print('rec-2731/rec-2737 closed')"
     expected: >-
       Prints 'rec-2731/rec-2737 closed' -- the rec-autoclose flow (or the ops_data_portal
       --update-rec fallback) resolved both bundled recs.
@@ -248,7 +248,7 @@ constraints:
     baseline in tests/test_checks_registry.py (Decision 135 point 7 / Decision 104). The
     derivation feeds the existing pytest_diff scaffold in scripts/validate.py unchanged.
   - >-
-    Only modify the five in-scope files; in scripts/checks/_scaffolding.py touch ONLY
+    Only modify the four in-scope files; in scripts/checks/_scaffolding.py touch ONLY
     _attribute_batched_collect_errors (and any private helper/regex it needs). Out-of-scope
     bugs become recommendations via scripts/ops_data_portal.py, not inline fixes.
   - >-
@@ -315,7 +315,7 @@ pre_implementation_checklist:
   - docs/PROJECT_CONTEXT.md read
   - DECISIONS.md read (Decision 135 full text; 73, 55, 80, 104, 128, 130, 131, 142, 48)
   - audits/validate-test-suite-4df4d48.yaml VTS-01/02/03/04 read (authoritative spec)
-  - All five scope files located and readable; _SEARCH_DIRS confirmed to index tests/
+  - All four scope files located and readable; _SEARCH_DIRS confirmed to index tests/
   - Acceptance criteria understood and verifiable
 execution_steps:
   - >-
