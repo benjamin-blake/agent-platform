@@ -1,0 +1,306 @@
+schema_version: 1
+slug: "gate-path-protection"
+intent: >-
+  Close audit finding DEP-05 / roadmap T2.50 under Decision 144: add a path-scoped, auditable
+  code-owner review requirement over the repo-side deploy-gate surface (the apply guard, the
+  authority-budget file, the terraform bootstrap/github roots, and the terraform-*/reconcile
+  workflows) so a change to the gate's own code surfaces a "review required" boundary and can merge
+  only via a deliberate, GitHub-audit-logged admin bypass, while routine PRs stay unaffected and the
+  sole maintainer is never wedged. This slice delivers (i) that auditable deliberate-bypass boundary
+  and (ii) a hard block against non-bypass actors (the read-only default GITHUB_TOKEN); silently
+  preventing the admin-identity agent from self-merging gate code is the job of the DEFERRED
+  behavioral no-auto-merge-protected-path contract (rec-2827), for which this ruleset is the
+  foundation. Slice G (last) of the /overseer terraform-deploy-redesign run (audit b67955b); closes
+  the repo-side half of the CD.35 / T2.20(d) residual whose AWS-side half T2.23 already closed.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-gate-path-protection.yaml
+phase: >-
+  Platform tier_item T2.50 (protected amendment channel over the repo-side gate surface, audit
+  DEP-05), depends_on T2.48 (Phase-2 allow-list inversion; core artifacts already landed --
+  authority_budget.json is schema_version 2 and the guard carries DEP-06 classification -- though
+  its roadmap criteria still read open). Phase 3 / slice G of the /overseer terraform-deploy-redesign
+  run. Execution plan closing T2.50 c1 + c2.
+closes_criteria:
+  - "T2.50:c1"
+  - "T2.50:c2"
+scope:
+  - file: .github/CODEOWNERS
+    action: Create
+    purpose: >-
+      Path-scoped owner map assigning the six protected deploy-gate path patterns (and CODEOWNERS
+      itself) to the sole maintainer, so PRs touching them require code-owner review. Path-scoping of
+      a review requirement is expressible ONLY via CODEOWNERS -- GitHub ruleset conditions are
+      branch-scoped, not path-scoped -- which is why a ruleset alone cannot scope review to these
+      files without wedging every routine PR.
+  - file: terraform/github/repo.tf
+    action: Modify
+    purpose: >-
+      Flip require_code_owner_review = true on the EXISTING main_protection ruleset pull_request
+      block (keep required_approving_review_count = 0 and the admin bypass_actors block), and update
+      the ruleset comment. This activates CODEOWNERS enforcement on protected-path PRs while leaving
+      routine PRs approval-free (non-wedging, Decision 83). No new variable is required.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    terraform/github is human-gated LOCAL apply ONLY (main.tf header, terraform/github/CLAUDE.md) --
+    NEVER auto-applied (the terraform_apply_guard cannot inspect github_* diffs). The repo.tf ruleset
+    change activates only after the operator runs the module apply runbook; .github/CODEOWNERS is a
+    committed file present on merge to main but ENFORCED only once the ruleset flip is applied.
+  - >-
+    The operator local apply of terraform/github requires the S3 provider mirror (Decision 119/120):
+    integrations/github is a third-party github.com-hosted provider whose init/plan is blocked on a
+    stock CC-web session, so the operator applies from the mirror-enabled admin container. There is NO
+    CI terraform-validate coverage for this root (ci.yml validates only terraform/ and
+    terraform/personal/), so the authoritative validate/plan is the operator apply-runbook.
+  - >-
+    Not part of the terraform/personal speculative-plan pipeline (T2.21) -- that pipeline is
+    terraform/personal-only; terraform/github is excluded from every auto-apply path. No personal IAM
+    role is created and no CI identity is repointed, so the slice-F bootstrap-deadlock class (rec-2824)
+    does not recur.
+acceptance_criteria:
+  - >-
+    [c1] A probe PR that modifies a protected-path file (e.g. a comment in
+    scripts/terraform_apply_guard.py) reports reviewDecision == REVIEW_REQUIRED and
+    mergeStateStatus == BLOCKED -- the code-owner review requirement is active on protected paths.
+    The only merge path is a DELIBERATE, GitHub-audit-logged admin bypass: benjamin-blake is the sole
+    collaborator and IS the retained admin-bypass actor, so the agent-as-admin CAN still bypass. This
+    is the auditable deliberate-bypass boundary this slice delivers, NOT a hard block (the hard block
+    against the admin-identity agent is deferred to rec-2827); there is no non-admin merge identity to
+    refuse.
+  - >-
+    [c1] A routine probe PR that modifies only a non-protected file (e.g. a docs/ file) is unaffected:
+    reviewDecision is not REVIEW_REQUIRED and it remains mergeable via the routine autonomous flow
+    (required status checks only).
+  - >-
+    [c2] The live main_protection ruleset retains its admin-bypass actor (RepositoryRole, bypass_mode
+    always) and adds NO required signatures and NO strict status-check policy, so routine autonomy is
+    not wedged and the sole maintainer is never locked out (Decision 83).
+  - >-
+    .github/CODEOWNERS covers all six protected path patterns plus self-protects itself, and
+    terraform/github/repo.tf sets require_code_owner_review = true with required_approving_review_count
+    still 0 on main_protection.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Assert .github/CODEOWNERS exists and maps every protected gate path (plus CODEOWNERS
+      self-protection) to an @owner.
+    command: |
+      bin/venv-python -c "import pathlib,sys; t=pathlib.Path('.github/CODEOWNERS').read_text(); L=[l.split('#',1)[0].split() for l in t.splitlines()]; L=[p for p in L if p]; req=['/.github/workflows/terraform-*.yml','/.github/workflows/reconcile.yml','/scripts/terraform_apply_guard.py','/terraform/bootstrap/','/terraform/github/','/.github/CODEOWNERS']; owned=lambda pat: any(p[0]==pat and any(o.startswith('@') for o in p[1:]) for p in L); missing=[pat for pat in req if not owned(pat)]; print('missing:',missing); sys.exit(1 if missing else 0)"
+    expected: "Prints 'missing: []' and exits 0 -- all six patterns present and each mapped to an @owner."
+    fix_if: >-
+      Non-zero exit / non-empty missing list -> a protected path pattern is absent from CODEOWNERS or an
+      entry has no @owner; add the missing line(s).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "codeowners-covers-gate-paths"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert terraform/github/repo.tf sets require_code_owner_review = true on main_protection while
+      required_approving_review_count stays 0 (non-wedging) and the bypass_actors block is retained.
+    command: |
+      bin/venv-python -c "import pathlib,re,sys; t=pathlib.Path('terraform/github/repo.tf').read_text(); ok=bool(re.search(r'require_code_owner_review\s*=\s*true',t)) and bool(re.search(r'required_approving_review_count\s*=\s*0',t)) and 'bypass_actors' in t and not re.search(r'required_signatures\s*=\s*true',t); print('invariants_ok:',ok); sys.exit(0 if ok else 1)"
+    expected: "Prints 'invariants_ok: True' and exits 0 -- require_code_owner_review=true, count=0, bypass_actors present, no required_signatures."
+    fix_if: >-
+      Non-zero -> the boolean flip or the count/bypass/no-signatures invariants were not applied
+      correctly; correct repo.tf.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The authoritative enforcement is the LIVE ruleset (activated by the operator apply), not the HCL
+      source text; a standing source grep duplicates the protection intent already carried by the
+      graduated codeowners-covers-gate-paths guard and by the operator plan-review at apply time, so
+      graduating a second source-grep guard would double-count without adding independent regression
+      coverage.
+  - step: 3
+    phase: pre-deploy
+    action: Validate this plan document against the PlanDocument schema.
+    command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-gate-path-protection.yaml
+    expected: "Prints 'PASS: ... validates against PlanDocument schema.' and exits 0."
+    fix_if: Schema errors -> correct the offending field per the validator message.
+    hermetic: true
+    graduation: not-applicable
+  - step: 4
+    phase: post-deploy
+    action: >-
+      [operator] Apply terraform/github via the module runbook (admin container + S3 provider mirror,
+      Decision 119/120): export GITHUB_TOKEN from Secrets Manager, then terraform -chdir=terraform/github
+      init && plan && apply. Confirm the plan diff is EXACTLY the require_code_owner_review true flip on
+      main_protection with no other ruleset drift (count unchanged at 0, bypass_actors retained).
+    command: terraform -chdir=terraform/github plan -detailed-exitcode
+    expected: >-
+      Operator-run (not runnable on stock CC-web -- third-party provider egress blocked, Decision 119):
+      plan shows only the require_code_owner_review update on main_protection; apply succeeds.
+    fix_if: >-
+      Plan shows unexpected drift (count change, bypass removal, a new wedging rule) -> STOP, do not
+      apply, reconcile repo.tf source before applying.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      [post-apply] Confirm GitHub parses .github/CODEOWNERS with ZERO errors on the default branch -- a
+      malformed CODEOWNERS is SILENTLY ignored by GitHub, leaving the gate inert even with the ruleset
+      flip applied (the reviewDecision probe only catches TOTAL failure, not a single bad line).
+    command: gh api repos/benjamin-blake/agent-platform/codeowners/errors --jq '.errors | length'
+    expected: "Prints 0 -- no CODEOWNERS parse errors on the default branch."
+    fix_if: >-
+      Non-zero -> GitHub reports CODEOWNERS syntax/owner errors (inspect via gh api
+      repos/benjamin-blake/agent-platform/codeowners/errors); fix the offending line and re-verify before
+      relying on the gate.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Probe the code-owner gate across the THREE glob shapes so a leading-slash / glob-semantics mismatch
+      on any pattern is caught: open probe PR(s) touching (a) scripts/terraform_apply_guard.py (exact
+      path), (b) a file under terraform/bootstrap/** or terraform/github/** (directory glob), and (c) a
+      .github/workflows/terraform-*.yml (workflow wildcard glob), each a trivial comment. Close the probe
+      PR(s) after.
+    command: gh pr view <protected-probe-pr> --repo benjamin-blake/agent-platform --json reviewDecision,mergeStateStatus
+    expected: >-
+      For EACH protected-path probe: reviewDecision == "REVIEW_REQUIRED" and mergeStateStatus == "BLOCKED".
+      Merging requires a deliberate, GitHub-audit-logged admin bypass (benjamin-blake is the sole
+      collaborator and the retained bypass actor); the agent-as-admin CAN bypass -- that deliberate, logged
+      bypass IS the boundary this slice delivers, not a non-admin refusal (no non-admin identity exists).
+    fix_if: >-
+      reviewDecision null on ANY protected probe -> that CODEOWNERS glob does not match (likely a
+      leading-slash / glob-semantics mismatch on that pattern) or require_code_owner_review did not
+      activate; re-check the specific glob and confirm the apply landed.
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Probe non-wedging on a ROUTINE path: open a PR touching only a non-protected file (e.g. a docs/
+      file) and confirm it is NOT gated by code-owner review and stays mergeable via the routine flow.
+      Close the probe PR after.
+    command: gh pr view <routine-probe-pr> --repo benjamin-blake/agent-platform --json reviewDecision,mergeStateStatus
+    expected: >-
+      reviewDecision is null (not "REVIEW_REQUIRED") and the PR is mergeable via the routine autonomous
+      flow (required status checks only).
+    fix_if: >-
+      A routine PR shows REVIEW_REQUIRED -> a CODEOWNERS pattern is too broad and matches routine paths;
+      narrow the offending glob.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Confirm the live main_protection ruleset retains the admin-bypass actor and adds no wedging rule
+      (c2), reading the ruleset back from the GitHub API.
+    command: gh api repos/benjamin-blake/agent-platform/rulesets --jq '.[] | select(.name=="main-protection") | .id'
+    expected: >-
+      The returned ruleset id, fetched via gh api repos/benjamin-blake/agent-platform/rulesets/<id>, shows
+      bypass_actors still containing the RepositoryRole admin actor with bypass_mode "always", no
+      required_signatures rule, and required_status_checks strict policy false.
+    fix_if: >-
+      Admin bypass missing or a wedging rule (required_signatures / strict checks) present -> reconcile
+      repo.tf and re-apply before closing the slice.
+constraints:
+  - >-
+    Public repo (Decision 101): CODEOWNERS lists only the public @benjamin-blake login; NO account ids,
+    ARNs, ExternalIds, or secrets in any scope file.
+  - >-
+    terraform/github is human-gated LOCAL apply ONLY (main.tf, CLAUDE.md) -- NEVER add it to any
+    apply-workflow path; the operator applies per the module runbook.
+  - >-
+    Non-wedging (Decision 83): keep required_approving_review_count = 0; add NO required signatures and
+    NO strict status-check policy; retain the admin bypass_actors block; do not touch the
+    required_status_checks contexts (pr-validate, terraform-validate).
+  - >-
+    Path-scoping comes ONLY from CODEOWNERS -- do NOT raise the ruleset's required_approving_review_count
+    (that gates ALL PRs and wedges routine autonomy, contradicting audit do-not-flag items 6/7).
+  - No rescue agents or workaround loops (Decision 55); on an unrecoverable V3/apply failure, stop and RCA.
+  - >-
+    Only modify the two files in scope; out-of-scope hardening (protecting guard helper modules) becomes
+    a follow-on rec, not inline scope. The behavioral no-auto-merge-protected-path contract that closes
+    the admin-identity efficacy gap is filed as rec-2827 (tracked, deferred -- NOT resolved by this plan).
+context:
+  - >-
+    Owning item T2.50 (DEP-05); closes c1 (probe-PR gate) + c2 (admin-bypass retained). depends_on T2.48;
+    its roadmap criteria still read open, but authority_budget.json is already schema_version 2 and the
+    guard carries DEP-06 classification (roadmap lagging repo). The protected-path list is
+    directory-glob-based (terraform/bootstrap/**, terraform/github/**), robust to T2.48's file-CONTENT
+    inversion, so authoring is not blocked (bootstrap allowance).
+  - >-
+    Central mechanism grounded in Decision 143 (privileged-verb decomposition, clause 1): enforce the
+    scope in a primitive OUTSIDE the agent's merge loop, not an in-handler guard the agent-authored
+    codebase could edit out. The self-protecting /.github/CODEOWNERS + the ruleset flip are that
+    out-of-loop primitive -- a materially higher bar than an in-repo guard the agent can silently revert.
+  - >-
+    Decision 126 (two-verb deployment model + heal button) governs the protected workflows: reconcile.yml
+    is the T2.37 Reconcile (heal-button) action and terraform-*.yml are the provision workflows -- both
+    reach agent-platform-github-ci-apply (reconcile.yml:188,520). Neither Decision 92 nor 144 names
+    reconcile.yml; 126 does.
+  - >-
+    Decision 94 (tf-gated-apply Environment) is a COMPLEMENTARY, DISTINCT layer: the Environment gate
+    protects the IAM APPLY; this code-owner gate protects the pipeline's SOURCE code. Name both; neither
+    subsumes the other. This is the GitHub-side analog of Decision 144's DenyBoundaryPolicyModification
+    (which protects the AWS-side boundary from the same agent).
+  - >-
+    Decision 93 reconciliation (pre-answers the plan-critique frame-challenge): this gate sits on the
+    gate's OWN code (the meta-control surface), NOT the routine rec->implement->merge iteration Decision
+    93 scopes as no-human-in-loop. Gating the meta-control surface does not re-introduce a human into the
+    routine loop.
+  - >-
+    Decision 100/75 (managed-service-native): native CODEOWNERS + ruleset is chosen over vendoring a
+    custom review-enforcement script (the anti-pattern those decisions reject). Decision 89 (branch
+    protection unavailable) is REVERSED by Decision 83 -- awareness only, not governing.
+  - >-
+    LOAD-BEARING security framing (empirically grounded, plan-critique-verified): benjamin-blake (the
+    sole collaborator, GitHub id 217728084) IS the retained admin-bypass actor (actor_id=5 RepositoryRole,
+    bypass_mode "always"; repo.tf:68-72) and is the agent's ONLY merge identity -- so an agent squash-merge
+    of a protected-path PR CAN bypass require_code_owner_review and succeed. There is NO non-admin merge
+    identity in the routine flow. This slice therefore delivers, honestly: (i) a path-scoped, auditable
+    "review required" + deliberate, GitHub-audit-logged admin-bypass boundary on gate code; (ii) a HARD
+    block against non-bypass actors -- notably the read-only default GITHUB_TOKEN, which already cannot
+    merge or approve PRs (repo.tf:119-129); and (iii) the FOUNDATION for the actual admin-identity hard
+    block, which is the DEFERRED behavioral no-auto-merge-protected-path contract (rec-2827). It is NOT a
+    cryptographic block against the admin-identity agent, and this plan does not claim one. The step-6
+    probe asserts only the verifiable facts (REVIEW_REQUIRED + BLOCKED + deliberate-bypass-only).
+  - >-
+    CI has NO terraform-validate coverage for terraform/github (ci.yml validates terraform/ +
+    terraform/personal/ only); the authoritative validate/plan is the operator apply-runbook, so local
+    terraform VP steps are grep/schema-only and the terraform plan/apply + probe steps are operator-run
+    [post-deploy]. No Lambda-packaged file is in scope (no Lambda build/deploy assessment).
+  - "No rec-2824 (slice-F bootstrap-deadlock) recurrence: DEP-05 creates NO personal IAM role and no CI-repointed identity -- it is a GitHub-settings ruleset flip + a committed file."
+  - >-
+    Efficacy-closing follow-on filed as rec-2827 (High; "Behavioral no-auto-merge-protected-path contract
+    on the autonomous flow (DEP-05 efficacy closure)"): DEP-05's ruleset is the auditable review-required
+    boundary; rec-2827 is the actual hard block against the admin-identity agent. Tracked as a residual,
+    NOT resolved by this plan -- deliberately absent from bundled_recommendations (no Closure Obligation),
+    referenced here so the gap is explicit.
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (round 1, 102/102 triaged). CITE = 144, 83, 92, 77, 101, 76, 143, 126, 94, 93, 100, 75, plus CD.35 / T2.20(d) / T2.23; Decision 89 is reversed-by-83 (awareness only, not governing)."
+  - "gates: decision-scout=NO_FLAGS (1 round); plan-critique=PROCEED (2 rounds; r1 REVISE acceptance/intent honesty + filed rec-2827, r2 PROCEED)"
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via decision-scout gate (NO_FLAGS; CITE list folded into context)
+  - All files in scope located and readable (terraform/github/repo.tf exists; .github/CODEOWNERS is new)
+  - Acceptance criteria understood and verifiable (the probe PR is the empirical acceptance for c1)
+  - Operator apply dependency understood (terraform/github human-gated local apply; provider mirror per Decision 119/120)
+execution_steps:
+  - >-
+    Create .github/CODEOWNERS: a header comment (DEP-05 / T2.50 / Decision 144; enforced by
+    main-protection require_code_owner_review, admin-bypassable per Decision 83; routine PRs unaffected),
+    then one owner line per protected pattern -- /.github/workflows/terraform-*.yml,
+    /.github/workflows/reconcile.yml, /scripts/terraform_apply_guard.py, /terraform/bootstrap/,
+    /terraform/github/ -- plus /.github/CODEOWNERS self-protection, each mapped to @benjamin-blake.
+  - >-
+    Modify terraform/github/repo.tf: in the main_protection ruleset pull_request block set
+    require_code_owner_review = true (leave required_approving_review_count = 0 and the other
+    pull_request fields unchanged; leave bypass_actors and required_status_checks untouched); update the
+    ruleset comment to state that CODEOWNERS-scoped code-owner review is now required on the protected
+    gate paths, admin bypass retained, count stays 0 (non-wedging).
+  - Run pre-deploy VP steps 1-3 (CODEOWNERS coverage, repo.tf invariants, plan schema); loop until pass.
+  - >-
+    Commit and open the implementation PR; run bin/venv-python -m scripts.validate --pre before pushing.
+    On merge, .github/CODEOWNERS lands on main (present but not yet enforced until the ruleset apply).
+  - >-
+    [operator] Apply terraform/github per the runbook (admin container + provider mirror) to activate
+    require_code_owner_review; then run post-deploy VP steps 4-7 (operator plan/apply, protected-path
+    probe PR, routine probe PR, admin-bypass retention). On an unrecoverable apply/probe failure, stop
+    and RCA (Decision 55) -- never a rescue loop.
+  - "Report: what was implemented, the probe-PR reviewDecision evidence, and the live-ruleset admin-bypass confirmation."
+work_areas: []
+rollback: >-
+  Revert the require_code_owner_review flip to false in terraform/github/repo.tf and re-apply the module
+  (operator, admin container); optionally delete .github/CODEOWNERS. The gate is inert without the ruleset
+  flip, so reverting the apply fully disables it -- no data migration or state cleanup, and routine
+  autonomy is unaffected either way.
