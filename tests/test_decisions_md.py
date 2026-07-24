@@ -19,6 +19,7 @@ import pytest
 from scripts.decisions_md import (
     _DECISIONS_MD_PATHS,
     _extract_decided_date,
+    _extract_multiline_section,
     _extract_related_decisions,
     _extract_section,
     _iter_decision_sections,
@@ -191,6 +192,51 @@ class TestByteReconstruction:
         assert bad_reconstruction != fixture
 
 
+class TestIntentMarker:
+    """Decision 151 / PLAN-dcg-intent-capture (audit finding DCG-06): the optional Intent
+    marker's typed extraction. Optional forever -- no required-marker change, no
+    retro-enforcement of the historical band; the existing context extraction (Rationale/Key
+    details/Context) is untouched.
+    """
+
+    _BODY_WITH_INTENT = "**Status:** Decided\n\n**Intent:** Make the durable why quotable.\n\n**Decision:** Do the thing.\n"
+    _ENTRY_WITH_INTENT = "## Decision 1: Synthetic (Decided)\n\n" + _BODY_WITH_INTENT
+    _ENTRY_WITHOUT_INTENT = "## Decision 1: Synthetic (Decided)\n\n**Status:** Decided\n\n**Decision:** Do the thing.\n"
+
+    def test_extract_multiline_section_returns_intent_marker_body(self) -> None:
+        assert _extract_multiline_section(self._BODY_WITH_INTENT, "Intent") == "Make the durable why quotable."
+
+    def test_markerless_block_parses_to_empty_intent(self, tmp_path: Path) -> None:
+        path = tmp_path / "DECISIONS.md"
+        path.write_text(self._ENTRY_WITHOUT_INTENT, encoding="utf-8")
+        rows = parse_decisions_md(paths=[path])
+        assert rows[0]["intent"] == ""
+
+    def test_intent_marker_round_trips_through_parse_decisions_md(self, tmp_path: Path) -> None:
+        path = tmp_path / "DECISIONS.md"
+        path.write_text(self._ENTRY_WITH_INTENT, encoding="utf-8")
+        rows = parse_decisions_md(paths=[path])
+        assert rows[0]["intent"] == "Make the durable why quotable."
+
+    def test_q3b_intent_only_edit_changes_content_hash(self, tmp_path: Path) -> None:
+        """Inserting an **Intent:** marker changes the parser-normalized content_hash -- the
+        gate the backfill's differential SCD2 write depends on. No separate intent hash."""
+        without_path = tmp_path / "without" / "DECISIONS.md"
+        with_path = tmp_path / "with" / "DECISIONS.md"
+        without_path.parent.mkdir()
+        with_path.parent.mkdir()
+        without_path.write_text(self._ENTRY_WITHOUT_INTENT, encoding="utf-8")
+        with_path.write_text(self._ENTRY_WITH_INTENT, encoding="utf-8")
+
+        without_rows = parse_decisions_md(paths=[without_path])
+        with_rows = parse_decisions_md(paths=[with_path])
+        assert without_rows[0]["content_hash"] != with_rows[0]["content_hash"]
+
+    def test_live_corpus_has_at_least_one_non_empty_intent(self, parsed_rows: dict[int, dict]) -> None:
+        """The governing Decision's own **Intent:** marker round-trips, robust to renumbering."""
+        assert any(row.get("intent") for row in parsed_rows.values())
+
+
 class TestDualModelFieldSync:
     """DecisionPayload (write-side) and jsonl_store.Decision (read-side) must both carry
     the four DAF-01 fields, as plain (non-Dq-Annotated) optional strings, with the
@@ -245,6 +291,34 @@ class TestDualModelFieldSync:
             DecisionPayload.model_validate(mismatched)
         with pytest.raises(Exception, match="Dual-write invariant"):
             Decision.model_validate(mismatched)
+
+    def test_intent_field_synced_plain_on_both_models(self) -> None:
+        """Decision 151 / PLAN-dcg-intent-capture: intent is declared plain (non-Annotated) on
+        both models, mirroring the four DAF-01 fields above, and a record carrying it
+        validates on both."""
+        from scripts.executor.jsonl_store import Decision
+        from src.schemas.decision import DecisionPayload
+
+        assert "intent" in DecisionPayload.model_fields, "DecisionPayload missing intent"
+        assert "intent" in Decision.model_fields, "jsonl_store.Decision missing intent"
+
+        hints = typing.get_type_hints(DecisionPayload, include_extras=True)
+        assert typing.get_origin(hints["intent"]) is not typing.Annotated, (
+            "DecisionPayload.intent must be a plain str | None, not Annotated[...]"
+        )
+
+        record = {
+            "id": "dec-997",
+            "decision_id": 997,
+            "title": "Synthetic intent test decision",
+            "status": "Decided",
+            "created_timestamp": "2026-07-24T00:00:00Z",
+            "last_updated_timestamp": "2026-07-24T00:00:00Z",
+            "intent": "Make the durable why quotable.",
+        }
+        payload = DecisionPayload.model_validate(record)
+        read_side = Decision.model_validate(record)
+        assert payload.intent == read_side.intent == record["intent"]
 
 
 class TestExtractSectionHelper:

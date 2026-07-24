@@ -184,7 +184,8 @@ class TestGenerateIntegration:
         assert "ulid" in cols
         assert "id" in cols
         assert "_contract_version" in cols
-        assert len(cols) == 18
+        assert "intent" in cols
+        assert len(cols) == 19
 
     def test_envelope_fields_are_derived(self) -> None:
         doc = generate()

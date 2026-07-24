@@ -503,6 +503,34 @@ class TestBackfillContentHashSkipGate:
         mock_write.assert_called_once()
 
 
+class TestIntentBackfillColumn:
+    """Decision 151 / PLAN-dcg-intent-capture (audit finding DCG-06): intent threads through
+    the backfill ETL's field-selection filter, warehouse-free (no writer/reader invoked) --
+    proves the ETL plumbing without invoking the live writer."""
+
+    def test_intent_is_in_backfill_cols(self) -> None:
+        from scripts.ops_portal.decisions import _DECISION_BACKFILL_COLS
+
+        assert "intent" in _DECISION_BACKFILL_COLS
+
+    def test_parsed_entry_with_intent_survives_the_field_selection_filter(self) -> None:
+        """Mirrors the exact filter expression backfill_decisions_from_md applies before
+        calling file_decision -- a non-empty intent must survive it."""
+        from scripts.ops_portal.decisions import _DECISION_BACKFILL_COLS
+
+        entry = {"title": "T", "status": "Decided", "intent": "Make the durable why quotable."}
+        fields = {k: v for k, v in entry.items() if k in _DECISION_BACKFILL_COLS and v not in (None, "")}
+        assert fields.get("intent") == "Make the durable why quotable."
+
+    def test_markerless_entry_intent_empty_string_is_filtered_out(self) -> None:
+        """A markerless entry parses intent="" -- the filter drops it so the column stays NULL."""
+        from scripts.ops_portal.decisions import _DECISION_BACKFILL_COLS
+
+        entry = {"title": "T", "status": "Decided", "intent": ""}
+        fields = {k: v for k, v in entry.items() if k in _DECISION_BACKFILL_COLS and v not in (None, "")}
+        assert "intent" not in fields
+
+
 @pytest.mark.integration
 @pytest.mark.aws
 class TestLiveReaderParity:
@@ -555,3 +583,17 @@ class TestLiveReaderParity:
         assert dec_067 is not None, "dec-067 not found in ops_decisions"
         decided_date = dec_067.get("decided_date") or ""
         assert decided_date == "" or decided_date[:4].isdigit()
+
+    def test_intent_live_reader_parity(self) -> None:
+        """Decision 151 / PLAN-dcg-intent-capture post-deploy anchor spot-check: the governing
+        Decision's own intent round-trips through the warehouse via the decision_by_id read
+        verb. Writer-health-gated (rec-2821): the class-level fixture already skips when creds
+        are unavailable or the raw_block schema migration has not landed; this method
+        additionally skips if intent specifically is not yet a live column or dec-151 has not
+        been backfilled (an older deploy that predates PLAN-dcg-intent-capture)."""
+        from scripts.ops_portal.decisions import _fetch_decision_from_reader
+
+        record = _fetch_decision_from_reader("dec-151")
+        if record is None or "intent" not in record:
+            pytest.skip("ops_decisions has no intent column yet, or dec-151 is not yet backfilled")
+        assert record.get("intent"), "dec-151.intent empty in-table"
