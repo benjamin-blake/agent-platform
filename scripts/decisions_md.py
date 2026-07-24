@@ -169,22 +169,27 @@ def _extract_superseded_by(text: str) -> str:
 # target must be an immediately-adjacent "Decision(s) N" (_TITLE_RELATION_SEED_RE) -- so a
 # non-Decision target (CD.N, KG.N, prose like "Identity Center") never matches, with no need
 # to enumerate every non-target word. A further target is accepted ONLY as an explicit ", N"
-# (_TITLE_RELATION_COMMA_RE) / "/N" (_TITLE_RELATION_SLASH_RE) plural-list continuation, or an
-# "and Decision(s) N" (_TITLE_RELATION_AND_RE) multi-target continuation, optionally preceded
-# by a "point P"/"cl.N"/"clause N" qualifier on the prior target (_TITLE_RELATION_QUALIFIER_RE,
-# consumed but never itself a number source). Any other following text -- a semicolon, a
-# different relation word ("mirrors", "extends", "builds on"), an ordinal like "2nd amendment"
-# -- is not a valid continuation and silently ends the scan for that anchor occurrence.
+# (_TITLE_RELATION_COMMA_RE) / "/N" (_TITLE_RELATION_SLASH_RE) plural-list continuation, an
+# "and Decision(s) N" (_TITLE_RELATION_AND_RE) continuation, or a "+ Decision(s) N"
+# (_TITLE_RELATION_PLUS_RE) continuation (dec-153: "amends Decision 73 enforcement + Decision
+# 135") -- optionally preceded by a qualifier on the prior target
+# (_TITLE_RELATION_QUALIFIER_RE: "point P"/"cl.N"/"clause N", or a single bare descriptive word
+# like "enforcement"; a qualifier is consumed but is never itself a number source, and the bare
+# word alternative explicitly excludes "and" so it never steals that continuation's own
+# keyword). Any other following text -- a semicolon, a different relation word ("mirrors",
+# "extends", "builds on"), an ordinal like "2nd amendment" -- is not a valid continuation and
+# silently ends the scan for that anchor occurrence.
 _TITLE_RELATION_SEED_RE = re.compile(r"\s+Decisions?\s+(\d+)\b", re.IGNORECASE)
-_TITLE_RELATION_QUALIFIER_RE = re.compile(r"\s*(?:point\s+\d+|cl\.\s*\d+|clause\s+\d+)", re.IGNORECASE)
+_TITLE_RELATION_QUALIFIER_RE = re.compile(r"\s*(?:point\s+\d+|cl\.\s*\d+|clause\s+\d+|(?!and\b)[A-Za-z]+)", re.IGNORECASE)
 _TITLE_RELATION_AND_RE = re.compile(r"\s*,?\s*and\s+Decisions?\s+(\d+)\b", re.IGNORECASE)
+_TITLE_RELATION_PLUS_RE = re.compile(r"\s*\+\s*Decisions?\s+(\d+)\b", re.IGNORECASE)
 _TITLE_RELATION_COMMA_RE = re.compile(r"\s*,\s*(\d+)\b")
 _TITLE_RELATION_SLASH_RE = re.compile(r"\s*/\s*(\d+)\b")
 
 
 def _extract_title_relation_targets(raw_title: str, relation_word: str) -> list[int]:
-    """Forward 'RELATION_WORD Decision(s) N[, M][/M][and Decision M]' targets from a raw
-    (unstripped) decision title, deduped, in first-occurrence order.
+    """Forward 'RELATION_WORD Decision(s) N[, M][/M][and Decision M][+ Decision M]' targets
+    from a raw (unstripped) decision title, deduped, in first-occurrence order.
 
     Generic helper shared by extract_amends_edges (relation_word="amends") and the internal
     _extract_title_borne_supersedes (relation_word="supersedes"). Never matches an inverse
@@ -212,6 +217,7 @@ def _extract_title_relation_targets(raw_title: str, relation_word: str) -> list[
             qual_end = qual_m.end() if qual_m else pos
             cont_m = (
                 _TITLE_RELATION_AND_RE.match(raw_title, qual_end)
+                or _TITLE_RELATION_PLUS_RE.match(raw_title, qual_end)
                 or _TITLE_RELATION_COMMA_RE.match(raw_title, qual_end)
                 or _TITLE_RELATION_SLASH_RE.match(raw_title, qual_end)
             )

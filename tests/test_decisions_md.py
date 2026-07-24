@@ -275,6 +275,18 @@ class TestAmendsEdgeExtraction:
         )
         assert extract_amends_edges(raw_title) == [98, 92]
 
+    def test_dec153_plus_continuation_with_bare_word_qualifier(self) -> None:
+        """'(amends Decision 73 enforcement + Decision 135)' -> {73, 135}: 'enforcement' is a
+        bare-word qualifier (no trailing number, unlike 'point N'/'cl.N'/'clause N') and '+' is
+        a plus-continuation separator -- both landed live in dec-153 mid-session, proving the
+        grammar generalizes past the four qualifier/continuation forms seen at plan time."""
+        raw_title = (
+            "Fast-tier budget assertion waives a full-suite-forced --pre run (warn, not "
+            "hard-fail) bounded by a forced-run ceiling derived from the pr-validate job "
+            "timeout (amends Decision 73 enforcement + Decision 135) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == [73, 135]
+
     def test_dec143_cl_suffix_tolerated(self) -> None:
         raw_title = (
             "Privileged-verb Lambda decomposition -- scope identities by worst reachable verb; "
