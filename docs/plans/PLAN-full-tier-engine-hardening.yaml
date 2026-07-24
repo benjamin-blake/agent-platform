@@ -1,0 +1,501 @@
+schema_version: 1
+slug: full-tier-engine-hardening
+intent: >-
+  Make the post-merge (full) validation tier faster, time-bounded, and non-wedging by hardening
+  the test-suite engine per audit validate-test-suite-4df4d48 (findings VTS-10, VTS-13, VTS-18,
+  VTS-14, VTS-20), cutting the ~27-min post-merge validate step and its forward-fix latency
+  without weakening any guarantee.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-full-tier-engine-hardening.yaml
+phase: >-
+  Platform validation-engine hardening (audit audits/validate-test-suite-4df4d48.yaml, findings
+  VTS-10/13/18/14/20). No tier_item targeted -- audit-driven ad-hoc scope; Tier Item Freshness
+  Gate N/A (intent claims no tier_item). Verification tier V2 (Decision 48/79: no external
+  system, no Lambda artifact -- compute_affected_artifacts(scope) -> {}).
+scope:
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      VTS-10/13: _build_unit_test_cmd gains -n auto, a FIXED --randomly-seed (reuse the existing
+      _PYTEST_RANDOMLY_SEED=20260710 constant, replacing the explicit --randomly-seed=last), and
+      --timeout 120 --timeout-method=thread; keep --cov=src/--cov-report=term-missing/
+      --disable-socket/--junitxml. VTS-18: run_lint_checks whole-tree default targets gain
+      "scripts/". Decomposition (Decision 128): remove the portal-writing filing helpers
+      _file_budget_breach_rec + _file_budget_bypass_rec (they move to _budget_recs.py) and
+      re-export them from _budget_recs (Decision 80/104/124 facade). Leave A.1's
+      _mirror_budget_notice_to_summary and _PYTEST_FLAGS/_PYTEST_RANDOMLY_SEED in place, untouched.
+  - file: scripts/checks/_budget_recs.py
+    action: Create
+    purpose: >-
+      New cohesive module (Decision 128 decompose-don't-raise; _scaffolding.py is 485/500 SLOC and
+      the VTS-20 dedupe would breach 500). Holds the relocated _file_budget_breach_rec (now with
+      VTS-20 dedupe), _file_budget_bypass_rec, and a reader-boundary dedupe lookup helper. The
+      dedupe reads open recs via the open_recs named verb (src.common.iceberg_reader.make_reader)
+      -- the reader boundary, never the local cache (Decision 84 warehouse-SoT) -- filters
+      source==budget_breach matching (branch, dominant_phase), and on hit calls update_rec (files
+      nothing new; Decision 142 prior art). CI-guard (CI=="true" -> loud print, no portal/reader)
+      preserved verbatim.
+  - file: scripts/checks/verification/validate_hermeticity_flags.py
+    action: Modify
+    purpose: >-
+      VTS-10/13 lockstep + rec-2052: widen the guarded set from --randomly-seed=last to the new
+      fixed-seed policy (--disable-socket + --randomly-seed=20260710) in the full-tier command,
+      extend the guard to also assert the fast-tier _PYTEST_FLAGS carries the fixed seed, and
+      confirm --allow-hosts and --disable-socket are present in pyproject.toml addopts (read-only
+      parse -- addopts is untouched; --allow-hosts lives only there, the rec-2052 gap).
+  - file: scripts/checks/deps/validate_requirements.py
+    action: Modify
+    purpose: >-
+      VTS-14: demote network-classified pip-index errors (connection/timeout/network/unreachable)
+      to loud warnings (no longer appended to failed); keep not-found-on-PyPI as a failure. Removes
+      the post-merge wedging class (a PyPI outage reddening main) while preserving typo detection.
+  - file: scripts/preflight/alerts.py
+    action: Modify
+    purpose: >-
+      VTS-20 (summary half): add _derive_budget_breach_recent + _check_budget_breach_summary,
+      mirroring the existing _derive_budget_bypass_recent/_check_budget_bypass_alert pattern
+      (7-day window, count + dominant_phase histogram) -- served from the supplied warm
+      recs_rows_cache rows, no reader re-fetch (Decision 88 invariant ii; Decision 103 surfacing).
+  - file: scripts/session/preflight.py
+    action: Modify
+    purpose: >-
+      VTS-20 (summary half): submit alerts._check_budget_breach_summary in the Phase-B fan-out
+      against recs_rows_cache, store it in the report dict, and print a one-line breach-rate
+      summary (count + dominant phase). ~7 SLOC added (488 -> ~495, stays under 500 -- no
+      decomposition needed).
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Repoint the 3 graduated-check rows whose check_spec.node_id hardcodes the retired
+      tests/validate/test_budget_rec_filing.py (check_ids budget-breach-priority-survives-real-validator,
+      budget-bypass-priority-survives-real-validator, fast-tier-budget-rec-filing-ci-guard). Without
+      this they go silently dangling on delete -- validate_verification_registry re-executes only
+      newly-ADDED check_ids (matches by check_id), and guard_target-driven orphan detection is T3.7
+      deferred_post_mvp. node_id file prefix -> tests/checks/test__budget_recs.py::; guard_target ->
+      scripts/checks/_budget_recs.py (the file the guarded logic moves to). config/agent is not
+      Lambda-bundled (config/CLAUDE.md), so no deploy step -- V2 unaffected.
+  - file: tests/checks/test__budget_recs.py
+    action: Create
+    purpose: >-
+      Mirror-convention test home (Decision 131/130) for scripts/checks/_budget_recs.py. Relocate
+      the rec-filing behavioral tests from tests/validate/test_budget_rec_filing.py and add the
+      VTS-20 dedupe tests (update-vs-insert, reader-unreachable degradation, CI-guard preserved).
+      Under 500 SLOC.
+  - file: tests/validate/test_budget_rec_filing.py
+    action: Delete
+    purpose: >-
+      Content relocates to tests/checks/test__budget_recs.py alongside the moved source
+      (_file_budget_breach_rec/_file_budget_bypass_rec now live in _budget_recs.py).
+  - file: tests/validate/test_budget.py
+    action: Modify
+    purpose: >-
+      Keep the validate.py budget_assertion orchestration tests (patch("validate._file_budget_*"),
+      still resolving via the facade re-export -- Decision 124 patch-interception) and the
+      _mirror_budget_notice_to_summary tests. Relocate any direct-invocation rec-filing behavioral
+      tests to tests/checks/test__budget_recs.py if validate_placement/validate_test_coverage
+      require it.
+  - file: tests/checks/verification/test_validate_hermeticity_flags.py
+    action: Modify
+    purpose: >-
+      Update the seed assertions from --randomly-seed=last to the fixed seed; add VTS-10/13
+      command-flag assertions on _build_unit_test_cmd (-n auto, --timeout 120,
+      --timeout-method=thread, fixed seed present, last absent, --cov/--junitxml retained); add
+      the widened-guard tests (fails when the fixed seed is dropped from the full cmd or the
+      fast-tier _PYTEST_FLAGS, or when --allow-hosts is absent from addopts).
+  - file: tests/checks/deps/test_validate_requirements.py
+    action: Create
+    purpose: >-
+      New mirror-home behavioral tests for VTS-14: a network-classified error leaves failed empty
+      (loud warning), a not-found-on-PyPI result reds, and a mixed run reds only on the not-found.
+      Mocks _common.run -- no real network.
+  - file: tests/session/preflight/test_alerts.py
+    action: Create
+    purpose: >-
+      Mirror-home behavioral tests for the new alerts functions: _check_budget_breach_summary
+      returns count + dominant_phase histogram from supplied rows, returns None on empty/None,
+      and issues no reader call when rows are supplied (Decision 88 warm-cache serving).
+  - file: tests/validate/test_lint_targets.py
+    action: Create
+    purpose: >-
+      VTS-18 behavioral test (tests/validate is _scaffolding.py's mirror home): run_lint_checks
+      with files=None invokes ruff with "scripts/" in the whole-tree target list.
+bundled_recommendations:
+  - rec-2342
+  - rec-2052
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    _build_unit_test_cmd() returns a command containing -n, auto, --timeout, 120,
+    --timeout-method=thread, --randomly-seed=20260710 (fixed), --cov=src, --disable-socket, and
+    --junitxml=logs/debug/pytest-junit.xml, and does NOT contain --randomly-seed=last.
+  - >-
+    validate_hermeticity_flags passes on the real config and reds when any of: the fixed seed is
+    removed from _build_unit_test_cmd, the fixed seed is removed from the fast-tier _PYTEST_FLAGS,
+    or --allow-hosts is removed from pyproject.toml addopts (rec-2052 closed). pyproject.toml
+    addopts is not modified.
+  - >-
+    run_lint_checks(failed, files=None) invokes ruff check and ruff format --check with "scripts/"
+    present in the target list alongside src/ and tests/.
+  - >-
+    validate_requirements does NOT append a network-classified error (connection/timeout/network/
+    unreachable) to failed -- it prints a loud warning -- while a not-found-on-PyPI package still
+    appends to failed.
+  - >-
+    A repeated fast-tier budget breach on the same (branch, dominant_phase) updates the existing
+    open budget_breach rec via update_rec (file_rec NOT called); the first breach for a new
+    (branch, dominant_phase) files a new rec; a reader-unreachable read degrades to file_rec
+    (breach still recorded) without raising; the CI=="true" guard still files/reads nothing and
+    prints loudly. The dedupe lookup reads the open_recs reader verb, never logs/.recommendations-log.jsonl.
+  - >-
+    Session preflight prints a one-line budget-breach-rate summary (count + dominant phase) derived
+    from the warm recs_rows_cache with no additional reader call.
+  - >-
+    scripts/checks/_scaffolding.py and scripts/checks/_budget_recs.py are each <= 500 SLOC (the
+    decomposition landed with no config/sloc_budgets.yaml raise), and every existing
+    patch("validate._file_budget_breach_rec")/patch("validate._file_budget_bypass_rec") target and
+    `from scripts.checks._scaffolding import _file_budget_breach_rec` import still resolves.
+  - >-
+    config/agent/verification_registry/registry.yaml contains no tests/validate/test_budget_rec_filing.py
+    reference: the 3 graduated rows (budget-breach-priority-survives-real-validator,
+    budget-bypass-priority-survives-real-validator, fast-tier-budget-rec-filing-ci-guard) have node_id
+    repointed to tests/checks/test__budget_recs.py:: and guard_target repointed to
+    scripts/checks/_budget_recs.py, with check_ids and guard_symbols unchanged.
+  - >-
+    Five consecutive `pytest tests/ -n auto --randomly-seed=20260710 --collect-only -m "not
+    integration"` runs complete with exit 0 and none prints "Different tests were collected between
+    gwX and gwN" (the rec-2653 xdist worker-mismatch class).
+  - rec-2342 and rec-2052 are closed on merge via the Resolves trailer.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      VTS-10/13 + rec-2052: exercise _build_unit_test_cmd's new full-tier flags and the widened
+      validate_hermeticity_flags guard (full cmd seed, fast-tier _PYTEST_FLAGS seed, addopts
+      --allow-hosts).
+    command: bin/venv-python -m pytest tests/checks/verification/test_validate_hermeticity_flags.py -q
+    expected: >-
+      All tests pass; assertions confirm -n auto, --timeout 120, --timeout-method=thread, the fixed
+      --randomly-seed=20260710 and --cov/--junitxml/--disable-socket are present (and
+      --randomly-seed=last absent) in _build_unit_test_cmd, and that the guard reds when the fixed
+      seed, the fast-tier seed, or addopts --allow-hosts is missing.
+    fix_if: >-
+      A flag is absent or still --randomly-seed=last, the guard passes when a mandatory flag is
+      removed, or the guard cannot read pyproject addopts -- fix the command builder / guard so the
+      flags and the guarded set move together.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      These assertions run as standing unit tests in the full pytest tier on every post-merge run;
+      a kernel test_selector duplicate in the graduation registry would re-execute the identical
+      test with zero marginal regression protection, and validate_hermeticity_flags is itself an
+      already-registered gate over the same flags.
+  - step: 2
+    phase: pre-deploy
+    action: VTS-18 -- run_lint_checks whole-tree default targets include scripts/.
+    command: bin/venv-python -m pytest tests/validate/test_lint_targets.py -q
+    expected: >-
+      Test passes; run_lint_checks(failed, files=None) invokes ruff check and ruff format --check
+      with "scripts/" in the target list (alongside src/ and tests/).
+    fix_if: >-
+      The captured ruff target list omits "scripts/" -- add it to run_lint_checks' files-is-None
+      default targets.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The behavioral assertion executes in the full pytest tier every post-merge run; the
+      whole-tree ruff sweep it guards is itself the standing regression (a planted scripts/
+      violation reds the full tier), so a kernel grep duplicate adds no marginal coverage.
+  - step: 3
+    phase: pre-deploy
+    action: VTS-14 -- network errors demote to warnings; not-found still fails.
+    command: bin/venv-python -m pytest tests/checks/deps/test_validate_requirements.py -q
+    expected: >-
+      All tests pass; a mocked connection/timeout/network/unreachable stderr leaves failed empty
+      (warning printed), a mocked not-found stderr appends to failed, and a mixed run reds only on
+      the not-found package.
+    fix_if: >-
+      A network-classified error still appends to failed (wedging class not removed) or a not-found
+      package no longer reds (typo detection lost) -- re-split the error/warning classification.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The classification assertion runs as a standing unit test in the full pytest tier each
+      post-merge run; graduating a test_selector duplicate re-runs the same mocked test with no
+      marginal regression protection.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      VTS-20 dedupe -- update-instead-of-insert, reader-unreachable degradation, CI-guard, and
+      reader-boundary (not local-cache) read path.
+    command: bin/venv-python -m pytest tests/checks/test__budget_recs.py -q
+    expected: >-
+      All tests pass; a matching open budget_breach rec (returned by a mocked open_recs reader)
+      routes to update_rec with file_rec NOT called; no match routes to file_rec; a reader that
+      raises degrades to file_rec without raising; CI=="true" touches neither the reader nor the
+      portal and prints loudly; the dedupe never reads logs/.recommendations-log.jsonl.
+    fix_if: >-
+      A repeat breach files a new rec instead of updating, a reader outage crashes _file_budget_breach_rec,
+      the CI-guard performs a read/write, or the lookup reads the local cache -- correct the dedupe
+      read path (open_recs verb) and the update-vs-insert branch.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The dedupe behavior is asserted by standing unit tests (mocked reader + portal) that run in
+      the full pytest tier every post-merge run; a kernel duplicate cannot exercise the mocked
+      reader/portal boundary and adds no marginal protection.
+  - step: 5
+    phase: pre-deploy
+    action: VTS-20 summary -- preflight breach-rate derivation from warm rows, no reader re-fetch.
+    command: bin/venv-python -m pytest tests/session/preflight/test_alerts.py -q
+    expected: >-
+      All tests pass; _check_budget_breach_summary(rows) returns count + dominant_phase histogram
+      for supplied budget_breach rows, returns None on empty/None, and issues no reader call when
+      rows are supplied.
+    fix_if: >-
+      The summary re-fetches from the reader when warm rows are supplied (Decision 88 violation),
+      or the histogram/count is wrong -- derive purely from the supplied rows.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Mirrors the already-tested _check_budget_bypass_alert derivation and runs as a standing unit
+      test in the full pytest tier each post-merge run; a kernel duplicate adds no marginal
+      regression coverage.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      rec-2653 worker-mismatch guard -- 5 consecutive xdist collections under the fixed seed must
+      be identical (this is the mandated VP step).
+    command: >-
+      for i in 1 2 3 4 5; do bin/venv-python -m pytest tests/ -n auto --randomly-seed=20260710
+      --collect-only -q -m "not integration" > /tmp/xc_$i.log 2>&1 || { echo "run $i exited
+      nonzero"; exit 1; }; grep -q "Different tests were collected" /tmp/xc_$i.log && { echo "run
+      $i collection mismatch"; exit 1; }; done; echo "5/5 xdist collections consistent"
+    expected: 'Prints "5/5 xdist collections consistent"; every run exits 0 with no cross-worker mismatch line.'
+    fix_if: >-
+      Any run exits nonzero or prints "Different tests were collected between gwX and gwN" -- the
+      fixed seed is not being applied uniformly across -n auto workers; confirm
+      --randomly-seed=20260710 reaches every worker and overrides addopts' --randomly-seed=last.
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Regression -- fast presubmit tier green, including SLOC-under-budget (post-decompose, no
+      raise), placement/test-coverage mirror homes, and the hermeticity-flags gate.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      Exits 0; prints "All files within SLOC budgets" (confirming _scaffolding.py and
+      _budget_recs.py are under 500 with no config/sloc_budgets.yaml raise); no placement,
+      test-coverage, or hermeticity-flags failure.
+    fix_if: >-
+      A SLOC breach (decompose further per Decision 128 -- never raise the budget), a placement /
+      mirror-home failure (fix the test homes per Decision 131/130), or a hermeticity-flags red --
+      resolve on-branch; do not add config/sloc_budgets.yaml entries.
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Retirement + registry-repoint confirmation -- the deleted tests/validate/test_budget_rec_filing.py
+      is gone and unreferenced in tests/+scripts/, both relocated classes are present in
+      tests/checks/test__budget_recs.py, AND config/agent/verification_registry/registry.yaml no longer
+      references the retired path (its 3 graduated rows are repointed). Guards two silent gaps at once:
+      the double-run gap (validate_test_coverage checks source->test existence only; validate_placement
+      and no-cross-test-imports do not flag a stranded old test file) and the dangling-node_id gap
+      (validate_verification_registry re-executes only newly-ADDED check_ids, so a stale node_id is
+      never re-run).
+    command: >-
+      test ! -f tests/validate/test_budget_rec_filing.py && ! rg -l
+      'test_budget_rec_filing|TestBudgetBreachRecFiling' tests/ scripts/ --glob
+      '!tests/checks/test__budget_recs.py' && ! rg -q 'tests/validate/test_budget_rec_filing\.py'
+      config/agent/verification_registry/registry.yaml && rg -q 'class TestBudgetBreachRecFiling'
+      tests/checks/test__budget_recs.py && rg -q 'class TestBudgetRecFilingCiGuard'
+      tests/checks/test__budget_recs.py && echo "retirement + registry repoint confirmed"
+    expected: 'Prints "retirement + registry repoint confirmed"; exit 0.'
+    fix_if: >-
+      The old file still exists, a test_budget_rec_filing / TestBudgetBreachRecFiling reference lingers
+      in tests/ or scripts/, a tests/validate/test_budget_rec_filing.py path still appears in the
+      verification registry (a dangling graduated node_id), or a relocated class is missing from
+      tests/checks/test__budget_recs.py -- complete the delete + relocate + registry repoint before merge.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time retirement / stale-reference + registry-repoint sweep tied to this session's transient
+      repo state (the file deleted and the 3 rows repointed by this decomposition); it is not a durable
+      regression guard, so a permanent kernel command_exit_zero row asserting the old path's absence
+      would be meaningless after this PR lands.
+  - step: 9
+    phase: post-deploy
+    action: Closure obligation -- confirm bundled recs close on merge via the Resolves trailer.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull >/dev/null 2>&1; for r in rec-2342 rec-2052; do grep
+      "\"$r\"" logs/.recommendations-log.jsonl | grep -q '"status": "closed"' && echo "$r closed"
+      || echo "$r OPEN"; done
+    expected: Both rec-2342 and rec-2052 print "closed" after the post-merge cache sync.
+    fix_if: >-
+      Either rec prints OPEN -- confirm the squash-merge body carried "Resolves: rec-2342, rec-2052"
+      and rec-autoclose.yml ran; fall back to `ops_data_portal --update-rec <id> --status closed`.
+constraints:
+  - >-
+    pyproject.toml is NOT modified -- addopts (--randomly-seed=last, --disable-socket,
+    --allow-hosts=127.0.0.1,::1) stays untouched; validate_hermeticity_flags only READS it. The
+    fixed --randomly-seed in the explicit command builders overrides addopts' "last" (the proven
+    rec-2653 mechanism), which is exactly why VP step 6 (5 green xdist collections) is mandatory.
+  - >-
+    SLOC decompose-don't-raise (Decision 128): _scaffolding.py (485/500) breaches on the VTS-20
+    dedupe, so the budget-rec filing helpers move to scripts/checks/_budget_recs.py behind a
+    _scaffolding facade re-export (Decision 80/104/124). No config/sloc_budgets.yaml raise, no bare
+    --update-sloc-budgets re-seed.
+  - >-
+    Warehouse-as-source-of-truth (Decision 84/88): the VTS-20 dedupe reads the reader boundary
+    (open_recs named verb via src.common.iceberg_reader.make_reader) and writes only via
+    update_rec/file_rec; it NEVER reads logs/.recommendations-log.jsonl as a dedupe source (a read
+    cache is never a write source). The preflight summary serves the warm recs_rows_cache rows with
+    no reader re-fetch.
+  - >-
+    Preserve A.1 / Decision 153 verbatim -- _mirror_budget_notice_to_summary and the 3-way
+    budget-assertion branch stay as merged; do not revert or restructure them.
+  - >-
+    CI-guard preserved in the relocated _file_budget_breach_rec -- when CI=="true" it files/reads
+    nothing (no portal, no reader) and prints a loud stderr + step-summary diagnostic (Decision 84
+    I-4: never a silent skip, never a buffered outbox).
+  - >-
+    Only the files in scope may be modified. scripts/ is already ruff-clean (0 violations across
+    282 files), so VTS-18 needs no out-of-scope fixes; any residual out-of-scope lint finding
+    becomes a rec via scripts/ops_data_portal.py, never an inline fix.
+  - No rescue agents or workaround loops (Decision 55). ruff line length 127; ASCII hyphens only; no emojis; bin/venv-python for all Python invocations.
+context:
+  - >-
+    Authoritative spec: audits/validate-test-suite-4df4d48.yaml findings VTS-10, VTS-13, VTS-18,
+    VTS-14, VTS-20 (their evidence/proposed_change/acceptance fields govern). VTS-10/13 share the
+    full-tier command line (land together); VTS-18 is rec-2342; the hermeticity allow-hosts gap is
+    rec-2052.
+  - >-
+    Change 1 is a fast->full parity fix, not a double-add: the fast-tier _PYTEST_FLAGS already
+    carries -n auto + fixed seed + --timeout; _build_unit_test_cmd (full tier) lacks them. This is
+    distinct from A.1's work (Decision 153) which added _mirror_budget_notice_to_summary and the
+    budget-assertion branch, left untouched here.
+  - >-
+    VTS-20 dedupe prior art: Decision 142 (CI-RCA reader-verb dedupe, deterministic-in-code) -- the
+    closest structural precedent for a non-LLM reader-based update-instead-of-insert. Update path
+    files nothing new (matches the human's scope note).
+  - >-
+    Verification-registry coupling (round-2 critique fix): 3 graduated rows in
+    config/agent/verification_registry/registry.yaml hardcode the retired test path
+    tests/validate/test_budget_rec_filing.py and would go silently dangling on delete --
+    validate_verification_registry re-executes only newly-ADDED check_ids (confirmed
+    scripts/checks/verification/validate_verification_registry.py:34-48 _added_entries matches by
+    check_id), and guard_target-driven re-execution / orphan detection is T3.7 deferred_post_mvp. Fix:
+    repoint node_id -> tests/checks/test__budget_recs.py and guard_target -> scripts/checks/_budget_recs.py.
+    guard_target DECISION (judgment): it moves to _budget_recs.py because guard_target is provenance for
+    the source whose behavior the check guards, and the guarded logic (_file_budget_breach_rec /
+    _file_budget_bypass_rec + the VTS-20 dedupe) physically relocates there; leaving it on the facade
+    _scaffolding.py would decouple the guard from the code it protects and miss it once T3.7 wires
+    guard_target-driven re-execution. guard_symbol is unchanged (symbol names preserved across the move).
+  - >-
+    ci_rca deferral (planning HARD-BLOCK exception): the one open ci_rca rec, rec-2836 (terraform
+    init kislerdm/neon 504 flake on scripts/checks/_terraform.py, Critical), is a distinct
+    subsystem and failure category (terraform provider-init egress, Decision 119) -- not the
+    validate-test-suite engine. It fails all three Related-Work conditions and is deferred here with
+    this logged rationale; not addressed by this plan.
+  - >-
+    Main Divergence Assessment: branch cut from origin/main at 0 behind / 0 ahead; no scope file
+    overlaps main_files_changed_since_branch. No rebase needed.
+  - >-
+    Verification is V2 (Decision 48/79): pure Python, unit-tested with mocked reader/portal and
+    mocked network; no external system, no Lambda artifact (config/agent and scripts/checks are not
+    Lambda-packaged). Graduation dispositions per Decision 132/T3.21 (enforced both tiers).
+  - "Decision-scout verdict + CITE list (verbatim decision ids)"
+  - >-
+    Decision-scout round 1 = NO_FLAGS (no contradictions). CITE list: dec-128, dec-124, dec-104,
+    dec-80, dec-84, dec-88, dec-132, dec-142, dec-103, dec-131, dec-130, dec-55, dec-73, dec-60,
+    dec-135, dec-148, dec-119, dec-48, dec-79; recs rec-2653 (context), rec-2342 + rec-2052 (bundled).
+  - "gates: decision-scout=NO_FLAGS; plan-critique=<verdict> after <N> round(s)"
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/vts-c-plan-full-tier-engine-hardening)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md sections for the cited decisions read (128/124/104/80/84/88/132/142/103/131/130/135/148/119/48/79)
+  - audits/validate-test-suite-4df4d48.yaml findings VTS-10/13/18/14/20 re-read at implement time
+  - All files in scope located and readable; scripts/ confirmed ruff-clean before adding it to the sweep
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/checks/_budget_recs.py (Create): move _file_budget_breach_rec and _file_budget_bypass_rec
+    verbatim from _scaffolding.py (preserving the CI-guard and A.1's Decision-153-adjacent behavior),
+    then add the VTS-20 dedupe to _file_budget_breach_rec's LOCAL (non-CI) path: compute
+    dedup_phase = dominant_phase or "unknown"; look up an existing open budget_breach rec for
+    (branch, dedup_phase) via a helper that calls
+    src.common.iceberg_reader.make_reader(profile=...).named("open_recs"), filters source=="budget_breach"
+    and matches the (branch, dominant_phase) key (match on the context substrings
+    "Branch: {branch}." and "Dominant phase: {dedup_phase}." so existing recs match too); on a hit
+    call update_rec(existing_id, {"title": ..., "context": fresh_context}) and return; on no hit
+    call file_rec as today; on any reader exception, loud-warn and fall through to file_rec (breach
+    still recorded). Keep the whole block inside the existing try/except loud-warn envelope.
+  - >-
+    scripts/checks/_scaffolding.py (Modify): (a) _build_unit_test_cmd -- insert "-n", "auto",
+    "--timeout", "120", "--timeout-method=thread" and change "--randomly-seed=last" to
+    f"--randomly-seed={_PYTEST_RANDOMLY_SEED}"; keep --cov=src/--cov-report=term-missing/
+    --disable-socket/--junitxml. (b) run_lint_checks -- change the files-is-None default targets to
+    ["src/", "tests/", "scripts/"]. (c) delete the two moved filing helpers and add a facade
+    re-export `from scripts.checks._budget_recs import _file_budget_breach_rec, _file_budget_bypass_rec  # noqa: F401`;
+    leave _mirror_budget_notice_to_summary, _PYTEST_FLAGS, _PYTEST_RANDOMLY_SEED in place. Confirm
+    validate.py's existing `from scripts.checks._scaffolding import (...)` block is unchanged.
+  - >-
+    scripts/checks/verification/validate_hermeticity_flags.py (Modify): set the full-tier guarded
+    set to ("--disable-socket", f"--randomly-seed={_PYTEST_RANDOMLY_SEED}") (import the constant
+    from _scaffolding); check it against _build_unit_test_cmd() (or _cmd). Extend the check to also
+    assert the fast-tier _PYTEST_FLAGS contains the fixed seed, and to parse pyproject.toml
+    [tool.pytest.ini_options].addopts (read-only) and assert --disable-socket and an --allow-hosts
+    entry are present (rec-2052). Each missing flag appends a distinct failed[] entry.
+  - >-
+    scripts/checks/deps/validate_requirements.py (Modify): split the returncode!=0 branch -- a
+    network-classified stderr (connection/timeout/network/unreachable) prints a loud warning and is
+    collected into a separate warnings list (NOT failed); a non-network non-zero stays a not-found
+    error appended to failed. Print warnings distinctly; only real errors call failed.append.
+  - >-
+    scripts/preflight/alerts.py (Modify): add _derive_budget_breach_recent(rows, *, now=None)
+    (budget_breach recs in the last 7 days, grouped/counted by dominant_phase parsed from context,
+    newest first) and _check_budget_breach_summary(cache_rows=_common._READER_SENTINEL) mirroring
+    _check_budget_bypass_alert (supplied rows -> derive; None -> None; sentinel -> reader path,
+    best-effort). Return {"count": N, "by_phase": {...}} or None.
+  - >-
+    scripts/session/preflight.py (Modify): in the Phase-B ThreadPoolExecutor, submit
+    alerts._check_budget_breach_summary(recs_rows_cache); store the result as
+    report["budget_breach_summary"]; print a one-line summary to stderr when non-None (count +
+    dominant phase). Prefer calling via the alerts.-prefix (no new facade re-export) to avoid
+    touching the decomposition symbol-list test; if the facade-completeness test requires it, add
+    the symbols to the alerts import block and update tests/test_session_preflight_decomposition.py.
+  - >-
+    Tests: create tests/checks/test__budget_recs.py (relocate tests/validate/test_budget_rec_filing.py
+    content, delete the old file, add the dedupe update-vs-insert / reader-degradation / CI-guard /
+    no-local-cache-read tests); update tests/checks/verification/test_validate_hermeticity_flags.py
+    (fixed-seed + VTS-10/13 command flags + widened-guard cases); create tests/checks/deps/test_validate_requirements.py
+    (network-demotion + not-found); create tests/session/preflight/test_alerts.py (breach summary);
+    create tests/validate/test_lint_targets.py (scripts/ in run_lint_checks targets); adjust
+    tests/validate/test_budget.py only as validate_placement/validate_test_coverage require.
+  - >-
+    config/agent/verification_registry/registry.yaml (Modify): repoint the 3 graduated rows that
+    reference the retired test file. For check_ids budget-breach-priority-survives-real-validator,
+    budget-bypass-priority-survives-real-validator, and fast-tier-budget-rec-filing-ci-guard: (a) change
+    each check_spec.node_id file prefix from tests/validate/test_budget_rec_filing.py:: to
+    tests/checks/test__budget_recs.py:: (keep the ::Class::method segments verbatim -- the relocation
+    MUST preserve class names TestBudgetBreachRecFiling / TestBudgetRecFilingCiGuard and the 3 referenced
+    methods so the node_ids resolve), and (b) repoint guard_target from scripts/checks/_scaffolding.py to
+    scripts/checks/_budget_recs.py. Leave guard_symbol (_file_budget_breach_rec / _file_budget_bypass_rec)
+    and every other field unchanged; preserve the YAML >- folded-scalar form. Do NOT rename the check_ids
+    (a rename makes validate_verification_registry treat the row as newly-added and demand a
+    fail-on-revert differential).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. VP step 6 (5 consecutive green
+    xdist collections) is a hard gate before merge (rec-2653 class). On an unrecoverable failure,
+    stop and RCA (Decision 55) -- never a workaround loop.
+  - >-
+    Commit-flow: include "Resolves: rec-2342, rec-2052" in the squash-merge body so rec-autoclose
+    fires. Report what was implemented and the verification results.
+work_areas: []
+rollback: >-
+  Single-PR, revert-clean: reverting the squash commit restores _build_unit_test_cmd's serial
+  form, the src/+tests/ lint sweep, the blocking validate_requirements, and folds
+  _budget_recs.py back (the facade re-export is inert once the module is gone -- confirm no other
+  importer references scripts.checks._budget_recs before/after). No data migration, no infra state.
