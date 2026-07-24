@@ -276,6 +276,7 @@ def main(roadmap_detail: str = "slim") -> int:
         )
         fut_forward_fix = phase_b.submit(alerts._check_forward_fix_recursion, recs_rows_cache)
         fut_budget = phase_b.submit(alerts._check_budget_bypass_alert, recs_rows_cache)
+        fut_budget_breach_summary = phase_b.submit(alerts._check_budget_breach_summary, recs_rows_cache)
 
         _rec_result = fut_rec_count.result()
         ci_rca_recs = fut_ci_rca.result()
@@ -288,6 +289,7 @@ def main(roadmap_detail: str = "slim") -> int:
         convergence_rca_gap_alert = fut_convergence_rca_gap.result()
         forward_fix_alert = fut_forward_fix.result()
         budget_bypass_alert = fut_budget.result()
+        budget_breach_summary = fut_budget_breach_summary.result()
 
     recs_read_status: str
     if _rec_result == "reader_unreachable":
@@ -420,6 +422,14 @@ def main(roadmap_detail: str = "slim") -> int:
         print(
             f"Budget bypass alert: {budget_bypass_alert['count']} --ignore-budget invocations in the last 7 days."
             " Repeated bypass indicates fast-tier drift -- consider a planning session to revisit the budget.",
+            file=sys.stderr,
+        )
+    report["budget_breach_summary"] = budget_breach_summary
+    if budget_breach_summary is not None:
+        _dominant_breach_phase = max(budget_breach_summary["by_phase"], key=budget_breach_summary["by_phase"].get)
+        print(
+            f"Budget breach summary: {budget_breach_summary['count']} fast-tier budget breach(es) in the last "
+            f"7 days (dominant phase: {_dominant_breach_phase}).",
             file=sys.stderr,
         )
 
