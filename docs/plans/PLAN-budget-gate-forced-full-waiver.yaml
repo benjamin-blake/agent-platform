@@ -1,0 +1,375 @@
+schema_version: 1
+slug: "budget-gate-forced-full-waiver"
+intent: >-
+  Wire the existing full_suite_forced selection-manifest signal into Decision 73's fast-tier
+  budget assertion so a root-conftest-editing PR (which deterministically forces full-suite
+  scope, ~19.8 min > the 5-min budget) WARNS-and-PASSES instead of being unbypassably hard-failed,
+  bounded by a new 25-minute forced-run ceiling under the 30-minute pr-validate job timeout;
+  ratified as Decision 152. Fixes a latent defect in merged Slice A, which shipped scope-forcing
+  (VTS-03) without teaching the budget gate about its own signal and thereby blocked Slice B PR #727.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-budget-gate-forced-full-waiver.yaml
+phase: >-
+  Platform quality hardening -- interstitial slice A.1 of the validate-test-suite-audit overseer
+  run. Wires Decision 135's full_suite_forced signal into Decision 73's fast-tier budget assertion.
+  No product-roadmap phase and no tier_item; human-approved forward-fix that unblocks Slice B (PR #727).
+scope:
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add a _FORCED_FULL_SUITE_CEILING_SECONDS = 1500 constant beside _FAST_TIER_BUDGET_SECONDS
+      (line 247); in _scaffold_budget_assertion (~line 459) read
+      _affected_selection["manifest"].get("full_suite_forced", False) and branch the existing
+      "elapsed > budget" breach path three ways (forced-within-ceiling warn-and-pass; forced-over-
+      ceiling hard-fail; non-forced hard-fail unchanged); add the new notice helper to the facade
+      re-export block (lines 42-59). The --ignore-budget and within-budget paths stay byte-identical.
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      Add one small helper _mirror_budget_notice_to_summary(title, message) beside the existing
+      _file_budget_breach_rec / _file_budget_bypass_rec helpers: print the message and, in CI,
+      append a "## {title}" section to GITHUB_STEP_SUMMARY (mirroring the existing lines 121-125
+      pattern); files NO rec and never exits. Shared by the forced-waiver notice (no exit) and the
+      forced-run ceiling-breach notice (caller exits 1). No other function in this file is touched.
+  - file: tests/validate/test_budget.py
+    action: Modify
+    purpose: >-
+      Add TestForcedFullSuiteWaiver (forced breach in (300,1500] exits 0 with a distinct waiver
+      notice and no breach rec; non-forced breach still exits 1; forced breach > 1500 exits 1) driven
+      end-to-end via _validate.main() with mocked time.monotonic, injecting full_suite_forced by
+      patching scripts.checks.deps.affected_tests.derive_affected_tests / emit_manifest; plus a
+      TestForcedWaiverCiTelemetry unit test that the new helper mirrors to GITHUB_STEP_SUMMARY and
+      files no rec.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Insert the drafted "## Decision 152" (amends Decision 73's enforcement + Decision 135) as the
+      new top entry, before Decision 151. Amend-only: the Decision 73 and 135 amendments are stated
+      IN Decision 152's body; the Decision 73 and 135 bodies are NOT edited (Decision 134/145
+      convention). Re-check the next free number at execution time (Decision 84 numbering race).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A --pre run whose selection manifest has full_suite_forced=True and elapsed in (300s, 1500s]
+    EXITS 0, emits a DISTINCT "budget waived: full-suite scope forced by root-conftest change"
+    notice, mirrors it to the CI step summary, and does NOT call _file_budget_breach_rec.
+  - >-
+    A --pre run with full_suite_forced falsy and elapsed > 300s behaves EXACTLY as today:
+    _file_budget_breach_rec + the existing ERROR diagnostic + exit 1. The gate is not generally
+    weakened, and the read is fail-closed -- _empty_manifest sets full_suite_forced=False and the
+    code reads it with .get(..., False), so a Decision-55 derivation-failure fallback hard-fails
+    rather than accidentally waiving.
+  - >-
+    A --pre run with full_suite_forced=True and elapsed > 1500s HARD-FAILS (exit 1) with a distinct
+    ceiling-breach notice, keeping an enforced 25-min ceiling under the 30-min pr-validate job timeout.
+  - >-
+    No regression across tests/validate/test_budget.py: the --ignore-budget bypass, the CI
+    --ignore-budget guard, the within-budget pass, and the CI budget-breach step-summary telemetry
+    all stay green.
+  - >-
+    docs/DECISIONS.md gains "## Decision 152" (amending Decision 73's enforcement + Decision 135) as
+    a PURELY ADDITIVE top insertion; Decisions 73 and 135 bodies are unedited (amend-only). No
+    conftest file is touched; scripts/checks/registry.py and FROZEN_PRE_SCAFFOLDS are untouched;
+    every touched file stays under 500 SLOC (Decision 128/130).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Forced breach within the ceiling warns-and-passes with a distinct notice (the core waiver).
+    command: bin/venv-python -m pytest "tests/validate/test_budget.py::TestForcedFullSuiteWaiver::test_forced_breach_within_ceiling_warns_and_passes" "tests/validate/test_budget.py::TestForcedFullSuiteWaiver::test_waiver_notice_is_distinct" -v
+    expected: >-
+      Both pass: a run with full_suite_forced=True and elapsed=400s (in (300,1500]) exits 0; stdout
+      carries a distinct "waived"/"forced by root-conftest" notice (NOT the hard-fail ERROR); and
+      _file_budget_breach_rec is not called for the forced case.
+    fix_if: >-
+      The forced in-window run exits 1 (waiver not applied), the notice is indistinguishable from the
+      non-forced ERROR, or the breach-rec stream is still filed for the forced case.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The waiver behaviour is pinned by a permanent test in tests/validate/test_budget.py, which the
+      full post-merge tier runs every push and --pre re-selects on any edit to validate.py or
+      _scaffolding.py; a parallel kernel test_selector row would duplicate the standing suite guard.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Non-forced breach still hard-fails (exit 1) -- the anti-drift gate is not gutted.
+    command: bin/venv-python -m pytest "tests/validate/test_budget.py::TestForcedFullSuiteWaiver::test_non_forced_breach_still_hard_fails" "tests/validate/test_budget.py::TestBudgetAssertion::test_exits_1_on_budget_breach" -v
+    expected: >-
+      Both pass: a run with full_suite_forced=False and elapsed=400s exits 1 via the unchanged
+      _file_budget_breach_rec + ERROR path, and the pre-existing non-forced breach test stays green.
+    fix_if: >-
+      A non-forced breach no longer exits 1 -- the change weakened the gate generally instead of
+      narrowing it to exactly the full_suite_forced case.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The preserved hard-fail is guarded by permanent suite tests (new + pre-existing) run every full
+      tier and re-selected on validate.py edits; a kernel row duplicates that standing coverage.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Forced breach over the 25-min ceiling hard-fails (exit 1) -- the forced path is bounded.
+    command: bin/venv-python -m pytest "tests/validate/test_budget.py::TestForcedFullSuiteWaiver::test_forced_breach_over_ceiling_hard_fails" -v
+    expected: >-
+      Passes: a run with full_suite_forced=True and elapsed=1600s (> 1500) exits 1 with a distinct
+      ceiling-breach notice; the boundary is exclusive-above-1500 (a forced run at exactly 1500s still
+      warns-and-passes per step 1's window).
+    fix_if: >-
+      A forced run over the ceiling passes (an unbounded escape), or the boundary is off-by-one at
+      exactly 1500s.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The ceiling contract is asserted by a permanent suite test run every full tier and re-selected
+      on validate.py edits; a kernel metric_under_threshold row would duplicate that standing guard.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Full budget-suite regression -- the whole test_budget.py file stays green.
+    command: bin/venv-python -m pytest tests/validate/test_budget.py -v
+    expected: >-
+      All tests pass: the new TestForcedFullSuiteWaiver / TestForcedWaiverCiTelemetry plus every
+      pre-existing class (TestBudgetAssertion, TestIgnoreBudgetFlag, TestIgnoreBudgetCIGuard,
+      TestBudgetBreachCiTelemetry).
+    fix_if: >-
+      Any existing budget / ignore-budget / CI-guard / breach-telemetry test reddens, indicating the
+      change perturbed behaviour outside the forced-scope branch.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A whole-file regression sweep is not a single canonical primitive, and its permanence is already
+      provided by the full post-merge tier that runs this file every push; a kernel row cannot express
+      a multi-class suite pass and would duplicate the tier.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      The new waiver-notice helper mirrors to GITHUB_STEP_SUMMARY and files no rec (CI diagnosability).
+    command: >-
+      bin/venv-python -c "import os,tempfile,pathlib; from scripts.checks._scaffolding import _mirror_budget_notice_to_summary as m; p=pathlib.Path(tempfile.mkdtemp())/'s.md'; os.environ['GITHUB_STEP_SUMMARY']=str(p); m('Fast-tier budget waived (forced full-suite scope)','budget waived: full-suite scope forced by root-conftest change'); c=p.read_text(encoding='utf-8'); assert 'Fast-tier budget waived' in c and 'forced' in c, c; print('waiver-mirror OK')"
+    expected: >-
+      Prints 'waiver-mirror OK' -- the helper wrote a distinct titled section to GITHUB_STEP_SUMMARY
+      and returned without any portal / rec write (it has no ops_data_portal path at all).
+    fix_if: >-
+      The helper raises, does not write the titled section, or attempts a portal/rec/outbox write
+      (it must be a print-plus-mirror only, mirroring _file_budget_breach_rec's CI leg).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The mirror is a file_presence/command_output_matches-shaped property, but it is permanently
+      guarded by the TestForcedWaiverCiTelemetry unit test in tests/validate/test_budget.py (run every
+      full tier, re-selected on _scaffolding.py edits), so a kernel row duplicates that standing guard.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      SLOC decompose-not-raise guard -- no touched file crossed 500 SLOC (no budget raise/registration).
+    command: >-
+      bin/venv-python -c "import pathlib; sl=lambda f: len([l for l in pathlib.Path(f).read_text(encoding='utf-8').splitlines() if l.strip() and not l.strip().startswith('#')]); files=['scripts/validate.py','scripts/checks/_scaffolding.py','tests/validate/test_budget.py']; [print(f, sl(f)) for f in files]; assert all(sl(f)<=500 for f in files); print('all <=500 SLOC (decompose-not-raise honored)')"
+    expected: >-
+      Prints each file's SLOC and 'all <=500 SLOC' -- validate.py, _scaffolding.py and test_budget.py
+      each stay at or under 500, so no config/sloc_budgets.yaml raise or new registration was needed.
+    fix_if: >-
+      Any touched file exceeds 500 SLOC -- decompose per Decision 131 (extract a cohesive sibling
+      module and re-export), never raise the budget or re-seed via --update-sloc-budgets (Decision 128).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The 500-SLOC ceiling is permanently guarded whole-repo every tier by validate_sloc_limits
+      (Decision 130); this step is a one-time authoring confirmation, so a kernel row duplicates the
+      standing check.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Decision 152 present and DECISIONS.md purely additive (amend-only; Decision 73/135 bodies intact).
+    command: >-
+      git fetch origin main -q && test "$(grep -c '^## Decision 152:' docs/DECISIONS.md)" -eq 1 && test -z "$(git diff origin/main -- docs/DECISIONS.md | grep -E '^-[^-]')" && echo 'D152 present + DECISIONS.md purely additive (amend-only)'
+    expected: >-
+      Prints 'D152 present + DECISIONS.md purely additive (amend-only)' -- exactly one "## Decision 152:"
+      header exists and the DECISIONS.md diff vs origin/main contains no removed content lines, proving
+      the Decision 73 and 135 bodies were not edited (the amendment lives only in Decision 152).
+    fix_if: >-
+      The header is missing/duplicated, or the diff removed/modified any existing line (a Decision 73
+      or 135 body edit) -- move all amendment text into Decision 152's body instead.
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - >-
+    Narrow, do not weaken: the waiver applies ONLY when full_suite_forced is true; every non-forced
+    breach keeps EXACTLY today's hard-fail (Decision 73 anti-drift intact). Read the flag fail-closed
+    with .get("full_suite_forced", False) so a Decision-55 derivation-failure fallback hard-fails.
+  - >-
+    Touch NO conftest file. This is load-bearing: A.1's own pr-validate must run the normal capped
+    selection (full_suite_forced=False for this diff), so the fix's own PR is not self-blocked by the
+    very gate it edits.
+  - >-
+    Inline path only: do NOT modify scripts/checks/registry.py or the FROZEN_PRE_SCAFFOLDS baseline in
+    tests/test_checks_registry.py (Decision 104/135). The budget assertion stays the existing
+    budget_assertion scaffold step; no new registered check is introduced.
+  - >-
+    SLOC decompose-don't-raise (Decision 128/130): keep every touched file under 500 SLOC (validate.py
+    425, _scaffolding.py 479 with 21 headroom, test_budget.py 282). The new helper is ~6 SLOC
+    (_scaffolding.py -> ~485). If against expectation _scaffolding.py would breach 500, decompose per
+    Decision 131 (sibling module + re-export), never raise the budget or re-seed via --update-sloc-budgets.
+  - >-
+    Amend-only (Decision 134/145): state the Decision 73 and Decision 135 amendments IN Decision 152's
+    body; do NOT edit the Decision 73 or 135 bodies. Re-check the next free "## Decision NNN:" number at
+    implement time and shift off 152 if a concurrent PR claimed it (Decision 84 numbering authority).
+  - >-
+    Only modify the four in-scope files; in scripts/checks/_scaffolding.py add ONLY the new helper and
+    touch nothing else. Out-of-scope bugs become recommendations via scripts/ops_data_portal.py, not
+    inline fixes.
+  - >-
+    No rescue agents or workaround loops (Decision 55). No emojis; ruff line-length 127; ASCII hyphens
+    only; always invoke bin/venv-python.
+context:
+  - >-
+    LATENT DEFECT this fixes: merged Slice A (docs/plans/PLAN-affected-set-recall-hardening.yaml,
+    audit finding VTS-03) made the --pre selector FORCE full-suite scope on a root tests/conftest.py
+    change and emit full_suite_forced into the manifest (scripts/checks/deps/affected_tests.py:416,435),
+    but wired that signal to nothing. Slice A's own plan (context line ~282) called Decision 73's budget
+    assertion a "sanctioned backstop" relying on Decision 135 reversal-condition (b)/KG.13 -- which is a
+    build-FAILING check whose cited relief valve cannot fire at this repo's concurrency 1. So a
+    conftest-editing PR runs ~6930 tests (~19.8 min, already at -n auto) and the 5-min budget assertion
+    hard-fails it deterministically. It blocked Slice B PR #727. This slice A.1 is the human-approved
+    forward-fix.
+  - >-
+    CITATION (corrected per decision-scout round 1): the KG.13 build-orchestrator revisit trigger is an
+    AND-gate -- executor concurrency > 1 AND (KG.13 filed OR a fast-tier-budget breach recurs) -- and
+    lives in Decision 80 point 4 (DECISIONS.md line 3768; "At T4.1 concurrency = 1"), NOT Decision 79
+    (the Lambda-deploy clause, irrelevant here). At sole-dev concurrency 1 the AND-gate can never fire,
+    so the breach never arms any relief -- the "backstop" was in practice an unbypassable blocker, which
+    is exactly why an in-band budget-gate waiver (not the KG.13 relief valve) is the correct forward-fix.
+  - >-
+    Decision 135 internal inconsistency reconciled in Decision 152: its KG.13 boundary note (line 911)
+    states concurrency > 1 AND (...), while reversal-condition (b) (line 942) parenthetically reads
+    concurrency > 1 OR a budget breach. The AUTHORITATIVE form is the AND-gate boundary note (concordant
+    with Decision 80 point 4); reversal-condition (b) is a design-REVISIT SIGNAL, not a runtime waiver (a
+    breach never lets the stranded PR pass).
+  - >-
+    Decision 150 significance gate CHECKED: Decision 152 clears the bar -- a durable architectural
+    commitment (amends a ratified CI enforcement invariant), adds a bounded 25-min ceiling, and carries
+    reversal conditions; not a CD state-flip, operational fact, or field-semantics change.
+  - >-
+    Decision 48 (V2): unit-level verification against the REAL closure via _validate.main() + a mocked
+    time.monotonic; no external system, deploy, or credentials -- mirrors Decision 135's own V2. Decision
+    131 (test-colocation mirror): the new tests live beside the existing budget-assertion tests in
+    tests/validate/test_budget.py. Decision 151: Decision 152 carries an optional Intent line.
+  - >-
+    Fail-closed proof: scripts/checks/deps/affected_tests.py::_empty_manifest sets full_suite_forced=False
+    (line 331), and full_suite_forced is True only for the ROOT tests/conftest.py (line 416) -- so the
+    waiver applies ONLY on a successful derivation that explicitly flagged a root-conftest change; any
+    fallback or sub-conftest reads False and hard-fails. Ground for the 25-min ceiling: the pr-validate
+    job has timeout-minutes: 30 (.github/workflows/ci.yml:19) running validate --pre, so 1500s hard-fails
+    with a diagnostic ~5 min before the opaque job-timeout kill.
+  - >-
+    KNOWN RESIDUAL (deliberately not engineered, recorded in Decision 152): an autouse-fixture-bearing
+    SUB-conftest uncaps its own subtree (VTS-03 conftest_subtree_forced provenance) but sets
+    full_suite_forced=False, so a large forced subtree could still hard-fail the 5-min gate. Left as-is
+    (rare, bounded); if it manifests the remedy is to extend the flag / add a bounded per-subtree
+    allowance, tracked then.
+  - >-
+    Test injection seam: derive_affected_tests / emit_manifest are function-scope imports inside
+    validate.py's --pre block (line 425), so tests patch scripts.checks.deps.affected_tests.derive_affected_tests
+    to return a manifest with full_suite_forced set and patch emit_manifest to a no-op; drive the closure
+    end-to-end via _validate.main() with mocked time.monotonic (same pattern as the existing
+    TestBudgetAssertion class).
+  - >-
+    SLOC at planning time (authoritative count = non-blank non-comment): scripts/validate.py 425/500,
+    scripts/checks/_scaffolding.py 479/500 (21 headroom), tests/validate/test_budget.py 282/500. Neither
+    source file is registered in config/sloc_budgets.yaml, so the 500 default applies; the ~6-SLOC helper
+    keeps _scaffolding.py at ~485 -- no raise, no decomposition needed.
+  - >-
+    Main Divergence: branch was ~1 commit behind origin/main at planning time (preflight main_freshness).
+    Rebase is deferred to commit-flow time per AGENTS.md Git-ops procedure (assessment-time does not
+    auto-rebase); the pre-push rebase handles any overlap on docs/DECISIONS.md (newest-first top insertion
+    minimizes conflict surface). ci_rca_unresolved_recs empty (no hard block).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (round 1, not a BLOCK; core rationale VALIDATED against code + decision text). CITE: dec-73, dec-135, dec-80, dec-150, dec-60, dec-55, dec-48, dec-131, dec-134, dec-145, dec-151, dec-84. Roadmap refs (not DECISIONS.md entries): KG.13 / T3.11 c5; validate-test-suite audit VTS-03; Slice B PR #727."
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=pending (Design-B trampoline gate dispatched after commit/push)."
+  - |
+    DRAFT Decision 152 (full text; added to docs/DECISIONS.md at implement time as the new top entry,
+    before Decision 151; re-check the next free number at execution time per Decision 84):
+
+    ## Decision 152: Fast-tier budget assertion waives a full-suite-forced --pre run (warn, not hard-fail) under a 25-minute forced-run ceiling (amends Decision 73 enforcement + Decision 135) (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-24
+    **Warehouse ID:** dec-152 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:**
+    Decision 135's affected-set selector (as hardened by audit finding VTS-03) forces FULL-suite scope on the --pre fast tier whenever a PR changes the root `tests/conftest.py`, emitting a `full_suite_forced` flag into the selection manifest. That signal was wired to nothing: Decision 73's fast-tier BUDGET assertion (`scripts/validate.py::_scaffold_budget_assertion`) hard-fails the build (exit 1) whenever elapsed exceeds the 5-minute (300s) budget, with no knowledge of the forced-scope flag. A root-conftest edit deterministically runs the full ~6930-test suite (~19.8 min, already at `-n auto`), so the budget assertion hard-blocks ANY conftest-editing PR from merging via normal CI -- it blocked Slice B's PR #727. Slice A's plan (`PLAN-affected-set-recall-hardening`) called the budget assertion a "sanctioned backstop" and cited Decision 135 reversal-condition (b)/KG.13 as the relief valve, but that relief valve is structurally dead at this repo's concurrency: the KG.13 build-orchestrator revisit trigger (Decision 80 point 4, line 3768; Decision 135's KG.13 boundary note, line 911) is an AND-gate requiring `executor concurrency > 1 AND (KG.13 filed OR a fast-tier-budget breach recurs)`, and this is a sole-developer repo at concurrency 1 ("At T4.1 concurrency = 1", Decision 80). The AND-gate can never fire, so a breach never arms any relief -- the "backstop" was in practice an unbypassable blocker.
+
+    **Intent:**
+    Teach the fast-tier budget gate about its own `full_suite_forced` signal so a deterministic, already-diagnosed full-suite run (a root-conftest PR) warns-and-passes instead of hard-failing, while keeping the gate's anti-drift teeth for every ordinary breach and bounding the forced path with an enforced 25-minute ceiling.
+
+    **Decision:**
+    1. **Forced-scope waiver (amends Decision 73 enforcement).** In `scripts/validate.py::_scaffold_budget_assertion`, when the selection manifest's `full_suite_forced` is true AND elapsed exceeds the 5-minute (300s) budget but is at or under a 25-minute (1500s) forced-run ceiling, the assertion emits a DISTINCT "budget waived: full-suite scope forced by root-conftest change" notice (mirrored to the CI step summary), skips the already-diagnosed `_file_budget_breach_rec` stream, and does NOT exit non-zero. This narrows Decision 73's "the fast tier asserts wall-clock budget and fails non-zero on breach" (point 1 / the "Enforced budgets" rationale) for exactly one deterministic, self-identified case.
+    2. **Hard-fail preserved for every non-forced breach.** When `full_suite_forced` is falsy, behaviour is EXACTLY as before: `_file_budget_breach_rec` + the existing ERROR diagnostic + exit 1. The gate's anti-drift purpose is intact; this is not a general weakening. The read is fail-closed -- `_empty_manifest` sets `full_suite_forced=False` and the code reads it with `.get(..., False)`, so a Decision-55 derivation-failure fallback hard-fails rather than accidentally waiving.
+    3. **Forced-run ceiling.** Even when `full_suite_forced`, elapsed above the 25-minute (1500s) ceiling hard-fails (exit 1) with a distinct ceiling-breach notice. The ceiling sits under the `pr-validate` job's 30-minute timeout (`.github/workflows/ci.yml`), so a runaway forced run fails with a clear diagnostic ~5 minutes before the opaque job-timeout kill, keeping an enforced contract on the forced path.
+
+    **Amends Decision 135:** the `full_suite_forced` manifest flag (Decision 135 point 5 surface, populated by VTS-03) becomes a load-bearing gate input, not merely an observability field. Decision 135 carries an internal inconsistency on the KG.13 trigger: its KG.13 boundary note (line 911) states `concurrency > 1 AND (KG.13 filed OR budget breach)` while reversal-condition (b) (line 942) parenthetically reads `concurrency > 1 OR a genuine fast-tier-budget breach`. The AUTHORITATIVE form is the AND-gate boundary note (concordant with Decision 80 point 4); reversal-condition (b) is a design-REVISIT SIGNAL (it invites re-examining whether a selection/coverage cache is warranted), NOT a runtime waiver -- a breach never lets the stranded PR pass. That is precisely why an in-band budget-gate waiver, not the KG.13 relief valve, is the correct forward-fix.
+
+    **Rationale:**
+    The budget assertion exists to catch fast-tier DRIFT -- a check silently growing past its contract (Decision 73 "Enforced budgets"). A root-conftest change is not drift: it is a rare, deterministic, self-identified event whose full-suite cost is understood and expected (Slice A consciously routed it to full scope). Blocking it teaches nothing and merely strands the PR, because the only sanctioned escape (`--ignore-budget`) is forbidden in CI (the `validate.py` CI guard) and the KG.13 relief valve cannot arm at concurrency 1. Warning-and-passing the forced case while preserving the hard-fail for every ordinary breach keeps the anti-drift signal exactly where it is meaningful, and the 25-minute ceiling under the 30-minute job timeout preserves an enforced upper bound so the forced path cannot itself become an unbounded escape.
+
+    **Known residual (deliberately not engineered):** `full_suite_forced` is set only for the ROOT `tests/conftest.py` (`scripts/checks/deps/affected_tests.py`). An autouse-fixture-bearing SUB-conftest uncaps its own subtree (VTS-03 `conftest_subtree_forced` provenance) but sets `full_suite_forced=False`, so a large forced subtree could still hard-fail the 5-minute gate. This is left as-is: sub-conftest subtrees are bounded and the case is rare; widening the waiver to a per-subtree budget is out of scope and would dilute the signal. If it manifests, the remedy is to extend the flag (or add a bounded per-subtree allowance), tracked then, not now.
+
+    **Reversal conditions:** Revisit if (a) forced-scope waivers become frequent enough that they mask genuine fast-tier drift landing in the same PRs as conftest edits (tighten to require the manifest also show no non-conftest slow-check growth); (b) the 25-minute ceiling is hit in practice (the forced full suite genuinely exceeds it -- then the suite itself, not the gate, is the problem, and this arms the Decision 80 point 4 / KG.13 revisit on its own terms if concurrency has by then risen above 1); (c) the known-residual sub-conftest case starts hard-failing real PRs (extend the flag). Full reversal (drop the waiver, restore the unconditional hard-fail) is a one-function revert with no data or schema migration.
+
+    **Significance:** clears the Decision 150 significance bar -- a durable architectural commitment (amends a ratified CI enforcement invariant), with reversal-relevant consequences and explicit reversal conditions; not a CD state-flip, operational fact, or field-semantics change.
+
+    **Related:** Decision 73 (fast-tier budget enforcement this narrows -- amended in Decision 152's body per the Decision 134/145 amend-only convention; Decision 73's own body is not edited), Decision 135 (the `full_suite_forced` signal source and the KG.13 boundary this reconciles), Decision 80 point 4 (the concurrency>1 AND-gate KG.13 revisit trigger that is the dead relief valve at concurrency 1), Decision 60 (originating two-tier / 5-minute-budget ratification -- lineage), Decision 150 (significance bar this entry is checked against), Decision 55 (fail-loud fallback -- the waiver reads fail-closed), Decision 48 (V2 verification tier), Decision 131 (test-colocation mirror -- the new tests live beside the budget-assertion tests), Decision 84 (warehouse SoT + decision-numbering authority). Roadmap refs (not DECISIONS.md entries): KG.13 / T3.11 c5 (the deferred TIA/cache work, still undisturbed), the validate-test-suite audit (VTS-03, which introduced `full_suite_forced`), Slice B PR #727 (the PR this unblocks).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/vts-a1-plan-budget-gate-forced-full-waiver)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (73, 135, 80 point 4, 150, 60, 55, 48, 131, 134/145, 151, 84)
+  - >-
+    Anchors confirmed: validate.py _FAST_TIER_BUDGET_SECONDS=300 (line 247), _scaffold_budget_assertion
+    (line 459), facade block (lines 42-59); affected_tests.py full_suite_forced (line 416/435) and
+    _empty_manifest False default (line 331); _scaffolding.py breach/bypass helpers + CI step-summary
+    mirror (lines 105-126); ci.yml pr-validate timeout-minutes 30 (line 19)
+  - All four scope files located and readable; the derive_affected_tests function-scope import seam verified for test injection
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/validate.py: add _FORCED_FULL_SUITE_CEILING_SECONDS = 1500 beside _FAST_TIER_BUDGET_SECONDS
+    (line 247), and add "_mirror_budget_notice_to_summary" to the scripts.checks._scaffolding facade
+    re-export block (lines 42-59, alongside _file_budget_breach_rec / _file_budget_bypass_rec).
+  - >-
+    scripts/validate.py _scaffold_budget_assertion (~line 459): read
+    forced = bool(_affected_selection["manifest"].get("full_suite_forced", False)). Keep the outer
+    "elif elapsed > _FAST_TIER_BUDGET_SECONDS:" guard and nest a 3-way branch: (i) forced and
+    elapsed <= _FORCED_FULL_SUITE_CEILING_SECONDS -> _mirror_budget_notice_to_summary(<waiver title>,
+    <distinct waiver message>), NO exit; (ii) forced (elapsed > ceiling) ->
+    _mirror_budget_notice_to_summary(<ceiling title>, <distinct ceiling ERROR message>) then
+    sys.exit(1); (iii) else (not forced) -> unchanged _file_budget_breach_rec(...) + the existing ERROR
+    print + sys.exit(1). Leave the args.ignore_budget and within-budget paths byte-identical.
+  - >-
+    scripts/checks/_scaffolding.py: add _mirror_budget_notice_to_summary(title: str, message: str) -> None
+    beside the existing budget helpers -- print(message) and, if os.environ.get("GITHUB_STEP_SUMMARY"),
+    append a "\n## {title}\n\n{message}\n" section (mirroring lines 121-125); files NO rec, never exits.
+    Keep the file under 500 SLOC (479 -> ~485).
+  - >-
+    tests/validate/test_budget.py: add TestForcedFullSuiteWaiver with
+    test_forced_breach_within_ceiling_warns_and_passes (elapsed 400s, forced, exit 0),
+    test_waiver_notice_is_distinct (stdout has the waiver wording, not the hard-fail ERROR),
+    test_non_forced_breach_still_hard_fails (elapsed 400s, not forced, exit 1),
+    test_forced_breach_over_ceiling_hard_fails (elapsed 1600s, forced, exit 1) -- all via _validate.main()
+    with mocked time.monotonic and full_suite_forced injected by patching
+    scripts.checks.deps.affected_tests.derive_affected_tests / emit_manifest. Add TestForcedWaiverCiTelemetry
+    asserting _mirror_budget_notice_to_summary writes the titled section to GITHUB_STEP_SUMMARY and files no rec.
+  - >-
+    docs/DECISIONS.md: insert the drafted "## Decision 152" block (full text in this plan's context) as the
+    new top entry, before Decision 151. State the Decision 73 + Decision 135 amendments IN Decision 152's
+    body only; do NOT edit the Decision 73 or 135 bodies (Decision 134/145 amend-only). Re-check the next
+    free "## Decision NNN:" number first and shift off 152 if a concurrent PR claimed it (Decision 84).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop and
+    RCA (Decision 55). Do not patch out of scope.
+  - "Report: what was implemented, per-step verification results, and any deferred recommendations."
+rollback: >-
+  Revert the branch's commits on scripts/validate.py and scripts/checks/_scaffolding.py; the waiver is a
+  localized branch inside one function plus one small print-plus-mirror helper, so reverting restores the
+  unconditional Decision 73 hard-fail with no data or schema migration. Decision 152 in docs/DECISIONS.md
+  is removed by the same revert (purely-additive top insertion).
