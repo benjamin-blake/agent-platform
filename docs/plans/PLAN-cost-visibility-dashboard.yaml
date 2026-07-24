@@ -1,0 +1,110 @@
+schema_version: 1
+slug: "cost-visibility-dashboard"
+intent: >-
+  Scope (report-only) a private variable-cost visibility dashboard and place it on the platform
+  roadmap as a deferred_post_mvp item, so the platform's operational spend becomes legible as it
+  scales -- without building anything premature while variable spend is still noise.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-cost-visibility-dashboard.yaml
+phase: >-
+  Platform tier_item T2.51 (new, deferred_post_mvp). No product-roadmap phase -- this is platform
+  cost-observability infrastructure.
+scope:
+  - file: docs/plans/reports/REPORT-cost-visibility-dashboard.md
+    action: Create
+    purpose: >-
+      The scoping deliverable -- cost-proportion analysis, the all-AWS private-S3 projection
+      architecture, feasibility findings, and the deferred timing rationale.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add tier item T2.51 (deferred_post_mvp) placing the capability on the roadmap with structured
+      exit_criteria and an activation-trigger progress_note.
+  - file: docs/plans/PLAN-cost-visibility-dashboard.yaml
+    action: Create
+    purpose: The REPORT-ONLY planning artifact pointing at the deliverable.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/plans/reports/REPORT-cost-visibility-dashboard.md exists and captures the proportions
+    analysis, the all-AWS private-S3 projection architecture, and the deferred timing rationale.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml contains a schema-valid tier item T2.51 with status
+    deferred_post_mvp, strategic:false, and structured exit_criteria (c1-c4, all status:open).
+  - >-
+    The roadmap validates (validate_platform_roadmap) and this plan validates (plan_document).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Validate the platform roadmap schema after adding T2.51.
+    command: bin/venv-python -m scripts.roadmap.platform_roadmap docs/ROADMAP-PLATFORM.yaml
+    expected: "PASS: ... validates against RoadmapDocument schema (T2.51 unique, deps resolve, criteria structured)."
+    fix_if: A schema/graph error prints -> fix the T2.51 item shape (id/deps/criteria) and re-run.
+    graduation: not-applicable
+  - step: 2
+    phase: pre-deploy
+    action: Confirm T2.51 is present as a deferred_post_mvp item with structured criteria.
+    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); t=[i for i in d['tier_items'] if i['id']=='T2.51'][0]; assert t['status']=='deferred_post_mvp' and t['strategic'] is False and len(t['exit_criteria'])>=4; print('T2.51 ok:', t['status'])"
+    expected: "T2.51 ok: deferred_post_mvp"
+    fix_if: KeyError/AssertionError -> the item is missing, mis-typed, or under-specified; correct it.
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: Validate this REPORT-ONLY plan document against the PlanDocument schema.
+    command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-cost-visibility-dashboard.yaml
+    expected: The plan validates (exit 0) against the PlanDocument schema.
+    fix_if: A validation error prints -> fix the offending field and re-run.
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the deliverable exists and references the tier item id it derives.
+    command: test -f docs/plans/reports/REPORT-cost-visibility-dashboard.md && grep -c "T2.51" docs/plans/reports/REPORT-cost-visibility-dashboard.md
+    expected: A count >= 1 (the report names T2.51).
+    fix_if: File missing or count 0 -> write/repair the deliverable so it references T2.51.
+    graduation: not-applicable
+constraints:
+  - No implementation this session -- REPORT-ONLY; the dashboard is not built.
+  - >-
+    Confidential cost figures are never committed to the repo; measured spend rests only in the
+    personal AWS account (private S3). Public-content boundary, Decisions 73/83/101.
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    STRATEGIC filing is frozen (CD.17) -- the L-effort tier item is authored deferred_post_mvp with
+    strategic:false and a freeze-override note, per the T2.19 pattern.
+context:
+  - >-
+    Decision-scout verdict: FLAGS_FOUND (102/102 decisions triaged). CITE: 67, 85, 86, 93, 101,
+    111, 114, 127, 136. NOTE flags folded into the report + T2.51: Decision 88 (Neon billing API,
+    not a catalog query) and Decisions 100/75 (native data sources + native AWS Budgets/Anomaly for
+    AWS-side alarming; only the cross-vendor unified view is custom). No candidate decision engaged
+    (Decision 105) -- the design derives from the existing boundary.
+  - "gates: decision-scout=FLAGS_FOUND (flags addressed in report + T2.51); plan-critique=<PENDING Step 9>"
+  - >-
+    Feasibility (verified this session): PlatformDev returns AccessDenied on ce:GetCostAndUsage; no
+    role has any ce:/budgets: grant; AWS CUR was retired by CD.28; no private web surface exists
+    (net-new); theseus.support is public-only (Decisions 73/83/101).
+  - >-
+    Existing cost infra: the monthly cost_reconciliation alarm (manual USD invoice snapshot,
+    thresholds -> recs) + the legacy non-applied terraform/cost_monitoring.tf + the cost_projection
+    envelope. Gap: no unified fresh VIEW, no AWS auto-pull, Neon unmodeled.
+  - >-
+    Timing: deferred_post_mvp; activation trigger = variable spend becomes material (executor
+    unfreeze / reconciliation tripping); precedes Semanto in priority with no dependency on it.
+  - >-
+    Owner decisions this session: variable-spend-only (subscription excluded -> all USD, no FX);
+    data rests in AWS, dashboard is a projection (option A0); no candidate decision needed (design
+    follows the existing boundary).
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via the decision-scout gate
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - Write docs/plans/reports/REPORT-cost-visibility-dashboard.md (the scoping deliverable).
+  - Add tier item T2.51 to docs/ROADMAP-PLATFORM.yaml (deferred_post_mvp, strategic:false, structured c1-c4).
+  - Execute the Verification Plan -- run each step; loop until all pass.
+  - "Report: deliverable written, T2.51 placed, roadmap + plan validations green."
+work_areas: []

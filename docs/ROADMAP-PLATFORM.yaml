@@ -5231,6 +5231,60 @@ tier_items:
     strategic: false
     status: not_started
 
+  - id: T2.51
+    tier: T2
+    name: Private variable-cost visibility dashboard (all-AWS projection)
+    intent: |
+      A private, unified view of variable operational vendor spend (AWS + Anthropic API + DeepSeek
+      API + Neon) so the platform's cost structure stays legible as it scales. Confidential cost
+      data RESTS in the personal AWS account (private S3); the dashboard is a read-only PROJECTION
+      rendered to private S3 and viewed via a presigned URL. No third-party hosting of confidential
+      data -- the public theseus.support / Semanto surface never carries cost figures (public-content
+      boundary, Decisions 73/83/101). Complements the existing monthly cost_reconciliation alarm
+      (scripts/cost_reconciliation.py) rather than replacing it: the alarm answers "did a threshold
+      trip?", this answers "where is variable spend going, and in what proportion?". The Claude Code
+      subscription is out of scope (variable-only), so all lines are USD (no currency conversion).
+      Design rationale + cost-proportion analysis: docs/plans/reports/REPORT-cost-visibility-dashboard.md.
+    depends_on: []
+    files_in_scope:
+      - terraform/personal/cost_read_role.tf    # new -- read-only ce:GetCostAndUsage IAM role (gated apply)
+      - scripts/cost/    # new subpackage -- daily pull + snapshot + render projection
+      - config/agent/cost_sources.yaml    # new -- provider/source registry (list-price refs only; no measured actuals)
+      - .github/workflows/cost-dashboard.yml    # new -- daily scheduler (or a Lambda + EventBridge equivalent)
+      - scripts/cost_reconciliation.py    # touch -- optional AWS auto-pull via the new role (retires manual invoice export)
+    exit_criteria:
+      - id: c1
+        text: >-
+          A net-new read-only AWS cost role granting ce:GetCostAndUsage is provisioned in
+          terraform/personal (gated apply; IAM-sensitive) and can read the month-to-date bill by
+          service; no measured cost figure is ever committed to the repo (Decisions 73/83/101)
+        status: open
+      - id: c2
+        text: >-
+          A scheduled daily job pulls AWS Cost Explorer plus the per-vendor billing/usage APIs
+          (Anthropic/DeepSeek/Neon; credentials in Secrets Manager) into a private-S3 USD snapshot.
+          The Neon leg uses Neon's billing/management HTTPS API, never a DuckLake catalog query
+          (Decision 88). A present-but-unparseable source fails loud rather than degrading to an
+          estimate (Decision 55)
+        status: open
+      - id: c3
+        text: >-
+          A rendered HTML projection (spend by vendor + proportion view) is written to private S3
+          and viewable via a presigned URL; each line is labelled by source (measured vs
+          list-price-estimate); no CloudFront/Cognito/Cloudflare and no new vendor
+        status: open
+      - id: c4
+        text: >-
+          The existing monthly cost_reconciliation job auto-pulls the AWS leg via the new cost-read
+          role, retiring the manual cost-invoices/<month>.json AWS export
+        status: open
+    related_candidate_decisions: [CD.28]
+    related_decisions: [55, 67, 73, 83, 88, 93, 98, 100, 101]
+    effort: L
+    strategic: false    # freeze override (AGENTS.md / CD.17): author as atomic IMPLEMENTATION plan(s) at reactivation
+    status: deferred_post_mvp
+    progress_note: "Scoped deferred_post_mvp (Decision 93) via PLAN-cost-visibility-dashboard / REPORT-cost-visibility-dashboard. Value scales with spend; today variable spend is noise vs the (out-of-scope) fixed subscription -- the two future cost 'whales' are inference (activity-driven, near-term) and S3 storage (data-driven, long-term). Activation trigger: the frozen executor (Decision 67) unfreezes and LLM-API spend is non-trivial, OR the monthly cost_reconciliation begins tripping thresholds regularly. Precedes the Semanto marketing surface (ROADMAP-SEMANTO S1.x) in priority but has NO dependency on it (private-AWS vs public-Cloudflare surfaces). Transitive active dependents: none. Reactivate by restoring status -> not_started; re-ground the stale anthropic_pool_size_usd (Max x5 -> Max x20) baseline at that time."
+
   # ----- T3: Trust loop closure -----
   - id: T3.1
     tier: T3
