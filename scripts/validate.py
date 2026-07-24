@@ -90,6 +90,9 @@ from scripts.checks.contracts.validate_prompt_compliance import validate_prompt_
 from scripts.checks.decisions.validate_decision_entry_conformance import (  # noqa: F401,E402
     validate_decision_entry_conformance,
 )
+from scripts.checks.decisions.validate_decisions_index_freshness import (  # noqa: F401,E402
+    validate_decisions_index_freshness,
+)
 from scripts.checks.decisions.validate_decisions_size import validate_decisions_size  # noqa: F401,E402
 from scripts.checks.decisions.validate_supersession_annotations import (  # noqa: F401,E402
     validate_supersession_annotations,

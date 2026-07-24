@@ -22,8 +22,10 @@ from scripts.decisions_md import (
     _extract_multiline_section,
     _extract_related_decisions,
     _extract_section,
+    _extract_title_borne_supersedes,
     _iter_decision_sections,
     decision_header_numbers,
+    extract_amends_edges,
     iter_decision_headings,
     parse_decisions_md,
     read_jsonl,
@@ -235,6 +237,186 @@ class TestIntentMarker:
     def test_live_corpus_has_at_least_one_non_empty_intent(self, parsed_rows: dict[int, dict]) -> None:
         """The governing Decision's own **Intent:** marker round-trips, robust to renumbering."""
         assert any(row.get("intent") for row in parsed_rows.values())
+
+
+class TestAmendsEdgeExtraction:
+    """DCG-08 / PLAN-dcg-decisions-index: extract_amends_edges() unit tests against the REAL
+    committed corpus titles (verbatim, grepped fresh from docs/DECISIONS.md) -- the freshness
+    guard only checks determinism (committed == regenerated), never edge-correctness, so these
+    tests are the SOLE guard against a wrong 'amends' edge silently committing green.
+    """
+
+    def test_dec150_single_target(self) -> None:
+        raw_title = (
+            "Decision-log growth direction -- significance bar for numbered Decisions + "
+            "batch-wave ratified form (amends Decision 105) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == [105]
+
+    def test_dec148_excludes_mirrors_clause(self) -> None:
+        """'(amends Decision 104, mirrors Decision 132)' -> {104} -- NOT {104, 132}: the
+        comma continuation requires a bare number, not another relation word."""
+        raw_title = (
+            "VF-01 hermetic VP-replay: replay at implement-time, not plan-time; "
+            "hermetic-default restored (amends Decision 104, mirrors Decision 132) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == [104]
+
+    def test_dec144_multi_target_via_and_excludes_extends_clause(self) -> None:
+        """'(...; amends Decision 98 point 1 and Decision 92 point 5; extends Decision 129 ...)'
+        -> {98, 92}: 'point N' suffixes are tolerated (not extra targets), the 'and Decision N'
+        continuation captures the second target, and the trailing 'extends' clause (a
+        different relation word) is excluded."""
+        raw_title = (
+            "Allow-list inversion: broad-but-bounded deployer under the mandatory permissions "
+            "boundary as the target Terraform deploy/IAM model (forward-direction; amends "
+            "Decision 98 point 1 and Decision 92 point 5; extends Decision 129 from reads to "
+            "writes) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == [98, 92]
+
+    def test_dec143_cl_suffix_tolerated(self) -> None:
+        raw_title = (
+            "Privileged-verb Lambda decomposition -- scope identities by worst reachable verb; "
+            "enforce the boundary in a primitive outside the agent merge loop (amends Decision "
+            "81 cl.1) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == [81]
+
+    def test_dec135_excludes_ordinal_and_builds_on_clause(self) -> None:
+        """'(amends Decision 73, 2nd amendment; builds on 80/104/124/131)' -> {73}, NOT
+        {73, 2}: '2nd' is an ordinal (not a plural-list continuation -- \\b fails between the
+        digit and the following letter), and 'builds on 80/104/124/131' is a separate clause
+        with no 'Decision' token at all."""
+        raw_title = (
+            "Live, cacheless, strictly-additive affected-set selection replaces the --pre "
+            "edited-set tier gate (amends Decision 73, 2nd amendment; builds on "
+            "80/104/124/131) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == [73]
+
+    def test_dec130_plural_slash_form(self) -> None:
+        """'(...; amends Decisions 102/128 scan scope)' -> {102, 128}: the plural 'Decisions
+        N/M' slash-list form, and the preceding 'completes Decision 43' clause (before the
+        amends anchor) is correctly excluded."""
+        raw_title = (
+            "Structural-size governance covers the whole repo -- one-time grandfather of "
+            "tests/ debt (completes Decision 43; amends Decisions 102/128 scan scope) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == [102, 128]
+
+    def test_dec83_case_insensitive_anchor(self) -> None:
+        """Title-case 'Amends' (mid-title, after '--') must still match."""
+        raw_title = "Branch Protection Now Active -- Amends Decision 89 Premise (Decided)"
+        assert extract_amends_edges(raw_title) == [89]
+
+    def test_dec122_does_not_match_inverse_amended_by(self) -> None:
+        """Real INVERSE 'amended by Decision N' title -- 'amended' is a different whole word
+        from 'amends'; must NOT produce a forward edge."""
+        raw_title = (
+            "Ratify CD.28 -- executor LLM inference = DeepSeek-direct via LiteLLM (Tier 1), "
+            "Anthropic-direct (Tier 2); Bedrock retired (as amended by Decision 116) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == []
+
+    def test_dec116_ignores_cd_dot_n_target(self) -> None:
+        """'amends CD.28's scheduled-agent clause' -- CD.28 is not 'Decision N'; must not be
+        captured (the CD.N-target it precedes, 'Supersedes Decision 49', is a supersedes
+        concern, not amends, and is covered separately)."""
+        raw_title = (
+            "Scheduled-agent provider routing -- routine/non-agentic agents to LiteLLM "
+            "(DeepSeek), judgment/agentic agents to claude -p (Supersedes Decision 49; amends "
+            "CD.28's scheduled-agent clause) (Decided)"
+        )
+        assert extract_amends_edges(raw_title) == []
+
+    def test_live_corpus_dec150_amends_105_round_trip(self, parsed_rows: dict[int, dict]) -> None:
+        """End-to-end: the live corpus's actual dec-150 row carries amends=[105] via the
+        parse_decisions_md wiring, not just the isolated function."""
+        assert 105 in parsed_rows[150]["amends"]
+
+    def test_live_corpus_dec143_amends_81_round_trip(self, parsed_rows: dict[int, dict]) -> None:
+        assert 81 in parsed_rows[143]["amends"]
+
+
+class TestTitleBorneSupersedesExtraction:
+    """DCG-08: _extract_title_borne_supersedes() -- the generic title-relation helper reused
+    for the forward 'Supersedes Decision N' idiom, sharing extract_amends_edges' grammar."""
+
+    def test_dec117_single_target(self) -> None:
+        raw_title = (
+            "Executor self-modification boundary -- capabilities.yaml is the code-level SSOT "
+            "(Supersedes Decision 44) (Decided)"
+        )
+        assert _extract_title_borne_supersedes(raw_title) == [44]
+
+    def test_dec52_plural_comma_multi_target(self) -> None:
+        raw_title = "Bedrock Migration -- DeepSeek V3.2 Default (Supersedes Decisions 37, 40, 49)"
+        assert _extract_title_borne_supersedes(raw_title) == [37, 40, 49]
+
+    def test_dec42_does_not_match_inverse_superseded_by(self) -> None:
+        """'Superseded by Decision 90' is the inverse direction -- a different whole word
+        ('superseded', not 'supersedes') -- must not produce a forward edge."""
+        raw_title = "Three-Tier Workflow Architecture (Superseded by Decision 90)"
+        assert _extract_title_borne_supersedes(raw_title) == []
+
+    def test_dec114_ignores_kg_dot_n_target(self) -> None:
+        """'supersedes KG.11's ...' -- KG.11 is not 'Decision N'; must not be captured."""
+        raw_title = (
+            "Raise the ROADMAP-PLATFORM.yaml size ceiling to 10,000 lines and add a "
+            "deterministic guard (supersedes KG.11's 2500-line/50K-token trigger) (Decided)"
+        )
+        assert _extract_title_borne_supersedes(raw_title) == []
+
+    def test_dec113_ignores_prose_target(self) -> None:
+        """'supersedes Identity Center ...' -- a prose target, not 'Decision N'."""
+        raw_title = (
+            "Ratify CD.26 -- Pattern-B agent auth (static-key + chained AssumeRole) "
+            "supersedes Identity Center for the personal account (Decided)"
+        )
+        assert _extract_title_borne_supersedes(raw_title) == []
+
+
+class TestAmendsStaysIndexOnly:
+    """Decision 84 warehouse-safety boundary (mirrors the Wave-4 intent-field test pattern,
+    inverted: intent is DELIBERATELY added to the backfill surface, amends is DELIBERATELY
+    excluded from it). Confirms the 'amends' and 'title_supersedes' parser keys can never reach
+    ops_decisions, protecting the Decision-134 fidelity tripwire from an unplanned schema
+    perturbation.
+    """
+
+    def test_amends_stays_index_only(self) -> None:
+        from scripts.ops_portal.decisions import _DECISION_BACKFILL_COLS
+        from src.schemas.decision import DecisionPayload
+
+        assert "amends" not in _DECISION_BACKFILL_COLS
+        assert DecisionPayload.model_config.get("extra") == "ignore"
+
+        row = next(r for r in parse_decisions_md() if r["decision_id"] == 150)
+        assert row.get("amends"), "dec-150 must carry a non-empty amends list for this assertion to be live"
+
+        kept = {k: v for k, v in row.items() if k in _DECISION_BACKFILL_COLS and v not in (None, "")}
+        assert "amends" not in kept
+
+    def test_title_supersedes_stays_index_only(self) -> None:
+        """The sibling row key (title-borne supersedes source) gets the identical treatment."""
+        from scripts.ops_portal.decisions import _DECISION_BACKFILL_COLS
+        from src.schemas.decision import DecisionPayload
+
+        assert "title_supersedes" not in _DECISION_BACKFILL_COLS
+        assert "title_supersedes" not in DecisionPayload.model_fields
+        assert DecisionPayload.model_config.get("extra") == "ignore"
+
+        row = next(r for r in parse_decisions_md() if r["decision_id"] == 117)
+        assert row.get("title_supersedes"), "dec-117 must carry a non-empty title_supersedes list for this to be live"
+
+        kept = {k: v for k, v in row.items() if k in _DECISION_BACKFILL_COLS and v not in (None, "")}
+        assert "title_supersedes" not in kept
+
+    def test_amends_not_a_decision_payload_field(self) -> None:
+        from src.schemas.decision import DecisionPayload
+
+        assert "amends" not in DecisionPayload.model_fields
 
 
 class TestDualModelFieldSync:

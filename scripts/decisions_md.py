@@ -20,6 +20,16 @@ DCG-06 intent capture (PLAN-dcg-intent-capture, Decision 151): adds an `intent` 
 separate typed extraction via _extract_multiline_section(body, "Intent") -- the existing
 `context` extraction (Rationale/Key details/Context) is untouched. Optional forever: no
 required-marker change, no retro-enforcement of the historical band.
+
+DCG-08 decisions index (PLAN-dcg-decisions-index): adds the public extract_amends_edges()
+(forward "amends Decision N" title-relation extraction) plus the private
+_extract_title_borne_supersedes() sibling, both built on the shared
+_extract_title_relation_targets() whitelist-continuation grammar -- never a relation-keyword
+blocklist, so a non-Decision target (CD.N, KG.N, prose like "Identity Center") is excluded
+structurally rather than enumerated. Surfaces two INDEX-ONLY parse_decisions_md row keys,
+"amends" and "title_supersedes", consumed solely by scripts/decisions_index.py -- neither key
+is added to _DECISION_BACKFILL_COLS, DecisionPayload, or config/agent/data_quality (Decision
+84 warehouse-safety boundary, mirrors the intent key's index-vs-warehouse separation).
 """
 
 from __future__ import annotations
@@ -153,6 +163,92 @@ def _extract_superseded_by(text: str) -> str:
     return f"dec-{int(n):03d}"
 
 
+# DCG-08 (PLAN-dcg-decisions-index) title-relation extraction, shared by the public
+# extract_amends_edges() and the private _extract_title_borne_supersedes(). Whitelist-
+# continuation grammar, not a relation-keyword blocklist: after the relation word, the FIRST
+# target must be an immediately-adjacent "Decision(s) N" (_TITLE_RELATION_SEED_RE) -- so a
+# non-Decision target (CD.N, KG.N, prose like "Identity Center") never matches, with no need
+# to enumerate every non-target word. A further target is accepted ONLY as an explicit ", N"
+# (_TITLE_RELATION_COMMA_RE) / "/N" (_TITLE_RELATION_SLASH_RE) plural-list continuation, or an
+# "and Decision(s) N" (_TITLE_RELATION_AND_RE) multi-target continuation, optionally preceded
+# by a "point P"/"cl.N"/"clause N" qualifier on the prior target (_TITLE_RELATION_QUALIFIER_RE,
+# consumed but never itself a number source). Any other following text -- a semicolon, a
+# different relation word ("mirrors", "extends", "builds on"), an ordinal like "2nd amendment"
+# -- is not a valid continuation and silently ends the scan for that anchor occurrence.
+_TITLE_RELATION_SEED_RE = re.compile(r"\s+Decisions?\s+(\d+)\b", re.IGNORECASE)
+_TITLE_RELATION_QUALIFIER_RE = re.compile(r"\s*(?:point\s+\d+|cl\.\s*\d+|clause\s+\d+)", re.IGNORECASE)
+_TITLE_RELATION_AND_RE = re.compile(r"\s*,?\s*and\s+Decisions?\s+(\d+)\b", re.IGNORECASE)
+_TITLE_RELATION_COMMA_RE = re.compile(r"\s*,\s*(\d+)\b")
+_TITLE_RELATION_SLASH_RE = re.compile(r"\s*/\s*(\d+)\b")
+
+
+def _extract_title_relation_targets(raw_title: str, relation_word: str) -> list[int]:
+    """Forward 'RELATION_WORD Decision(s) N[, M][/M][and Decision M]' targets from a raw
+    (unstripped) decision title, deduped, in first-occurrence order.
+
+    Generic helper shared by extract_amends_edges (relation_word="amends") and the internal
+    _extract_title_borne_supersedes (relation_word="supersedes"). Never matches an inverse
+    phrasing ("amended by Decision N", "superseded by Decision N") because those are spelled
+    as different whole words ("amended"/"superseded", not "amends"/"supersedes") -- \\b-bounded
+    matching on the exact relation_word excludes them with no explicit direction check needed.
+    """
+    anchor_re = re.compile(rf"\b{re.escape(relation_word)}\b", re.IGNORECASE)
+    seen: set[int] = set()
+    targets: list[int] = []
+
+    def _add(n: int) -> None:
+        if n not in seen:
+            seen.add(n)
+            targets.append(n)
+
+    for anchor_m in anchor_re.finditer(raw_title):
+        seed_m = _TITLE_RELATION_SEED_RE.match(raw_title, anchor_m.end())
+        if not seed_m:
+            continue
+        _add(int(seed_m.group(1)))
+        pos = seed_m.end()
+        while True:
+            qual_m = _TITLE_RELATION_QUALIFIER_RE.match(raw_title, pos)
+            qual_end = qual_m.end() if qual_m else pos
+            cont_m = (
+                _TITLE_RELATION_AND_RE.match(raw_title, qual_end)
+                or _TITLE_RELATION_COMMA_RE.match(raw_title, qual_end)
+                or _TITLE_RELATION_SLASH_RE.match(raw_title, qual_end)
+            )
+            if not cont_m:
+                break
+            _add(int(cont_m.group(1)))
+            pos = cont_m.end()
+
+    return targets
+
+
+def extract_amends_edges(raw_title: str) -> list[int]:
+    """Forward 'amends Decision(s) N' targets from a raw (unstripped) decision title.
+
+    Public per DCG-08 (PLAN-dcg-decisions-index) -- the decisions-index generator's typed
+    amends-edge source. Operates on the RAW title (m.group(2) in parse_decisions_md, before
+    the trailing-parenthetical strip that produces the stored `title` field) since the
+    parenthetical carrying "(amends Decision N)" is exactly what that strip drops. Never
+    matches "amended by Decision N" (the inverse direction -- a different whole word) or a
+    non-Decision target (CD.N, KG.N, prose) -- see _extract_title_relation_targets.
+    """
+    return _extract_title_relation_targets(raw_title, "amends")
+
+
+def _extract_title_borne_supersedes(raw_title: str) -> list[int]:
+    """Forward 'Supersedes Decision(s) N' targets from a raw (unstripped) decision title.
+
+    Internal counterpart to extract_amends_edges (DCG-08), reusing the same generic helper.
+    Feeds the index-only 'title_supersedes' parse_decisions_md row key that
+    scripts.decisions_index unions with the corpus-wide inverse of the typed superseded_by
+    field to build the final 'supersedes' index edge. Never matches 'Superseded by Decision N'
+    (the inverse direction -- a different whole word) or a non-Decision target (CD.N, KG.N,
+    prose).
+    """
+    return _extract_title_relation_targets(raw_title, "supersedes")
+
+
 def iter_decision_headings(content: str) -> list[re.Match[str]]:
     """Return every '## Decision N:' / '### Decision N:' heading match in content, in file order.
 
@@ -248,6 +344,8 @@ def parse_decisions_md(paths: Optional[list[Path]] = None) -> list[dict]:
                 "related_decisions": _extract_related_decisions(body),
                 "reversal_conditions": _extract_multiline_section(body, "Reversal conditions", "Reversal condition"),
                 "superseded_by": _extract_superseded_by(body),
+                "amends": extract_amends_edges(raw_title),
+                "title_supersedes": _extract_title_borne_supersedes(raw_title),
                 "raw_block": raw_block,
                 "content_hash": content_hash,
                 "created_timestamp": now_iso,
