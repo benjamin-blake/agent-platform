@@ -2,6 +2,81 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 150: Decision-log growth direction -- significance bar for numbered Decisions + batch-wave ratified form (amends Decision 105) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-24
+**Warehouse ID:** dec-150 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+Decision 145's stopgap ceiling raise and Decision 149's compaction lifecycle both treat decision-log
+growth as a SIZE problem (bytes/headers), but audit finding DCG-05 (high,
+audits/decision-consolidation-growth-f79d6b5.yaml Q2) names an unaddressed DIRECTION problem:
+nothing states the bar for what MAY become a numbered `## Decision NNN:` entry in the first place,
+so the corpus can keep growing unbounded in SHAPE even after compaction reclaims bytes --
+degrading decision-scout triage cost and lower-tier-model portability. DCG-04 (medium, same audit)
+names a second symptom of the same shapeless growth: Decision 105's ratification lane already
+reconciled a many-CDs-to-one-Decision shape in practice (CD.16/CD.24 -> dec-079) but never
+codified it as a reusable form, so each future same-session batch of gate-clear ratifications
+defaults to minting one Decision per CD instead of one shared wave entry.
+
+**Decision:**
+1. **Significance bar (realizes DCG-05).** `docs/contracts/decision-entry.yaml` gains a
+   `significance:` section: a numbered `## Decision NNN:` entry is reserved for a durable
+   architectural commitment with reversal-relevant consequences; three other classes of durable
+   content route elsewhere instead of minting a new number -- a CD state-flip routes to the
+   batch-wave clause below (clause 2), an operational fact routes to a recommendation or tier_item
+   note, and field semantics route to a governance note in the owning contract (Decision 86/127
+   routing). `.claude/skills/planning/SKILL.md` cites this section at a new "Decision Significance
+   Gate" note just before the Candidate Decision Ratification step (Step 5b), so any
+   numbered-Decision draft -- fresh governance Decision or CD ratification -- is checked against it
+   before drafting. The section's four routing rows are a citable classification vocabulary in
+   their own right, independent of any one Decision.
+2. **Batch-wave ratified form (amends Decision 105, realizes DCG-04).** Same-session PURE
+   candidate_decision (CD.NN) ratifications -- gate-clears carrying no content beyond "this CD's
+   work is realized" -- may land as ONE `## Decision N` wave entry instead of one entry per CD:
+   each bundled CD gets its own clause inside the shared entry, and each CD's `ratified_as` /
+   `filed_via` points at the same shared `dec-NNN`. A ratification that carries independent
+   content keeps its own entry; it is never bundled. This codifies forward, as a first-class form,
+   the many-to-one shape Decision 105's own ratification lane already exercised (CD.16 and CD.24
+   both ratified under Decision 79; Decision 105 itself reconciled 5 CDs in one entry) --
+   `docs/contracts/candidate-decision-ratification.yaml` gains a `batch_wave_ratified_form` section
+   documenting the shape and noting that the R1-R3 referential guard tolerates it by construction
+   (each CD is checked independently; no cross-CD `ratified_as` uniqueness bar).
+   `.claude/skills/implement/SKILL.md`'s CD Ratification Bookkeeping step gains a matching
+   batch-wave clause: entry-authoring and the portal ETL run once for the whole wave, but the three
+   per-CD sub-steps -- the roadmap-flip, the marking-convention obligation, and the pending-window
+   prose sweep -- repeat once per bundled CD; preflight and validate still run once over all
+   bundled CDs; tier_item status flips remain a separate bookkeeping step (Decision 90, unchanged).
+
+**Rationale:**
+Decision 134/145 govern how big the corpus may get and Decision 149 governs how a superseded entry
+sheds body weight, but neither constrains what is ALLOWED IN at the front door -- the audit (Q2)
+frames the significance bar and the batch-wave form as two facets of one answer to that gap: a bar
+that is worthless without a legal outlet for the content it excludes (the batch-wave form IS that
+outlet for the largest deflected class, CD state-flips), and an outlet that is worthless without a
+bar motivating anyone to use it instead of minting a fresh Decision by default. The two clauses are
+interdependent by construction -- the significance taxonomy's `cd_state_flip` row routes directly
+into the batch-wave form -- so one two-clause Decision carries both facets under a single
+reversible identity rather than splitting a single direction mechanism across two numbers. Routed
+here per Decision 86 (rationale in this Decision, taxonomy in `decision-entry.yaml`, mechanism in
+`candidate-decision-ratification.yaml` and the two skill files) -- no new standing prose doc.
+
+**Reversal conditions:** The batch-wave form reverts to one-entry-per-CD if the wave shape is found
+to obscure per-CD provenance in practice. The significance bar relaxes (or a routing row is
+re-drawn) if it is found to suppress content that is genuinely decision-worthy.
+
+**Related:** Decision 105 (amended -- see its reciprocal marker), Decision 145 (the byte-ceiling
+stopgap this direction mechanism complements), Decision 149 (the compaction/shape-after-entry
+sibling mechanism), Decision 146 (the archival policy in the same growth-governance family),
+Decision 134 (the size-governance ceilings and authoring grammar this extends), Decision 86
+(rationale/routing precedent this Decision and its contracts follow), Decision 84 (Single Portal
+Invariant / numbering authority for the ETL landing this entry), Decision 90 (tier_item status
+flips stay a separate bookkeeping step from ratification, preserved unchanged), Decision 79 (the
+CD.16/CD.24 -> dec-079 precedent the batch-wave form codifies forward).
+
+---
+
 ## Decision 149: Number-preserving decision-compaction lifecycle -- compact-in-place stub grammar, never-remove-headers, and the DCG-03 orphan-divergence guard (DCG-02/DCG-03, compact-in-place sibling of Decision 146's archival policy) (Decided)
 
 **Status:** Decided
@@ -2275,6 +2350,9 @@ tier_item status flips are a separate `/implement` bookkeeping step (Decision 90
 authority), Decision 92 + Decision 103 (the two working ratification precedents this pattern
 generalizes), Decision 104 (check registry pattern this guard follows), Decision 76/86 (canonical
 mechanism surface / contract routing).
+
+> **Amended by Decision 150 (2026-07-24):** batch-wave ratified form -- same-session pure
+> gate-clears may land as ONE wave entry with per-CD clauses sharing one dec-NNN. See Decision 150.
 
 ---
 

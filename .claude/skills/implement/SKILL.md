@@ -457,6 +457,16 @@ this step NEVER runs without the explicit execution-time confirmation in step 2 
    decision (the section above) -- note in the PR body which items became unpark-eligible, if
    any, but let the normal bookkeeping walk decide status flips (Decision 90).
 
+### Batch-wave bundling (Decision 150, >=2 same-session PURE gate-clear CDs)
+When the ratification block bundles >=2 same-session PURE gate-clear CDs (no content beyond "this
+CD's work is realized"; a content-bearing ratification is never bundled), steps 3 (author ONE
+`## Decision N` wave entry, one clause per CD) and 4 (ETL) above run ONCE FOR THE WHOLE WAVE, but
+the three PER-CD sub-steps -- step 5's roadmap-flip (each CD's own ratified_as/filed_via pointing
+at the SHARED dec-NNN), the marking-convention obligation, and the pending-window prose sweep
+(candidate-decision-ratification.yaml `lane_steps.implement.execute` sub-steps 5-6) -- REPEAT ONCE
+PER BUNDLED CD. Steps 6 (preflight) and 7 (validate) run once over all bundled CDs. Step 8
+(Decision 90: tier_item status flips stay a separate bookkeeping step) is unchanged.
+
 ### Rejection handling
 If the human declines to confirm the Decision text in step 2 (asks for edits, defers, or says
 no), do NOT proceed to steps 3-8. Either incorporate the requested edits and re-present, or stop
