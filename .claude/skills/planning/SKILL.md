@@ -370,6 +370,14 @@ through a finished implementation). When genuinely unsure between `graduate` and
 a false `not-applicable` is a missed regression guard; a false `graduate` becomes a mandatory
 `waive`-with-reason detour at implement time (harmless, but adds a step).
 
+## Decision Significance Gate (before drafting any numbered Decision -- fresh or CD ratification)
+
+Check `docs/contracts/decision-entry.yaml`'s `significance:` section before drafting ANY numbered
+`## Decision NNN:` text (a fresh governance Decision, or a CD ratification below): only a durable
+architectural commitment with reversal-relevant consequences clears the bar. A CD state-flip,
+operational fact, or field-semantics change routes per that section's four rows instead (the
+batch-wave clause below, a rec/tier_item note, or a contract governance note).
+
 ## Candidate Decision Ratification (Workflow Step 5b, when the plan realizes/ratifies a CD)
 
 Fires when the plan's scope realizes the work a pending `candidate_decision` (CD.NN) gates, OR the
@@ -393,6 +401,10 @@ this drafting step must satisfy.
      `--file-decision` single-row alternative) command sequence /implement will run.
    - The exact roadmap-flip diff: `state: ratified` + `ratified_as: dec-NNN` + `filed_via:
      ops_decisions:dec-NNN` (canonical shape; same NNN in both fields) on the target CD entry.
+   - **Wave bundling:** when >=2 same-session PURE gate-clear CDs realize together (no content
+     beyond "this CD's work is realized"), draft ONE wave `## Decision N` entry with a per-CD
+     clause each, all pointing at the shared dec-NNN (`batch_wave_ratified_form` in
+     candidate-decision-ratification.yaml) -- a content-bearing ratification keeps its own entry.
 3. This is a DRAFT only. Do not run the portal write or the roadmap flip during `/plan` --
    Decision 105 / the plan's own constraints reserve execution for `/implement` behind an
    execution-time human confirmation gate. Planning-time writes would make Step 6b's confirmation

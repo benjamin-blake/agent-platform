@@ -144,6 +144,22 @@ class TestCandidateDecisionRatification:
             validate_candidate_decision_ratification(failed)
         assert failed == []
 
+    def test_multiple_cds_share_one_ratified_as_passes(self, tmp_path: Path) -> None:
+        # batch-wave: >=2 CDs share one ratified_as (CD.16/CD.24 -> dec-079 precedent)
+        self._setup(
+            tmp_path,
+            "candidate_decisions:\n"
+            "  - id: CD.16\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-079\n    filed_via: ops_decisions:dec-079\n"
+            "  - id: CD.24\n    title: t\n    state: ratified\n"
+            "    ratified_as: dec-079\n    filed_via: ops_decisions:dec-079\n",
+            decisions_md="## Decision 79: X (Decided)\n",
+        )
+        failed: list[str] = []
+        with patch("scripts.checks._common.ROOT", tmp_path):
+            validate_candidate_decision_ratification(failed)
+        assert failed == []
+
 
 class TestConsolidatedHeaderHelper:
     """DAF-03 consolidation (PLAN-daf-authoring-grammar): the R1 guard's header-number scan now
