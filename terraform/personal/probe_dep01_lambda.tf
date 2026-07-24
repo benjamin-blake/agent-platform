@@ -32,13 +32,13 @@ resource "aws_cloudwatch_log_group" "probe_dep01_liveproof" {
 
   tags = {
     Name    = "DEP-01 Live-Proof Probe Logs"
-    Purpose = "T2.48 c1 DEP-01 live-proof (PLAN-t248-passrole-liveproof PR-2) - throwaway, reverted in PR-2-revert"
+    Purpose = "T2.48 c1 DEP-01 live-proof PLAN-t248-passrole-liveproof PR-2 - throwaway reverted in PR-2-revert"
   }
 }
 
 resource "aws_lambda_function" "probe_dep01_liveproof" {
   function_name = local.probe_dep01_function
-  description   = "T2.48 c1 DEP-01 live-proof probe (PLAN-t248-passrole-liveproof). Throwaway -- reuses the ops_compaction execution role + code; proves CreateFunction succeeds now that PassRole is live. Never invoked."
+  description   = "T2.48 c1 DEP-01 live-proof probe PLAN-t248-passrole-liveproof. Throwaway -- reuses the ops_compaction execution role + code; proves CreateFunction succeeds now that PassRole is live. Never invoked."
   role          = aws_iam_role.ops_compaction.arn
   handler       = "src.data.handlers.ops_compaction_handler.handler"
   runtime       = "python3.12"
@@ -58,7 +58,7 @@ resource "aws_lambda_function" "probe_dep01_liveproof" {
 
   tags = {
     Name    = "DEP-01 Live-Proof Probe"
-    Purpose = "T2.48 c1 DEP-01 live-proof (PLAN-t248-passrole-liveproof PR-2) - throwaway, reverted in PR-2-revert"
+    Purpose = "T2.48 c1 DEP-01 live-proof PLAN-t248-passrole-liveproof PR-2 - throwaway reverted in PR-2-revert"
   }
 }
 
@@ -67,7 +67,7 @@ resource "aws_lambda_function" "probe_dep01_liveproof" {
 # quiet in the absence of any Errors datapoints.
 resource "aws_cloudwatch_metric_alarm" "probe_dep01_liveproof_errors" {
   alarm_name          = "agent-platform-probe-liveproof-errors"
-  alarm_description   = "T2.48 c1 DEP-01 live-proof probe error alarm (PLAN-t248-passrole-liveproof PR-2). Throwaway -- reverted in PR-2-revert; the probe is never invoked so this should never fire."
+  alarm_description   = "T2.48 c1 DEP-01 live-proof probe error alarm PLAN-t248-passrole-liveproof PR-2. Throwaway -- reverted in PR-2-revert; the probe is never invoked so this should never fire."
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
   metric_name         = "Errors"
@@ -87,6 +87,6 @@ resource "aws_cloudwatch_metric_alarm" "probe_dep01_liveproof_errors" {
 
   tags = {
     Name    = "DEP-01 Live-Proof Probe Alarm"
-    Purpose = "T2.48 c1 DEP-01 live-proof (PLAN-t248-passrole-liveproof PR-2) - throwaway, reverted in PR-2-revert"
+    Purpose = "T2.48 c1 DEP-01 live-proof PLAN-t248-passrole-liveproof PR-2 - throwaway reverted in PR-2-revert"
   }
 }
