@@ -19,11 +19,17 @@ scope:
   - file: docs/contracts/decision-entry.yaml
     action: Modify
     purpose: >-
-      Add `Intent` to `optional_markers_fixed_spelling` ONLY (the list at lines 46-56, currently
-      Problem/Rationale/Reversal conditions/Related/Warehouse ID). OPTIONAL forever -- no change to
-      `required_markers`, no retro-enforcement, DAF-03 forward conformance untouched. Do NOT disturb
-      the separate `significance:` (Wave 3 / Decision 150) or `compaction:` (Wave 1 / Decision 149)
-      sections.
+      Two changes. (1) Add `Intent` to `optional_markers_fixed_spelling` (the list at lines 46-56,
+      currently Problem/Rationale/Reversal conditions/Related/Warehouse ID). OPTIONAL forever -- no
+      change to `required_markers`, no retro-enforcement, DAF-03 forward conformance untouched. (2) Add
+      a SHORT pointer note (one paragraph, a descriptive key e.g. `intent_accretion_note:`) ADJACENT to
+      `amendment_forms` (lines 67-79): the Intent marker follows the amendment_forms dated-append
+      accretion model post-ratification (draft-until-merge; then dated, source-cited, append-only
+      annotations inside the Intent section; ~3-clarification / ~120-150-word cap escalating to a
+      superseding Decision + Decision 149 compaction), pointing to Decision 151 for the full
+      convention. Keep it brief (collocate-semantics-with-enforcement, Decision 150 field_semantics
+      routing row). Do NOT disturb the separate `significance:` (Wave 3 / Decision 150) or
+      `compaction:` (Wave 1 / Decision 149) sections.
   - file: scripts/decisions_md.py
     action: Modify
     purpose: >-
@@ -105,7 +111,30 @@ scope:
       the numbering-race rule) recording intent as a first-class element, AUTHORED WITH an **Intent:**
       marker as the element's first live exercise (scope item 7). Clears the Decision 150 significance
       bar (durable architectural commitment, reversal-relevant). Forward governance Decision, NOT a CD
-      ratification -- the R1-R3 ratified-CD guard is not engaged.
+      ratification -- the R1-R3 ratified-CD guard is not engaged. Decision 151 ALSO carries the intent
+      mutability convention (Step 6b human decision, option c -- dated append-only accretion, folded
+      into THIS Decision, not a separate one): (i) draft-until-merge -- the Intent marker is a draft,
+      freely rewritten at PR review; ratification/merge is the mutability boundary; (ii) post-merge
+      accretion -- the original Intent text is NEVER rewritten; clarifications/caveats/exceptions accrue
+      as dated, source-cited, append-only annotations INSIDE the Intent section using the existing
+      decision-entry.yaml `amendment_forms` grammar (`[Amendment YYYY-MM-DD, <source>: ...]` /
+      `> **Update (YYYY-MM-DD):** ...`), so the typed intent column carries "original + dated deltas"
+      automatically and each edit bumps content_hash -> a new SCD2 version (zero parser/schema change);
+      (iii) provenance -- each clarification cites a ratified source (a later Decision, an audit id, or
+      explicit operator direction): the correction channel is open to agents but the correction
+      AUTHORITY is not (an agent's evolved understanding is a proposal via hand-back/rec, merged only at
+      operator direction or citing a ratified source -- mirrors the memory policy); (iv) cap -- ~3
+      clarifications OR the Intent section exceeding ~120-150 words (whichever first) escalates to a
+      SUPERSEDING Decision (which itself clears the significance bar, being reversal-relevant) followed
+      by Decision 149 compaction of the superseded entry; a clarification may narrow/annotate but never
+      negate the decision's effect (an intent contradicting the decision text is a mis-drawn decision ->
+      supersede); (v) enforcement -- convention-only, NO validator now (mirror Decision 146's
+      operator-disposed stance; the 500000-byte ceiling + PR review backstop it), no intent-drift signal
+      or stored guard. LOAD-BEARING rationale (in the Rationale section AND woven into D151's own
+      **Intent:** marker): the dated-append model is deliberately SCD2-shaped -- the in-band dates supply
+      the reader-visible VALID-TIME the current transaction-time-only SCD2 substrate lacks, so a post-MVP
+      migration to cloud-hosted verb-queried storage maps the intent field's dated accretion onto
+      warehouse SCD2 versioning with no remodel.
 bundled_recommendations: []
 infrastructure_dependencies:
   - >-
@@ -164,6 +193,15 @@ acceptance_criteria:
     Governing Decision 151 is authored WITH an **Intent:** marker (the element's first live exercise)
     and clears the significance bar; markerless historical entries continue to backfill green with
     intent NULL.
+  - >-
+    Decision 151 records the intent mutability convention (Step 6b option c): draft-until-merge; post-merge
+    dated append-only accretion INSIDE the Intent section via the existing amendment_forms grammar;
+    ratified-source provenance (correction channel open to agents, correction authority operator/ratified-
+    source only); ~3-clarification or ~120-150-word cap escalating to a superseding Decision + Decision 149
+    compaction; convention-only, NO validator (Decision 146 stance). The SCD2-shaped valid-time rationale
+    is explicit in the Rationale and woven into D151's own **Intent:** marker. docs/contracts/decision-entry.yaml
+    carries a short amendment_forms-adjacent pointer note to Decision 151. Verified warehouse-free by the
+    step-6 grep anchors (dated-append / draft-until-merge / valid-time).
   - >-
     Writer-health-gated (rec-2821): once the governed channel ships the new field_semantics to
     writer/reader/maintenance and the admin reconcile_columns adds the physical intent column, the
@@ -276,6 +314,32 @@ verification_plan:
   - step: 6
     phase: pre-deploy
     action: >-
+      Governance-text existence (Step 6b option-c deliverables) -- confirm the Decision 151 mutability
+      convention (draft-until-merge + dated append-only accretion) and its SCD2-shaped valid-time
+      rationale were authored, and the decision-entry.yaml amendment_forms pointer note exists. Grep by
+      distinctive phrase (robust to the Decision-151 numbering race), not by number.
+    command: >-
+      grep -q "dated-append" docs/contracts/decision-entry.yaml && grep -q "draft-until-merge"
+      docs/DECISIONS.md && grep -q "valid-time" docs/DECISIONS.md
+    expected: >-
+      All three anchors present: decision-entry.yaml carries the amendment_forms Intent pointer note
+      ("dated-append"); the governing Decision carries the mutability convention ("draft-until-merge")
+      and the SCD2-shaped rationale ("valid-time").
+    fix_if: >-
+      Any anchor missing -> the governance deliverable was not authored (the convention clause, the
+      pointer note, or the valid-time rationale). Author it. This is convention TEXT, never a validator
+      (Decision 146 operator-disposed stance -- no stored guard, no intent-drift signal).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time authored governance text, not a standing regression surface: the durable guards are the
+      existing decision-entry conformance + decisions-size checks (validate --pre) and the live-corpus
+      intent test; a verification_registry grep row on Decision-151 prose would be brittle to
+      renumbering/compaction and duplicate no durable invariant. Convention-only by human direction
+      (Decision 146) -- deliberately NOT graduated into a validator.
+  - step: 7
+    phase: pre-deploy
+    action: >-
       Full fast-tier presubmit -- CD.25 contract-drift (the amendment_log field_add), field-semantics
       drift, decisions-size (byte ceiling), decision-entry conformance, graduation-completeness on this
       plan, and SLOC all green.
@@ -288,7 +352,7 @@ verification_plan:
     fix_if: Any --pre check fails -> address the specific failing check (do not raise SLOC budgets, Decision 128; do not hand-edit field_semantics.yaml).
     hermetic: false
     graduation: not-applicable
-  - step: 7
+  - step: 8
     phase: post-deploy
     action: >-
       Confirm the governed CD channel genuinely shipped the new field_semantics asset on the merge
@@ -317,7 +381,7 @@ verification_plan:
       workflow_dispatch. Writer-health-gated (rec-2821): if the DuckLake writer is degraded, record the
       leg as deferred-pending-writer-recovery.
     hermetic: false
-  - step: 8
+  - step: 9
     phase: post-deploy
     action: >-
       Physical schema evolution (Decision 143, ADMIN-TIER / human-invoked, NOT autonomous CI) -- add
@@ -337,7 +401,7 @@ verification_plan:
       smoke catalog (must supply the EXPLICIT production data_path + meta_schema). Admin-tier only
       (Decision 143). Writer-health-gated: defer-pending-writer-recovery if maintenance/writer degraded.
     hermetic: false
-  - step: 9
+  - step: 10
     phase: post-deploy
     action: >-
       Run the backfill and confirm the governing entry's intent round-trips through the warehouse via
@@ -372,7 +436,10 @@ constraints:
     Do NOT add an intent-drift signal (audit Q4: a read-time query later, not stored machinery now).
     Do NOT add a separate intent content_hash -- Q3b rides Decision 134 cl.4's existing content_hash
     over raw_block. Fidelity tripwire (_fidelity_issue) UNTOUCHED -- intent is never a tripwire
-    condition.
+    condition. The Step 6b intent mutability convention is CONVENTION-ONLY (Decision 146 operator-disposed
+    stance): NO validator, no stored guard, no parser/schema/ETL change -- it is authored governance TEXT
+    in Decision 151 + a pointer note in decision-entry.yaml, backstopped by the 500000-byte ceiling and
+    PR review. The dated append-only accretion uses the EXISTING amendment_forms grammar (no new marker).
   - >-
     The new fields on DecisionPayload (src/schemas/decision.py) and Decision (scripts/executor/
     jsonl_store.py) are PLAIN `str | None = None` / `Optional[str] = None` -- NEVER Annotated[...]/
@@ -424,10 +491,23 @@ context:
     dec-099 (no version.yaml DuckDB bump for an additive column), dec-098 (deploy-role provisioning
     no-op-green risk). RELATED: dec-105 (Decision 151 is a FORWARD governance Decision, not a CD
     ratification -- R1-R3 ratified-CD guard not engaged; the pertinent recent amendment is dec-150),
-    dec-081 (closed reader/writer boundary, amended by dec-143), dec-070 (append-only lifecycle).
+    dec-081 (closed reader/writer boundary, amended by dec-143), dec-070 (append-only lifecycle),
+    dec-146 (archival policy / operator-disposed, convention-only-no-validator stance -- authority for
+    the Step 6b intent mutability convention's enforcement clause).
   - >-
-    gates: decision-scout=NO_FLAGS (103/103 triaged, gate_run_id verified) after 1 round;
-    plan-critique=<pending> (overseer trampoline -- dispatched as a fresh sibling).
+    gates: decision-scout=NO_FLAGS (103/103 triaged, gate_run_id verified) after 1 round (NOT re-run for
+    the r2 governance revision -- it reuses already-cited mechanisms: amendment_forms [already in
+    decision-entry.yaml], Decision 149/146/150); plan-critique=PROCEED r1, then REVISE for Step 6b option
+    (c), r2 pending (overseer trampoline).
+  - >-
+    Step 6b (human): ADOPTED option (c) -- the intent field accretes dated, append-only clarifications,
+    NOT free in-place editing. The mutability convention is folded INTO Decision 151 (not a separate
+    Decision 152). r2 revision is TEXT-LEVEL only (governance) -- the parser/schema/ETL/DQ/test substrate
+    is unchanged (it is correct as-is under every Step 6b option). Load-bearing rationale (woven into
+    D151's Intent + Rationale): the dated-append model is deliberately SCD2-shaped -- in-band dates supply
+    the reader-visible VALID-TIME the current transaction-time-only SCD2 substrate lacks, so a post-MVP
+    migration to cloud-hosted verb-queried storage maps the intent field's dated accretion onto warehouse
+    SCD2 versioning with no remodel. This is WHY dated-append-only was chosen over free in-place editing.
   - >-
     Governing Decision: this plan authors Decision 151 (a durable architectural commitment clearing the
     Decision 150 significance bar), recording intent as a first-class OPTIONAL decision-record element
@@ -470,7 +550,7 @@ context:
 pre_implementation_checklist:
   - Branch confirmed not on main (harness claude/... session branch)
   - docs/PROJECT_CONTEXT.md read
-  - DECISIONS.md read (Decisions 134, 150, 149, 84, 118, 79, 125, 126, 143, 132, 65, 86, 55, 128, 99, 98)
+  - DECISIONS.md read (Decisions 134, 150, 149, 146, 84, 118, 79, 125, 126, 143, 132, 65, 86, 55, 128, 99, 98)
   - All 11 files in scope located and readable; line refs re-verified against HEAD
   - Max `## Decision NNN:` header re-checked (numbering-race) before authoring the governing Decision
   - DEPLOY_ROLE_PROVISIONED confirmed 'true' before the post-deploy VP steps are treated as real
@@ -478,8 +558,11 @@ pre_implementation_checklist:
   - Acceptance criteria understood and verifiable
 execution_steps:
   - >-
-    docs/contracts/decision-entry.yaml: add `Intent` to optional_markers_fixed_spelling (the list only;
-    leave significance:/compaction:/required_markers untouched).
+    docs/contracts/decision-entry.yaml: (1) add `Intent` to optional_markers_fixed_spelling; (2) add a
+    short amendment_forms-adjacent pointer note (a descriptive key, e.g. `intent_accretion_note:`,
+    containing the anchor phrase "dated-append") stating the Intent marker follows the amendment_forms
+    dated-append accretion model post-ratification (cap + escalation-to-supersession) and pointing to
+    Decision 151. Leave significance:/compaction:/required_markers untouched.
   - >-
     scripts/decisions_md.py: add `"intent": _extract_multiline_section(body, "Intent"),` to the parsed
     dict in parse_decisions_md (do NOT touch the `context` extraction or raw_block/content_hash).
@@ -511,7 +594,13 @@ execution_steps:
   - >-
     docs/DECISIONS.md: author governing Decision 151 (re-check max number first) recording intent as a
     first-class OPTIONAL element, AUTHORED WITH an **Intent:** marker (placement: after **Problem:**,
-    before **Decision:**). Include Status/Date/Warehouse ID/Problem/Intent/Decision/Rationale.
+    before **Decision:**). Include Status/Date/Warehouse ID/Problem/Intent/Decision/Rationale. The
+    Decision body carries the full intent mutability convention (draft-until-merge; dated append-only
+    accretion via amendment_forms; ratified-source provenance; ~3-clarification / ~120-150-word cap
+    escalating to a superseding Decision + Decision 149 compaction; convention-only, no validator per
+    Decision 146). Weave the SCD2-shaped valid-time rationale (anchor phrase "valid-time") into BOTH the
+    **Intent:** marker and the Rationale; include the convention's "draft-until-merge" anchor phrase so
+    the step-6 grep passes.
   - >-
     Execute Verification Plan -- run each pre-deploy step (1-6) in the FOREGROUND; loop until pass.
     After merge, verify the governed deploy (step 7, precondition DEPLOY_ROLE_PROVISIONED=true), then
