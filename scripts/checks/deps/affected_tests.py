@@ -129,7 +129,11 @@ def _import_closure_channel(changed_source_files: list[str], repo_root: Path) ->
 
 def _module_imports_any(tree: ast.Module, dotted_names: set[str]) -> bool:
     """True if `tree` contains `import <dotted>` or `from <dotted> import ...` for any name in
-    dotted_names (exact match, or a submodule of a changed package)."""
+    dotted_names (exact match, or a submodule of a changed package). Matches absolute and
+    submodule-qualified imports only -- a relative import (`from . import x`) or a
+    `from <parent_pkg> import <submodule>` __init__-re-export style is not matched; no such
+    importer of a tests-tree helper exists in-repo today (grepped), so this is a known,
+    currently-inert follow-up gap, not an active recall hole."""
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
