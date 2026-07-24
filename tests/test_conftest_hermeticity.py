@@ -18,6 +18,8 @@ oversight.
 from __future__ import annotations
 
 import os
+import subprocess
+from unittest.mock import patch
 
 import boto3
 import botocore.exceptions
@@ -116,3 +118,63 @@ class TestClassLevelMarkerInheritance:
             "s3", region_name="eu-west-2"
         )
         assert client.meta.service_model.service_name == "s3"
+
+
+@pytest.mark.integration
+class TestClassLevelMarkerInheritanceNetworkAndSubprocess:
+    """VTS-22 (rec-575 closure): _allow_network_for_integration and _block_llm_cli_subprocess
+    now also use request.node.get_closest_marker(...) instead of own_markers, so a class-level
+    @pytest.mark.integration decorator is honoured for these two guards too -- completing the
+    same fix already proven for the AWS pair above (TestClassLevelMarkerInheritance).
+
+    A real connect() attempt is not a usable signal here: this repo's pyproject.toml sets
+    --allow-hosts globally, so pytest_socket's OWN pytest_runtest_setup hook re-applies its
+    host-based connect guard on every test unconditionally (regardless of any marker), which
+    would make a connect-based assertion pass whether or not this fixture's own marker
+    detection is correct -- a tautological check (verified empirically while designing this
+    test: a bare socket connect to a disallowed host raises pytest_socket's
+    SocketConnectBlockedError for a class-marked test exactly the same as for an unmarked one).
+    The class-scoped spy fixture below instead observes the fixture's OWN branch directly:
+    whether it calls pytest_socket.enable_socket() at all. Class scope is guaranteed by pytest
+    to be instantiated before the root conftest's FUNCTION-scoped _allow_network_for_integration
+    fixture (higher-scoped fixtures set up first), so the patch is reliably in place before that
+    fixture's deferred `from pytest_socket import enable_socket` executes -- unlike same-scope
+    autouse ordering, which pytest does not guarantee.
+    """
+
+    @pytest.fixture(scope="class", autouse=True)
+    @classmethod
+    def _spy_enable_socket(cls):  # type: ignore[misc]
+        """@classmethod (not a plain instance method) -- pytest instantiates a fresh test-class
+        instance per test method, so a class-scoped fixture defined as an instance method is
+        deprecated (PytestRemovedIn10Warning) since its `self` is only one of several
+        short-lived per-test instances. This fixture doesn't need instance state at all (it only
+        yields a plain list), so `cls` is unused beyond satisfying the classmethod signature."""
+        import pytest_socket
+
+        calls: list[bool] = []
+        original = pytest_socket.enable_socket
+
+        def _spy() -> None:
+            calls.append(True)
+            original()
+
+        with patch("pytest_socket.enable_socket", side_effect=_spy):
+            yield calls
+
+    def test_class_level_integration_marker_calls_enable_socket(self, _spy_enable_socket: list[bool]) -> None:
+        """A class- (not method-) level @pytest.mark.integration decorator must be honoured by
+        _allow_network_for_integration's get_closest_marker check, so enable_socket() fires --
+        own_markers would have silently missed the class decorator and never called it
+        (rec-575; reproduced while designing this test: this assertion fails against the
+        pre-fix own_markers check)."""
+        assert _spy_enable_socket, "_allow_network_for_integration did not call enable_socket() under a class-level marker"
+
+    def test_class_level_integration_marker_bypasses_llm_cli_guard(self) -> None:
+        """A class-level @pytest.mark.integration decorator must exempt
+        _block_llm_cli_subprocess's guard: subprocess.run for a stubbed LLM-CLI name ("gemini.CMD",
+        chosen because it is guaranteed absent on PATH, unlike e.g. "claude" in this CLI's own dev
+        environment) must reach the real subprocess.run (raising FileNotFoundError for a
+        non-existent binary) rather than the guard's own RuntimeError."""
+        with pytest.raises(FileNotFoundError):
+            subprocess.run(["gemini.CMD"], capture_output=True)

@@ -431,7 +431,7 @@ def main() -> None:
                 status_entries.append(("M", f))
         _affected_selection = derive_affected_tests(status_entries, repo_root=_common.ROOT)
         changed_tests = _affected_selection["selected"]
-        emit_manifest(_affected_selection["manifest"], repo_root=_common.ROOT)
+        emit_manifest(_affected_selection["manifest"])
 
         def _scaffold_lint() -> None:
             run_lint_checks(failed, files=changed)
