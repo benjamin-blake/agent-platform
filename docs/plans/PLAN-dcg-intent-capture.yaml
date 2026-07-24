@@ -87,13 +87,17 @@ scope:
       entry with non-empty intent (the governing Decision's marker round-trips, robust to
       renumbering); (e) extend the dual-model sync test so both DecisionPayload and jsonl_store.
       Decision declare `intent` as a plain (non-Annotated) field and a record with intent validates
-      on both.
+      on both. Structure: (a)-(d) in a new TestIntentMarker class; (e) as a
+      test_intent_field_synced_plain_on_both_models method on the existing TestDualModelFieldSync
+      class. VP steps select these by explicit ::ClassName, never `-k` tokens.
   - file: tests/test_ops_data_portal_decisions.py
     action: Modify
     purpose: >-
       Warehouse-free assertion that "intent" is in `_DECISION_BACKFILL_COLS` and that a parsed entry
       carrying intent survives the :323 backfill field-selection filter into the fields dict passed
-      to file_decision (proves the ETL plumbing without invoking the live writer).
+      to file_decision (proves the ETL plumbing without invoking the live writer). Structure: a new
+      TestIntentBackfillColumn class; plus a creds-gated test_intent_live_reader_parity method on the
+      existing TestLiveReaderParity class for the post-deploy leg (skips when creds absent).
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
@@ -174,16 +178,20 @@ verification_plan:
       parses to intent=""; Q3b content_hash changes when an **Intent:** marker is inserted; the live
       corpus now carries >=1 entry with non-empty intent (the governing Decision's marker round-trips,
       robust to renumbering).
-    command: bin/venv-python -m pytest tests/test_decisions_md.py -k intent -q
+    command: >-
+      grep -q "class TestIntentMarker" tests/test_decisions_md.py && bin/venv-python -m pytest
+      tests/test_decisions_md.py::TestIntentMarker -q
     expected: >-
-      All pass: _extract_multiline_section(body, "Intent") returns the marker body; a markerless body
-      returns ""; content_hash(block_with_intent) != content_hash(block_without_intent); at least one
-      parsed live entry has a non-empty intent.
+      The grep guard finds the class (fails loud if the test was mis-named/omitted), then all
+      TestIntentMarker cases pass: _extract_multiline_section(body, "Intent") returns the marker body;
+      a markerless body returns ""; content_hash(block_with_intent) != content_hash(block_without_intent);
+      at least one parsed live entry has a non-empty intent.
     fix_if: >-
-      Parse empty on a present marker -> the extraction key/spelling is wrong; content_hash unchanged
-      -> intent is not inside raw_block (it always is, since raw_block is heading-inclusive) or the
-      hash input drifted; live-corpus assertion fails -> the governing Decision's **Intent:** marker
-      was not authored or not extracted.
+      grep guard fails -> the TestIntentMarker class is missing/mis-named (author it; do NOT fall back
+      to a `-k` token selector -- the -k gotcha silently omits an untokened test, PROJECT_CONTEXT.md
+      Known Gotchas). Parse empty on a present marker -> the extraction key/spelling is wrong;
+      content_hash unchanged -> the hash input drifted; live-corpus assertion fails -> the governing
+      Decision's **Intent:** marker was not authored or not extracted.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -194,12 +202,16 @@ verification_plan:
   - step: 2
     phase: pre-deploy
     action: Byte-reconstruction invariant stays green (regression guard that adding the intent key did not touch raw_block).
-    command: bin/venv-python -m pytest tests/test_decisions_md.py -k byte_reconstruction -q
+    command: >-
+      grep -q "class TestByteReconstruction" tests/test_decisions_md.py && bin/venv-python -m pytest
+      tests/test_decisions_md.py::TestByteReconstruction -q
     expected: >-
-      Per-file concatenation of preamble + heading-inclusive raw_blocks still byte-equals docs/
-      DECISIONS.md and docs/DECISIONS_ARCHIVE.md; the synthetic sectioner-narrowing mutation still
-      fails (guard live).
-    fix_if: Reconstruction mismatch -> the intent change unexpectedly altered raw_block or the sectioner.
+      The grep guard finds the class, then: per-file concatenation of preamble + heading-inclusive
+      raw_blocks still byte-equals docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md; the synthetic
+      sectioner-narrowing mutation still fails (guard live).
+    fix_if: >-
+      grep guard fails -> the pre-existing TestByteReconstruction class was renamed/removed (restore
+      it). Reconstruction mismatch -> the intent change unexpectedly altered raw_block or the sectioner.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -208,12 +220,18 @@ verification_plan:
   - step: 3
     phase: pre-deploy
     action: Dual-model sync -- DecisionPayload and jsonl_store.Decision both declare a plain (non-Annotated) intent field.
-    command: bin/venv-python -m pytest tests/test_decisions_md.py -k dual_model -q
+    command: >-
+      grep -q "def test_intent_field_synced_plain_on_both_models" tests/test_decisions_md.py &&
+      bin/venv-python -m pytest tests/test_decisions_md.py::TestDualModelFieldSync -q
     expected: >-
-      Both models expose `intent` as an optional field; neither wraps it in Annotated/Dq*; a record
-      carrying intent validates on both and the dual-write invariant (int(id[4:]) == decision_id)
-      holds.
-    fix_if: intent missing on one model, or Annotated on either -> the hand-synced write/read pair drifted or the plain-str pattern was violated.
+      The grep guard finds the dedicated intent method, then TestDualModelFieldSync passes: both models
+      expose `intent` as an optional field; neither wraps it in Annotated/Dq*; a record carrying intent
+      validates on both and the dual-write invariant (int(id[4:]) == decision_id) holds.
+    fix_if: >-
+      grep guard fails -> the intent method was not added to TestDualModelFieldSync (add it; do NOT
+      rely on a `-k dual_model` token -- the -k gotcha would pass green without exercising the new
+      intent case). intent missing on one model, or Annotated on either -> the hand-synced write/read
+      pair drifted or the plain-str pattern was violated.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -222,13 +240,18 @@ verification_plan:
   - step: 4
     phase: pre-deploy
     action: Backfill threads intent (warehouse-free) -- "intent" is in _DECISION_BACKFILL_COLS and survives the field-selection filter.
-    command: bin/venv-python -m pytest tests/test_ops_data_portal_decisions.py -k intent -q
+    command: >-
+      grep -q "class TestIntentBackfillColumn" tests/test_ops_data_portal_decisions.py && bin/venv-python
+      -m pytest tests/test_ops_data_portal_decisions.py::TestIntentBackfillColumn -q
     expected: >-
-      "intent" in scripts.ops_portal.decisions._DECISION_BACKFILL_COLS; a parsed entry carrying a
-      non-empty intent yields a fields dict (post the `k in _DECISION_BACKFILL_COLS and v not in
-      (None, "")` filter) that includes intent; a markerless entry (intent="") yields a fields dict
-      WITHOUT intent (-> NULL column).
-    fix_if: intent absent from the constant or filtered out -> the ETL would silently drop it before the writer.
+      The grep guard finds the class, then TestIntentBackfillColumn passes: "intent" in
+      scripts.ops_portal.decisions._DECISION_BACKFILL_COLS; a parsed entry carrying a non-empty intent
+      yields a fields dict (post the `k in _DECISION_BACKFILL_COLS and v not in (None, "")` filter) that
+      includes intent; a markerless entry (intent="") yields a fields dict WITHOUT intent (-> NULL column).
+    fix_if: >-
+      grep guard fails -> the TestIntentBackfillColumn class is missing/mis-named (author it; not a `-k
+      intent` token). intent absent from the constant or filtered out -> the ETL would silently drop it
+      before the writer.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -323,7 +346,8 @@ verification_plan:
       recovery rather than hanging.
     command: >-
       bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md 2>&1 | tail -5 &&
-      bin/venv-python -m pytest tests/test_ops_data_portal_decisions.py -k intent_live_reader -q
+      bin/venv-python -m pytest
+      tests/test_ops_data_portal_decisions.py::TestLiveReaderParity::test_intent_live_reader_parity -q
     expected: >-
       Backfill completes (the governing Decision re-versions once with intent populated); the
       creds-gated reader spot-check confirms the governing entry's decision_by_id row carries a
@@ -371,6 +395,13 @@ constraints:
     No em dashes (ASCII hyphen), no emojis, ruff line length 127, type hints required, always
     bin/venv-python; no `python -c` in VP commands. SLOC decompose-by-default if a file crosses budget
     (Decision 128) -- do not raise budgets, do not `--update-sloc-budgets`.
+  - >-
+    VP test steps select by explicit `pytest tests/<file>::<ClassName>` with a `grep`-existence guard,
+    NEVER a `-k <token>` selector -- a test authored without the matching token is silently omitted and
+    passes without exercising the coverage (PROJECT_CONTEXT.md Known Gotchas / tests/CLAUDE.md). The
+    guarded class/method names (TestIntentMarker, TestDualModelFieldSync::test_intent_field_synced_plain_
+    on_both_models, TestIntentBackfillColumn, TestLiveReaderParity::test_intent_live_reader_parity) are
+    fixed at plan time so the selector and the authored test agree.
   - >-
     Loud-fail; no rescue agents or workaround loops (Decision 55). The deploy/reconcile/backfill legs
     are stop-and-RCA on red; the writer-health-gated legs are bounded-attempt-then-defer, never
@@ -470,12 +501,13 @@ execution_steps:
     pending, enforcement_ready: NO_TEST_NEEDED, phase4_session: ops-decisions-graduation-phase-2,
     current_test: none, last_verdict: no test).
   - >-
-    tests/test_decisions_md.py: add intent parse test, markerless->intent="" test, Q3b content_hash
-    test (name it so `-k intent` and the content_hash intent case are caught), live-corpus intent
-    presence test, and extend the dual-model tests to include intent (plain, validates on both).
-    tests/test_ops_data_portal_decisions.py: add a warehouse-free test (name it so `-k intent` matches)
-    that "intent" is in _DECISION_BACKFILL_COLS and survives the backfill field-selection filter; add a
-    creds-gated `intent_live_reader` spot-check for the post-deploy leg (skips when creds absent).
+    tests/test_decisions_md.py: add a TestIntentMarker class (intent parse, markerless->"", Q3b
+    content_hash-differs, live-corpus intent presence) and a test_intent_field_synced_plain_on_both_models
+    method on the existing TestDualModelFieldSync class. tests/test_ops_data_portal_decisions.py: add a
+    TestIntentBackfillColumn class ("intent" in _DECISION_BACKFILL_COLS + survives the field-selection
+    filter) and a creds-gated test_intent_live_reader_parity method on the existing TestLiveReaderParity
+    class. VP steps select these by explicit ::ClassName with a grep-existence guard (never `-k` tokens --
+    the -k gotcha silently omits an untokened test, PROJECT_CONTEXT.md Known Gotchas).
   - >-
     docs/DECISIONS.md: author governing Decision 151 (re-check max number first) recording intent as a
     first-class OPTIONAL element, AUTHORED WITH an **Intent:** marker (placement: after **Problem:**,
