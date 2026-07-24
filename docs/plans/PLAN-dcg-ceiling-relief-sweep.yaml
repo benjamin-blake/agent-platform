@@ -1,0 +1,258 @@
+schema_version: 1
+slug: "dcg-ceiling-relief-sweep"
+intent: >-
+  Apply the merged number-preserving compaction lifecycle (Decision 149) to Decision 58 -- the sole
+  remaining genuinely-eligible fully-superseded live entry after the DPI-04 archival wave and Plan-1's
+  D44 compaction -- reclaiming live headroom under the Decision 134/145 DECISIONS.md ceiling and closing
+  audit finding DCG-01 with an honest outflow record (relief valves built and exercised), not a byte
+  target or a ceiling raise.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-dcg-ceiling-relief-sweep.yaml
+phase: >-
+  Audit-driven platform governance (DCG-01, audits/decision-consolidation-growth-f79d6b5.yaml). No
+  tier_item -- audit follow-ups route to Decisions/contracts/plans, not recs (Decision 86); soft-warn
+  category (audit-driven), so the Tier Item Freshness Gate is skipped. Sibling application of the merged
+  PLAN-dcg-compaction-lifecycle (Decision 149 compaction mechanism) and the DPI-04 archival wave
+  (Decision 146).
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Compact Decision 58 (`.agents` as Canonical Interactive Workflow Layer, fully superseded by
+      Decision 76 -- the `.agents/` interactive-workflow layer is retired in favour of the
+      `.claude/commands/` + `.claude/skills/` architecture) to a conforming Decision-149 stub IN PLACE.
+      It cannot archive because docs/ROADMAP-PLATFORM.yaml (T5.3) and docs/contracts/instruction-architecture.yaml
+      cite "Decision 58" by number, so it stubs in the live file per the archive-vs-compact branch. Header
+      parenthetical stays `(Decided)`; body carries `**Status:** Superseded`, `**Date:** 2026-05-01`, a
+      non-empty one-line `**Decision:**` pointer to Decision 76 and why it stays live-compacted, and the
+      already-present exact `**Superseded by: Decision 76**` marker. ~700 live bytes reclaimed; the second
+      exercise of the compaction lifecycle after Plan-1's D44.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    Decision 58 in docs/DECISIONS.md is a conforming Decision-149 stub: header parenthetical still
+    `(Decided)`; body has `**Status:** Superseded`, `**Date:** 2026-05-01`, a non-empty one-line
+    `**Decision:**` pointer naming Decision 76, and the exact `**Superseded by: Decision 76**` marker; the
+    prior full body (Problem/Decision/Rationale/Related) is gone. parse_decisions_md() yields dec-058
+    status=Superseded, superseded_by=dec-076, non-empty decision_text, decided_date starting '2026'.
+  - >-
+    The `## Decision 58:` header survives in docs/DECISIONS.md exactly once (never-remove-headers) and
+    Decision 58 does NOT appear in docs/DECISIONS_ARCHIVE.md (compaction stays in place, no archive move);
+    every pre-existing by-name "Decision 58" citation (ROADMAP-PLATFORM.yaml T5.3, docs/contracts/instruction-architecture.yaml,
+    ROADMAP-PRODUCT.yaml, config/decision_supersession_waivers.yaml) still resolves to the live header.
+  - >-
+    bin/venv-python -m scripts.validate --pre is green -- validate_decisions_size PASS (live bytes < 500000;
+    live `## Decision` header count unchanged at 102 <= 120, no header added or removed) and the R1
+    ratification guard (validate_candidate_decision_ratification) + validate_candidate_decision_supersession
+    PASS (dec-058 still resolves to a live header; no ratified CD maps to dec-058).
+  - >-
+    bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md runs green, writing a status=Superseded
+    terminal SCD2 version for dec-058 (content_hash changed by the stub edit) with the prior full-body Decided
+    version retained as SCD2 history; the DCG-03 divergence guard fires no NEW orphan (dec-010 tolerated via the
+    orphan baseline) and the fidelity tripwire stays silent.
+  - >-
+    The ops_decisions current projection records dec-058 as the terminal Superseded version
+    (status=Superseded, superseded_by=dec-076) via the closed-boundary reader.
+  - >-
+    This plan files NO recommendations (bundled_recommendations: []); rec-2822 and rec-2823 (already filed by
+    the operator for the citation-stranded D24-class future work) are referenced in context, not refiled; no
+    Decision 24 edit is made, no DECISIONS_ARCHIVE.md move is made, no ceiling raise and no byte-target is
+    claimed.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Assert the compacted Decision 58 stub parses to the required terminal shape.
+    command: "bin/venv-python -c \"from scripts.decisions_md import parse_decisions_md; r={x['decision_id']:x for x in parse_decisions_md()}[58]; assert r['status']=='Superseded', r['status']; assert r['superseded_by']=='dec-076', r['superseded_by']; assert r['decision_text'].strip(), 'empty decision_text'; assert r['decided_date'].startswith('2026'), r['decided_date']; print('D58 stub OK', r['status'], r['superseded_by'])\""
+    expected: "Prints 'D58 stub OK Superseded dec-076'; no AssertionError."
+    fix_if: >-
+      status != Superseded (the `**Status:**` marker is missing or spelled wrong), superseded_by != dec-076
+      (the `**Superseded by: Decision 76**` marker was dropped/mangled), empty decision_text (the one-line
+      `**Decision:**` pointer is missing -- fidelity-tripwire risk), or a non-ISO decided_date (the `**Date:**`
+      line was dropped).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time correctness assertion on this compacted stub (transient this-plan repo state). The durable
+      guard for stub fidelity is the backfill's EXISTING per-run fidelity tripwire (empty decision_text /
+      non-ISO decided_date on a live-h2 entry), already exercised in VP step 4 -- registering a separate
+      CANONICAL_SLOTS kernel check duplicates that standing coverage without adding a new regression surface.
+  - step: 2
+    phase: pre-deploy
+    action: Confirm the Decision 58 header survives in place (never-remove-headers) and was not archived, so every inbound by-name citation still resolves.
+    command: "bin/venv-python -c \"from scripts.decisions_md import decision_header_numbers as H; n=H(); assert 58 in n, sorted(n); import pathlib; live=pathlib.Path('docs/DECISIONS.md').read_text(encoding='utf-8'); assert live.count('## Decision 58:')==1, live.count('## Decision 58:'); arch=pathlib.Path('docs/DECISIONS_ARCHIVE.md').read_text(encoding='utf-8'); assert '## Decision 58:' not in arch, 'D58 must NOT be archived'; print('D58 header live x1, not archived; citations resolve')\""
+    expected: "Prints 'D58 header live x1, not archived; citations resolve'."
+    fix_if: >-
+      Decision 58 lost its live header (a number-keyed citation would dangle -- never-remove-headers
+      violated), the header appears more than once (a duplicate was introduced), or Decision 58 was moved into
+      DECISIONS_ARCHIVE.md (the archive-vs-compact branch was mis-applied -- D58 is cited by number so it must
+      stub in place, not archive).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      A deterministic hermetic check, but this-entry-specific to D58's one-time compaction. The durable
+      never-remove-headers / no-orphaned-current-row invariant is ALREADY a standing guard -- the DCG-03
+      `_assert_no_orphaned_current_rows` divergence check the backfill runs (VP step 4) -- so a dedicated
+      kernel slot here duplicates existing coverage rather than adding a new regression surface.
+  - step: 3
+    phase: pre-deploy
+    action: Run the fast presubmit gate; the size guard and the R1 ratification guard must pass.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: >-
+      Green. DECISIONS size governance PASS (live bytes < 500000 -- ~421.9K after the ~700-byte compaction;
+      live `## Decision` headers unchanged at 102 <= 120, since compaction adds and removes no header). R1
+      validate_candidate_decision_ratification PASS and validate_candidate_decision_supersession PASS (dec-058
+      resolves to a live header; no ratified CD maps to dec-058). validate_plan_documents PASS on this plan.
+    fix_if: >-
+      A size breach (impossible -- bytes only decrease), an R1 FAIL (a decision header was removed or
+      renumbered -- never-remove-headers violated), a plan-schema FAIL on this document, or any other --pre
+      check regresses.
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: post-deploy
+    action: Run the DECISIONS.md -> ops_decisions backfill against the live DuckLake warehouse (needs agent_platform creds); writes dec-058's terminal Superseded version and exercises the DCG-03 orphan guard.
+    command: "bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md"
+    expected: >-
+      Exit 0. The run writes >=1 row including dec-058 (its content_hash changed by the stub edit), failed=0,
+      and neither the fidelity tripwire nor the DCG-03 divergence tripwire fires (dec-010 is tolerated via the
+      orphan baseline; no NEW orphan exists).
+    fix_if: >-
+      The DCG-03 divergence RuntimeError fires (a genuine NEW orphan exists -- investigate and DO NOT silence a
+      real one; dec-010 is the only baselined orphan); the fidelity tripwire fires (the D58 stub parsed to empty
+      decision_text or a non-ISO date -- fix the stub, do not weaken the tripwire); or the reader/writer Function
+      URLs are unreachable (degraded -- refresh the agent_static key per AGENTS.md, do NOT treat as a code
+      failure or retry into green, Decision 55).
+    hermetic: false
+  - step: 5
+    phase: post-deploy
+    action: Confirm the warehouse current projection now records dec-058 as the terminal Superseded version.
+    command: "bin/venv-python -c \"from src.common.iceberg_reader import make_reader; r=make_reader().named('decision_by_id', id='dec-058')[0]; assert r['status']=='Superseded', r['status']; assert r.get('superseded_by')=='dec-076', r.get('superseded_by'); print('dec-058 terminal:', r['status'], r.get('superseded_by'))\""
+    expected: "Prints 'dec-058 terminal: Superseded dec-076'. The prior status=Decided full-body version is retained as SCD2 history (append-only), and in git history."
+    fix_if: >-
+      The current projection still shows status Decided (the content_hash skip-gate did not detect the stub edit
+      -- confirm the raw_block actually changed) or superseded_by is unset (the `**Superseded by: Decision 76**`
+      marker did not parse to dec-076).
+    hermetic: false
+constraints:
+  - "IMPLEMENTATION plan type only -- STRATEGIC classification is frozen (Decision 67 / AGENTS.md Temporary Operational Constraints)."
+  - >-
+    File NO recommendations. rec-2822 (enumerate the citation-stranded decision class into a decision-migration
+    manifest) and rec-2823 (add a migrate-then-archive branch + pilot on Decision 24) are ALREADY FILED by the
+    orchestrator at the operator's direction -- reference them in context, never refile. Surface any unrelated
+    discovery via overseer hand-back, not the rec portal.
+  - >-
+    Scope is docs/DECISIONS.md ONLY. Do NOT edit Decision 24: it is confirmed NOT archive-eligible (Decision 77
+    clause 2 affirms its promotion train as live future-state; docs/PROJECT_CONTEXT.md:104 cites it live for the
+    human-triggered-promotion rationale; PLAN-decisions-archival-hygiene.yaml already excluded it). The D24
+    migration is rec-2823's future work, explicitly out of bounds for this plan.
+  - >-
+    Compaction stays IN PLACE -- no docs/DECISIONS_ARCHIVE.md move. Decision 58 is cited by number in
+    ROADMAP-PLATFORM.yaml (T5.3) + docs/contracts/instruction-architecture.yaml, so the archive-vs-compact branch
+    (Decision 149 / decision-entry.yaml `compaction:` section) requires a live-file stub, not an archive move.
+  - >-
+    Never-remove-headers (DCG-03): the stub keeps the `## Decision 58:` header and the parser emitting; number
+    retirement and destructive merges are out of the mechanism's vocabulary (~12,103 unguarded inbound
+    'Decision N' citations depend on every number staying resolvable to a header in one of the two files).
+  - "Direction-consistency: only the superseded victim (Decision 58) compacts; the superseder (Decision 76) never moves or compacts."
+  - >-
+    Do NOT reuse the archive-move header suffix '(Superseded by Decision 76)' on the live stub -- Decision 58's
+    header parenthetical stays '(Decided)'; the superseded signal lives in the body `**Status:** Superseded` +
+    `**Superseded by: Decision 76**` marker (the Decision 128/145 silent-trade anti-pattern otherwise).
+  - >-
+    Use the EXACT `**Superseded by: Decision 76**` spelling already pinned in decision-entry.yaml's
+    supersession_marker (colon after 'by', before 'Decision') -- Decision 58 already carries this exact form; the
+    stub preserves it verbatim, never the historical '**Superseded by:** Decision 76' fallback.
+  - "Loud-fail, no silent counters or retry-into-green (Decision 55); the DCG-03 orphan baseline (dec-010) is not to be silently altered to pass the backfill."
+  - "No new standing prose-architecture docs (Decision 86): DCG-01's closure is recorded in this plan; no new docs/INTENT-*.md or companion artefact."
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (round 1). The sole flag (Decision
+    146 WARN -- archive-convention) is ACCEPTED and RESOLVED by DROPPING Decision 24 from the sweep: D24 is
+    confirmed NOT archive-eligible (Decision 77 clause 2 affirms its promotion train as live future-state;
+    docs/PROJECT_CONTEXT.md:104 cites it live; PLAN-decisions-archival-hygiene.yaml already excluded it; a
+    4-part lifecycle test fails on rehomeable-principle -- its surviving principle's only live restatement is a
+    retiring INTENT doc, so it has no stable canonical home yet). CITE: Decision 146, Decision 149, Decision 145,
+    Decision 134, Decision 84, Decision 55, Decision 86, Decision 76, Decision 105.
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=<pending>"
+  - >-
+    DCG-01 honest-closure record: this plan closes audit finding DCG-01
+    (audits/decision-consolidation-growth-f79d6b5.yaml) with the HONEST record, not a byte target. DCG-01's
+    letter-acceptance already holds (~422.6K live / 500K ceiling = ~77 KB headroom) -- but that headroom is
+    Decision-145-RAISE-funded, not outflow-funded. DCG-01's SUBSTANTIVE condition (both relief valves
+    'named-but-unbuilt/unowned') is now genuinely RESOLVED: Decision 146 (archival) + the Decision-149
+    compaction lifecycle are BUILT and DEMONSTRABLY EXERCISED (D44 compacted by Plan-1; D58 compacted here;
+    D23/40/42/49/68/71 archived by the DPI-04 wave). The residual archive-looking population is
+    CITATION-STRANDED (the D24 class: fully-dead premise but a surviving principle with no stable canonical home
+    + live by-name citations), deferred to rec-2822 + rec-2823. Structural INFLOW relief is the later DCG-04
+    (batch-wave ratification) + DCG-05 (significance gate) slices of this audit -- out of this plan's scope.
+  - >-
+    Under-400K is NOT achievable with genuinely-eligible entries and is explicitly NOT a goal of this plan. The
+    genuinely-eligible superseded-live set (strict criterion: ENTIRE body superseded/inert AND the superseder
+    subsumes every live clause) reduced, after the DPI-04 archival wave + Plan-1's D44 compaction, to Decision
+    58 alone (~700 bytes). D24/D89/D74/D62/D37/D38/D35/D43 were each assessed and excluded -- partial-liveness (a
+    surviving live clause the superseder does not subsume: e.g. D89 design consequences preserved after Decision
+    83 reversed its premise; D74's workflow_dispatch escape hatch still live-cited across ci-rca; D37's
+    out-of-band-Secrets-Manager precedent cited by credential-routing.yaml; D62 deliberately revisited under
+    T1.6; D38's ghost-file guard cites it as live authority; D35 co-cited live with Decision 77) or
+    citation-stranded (D24). Reversing the Decision-145 stopgap (back to 400K) needs structural inflow control
+    (DCG-04/DCG-05), not more archival -- there are not enough genuinely-superseded live entries left.
+  - >-
+    Mechanism is already merged (PLAN-dcg-compaction-lifecycle / Decision 149): docs/contracts/decision-entry.yaml's
+    `compaction:` section (eligibility criterion, stub grammar, never-remove-headers, procedure), the DCG-03
+    orphan guard (`_assert_no_orphaned_current_rows` in scripts/ops_portal/decisions.py with the dec-010
+    baseline), and the D44 stub template all exist on origin/main. This plan authors NO code and NO new Decision
+    -- it is a pure application of the existing lifecycle to Decision 58 (so no `## Decision N:` numbering
+    re-check is needed).
+  - >-
+    ci-rca: preflight ci_rca_unresolved_recs is empty -- no HARD BLOCK, no Related-Work deferral needed.
+  - >-
+    Main-divergence (assessment time): the branch (claude/dcg-compaction-lifecycle-f98xza) is even with
+    origin/main (0 commits ahead/behind, clean working tree); the sole scope file docs/DECISIONS.md is in no
+    divergence set. No assessment-time rebase needed; commit-flow auto-rebase applies at push per AGENTS.md
+    git-ops.
+  - >-
+    Freshness Gate skipped: this names no tier_item (audit-driven follow-up, like the sibling
+    PLAN-dcg-compaction-lifecycle); soft-warn category.
+  - >-
+    Step 6b confirmation: AskUserQuestion is unavailable inside overseer subagents (harness constraint), so the
+    per-entry disposition menu was relayed by the orchestrator and the human confirmed the final scope (option i
+    = Decision 58 only; Decision 24 dropped, all other candidates left). No further inline human confirmation is
+    required before /implement.
+  - >-
+    Not T1.5-gated: the stub grammar + terminal-SCD2-version semantics ride the interim prose+ETL substrate and
+    survive the portal flip unchanged (audit Q4: authorable now as IMPLEMENTATION work).
+  - >-
+    Size governance: docs/DECISIONS.md is prose governed by validate_decisions_size (its own ceiling), not the
+    SLOC/prose budgets; the compaction DECREASES bytes, so no budget-raise concern (Decision 128/145).
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/dcg-compaction-lifecycle-f98xza; even with origin/main)
+  - docs/PROJECT_CONTEXT.md read
+  - "DECISIONS.md relevant entries read (58, 76, 146, 149, 145, 134, 84, 55, 86)"
+  - "decision-entry.yaml `compaction:` section (eligibility criterion + stub grammar + archive-vs-compact branch) read"
+  - The merged Decision 44 stub reviewed as the conforming template
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    docs/DECISIONS.md: compact Decision 58 to the conforming Decision-149 stub. Keep the header line
+    '## Decision 58: `.agents` as Canonical Interactive Workflow Layer (Decided)' UNCHANGED (original
+    '(Decided)' parenthetical -- do NOT add the archive '(Superseded by Decision 76)' suffix). Replace the
+    ENTIRE body (everything between the header and the closing '---') with, in order: `**Status:** Superseded`;
+    `**Date:** 2026-05-01`; a non-empty one-line `**Decision:**` pointer naming Decision 76 (the
+    `.claude/commands/` + `.claude/skills/` architecture that retired the `.agents/` interactive-workflow layer
+    this entry defined) AND why it stays live-compacted rather than archived (ROADMAP-PLATFORM.yaml T5.3 +
+    docs/contracts/instruction-architecture.yaml cite 'Decision 58' by name -- the Decision 146
+    still-cited-live carve-out; compaction under the DCG-02/DCG-03 lifecycle per decision-entry.yaml's
+    `compaction:` section); and the exact already-present `**Superseded by: Decision 76**` marker. Verify no
+    pre-compaction marker line (e.g. the old '**Status:** Decided' or the '**Related:**' line) survives -- this
+    is a full-body replacement, not a partial edit. Mirror the merged Decision 44 stub's shape.
+  - "Execute Verification Plan -- run each step in order; loop until pass; on unrecoverable V3 failure (e.g. the backfill reader unreachable after an agent_static cred refresh) stop and RCA (Decision 55)."
+  - "Report: the compacted Decision 58 stub, the live-byte delta, the validate --pre result, the backfill result (dec-058 terminal Superseded version + no NEW orphan), and the DCG-01 honest-closure confirmation for overseer hand-back."
+work_areas: []
+rollback: >-
+  All changes are on the session branch; revert the branch to drop them. The dec-058 warehouse write is SCD2
+  append-only -- re-running --backfill-decisions-md after reverting docs/DECISIONS.md restores dec-058's prior
+  status=Decided as a new terminal version (no destructive undo needed; history is preserved either way).
