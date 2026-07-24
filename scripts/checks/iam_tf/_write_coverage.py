@@ -8,12 +8,45 @@ at apply time), assert the apply role's inline policy grants the required write 
 resource prefix. An apply-role-written type with no covering write grant FAILS LOUD, mirroring the
 read-coverage loud-fail (Decision 55: fail loud, never silently pass).
 
+rec-2831 anti-recurrence (T2.48 c1, PLAN-t248-passrole-liveproof): a SECOND, verb-pair recurrence
+class -- lambda:CreateFunction was write-covered (above) but AWS also REQUIRES iam:PassRole on the
+Lambda execution role for CreateFunction to succeed, and the enumerated model never paired the two.
+check_passrole_implies_coverage() closes this: if CreateFunction is granted, both the identity
+policy AND the boundary DataPlaneAllow ceiling must grant iam:PassRole scoped to
+role/agent-platform-*. The identity-side check uses the apply_statements the facade already passes;
+the boundary-side check is SELF-CONTAINED -- it re-reads + re-parses github_ci_apply.tf's boundary
+block itself (reusing the _read_coverage HCL primitives), because the orchestrator facade
+(validate_ci_refresh_read_coverage.py) passes only the identity apply_statements, never the
+boundary policy, and stays out of scope here.
+
 Credential-free (pure text parsing) -- eligible for --pre and full tiers. Stays < 500 SLOC.
 """
 
 from __future__ import annotations
 
-from scripts.checks.iam_tf._read_coverage import _action_matches
+import re
+
+from scripts.checks import _common
+from scripts.checks.iam_tf._read_coverage import (
+    _BOOTSTRAP_TF_REL,
+    _SID_CAP_RE,
+    _action_matches,
+    _extract_bracket_block,
+    _extract_capitalized_field,
+    _split_top_level_objects,
+)
+
+# rec-2831 / Decision 143 worst-verb scoping: the identity PassRole grant must target exactly this
+# execution-role prefix, never role/* or a specific privileged role by name.
+_PASSROLE_ACTION = "iam:PassRole"
+_PASSROLE_RESOURCE_MARKER = "role/agent-platform-*"
+# Whole-file substring check (mirrors the plan's own VP step 2 rigor level -- a simple presence
+# check, not a statement-scoped parse): the PassedToService=lambda.amazonaws.com condition text
+# must be present somewhere in the bootstrap HCL, or the identity grant is an unconditioned
+# over-grant (any service, any pass).
+_PASSROLE_CONDITION_MARKERS = ("iam:PassedToService", "lambda.amazonaws.com")
+_BOUNDARY_RESOURCE_RE = re.compile(r'resource\s+"aws_iam_policy"\s+"github_ci_apply_boundary"\s*\{')
+_STATEMENT_ARRAY_RE = re.compile(r"Statement\s*=\s*\[")
 
 # ---------------------------------------------------------------------------
 # WRITE-coverage map: managed resource type -> the write actions github_ci_apply's inline policy MUST
@@ -68,6 +101,105 @@ def _write_grant_present(apply_statements: list[dict], spec: dict) -> bool:
     return True
 
 
+def _create_function_granted(apply_statements: list[dict]) -> bool:
+    """True if some apply statement grants lambda:CreateFunction (the PassRole trigger condition)."""
+    return any(_action_matches(("lambda:CreateFunction",), stmt["actions"]) for stmt in apply_statements)
+
+
+def _passrole_present(statements: list[dict]) -> bool:
+    """True if some statement grants iam:PassRole on a Resource matching the agent-platform-* prefix."""
+    return any(
+        _action_matches((_PASSROLE_ACTION,), stmt["actions"]) and _PASSROLE_RESOURCE_MARKER in stmt["resources_raw"]
+        for stmt in statements
+    )
+
+
+def _parse_boundary_dataplane_statement(bootstrap_text: str) -> dict | None:
+    """Self-contained re-read: locate github_ci_apply_boundary's DataPlaneAllow statement.
+
+    The orchestrator facade (validate_ci_refresh_read_coverage.py) passes this submodule only the
+    IDENTITY apply_statements -- it never reads or passes the boundary policy. Rather than widen the
+    facade's contract, this re-reads + re-parses github_ci_apply.tf's boundary block directly, reusing
+    the same _read_coverage HCL primitives the facade itself uses for the identity policy. Returns
+    None if the boundary resource or its DataPlaneAllow statement cannot be located (HCL shape drift).
+    """
+    resource_m = _BOUNDARY_RESOURCE_RE.search(bootstrap_text)
+    if not resource_m:
+        return None
+    # The boundary's `policy = jsonencode({ Version = ..., Statement = [...] })` is inline (no
+    # rec-2793 hoisted-local indirection -- that workaround exists only for the identity policy,
+    # whose lifecycle precondition needs to self-reference the rendered JSON). A forward search for
+    # the next `Statement = [` after the resource's opening brace is therefore unambiguous: nothing
+    # else in the boundary resource body (name/description/policy-open) can contain that text.
+    stmt_m = _STATEMENT_ARRAY_RE.search(bootstrap_text, resource_m.end())
+    if not stmt_m:
+        return None
+    array_text = _extract_bracket_block(bootstrap_text, stmt_m.end() - 1)
+    for obj_body in _split_top_level_objects(array_text):
+        sid_m = _SID_CAP_RE.search(obj_body)
+        if sid_m and sid_m.group(1) == "DataPlaneAllow":
+            actions, _ = _extract_capitalized_field(obj_body, "Action")
+            _, resources_raw = _extract_capitalized_field(obj_body, "Resource")
+            return {"sid": "DataPlaneAllow", "actions": actions, "resources_raw": resources_raw}
+    return None
+
+
+def check_passrole_implies_coverage(apply_statements: list[dict], failed: list[str], key: str) -> None:
+    """rec-2831 anti-recurrence (T2.48 c1): CreateFunction-implies-PassRole.
+
+    AWS requires iam:PassRole on a Lambda's execution role for lambda:CreateFunction to succeed. If
+    github_ci_apply grants CreateFunction, assert:
+      1. The identity policy (apply_statements, as passed by the facade) grants iam:PassRole scoped
+         to role/agent-platform-*.
+      2. The boundary DataPlaneAllow ceiling (re-read + parsed from github_ci_apply.tf directly --
+         see _parse_boundary_dataplane_statement) ALSO grants iam:PassRole -- a grant absent from the
+         boundary ceiling is silently denied by the identity/boundary intersection.
+      3. The PassedToService=lambda.amazonaws.com condition text is present in the bootstrap HCL
+         (Decision 143 worst-verb scoping) -- an unconditioned PassRole over-grants.
+
+    A CreateFunction grant with no covering PassRole (either layer, or no condition) FAILS LOUD --
+    this is the exact rec-2831 recurrence (a guard-PASS auto-apply that then AccessDenies at
+    CreateFunction) the check exists to prevent from ever silently recurring.
+    """
+    if not _create_function_granted(apply_statements):
+        return  # CreateFunction isn't granted -- PassRole isn't a requirement here.
+
+    if not _passrole_present(apply_statements):
+        failed.append(
+            f"{key} github_ci_apply grants lambda:CreateFunction but its identity policy has no "
+            f"iam:PassRole grant on a Resource matching {_PASSROLE_RESOURCE_MARKER!r} -- AWS requires "
+            "PassRole on the Lambda execution role for CreateFunction to succeed (rec-2831 recurrence)"
+        )
+
+    bootstrap_path = _common.ROOT / _BOOTSTRAP_TF_REL
+    try:
+        bootstrap_text = bootstrap_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        failed.append(f"{key} cannot re-read {bootstrap_path} for the boundary PassRole check: {exc}")
+        return
+
+    boundary_stmt = _parse_boundary_dataplane_statement(bootstrap_text)
+    if boundary_stmt is None:
+        failed.append(
+            f"{key} could not locate the github_ci_apply_boundary DataPlaneAllow statement in "
+            f"{bootstrap_path.name} -- has the boundary HCL shape changed?"
+        )
+    elif not _action_matches((_PASSROLE_ACTION,), boundary_stmt["actions"]):
+        failed.append(
+            f"{key} github_ci_apply grants lambda:CreateFunction and iam:PassRole is present in the "
+            "identity policy, but the github_ci_apply_boundary DataPlaneAllow ceiling does not grant "
+            "iam:PassRole -- a grant absent from the boundary ceiling is silently denied by the "
+            "identity/boundary intersection (rec-2831 recurrence)"
+        )
+
+    if not all(marker in bootstrap_text for marker in _PASSROLE_CONDITION_MARKERS):
+        failed.append(
+            f"{key} github_ci_apply's iam:PassRole grant is missing the iam:PassedToService="
+            "lambda.amazonaws.com condition (Decision 143 worst-verb scoping) -- an unconditioned "
+            "PassRole over-grants (any service, any pass)"
+        )
+
+
 def check_write_coverage(
     apply_statements: list[dict], resources: list[tuple[str, str, str]], failed: list[str], key: str
 ) -> int:
@@ -78,6 +210,10 @@ def check_write_coverage(
          broadened prefix. A removed / narrowed write grant fails the PR (DEP-01 write-surface gap).
       2. A terraform/personal resource of an apply-role-written type with NO WRITE_COVERAGE entry
          fails loud -- a new write-managed resource class must declare its write grant.
+
+    Also runs check_passrole_implies_coverage() (rec-2831, T2.48 c1): the CreateFunction-implies-
+    PassRole anti-recurrence assertion, a distinct verb-PAIR invariant from the per-type write-verb
+    coverage above.
 
     Returns the count of write-managed types asserted (for the PASS summary). Appends to `failed`.
     """
@@ -95,5 +231,7 @@ def check_write_coverage(
                 f"{key} apply-role-written type {rtype!r} (resource {rname} in {fname}) has no "
                 "WRITE_COVERAGE entry -- add one to scripts/checks/iam_tf/_write_coverage.py"
             )
+
+    check_passrole_implies_coverage(apply_statements, failed, key)
 
     return len(WRITE_COVERAGE)

@@ -253,6 +253,13 @@ locals {
           "arn:aws:iam::${var.account_id}:role/agent-platform-scheduled-agent-dispatcher",
           "arn:aws:iam::${var.account_id}:role/agent-platform-findings-processor",
           "arn:aws:iam::${var.account_id}:role/agent-platform-ops-compaction",
+          # rec-2831 / DEP-02 (T2.48 c2, PLAN-t248-passrole-liveproof): pre-staged ahead of the
+          # role's own creation, the established planner/deploy pre-add pattern (rec-2688; mirrors
+          # how github-ci-drift's own ARN was added here at T2.24) -- so github_ci_apply can
+          # refresh-read the throwaway DEP-02 live-proof role once its create PR lands. Added here
+          # in the PassRole-completion PR; the matching oidc.tf planner-read entry is added in the
+          # DEP-02 create PR and both entries are removed together in the DEP-02 revert PR.
+          "arn:aws:iam::${var.account_id}:role/agent-platform-probe-liveproof-role",
         ]
       },
       {
@@ -348,6 +355,31 @@ locals {
           "iam:DeleteRolePolicy"
         ]
         Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-*"]
+      },
+      {
+        # rec-2831 (DEP-01 completion, T2.48 c1, PLAN-t248-passrole-liveproof): AWS REQUIRES
+        # iam:PassRole on a Lambda's execution role for lambda:CreateFunction to succeed --
+        # LambdaFunctionWrite below grants CreateFunction but the enumerated model never paired it
+        # with PassRole, so a new agent-platform-* Lambda auto-applies past the guard and then
+        # AccessDenies at CreateFunction (the exact recurrence this Sid closes). Worst-verb scoped
+        # (Decision 143): Resource is the execution-role prefix role/agent-platform-* (never role/*
+        # or PlatformAdmin/PlatformDev), AND Condition requires iam:PassedToService=lambda.amazonaws.com
+        # (this identity may pass an agent-platform-* role ONLY to the lambda service, never to ecs,
+        # glue, or any other principal). Passing a PRIVILEGED agent-platform-* role (e.g. this apply
+        # role itself, or the planner role) to lambda is ALLOWED by this prefix grant BY DESIGN
+        # (Decision 143) -- containment is that the apply role holds no broad lambda:InvokeFunction,
+        # so it cannot create-then-invoke such a lambda to escalate in-session (verified via the
+        # bootstrap simulate-principal-policy gate). The boundary DataPlaneAllow ceiling is extended
+        # with the same verb below (a grant absent from the ceiling is silently denied).
+        Sid      = "IAMPassRoleForLambda"
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-*"]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "lambda.amazonaws.com"
+          }
+        }
       },
       {
         # T2.23 self-grant break, retained under the widened agent-platform-* prefix (audit Q7). The
@@ -723,7 +755,17 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
           "iam:DeleteRole",
           "iam:DetachRolePolicy",
           "iam:DeleteRolePolicy",
-          "iam:UpdateRoleDescription"
+          "iam:UpdateRoleDescription",
+          # rec-2831 (DEP-01 completion, T2.48 c1, PLAN-t248-passrole-liveproof): the boundary
+          # ceiling for the IAMPassRoleForLambda identity grant above. The identity policy already
+          # worst-verb-scopes PassRole (role/agent-platform-* + PassedToService=lambda.amazonaws.com);
+          # the boundary Allow itself stays unconditioned here, matching the existing pattern for
+          # every other IAM write verb in this same list (CreateRole/PutRolePolicy/AttachRolePolicy
+          # are narrowed by the separate DenyIAMEscalation Deny below, not by a Condition on this
+          # Allow) -- a boundary is a ceiling, not a second copy of the identity-side scoping.
+          # DenyIAMEscalation / DenyBoundaryRemoval / DenyBoundaryPolicyModification below stay
+          # non-intersecting with PassRole (verified live by the bootstrap simulate-gate, VP step 10).
+          "iam:PassRole"
         ]
         Resource = ["*"]
       },
