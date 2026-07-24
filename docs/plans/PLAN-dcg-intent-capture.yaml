@@ -1,0 +1,497 @@
+schema_version: 1
+slug: dcg-intent-capture
+intent: >-
+  Make semantic intent a first-class, OPTIONAL element of the decision record (audit finding DCG-06,
+  Q3a adopt-scoped / Q3b adopt): add an `Intent` optional fixed-spelling marker to the decision-entry
+  grammar and a nullable `intent` column extracted by the DECISIONS.md -> ops_decisions parser/ETL,
+  threaded through both schema models and the warehouse write path, so the durable "why" a consumer
+  can quote survives into the warehouse instead of being lost in prose. Optional forever: no
+  required-marker change, no retro-enforcement, DAF-03 forward conformance untouched.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-dcg-intent-capture.yaml
+phase: >-
+  Platform tier T1.5 pre-work (the intent column rides the ops_decisions schema T1.5 inherits; NOT
+  T1.5-gated -- audit Q4: "None requires T1.5; all ride the interim prose+ETL substrate and survive
+  the portal flip as grammar/schema"). Platform-plane, DCG audit-consolidation Wave 4. Closes no
+  roadmap exit criterion.
+scope:
+  - file: docs/contracts/decision-entry.yaml
+    action: Modify
+    purpose: >-
+      Add `Intent` to `optional_markers_fixed_spelling` ONLY (the list at lines 46-56, currently
+      Problem/Rationale/Reversal conditions/Related/Warehouse ID). OPTIONAL forever -- no change to
+      `required_markers`, no retro-enforcement, DAF-03 forward conformance untouched. Do NOT disturb
+      the separate `significance:` (Wave 3 / Decision 150) or `compaction:` (Wave 1 / Decision 149)
+      sections.
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      parse_decisions_md gains an `intent` key extracted via _extract_multiline_section(body,
+      "Intent") in the parsed dict (built at :234-249). Leave the existing `context` extraction
+      (Rationale/Key details/Context) UNTOUCHED -- intent is a NEW separate typed key, not a
+      re-slice of context. raw_block/content_hash (:232-233) and the byte-reconstruction invariant
+      are untouched (a new dict key does not change raw_block).
+  - file: docs/contracts/ops_decisions.yaml
+    action: Modify
+    purpose: >-
+      Class A CD.25 ritual contract (Decision 118 authority). Add an `intent` field to `fields:`
+      (type: str, iceberg_type: string, nullable: true, description + semantics + populated_by,
+      dq_intent.not_null.enforced: false) mirroring the raw_block/reversal_conditions shape at
+      :270-348; append an `amendment_log` entry (change_class: field_add, semantic_break: false);
+      bump the description field-count prose (18 -> 19). This contract is the generator SOURCE for
+      field_semantics.yaml. validate_contract_drift must clear.
+  - file: config/lambda/ducklake/field_semantics.yaml
+    action: Modify
+    purpose: >-
+      GENERATED projection -- REGENERATE via `bin/venv-python -m scripts.schema_to_field_semantics`
+      (never hand-edit; validate_field_semantics_drift byte-compares in --pre and full tiers). The
+      new `intent` ops_decisions column projects automatically from the amended contract as role:
+      input, sql_type: VARCHAR, nullable: true. This is the bundled DuckLake-Lambda asset whose
+      change gates the governed CD (Decision 79/125/126).
+  - file: src/schemas/decision.py
+    action: Modify
+    purpose: >-
+      DecisionPayload gains `intent: str | None = None` -- PLAIN, NEVER Annotated[...]/DqNotNull/any
+      Dq* marker, exactly the raw_block Phase-2-deferral pattern at :41-47. Keeps
+      validate_pydantic_yaml_drift (which walks Annotated fields against config/agent/data_quality/
+      ops.yaml) OUT of scope. Preserve the dual-write invariant.
+  - file: scripts/executor/jsonl_store.py
+    action: Modify
+    purpose: >-
+      The read-side Decision model gains `intent: Optional[str] = None` -- PLAIN, the hand-synced
+      counterpart its own comment (:354-357) mandates for the DecisionPayload parity fields. No Dq
+      markers. Stays well under 500 SLOC (currently 369).
+  - file: scripts/ops_portal/decisions.py
+    action: Modify
+    purpose: >-
+      Add "intent" to `_DECISION_BACKFILL_COLS` (:46-58) so the backfill ETL threads the parsed
+      intent to the writer -- WITHOUT this, the :323 filter (`k in _DECISION_BACKFILL_COLS`) silently
+      drops it and the "--backfill writes it" acceptance leg cannot pass. Markerless entries parse
+      intent="" which the existing `v not in (None, "")` filter drops -> column stays NULL. Fidelity
+      tripwire (_fidelity_issue) UNTOUCHED -- intent is never a tripwire condition.
+  - file: config/agent/data_quality/decisions/ops_decisions.yaml
+    action: Modify
+    purpose: >-
+      Add an `intent` DQ manifest row mirroring the raw_block/reversal_conditions rows (:169-215):
+      root_cause_class: A, human_decision: pending, enforcement_ready: NO_TEST_NEEDED,
+      phase4_session: ops-decisions-graduation-phase-2, current_test: none, last_verdict: no test
+      (Phase-2 deferral pattern).
+  - file: tests/test_decisions_md.py
+    action: Modify
+    purpose: >-
+      Add intent parser coverage: (a) a synthetic block with **Intent:** parses to a non-empty
+      `intent` matching the marker body; (b) a markerless block parses to intent=""; (c) Q3b --
+      inserting an **Intent:** marker into a block changes content_hash (proving an intent-only edit
+      produces a new SCD2 version, no separate intent hash); (d) the live corpus now carries >=1
+      entry with non-empty intent (the governing Decision's marker round-trips, robust to
+      renumbering); (e) extend the dual-model sync test so both DecisionPayload and jsonl_store.
+      Decision declare `intent` as a plain (non-Annotated) field and a record with intent validates
+      on both.
+  - file: tests/test_ops_data_portal_decisions.py
+    action: Modify
+    purpose: >-
+      Warehouse-free assertion that "intent" is in `_DECISION_BACKFILL_COLS` and that a parsed entry
+      carrying intent survives the :323 backfill field-selection filter into the fields dict passed
+      to file_decision (proves the ETL plumbing without invoking the live writer).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Author governing Decision 151 (max Decision is 150; numbering re-checked at implement time per
+      the numbering-race rule) recording intent as a first-class element, AUTHORED WITH an **Intent:**
+      marker as the element's first live exercise (scope item 7). Clears the Decision 150 significance
+      bar (durable architectural commitment, reversal-relevant). Forward governance Decision, NOT a CD
+      ratification -- the R1-R3 ratified-CD guard is not engaged.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    Governed CD channel .github/workflows/deploy-ducklake-lambdas.yml (Decision 79/125/126): on merge
+    to main touching config/lambda/ducklake/**, redeploys the four active DuckLake Lambdas
+    (writer/reader/maintenance/maintenance-smoke, all status: active) with the new bundled
+    field_semantics.yaml via the merged agent-platform-github-ci-deploy role (UpdateFunctionCode-only),
+    then runs deploy-record freshness + --lambda-attach/--lambda-reader smoke. Terraform is NOT
+    involved (code/infra decoupled, Decision 125). compute_affected_artifacts confirms the four
+    DuckLake artifacts (from field_semantics.yaml). The WRITER redeploy is the load-bearing minimum --
+    until it carries the new field_semantics, its schema_gate 422-rejects a record containing intent.
+  - >-
+    Deploy-role provisioning precondition (Decision 98): the scoped deploy role is IAM-sensitive and
+    admin-created out-of-band. While repo variable DEPLOY_ROLE_PROVISIONED (T2.49/DEP-12 consolidated
+    from the retired per-class DUCKLAKE_DEPLOY_ROLE_PROVISIONED) is not 'true', the deploy job no-ops
+    GREEN (deployed=false, smoke skipped) and the new asset is NOT shipped. Confirm the variable is
+    'true' before treating the CI deploy as real.
+  - >-
+    Physical schema evolution (Decision 143, admin-tier): ALTER TABLE ADD COLUMN intent on
+    ops_decisions_history + ops_decisions_current via the ducklake_maintenance reconcile_columns
+    action. This is an ADMIN OPERATIONAL verb invoked over 443 by `aws lambda invoke` (NOT a public
+    Function URL, NOT CI-invokable) with EXPLICIT data_path + meta_schema=ducklake_ops + table=
+    ops_decisions -- operator/human-invoked, never autonomous. Ordering: deploy -> reconcile ->
+    backfill; a backfill before deploy+reconcile fails loudly (schema gate / missing column).
+  - >-
+    Affected but not functionally gating: src/schemas/decision.py is also bundled into the
+    data-pipeline and ops-compaction artifacts (decoupled_build_pipeline channel, Decision 125). The
+    added DecisionPayload.intent field is optional and inert for those consumers (they neither read
+    nor write intent), so no functional redeploy is required; the field ships opportunistically with
+    their next routine build. No correctness dependency on this plan.
+acceptance_criteria:
+  - >-
+    An entry authored with an **Intent:** marker round-trips at the parse layer: parse_decisions_md
+    emits a non-empty `intent`; a markerless entry parses to intent="" (which the backfill maps to a
+    NULL column). The existing `context` extraction is unchanged and the byte-reconstruction invariant
+    stays green.
+  - >-
+    Q3b -- an Intent-only edit produces a new SCD2 version: inserting/altering an **Intent:** marker in
+    a decision block changes the parser-normalized content_hash (which gates the backfill's
+    differential SCD2 write). Grain unchanged (one version per decision_id + content change); no
+    separate intent hash; the fidelity tripwire is untouched.
+  - >-
+    `intent` exists as a nullable input column in the ops_decisions Class A contract with an
+    amendment_log field_add entry (validate_contract_drift clean), regenerates cleanly into
+    field_semantics.yaml (schema_to_field_semantics --check clean / validate_field_semantics_drift
+    green), and appears on BOTH DecisionPayload and jsonl_store.Decision as a plain (non-Annotated)
+    field with the dual-write invariant preserved.
+  - >-
+    "intent" is in _DECISION_BACKFILL_COLS and a parsed intent value survives the backfill
+    field-selection filter into the fields dict passed to file_decision (verified warehouse-free).
+  - >-
+    A DQ manifest row for `intent` is added (enforced=false Phase-2 deferral); no DQ check is enforced
+    on it. validate --pre is green (contract-drift, field-semantics-drift, decisions-size,
+    decision-entry-conformance, graduation-completeness, SLOC).
+  - >-
+    Governing Decision 151 is authored WITH an **Intent:** marker (the element's first live exercise)
+    and clears the significance bar; markerless historical entries continue to backfill green with
+    intent NULL.
+  - >-
+    Writer-health-gated (rec-2821): once the governed channel ships the new field_semantics to
+    writer/reader/maintenance and the admin reconcile_columns adds the physical intent column, the
+    backfill writes intent and the reader (decision_by_id) returns a non-null intent for the governing
+    entry. If the writer is down at implement time, this leg is bounded-attempted then documented as
+    deferred-pending-writer-recovery rather than hung.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Intent parser suite -- synthetic **Intent:** block parses to non-empty intent; markerless block
+      parses to intent=""; Q3b content_hash changes when an **Intent:** marker is inserted; the live
+      corpus now carries >=1 entry with non-empty intent (the governing Decision's marker round-trips,
+      robust to renumbering).
+    command: bin/venv-python -m pytest tests/test_decisions_md.py -k intent -q
+    expected: >-
+      All pass: _extract_multiline_section(body, "Intent") returns the marker body; a markerless body
+      returns ""; content_hash(block_with_intent) != content_hash(block_without_intent); at least one
+      parsed live entry has a non-empty intent.
+    fix_if: >-
+      Parse empty on a present marker -> the extraction key/spelling is wrong; content_hash unchanged
+      -> intent is not inside raw_block (it always is, since raw_block is heading-inclusive) or the
+      hash input drifted; live-corpus assertion fails -> the governing Decision's **Intent:** marker
+      was not authored or not extracted.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Committed pytest assertions; the durable coverage is the standing CI pytest tier (the `Tests
+      (pytest)` job) plus the registered checks, not a replayed VP step -- validate_vp_replay excludes
+      non-hermetic steps (this one is hermetic: false) and never re-runs them. A verification_registry
+      test_selector row would duplicate that standing guard rather than add coverage.
+  - step: 2
+    phase: pre-deploy
+    action: Byte-reconstruction invariant stays green (regression guard that adding the intent key did not touch raw_block).
+    command: bin/venv-python -m pytest tests/test_decisions_md.py -k byte_reconstruction -q
+    expected: >-
+      Per-file concatenation of preamble + heading-inclusive raw_blocks still byte-equals docs/
+      DECISIONS.md and docs/DECISIONS_ARCHIVE.md; the synthetic sectioner-narrowing mutation still
+      fails (guard live).
+    fix_if: Reconstruction mismatch -> the intent change unexpectedly altered raw_block or the sectioner.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Pre-existing committed pytest invariant; standing CI pytest tier is the durable guard.
+      validate_vp_replay excludes this non-hermetic step. A registry row duplicates the committed test.
+  - step: 3
+    phase: pre-deploy
+    action: Dual-model sync -- DecisionPayload and jsonl_store.Decision both declare a plain (non-Annotated) intent field.
+    command: bin/venv-python -m pytest tests/test_decisions_md.py -k dual_model -q
+    expected: >-
+      Both models expose `intent` as an optional field; neither wraps it in Annotated/Dq*; a record
+      carrying intent validates on both and the dual-write invariant (int(id[4:]) == decision_id)
+      holds.
+    fix_if: intent missing on one model, or Annotated on either -> the hand-synced write/read pair drifted or the plain-str pattern was violated.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Committed pytest test; the standing CI pytest tier is the durable guard. validate_vp_replay
+      excludes this non-hermetic step; a bespoke registry row duplicates the standing dual-model test.
+  - step: 4
+    phase: pre-deploy
+    action: Backfill threads intent (warehouse-free) -- "intent" is in _DECISION_BACKFILL_COLS and survives the field-selection filter.
+    command: bin/venv-python -m pytest tests/test_ops_data_portal_decisions.py -k intent -q
+    expected: >-
+      "intent" in scripts.ops_portal.decisions._DECISION_BACKFILL_COLS; a parsed entry carrying a
+      non-empty intent yields a fields dict (post the `k in _DECISION_BACKFILL_COLS and v not in
+      (None, "")` filter) that includes intent; a markerless entry (intent="") yields a fields dict
+      WITHOUT intent (-> NULL column).
+    fix_if: intent absent from the constant or filtered out -> the ETL would silently drop it before the writer.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Committed pytest test exercising a pure constant + filter; standing CI pytest tier is the durable
+      guard. validate_vp_replay excludes this non-hermetic step; a registry row duplicates it.
+  - step: 5
+    phase: pre-deploy
+    action: field_semantics.yaml regeneration drift gate (contract is the source of truth; the asset is generated).
+    command: bin/venv-python -m scripts.schema_to_field_semantics --check
+    expected: >-
+      OK, no drift -- the committed field_semantics.yaml is the exact projection of the amended
+      ops_decisions.yaml contract, with the new intent column (role: input, sql_type: VARCHAR,
+      nullable: true).
+    fix_if: >-
+      DRIFT DETECTED -> regenerate with `bin/venv-python -m scripts.schema_to_field_semantics` (never
+      hand-edit the generated file, Decision 55/65).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The drift gate is already enforced as a standing validate.py check (validate_field_semantics_drift)
+      in both --pre and full tiers; a verification_registry row duplicates that committed gate.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Full fast-tier presubmit -- CD.25 contract-drift (the amendment_log field_add), field-semantics
+      drift, decisions-size (byte ceiling), decision-entry conformance, graduation-completeness on this
+      plan, and SLOC all green.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      PASS. The contract amendment is a clean field_add (semantic_break: false); field_semantics.yaml
+      matches the generator; DECISIONS.md stays under the 500000-byte ceiling; the new Decision entry
+      passes decision-entry conformance (required markers present); no scope file crosses its SLOC
+      budget; every pre-deploy VP step here carries a graduation disposition.
+    fix_if: Any --pre check fails -> address the specific failing check (do not raise SLOC budgets, Decision 128; do not hand-edit field_semantics.yaml).
+    hermetic: false
+    graduation: not-applicable
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Confirm the governed CD channel genuinely shipped the new field_semantics asset on the merge
+      commit (Decision 79/119), distinguishing a real deploy from the bootstrap no-op (deployed=false,
+      smoke skipped) -- the no-op also reports a green workflow run. PRECONDITION: repo var
+      DEPLOY_ROLE_PROVISIONED == 'true'. Repo convention is the GitHub MCP tools, not local gh -- use
+      mcp__github__actions_list / mcp__github__actions_get against deploy-ducklake-lambdas.yml for
+      run-level corroboration if wanted; the deploy-record equality check below is authoritative.
+    command: >-
+      git fetch origin main -q && MERGE_SHA=$(git rev-parse origin/main) && for fn in
+      agent-platform-ducklake-writer agent-platform-ducklake-reader agent-platform-ducklake-maintenance
+      agent-platform-ducklake-maintenance-smoke; do REC=$(aws s3 cp
+      "s3://agent-platform-data-lake/deploy-records/ducklake/${fn}.json" - --profile agent_platform
+      --region eu-west-2) || { echo "NO RECORD for ${fn} -- deploy has never shipped"; exit 1; };
+      SHA=$(printf '%s' "$REC" | jq -r '.source_git_sha'); echo "${fn}: record_sha=${SHA}
+      merge_sha=${MERGE_SHA}"; [ "$SHA" = "$MERGE_SHA" ] || { echo "NO-OP OR STALE DEPLOY: ${fn}"; exit
+      1; }; done
+    expected: >-
+      Each DuckLake deploy-record reports source_git_sha == the merge commit SHA -- positive proof the
+      deploy job ran update-function-code on this exact commit, not the bootstrap-window no-op (which
+      leaves the previous record's SHA and fails this equality even though the run is green).
+    fix_if: >-
+      Any record missing or source_git_sha != merge SHA -> either the deploy no-op'd (DEPLOY_ROLE_
+      PROVISIONED not 'true') or a prior deploy is stale. Stop and RCA (Decision 55), never auto-retry
+      into green: operator provisions the role / sets DEPLOY_ROLE_PROVISIONED=true, then re-runs via
+      workflow_dispatch. Writer-health-gated (rec-2821): if the DuckLake writer is degraded, record the
+      leg as deferred-pending-writer-recovery.
+    hermetic: false
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Physical schema evolution (Decision 143, ADMIN-TIER / human-invoked, NOT autonomous CI) -- add
+      the intent column to ops_decisions_history + ops_decisions_current via the ducklake_maintenance
+      reconcile_columns admin verb over `aws lambda invoke` with EXPLICIT production data_path +
+      meta_schema + table.
+    command: >-
+      aws lambda invoke --function-name agent-platform-ducklake-maintenance --cli-binary-format
+      raw-in-base64-out --payload
+      '{"action":"reconcile_columns","data_path":"s3://agent-platform-data-lake/ducklake/","meta_schema":"ducklake_ops","table":"ops_decisions"}'
+      --profile agent_platform /dev/stdout
+    expected: >-
+      Response ok:true; added_history and added_current include intent (or columns_pre_existing on an
+      idempotent second run -- reconcile never DROPs).
+    fix_if: >-
+      A subsequent backfill SchemaGateError / missing-column error -> reconcile did not run or hit the
+      smoke catalog (must supply the EXPLICIT production data_path + meta_schema). Admin-tier only
+      (Decision 143). Writer-health-gated: defer-pending-writer-recovery if maintenance/writer degraded.
+    hermetic: false
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Run the backfill and confirm the governing entry's intent round-trips through the warehouse via
+      the ducklake_reader (decision_by_id verb) -- the "--backfill-decisions-md writes it" acceptance
+      leg. Writer-health-gated: bounded attempt; on writer-down, document deferred-pending-writer-
+      recovery rather than hanging.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md 2>&1 | tail -5 &&
+      bin/venv-python -m pytest tests/test_ops_data_portal_decisions.py -k intent_live_reader -q
+    expected: >-
+      Backfill completes (the governing Decision re-versions once with intent populated); the
+      creds-gated reader spot-check confirms the governing entry's decision_by_id row carries a
+      non-null intent. The test skips when creds are absent.
+    fix_if: >-
+      Writer SchemaGateError on intent -> deploy/reconcile incomplete (re-check steps 7-8); intent NULL
+      in-table after backfill -> the _DECISION_BACKFILL_COLS mapping or the parser key is wrong. Stop
+      and RCA (Decision 55); if the writer is down (rec-2821), record deferred-pending-writer-recovery.
+    hermetic: false
+constraints:
+  - "bundled_recommendations: [] -- no recs filed; all work inline (overseer constraint)."
+  - "IMPLEMENTATION plan type ONLY (Decision 67 STRATEGIC freeze). Do NOT declare STRATEGIC."
+  - >-
+    TRAP-5: the roadmap tier_item `intent:` field and the retiring docs/INTENT-*.md docs are DIFFERENT
+    concepts from this decision-record `intent` element -- do NOT touch them. No new prose doc under
+    docs/ (Decision 86 intent-doc-freeze).
+  - >-
+    intent is OPTIONAL forever: no change to required_markers, no retro-enforcement, DAF-03 forward
+    conformance untouched. Do NOT modify the existing `context` extraction (Rationale/Key details/
+    Context) -- intent is a separate new typed key.
+  - >-
+    Do NOT add an intent-drift signal (audit Q4: a read-time query later, not stored machinery now).
+    Do NOT add a separate intent content_hash -- Q3b rides Decision 134 cl.4's existing content_hash
+    over raw_block. Fidelity tripwire (_fidelity_issue) UNTOUCHED -- intent is never a tripwire
+    condition.
+  - >-
+    The new fields on DecisionPayload (src/schemas/decision.py) and Decision (scripts/executor/
+    jsonl_store.py) are PLAIN `str | None = None` / `Optional[str] = None` -- NEVER Annotated[...]/
+    DqNotNull/any Dq* marker. validate_pydantic_yaml_drift walks DecisionPayload's Annotated fields
+    against config/agent/data_quality/ops.yaml; a Dq-wrapped field would demand matching ops.yaml
+    blocks out of scope. The DQ intent lives in config/agent/data_quality/decisions/ops_decisions.yaml.
+  - >-
+    field_semantics.yaml is GENERATED (Decision 65) -- REGENERATE via scripts.schema_to_field_semantics;
+    never hand-edit. The contract amendment is a CD.25 ritual field_add (Decision 118): add the
+    amendment_log entry (semantic_break: false) and clear validate_contract_drift. No terraform/personal
+    edit (code/infra decoupled, Decision 125/126); no config/lambda/ducklake/version.yaml DuckDB bump
+    (Decision 99 -- additive column, no engine change); no src/common/ducklake_*.py DDL edit (the DDL +
+    reconcile are generic/schema-driven from the spec).
+  - >-
+    reconcile_columns is an ADMIN-TIER operational verb (Decision 143, amends Decision 81) invoked over
+    443 by `aws lambda invoke`, NOT CI-invokable and never autonomous -- the plan's step 8 is
+    human/operator-invoked. The governed code deploy (Decision 79/125/126) is CI; the physical
+    reconcile is admin.
+  - >-
+    No em dashes (ASCII hyphen), no emojis, ruff line length 127, type hints required, always
+    bin/venv-python; no `python -c` in VP commands. SLOC decompose-by-default if a file crosses budget
+    (Decision 128) -- do not raise budgets, do not `--update-sloc-budgets`.
+  - >-
+    Loud-fail; no rescue agents or workaround loops (Decision 55). The deploy/reconcile/backfill legs
+    are stop-and-RCA on red; the writer-health-gated legs are bounded-attempt-then-defer, never
+    auto-retry-into-green.
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (gate_run_id verified;
+    103/103 live decisions triaged, zero CONTRADICT). CITE: dec-134 (DAF-01 parity-column precedent /
+    content_hash-over-raw_block that Q3b rides), dec-150 (significance bar governing Decision 151),
+    dec-149 (compaction lifecycle -- sibling section in decision-entry.yaml, do not disturb), dec-084
+    (warehouse-as-SoT, backfill ETL, caller-keyed decisions I-2), dec-118 (CD.25 pre-codegen contract
+    ratification ritual -- authority for the ops_decisions.yaml field_add amendment_log +
+    validate_contract_drift), dec-079 (per-Lambda packaging/deploy-verify gating -- authority for the
+    V3 tier + writer redeploy), dec-125 + dec-126 (DuckLake governed decoupled code-deploy channel),
+    dec-143 (privileged-verb decomposition -- reconcile_columns admin-tier, amends dec-081), dec-132
+    (verification-graduation enforced pre-merge -- every pre-deploy VP step carries a disposition),
+    dec-119 (CI-delegation / grep-only local for generated+deployed assets), dec-065 (contract is the
+    field-semantic authority + generation source), dec-086 (field semantics route to the owning
+    contract; no new prose doc), dec-055 (loud-fail, no rescue), dec-128 (SLOC decompose-by-default),
+    dec-099 (no version.yaml DuckDB bump for an additive column), dec-098 (deploy-role provisioning
+    no-op-green risk). RELATED: dec-105 (Decision 151 is a FORWARD governance Decision, not a CD
+    ratification -- R1-R3 ratified-CD guard not engaged; the pertinent recent amendment is dec-150),
+    dec-081 (closed reader/writer boundary, amended by dec-143), dec-070 (append-only lifecycle).
+  - >-
+    gates: decision-scout=NO_FLAGS (103/103 triaged, gate_run_id verified) after 1 round;
+    plan-critique=<pending> (overseer trampoline -- dispatched as a fresh sibling).
+  - >-
+    Governing Decision: this plan authors Decision 151 (a durable architectural commitment clearing the
+    Decision 150 significance bar), recording intent as a first-class OPTIONAL decision-record element
+    and authored WITH an **Intent:** marker as the element's first live exercise. Suggested marker
+    placement: after **Problem:**, before **Decision:** (narrative flow Problem -> Intent -> Decision
+    -> Rationale). Re-check the max `## Decision NNN:` header at implement time (numbering-race rule) --
+    a concurrent PR may claim 151.
+  - >-
+    Precedent (exact): PLAN-daf-etl-parity-fidelity added raw_block/reversal_conditions/superseded_by/
+    content_hash through this identical pipeline (contract fields + amendment_log -> regenerated
+    field_semantics -> plain fields on both models -> _DECISION_BACKFILL_COLS -> DQ row -> tests ->
+    governed deploy -> admin reconcile -> backfill). This plan is a strict 1-column subset with no
+    parser bug-fixes, no tripwire, no baseline files.
+  - >-
+    Drift re-scope (audit refs from f79d6b5 are stale): the audit's explicit scope named 7 items but
+    the "--backfill writes it" acceptance structurally requires TWO more surfaces the audit omitted --
+    scripts/ops_portal/decisions.py (_DECISION_BACKFILL_COLS, else the parsed key is filtered before
+    the wire) and the docs/contracts/ops_decisions.yaml contract column + regenerated field_semantics.
+    yaml (else _project_ops_record drops intent and the writer schema_gate 422-rejects it). Both are in
+    scope. All line refs re-located against current HEAD.
+  - >-
+    Writer-health gating (rec-2821, ducklake-writer.zip -- owned by a SEPARATE terraform overseer, NOT
+    this plan's concern): the parse/schema/local-store/DQ/generator legs (VP steps 1-6) are verified
+    INDEPENDENTLY of the warehouse. The deploy -> reconcile -> backfill round-trip (VP steps 7-9) is
+    writer-health-gated -- the implement subagent makes a BOUNDED attempt and, if the writer is down,
+    documents the leg as deferred-pending-writer-recovery rather than hanging.
+  - >-
+    ci-rca HARD-BLOCK deferral (Related-Work check): one unresolved ci-rca rec, rec-2821 ("apply-sandbox
+    DuckLake assert failed: per-sha ducklake-writer.zip missing from S3", source_file .github/workflows/
+    terraform-apply-sandbox.yml). NOT bundled -- different file (this plan touches none of the terraform
+    apply-sandbox surface) and a different failure category (missing per-sha Lambda asset in the
+    terraform apply path, not decision-record parse/ETL). Deferred with this logged rationale; the
+    separate terraform overseer owns it.
+  - >-
+    Preflight: main_freshness commits_behind=0 (no divergence, no rebase needed); creds ok; venv ok.
+    815 open recs / 689 non-automatable (informational). Data-model assessment: no new table, no new
+    identity scheme, no merge_key change -- one additional nullable column on the existing SCD2
+    ops_decisions table (grain unchanged: one row per (decision_id, content change)); no Fable
+    escalation required (routine already-settled call).
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (Decisions 134, 150, 149, 84, 118, 79, 125, 126, 143, 132, 65, 86, 55, 128, 99, 98)
+  - All 11 files in scope located and readable; line refs re-verified against HEAD
+  - Max `## Decision NNN:` header re-checked (numbering-race) before authoring the governing Decision
+  - DEPLOY_ROLE_PROVISIONED confirmed 'true' before the post-deploy VP steps are treated as real
+  - Writer health (rec-2821) checked before the warehouse round-trip; degraded -> bounded-attempt-then-defer
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    docs/contracts/decision-entry.yaml: add `Intent` to optional_markers_fixed_spelling (the list only;
+    leave significance:/compaction:/required_markers untouched).
+  - >-
+    scripts/decisions_md.py: add `"intent": _extract_multiline_section(body, "Intent"),` to the parsed
+    dict in parse_decisions_md (do NOT touch the `context` extraction or raw_block/content_hash).
+  - >-
+    docs/contracts/ops_decisions.yaml: add the `intent` field entry (type: str, iceberg_type: string,
+    nullable: true, description + semantics + populated_by, dq_intent.not_null.enforced: false)
+    mirroring raw_block/reversal_conditions; append an amendment_log entry (change_class: field_add,
+    semantic_break: false, summary + migration_story naming this plan); bump the description
+    field-count prose (18 -> 19). Then regenerate config/lambda/ducklake/field_semantics.yaml via
+    `bin/venv-python -m scripts.schema_to_field_semantics` and confirm --check is clean.
+  - >-
+    src/schemas/decision.py: add `intent: str | None = None` to DecisionPayload (PLAIN, near the
+    raw_block Phase-2-deferral block, extend that comment to name intent). scripts/executor/
+    jsonl_store.py: add `intent: Optional[str] = None` to Decision (PLAIN, under the hand-sync comment).
+    Neither Annotated/Dq*. Preserve the dual-write invariant; confirm jsonl_store.py stays under 500 SLOC.
+  - >-
+    scripts/ops_portal/decisions.py: add "intent" to _DECISION_BACKFILL_COLS. config/agent/data_quality/
+    decisions/ops_decisions.yaml: add the `intent` DQ manifest row (root_cause_class: A, human_decision:
+    pending, enforcement_ready: NO_TEST_NEEDED, phase4_session: ops-decisions-graduation-phase-2,
+    current_test: none, last_verdict: no test).
+  - >-
+    tests/test_decisions_md.py: add intent parse test, markerless->intent="" test, Q3b content_hash
+    test (name it so `-k intent` and the content_hash intent case are caught), live-corpus intent
+    presence test, and extend the dual-model tests to include intent (plain, validates on both).
+    tests/test_ops_data_portal_decisions.py: add a warehouse-free test (name it so `-k intent` matches)
+    that "intent" is in _DECISION_BACKFILL_COLS and survives the backfill field-selection filter; add a
+    creds-gated `intent_live_reader` spot-check for the post-deploy leg (skips when creds absent).
+  - >-
+    docs/DECISIONS.md: author governing Decision 151 (re-check max number first) recording intent as a
+    first-class OPTIONAL element, AUTHORED WITH an **Intent:** marker (placement: after **Problem:**,
+    before **Decision:**). Include Status/Date/Warehouse ID/Problem/Intent/Decision/Rationale.
+  - >-
+    Execute Verification Plan -- run each pre-deploy step (1-6) in the FOREGROUND; loop until pass.
+    After merge, verify the governed deploy (step 7, precondition DEPLOY_ROLE_PROVISIONED=true), then
+    the admin reconcile (step 8, human-invoked, Decision 143) and the backfill + reader spot-check
+    (step 9), all writer-health-gated. On an unrecoverable failure stop and RCA (Decision 55); if the
+    writer is down (rec-2821), document the warehouse leg as deferred-pending-writer-recovery.
+  - "Report: what was implemented, pre-deploy verification results, and the post-deploy deploy/reconcile/backfill outcome (or its documented writer-health deferral)."
+work_areas: []
+rollback: >-
+  Code is forward-fixable (revert the PR). The physical ALTER TABLE ADD COLUMN intent is additive and
+  non-destructive (reconcile_columns never DROPs); leaving the column in place is harmless if the code
+  reverts. SCD2 history is append-only -- a bad backfill run is corrected by a subsequent good backfill
+  (the content_hash gate makes re-runs differential), never by deleting rows. The decision-entry Intent
+  marker is optional, so reverting it strands no authored entry (a pre-existing **Intent:** simply stops
+  being extracted).
