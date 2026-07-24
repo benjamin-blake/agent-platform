@@ -65,7 +65,9 @@ If any of these inputs are absent in the prompt, return immediately with `Verdic
    Emit a SPIRIT flag ONLY when ALL FOUR hold:
    - (i) **No literal CONTRADICT on the same decision.** If the decision is already flagged CONTRADICT
      (any severity), never also flag it SPIRIT -- literal contradiction supersedes, and a decision
-     appears in at most one of the two lanes.
+     appears in at most one of the two lanes. Routing note: a clause that merely describes the ruling's
+     OWN scope (e.g. "no retro-enforcement", "optional forever") is not a standing forward prohibition --
+     route it to SPIRIT, not CONTRADICT.
    - (ii) **Verbatim-quotable violation.** You can quote, VERBATIM, the exact text the approach works
      against: either the decision's `**Intent:**` marker (entries carrying one, Decision 151) or a
      single specific sentence from its Problem/Rationale (historical entries without an Intent marker).
