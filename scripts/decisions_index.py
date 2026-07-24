@@ -47,6 +47,8 @@ def _superseded_by_int(raw: str) -> int | None:
     """Coerce the parser's 'dec-NNN' superseded_by string to a bare int, or None if empty."""
     if not raw:
         return None
+    # raw is always exactly 'dec-NNN' here -- scripts.decisions_md._extract_superseded_by's
+    # only two possible return values are '' or f"dec-{int(n):03d}" -- so split("-")[1] is safe.
     return int(raw.split("-")[1])
 
 
@@ -79,7 +81,7 @@ def build_index() -> dict[str, Any]:
             "decided_date": by_number[n].get("decided_date", ""),
             "supersedes": sorted(supersedes_map[n]),
             "superseded_by": superseded_by_map[n],
-            "amends": sorted(by_number[n].get("amends", [])),
+            "amends": sorted(t for t in by_number[n].get("amends", []) if t in by_number),
         }
         for n in sorted(by_number)
     ]
@@ -135,11 +137,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generated decisions index -- typed supersedes/superseded_by/amends edges (DCG-08).",
     )
-    parser.add_argument("--write", action="store_true", help=f"Write the index to {_EXPORT_PATH}.")
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--write", action="store_true", help=f"Write the index to {_EXPORT_PATH}.")
+    group.add_argument(
         "--check", action="store_true", help="Check freshness against the committed export; exit 1 on drift/absence."
     )
-    parser.add_argument("--print", action="store_true", dest="print_", help="Print the current index to stdout.")
+    group.add_argument("--print", action="store_true", dest="print_", help="Print the current index to stdout.")
     args = parser.parse_args()
 
     if args.write:
