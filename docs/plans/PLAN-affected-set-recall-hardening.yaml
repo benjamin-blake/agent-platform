@@ -1,0 +1,368 @@
+schema_version: 1
+slug: "affected-set-recall-hardening"
+intent: >-
+  Close the two silent --pre fast-tier affected-set recall holes (tests-tree helper/fixture
+  modules; deleted-module structural recall) and the two cap-ordering escapes (root/autouse
+  conftest full-scope forcing; residue channel-priority ordering plus the batched-collect
+  last-block over-capture), per audit VTS-01/02/03/04 -- strictly additive, preserving
+  Decision 135's additive-only and manifest-output-only invariants so the PR gate stops
+  merging genuinely-broken tests it structurally could have caught.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-affected-set-recall-hardening.yaml
+phase: >-
+  Platform quality hardening -- the --pre affected-set selector's recall (Decision 135
+  surface). Audit-finding-driven (audits/validate-test-suite-4df4d48.yaml VTS-01/02/03/04);
+  no product-roadmap phase and no tier_item -- bundles rec-2731 (VTS-03) and rec-2737 (VTS-04).
+scope:
+  - file: scripts/checks/deps/affected_tests.py
+    action: Modify
+    purpose: >-
+      VTS-01 admit changed tests-tree non-test .py (fixtures/helpers) to the import-closure
+      candidate set; VTS-02 add a structural dotted-module token match for D-status .py to the
+      data-edge channel; VTS-03 promote root/autouse-fixture conftest subtree hits from capped
+      residue to the protected (uncapped) set; VTS-04 M2 order cap residue by channel priority
+      before truncation. All additive; selected/deferred stay flat disjoint path-string lists.
+  - file: scripts/checks/_scaffolding.py
+    action: Modify
+    purpose: >-
+      VTS-04 M1 only -- bound the final ERROR-collecting block in
+      _attribute_batched_collect_errors at the trailing short-summary section separator so it
+      no longer over-captures another file's summary-line ModuleNotFoundError and mis-defers a
+      genuinely-broken last file. No other function in this file is touched.
+  - file: tests/checks/deps/test_affected_tests.py
+    action: Modify
+    purpose: >-
+      Add incident-replay classes for VTS-01 (fixtures-edit selects importers), VTS-02
+      (deletion selects a path-mention-free importer), VTS-03 (root conftest forces full scope;
+      rec-2725 victim selected; autouse sub-conftest uncapped), VTS-04 M2 (mirror hit survives
+      cap pressure), and a dec-142 escape-attribution coherence assertion.
+  - file: tests/validate/test_pytest_diff.py
+    action: Modify
+    purpose: >-
+      Add a VTS-04 M1 replay: a batch whose last file has a real collection ERROR plus a
+      trailing short-summary section carrying an unrelated 'No module named' line must route
+      the last file to runnable (redden), not mis-defer it.
+bundled_recommendations:
+  - rec-2731
+  - rec-2737
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    VTS-01: derive_affected_tests([("M","tests/fixtures/<f>.py")]) selects every test module
+    importing that fixture module, provenance import_closure_direct -- a fixtures-only diff no
+    longer selects zero tests. Selection remains a superset of the prior affected-set
+    (additive-only invariant preserved).
+  - >-
+    VTS-02: deleting a first-party module imported by a test that never mentions its path in
+    text selects that test via a structural dotted-module token; the existing Incident-B
+    path/quoted-basename tests and the bare-substring precision test stay green.
+  - >-
+    VTS-03: derive_affected_tests([("M","tests/conftest.py")]) yields full-suite scope (every
+    tests/**/test_*.py selected, uncapped, nothing deferred); the rec-2725 replay selects
+    tests/ops_data_portal/test_decisions.py; a changed autouse-fixture-bearing sub-conftest
+    promotes its own subtree to protected (uncapped).
+  - >-
+    VTS-04 M2: under cap pressure a mirror-map hit is kept while lower-priority transitive
+    residue is deferred (channel-priority ordering mirror_map < conftest_subtree < transitive,
+    alphabetical tiebreak within a class).
+  - >-
+    VTS-04 M1: _attribute_batched_collect_errors does not attribute a trailing
+    short-summary-section 'No module named' line to the final ERROR-collecting file; a
+    genuinely-broken last file routes to runnable (reddens), never mis-deferred.
+  - >-
+    Invariant preservation: manifest['selected'] and manifest['deferred'] remain flat, disjoint
+    lists of test-file path strings, so scripts.ops_portal.ci_rca_lifecycle.compute_escape_class
+    (Decision 142) still resolves no-edge/capped/unknown-data-edge coherently; the manifest is
+    never read back as a selection input; scripts/checks/registry.py and FROZEN_PRE_SCAFFOLDS
+    are untouched; every touched file stays under the 500-SLOC limit (Decision 130/128).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      VTS-01 incident replay -- a fixtures-only diff selects its direct importer tests.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestTestsTreeHelperImportClosure -v
+    expected: >-
+      The new class passes: a changed tests/**/*.py helper (non-test, non-conftest) selects
+      every test importing it with provenance import_closure_direct; an unrelated test is not
+      selected.
+    fix_if: >-
+      A fixtures-only diff still selects zero tests, or the helper is not admitted as an
+      import-closure candidate, or the importer lands in residue instead of the protected set.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The assertion lives permanently in tests/checks/deps/test_affected_tests.py; the full
+      post-merge tier runs it every push and --pre self-selects it on any edit to
+      affected_tests.py (the module under test is its own import-closure target), so a parallel
+      kernel test_selector row would duplicate an already-standing suite guard.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      VTS-02 structural deletion recall -- a deleted module's path-mention-free importer is
+      selected, with no regression to Incident-B / precision.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestDeletedModuleStructuralRecall tests/checks/deps/test_affected_tests.py::TestDeletedPathDataEdge tests/checks/deps/test_affected_tests.py::TestDataEdgePrecision -v
+    expected: >-
+      The new deletion-structural class passes AND the existing Incident-B and bare-substring
+      precision classes stay green (dotted-token match is additive, not a widening of the
+      textual match).
+    fix_if: >-
+      The structural token match misses a path-mention-free importer, or it over-matches a
+      sibling/parent package (e.g. scripts.foo matching scripts.foobar), or an Incident-B /
+      precision test reddens.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same suite-membership permanence as step 1 -- the deletion-recall assertions are run by
+      the full tier every push and re-selected on any affected_tests.py edit; graduating them
+      into the kernel registry duplicates the standing suite guard.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      VTS-03 root/autouse conftest full-scope forcing -- rec-2731 with the verification it asked
+      for, including the rec-2725 incident replay.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestRootConftestForcesFullScope -v
+    expected: >-
+      ('M','tests/conftest.py') selects every tests/**/test_*.py uncapped (deferred empty),
+      including tests/ops_data_portal/test_decisions.py (rec-2725 victim); an autouse-bearing
+      sub-conftest promotes only its own subtree to protected/uncapped; a plain sub-conftest
+      keeps the ordinary (cappable) subtree channel.
+    fix_if: >-
+      A root-conftest diff still caps to 35/363, or the rec-2725 victim is deferred, or an
+      autouse sub-conftest is not promoted, or selected/deferred stop being disjoint string lists.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The full-scope-forcing behaviour is asserted by a permanent suite test run every full
+      tier and re-selected on affected_tests.py edits; a kernel row would duplicate it, and the
+      real regression guard is the incident replay itself, not a standing primitive check.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      VTS-04 M2 channel-priority residue ordering -- a mirror hit survives cap pressure while
+      transitive residue defers.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py::TestResidueChannelPriorityOrdering tests/checks/deps/test_affected_tests.py::TestCapAndDefer tests/checks/deps/test_affected_tests.py::TestAdditiveOnlyInvariant -v
+    expected: >-
+      Under a tight cap a mirror_map (and conftest_subtree) residue hit is kept while
+      alphabetically-early transitive residue is deferred; the existing cap/defer and
+      additive-only invariant classes stay green.
+    fix_if: >-
+      Residue is still truncated purely alphabetically (a mirror hit deferred while a
+      transitive ancestor is kept), or the reorder perturbs an edited-set / direct / data-edge
+      protected member, or the additive-only invariant regresses.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Ordering is verified by a permanent suite test (full tier + affected-set self-selection);
+      the canonical-slot equivalent would duplicate that standing suite coverage.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      VTS-04 M1 batched-collect last-block attribution -- a real ERROR on the last file plus a
+      trailing short-summary 'No module named' line must not mis-defer the last file.
+    command: bin/venv-python -m pytest tests/validate/test_pytest_diff.py -v
+    expected: >-
+      The new M1 replay passes and the whole test_pytest_diff.py file stays green: the last
+      ERROR-collecting file, whose block would otherwise swallow another file's trailing
+      summary-line ModuleNotFoundError, routes to runnable (reddens) rather than deferring.
+    fix_if: >-
+      The last file is still mis-attributed to an excluded-heavy-dep and silently deferred, or
+      the block-bounding regex breaks an existing mixed-batch attribution test.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The attribution fix is guarded by a permanent test in tests/validate/test_pytest_diff.py
+      run by the full tier and re-selected on _scaffolding.py edits; a kernel test_selector row
+      would duplicate the standing suite guard.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Decision 142 escape-attribution coherence -- a post-change manifest keeps flat, disjoint
+      selected/deferred path-string lists and compute_escape_class round-trips.
+    command: >-
+      bin/venv-python -c "import tempfile,pathlib; from scripts.checks.deps.affected_tests import derive_affected_tests as d; from scripts.ops_portal.ci_rca_lifecycle import compute_escape_class as c; r=pathlib.Path(tempfile.mkdtemp()); (r/'scripts').mkdir(); (r/'tests').mkdir(); (r/'scripts'/'base.py').write_text('def do():\n    pass\n'); (r/'scripts'/'mid.py').write_text('from scripts.base import do\n\ndef mid():\n    do()\n'); [ (r/'tests'/f'test_m{i}.py').write_text('from scripts.mid import mid\n\ndef test():\n    mid()\n') for i in range(6) ]; m=d([('M','scripts/base.py')], repo_root=r, cap=2)['manifest']; s=m['selected']; f=m['deferred']; assert isinstance(s,list) and all(isinstance(x,str) for x in s); assert isinstance(f,list) and all(isinstance(x,str) for x in f); assert set(s).isdisjoint(f); assert (not f) or c(f[0]+'::t', m)=='capped'; assert c('tests/never.py::t', m)=='no-edge'; print('dec-142 coherence OK')"
+    expected: >-
+      Prints 'dec-142 coherence OK' -- selected and deferred are flat disjoint string lists, a
+      deferred file classifies 'capped', and an unselected file classifies 'no-edge'.
+    fix_if: >-
+      compute_escape_class raises or mis-classifies, or manifest['selected']/['deferred'] are
+      no longer flat disjoint lists of path strings (a shape change that would silently break
+      Decision 142 escape attribution).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The dec-142 coherence property (compute_escape_class reads only flat, disjoint
+      selected/deferred path-string lists) is command_output_matches/command_exit_zero-shaped,
+      but it is permanently guarded by the dec-142 coherence assertion added to
+      tests/checks/deps/test_affected_tests.py -- run every full tier and re-selected whenever
+      affected_tests.py is edited -- so a kernel row would duplicate that standing suite guard.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Full-file regression across the selector test surface -- confirm no existing selector or
+      pytest-diff test regressed.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py tests/validate/test_pytest_diff.py tests/validate/test_pytest_diff_reactive.py -q
+    expected: >-
+      All tests pass (the full pre-existing selector, cap/defer, manifest, and reactive
+      heavy-dep suites plus the newly added incident-replay classes).
+    fix_if: >-
+      Any pre-existing selector or pytest-diff test reddens, indicating a change touched
+      behaviour outside the additive scope.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A whole-file regression sweep is not a single canonical primitive and its permanence is
+      already provided by the full post-merge tier that runs these files every push; a kernel
+      row cannot express a multi-file suite pass and would duplicate the tier.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Closure obligation -- after the implement PR merges with a 'Resolves: rec-2731, rec-2737'
+      trailer, confirm both bundled recs are closed in the synced cache.
+    command: >-
+      bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json,pathlib; rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; st={r['id']:r.get('status') for r in rows if r.get('id') in ('rec-2731','rec-2737')}; assert st.get('rec-2731')=='closed' and st.get('rec-2737')=='closed', st; print('rec-2731/rec-2737 closed')"
+    expected: >-
+      Prints 'rec-2731/rec-2737 closed' -- the rec-autoclose flow (or the ops_data_portal
+      --update-rec fallback) resolved both bundled recs.
+    fix_if: >-
+      Either rec is still open after merge -- add the Resolves: trailer to the squash-merge
+      body, or run bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status
+      closed --resolution "..." per the Decision 70 fallback.
+    hermetic: false
+constraints:
+  - >-
+    Strictly additive: selection can only grow, never shrink below the prior affected-set or the
+    edited-set (Decision 135 additive-only invariant; Decision 55 fail-loud, never silently
+    shrink). Every added channel/promotion only enlarges the selected set.
+  - >-
+    Manifest output-only: never read a prior selection-manifest.json as a selection input
+    (Decision 135 point 5). No selection cache or coverage cache is introduced -- the derivation
+    stays live/cacheless, leaving the KG.13 boundary undisturbed (Decision 80).
+  - >-
+    Preserve manifest['selected'] and manifest['deferred'] as flat, disjoint lists of
+    test-file path strings; do NOT change these field shapes -- compute_escape_class
+    (Decision 142, scripts/ops_portal/ci_rca_lifecycle.py) depends on 'test_file in deferred'
+    and 'test_file in selected' semantics.
+  - >-
+    Inline path only: do NOT modify scripts/checks/registry.py or the FROZEN_PRE_SCAFFOLDS
+    baseline in tests/test_checks_registry.py (Decision 135 point 7 / Decision 104). The
+    derivation feeds the existing pytest_diff scaffold in scripts/validate.py unchanged.
+  - >-
+    Only modify the four in-scope files; in scripts/checks/_scaffolding.py touch ONLY
+    _attribute_batched_collect_errors (and any private helper/regex it needs). Out-of-scope
+    bugs become recommendations via scripts/ops_data_portal.py, not inline fixes.
+  - >-
+    SLOC decompose-don't-raise (Decision 128/130): keep every touched file under 500 SLOC
+    (_scaffolding.py is at 470, test_affected_tests.py at 387, both unregistered). If an
+    addition would breach, split into a facade/sibling self-contained module (Decision 131),
+    never raise the budget and never re-seed via --update-sloc-budgets.
+  - >-
+    No rescue agents or workaround loops (Decision 55). No emojis; ruff line-length 127; ASCII
+    hyphens only; always invoke bin/venv-python.
+context:
+  - >-
+    Audit spec is authoritative: audits/validate-test-suite-4df4d48.yaml findings VTS-01
+    (critical), VTS-02 (medium), VTS-03 (high), VTS-04 (medium) -- their evidence,
+    proposed_change, and acceptance fields govern the implementation.
+  - >-
+    Decision 135 (dec-135, affected-set-selection) is the amended base. Its reversal condition
+    (a) explicitly pre-names 'tighten the cap's channel-priority ordering' as the remedy, so
+    VTS-04 follows Decision 135's own sanctioned evolution path -- not a contradiction.
+  - >-
+    Decision 142 is the downstream manifest consumer: compute_escape_class reads ONLY
+    manifest['selected'] and manifest['deferred']. VTS-01/02 shrink the 'no-edge' set, VTS-03
+    moves conftest hits from deferred to selected, and VTS-04 M2 reorders the 'capped' set --
+    all shift escape_class distribution while keeping the taxonomy coherent (field shapes
+    unchanged). VP step 6 verifies this coherence.
+  - >-
+    Decision 73 5-min fast-tier budget NOTE (decision-scout CONTRADICT[NOTE], no code pivot):
+    VTS-03's promotion of a root/autouse conftest to protected/uncapped full-suite scope edges
+    the 5-minute budget domain but does NOT violate it -- root-conftest changes are rare,
+    selection routes through run_pytest_diff's xdist plus per-file heavy-dep deferral, and the
+    loud budget assertion (Decision 73/135) is the sanctioned backstop. The trade is intended: a
+    rare conftest PR may run the full fast-tier suite and consciously relies on that loud
+    assertion; if it proves to routinely breach, that arms Decision 135 reversal (b)/KG.13 --
+    not a blocker now.
+  - >-
+    Decision 80 (import-graph oracle live-derivation vs deferred-cache/KG.13 boundary): the
+    VTS-01/02 added channels stay live and cacheless (ast/networkx over the existing graph),
+    introducing no cache -- KG.13 stays deferred and undisturbed.
+  - >-
+    Decision 131 (tests/fixtures/ is the sanctioned shared-helper home) is exactly the VTS-01
+    blind spot the no-cross-test-imports guard steers helpers into; new tests stay
+    self-contained (module-level helpers, no cross-test imports).
+  - >-
+    Decision 128 + Decision 130 (SLOC decompose-don't-raise; whole-repo scan extended to
+    tests/): the three grown tests/ files fall under the tests/ scan and are unregistered, so
+    they must stay under 500 or decompose.
+  - >-
+    Decision 48 (Verification Tier Classification): V2 -- unit-level incident-replay against the
+    REAL selector, no external system or deploy, mirroring Decision 135's own V2 classification.
+  - >-
+    Decision 104 (checks-registry inline-path discipline) and Decision 55 (fail-loud): the
+    exception fallback to the edited-set and the loud cap deferral are preserved verbatim.
+  - >-
+    Bundled recs: rec-2731 (VTS-03 full-suite-scope forcing on root/autouse conftest), rec-2737
+    (VTS-04 M1 batched-collect attribution + M2 mirror-map cap ordering). rec-2725 is the closed
+    incident replayed by VTS-03.
+  - >-
+    Branch was 0 commits behind origin/main at planning time with no scope-file divergence
+    (preflight main_freshness ok); ci_rca_unresolved_recs empty (no hard block).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (round 1, not a BLOCK). CITE: dec-135, dec-73, dec-55, dec-131, dec-128, dec-104, dec-142, dec-48, dec-80, dec-130, dec-132, dec-148; recs rec-2731, rec-2737, rec-2725."
+  - "gates: decision-scout=FLAGS_FOUND after 1 round; plan-critique=pending (Design-B trampoline gate dispatched after commit/push)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/vts-a-plan-affected-set-recall-hardening)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (Decision 135 full text; 73, 55, 80, 104, 128, 130, 131, 142, 48)
+  - audits/validate-test-suite-4df4d48.yaml VTS-01/02/03/04 read (authoritative spec)
+  - All four scope files located and readable; _SEARCH_DIRS confirmed to index tests/
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/checks/deps/affected_tests.py (VTS-01): add a predicate admitting a changed
+    non-test, non-conftest .py under tests/ (e.g. _is_changed_tests_helper_py) and include such
+    paths alongside _is_changed_source_py results in changed_source_files feeding the
+    import-closure (and mirror-map) channels. Their graph predecessors resolve via
+    _module_to_test_path (tests/ is in _SEARCH_DIRS), landing direct importer tests in the
+    protected set with provenance import_closure_direct.
+  - >-
+    scripts/checks/deps/affected_tests.py (VTS-02): for D-status .py entries compute the deleted
+    module's dotted name (strip the src/|scripts/|tests/ root, replace / with ., drop a trailing
+    __init__) and add a bounded structural token match to the data-edge scan -- an
+    identifier-boundary regex (no match inside a longer dotted name, so scripts.foo does not
+    match scripts.foobar or scripts.foo.bar). Preserve the existing path and quoted-basename
+    matching; hits join the protected data-edge set (provenance data_edge).
+  - >-
+    scripts/checks/deps/affected_tests.py (VTS-03): classify a changed conftest as forcing if
+    its path is tests/conftest.py OR its text declares an autouse fixture (e.g. autouse=True).
+    A forcing conftest's subtree hits move into the protected (uncapped) set -- for the root
+    conftest that is the whole tests/ tree (full-suite scope); ordinary conftests keep the
+    existing cappable subtree channel. Optionally record a manifest 'full_suite_forced' flag
+    (extra key, subset-checked tests unaffected). Keep selected/deferred flat and disjoint.
+  - >-
+    scripts/checks/deps/affected_tests.py (VTS-04 M2): replace residue_sorted = sorted(residue_pool)
+    with a channel-priority key -- rank mirror_map hits 0, ordinary conftest_subtree hits 1,
+    transitive 2, alphabetical within a class -- before the budget_remaining truncation, so
+    higher-signal channels survive the cap.
+  - >-
+    scripts/checks/_scaffolding.py (VTS-04 M1): in _attribute_batched_collect_errors, bound the
+    ERROR-collecting block region at the first pytest '=====' section separator that follows the
+    first ERROR-collecting header (the short test summary info / status section), so the last
+    block's block_end stops there instead of len(combined). The SKIPPED-line scan continues over
+    the whole combined output. Touch no other function in this file.
+  - >-
+    Add incident-replay tests: new classes in tests/checks/deps/test_affected_tests.py
+    (TestTestsTreeHelperImportClosure, TestDeletedModuleStructuralRecall,
+    TestRootConftestForcesFullScope, TestResidueChannelPriorityOrdering, plus a dec-142
+    coherence assertion) and a VTS-04 M1 replay in tests/validate/test_pytest_diff.py. Keep each
+    file under 500 SLOC (test_affected_tests.py at 387, ~113 headroom); if additions would
+    breach, split into a sibling self-contained module (Decision 131), never register/raise.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure
+    stop and RCA (Decision 55). Do not patch out of scope.
+  - "Report: what was implemented, per-step verification results, and any deferred recommendations."
+rollback: >-
+  Revert the branch's commits on scripts/checks/deps/affected_tests.py and
+  scripts/checks/_scaffolding.py; the changes are additive and isolated to the selector +
+  attribution function, so reverting restores the prior (Decision 135) selection behaviour with
+  no data or schema migration.
