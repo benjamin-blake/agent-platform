@@ -1,0 +1,561 @@
+schema_version: 1
+slug: "t248-passrole-liveproof"
+intent: >-
+  Complete the Decision-144 allow-list inversion by granting the single missing verb (iam:PassRole)
+  that lambda:CreateFunction structurally requires, then obtain the DEP-01/DEP-02 live-proofs the
+  audit's centerpiece never captured (E and F were applied via break-glass admin, not the
+  autonomous/gated path) using throwaway agent-platform-probe-* probes -- making a new
+  agent-platform-* Lambda genuinely auto-deployable end-to-end and closing T2.48 c1/c2 and rec-2831.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t248-passrole-liveproof.yaml
+phase: >-
+  Platform tier T2.48 (DEP-01/DEP-02 live-proof, realizes Decision 144); slice H of the
+  terraform-deploy-redesign overseer run (audit terraform-deploy-redesign-b67955b, prove-then-close).
+scope:
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      Add the missing iam:PassRole grant to BOTH the github_ci_apply identity policy (a new Sid
+      scoped to role/agent-platform-* with condition iam:PassedToService=lambda.amazonaws.com) AND
+      the boundary DataPlaneAllow ceiling (a grant absent from the ceiling is silently denied by the
+      intersection). Pre-stage the DEP-02 probe role's exact ARN in the enumerated IAMRolesRead list
+      (established pre-add pattern, cf. planner/deploy at lines 187-188). Applied via the DESIGNED
+      bootstrap admin tier (bootstrap is NEVER auto-applied -- terraform/bootstrap/CLAUDE.md).
+  - file: scripts/checks/iam_tf/_write_coverage.py
+    action: Modify
+    purpose: >-
+      Anti-recurrence hardening (audit's own static-guard pattern): assert that if github_ci_apply
+      grants lambda:CreateFunction, its inline policy AND the boundary DataPlaneAllow both grant
+      iam:PassRole scoped to role/agent-platform-* with the PassedToService=lambda condition. Encodes
+      the AWS CreateFunction-implies-PassRole invariant so rec-2831's gap can never silently recur.
+      Runs in CI via the existing validate_ci_refresh_read_coverage orchestrator (no registry / no
+      validate.py facade rewiring). PLUMBING (critique R5): the facade passes ONLY the github_ci_apply
+      identity apply_statements, NOT the boundary policy, so the identity-side assertion uses the
+      passed apply_statements while the boundary-side assertion RE-READS + parses the boundary
+      DataPlaneAllow block from terraform/bootstrap/github_ci_apply.tf itself inside _write_coverage.py
+      (reusing the _read_coverage parse primitives), keeping the orchestrator facade OUT of scope.
+      Stays well under the 500-SLOC budget (~130 SLOC + ~35).
+  - file: tests/checks/iam_tf/test__write_coverage.py
+    action: Modify
+    purpose: >-
+      Positive + negative coverage for the new CreateFunction-implies-PassRole assertion (present ->
+      pass; CreateFunction-without-PassRole and boundary-missing-PassRole -> loud fail).
+  - file: terraform/personal/probe_dep01_lambda.tf
+    action: Create
+    purpose: >-
+      DEP-01 live-proof probe (created then reverted within this plan): a throwaway
+      agent-platform-probe-liveproof Lambda that REUSES an existing agent-platform-* execution role
+      (aws_iam_role.ops_compaction.arn -- NO new aws_iam_role, keeps the plan non-IAM so the guard
+      PASSes and it auto-applies), its /aws/lambda/agent-platform-probe-* log group, and one
+      agent-platform-probe-* CloudWatch alarm. Code is S3-sourced (s3_bucket/s3_key at an existing
+      lambda-packages object, source_code_hash omitted) -- NOT data.archive_file/filemd5 on a local
+      path (the go-wrong trap: a PR-plan-time zip does not exist in the apply job's fresh checkout).
+  - file: terraform/personal/probe_dep02_role.tf
+    action: Create
+    purpose: >-
+      DEP-02 live-proof probe (created then reverted within this plan): a throwaway boundary-carrying
+      agent-platform-probe-liveproof-role (permissions_boundary = the authority-budget ARN,
+      lambda.amazonaws.com trust, one tiny in-boundary inline policy = logs:CreateLogStream/PutLogEvents
+      on its own log group, with the rec-2793 whitespace-stripped byte precondition). Referenced by NO
+      workflow / NO CI config -- structurally dodges rec-2824's bootstrap deadlock (which only fires
+      when a role PR repoints its OWN CI onto the not-yet-existent role).
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add the DEP-02 probe role's exact ARN to the github_ci_planner refresh-read list
+      (IAMPlatformRolesRead) so the hourly terraform-drift plan (planner identity) stays green while
+      the probe role exists -- CI-mandatory: validate_ci_refresh_read_coverage requires every
+      terraform/personal resource read-covered in BOTH apply (bootstrap) and planner (oidc.tf).
+      Added in the DEP-02 create PR, removed in the DEP-02 revert PR.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Roadmap bookkeeping. TRUTHFUL SUBSET early (E/F/G already shipped + applied live): T2.49 ->
+      complete (c1/c2/c3 met, met_by ci-deploy-role-consolidation); T2.48 c3/c4/c5 -> met (met_by
+      terraform-iam-allowlist-inversion) + item in_progress + a progress_note that ALSO records that
+      T2.44/T2.45 (DEP-06 guard resource-based-policy classification) remain not_started, that the
+      write-surface broadening shipped ahead of them (a pre-existing Decision-144-pt7 sequencing gap
+      this plan INHERITS, not causes), and that these probes deliberately avoid the
+      resource-based-policy surface (no aws_lambda_permission) so they do not depend on the unshipped
+      DEP-06 work; T2.50 -> complete (c1/c2 met, met_by gate-path-protection, c1 with the
+      documented-confound note). HELD until the probe run-ids exist: T2.48 c1/c2 -> met (met_by
+      t248-passrole-liveproof) + a T2.48 progress_note recording the DEP-01/DEP-02 LIVE-PROOF with the
+      two run-ids -- NOT a whole-Decision-144-audit-complete claim (T2.44/T2.45 are not_started, so
+      whole-audit completion would be false; that determination is the overseer's G3 call, out of this
+      plan's scope). Flipped in the closing step (PR-4).
+bundled_recommendations:
+  - rec-2831
+closes_criteria:
+  - "T2.48:c1"
+  - "T2.48:c2"
+infrastructure_dependencies:
+  - >-
+    terraform/bootstrap/github_ci_apply.tf is applied ONLY by the human-gated admin tier (PlatformAdmin
+    / agent_platform_admin), never auto-applied (terraform/bootstrap/CLAUDE.md). The PassRole admin
+    apply MUST land and be verified live BEFORE the DEP-01 probe PR merges, or CreateFunction
+    AccessDenies at auto-apply (the exact rec-2831 failure the plan exists to fix).
+  - >-
+    DEP-01 probe (aws_lambda_function + aws_cloudwatch_log_group + aws_cloudwatch_metric_alarm, no
+    aws_iam_* resource) is a non-IAM plan -> deterministic guard PASSes -> terraform-apply-sandbox
+    auto-applies the saved plan.bin on push-to-main. Requires PassRole live (above). Read+write
+    coverage is already satisfied by the existing agent-platform-* prefixes (function:agent-platform-*,
+    logs:* / cloudwatch:* wildcards, alarm:agent-platform-*) -- zero bootstrap edit for the Lambda.
+  - >-
+    DEP-02 probe (aws_iam_role create) is IAM_SENSITIVE -> guard exits 2 -> routes to the
+    tf-gated-apply GitHub Environment -> HUMAN approval -> apply. CreateRole is in-budget because the
+    role declares the mandatory permissions_boundary (IAMRoleCreateBounded's PermissionsBoundary
+    condition), so the gated apply succeeds with 0 AccessDenied and the admin tier is NOT invoked
+    (this is precisely DEP-02's acceptance). validate_boundary_attached forces the boundary at PR time.
+  - >-
+    Both reverts are DESTROYS -> guard routes to tf-gated-apply -> HUMAN approval. The DEP-02 role
+    destroy exercises the HAZARD-4 delete verbs (iam:DeleteRole/DeleteRolePolicy) that E designed in
+    and F simulate-verified live. Human-gated apply count for the whole plan: 1 bootstrap admin apply
+    + 3 gated approvals (DEP-01 revert, DEP-02 create, DEP-02 revert). HONESTY CAVEAT (not fully
+    self-cleaning): because bootstrap is NEVER auto-applied, removing the pre-staged probe-role ARN
+    from the committed bootstrap HCL (PR-3-revert) leaves the LIVE IAMRolesRead grant dangling
+    (committed != live drift) until an unscheduled future admin bootstrap apply -- an effective
+    deferred 4th admin apply. It is inert (a refresh-read grant on a since-destroyed ARN, and
+    terraform-drift monitors terraform/personal, NOT bootstrap, so it raises no drift-red), but it is
+    real residual state, not zero.
+acceptance_criteria:
+  - >-
+    github_ci_apply's identity policy grants iam:PassRole scoped to role/agent-platform-* with
+    condition iam:PassedToService=lambda.amazonaws.com, AND the boundary DataPlaneAllow Action list
+    includes iam:PassRole; the rec-2793 whitespace-stripped byte precondition (minified inline policy
+    <= 10,240 B) still holds after the addition.
+  - >-
+    _write_coverage asserts CreateFunction-implies-PassRole for BOTH the identity policy (via the
+    passed apply_statements) AND the boundary DataPlaneAllow (re-read + parsed inside the submodule,
+    facade unchanged); validate --pre is exit 0 including the new assertion, and the new test's
+    negative cases (CreateFunction-without-identity-PassRole and boundary-missing-PassRole) fail loud.
+  - >-
+    Decision 143 PassRole containment is proven by the bootstrap simulate-gate (VP step 10): PassRole
+    is allowed ONLY for the role/agent-platform-* + iam:PassedToService=lambda.amazonaws.com dual
+    predicate, denied off-scope, and the boundary self-protection denies (DenyIAMEscalation,
+    DenyBoundaryRemoval, DenyBoundaryPolicyModification) still dominate after iam:PassRole is added to
+    DataPlaneAllow -- no escalation intersection.
+  - >-
+    DEP-01 (T2.48 c1): a PR adding the agent-platform-probe-* Lambda + log group + alarm auto-applies
+    end-to-end via terraform-apply-sandbox with the guard PASSing, 0 AccessDenied, and 0 bootstrap
+    edit; the function/log-group/alarm are confirmed live; the auto-apply run-id is captured.
+  - >-
+    DEP-02 (T2.48 c2): a PR creating the boundary-carrying agent-platform-probe-* role routes to
+    tf-gated-apply and, on human approval via the rec-2816 verify-checklist pilot, applies with 0
+    AccessDenied without invoking the admin tier; the role is confirmed live carrying the boundary;
+    the gated-apply run-id is captured.
+  - >-
+    Both probes are reverted through the gated destroy path (HAZARD-4 verbs for the role); the probe
+    files, the oidc.tf planner read entry, and the bootstrap probe read entry are removed;
+    terraform/personal is back at its pre-probe state and the convergence record is green.
+  - >-
+    rec-2831 is closed via the PR-4 Resolves trailer, VERIFIED post-merge in the synced read cache
+    (not merely asserted pre-merge); the roadmap truthful-subset flips are landed (T2.49 complete,
+    T2.48 c3/c4/c5 met + in_progress, T2.50 complete) and the held T2.48 c1/c2 are flipped with the
+    two captured probe run-ids recorded in the T2.48 progress_note -- scoped to the DEP-01/DEP-02
+    live-proof, NOT a whole-audit-complete claim (T2.44/T2.45 remain not_started).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Assert the iam:PassRole grant is present in github_ci_apply.tf in BOTH the identity policy and
+      the boundary DataPlaneAllow (>= 2 occurrences).
+    command: 'test "$(grep -c "iam:PassRole" terraform/bootstrap/github_ci_apply.tf)" -ge 2'
+    expected: "Exit 0: iam:PassRole appears at least twice (identity Sid Action + boundary DataPlaneAllow)."
+    fix_if: "0 or 1 occurrence -- PassRole missing from the identity policy or the boundary ceiling (silent deny)."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "passrole-grant-present-identity-and-boundary"
+  - step: 2
+    phase: pre-deploy
+    action: "Assert the PassRole grant carries the PassedToService=lambda.amazonaws.com condition (not an unconditioned PassRole)."
+    command: 'grep -q "iam:PassedToService" terraform/bootstrap/github_ci_apply.tf && grep -q "lambda.amazonaws.com" terraform/bootstrap/github_ci_apply.tf'
+    expected: "Exit 0: the iam:PassedToService condition key and the lambda.amazonaws.com service value are both present."
+    fix_if: "Missing condition -- an unconditioned PassRole over-grants (any service, any pass); scope it to lambda."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "passrole-passedtoservice-lambda-condition"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert _write_coverage encodes the CreateFunction-implies-PassRole anti-recurrence invariant AND
+      is self-contained (re-reads the boundary DataPlaneAllow block itself, since the facade passes
+      only identity apply_statements).
+    command: 'grep -q "PassRole" scripts/checks/iam_tf/_write_coverage.py && grep -Eq "DataPlaneAllow|boundary" scripts/checks/iam_tf/_write_coverage.py'
+    expected: "Exit 0: the write-coverage submodule references both PassRole and the boundary block it re-reads (identity + boundary assertion, facade untouched)."
+    fix_if: "PassRole absent -- rec-2831 has no standing CI guard; boundary reference absent -- the boundary-side assertion is not self-contained and would need the facade in scope."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "write-coverage-asserts-passrole-identity-and-boundary"
+  - step: 4
+    phase: pre-deploy
+    action: "Run the _write_coverage unit tests (positive + the two negative cases) to confirm the new assertion fails loud."
+    command: "bin/venv-python -m pytest tests/checks/iam_tf/test__write_coverage.py -q"
+    expected: "All tests pass; the CreateFunction-without-PassRole and boundary-missing-PassRole cases assert a loud failure."
+    fix_if: "A negative case passes silently -- the assertion is vacuous; tighten the check."
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      DEP-01 go-wrong-trap mitigation: assert probe_dep01_lambda.tf is S3-sourced (s3_key), declares
+      NO aws_iam_role, and uses NO archive_file / filemd5-on-a-local-path.
+    command: 'grep -q "s3_key" terraform/personal/probe_dep01_lambda.tf && ! grep -Eq "archive_file|filemd5" terraform/personal/probe_dep01_lambda.tf && ! grep -q "resource \"aws_iam_role\"" terraform/personal/probe_dep01_lambda.tf'
+    expected: "Exit 0: S3-sourced code, no archive_file/filemd5, no new IAM role (reuses an existing agent-platform-* exec role)."
+    fix_if: "archive_file/filemd5 present -> the saved plan.bin cannot read the zip in the apply job's fresh checkout (masquerades as an IAM failure); a new aws_iam_role would flip the guard to BLOCK."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Targets terraform/personal/probe_dep01_lambda.tf, a transient probe file created and then
+      reverted within this plan; there is no persistent tree state for a standing regression guard to
+      assert against (the file is deleted by the DEP-01 revert PR).
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      DEP-02 structural asserts: probe_dep02_role.tf declares permissions_boundary = the authority
+      budget ARN and lambda.amazonaws.com trust, and the probe role name appears in NO workflow /
+      oidc.tf CI-role config (dodges rec-2824).
+    command: 'grep -q "permissions_boundary" terraform/personal/probe_dep02_role.tf && grep -q "lambda.amazonaws.com" terraform/personal/probe_dep02_role.tf && ! grep -rq "agent-platform-probe-liveproof-role" .github/workflows/'
+    expected: "Exit 0: boundary declared, lambda trust, and the probe role is referenced by no workflow (structurally cannot trip the rec-2824 self-repoint deadlock)."
+    fix_if: "Missing boundary -> validate_boundary_attached fails + gated CreateRole AccessDenies; a workflow reference would recreate the rec-2824 bootstrap deadlock."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Targets terraform/personal/probe_dep02_role.tf, a transient probe file created and reverted
+      within this plan; no persistent tree state exists for a standing regression guard.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Assert the DEP-02 probe role's exact ARN is present in BOTH read-lists (bootstrap IAMRolesRead
+      pre-staged, oidc.tf planner read-list) so validate_ci_refresh_read_coverage passes and drift
+      stays green.
+    command: 'grep -q "agent-platform-probe-liveproof-role" terraform/bootstrap/github_ci_apply.tf && grep -q "agent-platform-probe-liveproof-role" terraform/personal/oidc.tf'
+    expected: "Exit 0: the probe role ARN is refresh-read-covered in both the apply (bootstrap) and planner (oidc.tf) policies."
+    fix_if: "Missing in either -> validate_ci_refresh_read_coverage FAILS LOUD at PR time; or the hourly drift plan AccessDenies on GetRole and false-reds."
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Both read-list entries are transient (added in the DEP-02 create PR, removed at revert); they do
+      not persist to the final tree, so there is no standing state for a regression guard to assert.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Whole-tree presubmit: run the fast gate. Confirms the roadmap schema (met_by resolves,
+      closes_criteria integrity), the write-coverage check, boundary-attached lint, and public-repo
+      secret guards all pass on the working tree.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0 -- all registered --pre checks pass (advisory outside CI; authoritative in PR CI)."
+    fix_if: "Any FAIL -- fix the specific check before proceeding; never patch around a red gate (Decision 55)."
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: post-deploy
+    action: >-
+      [PR-1 merged; HUMAN admin gate -- NEVER auto-applied] Admin-apply terraform/bootstrap (PassRole
+      + pre-staged probe read entry) under agent_platform_admin. STOP if the plan shows any
+      destroy/replace of github_ci_apply. The overseer relays the plan; the human reviews and
+      explicitly directs the apply.
+    command: "terraform -chdir=terraform/bootstrap plan -var-file=terraform/bootstrap/terraform.bootstrap.tfvars   # then apply the saved plan on explicit human direction"
+    expected: "Plan is a pure inline-policy update (0 add / 1 change / 0 destroy); the rec-2793 whitespace-stripped precondition (<= 10,240 B) passes; apply completes; live policy now grants iam:PassRole."
+    fix_if: "Any destroy/replace of the apply role or its policy -> STOP (would break in-flight CI). Precondition breach -> relocate a read-only Sid to a customer-managed policy before retry."
+  - step: 10
+    phase: post-deploy
+    action: >-
+      [HUMAN -- NAMED ACCEPTANCE: Decision 143 PassRole containment] Re-run the simulate-principal-policy
+      gate on the applied policy. Assert four containment properties: (a) the PassRole grant is ALLOWED
+      only for the dual-predicate shape (role/agent-platform-* target AND
+      iam:PassedToService=lambda.amazonaws.com); (b) it is DENIED off-scope (a non-agent-platform-*
+      target, or a non-lambda service); (c) adding iam:PassRole to the boundary DataPlaneAllow did NOT
+      weaken or intersect the self-protection denies -- DenyIAMEscalation, DenyBoundaryRemoval, and
+      DenyBoundaryPolicyModification must still dominate (an unbounded CreateRole/PutRolePolicy and any
+      boundary self-modification stay explicitDeny); (d) the PRIVILEGED-CI-role-target case -- passing
+      a privileged agent-platform-* role (e.g. agent-platform-github-ci-apply or
+      agent-platform-github-ci-planner) to lambda -- is ALLOWED by the prefix grant (by design under
+      Decision 143, not a defect), AND the apply role holds NO broad lambda:InvokeFunction, so it
+      cannot create-then-invoke such a lambda to escalate in-session: the seam stays contained. Assert
+      both halves of (d) explicitly.
+    command: 'aws iam simulate-principal-policy --policy-source-arn "arn:aws:iam::${ACCOUNT_ID}:role/agent-platform-github-ci-apply" --action-names iam:PassRole iam:CreateRole iam:DeletePolicyVersion lambda:InvokeFunction --resource-arns "arn:aws:iam::${ACCOUNT_ID}:role/agent-platform-ops-compaction" --context-entries "ContextKeyName=iam:PassedToService,ContextKeyValues=lambda.amazonaws.com,ContextKeyType=string" --profile agent_platform   # then repeat PassRole with (i) a non-agent-platform-* target and ecs.amazonaws.com -> implicitDeny off-scope, and (ii) the agent-platform-github-ci-planner role as target -> allowed (privileged-target case)'
+    expected: "PassRole=allowed for the agent-platform-* + lambda dual-predicate shape (incl. a privileged CI role target -- by design); implicitDeny for a non-agent-platform-* target OR a non-lambda service; unbounded iam:CreateRole and iam:DeletePolicyVersion on the boundary policy remain explicitDeny (self-protection denies dominate); lambda:InvokeFunction is implicitDeny/absent (the apply role cannot invoke what it creates -- privileged-target PassRole is contained)."
+    fix_if: "allowed off-scope -> the Resource/condition is too loose (worst-verb-scoping violated); explicitDeny on the in-scope PassRole -> the boundary DataPlaneAllow is missing iam:PassRole (silent intersection deny); any self-protection Deny flips to allowed -> PassRole intersected a Deny (STOP, do not proceed); lambda:InvokeFunction ALLOWED -> the privileged-target containment argument breaks (a broad invoke would let the apply role create-and-run a lambda as a privileged role) -- STOP and escalate."
+  - step: 11
+    phase: post-deploy
+    action: >-
+      [PR-2 merged; AUTO-APPLY, no human gate] Merge the DEP-01 probe PR; terraform-apply-sandbox
+      guard PASSes (non-IAM) and applies the saved plan.bin. Verify 0 AccessDenied and the resources
+      live; capture the run-id.
+    command: 'gh run list --workflow=terraform-apply-sandbox.yml -L 1 --json databaseId,conclusion,url && aws lambda get-function --function-name agent-platform-probe-liveproof --profile agent_platform --query "Configuration.FunctionName"'
+    expected: "apply-sandbox run conclusion=success, guard verdict PASS, 0 AccessDenied in the apply log; the Lambda + /aws/lambda/agent-platform-probe-* log group + agent-platform-probe-* alarm exist; run-id recorded."
+    fix_if: "AccessDenied at CreateFunction -> PassRole not live (step 9 did not land); a genuine red-latch is recovered via ack-dispatch/reconcile AFTER ci-rca review (Decision 55) -- and IS the audit evidence."
+  - step: 12
+    phase: post-deploy
+    action: >-
+      [PR-2-revert; HUMAN gated destroy] Merge the DEP-01 revert PR (deletes probe_dep01_lambda.tf);
+      the guard routes the destroy to tf-gated-apply; human approves; verify the resources are gone
+      (bonus gated-destroy datapoint).
+    command: 'gh run list --workflow=terraform-apply-sandbox.yml -L 1 --json databaseId,conclusion,url  # approve tf-gated-apply in the GitHub Actions UI, then: aws lambda get-function --function-name agent-platform-probe-liveproof --profile agent_platform 2>&1 | grep -q ResourceNotFound'
+    expected: "Guard routes to gated; after human approval the apply destroys the Lambda/log-group/alarm; get-function returns ResourceNotFoundException."
+    fix_if: "Destroy AccessDenied -> unexpected (delete verbs for non-IAM resources are in-boundary); investigate before proceeding."
+  - step: 13
+    phase: post-deploy
+    action: >-
+      [PR-3 merged; HUMAN gated -- rec-2816 verify-checklist PILOT] Merge the DEP-02 probe PR; guard
+      BLOCKs (aws_iam_role create) and routes to tf-gated-apply. The human runs the rec-2816 checklist
+      (open the speculative-plan PR comment, confirm the plan sha == the saved-plan S3 key, THEN
+      approve). Verify 0 AccessDenied, the role live carrying the boundary; capture the run-id. Freeze
+      other terraform/personal merges during the approval window (shared apply-sandbox concurrency
+      group, cancel-in-progress:false) and do NOT fire reconcile/ack-dispatch (rec-2824 layer-1 unfixed).
+    command: 'gh run list --workflow=terraform-apply-sandbox.yml -L 1 --json databaseId,conclusion,url && aws iam get-role --role-name agent-platform-probe-liveproof-role --profile agent_platform --query "Role.PermissionsBoundary.PermissionsBoundaryArn"'
+    expected: "Guard verdict ROUTE; after human approval the gated apply creates the role with 0 AccessDenied and the admin tier is NOT invoked; get-role shows the agent-platform-github-ci-apply-boundary; run-id recorded."
+    fix_if: "AccessDenied on CreateRole -> the role did not declare the boundary (validate_boundary_attached should have caught it) or the boundary condition mismatched; a genuine failure is the audit evidence (recover via ack-dispatch after ci-rca review)."
+  - step: 14
+    phase: post-deploy
+    action: >-
+      [PR-3-revert; HUMAN gated destroy] Merge the DEP-02 revert PR (deletes probe_dep02_role.tf +
+      removes the oidc.tf planner read entry); the guard routes the role destroy to tf-gated-apply
+      (HAZARD-4 verbs iam:DeleteRole/DeleteRolePolicy); human approves; verify the role is gone and
+      the convergence record is green.
+    command: 'gh run list --workflow=terraform-apply-sandbox.yml -L 1 --json databaseId,conclusion,url  # approve tf-gated-apply, then: aws iam get-role --role-name agent-platform-probe-liveproof-role --profile agent_platform 2>&1 | grep -q NoSuchEntity'
+    expected: "Guard routes to gated; after approval the role is destroyed (get-role -> NoSuchEntity); apply-sandbox writes convergence green; terraform/personal matches origin/main."
+    fix_if: "Destroy AccessDenied -> the HAZARD-4 delete verbs regressed on github_ci_apply; re-verify E's IAMRoleDeleteBounded grant."
+  - step: 15
+    phase: post-deploy
+    action: >-
+      [PR-4; bookkeeping, PRE-merge] Flip the HELD T2.48 c1/c2 -> met (met_by t248-passrole-liveproof)
+      recording the two captured probe run-ids in the T2.48 progress_note, scoped to the DEP-01/DEP-02
+      LIVE-PROOF -- NO whole-audit-complete claim (T2.44/T2.45 not_started; that is the overseer's G3
+      call). Add the Resolves: rec-2831 trailer to the squash-merge commit. Confirm validate --pre and
+      validate_platform_roadmap green. (The bootstrap probe-ARN removal is done in PR-3-revert, not
+      here -- no double-attribution.)
+    command: 'bin/venv-python -m scripts.validate --pre && test "$(grep -c "met_by: t248-passrole-liveproof" docs/ROADMAP-PLATFORM.yaml)" -ge 2'
+    expected: "validate --pre exit 0 (includes validate_platform_roadmap); the met_by=t248-passrole-liveproof line appears at least twice (both held criteria T2.48 c1 and c2 flipped to met with this plan's slug) -- a count check that is robust to YAML text-wrapping pushing met_by out of an -A window."
+    fix_if: "Roadmap validation fails -> a met criterion lacks met_by, or a met_by does not resolve to a real plan/40-hex; fix per validate_platform_roadmap check (i)/(g)."
+  - step: 16
+    phase: post-deploy
+    action: >-
+      [PR-4; POST-merge -- closure obligation] AFTER PR-4 squash-merges and the Resolves-trailer
+      autoclose workflow fires, pull the read cache and verify rec-2831 is actually CLOSED. A silently
+      dropped continue-on-error autoclose would otherwise leave rec-2831 open with nothing catching it.
+    command: 'bin/venv-python -m scripts.sync.ops sync && grep "\"id\": \"rec-2831\"" logs/.recommendations-log.jsonl | grep -q "\"status\": \"closed\""'
+    expected: "rec-2831's OWN record (id-anchored) appears in the synced read cache with status closed -- the anchor rec is closed by the completed live-proof, not merely by the trailer being present, and not matched by some other rec that references rec-2831 in its body."
+    fix_if: "rec-2831 still open -> the rec-autoclose workflow did not fire or was dropped; close it via bin/venv-python -m scripts.ops_data_portal --update-rec rec-2831 --status closed --resolution \"DEP-01/DEP-02 live-proven at run-ids <...>\". (Note: sync.ops accepts only the 'sync' verb; 'pull' exits 2.)"
+constraints:
+  - >-
+    Decision 101 PUBLIC repo: NEVER put AWS account IDs / ARNs / ExternalIds / secrets in the plan, a
+    PR, a commit, or any committed file. All HCL uses ${var.account_id} / ${var.aws_region}; the
+    pre-commit never-commit hook + detect-secrets are the standing guards.
+  - >-
+    terraform/bootstrap is NEVER auto-applied (terraform/bootstrap/CLAUDE.md). The PassRole apply is
+    the DESIGNED bootstrap admin tier (PlatformAdmin) -- a fixed point, not break-glass shame.
+  - >-
+    NEVER-AUTO-APPLY (hard human gates): the bootstrap PassRole admin apply (step 9) and EACH
+    tf-gated-apply Environment approval (steps 12/13/14) PAUSE for the human. Agents never self-direct
+    a terraform apply (Decision 126); the overseer relays plans and drives applies only on the human's
+    explicit per-plan word. These pauses are explicit V3 steps, not glossed.
+  - >-
+    rec-2824 layer-1 is UNFIXED: while the probe role exists, do NOT fire reconcile or an
+    acknowledge-and-retry dispatch -- any pre-guard failure still false-reds, latches the convergence
+    record, and halts the platform. Schedule the DEP-02 approval window when the human can approve
+    promptly and freeze other terraform/personal merges for its duration.
+  - >-
+    rec-2770 CI-safety: every graduated-check command and VP-replay hermetic step is PURE-SHELL
+    (grep / test / git ls-files), never bin/venv-python -- CI has no .venv, so a venv-python command
+    passes locally + in code-review but fails in CI (VP-replay error / does-not-pass-on-HEAD).
+  - >-
+    GO-WRONG TRAP: the DEP-01 probe Lambda MUST be S3-sourced (s3_bucket/s3_key at an existing
+    lambda-packages object, source_code_hash omitted) -- NOT data.archive_file/filemd5 on a local
+    path. A PR-plan-time zip does not exist in the apply job's fresh checkout; the saved plan.bin
+    applies verbatim and then cannot read the file, masquerading as an IAM failure.
+  - >-
+    Decision 55: no rescue agents / no workaround loops. A genuine probe apply failure is a real
+    red-latch, recovered only via the now-rehearsed ack-dispatch/reconcile machinery AFTER the ci-rca
+    rec is reviewed -- and the failure itself is exactly the evidence the audit paid for.
+  - >-
+    Status-Trusted-Never-Inferred: the held T2.48 c1/c2 flip ONLY on a verified VP pass (both probe
+    run-ids captured), never inferred from prose or file existence. The truthful-subset flips are
+    silent-completion bookkeeping for work E/F/G already shipped and applied live.
+  - >-
+    SLOC / byte governance: PassRole fits the rec-2793 10,240 B whitespace-stripped inline-policy
+    ceiling (measured headroom, see context); no budget raise, no decomposition. _write_coverage stays
+    under 500 SLOC. If a future measurement shows a breach, relocate a read-only Sid to a
+    customer-managed policy -- do NOT raise the ceiling.
+  - >-
+    Decision 143 PassRole containment (scout NOTE flag 1): the grant MUST carry BOTH the resource
+    scope role/agent-platform-* AND the condition iam:PassedToService=lambda.amazonaws.com (worst-verb
+    scoping, never a bare PassRole); and adding iam:PassRole to the boundary DataPlaneAllow ceiling
+    must NOT weaken or intersect the self-protection denies (DenyIAMEscalation, DenyBoundaryRemoval,
+    DenyBoundaryPolicyModification) -- those Denies must still dominate. This is a NAMED acceptance in
+    the bootstrap simulate-gate VP (step 10), not prose.
+  - >-
+    Decision 136 exit-criteria ledger (scout NOTE flag 2): every criterion flipped to met/complete in
+    the truthful subset MUST carry a met_by that resolves to a real PLAN-<slug>.yaml or 40-hex commit
+    (validate_platform_roadmap check (i) + schema rule (g)); and T2.50's documented-confound close of
+    c1 is honest ONLY if c2 + the CODEOWNERS-live evidence cover the DEP-05 criterion's substance (no
+    genuinely unmet DEP-05 criterion). met_by mapping: T2.49 c1/c2/c3 -> ci-deploy-role-consolidation;
+    T2.48 c3/c4/c5 -> terraform-iam-allowlist-inversion; T2.50 c1/c2 -> gate-path-protection; T2.48
+    c1/c2 -> t248-passrole-liveproof.
+  - >-
+    Decision 93 roadmap dependency integrity (scout NOTE flag 3): T2.49 flips to complete while its
+    depends_on target T2.48 stays in_progress (c1/c2 held). The status validator's only
+    status-dependency rule is deferred_post_mvp-scoped (platform_roadmap_models rule (f)), verified
+    this session -- so this PASSes. Contingency (no redesign): the implementer runs
+    validate_platform_roadmap after the truthful-subset flip and, IF it ever fails on the
+    complete-with-in_progress-dependency shape, DEFERs the T2.49 complete-flip into the closing
+    bookkeeping PR (PR-4, alongside T2.48 c1/c2) instead of the early PR.
+context:
+  - >-
+    Verified finding (rec-2831, the anchor): iam:PassRole is ABSENT across the entire terraform tree
+    (grep -rn PassRole terraform/ = 0 hits) while lambda:CreateFunction IS present in
+    terraform/bootstrap/github_ci_apply.tf (LambdaFunctionWrite Sid). AWS requires iam:PassRole on the
+    execution role for lambda:CreateFunction, so DEP-01 is not merely unproven but currently
+    UNEXECUTABLE: a new agent-platform-* Lambda PR guard-PASSes (non-IAM), auto-applies, then
+    AccessDenies at CreateFunction -> red-latch + platform halt. The 4 existing Lambdas predate the
+    inversion and deploy via UpdateFunctionCode (no PassRole needed), so nothing surfaced the gap.
+  - >-
+    Why the live-proofs are owed: the audit's DEP-01/DEP-02 acceptances were never obtained on the
+    autonomous/gated path -- slice E's boundary and slice F's roles were both applied via break-glass
+    admin (the rec-2824 CI deadlock forced it), so closing T2.48 c1/c2 now would certify a centerpiece
+    whose flagship scenario AccessDenies on first contact. The probes ARE the verification (V3).
+  - >-
+    Byte headroom (measured this planning session, estimate): the github_ci_apply inline policy is
+    ~9,665 B minified today (~575 B under the 10,240 B ceiling). The PassRole Sid adds ~210 B and the
+    transient probe read ARN ~69 B -> ~9,944 B (~296 B headroom). The terraform lifecycle precondition
+    (length(jsonencode(jsondecode(policy)))<=10240) is the authoritative gate at apply time (step 9).
+  - >-
+    Guard classification (verified against scripts/terraform_apply_guard.py): aws_iam_role is in
+    IAM_SENSITIVE_TYPES -> probe role create BLOCKs -> gated; aws_lambda_function /
+    aws_cloudwatch_log_group / aws_cloudwatch_metric_alarm are neither IAM_SENSITIVE nor a
+    resource-policy type -> the probe Lambda plan is non-IAM -> PASS -> auto-apply. The probe Lambda
+    adds NO aws_lambda_permission (it is invoked by nothing), so no resource-policy-type routing.
+  - >-
+    Coverage verifier (validate_ci_refresh_read_coverage): every terraform/personal resource must be
+    refresh-read-covered in BOTH github_ci_apply (bootstrap) and github_ci_planner (oidc.tf). The
+    probe Lambda/log-group/alarm are covered by existing prefixes (function:agent-platform-*, logs:* /
+    cloudwatch:* wildcards); the probe ROLE needs enumerated entries in BOTH read-lists (IAM reads are
+    enumerated per Decision 35, never wildcarded) -- CI-mandatory, not merely a runtime nicety.
+    Pre-adding a not-yet-existent role ARN follows the established planner/deploy pre-add pattern.
+  - >-
+    rec-2816 gated-approval verify-checklist pilot: DEP-02's gated approval (step 13) is the first
+    real exercise of the checklist (open the speculative-plan PR comment, confirm the redacted plan
+    sha == the sha256 saved-plan S3 key, then approve tf-gated-apply). The overseer relays the plan
+    since a role-CREATE PR's speculative-plan may skip in the bootstrap window.
+  - >-
+    Anti-recurrence inclusion flagged for critique: the _write_coverage CreateFunction-implies-PassRole
+    assertion is a REFINEMENT beyond the Fable-designed 4-part scope. It is justified by the audit's
+    own thesis (enumerated allow-lists silently lag -> add a standing static guard, the read-axis
+    coverage verifier's exact pattern) and the slice-C/E/F precedent of in-slice standing checks. It
+    is minimal (extends an existing module, no registry/facade rewiring) and makes rec-2831's fix
+    durable rather than proven-once. Cut it if plan-critique judges it scope-creep; the probes remain
+    the primary V3 proof either way.
+  - >-
+    No DECISIONS.md edit: PassRole completion is an operational realization of the already-ratified
+    Decision 144 model, not a durable new architectural commitment -- it routes to a rec/roadmap note
+    per the Decision Significance Gate, not a numbered Decision (and avoids the byte-ceiling / the
+    significance gate). Decisions 98 pt1 / 92 pt5 were already amended-as-realized by slice E.
+  - >-
+    Preflight (2026-07-24): creds ok, branch claude/t248-passrole-liveproof, 0 behind origin/main,
+    ci_rca_unresolved=0 (no hard block). Anomaly surfaced (unrelated to this slice): ops_outbox shows
+    1 stray ops_recommendations entry (a migrated-table outbox is retired per Decision 84 I-4) -- flag
+    to the operator; it does not block plan authoring and this plan touches no ops-data write path.
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND -- 3 NOTE-severity flags,
+    no BLOCK/WARN (gate_run_id terraform-deploy-redesign-scout-h-passrole-r1); the scout confirmed the
+    plan is a faithful realization of ratified Decision 144. CITE: 144, 92, 98, 129, 94, 77, 126, 143,
+    55, 35, 101, 83, 136. Decision 143 governs PassRole worst-verb scoping + boundary-enforced-outside-
+    the-merge-loop for the probe-role CREATE; Decision 136 (exit-criteria ledger + Status-Trusted-
+    Never-Inferred) is the status-integrity governance the roadmap-flip sequencing lives under. RELATED
+    context (NOT cite): 128 (only bites if _write_coverage crosses SLOC budget -- no raise proposed),
+    119/120 (provider mirror), 150 (confirms the no-new-Decision stance), 113.
+  - >-
+    Three NOTE flags absorbed in-plan (none forced a redesign): (1) Decision 143 PassRole containment
+    -> encoded as a named acceptance in the bootstrap simulate-gate VP (dual predicate + off-scope deny
+    + self-protection deny dominance + privileged-CI-role-target contained); (2) Decision 136
+    status-integrity -> met_by on every truthful-subset flip + the T2.50 confound-substance check, HOLD
+    of c1/c2 + the c1/c2 live-proof progress_note retained (NO whole-audit-complete claim); (3)
+    Decision 93 dependency integrity -> verified benign (validate_platform_roadmap rule (f) is
+    deferred_post_mvp-scoped only), with a defer-to-PR-4 contingency if the
+    complete-with-in_progress-dependency shape ever fails.
+  - >-
+    T2.45/DEP-06 sequencing acknowledgment (critique R2, VERIFIED LIVE): T2.44 AND T2.45 (DEP-06 guard
+    resource-based-policy classification) are both not_started with all criteria open. The write-surface
+    broadening already shipped in slice E ahead of T2.45 -- a pre-existing Decision-144-pt7 sequencing
+    gap this plan INHERITS, not causes. These probes DELIBERATELY avoid the resource-based-policy
+    surface (the DEP-01 probe adds NO aws_lambda_permission; it is invoked by nothing), so they do not
+    depend on the unshipped DEP-06 guard work. This is recorded in the T2.48 progress_note so the
+    truthful-subset flips do not silently imply DEP-06 is done.
+  - "gates: decision-scout=FLAGS_FOUND after 1 round (3 NOTE flags absorbed in-plan); plan-critique=REVISE r1 (6 additive revisions) + REVISE r2 (1 required sync-verb fix + 2 grep hardenings), architecture affirmed both rounds -> round 3 PENDING"
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/t248-passrole-liveproof, cut fresh off origin/main)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "DECISIONS.md read (via decision-scout gate output; CITE list folded into context)"
+  - "terraform/bootstrap/CLAUDE.md + terraform/CLAUDE.md (apply model, guard classification) read"
+  - "All files in scope located and readable; existing Lambda/log-group/alarm/role patterns identified"
+  - "Acceptance criteria understood and independently verifiable"
+  - "The four human-gated applies (1 bootstrap admin + 3 tf-gated approvals) understood as hard pauses"
+execution_steps:
+  - >-
+    PR-1 (durable completion + anti-recurrence + truthful-subset roadmap flips): edit
+    terraform/bootstrap/github_ci_apply.tf to add the iam:PassRole identity Sid (role/agent-platform-*
+    + iam:PassedToService=lambda.amazonaws.com) and add iam:PassRole to the boundary DataPlaneAllow,
+    and pre-stage the exact ARN arn:aws:iam::${var.account_id}:role/agent-platform-probe-liveproof-role
+    in IAMRolesRead; extend scripts/checks/iam_tf/_write_coverage.py with the
+    CreateFunction-implies-PassRole assertion + tests; flip the roadmap truthful subset (T2.49 ->
+    complete met_by ci-deploy-role-consolidation; T2.48 c3/c4/c5 -> met met_by
+    terraform-iam-allowlist-inversion + status in_progress + progress_note; T2.50 -> complete, c1/c2
+    met met_by gate-path-protection with c1's documented-confound note). Every flipped criterion
+    carries a met_by that resolves to a real plan (Decision 136). Run validate --pre (steps 1-4, 8)
+    AND validate_platform_roadmap specifically; IF it fails on the T2.49-complete-with-T2.48-in_progress
+    dependency shape (Decision 93 contingency -- verified benign this session, but confirm), DEFER the
+    T2.49 complete-flip to PR-4. Open the PR; on CI green, merge. (Bootstrap change is committed but
+    NOT auto-applied.)
+  - >-
+    HUMAN GATE -- bootstrap admin apply (step 9): overseer relays the terraform/bootstrap plan (0 add
+    / 1 change / 0 destroy, account-id redacted); the human reviews and explicitly directs; apply
+    under agent_platform_admin; verify PassRole live; re-run the simulate-principal-policy gate (step
+    10). PassRole MUST be live before PR-2 merges.
+  - >-
+    PR-2 (DEP-01 probe): create terraform/personal/probe_dep01_lambda.tf (agent-platform-probe-liveproof
+    Lambda reusing aws_iam_role.ops_compaction.arn, S3-sourced zip, no archive_file; its log group;
+    one agent-platform-probe-* alarm). Run validate --pre (steps 5, 8). Open PR; on CI green, merge ->
+    guard PASS -> auto-apply. Verify 0 AccessDenied + resources live; capture the run-id (step 11).
+  - >-
+    PR-2-revert (DEP-01 cleanup): delete terraform/personal/probe_dep01_lambda.tf. Open PR; on CI
+    green, merge -> guard routes the destroy to tf-gated-apply -> HUMAN approves -> destroyed; verify
+    gone (step 12).
+  - >-
+    PR-3 (DEP-02 probe): create terraform/personal/probe_dep02_role.tf (boundary-carrying
+    agent-platform-probe-liveproof-role, lambda trust, tiny in-boundary inline policy, byte
+    precondition) and add its ARN to the github_ci_planner read-list in terraform/personal/oidc.tf.
+    Run validate --pre (steps 6, 7, 8). Open PR; on CI green, merge -> guard BLOCK -> tf-gated-apply.
+    HUMAN runs the rec-2816 verify-checklist and approves; verify 0 AccessDenied + role live carrying
+    the boundary; capture the run-id (step 13). Freeze other terraform/personal merges + do NOT
+    dispatch/reconcile during the window (rec-2824 layer-1).
+  - >-
+    PR-3-revert (DEP-02 cleanup): delete terraform/personal/probe_dep02_role.tf, remove the probe ARN
+    from the oidc.tf planner read-list, and remove the pre-staged probe ARN from the bootstrap file.
+    Open PR; on CI green, merge -> guard routes the role destroy to tf-gated-apply -> HUMAN approves ->
+    destroyed (HAZARD-4 verbs); verify gone + convergence green (step 14). HONESTY: the bootstrap
+    file cleanup is COMMITTED but bootstrap is never auto-applied, so the LIVE IAMRolesRead grant on
+    the (now-destroyed) probe ARN stays dangling until an unscheduled future admin bootstrap apply --
+    an effective deferred 4th admin apply. It is inert (a refresh-read on a destroyed ARN; bootstrap
+    is not drift-monitored), but it is real residual state, not fully self-cleaning (see
+    infrastructure_dependencies).
+  - >-
+    PR-4 (closing bookkeeping): flip the held T2.48 c1/c2 -> met (met_by t248-passrole-liveproof) with
+    the two captured probe run-ids in the T2.48 progress_note -- scoped to the DEP-01/DEP-02 LIVE-PROOF,
+    NOT a whole-audit-complete claim (T2.44/T2.45 not_started; whole-audit completion is the overseer's
+    G3 determination, not this plan's edit). Close rec-2831 via the Resolves: rec-2831 squash-merge
+    trailer. Run validate --pre + validate_platform_roadmap (step 15); AFTER merge, verify rec-2831 is
+    actually closed in the synced cache (step 16 -- closure obligation).
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 apply
+    failure STOP and route to ci-rca/RCA (Decision 55), do NOT patch around it. The overseer owns the
+    CI-green-wait + squash-merge for each PR and drives the human-gated applies on the human's word.
+  - "Report: what was implemented, each probe run-id, and the final roadmap/rec-2831 state."
+work_areas: []
+rollback: >-
+  Each probe is self-reverting (its own revert PR through the gated destroy path). The durable
+  changes (PassRole grant, _write_coverage assertion) are additive and safe to leave live even if the
+  probes are abandoned -- PassRole only widens the apply role to a verb AWS already requires for the
+  CreateFunction it holds, gated by the lambda condition. If a probe apply genuinely fails, it is a
+  real red-latch recovered via workflow_dispatch acknowledge-and-retry AFTER the ci-rca rec is
+  reviewed (Decision 55) -- never a silent re-plan-and-apply; the failure is the audit evidence.
