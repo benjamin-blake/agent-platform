@@ -1183,6 +1183,56 @@ candidate_decisions:
         (record destination now, defer build) -- the underlying subsystem (T3.20) is unbuilt.
       - "Cites Decisions 86, 84, 95, 96, 97, 105, 87, 75."
 
+  - id: CD.41
+    title: Private-dashboard hosting -- Cloudflare Access auth-front with in-AWS signing and a direct-to-AWS data path (invariant-fenced, reusable)
+    detail: |
+      Extends the 73/83/101 confidential-data boundary with a NARROW, reversible carve-out: a
+      private dashboard MAY use Cloudflare Access as its authentication front, PROVIDED the
+      architectural invariant holds -- (a) no AWS credential ever rests outside AWS; (b) the
+      confidential payload never transits Cloudflare (it flows AWS->browser via an in-AWS-minted,
+      <=5-min, single-object presigned GET, or a direct-from-AWS origin); (c) AWS independently
+      re-verifies the Cloudflare Access token (dual gate; Cloudflare is UX, not the sole control).
+      Any implementation breaking (a)/(b)/(c) -- a Cloudflare Worker holding an AWS key, Cloudflare
+      terminating TLS on the payload ("2a"), or the data resting on Cloudflare -- is OUT and needs
+      a fresh Decision.
+
+      Fenced on the INVARIANT, not the data type (owner's DRY point): it is ONE reusable
+      private-dashboard pattern (tier item T2.51, the cost dashboard, is its first tenant), not a
+      cost-only exception that would force a second hosting stack. The precedent therefore cannot
+      be cited to justify the unsafe variants for hotter data. The one thing genuinely different
+      about catastrophic-consequence data (trading alpha/performance) is the cost of a residual
+      failure, not the pattern's security; so reuse for such data is permitted under the SAME
+      invariant BUT triggers a deliberate hardening review (tighter TTL, IP allowlist, client-bound
+      links, or a non-internet-facing front) -- an added defense-in-depth layer on the same
+      pattern, a conscious pause rather than an auto-inherited grant.
+
+      Advice-consulted (model:fable) 2026-07-24; kept UNRATIFIED (Decision 105) -- realizes only
+      when T2.51 is built (deferred_post_mvp).
+    gates: [T2.51]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - >-
+        In-AWS signing only: the presigned URL is minted by an in-account Lambda using its
+        execution-role STS creds; the Cloudflare Worker / Access config holds ZERO AWS material.
+      - >-
+        Dual enforcement: the in-AWS endpoint rejects any request lacking a valid
+        Cf-Access-Jwt-Assertion (verified against the Access JWKS + AUD), so AWS is a real gate
+        even if the redirect URL leaks.
+      - >-
+        Presigned GET: TTL <= 5 min, single self-contained no-store object; bucket
+        Block-Public-Access stays on. A CloudTrail S3 data-event alert on the dashboard prefix
+        flags unexpected principals.
+      - "Cloudflare Access app: single allowed email, short session, Access logging enabled."
+      - >-
+        Extending the pattern to catastrophic-consequence data (trading alpha / performance /
+        credentials / account identifiers) requires a deliberate hardening review recorded as a
+        fresh Decision; this carve-out does NOT auto-grant it.
+      - >-
+        Reversal: fall back to an AWS-native front (CloudFront + Cognito / Amplify) -- a read-only
+        projection, so migration is plumbing with zero data movement. Cites Decisions 73, 83, 101,
+        100, 75, 55, 98, 144, 126, 105.
+
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
   - id: T-1.0
@@ -5233,22 +5283,25 @@ tier_items:
 
   - id: T2.51
     tier: T2
-    name: Private variable-cost visibility dashboard (all-AWS projection)
+    name: Private variable-cost visibility dashboard (Cloudflare-Access front, in-AWS data)
     intent: |
       A private, unified view of variable operational vendor spend (AWS + Anthropic API + DeepSeek
       API + Neon) so the platform's cost structure stays legible as it scales. Confidential cost
-      data RESTS in the personal AWS account (private S3); the dashboard is a read-only PROJECTION
-      rendered to private S3 and viewed via a presigned URL. No third-party hosting of confidential
-      data -- the public theseus.support / Semanto surface never carries cost figures (public-content
-      boundary, Decisions 73/83/101). Complements the existing monthly cost_reconciliation alarm
-      (scripts/cost_reconciliation.py) rather than replacing it: the alarm answers "did a threshold
-      trip?", this answers "where is variable spend going, and in what proportion?". The Claude Code
-      subscription is out of scope (variable-only), so all lines are USD (no currency conversion).
-      Design rationale + cost-proportion analysis: docs/plans/reports/REPORT-cost-visibility-dashboard.md.
+      data RESTS in the personal AWS account (private S3); the dashboard is a read-only PROJECTION.
+      The bookmarkable experience (open costs.theseus.support -> authenticate -> view) uses
+      Cloudflare Access ONLY for auth: an in-AWS Lambda verifies the Access token and mints a
+      <=5-min presigned GET (its own execution-role creds), and the browser loads the artifact
+      DIRECTLY from S3 -- no AWS credential leaves AWS and the payload never transits Cloudflare
+      (the CD.41 invariant). The public theseus.support / Semanto surface stays public and never
+      carries cost figures (Decisions 73/83/101). Complements the monthly cost_reconciliation alarm
+      (answers "did a threshold trip?"); this answers "where is variable spend going, and in what
+      proportion, over time?". Subscription out of scope (variable-only) -> all USD, no currency
+      conversion. Design rationale + architecture: docs/plans/reports/REPORT-cost-visibility-dashboard.md.
     depends_on: []
     files_in_scope:
       - terraform/personal/cost_read_role.tf    # new -- read-only ce:GetCostAndUsage IAM role (gated apply)
-      - scripts/cost/    # new subpackage -- daily pull + snapshot + render projection
+      - terraform/personal/cost_dashboard_auth.tf    # new -- in-AWS presign Lambda (Access-JWT verify) + private subdomain wiring
+      - scripts/cost/    # new subpackage -- daily pull + snapshot (grain: one row per vendor per day) + render projection
       - config/agent/cost_sources.yaml    # new -- provider/source registry (list-price refs only; no measured actuals)
       - .github/workflows/cost-dashboard.yml    # new -- daily scheduler (or a Lambda + EventBridge equivalent)
       - scripts/cost_reconciliation.py    # touch -- optional AWS auto-pull via the new role (retires manual invoice export)
@@ -5256,34 +5309,46 @@ tier_items:
       - id: c1
         text: >-
           A net-new read-only AWS cost role granting ce:GetCostAndUsage is provisioned in
-          terraform/personal (gated apply; IAM-sensitive) and can read the month-to-date bill by
-          service; no measured cost figure is ever committed to the repo (Decisions 73/83/101)
+          terraform/personal (gated apply; IAM-sensitive, Decision 98/144) and can read the
+          month-to-date bill by service; no measured cost figure is ever committed to the repo
+          (Decisions 73/83/101). Open question at build: whether the ce: role falls under the
+          Decision 129/144 read-coverage verifier.
         status: open
       - id: c2
         text: >-
           A scheduled daily job pulls AWS Cost Explorer plus the per-vendor billing/usage APIs
-          (Anthropic/DeepSeek/Neon; credentials in Secrets Manager) into a private-S3 USD snapshot.
-          The Neon leg uses Neon's billing/management HTTPS API, never a DuckLake catalog query
-          (Decision 88). A present-but-unparseable source fails loud rather than degrading to an
-          estimate (Decision 55)
+          (Anthropic usage API; DeepSeek; Neon via its billing/management HTTPS API, NEVER a
+          DuckLake catalog query -- Decision 88) into a private-S3 snapshot at grain
+          one-row-per-vendor-per-day (append-only, event-time-partitioned). A stale/absent snapshot
+          or an unparseable source fails loud / files a rec, never silently shows stale-as-current
+          (Decision 55/62)
         status: open
       - id: c3
         text: >-
-          A rendered HTML projection (spend by vendor + proportion view) is written to private S3
-          and viewable via a presigned URL; each line is labelled by source (measured vs
-          list-price-estimate); no CloudFront/Cognito/Cloudflare and no new vendor
+          A rendered static projection (spend by vendor AND its trend over time) is served via the
+          CD.41 pattern: Cloudflare Access authenticates costs.theseus.support; an in-AWS Lambda
+          verifies the Access JWT and mints a <=5-min presigned GET; the browser loads directly
+          from S3. No AWS credential leaves AWS; the payload never transits Cloudflare; the Lambda
+          dual-gates on the JWT. The renderer is unconstrained (static pre-rendered is the MVP
+          instance, not a pattern constraint)
         status: open
       - id: c4
         text: >-
-          The existing monthly cost_reconciliation job auto-pulls the AWS leg via the new cost-read
-          role, retiring the manual cost-invoices/<month>.json AWS export
+          CD.41 (the invariant-fenced private-dashboard hosting pattern) is ratified as a Decision
+          before the dashboard is served, with its discipline points and reversal conditions
         status: open
-    related_candidate_decisions: [CD.28]
-    related_decisions: [55, 67, 73, 83, 88, 93, 98, 100, 101]
+      - id: c5
+        text: >-
+          The existing monthly cost_reconciliation job auto-pulls the AWS leg via the new cost-read
+          role (assumable by its OIDC principal, or ce: added to agent-platform-github-ci-branch),
+          retiring the manual cost-invoices/<month>.json AWS export
+        status: open
+    related_candidate_decisions: [CD.28, CD.41]
+    related_decisions: [55, 67, 73, 83, 88, 93, 98, 100, 101, 111, 144]
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): author as atomic IMPLEMENTATION plan(s) at reactivation
     status: deferred_post_mvp
-    progress_note: "Scoped deferred_post_mvp (Decision 93) via PLAN-cost-visibility-dashboard / REPORT-cost-visibility-dashboard. Value scales with spend; today variable spend is noise vs the (out-of-scope) fixed subscription -- the two future cost 'whales' are inference (activity-driven, near-term) and S3 storage (data-driven, long-term). Activation trigger: the frozen executor (Decision 67) unfreezes and LLM-API spend is non-trivial, OR the monthly cost_reconciliation begins tripping thresholds regularly. Precedes the Semanto marketing surface (ROADMAP-SEMANTO S1.x) in priority but has NO dependency on it (private-AWS vs public-Cloudflare surfaces). Transitive active dependents: none. Reactivate by restoring status -> not_started; re-ground the stale anthropic_pool_size_usd (Max x5 -> Max x20) baseline at that time."
+    progress_note: "Scoped deferred_post_mvp (Decision 93) via PLAN-cost-visibility-dashboard / REPORT-cost-visibility-dashboard (2b architecture; Fable advice-consulted). Value scales with spend; today variable spend is noise vs the (out-of-scope) fixed subscription -- the two future cost 'whales' are inference (activity-driven, near-term) and S3 storage (data-driven, long-term). Activation trigger: the frozen executor (Decision 67) unfreezes and LLM-API spend is non-trivial, OR the monthly cost_reconciliation begins tripping thresholds regularly. Precedes the Semanto marketing surface (ROADMAP-SEMANTO S1.x) in priority but has NO dependency on it (private-AWS + Cloudflare-Access vs public-Cloudflare-Pages surfaces). Transitive active dependents: none. Reactivate by restoring status -> not_started; ratify CD.41 and re-ground the stale anthropic_pool_size_usd baseline against the owner's current subscription tier at that time."
 
   # ----- T3: Trust loop closure -----
   - id: T3.1

@@ -1,9 +1,10 @@
 schema_version: 1
 slug: "cost-visibility-dashboard"
 intent: >-
-  Scope (report-only) a private variable-cost visibility dashboard and place it on the platform
-  roadmap as a deferred_post_mvp item, so the platform's operational spend becomes legible as it
-  scales -- without building anything premature while variable spend is still noise.
+  Scope (report-only) a private variable-cost visibility dashboard -- data resting in AWS, served
+  read-only behind a Cloudflare-Access-authenticated, in-AWS-signed, direct-to-S3 path (CD.41) --
+  and place it on the platform roadmap as a deferred_post_mvp item (T2.51), so operational spend
+  becomes legible as it scales, without building anything premature while variable spend is noise.
 plan_type: REPORT-ONLY
 verification_tier: V1
 plan_path: docs/plans/PLAN-cost-visibility-dashboard.yaml
@@ -14,13 +15,14 @@ scope:
   - file: docs/plans/reports/REPORT-cost-visibility-dashboard.md
     action: Create
     purpose: >-
-      The scoping deliverable -- cost-proportion analysis, the all-AWS private-S3 projection
-      architecture, feasibility findings, and the deferred timing rationale.
+      The scoping deliverable -- cost-proportion analysis, the 2b architecture (Cloudflare Access
+      auth + in-AWS signing + direct-to-S3; CD.41 invariant), feasibility findings, and the
+      deferred timing rationale.
   - file: docs/ROADMAP-PLATFORM.yaml
     action: Modify
     purpose: >-
-      Add tier item T2.51 (deferred_post_mvp) placing the capability on the roadmap with structured
-      exit_criteria and an activation-trigger progress_note.
+      Add tier item T2.51 (deferred_post_mvp) placing the capability on the roadmap, plus candidate
+      decision CD.41 (pending; the invariant-fenced private-dashboard hosting pattern it gates).
   - file: docs/plans/PLAN-cost-visibility-dashboard.yaml
     action: Create
     purpose: The REPORT-ONLY planning artifact pointing at the deliverable.
@@ -29,10 +31,12 @@ infrastructure_dependencies: []
 acceptance_criteria:
   - >-
     docs/plans/reports/REPORT-cost-visibility-dashboard.md exists and captures the proportions
-    analysis, the all-AWS private-S3 projection architecture, and the deferred timing rationale.
+    analysis, the 2b architecture (Cloudflare Access + in-AWS signing + direct-to-S3), and the
+    deferred timing rationale.
   - >-
-    docs/ROADMAP-PLATFORM.yaml contains a schema-valid tier item T2.51 with status
-    deferred_post_mvp, strategic:false, and structured exit_criteria (c1-c4, all status:open).
+    docs/ROADMAP-PLATFORM.yaml contains a schema-valid tier item T2.51 (deferred_post_mvp,
+    strategic:false, structured exit_criteria c1-c5 all status:open) plus candidate decision CD.41
+    (state:pending, gates:[T2.51]).
   - >-
     The roadmap validates (validate_platform_roadmap) and this plan validates (plan_document).
 verification_plan:
@@ -45,10 +49,10 @@ verification_plan:
     graduation: not-applicable
   - step: 2
     phase: pre-deploy
-    action: Confirm T2.51 is present as a deferred_post_mvp item with structured criteria.
-    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); t=[i for i in d['tier_items'] if i['id']=='T2.51'][0]; assert t['status']=='deferred_post_mvp' and t['strategic'] is False and len(t['exit_criteria'])>=4; print('T2.51 ok:', t['status'])"
-    expected: "T2.51 ok: deferred_post_mvp"
-    fix_if: KeyError/AssertionError -> the item is missing, mis-typed, or under-specified; correct it.
+    action: Confirm T2.51 (deferred, structured criteria) and CD.41 (pending, gates T2.51) are present and well-shaped.
+    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); t=[i for i in d['tier_items'] if i['id']=='T2.51'][0]; c=[x for x in d['candidate_decisions'] if x['id']=='CD.41'][0]; assert t['status']=='deferred_post_mvp' and t['strategic'] is False and len(t['exit_criteria'])>=5; assert c['state']=='pending' and 'T2.51' in c['gates']; print('T2.51+CD.41 ok')"
+    expected: "T2.51+CD.41 ok"
+    fix_if: KeyError/AssertionError -> the item or CD is missing, mis-typed, or under-specified; correct it.
     graduation: not-applicable
   - step: 3
     phase: pre-deploy
@@ -75,27 +79,32 @@ constraints:
     strategic:false and a freeze-override note, per the T2.19 pattern.
 context:
   - >-
-    Decision-scout verdict: FLAGS_FOUND (102/102 decisions triaged). CITE: 67, 85, 86, 93, 101,
-    111, 114, 127, 136. NOTE flags folded into the report + T2.51: Decision 88 (Neon billing API,
-    not a catalog query) and Decisions 100/75 (native data sources + native AWS Budgets/Anomaly for
-    AWS-side alarming; only the cross-vendor unified view is custom). No candidate decision engaged
-    (Decision 105) -- the design derives from the existing boundary.
-  - "gates: decision-scout=FLAGS_FOUND (flags addressed in report + T2.51); plan-critique=<PENDING Step 9>"
+    Decision-scout verdict + CITE list: FLAGS_FOUND on the earlier all-AWS shape (flags folded in);
+    RE-RUN against the 2b + CD.41 shape -- the re-run verdict and CITE list (verbatim decision ids)
+    are recorded here at merge.
+  - "gates: decision-scout=<2b/CD.41 re-run pending>; plan-critique=PROCEED (Step 9, placement plan); report-critique=<Step 10 re-run in progress>"
   - >-
-    Feasibility (verified this session): PlatformDev returns AccessDenied on ce:GetCostAndUsage; no
-    role has any ce:/budgets: grant; AWS CUR was retired by CD.28; no private web surface exists
-    (net-new); theseus.support is public-only (Decisions 73/83/101).
+    Architecture (owner-chosen, Fable advice-consulted): option 2b -- Cloudflare Access authenticates
+    costs.theseus.support; an in-AWS Lambda verifies the Access JWT and mints a <=5-min presigned S3
+    GET; the browser loads directly from S3. No AWS credential leaves AWS; the payload never transits
+    Cloudflare. Codified as CD.41 (pending), fenced on the invariant not the data type (reusable;
+    trading-data reuse needs a hardening-review Decision).
   - >-
-    Existing cost infra: the monthly cost_reconciliation alarm (manual USD invoice snapshot,
-    thresholds -> recs) + the legacy non-applied terraform/cost_monitoring.tf + the cost_projection
-    envelope. Gap: no unified fresh VIEW, no AWS auto-pull, Neon unmodeled.
+    Feasibility (verified): PlatformDev returns AccessDenied on ce:GetCostAndUsage; no role has any
+    ce:/budgets: grant; no private web surface exists (net-new); theseus.support is public-only. LLM
+    spend is provider-billed (not AWS-CUR-captured); the AWS-infra Cost Explorer read is a NEW source
+    choice, not a CD.28 reversal (record a fresh source Decision at build).
+  - >-
+    Existing cost infra: the monthly cost_reconciliation alarm (manual USD invoice snapshot) + the
+    legacy non-applied terraform/cost_monitoring.tf (incl. an unapplied CloudWatch cost dashboard) +
+    the cost_projection envelope. Gap: no unified fresh VIEW, no AWS auto-pull, Neon unmodeled.
   - >-
     Timing: deferred_post_mvp; activation trigger = variable spend becomes material (executor
     unfreeze / reconciliation tripping); precedes Semanto in priority with no dependency on it.
   - >-
-    Owner decisions this session: variable-spend-only (subscription excluded -> all USD, no FX);
-    data rests in AWS, dashboard is a projection (option A0); no candidate decision needed (design
-    follows the existing boundary).
+    Owner decisions this session: variable-spend-only (subscription excluded -> all USD, no FX); data
+    rests in AWS, dashboard is a projection; access is 2b (Cloudflare Access + in-AWS signing);
+    boundary carve-out via CD.41 (ratify at build time).
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
@@ -104,7 +113,7 @@ pre_implementation_checklist:
   - Acceptance criteria understood and verifiable
 execution_steps:
   - Write docs/plans/reports/REPORT-cost-visibility-dashboard.md (the scoping deliverable).
-  - Add tier item T2.51 to docs/ROADMAP-PLATFORM.yaml (deferred_post_mvp, strategic:false, structured c1-c4).
+  - Add tier item T2.51 (deferred_post_mvp, strategic:false, structured c1-c5) + candidate decision CD.41 (pending, gates T2.51) to docs/ROADMAP-PLATFORM.yaml.
   - Execute the Verification Plan -- run each step; loop until all pass.
-  - "Report: deliverable written, T2.51 placed, roadmap + plan validations green."
+  - "Report: deliverable written, T2.51 + CD.41 placed, roadmap + plan validations green."
 work_areas: []
