@@ -4010,21 +4010,10 @@ The architecture review concluded that the design is unusually mature for a sole
 
 ## Decision 58: `.agents` as Canonical Interactive Workflow Layer (Decided)
 
-**Status:** Decided
+**Status:** Superseded
 **Date:** 2026-05-01
 
-**Problem:**
-The migration from VS Code to Antigravity created multiple workflow sources: `.github/prompts/` and `.github/agents/` for legacy VS Code, `.agents/workflows/` and `.agents/skills/` for the intended Antigravity split, and `.antigravity/workflows/` as an additional transitional workflow set. Multiple active sources increase drift risk and make it unclear which instructions agents should follow.
-
-**Decision:**
-`.agents/workflows/` and `.agents/skills/` are the canonical interactive workflow layer. `.github/prompts/` and `.github/agents/` are legacy VS Code compatibility artefacts. `.antigravity/workflows/` should either be removed or reduced to shims that delegate to `.agents` once Antigravity consumption semantics are confirmed.
-
-Interactive workflows should be thin orchestration files. Deep methodology belongs in `.agents/skills/`. Deterministic gates belong in scripts. Operational writes belong in portals.
-
-**Rationale:**
-The migration is an opportunity to improve the workflow architecture rather than port large VS Code prompts verbatim. The split into workflows and skills matches `docs/contracts/instruction-architecture.md`, reduces context bloat, and gives the system one canonical place to evolve interactive behavior.
-
-**Related:** `docs/contracts/instruction-architecture.md`, `docs/INTENT-autonomous-improvement-control-plane.md`
+**Decision:** Superseded by Decision 76, which names `.claude/commands/` + `.claude/skills/` as the canonical interactive-workflow layer that retired the `.agents/workflows/` + `.agents/skills/` layer this entry defined; kept live here rather than archived because `docs/ROADMAP-PLATFORM.yaml` (T5.3) and `docs/contracts/instruction-architecture.yaml` still cite "Decision 58" by name (the Decision 146 still-cited-live carve-out; compacted under the DCG-02/DCG-03 lifecycle per `docs/contracts/decision-entry.yaml`'s `compaction:` section).
 
 **Superseded by: Decision 76**
 
