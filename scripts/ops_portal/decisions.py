@@ -19,6 +19,11 @@ docs/DECISIONS.md or docs/DECISIONS_ARCHIVE.md (scripts.decisions_md.decision_he
 via an allowlist-diff baseline at config/agent/data_quality/decisions/orphan_baseline.yaml
 (mirrors the fidelity_baseline.yaml pattern). Raises RuntimeError loudly (Decision 55) on any
 NEW orphan -- a warehouse current row with no backing header and not in the baseline.
+
+DCG-06 intent capture (PLAN-dcg-intent-capture, Decision 151): _DECISION_BACKFILL_COLS carries
+"intent" so the backfill threads the parser's new intent key to the writer; the existing
+`k in _DECISION_BACKFILL_COLS and v not in (None, "")` field-selection filter drops a
+markerless entry's intent="" the same way it already drops any other empty optional field.
 """
 
 from __future__ import annotations
@@ -55,6 +60,7 @@ _DECISION_BACKFILL_COLS = (
     "reversal_conditions",
     "superseded_by",
     "content_hash",
+    "intent",
 )
 
 _FIDELITY_BASELINE_PATH = ROOT / "config" / "agent" / "data_quality" / "decisions" / "fidelity_baseline.yaml"

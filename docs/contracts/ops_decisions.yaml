@@ -21,16 +21,17 @@ contract:
   ratified_via: >-
     Step 11 smoke-test pass + PLAN-ratify-ops-class-a-contracts merge to main (T0.12.5)
   description: >-
-    Class A schema contract for the ops_decisions DuckLake SCD2 table. 18 fields: the
+    Class A schema contract for the ops_decisions DuckLake SCD2 table. 19 fields: the
     T0.12.5 baseline of 13 from the live DuckLake inventory in
     config/lambda/ducklake/field_semantics.yaml plus _contract_version (stamped at write
     time by the ducklake_writer Lambda), plus 4 DAF-01 parity-backstop columns (raw_block,
     reversal_conditions, superseded_by, content_hash) added by PLAN-daf-etl-parity-fidelity
-    (Decision 134 cl.4). Sole backend is DuckLake-on-Neon (Decision 84). id follows
-    DECISIONS.md numbering and is caller-supplied (NOT file_ops-allocated -- Decision 84
-    I-2 exception). Graduation arc: Phases 0+1 COMPLETE; Phases 2-6 NOT_STARTED. Phase 2
-    (Semantic Definition) is a blocking gate on semantic migration -- open questions (dual
-    id/decision_id keyspace, status str not Literal, DqXxx with enforced=False) are
+    (Decision 134 cl.4), plus 1 intent column (audit finding DCG-06) added by
+    PLAN-dcg-intent-capture (Decision 151). Sole backend is DuckLake-on-Neon (Decision 84).
+    id follows DECISIONS.md numbering and is caller-supplied (NOT file_ops-allocated --
+    Decision 84 I-2 exception). Graduation arc: Phases 0+1 COMPLETE; Phases 2-6 NOT_STARTED.
+    Phase 2 (Semantic Definition) is a blocking gate on semantic migration -- open questions
+    (dual id/decision_id keyspace, status str not Literal, DqXxx with enforced=False) are
     explicitly deferred.
   projects_to:
     artifact: config/lambda/ducklake/field_semantics.yaml
@@ -347,6 +348,30 @@ fields:
       not_null:
         enforced: false
 
+  intent:
+    type: str
+    iceberg_type: string
+    nullable: true
+    description: >-
+      Optional durable semantic "why" for the decision -- the quotable intent a consumer can
+      cite without re-deriving it from Rationale prose. Sourced from the "**Intent:**" marker
+      (audit finding DCG-06, Q3a adopt-scoped / Q3b adopt).
+    semantics: >-
+      Typed extraction (Decision 151 / PLAN-dcg-intent-capture), a new key distinct from the
+      existing `context` field (Rationale/Key details/Context) -- never a re-slice of it.
+      Optional forever: no required-marker change, no retro-enforcement of the historical band
+      (DAF-03 forward conformance untouched). Null for entries with no "**Intent:**" marker
+      (the overwhelming majority of the historical band). Once ratified, an entry's Intent text
+      is never rewritten in place -- clarifications accrue as dated, source-cited, append-only
+      annotations inside the Intent section (Decision 151 mutability convention), so each edit
+      still bumps content_hash into a new SCD2 version like any other body change.
+    populated_by: >-
+      Caller-supplied; scripts/decisions_md.py::parse_decisions_md computes intent via
+      _extract_multiline_section(body, "Intent").
+    dq_intent:
+      not_null:
+        enforced: false
+
 governance:
   table_class: SCD2
   partition_by: "history=day(created_timestamp), current=bucket(8, id)"
@@ -413,6 +438,37 @@ amendment_log:
       reflecting the four DAF-01 parity-backstop columns added by the field_add entry
       immediately above. Documentation-only: describes the post-addition schema accurately;
       does not itself add, remove, or retype any field.
+    migration_story: >-
+      No schema, DDL, or runtime change accompanies this entry -- the field_add entry above
+      performs the actual column addition. This entry exists solely to satisfy category-6
+      (INTENT Invariant 3/4): a contract.description text diff must be paired with an
+      amendment_log[] entry pairing change_class: prose_improvement with semantic_break:
+      false. semantic_break=false.
+  - date: "2026-07-24"
+    semantic_break: false
+    change_class: field_add
+    summary: >-
+      PLAN-dcg-intent-capture (Decision 151 / audit finding DCG-06): add intent -- a nullable
+      typed extraction of the optional "**Intent:**" marker, the durable semantic "why" a
+      consumer can quote. No column removed or retyped.
+    migration_story: >-
+      intent is nullable, DQ-deferred (dq_intent.not_null.enforced: false, Phase-2 deferral
+      pattern matching raw_block/reversal_conditions/superseded_by/content_hash), and populated
+      by the extended scripts/decisions_md.py parser (_extract_multiline_section(body,
+      "Intent")) plus scripts/ops_portal/decisions.py's backfill (_DECISION_BACKFILL_COLS).
+      Physical schema evolution (ALTER TABLE ADD COLUMN on ops_decisions_history +
+      ops_decisions_current) is operator-invoked via the ducklake_maintenance
+      reconcile_columns action, post-deploy of the regenerated field_semantics.yaml -- see
+      PLAN-dcg-intent-capture's infrastructure_dependencies. No runtime schema-gate, DDL, or
+      partition-transform code changes; the reconcile path is schema-driven. semantic_break=false.
+  - date: "2026-07-24"
+    semantic_break: false
+    change_class: prose_improvement
+    summary: >-
+      Update contract.description prose to state the field count as 19 (previously 18),
+      reflecting the intent column added by the field_add entry immediately above.
+      Documentation-only: describes the post-addition schema accurately; does not itself
+      add, remove, or retype any field.
     migration_story: >-
       No schema, DDL, or runtime change accompanies this entry -- the field_add entry above
       performs the actual column addition. This entry exists solely to satisfy category-6

@@ -2,6 +2,132 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 151: Decision-record Intent as a first-class optional element -- typed extraction, dated append-only accretion convention (audit finding DCG-06, Q3a adopt-scoped / Q3b adopt) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-24
+**Warehouse ID:** dec-151 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+A decision's durable semantic "why" -- the one-line intent a future consumer can quote without re-deriving
+it from the full Rationale prose -- has no typed home. It is either buried inside Problem/Rationale prose
+(never separately queryable) or omitted entirely. Audit finding DCG-06
+(audits/decision-consolidation-growth-f79d6b5.yaml, Q3a adopt-scoped / Q3b adopt) recommends an OPTIONAL
+`Intent` element and a typed `intent` column purely for surfacing this quotable why -- never a
+required-marker change, never retro-enforcement of the historical band (DAF-03 forward conformance
+untouched, mirroring the Decision 134 cl.3 authoring-grammar precedent).
+
+**Intent:**
+Give the decision-record format a place for the durable "why" a consumer can quote, without retroactively
+obligating the historical corpus to supply one. The typed column is populated exactly the way
+raw_block/reversal_conditions/superseded_by/content_hash were (Decision 134 cl.4, DAF-01): additive,
+nullable, parser-extracted, DQ-deferred. This entry's own Intent text is also the first worked example of
+the mutability convention it records below: once ratified it is never rewritten in place, only extended by
+dated, source-cited, append-only annotations -- a deliberately SCD2-shaped choice, so the in-band dates
+supply the reader-visible valid-time the current transaction-time-only SCD2 substrate otherwise lacks,
+letting a post-MVP migration to cloud-hosted verb-queried storage map this field's accretion onto warehouse
+SCD2 versioning with no remodel.
+
+**Decision:**
+1. **Optional Intent marker.** `docs/contracts/decision-entry.yaml`'s `optional_markers_fixed_spelling`
+   gains `Intent`, placed narratively after `Problem` and before `Decision` (Problem -> Intent -> Decision
+   -> Rationale). Exactly as optional and forward-only as the other five entries in that list -- no change
+   to `required_markers`, no retro-enforcement of the historical band.
+2. **Typed extraction, warehouse column, and deploy path.** `scripts/decisions_md.py::parse_decisions_md`
+   gains an `intent` key via `_extract_multiline_section(body, "Intent")`, a NEW separate key -- the
+   existing `context` extraction (Rationale/Key details/Context) is untouched. `docs/contracts/
+   ops_decisions.yaml` (the CD.25 Class A contract, Decision 118) gains a nullable `intent` field mirroring
+   the raw_block/reversal_conditions shape (`dq_intent.not_null.enforced: false`, Phase-2 deferral),
+   regenerated into `config/lambda/ducklake/field_semantics.yaml` via `scripts.schema_to_field_semantics`
+   (never hand-edited, Decision 65). `intent` is threaded onto both `src/schemas/decision.py::
+   DecisionPayload` and `scripts/executor/jsonl_store.py::Decision` as a PLAIN `str | None` -- never
+   `Annotated[...]`/`DqNotNull`/any `Dq*` marker (keeps `validate_pydantic_yaml_drift` out of scope, same
+   reasoning as the DAF-01 fields) -- and into `scripts/ops_portal/decisions.py::_DECISION_BACKFILL_COLS`
+   so the backfill ETL threads it to the writer. Ships through the governed DuckLake code-deploy channel
+   (Decision 79/125/126); the physical `ALTER TABLE ADD COLUMN` is an operator-invoked `reconcile_columns`
+   admin verb (Decision 143), never autonomous.
+3. **Intent mutability convention (Step 6b option c).** Once ratified, an Intent section is never freely
+   rewritten in place. (i) draft-until-merge -- before merge, the Intent marker is an ordinary draft,
+   rewritten freely during PR review (this entry's own Intent marker above was drafted and revised under
+   exactly this rule); ratification (merge) is the mutability boundary. (ii) post-merge accretion -- after
+   merge, the original Intent text is NEVER rewritten; clarifications, caveats, and exceptions accrue as
+   dated, source-cited, append-only annotations INSIDE the Intent section, using the EXISTING
+   `docs/contracts/decision-entry.yaml` `amendment_forms` grammar (no new marker syntax), so the typed
+   `intent` column carries "original + dated deltas" automatically and each edit still bumps `content_hash`
+   into a new SCD2 version like any other body change. This layers two conventions on top of that existing
+   grammar, not a divergent shape from it: (a) the `trailing_bracket` form's annotation gains a `<source>`
+   citation clause -- `[Amendment YYYY-MM-DD, <source>: ...]` -- tightening, not replacing, the base
+   `[Amendment YYYY-MM-DD: ...]` shape; (b) placement narrows to INSIDE the Intent section specifically, one
+   legal location within the base grammar's broader "appended after the entry's original body" description.
+   (iii) provenance -- every clarification cites a ratified source: a later Decision, an audit id, or
+   explicit operator direction. The correction CHANNEL is open to agents (via hand-back or a recommendation
+   proposing the wording); the correction AUTHORITY is not -- an agent's evolved understanding lands only at
+   operator direction or by citing an already-ratified source, mirroring the CLAUDE.md memory policy
+   (propose, do not silently save). A clarification may narrow or annotate but never negate the decision's
+   effect -- an intent that contradicts the decision text is a mis-drawn decision, which supersedes, not
+   clarifies. (iv) cap -- at roughly 3 accreted clarifications, or the Intent section exceeding ~120-150
+   words (whichever first), escalate to a SUPERSEDING Decision -- itself clearing this same significance
+   bar, being reversal-relevant -- followed by a Decision 149 compaction of the superseded entry. A
+   cap-driven supersession is a normal, expected lifecycle event, not a failure. (v) enforcement --
+   convention-only, mirroring Decision 146's operator-disposed archival stance: NO validator, no stored
+   guard, no intent-drift signal now (a read-time query later, per audit Q4, is a different, unbuilt thing)
+   -- backstopped by the existing 500,000-byte live-file ceiling (Decision 134/145) and ordinary PR review.
+4. **`decision-entry.yaml` pointer note.** A short `intent_accretion_note` paragraph is added adjacent to
+   `amendment_forms`, stating the Intent marker follows this same dated-append accretion model
+   post-ratification and pointing here for the full convention. `significance:` (Decision 150) and
+   `compaction:` (Decision 149) are untouched.
+
+**Rationale:**
+The dated-append-only model is deliberately SCD2-shaped, and that is the load-bearing reason it was chosen
+over free in-place editing: `ops_decisions` is Type-2 SCD on TRANSACTION time only (a new row version
+records when a write happened, not what span of real-world time the recorded fact was valid for). An Intent
+section that could be edited in place would lose exactly the valid-time dimension a reader needs to answer
+"was this true when I read it before, or did it silently change?" -- and this transaction-time-only
+substrate cannot answer that on its own. In-band, source-cited dates on each accreted clarification supply
+that missing reader-visible valid-time without any warehouse remodel: each dated annotation is itself a
+small valid-time interval nested inside the entry's single current transaction-time row. This also means a
+post-MVP migration of decisions to cloud-hosted, verb-queried storage maps the field's accretion pattern
+onto genuine warehouse SCD2 versioning (one row per accretion) with no remodel -- the convention is a
+forward-compatible precursor to that migration, not merely a governance nicety. Convention-only enforcement
+(no validator) follows Decision 146's already-settled operator-disposed stance for a structurally similar
+judgment call (archival eligibility): "fully superseded" and "clarification vs. supersession-worthy" are
+both non-mechanically-decidable, so both route to operator/PR-review judgment rather than an automated
+gate. Per Decision 86, rationale lives here and the field's mechanical semantics live in the owning
+contract (`ops_decisions.yaml`) and `decision-entry.yaml` -- no new standing prose document.
+
+**Reversal conditions:** Revisit the dated-append-only mutability convention if PR review proves an
+insufficient backstop in practice (e.g. clarifications routinely drift from their cited source) -- the
+escalation path would then need a mechanical trigger instead of the ~3-clarification / ~120-150-word
+convention-only cap. Revisit the optional-forever posture on the marker itself only if a future audit finds
+the historical corpus's absence of intent is itself a live cost worth a retro-enforcement campaign -- not
+anticipated by this Decision.
+
+**Related:** Decision 134 (the DAF-01 parity-column precedent this element's typed-extraction /
+nullable-column shape and content_hash-over-raw_block mechanism directly reuses), Decision 150 (the
+significance bar this Decision clears, and the significance-taxonomy routing this Decision itself
+exercises), Decision 149 (the compaction lifecycle a cap-driven Intent supersession will invoke), Decision
+84 (warehouse-as-source-of-truth, the backfill ETL, and the caller-keyed decisions numbering exception,
+I-2), Decision 118 (the CD.25 pre-codegen contract-ratification ritual this `ops_decisions.yaml` field_add
+amendment follows), Decision 79 (per-Lambda packaging / deploy-verify gating, the authority for the writer
+redeploy this column's live path depends on), Decision 125 and Decision 126 (the DuckLake governed decoupled
+code-deploy channel this change ships through), Decision 143 (privileged-verb decomposition --
+`reconcile_columns` is admin-tier, amending Decision 81), Decision 132 (verification-graduation as an
+enforced pre-merge obligation -- every pre-deploy VP step on this change carries a disposition), Decision
+119 (CI-delegation / grep-only local verification for generated-and-deployed assets), Decision 65 (the
+contract is the field-semantic authority and generation source), Decision 86 (field semantics route to the
+owning contract, not a new prose doc -- the routing this Decision's own pointer note follows), Decision 55
+(loud-fail, no rescue loops -- governs the writer-health-gated post-deploy legs), Decision 128 (SLOC
+decompose-by-default, preserved unchanged by this narrowly-scoped change), Decision 99 (no `version.yaml`
+DuckDB lockstep bump for an additive column), Decision 98 (deploy-role provisioning precondition -- the
+no-op-green risk this change's V3 verification checks for), Decision 105 (candidate-decision ratification
+lane -- NOT engaged here; this is a forward governance Decision, not a CD ratification), Decision 81 (the
+closed reader/writer boundary that Decision 143 amends and `reconcile_columns` operates within), Decision 70
+(append-only physical-deletion lifecycle, context for why this column is additive-only and never retrofits
+historical rows), Decision 146 (the operator-disposed, convention-only-enforcement stance this Decision's
+mutability convention explicitly mirrors).
+
+---
+
 ## Decision 150: Decision-log growth direction -- significance bar for numbered Decisions + batch-wave ratified form (amends Decision 105) (Decided)
 
 **Status:** Decided

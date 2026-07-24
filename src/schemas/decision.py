@@ -38,16 +38,17 @@ class DecisionPayload(BaseModel):
     decided_date: str | None = None
     related_decisions: list[int] | None = None
     related_decisions_v2: list[str] | None = None
-    # DAF-01 parity backstop (PLAN-daf-etl-parity-fidelity, Decision 134 cl.4). Plain
-    # `str | None` -- NEVER Annotated[...]/DqNotNull/any Dq* marker: validate_pydantic_yaml_drift
-    # walks this model's Annotated fields against config/agent/data_quality/ops.yaml, and a
-    # Dq-wrapped field here would demand matching ops.yaml blocks out of scope. The DQ intent for
-    # these fields lives in config/agent/data_quality/decisions/ops_decisions.yaml instead
-    # (Phase-2 deferral pattern).
+    # DAF-01 parity backstop (PLAN-daf-etl-parity-fidelity, Decision 134 cl.4) plus intent
+    # (PLAN-dcg-intent-capture, Decision 151, audit finding DCG-06). Plain `str | None` -- NEVER
+    # Annotated[...]/DqNotNull/any Dq* marker: validate_pydantic_yaml_drift walks this model's
+    # Annotated fields against config/agent/data_quality/ops.yaml, and a Dq-wrapped field here
+    # would demand matching ops.yaml blocks out of scope. The DQ intent for these fields lives in
+    # config/agent/data_quality/decisions/ops_decisions.yaml instead (Phase-2 deferral pattern).
     raw_block: str | None = None
     reversal_conditions: str | None = None
     superseded_by: str | None = None
     content_hash: str | None = None
+    intent: str | None = None
     created_timestamp: str
     last_updated_timestamp: str
 

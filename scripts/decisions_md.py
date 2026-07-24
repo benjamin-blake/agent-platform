@@ -15,6 +15,11 @@ surface every structural consumer imports (the R1 ratification guard, the prefli
 open-decisions counter, the forward conformance check) -- both built on the pre-existing
 _DECISION_HEADING_RE grammar, never a rework of parse_decisions_md or the byte-reconstruction
 invariant. See docs/contracts/decision-entry.yaml for the authoring grammar these enforce.
+
+DCG-06 intent capture (PLAN-dcg-intent-capture, Decision 151): adds an `intent` key, a NEW
+separate typed extraction via _extract_multiline_section(body, "Intent") -- the existing
+`context` extraction (Rationale/Key details/Context) is untouched. Optional forever: no
+required-marker change, no retro-enforcement of the historical band.
 """
 
 from __future__ import annotations
@@ -236,6 +241,7 @@ def parse_decisions_md(paths: Optional[list[Path]] = None) -> list[dict]:
                 "title": title,
                 "status": status,
                 "problem": _extract_multiline_section(body, "Problem", "Trigger"),
+                "intent": _extract_multiline_section(body, "Intent"),
                 "decision_text": _extract_decision_text(body),
                 "context": _extract_multiline_section(body, "Rationale", "Key details", "Context"),
                 "decided_date": _extract_decided_date(body),
