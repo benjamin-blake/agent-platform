@@ -58,6 +58,15 @@ from scripts.test_coverage_checker import map_source_to_test
 
 CAP = 35
 
+# VTS-06: emit_manifest's write target when repo_root is None (production default). A
+# module-level constant (rather than an inline expression in emit_manifest) so an autouse test
+# fixture (tests/conftest.py's _isolate_selection_manifest, mirroring _isolate_plans_jsonl) can
+# monkeypatch it to a per-test temp path -- otherwise every tests/validate/ orchestrator test
+# that drives _validate.main() --pre would clobber the tracked logs/debug/selection-manifest.json
+# with fixture data. Production behaviour is unchanged: this resolves to the identical path the
+# inline expression previously computed.
+DEBUG_MANIFEST_PATH: Path = _common.ROOT / "logs" / "debug" / "selection-manifest.json"
+
 # Same shape as scripts/validate.py's pre-existing edited-set regex (kept identical for
 # continuity: the edited-set baseline must not itself narrow or widen on this change).
 _EDITED_TEST_RE = re.compile(r"tests/.*test_[^/]+\.py$")
@@ -483,12 +492,16 @@ def emit_manifest(manifest: dict[str, Any], *, repo_root: Path | None = None) ->
     The local write is best-effort (Decision 55: LOUD skip, never silent, never raising) --
     an observability artifact must never crash the --pre gate on a local disk I/O error, the
     same philosophy already applied to the S3 upload leg below.
+
+    repo_root=None (the production default) resolves the write target through the patchable
+    DEBUG_MANIFEST_PATH module constant (VTS-06), so a test fixture can redirect it without
+    touching this function. An explicit repo_root (existing callers, e.g.
+    tests/checks/deps/test_affected_tests.py) is honoured verbatim, unaffected by the constant.
     """
-    root = repo_root if repo_root is not None else _common.ROOT
     print("\n=== Affected-set selection manifest ===")
     rendered = json.dumps(manifest, indent=2, sort_keys=True)
     print(rendered)
-    manifest_path = root / "logs" / "debug" / "selection-manifest.json"
+    manifest_path = DEBUG_MANIFEST_PATH if repo_root is None else repo_root / "logs" / "debug" / "selection-manifest.json"
     try:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(rendered, encoding="utf-8")

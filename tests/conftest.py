@@ -70,9 +70,8 @@ def _hermetic_aws_profile(request: pytest.FixtureRequest, monkeypatch: pytest.Mo
     main-validate runner exports AWS_ACCESS_KEY_ID into the job env before pytest, which
     would otherwise flip named-profile assertions to None only on CI; deleting it keeps unit
     tests deterministic across local and CI. @pytest.mark.integration tests opt out -- they
-    need real AWS access. Uses get_closest_marker (not own_markers, per the rec-575 gap) so a
-    class- or module-level @pytest.mark.integration decorator is honoured, not just a
-    method-level one.
+    need real AWS access. Uses get_closest_marker (not own_markers) so a class- or
+    module-level @pytest.mark.integration decorator is honoured, not just a method-level one.
     """
     if request.node.get_closest_marker("integration") is not None:
         return
@@ -97,8 +96,8 @@ def _block_unmocked_aws_client(request: pytest.FixtureRequest, monkeypatch: pyte
     at all). Tests that genuinely construct a client -- mocked (moto, Stubber) or live -- opt
     in with @pytest.mark.aws. This is a separate opt-out from L1's @pytest.mark.integration:
     a live-AWS integration test needs @pytest.mark.aws too to fully bypass both layers. Uses
-    get_closest_marker (not own_markers, per the rec-575 gap) so a class- or module-level
-    @pytest.mark.aws decorator is honoured, not just a method-level one. boto3/botocore are
+    get_closest_marker (not own_markers) so a class- or module-level @pytest.mark.aws
+    decorator is honoured, not just a method-level one. boto3/botocore are
     deliberately excluded from requirements-fast.txt (rec-2485, ~3GB of heavy wheels) -- this
     fixture is autouse and runs for every test in every tier, so the import is guarded the
     same way _get_executor_env_vars/_isolate_plans_jsonl/_clear_fear_greed_cache above guard
@@ -136,6 +135,24 @@ def _isolate_plans_jsonl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         import scripts.executor.plan as _plan_mod  # noqa: PLC0415
 
         monkeypatch.setattr(_plan_mod, "PLANS_JSONL", tmp_path / "plans.jsonl")
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_selection_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect DEBUG_MANIFEST_PATH to a per-test temp file.
+
+    Prevents tests/validate/ orchestrator tests that drive _validate.main() --pre
+    (with the real emit_manifest) from writing to the tracked
+    logs/debug/selection-manifest.json.  Tests that explicitly patch
+    DEBUG_MANIFEST_PATH (or call emit_manifest with an explicit repo_root)
+    themselves will simply override this fixture's value.
+    """
+    try:
+        import scripts.checks.deps.affected_tests as _at  # noqa: PLC0415
+
+        monkeypatch.setattr(_at, "DEBUG_MANIFEST_PATH", tmp_path / "selection-manifest.json")
     except ImportError:
         pass
 
@@ -183,9 +200,11 @@ def _allow_network_for_integration(request: pytest.FixtureRequest) -> None:
     the block when the test node carries @pytest.mark.integration.
     Integration skip-fixtures in test_iceberg_reader.py and test_ducklake_spike.py
     must request this fixture so the probe's own network call runs only after
-    sockets are restored.
+    sockets are restored. Uses get_closest_marker (not own_markers) so a class-
+    or module-level @pytest.mark.integration decorator is honoured, not just a
+    method-level one.
     """
-    if "integration" not in [m.name for m in request.node.own_markers]:
+    if request.node.get_closest_marker("integration") is None:
         return
     from pytest_socket import enable_socket  # noqa: PLC0415
 
@@ -194,8 +213,12 @@ def _allow_network_for_integration(request: pytest.FixtureRequest) -> None:
 
 @pytest.fixture(autouse=True)
 def _block_llm_cli_subprocess(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guard against CI/local drift where LLM CLIs exist on dev but not on Ubuntu CI runners."""
-    if "integration" in [m.name for m in request.node.own_markers]:
+    """Guard against CI/local drift where LLM CLIs exist on dev but not on Ubuntu CI runners.
+
+    Uses get_closest_marker (not own_markers) so a class- or module-level
+    @pytest.mark.integration decorator is honoured, not just a method-level one.
+    """
+    if request.node.get_closest_marker("integration") is not None:
         return
 
     import subprocess as _sp  # noqa: PLC0415
