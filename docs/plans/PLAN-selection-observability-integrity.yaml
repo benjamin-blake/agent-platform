@@ -1,0 +1,361 @@
+schema_version: 1
+slug: "selection-observability-integrity"
+intent: >-
+  Make Decision 135's --pre affected-set selection observability trustworthy: stop tests/validate
+  orchestrator tests from clobbering the tracked logs/debug/selection-manifest.json with fixture
+  data on exactly the PRs that touch the selector (VTS-06), confirm the escape-rate attribution
+  behind Decision 135's reversal condition (a) is already a standing, recs-cache-grep-able metric
+  (VTS-05, produced by Decision 142) so no warehouse / T2.36 work is engaged, and complete the
+  rec-575 hermeticity-guard marker-scope fix so all four conftest guard fixtures honour class /
+  module-level markers (VTS-22).
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-selection-observability-integrity.yaml
+phase: >-
+  Platform quality hardening -- the --pre affected-set selector's observability (Decision 135
+  surface). Audit-finding-driven (audits/validate-test-suite-4df4d48.yaml VTS-06/05/22), Slice B
+  following Slice A (#723, VTS-01/02/03/04); no product-roadmap phase and no tier_item -- bundles
+  rec-575 (VTS-22). T2.36 (manifest warehouse registration) deliberately NOT engaged.
+scope:
+  - file: scripts/checks/deps/affected_tests.py
+    action: Modify
+    purpose: >-
+      VTS-06 seam: add a module-level DEBUG_MANIFEST_PATH constant (= _common.ROOT / logs / debug /
+      selection-manifest.json) used as emit_manifest's write target when repo_root is None, so an
+      autouse test fixture can redirect it (mirroring the PLANS_JSONL / _isolate_plans_jsonl
+      precedent). The explicit-repo_root branch is retained verbatim for existing callers; all
+      print / write / best-effort-upload logic and the loud-skip semantics are otherwise unchanged.
+      The manifest stays output-only (never read back as a selection input).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      VTS-06: drop the explicit repo_root=_common.ROOT keyword at the emit_manifest call in main()'s
+      --pre block (currently line 434) so production resolves the write target through the patchable
+      DEBUG_MANIFEST_PATH module constant. Behaviour is identical in production
+      (DEBUG_MANIFEST_PATH == _common.ROOT/logs/debug/selection-manifest.json). No other line changes.
+  - file: tests/conftest.py
+    action: Modify
+    purpose: >-
+      VTS-06: add an autouse _isolate_selection_manifest(tmp_path, monkeypatch) fixture that
+      monkeypatches scripts.checks.deps.affected_tests.DEBUG_MANIFEST_PATH to a per-test temp path,
+      mirroring the existing _isolate_plans_jsonl fixture exactly (import-guarded try/except).
+      VTS-22: flip the two remaining own_markers guard fixtures -- _allow_network_for_integration
+      (line 188) and _block_llm_cli_subprocess (line 198) -- to request.node.get_closest_marker
+      ("integration"), matching the already-fixed AWS pair (_hermetic_aws_profile:77,
+      _block_unmocked_aws_client:108); refresh their docstrings to drop the "per the rec-575 gap"
+      caveat now that the gap is closed.
+  - file: tests/validate/test_manifest_isolation.py
+    action: Create
+    purpose: >-
+      VTS-06 guard test: drive _validate.main() in --pre mode under the TestPreModeDiffAware harness
+      (sys.argv=["validate","--pre"], _VALIDATE_DEPTH=0, PYTEST_CURRENT_TEST deleted,
+      _neutralized_pre_registry, subprocess stubbed to _pre_mock_run) and assert the tracked
+      logs/debug/selection-manifest.json is byte-identical (or still absent) before/after, AND that
+      the redirected temp DEBUG_MANIFEST_PATH target received the run's own manifest (proving emit
+      fired and was redirected, not silently skipped). Self-contained; no cross-test imports.
+  - file: tests/test_conftest_hermeticity.py
+    action: Modify
+    purpose: >-
+      VTS-22: add tests (alongside the existing TestClassLevelMarkerInheritance for the AWS pair)
+      asserting a class-level @pytest.mark.integration decorator is honoured by
+      _allow_network_for_integration (sockets re-enabled) and by _block_llm_cli_subprocess (LLM-CLI
+      guard exempt), not just a method-level one -- the audit's VTS-22 acceptance.
+bundled_recommendations:
+  - rec-575
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    VTS-06: after running the tests/validate/ suite (or the new guard test), the tracked
+    logs/debug/selection-manifest.json is byte-identical to its pre-run state (or still absent) --
+    no orchestrator test writes outside tmp_path. The guard test additionally asserts the redirected
+    DEBUG_MANIFEST_PATH temp target holds the run's own manifest, proving the redirect (not a silent
+    emit skip).
+  - >-
+    VTS-06 non-regression: emit_manifest still honours an explicit repo_root (existing
+    tests/checks/deps/test_affected_tests.py emit_manifest and determinism tests stay green), and
+    production validate.py --pre still writes the real logs/debug/selection-manifest.json because
+    DEBUG_MANIFEST_PATH resolves to the identical prior path. ci.yml's selection-manifest
+    artifact-upload step is untouched; the manifest remains output-only (never a selection input).
+  - >-
+    VTS-22: a class- or module-level @pytest.mark.integration decorator is honoured by
+    _allow_network_for_integration (sockets re-enabled) and _block_llm_cli_subprocess (guard
+    exempt), not just a method-level one -- all four conftest hermeticity guard fixtures now use
+    get_closest_marker. rec-575 is bundled for closure.
+  - >-
+    VTS-05 (verify already-satisfied, no code change): the escape_class attribution the finding
+    requests already reaches the rec context -- the write-time cross-check spine
+    (scripts/ops_portal/ci_rca_runtime.py, invoked from scripts/ops_data_portal.py file_rec) stamps
+    context_v2_json["escape_class"] from the verified evidence bundle (Decision 142), schema-checked
+    in scripts/ops_portal/ci_rca_schema.py, so the defer/escape rate greps out of the recs cache for
+    free. No DuckLake / named-verb / cross-run query is added; T2.36 stays deferred and undisturbed.
+  - >-
+    SLOC / invariants: every touched file stays under the 500-SLOC limit (Decision 128/130 --
+    affected_tests.py 425, validate.py 425, conftest.py 221, all with small deltas); no
+    scripts/checks/registry.py or FROZEN_PRE_SCAFFOLDS change; Decision 135's manifest-output-only
+    and additive-only invariants are preserved.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      VTS-06 isolation guard -- driving _validate.main() --pre under the tests/validate harness
+      (emit_manifest real) leaves the tracked selection-manifest untouched and writes to the
+      redirected temp target.
+    command: bin/venv-python -m pytest tests/validate/test_manifest_isolation.py -v
+    expected: >-
+      The new guard passes: logs/debug/selection-manifest.json bytes (or absence) are identical
+      before and after main() --pre, and the redirected DEBUG_MANIFEST_PATH temp file holds the
+      run's manifest (proving the autouse fixture redirected the write, not that emit was skipped).
+    fix_if: >-
+      The tracked file changes across the run (fixture not redirecting DEBUG_MANIFEST_PATH, or
+      validate.py still passes repo_root, or emit_manifest ignores the constant), OR the temp target
+      is empty (main() never reached the emit -- check _VALIDATE_DEPTH=0 / PYTEST_CURRENT_TEST del /
+      the affected-set block ran).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The guard is a committed regression test in tests/validate/test_manifest_isolation.py run by
+      the full post-merge tier every push and re-selected pre-merge by the affected-set whenever
+      affected_tests.py / validate.py / tests/validate/ change (its own import-closure targets); an
+      unconditional canonical test_selector registry row would duplicate that standing suite +
+      affected-set coverage and cost every --pre for a low-severity observability property.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      VTS-06 non-regression -- emit_manifest's explicit-repo_root branch and the manifest
+      determinism/loud-skip properties survive the DEBUG_MANIFEST_PATH refactor.
+    command: bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py -q
+    expected: >-
+      All selector tests pass, including test_emit_manifest_writes_gitignored_path_and_returns_it
+      (explicit repo_root=tmp_path still writes tmp_path/logs/debug/selection-manifest.json), the
+      local-write-failure loud-skip test, and the prior-manifest determinism class.
+    fix_if: >-
+      Any emit_manifest or selector test reddens -- the repo_root override was dropped, the default
+      path diverged from _common.ROOT/logs/debug/selection-manifest.json, or the loud-skip / return
+      semantics changed.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A whole-file regression sweep of pre-existing committed tests is not a single canonical
+      primitive; its permanence is already provided by the full post-merge tier that runs
+      test_affected_tests.py every push, so a kernel row cannot express it and would duplicate the
+      tier.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      VTS-22 -- a class-level @pytest.mark.integration decorator is honoured by both the socket-enable
+      and LLM-CLI guard fixtures (get_closest_marker, not own_markers).
+    command: bin/venv-python -m pytest tests/test_conftest_hermeticity.py -v
+    expected: >-
+      The new class-level-marker tests pass: _allow_network_for_integration re-enables sockets and
+      _block_llm_cli_subprocess exempts the LLM-CLI guard for a class-marked integration test, and
+      the pre-existing AWS-pair TestClassLevelMarkerInheritance tests stay green.
+    fix_if: >-
+      A class-level marker is missed (own_markers still in use), or the flip perturbs method-level
+      marker behaviour, or the LLM-CLI / socket guard no longer exempts a class-marked integration
+      test.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The class-level marker-bypass property manifests only for @pytest.mark.integration tests, which
+      are deselected in every CI tier (-m 'not integration'), so a canonical CI registry check cannot
+      exercise it; the committed sibling AWS-pair tests in the same file establish the deliberate
+      un-graduated pattern, and this is a low-severity local-only fix.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      VTS-05 verify-already-satisfied -- the escape_class attribution the finding requests already
+      reaches the rec context (recs cache) via the Decision 142 write-time cross-check spine; no new
+      code is introduced.
+    command: >-
+      bin/venv-python -m pytest tests/ops_data_portal/test_ci_rca_fingerprint.py -k escape_class -v &&
+      grep -Eq "no-edge|capped|unknown-data-edge" scripts/ops_portal/ci_rca_schema.py &&
+      echo "VTS-05 escape_class stamping verified (Decision 142)"
+    expected: >-
+      test_cross_check_stamps_affected_nodeids_and_escape_class passes (context_v2_json["escape_class"]
+      is stamped from the verified bundle at file_rec write time) and the escape_class enum is present
+      in ci_rca_schema.py's context_v2_json projection -- confirming the defer/escape rate is already
+      grep-able from logs/.recommendations-log.jsonl. Prints the verified line.
+    fix_if: >-
+      The stamping test fails or the schema enum is absent -- then VTS-05 is NOT already-satisfied and
+      the plan's verify-only premise is wrong: STOP and escalate to the overseer/human rather than
+      building a duplicate escape_class producer (Decision 55) or a T2.36 cross-run query.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step verifies a pre-existing, already-suite-covered property (Decision 142's
+      test_cross_check_stamps_affected_nodeids_and_escape_class already stands in the full tier);
+      there is no new guard to canonicalize -- graduating would register an existing committed test.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      Closure obligation -- after the implement PR merges with a 'Resolves: rec-575' trailer, confirm
+      the bundled rec is closed in the synced cache.
+    command: >-
+      bin/venv-python -m scripts.sync.ops sync && bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines()
+      if l.strip()]; st={r['id']:r.get('status') for r in rows if r.get('id')=='rec-575'};
+      assert st.get('rec-575')=='closed', st; print('rec-575 closed')"
+    expected: >-
+      Prints 'rec-575 closed' -- the rec-autoclose flow (or the ops_data_portal --update-rec
+      fallback) resolved rec-575.
+    fix_if: >-
+      rec-575 is still open after merge -- add the Resolves: rec-575 trailer to the squash-merge body,
+      or run bin/venv-python -m scripts.ops_data_portal --update-rec rec-575 --status closed
+      --resolution "..." per the Decision 70 fallback.
+    hermetic: false
+constraints:
+  - >-
+    Manifest output-only (Decision 135 point 5): DEBUG_MANIFEST_PATH only redirects the WRITE target
+    for tests; production writes the same real logs/debug/selection-manifest.json. Never read a prior
+    manifest as a selection input; introduce no selection or coverage cache -- the derivation stays
+    live/cacheless (KG.13 / Decision 80 undisturbed).
+  - >-
+    ci.yml's selection-manifest artifact-upload step (pr-validate) is UNTOUCHED; do not alter S3
+    upload, artifact naming, or the always()-upload semantics.
+  - >-
+    VTS-05 is VERIFY-ONLY. Add NO DuckLake / named-verb registration and NO cross-run aggregation
+    query (that is exactly T2.36's "first written cross-run query" trigger, deliberately not engaged).
+    escape_class already rides in context_v2_json (a projection, Decision 84/103), stamped by the
+    existing Decision 142 write-time spine -- do not re-implement it (Decision 55: no duplicate work).
+  - >-
+    Mirror the _isolate_plans_jsonl precedent exactly for the new fixture (autouse, import-guarded
+    try/except, monkeypatch a module-level Path constant). The guard test is self-contained -- no
+    cross-test imports (Decision 131 / no-cross-test-imports guard); it reuses the shared
+    tests.fixtures.subprocess_stubs._pre_mock_run and tests.fixtures.validate_module._validate.
+  - >-
+    VTS-06 seam must retain emit_manifest's repo_root parameter -- existing tests at
+    tests/checks/deps/test_affected_tests.py:242-266 call emit_manifest(..., repo_root=tmp_path) and
+    assert the returned path; only the repo_root=None DEFAULT changes (to DEBUG_MANIFEST_PATH).
+  - >-
+    SLOC decompose-don't-raise (Decision 128/130): keep every touched file under 500 SLOC
+    (affected_tests.py 425, validate.py 425, conftest.py 221; the new guard test is small). If any
+    addition would breach, split into a self-contained sibling module (Decision 131) -- never raise
+    the budget and never re-seed via --update-sloc-budgets.
+  - >-
+    Only modify the five in-scope files. Do NOT touch scripts/checks/registry.py or
+    FROZEN_PRE_SCAFFOLDS. Out-of-scope bugs become recommendations via scripts/ops_data_portal.py,
+    not inline fixes. No rescue agents or workaround loops (Decision 55). No emojis; ruff line-length
+    127; ASCII hyphens only; always invoke bin/venv-python.
+context:
+  - >-
+    Audit spec is authoritative: audits/validate-test-suite-4df4d48.yaml findings VTS-06 (medium,
+    line 722), VTS-05 (medium, line 679), VTS-22 (low, line 1217) -- their evidence, proposed_change,
+    and acceptance fields govern this work.
+  - >-
+    KEY DISCOVERY (VTS-05 already-satisfied, decision-scout VALIDATED): the escape_class stamping the
+    finding asks for is already implemented, wired, schema-validated, contract-documented, and tested
+    end-to-end AT the audit commit 4df4d48 -- the auditor's "no aggregation code (grepped consumers:
+    none)" grep missed the WRITE-TIME producer path. Chain: scripts/ci_rca/evidence.py:342-350,462-488
+    computes escape_class from the fetched manifest; .github/workflows/ci-rca.yml:206-238 resolves the
+    merged PR and passes --selection-manifest; scripts/ops_portal/ci_rca_runtime.py:188-189 stamps
+    context_v2_json["escape_class"] from the verified bundle; invoked from scripts/ops_data_portal.py:294
+    (file_rec); schema scripts/ops_portal/ci_rca_schema.py:127; contract docs/contracts/ci-rca-lifecycle.yaml;
+    tests tests/ops_data_portal/test_ci_rca_fingerprint.py:182-206. Because context_v2_json is in the
+    recs cache, the defer/escape rate greps out for free -- VTS-05's acceptance is met. VP step 4
+    verifies this; if it ever fails the premise is wrong and the plan escalates (never builds a
+    duplicate).
+  - >-
+    Decision 142 (dec-142, CI-RCA fingerprint v2 + status-aware chain lifecycle) is the PRODUCER of
+    escape_class -> {no-edge, capped, unknown-data-edge} diffing against the Decision 135 --pre
+    manifest; VTS-05's entire "already-implemented" evidence chain maps 1:1 onto it. Citing only
+    Decision 135 would under-attribute the producer.
+  - >-
+    Decision 135 (dec-135, affected-set-selection) is the base surface: the manifest is output-only,
+    and its reversal condition (a) -- the defer/escape rate -- is what VTS-05's escape_class makes
+    measurable. VTS-06 preserves the manifest-output-only invariant (only the TEST write target is
+    redirected). The compute_escape_class consumer reads manifest['selected'] / ['deferred'] (flat
+    disjoint path-string lists) -- unchanged by this plan.
+  - >-
+    Decision 84 + Decision 103 (single-portal invariant; projection-not-column boundary): escape_class
+    rides in context_v2_json (a projection), no Class-A schema change and no named-verb read; VTS-05
+    is read-only verification honouring both. Decision 124 (ops_data_portal facade decomposition):
+    _run_ci_rca_cross_check resolves to scripts/ops_portal/ci_rca_runtime.py, where the stamping call
+    site lives -- the facade re-exports it (imported at scripts/ops_data_portal.py:73).
+  - >-
+    Decision 148 (hermetic VP-replay): the VTS-06 guard drives _validate.main() --pre, i.e. a
+    pytest-invoking step -- so all feature VP steps are hermetic:false per the "steps needing pytest
+    stay hermetic:false; never hermetic when it invokes validate --pre (recursion)" rule.
+  - >-
+    Decision 132 (verification-graduation enforced pre-merge obligation): every pre-deploy VP step
+    carries a disposition -- all waived here, mirroring Slice A (#723): the guards are committed suite
+    tests re-selected by the affected-set on edits to their targets, so a kernel test_selector row
+    would duplicate standing coverage (VTS-22 additionally cannot run in CI -- integration deselected).
+  - >-
+    Decision 130 + Decision 128 (whole-repo SLOC scan covers tests/; decompose-don't-raise): the new
+    guard test and the edited conftest/test files fall under the tests/ scan and stay under 500 SLOC.
+    Decision 131 (test placement / tests/fixtures shared-helper home): the guard lives in tests/validate/
+    (orchestrator home) and reuses tests/fixtures shared stubs rather than importing another test.
+  - >-
+    Decision 73 (two-tier presubmit): the selection-manifest is the fast tier's observability artifact;
+    VTS-06 restores its trustworthiness on selector-touching PRs without changing the gate. Decision 48
+    (Verification Tier Classification): V2 -- unit-level, no external system or deploy.
+  - >-
+    Bundled rec: rec-575 (VTS-22, open; rec_relevance verdict 'unknown' at planning -> proceed and
+    bundle per the Recommendation Relevance Gate). rec-2724 records the partial AWS-pair fix wave (not
+    bundled).
+  - >-
+    Branch was 0 commits behind origin/main at planning time (preflight main_freshness ok; branched off
+    48cefa40 which includes merged Slice A) with no scope-file divergence; ci_rca_unresolved_recs empty
+    (no HARD BLOCK).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (round 1). Required additions applied: dec-142 (VTS-05 producer), dec-132 (graduation). CITE: dec-135, dec-142, dec-84, dec-103, dec-55, dec-73, dec-131, dec-128, dec-130, dec-132, dec-148, dec-124, dec-48; rec-575; T2.36 (deliberately not engaged)."
+  - "gates: decision-scout=NO_FLAGS after 1 round; plan-critique=pending (Design-B trampoline gate dispatched after commit/push)."
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/vts-b-plan-selection-observability-integrity)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (135, 142, 84, 103, 55, 73, 131, 128, 130, 132, 148, 124, 48)
+  - audits/validate-test-suite-4df4d48.yaml VTS-06/05/22 read (authoritative spec)
+  - VTS-05 already-satisfied premise re-confirmed against the repo (VP step 4) BEFORE treating it as verify-only
+  - All five scope files located and readable; _isolate_plans_jsonl precedent + TestPreModeDiffAware --pre harness confirmed
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    scripts/checks/deps/affected_tests.py (VTS-06): add a module-level
+    DEBUG_MANIFEST_PATH: Path = _common.ROOT / "logs" / "debug" / "selection-manifest.json" (near the
+    CAP constant, after imports). In emit_manifest, replace the inline root computation with
+    manifest_path = DEBUG_MANIFEST_PATH if repo_root is None else repo_root / "logs" / "debug" /
+    "selection-manifest.json"; keep the print, mkdir, write_text, OSError loud-skip, best-effort S3
+    upload, and return manifest_path exactly as-is.
+  - >-
+    scripts/validate.py (VTS-06): in main()'s --pre block (currently line 434) change
+    emit_manifest(_affected_selection["manifest"], repo_root=_common.ROOT) to
+    emit_manifest(_affected_selection["manifest"]) so the write flows through DEBUG_MANIFEST_PATH.
+    Touch nothing else; the derive_affected_tests(..., repo_root=_common.ROOT) call is unchanged.
+  - >-
+    tests/conftest.py (VTS-06): add an autouse fixture _isolate_selection_manifest(tmp_path,
+    monkeypatch) that does `import scripts.checks.deps.affected_tests as _at;
+    monkeypatch.setattr(_at, "DEBUG_MANIFEST_PATH", tmp_path / "selection-manifest.json")` inside a
+    try/except ImportError, mirroring _isolate_plans_jsonl verbatim in shape.
+  - >-
+    tests/conftest.py (VTS-22): flip line 188 `if "integration" not in [m.name for m in
+    request.node.own_markers]:` to `if request.node.get_closest_marker("integration") is None:` and
+    line 198 `if "integration" in [m.name for m in request.node.own_markers]:` to `if
+    request.node.get_closest_marker("integration") is not None:`; update both docstrings to drop the
+    "per the rec-575 gap" caveat and match the AWS pair's get_closest_marker comments (77/108).
+  - >-
+    tests/validate/test_manifest_isolation.py (Create, VTS-06 guard): a @pytest.mark.usefixtures
+    ("_neutralized_pre_registry") class whose test snapshots the REAL manifest bytes-or-None via
+    `from scripts.checks import _common; real = _common.ROOT / "logs" / "debug" /
+    "selection-manifest.json"`, then drives _validate.main() in --pre mode using the
+    test_source_only_change_now_selects_reverse_dep_tests_via_affected_set pattern (sys.argv=
+    ["validate","--pre"], setenv _VALIDATE_DEPTH=0, delenv PYTEST_CURRENT_TEST and CI, patch
+    scripts.checks._common.get_changed_files + run, patch the credentialled/prompt checks, patch
+    time.monotonic, pytest.raises(SystemExit)), and asserts (a) real bytes-or-None unchanged and (b)
+    scripts.checks.deps.affected_tests.DEBUG_MANIFEST_PATH == tmp_path/"selection-manifest.json" and
+    exists (emit fired into the redirect). Reuse tests.fixtures.subprocess_stubs._pre_mock_run and
+    tests.fixtures.validate_module._validate; keep the file self-contained and under 500 SLOC.
+  - >-
+    tests/test_conftest_hermeticity.py (VTS-22): add class-level-marker tests mirroring the existing
+    TestClassLevelMarkerInheritance -- a class-marked @pytest.mark.integration test asserting sockets
+    are re-enabled (a socket op permitted / pytest_socket enabled) via _allow_network_for_integration,
+    and that subprocess.run for a stubbed LLM-CLI name does NOT raise the _block_llm_cli_subprocess
+    guard RuntimeError. Keep the file under 500 SLOC.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable failure stop
+    and RCA (Decision 55). Do not patch out of scope. If VP step 4 fails, STOP and escalate (the
+    VTS-05 verify-only premise would be falsified).
+  - "Report: what was implemented, per-step verification results (incl. the VTS-05 verify outcome), and any deferred recommendations."
+rollback: >-
+  Revert the branch's commits. VTS-06 is an additive module constant plus a call-site keyword drop
+  (production write path unchanged), VTS-22 is a semantic-preserving marker-detection widening, and
+  VTS-05 is verify-only (no source change) -- reverting restores the prior (Decision 135 / Decision
+  142) behaviour with no data or schema migration.
