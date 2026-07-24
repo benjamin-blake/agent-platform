@@ -1,0 +1,454 @@
+schema_version: 1
+slug: dcg-growth-direction-governance
+intent: >-
+  Give decision-log growth an explicit direction mechanism -- a significance bar for what becomes a
+  numbered Decision, plus a batch-wave ratified form -- so the reasoning corpus stays bounded in
+  SHAPE (not just size), preserving decision-scout triage and lower-tier-model portability as the
+  self-improvement loop keeps routing rationale into DECISIONS.md.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-dcg-growth-direction-governance.yaml
+phase: >-
+  Platform governance surface -- decision-log growth direction. Audit remediation of DCG-05 (high)
+  and DCG-04 (medium), audits/decision-consolidation-growth-f79d6b5.yaml (Q2 verdict: insufficient).
+  Audit-driven, no owning tier_item (soft-warn exception; Tier Item Freshness Gate skipped -- names
+  no tier_item, claims no alignment). T1.5 owns DECISIONS.md long-term but does not gate this work.
+scope:
+  - file: docs/contracts/decision-entry.yaml
+    action: Modify
+    purpose: >-
+      Add a named `significance:` section (mirroring Decision 149's `compaction:` section shape on
+      this same file) -- the bar for what becomes a numbered Decision, plus the four routing rows
+      (numbered Decision / batch-wave clause / rec or tier_item note / contract governance note),
+      rows 3-4 precise enough to serve as a citable classification vocabulary. Realizes DCG-05.
+  - file: docs/contracts/candidate-decision-ratification.yaml
+    action: Modify
+    purpose: >-
+      Document the batch-wave ratified form: same-session PURE gate-clears land as ONE wave Decision
+      with per-CD clauses, each CD's ratified_as/filed_via pointing at the shared dec-NNN;
+      content-bearing ratifications keep their own entry. Note R1-R3 already tolerate many-to-one by
+      construction. Realizes DCG-04 (artifact rescope of the Decision-105 lane, not lane deletion).
+  - file: .claude/skills/planning/SKILL.md
+    action: Modify
+    purpose: >-
+      Cite the significance clause at the decision-authoring step (a short Decision Significance Gate
+      note at/just before "Candidate Decision Ratification (Workflow Step 5b)", line 373), and extend
+      the ratification-lane draft guidance to cover bundling >=2 pure gate-clears into one wave entry.
+  - file: .claude/skills/implement/SKILL.md
+    action: Modify
+    purpose: >-
+      Add the batch-wave clause to "CD Ratification Bookkeeping" (line 419): author ONE wave Decision
+      + ETL once, but repeat the three PER-CD sub-steps (roadmap-flip, marking-convention obligation,
+      pending-window prose sweep) once per bundled CD (scout flag 2). Preserve Decision 90 (tier_item
+      status flips are a separate bookkeeping step).
+  - file: tests/checks/roadmap/test_validate_candidate_decision_ratification.py
+    action: Modify
+    purpose: >-
+      Add a regression test proving >=2 state=ratified CDs sharing one ratified_as dec-NNN pass
+      R1-R3 green (failed == []), mirroring the live CD.16/CD.24 -> dec-079 precedent (Decision 79).
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      (a) Author the governing Decision 150 (default: one two-clause entry -- significance bar +
+      batch-wave form -- amending Decision 105; see the granularity fork in context). (b) Append the
+      reciprocal inline blockquote back-reference "> **Amended by Decision 150 (date):**" to Decision
+      105's body (scout flag 1: realized-mechanism amendment convention).
+  - file: config/prose_budgets.yaml
+    action: Modify
+    purpose: >-
+      Bump the zero-headroom ratchet entries for .claude/skills/planning/SKILL.md (~24 B headroom)
+      and .claude/skills/implement/SKILL.md (~59 B headroom) to their exact post-edit byte sizes, each
+      carrying an inline `# raise-approved: dec-150 <reason>` marker (validate_prose_limits +
+      validate_prose_budget_raises are both in the --pre tier). Surfaced by plan-critique round 1.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/contracts/decision-entry.yaml carries a named `significance:` section (mirroring the
+    `compaction:` section shape) stating the bar (durable architectural commitment with
+    reversal-relevant consequences -> numbered Decision) and all four routing rows, with rows 3-4
+    (operational fact -> rec / tier_item note; field semantics -> contract governance note) precise
+    enough to serve as a citable classification vocabulary.
+  - >-
+    The planning skill's decision-authoring step (near Step 5b) cites the significance clause in
+    decision-entry.yaml.
+  - >-
+    docs/contracts/candidate-decision-ratification.yaml documents the batch-wave ratified form:
+    same-session pure gate-clears -> one `## Decision N` wave entry with per-CD clauses, each CD's
+    ratified_as/filed_via -> the shared dec-NNN; content-bearing ratifications keep their own entry;
+    and it notes R1-R3 tolerate many-to-one by construction.
+  - >-
+    The /plan and /implement ratification-lane steps describe the batch-wave form; the
+    implement/SKILL.md edit makes explicit that the three PER-CD sub-steps (roadmap-flip,
+    marking-convention obligation, pending-window prose sweep) repeat once per bundled CD while
+    entry-authoring / ETL / preflight / validate run once per wave (Decision 105 flag-2; Decision 90
+    tier-flip-separate preserved).
+  - >-
+    tests/checks/roadmap/test_validate_candidate_decision_ratification.py includes a regression test
+    proving >=2 CDs sharing one ratified_as dec-NNN pass R1-R3 green (failed == []), mirroring the
+    live CD.16/CD.24 -> dec-079 precedent (Decision 79), carrying the mandated anchor comment
+    "# batch-wave: >=2 CDs share one ratified_as (CD.16/CD.24 -> dec-079 precedent)".
+  - >-
+    A governing Decision 150 exists in docs/DECISIONS.md (default: one two-clause entry amending
+    Decision 105; title distinct from Decision 43; includes reversal conditions; Related cites
+    Decisions 105/145/149/134/86/84/90/79) and is landed via `ops_data_portal --backfill-decisions-md`.
+  - >-
+    Decision 105's body carries a reciprocal inline "> **Amended by Decision 150 (YYYY-MM-DD):**"
+    blockquote back-reference (realized-mechanism convention, per the Decision 89 <- Decision 83
+    precedent), and Decision 150 carries the amends-Decision-105 clause (bidirectional linkage).
+  - >-
+    `bin/venv-python -m scripts.validate --pre` passes (validate_candidate_decision_ratification,
+    validate_decisions_size, decision-entry conformance, prose/placement, validate_prose_limits,
+    validate_prose_budget_raises).
+  - >-
+    config/prose_budgets.yaml's planning/SKILL.md and implement/SKILL.md entries are bumped to their
+    exact post-edit byte sizes, each carrying an inline `# raise-approved: dec-150 <reason>` marker
+    that resolves against the working-tree `## Decision 150:` header; validate_prose_limits and
+    validate_prose_budget_raises both pass.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the ratification guard's unit-test file green, exercising the real R1-R3 code path
+      including the new >=2-CDs-share-one-dec-NNN case.
+    command: 'bin/venv-python -m pytest tests/checks/roadmap/test_validate_candidate_decision_ratification.py -q'
+    expected: >-
+      All tests pass, including the new shared-ratified_as regression test (failed == []).
+    fix_if: >-
+      The new test fails -- the guard wrongly rejects legitimate many-to-one, or the test set up the
+      shared ratified_as / single header incorrectly.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The guard's unit tests already execute under the standard pytest suite invoked by validate.py's
+      full tier; a separately-registered kernel check would duplicate that existing coverage.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm the new regression test actually exercises two ratified CDs sharing one dec-NNN (not
+      merely any green test) via the plan-mandated stable anchor comment.
+    command: 'grep -n "batch-wave: >=2 CDs share one ratified_as" tests/checks/roadmap/test_validate_candidate_decision_ratification.py'
+    expected: >-
+      >=1 match -- the mandated anchor comment on the new shared-ratified_as regression test.
+    fix_if: >-
+      No match -- the implementer added a differently-shaped test or omitted the anchor; the specific
+      many-to-one case is unverified.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Verifies presence of a specific regression test whose execution is already enforced by the
+      pytest suite; a standing grep on test internals is brittle to LLM-authored naming and duplicative.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm decision-entry.yaml carries the `significance:` section with all four routing rows.
+    command: 'grep -nE "^significance:|numbered_decision:|cd_state_flip:|operational_fact:|field_semantics:" docs/contracts/decision-entry.yaml'
+    expected: >-
+      The `significance:` header plus all four routing keys (numbered_decision, cd_state_flip,
+      operational_fact, field_semantics) present.
+    fix_if: >-
+      The section or any of the four routing rows is missing.
+    graduation: waive
+    graduation_waiver_reason: >-
+      A bare existence grep verifies presence, not the correctness of the four routing rows (an
+      authoring-time judgement reviewed at plan-critique); it is not a meaningful standing regression
+      invariant worth a registry row -- consistent with Decision 149's `compaction:` section, which
+      added no such existence guard.
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the planning skill cites the significance clause at its decision-authoring step.
+    command: 'grep -niE "significance" .claude/skills/planning/SKILL.md'
+    expected: >-
+      >=1 match referencing decision-entry.yaml's significance section at the decision-authoring /
+      Step 5b area.
+    fix_if: >-
+      No match -- the citation required by DCG-05's acceptance is absent.
+    graduation: waive
+    graduation_waiver_reason: >-
+      A grep-for-citation standing check is brittle to benign rewordings and risks false-positive CI
+      breaks on unrelated skill edits; the citation link is protected by the decision-scout /
+      plan-critique review loop rather than a mechanical grep (cf. rec-2479 stale-reference handling).
+  - step: 5
+    phase: pre-deploy
+    action: Confirm candidate-decision-ratification.yaml documents the batch-wave ratified form.
+    command: 'grep -niE "batch.?wave" docs/contracts/candidate-decision-ratification.yaml'
+    expected: >-
+      >=1 match documenting the many-CDs -> one shared dec-NNN wave form.
+    fix_if: >-
+      No match -- the batch-wave form is undocumented in the canonical contract.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same family as step 3 -- contract-content existence, not correctness; the wave shape's rules
+      are reviewed at authoring, so a bare existence grep is not a meaningful standing invariant.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm implement/SKILL.md CD Ratification Bookkeeping covers the batch-wave form AND the
+      explicit per-bundled-CD repetition of the three per-CD sub-steps.
+    command: 'grep -niE "batch.?wave|per bundled CD|once per bundled" .claude/skills/implement/SKILL.md'
+    expected: >-
+      Matches documenting the wave form and the explicit per-bundled-CD repetition of the roadmap-flip
+      + marking-convention + pending-window prose sweep sub-steps.
+    fix_if: >-
+      No match, or the per-CD repetition is not made explicit -- bookkeeping would under-apply past
+      the first CD (scout flag 2 unresolved).
+    graduation: waive
+    graduation_waiver_reason: >-
+      Same family as step 4 -- skill-wiring grep is brittle to benign rewordings; the batch-wave
+      methodology is protected by the review loop, not a mechanical grep.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm the governing Decision 150 entry exists AND Decision 105 carries the reciprocal inline
+      amendment marker.
+    command: 'grep -nE "^## Decision 150:" docs/DECISIONS.md && grep -nE "Amended by Decision 150" docs/DECISIONS.md'
+    expected: >-
+      The `## Decision 150:` header is present AND a "> **Amended by Decision 150 ...**" blockquote
+      marker appears inside Decision 105's body.
+    fix_if: >-
+      Either the Decision 150 header or the reciprocal 105 back-reference is missing (bidirectional
+      linkage incomplete).
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time decision-entry authoring; a specific Decision header's existence is not a standing
+      invariant, and validate's ratification / size / conformance guards already cover the corpus's
+      structural integrity.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Confirm both prose-budget entries carry a dec-150 raise-approved marker on the entry line
+      (guards the zero-headroom ratchet raise).
+    command: 'grep -nE "(planning|implement)/SKILL\.md:\s*[0-9]+\s*#\s*raise-approved:\s*dec-150" config/prose_budgets.yaml'
+    expected: >-
+      Two matches -- the planning/SKILL.md and implement/SKILL.md entries each raised to their exact
+      post-edit byte size with an inline `# raise-approved: dec-150 <reason>` marker.
+    fix_if: >-
+      Fewer than two matches -- an entry was raised without the marker (validate_prose_budget_raises
+      FAILs) or was not bumped (validate_prose_limits FAILs on the over-budget skill file).
+    graduation: waive
+    graduation_waiver_reason: >-
+      A one-time Decision-cited ratchet raise; validate_prose_limits and validate_prose_budget_raises
+      already stand as the permanent guards on this surface, so a separately-registered grep would
+      duplicate them.
+  - step: 9
+    phase: pre-deploy
+    action: >-
+      Run the fast presubmit gate over all touched files (size, decision-entry conformance,
+      ratification guard, prose/placement, prose budgets).
+    command: 'bin/venv-python -m scripts.validate --pre'
+    expected: >-
+      Exit 0; validate_candidate_decision_ratification PASS, validate_decisions_size PASS,
+      decision-entry conformance PASS, validate_prose_limits PASS, validate_prose_budget_raises PASS.
+    fix_if: >-
+      Any registered pre-tier check fails -- e.g. the size ceiling is breached, the ratification guard
+      rejects the corpus, a conformance check flags the touched files, or a skill file exceeds its
+      (now-raised) prose budget.
+    graduation: not-applicable
+constraints:
+  - >-
+    IMPLEMENTATION type (Decision 67 STRATEGIC freeze); no recs filed -- audit findings DCG-04/DCG-05
+    and recs rec-2814/2815/2822/2823 are referenced, not refiled.
+  - >-
+    Deliberate-constraint boundary: the Decision-105 ratification lane STAYS -- this rescopes its
+    ARTIFACT (adds the batch-wave form), never proposes deleting the lane.
+  - >-
+    TRAP-1: Decision 43 ("Directed Growth Governance") governs CODE/SLOC growth, NOT decision-log
+    growth -- precedent in name only; not cited as governing, and Decision 150 is titled distinctly to
+    avoid conflation (decision-scout confirmed clean).
+  - >-
+    No new standing prose docs (Decision 86/127): the significance clause is a section in the existing
+    decision-entry.yaml contract; rationale routes to Decision 150; no docs/INTENT-*.md.
+  - >-
+    The significance clause's four routing rows are authored to be citable as a classification
+    vocabulary (forward-linkage: rec-2822/2823 will cite it for the citation-stranded-artifact class)
+    -- but this plan does NOT build the migration manifest or touch those recs.
+  - >-
+    Amendment-form convention (scout flag 1): use the realized-mechanism inline blockquote form
+    ("> **Amended by Decision 150 (date):**") on Decision 105's body, reciprocal to Decision 150's
+    amends-clause -- NOT the forward-only amending-Decision-only form (Decision 105 is live/realized).
+  - >-
+    Decision 150 authoring + `--backfill-decisions-md` ETL run behind the /implement execution-time
+    human confirmation gate for the Decision text; the entry lands via the sanctioned portal ETL
+    (Decision 84 Single Portal Invariant / numbering authority), never a direct JSONL cache edit.
+  - >-
+    Prose-budget ratchet (Decision 43/127 surface, Decision 128 raise mechanism; surfaced by
+    plan-critique round 1): planning/SKILL.md and implement/SKILL.md are zero-headroom entries in
+    config/prose_budgets.yaml (~24 B and ~59 B headroom). Keep the skill additions MINIMAL/tight and
+    raise each entry to its exact post-edit size with a dec-150-cited `# raise-approved:` marker -- a
+    Decision-cited raise is the sanctioned exception; do NOT pad the additions to justify a bigger raise.
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (round 1). CITE: Decision
+    145, Decision 149, Decision 134, Decision 105, Decision 86, Decision 84, Decision 90, Decision 79.
+    TRAP-1 clean (Decision 43 excluded as governing).
+  - "gates: decision-scout=FLAGS_FOUND (1 round); plan-critique=REVISE r1 -> re-requested r2 (prose-budget ratchet fix)"
+  - >-
+    Scout CONTRADICT resolutions folded in (both Decision 105, non-blocking): (1) AMENDMENT-FORM --
+    Decision 105 is realized/live, so the corpus's realized-mechanism convention (inline blockquote
+    back-reference on the original body, cf. Decision 89 body <- Decision 83 at DECISIONS.md:4140) is
+    used, reciprocal to Decision 150's amends-clause (execution step 7 + acceptance 7). (2) PER-CD
+    BOOKKEEPING -- implement/SKILL.md makes explicit that the roadmap-flip, marking-convention
+    obligation, and pending-window prose sweep repeat once per bundled CD, while entry-authoring / ETL
+    / preflight / validate run once per wave (execution step 4 + acceptance 4).
+  - >-
+    Sources: audit DCG-05 (high, VD2/Q2) + DCG-04 (medium, VD6/Q2),
+    audits/decision-consolidation-growth-f79d6b5.yaml (Q2 verdict insufficient). Effort S each per the audit.
+  - >-
+    Waves 1+2 of this DCG run are merged on main (Decision 149 compaction lifecycle + DCG-03
+    orphan-divergence guard). Live docs/DECISIONS.md is 421,753 bytes / 102 H2 headers -> ~78 KB and
+    18 headers of headroom under Decision 134's 500,000-byte / 120-header ceilings (Decision 145
+    stopgap raise) -- ample for Decision 150. Max header is 149 -> Decision 150 is the next number
+    (re-check at execution per the numbering-race note).
+  - >-
+    Batch-wave shape is ALREADY exercised and R1-R3-compatible: CD.16 and CD.24 both carry
+    ratified_as=dec-079 / filed_via=ops_decisions:dec-079 (verified via the roadmap loader), ratified
+    together under Decision 79; Decision 105 reconciled 5 CDs in one entry. The guard checks each CD
+    independently (no cross-CD ratified_as uniqueness bar;
+    scripts/checks/roadmap/validate_candidate_decision_ratification.py), so many-CDs -> one-dec-NNN
+    passes by construction -- the plan codifies it as a regression test.
+  - >-
+    GRANULARITY FORK (human decision at Step 6b, relayed by the orchestrator): governing Decision as
+    ONE two-clause entry (RECOMMENDED) vs TWO separate entries. Recommendation ONE -- the significance
+    bar and batch-wave form are two facets of a single direction mechanism (audit Q2 frames them as
+    one answer), interdependent by construction (the significance taxonomy's cd_state_flip row routes
+    INTO the batch-wave form), and a Decision about minting fewer headers should itself prefer one
+    header for one commitment; the 78 KB / 18-header headroom removes any byte pressure to split;
+    per-clause reversal conditions and the amends-Decision-105 title edge (cf. Decision 143 "amends
+    Decision 81 cl.1") both work in one entry. Counter (TWO): the clauses touch different anchors (a
+    fresh commitment on decision-entry.yaml vs an amendment to Decision 105), and separate numbers
+    give each an independent citable/reversible identity (relevant if rec-2822/2823 prefer to cite the
+    significance taxonomy by a distinct Decision number). The swap is text-only and cheap; the plan
+    defaults to ONE.
+  - >-
+    HARD-BLOCK deferral (ci-rca): rec-2821 (Critical -- apply-sandbox DuckLake writer zip missing;
+    .github/workflows/terraform-apply-sandbox.yml) is open/unresolved. This plan is decision-log
+    governance, unrelated to the terraform apply-sandbox CI failure -- different file, different
+    failure category (terraform/CI-infra RCA vs governance-doc authoring), no shared Decision.
+    Deferral rationale per the Related-Work check: addressing rec-2821 here would be scope-mixing;
+    recommend a separate ci-rca-aligned session.
+  - >-
+    Drafted Decision 150 (default one two-clause entry, for human/plan-critique sign-off). TITLE:
+    "Decision-log growth direction -- significance bar for numbered Decisions + batch-wave ratified
+    form (amends Decision 105)". CLAUSE 1 (significance bar, realizes DCG-05): a numbered `## Decision
+    NNN:` entry is reserved for a durable architectural commitment with reversal-relevant
+    consequences; other durable content routes per the four rows in decision-entry.yaml's
+    `significance:` section (CD state-flip -> batch-wave clause; operational fact -> rec / tier_item
+    note; field semantics -> contract governance note); the authoritative artifact is that section.
+    CLAUSE 2 (batch-wave form, amends Decision 105, realizes DCG-04): same-session PURE gate-clear CD
+    ratifications may land as ONE `## Decision N` wave entry with per-CD clauses, each CD's
+    ratified_as/filed_via pointing at the shared dec-NNN; content-bearing ratifications keep their own
+    entry; codifies forward the many-to-one shape Decision 105 already exercised (CD.16/CD.24 ->
+    dec-079). REVERSAL CONDITIONS: the batch-wave form reverts to one-entry-per-CD if the wave shape
+    obscures per-CD provenance; the significance bar relaxes if it suppresses legitimately
+    decision-worthy content. RELATED: Decision 105 (amended), 145, 149, 146, 134, 86, 84, 90, 79.
+  - >-
+    RELATED context (scout, non-blocking): Decision 118 (both target contracts carry
+    non-ritual/free-form-registry headers -> exempt from the CD.25 validate_contract_drift gate; edits
+    won't trip it); Decision 104 (check-registry pattern -- where the modified guard/test lives);
+    Decision 76 (the two skill files are the .claude/ canonical interactive layer, already in
+    candidate-decision-ratification.yaml decisions_cited); Decision 127 (prose taxonomy -- touched
+    files are pre-existing YAML, not new markdown); Decision 146/147 (growth-governance neighbourhood,
+    different axes); Decision 67 (STRATEGIC freeze -> IMPLEMENTATION posture correct).
+  - >-
+    Branch was 0 commits behind origin/main at planning time (fresh); the `compaction:` section is
+    confirmed merged to main (decision-entry.yaml identical HEAD vs origin/main). No scope-file overlap
+    with main_files_changed_since_branch.
+  - >-
+    Prose-budget ratchet (plan-critique round 1 blocking fix): the two skill edits breach
+    config/prose_budgets.yaml's zero-headroom entries (planning/SKILL.md registered 54907, actual
+    54883 -> 24 B headroom; implement/SKILL.md registered 47426, actual 47367 -> 59 B headroom), both
+    enforced by validate_prose_limits + validate_prose_budget_raises in the --pre tier. Fix folded in:
+    config/prose_budgets.yaml added to scope; a bump step (ordered AFTER Decision 150 authoring so the
+    `## Decision 150:` header resolves the marker) raises both entries to exact post-edit size with
+    `# raise-approved: dec-150 <reason>` markers; VP steps 8-9 verify. Decision 128 raise mechanism;
+    Decision 43/127 govern the surface.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (Decision 105 body + current max header re-checked at execution time)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Execution-time human confirmation obtained for the Decision 150 text before authoring/ETL
+    (candidate-decision-ratification.yaml / Decision 105 authoring discipline)
+execution_steps:
+  - >-
+    docs/contracts/decision-entry.yaml: add a `significance:` section (mirroring the `compaction:`
+    section shape -- a leading comment naming DCG-05 / Decision 150 / this plan, then keyed subfields).
+    Include `bar:` (durable architectural commitment with reversal-relevant consequences -> a numbered
+    `## Decision NNN:` entry) and `routing:` with four rows: numbered_decision (as above);
+    cd_state_flip (a CD status transition / gate-clear -> the batch-wave clause in
+    candidate-decision-ratification.yaml; content-bearing ratifications keep their own entry);
+    operational_fact (a transient/operational statement -- what-is-currently-true or a point-fix -> a
+    recommendation via `scripts.ops_data_portal file_rec`, or a tier_item note/progress_note if it is
+    roadmap status); field_semantics (the meaning/constraints of a data field or config key -> a
+    governance/semantics note in the owning contract, never a numbered Decision; Decision 86/127
+    routing). Add a note that the planning skill's decision-authoring step cites this section and that
+    the taxonomy is a citable classification vocabulary. Pre: no significance section. Post: section
+    present, `bin/venv-python -c "import yaml,pathlib; yaml.safe_load(pathlib.Path('docs/contracts/decision-entry.yaml').read_text())"` parses clean.
+  - >-
+    docs/contracts/candidate-decision-ratification.yaml: add a `batch_wave_ratified_form:` subsection
+    -- the many-CDs -> one shared dec-NNN wave-entry shape, the per-CD clause form, the
+    content-bearing-keeps-own-entry rule, and an explicit note that R1-R3 tolerate it by construction
+    (each CD checked independently; live CD.16/CD.24 -> dec-079 precedent under Decision 79; Decision
+    105's own 5-CD reconciliation).
+  - >-
+    .claude/skills/planning/SKILL.md: add a short "Decision Significance Gate" note at/just before the
+    "Candidate Decision Ratification (Workflow Step 5b)" section (line 373) that cites
+    decision-entry.yaml's `significance:` section as the bar for any numbered-Decision draft (fresh
+    governance Decision OR CD ratification), and extend the Step 5b draft guidance to cover bundling
+    >=2 same-session pure gate-clears into one wave Decision (routing per the significance clause). Keep
+    the addition tight -- planning/SKILL.md is a zero-headroom prose-budget entry (raised in the
+    config/prose_budgets.yaml step below).
+  - >-
+    .claude/skills/implement/SKILL.md: in "CD Ratification Bookkeeping (Workflow Step 6)" (line 419),
+    add a batch-wave clause -- when a plan bundles >=2 same-session PURE gate-clear CDs into one wave
+    Decision, author ONE `## Decision N` entry (step 3) and ETL once (step 4), but repeat the three
+    PER-CD sub-steps once per bundled CD: the roadmap-flip (step 5, with each CD's
+    ratified_as/filed_via pointing at the SHARED dec-NNN), the marking-convention obligation, and the
+    pending-window prose sweep (candidate-decision-ratification.yaml lane_steps.implement.execute
+    sub-steps 5 and 6). Preflight (step 6) and validate (step 7) run once over all bundled CDs.
+    Content-bearing ratifications are NOT bundled. Preserve Decision 90 (tier_item status flips remain
+    a separate bookkeeping step). Keep the addition tight -- implement/SKILL.md is a zero-headroom
+    prose-budget entry (raised in the config/prose_budgets.yaml step below).
+  - >-
+    tests/checks/roadmap/test_validate_candidate_decision_ratification.py: add a regression test (e.g.
+    `test_multiple_cds_share_one_ratified_as_passes`) that sets up two `state: ratified` CDs both
+    carrying `ratified_as: dec-079` / `filed_via: ops_decisions:dec-079` against a single `## Decision
+    79:` header, and asserts `failed == []`. Include the mandated stable anchor comment:
+    `# batch-wave: >=2 CDs share one ratified_as (CD.16/CD.24 -> dec-079 precedent)`. Follow the
+    file's existing `_setup` + `patch("scripts.checks._common.ROOT", tmp_path)` pattern.
+  - >-
+    docs/DECISIONS.md: author Decision 150 using the drafted text in context (default one two-clause
+    entry; honor the human's granularity choice if the orchestrator relays TWO entries). Re-check the
+    current max `## Decision NNN:` header at execution (currently 149) and shift to the next free
+    number if a concurrent PR claimed it. Behind the /implement execution-time human confirmation gate
+    for the Decision text.
+  - >-
+    docs/DECISIONS.md: append the reciprocal inline back-reference to Decision 105's body, just before
+    its closing `---` (~line 2279), using the realized-mechanism blockquote convention:
+    "> **Amended by Decision 150 (YYYY-MM-DD):** batch-wave ratified form -- same-session pure
+    gate-clears may land as ONE wave entry with per-CD clauses sharing one dec-NNN. See Decision 150."
+    This changes Decision 105's content_hash -> a new SCD2 version at backfill (expected).
+  - >-
+    config/prose_budgets.yaml: raise the `.claude/skills/planning/SKILL.md` and
+    `.claude/skills/implement/SKILL.md` entries to each file's EXACT post-edit byte size (measure with
+    `wc -c` after the two skill-file edits above are final), appending an inline
+    `# raise-approved: dec-150 <reason>` marker to each raised line (planning: "significance-gate
+    citation + Step-5b wave-bundling guidance"; implement: "batch-wave ratification clause / per-CD
+    sub-step repetition"). ORDER: run this AFTER Decision 150 is authored above, so the marker resolves
+    against the working-tree `## Decision 150:` header. Keep the raises as small as the minimal skill
+    additions require (do not pad). Pre: entries at 54907 / 47426. Post: validate_prose_limits +
+    validate_prose_budget_raises both green.
+  - >-
+    ETL: `bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md`; confirm dec-150 is
+    present (and dec-105 re-versioned) in `logs/.decisions-index.jsonl`. Single Portal Invariant
+    (Decision 84) -- never edit the JSONL cache directly.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA
+    (Decision 55).
+  - 'Report: what was implemented, verification results, and which granularity option (ONE vs TWO) was landed.'
+work_areas: []
+rollback: >-
+  All changes are additive doc/skill/test edits plus one new Decision entry and one inline amendment
+  marker. Rollback = git revert the feat commit. If the backfill already ran, the ops_decisions
+  dec-150 row and the re-versioned dec-105 remain as append-only SCD2 history; the reverted files
+  re-backfill to a consistent state on the next `--backfill-decisions-md`. No infra, no schema change.
