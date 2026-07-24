@@ -2,6 +2,97 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 152: Decision-scout SPIRIT axis -- a quotability-gated intent-alignment triage lane distinct from literal contradiction (audit finding DCG-07, Q3c adopt-scoped) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-24
+**Warehouse ID:** dec-152 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:**
+The decision-scout gate triages a proposed plan against the corpus on ONE axis only -- literal
+contradiction (`.claude/skills/decision-scout/SKILL.md` CONTRADICT bucket = "violates an active
+decision"). A plan can obey every literal clause while working against the durable *spirit* of a
+ruling, and that failure mode passes the gate as NO_FLAGS (or at best surfaces as diluted RELATED
+context with no violation semantics). Audit finding DCG-07
+(audits/decision-consolidation-growth-f79d6b5.yaml, Q3c adopt-scoped) names this as the unconsumed
+half of NS-1's query -- "is my plan aligned with the spirit of the corpus?" -- now that Decision 151
+(DCG-06) has given the corpus a quotable **Intent:** anchor to align against.
+
+**Intent:**
+Give the scout a second, intent-alignment triage lane so a spirit violation without literal
+contradiction is surfaced, WITHOUT letting that fuzzier axis collapse into the defensive-over-citation
+noise the skill's own doctrine forbids. The anti-noise gating IS the design: a SPIRIT flag exists only
+when it can be grounded in a verbatim quote of the violated Intent/Problem/Rationale, never carries
+BLOCK, is capped at 3, and never double-flags a decision already caught literally. The lane is
+prompt-level methodology (convention-only, no validator, mirroring Decision 146), tractable precisely
+because the scout already reads the whole corpus -- audit TRAP-7: this adds a judgment axis, never a
+change to HOW the corpus is read (the deferred agent-context-governance audit owns that). That
+tractability is itself regime-dependent, not a permanent given: the SPIRIT lane and the prose budget it
+consumes are workable at current scale precisely because the scout's whole-file `docs/DECISIONS.md`
+read already exists, and that dependency ties to the same post-MVP migration to cloud-hosted,
+verb-queried decision-corpus access that Decision 151's SCD2-precursor rationale anticipates (see
+Reversal conditions below).
+
+**Decision:**
+1. **SPIRIT bucket + four gates.** `.claude/skills/decision-scout/SKILL.md` gains a Phase-2
+   spirit-alignment overlay step defining a SPIRIT bucket that fires ONLY when all four hold: (i) no
+   literal CONTRADICT on the same decision (literal supersedes; a decision appears in at most one
+   lane); (ii) the flag quotes VERBATIM the violated decision's **Intent:** marker (new entries) or a
+   specific Problem/Rationale sentence (historical band) -- unquotable means no flag; (iii) severity
+   WARN or NOTE only (BLOCK stays literal-contradiction-only); (iv) capped at 3 flags, inside the
+   existing ~1,200-word response budget.
+2. **Output contract + verdict.** A mandatory-even-when-empty `### Spirit-Alignment Flags (SPIRIT)`
+   section with a "None" default (the parent parser never branches), and a widened Verdict definition:
+   FLAGS_FOUND fires on >=1 SPIRIT flag OR >=1 CONTRADICT WARN/NOTE. The three verdict strings
+   (NO_FLAGS | FLAGS_FOUND | BLOCK) and the `## Decision Scout Report` / `Verdict` interface are
+   UNCHANGED -- every existing caller (the /plan Step 6a gate, the overseer decision-scout gate) parses
+   the same surface. Two Quality-Gate rows enforce the gates (every SPIRIT flag carries a verbatim
+   quote; SPIRIT count <= 3 with no CONTRADICT overlap).
+3. **Prose-budget funding.** The addition breaches the skill's zero-headroom `config/prose_budgets.yaml`
+   S4 entry; this Decision funds the raise via a `# raise-approved: dec-152` marker (Decision 127/43
+   sanctioned-prose taxonomy). Decision 128's decompose-don't-raise relief valve is SLOC-specific and,
+   by the prose registry's own header, does not apply here; the registry forbids @-import fragmentation
+   (Decision 114/110), so a loud Decision-cited raise is the correct relief valve. Only the FILE byte
+   budget is raised; the ~1,200-word RESPONSE cap is unchanged.
+
+**Rationale:**
+The SPIRIT axis is the consumer that makes Decision 151's Intent marker load-bearing end-to-end: DCG-06
+gave the corpus a quotable anchor, DCG-07 gives a gate that quotes it. It is a distinct lane rather than
+an extension of CONTRADICT because the two have different evidentiary bars (literal clause-violation vs.
+quotable spirit-divergence) and different consequences (BLOCK-eligible vs. WARN/NOTE-only); folding
+spirit judgement into CONTRADICT would either over-block on soft tensions or dilute the literal lane.
+The quote-or-drop gate is the same operator-disposed, non-mechanically-decidable judgement stance
+Decision 146 settled for archival eligibility -- "aligned with the spirit" is not machine-decidable, so
+it routes to grounded LLM judgement with a hard evidentiary floor (the verbatim quote), not an automated
+check. Routed per Decision 86: methodology in the skill, this rationale here, no new prose doc.
+
+**Reversal conditions:** The SPIRIT axis in its current form is a CONSEQUENCE of the present regime in
+which the decision-scout reads the ENTIRE `docs/DECISIONS.md` corpus into context (an all-file prose
+dump) -- the SPIRIT lane and the prose budget it consumes are workable at current scale PRECISELY
+BECAUSE that whole-corpus read already exists. The planned post-MVP migration of the decision corpus to
+cloud-hosted, VERB-QUERIED access (the same migration Decision 151's SCD2-precursor rationale
+anticipates) removes that whole-file-read inefficiency; when it lands, THIS decision is revisited to
+make the SPIRIT axis leaner and query-driven rather than prose-budget-funded. The removal of the
+whole-file-read inefficiency is ITSELF the reversal trigger. Separately and sooner than that migration,
+revert the SPIRIT axis (remove the bucket, restore the CONTRADICT-only verdict, and lower the prose
+budget back) if in practice it produces net noise -- e.g. SPIRIT flags are routinely waved through at
+Step 6b without changing plans, or the quote-gate proves insufficient to prevent defensive
+over-citation. If instead the axis proves valuable but convention-only enforcement drifts, the
+escalation is a mechanical quote-presence check in the scout's Quality Gate, not removal.
+
+**Related:** Decision 151 (the **Intent:** marker this lane quotes; DCG-06, this finding's depends_on),
+Decision 150 (the significance bar this Decision clears and the routing taxonomy it exercises), Decision
+127 and Decision 43 (the sanctioned-prose byte-budget taxonomy governing the prose_budgets.yaml raise),
+Decision 128 (SLOC decompose-by-default -- SLOC-specific, explicitly not applicable to the prose
+registry; the raise is the sanctioned prose relief valve), Decision 134 and Decision 145 (the
+DECISIONS.md live byte ceiling this entry stays within, and the scout's own size-ceiling context),
+Decision 146 (the operator-disposed, convention-only-enforcement stance this axis's quote-or-drop
+judgement mirrors), Decision 100 and Decision 75 (the managed-service-native WARN check in the same
+Phase 2, preserved unchanged), Decision 105 (this is a forward governance Decision, NOT a CD
+ratification -- the R1-R3 guard is not engaged), Decision 90 (the four-tier workflow whose Step 6a gate
+the scout serves), Decision 86 (methodology-in-skill / rationale-in-Decision routing -- no new prose
+doc), Decision 55 (loud-fail, no rescue).
+
 ## Decision 151: Decision-record Intent as a first-class optional element -- typed extraction, dated append-only accretion convention (audit finding DCG-06, Q3a adopt-scoped / Q3b adopt) (Decided)
 
 **Status:** Decided
