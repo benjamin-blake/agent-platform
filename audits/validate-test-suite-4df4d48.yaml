@@ -1,0 +1,1334 @@
+# Audit: validate.py, check corpus, test suite, fast-tier selection, dependency declarations (S1-S6)
+# Produced by AUDIT-validate-test-suite.md executed at origin/main 4df4d48 (2026-07-23).
+# System of record; companion prose: audits/validate-test-suite-4df4d48.md
+
+audit:
+  meta:
+    audited_commit: 4df4d48
+    base_branch: main
+    model: claude-fable-5
+    methodology_version: 1
+    scope_surfaces: [S1, S2, S3, S4, S5, S6]
+    degraded_dedup: false
+    contract_notes: >-
+      Preflight succeeded (recs cache refreshed, 804 open recs) so dedup ran non-degraded.
+      Empirical timings: per-check and per-trace timings were measured in the CC-web session
+      container, which ran ~3x slower than GitHub-hosted runners while the full suite executed
+      concurrently with audit work; container numbers are used for RANKING and relative cost
+      only, and GitHub Actions observed numbers (sampled runs) are authoritative for CI
+      wall-clock. validate.py --pre does not print per-phase timings (phase_times is captured
+      but only the dominant phase is printed, and only on breach), so per-check cost was
+      measured by invoking each registered check function directly, once, in-process;
+      validate_requirements and validate_verification_harness were timed/skipped separately
+      (network / live-AWS). The optional Q4 selection replay over 15 merged PRs was skipped:
+      the recall question resolved via the 20-rec ci_rca classification, five derive-level
+      traces, two deletion traces, and two sampled production selection manifests.
+      Full suite timed once per the caps: 6885 passed / 2 skipped / 17 deselected in 35:14
+      (serial, contended container - CI's whole validate step is 25.7-27.7 min, so treat the
+      container wall as ranking evidence only); validate --pre timed once on a near-empty
+      diff (31.0s floor). The unrelated-failure clause was not needed: both runs were green.
+    stale_anchors: []
+
+  question_answers:
+    - q: Q1
+      verdict: partial
+      basis: [VTS-08, VTS-23, VTS-16, VTS-17]
+      prose: >-
+        The corpus (83 registered checks) is genuinely curated by structure: growth-safe
+        membership floors and facade-completeness tests hold registration coherent, and the
+        graduation registry (Decision 132/CD.29) gives new checks a provenance discipline.
+        Against CD.29's bar the failures are specific, not systemic: two prompt checks are
+        permanent no-ops globbing paths T-1.13 deleted while the five live prompts in
+        .github/prompts/scheduled/ go unvalidated (VTS-08, owned by rec-2396 - one of them
+        dispatched twice in the full tier with a test pinning the duplication);
+        validate_imports re-imports two hardcoded modules for 16s per full run to assert a
+        property the same tier's full pytest collection already asserts (VTS-23); pytest-picked
+        survives in both requirements files with three stale comments referencing the retired
+        selection mechanism (VTS-16); and the registry's owner/product_coupled metadata has no
+        consumer outside its own conformance tests (VTS-17). Test-suite redundancy: no
+        tautological or dead tests surfaced in sampling; the count-coupling and
+        no-cross-test-import guards block the known tautology classes, and systematic
+        dead/redundant-test detection is T3.7 (deferred_post_mvp), correctly classified
+        planned-unbuilt rather than re-filed here.
+    - q: Q2
+      verdict: partial
+      basis: [VTS-07, VTS-14, VTS-18, VTS-19, VTS-08]
+      prose: >-
+        The 39 checks running in BOTH tiers are justified as a pattern: the pre run is the
+        author's pre-merge gate and the full run is the merge-race/whole-tree re-assertion -
+        rec-2749/rec-2762 (validate_platform_roadmap failing post-merge despite both-tier
+        registration) are live proof that whole-tree checks catch unions of individually-green
+        PRs, so double execution is defensible; its COST is a Q3 matter (VTS-09). The real
+        placement defects: validate_test_coverage is registered only in the full tier where its
+        merge-base diff is empty on every CI invocation - structurally inert exactly where it
+        runs, absent where its diff exists (VTS-07); validate_requirements does ~32 serial PyPI
+        network calls in the blocking post-merge gate, a wedging class with near-zero
+        post-merge value since requirements changes are gated pre-merge (VTS-14); the full-tier
+        lint sweep targets src/+tests/ only, leaving scripts/ ruff-covered solely by the
+        diff-aware fast tier (VTS-18, owned by rec-2342); two whole-tree checks (validate_cc_limits,
+        validate_deploy_channel_conformance) are pre-only, so the post-merge tier never
+        re-asserts them against merge unions (VTS-19); and validate_cli_tools_in_prompts is
+        dispatched twice in full_sequence (VTS-08). The five pre-only placements split cleanly:
+        budget-raise guards and vp_replay are diff-semantic (correct pre-only); the two
+        whole-tree ones are the asymmetry.
+    - q: Q3
+      verdict: partial
+      basis: [VTS-10, VTS-09, VTS-20, VTS-11, VTS-12, VTS-14]
+      prose: >-
+        Observed CI: pr-validate wall-clock median 1.8 min (n=15 sampled runs, range 1.5-2.6),
+        comfortably inside the 300s budget - Decision 135's p90 2-2.5 min target is met in CI.
+        The full tier costs 28-33 min per run (validate step alone 27.7 min observed), running
+        ~10-12x/day on pushes plus 8x/day on the canary: roughly 8-10 hours of full-tier
+        compute daily, free on a public repo but a ~30-min post-merge signal latency. The
+        dominant reducible cost is the serial full-suite pytest invocation (no -n auto, unlike
+        the fast tier; VTS-10). Second-order: ~28s of every --pre is whole-tree checks that
+        ignore the diff (roadmap trio 16.7s + count-coupling 3.2s + cc_limits 2.9s +
+        cross-test-imports 1.3s; VTS-09); the budget-breach governance loop has 23 open
+        budget_breach recs (5.2-5.5 min, dominant phase pytest_diff, all local sessions) that
+        nothing consumes (VTS-20); no workflow declares concurrency/cancel-in-progress so
+        superseded pr-validate runs complete after force-pushes (VTS-11); the pip cache keys
+        hash requirements.txt while jobs install fast/dev sets (VTS-12, extending rec-2304) -
+        though the cache works in practice (observed main-validate: 35s restore + 89s install).
+        Network in checks: validate_requirements 35.4s measured (VTS-14); pip-audit/pip-outdated
+        are informational-only by design.
+    - q: Q4
+      verdict: partial
+      basis: [VTS-01, VTS-02, VTS-03, VTS-04, VTS-05, VTS-06]
+      prose: >-
+        RECALL: the four-channel design is sound where it looks - strictly-additive union,
+        protected classes never capped, loud fallback-to-edited-set on exception, and the
+        soundness patches (package __init__ nodes, patch-string edges) close real static-analysis
+        gaps. Empirically, of 20 recent ci_rca recs, exactly ONE is a post-Decision-135
+        selection escape (rec-2725: a root-conftest autouse fixture change whose victim modules
+        sat beyond the cap's alphabetical keep window - the channel SAW them and deferred
+        loudly; VTS-03/VTS-04, owned by rec-2731/rec-2737). The pre-135 escapes in the sample
+        (rec-2716, rec-2710/2707, rec-2673/74/75) would all be selected by the current
+        derivation (data-edge deleted-bytes; import-closure direct) - the upgrade demonstrably
+        closed the incident classes that motivated it. Two SILENT residual classes survive:
+        (1) tests-tree helper modules - tests/fixtures/**, the repo's sanctioned shared-helper
+        home - are structurally outside _is_changed_source_py's candidate set, so a
+        fixtures-only edit selects ZERO tests (traced; VTS-01, critical); (2) deleted-module
+        recall rides on an unenforced docstring convention - importers of a deleted module are
+        selected only if their text mentions the path/basename (traced both ways; VTS-02).
+        The defer/escape rate Decision 135's reversal condition (a) names is RECORDED
+        per-run (manifest deferred[] + loud prints) but MEASURED nowhere - no aggregation
+        exists, its T2.36 consumer is deferred behind a trigger ("first written cross-run
+        query") that itself presupposes the measurement, and the manifest artifact is
+        clobbered by orchestrator tests on exactly the PRs that touch the selector (VTS-05,
+        VTS-06). PRECISION: bounded and acceptable - the cap holds the residue at 35, the
+        protected set is uncapped by design (hub-module trace selected 63 direct importers),
+        and production manifests show mixed-channel selections of ~31 modules deriving in
+        4.5s; CI wall-clock (median 1.8 min) confirms over-selection is not currently a budget
+        problem in CI; the 23 local budget breaches are dominated by pytest_diff runtime, i.e.
+        precision cost lands on local sessions, not the CI gate.
+    - q: Q5
+      verdict: partial
+      basis: [VTS-07, VTS-13, VTS-15, VTS-22, VTS-01]
+      prose: >-
+        Where can a defect merge undetected? (1) Anything only an unselected test would catch
+        (the Q4 recall classes) - by design it merges and reddens post-merge, and the two
+        silent classes (VTS-01/02) merge without even the loud-defer trace. (2) Anything only
+        types would catch: mypy is informational in both tiers with 143 standing errors in 59
+        src files, and no decision owns that advisory status (VTS-15). (3) Anything only
+        coverage would catch: no PR-time coverage gate exists; the full tier's per-changed-file
+        100% floor is structurally inert in CI (VTS-07) and the global fail_under=37 floor
+        measures src/ only - scripts/, the platform machinery, has no coverage measurement at
+        all. (4) Integration-marked tests run in no automated tier; the compensating control is
+        real but partial: main-validate's DQ runner + verifier harness exercise the live
+        warehouse read path with OIDC credentials post-merge. The strong properties: hermeticity
+        is enforced in config (addopts --disable-socket/--allow-hosts) plus three autouse
+        guard layers, meta-guarded by validate_hermeticity_flags; and the presubmit/postsubmit
+        split itself is deliberate, owned, and empirically fast.
+      external_checklist:
+        - {property: a, rating: missed, evidence: "No coverage gate on PRs (fast tier runs pytest without --cov); full tier fail_under=37 over src/ only (pyproject.toml:31-36) - scripts/ entirely unmeasured; per-changed-file floor inert in CI (VTS-07); diff-ratchet is CD.30/T3.7, pending. Observed: fail_under DOES enforce ('Required test coverage of 37.0% reached. Total coverage: 74.59%') but sits 37.6 points below actual - a backstop that never binds, not a ratchet"}
+        - {property: b, rating: missed, evidence: "mypy informational in both tiers (validate.py:270-274, 439-446); 143 errors / 59 files measured; advisory status owned by no decision (VTS-15)"}
+        - {property: c, rating: partial, evidence: "-m 'not integration' in both tiers; no workflow runs the marker (observed: 17 integration tests deselected in the timed full-suite run). Compensating control, property-matched: main-validate/canary run ensure_fresh_dq (data_quality_runner) + validate_verification_harness against the LIVE warehouse with OIDC creds 18-20x/day - real integration exercise of the data plane; it would fail on a broken reader boundary, but does not exercise broker/ingestion integrations (those tests run only manually)"}
+        - {property: d, rating: met, evidence: "Decision 60/73 two-tier split, ratified with enforcement (budget assertion, forward-fix, canary); Decision 135 upgraded PR-gate selection; observed: 1 selection escape in 20 recent ci_rca recs"}
+        - {property: e, rating: met, evidence: "pyproject addopts --disable-socket + --allow-hosts=127.0.0.1,::1 apply to every invocation; L1/L2 AWS fixtures + LLM-CLI guard in tests/conftest.py; validate_hermeticity_flags meta-check; T3.6 hermeticity audit complete. Residuals: rec-2687 (one flaky non-hermetic test) and rec-575/VTS-22 (own_markers gap in 2 of 4 guard fixtures) are open"}
+        - {property: f, rating: partial, evidence: "Fast tier: fixed seed 20260710 (rec-2653) + --timeout 60 + xdist. Full tier: --randomly-seed=last resolves to a NEW random seed per CI run (no .pytest_cache persists), no per-test timeout, serial (VTS-13); junit uploaded for RCA fingerprinting is the compensating observability; no rerun/quarantine/flake-rate machinery"}
+        - {property: g, rating: missed, evidence: "Nothing operating detects dead checks or dead tests today - rec-2396's no-op checks sat undetected until humans filed them; T3.7's assertion-free lint / orphan detection / coverage-uniqueness are deferred_post_mvp (planned-unbuilt)"}
+        - {property: h, rating: partial, evidence: "Compensating control, property-matched: the differential admission gate (fail-on-revert at graduation, validate_differential_gate_baseline self-test in full tier) is an operating adequacy signal for GRADUATED checks - a check that cannot fail on revert is not admitted; VF-11 records its structural-only residue. Mutation testing over the corpus is T3.7, deferred"}
+    - q: Q6
+      verdict: partial
+      basis: [VTS-21]
+      prose: >-
+        Enumerated coverage-named surfaces: (1) pytest-cov CODE coverage (pyproject
+        [tool.coverage.*], --cov=src, fail_under=37); (2) VERIFIER coverage (--coverage flag,
+        run_coverage_check, the coverage_report scaffold step, scripts/verifiers/check_coverage);
+        (3) per-changed-file TEST coverage (validate_test_coverage + test_coverage_checker.py's
+        check_per_file_coverage) - a third distinct semantics; (4) test_coverage_checker.py
+        ALSO hosts map_source_to_test, the selection mirror-map (not coverage at all) that
+        Decision 135 channel 3 depends on; (5) validate_ci_refresh_read_coverage and (6)
+        validate_lambda_manifest_coverage - benign domain qualifiers (IAM-grant and manifest
+        completeness), not confusable in context. Verdict: (1)/(2)/(3) genuinely collide -
+        three semantics behind one word on the same CLI surface - and (4) is the sharpest
+        hazard (the selector's channel 3 lives in a module named for a different subsystem).
+        No decision governs any of this; it accreted. Recommendation: disambiguate-in-place
+        (VTS-21) - rename the verifier-coverage CLI surfaces and relocate/rename the mirror
+        map - not a wholesale reconcile. The "validate" overload is mostly the check-naming
+        convention itself (validate.py + validate_* checks are ONE subsystem by design);
+        the genuine stray is scripts/validate_telemetry.py: a standalone Athena-schema CLI
+        with zero importers beyond its own test, whose subject (telemetry tables) is dead
+        pending T2.36 - disposition belongs to the T2.36 rebuild, not a rename now.
+    - q: Q7
+      verdict: partial
+      basis: [VTS-16, VTS-12]
+      prose: >-
+        Current coherence: better than it looks from the root. Roles are documented in-file,
+        requirements-fast.txt states its sync discipline, Dependabot grouped updates hold the
+        two .txt files in lockstep, validate_lockfile_sync gates requirements.txt-to-lock
+        membership, and the fast-tier heavy-set is DERIVED at runtime from (full - fast) so
+        membership drift self-corrects loudly (a missing fast dep reds --pre; a new heavy dep
+        auto-defers). The warts: requirements.txt mixes runtime and dev/test tools under a
+        comment header, requirements-dev.txt is really "CI extras" (pre-commit, litellm,
+        pip-tools) while the actual dev tools live in requirements.txt, requirements.lock is
+        sync-checked but never installed by any CI job (a lock nobody installs pins nothing -
+        its only live role is documentation of the resolved closure), pyproject.toml has no
+        [project]/[build-system] table (coherent only because setup.py is an env bootstrap,
+        Decision 27, not packaging), and pytest-picked is a dead declaration in both files
+        (VTS-16). Constraint-level drift between fast and full (same name, different pin)
+        is guarded only by the Dependabot-grouping convention - no check compares constraints.
+        Root PLACEMENT was assessed and dismissed by audits/repository-structure-cb02572.yaml;
+        not re-litigated here. Options with deferral/cache coupling: see requirements_options.
+    - q: Q8
+      answers:
+        - question: "(1) Full-tier pytest parallelism vs fast tier"
+          answer: >-
+            Fast tier: -n auto + --timeout 60 + fixed seed (_PYTEST_FLAGS). Full tier: serial,
+            no timeout, random-per-run order. The asymmetry is the largest reducible cost in
+            the 27.7-min full validate step; xdist is already a dependency and junit/cov are
+            xdist-compatible; adopting the fast tier's fixed-seed pattern (rec-2653) makes it
+            safe. See VTS-10, VTS-13.
+          basis: [VTS-10, VTS-13]
+        - question: "(2) Risk profile of gating PRs on the fast tier alone"
+          answer: >-
+            Deliberate (Decision 60/73) and empirically healthy: 1 selection escape in 20
+            recent ci_rca recs post-135; escapes become priority=critical forward-fix recs with
+            ~30-min detection latency. The residual risk concentrates in the silent recall
+            classes (VTS-01/02) and in whole-tree merge races, which the both-tier checks and
+            full pytest catch post-merge as designed. Not a defect; the recall holes are.
+          basis: [VTS-01, VTS-02, VTS-03]
+        - question: "(3) registry owner/product_coupled metadata consumers"
+          answer: >-
+            No runtime path consumes either field - dispatch, tier sequencing, and reporting
+            ignore them; the sole consumers are tests/test_checks_registry.py conformance
+            assertions pinning 3 non-default rows. Write-only metadata with test-enforced
+            conformance: either wire the intended consumer (product/platform split reporting)
+            or record the intent. VTS-17.
+          basis: [VTS-17]
+        - question: "(4) Facade re-export maintenance surface"
+          answer: >-
+            Guarded, at real but accepted cost: a check added without its re-export line
+            KeyErrors --pre and fails TestFacadeCompleteness, and the affected-set selects
+            test_checks_registry.py on any registry.py edit (direct import edge), so the
+            failure is pre-merge. History: the FROZEN-baseline variant of this guard caused
+            three consecutive post-merge reds (rec-2673/74/75) and was superseded by
+            growth-safe membership floors + scaffold-only frozen tuples - already landed.
+            No action beyond the Decision-104 pattern's accepted cost.
+          basis: []
+        - question: "(5) scripts/validate_telemetry.py vs the presubmit gate"
+          answer: >-
+            No relationship: zero importers outside its own test, not registered, not
+            dispatched, not named by any workflow. It is a dormant standalone CLI for the
+            dead Athena telemetry path; its subject rebuilds on DuckLake at T2.36. Disposition
+            (rename/retire/rebuild) belongs to T2.36; flagged under Q6 vocabulary only.
+          basis: [VTS-21]
+        - question: "(6) Checks in the fast tier but not the post-merge tier"
+          answer: >-
+            Five: validate_sloc_budget_raises, validate_prose_budget_raises, validate_vp_replay
+            (all diff-semantic - vs-origin/main comparisons that are empty on main - correct
+            pre-only), and validate_cc_limits + validate_deploy_channel_conformance (whole-tree
+            scans whose absence from full means no merge-race/bypass re-assertion; VTS-19,
+            add-to-full).
+          basis: [VTS-19]
+        - question: "(7) pip cache key vs the fast job's installed set"
+          answer: >-
+            All three workflows key the pip cache on hashFiles('requirements.txt') alone;
+            pr-validate installs requirements-fast.txt + requirements-dev.txt (neither hashed),
+            so a fast/dev-only change reuses a stale cache silently (rec-2304 names the dev
+            half for canary/main). Observed impact is low (cache restore 35s + install 89s on
+            main-validate; pr-validate installs in well under its 1.8-min median) - correctness
+            of installs is unaffected (pip cache stores downloads, not resolutions). VTS-12.
+          basis: [VTS-12]
+        - question: "(8) Can the budget assertion prevent a slow run?"
+          answer: >-
+            No - it is the LAST pre_sequence step, computing elapsed after the work is done;
+            it converts a breach into a red exit + a filed rec (local) or a stderr/step-summary
+            warning (CI). Prevention lives only in the job-level timeout-minutes: 30. The 23
+            open local breach recs (dominant phase pytest_diff) show it reporting, not
+            preventing, and nothing consumes those recs (VTS-20).
+          basis: [VTS-20]
+        - question: "(9) Do validation workflows cancel superseded runs?"
+          answer: >-
+            No workflow declares a concurrency group; the only concurrency governance is
+            _check_concurrency asserting the RETIRED ci-runner group stays absent. Superseded
+            pr-validate runs complete after force-pushes (pure waste, ~2 min each);
+            main-validate/canary should NOT be cancelled (per-commit RCA attribution and
+            drift-canary roles). Scope a per-PR concurrency group to pr-validate only. VTS-11.
+          basis: [VTS-11]
+        - question: "(10) pr-validate trust posture over untrusted PR diffs"
+          answer: >-
+            Acceptable. pull_request-event token is contents:read only, no secrets, no OIDC
+            step in pr-validate; fork PRs get a read-only token; signal-green's
+            pull-requests:write fires only for same-repo claude/* head refs. Arbitrary-code
+            execution (pytest over the diff) is contained to the runner. Cache poisoning is
+            bounded by GitHub's branch-scope cache isolation (PR-saved caches are not
+            restorable by main); the hashFiles('requirements.txt') key mismatch is a cost
+            issue (VTS-12), not a security one. Residual accepted risk: a malicious PR can
+            burn runner minutes and write its own selection-manifest artifact - neither
+            crosses a trust boundary.
+          basis: [VTS-12]
+        - question: "(extension) Is the selection-manifest observability trustworthy?"
+          answer: >-
+            Not currently on the PRs where it matters most: orchestrator tests that drive
+            validate.main() in --pre mode write a fixture manifest to the REAL
+            logs/debug/selection-manifest.json (observed artifact: sha 'agent/test-branch',
+            empty diff, on a feat PR run), clobbering the run's own record whenever the
+            selection includes tests/validate/** - i.e. exactly on selector/orchestrator
+            changes. VTS-06.
+          basis: [VTS-06]
+        - question: "(extension) Are any registered checks dispatched outside the sequences?"
+          answer: >-
+            One: validate_terraform_try is registered but appears in neither sequence - it is
+            dispatched inside the terraform_checks scaffold (scripts/checks/_terraform.py:147),
+            documented in registry.py and tested as one unit. Coherent, but the registry's own
+            accounting cannot see it; any future sequence-vs-registry reconciliation tooling
+            must special-case it. No action filed.
+          basis: []
+
+  per_surface_assessment:
+    - surface: S1
+      maturity: strong
+      strengths: >-
+        Thin-CLI discipline held (Decision 104): registry is the sole tier-order source, both
+        tiers dispatch through one path, recursion/branch/CI guards are layered, and the facade
+        is machine-guarded (growth-safe floors + facade-completeness + mock-interception
+        tests). Budget assertion is enforced, bypass is CI-forbidden and audited.
+      top_gaps: [VTS-09, VTS-20, VTS-15, VTS-18]
+    - surface: S2
+      maturity: strong
+      strengths: >-
+        83 checks with registration coherence machine-verified; graduation discipline (Decision
+        132) gives additions provenance; whole-tree checks double as merge-race defense;
+        meta-guards (hermeticity flags, workflow guards, budget-raise ratchets) protect the
+        gate itself.
+      top_gaps: [VTS-07, VTS-08, VTS-14, VTS-19]
+    - surface: S3
+      maturity: strong
+      strengths: >-
+        363-file mirror-convention tree with machine-enforced placement, cross-import and
+        count-coupling bans; three-layer AWS/network/CLI hermeticity with meta-checks; junit
+        substrate for post-merge RCA fingerprinting.
+      top_gaps: [VTS-06, VTS-13, VTS-22]
+    - surface: S4
+      maturity: solid
+      strengths: >-
+        Design-sound four-channel additive selection with protected classes, loud cap deferral,
+        loud exception fallback, soundness patches for package facades and patch-string edges;
+        production manifests show mixed-channel selections deriving in ~4.5s; the upgrade
+        demonstrably closed the pre-135 escape classes in the ci_rca sample.
+      top_gaps: [VTS-01, VTS-03, VTS-02, VTS-05]
+    - surface: S5
+      maturity: strong
+      strengths: >-
+        Single-source-of-truth invariant real in both directions (workflows call validate.py;
+        validate.py checks guard the workflows' load-bearing shape, plus tests/verify_ci_workflow);
+        fast PR gate (median 1.8 min observed); creds-free terraform gate; artifact substrates
+        (junit, selection-manifest) wired for RCA.
+      top_gaps: [VTS-10, VTS-11, VTS-12]
+    - surface: S6
+      maturity: strong
+      strengths: >-
+        Documented per-file roles with mechanical sync (Dependabot grouping + lockfile-sync
+        gate); the fast-tier exclusion set is DERIVED from the files at runtime, so membership
+        drift self-corrects loudly rather than silently.
+      top_gaps: [VTS-16]
+
+  rubric_ratings:
+    - {surface: S1, dimension: VD2, rating: adequate, evidence: "registry.py:84-137 vs 140-245; VTS-18/VTS-19", note: "tier split principled; scripts/ lint sweep and two whole-tree pre-only checks are the drift points"}
+    - {surface: S1, dimension: VD3, rating: adequate, evidence: "VTS-09; check_timings (roadmap trio 16.7s in --pre); CI median 1.8 min", note: "fast in CI; non-diff-aware check cost + unconsumed breach recs locally"}
+    - {surface: S1, dimension: VD6, rating: adequate, evidence: "validate.py:270-274 mypy informational; budget assertion validate.py:456-472", note: "budget gate real; mypy advisory unowned (VTS-15)"}
+    - {surface: S1, dimension: VD7, rating: strong, evidence: "tests/test_checks_registry.py floors/facade/interception; registry.py sole order source", note: "post-rec-2673/74/75 growth-safe redesign landed; validate_terraform_try scaffold-bundled (documented)"}
+    - {surface: S1, dimension: VD9, rating: adequate, evidence: "VTS-21 (--coverage flag = verifier coverage)", note: "flag name collides with pytest-cov semantics"}
+    - {surface: S2, dimension: VD1, rating: adequate, evidence: "VTS-08 (2 no-op checks), VTS-23 (validate_imports redundant)", note: "isolated dead/redundant members in an otherwise non-overlapping corpus"}
+    - {surface: S2, dimension: VD2, rating: adequate, evidence: "VTS-07 (inert in CI), VTS-14 (network in blocking full tier), VTS-19", note: ""}
+    - {surface: S2, dimension: VD3, rating: adequate, evidence: "check_timings.json: 64.9s full-tier check sum (excl. requirements/harness); validate_lambda_bundle_completeness 16.1s, validate_imports 16.1s", note: "two 16s checks dominate; both full-only"}
+    - {surface: S2, dimension: VD6, rating: adequate, evidence: "VTS-07/VTS-08: gates that cannot fail where they run", note: "3 of 83 checks assert nothing where dispatched; rest block for real"}
+    - {surface: S2, dimension: VD7, rating: strong, evidence: "registry->facade->tests coherence machine-checked; zero dispatched-but-unregistered; one scaffold-bundled registration", note: "VTS-17 write-only metadata is the residue"}
+    - {surface: S2, dimension: VD9, rating: adequate, evidence: "validate_test_coverage vs run_coverage_check vs --cov (VTS-21)", note: "domain-qualified coverage names are benign; the three test/code/verifier semantics collide"}
+    - {surface: S3, dimension: VD1, rating: adequate, evidence: "no redundant/tautological tests surfaced in sampling; T3.7 detection unbuilt", note: "count-coupling + cross-import guards block known tautology classes"}
+    - {surface: S3, dimension: VD3, rating: adequate, evidence: "full suite timed once (audit container, serial): 6885 passed / 2 skipped / 17 deselected in 35:14; --durations top: 40.1s (platform_roadmap_state feeds), ~15 session/preflight report tests at 26.8-28.4s each, 2x30.0s ducklake connect-probe bounded-timeout tests", note: "the slow tail is many INDEPENDENT 27-40s tests - xdist-friendly; serial full-suite invocation is the S5-side lever (VTS-10)"}
+    - {surface: S3, dimension: VD6, rating: adequate, evidence: "conftest L1/L2 + socket + CLI guards; VTS-13 full-tier flake gaps; VTS-06 isolation defect", note: ""}
+    - {surface: S3, dimension: VD7, rating: strong, evidence: "map_source_to_test mirror rule + validate_placement + no-cross-test-imports + count-coupling checks", note: "placement and coupling are machine-enforced, not conventions"}
+    - {surface: S4, dimension: VD4, rating: weak, evidence: "VTS-01 (fixtures-edit selects zero, traced), VTS-02, VTS-03 (328/363 deferred on root conftest; rec-2725 escape)", note: "one critical + one high open on recall"}
+    - {surface: S4, dimension: VD5, rating: adequate, evidence: "CAP=35, protected set uncapped (63-direct hub trace); production manifest 31 selected / 4.5s; alphabetical residue order (VTS-04)", note: "cost bounded; ordering is relevance-blind"}
+    - {surface: S4, dimension: VD3, rating: strong, evidence: "derivation 4.5s in production manifest; batched collect-only (~30x spawn reduction, Decision 135)", note: ""}
+    - {surface: S4, dimension: VD7, rating: strong, evidence: "manifest is output-only (no read-back path exists); emit is best-effort/loud-skip", note: "VTS-06 corrupts the artifact's content, not the invariant"}
+    - {surface: S5, dimension: VD2, rating: adequate, evidence: "ci.yml job split + terraform-validate creds-free; full suite post-merge only (deliberate)", note: ""}
+    - {surface: S5, dimension: VD3, rating: adequate, evidence: "28-33 min full tier x ~18-20 runs/day observed; serial pytest; no cancel-in-progress; cache observed working (89s install)", note: "VTS-10/11/12"}
+    - {surface: S5, dimension: VD6, rating: adequate, evidence: "main-protection requires pr-validate + terraform-validate (Decision 83); forward-fix churn is the accepted cost", note: ""}
+    - {surface: S5, dimension: VD7, rating: strong, evidence: "workflows guarded by validate_ci_workflow_guards/validate_pr_conflict_signal checks + tests/verify_ci_workflow/**", note: "the gate guards its own delivery mechanism - genuinely unusual maturity"}
+    - {surface: S6, dimension: VD1, rating: adequate, evidence: "fast set is a strict subset by discipline; pytest-picked dead in both files (VTS-16)", note: ""}
+    - {surface: S6, dimension: VD7, rating: adequate, evidence: "_excluded_heavy_import_names derives from the files at runtime (rec-2485)", note: "no gate compares fast-vs-full constraint pins; Dependabot grouping is the only sync mechanism for versions"}
+    - {surface: S6, dimension: VD8, rating: adequate, evidence: "documented roles; lock sync-checked never installed; dev tools in requirements.txt; no [project] table (Decision 27 context)", note: "see requirements_options"}
+    - {surface: S6, dimension: VD9, rating: adequate, evidence: "file roles stated in headers; setup.py misleading name (owned by repository-structure audit EC9/RS finding)", note: ""}
+
+  check_disposition:
+    - {check: validate_prompt_files, redundancy_verdict: rescope, tier_verdict: keep-tier,
+       target: "re-point glob at .github/prompts/scheduled/*.prompt.md; refresh KNOWN_MODELS",
+       rationale: "Globs the top-level path T-1.13 emptied ('All 0 prompt files passed') while 5 live scheduled prompts go unvalidated.",
+       finding_ids: [VTS-08], confidence: CONFIRMED}
+    - {check: validate_cli_tools_in_prompts, redundancy_verdict: rescope, tier_verdict: dedupe,
+       target: "same rescope to scheduled/; drop the second full_sequence dispatch + update test_full_sequence_cli_tools_in_prompts_appears_exactly_twice",
+       rationale: "Same dead glob; additionally dispatched twice in full_sequence with a test pinning the duplication.",
+       finding_ids: [VTS-08], confidence: CONFIRMED}
+    - {check: validate_test_coverage, redundancy_verdict: rescope, tier_verdict: promote-to-pre,
+       target: "CD.30 diff-line-ratchet retarget; fix rec-2791 slash-form --cov; only then promote to --pre where its merge-base diff is non-empty",
+       rationale: "Diff-scoped check registered only in the tier whose CI diff is always empty; inert everywhere in CI today.",
+       finding_ids: [VTS-07], confidence: CONFIRMED}
+    - {check: validate_requirements, redundancy_verdict: rescope, tier_verdict: keep-tier,
+       target: "gate on requirements*.txt present in the push diff, or demote to informational beside pip-audit",
+       rationale: "32 serial PyPI calls (35.4s measured) in the blocking post-merge gate; PyPI hiccup reds main; near-zero post-merge value.",
+       finding_ids: [VTS-14], confidence: CONFIRMED}
+    - {check: validate_imports, redundancy_verdict: delete, tier_verdict: n/a,
+       target: "full-tier pytest collection of tests/execute_recommendation/** + tests/test_classify_risk.py asserts the same importability",
+       rationale: "Hardcoded 2-module import smoke costing 16.1s/run; property subsumed by the same tier's suite collection.",
+       finding_ids: [VTS-23], confidence: CONFIRMED}
+    - {check: validate_cc_limits, redundancy_verdict: keep, tier_verdict: add-to-full,
+       target: "full_sequence, adjacent to validate_sloc_limits",
+       rationale: "Whole-tree CC gate is pre-only; merge unions and bypass pushes are never re-asserted (sloc_limits gets both-tier treatment; cc does not). 2.9s.",
+       finding_ids: [VTS-19], confidence: CONFIRMED}
+    - {check: validate_deploy_channel_conformance, redundancy_verdict: keep, tier_verdict: add-to-full,
+       target: "full_sequence, ops_governance block",
+       rationale: "Whole-tree drift guard (docs-vs-terraform), pre-only; the #544 drift class it guards can re-enter via merge union. 0.09s - free to add.",
+       finding_ids: [VTS-19], confidence: CONFIRMED}
+    - {check: validate_hermeticity_flags, redundancy_verdict: rescope, tier_verdict: keep-tier,
+       target: "add --allow-hosts to the guarded set (rec-2052) and extend the guard to the fast tier's _PYTEST_FLAGS",
+       rationale: "Guards only the full-tier command's two flags; the fast tier's flag set and the allow-hosts flag are unguarded.",
+       finding_ids: [], confidence: CONFIRMED}
+    - {check: validate_platform_roadmap, redundancy_verdict: keep, tier_verdict: keep-tier,
+       target: "diff-gate the --pre dispatch (run only when docs/plans/**, ROADMAP-*, or DECISIONS.md changed)",
+       rationale: "6.3s whole-tree parse in every --pre regardless of diff; both-tier placement is correct (merge-race defense observed: rec-2749/2762), only the pre-tier cost is addressable.",
+       finding_ids: [VTS-09], confidence: CONFIRMED}
+    - {check: validate_plan_documents, redundancy_verdict: keep, tier_verdict: keep-tier,
+       target: "same diff-gating as validate_platform_roadmap (5.4s)",
+       rationale: "Same shape.", finding_ids: [VTS-09], confidence: CONFIRMED}
+    - {check: validate_tier_floor, redundancy_verdict: keep, tier_verdict: keep-tier,
+       target: "same diff-gating (5.0s)",
+       rationale: "Same shape.", finding_ids: [VTS-09], confidence: CONFIRMED}
+
+  naming_reconciliation:
+    - collision: coverage
+      verdict: disambiguate-in-place
+      mechanism: >-
+        Rename the VERIFIER-coverage surfaces only: --coverage -> --verifier-coverage (keep
+        --coverage as a deprecated alias for one release), run_coverage_check ->
+        run_verifier_coverage_report, pre_sequence scaffold name coverage_report ->
+        verifier_coverage_report; move map_source_to_test out of test_coverage_checker.py into
+        a selection-owned module (or rename the module) at the CD.30 retarget, when
+        test_coverage_checker.py is already being rewritten. Leave pytest-cov and the
+        domain-qualified check names untouched.
+      blast_radius: >-
+        --coverage callers: validate.py + scripts/verifiers/__init__.py docstring only (grepped;
+        T2.15 references it in prose). Scaffold rename touches registry.py pre_sequence +
+        FROZEN_PRE_SCAFFOLDS tuple in tests/test_checks_registry.py (one line each).
+        map_source_to_test relocation touches affected_tests.py channel 3 import +
+        validate_test_coverage's loader + tests.
+      cost: XS for the CLI/scaffold renames; S for the mirror-map relocation (fold into CD.30 work).
+      rationale: >-
+        Three coverage semantics share one word on one CLI; the selection mirror-map living in
+        a coverage-named module is the highest-misdirection instance (an agent-first repo is
+        the stated design constraint). Full reconcile (renaming checks) buys little over
+        in-place disambiguation of the two user-facing surfaces.
+      confidence: CONFIRMED
+    - collision: validate
+      verdict: leave-as-is
+      mechanism: >-
+        No rename. The validate.py + validate_* corpus is ONE subsystem whose prefix IS the
+        convention; scripts/verifiers/ is already differently named. The single genuine stray,
+        scripts/validate_telemetry.py (zero importers, dormant Athena-era standalone), gets its
+        disposition at T2.36 (rebuild/retire/rename with the telemetry re-land) - a rename now
+        churns a dormant file twice.
+      blast_radius: "None now; T2.36 absorbs the one-file disposition (its test moves with it)."
+      cost: "Zero now; XS at T2.36."
+      rationale: >-
+        The overload is deliberate convention for surfaces (1)/(2), documented in Decision 104;
+        only the stray needs an owner, and it has a natural future one.
+      confidence: CONFIRMED
+
+  requirements_options:
+    - option: "A - Harden the status quo (role-true four-file set)"
+      changes: >-
+        Move pytest*/ruff/mypy/pydantic-dev-tools out of requirements.txt into
+        requirements-dev.txt (or a new requirements-ci.txt); requirements.txt becomes
+        runtime-only; ci.yml main-validate/canary install runtime+dev; delete pytest-picked
+        everywhere; extend pip cache keys to hash all installed files (subsumes rec-2304).
+      tradeoffs: >-
+        Cleanest roles for lowest churn; keeps every existing mechanism. Leaves four files and
+        the convention-only fast/full constraint sync in place.
+      deferral_coupling: >-
+        Excluded-set: _excluded_heavy_import_names = requirements.txt - requirements-fast.txt;
+        moving DEV tools out of requirements.txt does not change the excluded set (those dists
+        are in requirements-fast.txt, so they never contributed) - torch/pandas/etc stay
+        excluded. Pip cache: keys must add hashFiles of requirements-dev.txt (+fast for
+        pr-validate) or stale-dev-layer reuse (rec-2304's outage class) persists.
+      effort: S
+    - option: "B - pyproject consolidation ([project] + extras)"
+      changes: >-
+        Adopt [project] dependencies + optional-dependencies {fast, dev}; generate
+        requirements.lock from pyproject via pip-compile; retire the three .txt files;
+        Dependabot pip ecosystem follows pyproject; ci.yml installs '.[fast]'/'.[dev]' or
+        pip-compile exports.
+      tradeoffs: >-
+        Single standard SoT, machine-parseable (agent-first alignment), tooling-native. Largest
+        migration: touches _scaffolding.py's file parser, all three workflows, lockfile-sync
+        check, and the requirements-file headers' documented discipline; setup.py stays an env
+        bootstrap (Decision 27) but the name collision with packaging gets sharper.
+      deferral_coupling: >-
+        _excluded_heavy_import_names and _parse_requirement_dist_names read the two .txt PATHS
+        - both must be rewritten to read pyproject extras (the derived-not-hardcoded acceptance
+        of rec-2485 must be preserved). Pip cache keys re-point at pyproject.toml +
+        requirements.lock. Highest coupling of the three options.
+      effort: M
+    - option: "C - Lock-driven CI installs (reproducible full tier)"
+      changes: >-
+        Keep the declaration files as-is; make main-validate/canary install FROM
+        requirements.lock (pip-compile closure; optionally --require-hashes); pr-validate keeps
+        the fast set; pip cache key -> hashFiles('requirements.lock'); Dependabot lock updates
+        become the drift channel.
+      tradeoffs: >-
+        Gives the lock a live role (today it is sync-checked, installed by nothing) and makes
+        post-merge reds reproducible. COST: the canary's environment-drift-detection role
+        inverts - pinned installs stop catching fresh-resolution breakage, so drift detection
+        moves to Dependabot PRs (which DO run the gate) - arguably a better home, but it is a
+        semantic change to Decision 73's L8 canary purpose and must be owned in a decision.
+      deferral_coupling: >-
+        Excluded-set derivation unchanged (still reads the two .txt declaration files - the
+        lock is an INSTALL source, not a declaration surface). Cache key becomes
+        content-correct automatically (the lock IS the installed set).
+      effort: S-M
+
+  findings:
+    - id: VTS-01
+      surface: S4
+      question: Q4
+      dimension: VD4
+      title: "tests-tree helper modules (tests/fixtures/**) are invisible to affected-set candidate admission - a fixtures-only edit selects zero tests, silently"
+      evidence: "scripts/checks/deps/affected_tests.py:56-61 (_is_changed_source_py admits only src/|scripts/); trace: derive_affected_tests([('M','tests/fixtures/ducklake_fakes.py')]) -> selected=0, no defer, no warning; 8+ test files import tests.fixtures.ducklake_fakes; tests/CLAUDE.md names tests/fixtures/ as the sanctioned shared-helper home"
+      evidence_kind: observed
+      current_behavior: >-
+        The import-closure and mirror-map channels draw candidates only from changed .py files
+        under src/ or scripts/. tests/** non-test .py files (the fixtures package, any helper
+        module) are not candidates; conftest.py is channel 4's only tests-tree trigger; the
+        data-edge channel skips modified .py files by construction. Result: a PR that only
+        edits tests/fixtures/ducklake_fakes.py runs ZERO tests in --pre - no selection, no cap
+        deferral, no warning - although the dependency graph (which indexes tests/) knows every
+        importer.
+      ideal_behavior: >-
+        A changed non-test .py under tests/ is an import-closure candidate; its direct
+        importer tests land in the protected set like any other direct reverse-dep.
+      gap: "Silent under-selection below the true blast radius - the exact property NS-D/Decision 135 rule out; unlike cap deferral it leaves no trace."
+      compensating_controls_considered: >-
+        rec-2731 (force full-suite scope on conftest/autouse-fixture changes) is adjacent but
+        does NOT property-match: fixtures modules are imported helpers, not autouse fixture
+        carriers, and its remedy keys on conftest paths. The full post-merge tier catches the
+        breakage ~30 min later as a critical ci_rca rec - detection, not prevention. The
+        no-cross-test-imports guard actively steers shared helpers INTO this blind spot.
+      change_type: rescope
+      proposed_change: >-
+        Extend _is_changed_source_py (or add a fifth candidate class) to admit changed
+        tests/**/*.py non-test files into the import-closure channel; their graph predecessors
+        already resolve via _module_to_test_path. Add an incident-replay test mirroring the
+        existing TestRoadmapGuardSubsumption pattern.
+      acceptance: "derive_affected_tests([('M','tests/fixtures/ducklake_fakes.py')]) selects every test module importing tests.fixtures.ducklake_fakes, provenance import_closure_direct; bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py"
+      severity: critical
+      severity_rationale: >-
+        Matches the brief's critical class verbatim: an affected-set recall hole that lets a
+        genuinely-broken test escape the PR gate - and this one is silent, unlike the loud cap
+        path. A fixtures-only refactor that breaks its importers merges green with zero tests
+        run. Frequency is moderated by fixtures edits usually accompanying test edits, but the
+        sanctioned-home policy makes fixtures-only refactors a designed-for workflow.
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["tests/fixtures", "affected-set", "affected_tests", "conftest", "autouse"],
+        dedup_hit_count: 2,
+        note: "Hits rec-2731 (conftest/autouse scope forcing) and rec-2737 (cap ordering) are adjacent cap/conftest remedies; neither admits tests-tree helper modules as candidates. Fully distinct hole."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Pure additive selection widening; cannot shrink any existing selection (additive-only invariant preserved)."}
+
+    - id: VTS-02
+      surface: S4
+      question: Q4
+      dimension: VD4
+      title: "Deleted-module recall rides on an unenforced docstring convention; import-closure structurally excludes deletions"
+      evidence: "affected_tests.py:53 (_ADDED_OR_MODIFIED excludes 'D') + :234-235; dependency_graph.build_graph drops edges to absent modules; traces: D src/schemas/annotations.py -> selected=1 via data_edge ONLY because tests/test_annotations.py's docstring literally contains 'src/schemas/annotations.py'; D scripts/dependency_graph.py -> selector itself crashes loudly (its own import chain)"
+      evidence_kind: observed
+      current_behavior: >-
+        A deleted module's surviving importer tests are selected only by the data-edge channel,
+        which needs the test's TEXT to mention the deleted path or quoted basename. The repo's
+        'Tests for <path>' docstring convention makes this work often (241/363 test files
+        contain some src/ or scripts/ path string - a loose upper bound), but nothing enforces
+        the convention; a test importing a deleted module without a textual path mention is
+        silently unselected and breaks at post-merge collection.
+      ideal_behavior: >-
+        Deletion blast radius derived structurally: compute the deleted file's reverse-deps
+        against the PRE-deletion tree (e.g. build the graph including D-status paths via git
+        show of the old blob, or index importers by dotted-module reference), not via textual
+        mention.
+      gap: "Recall for deletions is convention-dependent, and the convention is invisible to every gate - drift narrows recall silently."
+      compensating_controls_considered: >-
+        Incident-B's quoted-basename channel was BUILT for the meta-test shape and works;
+        the docstring-mention effect is an unplanned bonus of the same substring match. A
+        deleted module still imported by PRODUCTION code fails the importer's own selected
+        tests if those changed; the uncovered case is deletion PRs that miss one test-side
+        importer. Full tier catches at collection ~30 min later.
+      change_type: rescope
+      proposed_change: >-
+        Admit D-status .py paths to the import-closure channel using the merge-base tree's
+        import edges (git show <base>:<path> parsed once), or cheaper: treat a D .py path's
+        dotted module name as a data-edge token so any test importing it matches structurally
+        rather than textually.
+      acceptance: "Trace: deleting a module imported by a path-mention-free test selects that test; existing Incident-B tests stay green."
+      severity: medium
+      severity_rationale: >-
+        Real recall hole but doubly moderated: deletion PRs usually edit importers too (whose
+        tests then select), and the docstring convention covers the common mirror-named case.
+        Not high: no observed incident in the 20-rec ci_rca sample post-135.
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["deleted", "Incident B", "data_edge", "deletion", "affected-set"],
+        dedup_hit_count: 0,
+        note: "Decision 135 owns the deleted-BYTES (textual reference) shape explicitly; the import-based deletion shape is unowned."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-03
+      surface: S4
+      question: Q4
+      dimension: VD4
+      title: "Root-conftest changes keep 35/363 test modules and defer 328 - the one observed post-135 escape class"
+      evidence: "trace: derive_affected_tests([('M','tests/conftest.py')]) -> selected=35, deferred=328 (loud); rec-2725 (Main Canary red: autouse fixture added in root conftest, victim modules alphabetically beyond the keep window); rec-2731 proposes forcing full-suite scope"
+      evidence_kind: observed
+      current_behavior: >-
+        Channel 4 correctly identifies the whole tests/ tree as affected by a root-conftest
+        change, but every hit is residue under CAP=35: the first 35 alphabetical modules run,
+        328 defer loudly to post-merge. rec-2725 is the realized escape: a root-conftest
+        hermeticity fixture broke tests/ops_data_portal/test_decisions.py (alphabetically past
+        the window), red only on the canary.
+      ideal_behavior: >-
+        A root-conftest (or any autouse-fixture-bearing conftest) change forces full-suite
+        --pre scope, or at minimum the conftest channel's hits get proportional protected
+        budget rather than alphabetical truncation.
+      gap: "The highest-blast-radius single-file change in the repo gets the weakest effective selection (9.6% of its true radius)."
+      compensating_controls_considered: >-
+        The deferral is LOUD (printed + manifest deferred[]) and the full tier covers it -
+        this is the designed cap behavior, not silence; but rec-2725 shows the churn cost is
+        real (canary red + critical rec + forward-fix cycle for a change --pre saw and skipped).
+      change_type: retune_gate
+      proposed_change: >-
+        Implement rec-2731 with the verification it asked for (this trace): root tests/conftest.py
+        in the diff -> pytest_diff runs tests/ (full suite, xdist) instead of a file list;
+        sub-conftests keep the subtree channel.
+      acceptance: "Trace: ('M','tests/conftest.py') yields full-suite scope (or equivalent); rec-2725 incident replay selects tests/ops_data_portal/test_decisions.py"
+      severity: high
+      severity_rationale: >-
+        Materially reduces the guarantee for a recurring change class (hermeticity fixture
+        waves are ongoing) and the compensating control (post-merge catch) demonstrably
+        incurred the churn it exists to avoid (rec-2725). Not critical: the defer is loud and
+        the class is now known.
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-unbuilt, item_ids: [rec-2731],
+        dedup_search_terms: ["conftest", "autouse", "full-suite scope", "affected-set"],
+        dedup_hit_count: 1,
+        note: "rec-2731 names exactly this remedy and asked for verification whether channel 4 covers the root; this audit supplies it: covered but cap-truncated to 35/363."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Full-suite --pre on conftest PRs costs minutes (xdist) - acceptable for a rare, highest-radius class."}
+
+    - id: VTS-04
+      surface: S4
+      question: Q4
+      dimension: VD5
+      title: "Cap residue kept/deferred by alphabetical sort, not channel priority - mirror-map and conftest hits are unprotected"
+      evidence: "affected_tests.py:246-249 (residue_sorted = sorted(residue_pool); kept = [:budget_remaining]); rec-2737 M2 names the mirror-map instance"
+      evidence_kind: static
+      current_behavior: >-
+        residue = (transitive | mirror_hits | conftest_hits) - protected is truncated purely
+        alphabetically. A canonical mirror test for a changed source (when not also a static
+        import predecessor - the subprocess-CLI test shape) can be deferred while
+        alphabetically-early deep-transitive ancestors are kept.
+      ideal_behavior: "Residue ordered by channel signal (mirror_map, conftest, then transitive by graph distance), alphabetical only as tiebreak."
+      gap: "Relevance-blind truncation spends the cap budget on the weakest-signal channel first in adversarial orderings."
+      compensating_controls_considered: "Deferral is loud + full tier covers; Decision 135's reversal condition (a) pre-names 'tighten the cap's channel-priority ordering' as the remedy."
+      change_type: retune_gate
+      proposed_change: "Order residue (mirror, conftest, transitive) before truncation, per rec-2737 M2; alphabetical within class."
+      acceptance: "Unit test: under cap pressure a mirror-map hit survives while transitive residue defers; bin/venv-python -m pytest tests/checks/deps/test_affected_tests.py"
+      severity: medium
+      severity_rationale: "Precision-hardening with recall side-benefit; loud backstop exists; rec-2737 already frames it as non-blocking."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-unbuilt, item_ids: [rec-2737],
+        dedup_search_terms: ["mirror-map cap ordering", "residue", "affected_tests"],
+        dedup_hit_count: 1,
+        note: "rec-2737 M2 is this finding; M1 (batched-collect last-block attribution over-capture) is the same rec's other half - both unbuilt."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Combine with VTS-03 in one selector-hardening PR."}
+
+    - id: VTS-05
+      surface: S4
+      question: Q4
+      dimension: VD4
+      title: "Decision 135's reversal condition (a) - the defer/escape rate - is recorded per-run but measured by nothing, and its measurement machinery is deferred behind a trigger that presupposes the measurement"
+      evidence: "Decision 135 (docs/DECISIONS.md:713-720) reversal conditions; manifest deferred[]/capped fields (affected_tests.py:277-287); T2.36 deferral 'triggered by first written cross-run query' (DECISIONS.md:673-675); no aggregation code exists (grepped consumers: none)"
+      evidence_kind: static
+      current_behavior: >-
+        Every run records deferred counts (stdout, local JSON, S3 best-effort, PR artifact),
+        but no query, no telemetry, no scheduled job aggregates defer rates or attributes
+        post-merge failures to deferrals. The condition that would trigger re-design ("defer
+        rate proves high enough that the full tier routinely catches what should have been
+        fast-tier-caught") is unobservable as instrumented; the DuckLake registration that
+        would make it queryable is T2.36-deferred, triggered by "first written cross-run
+        query" - which is exactly the query the reversal condition needs. Circular.
+      ideal_behavior: >-
+        A cheap standing signal: ci-rca (its taxonomy already exists) tags each post-merge
+        pytest failure with whether the failing module appears in the triggering merge's
+        selection-manifest deferred[]; a counter in the rec context makes the reversal
+        condition evaluable from the recs cache alone - no warehouse work needed.
+      gap: "A ratified reversal condition nobody can evaluate is a Decision-40-class recorded-then-forgotten trigger."
+      compensating_controls_considered: >-
+        The 23 budget_breach recs measure the BUDGET arm of the reversal conditions (b) - that
+        arm IS observable. This audit's manual classification (1 escape / 20 recs) is a
+        point-in-time substitute, not a standing control.
+      change_type: persist
+      proposed_change: >-
+        At the T2.36 boundary OR cheaper now: extend the ci-rca prompt/taxonomy to check the
+        merge's selection-manifest artifact for the failing test in deferred[] and stamp
+        escape_class=cap_deferral|silent_miss|not_selection on the rec. This makes the grep
+        this audit ran a standing, free metric.
+      acceptance: "A ci_rca rec for a post-merge pytest failure carries escape-attribution; grep of recs cache yields defer-escape rate"
+      severity: medium
+      severity_rationale: "Observability of a ratified reversal condition, not a live gate defect; the loud per-run records mean a human CAN reconstruct it expensively (this audit did)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-unbuilt, item_ids: [T2.36],
+        dedup_search_terms: ["selection manifest", "escape", "T2.36", "cross-run query", "defer rate"],
+        dedup_hit_count: 1,
+        note: "T2.36 owns manifest registration; the circularity of its trigger vs the reversal condition is the new observation. 'Manifest has no consumer' alone is the owned deferral and is NOT filed (see rejected_candidates)."}
+      effort: S
+      depends_on: [VTS-06]
+      sequencing: {safe_to_queue_now: true, blocked_behind: [VTS-06], note: "Escape attribution reads the artifact VTS-06 currently corrupts on selector-touching PRs."}
+
+    - id: VTS-06
+      surface: S3
+      question: Q4
+      dimension: VD4
+      title: "Orchestrator tests clobber the real selection-manifest - the uploaded artifact is fixture data on exactly the PRs that change the selector"
+      evidence: "OBSERVED artifact (pr-validate run 30034430521, PR #705 feat validate.py guard): selection-manifest.json = {sha: 'agent/test-branch', diff: [], selected: []}; fixture string tests/fixtures/subprocess_stubs.py:30; tests/validate/test_tiers.py TestPreModeDiffAware runs _validate.main() --pre with emit_manifest unpatched (0 references); emit target = _common.ROOT/logs/debug/selection-manifest.json; healthy contrast: run 30042741919's manifest is real (31 selected, 4 channels, sha 090a2ec)"
+      evidence_kind: observed
+      current_behavior: >-
+        tests/validate/** orchestrator tests drive main() in --pre mode with git subprocesses
+        stubbed but emit_manifest real, writing the stub manifest to the repo's actual
+        logs/debug path. Whenever the PR's selection includes tests/validate/** - i.e. on any
+        validate.py/scaffolding/selector change, the PRs whose manifests matter most - the
+        run's true manifest is overwritten before the always() artifact upload.
+      ideal_behavior: "Orchestrator tests never write outside tmp_path; the uploaded artifact is always the run's own manifest."
+      gap: "The observability artifact Decision 135 built (and T2.36 will consume) is untrustworthy precisely on selector-affecting PRs."
+      compensating_controls_considered: >-
+        The stdout print of the real manifest survives in the CI LOG (uncorrupted) - expensive
+        to consume but present; the S3 leg is skipped in pr-validate (no creds) so nothing
+        false lands in S3 from CI; --disable-socket blocks the tests' own S3 leg. Controls
+        reduce blast radius to the artifact only.
+      change_type: enforce
+      proposed_change: >-
+        Root-conftest autouse fixture redirecting the manifest path for tests (mirror the
+        existing _isolate_plans_jsonl precedent exactly), or patch emit_manifest in
+        tests/validate/'s conftest; add a guard test asserting logs/debug/selection-manifest.json
+        is byte-identical before/after a tests/validate run.
+      acceptance: "After running tests/validate/ locally, logs/debug/selection-manifest.json is unchanged; sampled artifact on the landing PR shows a real sha"
+      severity: medium
+      severity_rationale: "Corrupts observability, not gating; the manifest is deliberately never a selection input (Decision 135), so no selection behavior is affected."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["selection-manifest", "logs/debug", "clobber", "emit_manifest"],
+        dedup_hit_count: 0, note: "The _isolate_plans_jsonl fixture is the in-repo precedent for the fix shape."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-07
+      surface: S2
+      question: Q2
+      dimension: VD6
+      title: "validate_test_coverage is structurally inert in CI: registered only in the tier whose diff is always empty, absent from the tier that has a diff"
+      evidence: "registry.py:192 (full only); scripts/checks/misc/validate_test_coverage.py:50-52 ('No source file changes to check.'); test_coverage_checker.get_changed_source_files:473-498 (merge-base vs origin/main - empty when HEAD==origin/main, which is every main-validate/canary checkout); CD.30 describes the gate as operating; rec-2791/2681/2640 (slash-form --cov no-op for scripts/) compound"
+      evidence_kind: static
+      current_behavior: >-
+        On main-validate and main-canary (the only CI contexts running the full tier), the
+        checkout IS origin/main, the merge-base diff is empty, and the check prints "No source
+        file changes to check" - it has never been able to fail in CI. It is not in
+        pre_sequence, where the diff exists. Its per-file coverage leg is ADDITIONALLY vacuous
+        for all scripts/ files via the slash-form --cov defect (rec-2791 cluster). Net: the
+        per-changed-file 100% floor documented in tests/CLAUDE.md and premised by CD.30 is
+        enforced only in ad-hoc local full runs on branches.
+      ideal_behavior: >-
+        The changed-file coverage obligation runs where a diff exists (the PR gate), in its
+        CD.30 diff-line-ratchet form, with the dotted --cov form that measures scripts/.
+      gap: "A documented, roadmap-premised coverage gate that cannot fire anywhere in CI - a gate believed to block that does not."
+      compensating_controls_considered: >-
+        pytest-cov's global fail_under=37 (pyproject) DOES gate the full-tier suite run over
+        src/ - a real but much weaker floor (global, src-only, post-merge). The planning/implement
+        skills' verification-plan discipline pushes per-change test obligations procedurally.
+        Neither asserts per-change coverage mechanically.
+      change_type: retune_gate
+      proposed_change: >-
+        Sequence: (1) fix the slash-form --cov (rec-2791, already scoped); (2) land CD.30's
+        diff-line ratchet retarget of test_coverage_checker; (3) register the retargeted check
+        in pre_sequence and drop it from full_sequence (where it is structurally a no-op).
+        Landing (3) without (1)/(2) would suddenly enforce per-file 100% on every touched
+        legacy file - do not reorder.
+      acceptance: "A PR reducing changed-line coverage reds pr-validate; main-validate no longer dispatches a check that cannot fail"
+      severity: high
+      severity_rationale: >-
+        'A gate believed to block that does not' is the brief's critical clause, but the
+        subject is a quality floor, not a correctness assertion - an under-covered merge is
+        not itself a broken merge, and the global 37% floor still operates. High, not
+        critical, on that distinction.
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-insufficient, item_ids: [CD.30, T3.7, rec-2791],
+        dedup_search_terms: ["test_coverage_checker", "coverage gate", "100%", "vacuous", "fail_under"],
+        dedup_hit_count: 14,
+        note: "The rec-2791/2681/2640/2633 cluster owns the scripts/ slash-form vacuity; CD.30/T3.7 own the gate's replacement but PREMISE it as currently operating ('wired into validate.py... already diff-scoped') - the empty-diff-in-CI layer is unrecorded anywhere, hence planned-INSUFFICIENT."}
+      effort: M
+      depends_on: []
+      sequencing: {safe_to_queue_now: false, blocked_behind: [], note: "Blocked behind rec-2791 fix + CD.30 ratification (T3.7-gated); promoting the current 100%-floor form to --pre would be a breaking strictness jump."}
+
+    - id: VTS-08
+      surface: S2
+      question: Q1
+      dimension: VD1
+      title: "Two prompt checks are permanent no-ops globbing T-1.13-deleted paths - while the five live scheduled prompts go unvalidated; one is dispatched twice"
+      evidence: "validate_prompt_files.py:23-24 (globs .github/prompts/*.prompt.md - top-level only); ls .github/prompts/ -> only scheduled/ (5 .prompt.md files); registry.py:158+237 (validate_cli_tools_in_prompts twice in full_sequence); tests/test_checks_registry.py:258 pins 'appears_exactly_twice'; rec-2396"
+      evidence_kind: observed
+      current_behavior: >-
+        Both checks print 'All 0 ... passed' green in every tier run (pre + full; cli_tools
+        twice in full). The live prompt surface (.github/prompts/scheduled/, retained per
+        AGENTS.md for scheduled agents) is not globbed, so KNOWN_MODELS drift or CLI-tool rot
+        in real prompts is invisible.
+      ideal_behavior: "Checks validate the live prompt surface once per tier, or are deleted with their floor entries if the surface is out of contract."
+      gap: "False green signal from dead guards; a curated-asset (CD.29) violation rec-2396 already names."
+      compensating_controls_considered: "None: nothing else validates scheduled/*.prompt.md; the scheduled agents are live consumers."
+      change_type: rescope
+      proposed_change: >-
+        Re-point both checks' globs at .github/prompts/scheduled/ (and .claude/ if intended),
+        refresh KNOWN_MODELS, drop the duplicate full-tier dispatch, and update the
+        exactly-twice test + membership floors accordingly. If the scheduled surface is
+        deliberately out of scope, delete both checks + floors instead - either way the
+        no-op state ends.
+      acceptance: "Both checks report a non-zero file count against the live surface (or are removed); registry floors updated; full_sequence dispatches cli_tools once"
+      severity: medium
+      severity_rationale: "Dead guards emitting green are drift-risk with a clear fix; no live defect passes BECAUSE of them today (the guarded surface is low-churn)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-unbuilt, item_ids: [rec-2396],
+        dedup_search_terms: ["validate_prompt_files", "cli_tools", "no-op", "prompt"],
+        dedup_hit_count: 1,
+        note: "rec-2396 (open) owns the no-op diagnosis; the scheduled/-surface miss and the pinned double-dispatch are this audit's additions to its scope."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-09
+      surface: S1
+      question: Q3
+      dimension: VD3
+      title: "~28s of every --pre run is whole-tree governance checks that ignore the diff"
+      evidence: "check_timings.json (this container): validate_platform_roadmap 6.3s + validate_plan_documents 5.4s + validate_tier_floor 5.0s + validate_test_count_coupling 3.2s + validate_cc_limits 2.9s + validate_no_cross_test_imports 1.3s + validate_ops_portal_patch_targets 1.7s; pre-tier check sum 31.3s; confirmed end-to-end: validate --pre on a near-empty diff (lint/precommit/mypy/pytest all skipped) = 31.0s wall, all check-block"
+      evidence_kind: observed
+      current_behavior: >-
+        The fast tier's check block costs ~31s (container; proportionally less on CI) on every
+        run including diffs that touch none of the checked surfaces. The roadmap trio alone is
+        16.7s re-parsing docs/plans/** + ROADMAP-PLATFORM.yaml on every edit-loop iteration.
+      ideal_behavior: >-
+        Diff-gated dispatch for the expensive whole-tree checks in --pre only (skip when no
+        file under their input globs changed), preserving unconditional full-tier runs as the
+        merge-race backstop.
+      gap: "Edit-loop latency + budget headroom spent re-validating unchanged surfaces; Decision 73's diff-aware principle applied to lint/mypy/pytest but not to the check block."
+      compensating_controls_considered: "CI is comfortably under budget (median 1.8 min), so this is local-session latency + headroom, not a CI defect; the 300s budget assertion is the backstop."
+      change_type: rescope
+      proposed_change: >-
+        Add an input-glob gate for the 5-6 checks >1s in pre_sequence (e.g. roadmap trio on
+        docs/plans/**|docs/ROADMAP-*|docs/DECISIONS.md; count-coupling/cross-imports on
+        tests/**; cc_limits on **/*.py) - a per-check `pre_globs` field on Check keeps it
+        declarative in the registry.
+      acceptance: "--pre on a docs-only diff skips the roadmap trio (logged as skipped-by-glob); full tier unchanged; budget headroom grows ~20-25s"
+      severity: medium
+      severity_rationale: "Efficiency with a clear fix; no coverage lost (full tier keeps whole-tree runs)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["diff-gate", "tier_floor slow", "platform_roadmap slow", "pre tier cost"],
+        dedup_hit_count: 0, note: "Budget-breach recs record symptoms (pytest_diff dominant), not this check-block cost."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-10
+      surface: S5
+      question: Q3
+      dimension: VD3
+      title: "Full-tier pytest runs serial while the fast tier runs xdist - the largest reducible share of the 27.7-min post-merge validate step"
+      evidence: "_scaffolding.py:224-237 (_build_unit_test_cmd: no -n); _PYTEST_FLAGS:50-57 (-n auto in fast tier); observed main-validate validate step 27.7 / 25.7 min (runs 30037739757 / 30030803231); suite timed once: 6885 tests in 35:14 serial (audit container) with the top-25 durations all independent 24-40s tests (a ~27s-each session/preflight cluster alone is ~7 min serial) - the shape parallelizes well"
+      evidence_kind: observed
+      current_behavior: >-
+        The full suite runs single-process with --cov on every push to main (~10-12x/day) and
+        canary (8x/day). The fast tier already runs the same tests xdist-parallel with a fixed
+        seed (rec-2653) - the flake-safety pattern for parallel collection is proven in-repo.
+      ideal_behavior: "-n auto (+ fixed seed per rec-2653's pattern) on the full-tier invocation; junit and pytest-cov are xdist-compatible."
+      gap: "~30-min post-merge signal latency where ~10-15 min is achievable; later PRs branch from unvalidated main during the window."
+      compensating_controls_considered: "Public-repo minutes are free - the cost is signal LATENCY and forward-fix delay, which no control offsets."
+      change_type: retune_gate
+      proposed_change: >-
+        Add -n auto --randomly-seed=<fixed> to _build_unit_test_cmd (mirroring _PYTEST_FLAGS),
+        keeping --cov/--junitxml; validate_hermeticity_flags' guarded set updates in the same
+        change (it pins --randomly-seed=last today - the guard and the seed policy must move
+        together).
+      acceptance: "main-validate wall drops materially (target: validate step under ~18 min); junit still uploaded; no cross-worker collection mismatch over 5 consecutive runs"
+      severity: medium
+      severity_rationale: "Pure efficiency/latency; no guarantee reduction. Medium not high: the ladder reserves high for guarantee-reducing weaknesses."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["xdist", "-n auto", "full tier parallel", "serial pytest"],
+        dedup_hit_count: 0, note: "Closed xdist recs concern the fast tier's seed fix (rec-2653), not full-tier parallelism."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Interacts with VTS-13 (same command line); land together."}
+
+    - id: VTS-11
+      surface: S5
+      question: Q3
+      dimension: VD3
+      title: "No workflow declares concurrency - superseded pr-validate runs complete after force-pushes"
+      evidence: "ci.yml/main-canary.yml: zero concurrency keys (grepped); verify_ci_workflow.py:54-67 _check_concurrency asserts only the RETIRED ci-runner group stays absent"
+      evidence_kind: static
+      current_behavior: "A force-push mid-run leaves the stale pr-validate run consuming a runner to completion (~2 min each); rapid iteration stacks them."
+      ideal_behavior: "concurrency: {group: pr-validate-${{ github.ref }}, cancel-in-progress: true} on pr-validate ONLY; main-validate/canary deliberately uncancelled (per-commit RCA attribution + drift-canary role)."
+      gap: "Minor runner waste + queue pressure at GitHub's concurrent-job limit during bursts."
+      compensating_controls_considered: "Public-repo minutes free; job timeout 30 min bounds each stale run; _check_concurrency does not conflict (group name != 'ci-runner')."
+      change_type: add
+      proposed_change: "Per-PR concurrency group with cancel-in-progress on pr-validate; extend _check_concurrency to pin main-validate's ABSENCE of cancel-in-progress (making the asymmetry deliberate and guarded)."
+      acceptance: "Two rapid pushes to one PR -> first run cancelled; push to main never cancels a prior main-validate"
+      severity: low
+      severity_rationale: "Waste only; free minutes make it cosmetic-adjacent, but queue contention during bursts is real."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["cancel-in-progress", "concurrency", "superseded run"],
+        dedup_hit_count: 1, note: "rec-2794 is terraform gated-apply orphaning - different subsystem; no ci.yml concurrency rec exists."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-12
+      surface: S5
+      question: Q3
+      dimension: VD3
+      title: "pip cache keys hash requirements.txt while jobs install fast/dev sets"
+      evidence: "ci.yml:37/108, main-canary.yml:37 (key: hashFiles('requirements.txt')); pr-validate installs requirements-fast.txt + requirements-dev.txt (ci.yml:56-59); rec-2304; observed: cache restore 35s + install 89s on main-validate (working adequately)"
+      evidence_kind: observed
+      current_behavior: >-
+        A change to requirements-fast.txt or requirements-dev.txt alone does not rotate any
+        cache key; restore-keys prefix matching serves a stale layer silently (rec-2304's
+        litellm outage is the realized instance for dev+canary). pr-validate additionally
+        restores main's full-set cache (~35s) for wheels it never installs.
+      ideal_behavior: "Each job's key hashes exactly the files it installs (pr-validate: fast+dev; main/canary: full+dev)."
+      gap: "Stale-layer reuse class; minor restore waste."
+      compensating_controls_considered: "pip verifies versions at install time against the declaration files, so the cache cannot pin a WRONG version - only re-download or stale-wheel reuse; correctness unaffected."
+      change_type: rescope
+      proposed_change: "pr-validate key: hashFiles('requirements-fast.txt','requirements-dev.txt'); main/canary: hashFiles('requirements.txt','requirements-dev.txt') - the rec-2304 fix widened to the fast set."
+      acceptance: "Editing requirements-fast.txt alone rotates pr-validate's cache key"
+      severity: low
+      severity_rationale: "Cache works today (observed 89s install); this closes a staleness class, not a live outage."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-insufficient, item_ids: [rec-2304],
+        dedup_search_terms: ["pip cache", "hashFiles", "requirements-dev"],
+        dedup_hit_count: 1, note: "rec-2304 covers the dev-hash half (canary + main-validate); the pr-validate fast-set half is this audit's extension."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Fold into the rec-2304 fix."}
+
+    - id: VTS-13
+      surface: S3
+      question: Q5
+      dimension: VD6
+      title: "Full-tier flake governance gaps: no per-test timeout, order randomized with a fresh seed every CI run, no quarantine/rerun policy"
+      evidence: "_build_unit_test_cmd (no --timeout; --randomly-seed=last); no .pytest_cache persists across CI runs so 'last' degrades to a new random seed per run; _PYTEST_FLAGS has --timeout 60 + fixed seed for the fast tier; job timeout-minutes: 60 is the only hang bound"
+      evidence_kind: static
+      current_behavior: >-
+        A hung test consumes up to the 60-min job timeout and the junit report is lost with
+        the cancelled job (RCA falls back to log tails); order-dependence flakes surface
+        nondeterministically on main/canary as priority=critical forward-fix recs (rec-2687 is
+        an open instance of a non-hermetic full-tier flake).
+      ideal_behavior: >-
+        --timeout on the full run (generous, e.g. 120s); an OWNED seed policy: either pinned
+        (deterministic reds, order-shakeout delegated to a scheduled randomized job) or
+        random-with-printed-seed (current de-facto) ratified as a choice; junit salvage on
+        timeout.
+      gap: "Post-merge flake handling is entirely reactive (critical rec + human cycle) with nondeterministic reproduction."
+      compensating_controls_considered: >-
+        pytest-randomly PRINTS the seed in the header, so a red run's order IS reproducible
+        from its log (real, partial mitigation); junit upload if: always() covers ordinary
+        failures, just not job-timeout kills; hermeticity layers (checklist e) prevent the
+        network/AWS flake classes at the root.
+      change_type: retune_gate
+      proposed_change: "Add --timeout 120 --timeout-method=thread to _build_unit_test_cmd; ratify the seed policy in the same change (validate_hermeticity_flags pins whichever wins); land with VTS-10's xdist change (xdist requires the fixed-seed pattern anyway, per rec-2653)."
+      acceptance: "A deliberately-hung test reds the suite at 120s with junit emitted; hermeticity-flags guard updated in lockstep"
+      severity: medium
+      severity_rationale: "Reduces the guarantee's OPERABILITY (a hang wastes an hour and blinds RCA) but not its coverage; compensating seed-print mitigation is real."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["timeout", "randomly-seed", "flake", "quarantine"],
+        dedup_hit_count: 1, note: "rec-2687 is one flaky-test instance, not the governance gap; rec-2653 fixed the fast tier's seed only."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Same command line as VTS-10 - one PR."}
+
+    - id: VTS-14
+      surface: S2
+      question: Q2
+      dimension: VD2
+      title: "validate_requirements: 35.4s of serial PyPI network calls in the blocking post-merge gate"
+      evidence: "measured: 35.4s / 32 packages (one run, this container); validate_requirements.py:44-52 (pip index versions per package, network errors append to failed); full_sequence only (registry.py:234)"
+      evidence_kind: observed
+      current_behavior: >-
+        Every push to main and every canary run does 32 serial PyPI index round-trips; a PyPI
+        outage or rate-limit reds main (network-classified errors append to failed), filing a
+        critical ci_rca rec for weather. The property it checks (declared names exist on PyPI)
+        can only change when requirements*.txt changes - which is gated pre-merge by
+        installs succeeding.
+      ideal_behavior: "Runs when a requirements file is in the relevant diff, or is informational alongside pip-audit (which is already deliberately non-blocking for exactly this wedging reason)."
+      gap: "A non-hermetic blocking check in the tier whose failures hard-block the planning queue (Decision 73 L5) - the wedging class the informational dependency_health design deliberately avoided."
+      compensating_controls_considered: "Its own error classifier labels network failures distinctly, but still appends to failed - classification without mercy; the ci-rca agent would diagnose the outage, at the cost of a critical-rec cycle."
+      change_type: retune_gate
+      proposed_change: "Demote network-classified errors to loud warnings (keep not-found as failures), or diff-gate the whole check; either preserves typo detection where it matters."
+      acceptance: "Simulated network failure (offline run) does not append to failed; a fake package name still reds"
+      severity: medium
+      severity_rationale: "Wedging risk with an observed-cheap fix; no incident in the ci_rca sample yet (PyPI has been up)."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["pip index", "validate_requirements", "PyPI", "network check"],
+        dedup_hit_count: 1, note: "rec-2717 wants unit tests for orphan validators incl. this one - orthogonal."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-15
+      surface: S1
+      question: Q5
+      dimension: VD6
+      title: "mypy is advisory in both tiers with 143 standing errors, and no decision owns the advisory status"
+      evidence: "validate.py:270-274 ('informational - not blocking. Fix progressively.') + :439-446; measured: mypy src/ -> 143 errors in 59 files, 54s; grep of DECISIONS.md: no decision addresses mypy's gate status; AGENTS.md mandates 'type hints required'"
+      evidence_kind: observed
+      current_behavior: >-
+        Both tiers print type errors and continue. The debt is stable-high (143), 'fix
+        progressively' has no ratchet, and the repo's own code-style contract mandates type
+        hints - asserted by no gate.
+      ideal_behavior: >-
+        Either a ratchet (mypy on changed files gates in --pre; error-count baseline that only
+        moves down, mirroring the SLOC-budget downward ratchet pattern already proven in-repo)
+        or a decision explicitly owning advisory-forever.
+      gap: "Checklist (b) missed with an unowned choice - the exact 'advisory by deliberate design' escape the checklist offers is unavailable because nobody decided it."
+      compensating_controls_considered: "ruff (E/F/W/I) catches the untyped-name classes; pydantic validates runtime boundaries; neither is a type gate."
+      change_type: clarify
+      proposed_change: >-
+        Smallest honest step: a decision record choosing one of (i) advisory-forever with
+        rationale, (ii) changed-files mypy gating in --pre after a burn-down, (iii) a
+        count-ratchet (the SLOC-budget mechanism generalized). This audit does not pick;
+        ownership is the finding.
+      acceptance: "A Decision names mypy's gate status; if (ii)/(iii), the corresponding check lands with it"
+      severity: medium
+      severity_rationale: "A merge relying on type correctness can land trusted-but-wrong today, but the class overlaps heavily with what tests catch; the defect filed is the unowned status, not 'mypy must block'."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["mypy", "type check gate", "informational"],
+        dedup_hit_count: 0, note: "Three mypy-adjacent recs are per-module typing fixes, not gate-status governance."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-16
+      surface: S6
+      question: Q7
+      dimension: VD8
+      title: "pytest-picked is a dead dependency declared in both requirements files, with three stale surface comments"
+      evidence: "requirements.txt:42 + requirements-fast.txt:8 declare it; zero --picked invocations repo-wide (grepped); stale references: validate.py:398 comment, ci.yml:50 comment, requirements-fast.txt:1 header; Decision 135 retired the mechanism"
+      evidence_kind: static
+      current_behavior: "The plugin installs and auto-loads into every pytest process in both tiers for a flag nothing passes; three comments describe the fast tier as '--picked'-based."
+      ideal_behavior: "Dependency removed from both files; the three comments describe the affected-set selection."
+      gap: "Declaration/reality drift in the exact file set whose sync discipline is otherwise mechanically enforced."
+      compensating_controls_considered: "None needed; removal is free (no consumer). scripts/ci_rca/vacuous_pass.py also references --picked semantics - CI-RCA internals, owned by audits/ci-rca-system-a49db8f, noted at the boundary."
+      change_type: rescope
+      proposed_change: "Remove pytest-picked from requirements.txt + requirements-fast.txt (+ lock regen); rewrite the three comments."
+      acceptance: "grep -r 'picked' over requirements*, ci.yml, validate.py returns nothing; validate --pre green"
+      severity: low
+      severity_rationale: "Cosmetic-plus: one dead wheel and misleading docs; no behavior."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["pytest-picked", "picked"],
+        dedup_hit_count: 2, note: "rec-2427/2428 touch tests NAMED for the old selection - test-hygiene items, not the dependency."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-17
+      surface: S2
+      question: Q8
+      dimension: VD7
+      title: "registry owner/product_coupled metadata is write-only - consumed by nothing but its own conformance tests"
+      evidence: "registry.py:33-58 (fields); grep: no runtime consumer (dispatch/sequencing/reporting ignore both); tests/test_checks_registry.py:354-379 pins 3 non-default rows"
+      evidence_kind: static
+      current_behavior: "Every check carries owner + product_coupled; no filter, report, or dispatch path reads them."
+      ideal_behavior: "Either a consumer exists (e.g. product-coupled checks skippable when trading surfaces are frozen; ownership routing in ci-rca), or the intent is recorded on the registry docstring so the fields are known-forward-looking."
+      gap: "VD7 names write-only metadata as a drift class: fields that cost conformance-test maintenance while informing nothing."
+      compensating_controls_considered: "The conformance tests DO stop silent value rot; what is missing is any reason the values matter."
+      change_type: clarify
+      proposed_change: "One-paragraph intent note in registry.py (who will consume, when) or wire the cheapest real consumer (ci-rca rec tagging by owner)."
+      acceptance: "registry.py states the consumer/intent, or a consumer reads the fields"
+      severity: low
+      severity_rationale: "Pure hygiene; the platform/product split is plausibly the future consumer."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["product_coupled", "owner metadata"],
+        dedup_hit_count: 0, note: ""}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-18
+      surface: S1
+      question: Q2
+      dimension: VD2
+      title: "Full-tier ruff sweep targets src/ + tests/ only - scripts/ is linted solely by the diff-aware fast tier"
+      evidence: "_scaffolding.py:98 (targets = ['src/', 'tests/'] when files is None); pre-commit config has no ruff hook; ruff==0.15.20 pinned + Dependabot grouped bumps; rec-2342"
+      evidence_kind: static
+      current_behavior: >-
+        Post-merge, scripts/ (the platform machinery, including validate.py itself and every
+        check) is never ruff-checked. On a ruff version bump PR the diff contains no .py files,
+        so NO lint runs anywhere pre-merge; new-rule violations in src/tests red post-merge
+        (ci_rca), and violations in scripts/ lie dormant until an unrelated PR touches the file
+        and inherits the red.
+      ideal_behavior: "Full-tier lint covers every linted root (src/, tests/, scripts/); a ruff-bump PR triggers a whole-tree lint."
+      gap: "Gate-coverage asymmetry rec-2342 names; the innocent-PR-inherits-red failure mode misattributes causes."
+      compensating_controls_considered: "Exact ruff pin + grouped Dependabot updates make rule-set drift a discrete, reviewable event - the window is real but narrow; fast-tier diff lint keeps touched scripts/ files clean, so standing debt cannot accumulate silently."
+      change_type: enforce
+      proposed_change: "Add 'scripts/' to run_lint_checks' default targets (rec-2342); optionally diff-gate a whole-tree lint on requirements*-touching PRs to close the ruff-bump window."
+      acceptance: "Full tier reds on a planted scripts/ lint violation; bin/venv-python -m scripts.validate (full) exercises it"
+      severity: medium
+      severity_rationale: "Drift-risk with wrong-PR blame side effect; no correctness gate lost."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-unbuilt, item_ids: [rec-2342],
+        dedup_search_terms: ["ruff", "lint scripts", "gate-coverage"],
+        dedup_hit_count: 1, note: "rec-2342 (open) owns it verbatim; the ruff-bump-PR interaction is this audit's addition."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: "Pre-clean scripts/ first (fast tier has kept touched files clean; residual violations should be near zero)."}
+
+    - id: VTS-19
+      surface: S2
+      question: Q2
+      dimension: VD2
+      title: "Two whole-tree checks are pre-only: validate_cc_limits and validate_deploy_channel_conformance never re-assert post-merge"
+      evidence: "registry.py pre_sequence:102/116 vs full_sequence (absent); both scan the tree, not the diff (cc_limits.py:18 iter_gated_py_files; deploy_channel scans terraform/docs); sloc_limits - the sibling gate - IS both-tier"
+      evidence_kind: static
+      current_behavior: >-
+        Merge unions (two individually-green PRs) and admin-bypass pushes are re-asserted for
+        SLOC/prose but not CC or deploy-channel conformance; the asymmetry with sloc_limits is
+        unexplained anywhere.
+      ideal_behavior: "Whole-tree invariants appear in the full tier; diff-semantic checks stay pre-only."
+      gap: "The full tier's whole-repo-soundness claim has two silent exclusions."
+      compensating_controls_considered: "Branch protection requires pr-validate on every merge (Decision 83), so single-PR breaches cannot land; only unions/bypass escape - narrow but real (rec-2749/2762 prove the union class occurs for other checks)."
+      change_type: add
+      proposed_change: "Add both to full_sequence (2.9s + 0.09s measured - negligible against 27.7 min); update REQUIRED_FULL_CHECKS floor."
+      acceptance: "Both names in full_sequence(); floor test green"
+      severity: low
+      severity_rationale: "Narrow escape channel, cheap symmetric fix."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["cc_limits full tier", "deploy_channel_conformance tier"],
+        dedup_hit_count: 0, note: "cc_limits recs (rec-2386/2711/931) are test/doc polish, not tier placement."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-20
+      surface: S1
+      question: Q3
+      dimension: VD3
+      title: "The fast-tier budget loop reports but never converges: 23 open budget_breach recs, post-hoc assertion, no consumer"
+      evidence: "23 open source=budget_breach recs at 5.2-5.5 min, dominant_phase=pytest_diff in 20/32 total; budget assertion is pre_sequence's LAST step (registry.py:136, validate.py:456-472); CI unaffected (pr-validate median 1.8 min, n=15)"
+      evidence_kind: observed
+      current_behavior: >-
+        Local sessions breach the 300s budget routinely (large mid-implementation diffs ->
+        big selections -> serial-ish pytest on container cores); each breach files a rec;
+        nothing consumes them (the executor that would is frozen, and /plan surfaces them only
+        as queue noise). The assertion cannot prevent a breach - it reds after the fact (its
+        design; Q8.8).
+      ideal_behavior: >-
+        The breach stream feeds a standing consumer: preflight already soft-alerts on bypasses;
+        extend it to aggregate breach recs (count/phase histogram) and auto-close superseded
+        duplicates, so the signal Decision 135's reversal condition (b) needs stays legible
+        instead of accreting as 23 near-identical open recs.
+      gap: "A governance mechanism generating unconsumed obligations is negative-value until read; 23 duplicates bury the one insight (pytest_diff dominates local breaches)."
+      compensating_controls_considered: "CI's step-summary path works and CI is under budget - the loop's CI half is healthy; the local half is the accretion."
+      change_type: persist
+      proposed_change: "Dedupe breach recs on (branch, dominant_phase) at filing time (update-instead-of-insert), and surface a one-line breach-rate summary in session preflight."
+      acceptance: "A repeat breach on the same branch updates the existing rec; preflight prints breach-rate"
+      severity: medium
+      severity_rationale: "Governance-loop health; no gate weakened, but the budget contract is de facto unenforced locally."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["budget breach", "budget_bypass", "preflight alert"],
+        dedup_hit_count: 23, note: "The 23 hits ARE the symptom records; no item owns their consumption."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-21
+      surface: shared
+      question: Q6
+      dimension: VD9
+      title: "'coverage' names three semantics across the validation surface; the selection mirror-map lives in a coverage-named module"
+      evidence: "Enumeration in Q6 prose; sharpest: scripts/test_coverage_checker.py hosts map_source_to_test (Decision 135 channel 3) - a selection input inside a coverage-named module; --coverage flag = verifier coverage while --cov = code coverage on the same CLI"
+      evidence_kind: static
+      current_behavior: "Documented in Q6; degrades S1 (CLI flag), S2 (check names), S3/S4 (mirror-map host module) navigation - an agent-first repo's stated failure mode."
+      ideal_behavior: "One word, one subsystem: verifier-coverage surfaces renamed; mirror map relocated at the CD.30 rewrite."
+      gap: "Accreted overload with no owning decision (grepped: none)."
+      compensating_controls_considered: "The audit-prompt disambiguation blocks (this brief's READ FIRST) exist BECAUSE the collision misdirects - a documentation patch over a naming defect."
+      change_type: rename
+      proposed_change: "Per naming_reconciliation row 1: rename --coverage/run_coverage_check/coverage_report scaffold (XS); relocate map_source_to_test with CD.30's retarget (S)."
+      acceptance: "grep 'coverage' under scripts/checks + validate.py resolves to exactly one semantics per hit context"
+      severity: low
+      severity_rationale: "Clarity/naming class by the ladder."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["coverage naming", "rename coverage", "map_source_to_test"],
+        dedup_hit_count: 0, note: "Counts toward S1/S2/S3/S4 clarity; low severity so no maturity impact."}
+      effort: S
+      depends_on: []
+      sequencing: {safe_to_queue_now: false, blocked_behind: [VTS-07], note: "Mirror-map relocation rides the CD.30 rewrite; CLI/scaffold renames are free anytime."}
+
+    - id: VTS-22
+      surface: S3
+      question: Q5
+      dimension: VD6
+      title: "Two of four conftest guard fixtures still use own_markers, missing class/module-level markers (the documented rec-575 gap)"
+      evidence: "tests/conftest.py:188 (_allow_network_for_integration) and :198 (_block_llm_cli_subprocess) use own_markers; :77 and :108 (the AWS pair) were fixed to get_closest_marker with comments citing rec-575; rec-575 open"
+      evidence_kind: static
+      current_behavior: "A class- or module-level @pytest.mark.integration test gets AWS-guard exemption but NOT socket re-enable or CLI-guard exemption - it fails on the wrong layer, locally only (integration never runs in CI)."
+      ideal_behavior: "All four guards use get_closest_marker."
+      gap: "Half-applied fix; the file documents the gap it still contains."
+      compensating_controls_considered: "Integration tests are manual-only, so blast radius is local diagnostics."
+      change_type: enforce
+      proposed_change: "Two-line change to get_closest_marker; done under rec-575."
+      acceptance: "A class-level integration marker re-enables sockets (unit test with a marked dummy class)"
+      severity: low
+      severity_rationale: "Local-only inconsistency."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: planned-unbuilt, item_ids: [rec-575],
+        dedup_search_terms: ["own_markers", "get_closest_marker", "rec-575"],
+        dedup_hit_count: 2, note: "rec-575 open owns it; rec-2724 records the partial fix wave."}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+    - id: VTS-23
+      surface: S2
+      question: Q1
+      dimension: VD1
+      title: "validate_imports re-imports two hardcoded modules for 16.1s per full run - a property the same tier's pytest collection already asserts"
+      evidence: "validate_imports.py:15-18 (execute_recommendation + classify_risk only); measured 16.1s (heavy transitive imports); tests/execute_recommendation/** and classify_risk tests import both in the same full tier's suite run"
+      evidence_kind: observed
+      current_behavior: "A 2-module import smoke from a 2026-era executor plan, never generalized; its failure mode (ImportError) reds the full-tier pytest collection identically."
+      ideal_behavior: "Deleted (floor entry too), or generalized into a cheap all-entry-points import smoke if that property is wanted - not a hardcoded pair."
+      gap: "CD.29 curated-asset violation: a check not earning its 16s."
+      compensating_controls_considered: "Full-suite collection covers it; --pre affected-set covers it pre-merge whenever either module changes (direct import edges)."
+      change_type: rescope
+      proposed_change: "Delete check + registry line + facade line + floor entry; note in commit that suite collection subsumes."
+      acceptance: "Full tier green without it; planted ImportError in execute_recommendation still reds full tier (via pytest)"
+      severity: low
+      severity_rationale: "Redundancy with measurable cost; zero coverage change."
+      confidence: CONFIRMED
+      roadmap_crossref: {classification: novel, item_ids: [],
+        dedup_search_terms: ["validate_imports", "import smoke"],
+        dedup_hit_count: 0, note: ""}
+      effort: XS
+      depends_on: []
+      sequencing: {safe_to_queue_now: true, blocked_behind: [], note: ""}
+
+  rejected_candidates:
+    - candidate: "The full pytest suite runs only post-merge - make it gate PRs"
+      why_dismissed: "Deliberate presubmit/postsubmit split, ratified and enforced (Decision 60/73); the live question is selection recall, filed as VTS-01..05."
+      compensating_control: "Diff-aware affected-set gate (Decision 135) + forward-fix + 28-33-min post-merge detection"
+      control_property_match: "The affected-set selects the diff's blast radius pre-merge; observed escape rate 1/20 recent ci_rca recs; if selection were broken the full tier catches within ~30 min and hard-blocks the queue."
+      decision_or_item_id: "Decision 60/73"
+    - candidate: "Selection should be cached / manifest should feed back into selection"
+      why_dismissed: "Deliberately live/cacheless/tool-free; a selection or coverage cache is the KG.13 (T3.11 c5) deferral with an armed revisit trigger; the manifest is output-only by structural design."
+      compensating_control: "Decision 135 KG.13 boundary + Decision 80 point 3"
+      control_property_match: "The revisit trigger (concurrency > 1 OR budget breach in CI) names the exact conditions under which caching would pay; neither has fired in CI (median 1.8 min observed)."
+      decision_or_item_id: "KG.13 / T3.11 c5"
+    - candidate: "The selection manifest has no consumer"
+      why_dismissed: "Owned deferral: DuckLake/named-verb registration is T2.36, triggered by first written cross-run query. The DISTINCT gap - the reversal condition that cannot be evaluated without it - is filed as VTS-05, and artifact corruption as VTS-06."
+      compensating_control: "T2.36 deferral clause in Decision 135"
+      control_property_match: "The deferral names the activation trigger; consumption before need would violate the do-less baseline (Decision 80)."
+      decision_or_item_id: "T2.36"
+    - candidate: "main-validate's pip cache is starved by pr-validate saving the shared key first"
+      why_dismissed: "DISPROVED by observation: GitHub cache scoping is branch-scoped (PR-saved caches are not restorable by main), and main-validate showed 35s restore + 89s full install - the cache works."
+      compensating_control: "actions/cache branch-scope isolation"
+      control_property_match: "PR-scope caches cannot shadow main-scope caches by design; observed install time confirms."
+      decision_or_item_id: ""
+    - candidate: "Main Canary re-runs the same SHA (4 consecutive observed) - skip unchanged SHAs"
+      why_dismissed: "Same-SHA re-runs are the drift-canary's PURPOSE (fresh dependency resolution against >= floors catches PyPI-published breakage between pushes); public-repo minutes are free, and the latency cost is nil (async)."
+      compensating_control: "Decision 73 L8 drift-canary role"
+      control_property_match: "An unchanged tree with a changed environment is exactly what a same-SHA rerun detects; skipping it would blind the canary to its primary signal."
+      decision_or_item_id: "Decision 73"
+    - candidate: "validate_dependency_graph_freshness is a no-op (docs/dependency-graph.json absent)"
+      why_dismissed: "Deliberate lean posture: no export committed by default; the check exists to bind the export IF someone commits one."
+      compensating_control: "Decision 80 'no committed output file by default'"
+      control_property_match: "The guard is dormant-by-design and activates exactly when its target artifact appears; a dormant guard costs 1.1s in full tier only."
+      decision_or_item_id: "Decision 80"
+    - candidate: "The three-place add ritual / facade re-export block is excessive maintenance surface"
+      why_dismissed: "Chosen Decision-104 pattern; its historical failure mode (frozen baselines causing rec-2673/74/75 post-merge churn) was already redesigned into growth-safe floors; remaining cost is accepted and machine-guarded pre-merge."
+      compensating_control: "TestFacadeCompleteness + growth-safe membership floors + affected-set selection of test_checks_registry.py on registry edits"
+      control_property_match: "A missing re-export line KeyErrors --pre and fails the registry tests on the SAME PR (import edge guarantees selection)."
+      decision_or_item_id: "Decision 104"
+    - candidate: "setup.py is not packaging / pyproject has no [project] table - adopt packaging"
+      why_dismissed: "setup.py's env-bootstrap role is Decision 27 (deliberate); the name concern is recorded by the repository-structure audit (EC9 residual). Packaging adoption is enumerated as requirements_options B, a trade-off - not filed as a defect."
+      compensating_control: "Decision 27 + setup.py's own deprecation header"
+      control_property_match: "The docstring states the role and the CC-web replacement; no build path consumes setup.py as packaging."
+      decision_or_item_id: "Decision 27; audits/repository-structure-cb02572.yaml"
+    - candidate: "Root requirements-file count / placement"
+      why_dismissed: "Owned and dismissed by the repository-structure audit (documented, mechanically-synced roles); Q7 here is content/coupling only."
+      compensating_control: "audits/repository-structure-cb02572.yaml C10 rejection"
+      control_property_match: "That audit verified each file's stated role and sync mechanism at the root level."
+      decision_or_item_id: "audits/repository-structure-cb02572.yaml"
+    - candidate: "validate_terraform_try is registered but dispatched by neither sequence"
+      why_dismissed: "Dispatched inside the terraform_checks scaffold (_terraform.py:147), documented in registry.py's full_sequence comment and tested as one unit (TestRunTerraformChecks); a registry-accounting nuance, not an orphan."
+      compensating_control: "registry.py full_sequence docstring + tests/test_validate.py::TestRunTerraformChecks"
+      control_property_match: "The bundled call site is exercised by tests; removal of the inner call would fail them."
+      decision_or_item_id: "Decision 104"
+    - candidate: "Fast tier installs no boto3 - AWS-dependent checks silently skip in pr-validate"
+      why_dismissed: "Deliberate rec-2485 design: heavy wheels excluded, AWS-touching steps (DQ, harness, S3 manifest leg) are full-tier or loud-skip; the deferral classifier fails closed for every non-heavy shape."
+      compensating_control: "requirements-fast.txt exclusion set derived at runtime + loud-skip pattern (Decision 55)"
+      control_property_match: "A test needing a heavy dep defers loudly with the dep named; any other failure reddens - verified in _scaffolding partition/reactive logic and its tests."
+      decision_or_item_id: "rec-2485 / Decision 104"
+
+  summary:
+    total_findings: 23
+    novel_count: 15
+    planned_insufficient_count: 2
+    planned_unbuilt_count: 6
+    top_improvements: [VTS-01, VTS-03, VTS-07, VTS-10, VTS-05]
+    highest_leverage_change: VTS-01
+    maturity_S1: strong
+    maturity_S2: strong
+    maturity_S3: strong
+    maturity_S4: solid
+    maturity_S5: strong
+    maturity_S6: strong
