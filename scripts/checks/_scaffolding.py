@@ -435,6 +435,9 @@ def _runtime_heavy_dep_defer_reason(test_file: str, excluded: set[str]) -> str |
 # entry in changed_tests.
 _ERROR_COLLECTING_RE = re.compile(r"ERROR collecting (\S+)")
 _SKIPPED_LINE_RE = re.compile(r"^SKIPPED\s+\[\d+\]\s+(\S+):\d+:\s*(.+)$", re.MULTILINE)
+# VTS-04 M1: a pytest section-separator line (e.g. the "short test summary info" banner) --
+# bounds the LAST ERROR-collecting block so it stops there instead of running to end-of-output.
+_SECTION_SEPARATOR_RE = re.compile(r"^=+.+=+$", re.MULTILINE)
 
 
 def _match_changed_test_path(file_token: str, changed_tests: list[str]) -> str | None:
@@ -451,13 +454,22 @@ def _attribute_batched_collect_errors(combined: str, changed_tests: list[str], e
     """Parse ONE combined `--collect-only -rs` invocation's stdout+stderr and attribute each
     per-file signal -- a hard collection-ERROR block, or a graceful SKIPPED line -- to its OWN
     file, so a mixed batch (one uncollectable file among several runnable ones) defers exactly
-    the uncollectable file(s), never the whole batch."""
+    the uncollectable file(s), never the whole batch.
+
+    VTS-04 M1: the LAST header's block is additionally bounded at the first pytest section
+    separator (e.g. "=== short test summary info ===") that follows it, not just the next
+    header/end-of-string -- otherwise it swallows the trailing summary section, which echoes
+    EVERY errored file's own "No module named" message, and `matches[-1]` (the last match in an
+    unbounded block) can mis-attribute an earlier file's heavy-dep message to the last file even
+    when the last file's own error is a genuine, unrelated bug."""
     deferred: dict[str, str] = {}
 
     headers = list(_ERROR_COLLECTING_RE.finditer(combined))
     for i, header in enumerate(headers):
         file_token = header.group(1)
-        block_end = headers[i + 1].start() if i + 1 < len(headers) else len(combined)
+        next_start = headers[i + 1].start() if i + 1 < len(headers) else len(combined)
+        sep_match = _SECTION_SEPARATOR_RE.search(combined, header.end(), next_start)
+        block_end = sep_match.start() if sep_match else next_start
         block = combined[header.end() : block_end]
         matches = _NO_MODULE_NAMED_RE.findall(block)
         missing = _excluded_and_absent(matches[-1], excluded) if matches else None

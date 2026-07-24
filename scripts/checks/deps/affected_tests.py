@@ -7,19 +7,30 @@ by a change it does not itself contain -- is caught pre-merge.
 
 Unions FOUR channels over the edited-set, STRICTLY ADDITIVELY (selection can only grow, never
 shrink):
-  1. import-closure reverse-deps (nx.ancestors over scripts.dependency_graph.build_graph()).
+  1. import-closure reverse-deps (nx.ancestors over scripts.dependency_graph.build_graph()) --
+     candidates are a changed non-test .py under src/|scripts/ OR a non-test, non-conftest .py
+     under tests/ (VTS-01: tests/fixtures/** shared helpers are graph nodes too, so their direct
+     importers must be candidates, not silently invisible).
   2. data-edge PRECISE match (path or quoted-token reference, never a bare substring) over
      non-.py data artifacts changed in the diff PLUS the deleted-.py-bytes case (Incident B) --
-     generalises and retires scripts/validate.py's old select_roadmap_guard_tests special case.
+     generalises and retires scripts/validate.py's old select_roadmap_guard_tests special case --
+     PLUS (VTS-02) a structural identifier-boundary dotted-module-token match for D-status .py,
+     so a deleted module's importer is selected even when no test text mentions its path/basename.
   3. scripts.test_coverage_checker.map_source_to_test() mirror map (read-only use).
-  4. conftest-subtree rule (a changed tests/**/conftest.py selects every test_*.py under it).
+  4. conftest-subtree rule (a changed tests/**/conftest.py selects every test_*.py under it) --
+     VTS-03: a FORCING conftest (the root tests/conftest.py, or any conftest declaring an
+     autouse fixture) promotes its subtree straight into the protected/uncapped set instead of
+     the cappable residue pool; an ordinary conftest keeps the pre-existing cappable channel.
 
 A ~35-module CAP protects against the import-closure channel's combinatorial blow-up: the
-edited-set, DIRECT reverse-deps, and data-edge hits are NEVER deferred (the additive-only
-invariant); only the TRANSITIVE residue (indirect import-closure ancestors, plus the
-mirror-map/conftest-subtree channels, which are cheap/bounded in the common case but not given
-the same hard protection as the three invariant-protected categories) is subject to the cap, and
-any overflow is deferred LOUDLY (never silently dropped) -- the full tier still covers it.
+edited-set, DIRECT reverse-deps, data-edge hits, and forcing-conftest hits are NEVER deferred
+(the additive-only invariant); only the TRANSITIVE residue (indirect import-closure ancestors,
+plus the mirror-map/ordinary-conftest-subtree channels, which are cheap/bounded in the common
+case but not given the same hard protection as the four invariant-protected categories) is
+subject to the cap. Residue is ordered by CHANNEL PRIORITY before truncation (VTS-04 M2:
+mirror_map, then conftest_subtree, then transitive, alphabetical tiebreak within a class) so a
+higher-signal channel survives the cap first; any overflow is deferred LOUDLY (never silently
+dropped) -- the full tier still covers it.
 
 On any internal exception, falls back to the edited-set and prints a loud warning (Decision 55:
 fail loud, never silently shrink below the edited-set).
@@ -31,6 +42,7 @@ the derivation "live" and "cacheless").
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -58,6 +70,20 @@ def _is_changed_source_py(path: str) -> bool:
     candidate set."""
     return (
         path.endswith(".py") and (path.startswith("src/") or path.startswith("scripts/")) and not _EDITED_TEST_RE.match(path)
+    )
+
+
+def _is_changed_tests_helper_py(path: str) -> bool:
+    """VTS-01: a non-test, non-conftest .py file under tests/ (e.g. tests/fixtures/*.py shared
+    helpers, Decision 131's sanctioned shared-helper home) -- admitted into the SAME
+    import-closure/mirror-map candidate set as _is_changed_source_py so a fixtures-only edit
+    selects its direct importer tests instead of silently selecting zero. conftest.py is
+    excluded here because it already has its own dedicated channel (_conftest_subtree_channel)."""
+    return (
+        path.endswith(".py")
+        and path.startswith("tests/")
+        and not _EDITED_TEST_RE.match(path)
+        and Path(path).name != "conftest.py"
     )
 
 
@@ -101,6 +127,51 @@ def _import_closure_channel(changed_source_files: list[str], repo_root: Path) ->
     return direct, transitive
 
 
+def _module_imports_any(tree: ast.Module, dotted_names: set[str]) -> bool:
+    """True if `tree` contains `import <dotted>` or `from <dotted> import ...` for any name in
+    dotted_names (exact match, or a submodule of a changed package)."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in dotted_names or any(alias.name.startswith(d + ".") for d in dotted_names):
+                    return True
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            if node.module in dotted_names or any(node.module.startswith(d + ".") for d in dotted_names):
+                return True
+    return False
+
+
+def _tests_tree_import_closure_channel(changed_tests_helper_files: list[str], repo_root: Path) -> set[str]:
+    """VTS-01: direct-importer scan for changed tests-tree helper modules (e.g.
+    tests/fixtures/**, Decision 131's sanctioned shared-helper home).
+
+    scripts.dependency_graph.build_graph()'s first-party import extraction
+    (extract_first_party_imports roots=("src", "scripts")) never targets "tests." modules, so a
+    tests/fixtures/x.py file IS a graph node but graph.predecessors() on it is always empty --
+    _import_closure_channel above cannot see these edges no matter how its candidate set is
+    widened. Fixing that root cause lives in scripts/dependency_graph.py, outside this plan's
+    inline-path scope, so this self-contained ast scan supplies the same "direct importer"
+    signal (channel 1's graph.predecessors() case) without touching that file: every
+    tests/**/test_*.py that imports the changed helper's dotted module name directly."""
+    tests_dir = repo_root / "tests"
+    if not changed_tests_helper_files or not tests_dir.is_dir():
+        return set()
+    dotted_names = {mod for f in changed_tests_helper_files if (mod := _file_to_module(repo_root / f, repo_root))}
+    if not dotted_names:
+        return set()
+    hits: set[str] = set()
+    for test_file in sorted(tests_dir.rglob("test_*.py")):
+        if "__pycache__" in test_file.parts:
+            continue
+        try:
+            tree = ast.parse(test_file.read_text(encoding="utf-8"), filename=str(test_file))
+        except (OSError, SyntaxError):
+            continue
+        if _module_imports_any(tree, dotted_names):
+            hits.add(test_file.relative_to(repo_root).as_posix())
+    return hits
+
+
 def _data_edge_reference_candidates(entries: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """(basename, relpath) candidates for the data-edge channel: any changed non-.py file
     (added/modified/untracked) PLUS any DELETED .py file (Incident B: a deleted test file's
@@ -123,17 +194,48 @@ def _quoted_token_pattern(basename: str) -> re.Pattern[str]:
     return re.compile(r"['\"]([^'\"]*/)?" + re.escape(basename) + r"['\"]")
 
 
+def _dotted_token_pattern(dotted: str) -> re.Pattern[str]:
+    """VTS-02: identifier-boundary structural match for a dotted module name -- matches
+    'scripts.foo' as a whole dotted token (e.g. inside `import scripts.foo` or a
+    `patch("scripts.foo.run")` string) but never inside a longer name: neither a word character
+    nor '.' may immediately precede or follow the match, so 'scripts.foo' does not match
+    'scripts.foobar' (blocked by the trailing word-char lookahead) or 'scripts.foo.bar' (blocked
+    by the trailing '.' lookahead)."""
+    return re.compile(r"(?<![\w.])" + re.escape(dotted) + r"(?![\w.])")
+
+
+def _deleted_py_dotted_patterns(entries: list[tuple[str, str]], repo_root: Path) -> list[re.Pattern[str]]:
+    """VTS-02: one structural dotted-module-token pattern per D-status .py path, computed purely
+    from the path string via the SAME dotted-name convention as dependency_graph._file_to_module
+    (repo-root-prefixed, trailing __init__ dropped) -- no filesystem access needed since a
+    deleted file's dotted name is fully determined by its former path. Lets a test that imports
+    a deleted module structurally (no textual path/quoted-basename mention required, unlike the
+    pre-existing _quoted_token_pattern/relpath match this is purely additive alongside) still be
+    selected."""
+    patterns: list[re.Pattern[str]] = []
+    for status, path in entries:
+        if status != "D" or not path.endswith(".py"):
+            continue
+        dotted = _file_to_module(repo_root / path, repo_root)
+        if dotted:
+            patterns.append(_dotted_token_pattern(dotted))
+    return patterns
+
+
 def _data_edge_channel(entries: list[tuple[str, str]], repo_root: Path) -> set[str]:
-    """Single-pass scan of tests/**/*.py: a hit is either the full candidate PATH appearing
-    literally in the text, or the candidate's basename appearing as a precise quoted token
-    (never a bare substring) -- see _quoted_token_pattern."""
+    """Single-pass scan of tests/**/*.py: a hit is the full candidate PATH appearing literally in
+    the text, the candidate's basename appearing as a precise quoted token (never a bare
+    substring, see _quoted_token_pattern), or -- VTS-02 -- a deleted .py path's dotted module
+    name appearing as a structural identifier-boundary token (see _dotted_token_pattern)."""
     candidates = _data_edge_reference_candidates(entries)
-    if not candidates:
+    dotted_patterns = _deleted_py_dotted_patterns(entries, repo_root)
+    if not candidates and not dotted_patterns:
         return set()
     tests_dir = repo_root / "tests"
     if not tests_dir.is_dir():
         return set()
-    compiled = [(relpath, _quoted_token_pattern(basename)) for basename, relpath in candidates]
+    path_literals = [relpath for _basename, relpath in candidates]
+    token_patterns = [_quoted_token_pattern(basename) for basename, _relpath in candidates] + dotted_patterns
     hits: set[str] = set()
     for path in sorted(tests_dir.rglob("*.py")):
         if "__pycache__" in path.parts:
@@ -143,10 +245,8 @@ def _data_edge_channel(entries: list[tuple[str, str]], repo_root: Path) -> set[s
         except OSError:
             continue
         rel_test = path.relative_to(repo_root).as_posix()
-        for relpath, quoted_re in compiled:
-            if relpath in text or quoted_re.search(text):
-                hits.add(rel_test)
-                break
+        if any(relpath in text for relpath in path_literals) or any(p.search(text) for p in token_patterns):
+            hits.add(rel_test)
     return hits
 
 
@@ -165,10 +265,32 @@ def _mirror_map_channel(changed_source_files: list[str], repo_root: Path) -> set
     return hits
 
 
-def _conftest_subtree_channel(entries: list[tuple[str, str]], repo_root: Path) -> set[str]:
+_AUTOUSE_RE = re.compile(r"autouse\s*=\s*True")
+
+
+def _is_forcing_conftest(path: str, repo_root: Path) -> bool:
+    """VTS-03: a conftest FORCES its subtree into protected/uncapped scope if it is the root
+    tests/conftest.py (whose fixtures apply repo-wide, so its subtree IS the whole suite) or its
+    text declares an autouse fixture (autouse=True applies to every test collected under it, so a
+    change can alter EVERY test's behavior in its subtree, not just tests that import it)."""
+    if path == "tests/conftest.py":
+        return True
+    try:
+        text = (repo_root / path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return _AUTOUSE_RE.search(text) is not None
+
+
+def _conftest_subtree_channel(entries: list[tuple[str, str]], repo_root: Path) -> tuple[set[str], set[str]]:
     """A changed (added/modified) tests/**/conftest.py selects every test_*.py in its subtree
-    (pytest's conftest fixtures apply to the whole directory beneath it)."""
-    hits: set[str] = set()
+    (pytest's conftest fixtures apply to the whole directory beneath it).
+
+    Returns (forcing_hits, ordinary_hits) -- VTS-03: forcing_hits come from a root or
+    autouse-fixture-bearing conftest and are promoted to the protected (uncapped) set by the
+    caller; ordinary_hits are the pre-existing cappable subtree channel, unchanged."""
+    forcing: set[str] = set()
+    ordinary: set[str] = set()
     for status, path in entries:
         if status not in _ADDED_OR_MODIFIED:
             continue
@@ -179,9 +301,10 @@ def _conftest_subtree_channel(entries: list[tuple[str, str]], repo_root: Path) -
         conftest_dir = (repo_root / path).parent
         if not conftest_dir.is_dir():
             continue
+        bucket = forcing if _is_forcing_conftest(path, repo_root) else ordinary
         for test_file in sorted(conftest_dir.rglob("test_*.py")):
-            hits.add(test_file.relative_to(repo_root).as_posix())
-    return hits
+            bucket.add(test_file.relative_to(repo_root).as_posix())
+    return forcing, ordinary
 
 
 def _current_sha(repo_root: Path) -> str:
@@ -201,8 +324,23 @@ def _empty_manifest(
         "capped": False,
         "deferred": [],
         "cap": cap,
+        "full_suite_forced": False,
         "timings": {"total_s": elapsed},
     }
+
+
+def _residue_sort_key(path: str, mirror_hits: set[str], conftest_hits: set[str]) -> tuple[int, str]:
+    """VTS-04 M2: channel-priority ordering for residue truncation, applied BEFORE the
+    budget_remaining slice -- mirror-map hits (channel 3, a precise curated source<->test
+    mapping) rank above conftest-subtree hits (channel 4, a coarser whole-directory rule), which
+    rank above plain transitive import-closure residue (channel 1's weakest-signal indirect
+    ancestors); alphabetical tiebreak within a class. A cap now defers the lowest-priority
+    channel first instead of truncating purely alphabetically across all channels."""
+    if path in mirror_hits:
+        return (0, path)
+    if path in conftest_hits:
+        return (1, path)
+    return (2, path)
 
 
 def derive_affected_tests(
@@ -231,20 +369,24 @@ def derive_affected_tests(
         return {"selected": edited_set, "manifest": manifest}
 
     try:
+        changed_tests_helper_files = [
+            path for status, path in entries if status in _ADDED_OR_MODIFIED and _is_changed_tests_helper_py(path)
+        ]
         changed_source_files = [
             path for status, path in entries if status in _ADDED_OR_MODIFIED and _is_changed_source_py(path)
-        ]
+        ] + changed_tests_helper_files
 
         direct, transitive = _import_closure_channel(changed_source_files, root)
+        direct |= _tests_tree_import_closure_channel(changed_tests_helper_files, root)
         data_edge_hits = _data_edge_channel(entries, root)
         mirror_hits = _mirror_map_channel(changed_source_files, root)
-        conftest_hits = _conftest_subtree_channel(entries, root)
+        conftest_forced_hits, conftest_hits = _conftest_subtree_channel(entries, root)
 
-        protected = set(edited_set) | direct | data_edge_hits
+        protected = set(edited_set) | direct | data_edge_hits | conftest_forced_hits
         residue_pool = (transitive | mirror_hits | conftest_hits) - protected
 
         budget_remaining = max(cap - len(protected), 0)
-        residue_sorted = sorted(residue_pool)
+        residue_sorted = sorted(residue_pool, key=lambda p: _residue_sort_key(p, mirror_hits, conftest_hits))
         kept_residue = residue_sorted[:budget_remaining]
         deferred_residue = residue_sorted[budget_remaining:]
 
@@ -255,6 +397,8 @@ def derive_affected_tests(
             provenance.setdefault(p, "import_closure_direct")
         for p in data_edge_hits:
             provenance.setdefault(p, "data_edge")
+        for p in conftest_forced_hits:
+            provenance.setdefault(p, "conftest_subtree_forced")
         for p in kept_residue:
             if p in mirror_hits:
                 provenance.setdefault(p, "mirror_map")
@@ -265,6 +409,7 @@ def derive_affected_tests(
 
         selected = sorted(protected | set(kept_residue))
         capped = bool(deferred_residue)
+        full_suite_forced = any(status in _ADDED_OR_MODIFIED and path == "tests/conftest.py" for status, path in entries)
 
         if capped:
             print(
@@ -283,6 +428,7 @@ def derive_affected_tests(
             "capped": capped,
             "deferred": deferred_residue,
             "cap": cap,
+            "full_suite_forced": full_suite_forced,
             "timings": {"total_s": time.monotonic() - t0},
         }
         return {"selected": selected, "manifest": manifest}

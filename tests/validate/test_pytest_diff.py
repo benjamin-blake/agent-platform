@@ -473,3 +473,37 @@ class TestRunPytestDiffSingleExecution:
         assert "tests/test_a.py" in real_run_cmds[0]
         assert "tests/test_b.py" in real_run_cmds[0]
         assert failed == []
+
+
+class TestLastBlockAttributionBounding:
+    """VTS-04 M1: the LAST ERROR-collecting block must not swallow a trailing short-summary-info
+    line belonging to an EARLIER file -- a genuinely-broken last file (its own error unrelated
+    to any heavy dep) must route to runnable, never mis-deferred to the earlier file's dep."""
+
+    def test_trailing_summary_line_not_attributed_to_last_file(self) -> None:
+        heavy_file = "tests/test_heavy_earlier.py"
+        broken_file = "tests/test_broken_last.py"
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.returncode = 2
+            result.stdout = (
+                _collect_error_block(heavy_file, "pyarrow")
+                + f"__________________ ERROR collecting {broken_file} ___________________\n"
+                "E   ImportError: cannot import name 'Thing' from 'scripts.foo'\n"
+                "=========================== short test summary info ============================\n"
+                f"ERROR {heavy_file} - ModuleNotFoundError: No module named 'pyarrow'\n"
+                f"ERROR {broken_file} - ImportError: cannot import name 'Thing' from 'scripts.foo'\n"
+                "=========================== 2 errors in 0.12s ============================\n"
+            )
+            result.stderr = ""
+            return result
+
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            runnable, deferred = partition_changed_tests_by_collectability([heavy_file, broken_file])
+
+        assert broken_file in runnable, "the genuinely-broken last file must redden, not mis-defer"
+        assert dict(deferred) == {heavy_file: "pyarrow"}
