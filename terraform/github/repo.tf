@@ -52,6 +52,13 @@ resource "github_repository" "this" {
 # 'terraform-validate' (NOT the placeholder 'validate (pre)' -- see VP step 4 / ci.yml:16,138).
 # bypass_actors carries an admin escape hatch: actor_id=5 = Repository Admin role so a human
 # always retains an in-band escape from lockout.
+# require_code_owner_review = true (DEP-05 / T2.50 / Decision 144): PRs touching a path
+# scoped in .github/CODEOWNERS now require code-owner review before merge. Path-scoping
+# comes from CODEOWNERS alone -- required_approving_review_count stays 0 so routine PRs
+# outside those paths remain approval-free and non-wedging (Decision 83); the admin
+# bypass_actors escape hatch above still applies to protected-path PRs too (a deliberate,
+# GitHub-audit-logged bypass, not a hard block -- see rec-2827 for the deferred hard block
+# against the admin identity itself).
 resource "github_repository_ruleset" "main_protection" {
   repository  = github_repository.this.name
   name        = "main-protection"
@@ -77,7 +84,7 @@ resource "github_repository_ruleset" "main_protection" {
 
     pull_request {
       dismiss_stale_reviews_on_push     = false
-      require_code_owner_review         = false
+      require_code_owner_review         = true
       require_last_push_approval        = false
       required_approving_review_count   = 0
       required_review_thread_resolution = false

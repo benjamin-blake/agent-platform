@@ -1633,3 +1633,16 @@ entries:
       - -c
       - |
         f=scripts/checks/iam_tf/_read_coverage.py; planner=$(grep -c 'github_ci_planner' "$f"); stale=$(grep -Ec '_(PLAN|DRIFT)_ROLE_POLICY_NAME *= *"github_ci_(plan|drift)"' "$f"); echo "planner_ref=$planner stale_constants=$stale"; [ "$planner" -ge 1 ] && [ "$stale" -eq 0 ]
+  - check_id: codeowners-covers-gate-paths
+    primitive_slot: command_exit_zero
+    guard_target: .github/CODEOWNERS
+    guard_symbol: null
+    plan_slug: gate-path-protection
+    graduated_at: '2026-07-24'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - python
+      - -c
+      - |
+        import pathlib,sys; t=pathlib.Path('.github/CODEOWNERS').read_text(); L=[l.split('#',1)[0].split() for l in t.splitlines()]; L=[p for p in L if p]; req=['/.github/workflows/terraform-*.yml','/.github/workflows/reconcile.yml','/scripts/terraform_apply_guard.py','/terraform/bootstrap/','/terraform/github/','/.github/CODEOWNERS']; owned=lambda pat: any(p[0]==pat and any(o.startswith('@') for o in p[1:]) for p in L); missing=[pat for pat in req if not owned(pat)]; print('missing:',missing); sys.exit(1 if missing else 0)
