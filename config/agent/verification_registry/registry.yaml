@@ -1658,3 +1658,41 @@ entries:
       pattern: '### Spirit-Alignment Flags \(SPIRIT\)'
       operator: eq
       count: 1
+  - check_id: passrole-grant-present-identity-and-boundary
+    primitive_slot: grep_count
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: null
+    plan_slug: t248-passrole-liveproof
+    graduated_at: '2026-07-24'
+    graduated_by: implement-agent
+    check_spec:
+      path: terraform/bootstrap/github_ci_apply.tf
+      pattern: 'iam:PassRole'
+      operator: gte
+      count: 2
+  - check_id: passrole-passedtoservice-lambda-condition
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: IAMPassRoleForLambda
+    plan_slug: t248-passrole-liveproof
+    graduated_at: '2026-07-24'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -q "iam:PassedToService" terraform/bootstrap/github_ci_apply.tf && grep -q "lambda.amazonaws.com" terraform/bootstrap/github_ci_apply.tf
+  - check_id: write-coverage-asserts-passrole-identity-and-boundary
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/iam_tf/_write_coverage.py
+    guard_symbol: check_passrole_implies_coverage
+    plan_slug: t248-passrole-liveproof
+    graduated_at: '2026-07-24'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -q "PassRole" scripts/checks/iam_tf/_write_coverage.py && grep -Eq "DataPlaneAllow|boundary" scripts/checks/iam_tf/_write_coverage.py

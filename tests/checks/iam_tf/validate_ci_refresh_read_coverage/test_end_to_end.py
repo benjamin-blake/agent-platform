@@ -67,6 +67,33 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Effect = "Allow"
         Action = ["iam:CreateRole"]
         Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
+      },
+      {
+        Sid    = "IAMPassRoleForLambda"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "lambda.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "github_ci_apply_boundary" {
+  name = "test-apply-boundary"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DataPlaneAllow"
+        Effect   = "Allow"
+        Action   = ["lambda:*", "logs:*", "cloudwatch:*", "events:*", "iam:CreateRole", "iam:PassRole"]
+        Resource = ["*"]
       }
     ]
   })
@@ -341,6 +368,33 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Effect = "Allow"
         Action = ["iam:CreateRole"]
         Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
+      },
+      {
+        Sid    = "IAMPassRoleForLambda"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "lambda.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "github_ci_apply_boundary" {
+  name = "test-apply-boundary"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DataPlaneAllow"
+        Effect   = "Allow"
+        Action   = ["lambda:*", "logs:*", "cloudwatch:*", "events:*", "iam:CreateRole", "iam:PassRole"]
+        Resource = ["*"]
       }
     ]
   })
