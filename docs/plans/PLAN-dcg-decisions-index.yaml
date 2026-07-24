@@ -1,0 +1,313 @@
+schema_version: 1
+slug: "dcg-decisions-index"
+intent: >-
+  Build the generated decisions index (audit finding DCG-08, the FINAL DCG wave): a lightweight,
+  machine-parseable projection -- number, title, status, date, and typed
+  supersedes/superseded_by/amends edges -- derived SOLELY via the shared parser
+  scripts/decisions_md.py, so decision chains (e.g. 43/102/128/130; 90->42 live->archive) are
+  traversable and status is glanceable without a whole-corpus read or grep. The DAF-safe remedy
+  channel for the audit's generated-index (property 4), machine-readable-frontmatter (6) and
+  relationship-graph (9) gaps.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-dcg-decisions-index.yaml
+phase: >-
+  DCG audit remediation -- finding DCG-08 in audits/decision-consolidation-growth-f79d6b5.yaml
+  (novel, roadmap_crossref item_ids: []). FINAL wave (6 of 6) of the dcg-* audit-consolidation
+  overseer run; merging this completes findings DCG-01..08. Not a platform/product tier_item.
+scope:
+  - file: scripts/decisions_index.py
+    action: Create
+    purpose: >-
+      Deterministic generator (new root single, < 500 SLOC per Decision 128). build_index() ->
+      dict emits a STABLE projection over BOTH _DECISIONS_MD_PATHS files -- per entry
+      {number, title, status, decided_date, supersedes: list[int], superseded_by: int|null,
+      amends: list[int]} sorted by number, plus a metadata block -- and MUST exclude the parser's
+      volatile fields (created_timestamp/last_updated_timestamp/content_hash/raw_block) so the
+      output is byte-stable across runs. check_index_freshness(failed) fails on drift OR absence.
+      main() exposes --write/--check/--print. Consumes ONLY scripts/decisions_md.py (DAF-03).
+  - file: scripts/decisions_md.py
+    action: Modify
+    purpose: >-
+      Add public extract_amends_edges(raw_title) -> list[int] (forward "amends Decision(s) N",
+      tolerating "point P"/"cl.N"/"clause N" suffixes and plural forms; numeric Decision targets
+      only, ignoring CD.N; MUST NOT match the inverse "amended by Decision N"), built on a small
+      generic title-relation helper reused for title-borne "Supersedes Decision N". Surface an
+      index-only "amends" key on the parse_decisions_md row dict (computed from the raw heading
+      title m.group(2), since the stripped title drops trailing parentheticals). The "amends" key
+      is DELIBERATELY NOT added to _DECISION_BACKFILL_COLS, DecisionPayload, or the DQ config.
+  - file: scripts/checks/decisions/validate_decisions_index_freshness.py
+    action: Create
+    purpose: >-
+      Registered drift check: @register("validate_decisions_index_freshness", owner="platform"),
+      a thin wrapper delegating to scripts.decisions_index.check_index_freshness(failed). Pure
+      file derivation, credential-free -> runs in BOTH tiers. Models
+      scripts/checks/deps/validate_dependency_graph_freshness.py.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Insert _c("validate_decisions_index_freshness") into pre_sequence() AND full_sequence(),
+      adjacent to validate_decisions_size.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the facade re-export line "from
+      scripts.checks.decisions.validate_decisions_index_freshness import
+      validate_decisions_index_freshness  # noqa: F401,E402" in the decisions-check re-export
+      block (validate.py-first rule; Decision 104 dispatch is globals()[name]).
+  - file: docs/decisions-index.json
+    action: Create
+    purpose: >-
+      The committed generated index artifact, produced by `bin/venv-python -m
+      scripts.decisions_index --write`. Deterministic, sorted. Mirrors the docs/dependency-graph.json
+      committed-export precedent.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Add "decisions-index.json" to docs_root_allowlist.allowed_files (depth-1 docs/ file, RS-03)
+      and "decisions_index.py" to scripts_root_allowlist (mirrors the decisions_md.py /
+      dependency_graph.py precedent).
+  - file: tests/test_decisions_md.py
+    action: Modify
+    purpose: >-
+      Unit tests for extract_amends_edges (forward "amends Decision N"; plural; "point"/"cl."
+      suffix; does NOT emit a forward edge for "amended by Decision N"; ignores CD.N targets) plus
+      the Decision-84 warehouse-safety assertion (amends absent from _DECISION_BACKFILL_COLS;
+      DecisionPayload.model_config extra=="ignore"; the backfill field-filter drops amends) --
+      mirrors the Wave-4 intent test pattern.
+  - file: tests/test_decisions_index.py
+    action: Create
+    purpose: >-
+      Generator coverage (V2, Decision 104/131 mirror of scripts/decisions_index.py): build_index()
+      determinism (byte-stable across two calls -> no volatile-field leak); entry count ==
+      scripts.decisions_md.decision_header_numbers() covering BOTH files (Decision 146); typed-edge
+      spot-checks (150 amends 105; 143 amends 81; 90 supersedes 42 [inverse, live->archive]; 69
+      superseded_by 78 and 78 supersedes 69 [inverse symmetry]; 117 supersedes 44 [title + inverse]).
+  - file: tests/checks/decisions/test_validate_decisions_index_freshness.py
+    action: Create
+    purpose: >-
+      Mirror test for the drift check: a hand edit to the committed index (via a tmp_path /
+      monkeypatch seam) makes the check append a failure; an absent index appends a failure; a
+      freshly regenerated tree passes. The "fails on a hand edit" acceptance. tests/checks/decisions/
+      already carries __init__.py (Decision 131 satisfied).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    The index regenerates deterministically from docs/DECISIONS.md + docs/DECISIONS_ARCHIVE.md via
+    the shared parser scripts/decisions_md.py alone: two consecutive build_index() calls are
+    byte-identical (no volatile timestamp/hash/raw_block leak).
+  - >-
+    The committed docs/decisions-index.json lists every live AND archive decision -- entry count
+    equals scripts.decisions_md.decision_header_numbers() (re-derived at build time, currently 132;
+    NOT hardcoded) -- covering BOTH files (Decision 146).
+  - >-
+    Each entry carries typed supersedes, superseded_by, and amends edges: amends from the
+    header-title extractor (150 amends 105; 143 amends 81); superseded_by from the parser's typed
+    field (69 superseded_by 78); supersedes from the corpus inverse map unioned with title-borne
+    "Supersedes Decision N" (90 supersedes 42 [live->archive]; 117 supersedes 44).
+  - >-
+    The registered check validate_decisions_index_freshness fails on a hand edit to
+    docs/decisions-index.json (and on a decision-header edit that changes the graph) and on the
+    file's absence, and passes on a freshly regenerated tree -- in BOTH --pre and full tiers,
+    credential-free.
+  - >-
+    No authored front-matter is introduced and the warehouse schema is unchanged (TRAP-2): the
+    "amends" parser key is absent from _DECISION_BACKFILL_COLS and DecisionPayload;
+    DecisionPayload.model_config extra=="ignore"; backfill_decisions_from_md is unperturbed (the
+    Decision-134 fidelity tripwire and Decision-149 orphan guard stay intact).
+  - >-
+    No consumer is wired to READ the index (TRAP-7): scope touches no reader (decision-scout etc.).
+  - >-
+    `bin/venv-python -m scripts.validate --pre` passes: the new check is reachable via the facade
+    re-export, the new files are placement-allowlisted, and scripts/decisions_index.py +
+    scripts/decisions_md.py stay under their SLOC budgets (no raise).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Determinism -- regenerate the index twice in-process and assert byte-identical, proving
+      build_index() excludes the parser's volatile fields.
+    command: >-
+      bin/venv-python -c "from scripts.decisions_index import build_index; import json; assert
+      json.dumps(build_index(), sort_keys=True) == json.dumps(build_index(), sort_keys=True),
+      'non-deterministic index'; print('deterministic OK')"
+    expected: "Prints 'deterministic OK'; exit 0."
+    fix_if: >-
+      build_index() leaks now_iso timestamps / content_hash / raw_block from parse_decisions_md
+      rows, so two calls differ and the assertion fails -- restrict the projection to the stable
+      field subset.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Determinism is subsumed by the registered validate_decisions_index_freshness guard (a
+      non-deterministic build_index() fails freshness on the next run) and asserted by the standing
+      pytest tests/test_decisions_index.py; graduating a third copy into the verification registry
+      adds no coverage.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Coverage -- assert the index entry set equals the shared parser's header set across BOTH
+      DECISIONS.md and DECISIONS_ARCHIVE.md (Decision 146).
+    command: >-
+      bin/venv-python -c "from scripts.decisions_index import build_index; from scripts.decisions_md
+      import decision_header_numbers; nums={d['number'] for d in build_index()['decisions']};
+      hdr=decision_header_numbers(); assert nums==hdr, f'missing={sorted(hdr-nums)}
+      extra={sorted(nums-hdr)}'; print('coverage OK', len(nums))"
+    expected: "Prints 'coverage OK <N>' where N is the re-derived live+archive header count; exit 0."
+    fix_if: >-
+      The generator reads only DECISIONS.md or drops archive entries, so nums != hdr -- derive from
+      the parser's _DECISIONS_MD_PATHS (both files).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Both-files coverage is asserted by the standing pytest
+      tests/test_decisions_index.py::test_covers_all_headers_both_files (count ==
+      decision_header_numbers()); the diff-aware pytest tier re-runs it on any
+      decisions_md.py/decisions_index.py change, so a registry duplicate is redundant.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Edge correctness -- spot-check specific typed edges spanning both files and both derivation
+      paths (title extraction, inverse map, title-borne supersedes).
+    command: >-
+      bin/venv-python -c "from scripts.decisions_index import build_index; d={x['number']:x for x in
+      build_index()['decisions']}; assert 105 in d[150]['amends']; assert 81 in d[143]['amends'];
+      assert 42 in d[90]['supersedes']; assert d[69]['superseded_by']==78 and 69 in
+      d[78]['supersedes']; assert 44 in d[117]['supersedes']; print('edges OK')"
+    expected: "Prints 'edges OK'; exit 0."
+    fix_if: >-
+      A wrong-direction or missing edge (e.g. amends parsed from the stripped title instead of the
+      raw title; supersedes not inverted from superseded_by; archive victim 42 absent) trips an
+      assertion.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Edge typing/direction is asserted by standing pytests (tests/test_decisions_md.py amends cases
+      + tests/test_decisions_index.py supersedes/superseded_by symmetry incl. the live->archive
+      90->42 and 117->44 cases); a registry duplicate adds no coverage.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Amends extractor unit tests -- forward "amends Decision N", plural, "point"/"cl." suffix, NOT
+      the inverse "amended by Decision N", and ignore CD.N targets.
+    command: bin/venv-python -m pytest tests/test_decisions_md.py -k "amends" -q
+    expected: "All selected amends tests pass; exit 0."
+    fix_if: >-
+      The extractor matches "amended by" (wrong direction), misses plural/suffix forms, or emits a
+      numeric edge for a CD.N target.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      These tests ARE the standing regression (tests/test_decisions_md.py, the Decision-131 mirror
+      of the modified source); the diff-aware pytest tier re-runs them on any decisions_md.py change,
+      so graduating a second copy into the registry is redundant.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Warehouse-safety (the load-bearing Decision-84 premise) -- the "amends" parser key stays
+      index-only and cannot reach ops_decisions.
+    command: >-
+      bin/venv-python -c "from scripts.ops_portal.decisions import _DECISION_BACKFILL_COLS; from
+      src.schemas.decision import DecisionPayload; from scripts.decisions_md import
+      parse_decisions_md; assert 'amends' not in _DECISION_BACKFILL_COLS;
+      assert DecisionPayload.model_config.get('extra')=='ignore'; row=next(r for r in
+      parse_decisions_md() if r['decision_id']==150); assert row.get('amends'); kept={k:v for k,v in
+      row.items() if k in _DECISION_BACKFILL_COLS}; assert 'amends' not in kept; print('warehouse-safe
+      OK')"
+    expected: "Prints 'warehouse-safe OK'; exit 0."
+    fix_if: >-
+      "amends" was added to _DECISION_BACKFILL_COLS or DecisionPayload, or extra != 'ignore', so the
+      key could reach the warehouse and perturb the Decision-134 fidelity tripwire -- keep it
+      index-only.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The Decision-84 index-only boundary (amends not in _DECISION_BACKFILL_COLS, DecisionPayload
+      extra='ignore', backfill filter drops amends) is asserted by the standing pytest
+      tests/test_decisions_md.py::test_amends_stays_index_only; graduating it would duplicate that
+      pytest and expand scope to config/agent/verification_registry, so it is kept as a first-class
+      pytest instead.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Drift guard -- a hand edit to the committed index (and an absent index) makes
+      validate_decisions_index_freshness fail; a clean regenerated tree passes.
+    command: bin/venv-python -m pytest tests/checks/decisions/test_validate_decisions_index_freshness.py -q
+    expected: "All freshness-check tests pass (tampered->fail, absent->fail, clean->pass); exit 0."
+    fix_if: >-
+      check_index_freshness does not compare committed vs regenerated (drift undetected), or no-ops
+      on absence instead of failing for a required committed artifact.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The acceptance-critical drift behavior is asserted by the standing pytest
+      tests/checks/decisions/test_validate_decisions_index_freshness.py (the Decision-131 mirror of
+      the check); that mirror-test is the standing regression, so a registry duplicate is redundant.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Full fast presubmit gate -- exercises the new check in-sequence, the facade re-export
+      reachability, placement allowlisting of the new files, and SLOC budgets end-to-end.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exit 0; validate_decisions_index_freshness runs and passes; no KeyError, placement, or SLOC failure."
+    fix_if: >-
+      Missing registry.py sequence entry or validate.py re-export (KeyError / reachability fail);
+      missing docs_root_allowlist/scripts_root_allowlist entry (placement fail); generator over 500
+      SLOC (decompose, do not raise).
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - "IMPLEMENTATION type only (Decision 67 STRATEGIC freeze). No recommendations filed -- unrelated discoveries surface in the session hand-back's open_questions, not the portal."
+  - "Derive the TOC SOLELY via scripts/decisions_md.py (DAF-03 single-shared-parser rule / Decision 134 cl.3). Do NOT hand-roll a second header or title regex outside decisions_md.py -- the amends extractor lives IN decisions_md.py, built on the existing _DECISION_HEADING_RE grammar."
+  - "Cover BOTH docs/DECISIONS.md and docs/DECISIONS_ARCHIVE.md via the parser's _DECISIONS_MD_PATHS (Decision 146 two-file canonical corpus; archived victims are edge targets, e.g. 90->42)."
+  - "Warehouse untouched (Decision 84): the 'amends' parser key stays index-only -- never add it to _DECISION_BACKFILL_COLS, DecisionPayload, or config/agent/data_quality. The index is a derived projection, never a warehouse write source."
+  - "No authored front-matter / no decision-format change (TRAP-2): this is a generated projection, not a decision-format change. The prose-authoring choice is ratified, not revisited."
+  - "Consumption is out of scope (TRAP-7): do NOT wire decision-scout or any reader to the index; the concurrent agent-context-governance audit owns consumption."
+  - "Format = committed JSON, not Markdown -- a .json artifact needs only the docs_root_allowlist entry and stays clear of the Decision-127 .md prose_allowlist and the Decision-86 prose-doc line (machine-generated, machine-parseable); mirrors docs/dependency-graph.json."
+  - "The drift check runs credential-free in BOTH tiers (pure file derivation). Never mark the `validate --pre` VP step hermetic (validate recursion)."
+  - "No new numbered Decision (Decision-150 significance bar): generated-projection tooling routes to a plan, like the Decision-80 dependency-graph export; a Decision here would itself be the low-significance accretion Decision 150 / DCG-05 warns against."
+  - "SLOC decompose-by-default (Decision 128): keep scripts/decisions_index.py < 500 and scripts/decisions_md.py under its budget; if decisions_md.py tips over, decompose (facade package) -- do NOT raise, do NOT bare `--update-sloc-budgets`."
+  - "No rescue agents or workaround loops (Decision 55): the drift check fails loudly with a regenerate hint."
+context:
+  - "Realizes audit finding DCG-08 (audits/decision-consolidation-growth-f79d6b5.yaml). FINAL wave (6 of 6) of the dcg-* audit-consolidation overseer run -- merging this completes findings DCG-01..08."
+  - "Decision 146: DECISIONS.md + DECISIONS_ARCHIVE.md are ONE canonical corpus; the shared parser reads both (_DECISIONS_MD_PATHS); archived entries keep dec-NNN identity and are edge targets. Index completeness depends on both files (verified: 42/49/69 live in the archive as superseded victims)."
+  - "Decision 134 cl.3 (DAF-03 single shared parser: iter_decision_headings/decision_header_numbers/parse_decisions_md) + cl.4 (content_hash over raw_block). The amends extractor is a NEW extraction on the SAME grammar, never a reworked regex."
+  - "Decision 151 / PLAN-dcg-intent-capture (Wave 4) added the 'intent' parser key + DecisionPayload.intent -- the precedent for adding a parser key. amends differs by staying index-only (NOT added to payload/backfill), the load-bearing Decision-84 warehouse-safety premise verified via extra='ignore' + the _DECISION_BACKFILL_COLS filter (scripts/ops_portal/decisions.py:23-25,51,329)."
+  - "Decision 135: commit-artifact-now / defer-warehouse-registration precedent -- direct support for the committed-JSON-without-warehouse-registration shape and the TRAP-7 consumption boundary."
+  - "Decision 145: the decision-scout whole-live-file read cost this index eventually relieves -- the downstream consumer that makes the index load-bearing; consumption stays OUT of scope (TRAP-7)."
+  - "Decision 80 / scripts.dependency_graph + docs/dependency-graph.json + check_export_freshness: the regen-with-guard precedent mirrored here (deterministic export dict, freshness check comparing committed vs regenerated, regenerate-hint on drift)."
+  - "Decision 104: check registry (@register + registry.py sequences + validate.py globals() dispatch + facade re-export; reachability in tests/test_checks_registry.py membership-floor). Decision 131: tests mirror-package rule -- tests/checks/decisions/ already carries __init__.py, so no new package init is needed; map_source_to_test finds the V2 per-file coverage."
+  - "Decision 73: two-tier presubmit -- the drift check runs in both --pre and full (credential-free), placed beside validate_decisions_size which already gates DECISIONS.md in both tiers. Non-wedging: the fix is a deterministic local `--write` regenerate."
+  - "Decision 149 (DCG-03 orphan guard) + Decision 134 fidelity tripwire: the backfill write-path guards must remain intact; this change does not touch backfill_decisions_from_md."
+  - "Step 6b fork 1 (format): committed JSON [recommended] vs Markdown -- recommend JSON (guard-clean, machine-parseable default, dependency-graph.json precedent)."
+  - "Step 6b fork 2 (home): committed artifact + registered drift check [recommended] vs synced gitignored cache -- recommend committed (the gitignored logs/.decisions-index.jsonl is the exact unused-artifact pattern the audit flagged; committed is PR-diffable and makes 'fails on a hand edit' testable)."
+  - "Step 6b fork 3 (significance bar): no new numbered Decision [recommended] per Decision 150 -- generated-projection tooling, like the Decision-80 dependency-graph export; if a durable governance anchor is wanted, a single lightweight Decision with an **Intent:** marker (Decision 151) is the alternative, but recommend against."
+  - "Main divergence: branch cut at merged main f0049ac (includes Waves 1-5); preflight commits_behind 0, no scope-file overlap -- clean, no rebase needed."
+  - "Preflight non-blocking notes: ops_outbox {ops_recommendations: 2} is a standing Decision-84-I-4 anomaly (not introduced here); 816 open / 690 non-automatable recs, softcap breached (individual review suspended per Decision 73); DQ verdict FAIL is degenerate (0 checks defined)."
+  - "Decision-scout verdict + CITE list (verbatim decision ids): NO_FLAGS (round 1). CITE = [86, 127, 128, 134, 150, 151, 104, 80, 73, 55, 84, 149, 143, 146]. RELATED = [131, 135, 145]."
+  - "gates: decision-scout=NO_FLAGS (round 1); plan-critique=PROCEED (round 1)"
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/dcg-compaction-lifecycle-f98xza)"
+  - "docs/PROJECT_CONTEXT.md read"
+  - "DECISIONS.md + DECISIONS_ARCHIVE.md read (CITE entries 86/127/128/134/145/146/150/151/104/80/73/55/84/149/143/135 + archive edge targets 42/49/69)"
+  - "All files in scope located and readable"
+  - "Acceptance criteria understood and verifiable"
+  - "Decision-84 warehouse-safety re-verified: DecisionPayload.model_config extra=='ignore' AND backfill filters to _DECISION_BACKFILL_COLS BEFORE payload construction, so 'amends' cannot reach ops_decisions or perturb the Decision-134 fidelity tripwire (assertion added; mirrors the Wave-4 intent pattern)"
+  - "scripts/decisions_md.py SLOC re-confirmed under its config/sloc_budgets.yaml budget (unregistered -> 500 default; ~217 non-comment now) after adding extract_amends_edges; if it tips over, decompose per Decision 128 (do NOT raise)"
+  - "Generator excludes volatile parse fields (created_timestamp/last_updated_timestamp/content_hash/raw_block) so build_index() is deterministic and the freshness check is stable"
+execution_steps:
+  - "scripts/decisions_md.py: add extract_amends_edges(raw_title) plus the generic title-relation helper (reused for title-borne 'supersedes'); surface an index-only 'amends' key on parse_decisions_md rows (from the raw m.group(2) title). Do NOT touch _DECISION_BACKFILL_COLS / DecisionPayload / DQ."
+  - "scripts/decisions_index.py: create build_index() (stable projection over BOTH _DECISIONS_MD_PATHS -- number/title/status/decided_date/supersedes[inverse-map union title-borne]/superseded_by[int|null]/amends + metadata, sorted, no volatile fields), check_index_freshness(failed) (fail on drift OR absence with a regenerate hint), main() with --write/--check/--print."
+  - "Run `bin/venv-python -m scripts.decisions_index --write` to produce docs/decisions-index.json; commit the artifact."
+  - "scripts/checks/decisions/validate_decisions_index_freshness.py: create the @register wrapper delegating to check_index_freshness; insert it in pre_sequence() AND full_sequence() in scripts/checks/registry.py beside validate_decisions_size; add the facade re-export line in scripts/validate.py (validate.py-first)."
+  - "docs/contracts/file-router.yaml: add decisions-index.json to docs_root_allowlist.allowed_files and scripts/decisions_index.py to scripts_root_allowlist."
+  - "Add tests: tests/test_decisions_md.py (amends extractor cases + warehouse-safety assertion), tests/test_decisions_index.py (determinism/coverage/edges), tests/checks/decisions/test_validate_decisions_index_freshness.py (drift-on-hand-edit / absent / clean)."
+  - "Execute Verification Plan -- run each step; loop until pass; on unrecoverable failure stop and RCA (Decision 55)."
+  - "Report: what was implemented, verification results; note in the hand-back that this completes the DCG series (findings DCG-01..08)."
+work_areas: []
+rollback: >-
+  Fully additive and reversible: a new generator, a new registered check, a committed index, two
+  allowlist entries, and one index-only parser key -- no warehouse writes, no migrations, no infra.
+  Reverting the branch removes docs/decisions-index.json, the check, and the parser additions with
+  no residual state; the warehouse (ops_decisions) is never written by this change.
