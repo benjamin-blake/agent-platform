@@ -15,7 +15,9 @@ validate_iam_runner_policy = _validate.validate_iam_runner_policy
 get_changed_files = _validate.get_changed_files
 _file_budget_breach_rec = _validate._file_budget_breach_rec
 _file_budget_bypass_rec = _validate._file_budget_bypass_rec
+_mirror_budget_notice_to_summary = _validate._mirror_budget_notice_to_summary
 _FAST_TIER_BUDGET_SECONDS = _validate._FAST_TIER_BUDGET_SECONDS
+_FORCED_FULL_SUITE_CEILING_SECONDS = _validate._FORCED_FULL_SUITE_CEILING_SECONDS
 run_pytest_diff = _validate.run_pytest_diff
 validate_prompt_files = _validate.validate_prompt_files
 
@@ -156,6 +158,148 @@ class TestBudgetAssertion:
 
         captured = capsys.readouterr()
         assert "Dominant phase: pytest_diff" in captured.out
+
+
+@pytest.mark.usefixtures("_neutralized_pre_registry")
+class TestForcedFullSuiteWaiver:
+    """Decision 153: a root-conftest-forced full-suite --pre run warns-and-passes instead of
+    hard-failing, bounded by a forced-run ceiling derived from the pr-validate job timeout.
+    Every non-forced breach keeps EXACTLY today's hard-fail (Decision 73 anti-drift intact).
+
+    full_suite_forced is injected by patching scripts.checks.deps.affected_tests.derive_affected_tests
+    / emit_manifest -- the function-scope import seam validate.py's --pre block uses (Decision
+    affected-set-selection); real derivation is exercised by the affected_tests test suite itself.
+    """
+
+    @staticmethod
+    def _selection(forced: bool) -> dict:
+        return {"selected": [], "manifest": {"full_suite_forced": forced}}
+
+    def test_forced_breach_within_ceiling_warns_and_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("CI", raising=False)
+
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(True)),
+            patch("scripts.checks.deps.affected_tests.emit_manifest"),
+            patch("validate._file_budget_breach_rec") as mock_breach,
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        mock_breach.assert_not_called()
+
+    def test_waiver_notice_is_distinct(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("CI", raising=False)
+
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(True)),
+            patch("scripts.checks.deps.affected_tests.emit_manifest"),
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "budget waived: full-suite scope forced by root-conftest change" in captured.out
+        assert "Fast tier exceeded budget" not in captured.out
+
+    def test_non_forced_breach_still_hard_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("CI", raising=False)
+
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(False)),
+            patch("scripts.checks.deps.affected_tests.emit_manifest"),
+            patch("validate._file_budget_breach_rec") as mock_breach,
+            patch("time.monotonic", side_effect=itertools.chain([0.0], itertools.repeat(400.0))),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 1
+        mock_breach.assert_called_once()
+
+    def test_forced_breach_at_exactly_ceiling_warns_and_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("CI", raising=False)
+
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(True)),
+            patch("scripts.checks.deps.affected_tests.emit_manifest"),
+            patch("validate._file_budget_breach_rec") as mock_breach,
+            patch(
+                "time.monotonic",
+                side_effect=itertools.chain([0.0], itertools.repeat(float(_FORCED_FULL_SUITE_CEILING_SECONDS))),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 0
+        mock_breach.assert_not_called()
+
+    def test_forced_breach_over_ceiling_hard_fails(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate", "--pre"])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("CI", raising=False)
+
+        with (
+            patch("scripts.checks._common.get_changed_files", return_value=[]),
+            patch("scripts.checks._common.run", side_effect=_pre_mock_run),
+            patch("validate.validate_iam_runner_policy"),
+            patch("validate.validate_prompt_files"),
+            patch("validate.validate_cli_tools_in_prompts"),
+            patch("scripts.checks.deps.affected_tests.derive_affected_tests", return_value=self._selection(True)),
+            patch("scripts.checks.deps.affected_tests.emit_manifest"),
+            patch("validate._file_budget_breach_rec") as mock_breach,
+            patch(
+                "time.monotonic",
+                side_effect=itertools.chain([0.0], itertools.repeat(float(_FORCED_FULL_SUITE_CEILING_SECONDS) + 100.0)),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _validate.main()
+
+        assert exc_info.value.code == 1
+        mock_breach.assert_not_called()
+        captured = capsys.readouterr()
+        assert "ceiling" in captured.out.lower()
 
 
 @pytest.mark.usefixtures("_neutralized_pre_registry")
@@ -344,3 +488,39 @@ class TestBudgetBreachCiTelemetry:
 
         captured = capsys.readouterr()
         assert "pytest_diff" in captured.err
+
+
+class TestForcedWaiverCiTelemetry:
+    """Decision 153: the forced-waiver/-ceiling notice helper mirrors a titled section to
+    GITHUB_STEP_SUMMARY and files no rec (it has no ops_data_portal path at all) -- mirrors
+    TestBudgetBreachCiTelemetry's pattern for the pre-existing breach-rec helper."""
+
+    def test_mirrors_titled_section_and_files_no_rec(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        summary_file = tmp_path / "step-summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
+        mock_portal = MagicMock()
+
+        with (
+            patch("scripts.checks._common.run") as mock_run,
+            patch.dict(sys.modules, {"scripts.ops_data_portal": mock_portal}),
+        ):
+            _mirror_budget_notice_to_summary(
+                "Fast-tier budget waived (forced full-suite scope)",
+                "budget waived: full-suite scope forced by root-conftest change.",
+            )
+
+        content = summary_file.read_text(encoding="utf-8")
+        assert "Fast-tier budget waived (forced full-suite scope)" in content
+        assert "budget waived: full-suite scope forced by root-conftest change." in content
+        mock_portal.file_rec.assert_not_called()
+        mock_run.assert_not_called()
+
+    def test_falls_back_to_print_when_step_summary_unset(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+        _mirror_budget_notice_to_summary("Fast-tier forced-run ceiling breached", "some distinct ceiling message")
+
+        captured = capsys.readouterr()
+        assert "some distinct ceiling message" in captured.out

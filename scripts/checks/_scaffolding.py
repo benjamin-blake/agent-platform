@@ -214,6 +214,14 @@ def _file_budget_bypass_rec(elapsed_s: float | None, diff_manifest: list[str], r
         )
 
 
+def _mirror_budget_notice_to_summary(title: str, message: str) -> None:
+    """Print a budget-gate notice and mirror it to CI's step summary (Decision 153). No rec, no exit."""
+    print(message)
+    if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary_path, "a", encoding="utf-8") as f:
+            f.write(f"\n## {title}\n\n{message}\n")
+
+
 def _build_unit_test_cmd() -> list[str]:
     """Return the pytest command for the 'Unit tests + coverage' step.
 

@@ -47,6 +47,7 @@ from scripts.checks._scaffolding import (  # noqa: F401,E402
     _build_unit_test_cmd,
     _file_budget_breach_rec,
     _file_budget_bypass_rec,
+    _mirror_budget_notice_to_summary,
     _terraform_init_with_retry,
     ensure_fresh_dq_results,
     run_coverage_check,
@@ -245,6 +246,12 @@ from scripts.checks.verification.validate_verifier_same_pr_guard import (  # noq
 from scripts.checks.verification.validate_vp_replay import validate_vp_replay  # noqa: F401,E402
 
 _FAST_TIER_BUDGET_SECONDS = 300
+
+# Derived guardrail, not a second tier budget (Decision 153): pr-validate's 30-min job
+# timeout (.github/workflows/ci.yml) minus a ~5-min diagnostic margin, on the fast tier's
+# own elapsed clock (job clock additionally includes checkout/pip). Re-derive if
+# timeout-minutes changes; the fast tier's sole design budget is _FAST_TIER_BUDGET_SECONDS.
+_FORCED_FULL_SUITE_CEILING_SECONDS = 1500
 
 
 def _dispatch_check(name: str, failed: list[str]) -> None:
@@ -463,16 +470,43 @@ def main() -> None:
                 _file_budget_bypass_rec(elapsed, diff_manifest, args.ignore_budget_reason)
                 print(f"\nBudget assertion skipped (--ignore-budget). Elapsed: {elapsed / 60:.1f} min.")
             elif elapsed > _FAST_TIER_BUDGET_SECONDS:
-                _file_budget_breach_rec(elapsed, diff_manifest, dominant_phase)
-                print(
-                    f"\nERROR: Fast tier exceeded budget (5 min). Elapsed: {elapsed / 60:.1f} min. "
-                    f"Dominant phase: {dominant_phase or 'unknown'}.\n"
-                    "This tier has grown beyond its design contract. Either:\n"
-                    "  1. Move the slow check to the full tier, or\n"
-                    "  2. Optimise the check, or\n"
-                    "  3. Open a planning session to revise this budget (requires Decision Record)."
-                )
-                sys.exit(1)
+                # Decision 153: a root-conftest change deterministically forces full-suite scope
+                # (Decision 135/VTS-03) and is a self-identified, already-diagnosed cause of the
+                # breach -- not drift. Narrow the hard-fail to exactly the non-forced case; a
+                # forced run is still bounded by the derived ceiling below. Fail-closed read:
+                # _empty_manifest defaults full_suite_forced to False, so any derivation-failure
+                # fallback still hard-fails.
+                forced = bool(_affected_selection["manifest"].get("full_suite_forced", False))
+                if forced and elapsed <= _FORCED_FULL_SUITE_CEILING_SECONDS:
+                    _mirror_budget_notice_to_summary(
+                        "Fast-tier budget waived (forced full-suite scope)",
+                        "budget waived: full-suite scope forced by root-conftest change. "
+                        f"Elapsed: {elapsed / 60:.1f} min (forced-run ceiling: "
+                        f"{_FORCED_FULL_SUITE_CEILING_SECONDS / 60:.0f} min). Dominant phase: "
+                        f"{dominant_phase or 'unknown'}. No breach rec filed -- this is a "
+                        "deterministic, already-diagnosed full-suite run, not drift.",
+                    )
+                elif forced:
+                    _mirror_budget_notice_to_summary(
+                        "Fast-tier forced-run ceiling breached",
+                        "ERROR: forced full-suite run exceeded the forced-run ceiling "
+                        f"({_FORCED_FULL_SUITE_CEILING_SECONDS / 60:.0f} min). Elapsed: "
+                        f"{elapsed / 60:.1f} min. Dominant phase: {dominant_phase or 'unknown'}.\n"
+                        "The forced full suite itself is now the problem, not the gate -- "
+                        "open a planning session (Decision 153 reversal condition (b)).",
+                    )
+                    sys.exit(1)
+                else:
+                    _file_budget_breach_rec(elapsed, diff_manifest, dominant_phase)
+                    print(
+                        f"\nERROR: Fast tier exceeded budget (5 min). Elapsed: {elapsed / 60:.1f} min. "
+                        f"Dominant phase: {dominant_phase or 'unknown'}.\n"
+                        "This tier has grown beyond its design contract. Either:\n"
+                        "  1. Move the slow check to the full tier, or\n"
+                        "  2. Optimise the check, or\n"
+                        "  3. Open a planning session to revise this budget (requires Decision Record)."
+                    )
+                    sys.exit(1)
 
         scaffold_fns = {
             "lint": _scaffold_lint,
