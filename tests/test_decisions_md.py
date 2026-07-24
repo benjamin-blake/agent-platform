@@ -239,8 +239,8 @@ class TestIntentMarker:
 
 class TestDualModelFieldSync:
     """DecisionPayload (write-side) and jsonl_store.Decision (read-side) must both carry
-    the four DAF-01 fields, as plain (non-Dq-Annotated) optional strings, with the
-    dual-write invariant preserved.
+    the four DAF-01 fields plus intent (Decision 151 / PLAN-dcg-intent-capture), as plain
+    (non-Dq-Annotated) optional strings, with the dual-write invariant preserved.
     """
 
     _NEW_FIELDS = ("raw_block", "reversal_conditions", "superseded_by", "content_hash")

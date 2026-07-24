@@ -522,6 +522,37 @@ class TestIntentBackfillColumn:
         fields = {k: v for k, v in entry.items() if k in _DECISION_BACKFILL_COLS and v not in (None, "")}
         assert fields.get("intent") == "Make the durable why quotable."
 
+    def test_intent_lands_in_the_fields_dict_passed_to_file_decision(self, tmp_path: Path) -> None:
+        """End-to-end via the REAL backfill_decisions_from_md filter (not reconstructed inline)
+        -- mocks file_decision itself, mirroring TestBackfillContentHashSkipGate's mock_write
+        pattern, catching a future filter/_DECISION_BACKFILL_COLS divergence too."""
+        decisions_jsonl = tmp_path / ".decisions-index.jsonl"
+        entry = {
+            "decision_id": 1,
+            "title": "An entry",
+            "status": "Decided",
+            "intent": "Make the durable why quotable.",
+        }
+
+        with (
+            patch("scripts.ops_portal.decisions.file_decision", return_value="dec-001") as mock_file_decision,
+            patch("scripts.ops_portal.decisions.DECISIONS_JSONL", decisions_jsonl),
+            patch("scripts.ops_portal.decisions._sync_table"),
+            patch("scripts.ops_portal.decisions._load_write_time_validators", return_value=[]),
+            patch("scripts.ops_portal.decisions._fetch_decision_from_reader", return_value=None),
+            patch("scripts.ops_portal.decisions._live_decision_ids", return_value=set()),
+            patch("scripts.decisions_md.parse_decisions_md", return_value=[entry]),
+            patch("scripts.ops_portal.decisions._assert_no_orphaned_current_rows"),
+        ):
+            from scripts.ops_data_portal import backfill_decisions_from_md
+
+            result = backfill_decisions_from_md()
+
+        assert result == {"written": 1, "failed": 0, "skipped": 0}
+        mock_file_decision.assert_called_once()
+        fields_arg = mock_file_decision.call_args[0][0]
+        assert fields_arg.get("intent") == "Make the durable why quotable."
+
     def test_markerless_entry_intent_empty_string_is_filtered_out(self) -> None:
         """A markerless entry parses intent="" -- the filter drops it so the column stays NULL."""
         from scripts.ops_portal.decisions import _DECISION_BACKFILL_COLS
