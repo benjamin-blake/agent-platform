@@ -1,0 +1,505 @@
+schema_version: 1
+slug: dcg-scout-spirit-axis
+intent: >-
+  Complete the decision-scout's intent-alignment capability (audit finding DCG-07): add a
+  quotability-gated SPIRIT triage lane so a plan that violates the spirit of an active decision
+  without literally contradicting any clause is surfaced as a WARN/NOTE flag -- making Decision 151's
+  Intent marker load-bearing end-to-end and tightening the /plan pre-confirmation gate that guards
+  every planning session, without loosening its anti-over-citation discipline.
+plan_type: IMPLEMENTATION
+verification_tier: V1
+plan_path: docs/plans/PLAN-dcg-scout-spirit-axis.yaml
+phase: >-
+  Platform-plane, DCG audit-consolidation Wave 5 (audit finding DCG-07, Q3c adopt-scoped). Consumer
+  half of the NS-3 intent mechanism whose anchor half -- the decision-record Intent marker -- landed as
+  Decision 151 / DCG-06 (Wave 4, merged f0e701d). Closes no roadmap exit criterion.
+scope:
+  - file: .claude/skills/decision-scout/SKILL.md
+    action: Modify
+    purpose: >-
+      Add the SPIRIT intent-alignment triage axis: (1) a Phase-2 spirit-alignment overlay step
+      defining the SPIRIT bucket and its four anti-noise gates; (2) a mandatory-even-when-empty
+      `### Spirit-Alignment Flags (SPIRIT)` output section with a "None" default; (3) a widened Verdict
+      definition (FLAGS_FOUND fires on >=1 SPIRIT flag OR >=1 CONTRADICT WARN/NOTE) keeping the three
+      verdict strings and the `## Decision Scout Report` / `Verdict` interface UNCHANGED; (4) two
+      Quality-Gate rows; (5) a SPIRIT-over-citation anti-pattern; (6) a one-clause spirit-alignment
+      mention in the `## Intent` role list. PRESERVE every existing Phase 2 step, especially the
+      Managed-service-native check (Decision 100 / Decision 75). No change to HOW the corpus is read
+      (TRAP-7).
+  - file: config/prose_budgets.yaml
+    action: Modify
+    purpose: >-
+      [Option A] Raise the S4 `.claude/skills/decision-scout/SKILL.md` entry from its zero-headroom
+      8265 bytes to the post-edit `wc -c` value, carrying an inline `# raise-approved: dec-152 <reason>`
+      marker resolving to the governing `## Decision 152:` header authored in this same PR. Only this
+      FILE byte budget is raised; the scout's 1,200-word RESPONSE cap is untouched. Do NOT touch any
+      other budget entry.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      [Option A] Author governing Decision 152 (re-check the max `## Decision NNN:` header at implement
+      time per the numbering-race rule; author at the next free number and use that SAME number in the
+      prose raise marker) recording the SPIRIT axis as a durable architectural commitment clearing the
+      Decision 150 significance bar. Authored WITH an `**Intent:**` marker (Decision 151's now-live
+      convention) and with reversal conditions. Forward governance Decision, NOT a CD ratification (the
+      Decision 105 R1-R3 ratified-CD guard is not engaged). The DECISIONS.md -> ops_decisions sync is
+      CI-automated post-merge by rec-autoclose.yml; NOT a VP step here.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `.claude/skills/decision-scout/SKILL.md` defines the SPIRIT bucket with ALL FOUR gates -- (i) no
+    literal CONTRADICT on the same decision, (ii) a mandatory verbatim quote of the violated
+    `**Intent:**` marker or a specific Problem/Rationale sentence (unquotable means no flag), (iii) WARN
+    or NOTE severity only (never BLOCK), (iv) capped at 3 flags -- plus the mandatory
+    `### Spirit-Alignment Flags (SPIRIT)` output section with a "None" default, the widened FLAGS_FOUND
+    verdict (SPIRIT-inclusive), and two Quality-Gate rows (verbatim quote per SPIRIT flag; SPIRIT count
+    <= 3, no CONTRADICT overlap). The three verdict strings (NO_FLAGS | FLAGS_FOUND | BLOCK), the
+    `## Decision Scout Report` interface, and the existing Managed-service-native check (Decision
+    100/75) are all preserved unchanged.
+  - >-
+    Synthetic dispatch (violating): a decision-scout dispatch against a proposed approach that works
+    against a stated decision Intent WITHOUT literally contradicting any clause returns >= 1 SPIRIT flag
+    at WARN carrying a verbatim quote of the violated intent, and Verdict FLAGS_FOUND.
+  - >-
+    Synthetic dispatch (benign): a decision-scout dispatch against a proposed approach with no spirit
+    violation and no contradiction returns the SPIRIT section as "None" and Verdict NO_FLAGS.
+  - >-
+    [Option A] `config/prose_budgets.yaml`'s decision-scout S4 entry is raised to the exact post-edit
+    byte size with a `# raise-approved: dec-152 <reason>` marker resolving to the authored
+    `## Decision 152:` header, and `bin/venv-python -m scripts.validate --pre` is green (prose limits,
+    prose budget-raise guard, decisions-size, decision-entry conformance on Decision 152,
+    graduation-completeness on this plan, SLOC).
+  - >-
+    [Option A] `docs/DECISIONS.md` carries governing Decision 152 authored WITH an `**Intent:**` marker
+    (Decision 151 convention) and reversal conditions, clearing the Decision 150 significance bar; the
+    DECISIONS.md -> ops_decisions sync is left to the automatic post-merge rec-autoclose.yml backfill
+    (writer-health-gated, CI-owned), not a VP step.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Interface-contract presence -- the mandatory SPIRIT output section header the parent parser
+      depends on exists exactly once in the edited skill. This is the stable, parsed-interface string
+      (distinct from the reword-prone gate prose in step 2).
+    command: >-
+      test "$(grep -c '^### Spirit-Alignment Flags (SPIRIT)$' .claude/skills/decision-scout/SKILL.md)" = "1"
+    expected: >-
+      Exactly one `### Spirit-Alignment Flags (SPIRIT)` section header in the skill -- the
+      mandatory-even-when-empty output section is present and singular.
+    fix_if: >-
+      Count 0 -> the SPIRIT output section was not added or was mis-spelled (author it with the exact
+      header). Count >1 -> a duplicate section was introduced (collapse to one).
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: decision-scout-spirit-section-present
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Structural completeness of the SPIRIT axis and preservation of the existing interface -- the four
+      gates, the widened verdict, the two quality-gate rows, the anti-pattern, AND the preserved
+      Managed-service-native check and report header. Grep by distinctive phrase.
+    command: >-
+      f=.claude/skills/decision-scout/SKILL.md; grep -q "SPIRIT bucket" "$f" && grep -q "unquotable means
+      no flag" "$f" && grep -q "NEVER carries BLOCK" "$f" && grep -q "Capped at 3" "$f" && grep -q "at
+      least one SPIRIT flag" "$f" && grep -q "verbatim quote of the violated" "$f" && grep -q "SPIRIT
+      over-citation" "$f" && grep -q "## Decision Scout Report" "$f" && grep -q "Managed-service-native
+      check" "$f" && grep -q "NO_FLAGS | FLAGS_FOUND | BLOCK" "$f"
+    expected: >-
+      All anchors present: the SPIRIT bucket step, the quote-or-drop gate, the never-BLOCK gate, the
+      cap-3 gate, the SPIRIT-inclusive FLAGS_FOUND clause, the verbatim-quote quality-gate row, the
+      SPIRIT over-citation anti-pattern, the unchanged report header + three-string verdict line, and
+      the preserved managed-service check.
+    fix_if: >-
+      Any anchor missing -> that element was omitted or reworded away (author/restore it). A missing
+      "Managed-service-native check" or "## Decision Scout Report" means the edit disturbed the existing
+      interface -- revert that disturbance (the SPIRIT axis is purely additive).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      These anchors are phrasing-level and reword-brittle by nature (gate wording, anti-pattern prose);
+      a verification_registry grep row on each would fail on legitimate future rewordings while adding
+      no durable invariant. The durable guards are the graduated stable-interface check (step 1), the
+      zero-headroom prose-budget floor + PR review (a trim that drops the SPIRIT axis breaches the
+      budget or is caught in review), and the behavioral synthetic-dispatch checks (steps 4-5). This
+      hermetic step is still replayed by validate_vp_replay at implement time against the complete tree.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Full fast-tier presubmit -- prove the Option A budget raise and the Decision 152 authoring are
+      well-formed: prose limits (current <= budget), the prose budget-raise guard (the dec-152 marker
+      resolves to a real `## Decision 152:` header in the working tree), decisions-size (byte ceiling),
+      decision-entry conformance on the new entry (Status/Date/Decision present), graduation-completeness
+      on THIS plan, and SLOC all green.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      PASS. validate_prose_budget_raises confirms the raised decision-scout entry carries a dec-152
+      marker resolving to the authored header; validate_prose_limits confirms the file is <= its new
+      budget; validate_decisions_size confirms DECISIONS.md stays under 500000 bytes; decision-entry
+      conformance passes on Decision 152; every pre-deploy VP step here carries a graduation disposition.
+    fix_if: >-
+      Prose budget-raise violation -> the marker is missing, cites a number with no matching header
+      (numbering race: re-check max `## Decision NNN:` and align the marker to the authored number), or
+      the raise is unmarked. Prose-limits fail -> the budget value is below the actual post-edit `wc -c`
+      (set it to the exact measured size). decision-entry conformance fail -> a required marker is
+      missing from Decision 152. Do NOT decompose or fragment the skill (Decision 114/110), do NOT
+      `--update` any budget silently.
+    hermetic: false
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Synthetic dispatch (VIOLATING). Dispatch the decision-scout skill in a fresh subagent (Agent tool,
+      subagent_type general-purpose, invoking the `decision-scout` Skill) against this inline brief and
+      save its VERBATIM `## Decision Scout Report` to logs/debug/spirit-dispatch-violating.txt. Brief:
+      Intent = "make decision intent auditable"; Proposed approach = "add a validate.py check that FAILS
+      CI when any docs/DECISIONS.md entry lacks an **Intent:** marker, retroactively enforcing an Intent
+      marker across the entire historical decision corpus"; Scope files = ["scripts/validate.py",
+      "docs/DECISIONS.md"]; Verification Tier = V2; Explicitly cited decisions = none. This works AGAINST
+      Decision 151's stated Intent ("never retroactively obligating the historical corpus to supply one"
+      / "no retro-enforcement") WITHOUT literally contradicting a Decision 151 clause (the clauses assert
+      optionality; none literally forbids a validator), so it is the canonical spirit-not-literal case and
+      Decision 151 carries a quotable **Intent:** marker.
+    command: >-
+      o=logs/debug/spirit-dispatch-violating.txt; test -s "$o" && grep -q "FLAGS_FOUND" "$o" && sed -n
+      '/^### Spirit-Alignment Flags/,/^### Verdict/p' "$o" | grep -Eq "\bWARN\b" && sed -n '/^###
+      Spirit-Alignment Flags/,/^### Verdict/p' "$o" | grep -q '"'
+    expected: >-
+      The saved report exists and non-empty; Verdict is FLAGS_FOUND; the SPIRIT section carries at least
+      one WARN flag; and that section contains a double-quote character (the mandatory verbatim quote of
+      the violated Decision 151 Intent). The dispatch itself is the real behavioral test; this command is
+      the deterministic pass/fail latch on its saved output.
+    fix_if: >-
+      No SPIRIT section or an empty one -> the skill did not emit the mandatory section (structural bug,
+      re-check steps 1-2). WARN present but no quote -> the quote-or-drop gate is not being honored in the
+      output template. Verdict NO_FLAGS despite a SPIRIT flag -> the FLAGS_FOUND widening (step 2 anchor
+      "at least one SPIRIT flag") was not wired into the verdict definition. A BLOCK verdict -> the
+      never-BLOCK gate is violated. This is an LLM-in-the-loop step; on a malformed dispatch, re-run the
+      dispatch, not a workaround (Decision 55).
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Synthetic dispatch (BENIGN). Dispatch the decision-scout skill in a fresh subagent (same shape as
+      step 4) against this inline brief and save its VERBATIM report to
+      logs/debug/spirit-dispatch-benign.txt. Brief: Intent = "add an optional field to an existing config
+      contract"; Proposed approach = "add a new nullable, optional field to an existing docs/contracts
+      YAML contract, collocating its description and semantics with the field per the Decision 86 routing,
+      changing no write path and retro-enforcing nothing"; Scope files = ["docs/contracts/ops_decisions.yaml"];
+      Verification Tier = V1; Explicitly cited decisions = none. This has no spirit violation and no literal
+      contradiction.
+    command: >-
+      o=logs/debug/spirit-dispatch-benign.txt; test -s "$o" && grep -q "NO_FLAGS" "$o" && sed -n '/^###
+      Spirit-Alignment Flags/,/^### Verdict/p' "$o" | grep -q "None"
+    expected: >-
+      The saved report exists and non-empty; the SPIRIT section is present and reads "None"; Verdict is
+      NO_FLAGS. Confirms the mandatory-even-when-empty section renders its "None" default (the parent
+      parser never has to branch) and that a benign approach does not manufacture SPIRIT noise.
+    fix_if: >-
+      No SPIRIT section -> the section is not truly mandatory-when-empty (fix the output contract). A
+      SPIRIT flag on a benign approach -> the anti-noise gating is too loose (the quote-or-drop / no-flag
+      discipline is not being applied). Verdict not NO_FLAGS with no flags in any lane -> the verdict
+      logic is miswired. Re-run the dispatch on a malformed result (Decision 55), never patch around it.
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - "IMPLEMENTATION plan type ONLY (Decision 67 STRATEGIC freeze). Do NOT declare STRATEGIC."
+  - "bundled_recommendations: [] -- file NO recs; all work inline (overseer constraint). Unrelated discoveries go to the hand-back open_questions, not the portal."
+  - >-
+    TRAP-7 boundary: do NOT redesign HOW the scout reads the corpus (no pagination, no tool-backed read,
+    no index consumption). This axis is workable at current corpus size precisely because the whole-file
+    read (SKILL.md Phase 1) already exists; the concurrent agent-context-governance audit owns any change
+    to the read mechanism. The SPIRIT axis adds only a judgment lane.
+  - >-
+    PRESERVE the decision-scout public interface: the `## Decision Scout Report` structure, the three
+    verdict strings (NO_FLAGS | FLAGS_FOUND | BLOCK), and the `Decisions triaged: N of M` line are parsed
+    by the /plan Step 6a gate AND the overseer decision-scout gate. The SPIRIT change is purely additive
+    -- widen the FLAGS_FOUND DEFINITION, add one output section, never rename or drop an existing string.
+  - >-
+    PRESERVE every existing Phase 2 step, especially the Managed-service-native check (Decision 100 /
+    Decision 75) which lives in the SAME Phase 2 being edited. The SPIRIT overlay is a NEW step appended
+    after the status filter; do not disturb steps 3-6.
+  - >-
+    TWO DISTINCT BUDGETS -- do not conflate. Option A raises ONLY the FILE byte budget in
+    config/prose_budgets.yaml (the skill grew). The scout's ~1,200-word RESPONSE cap (SKILL.md Quality
+    Gate / step 9) is UNCHANGED; the SPIRIT section rides inside it, bounded by the cap of 3 flags.
+  - >-
+    Numbering-race linkage (Option A): re-check the max `## Decision NNN:` header in the working-tree
+    DECISIONS.md at implement time; author the Decision at the next free number; the
+    `# raise-approved: dec-NNN` marker in prose_budgets.yaml MUST use that SAME number, because
+    validate_prose_budget_raises resolves the marker against the working-tree `## Decision N:` header.
+    A mismatch fails the raise guard.
+  - >-
+    Decision 152 is a FORWARD governance Decision, not a candidate-decision ratification -- the Decision
+    105 R1-R3 ratified-CD referential guard is NOT engaged (mirrors how Decision 151 handled it).
+  - >-
+    Prose registry relief valve: for an S4 skill file the sanctioned relief for an over-budget surface is
+    a loud, Decision-cited RAISE (Option A) or content RELOCATION/DEFERRAL to a contract/PROJECT_CONTEXT
+    (Option B). NEVER split/decompose the skill into @-imported fragments (Decision 114/110
+    anti-fragmentation). Decision 128's decompose-don't-raise relief valve is SLOC-specific and, by the
+    prose_budgets.yaml header's own statement, does not apply to this registry.
+  - >-
+    No em dashes (ASCII hyphen `-` / ` -- `), no emojis, no new standing prose doc under docs/ (Decision
+    86 intent-doc-freeze). Do not touch the pre-existing em-dash on the current SKILL.md status-filter
+    line (out of scope).
+  - "Loud-fail; no rescue agents or workaround loops (Decision 55). A malformed synthetic dispatch is re-run, never patched around."
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (gate_run_id verified;
+    104/104 live decisions triaged; NO BLOCK -- Option A well-grounded, no pivot). CITE: dec-150 (the
+    significance bar Decision 152 clears + the four routing rows it exercises), dec-151 (the **Intent:**
+    marker the SPIRIT bucket quotes; this finding's depends_on DCG-06), dec-127 and dec-043 (the
+    sanctioned-prose byte-budget taxonomy governing the config/prose_budgets.yaml raise -- the registry's
+    own charter), dec-134 / dec-145 (DECISIONS.md live byte ceiling + the scout's own size-ceiling
+    context; 60885 bytes headroom), dec-105 (forward governance Decision, R1-R3 guard not engaged),
+    dec-086 (methodology-in-skill / rationale-in-Decision routing; no new prose doc), dec-090 (four-tier
+    workflow whose Step 6a gate the scout serves), dec-146 (operator-disposed convention-only enforcement
+    the SPIRIT quote-or-drop judgment mirrors), dec-055 (loud-fail), dec-128 (SLOC decompose-by-default --
+    does-NOT-violate NOTE, see fork below), dec-100 / dec-075 (managed-service-native check preserved
+    unchanged in the same Phase 2). RELATED: dec-048 (confirms V1 -- no runtime effect -- and no
+    double-guard: DECISIONS.md is governed by validate_decisions_size, the SKILL.md by
+    validate_prose_budget_raises; keep them separate).
+  - "gates: decision-scout=FLAGS_FOUND (104/104 triaged, gate_run_id verified) after 1 round; plan-critique=<verdict> after <N> round(s) (overseer trampoline -- filled post-critique)."
+  - >-
+    STEP 6b A/B FORK (the Decision-150 significance-bar call; the decision-scout Decision-128 NOTE is
+    exactly this fork). This plan is WRITTEN for Option A (recommended). OPTION A: author Decision 152 +
+    raise the decision-scout prose budget with a dec-152 marker (scope = SKILL.md + prose_budgets.yaml +
+    DECISIONS.md). OPTION B: net-neutral restructure of the SKILL.md using the prose registry's
+    relocate/defer relief valves so the file stays <= 8265 bytes -- no Decision, no raise (scope = SKILL.md
+    only). RECOMMENDATION: Option A. Reasons: (1) the SPIRIT axis clears the Decision 150 significance bar
+    -- a durable architectural commitment to a load-bearing gate (the /plan pre-confirmation gate AND the
+    overseer gate) with reversal-relevant consequences (reversal removes the bucket, reverts the verdict
+    semantics, lowers the budget); (2) symmetry with Decision 151 -- DCG-07 depends_on DCG-06; the anchor
+    half (Intent marker) got a numbered Decision, and the consumer half that quotes it completes the same
+    NS-3 mechanism; (3) budget-raise funding precedent -- both live raises in prose_budgets.yaml cite the
+    Decision that introduced their content (dec-150); a scout-axis raise should likewise cite a Decision
+    that actually governs the axis (a fresh Decision 152), not dec-151 (which governs the marker, not the
+    scout -- citing it would be the semantically-thin raise the significance gate warns against); (4)
+    Option B would force ~2.5KB of net-neutral cuts into a dense live gate skill, and the only trims large
+    enough push into load-bearing content (the managed-service check, the anti-patterns, the
+    subagent-isolation rationale), degrading the gate, AND would leave a durable commitment unrecorded.
+    Decision 128 does NOT block Option A: it is SLOC-specific and the prose_budgets.yaml header states
+    Decision 128 point 1 does not apply to the prose registry; a loud dec-cited prose raise is the
+    first-class sanctioned relief valve.
+  - >-
+    V1 rationale: the dominant artifact class is docs/config/markdown (skill methodology, a prose budget
+    entry, one Decision entry). No Python source (V2), no Terraform/Lambda/self-invoked external system
+    (V3). The only warehouse write -- the DECISIONS.md -> ops_decisions backfill -- is CI-automated
+    post-merge by rec-autoclose.yml (.github/workflows/rec-autoclose.yml, "Backfill decisions to
+    warehouse" step, writer-health-gated), so it is NOT a self-invoked VP step. The synthetic-dispatch
+    behavioral checks (VP steps 4-5) are LLM-judgment steps layered on the V1 change, verified via a
+    deterministic grep on the saved dispatch output.
+  - >-
+    planning/SKILL.md is deliberately NOT in scope. SPIRIT flags are always WARN/NOTE and surface to the
+    human through the planning skill's EXISTING FLAGS_FOUND handling ("Surface each WARN/NOTE flag ...
+    under a Decision Flags section"), which is severity-generic and does not enumerate bucket names. The
+    scout's output section is self-labeling. Editing planning/SKILL.md would breach its own dec-150-raised
+    prose budget for no functional gain.
+  - >-
+    Numbering-race (re-stated for the implementer): max header at planning time is `## Decision 151:`, so
+    the target is 152 -- but a concurrent PR may claim it. Re-check at implement time; author at the next
+    free number; align the prose raise marker's dec-NNN to that number (the raise guard resolves the
+    marker against the working-tree header, so authoring + marker must agree).
+  - >-
+    Data-Model assessment: authoring Decision 152 appends one row to the existing SCD2 ops_decisions table
+    via the CI backfill (grain unchanged: one row per (decision_id, content change)); no new table, no new
+    column, no new identity scheme, no merge_key change. Routine already-settled call -- no Fable
+    escalation required.
+  - >-
+    Preflight: venv_ok, creds ok; main_freshness commits_behind=0 (at merged main f0e701d, no rebase
+    needed, no scope-file divergence); ci_rca_unresolved_recs=[] (no HARD BLOCK); 816 open recs / 690
+    non-automatable (informational, individual review suspended per Decision 73). Data-quality last run
+    FAIL with 0 checks defined (stub state; this plan touches no data pipeline). ANOMALY (pre-existing,
+    out of scope, surfaced to the orchestrator, NOT acted on -- overseer no-recs constraint): ops_outbox
+    shows 2 entries in the retired ops_recommendations dir (Decision 84 I-4: migrated-table outboxes are
+    never drained).
+  - >-
+    Audit acceptance (audits/decision-consolidation-growth-f79d6b5.yaml DCG-07): "the skill defines the
+    bucket and gates; a synthetic dispatch (plan violating a stated intent without literal contradiction)
+    returns >=1 quoted SPIRIT WARN and verdict FLAGS_FOUND; a benign dispatch returns SPIRIT None." Mapped
+    1:1 onto acceptance_criteria 1-3 and VP steps 1-5.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/... session branch)
+  - docs/PROJECT_CONTEXT.md read
+  - "DECISIONS.md read (Decisions 150, 151, 127, 43, 134, 145, 105, 86, 90, 146, 55, 128, 100, 75, 48)"
+  - All 3 scope files located and readable; SKILL.md edit anchor points confirmed
+  - Max `## Decision NNN:` header re-checked (numbering-race) BEFORE authoring Decision 152 AND before setting the prose raise marker number; the two numbers agree
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    Edit .claude/skills/decision-scout/SKILL.md, additively (do not disturb existing Phase 2 steps 3-6,
+    the report interface, or the pre-existing status-filter em-dash). Six edits: (a) in `## Intent`, extend
+    the role list "as context to cite, as a contradiction to resolve, or as a related-work pointer." to
+    read "... as context to cite, as a literal contradiction to resolve, as a related-work pointer, or as
+    a spirit-alignment concern to weigh (the SPIRIT overlay, Phase 2)."; (b) append a new Phase 2 step
+    after the status-filter step (renumber the two Phase 3 steps 7->8, 8->9); (c) insert the SPIRIT output
+    section between the RELATED and Verdict blocks; (d) widen the Verdict definition; (e) add two Quality
+    Gate rows; (f) add the anti-pattern. Verbatim blocks (b)-(f) below (ASCII hyphens only).
+  - |
+    SKILL.md block (b) -- new Phase 2 step appended after "6. **Status filter.** ..." (renumber the
+    Phase 3 output step to 8 and the word-cap step to 9):
+
+    7. **Spirit-alignment overlay (SPIRIT bucket).** SEPARATELY from the literal CONTRADICT triage (steps
+       3-4), flag a proposed approach that violates the *spirit* of an active decision without
+       contradicting any single clause of it. This axis answers the intent-alignment half of the plan's
+       question ("is my plan aligned with the spirit of the corpus?"); it is gated hard against noise --
+       the skill's own defensive-over-citation anti-pattern applies with FULL force to this fuzzier axis.
+       Emit a SPIRIT flag ONLY when ALL FOUR hold:
+       - (i) **No literal CONTRADICT on the same decision.** If the decision is already flagged CONTRADICT
+         (any severity), never also flag it SPIRIT -- literal contradiction supersedes, and a decision
+         appears in at most one of the two lanes.
+       - (ii) **Verbatim-quotable violation.** You can quote, VERBATIM, the exact text the approach works
+         against: either the decision's `**Intent:**` marker (entries carrying one, Decision 151) or a
+         single specific sentence from its Problem/Rationale (historical entries without an Intent marker).
+         If you cannot ground the flag in a verbatim quote, DO NOT flag -- unquotable means no flag. A
+         paraphrase is not a quote.
+       - (iii) **WARN or NOTE severity only.** A SPIRIT flag NEVER carries BLOCK -- BLOCK stays reserved
+         for literal contradiction (step 4). WARN = the approach clearly works against the quoted intent;
+         NOTE = a softer tension surfaced for the planning agent's judgement.
+       - (iv) **Capped at 3.** Emit at most 3 SPIRIT flags. If more than 3 candidates qualify, keep the 3
+         highest-severity (WARN over NOTE) and drop the rest; the whole report still fits the ~1,200-word
+         budget (step 9).
+  - |
+    SKILL.md block (c) -- new output section, inserted between the "### Related Decisions (RELATED)"
+    block (and its "(or None if empty)" line) and the "### Verdict" block, INSIDE the fenced report
+    template:
+
+    ### Spirit-Alignment Flags (SPIRIT)
+    - **Decision N** [WARN | NOTE]: [title]
+      - Violated intent (verbatim): "[exact quote of the entry's **Intent:** marker, or a specific
+        Problem/Rationale sentence]"
+      - Divergence: [the specific element of the proposed approach that works against the quoted intent]
+      - Suggested resolution: [align to X | add explicit deferral note citing Decision N | clarify with human]
+
+    (or "None" if empty)
+  - |
+    SKILL.md block (d) -- REPLACE the parenthetical under "### Verdict" (currently "(NO_FLAGS = no
+    CONTRADICT entries; CITE-only is still NO_FLAGS. / FLAGS_FOUND = at least one CONTRADICT at WARN or
+    NOTE severity. / BLOCK = ...)") with:
+
+    (NO_FLAGS = no CONTRADICT entries AND no SPIRIT flags; CITE-only is still NO_FLAGS.
+    FLAGS_FOUND = at least one CONTRADICT at WARN or NOTE severity, OR at least one SPIRIT flag (SPIRIT is
+    always WARN/NOTE, so a SPIRIT flag alone yields FLAGS_FOUND, never BLOCK).
+    BLOCK = at least one CONTRADICT at BLOCK severity; planning agent must pivot before confirming.)
+
+    Leave the "NO_FLAGS | FLAGS_FOUND | BLOCK" line and the "Decisions triaged: N of M" line UNCHANGED.
+  - |
+    SKILL.md block (e) -- two rows appended to the "## Quality Gate (self-check before output)"
+    checklist, before the "If any checkbox is false" line:
+
+    - [ ] Every SPIRIT flag carries a verbatim quote of the violated **Intent:** marker or a specific
+      Problem/Rationale sentence (no paraphrase)
+    - [ ] SPIRIT flags number <= 3, and no decision appears in both SPIRIT and CONTRADICT
+  - |
+    SKILL.md block (f) -- one anti-pattern appended to the "## Anti-patterns" list:
+
+    - **SPIRIT over-citation.** The SPIRIT axis is the highest-noise lane -- an unquotable "this feels
+      misaligned" is not a flag. If you cannot paste a verbatim Intent/Problem/Rationale quote the approach
+      works against, it is not a SPIRIT flag; drop it. Three well-grounded flags beat ten hedged ones.
+  - >-
+    [Option A] Measure `wc -c .claude/skills/decision-scout/SKILL.md` after the edit; set the
+    config/prose_budgets.yaml S4 entry `.claude/skills/decision-scout/SKILL.md:` to that EXACT byte value
+    with an inline marker, e.g. `  .claude/skills/decision-scout/SKILL.md: <N>  # raise-approved: dec-152
+    SPIRIT intent-alignment triage axis (DCG-07) added to the scout`. Use the actually-authored Decision
+    number if the numbering race shifted it off 152. Touch no other budget entry.
+  - |
+    [Option A] Re-check the max `## Decision NNN:` header, then author governing Decision 152 (or the next
+    free number) at the TOP of docs/DECISIONS.md (newest-first, matching Decisions 150/151), authored WITH
+    an **Intent:** marker and reversal conditions. Verbatim drafted text (align the number everywhere to
+    the re-checked value; the plan-critique + Step 6b gates are the human sign-off on this text):
+
+    ## Decision 152: Decision-scout SPIRIT axis -- a quotability-gated intent-alignment triage lane distinct from literal contradiction (audit finding DCG-07, Q3c adopt-scoped) (Decided)
+
+    **Status:** Decided
+    **Date:** 2026-07-24
+    **Warehouse ID:** dec-152 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+    **Problem:**
+    The decision-scout gate triages a proposed plan against the corpus on ONE axis only -- literal
+    contradiction (`.claude/skills/decision-scout/SKILL.md` CONTRADICT bucket = "violates an active
+    decision"). A plan can obey every literal clause while working against the durable *spirit* of a
+    ruling, and that failure mode passes the gate as NO_FLAGS (or at best surfaces as diluted RELATED
+    context with no violation semantics). Audit finding DCG-07
+    (audits/decision-consolidation-growth-f79d6b5.yaml, Q3c adopt-scoped) names this as the unconsumed
+    half of NS-1's query -- "is my plan aligned with the spirit of the corpus?" -- now that Decision 151
+    (DCG-06) has given the corpus a quotable **Intent:** anchor to align against.
+
+    **Intent:**
+    Give the scout a second, intent-alignment triage lane so a spirit violation without literal
+    contradiction is surfaced, WITHOUT letting that fuzzier axis collapse into the defensive-over-citation
+    noise the skill's own doctrine forbids. The anti-noise gating IS the design: a SPIRIT flag exists only
+    when it can be grounded in a verbatim quote of the violated Intent/Problem/Rationale, never carries
+    BLOCK, is capped at 3, and never double-flags a decision already caught literally. The lane is
+    prompt-level methodology (convention-only, no validator, mirroring Decision 146), tractable precisely
+    because the scout already reads the whole corpus -- audit TRAP-7: this adds a judgment axis, never a
+    change to HOW the corpus is read (the deferred agent-context-governance audit owns that).
+
+    **Decision:**
+    1. **SPIRIT bucket + four gates.** `.claude/skills/decision-scout/SKILL.md` gains a Phase-2
+       spirit-alignment overlay step defining a SPIRIT bucket that fires ONLY when all four hold: (i) no
+       literal CONTRADICT on the same decision (literal supersedes; a decision appears in at most one
+       lane); (ii) the flag quotes VERBATIM the violated decision's **Intent:** marker (new entries) or a
+       specific Problem/Rationale sentence (historical band) -- unquotable means no flag; (iii) severity
+       WARN or NOTE only (BLOCK stays literal-contradiction-only); (iv) capped at 3 flags, inside the
+       existing ~1,200-word response budget.
+    2. **Output contract + verdict.** A mandatory-even-when-empty `### Spirit-Alignment Flags (SPIRIT)`
+       section with a "None" default (the parent parser never branches), and a widened Verdict definition:
+       FLAGS_FOUND fires on >=1 SPIRIT flag OR >=1 CONTRADICT WARN/NOTE. The three verdict strings
+       (NO_FLAGS | FLAGS_FOUND | BLOCK) and the `## Decision Scout Report` / `Verdict` interface are
+       UNCHANGED -- every existing caller (the /plan Step 6a gate, the overseer decision-scout gate) parses
+       the same surface. Two Quality-Gate rows enforce the gates (every SPIRIT flag carries a verbatim
+       quote; SPIRIT count <= 3 with no CONTRADICT overlap).
+    3. **Prose-budget funding.** The addition breaches the skill's zero-headroom `config/prose_budgets.yaml`
+       S4 entry; this Decision funds the raise via a `# raise-approved: dec-152` marker (Decision 127/43
+       sanctioned-prose taxonomy). Decision 128's decompose-don't-raise relief valve is SLOC-specific and,
+       by the prose registry's own header, does not apply here; the registry forbids @-import fragmentation
+       (Decision 114/110), so a loud Decision-cited raise is the correct relief valve. Only the FILE byte
+       budget is raised; the ~1,200-word RESPONSE cap is unchanged.
+
+    **Rationale:**
+    The SPIRIT axis is the consumer that makes Decision 151's Intent marker load-bearing end-to-end: DCG-06
+    gave the corpus a quotable anchor, DCG-07 gives a gate that quotes it. It is a distinct lane rather than
+    an extension of CONTRADICT because the two have different evidentiary bars (literal clause-violation vs.
+    quotable spirit-divergence) and different consequences (BLOCK-eligible vs. WARN/NOTE-only); folding
+    spirit judgement into CONTRADICT would either over-block on soft tensions or dilute the literal lane.
+    The quote-or-drop gate is the same operator-disposed, non-mechanically-decidable judgement stance
+    Decision 146 settled for archival eligibility -- "aligned with the spirit" is not machine-decidable, so
+    it routes to grounded LLM judgement with a hard evidentiary floor (the verbatim quote), not an automated
+    check. Routed per Decision 86: methodology in the skill, this rationale here, no new prose doc.
+
+    **Reversal conditions:** Revert the SPIRIT axis (remove the bucket, restore the CONTRADICT-only verdict,
+    and lower the prose budget back) if in practice it produces net noise -- e.g. SPIRIT flags are routinely
+    waved through at Step 6b without changing plans, or the quote-gate proves insufficient to prevent
+    defensive over-citation. If instead the axis proves valuable but convention-only enforcement drifts, the
+    escalation is a mechanical quote-presence check in the scout's Quality Gate, not removal.
+
+    **Related:** Decision 151 (the **Intent:** marker this lane quotes; DCG-06, this finding's depends_on),
+    Decision 150 (the significance bar this Decision clears and the routing taxonomy it exercises), Decision
+    127 and Decision 43 (the sanctioned-prose byte-budget taxonomy governing the prose_budgets.yaml raise),
+    Decision 128 (SLOC decompose-by-default -- SLOC-specific, explicitly not applicable to the prose
+    registry; the raise is the sanctioned prose relief valve), Decision 134 and Decision 145 (the
+    DECISIONS.md live byte ceiling this entry stays within, and the scout's own size-ceiling context),
+    Decision 146 (the operator-disposed, convention-only-enforcement stance this axis's quote-or-drop
+    judgement mirrors), Decision 100 and Decision 75 (the managed-service-native WARN check in the same
+    Phase 2, preserved unchanged), Decision 105 (this is a forward governance Decision, NOT a CD
+    ratification -- the R1-R3 guard is not engaged), Decision 90 (the four-tier workflow whose Step 6a gate
+    the scout serves), Decision 86 (methodology-in-skill / rationale-in-Decision routing -- no new prose
+    doc), Decision 55 (loud-fail, no rescue).
+  - >-
+    Execute the Verification Plan -- run pre-deploy steps 1-3 (deterministic) in the FOREGROUND and loop
+    until green; then run steps 4-5 (synthetic dispatches) by dispatching the decision-scout skill in a
+    fresh subagent against the two inline briefs, saving each verbatim report under logs/debug/, and
+    asserting the saved output with the step commands. On an unrecoverable failure stop and RCA (Decision
+    55); a malformed dispatch is re-run, never patched around.
+  - "Report: what was implemented (the six SKILL.md edits, the prose raise value, the authored Decision number), the deterministic VP results, and both synthetic-dispatch outcomes."
+work_areas: []
+rollback: >-
+  Fully forward-fixable by reverting the PR -- all three files are text. Reverting SKILL.md restores the
+  four-bucket scout with no orphaned state (the SPIRIT axis is purely additive and self-contained).
+  Reverting the prose_budgets.yaml raise is a pure ratchet-down (always allowed, no marker needed).
+  Reverting the Decision 152 entry: DECISIONS.md is the ETL source, so removing the entry and letting the
+  post-merge rec-autoclose.yml backfill re-sync leaves ops_decisions consistent (SCD2 history is
+  append-only; a removed entry simply stops projecting to the CURRENT row -- no manual warehouse surgery).
+  If Option B is chosen at Step 6b instead, prose_budgets.yaml and docs/DECISIONS.md drop from scope
+  entirely and only the net-neutral SKILL.md restructure lands.
