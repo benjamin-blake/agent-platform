@@ -39,17 +39,51 @@ def _skipped_line(path: str, missing_module: str, line: int = 2) -> str:
 
 
 class TestExcludedHeavyDeps:
-    """Excluded-heavy import-name set derivation from the REAL requirements files (rec-2485)."""
+    """Excluded-heavy import-name set derivation from the REAL requirements files (rec-2485).
+
+    Option-A coupling invariant (VTS-16 / dependency-declarations-ci-config): the set is
+    derived as (requirements.txt distributions) - (requirements-fast.txt distributions), so
+    moving ruff/mypy/pytest* into requirements-dev.txt does not affect it -- those tools stay
+    declared in requirements-fast.txt too, and requirements-dev.txt is not a term in the
+    derivation at all. The one exception is pytest-cov: it was requirements.txt-only (never
+    in requirements-fast.txt) and moved to requirements-dev.txt, so it drops out of "full" and
+    therefore out of the excluded set. This single-member pytest_cov delta is intended and
+    harmless -- pytest-cov is a coverage-report tool, not a heavy runtime import any test
+    module needs deferred at collection time, and every heavy runtime dep stays excluded.
+    """
 
     def test_heavy_deps_in_excluded_set(self) -> None:
         excluded = _excluded_heavy_import_names()
-        for name in ("pyarrow", "pandas", "numpy", "duckdb"):
+        for name in (
+            "pyarrow",
+            "pandas",
+            "numpy",
+            "duckdb",
+            "torch",
+            "pyiceberg",
+            "awswrangler",
+            "psycopg2",
+            "sklearn",
+            "sympy",
+            "pysr",
+            "aiohttp",
+            "radon",
+        ):
             assert name in excluded, f"{name} should be excluded (heavy, requirements.txt-only)"
 
     def test_fast_tier_deps_not_in_excluded_set(self) -> None:
         excluded = _excluded_heavy_import_names()
         for name in ("ruff", "mypy", "pytest", "pyyaml", "pydantic"):
             assert name not in excluded, f"{name} is present in requirements-fast.txt; must not be excluded"
+
+    def test_moved_dev_tools_not_in_excluded_set_post_move(self) -> None:
+        """Regression (VTS-16 / Option A): pytest/ruff/mypy moved from requirements.txt to
+        requirements-dev.txt must stay OUT of the excluded set -- they remain declared in
+        requirements-fast.txt, which is the only thing that keeps a name out of the
+        (requirements.txt - requirements-fast.txt) difference."""
+        excluded = _excluded_heavy_import_names()
+        for name in ("pytest", "ruff", "mypy"):
+            assert name not in excluded, f"{name} moved to requirements-dev.txt but must still not be excluded"
 
     def test_parse_requirement_dist_names_missing_file_returns_empty_set(self, tmp_path: Path) -> None:
         assert _parse_requirement_dist_names(tmp_path / "nonexistent-requirements.txt") == set()
