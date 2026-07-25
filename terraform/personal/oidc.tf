@@ -216,12 +216,7 @@ data "aws_iam_policy_document" "ci_full_refresh_read" {
       # state, or every subsequent plan against this module fails closed with AccessDenied.
       "arn:aws:iam::${var.account_id}:role/agent-platform-scheduled-agent-dispatcher",
       "arn:aws:iam::${var.account_id}:role/agent-platform-findings-processor",
-      "arn:aws:iam::${var.account_id}:role/agent-platform-ops-compaction",
-      # rec-2831 / DEP-02 (T2.48 c2, PLAN-t248-passrole-liveproof, PR-3): the throwaway DEP-02
-      # live-proof probe role (probe_dep02_role.tf), so github_ci_planner's hourly drift plan stays
-      # green while the probe role exists. Matches the ARN pre-staged in github_ci_apply's
-      # IAMRolesRead (PR-1). Added in the DEP-02 create PR, removed in the DEP-02 revert PR.
-      "arn:aws:iam::${var.account_id}:role/agent-platform-probe-liveproof-role"
+      "arn:aws:iam::${var.account_id}:role/agent-platform-ops-compaction"
     ]
   }
 
