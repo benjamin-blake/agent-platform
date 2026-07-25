@@ -932,6 +932,19 @@ candidate_decisions:
       skill. At CD.30 ratification those consumers MUST be amended in lockstep (see discipline_points). This
       roadmap edit does NOT touch DECISIONS.md or the prompt -- those land at ratification via the log-decision
       path and a named follow-on plan.
+
+      [VTS-07 correction, 2026-07-25] The "already diff-scoped" / "wired into validate.py enforces"
+      premise above describes intent, not CI reality: the gate is structurally inert in every CI
+      context today. validate_test_coverage is full_sequence-only (Decision 124), so on every
+      origin/main checkout (main-validate / canary runs) its merge-base diff against origin/main is
+      empty and it no-ops there regardless; and its per-file leg additionally no-opped via a
+      slash-form --cov argument that made coverage.py silently skip data collection rather than
+      measure anything (rec-2791 cluster; fixed as VTS-07's buildable half). Safe sequencing for
+      this rewrite: land the slash->dotted --cov fix first, then this CD.30 diff-line ratchet, then
+      promote to --pre -- never reorder (promoting the current per-file 100%-floor form straight to
+      --pre would be a breaking strictness jump). map_source_to_test also relocates out of this
+      coverage-named module at the CD.30 rewrite (VTS-21 deferred half, Decisions 104/131) -- not
+      performed here.
     gates: [T3.7]
     state: pending
     filed_via: pending_log_decision_lambda
@@ -4634,6 +4647,17 @@ tier_items:
       volume lands -- Neon storage and S3 small-file growth thresholds measured and set (per
       Decision 88 / T2.18 cadence). Gated on T2.26 (Athena demolition + ops_compaction retirement)
       and T2.18 (DuckLake maintenance pipeline).
+
+      [VTS-05 annotation, 2026-07-25] Decision 135 deferred the selection-manifest's DuckLake
+      table / named-verb registration to this item, triggered by "first written cross-run query"
+      (Decision 135 point 5). That cross-run query is also the natural evaluator for Decision 135's
+      reversal condition (a) (the ~35-module cap's transitive-residue defer/escape rate proving high
+      enough in practice that the full tier is routinely catching what fast-tier selection should
+      have caught): the defer/escape rate is recorded per selection-run today but aggregated by
+      nothing. The deferral is circular -- the "first written cross-run query" trigger presupposes a
+      query that cannot itself be written until this item's DuckLake registration lands. Scope the
+      cross-run escape-rate query as the reversal-condition-(a) instrument when T2.36 lands.
+      Annotation only per Decision 93 -- stays not_started.
     depends_on: [T2.26, T2.18]
     files_in_scope:
       - scripts/ops_writer.py           # OpsWriter.emit -> writer-boundary; staging outbox retire
@@ -5629,6 +5653,18 @@ tier_items:
         3. Diff-line-coverage ratchet (CD.30): replace the per-changed-file 100% floor (test_coverage_checker.py
            is already diff-scoped) with require-coverage-on-changed-LINES + upward-only global ratchet, enforced
            in validate.py; retarget scripts/test_coverage_checker.py.
+
+           [VTS-07 correction, 2026-07-25] The "already diff-scoped" premise above describes intent,
+           not CI reality: the gate is structurally inert in every CI context today --
+           full_sequence-only (Decision 124) so its merge-base diff against origin/main is empty on
+           every origin/main checkout, and its per-file leg additionally no-opped via a slash-form
+           --cov argument that silently skipped coverage collection instead of measuring anything
+           (rec-2791 cluster; fixed as VTS-07's buildable half). Safe sequencing: land the
+           slash->dotted --cov fix first, then this CD.30 diff-line ratchet, then promote to --pre --
+           never reorder (promoting the current per-file 100%-floor form straight to --pre would be
+           a breaking strictness jump). map_source_to_test also relocates out of this coverage-named
+           module at the CD.30 rewrite (VTS-21 deferred half, Decisions 104/131) -- not performed
+           here. Annotation only per Decision 93 -- this mechanism stays deferred_post_mvp.
 
       Freeze override (AGENTS.md): the three mechanisms decompose into separate atomic IMPLEMENTATION plans
       (mutation runner, dead-test detector, diff-coverage ratchet + the meta-validation workflow) at /implement

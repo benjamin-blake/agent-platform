@@ -379,8 +379,8 @@ def check_per_file_coverage(source_files: list[Path]) -> list[str]:
             continue
 
         # Convert path to module-style for --cov argument
-        # e.g. src/common/config.py -> src/common/config
-        module_str = str(rel.with_suffix("")).replace("\\", "/")
+        # e.g. src/common/config.py -> src.common.config
+        module_str = ".".join(rel.with_suffix("").parts)
 
         # Run only the corresponding test file instead of the full suite.
         # Running `pytest tests/` for each source file triggers a recursive
