@@ -224,3 +224,78 @@ class TestCheckPerFileCoverageDirectoryTarget:
 
         assert errors == []
         mock_popen.assert_not_called()
+
+
+class TestPerFileCoverageDottedModuleForm:
+    """VTS-07 regression (rec-866/2633/2640/2681/2791/2810 cluster): check_per_file_coverage's
+    --cov argument must be a dotted module path ('.'.join(parts)), not the former slash-separated
+    posix path. The slash form makes coverage.py warn 'Module ... was never imported' / 'No data
+    was collected' and write no .coverage.json, which check_per_file_coverage's own
+    `if not coverage_json.exists(): continue` then swallows as a silent skip (empty error list)
+    instead of surfacing the shortfall -- broken for BOTH scripts/ and src/ modules alike."""
+
+    def test_dotted_cov_form_flags_undertested_module(self, tmp_path: Path, monkeypatch) -> None:
+        """Behavioral proof (rec-2791/rec-2633/rec-2681 acceptance): a REAL coverage subprocess
+        against a deliberately-undertested scripts/-style module returns a non-empty error on the
+        dotted form; the pre-fix slash form returned [] here (silent skip). Pinned SPECIFICALLY to
+        the 'expected 100%' shortfall signature -- not mere list non-emptiness -- because the
+        unmatched-module branch ('0% coverage (no tests exercise this file)') is also non-empty
+        and would otherwise pass vacuously without proving dotted-form collection actually worked."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "__init__.py").write_text("", encoding="utf-8")
+        probe = scripts_dir / "probe.py"
+        probe.write_text(
+            "def covered_fn() -> int:\n    return 1\n\n\ndef uncovered_fn() -> int:\n    return 2\n",
+            encoding="utf-8",
+        )
+
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        test_probe = tests_dir / "test_probe.py"
+        test_probe.write_text(
+            "from scripts.probe import covered_fn\n\n\ndef test_covered_fn() -> None:\n    assert covered_fn() == 1\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+
+        with (
+            patch("test_coverage_checker.ROOT", tmp_path),
+            patch("test_coverage_checker.map_source_to_test", return_value=test_probe),
+        ):
+            errors = check_per_file_coverage([probe])
+
+        assert errors, "expected a non-empty coverage-shortfall error; got [] (dotted --cov collection silently no-opped)"
+        assert any("expected 100%" in e for e in errors), errors
+
+    def test_cov_argument_is_dotted_not_slash(self, tmp_path: Path) -> None:
+        """Form-pinning: the constructed --cov argument value is a dotted module path with no '/'
+        path separator (mocked Popen -- no real subprocess needed to pin argument FORM)."""
+        source = tmp_path / "scripts" / "probe.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("def f() -> None: pass\n", encoding="utf-8")
+
+        test_dir = tmp_path / "tests"
+        test_dir.mkdir()
+        test_file = test_dir / "test_probe.py"
+        test_file.write_text("def test_f() -> None: pass\n", encoding="utf-8")
+
+        with (
+            patch("test_coverage_checker.ROOT", tmp_path),
+            patch("test_coverage_checker.map_source_to_test", return_value=test_file),
+            patch("test_coverage_checker.subprocess.Popen") as mock_popen,
+        ):
+            mock_proc = MagicMock()
+            mock_proc.communicate.return_value = (None, None)
+            mock_popen.return_value.__enter__.return_value = mock_proc
+
+            errors = check_per_file_coverage([source])
+
+        assert errors == []
+        called_cmd = mock_popen.call_args.args[0]
+        cov_args = [arg for arg in called_cmd if isinstance(arg, str) and arg.startswith("--cov=")]
+        assert len(cov_args) == 1, called_cmd
+        cov_value = cov_args[0].removeprefix("--cov=")
+        assert "/" not in cov_value, cov_value
+        assert cov_value == "scripts.probe", cov_value
