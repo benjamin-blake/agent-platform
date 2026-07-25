@@ -1,0 +1,449 @@
+schema_version: 1
+slug: "t248-tagrole-completion"
+intent: >-
+  Unblock and complete DEP-02 (T2.48 c2) by closing the SECOND companion-verb gap that red-latched the
+  gated apply (run 30126122217): github_ci_apply grants iam:CreateRole on role/agent-platform-* but
+  iam:TagRole / iam:UntagRole only on two enumerated roles, so the provider default_tags block forces a
+  TagRole on every new agent-platform-* role's create and AccessDenies. Split the role metadata/lifecycle
+  verbs into one prefix-scoped risk-class Sid (adding iam:UpdateRole, Fable's predicted next gap), add
+  two standing presubmit checks so the identity/boundary and create-companion invariants can never
+  silently drift again, then re-run DEP-02 to convergence-green -- the reviewed ci_rca recovery for
+  rec-2842.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-t248-tagrole-completion.yaml
+phase: >-
+  Platform tier T2.48 (DEP-02 live-proof, realizes Decision 144); slice H of the terraform-deploy-redesign
+  overseer run (audit terraform-deploy-redesign-b67955b). This plan is the reviewed ci_rca recovery
+  (rec-2842) for the run-30126122217 gated-apply failure; it makes the DEP-02 gated create executable so
+  PLAN-t248-passrole-liveproof's PR-4 can record the c2 proof. It does NOT itself flip roadmap criteria
+  or tear down the probe (those stay with the sibling, after c2 is proven -- no double-attribution).
+scope:
+  - file: terraform/bootstrap/github_ci_apply.tf
+    action: Modify
+    purpose: >-
+      (1) SPLIT iam:TagRole + iam:UntagRole OUT of IAMRoleReconcile into a NEW prefix-scoped risk-class
+      Sid IAMRoleMetadataWrite on Resource role/agent-platform-*, MERGING the existing
+      IAMRoleDescriptionWrite (iam:UpdateRoleDescription) into it -- so the role metadata/lifecycle verbs
+      live in one Sid at the same prefix as IAMRoleCreateBounded's iam:CreateRole. (2) Leave
+      IAMRoleReconcile as TRUST-ONLY: iam:UpdateAssumeRolePolicy on the two enumerated branch/pr roles
+      ONLY -- do NOT widen its Resource (a widened trust Resource silently grants a fleet-wide trust
+      rewrite; DEP-05 is open so the identity policy is the only control -- Decision 143). (3) ADD
+      iam:UpdateRole to IAMRoleMetadataWrite (identity) AND to the boundary DataPlaneAllow ceiling (a
+      grant absent from the ceiling is silently denied by the intersection; max_session_duration edits
+      AccessDeny at both layers today). (4) Rewrite the IAMRoleReconcile comment (now trust-only) and add
+      an IAMRoleMetadataWrite comment: TagRole is structurally forced by default_tags on CreateRole (the
+      rec-2842 fix), UntagRole for tag-drift reconcile, UpdateRoleDescription folded from the retired Sid,
+      UpdateRole added proactively. Applied via the DESIGNED bootstrap admin tier (bootstrap is NEVER
+      auto-applied -- terraform/bootstrap/CLAUDE.md). Net inline delta +14 B (only the new UpdateRole
+      verb; the rearrangement is byte-neutral) -> ~9,958 B, ~282 B headroom under the 10,240 B ceiling.
+  - file: scripts/checks/iam_tf/_write_coverage.py
+    action: Modify
+    purpose: >-
+      Anti-recurrence hardening (mirrors the rec-2831 check_passrole_implies_coverage precedent in this
+      same module; no orchestrator/registry rewiring -- both new checks run inside the already --pre-tier
+      validate_ci_refresh_read_coverage). Add TWO check functions, invoked from check_write_coverage after
+      check_passrole_implies_coverage: (A) check_create_companion_scope_coverage -- the RECURRENCE-KILLER
+      for rec-2842: if the identity policy grants iam:CreateRole on role/agent-platform-*, assert
+      iam:TagRole, iam:UntagRole, AND iam:UpdateRole are EACH granted on a Resource covering the SAME
+      role/agent-platform-* prefix (default_tags forces tag-on-create, so CreateRole@prefix structurally
+      implies TagRole@prefix). (B) check_identity_iam_actions_subset_of_boundary -- defense-in-depth
+      generalizing the PassRole-specific check: every iam: action GRANTED (Effect=Allow) in the identity
+      policy must also appear in the boundary DataPlaneAllow ceiling, so the single list can never split
+      into drift. Implementer guidance (plan-critique): (i) scope invariant B to iam: actions ONLY -- iam
+      is the sole ACTION-ENUMERATED service in DataPlaneAllow; s3:* / lambda:* / logs:* etc. are wildcards
+      where a subset test is vacuous. (ii) Implement "the boundary covers action a" with the boundary's
+      action list as the PATTERNS, e.g. _action_matches(tuple(boundary_actions), [a]), so a future iam:* in
+      the ceiling is honored (not literal string-equality membership). (iii) Effect source: PREFER extending
+      _read_coverage._parse_bootstrap_statements with a backwards-compatible "effect" key rather than
+      duplicating the statement-splitter for a self-contained Effect-parse; the self-contained parse
+      (reusing _split_top_level_objects + _extract_capitalized_field + _parse_boundary_dataplane_statement)
+      remains an acceptable fallback. Either way the orchestrator facade stays unchanged. Stays well under
+      the 500-SLOC budget.
+  - file: scripts/checks/iam_tf/_read_coverage.py
+    action: Modify
+    purpose: >-
+      OPTIONAL, plan-critique's mild preference (decision-scout item 4c): invariant B's Effect filter needs
+      each identity statement's Effect. Preferred path -- extend _parse_bootstrap_statements to add a
+      backwards-compatible "effect" key to each returned statement dict (existing consumers read only
+      sid/actions/resources_raw, and existing _read_coverage tests assert on specific keys, never exact dict
+      equality -- verified this session, so they stay green). If the implementer keeps the Effect-parse
+      self-contained in _write_coverage.py instead, this file stays UNMODIFIED -- both paths are
+      gate-approved; scope PERMITS, does not require, the edit.
+  - file: tests/checks/iam_tf/test__write_coverage.py
+    action: Modify
+    purpose: >-
+      Positive + negative coverage for BOTH new checks. Companion-scope: CreateRole@prefix +
+      TagRole/UntagRole/UpdateRole@prefix -> pass; CreateRole@prefix with TagRole narrowed to the two
+      enumerated roles (the EXACT rec-2842 shape) -> loud fail; likewise UntagRole-missing and
+      UpdateRole-missing -> loud fail. Subset: all identity Allow iam actions present in the boundary ->
+      pass; an identity Allow iam action absent from the boundary DataPlaneAllow -> loud fail; a Deny-only
+      identity iam action absent from the boundary -> NO false-fail (Effect filtering). Plus a real-tree
+      assertion the live github_ci_apply.tf passes both (mirrors the existing test_real_bootstrap_file_passes).
+bundled_recommendations:
+  - rec-2842
+infrastructure_dependencies:
+  - >-
+    terraform/bootstrap/github_ci_apply.tf is applied ONLY by the human-gated admin tier (PlatformAdmin /
+    agent_platform_admin), NEVER auto-applied (bootstrap is excluded from terraform-apply-sandbox's
+    terraform/personal/** path filter -- terraform/bootstrap/CLAUDE.md). PR-1 merging COMMITS the fix but
+    does NOT apply it; the admin apply MUST land + be verified live BEFORE the DEP-02 retry, or the retry
+    AccessDenies at iam:TagRole again (the exact rec-2842 failure this plan exists to fix).
+  - >-
+    The DEP-02 probe role (aws_iam_role.probe_dep02 = agent-platform-probe-liveproof-role) is already
+    committed on main (PR-3 / 253f5ce) but is NOT in state -- its create FAILED at the TagRole gate, so
+    the resource exists only in config. Both refresh-read lists already carry its ARN (bootstrap
+    IAMRolesRead from the sibling PR-1; the oidc.tf planner read-list from the sibling PR-3), so NO
+    read-list edit is needed and the hourly drift plan stays green while the probe exists.
+  - >-
+    DEP-02 retry = a HUMAN-initiated workflow_dispatch acknowledge-and-retry on terraform-apply-sandbox
+    (acknowledge_red_commit=253f5ce -- the red commit) that re-plans fresh (the ONLY human-reviewed
+    re-plan path; the push path has no re-plan). The guard re-classifies the aws_iam_role create as
+    IAM_SENSITIVE (guard UNCHANGED -- Decision 92/35) -> routes to the tf-gated-apply GitHub Environment
+    -> HUMAN approves -> the create now succeeds (TagRole authorized on role/agent-platform-*) with 0
+    AccessDenied -> the always-run convergence write flips the record GREEN, clearing the red latched at
+    253f5ce. The red-unlatch is HARD-ALWAYS-ASK; capture the run-id as the DEP-02 c2 evidence.
+  - >-
+    Guard classification is UNCHANGED (scripts/terraform_apply_guard.py is NOT in scope): aws_iam_role
+    stays IAM_SENSITIVE -> role create/trust/destroy still route to gated-apply. The metadata verbs
+    (TagRole/UntagRole/UpdateRole/UpdateRoleDescription) act on aws_iam_role and are NOT in
+    authority_budget.json's in_budget_resource_types (which mirrors only IAMRoleWriteBounded's inline-policy
+    / attachment budget) -> they NEVER auto-apply; they only give the apply role the VERB to execute an
+    already-APPROVED gated apply (identical posture to the HAZARD-4 delete verbs / IAMRoleDeleteBounded).
+    No authority_budget.json edit; validate_authority_budget (checks IAMRoleWriteBounded's prefix) is
+    unaffected.
+acceptance_criteria:
+  - >-
+    github_ci_apply's identity policy grants iam:TagRole, iam:UntagRole, iam:UpdateRole, and
+    iam:UpdateRoleDescription on Resource role/agent-platform-* in ONE risk-class Sid (IAMRoleMetadataWrite);
+    IAMRoleReconcile is reduced to iam:UpdateAssumeRolePolicy on the two enumerated branch/pr roles ONLY
+    (trust stays narrow -- Decision 143); and the boundary DataPlaneAllow Action list includes iam:UpdateRole.
+    The rec-2793 whitespace-stripped byte precondition (minified inline policy <= 10,240 B) still holds
+    (measured ~9,958 B, ~282 B headroom).
+  - >-
+    check_create_companion_scope_coverage fails loud when iam:CreateRole is granted on role/agent-platform-*
+    but any of iam:TagRole / iam:UntagRole / iam:UpdateRole is missing or narrower than that prefix (the
+    exact rec-2842 shape), and passes on the fixed policy; check_identity_iam_actions_subset_of_boundary
+    fails loud when an identity Allow iam action is absent from the boundary DataPlaneAllow, and passes on
+    the fixed policy. validate --pre is exit 0 including both new assertions; the negative unit tests fail loud.
+  - >-
+    Decision 143 containment is proven by the bootstrap simulate-principal-policy gate (VP step): the
+    metadata verbs (TagRole/UntagRole/UpdateRole) are ALLOWED on a role/agent-platform-* target and DENIED
+    off-scope (a non-agent-platform-* target such as PlatformAdmin); iam:UpdateAssumeRolePolicy is ALLOWED
+    only for the two enumerated CI roles and implicitDeny for an arbitrary agent-platform-* role (trust
+    stays fleet-narrow -- the only control against a cross-fleet trust rewrite while DEP-05 is open); and
+    adding iam:UpdateRole to the boundary DataPlaneAllow does NOT weaken the self-protection Denies
+    (DenyIAMEscalation / DenyBoundaryRemoval / DenyBoundaryPolicyModification still dominate).
+  - >-
+    After the human-gated bootstrap admin apply makes the metadata verbs live, the DEP-02 retry
+    (workflow_dispatch ack, acknowledge_red_commit=253f5ce) re-creates agent-platform-probe-liveproof-role
+    via tf-gated-apply on human approval with 0 AccessDenied, the role is confirmed live carrying the
+    authority-budget boundary, the convergence record is GREEN, and the retry run-id is captured as the
+    T2.48 c2 evidence.
+  - >-
+    rec-2842 is closed via the PR-1 Resolves trailer, VERIFIED post-merge in the synced read cache (not
+    merely asserted pre-merge); the resolution notes the design divergence (the fix lands in the new
+    IAMRoleMetadataWrite risk-class Sid, NOT co-located in IAMRoleCreateBounded as rec-2842's naive
+    acceptance grep assumed -- per Fable's per-risk-class granularity; the substance, TagRole covers
+    role/agent-platform-*, IS met).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Assert iam:UpdateRole is newly granted in BOTH the identity policy and the boundary DataPlaneAllow
+      (>= 2 exact-quoted occurrences; the closing quote excludes iam:UpdateRoleDescription).
+    command: 'test "$(grep -c ''"iam:UpdateRole"'' terraform/bootstrap/github_ci_apply.tf)" -ge 2'
+    expected: 'Exit 0: "iam:UpdateRole" (exact-quoted) appears >= 2x -- identity IAMRoleMetadataWrite Action + boundary DataPlaneAllow Action.'
+    fix_if: "0 or 1 occurrence -- UpdateRole missing from the identity Sid or the boundary ceiling (silent intersection deny; max_session_duration edits AccessDeny)."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "updaterole-present-identity-and-boundary"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert the create-companion verbs live in the prefix-scoped IAMRoleMetadataWrite Sid (the
+      recurrence-killer's on-disk shape): iam:TagRole, iam:UntagRole, and iam:UpdateRole all appear within
+      the metadata Sid window.
+    command: 'grep -A14 ''"IAMRoleMetadataWrite"'' terraform/bootstrap/github_ci_apply.tf | grep -q ''"iam:TagRole"'' && grep -A14 ''"IAMRoleMetadataWrite"'' terraform/bootstrap/github_ci_apply.tf | grep -q ''"iam:UntagRole"'' && grep -A14 ''"IAMRoleMetadataWrite"'' terraform/bootstrap/github_ci_apply.tf | grep -q ''"iam:UpdateRole"'''
+    expected: "Exit 0: TagRole + UntagRole + UpdateRole all present in the IAMRoleMetadataWrite Sid window (the prefix-scoped risk-class Sid; the validate check + step 4 enforce the role/agent-platform-* scope precisely)."
+    fix_if: "A verb missing from the metadata Sid -> the split/consolidation is incomplete; the create-companion scope is not covered."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "metadata-sid-carries-create-companions"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert trust stays narrow: IAMRoleReconcile still carries iam:UpdateAssumeRolePolicy and NO LONGER
+      carries iam:TagRole (the split preserved Decision 143 trust isolation -- the Resource was NOT widened).
+    command: 'grep -A8 ''"IAMRoleReconcile"'' terraform/bootstrap/github_ci_apply.tf | grep -q ''"iam:UpdateAssumeRolePolicy"'' && ! grep -A8 ''"IAMRoleReconcile"'' terraform/bootstrap/github_ci_apply.tf | grep -q ''"iam:TagRole"'''
+    expected: "Exit 0: within the IAMRoleReconcile window, UpdateAssumeRolePolicy present and TagRole absent -- trust-only, TagRole moved to the prefix-scoped metadata Sid."
+    fix_if: "TagRole still in IAMRoleReconcile -> the split did not happen; OR UpdateAssumeRolePolicy gone -> trust reconcile broke. Either silently mis-scopes trust authority (Decision 143 violation)."
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "reconcile-trust-only-no-tagrole"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Run the _write_coverage unit tests -- the positive + negative cases for BOTH new checks
+      (companion-scope: TagRole/UntagRole/UpdateRole narrowed below the CreateRole prefix fails loud;
+      subset: an identity Allow action absent from the boundary fails loud) -- to confirm the assertions
+      fail loud, not vacuously.
+    command: "bin/venv-python -m pytest tests/checks/iam_tf/test__write_coverage.py -q"
+    expected: "All tests pass; the rec-2842-shape negative cases (TagRole@enumerated-roles with CreateRole@prefix) and the subset negative case assert a loud failure."
+    fix_if: "A negative case passes silently -- the assertion is vacuous; tighten the check."
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Whole-tree presubmit: run the fast gate. Confirms the two new assertions inside
+      validate_ci_refresh_read_coverage, the authority-budget / boundary-attached / convergence-writer
+      iam_tf checks (unchanged shape after the Sid restructure), and public-repo secret guards all pass.
+    command: "bin/venv-python -m scripts.validate --pre"
+    expected: "Exit 0 -- all registered --pre checks pass (advisory outside CI; authoritative in PR CI)."
+    fix_if: "Any FAIL -- fix the specific check before proceeding; never patch around a red gate (Decision 55). A break in an existing iam_tf check means the Sid restructure changed a shape another check parses."
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: post-deploy
+    action: >-
+      [PR-1 merged; HUMAN admin gate -- NEVER auto-applied] Admin-apply terraform/bootstrap (the Sid split
+      + boundary UpdateRole) under agent_platform_admin. STOP if the plan shows any destroy/replace of the
+      github_ci_apply role or policy. The overseer relays the redacted plan; the human reviews and
+      explicitly directs the apply.
+    command: "terraform -chdir=terraform/bootstrap plan -var-file=terraform/bootstrap/terraform.bootstrap.tfvars   # then apply the saved plan on explicit human direction"
+    expected: "Plan is a pure IAM-policy update (0 add / 2 change / 0 destroy -- the inline role policy + the boundary managed policy); the rec-2793 whitespace-stripped precondition (<= 10,240 B) passes; apply completes; the live identity policy grants iam:TagRole/UntagRole/UpdateRole/UpdateRoleDescription on role/agent-platform-* and the boundary grants iam:UpdateRole."
+    fix_if: "Any destroy/replace of the apply role or its policy -> STOP (would break in-flight CI). Precondition breach -> relocate a read-only Sid to a customer-managed policy before retry."
+  - step: 7
+    phase: post-deploy
+    action: >-
+      [HUMAN -- NAMED ACCEPTANCE: Decision 143 containment] Re-run the simulate-principal-policy gate on
+      the applied policy. Assert four properties: (a) the metadata verbs iam:TagRole / iam:UpdateRole are
+      ALLOWED for a role/agent-platform-* target; (b) DENIED off-scope (a non-agent-platform-* target, e.g.
+      PlatformAdmin, is implicitDeny -- the prefix does not match it); (c) iam:UpdateAssumeRolePolicy is
+      ALLOWED only for the two enumerated CI roles and implicitDeny for an arbitrary agent-platform-* role
+      (the probe role) -- trust stays fleet-narrow, NOT widened by the split; (d) adding iam:UpdateRole to
+      the boundary DataPlaneAllow did NOT weaken the self-protection Denies -- DenyIAMEscalation,
+      DenyBoundaryRemoval, DenyBoundaryPolicyModification must still dominate (an unbounded
+      CreateRole/PutRolePolicy and any boundary self-modification stay explicitDeny). Assert all four.
+    command: 'aws iam simulate-principal-policy --policy-source-arn "arn:aws:iam::${ACCOUNT_ID}:role/agent-platform-github-ci-apply" --action-names iam:TagRole iam:UpdateRole iam:UpdateAssumeRolePolicy iam:CreatePolicyVersion --resource-arns "arn:aws:iam::${ACCOUNT_ID}:role/agent-platform-probe-liveproof-role" --profile agent_platform   # then repeat: (i) TagRole/UpdateRole on a non-agent-platform-* target -> implicitDeny off-scope; (ii) UpdateAssumeRolePolicy on the probe role -> implicitDeny (trust scoped to branch/pr only); (iii) CreatePolicyVersion on the boundary policy ARN -> explicitDeny'
+    expected: "TagRole/UpdateRole=allowed for the agent-platform-* target, implicitDeny off-scope; UpdateAssumeRolePolicy=implicitDeny for the probe role (allowed only for branch/pr -- trust narrow preserved); CreatePolicyVersion on the boundary policy remains explicitDeny (DenyBoundaryPolicyModification dominates -- UpdateRole did not intersect it)."
+    fix_if: "allowed off-scope -> Resource too loose (worst-verb-scoping violated); UpdateAssumeRolePolicy ALLOWED for the probe role -> IAMRoleReconcile Resource was silently widened (Decision 143 violation -- STOP); any self-protection Deny flips to allowed -> UpdateRole intersected a Deny (STOP, do not proceed)."
+  - step: 8
+    phase: post-deploy
+    action: >-
+      [HUMAN -- HARD-ALWAYS-ASK red-unlatch + gated approval] DEP-02 retry. The human initiates a
+      workflow_dispatch acknowledge-and-retry on terraform-apply-sandbox (acknowledge_red_commit=253f5ce),
+      which re-plans fresh; the guard routes the aws_iam_role create to tf-gated-apply; the human approves
+      the Environment; the create now succeeds (TagRole authorized). Verify 0 AccessDenied, the role live
+      carrying the boundary, and the convergence record GREEN; capture the run-id (T2.48 c2 evidence).
+      Freeze other terraform/personal merges during the approval window (shared apply-sandbox concurrency
+      group) and do NOT fire any other reconcile/ack-dispatch (rec-2824 layer-1 unfixed).
+    command: 'gh run list --workflow=terraform-apply-sandbox.yml -L 1 --json databaseId,conclusion,url && aws iam get-role --role-name agent-platform-probe-liveproof-role --profile agent_platform --query "Role.PermissionsBoundary.PermissionsBoundaryArn"'
+    expected: "apply-sandbox run conclusion=success; 0 AccessDenied at CreateRole/TagRole in the apply log; get-role shows the agent-platform-github-ci-apply-boundary; the convergence record is GREEN at the dispatched commit; run-id recorded as the T2.48 c2 evidence."
+    fix_if: "AccessDenied on iam:TagRole -> the bootstrap admin apply (step 6) did not land the metadata verbs live; a genuine red-latch is recovered ONLY via a further ack-and-retry AFTER the ci-rca rec is reviewed (Decision 55) -- never a silent re-plan-and-apply; the failure is the audit evidence."
+  - step: 9
+    phase: post-deploy
+    action: >-
+      [PR-1; POST-merge -- closure obligation] AFTER PR-1 squash-merges and the Resolves-trailer autoclose
+      workflow fires, pull the read cache and verify rec-2842 is actually CLOSED. A silently dropped
+      continue-on-error autoclose would otherwise leave rec-2842 open with nothing catching it.
+    command: 'bin/venv-python -m scripts.sync.ops sync && grep ''"id": "rec-2842"'' logs/.recommendations-log.jsonl | grep -q ''"status": "closed"'''
+    expected: "rec-2842's OWN record (id-anchored) appears in the synced read cache with status closed -- closed by the landed forward-fix, not matched by some other rec that references rec-2842 in its body."
+    fix_if: 'rec-2842 still open -> the rec-autoclose workflow did not fire or was dropped; close it via bin/venv-python -m scripts.ops_data_portal --update-rec rec-2842 --status closed --resolution "TagRole/UntagRole/UpdateRole moved to the prefix-scoped IAMRoleMetadataWrite Sid (per-risk-class granularity, NOT co-located in IAMRoleCreateBounded); DEP-02 live-proven at run-id <...>". (Note: sync.ops accepts only the ''sync'' verb.)'
+constraints:
+  - >-
+    Decision 101 PUBLIC repo: NEVER put AWS account IDs / ARNs / ExternalIds / secrets in the plan, a PR,
+    a commit, or any committed file. All HCL uses ${var.account_id} / ${var.aws_region}; the ${ACCOUNT_ID}
+    in the simulate-principal-policy VP command is a shell placeholder resolved at runtime, never a
+    literal. The pre-commit never-commit hook + detect-secrets are the standing guards.
+  - >-
+    terraform/bootstrap is NEVER auto-applied (terraform/bootstrap/CLAUDE.md). The metadata-verb apply is
+    the DESIGNED bootstrap admin tier (PlatformAdmin) -- a fixed point, not break-glass shame.
+  - >-
+    NEVER-AUTO-APPLY (hard human gates): the bootstrap admin apply (step 6) and the DEP-02 retry -- BOTH
+    the human-initiated workflow_dispatch AND the tf-gated-apply Environment approval (step 8) -- PAUSE for
+    the human. Agents never self-direct a terraform apply (Decision 126); the overseer relays plans and
+    drives applies only on the human's explicit per-plan word. These pauses are explicit V3 steps.
+  - >-
+    Decision 143 worst-verb scoping is PRESERVED for the dangerous verbs: iam:UpdateAssumeRolePolicy
+    (trust) STAYS narrow at the two enumerated branch/pr roles -- NOT resource-widened, NOT family-wildcarded
+    (a widened trust Resource silently grants a fleet-wide trust rewrite; DEP-05 is open, so the identity
+    policy is the only control). iam:PassRole (role/agent-platform-* + PassedToService=lambda) and the
+    boundary-edit verbs likewise stay individually narrow. Only the NON-escalating role metadata/lifecycle
+    verbs (Tag/Untag/UpdateRole/UpdateRoleDescription -- tags, description, max_session_duration; all
+    guard-gated on aws_iam_role) are family-grouped at the bounded prefix. This is a NAMED acceptance in
+    the bootstrap simulate-gate VP (step 7), not prose.
+  - >-
+    Decision 144 realization: the identity policy's granularity unit is per-RISK-CLASS, not per-verb --
+    verb-FAMILY on the bounded prefix, NOT service-broad iam:* (rejected -- the boundary's IAM enumeration,
+    not its Denies, is the real containment). Exactly ONE enumerated IAM ceiling: the boundary; the
+    identity policy is risk-class families UNDER it. This is an operational realization of the
+    already-ratified Decision 144 model, so NO new numbered Decision (Decision Significance Gate, Decision 150 -> rec /
+    roadmap note).
+  - >-
+    VP hermeticity (Decision 148, supersedes the stale rec-2770 premise): Decision 148 cl.2 made
+    bin/venv-python fall back to a pydantic-importable PATH interpreter in venv-less CI, and cl.3 restored
+    hermetic:true as the pre-deploy default -- so the old rec-2770 rationale ("CI has no .venv, so a
+    venv-python step fails the VP-replay") is STALE and is NOT relied on here. VP steps 1-3 are kept pure
+    grep/test purely because they are cleanly grep-expressible and graduate into the kernel as fast standing
+    guards (belt-and-suspenders), NOT because venv-python would fail. VP steps 4-5 stay hermetic:false +
+    not-applicable on their own merits: step 4 runs pytest and step 5 invokes validate --pre (never mark a
+    step hermetic if it calls validate --pre -- recursion), and neither maps to a single kernel-primitive
+    slot. Net: rec-2770 is PARTIALLY superseded by Decision 148 (its venv-less-CI failure mode is fixed);
+    its residual live value is only the general "prefer cheap deterministic grep/test for graduated steps"
+    preference, which this plan follows.
+  - >-
+    Decision 55/72: this IS the reviewed ci_rca recovery for rec-2842 (run 30126122217) -- a forward-fix,
+    never an auto-revert, and NOT a new slice blocked by the ci_rca halt. The DEP-02 retry is the live
+    confirmation; a genuine retry failure routes to ci-rca and is recovered only via a further human-reviewed
+    ack-and-retry -- no rescue agents, no workaround loops.
+  - >-
+    Status-Trusted-Never-Inferred (Decision 136): this plan does NOT flip any roadmap criterion. The T2.48
+    c2 flip (with the captured retry run-id in the progress_note) is PLAN-t248-passrole-liveproof's PR-4,
+    on a verified retry pass -- authoring it here would double-attribute. This plan's job is to make the
+    gated create EXECUTABLE and capture the c2 evidence.
+  - >-
+    SLOC / byte governance: the two new checks stay well under the 500-SLOC _write_coverage.py budget --
+    no raise, no decomposition (Decision 128). The Sid split fits the rec-2793 10,240 B whitespace-stripped
+    inline-policy ceiling (+14 B net -> ~282 B headroom); if a future measurement shows a breach, relocate a
+    read-only Sid to a customer-managed policy -- do NOT raise the ceiling.
+  - "No rescue agents or workaround loops (Decision 55)."
+context:
+  - >-
+    Verified finding (rec-2842, the anchor -- ci_rca, Critical, open; run 30126122217 gated-apply failure):
+    iam:CreateRole is granted on role/agent-platform-* (IAMRoleCreateBounded, github_ci_apply.tf:303) while
+    iam:TagRole / iam:UntagRole are granted only on the two enumerated branch/pr roles (IAMRoleReconcile,
+    :272). The AWS provider default_tags block (terraform/personal/main.tf) injects tags into EVERY taggable
+    resource, so even the tagless probe role's CreateRole call carries tags -> AWS evaluates iam:TagRole as a
+    distinct authorization on the NEW role ARN -> AccessDenied. This is the SECOND companion-verb gap (the
+    first was iam:PassRole, rec-2831): the identity allow-list grants a headline verb (CreateRole) on a
+    wildcard but a structurally-required companion (TagRole) lags at a narrower scope. It surfaced now
+    because DEP-02 is the FIRST role ever minted through the gated path (slices E/F used break-glass admin).
+  - >-
+    Which check prevents recurrence (task-required reasoning): the pure action-SUBSET check (invariant B)
+    does NOT catch THIS bug -- iam:TagRole IS present in both the identity policy and the boundary, so the
+    action-membership subset already holds; the failure is a RESOURCE-SCOPE mismatch (TagRole@2-enumerated-roles
+    vs CreateRole@agent-platform-*). check_create_companion_scope_coverage (invariant A) IS the
+    recurrence-killer: it asserts CreateRole@prefix implies TagRole/UntagRole/UpdateRole@same-prefix. BOTH
+    checks are included because they close DIFFERENT classes -- A catches the resource-scope companion gap
+    (rec-2842); B catches the action-entirely-absent-from-the-boundary-ceiling gap (the rec-2831/PassRole
+    class, generalized beyond PassRole so the single list can never split into drift). rec-2842's own RCA
+    preventive_action independently recommends exactly invariant A.
+  - >-
+    Fable best-practice consult (human agreed + directed "continue"): VERB-FAMILY-WILDCARDS-UNDER-BOUNDARY.
+    The identity policy's granularity unit should be per-RISK-CLASS, not per-verb (IAM verbs are
+    risk-heterogeneous): verb-FAMILY on the bounded prefix, NOT service-broad iam:* (rejected -- broad-both
+    would need a provably-complete deny-list; the boundary's IAM enumeration is the containment). Keep
+    exactly ONE enumerated IAM ceiling (the boundary). Decision 143 worst-verb scoping is PRESERVED for
+    iam:PassRole, iam:UpdateAssumeRolePolicy (trust), and boundary-edit verbs -- NEVER family-wildcarded.
+    Fable also flagged iam:UpdateRole as the predictable NEXT gap (max_session_duration edits AccessDeny at
+    both layers today), folded into this same admin round-trip.
+  - >-
+    Byte headroom (measured this planning session): the inline policy is ~9,944 B minified post-PassRole
+    (sibling baseline, PLAN-t248-passrole-liveproof). This change's NET inline delta is +14 B -- the ONLY
+    net addition is the new iam:UpdateRole verb; moving TagRole/UntagRole from the 2-enumerated scope to the
+    prefix scope and merging IAMRoleDescriptionWrite into IAMRoleMetadataWrite is byte-neutral (one Sid
+    removed, one added; the action strings appear once either way). Resulting ~9,958 B, ~282 B headroom
+    under 10,240 B. The boundary is a SEPARATE managed policy (6,144 B limit, far under budget; +17 B for
+    UpdateRole). The terraform lifecycle precondition (length(jsonencode(jsondecode(policy))) <= 10240) is
+    the authoritative apply-time gate (VP step 6).
+  - >-
+    Guard classification (verified against scripts/terraform_apply_guard.py, UNTOUCHED): aws_iam_role is in
+    IAM_SENSITIVE_TYPES -> probe role create BLOCKs -> gated. The metadata verbs are NOT in
+    authority_budget.json's in_budget_resource_types (aws_iam_role_policy / _policy_attachment only, mirroring
+    IAMRoleWriteBounded) -> they never auto-apply; they only give the apply role the VERB for an approved
+    gated apply, identical to the HAZARD-4 delete verbs (IAMRoleDeleteBounded). No authority_budget.json edit;
+    validate_authority_budget (checks IAMRoleWriteBounded's prefix, not the metadata Sid) is unaffected. No
+    check or test hard-references the Sid names being restructured (grep-verified this session).
+  - >-
+    Decision 129 re-narrow reversal trigger (write-axis extension, decision-scout advisory): the NEW
+    write-axis prefix grants (iam:TagRole / iam:UntagRole / iam:UpdateRole on role/agent-platform-*) inherit
+    Decision 129's re-narrow trigger -- if the agent-platform-* prefix ever stops being a safe blast-radius
+    boundary (e.g. a non-CI-owned agent-platform-* role is minted), re-narrow the prefix back to enumerated
+    ARNs. ABAC trip-wire: these metadata verbs are non-escalating ONLY while no tag-based authorization
+    exists; if aws:ResourceTag / aws:PrincipalTag authorization is EVER introduced anywhere in this account,
+    iam:TagRole / iam:UntagRole reclassify to ESCALATION verbs (a tag write becomes a permission grant) and
+    MUST be re-narrowed out of the family-wildcard back to worst-verb scoping (Decision 143). Deferred
+    follow-on (Fable sequenced it to a later T2.48 wave), recorded so the reversal condition is not lost.
+  - >-
+    rec-2842 acceptance divergence: rec-2842's naive acceptance grep (grep -A15 IAMRoleCreateBounded ... |
+    grep -q iam:TagRole) assumes the fix co-locates TagRole INSIDE IAMRoleCreateBounded. Fable's
+    per-risk-class design instead places it in the separate IAMRoleMetadataWrite Sid, so the literal grep
+    would false-fail even though the SUBSTANCE (TagRole covers role/agent-platform-*) is met. The Resolves
+    trailer closes by rec-id (the autoclose workflow does not re-run acceptance), and the resolution note
+    records the divergence (VP step 9).
+  - >-
+    ci_rca hard-block disposition (preflight ci_rca_unresolved=2): rec-2842 is THIS plan's reviewed recovery
+    (Related-Work condition #1 -- same file terraform/bootstrap/github_ci_apply.tf; bundled + Resolves
+    trailer). rec-2836 (terraform init flakes on kislerdm/neon 504 Gateway Timeout from github.com,
+    GitHub-hosted CI) is an UNRELATED environment/transient upstream outage, NOT a code regression, on a
+    surface this plan does not touch (scripts/checks/_terraform.py retry-window / a CI-side provider mirror)
+    -- DEFERRED with this logged rationale per the Related-Work check.
+  - >-
+    rec-2841 (tf_drift, Medium, open): the pending-gated delta the drift plan saw (run 30126122217, PR #740)
+    auto-resolves when the DEP-02 retry applies green (its acceptance is the convergence record sans the
+    pending_gated marker). NOT bundled -- it clears via the post-deploy retry, not the PR-1 merge, so a PR-1
+    Resolves trailer would close it prematurely; close via the portal (or the retry's own trailer) if still open.
+  - >-
+    Sibling relationship: PLAN-t248-passrole-liveproof owns the DEP-01/DEP-02 live-proof narrative, the
+    T2.48 c1/c2 roadmap flips (its PR-4, with the run-ids), the rec-2831 close, and the PR-3-revert probe
+    teardown. THIS plan is the unblocker its PR-3 gated apply needed; it proves DEP-02 c2 (captures the retry
+    run-id) but does NOT flip roadmap criteria or tear down the probe (that stays with the sibling, after c2
+    is proven) -- no double-attribution.
+  - >-
+    Preflight (2026-07-25): venv ok, creds ok; fresh branch claude/t248-tagrole-completion cut off
+    origin/main (339519c) -- PR-1 (PassRole) + PR-3 (probe role) both landed, both read-lists carry the probe
+    ARN, probe_dep02_role.tf on main; ci_rca_unresolved=2 (rec-2842 = this recovery; rec-2836 = unrelated,
+    deferred above); open_recs=816, non_automatable=689 (individual review suspended per Decision 73 / CD.17).
+  - "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (no BLOCK) -- 4 minor NOTE/WARN flags absorbed in-doc with no design change (CITE additions; the Decision 148 rec-2770 reconcile; the Decision 129 re-narrow + ABAC trip-wire note; plan-critique implementer guidance). CITE: 144, 143, 98, 92, 77, 35, 129, 148, 150, 55, 72, 126, 128, 136, 101, 83. Decision 77 = the bootstrap manual admin-apply + guard fail-closed-on-IAM apply model this fix rides; Decision 148 = the VP-hermeticity reconcile above; Decision 150 = the Decision Significance Gate for the no-new-Decision routing; Decision 98 = the admin-create / gated-create provisioning model amended by Decision 144."
+  - "gates: decision-scout=FLAGS_FOUND after 1 round (4 minor NOTE/WARN flags absorbed in-doc, no design change); plan-critique=PROCEED after 1 round (all 4 open questions adjudicated in the plan's favor). Both overseer-dispatched post-authoring per the Design-B gate-request trampoline."
+pre_implementation_checklist:
+  - "Branch confirmed not on main (claude/t248-tagrole-completion, cut fresh off origin/main 339519c)"
+  - "Apply model + guard classification read (terraform/CLAUDE.md + terraform/bootstrap/CLAUDE.md, the SoT)"
+  - "DECISIONS.md: Decision 143 + 144 read directly this session; full decision-scout gate dispatched post-authoring (Design-B)"
+  - "All scope files located and readable (bootstrap tf + _write_coverage + test; _read_coverage optional); the check-extension pattern (check_passrole_implies_coverage) + the Sid structure identified"
+  - "Acceptance criteria understood and independently verifiable"
+  - "The human-gated applies (1 bootstrap admin apply + the DEP-02 retry's dispatch + tf-gated-apply approval) understood as hard pauses"
+execution_steps:
+  - >-
+    PR-1 (durable fix + anti-recurrence): edit terraform/bootstrap/github_ci_apply.tf -- split iam:TagRole
+    + iam:UntagRole out of IAMRoleReconcile (leaving it trust-only: iam:UpdateAssumeRolePolicy on the two
+    enumerated branch/pr roles) into a NEW prefix-scoped IAMRoleMetadataWrite Sid on role/agent-platform-*
+    that MERGES IAMRoleDescriptionWrite and ADDS iam:UpdateRole; add iam:UpdateRole to the boundary
+    DataPlaneAllow; rewrite the IAMRoleReconcile + IAMRoleMetadataWrite comments. Extend
+    scripts/checks/iam_tf/_write_coverage.py with check_create_companion_scope_coverage +
+    check_identity_iam_actions_subset_of_boundary, invoked from check_write_coverage (facade unchanged).
+    Add positive + negative tests to tests/checks/iam_tf/test__write_coverage.py. Run validate --pre (VP
+    steps 1-5). Open the PR with a Resolves: rec-2842 trailer prepared for the squash-merge; on CI green,
+    merge. (Bootstrap change committed but NOT auto-applied.)
+  - >-
+    HUMAN GATE -- bootstrap admin apply (VP step 6): the overseer relays the terraform/bootstrap plan (0
+    add / 2 change / 0 destroy, account-id redacted); the human reviews and explicitly directs; apply under
+    agent_platform_admin; verify the metadata verbs + boundary UpdateRole live; re-run the
+    simulate-principal-policy gate (VP step 7). The metadata verbs MUST be live before the DEP-02 retry.
+  - >-
+    HUMAN GATE -- DEP-02 retry (VP step 8): the overseer relays; the human initiates the workflow_dispatch
+    acknowledge-and-retry (acknowledge_red_commit=253f5ce) and approves the tf-gated-apply Environment when
+    the guard routes the probe-role create; verify 0 AccessDenied + the role live carrying the boundary +
+    convergence GREEN; capture the run-id (T2.48 c2 evidence). Freeze other terraform/personal merges during
+    the approval window and do NOT fire any other reconcile/ack-dispatch (rec-2824 layer-1 unfixed).
+  - >-
+    PR-1 POST-merge closure (VP step 9): after the Resolves-trailer autoclose fires, sync the read cache and
+    verify rec-2842 is CLOSED; if dropped, close via the ops portal with a resolution noting the
+    IAMRoleMetadataWrite design divergence + the captured retry run-id.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass; on an unrecoverable V3 apply failure
+    STOP and route to ci-rca / RCA (Decision 55), never patch around it. The overseer owns the CI-green-wait
+    + squash-merge and drives the human-gated applies on the human's explicit word.
+  - "Report: what was implemented, the DEP-02 retry run-id, and the final rec-2842 + convergence-record state."
+work_areas: []
+rollback: >-
+  The durable change (the Sid split + iam:UpdateRole + the two presubmit checks) is additive and safe to
+  leave live even if DEP-02 is abandoned -- the metadata verbs only give the apply role verbs AWS already
+  requires to execute an APPROVED gated create (tags/description/max_session_duration on agent-platform-*
+  roles), guard-gated and non-escalating (no inline-policy / trust / boundary write). If the DEP-02 retry
+  genuinely fails, it is a real red-latch recovered only via a further workflow_dispatch acknowledge-and-retry
+  AFTER the ci-rca rec is reviewed (Decision 55) -- never a silent re-plan-and-apply; the failure is the
+  audit evidence. The probe teardown (PR-3-revert) and the T2.48 c1/c2 roadmap flips remain
+  PLAN-t248-passrole-liveproof's, after c2 is proven.
