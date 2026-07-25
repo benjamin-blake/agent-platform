@@ -1696,3 +1696,41 @@ entries:
       - -c
       - |
         grep -q "PassRole" scripts/checks/iam_tf/_write_coverage.py && grep -Eq "DataPlaneAllow|boundary" scripts/checks/iam_tf/_write_coverage.py
+  - check_id: updaterole-present-identity-and-boundary
+    primitive_slot: grep_count
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: null
+    plan_slug: t248-tagrole-completion
+    graduated_at: '2026-07-25'
+    graduated_by: implement-agent
+    check_spec:
+      path: terraform/bootstrap/github_ci_apply.tf
+      pattern: '"iam:UpdateRole"'
+      operator: gte
+      count: 2
+  - check_id: metadata-sid-carries-create-companions
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: IAMRoleMetadataWrite
+    plan_slug: t248-tagrole-completion
+    graduated_at: '2026-07-25'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -A14 '"IAMRoleMetadataWrite"' terraform/bootstrap/github_ci_apply.tf | grep -q '"iam:TagRole"' && grep -A14 '"IAMRoleMetadataWrite"' terraform/bootstrap/github_ci_apply.tf | grep -q '"iam:UntagRole"' && grep -A14 '"IAMRoleMetadataWrite"' terraform/bootstrap/github_ci_apply.tf | grep -q '"iam:UpdateRole"'
+  - check_id: reconcile-trust-only-no-tagrole
+    primitive_slot: command_exit_zero
+    guard_target: terraform/bootstrap/github_ci_apply.tf
+    guard_symbol: IAMRoleReconcile
+    plan_slug: t248-tagrole-completion
+    graduated_at: '2026-07-25'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -A8 '"IAMRoleReconcile"' terraform/bootstrap/github_ci_apply.tf | grep -q '"iam:UpdateAssumeRolePolicy"' && ! grep -A8 '"IAMRoleReconcile"' terraform/bootstrap/github_ci_apply.tf | grep -q '"iam:TagRole"'

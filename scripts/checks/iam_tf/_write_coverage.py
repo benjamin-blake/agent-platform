@@ -40,6 +40,20 @@ from scripts.checks.iam_tf._read_coverage import (
 # execution-role prefix, never role/* or a specific privileged role by name.
 _PASSROLE_ACTION = "iam:PassRole"
 _PASSROLE_RESOURCE_MARKER = "role/agent-platform-*"
+
+# rec-2842 (DEP-02, T2.48 c2): the create-companion recurrence-killer. AWS's default_tags provider
+# block (terraform/personal/main.tf) forces a TagRole call on EVERY taggable resource's create, so
+# iam:CreateRole@role/agent-platform-* structurally REQUIRES these companion verbs at the SAME
+# prefix (UpdateRole folded in per Fable's predicted-next-gap consult, same risk class as Tag/Untag).
+_CREATE_ROLE_ACTION = "iam:CreateRole"
+_CREATE_ROLE_RESOURCE_MARKER = "role/agent-platform-*"
+_CREATE_COMPANION_ACTIONS = ("iam:TagRole", "iam:UntagRole", "iam:UpdateRole")
+
+# check_identity_iam_actions_subset_of_boundary (defense-in-depth, generalizes the PassRole-specific
+# boundary check above): scoped to iam: actions ONLY -- iam is the sole ACTION-ENUMERATED service in
+# the boundary's DataPlaneAllow ceiling; s3:*/lambda:*/logs:*/etc. are already service-wide wildcards
+# there, so a subset test over those services would be vacuous (plan-critique implementer guidance).
+_IAM_ACTION_PREFIX = "iam:"
 # Whole-file substring check (mirrors the plan's own VP step 2 rigor level -- a simple presence
 # check, not a statement-scoped parse): the PassedToService=lambda.amazonaws.com condition text
 # must be present somewhere in the bootstrap HCL, or the identity grant is an unconditioned
@@ -198,6 +212,113 @@ def check_passrole_implies_coverage(apply_statements: list[dict], failed: list[s
             "lambda.amazonaws.com condition (Decision 143 worst-verb scoping) -- an unconditioned "
             "PassRole over-grants (any service, any pass)"
         )
+
+
+def _create_role_granted_on_prefix(apply_statements: list[dict]) -> bool:
+    """True if some apply statement grants iam:CreateRole on a Resource matching the agent-platform-* prefix."""
+    return any(
+        _action_matches((_CREATE_ROLE_ACTION,), stmt["actions"]) and _CREATE_ROLE_RESOURCE_MARKER in stmt["resources_raw"]
+        for stmt in apply_statements
+    )
+
+
+def check_create_companion_scope_coverage(apply_statements: list[dict], failed: list[str], key: str) -> None:
+    """rec-2842 anti-recurrence (DEP-02, T2.48 c2): CreateRole@prefix-implies-companions@SAME-prefix.
+
+    This is the RECURRENCE-KILLER for rec-2842 (run 30126122217): AWS's default_tags provider block
+    forces a TagRole call on EVERY taggable resource's create, so if github_ci_apply grants
+    iam:CreateRole on a Resource matching role/agent-platform-*, it structurally requires
+    iam:TagRole/iam:UntagRole/iam:UpdateRole to ALSO be granted on a Resource covering that SAME
+    prefix -- not merely present somewhere in the policy. rec-2842's actual bug was exactly this: the
+    Resource for iam:TagRole/iam:UntagRole was narrower (the two enumerated branch/pr roles) than
+    iam:CreateRole's role/agent-platform-* prefix, so the two verbs' action-presence looked fine but
+    their resource scopes diverged -- a RESOURCE-SCOPE mismatch, not an action-absence gap (that
+    sibling class is check_identity_iam_actions_subset_of_boundary below). A companion verb missing
+    or narrower than the CreateRole prefix FAILS LOUD.
+    """
+    if not _create_role_granted_on_prefix(apply_statements):
+        return  # CreateRole isn't prefix-granted -- the companion-scope requirement doesn't apply.
+
+    for action in _CREATE_COMPANION_ACTIONS:
+        covered = any(
+            _action_matches((action,), stmt["actions"]) and _CREATE_ROLE_RESOURCE_MARKER in stmt["resources_raw"]
+            for stmt in apply_statements
+        )
+        if not covered:
+            failed.append(
+                f"{key} github_ci_apply grants iam:CreateRole on a Resource matching "
+                f"{_CREATE_ROLE_RESOURCE_MARKER!r} but {action!r} is missing, or granted only on a "
+                "narrower Resource -- AWS's default_tags provider block forces a tag-on-create call "
+                "on every new role, so CreateRole@prefix structurally requires the companion "
+                "metadata verbs at the SAME prefix (rec-2842 recurrence)"
+            )
+
+
+def _identity_allow_iam_actions(apply_statements: list[dict]) -> set[str]:
+    """Every distinct iam: action GRANTED (Effect=Allow) somewhere in the identity policy.
+
+    Effect-aware: a statement with no parsed "effect" (older callers / synthetic fixtures that never
+    set the key) is treated as Allow, matching every pre-existing apply_statements fixture in this
+    test module (they omit Effect entirely, and none of them is a Deny statement).
+    """
+    actions: set[str] = set()
+    for stmt in apply_statements:
+        if stmt.get("effect") not in (None, "Allow"):
+            continue
+        for action in stmt["actions"]:
+            if action.startswith(_IAM_ACTION_PREFIX):
+                actions.add(action)
+    return actions
+
+
+def check_identity_iam_actions_subset_of_boundary(apply_statements: list[dict], failed: list[str], key: str) -> None:
+    """Defense-in-depth (DEP-02 plan): every identity-policy iam: Allow action must also be granted by
+    the boundary DataPlaneAllow ceiling, generalizing the rec-2831 PassRole-specific boundary check
+    (check_passrole_implies_coverage) to the whole iam: action family so the single enumerated IAM
+    list (Decision 144) can never split into silent drift between the two layers.
+
+    Scoped to iam: actions ONLY (plan-critique implementer guidance): iam is the sole
+    ACTION-ENUMERATED service in DataPlaneAllow -- s3:*/lambda:*/logs:*/etc. are already service-wide
+    wildcards there, so a subset test over those services would be vacuous. "The boundary covers
+    action a" is implemented with the boundary's action list as the PATTERNS
+    (_action_matches(tuple(boundary_actions), [a])), so a future iam:* in the ceiling is honored --
+    not literal string-equality membership.
+
+    Does NOT catch the rec-2842 recurrence itself (a RESOURCE-SCOPE mismatch: iam:TagRole IS present
+    in both layers in that bug, see check_create_companion_scope_coverage above) -- this check closes
+    the sibling class: an iam action present in the identity policy but entirely ABSENT from the
+    boundary ceiling (the rec-2831/PassRole class, generalized beyond PassRole so the single list can
+    never split into drift). Effect-aware: a Deny-only identity iam action is never flagged -- it
+    grants nothing, so it has no boundary-ceiling obligation.
+    """
+    identity_actions = _identity_allow_iam_actions(apply_statements)
+    if not identity_actions:
+        return
+
+    bootstrap_path = _common.ROOT / _BOOTSTRAP_TF_REL
+    try:
+        bootstrap_text = bootstrap_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        failed.append(f"{key} cannot re-read {bootstrap_path} for the identity/boundary subset check: {exc}")
+        return
+
+    boundary_stmt = _parse_boundary_dataplane_statement(bootstrap_text)
+    if boundary_stmt is None:
+        failed.append(
+            f"{key} could not locate the github_ci_apply_boundary DataPlaneAllow statement in "
+            f"{bootstrap_path.name} -- has the boundary HCL shape changed?"
+        )
+        return
+
+    boundary_actions = tuple(boundary_stmt["actions"])
+    for action in sorted(identity_actions):
+        if not _action_matches(boundary_actions, [action]):
+            failed.append(
+                f"{key} identity policy grants {action!r} (Effect=Allow) but the "
+                "github_ci_apply_boundary DataPlaneAllow ceiling does not grant it (or a covering "
+                "pattern) -- a grant absent from the boundary ceiling is silently denied by the "
+                "identity/boundary intersection"
+            )
 
 
 def check_write_coverage(
