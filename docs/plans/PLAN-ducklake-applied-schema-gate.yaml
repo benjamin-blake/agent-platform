@@ -1,0 +1,720 @@
+---
+schema_version: 1
+slug: "ducklake-applied-schema-gate"
+intent: >-
+  Enforce, in the governed DuckLake code-deploy channel, that a serving Lambda never ships code
+  requiring an ops-table column the physical table does not have -- the sequencing hole that took
+  ops_decisions hard-down for read AND write on 2026-07-24. Enforcement is static and zero-egress: a
+  merge-time declaration gate plus a deploy-time refusal that splits the maintenance deploy (which
+  must land FIRST, because it performs the reconcile) from the serving deploy (which must land LAST).
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ducklake-applied-schema-gate.yaml
+phase: >-
+  No tier_item alignment. Soft-warn exception category `hotfix` -- forward-fix follow-up to a live
+  production incident (ducklake-writer-errors CloudWatch alarm, 2026-07-24T14:31:12Z). Consumes
+  T2.26 c9's landed result (ops_execution_plans is DuckLake-resident) but does not advance T2.26.
+scope:
+  - file: config/lambda/ducklake/field_semantics.static.yaml
+    action: Modify
+    purpose: >-
+      Extend `contract_table_ops` to carry an entry for ALL SIX ops tables (it currently holds only
+      ops_recommendations and ops_decisions), each with three new keys: `reconcile_scope`
+      (ducklake | exempt, with `exempt_reason`); `pending_reconcile` ({history: [...], current: [...]})
+      listing columns whose physical ALTER is owed; and `reconciled`
+      ({history: {<column>: {at, evidence}}, current: {<column>: {...}}}) recording the
+      reconcile_columns response that justified each clear. The per-COLUMN key is required, not
+      cosmetic: a per-side-only shape cannot express a table with two pending columns of which one
+      reconciled, which is exactly the half-reconciled state the declared grain exists to catch. Seed ops_decisions.pending_reconcile with
+      `intent` on both sides (history-only for append_only tables -- see APPEND-ONLY in context). Also
+      amend the block's own comments: the file header item 4 and the `contract_table_ops` block comment
+      both describe it as holding operational keys for "contract-backed tables", which becomes
+      self-contradictory once four non-contract tables are added. See DECLARATION HOME in context for why
+      contract_table_ops -- and not the dormant/smoke blocks -- is the only home that does not leak into
+      the generated artefact.
+  - file: scripts/schema_to_field_semantics.py
+    action: Modify
+    purpose: >-
+      Add a standalone subset-validation pass over EVERY `contract_table_ops` entry (not only the two
+      in `_CONTRACT_TABLE_IDS`), mirroring `_enforce_migration_columns_subset` (rec-2232), so the four
+      non-contract tables are validated even though the emission path never reads them. Emit none of
+      the three new keys.
+  - file: scripts/checks/ops_governance/validate_reconcile_pending_gate.py
+    action: Create
+    purpose: >-
+      One module, two entrypoints sharing one predicate. Merge-time check (registered in both
+      validate.py tiers): fail closed on an unclassified ops table; fail when a column added IN THE DIFF
+      to EITHER a `docs/contracts/ops_*.yaml` contract OR a `dormant_ops_tables`/`smoke_ops_tables`
+      `columns:` block is absent from pending_reconcile; fail when a pending_reconcile or reconciled
+      entry names an undeclared column; fail when a `current`-side entry names a table whose
+      `write_mode` is append_only. Plus a `--deploy-gate`
+      entrypoint returning non-zero while any reconcile_scope=ducklake table has a non-empty
+      pending_reconcile, called verbatim by the workflow so the two cannot drift.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: Register validate_reconcile_pending_gate in BOTH the --pre and full tiers.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: Add the facade re-export import so the @registry.register decorator executes.
+  - file: scripts/build_lambda_deploy.py
+    action: Modify
+    purpose: >-
+      Add an `only_functions: set[str] | None` parameter to `update_lambda_functions()` (line 84 --
+      note this is the real symbol; there is no `deploy_functions`) filtering the map from
+      `_build_ducklake_function_zip_keys()`. Raise on an unrecognised name, and raise ValueError if
+      passed with only_ducklake=False -- the prod branch builds a different map and subsetting it is
+      out of scope. Required because --ducklake-only is currently all-or-nothing across five functions.
+  - file: scripts/build_lambda.py
+    action: Modify
+    purpose: >-
+      Add `--ducklake-functions <comma-list>` threading through to only_functions -- the accepted
+      vocabulary is the FULL AWS function names that key _build_ducklake_function_zip_keys() (e.g.
+      agent-platform-ducklake-writer), not bare slugs -- and
+      `--ducklake-deploy-only` which skips the build/upload phase and calls update_lambda_functions()
+      against artifacts already in S3. Both absent, behaviour is byte-identical to today, so every
+      existing caller and the Decision 125 break-glass path are untouched. deploy-only is what keeps
+      the split from building and re-uploading the same artifacts twice (see DOUBLE-BUILD in context).
+  - file: .github/workflows/deploy-ducklake-lambdas.yml
+    action: Modify
+    purpose: >-
+      Restructure into five jobs: deploy-maintenance (ungated; builds+uploads ALL artifacts once, then
+      deploys maintenance + maintenance-smoke) -> maintenance-smoke (needs deploy-maintenance; the four
+      --lambda-maintenance-* gates) and reconcile-gate (needs deploy-maintenance; calls --deploy-gate)
+      -> deploy-serving (needs reconcile-gate; --ducklake-deploy-only for writer + reader + catalog-dr)
+      -> smoke (needs deploy-serving; --lambda-attach + --lambda-reader). Each leg's deploy-record
+      freshness assertion is narrowed to its own function set. Both deploy jobs publish a `deployed`
+      output; deploy-serving lists BOTH reconcile-gate and deploy-maintenance in `needs` (Actions cannot
+      read a non-listed job's outputs) and gates on deploy-maintenance's `deployed`, and smoke gates on
+      deploy-serving's. reconcile-gate carries its own setup-python + pip install pyyaml pydantic.
+  - file: docs/contracts/build-lambda.yaml
+    action: Modify
+    purpose: >-
+      MANDATORY, not optional: tests/test_build_lambda_config.py::test_cli_flag_equivalence asserts exact
+      set equality between build_parser()'s option strings and this contract's `cli_flags:` list, so
+      adding --ducklake-functions and --ducklake-deploy-only without registering them here is a
+      deterministic CI failure. Also re-ground `deploy_channels.ducklake_functions.governed_channel`,
+      whose prose describes the channel as "runs build_lambda --ducklake-only --deploy, gates on
+      --lambda-attach/--lambda-reader smoke" -- the five-job restructure falsifies that sentence, and
+      validate_deploy_channel_conformance will NOT catch it (it reads channel_class/ignore_changes, not
+      this prose). This is the #544 doc-drift class.
+  - file: docs/contracts/deploy-paths.yaml
+    action: Modify
+    purpose: >-
+      Decision 126 cl.2 navigation obligation -- describe the new red-pipeline state (serving deploy
+      refused, reconcile owed, remedy is an admin-tier verb the agent cannot invoke) by EXTENDING
+      `deploy_code.recovery`. Do NOT add a new top-level key: the file's three top-level intents ARE
+      Decision 126 cl.1's three-intent model, and a fourth would assert an intent that decision does not
+      recognise. Must also disambiguate from the existing `reconcile:` entry, which is the TERRAFORM
+      reconcile and does something entirely different. Pointer only; never a second source of truth.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Decision 132 cl.2 -- registry rows for the FIVE `graduate`-dispositioned VP steps (1, 2, 4, 5, 7).
+  - file: tests/checks/ops_governance/test_validate_reconcile_pending_gate.py
+    action: Create
+    purpose: Unit coverage over the merge-time gate and the --deploy-gate entrypoint.
+  - file: tests/build_lambda_deploy/test_function_subset.py
+    action: Create
+    purpose: >-
+      Unit coverage that only_functions filters the deploy set, an unknown name raises rather than
+      silently deploying nothing, only_functions with only_ducklake=False raises, omitting it preserves
+      all-five behaviour, and --ducklake-deploy-only performs no build/upload.
+  - file: tests/test_schema_to_field_semantics.py
+    action: Modify
+    purpose: >-
+      Cover the new subset-validation pass over all six contract_table_ops entries (acceptance
+      criterion 2), keeping the new generator lines above the CD.30 diff-line-coverage ratchet.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    All six ops tables from generate()['ops_tables'] carry an explicit reconcile_scope, and the gate
+    FAILS if any is unset. Classification: `ducklake` for ops_recommendations, ops_decisions,
+    ops_priority_queue, ops_execution_plans and ops_smoke_events; `exempt` for ops_session_log alone.
+  - >-
+    ops_decisions.pending_reconcile lists `intent` under BOTH history and current; ops_smoke_events is
+    seeded history-only and a current-side entry for it is REJECTED; and the generator rejects any
+    pending_reconcile or reconciled entry naming an undeclared column -- for the two
+    contract tables that means absent from the Class A contract, and for the four non-contract tables
+    absent from that table's own column block in the sidecar (they have no Class A contract).
+  - >-
+    validate_reconcile_pending_gate FAILS a PR that adds a column WITHOUT a matching pending_reconcile
+    entry, whether that column was added to a docs/contracts/ops_*.yaml contract OR to a
+    dormant_ops_tables/smoke_ops_tables `columns:` block, and the message contains the literal
+    reconcile_columns invoke.
+  - >-
+    `bin/venv-python -m scripts.schema_to_field_semantics --check` exits 0 -- the generated
+    field_semantics.yaml is byte-unchanged by this plan, so none of the three new keys reaches the
+    Lambda-bundled artefact.
+  - >-
+    update_lambda_functions(only_functions=...) deploys exactly the named subset; an unrecognised name
+    raises; only_functions with only_ducklake=False raises ValueError; omitting it deploys all five as
+    before; and --ducklake-deploy-only performs no build or upload.
+  - >-
+    deploy-ducklake-lambdas.yml contains exactly the jobs deploy-maintenance, maintenance-smoke,
+    reconcile-gate, deploy-serving, smoke -- the old single `deploy` job is GONE -- with
+    deploy-maintenance ungated, maintenance-smoke and reconcile-gate both needing deploy-maintenance,
+    deploy-serving needing reconcile-gate, and reconcile-gate actually invoking --deploy-gate.
+  - >-
+    The check is registered in both validate.py tiers and `bin/venv-python -m scripts.validate --pre`
+    exits 0 on this branch within the Decision 153 / Decision 73 300s budget.
+  - >-
+    OPERATOR-GATED, merge-blocking: the deployed ducklake_maintenance deploy record proves it carries
+    the column BEFORE the reconcile runs; reconcile_columns then reports `intent` in added_history and
+    added_current; ducklake_reader current_state("ops_decisions") returns rows; and
+    --backfill-decisions-md writes dec-151 and dec-152 without a 502.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise the merge-time gate -- unclassified table FAILS, diff-added-but-undeclared column FAILS,
+      declared column PASSES, non-subset pending/reconciled entry FAILS, unreachable origin/main
+      advisory-SKIPs with a printed reason rather than false-greening.
+    command: >-
+      bin/venv-python -m pytest tests/checks/ops_governance/test_validate_reconcile_pending_gate.py -q
+    expected: >-
+      All tests pass. The undeclared-column test asserts the failure string contains both the column
+      name and the substring "reconcile_columns".
+    fix_if: >-
+      If the unclassified-table test passes when it should fail, the gate is iterating the sidecar
+      rather than the contract -- invert it; generate()['ops_tables'] is authoritative. If the
+      advisory-skip false-greens, it must print its reason and be unreachable when origin/main resolves.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "reconcile-pending-gate-unit-tests"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the deploy split is real: only_functions filters the set, an unknown name raises,
+      only_ducklake=False raises, the default deploys all five, and deploy-only never builds. Also run
+      the build-contract equivalence suite, which fails closed if the two new CLI flags are not
+      registered in docs/contracts/build-lambda.yaml.
+    command: >-
+      bin/venv-python -m pytest tests/build_lambda_deploy/test_function_subset.py
+      tests/test_build_lambda_config.py -q
+    expected: All tests pass.
+    fix_if: >-
+      A test passing with an unknown function name means the filter silently intersects to empty -- a
+      subset deploy that deploys nothing and reports success is exactly the false-green this plan
+      exists to remove. Raise on unrecognised names.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "build-lambda-deploy-function-subset"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Run the real merge-time gate against the real repo: all six ops tables classified, and the seeded
+      ops_decisions/intent crossing declared rather than undeclared.
+    command: >-
+      bin/venv-python -c "from scripts.checks.ops_governance.validate_reconcile_pending_gate import
+      validate_reconcile_pending_gate as v; f=[]; v(f); print('FAILURES=%d' % len(f)); assert not f, f"
+    expected: Prints FAILURES=0, exit 0.
+    fix_if: >-
+      FAILURES>0 naming an unclassified table means reconcile_scope was seeded only for the tables this
+      incident touched. Classify all six against docs/ROADMAP-PLATFORM.yaml T2.26 exit criteria and each
+      table's own sidecar `status` -- NOT against AGENTS.md, which is stale on ops_execution_plans
+      (rec-2852). Never silence the gate by narrowing the table set it iterates.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step runs the check that execution step 4 registers as a standing guard in both validate.py
+      tiers (registration confirmed by VP step 4), so a registry row would duplicate an already-standing
+      check. Deliberately NOT hermetic: it exercises the origin/main diff leg, which residual risk 1
+      records as advisory-SKIPping when the ref does not resolve -- a hermetic replay could silently
+      take that path.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm registration in BOTH validate.py tiers. The pattern is deliberately loose on the _c() call
+      shape because current main writes many --pre entries as _c(name, pre_globs=(...)) on one line.
+    command: >-
+      test "$(grep -c 'validate_reconcile_pending_gate' scripts/checks/registry.py)" = "2"
+      && grep -q "validate_reconcile_pending_gate" scripts/validate.py && echo REGISTERED_BOTH_TIERS
+    expected: Prints REGISTERED_BOTH_TIERS, exit 0.
+    fix_if: >-
+      A count of 1 means the check landed in one tier only. Decide and record whether the --pre entry is
+      pre_globs-gated; if it is, the globs MUST include both docs/contracts/ops_*.yaml and
+      config/lambda/ducklake/field_semantics.static.yaml, or a column-add PR skips the gate entirely.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "reconcile-pending-gate-registered-both-tiers"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert the exact workflow job topology, including that the old ungated single `deploy` job is
+      gone and that the gate job really invokes the shared entrypoint.
+    command: >-
+      bin/venv-python -c "import yaml; w=yaml.safe_load(open('.github/workflows/deploy-ducklake-lambdas.yml'));
+      j=w['jobs']; n=lambda x: [x] if isinstance(x, str) else list(x or []);
+      assert set(j)=={'deploy-maintenance','maintenance-smoke','reconcile-gate','deploy-serving','smoke'}, sorted(j);
+      assert 'reconcile-gate' not in n(j['deploy-maintenance'].get('needs'));
+      assert 'deploy-maintenance' in n(j['maintenance-smoke']['needs']);
+      assert 'reconcile-gate' not in n(j['maintenance-smoke']['needs']);
+      assert 'deploy-maintenance' in n(j['reconcile-gate']['needs']);
+      assert 'reconcile-gate' in n(j['deploy-serving']['needs']);
+      assert 'deploy-maintenance' in n(j['deploy-serving']['needs']);
+      assert 'deploy-serving' in n(j['smoke']['needs']);
+      assert '--deploy-gate' in yaml.dump(j['reconcile-gate']);
+      assert 'pip install' in yaml.dump(j['reconcile-gate']);
+      assert \"needs.deploy-maintenance.outputs.deployed\" in yaml.dump(j['deploy-serving']);
+      assert \"needs.deploy-serving.outputs.deployed\" in yaml.dump(j['smoke']);
+      print('JOB_TOPOLOGY_OK')"
+    expected: Prints JOB_TOPOLOGY_OK, exit 0.
+    fix_if: >-
+      If maintenance is gated behind reconcile-gate, the reconcile becomes a silent no-op:
+      reconcile_columns derives its ALTER list from the DEPLOYED maintenance function's bundled
+      field_semantics.yaml, so a maintenance function that never received the column adds nothing and
+      reports columns_pre_existing=true. If a stray `deploy` job survives alongside the new set, serving
+      code ships past the refusal and the whole gate is decorative -- the exact-set assertion catches
+      that half-migration. deploy-serving must list deploy-maintenance in `needs` as well as
+      reconcile-gate, because GitHub Actions does not expose a non-listed job's outputs: without it the
+      DEPLOY_ROLE_PROVISIONED bootstrap window (where deploy goes green with `deployed` unset) turns a
+      designed green no-op into a hard red, as deploy-serving would call --ducklake-deploy-only against
+      per-sha S3 keys nothing ever uploaded. And reconcile-gate needs its own setup-python +
+      `pip install pyyaml pydantic`: bin/venv-python falls back to a PATH interpreter and exits 1 when
+      the deps are absent, which would wedge the channel red on every run regardless of reconcile state.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "ducklake-deploy-job-topology"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Prove the new sidecar keys never reach the Lambda-bundled artefact -- the assertion the whole
+      Lambda Deployment Assessment rests on.
+    command: bin/venv-python -m scripts.schema_to_field_semantics --check
+    expected: Exit 0 -- generated field_semantics.yaml byte-identical to the committed file.
+    fix_if: >-
+      A failure means a new key reached the emission path. The four non-contract tables MUST be declared
+      under contract_table_ops, not under dormant_ops_tables/smoke_ops_tables -- those blocks are spliced
+      VERBATIM into the output, so anything added there ships inside four active Lambda packages and
+      drags this plan into a per-Lambda build/deploy/smoke obligation it is scoped to avoid.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Inadmissible as a differential, not merely inconvenient: validate_verification_registry materialises
+      each new row against an origin/main worktree and requires FAIL there, but `--check` is green on main
+      BY CONSTRUCTION -- validate_field_semantics_drift already guarantees main is self-consistent. The row
+      would be tautological (PASS on both sides) and would redden --pre. Step 7 carries the graduated
+      coverage instead, over a test node that genuinely does not exist on main.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Prove the generator rejects an undeclared pending/reconciled column, and rejects a current-side
+      entry on an append_only table (acceptance criterion 2).
+    command: >-
+      bin/venv-python -m pytest
+      tests/test_schema_to_field_semantics.py::TestReconcileScopeSubset -q
+    expected: >-
+      All cases pass: undeclared column under pending_reconcile raises; undeclared column under
+      reconciled raises; a current-side entry for ops_smoke_events (write_mode append_only) raises;
+      a declared column on both sides is accepted.
+    fix_if: >-
+      If the append_only case does not raise, the validator is not consulting write_mode -- an
+      unreconcilable current-side entry on ops_smoke_events would block every serving deploy forever
+      with no sanctioned escape (see APPEND-ONLY in context).
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "field-semantics-reconcile-scope-subset-rejection"
+  - step: 8
+    phase: pre-deploy
+    action: Confirm the gate lands non-wedging -- the fast presubmit tier is green on this branch.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0, within the Decision 153 / Decision 73 300s fast-tier budget.
+    fix_if: >-
+      If --pre goes red on the new check, the seeded sidecar entries are malformed. Do not delete the
+      check or drop `intent` from the contract to get green. If the run breaches the budget, the gate is
+      doing more than a static YAML read plus one _common diff -- narrow it, do not raise the budget.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The command is a bare command_exit_zero over `scripts.validate --pre` itself. Graduating it into
+      config/agent/verification_registry/registry.yaml -- which `validate --pre` consumes -- is circular:
+      the registry row would assert the success of the runner evaluating it.
+  - step: 9
+    phase: post-deploy
+    action: >-
+      PREREQUISITE TO THE RECONCILE. Prove the deployed ducklake_maintenance actually carries `intent`
+      before invoking the reconcile. Without this, an all-empty reconcile result is indistinguishable
+      from a successful no-op and the operator would clear pending_reconcile over a still-broken table.
+      Verified executable by the agent during planning: PlatformDev holds s3:GetObject on this prefix.
+    command: >-
+      aws s3 cp s3://agent-platform-data-lake/deploy-records/ducklake/agent-platform-ducklake-maintenance.json -
+      --profile agent_platform --region eu-west-2
+      | bin/venv-python -c "import json,subprocess,sys; r=json.load(sys.stdin); s=r.get('source_git_sha');
+      assert s, 'source_git_sha null -- break-glass local deploy, provenance unknown; redeploy via the workflow';
+      subprocess.run(['git','merge-base','--is-ancestor','f0e701d',s], check=True);
+      print('MAINTENANCE_CARRIES_INTENT', s)"
+    expected: >-
+      Prints MAINTENANCE_CARRIES_INTENT with the sha. As of this planning session the record already
+      reads source_git_sha=f0e701d1b6a6ac361a2ba0820c802953f218ed3f (deployed 2026-07-24T14:27:46Z) --
+      the very commit that introduced `intent` -- so this precondition is already satisfied for the
+      recovery leg.
+    fix_if: >-
+      A null source_git_sha means the function was last deployed by the break-glass local path, which
+      does not stamp GITHUB_SHA -- redeploy through the workflow rather than guessing. An older sha means
+      deploy-maintenance has not run since the column landed. Do NOT proceed to step 10 on either; the
+      reconcile would silently add nothing. If the s3 read AccessDenies, stop and request the record from
+      the operator -- do not skip the precondition.
+  - step: 10
+    phase: post-deploy
+    action: >-
+      OPERATOR-EXECUTED, HUMAN-DIRECTED BREAK-GLASS (Decision 126 cl.1; Decision 151 cl.2 -- "never
+      autonomous"; Decision 143 cl.2 -- admin-tier, unreachable from PlatformDev or CI). The implementing
+      agent MUST NOT attempt this and holds no lambda:InvokeFunction on ducklake_maintenance. Stop and
+      request it. Capture the FULL response body -- it is the evidence recorded in step 13.
+    command: >-
+      aws lambda invoke --function-name agent-platform-ducklake-maintenance --cli-binary-format
+      raw-in-base64-out --payload
+      '{"action":"reconcile_columns","data_path":"s3://agent-platform-data-lake/ducklake/","meta_schema":"ducklake_ops","table":"ops_decisions"}'
+      --profile agent_platform_admin --region eu-west-2 /tmp/reconcile-ops-decisions.json
+      && cat /tmp/reconcile-ops-decisions.json
+    expected: >-
+      ok=true AND `intent` appears in added_history AND added_current. Given step 9 proved the deployed
+      spec carries `intent`, an all-empty added_* with columns_pre_existing=true is acceptable ONLY as
+      evidence of a prior successful reconcile -- it is a HARD FAILURE if step 9 was skipped or stale.
+    fix_if: >-
+      `intent` in one of added_history/added_current but not the other means only one physical table
+      reconciled -- do NOT clear pending_reconcile for the missing side. AccessDenied means the wrong
+      profile; never widen a CI or PlatformDev role to reach this function.
+  - step: 11
+    phase: post-deploy
+    action: >-
+      Verify the incident is resolved through the closed named-verb read boundary (Decision 84 I-3):
+      ops_decisions reads again. The single warm catalog read this plan spends (Decision 88). Row-key
+      presence is a secondary signal only -- step 10's response body is the authoritative schema oracle,
+      because a freshly added column is NULL for every row and may be omitted from row serialization.
+    command: >-
+      bin/venv-python -c "from src.common.iceberg_reader import make_reader;
+      r=make_reader(profile='agent_platform'); rows=r.current_state('ops_decisions');
+      assert rows, 'no rows returned'; print('OPS_DECISIONS_READ_OK rows=%d intent_key_present=%s'
+      % (len(rows), 'intent' in rows[0]))"
+    expected: >-
+      Prints OPS_DECISIONS_READ_OK with a non-zero row count. intent_key_present may legitimately be
+      False if the reader omits null-valued keys -- that is NOT a failure.
+    fix_if: >-
+      A continuing HTTP 502 means the reconcile did not land -- re-read step 10's response body. Do NOT
+      weaken _assert_no_orphaned_current_rows (scripts/ops_portal/decisions.py:163) or add a 502
+      tolerance (Decision 149 cl.3: the guard is never weakened to accommodate a broken substrate).
+  - step: 12
+    phase: post-deploy
+    action: >-
+      Confirm the write path recovered via the sanctioned ETL (Decision 84: the only legitimate re-write
+      path; never re-stage from logs/.decisions-index.jsonl).
+    command: bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md 2>&1 | tail -5
+    expected: >-
+      Fidelity report shows failed=0, with no "ducklake_writer write_ops ops_decisions failed (HTTP 502)"
+      line for dec-151 or dec-152.
+    fix_if: >-
+      A surviving 502 on a specific decision id means that entry carries a further unreconciled column --
+      add it to pending_reconcile and re-run steps 9-10; do not skip the entry.
+  - step: 13
+    phase: post-deploy
+    action: >-
+      Close the loop with recorded proof: move `intent` from pending_reconcile into `reconciled` for both
+      history and current, pasting step 10's added_history/added_current as the evidence value, commit, and
+      confirm the deploy gate now permits.
+    command: >-
+      bin/venv-python -m scripts.checks.ops_governance.validate_reconcile_pending_gate --deploy-gate
+      && echo DEPLOY_GATE_CLEAR
+    expected: Prints DEPLOY_GATE_CLEAR, exit 0.
+    fix_if: >-
+      Still refusing means pending_reconcile was cleared on only one of history/current. Clear a side ONLY
+      when step 10's response body evidences that side reconciled -- clearing it to make the gate green is
+      the exact failure this plan exists to prevent, and the `reconciled` evidence field exists so a later
+      reader can tell the difference.
+constraints:
+  - >-
+    No rescue agents or workaround loops (Decision 55). A failing post-deploy leg stops and RCAs.
+  - >-
+    reconcile_columns is ADMIN-TIER and never autonomous (Decision 143 cl.2; Decision 151 cl.2;
+    Decision 126 cl.1). The implementing agent stops and requests operator execution for VP step 10.
+    Never widen a CI or PlatformDev role to reach ducklake_maintenance.
+  - >-
+    Both gates must be STATIC and zero-egress (Decision 88). Neither may invoke ducklake_maintenance to
+    introspect the catalog -- github_ci_branch is never granted invoke on it, and
+    ducklake_maintenance_smoke is env-pinned to the disposable smoke catalog and structurally cannot see
+    production ops_decisions. That blindness is why deploy run 8 reported green over a broken table.
+  - >-
+    The merge-time check and the deploy gate MUST be one module with two entrypoints. Two implementations
+    of the same predicate will drift, and the drifting one will be the deploy gate, because it runs least.
+  - >-
+    The gate uses scripts/checks/_common helpers (ROOT, run, get_changed_files/get_status_aware_diff) --
+    Decision 104 makes _common the SOLE home for these, and Decision 135 owns the affected-set diff. Do
+    not roll a private git-diff helper.
+  - >-
+    The gate must stay a static YAML read plus one _common diff. Decision 153 preserves hard-fail on the
+    --pre 300s budget for every non-full_suite_forced breach.
+  - >-
+    Do not hand-edit config/lambda/ducklake/field_semantics.yaml -- it is GENERATED (Decision 65,
+    Decision 118). Sidecar keys are authored in field_semantics.static.yaml.
+  - >-
+    Signal and sequencing only. Do not add write buffering, an outbox, retry/replay, or any path that
+    re-stages ops rows from logs/.decisions-index.jsonl (Decision 84 I-4).
+  - >-
+    `--ducklake-functions` and `--ducklake-deploy-only` must both default to today's behaviour when
+    omitted, so every existing caller and the Decision 125 break-glass path are byte-identical.
+  - >-
+    An ungated deploy must never be an unverified deploy. deploy-maintenance ships production code
+    regardless of the reconcile state, so its own smoke leg must run on the same condition
+    (Decision 55 false-green avoidance, the rationale already written into this workflow).
+  - >-
+    Files outside the Scope table are not modified. Out-of-scope findings become recommendations via
+    scripts/ops_data_portal.py, not inline fixes.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": round 2 verdict FLAGS_FOUND, 106 of 106
+    decisions triaged. CITE list: dec-143, dec-151, dec-084, dec-081, dec-149, dec-142, dec-072, dec-126,
+    dec-125, dec-039, dec-062, dec-092, dec-144, dec-113, dec-065, dec-118, dec-129, dec-088, dec-055,
+    dec-079, dec-132, dec-128, dec-153, dec-104, dec-135, dec-086, dec-103, dec-130, dec-131.
+  - "gates: decision-scout=FLAGS_FOUND (106/106 triaged, round 2); plan-critique=PROCEED after 5 round(s)"
+  - >-
+    INCIDENT ORIGIN. CloudWatch alarm `ducklake-writer-errors` (terraform/personal/ducklake_lambdas.tf:430)
+    entered ALARM at 2026-07-24T14:31:12Z on a 1-error datapoint in the 14:16-14:31 window. Source was
+    rec-autoclose run 581 (14:26:27Z, commit f0e701d) and again run 585 (16:21:23Z, commit f0049ac), both
+    failing with `ducklake_writer write_ops ops_decisions failed (HTTP 502)` for dec-151/dec-152, then
+    `ducklake_reader 'read_ops_current' failed (HTTP 502)` raised at scripts/ops_portal/decisions.py:163.
+    ops_decisions was confirmed still hard-down for BOTH read and write on 2026-07-25 during this planning
+    session; ops_recommendations is unaffected (1538 rows).
+  - >-
+    ROOT CAUSE. PR f0e701d (Decision 151 / audit finding DCG-06) added the nullable `intent` column to
+    docs/contracts/ops_decisions.yaml and the generated field_semantics.yaml. deploy-ducklake-lambdas run 8
+    fired automatically on merge at 14:26:27Z and went green, so the deployed reader/writer began requiring
+    `intent`. The admin-tier reconcile_columns that physically ALTERs the table was never run. Leg 1 of 3
+    self-executes on merge; legs 2 and 3 wait on a human, and nothing enforced the ordering.
+  - >-
+    THE ORDERING CONSTRAINT, and why the deploy must be split. reconcile_columns does NOT take a column
+    list -- reconcile_table_columns (src/common/ducklake_tables.py) derives its ALTER set from
+    resolve_table_spec(table).fields, which loads the field_semantics.yaml BUNDLED INTO THE DEPLOYED
+    ducklake_maintenance package. So the reconcile can only add columns the deployed maintenance function
+    already knows about. A refusal blocking all five functions would block maintenance too, the reconcile
+    would add nothing, and handler.py computes columns_pre_existing = not added_* -- reporting `true` for a
+    table never touched. An earlier draft accepted that as success, converting a loud human-forgetfulness
+    failure into a silent mechanised one. Hence: maintenance deploys FIRST and ungated (and is smoked on
+    its own leg); the gate refuses only the serving deploy; and VP step 9 proves the deployed maintenance
+    carries the column before the reconcile may run. VERIFIED DURING PLANNING: the maintenance deploy
+    record already reads source_git_sha=f0e701d (deployed 2026-07-24T14:27:46Z), so the recovery reconcile
+    will genuinely apply rather than no-op.
+  - >-
+    APPEND-ONLY. reconcile_table_columns (src/common/ducklake_tables.py:57) reconciles the current table
+    only `if spec.write_mode != "append_only"`. ops_smoke_events is write_mode append_only with
+    current_table absent entirely, so a `current`-side pending_reconcile entry for it could never be
+    cleared by evidence -- and per residual risk 4 that would block EVERY serving deploy permanently with
+    no sanctioned escape but the Decision 125 break-glass. The gate therefore rejects a current-side
+    pending/reconciled entry for any append_only table, and such tables are seeded history-only. This is
+    the one place where the otherwise-uniform (table, history|current) grain legitimately degenerates to
+    (table, history).
+  - >-
+    DECLARATION HOME. All six tables declare the three new keys under `contract_table_ops`, which today
+    holds only ops_recommendations and ops_decisions. This is the ONLY home that does not leak into the
+    generated artefact: `dormant_ops_tables` (ops_priority_queue, ops_session_log, ops_execution_plans) and
+    `smoke_ops_tables` (ops_smoke_events) are spliced VERBATIM into the output
+    (scripts/schema_to_field_semantics.py lines ~203/208), so keys added there would ship inside four
+    `status: active` Lambda packages. The generator's emission path builds each contract entry key-by-key
+    and consults contract_table_ops only for `_CONTRACT_TABLE_IDS`, so the four non-contract entries are
+    never read by emission and need no strip step. They would also go unvalidated, which is why scope row 2
+    adds a standalone subset-validation pass over every contract_table_ops entry. ops_execution_plans
+    consequently carries metadata in two sidecar blocks -- its schema under dormant_ops_tables, its
+    reconcile governance under contract_table_ops -- a deliberate separation of concerns, not duplication.
+  - >-
+    PREDICATE COVERAGE. Only ops_recommendations and ops_decisions have Class A contracts. Columns for
+    ops_priority_queue, ops_session_log, ops_execution_plans and ops_smoke_events are authored directly in
+    field_semantics.static.yaml's dormant_ops_tables/smoke_ops_tables `columns:` blocks and spliced
+    VERBATIM into the generated, Lambda-bundled field_semantics.yaml -- i.e. they reach the deployed
+    reader/writer/maintenance spec by EXACTLY the path that broke ops_decisions. A predicate watching only
+    docs/contracts/ops_*.yaml would therefore be decorative for three of the five ducklake-scoped tables,
+    and the same incident would recur on ops_execution_plans. The gate watches both surfaces, and VP step
+    4's fix_if already requires the sidecar in any pre_globs the --pre registration uses.
+  - >-
+    GENERATED-ARTEFACT DECISION, now conditional on a verified assertion rather than asserted. None of
+    reconcile_scope, pending_reconcile or reconciled is emitted into config/lambda/ducklake/field_semantics.yaml.
+    VP step 6 byte-asserts this via `schema_to_field_semantics --check`. While it holds:
+    validate_field_semantics_drift stays green with no regeneration commit, field_semantics.yaml stays out
+    of Scope, and compute_affected_artifacts() returns {} for every scope file so no per-Lambda
+    build/deploy/smoke obligation attaches. Were the keys emitted, field_semantics.yaml affects four
+    `status: active` artifacts and Decision 79 / CD.16 would apply -- so VP step 6 is load-bearing for the
+    Lambda Deployment Assessment, not a nicety.
+  - >-
+    DOUBLE-BUILD. `--ducklake-only` builds all five zips plus three layers and uploads all eight
+    regardless of which functions are deployed, so a naive split would run the full heavy build twice and
+    have deploy-serving overwrite `lambda-packages/<sha>/*` bytes that deploy-maintenance already deployed
+    from -- contradicting the per-artifact-sha overwrite-immunity contract documented at
+    scripts/build_lambda_deploy.py:55-66 and desynchronising the maintenance deploy record's code_sha256
+    from the artifact at that key. Resolution: deploy-maintenance performs the single build+upload of all
+    artifacts; deploy-serving uses the new `--ducklake-deploy-only`, which skips build/upload entirely and
+    calls update_lambda_functions() against the S3 artifacts already there. This also roughly halves
+    workflow wall-clock against the 20-minute per-job timeout.
+  - >-
+    IN-SCOPE TABLE SET, and the stale oracle. generate()['ops_tables'] returns SIX tables. Neither
+    available field discriminates: `status` marks ops_priority_queue `dormant` though Decision 84 makes it
+    a live DuckLake table, and resolve_table_spec() succeeds for all six. Hence the explicit
+    reconcile_scope with fail-closed on unset. CRITICAL: AGENTS.md's source-of-truth-by-table section is
+    STALE -- it still lists ops_execution_plans as Athena/Iceberg, but T2.26 exit criterion c9 is `met`
+    (2026-07-21; table provisioned on the catalog with history + current, merge_key rec_id), and the
+    sidecar records `status: live  # T2.26 c9: DuckLake migration landed`. The authoritative oracle is
+    docs/ROADMAP-PLATFORM.yaml T2.26 exit criteria plus each table's own sidecar status -- NOT AGENTS.md.
+    An earlier draft classified ops_execution_plans `exempt` on AGENTS.md's authority, which would have
+    permanently exempted a live table from the very gate this plan builds. Filed: rec-2852.
+  - >-
+    DESIGN PIVOT HISTORY. Draft 1 proposed a new config/ducklake/applied_schema.yaml. Rejected: it invents
+    a fourth config zone against the three-zone layout in config/CLAUDE.md (T-1.7 -- NOT Decision 127,
+    which governs the sanctioned-prose taxonomy; an earlier draft mis-cited this); its one-entry-per-table
+    grain was coarser than physical reality, since every reconcile surface models history and current
+    separately; and its gate was advisory for a MARKED crossing, so a PR that declared its pending column
+    would still merge, still deploy, and still break production.
+  - >-
+    ZONE PLACEMENT, stated as a deliberate exception rather than claimed as automatic conformance.
+    config/CLAUDE.md defines config/lambda/<name>/ as bundled runtime payloads and config/agent/<consumer>/
+    as agent- and CI-read content. pending_reconcile is read only by a CI check and a workflow job, which
+    is config/agent/-class by that definition. It is nonetheless sited in field_semantics.static.yaml
+    because that sidecar is the established non-bundled exception in that directory, is the generator's
+    input, and already carries migration_columns at exactly this grain -- splitting sibling keys across two
+    zones would cost more than the irregularity. Decision 86's "field/contract semantics -> docs/contracts/"
+    routing rule was weighed and not followed for the same reason: these keys annotate physical deployment
+    state, not contract semantics, and belong with the generator input they constrain.
+  - >-
+    CORRECTION TO A TEMPTING FALSE LEAD, verified independently by plan-critique. The sidecar's existing
+    `migration_columns` key is populated for ops_recommendations and null for ops_decisions, inviting the
+    conclusion that populating it would have prevented the incident. It would not. reconcile_table_columns
+    derives its ALTER list from resolve_table_spec(table).fields -- the full contract -- and a repo-wide
+    grep finds ZERO runtime consumers of migration_columns: the generator subset-validates it and emits it
+    as inert metadata. pending_reconcile is therefore a new sibling key, not a repurposing --
+    migration_columns' semantics (columns historically added via migration, already applied) are the
+    opposite of pending and must not be overloaded.
+  - >-
+    OUT OF SCOPE, FILED. rec-2849 (ci-rca.yml's workflow_run filter omits rec-autoclose, so its failures
+    file nothing -- why this incident produced no ci_rca rec); rec-2850 (the SNS alerts topic has one
+    subscription, an email endpoint -- no CloudWatch alarm reaches ops_recommendations); rec-2851
+    (PlatformDev holds no cloudwatch:GetMetricStatistics, no logs:FilterLogEvents/DescribeLogGroups, and no
+    lambda:InvokeFunction on ducklake_maintenance -- scoped to Decision 129's forward-fix prefix shape, NOT
+    an enumeration of the three actions this incident needed); rec-2852 (AGENTS.md source-of-truth-by-table
+    stale on ops_execution_plans).
+  - >-
+    KNOWN RESIDUAL RISKS, named rather than silently omitted. (1) The diff leg of the merge-time gate needs
+    a resolvable origin/main; when unreachable it advisory-SKIPs with a printed reason (the Decision 132
+    limitation-B precedent used by validate_vp_replay). In CI origin/main always resolves, so the hole is
+    local-only -- and VP step 3 is deliberately non-hermetic so a replay cannot silently take that path.
+    (2) pending_reconcile is operator-maintained; the new `reconciled` evidence field makes a convenience
+    clear detectable after the fact but does not mechanically prevent one. A continuous truth-probe would
+    cost recurring metered Neon catalog egress on every deploy (Decision 88); the natural follow-on is to
+    extend scripts.convergence_health.detect_ducklake_code_drift, already this codebase's deployed-vs-declared
+    drift primitive, with a periodic (not per-deploy) column probe. (3) The Decision 125 break-glass path
+    `build_lambda --ducklake-only --deploy` bypasses the workflow refusal entirely -- the gate binds the
+    governed channel, not every possible deploy, and the intent line is scoped accordingly. That bypass is
+    also the only escape hatch from residual risk 4, so the deploy-paths.yaml recovery row must signpost it.
+    (4) While any ducklake-scoped table has a non-empty pending_reconcile, the refusal blocks ALL serving
+    deploys, including unrelated writer/reader hotfixes, and leaves deploy-ducklake-lambdas red on main --
+    a red ci-rca cannot see, because that workflow is absent from its workflow_run filter (rec-2849).
+    Fail-closed is the correct posture, but the blast radius is real.
+  - >-
+    DEPLOY-TRIGGER FACT (corrected -- an earlier draft asserted the opposite).
+    deploy-ducklake-lambdas.yml's push filter is config/lambda/ducklake/**, which MATCHES
+    field_semantics.static.yaml. Every sidecar edit -- declaring a pending column or clearing it -- fires
+    the workflow on push to main. This is benign and arguably desirable: clearing auto-triggers the
+    now-permitted serving deploy. No workflow_dispatch is needed, and an operator should not wait for one.
+  - >-
+    DEPLOY-PATHS DISAMBIGUATION. docs/contracts/deploy-paths.yaml already has a `reconcile:` entry -- that
+    is the TERRAFORM reconcile (the Decision 126 one-input Reconcile action for infra drift), which does
+    something entirely unrelated to a DuckLake column reconcile. The new recovery row must be named and
+    worded so a reader routed there by Decision 126 cl.2 cannot confuse the two.
+  - >-
+    CI-RCA DEFERRAL RATIONALE (required: ci_rca_unresolved_recs was non-empty at planning time). rec-2836
+    ("Terraform init flakes on kislerdm/neon 504 Gateway Timeout from github.com", source=ci_rca,
+    priority=Critical, filed 2026-07-24T17:10:56Z, file scripts/checks/_terraform.py) is open. This plan
+    satisfies none of the three Related-Work conditions: different file, different Decision Record,
+    different failure category (a terraform-init network flake vs a warehouse schema-sequencing defect).
+    Deferral is deliberate and was surfaced to the human at Step 6b, who directed proceed-and-flag.
+  - >-
+    MAIN-DIVERGENCE NOTE (corrected -- draft 1 asserted the opposite and was wrong). The branch was 21
+    commits behind origin/main at draft-1 time, and FIVE of those touch this plan's pre-existing scope
+    files: 5d770b9 (#748), 3793a0b (#746 check-corpus-curation), 05eff8b (DCG-08), b438fd5 (#727),
+    22b35a3 (#738). The check-corpus curation wave changed the exact registration API this plan edits: Step
+    gained `pre_globs: tuple[str,...] | None`, `_c()` accepts pre_globs for diff-gating --pre entries, and
+    `_s("coverage_report")` became `_s("verifier_coverage_report")`. The branch was rebased onto d4db904;
+    the implementer must read registry.py and validate.py at that base or later.
+  - >-
+    DATA-MODEL ASSESSMENT: no table, merge_key, identity scheme, or warehouse write path changes; no Fable
+    escalation required. The one grain call is on the new sidecar keys -- grain is ONE ENTRY PER (ops table,
+    physical table) where physical table is history or current, matching reconcile_table_columns' loop and
+    action_reconcile_columns' added_history/added_current response shape. Draft 1's one-entry-per-table
+    grain would have recorded a half-reconciled table as fully reconciled.
+  - >-
+    SLOC: the new check is expected around 140 lines; build_lambda_deploy.py (371) gains roughly 25 and
+    build_lambda.py (270) roughly 25 -- both stay well under the 500 default, so no Decision 128
+    decomposition or raise is in play. New test files land under tests/ per the Decision 130/131 mirror
+    convention (tests/build_lambda_deploy/ already exists).
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    scripts/checks/registry.py and scripts/validate.py re-read at base d4db904 or later, and the pre_globs
+    decision for the --pre registration made explicitly
+  - >-
+    T2.26 exit criteria read in docs/ROADMAP-PLATFORM.yaml to classify all six ops tables -- do NOT use
+    AGENTS.md's source-of-truth-by-table section, which is stale on ops_execution_plans (rec-2852)
+  - >-
+    Confirmed the implementing agent CANNOT execute VP step 10 (no lambda:InvokeFunction on
+    ducklake_maintenance) and an operator is available before attempting steps 11-13
+execution_steps:
+  - >-
+    Extend config/lambda/ducklake/field_semantics.static.yaml: add contract_table_ops entries for the FOUR
+    tables that lack one, then add reconcile_scope to all six (classified against ROADMAP-PLATFORM T2.26
+    exit criteria plus each table's own sidecar status), pending_reconcile for ops_decisions listing
+    `intent` under both history and current, and the empty `reconciled` structure. Do NOT put the new keys
+    under dormant_ops_tables or smoke_ops_tables -- those splice verbatim into the generated artefact.
+  - >-
+    Extend scripts/schema_to_field_semantics.py with a standalone subset-validation pass over EVERY
+    contract_table_ops entry, mirroring _enforce_migration_columns_subset (rec-2232). For the two contract
+    tables validate against the Class A contract columns; for the four non-contract tables validate against
+    that table's own column block in the sidecar. Emit none of the three new keys.
+  - >-
+    Create scripts/checks/ops_governance/validate_reconcile_pending_gate.py following the
+    validate_field_semantics_drift shape (@registry.register(..., owner="platform"), appends to `failed`,
+    never auto-writes), using scripts/checks/_common helpers for ROOT and the diff. Iterate the CONTRACT's
+    ops tables so an unclassified table fails closed. Expose a `--deploy-gate` entrypoint sharing the same
+    predicate. Embed the literal reconcile_columns invoke in the failure message.
+  - >-
+    Register the check in BOTH tier lists in scripts/checks/registry.py and add the facade re-export import
+    to scripts/validate.py. Record the pre_globs decision per VP step 4's fix_if.
+  - >-
+    Add `only_functions` to update_lambda_functions() in scripts/build_lambda_deploy.py (raising on an
+    unrecognised name and on only_ducklake=False), and thread `--ducklake-functions` plus
+    `--ducklake-deploy-only` through scripts/build_lambda.py, both defaulting to today's behaviour.
+  - >-
+    Restructure .github/workflows/deploy-ducklake-lambdas.yml into deploy-maintenance (ungated; the single
+    build+upload of all artifacts, then deploys maintenance + maintenance-smoke) -> maintenance-smoke
+    (needs deploy-maintenance, gated on its `deployed` output, running the four --lambda-maintenance-*
+    gates) and reconcile-gate (needs deploy-maintenance) -> deploy-serving (needs reconcile-gate;
+    --ducklake-deploy-only for writer + reader + catalog-dr) -> smoke (needs deploy-serving; --lambda-attach
+    + --lambda-reader). Narrow each leg's deploy-record freshness assertion to its OWN function set -- the
+    existing all-five loop fails closed in a per-leg smoke. Preserve the DEPLOY_ROLE_PROVISIONED bootstrap
+    tolerance and a `deployed` output in both deploy jobs.
+  - >-
+    Add the Decision 126 cl.2 recovery row to docs/contracts/deploy-paths.yaml, disambiguated from the
+    existing terraform `reconcile:` entry and signposting the break-glass escape hatch.
+  - >-
+    Create the two new test modules and extend tests/test_schema_to_field_semantics.py, using tmp_path
+    fixtures -- do not mutate the real sidecar.
+  - >-
+    Add registry rows in config/agent/verification_registry/registry.yaml for the FIVE
+    `graduate`-dispositioned VP steps (1, 2, 4, 5, 7), per Decision 132 cl.2.
+  - Execute Verification Plan steps 1-8 (pre-deploy) -- run each step; loop until pass.
+  - >-
+    STOP. Run VP step 9 to prove the deployed maintenance carries `intent`, then request operator execution
+    of VP step 10 (admin-tier reconcile_columns) and capture its full response body. Do not attempt step 10,
+    do not seek a workaround, and do not proceed to steps 11-13 until the operator confirms.
+  - >-
+    Execute Verification Plan steps 11-13 (post-deploy); on an unrecoverable V3 failure stop and RCA
+    (Decision 55).
+  - >-
+    Commit the VP step 13 sidecar update (intent moved from pending_reconcile to reconciled with step 10's
+    response body as evidence, both sides) as part of the same PR.
+  - 'Report: what was implemented, verification results, and the confirmed recovery state of ops_decisions'
+work_areas: []
+rollback: >-
+  Revert the PR. The gates are additive and static, and both new build_lambda flags default to prior
+  behaviour when omitted, so reverting restores the unguarded single-job deploy exactly. The physical
+  reconcile from VP step 10 is NOT rolled back and must not be -- adding a nullable column is
+  backwards-compatible, and reversing it would re-break the deployed reader/writer that now require `intent`.
