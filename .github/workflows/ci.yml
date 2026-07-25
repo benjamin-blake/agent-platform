@@ -17,6 +17,9 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: pr-validate-${{ github.ref }}
+      cancel-in-progress: true
     permissions:
       contents: read
 
@@ -34,7 +37,7 @@ jobs:
       uses: actions/cache@v6
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements-fast.txt', 'requirements-dev.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
 
@@ -47,12 +50,12 @@ jobs:
           ${{ runner.os }}-precommit-
 
     - name: Install fast-tier dependencies only
-      # --pre runs ruff, mypy, pytest --picked, pyyaml-backed validators, and the
-      # diff-aware pre-commit suite (detect-secrets + denylist + hygiene).
-      # It does NOT need torch, CUDA, pyarrow, awswrangler, etc. Installing
-      # the full requirements.txt fills the runner's disk
-      # (~3GB of torch+CUDA wheels). Versions sourced from requirements.txt via -c;
-      # pre-commit is pinned in requirements-dev.txt.
+      # --pre runs ruff, mypy, pytest affected-set selection (Decision 135),
+      # pyyaml-backed validators, and the diff-aware pre-commit suite (detect-secrets +
+      # denylist + hygiene). It does NOT need torch, CUDA, pyarrow, awswrangler, etc.
+      # Installing the full requirements.txt fills the runner's disk (~3GB of
+      # torch+CUDA wheels). Lint/type/test tool versions come from requirements-fast.txt;
+      # dev tools + pre-commit come from requirements-dev.txt.
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements-fast.txt
@@ -105,7 +108,7 @@ jobs:
       uses: actions/cache@v6
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
 

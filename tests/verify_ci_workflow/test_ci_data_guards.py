@@ -26,6 +26,7 @@ _VALID_CI_DATA: dict[str, Any] = {
         "pr-validate": {
             "if": "github.event_name == 'pull_request'",
             "runs-on": "ubuntu-latest",
+            "concurrency": {"group": "pr-validate-${{ github.ref }}", "cancel-in-progress": True},
             "steps": [
                 {"uses": "actions/checkout@v4", "with": {"fetch-depth": 0}},
                 {"run": "bin/venv-python -m scripts.validate --pre"},
@@ -144,21 +145,33 @@ class TestCheckFetchDepthFailPath:
 
 
 # ---------------------------------------------------------------------------
-# _check_concurrency (CD.21: assert ci-runner group is ABSENT)
+# _check_concurrency (CD.21: ci-runner group ABSENT; VTS-11: pr-validate cancels
+# superseded runs on a per-PR key, main-validate does not cancel in-flight runs)
 # ---------------------------------------------------------------------------
 
 
 class TestCheckConcurrencyPassPath:
     def test_passes_when_no_ci_runner_group(self) -> None:
+        """Also the VTS-11 happy path: pr-validate's fixture concurrency block (per-PR
+        group + cancel-in-progress: True) and main-validate's absent block both satisfy
+        _check_concurrency in one pass."""
         with patch("scripts.verify_ci_workflow._load") as mock_load:
             mock_load.return_value = _VALID_CI_DATA
             _check_concurrency()
 
-    def test_passes_when_concurrency_block_absent(self) -> None:
+    def test_passes_with_string_cancel_in_progress_values(self) -> None:
+        """cancel-in-progress may be a templated `${{ true }}` expression or a quoted
+        "false" string, not just a bare YAML bool -- both must resolve correctly."""
         data = {
             "jobs": {
-                "pr-validate": {**_VALID_CI_DATA["jobs"]["pr-validate"]},
-                "main-validate": {**_VALID_CI_DATA["jobs"]["main-validate"]},
+                "pr-validate": {
+                    **_VALID_CI_DATA["jobs"]["pr-validate"],
+                    "concurrency": {"group": "pr-validate-${{ github.ref }}", "cancel-in-progress": "${{ true }}"},
+                },
+                "main-validate": {
+                    **_VALID_CI_DATA["jobs"]["main-validate"],
+                    "concurrency": {"group": "main-validate-${{ github.ref }}", "cancel-in-progress": "false"},
+                },
             }
         }
         with patch("scripts.verify_ci_workflow._load") as mock_load:
@@ -195,6 +208,51 @@ class TestCheckConcurrencyFailPath:
         with patch("scripts.verify_ci_workflow._load") as mock_load:
             mock_load.return_value = data
             with pytest.raises(AssertionError, match="ci-runner"):
+                _check_concurrency()
+
+    def test_fails_when_pr_validate_concurrency_block_absent(self) -> None:
+        """Inverts the pre-VTS-11 assumption that a fully absent concurrency block passes:
+        now that pr-validate must declare a per-PR cancel-in-progress group, an absent block
+        fails (on the group-shape assertion, which runs before the cancel-in-progress one)."""
+        data = {
+            "jobs": {
+                "pr-validate": {k: v for k, v in _VALID_CI_DATA["jobs"]["pr-validate"].items() if k != "concurrency"},
+                "main-validate": _VALID_CI_DATA["jobs"]["main-validate"],
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = data
+            with pytest.raises(AssertionError, match="per-PR keyed"):
+                _check_concurrency()
+
+    def test_fails_when_pr_validate_missing_cancel_in_progress(self) -> None:
+        data = {
+            "jobs": {
+                "pr-validate": {
+                    **_VALID_CI_DATA["jobs"]["pr-validate"],
+                    "concurrency": {"group": "pr-validate-${{ github.ref }}"},
+                },
+                "main-validate": _VALID_CI_DATA["jobs"]["main-validate"],
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = data
+            with pytest.raises(AssertionError, match="cancel-in-progress"):
+                _check_concurrency()
+
+    def test_fails_when_main_validate_has_cancel_in_progress(self) -> None:
+        data = {
+            "jobs": {
+                "pr-validate": _VALID_CI_DATA["jobs"]["pr-validate"],
+                "main-validate": {
+                    **_VALID_CI_DATA["jobs"]["main-validate"],
+                    "concurrency": {"group": "main-validate-${{ github.ref }}", "cancel-in-progress": "true"},
+                },
+            }
+        }
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = data
+            with pytest.raises(AssertionError, match="cancel-in-progress"):
                 _check_concurrency()
 
 

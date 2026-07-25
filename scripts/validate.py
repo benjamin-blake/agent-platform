@@ -436,7 +436,7 @@ def main() -> None:
             print(f"  - {f}")
         sys.exit(1)
 
-    # --pre: diff-aware lint/format/mypy/picked-pytest + prompt validation, with 5-min budget
+    # --pre: diff-aware lint/format/mypy/affected-set pytest (Decision 135) + prompt validation, with 5-min budget
     if args.pre:
         _t0 = time.monotonic()
         print("Pre mode: diff-aware lint/format/mypy/pytest and prompt validation.")

@@ -51,7 +51,29 @@ def _check_jobs_and_flags() -> None:
     assert "--pre" not in main_steps, "main-validate steps contain --pre (should not)"
 
 
+def _is_truthy_concurrency_flag(value: Any) -> bool:
+    """Accept a YAML bool True or a templated/string truthy value ("true", "${{ true }}").
+
+    GitHub Actions `cancel-in-progress` is normally a bare YAML boolean (PyYAML loads it as
+    Python True), but may also appear quoted or as a `${{ ... }}` expression -- both of which
+    PyYAML loads as plain strings.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    normalized = str(value).strip().lower()
+    if normalized == "true":
+        return True
+    return bool(re.fullmatch(r"\$\{\{\s*true\s*\}\}", normalized))
+
+
 def _check_concurrency() -> None:
+    """VTS-11: pr-validate must cancel superseded runs on a per-PR key (so a force-pushed PR
+    doesn't leave a stale run occupying a required check); main-validate -- the merge-to-main
+    gate -- must NOT cancel in-flight runs (drift-canary + per-commit RCA role, dec-73 L8). Also
+    retains the CD.21 ci-runner-serialisation-group-absence anti-regression guard for both jobs.
+    """
     data = _load(".github/workflows/ci.yml")
     jobs = data.get("jobs", {})
 
@@ -65,6 +87,28 @@ def _check_concurrency() -> None:
         assert concurrency.get("group") != "ci-runner", (
             f"{job_name} still declares obsolete concurrency.group 'ci-runner' (retired by CD.21)"
         )
+
+    # pr-validate: a superseded run (e.g. after a force-push) must be cancelled, keyed
+    # per-PR so distinct PRs never cross-cancel each other.
+    pr_job = jobs.get("pr-validate") or {}
+    pr_concurrency = pr_job.get("concurrency") or {}
+    pr_group = str(pr_concurrency.get("group", ""))
+    assert any(key in pr_group for key in ("github.ref", "head_ref", "pull_request")), (
+        f"pr-validate concurrency.group is not per-PR keyed (expected github.ref / head_ref / "
+        f"pull_request in the group): {pr_group!r}"
+    )
+    assert _is_truthy_concurrency_flag(pr_concurrency.get("cancel-in-progress")), (
+        f"pr-validate concurrency.cancel-in-progress is not truthy: {pr_concurrency.get('cancel-in-progress')!r}"
+    )
+
+    # main-validate: the merge-to-main gate must run to completion even if superseded --
+    # cancel-in-progress must stay absent/false.
+    main_job = jobs.get("main-validate") or {}
+    main_concurrency = main_job.get("concurrency") or {}
+    assert not _is_truthy_concurrency_flag(main_concurrency.get("cancel-in-progress")), (
+        f"main-validate concurrency.cancel-in-progress is truthy (must not cancel in-flight main "
+        f"runs): {main_concurrency.get('cancel-in-progress')!r}"
+    )
 
 
 def _check_fetch_depth() -> None:
