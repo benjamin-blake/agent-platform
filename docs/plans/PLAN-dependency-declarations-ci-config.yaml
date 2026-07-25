@@ -1,0 +1,434 @@
+schema_version: 1
+slug: "dependency-declarations-ci-config"
+intent: >-
+  Make the four-file dependency set role-true (Q7 Option A), correct the pip cache keys to hash
+  exactly what each CI job installs, and add a per-PR cancel-in-progress concurrency group to
+  pr-validate only -- closing validate-test-suite audit findings VTS-16 / VTS-12 / VTS-11 and
+  bundling rec-2304, so the platform's dependency-declaration and CI-config surfaces stop drifting
+  from what they actually run.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-dependency-declarations-ci-config.yaml
+phase: >-
+  Platform hardening -- validate-test-suite audit (Slice E): S5 CI path (VTS-11/12) + S6 dependency
+  declarations (VTS-16), Q7 Option A. Audit-remediation work; no roadmap tier_item (ad_hoc /
+  audit-followup soft-warn category).
+scope:
+  - file: requirements.txt
+    action: Modify
+    purpose: >-
+      Make runtime-only. Remove the "# Development" block (pytest, pytest-asyncio, pytest-cov,
+      pytest-randomly, pytest-socket, pytest-xdist, pytest-timeout, ruff, mypy) and delete
+      pytest-picked entirely (VTS-16). Relocate pydantic to a runtime "# Schema validation" section
+      -- it stays here (dec-148 sentinel + genuine runtime importer in src/schemas, scripts/ops_portal,
+      contracts_schema). The duckdb floor line is left byte-untouched (dec-99).
+  - file: requirements-fast.txt
+    action: Modify
+    purpose: >-
+      Remove the pytest-picked line (VTS-16). Rewrite the 1-3 header comment: describe the
+      Decision-135 affected-set (changed-file) pytest selection instead of "pytest --picked", and
+      correct the constraint-sync clause to name each tool's home file now that ruff/mypy/pytest*
+      live in requirements-dev.txt (Dependabot's pip group keeps all requirements*.txt in lockstep).
+      Keep ruff, mypy, pytest*, pydantic (dec-148), pyyaml, networkx, import-linter unchanged.
+  - file: requirements-dev.txt
+    action: Modify
+    purpose: >-
+      Become the role-true dev/test-tool home. Add pytest>=9.0.3, pytest-asyncio>=1.4.0,
+      pytest-cov>=4.1.0, pytest-randomly>=4.1.0, pytest-socket>=0.8.0, pytest-xdist>=3.6.1,
+      pytest-timeout>=2.3.1, ruff==0.15.20, mypy>=1.5.0 (constraints mirror requirements-fast.txt).
+      Keep the existing CI extras (pre-commit, litellm, pip-tools). pytest-cov is dev-only (full-tier
+      --cov=src) and intentionally NOT added to requirements-fast.txt.
+  - file: requirements.lock
+    action: Modify
+    purpose: >-
+      Regenerate from the new runtime-only requirements.txt via the established convention
+      `pip-compile requirements.txt -o requirements.lock --no-header` (no --upgrade). pytest-picked
+      and the dev-tool transitive closure drop out; runtime pins (torch/pandas/duckdb/networkx/grimp/
+      import-linter/pydantic) are retained. check_lockfile_sync (requirements.txt top-levels subset of
+      lock) stays green; nothing installs from the lock (NOTE-a).
+  - file: .github/workflows/ci.yml
+    action: Modify
+    purpose: >-
+      Config-only edits (no new job/step/check). (1) pr-validate pip cache key ->
+      hashFiles('requirements-fast.txt','requirements-dev.txt'); (2) main-validate pip cache key ->
+      hashFiles('requirements.txt','requirements-dev.txt') (VTS-12 / rec-2304); (3) add a pr-validate
+      `concurrency` block {group: pr-validate-${{ github.ref }}, cancel-in-progress: true} WITHOUT
+      touching timeout-minutes: 30 (dec-153); (4) rewrite the install-step "--picked" comment (lines
+      49-55) to describe the affected-set selection and the corrected dev-tool sourcing.
+  - file: .github/workflows/main-canary.yml
+    action: Modify
+    purpose: >-
+      pip cache key -> hashFiles('requirements.txt','requirements-dev.txt') (VTS-12 / rec-2304). The
+      canary stays uncancelled (no concurrency block -- drift-canary + per-commit RCA role, dec-73 L8).
+  - file: scripts/verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      Extend _check_concurrency (VTS-11): keep the CD.21 ci-runner-absence guard; additionally PIN
+      that pr-validate declares a per-PR concurrency group (github.ref / head_ref / pull_request in
+      the group) with cancel-in-progress truthy, AND that main-validate does NOT set
+      cancel-in-progress true -- guarding the deliberate asymmetry. Handle YAML bool True and
+      templated strings. No new _COMMANDS entry; the function is already wired into the registered
+      validate_ci_workflow_guards tier check.
+  - file: tests/verify_ci_workflow/test_ci_data_guards.py
+    action: Modify
+    purpose: >-
+      Update TestCheckConcurrencyPassPath fixtures to include pr-validate's per-PR group +
+      cancel-in-progress and main-validate without cancel-in-progress; add TestCheckConcurrencyFailPath
+      cases (pr-validate missing cancel-in-progress -> raises; main-validate with cancel-in-progress:
+      true -> raises). Keep the existing ci-runner-absence cases.
+  - file: tests/validate/test_pytest_diff.py
+    action: Modify
+    purpose: >-
+      Extend TestExcludedHeavyDeps (the home of the _scaffolding excluded-set regression) to pin the
+      Option-A coupling invariant: widen test_heavy_deps_in_excluded_set to include torch, pyiceberg,
+      awswrangler, psycopg2, sklearn, sympy, pysr, aiohttp, radon; add a regression test asserting the
+      moved dev tools (pytest, ruff, mypy) stay OUT of the excluded set. Docstring notes the single
+      pytest_cov delta is intended and harmless. _scaffolding.py logic itself is NOT edited (test-only).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Rewrite one comment line (currently line 439: "picked-pytest") to "affected-set pytest
+      (Decision 135)" (VTS-16 third stale comment; the audit's "398" is a stale line number).
+bundled_recommendations:
+  - rec-2304
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    `grep -REn "pytest-picked|--picked|picked-pytest" requirements.txt requirements-fast.txt
+    requirements.lock .github/workflows/ci.yml scripts/validate.py` returns no matches (VTS-16 cleared
+    in every declared file).
+  - >-
+    requirements.txt is runtime-only: it declares no ruff/mypy/pytest* line, and still declares
+    pydantic (dec-148) and the duckdb floor (dec-99) plus every heavy runtime dep.
+  - >-
+    pydantic is declared in BOTH requirements.txt and requirements-fast.txt (dec-148: bin/venv-python
+    SENTINEL_DEP=pydantic venv-less probe must resolve from either file).
+  - >-
+    requirements-dev.txt declares pytest, pytest-asyncio, pytest-cov, pytest-randomly, pytest-socket,
+    pytest-xdist, pytest-timeout, ruff==0.15.20, mypy>=1.5.0 (constraints matching requirements-fast.txt)
+    and still declares pre-commit, litellm, pip-tools.
+  - >-
+    requirements.lock passes `import_governance --check-lockfile`; runtime pins (torch, pandas, duckdb,
+    networkx, grimp, import-linter, pydantic) are present; dev-tool pins (pytest*, ruff, mypy,
+    pytest-picked) are absent.
+  - >-
+    _excluded_heavy_import_names() contains all of {torch, pandas, numpy, duckdb, pyarrow, pyiceberg,
+    awswrangler, psycopg2, sklearn, sympy, pysr, aiohttp, radon} and none of {pytest, ruff, mypy}; the
+    regression test in tests/validate/test_pytest_diff.py pins this (rec-2485 derived-set acceptance upheld).
+  - >-
+    pip cache keys hash exactly what each job installs: pr-validate ->
+    hashFiles('requirements-fast.txt','requirements-dev.txt'); main-validate and main-canary ->
+    hashFiles('requirements.txt','requirements-dev.txt') (VTS-12 / rec-2304).
+  - >-
+    pr-validate declares concurrency {group: pr-validate-${{ github.ref }}, cancel-in-progress: true};
+    main-validate and the canary do NOT set cancel-in-progress: true (VTS-11 asymmetry).
+  - >-
+    `bin/venv-python -m scripts.verify_ci_workflow concurrency` passes on the new ci.yml (and thus the
+    registered validate_ci_workflow_guards check passes in both tiers), and the concurrency unit tests
+    prove the guard FAILS when pr-validate loses cancel-in-progress or main-validate gains it.
+  - >-
+    pr-validate timeout-minutes stays 30 (dec-153) and ci.yml gains no new job/step/check -- validate.py
+    remains the single source of truth; the concurrency shape is enforced by the existing
+    validate_ci_workflow_guards registry check, not a new ci.yml step.
+  - "`bin/venv-python -m scripts.validate --pre` is green."
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: pytest-picked is fully removed from every declared surface (VTS-16).
+    command: |-
+      ! grep -REn "pytest-picked|--picked|picked-pytest" requirements.txt requirements-fast.txt requirements.lock .github/workflows/ci.yml scripts/validate.py
+    expected: >-
+      grep finds no match; the negation exits 0. (Scoped to declared files -- the out-of-scope
+      scripts/ci_rca/vacuous_pass.py and tests/validate/test_tiers.py --picked references are excluded.)
+    fix_if: >-
+      Any hit means a pytest-picked declaration or stale --picked comment survived; remove it in the
+      offending file.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "pytest-picked-absent"
+  - step: 2
+    phase: pre-deploy
+    action: requirements.txt is runtime-only and retains pydantic (dec-148) + duckdb (dec-99).
+    command: |-
+      { ! grep -Eq "^(ruff|mypy|pytest)([<>=! ]|$)" requirements.txt; } && grep -Eq "^pydantic[<>=]" requirements.txt && grep -Eq "^duckdb[<>=]" requirements.txt
+    expected: >-
+      No ruff/mypy/pytest* line remains; pydantic and the duckdb floor are still declared. Exit 0.
+    fix_if: >-
+      A dev tool still sits in requirements.txt (move it to requirements-dev.txt), or pydantic/duckdb
+      were dropped (restore them -- dec-148/dec-99 invariants).
+    hermetic: true
+    graduation: not-applicable
+  - step: 3
+    phase: pre-deploy
+    action: pydantic stays declared in BOTH requirements.txt and requirements-fast.txt (dec-148 hard invariant).
+    command: |-
+      grep -Eq "^pydantic[<>=]" requirements.txt && grep -Eq "^pydantic[<>=]" requirements-fast.txt
+    expected: >-
+      pydantic present in both files; exit 0. bin/venv-python's venv-less sentinel probe (SENTINEL_DEP)
+      resolves from either file.
+    fix_if: >-
+      pydantic missing from either file -- restore it; removing it from either would break the
+      Decision-148 venv-less interpreter fallback in CI.
+    hermetic: true
+    graduation: not-applicable
+  - step: 4
+    phase: pre-deploy
+    action: requirements-dev.txt is the role-true dev/test-tool home with constraints matching requirements-fast.txt.
+    command: |-
+      grep -Eq "^ruff==0\.15\.20" requirements-dev.txt && grep -Eq "^mypy>=1\.5\.0" requirements-dev.txt && grep -Eq "^pytest>=9\.0\.3" requirements-dev.txt && grep -Eq "^pytest-cov>=4\.1\.0" requirements-dev.txt && grep -Eq "^pre-commit>=" requirements-dev.txt
+    expected: >-
+      The moved dev tools (with requirements-fast.txt-matching constraints) and the retained CI extra
+      pre-commit are all declared; exit 0.
+    fix_if: >-
+      A moved tool is missing or its constraint diverges from requirements-fast.txt (Dependabot grouping
+      assumes lockstep), or a CI extra was dropped.
+    hermetic: true
+    graduation: not-applicable
+  - step: 5
+    phase: pre-deploy
+    action: The excluded-heavy-set derivation is unchanged for heavy deps and excludes no fast-tier tool (rec-2485 / Option-A coupling).
+    command: |-
+      bin/venv-python -c "from scripts.checks._scaffolding import _excluded_heavy_import_names as e; x=e(); heavy={'torch','pandas','numpy','duckdb','pyarrow','pyiceberg','awswrangler','psycopg2','sklearn','sympy','pysr','aiohttp','radon'}; missing=heavy-x; assert not missing, ('heavy deps dropped from excluded set: '+repr(sorted(missing))); leaked={'pytest','ruff','mypy'}&x; assert not leaked, ('fast-tier tool leaked into excluded set: '+repr(sorted(leaked))); print('EXCLUDED-SET-OK', len(x))"
+    expected: >-
+      Prints "EXCLUDED-SET-OK <n>"; all heavy runtime deps remain excluded and none of pytest/ruff/mypy
+      are excluded. (The single pytest_cov member leaving the set is intended and harmless -- heavy set
+      unaffected.)
+    fix_if: >-
+      A heavy dep dropped out (it was wrongly removed from requirements.txt or added to
+      requirements-fast.txt) or a dev tool leaked in (it was wrongly left in requirements.txt while
+      removed from requirements-fast.txt) -- reconcile the two declaration files.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "excluded-heavy-set-invariant"
+  - step: 6
+    phase: pre-deploy
+    action: The excluded-set regression test and the concurrency guard unit tests pass (positive and negative paths).
+    command: |-
+      bin/venv-python -m pytest tests/validate/test_pytest_diff.py::TestExcludedHeavyDeps "tests/verify_ci_workflow/test_ci_data_guards.py" -k "ExcludedHeavyDeps or Concurrency" -p no:randomly -q
+    expected: >-
+      All selected tests pass -- heavy deps pinned excluded, dev tools pinned not-excluded, and
+      _check_concurrency's pass path (pr-validate group+cancel / main-validate no-cancel) plus fail
+      paths (pr-validate missing cancel; main-validate has cancel) behave correctly.
+    fix_if: >-
+      A regression assertion fails -- fix the declaration files or the _check_concurrency extension;
+      never weaken the test to pass.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      These are pytest regression tests collected in the full-tier suite (_build_unit_test_cmd) and
+      selected pre-merge on any edit to their source/import edges; a separate kernel test_selector slot
+      would duplicate the suite's standing execution of them.
+  - step: 7
+    phase: pre-deploy
+    action: pip cache keys hash exactly the files each job installs (VTS-12 / rec-2304).
+    command: |-
+      grep -Eq "hashFiles\('requirements-fast\.txt', *'requirements-dev\.txt'\)" .github/workflows/ci.yml && grep -Eq "hashFiles\('requirements\.txt', *'requirements-dev\.txt'\)" .github/workflows/ci.yml && grep -Eq "hashFiles\('requirements\.txt', *'requirements-dev\.txt'\)" .github/workflows/main-canary.yml
+    expected: >-
+      pr-validate hashes fast+dev; main-validate and main-canary hash txt+dev; exit 0.
+    fix_if: >-
+      A key still hashes requirements.txt alone (the rec-2304 stale-layer class), or the pr-validate key
+      hashes the wrong pair -- correct the hashFiles() argument list.
+    hermetic: true
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: The ci.yml concurrency shape passes the registered structural guard (VTS-11), enforced in-tier.
+    command: |-
+      bin/venv-python -m scripts.verify_ci_workflow concurrency
+    expected: >-
+      Prints OK -- pr-validate has a per-PR group with cancel-in-progress; main-validate has no
+      cancel-in-progress; the retired ci-runner group stays absent. This is the same _check_concurrency
+      run by the registered validate_ci_workflow_guards check (registry.py:139/179) in both tiers.
+    fix_if: >-
+      A FAIL means pr-validate lacks the per-PR cancel group, or main-validate carries
+      cancel-in-progress: true, or the group is mis-keyed -- correct ci.yml.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Enforcement is already graduated: _check_concurrency is wired into the registered
+      validate_ci_workflow_guards check (scripts/checks/ci_guards/validate_ci_workflow_guards.py,
+      registry.py:139 pre + :179 full), so it runs in both validate.py tiers; a separate kernel slot
+      would duplicate it.
+  - step: 9
+    phase: pre-deploy
+    action: The lockfile is in sync, retains runtime pins, and has shed the dev-tool closure (VTS-16 / NOTE-a).
+    command: |-
+      bin/venv-python -m scripts.import_governance --check-lockfile && grep -Eq "^(torch|pandas|duckdb|networkx|grimp|import-linter|pydantic)==" requirements.lock && { ! grep -Eq "^(pytest|ruff==|mypy==)" requirements.lock; }
+    expected: >-
+      check_lockfile_sync exits 0 (every runtime top-level pinned); runtime pins present; no
+      pytest*/ruff/mypy pins remain (the lock is now the runtime-only closure).
+    fix_if: >-
+      check_lockfile_sync fails -- a runtime top-level is unpinned; regenerate with
+      `pip-compile requirements.txt -o requirements.lock --no-header`. If dev-tool pins persist, the
+      lock was hand-edited from the old requirements.txt rather than recompiled.
+    hermetic: true
+    graduation: not-applicable
+  - step: 10
+    phase: pre-deploy
+    action: The dev-tool move changes no Lambda bundle, so the V2 tier holds (dec-48 / dec-79).
+    command: |-
+      grep -Eq "PROD_DEPS|DUCKLAKE_DEPS" scripts/build_lambda_packaging.py && { ! grep -Eq "requirements\.txt|requirements\.lock" scripts/build_lambda_packaging.py scripts/build_lambda_config.py; }
+    expected: >-
+      Lambda layer packaging sources its deps from the curated PROD_DEPS/DUCKLAKE_DEPS constants and
+      references neither requirements.txt nor requirements.lock; exit 0. Confirms no active Lambda bundle
+      is coupled to the declaration files, so only dev/test tools moved and the runtime closure is unchanged.
+    fix_if: >-
+      If build_lambda_packaging.py or build_lambda_config.py references requirements.txt/lock, the
+      bundle IS coupled -- re-assess the tier as V3 and add per-Lambda build/deploy/smoke-test steps.
+    hermetic: true
+    graduation: not-applicable
+  - step: 11
+    phase: pre-deploy
+    action: The authoritative fast-tier gate is green end to end.
+    command: |-
+      bin/venv-python -m scripts.validate --pre
+    expected: >-
+      --pre passes, including validate_ci_workflow_guards (concurrency), validate_lockfile_sync, ruff,
+      mypy, and the affected-set pytest selection.
+    fix_if: >-
+      Any check reds -- diagnose from its output and fix on-branch; do not bypass the budget or weaken a check.
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - >-
+    validate.py is the single source of truth -- NO new check enters ci.yml. The ci.yml/main-canary.yml
+    edits are config only (cache keys, pr-validate concurrency block, comment). The concurrency shape is
+    enforced by extending the EXISTING _check_concurrency, already wired into the registered
+    validate_ci_workflow_guards tier check (registry.py:139/179).
+  - >-
+    Q7 = Option A, pre-approved by the human spec. Options B (pyproject [project]+extras) and C
+    (lock-driven CI installs) are recorded in the audit requirements_options block with their coupling
+    costs; do NOT implement them. The human may object at the plan PR to switch to B/C.
+  - >-
+    pydantic stays in BOTH requirements.txt and requirements-fast.txt (dec-148: bin/venv-python
+    SENTINEL_DEP=pydantic venv-less interpreter probe). duckdb stays in requirements.txt (dec-99:
+    scripts/sync/ducklake_version.py writes the floor; validate_ducklake_version_lockstep enforces it).
+  - >-
+    Do NOT touch pr-validate's timeout-minutes: 30 (dec-153: the forced-run ceiling derives from it).
+    Cache/concurrency edits stay inside the two-tier contract (dec-73).
+  - >-
+    Lambda bundles source deps from PROD_DEPS/DUCKLAKE_DEPS (scripts/build_lambda_config.py), not the
+    requirements files, so the dev-tool move changes no active Lambda artifact -- V2 tier holds (dec-48/79).
+    If VP step 10 disproves this, escalate to V3 (do not silently proceed).
+  - >-
+    requirements.lock is regenerated with the established `pip-compile requirements.txt -o
+    requirements.lock --no-header` convention (no --upgrade). It stays a requirements.txt-scoped
+    artifact; check_lockfile_sync (requirements.txt top-levels subset of lock) is its only gate and
+    nothing installs from it (NOTE-a). Option lock-2 (compiling with requirements-dev.txt) was rejected:
+    it would force an out-of-scope edit to the import_governance.py regen hint and mix dev provenance
+    into a requirements.txt-scoped lock.
+  - >-
+    Only modify files in scope. Out-of-scope --picked references are left untouched and become
+    recommendations, not inline fixes: scripts/ci_rca/vacuous_pass.py (owned by audit
+    ci-rca-system-a49db8f) and tests/validate/test_tiers.py (its --picked-absence assertions stay green).
+  - >-
+    SLOC decompose-by-default (dec-128/130): touched files are at 247 (verify_ci_workflow.py) / 279
+    (test_ci_data_guards.py) / 404 (test_pytest_diff.py) SLOC; the additions keep each under the 500
+    default. If any unexpectedly crosses, decompose (facade package) -- never raise the budget.
+  - No emojis; ASCII hyphens only; POSIX/coreutils in VP commands (no rg -- it reds on the CI /bin/sh replay).
+  - No rescue agents or workaround loops (Decision 55); on an unrecoverable failure STOP and RCA.
+context:
+  - >-
+    Source of truth: audits/validate-test-suite-4df4d48.yaml -- findings VTS-16 (dead pytest-picked +
+    three stale comments), VTS-12 (pip cache keys hash requirements.txt while jobs install fast/dev
+    sets; extends rec-2304), VTS-11 (no concurrency; superseded pr-validate runs complete after
+    force-pushes), and the requirements_options block (Option A mechanics; B/C alternatives).
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND (all NOTE-severity, no blocker; 106/106 decisions
+    triaged). CITE (verbatim ids): dec-135 (affected-set selection retired --picked; source of the
+    comment rewrites), dec-73 (two-tier diff-aware CI + L8 canary role justifying the cancel-in-progress
+    asymmetry), dec-112 / CD.21 (self-hosted runner retired -> ci-runner group obsolete; _check_concurrency
+    base), dec-104 + rec-2485 (validate check-registry + derived-not-hardcoded excluded-set the regression
+    test protects), dec-83 (branch protection; pr-validate required-check identity unchanged by a
+    job-level concurrency block), dec-80 (lockfile EXISTENCE only -- the pip-compile-from-requirements.txt
+    convention is tooling-level validate_lockfile_sync, not Decision 80's text), dec-148 (pydantic in BOTH
+    files -- bin/venv-python sentinel), dec-99 (duckdb floor in requirements.txt), dec-153 (pr-validate
+    30-min timeout ceiling -- do not touch), dec-48 + dec-79 (V2 tier / Lambda manifest gating), dec-128 /
+    dec-130 (SLOC decompose-don't-raise). dec-27 was DROPPED by the scout -- it governs Git Bash venv
+    activation via setup.py, not dependency layout; no active decision governs the requirements
+    tri-partition, so Option A needs no decision cover.
+  - "gates: decision-scout=FLAGS_FOUND (all NOTE, no blocker, 106/106 triaged); plan-critique=pending (round 1 gate-request handed to orchestrator)."
+  - >-
+    NOTE guardrails folded in: (a) nothing installs from requirements.lock (verified; VP step 9/NOTE-a
+    documents it) so dropping the dev-tool closure is safe; (b) the pytest_cov single-member excluded-set
+    delta is intended and harmless -- _excluded_heavy_import_names is test-only-pinned (no logic edit),
+    heavy deps stay excluded, rec-2485 derived-set upheld; (c) the pr-validate concurrency block does not
+    rename the check-run, so branch protection (dec-83) and signal-green.needs still match the unchanged
+    name -- group keyed on github.ref so distinct PRs never cross-cancel; (d) enforcement stays reachable
+    from a validate.py tier via the registered validate_ci_workflow_guards check (NOTE-d).
+  - >-
+    Line-number drift vs the audit: the three VTS-16 comments are at requirements-fast.txt:1,
+    .github/workflows/ci.yml:50, and scripts/validate.py:439 on current main (the audit's "validate.py:398"
+    was captured at commit 4df4d48 and is stale).
+  - >-
+    Co-dependency / ordering: the new _check_concurrency requires the new ci.yml concurrency block, so the
+    verify_ci_workflow.py edit and the ci.yml edit must land in the same commit (a split would red
+    validate --pre in either direction). Single atomic PR.
+  - >-
+    Branch was at origin/main HEAD 3793a0b at planning time (up to date -- no rebase needed). Scope files
+    did not overlap main_files_changed_since_branch.
+pre_implementation_checklist:
+  - Branch confirmed not on main (harness claude/vts-e-plan-dependency-declarations-ci-config branch)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md consulted via the decision-scout gate (106/106 triaged; CITE list incorporated)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - >-
+    requirements.txt: delete the "# Development" block (pytest, pytest-asyncio, pytest-cov,
+    pytest-randomly, pytest-socket, pytest-xdist, pytest-timeout, ruff, mypy) and pytest-picked; move
+    pydantic into a runtime "# Schema validation (src/schemas, ops_portal, contracts_schema)" section.
+    Leave the duckdb floor line byte-identical (dec-99). Confirm no runtime dep was removed.
+  - >-
+    requirements-fast.txt: delete the pytest-picked line; rewrite the 1-3 header to (a) describe the
+    Decision-135 affected-set (changed-file) pytest selection in place of "pytest --picked", and (b)
+    state that constraints match each tool's home file (dev tools -> requirements-dev.txt, runtime deps
+    -> requirements.txt) with Dependabot's pip group keeping all requirements*.txt in lockstep. Keep
+    ruff/mypy/pytest*/pydantic/pyyaml/networkx/import-linter.
+  - >-
+    requirements-dev.txt: add the moved dev/test tools (pytest>=9.0.3, pytest-asyncio>=1.4.0,
+    pytest-cov>=4.1.0, pytest-randomly>=4.1.0, pytest-socket>=0.8.0, pytest-xdist>=3.6.1,
+    pytest-timeout>=2.3.1, ruff==0.15.20, mypy>=1.5.0) under a role comment; keep pre-commit/litellm/
+    pip-tools. Do NOT add pytest-cov to requirements-fast.txt.
+  - >-
+    requirements.lock: run `bin/venv-python -m piptools compile requirements.txt -o requirements.lock
+    --no-header` (or the pip-compile entrypoint) with NO --upgrade to preserve pinned versions; verify
+    pytest-picked + dev-tool pins dropped and runtime pins retained. If PyPI resolution is unavailable in
+    the container, fall back to surgically deleting the pytest*/ruff/mypy/pytest-picked pins and their
+    now-orphaned transitives, then reconcile until check_lockfile_sync is green.
+  - >-
+    .github/workflows/ci.yml: set the pr-validate cache key to
+    hashFiles('requirements-fast.txt','requirements-dev.txt') and the main-validate cache key to
+    hashFiles('requirements.txt','requirements-dev.txt'); add the pr-validate `concurrency` block
+    {group: pr-validate-${{ github.ref }}, cancel-in-progress: true} leaving timeout-minutes: 30
+    untouched (dec-153); rewrite the install-step comment so it describes the affected-set selection and
+    that lint/type/test tool versions come from requirements-fast.txt while dev tools + pre-commit come
+    from requirements-dev.txt. Add no new job/step/check.
+  - >-
+    .github/workflows/main-canary.yml: set the cache key to
+    hashFiles('requirements.txt','requirements-dev.txt'); add no concurrency block (canary stays uncancelled).
+  - >-
+    scripts/verify_ci_workflow.py: extend _check_concurrency -- keep the ci-runner-absence assertions;
+    add (1) pr-validate has concurrency.group containing a per-PR key (github.ref / head_ref /
+    pull_request) and cancel-in-progress truthy (accept YAML True or the string "true"/"${{ true }}"),
+    and (2) main-validate does NOT set cancel-in-progress truthy. Clear assertion messages naming the job.
+  - >-
+    tests/verify_ci_workflow/test_ci_data_guards.py: rewrite the TestCheckConcurrencyPassPath fixtures to
+    include pr-validate's per-PR group + cancel-in-progress and main-validate without cancel; add
+    TestCheckConcurrencyFailPath cases (pr-validate missing cancel-in-progress -> AssertionError;
+    main-validate with cancel-in-progress: true -> AssertionError). Keep the ci-runner cases.
+  - >-
+    tests/validate/test_pytest_diff.py: widen TestExcludedHeavyDeps.test_heavy_deps_in_excluded_set to add
+    torch, pyiceberg, awswrangler, psycopg2, sklearn, sympy, pysr, aiohttp, radon; add a test asserting
+    {pytest, ruff, mypy} are NOT in the excluded set post-move; docstring notes the pytest_cov single-member
+    delta is intended/harmless. Do not edit _scaffolding.py logic.
+  - >-
+    scripts/validate.py: change the line-439 comment "picked-pytest" to "affected-set pytest (Decision 135)".
+  - >-
+    Execute the Verification Plan -- run each step; loop until every step passes; on an unrecoverable
+    failure STOP and RCA (Decision 55). Confirm the verify_ci_workflow.py + ci.yml edits landed together.
+  - "Report: what was implemented, verification results, and the rec-2304 Resolves trailer for the merge commit."
+rollback: >-
+  All edits are declaration/config/test changes on one branch. Revert the PR (or `git revert` the squash
+  commit) to restore the prior four-file layout, cache keys, and ci.yml -- no infra, no deploy, no data
+  migration to unwind. requirements.lock reverts with the same commit.
