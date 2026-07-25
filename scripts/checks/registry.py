@@ -32,6 +32,17 @@ _VALID_OWNERS = ("platform", "trading")
 
 @dataclasses.dataclass(frozen=True)
 class Check:
+    """A registered check's ownership metadata (separate from Step's per-tier sequence entry).
+
+    `owner` and `product_coupled` are consumer-facing metadata, not dispatch inputs --
+    pre_sequence()/full_sequence() dispatch purely by Step.name, so neither field affects
+    whether or when a check runs. Today's sole reader is
+    tests/test_checks_registry.py::TestOwnerMetadata (the OWNER_EXPECTATIONS pinned-owner
+    spot checks plus the platform/product_coupled=False default-floor assertion over every
+    other registered check); both fields are set once at each check's `@register(...)`
+    call site and are otherwise free for a future owner-scoped reporting/routing consumer.
+    """
+
     name: str
     owner: str = "platform"
     product_coupled: bool = False
@@ -71,10 +82,11 @@ def all_checks() -> dict[str, Check]:
 class Step:
     kind: str  # "check" | "scaffold"
     name: str
+    pre_globs: tuple[str, ...] | None = None  # --pre only; None = ungated, always runs
 
 
-def _c(name: str) -> Step:
-    return Step(kind="check", name=name)
+def _c(name: str, pre_globs: tuple[str, ...] | None = None) -> Step:
+    return Step(kind="check", name=name, pre_globs=pre_globs)
 
 
 def _s(name: str) -> Step:
@@ -93,21 +105,21 @@ def pre_sequence() -> list[Step]:
         _c("validate_cli_tools_in_prompts"),
         _c("validate_workflow_agent_safety"),
         _c("validate_product_roadmap"),
-        _c("validate_plan_documents"),
-        _c("validate_platform_roadmap"),
-        _c("validate_tier_floor"),
+        _c("validate_plan_documents", pre_globs=("docs/plans/**", "docs/ROADMAP-*", "docs/DECISIONS.md")),
+        _c("validate_platform_roadmap", pre_globs=("docs/plans/**", "docs/ROADMAP-*", "docs/DECISIONS.md")),
+        _c("validate_tier_floor", pre_globs=("docs/plans/**", "docs/ROADMAP-*", "docs/DECISIONS.md")),
         _c("validate_candidate_decision_ratification"),
         _c("validate_candidate_decision_supersession"),
         _c("validate_decisions_size"),
         _c("validate_decisions_index_freshness"),
-        _c("validate_cc_limits"),
+        _c("validate_cc_limits", pre_globs=("**/*.py",)),
         _c("validate_sloc_limits"),
         _c("validate_prose_limits"),
         _c("validate_sloc_budget_raises"),
         _c("validate_prose_budget_raises"),
         _c("validate_subprocess_encoding"),
-        _c("validate_test_count_coupling"),
-        _c("validate_no_cross_test_imports"),
+        _c("validate_test_count_coupling", pre_globs=("tests/**",)),
+        _c("validate_no_cross_test_imports", pre_globs=("tests/**",)),
         _c("validate_intent_doc_freeze"),
         _c("validate_prose_allowlist"),
         _c("validate_contract_drift"),
@@ -134,7 +146,7 @@ def pre_sequence() -> list[Step]:
         _c("validate_verification_registry"),
         _c("validate_vp_replay"),
         _c("validate_graduation_completeness"),
-        _s("coverage_report"),
+        _s("verifier_coverage_report"),
         _s("budget_assertion"),
     ]
 
@@ -146,9 +158,6 @@ def full_sequence() -> list[Step]:
     terraform block, validate_iam_runner_policy, run_dependency_checks +
     validate_requirements, the prompts block, ensure_fresh_dq_results,
     validate_verification_harness, and the all-files precommit run.
-    validate_cli_tools_in_prompts legitimately appears twice (once inside
-    run_python_checks, once in the prompts block) -- existing behaviour,
-    preserved verbatim.
     """
     return [
         # run_python_checks()
@@ -158,7 +167,6 @@ def full_sequence() -> list[Step]:
         _c("validate_no_cross_test_imports"),
         _c("validate_sys_executable"),
         _c("validate_cli_tools_in_prompts"),
-        _c("validate_imports"),
         _c("validate_recommendations_schema"),
         _c("validate_outbox_staleness"),
         _c("validate_executor_boundary"),
@@ -172,6 +180,7 @@ def full_sequence() -> list[Step]:
         _c("validate_pr_conflict_signal"),
         _c("validate_composite_action_manifests"),
         _c("validate_claude_p_retry_wrapper"),
+        _c("validate_cc_limits"),
         _c("validate_sloc_limits"),
         _c("validate_prose_limits"),
         _c("check_source_registry"),
@@ -213,6 +222,7 @@ def full_sequence() -> list[Step]:
         _c("validate_portal_drift"),
         _c("validate_rec_relevance_contract"),
         _c("validate_field_semantics_drift"),
+        _c("validate_deploy_channel_conformance"),
         _c("validate_reversal_stanzas"),
         _c("validate_ci_rca_taxonomy"),
         _c("validate_ops_portal_patch_targets"),
@@ -238,7 +248,6 @@ def full_sequence() -> list[Step]:
         _c("validate_requirements"),
         # prompts block
         _c("validate_prompt_files"),
-        _c("validate_cli_tools_in_prompts"),
         _c("validate_workflow_agent_safety"),
         _c("validate_prompt_compliance"),
         _c("validate_instruction_architecture_layers"),

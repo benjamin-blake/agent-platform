@@ -9,18 +9,17 @@ from scripts.checks import _common, registry
 _KNOWN_CLI_TOOLS = {"aws", "gh", "terraform", "docker", "psql", "pip-audit"}
 
 # CLI tools intentionally absent on the Claude Code web harness (GitHub ops use the
-# GitHub MCP tools, Decision 76). The .github/prompts/ and .github/agents/ directories
-# survive for live scheduled-agent surfaces; a missing optional tool is a skip, not a failure.
+# GitHub MCP tools, Decision 76). .github/prompts/scheduled/ is the live scheduled-agent
+# surface; a missing optional tool is a skip, not a failure.
 _OPTIONAL_CLI_TOOLS = {"gh"}
 
 
 @registry.register("validate_cli_tools_in_prompts", owner="platform")
 def validate_cli_tools_in_prompts(failed: list[str]) -> None:
-    """Scan prompt and agent files for CLI tool references and verify each is in PATH."""
+    """Scan the scheduled-prompt surface for CLI tool references and verify each is in PATH."""
     print("\n=== CLI tool verification (prompt/agent files) ===")
     search_dirs = [
-        _common.ROOT / ".github" / "prompts",
-        _common.ROOT / ".github" / "agents",
+        _common.ROOT / ".github" / "prompts" / "scheduled",
     ]
     errors: list[str] = []
     referenced: dict[str, str] = {}  # tool -> first file that references it

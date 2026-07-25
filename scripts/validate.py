@@ -16,6 +16,7 @@ and `from scripts.validate import <name>` keep resolving.
 """
 
 import argparse
+import fnmatch
 import os
 import shutil  # noqa: F401  (back-compat: patch("validate.shutil.which") test target; global module identity)
 import subprocess  # noqa: F401  (back-compat: patch("validate.subprocess.run") test target; global module identity)
@@ -112,7 +113,6 @@ from scripts.checks.deps.validate_dependency_graph_freshness import (  # noqa: F
     validate_dependency_graph_freshness,
 )
 from scripts.checks.deps.validate_import_contracts import validate_import_contracts  # noqa: F401,E402
-from scripts.checks.deps.validate_imports import validate_imports  # noqa: F401,E402
 from scripts.checks.deps.validate_lockfile_sync import validate_lockfile_sync  # noqa: F401,E402
 from scripts.checks.deps.validate_requirements import validate_requirements  # noqa: F401,E402
 from scripts.checks.executor.validate_executor_boundary import (  # noqa: E402
@@ -190,7 +190,7 @@ from scripts.checks.ops_governance.validate_warehouse_write_sources import (  # 
     validate_warehouse_write_sources,
 )
 from scripts.checks.product.trading.validate_broker_env_reads import validate_broker_env_reads  # noqa: F401,E402
-from scripts.checks.prompts.validate_prompt_files import KNOWN_MODELS, validate_prompt_files  # noqa: F401,E402
+from scripts.checks.prompts.validate_prompt_files import validate_prompt_files  # noqa: F401,E402
 from scripts.checks.prose.prose_budget_raises import validate_prose_budget_raises  # noqa: F401,E402
 from scripts.checks.prose.prose_limits import validate_prose_limits  # noqa: F401,E402
 from scripts.checks.roadmap.check_graduation_guard import (  # noqa: E402
@@ -266,6 +266,29 @@ def _dispatch_check(name: str, failed: list[str]) -> None:
     globals()[name](failed)
 
 
+def _pre_glob_match(path: str, glob: str) -> bool:
+    """fnmatch-based match of a single repo-relative path against a single pre_globs pattern.
+
+    fnmatch's `*` already crosses path separators (unlike pathlib/glob.glob's non-recursive
+    `*`), so a `**` segment (e.g. "docs/plans/**") matches any depth without special-casing.
+    """
+    return fnmatch.fnmatch(path, glob)
+
+
+def _should_run_in_pre(pre_globs: tuple[str, ...] | None, changed_paths, derivation_ok: bool) -> bool:
+    """Decide whether a --pre gated check should run (VTS-09, dec-55/dec-135/dec-153 fail-closed).
+
+    True (run) when: the check is ungated (pre_globs is None), the diff derivation failed or
+    returned something unexpected (derivation_ok is False), the derived changed-path set is
+    empty (a no-diff or derivation-blind-spot branch state), or at least one changed path
+    matches one of the check's globs. False (skip) ONLY on a successful, non-empty derivation
+    with zero matches -- never silently skip on doubt.
+    """
+    if pre_globs is None or not derivation_ok or not changed_paths:
+        return True
+    return any(_pre_glob_match(path, glob) for path in changed_paths for glob in pre_globs)
+
+
 def run_python_checks(failed: list[str]) -> None:
     """Dispatch the ENTIRE full (default) tier by iterating registry.full_sequence() -- every
     check and non-check scaffold step, from lint through the all-files precommit run. This is
@@ -336,9 +359,12 @@ def main() -> None:
         "Use for per-step validation during implementation. Subject to a 5-minute wall-clock budget.",
     )
     parser.add_argument(
+        "--verifier-coverage",
         "--coverage",
+        dest="verifier_coverage",
         action="store_true",
-        help="Report scope files lacking verifier coverage (advisory; exits 0 unconditionally).",
+        help="Report scope files lacking verifier coverage (advisory; exits 0 unconditionally). "
+        "--coverage is a deprecated alias for --verifier-coverage.",
     )
     parser.add_argument(
         "--terraform-only",
@@ -386,8 +412,10 @@ def main() -> None:
 
     failed: list[str] = []
 
-    # --coverage: advisory verifier-coverage report, then exit 0
-    if args.coverage:
+    # --verifier-coverage: advisory verifier-coverage report, then exit 0 (--coverage: deprecated alias)
+    if args.verifier_coverage:
+        if "--coverage" in sys.argv:
+            print("[DEPRECATED] --coverage is a deprecated alias; use --verifier-coverage instead.")
         run_coverage_check()
         sys.exit(0)
 
@@ -461,7 +489,7 @@ def main() -> None:
         def _scaffold_pytest_diff() -> None:
             run_pytest_diff(changed_tests, failed)
 
-        def _scaffold_coverage_report() -> None:
+        def _scaffold_verifier_coverage_report() -> None:
             run_coverage_check(changed)
 
         phase_times: dict[str, float] = {}
@@ -516,14 +544,29 @@ def main() -> None:
             "precommit_changed": _scaffold_precommit_changed,
             "mypy_diff": _scaffold_mypy_diff,
             "pytest_diff": _scaffold_pytest_diff,
-            "coverage_report": _scaffold_coverage_report,
+            "verifier_coverage_report": _scaffold_verifier_coverage_report,
             "budget_assertion": _scaffold_budget_assertion,
         }
+
+        # pre_globs gate derivation (VTS-09): reuse the already-built status-aware diff:
+        # fail-closed on any derivation error (dec-135) -- an exception here must never
+        # silently skip a gated check, so _gate_derivation_ok flips to False and
+        # _should_run_in_pre runs everything regardless of glob match.
+        try:
+            _gate_changed_paths = {path for _, path in status_entries}
+            _gate_derivation_ok = True
+        except Exception as exc:
+            _gate_changed_paths = set()
+            _gate_derivation_ok = False
+            print(f"pre_globs: diff derivation failed ({exc}); running all gated checks (fail-closed).")
 
         for step in registry.pre_sequence():
             step_t0 = time.monotonic()
             if step.kind == "check":
-                _dispatch_check(step.name, failed)
+                if _should_run_in_pre(step.pre_globs, _gate_changed_paths, _gate_derivation_ok):
+                    _dispatch_check(step.name, failed)
+                else:
+                    print(f"skipped-by-glob: {step.name}")
             else:
                 scaffold_fns[step.name]()
             phase_times[step.name] = time.monotonic() - step_t0

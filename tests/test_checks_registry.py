@@ -108,7 +108,7 @@ FROZEN_PRE_SCAFFOLDS: tuple[str, ...] = (
     "precommit_changed",
     "mypy_diff",
     "pytest_diff",
-    "coverage_report",
+    "verifier_coverage_report",
     "budget_assertion",
 )
 
@@ -118,7 +118,6 @@ REQUIRED_FULL_CHECKS: frozenset[str] = frozenset(
         "validate_test_count_coupling",
         "validate_sys_executable",
         "validate_cli_tools_in_prompts",
-        "validate_imports",
         "validate_recommendations_schema",
         "validate_outbox_staleness",
         "validate_executor_boundary",
@@ -130,6 +129,7 @@ REQUIRED_FULL_CHECKS: frozenset[str] = frozenset(
         "validate_ci_rca_trigger",
         "validate_ci_workflow_guards",
         "validate_claude_p_retry_wrapper",
+        "validate_cc_limits",
         "validate_sloc_limits",
         "check_source_registry",
         "validate_platform_roadmap",
@@ -165,6 +165,7 @@ REQUIRED_FULL_CHECKS: frozenset[str] = frozenset(
         "validate_portal_drift",
         "validate_rec_relevance_contract",
         "validate_field_semantics_drift",
+        "validate_deploy_channel_conformance",
         "validate_ci_rca_taxonomy",
         "validate_ops_portal_patch_targets",
         "validate_authority_budget",
@@ -255,11 +256,12 @@ class TestSequenceInvariants:
         names = [s.name for s in registry.pre_sequence() if s.kind == "check"]
         assert len(names) == len(set(names))
 
-    def test_full_sequence_cli_tools_in_prompts_appears_exactly_twice(self) -> None:
-        """Existing behaviour preserved verbatim: once via run_python_checks, once via
-        the prompts block."""
+    def test_full_sequence_cli_tools_in_prompts_appears_exactly_once(self) -> None:
+        """VTS-08: the duplicate prompts-block dispatch was dropped (run_python_checks'
+        own dispatch is the sole remaining occurrence), matching pre_sequence's existing
+        no-duplicate-checks contract."""
         names = [s.name for s in registry.full_sequence() if s.kind == "check"]
-        assert names.count("validate_cli_tools_in_prompts") == 2
+        assert names.count("validate_cli_tools_in_prompts") == 1
 
     def test_membership_floor_growth_safe_to_additions(self) -> None:
         """A new check added to the registry must not break the required-check floor."""
