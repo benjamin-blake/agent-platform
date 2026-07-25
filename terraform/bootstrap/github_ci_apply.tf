@@ -263,18 +263,19 @@ locals {
         ]
       },
       {
-        # Non-policy write actions for pipeline-managed CI roles (branch + pr only).
-        # The apply role's own ARN is excluded (self-grant break, T2.23): github_ci_apply can no
-        # longer PutRolePolicy on itself. UpdateAssumeRolePolicy/TagRole/UntagRole do not widen the
-        # inline-policy scope and do not require a PermissionsBoundary propagation condition (trust
-        # and tag changes carry no escalation risk equivalent to inline-policy mutations; the guard
-        # still blocks these from auto-applying).
+        # TRUST-ONLY (Decision 143, unchanged by DEP-02 / rec-2842): iam:UpdateAssumeRolePolicy on
+        # the two enumerated branch/pr roles ONLY -- the Resource is deliberately NOT widened to
+        # role/agent-platform-*. A widened trust Resource would silently grant a fleet-wide trust
+        # rewrite (any agent-platform-* role's trust policy), and DEP-05 (a dedicated trust-boundary
+        # control) is still open, so this narrow identity grant is the ONLY control against that. The
+        # non-trust role metadata/lifecycle verbs that used to share this Sid (TagRole/UntagRole) are
+        # split OUT into the prefix-scoped IAMRoleMetadataWrite Sid below -- they are non-escalating
+        # role-metadata writes, not trust, so they get the wider agent-platform-* prefix while trust
+        # stays fleet-narrow at exactly these two roles.
         Sid    = "IAMRoleReconcile"
         Effect = "Allow"
         Action = [
-          "iam:UpdateAssumeRolePolicy",
-          "iam:TagRole",
-          "iam:UntagRole"
+          "iam:UpdateAssumeRolePolicy"
         ]
         Resource = [
           "arn:aws:iam::${var.account_id}:role/agent-platform-github-ci-branch",
@@ -282,15 +283,31 @@ locals {
         ]
       },
       {
-        # DEP-01 (Decision 144, rec-2757): apply-phase iam:UpdateRoleDescription on agent-platform-*
-        # roles. The enumerated model lacked this verb entirely, so a description drift on any
-        # agent-platform-* role (an aws_iam_role UPDATE, which the guard routes to gated-apply)
-        # AccessDenied. UpdateRoleDescription is a NON-escalating, non-trust, non-inline-policy role
-        # write (a cosmetic attribute), so it carries no PermissionsBoundary propagation condition and
-        # no self-exclusion (a self-description edit is harmless). Scoped to role/agent-platform-*.
-        Sid      = "IAMRoleDescriptionWrite"
-        Effect   = "Allow"
-        Action   = ["iam:UpdateRoleDescription"]
+        # DEP-02 (Decision 144, rec-2842): prefix-scoped role metadata/lifecycle risk-class Sid, at
+        # the SAME role/agent-platform-* prefix as IAMRoleCreateBounded's iam:CreateRole below (Fable
+        # best-practice consult: verb-FAMILY-wildcards-under-boundary -- the identity policy's
+        # granularity unit is per-risk-class, not per-verb; Decision 144). TagRole/UntagRole moved
+        # here from the (now trust-only) IAMRoleReconcile Sid above: the AWS provider's default_tags
+        # block (terraform/personal/main.tf) forces a TagRole call on EVERY taggable resource's
+        # create, so iam:CreateRole@role/agent-platform-* structurally REQUIRES iam:TagRole at the
+        # SAME prefix, or every new agent-platform-* role's create AccessDenies -- the exact rec-2842
+        # recurrence (run 30126122217; the first role ever minted through the gated path). UntagRole
+        # covers tag-drift reconcile. UpdateRoleDescription is folded in from the retired
+        # IAMRoleDescriptionWrite Sid (DEP-01 / rec-2757) -- same risk class, same prefix, no reason
+        # to keep it a separate Sid. UpdateRole is added proactively (Fable's predicted next gap): it
+        # covers max_session_duration edits, which AccessDeny at both the identity and boundary layers
+        # today with no covering grant. None of these four verbs is trust, inline-policy, or
+        # boundary-modifying -- they carry no escalation risk equivalent to IAMRoleReconcile's trust
+        # verb, so the prefix-scoped grant is safe (Decision 143: only worst-verb-scoped verbs like
+        # iam:UpdateAssumeRolePolicy / iam:PassRole / the boundary-edit verbs stay individually narrow).
+        Sid    = "IAMRoleMetadataWrite"
+        Effect = "Allow"
+        Action = [
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:UpdateRole",
+          "iam:UpdateRoleDescription"
+        ]
         Resource = ["arn:aws:iam::${var.account_id}:role/agent-platform-*"]
       },
       {
@@ -756,6 +773,14 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
           "iam:DetachRolePolicy",
           "iam:DeleteRolePolicy",
           "iam:UpdateRoleDescription",
+          # DEP-02 (Decision 144, rec-2842): the boundary ceiling for the new IAMRoleMetadataWrite
+          # identity Sid above. iam:TagRole / iam:UntagRole are already ceiling-covered by the
+          # pre-existing entries above (moved here unchanged from the old IAMRoleReconcile grant);
+          # iam:UpdateRole is the one NEW verb this Sid adds (Fable's predicted next gap --
+          # max_session_duration edits AccessDeny at both layers today with no covering grant). A
+          # grant absent from the boundary ceiling is silently denied by the identity/boundary
+          # intersection.
+          "iam:UpdateRole",
           # rec-2831 (DEP-01 completion, T2.48 c1, PLAN-t248-passrole-liveproof): the boundary
           # ceiling for the IAMPassRoleForLambda identity grant above. The identity policy already
           # worst-verb-scopes PassRole (role/agent-platform-* + PassedToService=lambda.amazonaws.com);

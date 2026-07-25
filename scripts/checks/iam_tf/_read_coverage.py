@@ -190,7 +190,21 @@ def _parse_bootstrap_statements(text: str, role_policy_resource_name: str) -> li
         sid_m = _SID_CAP_RE.search(obj_body)
         actions, _ = _extract_capitalized_field(obj_body, "Action")
         _, resources_raw = _extract_capitalized_field(obj_body, "Resource")
-        statements.append({"sid": sid_m.group(1) if sid_m else None, "actions": actions, "resources_raw": resources_raw})
+        # DEP-02 (Decision 144, rec-2842 plan): backwards-compatible "effect" key, added for
+        # check_identity_iam_actions_subset_of_boundary's Effect-aware subset test (a Deny-only
+        # action must never be flagged as "absent from the boundary Allow ceiling" -- it was never
+        # granted to begin with). Existing consumers read only sid/actions/resources_raw and never
+        # assert exact dict equality, so this addition is non-breaking (verified against
+        # tests/checks/iam_tf/test__read_coverage.py this session).
+        effect_vals, _ = _extract_capitalized_field(obj_body, "Effect")
+        statements.append(
+            {
+                "sid": sid_m.group(1) if sid_m else None,
+                "actions": actions,
+                "resources_raw": resources_raw,
+                "effect": effect_vals[0] if effect_vals else None,
+            }
+        )
     return statements
 
 
