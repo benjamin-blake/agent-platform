@@ -1,0 +1,364 @@
+---
+schema_version: 1
+slug: "ducklake-applied-schema-gate"
+intent: >-
+  Close the sequencing hole that took ops_decisions hard-down on 2026-07-24: a contract column-add
+  reached the governed DuckLake code-deploy channel ahead of its operator-invoked physical
+  reconcile, so the deployed reader/writer began requiring a column the table did not have.
+  Introduce a static, zero-egress merge-time gate that makes that ordering impossible to land
+  silently, and record the physical column state the repo currently has no representation of.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ducklake-applied-schema-gate.yaml
+phase: >-
+  No tier_item alignment. Soft-warn exception category `hotfix` -- this is the forward-fix
+  follow-up to a live production incident (ducklake-writer-errors CloudWatch alarm,
+  2026-07-24T14:31:12Z). Adjacent to T2.26 (ops producer repoint) but does not advance it.
+scope:
+  - file: config/ducklake/applied_schema.yaml
+    action: Create
+    purpose: >-
+      New operational manifest recording, per ops table, the column set PHYSICALLY present in the
+      production DuckLake catalog, plus reconcile provenance and an explicit pending_reconcile list
+      for contract columns whose physical ALTER has not yet been run. Deliberately placed OUTSIDE
+      config/lambda/ducklake/ so it is not swept into the Lambda package (verified:
+      compute_affected_artifacts returns {} for this path). This is the representation the repo
+      currently lacks -- nothing on disk today knows what the warehouse physically has.
+  - file: scripts/checks/ops_governance/validate_applied_schema_conformance.py
+    action: Create
+    purpose: >-
+      Fail-closed static gate. Compares each ops table's contract-declared column set (taken from
+      scripts.schema_to_field_semantics.generate(), the same source validate_field_semantics_drift
+      already uses -- no new parsing surface) against config/ducklake/applied_schema.yaml. A
+      declared-but-not-applied column that is not explicitly marked pending FAILS the PR.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: Register validate_applied_schema_conformance in BOTH the --pre and full tiers.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: Import the new check so its @registry.register decorator executes.
+  - file: tests/checks/ops_governance/test_validate_applied_schema_conformance.py
+    action: Create
+    purpose: >-
+      Unit coverage over the four gate behaviours: unmarked crossing FAILS, marked-pending crossing
+      PASSES with a loud warning, ops table absent from the manifest FAILS (fail-closed), and an
+      extra physical column not in the contract is tolerated.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    config/ducklake/applied_schema.yaml exists and records applied_columns for both live DuckLake
+    ops tables (ops_recommendations, ops_decisions), with `intent` recorded under
+    ops_decisions.pending_reconcile carrying a reconcile-pending marker naming dec-151.
+  - >-
+    validate_applied_schema_conformance FAILS a contract column-add that is neither present in
+    applied_columns nor marked in pending_reconcile, and the failure message contains the literal
+    reconcile_columns invoke the operator must run.
+  - >-
+    validate_applied_schema_conformance FAILS fail-closed when an ops table declared in the contract
+    has no entry at all in the manifest.
+  - >-
+    The check is registered in both the --pre and full validate.py tiers, and
+    `bin/venv-python -m scripts.validate --pre` exits 0 on this branch (the known `intent` crossing
+    is grandfathered via pending_reconcile, so the gate lands non-wedging).
+  - >-
+    OPERATOR-GATED: after the human-directed reconcile_columns invoke, ducklake_reader
+    current_state("ops_decisions") returns rows again and those rows carry an `intent` key, and
+    `--backfill-decisions-md` writes dec-151 and dec-152 without a 502.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise all four gate behaviours against fixture manifests -- unmarked crossing FAILS,
+      marked-pending crossing PASSES, missing table entry FAILS, extra physical column tolerated.
+    command: >-
+      bin/venv-python -m pytest tests/checks/ops_governance/test_validate_applied_schema_conformance.py -q
+    expected: >-
+      All tests pass. The unmarked-crossing test asserts the failure string contains both the
+      offending column name and the substring "reconcile_columns".
+    fix_if: >-
+      A crossing test passes when it should fail means the declared-column set is being read from
+      the wrong source (it must come from schema_to_field_semantics.generate(), not from a hand-parse
+      of the contract YAML). A missing-table test that passes means the check is iterating the
+      manifest rather than the contract -- invert the iteration; the contract is authoritative for
+      which tables must be present.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "applied-schema-gate-unit-tests"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Run the real check against the real repo and confirm the grandfather path works on live data:
+      the known `intent` crossing is reported loudly but does NOT fail the gate.
+    command: >-
+      bin/venv-python -c "from scripts.checks.ops_governance.validate_applied_schema_conformance
+      import validate_applied_schema_conformance as v; f=[]; v(f); print('FAILURES=%d' % len(f));
+      assert not f, f"
+    expected: >-
+      Stdout contains "FAILURES=0" and a warning line naming `intent` as pending reconcile for
+      ops_decisions. Exit 0.
+    fix_if: >-
+      FAILURES>0 means the seeded manifest disagrees with the contract beyond the grandfathered
+      column -- re-derive applied_columns from the live reader (step 6) rather than hand-editing
+      the manifest to make the check pass. Making the manifest lie to get green is the exact
+      failure mode this gate exists to prevent.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step runs the check itself, which step 4 registers as a standing guard in both validate.py
+      tiers. Graduating it into the verification registry would duplicate an already-standing check
+      with no added regression coverage.
+  - step: 3
+    phase: pre-deploy
+    action: Confirm the check is registered in BOTH validate.py tiers, not just one.
+    command: >-
+      test "$(grep -c '_c("validate_applied_schema_conformance")' scripts/checks/registry.py)" = "2"
+      && grep -q "validate_applied_schema_conformance" scripts/validate.py && echo REGISTERED_BOTH_TIERS
+    expected: Prints REGISTERED_BOTH_TIERS, exit 0.
+    fix_if: >-
+      A count of 1 means the check landed in only one tier -- a --pre-only registration lets a
+      merge-queue path skip it; a full-only registration means the PR author never sees it. Both
+      lists in scripts/checks/registry.py need the entry.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "applied-schema-gate-registered-both-tiers"
+  - step: 4
+    phase: pre-deploy
+    action: Confirm the gate lands non-wedging -- the fast presubmit tier is green on this branch.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0.
+    fix_if: >-
+      If --pre goes red specifically on the new check, the grandfather entry for `intent` is
+      malformed. Do NOT delete the check or drop `intent` from the contract to get green -- fix the
+      pending_reconcile entry shape.
+    hermetic: false
+    graduation: not-applicable
+  - step: 5
+    phase: post-deploy
+    action: >-
+      OPERATOR-EXECUTED, HUMAN-DIRECTED BREAK-GLASS (Decision 126 cl.1; Decision 151 cl.2 -- this
+      verb is "never autonomous"). The implementing agent MUST NOT run this and holds no
+      lambda:InvokeFunction on ducklake_maintenance. Stop and request it explicitly. Adds the
+      physical `intent` column to the live ops_decisions history + current tables.
+    command: >-
+      aws lambda invoke --function-name agent-platform-ducklake-maintenance --cli-binary-format
+      raw-in-base64-out --payload
+      '{"action":"reconcile_columns","data_path":"s3://agent-platform-data-lake/ducklake/","meta_schema":"ducklake_ops","table":"ops_decisions"}'
+      --profile agent_platform_admin --region eu-west-2 /tmp/reconcile-ops-decisions.json
+      && cat /tmp/reconcile-ops-decisions.json
+    expected: Response body reports ok=true and names `intent` among the reconciled columns.
+    fix_if: >-
+      ok=false or an AccessDenied means this was attempted with the wrong profile -- reconcile_columns
+      is admin-tier (Decision 143 cl.2) and is not reachable from PlatformDev or from CI. Do not
+      widen any CI role to reach it.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Verify the incident is actually resolved end-to-end through the closed named-verb read
+      boundary (Decision 84 I-3) -- ops_decisions reads again AND the physical column is really
+      there. This is the single warm catalog read the plan spends (Decision 88).
+    command: >-
+      bin/venv-python -c "from src.common.iceberg_reader import make_reader;
+      r=make_reader(profile='agent_platform'); rows=r.current_state('ops_decisions');
+      assert rows, 'no rows'; assert 'intent' in rows[0], sorted(rows[0]);
+      print('OPS_DECISIONS_OK rows=%d intent_present=True' % len(rows))"
+    expected: Prints OPS_DECISIONS_OK with a non-zero row count. Exit 0.
+    fix_if: >-
+      A continuing HTTP 502 means the reconcile did not actually land -- re-check step 5's response
+      body. Do NOT weaken _assert_no_orphaned_current_rows or add a 502 tolerance to get past this
+      (Decision 149 cl.3: the guard is never silently weakened to accommodate a broken substrate).
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Confirm the write path recovered by running the sanctioned ETL (Decision 84: the ONLY
+      legitimate re-write path; never re-stage from logs/.decisions-index.jsonl).
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md 2>&1 | tail -5
+    expected: >-
+      Fidelity report shows failed=0. No "ducklake_writer write_ops ops_decisions failed (HTTP 502)"
+      line for dec-151 or dec-152.
+    fix_if: >-
+      A surviving 502 on a specific decision id means that entry carries a field beyond `intent`
+      that is also unreconciled -- re-run step 5 naming that column, do not skip the entry.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Close the loop: re-derive applied_columns from the live reader and confirm the manifest now
+      tells the truth, with pending_reconcile empty for ops_decisions. Commit the updated manifest.
+    command: >-
+      bin/venv-python -c "from src.common.iceberg_reader import make_reader; import yaml;
+      r=make_reader(profile='agent_platform');
+      m=yaml.safe_load(open('config/ducklake/applied_schema.yaml'))['tables'];
+      live=set(r.current_state('ops_decisions')[0]);
+      rec=set(m['ops_decisions']['applied_columns']);
+      assert not m['ops_decisions'].get('pending_reconcile'), 'pending_reconcile not cleared';
+      assert rec==live, ('manifest drift', sorted(rec^live)); print('MANIFEST_TRUTHFUL')"
+    expected: Prints MANIFEST_TRUTHFUL, exit 0.
+    fix_if: >-
+      A symmetric-difference report means the manifest was seeded by hand rather than from the live
+      reader. Re-seed it from the reader output -- the manifest's whole value is that it is true.
+constraints:
+  - >-
+    No rescue agents or workaround loops (Decision 55). A failing post-deploy leg stops and RCAs; it
+    never auto-retries into green.
+  - >-
+    reconcile_columns is ADMIN-TIER and never autonomous (Decision 143 cl.2; Decision 151 cl.2;
+    Decision 126 cl.1). The implementing agent stops and requests operator execution for VP step 5.
+    Under no circumstance widen a CI or PlatformDev role to reach ducklake_maintenance.
+  - >-
+    The gate must be STATIC and zero-egress at merge time (Decision 88: catalog egress is a
+    first-class budget). CI must not invoke ducklake_maintenance to read the catalog --
+    github_ci_branch is explicitly never granted invoke on it, and ducklake_maintenance_smoke is
+    env-pinned to the disposable smoke catalog and cannot see the real ops_decisions.
+  - >-
+    Do not hand-edit config/lambda/ducklake/field_semantics.yaml -- it is GENERATED from
+    docs/contracts/ops_decisions.yaml (Decision 65, Decision 118). The gate reads the generator's
+    output, so it guards the contract -> codegen -> deploy -> physical chain rather than the
+    generated artefact.
+  - >-
+    Signal-emission only. Do not add write buffering, an outbox, retry/replay, or any path that
+    re-stages ops rows from logs/.decisions-index.jsonl (Decision 84 I-4: the outbox is retired and
+    a read cache is never a write source).
+  - >-
+    Do not weaken _assert_no_orphaned_current_rows (scripts/ops_portal/decisions.py:163) or add a
+    transport-502 tolerance to it (Decision 149 cl.3).
+  - >-
+    Files outside the Scope table are not modified. Out-of-scope findings become recommendations via
+    scripts/ops_data_portal.py, not inline fixes.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": verdict FLAGS_FOUND, 105 of 105
+    decisions triaged. CITE list: dec-143, dec-151, dec-084, dec-081, dec-149, dec-142, dec-072,
+    dec-126, dec-125, dec-039, dec-062, dec-092, dec-144, dec-113, dec-065, dec-118, dec-129,
+    dec-088, dec-055, dec-079, dec-132, dec-128.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - >-
+    INCIDENT ORIGIN. CloudWatch alarm `ducklake-writer-errors` (terraform/personal/ducklake_lambdas.tf:430)
+    entered ALARM at 2026-07-24T14:31:12Z on a 1-error datapoint in the 14:16-14:31 window. Source
+    was rec-autoclose workflow run 581 (14:26:27Z, commit f0e701d) and again run 585 (16:21:23Z,
+    commit f0049ac), both failing with `ducklake_writer write_ops ops_decisions failed (HTTP 502)`
+    for dec-151/dec-152, then `ducklake_reader 'read_ops_current' failed (HTTP 502)` raised at
+    scripts/ops_portal/decisions.py:163. ops_decisions was confirmed still hard-down for BOTH read
+    and write at 2026-07-25 during this planning session; ops_recommendations is unaffected.
+  - >-
+    ROOT CAUSE. PR f0e701d (Decision 151 / audit finding DCG-06) added the nullable `intent` column
+    to docs/contracts/ops_decisions.yaml and the generated field_semantics.yaml. Its
+    deploy-ducklake-lambdas run 8 fired automatically on merge at 14:26:27Z and went green, so the
+    deployed reader/writer began requiring `intent`. PLAN-dcg-intent-capture's post-deploy VP step 8
+    -- the admin-tier reconcile_columns that physically ALTERs the table -- was never run. Leg 1 of 3
+    self-executes on merge; legs 2 and 3 wait on a human. Nothing enforced the ordering, and nothing
+    on disk represented the physical column state, so the divergence was unrepresentable and
+    therefore undetectable.
+  - >-
+    WHY NO CI-RCA WAS FILED (three independent gaps; this plan addresses only the first). (1) The
+    sequencing hole itself -- this plan. (2) ci-rca.yml's workflow_run filter is
+    ["CI", "Main Canary", "terraform-apply-sandbox"]; rec-autoclose is absent, so its failures file
+    nothing. (3) The SNS alerts topic (terraform/personal/sns_alerts.tf) has exactly one
+    subscription, an email endpoint -- no CloudWatch alarm has any ingestion path back into
+    ops_recommendations. Gaps (2) and (3) are deliberately OUT OF SCOPE here and are filed as
+    separate recs for their own /plan sessions; bundling them would make this plan a three-headed
+    change to three unrelated subsystems.
+  - >-
+    FOURTH GAP, OUT OF SCOPE, filed separately. The PlatformDev agent role holds no
+    cloudwatch:GetMetricStatistics, no logs:FilterLogEvents/DescribeLogGroups, and no
+    lambda:InvokeFunction on ducklake_maintenance. Every fact in this plan was reconstructed from
+    GitHub Actions logs; zero came from AWS. Per Decision 129's forward-fix intent, the fix is
+    prefix-scoped CloudWatch/Logs reads on agent-platform-* / ducklake-* plus a coverage-verifier
+    extension -- NOT an enumeration of the three actions this incident happened to need. That work
+    also carries its own IAM apply routing (Decision 92 pt5 / Decision 144 pt5: PlatformDev is not
+    agent-platform-*-named, so an inline-policy update on it plausibly classifies out-of-budget and
+    routes to the tf-gated-apply Environment), which is a second reason to keep it separate.
+  - >-
+    GRANDFATHER PATTERN. The gate lands non-wedging by mirroring the Decision 128 SLOC
+    `# raise-approved: dec-NNN` precedent: a crossing may be carried in pending_reconcile with an
+    explicit marker naming the governing decision, which the check reports loudly but does not fail
+    on. This is a deliberate, reviewable exception surface, not a bypass -- an unmarked crossing is
+    a hard fail. Without it, seeding a truthful manifest today would immediately red-wedge main,
+    since `intent` is genuinely declared-but-not-applied right now.
+  - >-
+    KNOWN RESIDUAL RISK, accepted. The manifest is operator-maintained, so it can drift from
+    physical reality if a reconcile is run without updating it. VP step 8 closes the loop for this
+    incident via a single warm named-verb read, but there is no continuous truth-probe -- adding one
+    would cost recurring metered Neon catalog egress on every deploy, which Decision 88 ranks as a
+    first-class budget. A periodic (not per-deploy) drift probe is the natural follow-on and is
+    noted here rather than silently omitted.
+  - >-
+    CI-RCA DEFERRAL RATIONALE (required: ci_rca_unresolved_recs was non-empty at planning time).
+    rec-2836 ("Terraform init flakes on kislerdm/neon 504 Gateway Timeout from github.com",
+    source=ci_rca, priority=Critical, filed 2026-07-24T17:10:56Z, file scripts/checks/_terraform.py)
+    is open. This plan satisfies none of the three Related-Work conditions: different file (no
+    overlap with scripts/checks/_terraform.py), different Decision Record, and a different failure
+    category (rec-2836 is a terraform-init network flake; this is a warehouse schema-sequencing
+    defect). Deferral is deliberate and was surfaced to the human at Step 6b, who directed
+    proceed-and-flag. The two are fully disjoint -- neither blocks nor informs the other.
+  - >-
+    SCOPE-FILE / MAIN-DIVERGENCE NOTE. main_freshness.status was "ok" with 0 commits behind at
+    preflight. main advanced during the session (8150a3b -> d4db904); none of the advancing commits
+    touch this plan's Scope files, so no rebase-before-planning decision was required.
+  - >-
+    LAMBDA DEPLOYMENT ASSESSMENT: none required. compute_affected_artifacts() returns {} for every
+    Scope file, including config/ducklake/applied_schema.yaml -- the manifest is deliberately sited
+    outside config/lambda/ducklake/ so it is not swept into the four DuckLake Lambda packages (that
+    directory's field_semantics.yaml and version.yaml ARE packaged). No .tf in scope, so no
+    Infrastructure Assessment and no speculative-plan pipeline interaction.
+  - >-
+    DATA-MODEL ASSESSMENT: no table, grain, merge_key, identity scheme, or warehouse write path
+    changes. The plan adds no column and alters no contract; it adds a guard over an existing
+    contract chain plus a flat operational manifest keyed one entry per ops table. No Fable
+    escalation required (Decision 96 / data-modeling-standard.yaml: escalation is for a new table,
+    a new identity scheme, or a merge_key change).
+  - >-
+    SLOC: the new check is expected around 90 lines and the new test file well under budget;
+    registry.py (247 lines) gains 2 lines and validate.py gains an import. No file approaches its
+    config/sloc_budgets.yaml budget, so no Decision 128 decomposition or raise is in play.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Confirmed the implementing agent CANNOT execute VP step 5 (no lambda:InvokeFunction on
+    ducklake_maintenance) and has an operator available to run it before attempting steps 6-8
+execution_steps:
+  - >-
+    Create config/ducklake/applied_schema.yaml. Seed applied_columns for ops_recommendations and
+    ops_decisions by reading the LIVE reader, not by copying the contract -- ops_recommendations via
+    make_reader().current_state('ops_recommendations') row keys. ops_decisions cannot be read while
+    it is 502ing, so seed it as the contract's column set MINUS `intent`, and record that derivation
+    in an inline comment so the provenance is not lost; VP step 8 re-derives it from the live reader
+    once recovered. Add `intent` to ops_decisions.pending_reconcile with a reconcile-pending marker
+    naming dec-151.
+  - >-
+    Create scripts/checks/ops_governance/validate_applied_schema_conformance.py following the
+    validate_field_semantics_drift shape (@registry.register(..., owner="platform"), appends to the
+    `failed` list, never auto-writes). Iterate the CONTRACT's ops tables (from
+    scripts.schema_to_field_semantics.generate(include_prose=False)), not the manifest, so a table
+    missing from the manifest fails closed. For each: crossing = declared - applied. Fail on any
+    crossing not in pending_reconcile; print a loud warning for those that are. The failure message
+    must embed the literal reconcile_columns invoke from VP step 5. Tolerate applied columns absent
+    from the contract (extra physical columns are harmless).
+  - >-
+    Register the check in scripts/checks/registry.py in BOTH tier lists, adjacent to the existing
+    _c("validate_field_semantics_drift") entries, and add the import to scripts/validate.py beside
+    the other ops_governance imports so the decorator executes.
+  - >-
+    Create tests/checks/ops_governance/test_validate_applied_schema_conformance.py covering the four
+    behaviours in VP step 1, using fixture manifests via tmp_path -- do not mutate the real manifest.
+  - Execute Verification Plan steps 1-4 (pre-deploy) -- run each step; loop until pass.
+  - >-
+    STOP. Request operator execution of VP step 5 (admin-tier reconcile_columns). Do not attempt it,
+    do not seek a workaround, and do not proceed to steps 6-8 until the operator confirms it ran.
+  - >-
+    Execute Verification Plan steps 6-8 (post-deploy) once the operator confirms; on an unrecoverable
+    V3 failure stop and RCA (Decision 55).
+  - >-
+    Commit the VP step 8 manifest update (pending_reconcile cleared, applied_columns re-derived from
+    the live reader) as part of the same PR.
+  - 'Report: what was implemented, verification results, and the confirmed recovery state of ops_decisions'
+work_areas: []
+rollback: >-
+  Revert the PR. The gate is additive and static -- removing it restores the prior (unguarded) state
+  and cannot itself break a deploy. The physical reconcile from VP step 5 is NOT rolled back and must
+  not be: adding a nullable column is backwards-compatible, and reversing it would re-break the
+  deployed reader/writer that now require `intent`.
