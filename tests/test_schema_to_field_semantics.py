@@ -36,6 +36,7 @@ _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
 _map_iceberg_type = _mod._map_iceberg_type
 _project_role = _mod._project_role
 _enforce_migration_columns_subset = _mod._enforce_migration_columns_subset
+_enforce_reconcile_pending_subset = _mod._enforce_reconcile_pending_subset
 _project_contract_table = _mod._project_contract_table
 _emit_yaml = _mod._emit_yaml
 generate = _mod.generate
@@ -162,6 +163,139 @@ class TestMigrationColumnsSubset:
             {"history": {"id": None}},
             self._projected(),
         )
+
+
+# ---------------------------------------------------------------------------
+# Reconcile-pending-gate subset enforcement (hotfix follow-up to the 2026-07-24
+# ops_decisions incident) -- mirrors _enforce_migration_columns_subset (rec-2232),
+# but runs over ALL SIX contract_table_ops entries, not only the two contract tables.
+# ---------------------------------------------------------------------------
+class TestReconcileScopeSubset:
+    def _declared(self) -> set[str]:
+        return {"id", "intent"}
+
+    def test_valid_scope_and_declared_columns_passes(self) -> None:
+        _enforce_reconcile_pending_subset(
+            "ops_decisions",
+            {
+                "reconcile_scope": "ducklake",
+                "pending_reconcile": {"history": ["intent"], "current": ["intent"]},
+                "reconciled": {"history": {}, "current": {}},
+            },
+            self._declared(),
+            "scd2",
+        )
+
+    def test_invalid_reconcile_scope_raises(self) -> None:
+        with pytest.raises(ValueError, match="reconcile_scope"):
+            _enforce_reconcile_pending_subset(
+                "ops_decisions",
+                {"reconcile_scope": "bogus", "pending_reconcile": {}, "reconciled": {}},
+                self._declared(),
+                "scd2",
+            )
+
+    def test_undeclared_column_under_pending_reconcile_raises(self) -> None:
+        with pytest.raises(ValueError, match="not a declared column"):
+            _enforce_reconcile_pending_subset(
+                "ops_decisions",
+                {
+                    "reconcile_scope": "ducklake",
+                    "pending_reconcile": {"history": ["typo"], "current": []},
+                    "reconciled": {"history": {}, "current": {}},
+                },
+                self._declared(),
+                "scd2",
+            )
+
+    def test_undeclared_column_under_reconciled_raises(self) -> None:
+        with pytest.raises(ValueError, match="not a declared column"):
+            _enforce_reconcile_pending_subset(
+                "ops_decisions",
+                {
+                    "reconcile_scope": "ducklake",
+                    "pending_reconcile": {"history": [], "current": []},
+                    "reconciled": {"history": {"typo": {"at": "x"}}, "current": {}},
+                },
+                self._declared(),
+                "scd2",
+            )
+
+    def test_current_side_entry_on_append_only_table_raises(self) -> None:
+        with pytest.raises(ValueError, match="append_only"):
+            _enforce_reconcile_pending_subset(
+                "ops_smoke_events",
+                {
+                    "reconcile_scope": "ducklake",
+                    "pending_reconcile": {"history": [], "current": ["event_type"]},
+                    "reconciled": {"history": {}, "current": {}},
+                },
+                {"event_type"},
+                "append_only",
+            )
+
+    def test_current_side_reconciled_entry_on_append_only_table_raises(self) -> None:
+        with pytest.raises(ValueError, match="append_only"):
+            _enforce_reconcile_pending_subset(
+                "ops_smoke_events",
+                {
+                    "reconcile_scope": "ducklake",
+                    "pending_reconcile": {"history": [], "current": []},
+                    "reconciled": {"history": {}, "current": {"event_type": {"at": "x"}}},
+                },
+                {"event_type"},
+                "append_only",
+            )
+
+    def test_history_only_on_append_only_table_passes(self) -> None:
+        _enforce_reconcile_pending_subset(
+            "ops_smoke_events",
+            {
+                "reconcile_scope": "ducklake",
+                "pending_reconcile": {"history": ["event_type"], "current": []},
+                "reconciled": {"history": {}, "current": {}},
+            },
+            {"event_type"},
+            "append_only",
+        )
+
+    def test_empty_blocks_are_skipped(self) -> None:
+        _enforce_reconcile_pending_subset(
+            "ops_decisions",
+            {"reconcile_scope": "ducklake", "pending_reconcile": {}, "reconciled": {}},
+            self._declared(),
+            "scd2",
+        )
+
+
+class TestReconcileScopeGeneratorIntegration:
+    """generate() runs the subset-validation pass over ALL SIX contract_table_ops entries."""
+
+    def test_real_sidecar_passes_generate(self) -> None:
+        doc = generate()
+        assert "ops_tables" in doc  # would have raised during generate() if any entry were invalid
+
+    def test_generate_raises_on_undeclared_pending_reconcile_column(self, tmp_path: Path) -> None:
+        sidecar_path = _ROOT / "config" / "lambda" / "ducklake" / "field_semantics.static.yaml"
+        sidecar = yaml.safe_load(sidecar_path.read_text(encoding="utf-8"))
+        sidecar["contract_table_ops"]["ops_decisions"]["pending_reconcile"]["history"].append("__bogus_column__")
+        tmp_sidecar = tmp_path / "field_semantics.static.yaml"
+        tmp_sidecar.write_text(yaml.dump(sidecar), encoding="utf-8")
+
+        with patch.object(_mod, "_SIDECAR_PATH", tmp_sidecar):
+            with pytest.raises(ValueError, match="not a declared column"):
+                generate()
+
+    def test_generate_raises_on_current_side_entry_for_append_only_table(self, tmp_path: Path) -> None:
+        sidecar_path = _ROOT / "config" / "lambda" / "ducklake" / "field_semantics.static.yaml"
+        sidecar = yaml.safe_load(sidecar_path.read_text(encoding="utf-8"))
+        sidecar["contract_table_ops"]["ops_smoke_events"]["pending_reconcile"]["current"] = ["event_type"]
+        tmp_sidecar = tmp_path / "field_semantics.static.yaml"
+        tmp_sidecar.write_text(yaml.dump(sidecar), encoding="utf-8")
+
+        with patch.object(_mod, "_SIDECAR_PATH", tmp_sidecar):
+            with pytest.raises(ValueError, match="append_only"):
+                generate()
 
 
 # ---------------------------------------------------------------------------

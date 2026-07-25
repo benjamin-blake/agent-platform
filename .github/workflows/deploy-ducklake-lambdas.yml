@@ -15,14 +15,44 @@ name: deploy-ducklake-lambdas
 # Triggers on push to main touching ducklake source, and on workflow_dispatch (operator-triggered
 # redeploy / recovery, e.g. after a stale-code drift alarm).
 #
-# deploy job:
+# FIVE-JOB SPLIT (hotfix follow-up to the 2026-07-24 ops_decisions incident): reconcile_columns
+# (src/common/ducklake_tables.py) derives its physical ALTER list from the field_semantics.yaml
+# BUNDLED INTO THE DEPLOYED ducklake_maintenance package -- so a serving deploy (writer/reader)
+# that ships a new column must never land before maintenance has both received that column AND
+# had reconcile_columns run against it. A single ungated `deploy` job that redeployed all five
+# functions at once let a merged column reach the serving functions before the admin-tier
+# reconcile ever ran, taking ops_decisions hard-down for read AND write. The split:
+#   1. deploy-maintenance: ungated (never blocked on the reconcile state -- maintenance must
+#      always ship, since it is what the reconcile ALTERs against). Builds + uploads ALL eight
+#      artifacts once (five zips + three layers), then deploys ONLY the two maintenance functions
+#      (maintenance, maintenance-smoke) via --ducklake-functions.
+#   2. maintenance-smoke (needs deploy-maintenance): the four --lambda-maintenance-* gates,
+#      narrowed to the two maintenance functions' deploy records. Runs on the SAME condition as
+#      deploy-maintenance shipping code (Decision 55 false-green avoidance: an ungated deploy must
+#      never be an unverified deploy).
+#   3. reconcile-gate (needs deploy-maintenance): static, zero-egress (Decision 88) merge-time
+#      predicate re-run at deploy time -- calls
+#      `scripts.checks.ops_governance.validate_reconcile_pending_gate --deploy-gate`, which exits
+#      non-zero while any reconcile_scope=ducklake table in
+#      config/lambda/ducklake/field_semantics.static.yaml has a non-empty pending_reconcile. Never
+#      invokes ducklake_maintenance to introspect the live catalog -- github_ci_branch is never
+#      granted invoke on it, and the smoke function is env-pinned to the disposable smoke catalog
+#      and cannot see production ops_decisions (why deploy run 8 reported green over a broken
+#      table).
+#   4. deploy-serving (needs reconcile-gate AND deploy-maintenance -- Actions cannot read a
+#      non-listed job's outputs): `--ducklake-deploy-only` skips build/upload entirely and deploys
+#      writer + reader + catalog-dr from the artifacts deploy-maintenance already uploaded (avoids
+#      a double build/upload of the same eight artifacts, and desynchronising a deploy record's
+#      code_sha256 from the S3 bytes it names).
+#   5. smoke (needs deploy-serving): --lambda-attach + --lambda-reader, narrowed to the three
+#      serving functions' deploy records.
+#
+# deploy-maintenance / deploy-serving:
 #   - T2.49 / DEP-12 (Decision 144): assumes the merged agent-platform-github-ci-deploy role
 #     (UpdateFunctionCode-only on the function:agent-platform-* prefix, covering all 8 functions
 #     -- the five ducklake + three prod; no lambda-config, no invoke, no terraform, no iam-write).
-#     This role replaces the retired ducklake-only deploy role and is shared with
-#     deploy-prod-lambdas.yml -- ONE role, ONE provisioning signal (see DEPLOY_ROLE_PROVISIONED
-#     below; the two per-class variables were reconciled to this single shared name since both
-#     workflows now gate on the existence of the SAME role).
+#     Shared with deploy-prod-lambdas.yml -- ONE role, ONE provisioning signal (see
+#     DEPLOY_ROLE_PROVISIONED below).
 #   - This role is IAM-SENSITIVE and lands via the human-gated tf-gated-apply Environment
 #     (Decision 77/92) -- it does NOT exist until an operator approves the gated apply of
 #     terraform/personal/oidc.tf. continue-on-error on the assume-role step covers that
@@ -32,25 +62,21 @@ name: deploy-ducklake-lambdas
 #     assume-role (a trust/policy regression, throttling, expired federation) FAILS LOUD instead
 #     of reporting a silent green no-op deploy. Pre-provisioning pushes no-op (green,
 #     deployed=false); post-provisioning regressions are red.
-#   - Runs `build_lambda --ducklake-only --deploy`, which builds + uploads + deploys the five
-#     function zips and three layer zips, capturing each function's CodeSha256 and writing a
-#     deploy-records/ducklake/<function>.json record (function -> CodeSha256 -> source git SHA;
-#     c3). Emits deployed=true only on a genuine successful deploy.
+#   - Each captures its functions' CodeSha256 and writes a deploy-records/ducklake/<function>.json
+#     record (function -> CodeSha256 -> source git SHA; c3). Emits deployed=true only on a genuine
+#     successful deploy.
 #
-# smoke job (needs: deploy; Decision 55 false-green avoidance):
-#   - Runs ONLY when deploy actually shipped code (needs.deploy.outputs.deployed == 'true') --
-#     never on a bootstrap-window no-op.
-#   - Asserts deploy-record freshness (source_git_sha == github.sha) for all five functions
+# maintenance-smoke / smoke (Decision 55 false-green avoidance):
+#   - Each runs ONLY when its own deploy leg actually shipped code -- never on a bootstrap-window
+#     no-op.
+#   - Asserts deploy-record freshness (source_git_sha == github.sha) for its OWN function set
 #     BEFORE running the smoke gates -- a stale or partially-written record fails closed instead
 #     of letting a skipped/no-op deploy report smoke-green.
 #   - Assumes agent-platform-github-ci-branch (reuses its existing DuckLakeInvokeCI writer+reader
 #     Function-URL invoke grant, plus the T2.18 c9 MaintenanceSmokeInvokeCI grant scoped to the
 #     smoke function ARN only -- the scoped deploy role above needs no invoke permission, which
 #     keeps c1's "UpdateFunctionCode-only" literal).
-#   - Runs ducklake_neon_smoke_test --lambda-attach (EC1 in-Lambda ATTACH proof), --lambda-reader
-#     (EC1/boundary closed reader path), and the four --lambda-maintenance-* gates (merge/gc/
-#     breaker/hot-merge) against the smoke function -- the autonomous T2.18 c9 gate. A failed gate
-#     is a loud-fail (Decision 55): stop and RCA, never auto-retry into green.
+#   - A failed gate is a loud-fail (Decision 55): stop and RCA, never auto-retry into green.
 #
 # T2.42 boundary: this workflow deploys the FUNCTION code artifacts only. Layer version
 # publishing stays with T2.42 -- no publish-version step is added here.
@@ -74,7 +100,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  deploy-maintenance:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -107,12 +133,10 @@ jobs:
         # Decision 55 false-green guard: continue-on-error above must NOT silently swallow a
         # post-provisioning assume-role regression (a trust-policy edit, throttling, expired
         # federation) as a green no-op deploy. The bootstrap-window tolerance is gated on the
-        # operator-owned repo variable DEPLOY_ROLE_PROVISIONED (T2.49 / DEP-12: reconciled from
-        # the retired per-class DUCKLAKE_DEPLOY_ROLE_PROVISIONED to one shared variable, since
-        # this workflow and deploy-prod-lambdas.yml now gate on the SAME merged role), set to
-        # 'true' as part of the gated-apply step that creates the role:
+        # operator-owned repo variable DEPLOY_ROLE_PROVISIONED (T2.49 / DEP-12), set to 'true' as
+        # part of the gated-apply step that creates the role:
         #   - flag unset/not 'true' (pre-provisioning): a failed assume is the EXPECTED absent-role
-        #     bootstrap window -> warn loudly and no-op (deployed stays unset -> smoke skips).
+        #     bootstrap window -> warn loudly and no-op (deployed stays unset -> downstream jobs skip).
         #   - flag 'true' (role should exist): a failed assume is a REAL regression -> fail loud.
         # A successful assume is always fine regardless of the flag.
         if: steps.oidc_deploy.outcome != 'success'
@@ -135,25 +159,189 @@ jobs:
       - name: Install build_lambda runtime deps
         # This runner has no .venv (CC-web-only convention). build_lambda's manifest-driven
         # staging needs pyyaml (parse manifest.yaml) + pydantic (LambdaManifest schema);
-        # upload/deploy go through the AWS CLI via subprocess, not boto3 (reconcile.yml installs
-        # the same pyyaml+pydantic for its `build_lambda --ducklake-only` build). NOTE: unlike
-        # reconcile.yml (which runs --skip-upload), THIS deploy uploads, so it also exercises
-        # validate_bucket_exists -> `aws s3api head-bucket` (needs the role's DataLakeHeadBucket
-        # s3:ListBucket grant) and update-function-code + the deploy-record write.
+        # upload/deploy go through the AWS CLI via subprocess, not boto3.
         if: steps.oidc_deploy.outcome == 'success'
         run: pip install pyyaml pydantic
 
-      - name: Build + upload + deploy DuckLake Lambda code
+      - name: Build + upload ALL DuckLake artifacts, deploy maintenance + maintenance-smoke only
+        # Builds and uploads all eight artifacts (five zips + three layers) as before -- deploy-
+        # serving later reuses these same uploaded artifacts via --ducklake-deploy-only, so they
+        # must not be built twice. --ducklake-functions narrows WHICH functions get their code
+        # updated to just the two maintenance functions (DOUBLE-BUILD avoidance).
         id: deploy_code
         if: steps.oidc_deploy.outcome == 'success'
         run: |
           set -euo pipefail
-          python -m scripts.build_lambda --ducklake-only --deploy --profile "" --bucket agent-platform-data-lake
+          python -m scripts.build_lambda --ducklake-only --deploy \
+            --ducklake-functions agent-platform-ducklake-maintenance,agent-platform-ducklake-maintenance-smoke \
+            --profile "" --bucket agent-platform-data-lake
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+
+  maintenance-smoke:
+    needs: deploy-maintenance
+    if: needs.deploy-maintenance.outputs.deployed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write  # OIDC token minting for assume-role
+      contents: read
+
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC -- github_ci_branch role, DuckLake maintenance-smoke invoke)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
+          aws-region: eu-west-2
+
+      - name: Assert deploy-record freshness (source_git_sha == github.sha, maintenance functions only)
+        # False-green guard (Decision 55): a skipped/partial/stale deploy must not let the smoke
+        # gates report green against previously-deployed code. Narrowed to THIS leg's own function
+        # set (maintenance, maintenance-smoke) -- the writer/reader/catalog-dr records are
+        # deploy-serving's concern, not this leg's.
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for fn in agent-platform-ducklake-maintenance agent-platform-ducklake-maintenance-smoke; do
+            RECORD=$(aws s3 cp "s3://agent-platform-data-lake/deploy-records/ducklake/${fn}.json" - --region eu-west-2)
+            ACTUAL_SHA=$(printf '%s' "$RECORD" | python3 -c "import json,sys; print(json.load(sys.stdin).get('source_git_sha') or '')")
+            if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::DEPLOY_RECORD_STALE ${fn}: source_git_sha=${ACTUAL_SHA} != github.sha=${EXPECTED_SHA} -- a stale or skipped deploy cannot report smoke-green (Decision 55 false-green guard)." >&2
+              exit 1
+            fi
+            echo "OK ${fn} deploy record fresh: ${ACTUAL_SHA}"
+          done
+
+      - name: Resolve DuckLake maintenance-smoke Function URL
+        run: |
+          set -euo pipefail
+          URL=$(aws lambda get-function-url-config --function-name "agent-platform-ducklake-maintenance-smoke" --region eu-west-2 --query FunctionUrl --output text)
+          if [ -z "$URL" ] || [ "$URL" = "None" ]; then
+            echo "::error::Could not resolve the maintenance-smoke Function URL via get-function-url-config." >&2
+            exit 1
+          fi
+          echo "::add-mask::${URL}"
+          echo "DUCKLAKE_MAINTENANCE_SMOKE_URL=${URL}" >> "$GITHUB_ENV"
+          echo "Resolved DUCKLAKE_MAINTENANCE_SMOKE_URL (masked)."
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies (venv)
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Smoke test -- maintenance-merge (T2.18 c9 autonomous gate)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-merge
+
+      - name: Smoke test -- maintenance-gc (T2.18 c9 autonomous gate)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-gc
+
+      - name: Smoke test -- maintenance-breaker (T2.18 c9 autonomous gate)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-breaker
+
+      - name: Smoke test -- maintenance-hot-merge (T2.18 c9 autonomous gate)
+        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-hot-merge
+
+  reconcile-gate:
+    needs: deploy-maintenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install gate runtime deps
+        run: pip install pyyaml pydantic
+
+      - name: Reconcile-pending deploy gate (static, zero-egress -- Decision 88)
+        # Refuses the serving deploy while any reconcile_scope=ducklake table in
+        # config/lambda/ducklake/field_semantics.static.yaml has a non-empty pending_reconcile.
+        # Shares its predicate with validate_reconcile_pending_gate (the merge-time check) --
+        # ONE module, two entrypoints, so the two can never drift apart.
+        run: python -m scripts.checks.ops_governance.validate_reconcile_pending_gate --deploy-gate
+
+  deploy-serving:
+    needs: [reconcile-gate, deploy-maintenance]
+    if: needs.deploy-maintenance.outputs.deployed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      deployed: ${{ steps.deploy_code.outputs.deployed }}
+    permissions:
+      id-token: write  # OIDC token minting for assume-role
+      contents: read
+
+    env:
+      AWS_DEFAULT_REGION: eu-west-2
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC -- merged deploy role, main only)
+        # Same bootstrap-window tolerance as deploy-maintenance, scoped by the SAME
+        # DEPLOY_ROLE_PROVISIONED repo variable (T2.49 / DEP-12, one shared role/signal).
+        id: oidc_deploy
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-deploy
+          aws-region: eu-west-2
+
+      - name: Classify assume-role outcome (scope the tolerance to the genuinely-absent role)
+        if: steps.oidc_deploy.outcome != 'success'
+        env:
+          ROLE_PROVISIONED: ${{ vars.DEPLOY_ROLE_PROVISIONED }}
+        run: |
+          set -euo pipefail
+          if [ "$ROLE_PROVISIONED" = "true" ]; then
+            echo "::error::assume-role failed but DEPLOY_ROLE_PROVISIONED=true -- the merged agent-platform-github-ci-deploy role is expected to exist, so this is a real regression (trust/policy/throttle/federation), NOT the bootstrap window. Failing loud (Decision 55) rather than reporting a silent green no-op deploy."
+            exit 1
+          fi
+          echo "::warning::assume-role failed and DEPLOY_ROLE_PROVISIONED is not 'true' -- treating as the pre-provisioning bootstrap window (role genuinely absent). No deploy performed (deployed=false); the operator lands the gated apply and sets DEPLOY_ROLE_PROVISIONED=true to close this window."
+
+      - name: Setup Python 3.12
+        if: steps.oidc_deploy.outcome == 'success'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install build_lambda runtime deps
+        if: steps.oidc_deploy.outcome == 'success'
+        run: pip install pyyaml pydantic
+
+      - name: Deploy writer + reader + catalog-dr from existing S3 artifacts (--ducklake-deploy-only)
+        # No build/upload here -- deploy-maintenance already built + uploaded all eight artifacts
+        # this run. Skipping the rebuild avoids the DOUBLE-BUILD hazard (re-uploading identical
+        # bytes and desynchronising a deploy record's code_sha256 from the S3 key it names).
+        id: deploy_code
+        if: steps.oidc_deploy.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python -m scripts.build_lambda --ducklake-only --deploy --ducklake-deploy-only \
+            --ducklake-functions agent-platform-ducklake-writer,agent-platform-ducklake-reader,agent-platform-ducklake-catalog-dr \
+            --profile "" --bucket agent-platform-data-lake
           echo "deployed=true" >> "$GITHUB_OUTPUT"
 
   smoke:
-    needs: deploy
-    if: needs.deploy.outputs.deployed == 'true'
+    needs: deploy-serving
+    if: needs.deploy-serving.outputs.deployed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -172,16 +360,14 @@ jobs:
           role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agent-platform-github-ci-branch
           aws-region: eu-west-2
 
-      - name: Assert deploy-record freshness (source_git_sha == github.sha)
-        # False-green guard (Decision 55): a skipped/partial/stale deploy must not let the smoke
-        # gates report green against previously-deployed code. Reads each of the five deploy
-        # records this run's deploy job wrote and asserts source_git_sha matches the commit that
-        # triggered this workflow run.
+      - name: Assert deploy-record freshness (source_git_sha == github.sha, serving functions only)
+        # False-green guard (Decision 55), narrowed to THIS leg's own function set (writer,
+        # reader, catalog-dr) -- the maintenance records are maintenance-smoke's concern.
         env:
           EXPECTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          for fn in agent-platform-ducklake-writer agent-platform-ducklake-reader agent-platform-ducklake-maintenance agent-platform-ducklake-maintenance-smoke agent-platform-ducklake-catalog-dr; do
+          for fn in agent-platform-ducklake-writer agent-platform-ducklake-reader agent-platform-ducklake-catalog-dr; do
             RECORD=$(aws s3 cp "s3://agent-platform-data-lake/deploy-records/ducklake/${fn}.json" - --region eu-west-2)
             ACTUAL_SHA=$(printf '%s' "$RECORD" | python3 -c "import json,sys; print(json.load(sys.stdin).get('source_git_sha') or '')")
             if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
@@ -212,23 +398,6 @@ jobs:
             echo "Resolved DUCKLAKE_${role^^}_URL (masked)."
           done
 
-      - name: Resolve DuckLake maintenance-smoke Function URL
-        # Same rationale as the writer/reader resolution above; a dedicated step (not folded into
-        # that loop) because the function name (agent-platform-ducklake-maintenance-smoke) and the
-        # target env var (DUCKLAKE_MAINTENANCE_SMOKE_URL) don't fit the loop's
-        # agent-platform-ducklake-${role} / DUCKLAKE_${role^^}_URL naming convention -- bash
-        # uppercasing does not translate a hyphenated role into the underscored env var name.
-        run: |
-          set -euo pipefail
-          URL=$(aws lambda get-function-url-config --function-name "agent-platform-ducklake-maintenance-smoke" --region eu-west-2 --query FunctionUrl --output text)
-          if [ -z "$URL" ] || [ "$URL" = "None" ]; then
-            echo "::error::Could not resolve the maintenance-smoke Function URL via get-function-url-config." >&2
-            exit 1
-          fi
-          echo "::add-mask::${URL}"
-          echo "DUCKLAKE_MAINTENANCE_SMOKE_URL=${URL}" >> "$GITHUB_ENV"
-          echo "Resolved DUCKLAKE_MAINTENANCE_SMOKE_URL (masked)."
-
       - name: Setup Python 3.12
         uses: actions/setup-python@v6
         with:
@@ -245,15 +414,3 @@ jobs:
 
       - name: Smoke test -- lambda-reader (EC1/boundary closed reader path)
         run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-reader
-
-      - name: Smoke test -- maintenance-merge (T2.18 c9 autonomous gate)
-        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-merge
-
-      - name: Smoke test -- maintenance-gc (T2.18 c9 autonomous gate)
-        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-gc
-
-      - name: Smoke test -- maintenance-breaker (T2.18 c9 autonomous gate)
-        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-breaker
-
-      - name: Smoke test -- maintenance-hot-merge (T2.18 c9 autonomous gate)
-        run: .venv/bin/python -m scripts.ducklake_neon_smoke_test --lambda-maintenance-hot-merge

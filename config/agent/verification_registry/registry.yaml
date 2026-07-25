@@ -1734,3 +1734,59 @@ entries:
       - -c
       - |
         grep -A8 '"IAMRoleReconcile"' terraform/bootstrap/github_ci_apply.tf | grep -q '"iam:UpdateAssumeRolePolicy"' && ! grep -A8 '"IAMRoleReconcile"' terraform/bootstrap/github_ci_apply.tf | grep -q '"iam:TagRole"'
+  - check_id: reconcile-pending-gate-unit-tests
+    primitive_slot: test_selector
+    guard_target: scripts/checks/ops_governance/validate_reconcile_pending_gate.py
+    guard_symbol: validate_reconcile_pending_gate
+    plan_slug: ducklake-applied-schema-gate
+    graduated_at: '2026-07-25'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/checks/ops_governance/test_validate_reconcile_pending_gate.py
+  - check_id: build-lambda-deploy-function-subset
+    primitive_slot: command_exit_zero
+    guard_target: scripts/build_lambda_deploy.py
+    guard_symbol: update_lambda_functions
+    plan_slug: ducklake-applied-schema-gate
+    graduated_at: '2026-07-25'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - bin/venv-python -m pytest tests/build_lambda_deploy/test_function_subset.py tests/test_build_lambda_config.py -q
+  - check_id: reconcile-pending-gate-registered-both-tiers
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/registry.py
+    guard_symbol: null
+    plan_slug: ducklake-applied-schema-gate
+    graduated_at: '2026-07-25'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        test "$(grep -c 'validate_reconcile_pending_gate' scripts/checks/registry.py)" = "2" && grep -q "validate_reconcile_pending_gate" scripts/validate.py
+  - check_id: ducklake-deploy-job-topology
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/deploy-ducklake-lambdas.yml
+    guard_symbol: null
+    plan_slug: ducklake-applied-schema-gate
+    graduated_at: '2026-07-25'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        bin/venv-python -c "import yaml; j=yaml.safe_load(open('.github/workflows/deploy-ducklake-lambdas.yml'))['jobs']; assert set(j)=={'deploy-maintenance','maintenance-smoke','reconcile-gate','deploy-serving','smoke'}; assert 'reconcile-gate' in j['deploy-serving']['needs']; assert 'deploy-maintenance' in j['deploy-serving']['needs']; assert '--deploy-gate' in yaml.dump(j['reconcile-gate'])"
+  - check_id: field-semantics-reconcile-scope-subset-rejection
+    primitive_slot: test_selector
+    guard_target: scripts/schema_to_field_semantics.py
+    guard_symbol: _enforce_reconcile_pending_subset
+    plan_slug: ducklake-applied-schema-gate
+    graduated_at: '2026-07-25'
+    graduated_by: implement-agent
+    check_spec:
+      node_id: tests/test_schema_to_field_semantics.py::TestReconcileScopeSubset

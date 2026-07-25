@@ -82,7 +82,13 @@ def upload_to_s3(zip_path: Path, bucket: str, profile: str, region: str, *, arti
 
 
 def update_lambda_functions(
-    bucket: str, profile: str, region: str, *, only_ducklake: bool = False, artifact_sha: Optional[str] = None
+    bucket: str,
+    profile: str,
+    region: str,
+    *,
+    only_ducklake: bool = False,
+    artifact_sha: Optional[str] = None,
+    only_functions: Optional[set[str]] = None,
 ) -> None:
     """Update Lambda function code to point at the latest S3 ZIPs.
 
@@ -104,15 +110,35 @@ def update_lambda_functions(
     read, unchanged prior behaviour) so a bare call is unaffected; ``scripts/build_lambda.py``'s
     orchestrators thread the build's resolved sha through explicitly.
 
+    ``only_functions`` (hotfix follow-up to the 2026-07-24 ops_decisions incident -- splits the
+    ducklake deploy into a maintenance leg and a serving leg so the reconcile gate can refuse only
+    the latter): further filters ``only_ducklake``'s five-function map down to the named subset.
+    Raises ``ValueError`` on an unrecognised function name (a subset deploy that silently
+    intersects to empty and reports success is exactly the false-green this exists to prevent) and
+    on ``only_functions`` passed with ``only_ducklake=False`` (the prod branch builds a different
+    map; subsetting it is out of scope). ``None`` (the default) deploys all five ducklake functions,
+    unchanged from prior behaviour.
+
     Ref: AWS CLI ``lambda update-function-code`` requires
     --function-name, --s3-bucket, --s3-key; optional --region and
     --profile.  Ref: ``docs/contracts/inference-provider.yaml`` for
     the inference-client packaging requirements.
     """
+    if only_functions is not None and not only_ducklake:
+        raise ValueError("only_functions requires only_ducklake=True -- the prod branch builds a different map.")
+
     if only_ducklake:
         # Scope the deploy to the four DuckLake functions ONLY: data-pipeline + ops-compaction are
         # NOT redeployed by a T2.17/T2.18 deploy (Decision 79 affected-artifact hygiene).
         function_zip_map = dict(_build_ducklake_function_zip_keys())
+        if only_functions is not None:
+            unrecognised = only_functions - set(function_zip_map)
+            if unrecognised:
+                raise ValueError(
+                    f"only_functions names unrecognised function(s) {sorted(unrecognised)} -- "
+                    f"expected a subset of {sorted(function_zip_map)}."
+                )
+            function_zip_map = {fn: key for fn, key in function_zip_map.items() if fn in only_functions}
         channel = "ducklake"
     else:
         function_zip_map = {fn: "lambda-packages/data-pipeline.zip" for fn in _build_prod_function_names()}

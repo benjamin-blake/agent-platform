@@ -75,6 +75,8 @@ cli_flags:
   - --deploy
   - --ducklake-only
   - --list-bundle
+  - --ducklake-functions
+  - --ducklake-deploy-only
   - --ducklake-publish-canary-layers
 
 verified_against:
@@ -89,7 +91,7 @@ deploy_channels:
     root: terraform/personal
     channel_class: terraform_personal_ignore_changes_decoupled  # #544 landed the decoupling (Decision 125/126)
     see: docs/contracts/environment-taxonomy.md#5-lambda-codeinfra-decoupling-principle-personal-account-lambdas
-    governed_channel: .github/workflows/deploy-ducklake-lambdas.yml  # T2.38: the DEFAULT channel -- push-to-main (ducklake source paths) or workflow_dispatch; assumes the merged agent-platform-github-ci-deploy role (T2.49 / DEP-12, UpdateFunctionCode-only on function:agent-platform-*), runs build_lambda --ducklake-only --deploy, gates on --lambda-attach/--lambda-reader smoke
+    governed_channel: .github/workflows/deploy-ducklake-lambdas.yml  # T2.38 (five-job split, hotfix follow-up to the 2026-07-24 ops_decisions incident): the DEFAULT channel -- push-to-main (ducklake source paths) or workflow_dispatch; assumes the merged agent-platform-github-ci-deploy role (T2.49 / DEP-12, UpdateFunctionCode-only on function:agent-platform-*). deploy-maintenance builds+uploads ALL artifacts once and deploys maintenance + maintenance-smoke (ungated) -> maintenance-smoke + reconcile-gate (the latter invoking validate_reconcile_pending_gate --deploy-gate, refusing the serving leg while any reconcile_scope=ducklake table has a non-empty pending_reconcile) -> deploy-serving (--ducklake-deploy-only for writer/reader/catalog-dr) -> smoke (--lambda-attach/--lambda-reader)
     break_glass_only: "bin/venv-python -m scripts.build_lambda --ducklake-only --deploy"  # genuinely NON-DEFAULT now that governed_channel exists (T2.38) -- retained as a fallback for when the governed channel cannot run (mirrors the agent_platform_admin human-gated IAM-apply precedent), not the routine agent path
   prod_functions:  # data-pipeline.zip targets above
     root: terraform/personal  # T2.43: provisioned in terraform/personal/prod_lambdas.tf
