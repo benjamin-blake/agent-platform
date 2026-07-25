@@ -1,0 +1,517 @@
+schema_version: 1
+slug: "check-corpus-curation"
+intent: >-
+  Curate the validate.py check corpus so every registered check earns its cost and runs where
+  it can fail: rescope the two dead prompt checks onto the live scheduled-agent surface, diff-gate
+  the expensive whole-tree checks in --pre only, close the two whole-tree tier asymmetries, delete
+  a redundant import-smoke check, and disambiguate the verifier-coverage naming -- ending the
+  audit's confirmed no-op/asymmetry findings without changing full-tier coverage.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-check-corpus-curation.yaml
+phase: >-
+  Platform hardening -- validate-test-suite audit remediation (Slice D: check-corpus curation).
+  Findings VTS-08 / VTS-09 / VTS-17 / VTS-19 / VTS-23 and VTS-21's FREE RENAMES only
+  (source of truth: audits/validate-test-suite-4df4d48.yaml check_disposition + findings).
+  Audit-driven; no tier_item exit-criteria closed by this slice.
+scope:
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      VTS-09 add a declarative `pre_globs: tuple[str, ...] | None = None` field to the `Step`
+      dataclass + `_c()` and set it on the six expensive pre-tier checks (DATA only -- the glob
+      match + run/skip decision live in validate.py, whose concern-split test home tests/validate/
+      has SLOC headroom; see the SLOC context note). VTS-19 add validate_cc_limits +
+      validate_deploy_channel_conformance to full_sequence(). VTS-23 remove the validate_imports
+      full_sequence entry. VTS-08 drop the SECOND (prompts-block) validate_cli_tools_in_prompts
+      dispatch in full_sequence() AND fix the full_sequence() docstring (lines 148-152 state
+      cli_tools "legitimately appears twice ... preserved verbatim" -- false after the drop).
+      VTS-21 rename the _s("coverage_report") pre_sequence scaffold to _s("verifier_coverage_report").
+      VTS-17 add a one-paragraph intent note on the Check.owner/product_coupled fields.
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      VTS-09 house the pre_globs gate logic here (validate.py maps to the concern-split test dir
+      tests/validate/, which has SLOC headroom): add module-level `_pre_glob_match(path, glob)` and
+      `_should_run_in_pre(pre_globs, changed_paths, derivation_ok)`; in the --pre loop derive the
+      changed-path set inside try/except and, for each check step, skip + print
+      "skipped-by-glob: <name>" when the gate returns False, else dispatch. Fail-closed: run all
+      gated checks on derivation exception/unexpected OR empty derived set. Full-tier dispatch
+      (run_python_checks) is untouched. VTS-23 delete the validate_imports facade re-export line
+      (line 115). VTS-08 edit the KNOWN_MODELS facade import (line 193: `from
+      scripts.checks.prompts.validate_prompt_files import KNOWN_MODELS, validate_prompt_files` ->
+      drop KNOWN_MODELS, else `import scripts.validate` raises ImportError and crashes the suite).
+      VTS-21 rename --coverage to --verifier-coverage keeping --coverage as a working deprecated
+      alias (both option strings -> one dest, deprecation note on alias use); rename the
+      coverage_report scaffold closure + scaffold_fns key to verifier_coverage_report.
+  - file: scripts/checks/prompts/validate_prompt_files.py
+    action: Modify
+    purpose: >-
+      VTS-08 re-point the glob to .github/prompts/scheduled/*.prompt.md and assert the surface is
+      non-empty (ends the "All 0 passed" no-op). Adapt per-file validation to the scheduled-prompt
+      structural contract the live files actually meet (H1 title line + >=1 `## ` section + the
+      existing dead relative-reference check); REMOVE the VS-Code-format assertions (YAML
+      frontmatter / name / description / inline model / `## Intent`) and the hand-maintained
+      KNOWN_MODELS constant -- models live in schedule.yaml under the retired copilot-sdk provider
+      (dec-116) with no canonical scheduled-model allowlist, so re-homing a model check here would
+      be a dec-86 second-source violation (see context NOTE 1).
+  - file: scripts/checks/hygiene/validate_cli_tools_in_prompts.py
+    action: Modify
+    purpose: >-
+      VTS-08 re-point search_dirs at .github/prompts/scheduled/ (the emptied top-level
+      .github/prompts/ and the .md-free .github/agents/ are dropped); the bash-code-block CLI-tool
+      scan logic is preserved verbatim.
+  - file: scripts/checks/deps/validate_imports.py
+    action: Delete
+    purpose: >-
+      VTS-23 delete the hardcoded 2-module import-smoke check (16.1s/full run); the same full
+      tier's whole-suite pytest collection imports execute_recommendation + classify_risk
+      transitively and asserts the identical importability property (it is full-tier-only, never
+      in pre_sequence -- no --pre coverage is narrowed; context NOTE 2).
+  - file: tests/test_checks_registry.py
+    action: Modify
+    purpose: >-
+      Same-commit frozen-baseline lockstep (dec-104, NOTE 4), EDITS ONLY -- this file is at 495/500
+      SLOC (unregistered), so it takes NO new gate-helper tests (dec-128 decompose-don't-raise; see
+      the SLOC context note): add validate_cc_limits + validate_deploy_channel_conformance to
+      REQUIRED_FULL_CHECKS and remove validate_imports; replace
+      test_full_sequence_cli_tools_in_prompts_appears_exactly_twice with an exactly-once assertion
+      (+ docstring); rename "coverage_report" to "verifier_coverage_report" in FROZEN_PRE_SCAFFOLDS.
+      Net ~+1 SLOC (-> ~496, under budget). The pre_globs Step field is data already exercised by the
+      existing pre_sequence()/full_sequence() iteration tests in this file; the gate-helper unit
+      tests live in tests/validate/test_tiers.py (validate.py's coverage home).
+  - file: tests/checks/hygiene/test_validate_cli_tools_in_prompts.py
+    action: Modify
+    purpose: >-
+      VTS-08 update the fixtures that build .github/prompts/ to build .github/prompts/scheduled/
+      so the mirror test exercises the rescoped search path.
+  - file: tests/checks/prompts/test_validate_prompt_files.py
+    action: Create
+    purpose: >-
+      VTS-08 new mirror test (coverage policy: validate_prompt_files.py is modified and currently
+      has no test home). Cover the scheduled-prompt structural contract (H1 + section + dead-ref),
+      the non-empty-surface guard, and a live-surface pass against the real
+      .github/prompts/scheduled/ tree (substantive rec-2396 closure evidence).
+  - file: tests/checks/prompts/__init__.py
+    action: Create
+    purpose: >-
+      Empty package marker for the new tests/checks/prompts/ mirror dir -- every sibling
+      (tests/checks/{hygiene,roadmap,deps}/) carries one per the prepend-import mirror convention;
+      without it the new test module's package import is inconsistent with the tree.
+  - file: tests/validate/test_tiers.py
+    action: Modify
+    purpose: >-
+      VTS-09 home the pre_globs gate tests HERE (tests/validate/ is validate.py's concern-split
+      coverage home -- check_per_file_coverage runs the whole dir, so these tests cover validate.py's
+      _pre_glob_match/_should_run_in_pre; and this file is at 388 SLOC with headroom). Add: unit
+      tests for _pre_glob_match on the six gate globs (positive + negative paths) and
+      _should_run_in_pre (match->run, non-match->skip, derivation-exception->run, empty-set->run,
+      pre_globs-None->run); end-to-end tests that a docs-only diff logs skipped-by-glob and skips the
+      roadmap trio in --pre while running them in full, a tests/**-only diff skips
+      count-coupling/cross-imports, and a **/*.py diff runs validate_cc_limits. Confirm the existing
+      TestSlocLimitsInPreMode (empty get_changed_files) stays green under empty->run-all.
+  - file: tests/validate/test_scaffold_gates.py
+    action: Modify
+    purpose: >-
+      VTS-21 add a main()-argv test asserting --verifier-coverage runs the advisory report and
+      exits 0, and that the --coverage deprecated alias still resolves to the same behavior.
+bundled_recommendations:
+  - rec-2396
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    validate_prompt_files and validate_cli_tools_in_prompts glob
+    .github/prompts/scheduled/*.prompt.md and pass green with a NON-ZERO file count against the
+    live surface; a zero-file result fails loudly (the "All 0 ... passed" no-op is gone).
+  - >-
+    validate_prompt_files validates the scheduled-prompt structural contract (H1 title + >=1 `## `
+    section + dead relative-reference check) and no longer requires YAML frontmatter / name /
+    description / inline model / `## Intent`; the KNOWN_MODELS constant is removed (no second
+    model-validity source, dec-86).
+  - >-
+    validate_cli_tools_in_prompts appears exactly ONCE in registry.full_sequence(); the registry
+    test asserts exactly-once (the appears_exactly_twice test is replaced).
+  - >-
+    A declarative `pre_globs` field exists on the pre-tier Step (registry.py) and validate.py's
+    --pre loop honors it via `_should_run_in_pre`: a gated check whose input globs match none of the
+    diff's paths logs "skipped-by-glob: <name>" and is skipped, while the same check runs
+    unconditionally in full_sequence() (merge-race backstop preserved).
+  - >-
+    The pre_globs gate is FAIL-CLOSED: on a diff-derivation exception/unexpected return OR an empty
+    derived diff-path set, every gated check RUNS (never silently skips) -- asserted by unit tests.
+  - >-
+    validate_cc_limits and validate_deploy_channel_conformance are present in both
+    registry.full_sequence() and the REQUIRED_FULL_CHECKS floor.
+  - >-
+    validate_imports is fully retired: the module file, the registry full_sequence entry, the
+    validate.py facade re-export line, and the REQUIRED_FULL_CHECKS floor entry are all removed in
+    one commit and a grep finds zero residual references under scripts/ + tests/test_checks_registry.py.
+  - >-
+    registry.py carries a one-paragraph intent note documenting who consumes Check.owner /
+    product_coupled and when.
+  - >-
+    --coverage is renamed to --verifier-coverage with --coverage retained as a working deprecated
+    alias; the coverage_report scaffold is renamed to verifier_coverage_report in registry
+    pre_sequence, FROZEN_PRE_SCAFFOLDS, and the main() scaffold_fns closure; the registry
+    equivalence oracle (tests/test_checks_registry.py) passes.
+  - >-
+    All frozen-baseline updates (FROZEN_PRE_SCAFFOLDS rename, floor add/remove, exactly-once)
+    land in the SAME commit as the registry.py changes and the full tests/test_checks_registry.py
+    suite is green.
+  - >-
+    Every touched .py file stays <=500 SLOC by the repo's definition (non-blank, non-#-comment
+    lines) with NO raise-approved marker added (dec-128): gate logic + gate tests are homed in
+    validate.py / tests/validate/ (headroom), keeping the 495-SLOC tests/test_checks_registry.py
+    under budget.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Rescoped prompt checks pass green against the LIVE scheduled surface with a non-zero file
+      count (VTS-08; substantive rec-2396 closure evidence).
+    command: >-
+      bin/venv-python -m pytest tests/checks/prompts/test_validate_prompt_files.py
+      tests/checks/hygiene/test_validate_cli_tools_in_prompts.py -q
+    expected: >-
+      All tests pass, including a case that invokes validate_prompt_files against the real
+      .github/prompts/scheduled/ tree and asserts >0 files validated with no failures.
+    fix_if: >-
+      A test reds -> the rescoped glob or the scheduled-prompt structural rules are wrong (the live
+      prompts have no YAML frontmatter / `## Intent`); realign the assertions to the H1+section+dead-ref
+      contract, or the fixtures still build the old .github/prompts/ top-level path.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The standing regression guard IS the committed mirror test
+      tests/checks/prompts/test_validate_prompt_files.py (plus the hygiene mirror); graduating this
+      pytest invocation into the verification registry would duplicate the suite's own assertion.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Registry equivalence oracle green: floors updated (cc_limits + deploy_channel added,
+      validate_imports removed), cli_tools exactly-once in full, FROZEN_PRE_SCAFFOLDS renamed to
+      verifier_coverage_report, and the new pre_globs/gate-helper unit tests pass (VTS-08/09/19/21/23, NOTE 4).
+    command: bin/venv-python -m pytest tests/test_checks_registry.py -q
+    expected: >-
+      All tests pass; the membership-floor, scaffold-anchor, exactly-once, and pre_globs helper
+      assertions hold against the mutated sequences.
+    fix_if: >-
+      A floor/scaffold/oracle test reds -> a frozen-baseline edit was missed in the same commit
+      (dec-104 lockstep): re-check REQUIRED_FULL_CHECKS, FROZEN_PRE_SCAFFOLDS, and the exactly-once test.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The registry equivalence oracle already lives as the committed
+      tests/test_checks_registry.py suite (growth-safe floors + scaffold-anchor invariants);
+      graduating this run duplicates that standing oracle.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      pre_globs gate behaves correctly and fail-closed (VTS-09, NOTE 3): non-matching diff skips
+      + logs skipped-by-glob; matching diff runs the check; diff-derivation exception AND empty
+      derived set both RUN all gated checks; full tier is unaffected.
+    command: bin/venv-python -m pytest tests/validate/test_tiers.py -q
+    expected: >-
+      All tests pass, including the new gate cases (docs-only diff skips the roadmap trio; a
+      **/*.py diff runs validate_cc_limits; exception/empty -> all gated checks run) and the
+      pre-existing TestSlocLimitsInPreMode.
+    fix_if: >-
+      A skip fires on empty/failed derivation -> the gate is fail-OPEN; make should_run_in_pre
+      return True whenever the derived path set is empty or derivation raised (dec-153 conservative read).
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The gate's regression guard is the committed tests/validate/test_tiers.py gate cases;
+      graduating this pytest run duplicates the suite's standing assertion.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Verifier-coverage rename + deprecated alias both work (VTS-21): --verifier-coverage runs the
+      advisory report and exits 0; --coverage alias resolves to the same behavior.
+    command: bin/venv-python -m pytest tests/validate/test_scaffold_gates.py -q
+    expected: All tests pass, including the new --verifier-coverage and --coverage-alias argv cases.
+    fix_if: >-
+      The alias case reds -> argparse maps only the new flag; add --coverage as a second option
+      string on the same dest (keep args.<dest> working) and emit a deprecation note on alias use.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The alias behavior is guarded by the committed tests/validate/test_scaffold_gates.py case;
+      graduating this run duplicates the suite's standing assertion.
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Positive retirement confirmation for the validate_imports Delete (VTS-23): module absent and
+      zero residual references across the code surface.
+    command: >-
+      test ! -f scripts/checks/deps/validate_imports.py && test -z "$(grep -rn --include=*.py
+      validate_imports scripts/checks scripts/validate.py tests/test_checks_registry.py)" && echo RETIRED
+    expected: Prints "RETIRED" (module file gone AND no residual validate_imports references).
+    fix_if: >-
+      Non-zero exit / no "RETIRED" -> a reference survives (registry full_sequence entry, the
+      validate.py facade line, or the floor entry) or the module file was not deleted; remove the
+      remaining occurrence in the same commit.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time retirement confirmation for the validate_imports cutover -- a point-in-time
+      migration assertion (module-absence + zero residual references) subsumed permanently by the
+      REQUIRED_FULL_CHECKS floor removal + TestFacadeCompleteness; a standing "is-absent" registry
+      check would duplicate that floor guard.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Stale-surface sweep (Closure Obligation): both rescoped prompt checks now target the live
+      scheduled surface and no longer glob the T-1.13-emptied top-level path (VTS-08).
+    command: >-
+      grep -q "scheduled" scripts/checks/prompts/validate_prompt_files.py && grep -q "scheduled"
+      scripts/checks/hygiene/validate_cli_tools_in_prompts.py && echo REPOINTED
+    expected: Prints "REPOINTED" (both checks reference the .github/prompts/scheduled/ surface).
+    fix_if: >-
+      No "REPOINTED" -> a check still points at the emptied top-level .github/prompts/ path; update
+      its glob / search_dirs to the scheduled/ subdirectory.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      One-time surface-cutover confirmation (emptied top-level -> scheduled/) -- a point-in-time
+      migration assertion subsumed permanently by the committed rescope tests (the new mirror test
+      + the cli_tools fixture update); graduating it would duplicate those standing tests.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      End-to-end fast-tier integration: the full --pre tier is green on the branch with the gate,
+      rescopes, tier moves, deletion, and rename applied (the pre_globs gate itself dispatches).
+    command: bin/venv-python -m scripts.validate --pre
+    expected: >-
+      "=== Validation Summary (scope: pre) ===" then "All checks passed."; the run logs
+      skipped-by-glob for any gated check whose globs the branch diff does not touch.
+    fix_if: >-
+      Any check reds -> diagnose the specific failure; if the gate skipped a check that should have
+      run for this diff, widen/fix that check's pre_globs or the match helper. Do NOT mark this step
+      hermetic (it invokes validate --pre -> recursion).
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Every touched .py file stays <=500 SLOC by the repo's own definition (non-blank, non-#-comment
+      lines) -- the dec-128 decomposition holds (gate logic + gate tests homed off the 495-SLOC
+      tests/test_checks_registry.py, no raise-approved marker).
+    command: >-
+      for f in scripts/validate.py scripts/checks/registry.py
+      scripts/checks/prompts/validate_prompt_files.py
+      scripts/checks/hygiene/validate_cli_tools_in_prompts.py tests/test_checks_registry.py
+      tests/validate/test_tiers.py tests/validate/test_scaffold_gates.py
+      tests/checks/hygiene/test_validate_cli_tools_in_prompts.py
+      tests/checks/prompts/test_validate_prompt_files.py; do n=$(grep -cvE
+      '^[[:space:]]*(#|$)' "$f"); test "$n" -le 500 || { echo "OVER $f=$n"; exit 1; }; done;
+      echo ALL_UNDER_500
+    expected: Prints "ALL_UNDER_500"; exits 0 (every touched file <=500 SLOC by the repo definition).
+    fix_if: >-
+      "OVER <file>=<n>" -> decompose that file (relocate cohesive tests to a home with headroom, or
+      a facade package) rather than adding a raise-approved marker (dec-128).
+    hermetic: true
+    graduation: not-applicable
+constraints:
+  - Only the 11 files in the scope table may be modified/created (AGENTS.md only-modify-in-scope).
+  - >-
+    No new recommendations filed. bundled_recommendations is rec-2396, closed via the implement
+    PR's `Resolves: rec-2396` squash-merge trailer -- NOT during planning or implementation body.
+  - >-
+    IMPLEMENTATION plan type only (STRATEGIC suspended under the executor freeze, Decision 67);
+    authored as one cohesive plan, not decomposed into recommendations.
+  - >-
+    dec-104 three-place ritual: every tier move / deletion edits the check module (or its absence),
+    the registry sequence, and the validate.py facade line, and updates the growth-safe
+    tests/test_checks_registry.py floor + FROZEN_PRE_SCAFFOLDS in the SAME commit (NOTE 4).
+  - >-
+    pre_globs MUST be fail-closed: run every gated check on a diff-derivation exception/unexpected
+    return OR an empty derived path set; never silently skip (dec-55 loud fallback, dec-135
+    fallback-on-exception, dec-153 conservative .get(...,default=False) read) (NOTE 3).
+  - >-
+    Do NOT introduce a second hand-maintained model-validity source (dec-86). Scheduled-agent
+    model/provider governance stays owned by docs/contracts/inference-provider.yaml +
+    scripts/run_scheduled_agent.py (dec-116: copilot-sdk retired -> RetiredProviderError); its
+    migration is the open CD.28 PLAN-resolve-scheduled-agent-provider follow-on (NOTE 1).
+  - >-
+    Do NOT relocate map_source_to_test -- it rides the CD.30 retarget / Plan F (dec-131 owns it);
+    only the verifier-coverage CLI flag + scaffold name are renamed here (VTS-21 FREE HALF only).
+  - >-
+    dec-128 decompose-don't-raise, SLOC-aware homing (the binding constraint is
+    tests/test_checks_registry.py at 495/500, unregistered): house the pre_globs match +
+    run/skip-decision helpers in validate.py (~451 today; its coverage home tests/validate/ is a
+    concern-split dir run wholesale, with headroom) and home the gate-helper tests in
+    tests/validate/test_tiers.py -- NOT in tests/test_checks_registry.py (which gets edits-only,
+    ~+1 SLOC). Every touched file stays <=500 (VP step 8); NO raise-approved marker (Decision 128 /
+    Decision 130 whole-repo SLOC gate, both tiers).
+  - No rescue agents or workaround loops (Decision 55).
+  - >-
+    All VP commands are POSIX/coreutils (grep/test/find) -- the GitHub ubuntu-latest CI runner
+    replays hermetic VP steps via /bin/sh which LACKS rg (dec-148 hermetic replay; a local pass
+    does not prove CI).
+context:
+  - >-
+    Source of truth: audits/validate-test-suite-4df4d48.yaml (check_disposition rows for
+    validate_prompt_files / validate_cli_tools_in_prompts / validate_imports / validate_cc_limits /
+    validate_deploy_channel_conformance / validate_platform_roadmap|plan_documents|tier_floor;
+    findings VTS-08 / VTS-09 / VTS-17 / VTS-19 / VTS-21 / VTS-23).
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (4 NOTE, 0 BLOCK;
+    106/106 triaged). CITE: dec-104, dec-128, dec-132, dec-73, dec-135, dec-153, dec-76, dec-55,
+    dec-60, dec-116, dec-48, dec-122, dec-86, dec-118, dec-130, dec-131, dec-79, dec-148. Roadmap
+    refs (NOT decisions): CD.28, CD.29, CD.30. bundled rec-2396."
+  - >-
+    "gates: decision-scout=FLAGS_FOUND (4 NOTE, 0 BLOCK) after 1 round; plan-critique=REVISE round 1
+    (NOTE-1 removal upheld; 5 items addressed: SLOC decompose, validate.py:193 KNOWN_MODELS facade,
+    tests/checks/prompts/__init__.py, VP5/6 graduation->waive, full_sequence docstring) -> round 2 pending"
+  - >-
+    NOTE 1 (dec-86 / dec-122 / dec-116): the live scheduled prompts carry NO inline model; all
+    schedule.yaml entries declare provider copilot-sdk, RETIRED per dec-116 (RetiredProviderError);
+    docs/contracts/inference-provider.yaml exposes no canonical scheduled-model allowlist and its
+    migration is the open CD.28 PLAN-resolve-scheduled-agent-provider follow-on. Therefore
+    KNOWN_MODELS is REMOVED (not "refreshed" into a second-source allowlist); model/provider
+    validity stays owned by the inference-provider contract + run_scheduled_agent. This is a
+    deliberate, decision-grounded deviation from the human spec's literal "refresh KNOWN_MODELS".
+  - >-
+    NOTE 2 (dec-135 / dec-73): validate_imports is FULL-TIER ONLY (registry.full_sequence, absent
+    from pre_sequence). The full tier's whole-suite pytest collection imports execute_recommendation
+    + classify_risk transitively, subsuming the 2-module import smoke; no --pre import coverage is
+    narrowed because it never ran in --pre. The always-run full tier is the backstop.
+  - >-
+    NOTE 3 (dec-55 / dec-153): the pre_globs gate is fail-closed -- diff derivation is wrapped so an
+    exception/unexpected return OR an empty derived path set runs ALL gated checks with a loud
+    printed reason; mirrors dec-153's `.get("full_suite_forced", False)` conservative read. The
+    existing empty-get_changed_files tests (TestSlocLimitsInPreMode) stay green under empty->run-all.
+  - >-
+    NOTE 4 (dec-104): the pre_globs Step field, the coverage_report->verifier_coverage_report
+    scaffold rename, the cc_limits/deploy_channel tier moves, and dropping the duplicate
+    validate_cli_tools_in_prompts dispatch all mutate the frozen pre-sequence baseline +
+    FROZEN_PRE_SCAFFOLDS -> updated in the SAME commit; VP step 2 asserts the equivalence oracle.
+  - >-
+    Related decisions (awareness): dec-130 = validate_cc_limits whole-repo scope (VTS-19 target);
+    dec-79 supports moving deploy_channel_conformance to full-only; dec-131 owns map_source_to_test
+    (correctly NOT relocated); dec-48 names .github/prompts/scheduled/ + schedule.yaml as the live
+    surface and the V3 "verifier" tier that "verifier-coverage" refers to; dec-148 is why VP is POSIX.
+  - >-
+    ci_rca HARD BLOCK deferral: 3 unresolved ci_rca recs at planning time (rec-2844
+    validate_rec_write_paths DOTALL false-positive -- addressed by the interstitial C.1 hotfix;
+    rec-2842 terraform IAMRoleCreateBounded iam:TagRole; rec-2836 terraform kislerdm/neon 504
+    flake). None shares a scope file, Decision Record, or failure category with this check-corpus
+    curation slice, so per the /plan Related-Work HARD BLOCK this plan proceeds with a logged
+    deferral -- the ci_rca recs are handled on their own forward-fix tracks and are orthogonal here.
+  - >-
+    Branch was cut/rebased onto origin/main a8cb3dd (interstitial C.1 hotfix; scope disjoint from
+    this slice) at planning time; recon performed at 171c6f8 remains valid (C.1 touched only
+    scripts/checks/ops_governance/validate_rec_write_paths.py + its test).
+  - >-
+    Environment note: the working tree is shared across overseer slices (sibling claude/vts-*
+    branches present); re-verify `git branch --show-current` immediately before every edit/commit.
+  - >-
+    SLOC decomposition (dec-128, plan-critique R1 item 1): measured with the repo's own definition
+    (non-blank, non-#-comment) -- tests/test_checks_registry.py is 495/500 UNREGISTERED, so adding
+    ~+40 SLOC of gate-helper tests there would breach validate_sloc_limits (whole-repo, dec-130,
+    BOTH tiers) and red VP steps 2/7/8. Resolution (decompose, not raise): the pre_globs match +
+    run/skip helpers live in validate.py (451 -> ~470) and their tests in tests/validate/test_tiers.py
+    (388 -> ~445) -- validate.py's concern-split coverage home, which check_per_file_coverage runs
+    wholesale so coverage still resolves. tests/test_checks_registry.py takes edits-only (floor +/-,
+    scaffold rename, twice->once; ~496). registry.py holds pre_globs DATA only (211 -> ~226). Other
+    touched files: validate_prompt_files.py ~51, cli_tools ~44, test_scaffold_gates.py ~245,
+    test_tiers.py ~445 -- all <500. validate_imports.py has no sloc_budgets entry and no test file,
+    so its deletion touches neither. VP step 8 re-asserts every touched file <=500 with no raise marker.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/vts-d-plan-check-corpus-curation at origin/main a8cb3dd)
+  - docs/PROJECT_CONTEXT.md read
+  - >-
+    DECISIONS.md relevant sections read (dec-104, 128, 132, 73, 135, 153, 76, 55, 60, 116, 48, 122,
+    86, 118, 130, 131, 79, 148) and CD.28/CD.29/CD.30 roadmap refs understood as non-decisions
+  - audits/validate-test-suite-4df4d48.yaml check_disposition + findings VTS-08/09/17/19/21/23 read
+  - All 11 scope files located and readable (validate_imports.py present for deletion)
+  - >-
+    SLOC of every touched file measured with the repo definition; tests/test_checks_registry.py
+    confirmed at 495/500 (gate-helper tests homed in tests/validate/test_tiers.py, not here)
+  - docs/contracts/inference-provider.yaml read (dec-116 copilot-sdk retired; NOTE 1 grounding)
+  - Acceptance criteria understood and independently verifiable
+execution_steps:
+  - >-
+    registry.py (VTS-09, DATA only): add `pre_globs: tuple[str, ...] | None = None` to the Step
+    dataclass; extend `_c(name, pre_globs=None)` to carry it. In pre_sequence() set pre_globs on the
+    six checks: the roadmap trio (validate_platform_roadmap / validate_plan_documents /
+    validate_tier_floor) on ("docs/plans/**", "docs/ROADMAP-*", "docs/DECISIONS.md");
+    validate_test_count_coupling + validate_no_cross_test_imports on ("tests/**",); validate_cc_limits
+    on ("**/*.py",). The match + run/skip decision helpers do NOT live here -- they go in validate.py
+    (SLOC homing; the pre_globs literals are covered by the existing pre_sequence()-iteration tests).
+  - >-
+    registry.py (VTS-19 / VTS-23 / VTS-08 / VTS-21 / VTS-17): add _c("validate_cc_limits") adjacent
+    to validate_sloc_limits and _c("validate_deploy_channel_conformance") in the ops_governance
+    region of full_sequence(); delete the _c("validate_imports") line; remove the SECOND
+    validate_cli_tools_in_prompts dispatch (the prompts-block occurrence; keep the run_python_checks
+    one); FIX the full_sequence() docstring (lines 148-152: delete the "validate_cli_tools_in_prompts
+    legitimately appears twice ... preserved verbatim" sentences -- false after the drop); rename
+    _s("coverage_report") -> _s("verifier_coverage_report") in pre_sequence(); add a one-paragraph
+    docstring note on Check.owner/product_coupled (who consumes them and when).
+  - >-
+    validate.py (VTS-09, gate logic homed here): add module-level `_pre_glob_match(path, glob)`
+    (pathlib-** aware, fnmatch-based) and `_should_run_in_pre(pre_globs, changed_paths,
+    derivation_ok)` returning True when pre_globs is None, derivation failed, changed_paths is empty,
+    or any path matches -- and False ONLY on a successful, non-empty derivation with zero matches. In
+    the --pre loop derive the changed-path set from the already-built status-aware diff inside a
+    try/except (set derivation_ok=False + print a loud reason on any exception, dec-135); for
+    step.kind=="check" call _should_run_in_pre(step.pre_globs, changed_paths, derivation_ok) -- if
+    False, print "skipped-by-glob: <name>" and continue; else _dispatch_check. run_python_checks
+    (full tier) is NOT changed.
+  - >-
+    validate.py (VTS-23 / VTS-08 / VTS-21): delete the `from scripts.checks.deps.validate_imports
+    import validate_imports` facade line (line 115); edit the KNOWN_MODELS facade import (line 193
+    `from scripts.checks.prompts.validate_prompt_files import KNOWN_MODELS, validate_prompt_files` ->
+    drop KNOWN_MODELS so only validate_prompt_files is imported -- REQUIRED or `import scripts.validate`
+    ImportErrors and crashes the suite); rename --coverage to --verifier-coverage adding --coverage as
+    a second option string on the same dest (args.<dest> unchanged) plus a deprecation note printed
+    when the alias token appears in sys.argv; rename _scaffold_coverage_report ->
+    _scaffold_verifier_coverage_report and the scaffold_fns key "coverage_report" ->
+    "verifier_coverage_report".
+  - >-
+    validate_prompt_files.py (VTS-08): glob .github/prompts/scheduled/*.prompt.md; fail if the set
+    is empty; per file assert a non-empty H1 (`# `) title line and >=1 `## ` section, and keep the
+    dead relative-reference check; delete the KNOWN_MODELS constant and the frontmatter / name /
+    description / inline-model / `## Intent` assertions (NOTE 1).
+  - >-
+    validate_cli_tools_in_prompts.py (VTS-08): set search_dirs to [ROOT/".github"/"prompts"/
+    "scheduled"]; preserve the bash-code-block CLI-tool scan + PATH check + optional-tool (gh)
+    skip logic verbatim.
+  - Delete scripts/checks/deps/validate_imports.py (VTS-23) in the same commit as its de-registration.
+  - >-
+    tests/test_checks_registry.py (EDITS ONLY -- at 495/500 SLOC, no new gate-helper tests): add
+    validate_cc_limits + validate_deploy_channel_conformance to REQUIRED_FULL_CHECKS, remove
+    validate_imports; rename "coverage_report" -> "verifier_coverage_report" in FROZEN_PRE_SCAFFOLDS;
+    replace test_full_sequence_cli_tools_in_prompts_appears_exactly_twice with an exactly-once
+    assertion (+ docstring). Keep the net change to ~+1 SLOC (verify with VP step 8).
+  - >-
+    tests/checks/hygiene/test_validate_cli_tools_in_prompts.py: update the fixture directories from
+    .github/prompts/ to .github/prompts/scheduled/.
+  - >-
+    tests/checks/prompts/__init__.py (Create): empty package marker (mirror-convention sibling of
+    tests/checks/{hygiene,roadmap,deps}/__init__.py).
+  - >-
+    tests/checks/prompts/test_validate_prompt_files.py (Create): mirror test covering the
+    scheduled-prompt structural contract, the empty-surface failure guard, and a live pass against
+    the real .github/prompts/scheduled/ tree (unmocked _common.ROOT) asserting >0 files + no failure.
+  - >-
+    tests/validate/test_tiers.py (homes the gate-helper tests -- validate.py's concern-split coverage
+    dir): add unit tests for _pre_glob_match on the six gate globs (positive + negative paths) and
+    _should_run_in_pre (match->run, non-match->skip, derivation-exception->run, empty-set->run,
+    pre_globs-None->run); add end-to-end gate tests (docs-only diff skips + logs skipped-by-glob for
+    the roadmap trio; tests/**-only diff skips count-coupling/cross-imports; **/*.py diff runs
+    validate_cc_limits); confirm TestSlocLimitsInPreMode stays green.
+  - >-
+    tests/validate/test_scaffold_gates.py: add a main() argv test for --verifier-coverage (runs the
+    advisory report, exits 0) and the --coverage deprecated alias (same behavior).
+  - >-
+    Execute the Verification Plan -- run each step; loop until all pass; keep EVERY touched file
+    <=500 SLOC (VP step 8) -- tests/test_checks_registry.py (495) is the binding one, so any new
+    registry/gate assertions go to tests/validate/test_tiers.py, never here. On any unrecoverable
+    failure stop and RCA (Decision 55).
+  - "Report: what was implemented, verification results, and confirmation the frozen baselines updated in one commit."
+rollback: >-
+  Single squash-merge feat(check-corpus-curation) commit -- `git revert` restores validate_imports,
+  the top-level prompt globs, the twice-dispatch, the pre-gate-free --pre loop, and the --coverage
+  name. No data migration, no deploy, no infra: reversion is pure code + tests.
