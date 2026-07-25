@@ -68,6 +68,31 @@ def _fully_covered_apply_statements() -> list[dict]:
     ]
 
 
+def _rec_2842_shaped_apply_statements() -> list[dict]:
+    """The EXACT rec-2842 shape (code-review gate, PR #752 REVISE regression fixture): identical to
+    _fully_covered_apply_statements() except the create-companion metadata Sid is narrowed to the
+    rec-2842 bug -- iam:TagRole/iam:UntagRole granted only on the two enumerated branch/pr roles
+    (narrower than iam:CreateRole's role/agent-platform-* prefix) and iam:UpdateRole missing
+    entirely. Every OTHER grant stays fully covered so this fixture isolates
+    check_create_companion_scope_coverage's failure -- it does not also trip
+    check_passrole_implies_coverage or check_identity_iam_actions_subset_of_boundary."""
+    return [
+        _stmt(
+            ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"],
+            '["arn:aws:lambda:eu-west-2:1234567890:function:agent-platform-*"]',
+        ),
+        _stmt(
+            ["logs:CreateLogGroup", "logs:PutRetentionPolicy"],
+            '["arn:aws:logs:eu-west-2:1234567890:log-group:/aws/lambda/agent-platform-*"]',
+        ),
+        _stmt(["cloudwatch:PutMetricAlarm"], '["arn:aws:cloudwatch:eu-west-2:1234567890:alarm:agent-platform-*"]'),
+        _stmt(["events:PutRule"], '["arn:aws:events:eu-west-2:1234567890:rule/agent-platform-*"]'),
+        _stmt(["iam:CreateRole"], '["arn:aws:iam::1234567890:role/agent-platform-*"]'),
+        _stmt(["iam:TagRole", "iam:UntagRole"], _ENUMERATED_ROLES_RESOURCE),
+        _PASSROLE_STMT,
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Synthetic bootstrap HCL fixtures for check_passrole_implies_coverage's self-contained boundary
 # re-read (scripts.checks._common.ROOT is monkeypatched to a tmp_path tree holding one of these
@@ -223,6 +248,28 @@ class TestCheckWriteCoverage:
         failed: list[str] = []
         wc.check_write_coverage(_fully_covered_apply_statements(), resources, failed, "k:")
         assert any("aws_sfn_state_machine" in f and "no\n" not in f and "WRITE_COVERAGE entry" in f for f in failed)
+
+
+class TestCheckWriteCoverageWiring:
+    """Regression test (code-review gate, PR #752 REVISE, Critical): drives check_write_coverage()
+    ITSELF -- not the sub-function directly -- against a synthetic rec-2842-shaped policy, proving
+    check_create_companion_scope_coverage and check_identity_iam_actions_subset_of_boundary are
+    actually WIRED into the production entry point (scripts.checks.iam_tf.validate_ci_refresh_read_coverage
+    calls check_write_coverage, which is where every check in this module must ultimately be reached
+    from). Before this fix, check_write_coverage invoked ONLY check_passrole_implies_coverage -- the
+    two new checks were defined and unit-tested (called directly, see TestCheckCreateCompanionScopeCoverage
+    / TestCheckIdentityIamActionsSubsetOfBoundary above) but dead in the standing --pre gate: this
+    exact rec-2842-shaped scenario would have silently returned failed == [] through check_write_coverage
+    even though it is the precise bug rec-2842 exists to catch."""
+
+    def test_rec_2842_shape_populates_failed_via_check_write_coverage(self) -> None:
+        failed: list[str] = []
+        check_write_coverage(_rec_2842_shaped_apply_statements(), [], failed, "k:")
+        assert any("'iam:TagRole'" in f and "rec-2842" in f for f in failed), failed
+        assert any("'iam:UntagRole'" in f and "rec-2842" in f for f in failed), failed
+        assert any("'iam:UpdateRole'" in f and "rec-2842" in f for f in failed), failed
+        assert len(failed) == 3, failed
+        assert all(f.startswith("k:") for f in failed)
 
 
 class TestCreateFunctionGrantedAndPassrolePresent:
@@ -499,6 +546,19 @@ class TestCheckIdentityIamActionsSubsetOfBoundary:
         check_identity_iam_actions_subset_of_boundary([_stmt(["iam:PassRole"], '["...role/agent-platform-*"]')], failed, "k:")
         assert len(failed) == 1, failed
         assert "could not locate the github_ci_apply_boundary DataPlaneAllow statement" in failed[0]
+
+    def test_bootstrap_file_missing_hits_os_error_branch_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The bootstrap file itself is absent under tmp_path (not merely missing its boundary
+        # block) -- read_text() raises OSError, caught and reported as a loud failure rather than
+        # an unhandled crash.
+        monkeypatch.setattr(_common, "ROOT", tmp_path)
+        failed: list[str] = []
+        check_identity_iam_actions_subset_of_boundary([_stmt(["iam:PassRole"], '["...role/agent-platform-*"]')], failed, "k:")
+        assert len(failed) == 1, failed
+        assert "cannot re-read" in failed[0]
+        assert failed[0].startswith("k:")
 
 
 class TestRealTreePassesNewChecks:

@@ -69,6 +69,12 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
       },
       {
+        Sid    = "IAMRoleMetadataWrite"
+        Effect = "Allow"
+        Action = ["iam:TagRole", "iam:UntagRole", "iam:UpdateRole"]
+        Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
+      },
+      {
         Sid    = "IAMPassRoleForLambda"
         Effect = "Allow"
         Action = ["iam:PassRole"]
@@ -92,7 +98,10 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
       {
         Sid      = "DataPlaneAllow"
         Effect   = "Allow"
-        Action   = ["lambda:*", "logs:*", "cloudwatch:*", "events:*", "iam:CreateRole", "iam:PassRole"]
+        Action   = [
+          "lambda:*", "logs:*", "cloudwatch:*", "events:*",
+          "iam:CreateRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:PassRole"
+        ]
         Resource = ["*"]
       }
     ]
@@ -370,6 +379,12 @@ resource "aws_iam_role_policy" "github_ci_apply" {
         Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
       },
       {
+        Sid    = "IAMRoleMetadataWrite"
+        Effect = "Allow"
+        Action = ["iam:TagRole", "iam:UntagRole", "iam:UpdateRole"]
+        Resource = ["arn:aws:iam::1234567890:role/agent-platform-*"]
+      },
+      {
         Sid    = "IAMPassRoleForLambda"
         Effect = "Allow"
         Action = ["iam:PassRole"]
@@ -393,7 +408,11 @@ resource "aws_iam_policy" "github_ci_apply_boundary" {
       {
         Sid      = "DataPlaneAllow"
         Effect   = "Allow"
-        Action   = ["lambda:*", "logs:*", "cloudwatch:*", "events:*", "iam:CreateRole", "iam:PassRole"]
+        Action   = [
+          "lambda:*", "logs:*", "cloudwatch:*", "events:*",
+          "iam:GetOpenIDConnectProvider",
+          "iam:CreateRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:PassRole"
+        ]
         Resource = ["*"]
       }
     ]

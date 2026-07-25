@@ -332,9 +332,15 @@ def check_write_coverage(
       2. A terraform/personal resource of an apply-role-written type with NO WRITE_COVERAGE entry
          fails loud -- a new write-managed resource class must declare its write grant.
 
-    Also runs check_passrole_implies_coverage() (rec-2831, T2.48 c1): the CreateFunction-implies-
-    PassRole anti-recurrence assertion, a distinct verb-PAIR invariant from the per-type write-verb
-    coverage above.
+    Also runs three verb-pair/verb-family anti-recurrence checks, each closing a DIFFERENT drift class:
+      - check_passrole_implies_coverage() (rec-2831, T2.48 c1): CreateFunction-implies-PassRole.
+      - check_create_companion_scope_coverage() (rec-2842, T2.48 c2, DEP-02): CreateRole@prefix
+        implies its companion verbs (TagRole/UntagRole/UpdateRole) are granted on that SAME prefix --
+        a RESOURCE-SCOPE mismatch class (the exact rec-2842 recurrence).
+      - check_identity_iam_actions_subset_of_boundary() (DEP-02 plan, defense-in-depth): every
+        identity-policy Allow iam: action must also be granted by the boundary DataPlaneAllow
+        ceiling -- an action-absent-from-the-ceiling class, generalizing the PassRole-specific
+        boundary check above.
 
     Returns the count of write-managed types asserted (for the PASS summary). Appends to `failed`.
     """
@@ -354,5 +360,7 @@ def check_write_coverage(
             )
 
     check_passrole_implies_coverage(apply_statements, failed, key)
+    check_create_companion_scope_coverage(apply_statements, failed, key)
+    check_identity_iam_actions_subset_of_boundary(apply_statements, failed, key)
 
     return len(WRITE_COVERAGE)
