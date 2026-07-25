@@ -1,0 +1,374 @@
+schema_version: 1
+slug: "coverage-gate-truth-governance"
+intent: >-
+  Restore truth to the per-changed-file coverage gate and to the roadmap text that premises it as
+  operating, and put mypy's unowned advisory CI gate-status on the governance record. Part A fixes
+  the rec-2791 slash-form --cov defect (closing six same-defect recs) and corrects/annotates the
+  stale CD.30/T3.7/T2.36 roadmap premises; Part B presents the VTS-15 mypy gate-status options for a
+  human-gated numbered Decision. Slice F (final) of the validate-test-suite audit.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-coverage-gate-truth-governance.yaml
+phase: >-
+  Validate-test-suite audit remediation (Slice F). Addresses audit findings VTS-07 (buildable half +
+  roadmap half) and VTS-15 (mypy gate-status Decision, human-gated), and annotates the VTS-21 and
+  VTS-05 deferred residue onto CD.30/T3.7/T2.36. Annotates -- does not reactivate -- T3.7
+  (deferred_post_mvp) and CD.30 (pending); closes no roadmap exit_criteria.
+scope:
+  - file: scripts/test_coverage_checker.py
+    action: Modify
+    purpose: >-
+      VTS-07 buildable fix. In check_per_file_coverage, change the --cov argument from slash-path form
+      (module_str built as the posix path of rel.with_suffix('')) to dotted-module form
+      ('.'.join(rel.with_suffix('').parts)). Argument FORM only -- preserves the per-file 100% floor
+      (Decision 48), the full_sequence-only registration (Decision 124), and map_source_to_test
+      (untouched; its relocation is deferred to the CD.30 rewrite). Line-neutral edit; no SLOC interaction.
+  - file: tests/test_coverage_checker_grandfather.py
+    action: Modify
+    purpose: >-
+      VTS-07 regression test (rec-2681 / rec-2633). Add a class with (a) a self-contained behavioral
+      test that a deliberately-undertested scripts/-form module is flagged below 100% by
+      check_per_file_coverage (tmp_path source + partial test, patched ROOT / map_source_to_test /
+      PYTHONPATH, a real coverage subprocess -- passes on the dotted fix, would return [] on the slash
+      form), and (b) a form-pinning test (mocked Popen) asserting the constructed --cov value contains
+      no path separator. File kept under 500 SLOC (Decision 130).
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      VTS-07 roadmap half + VTS-21/VTS-05 residue, TEXT-only additive annotations (Decisions 86/93/147).
+      Correct CD.30 detail (the 'already diff-scoped' / 'wired into validate.py enforces' premise) with
+      a VTS-07 note that the gate is structurally inert in every CI context; annotate CD.30 + T3.7 with
+      the safe sequencing (slash->dotted fix -> CD.30 ratchet -> promote-to-pre) and the
+      map_source_to_test relocation (VTS-21 deferred half); annotate T2.36 with the VTS-05 residue (the
+      manifest cross-run escape-rate query is Decision 135's reversal-condition-(a) evaluator). No
+      status/depends_on/gates/state edits; T3.7 stays byte-stable deferred_post_mvp; CD.30 stays pending.
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      VTS-15, Part B, HUMAN-GATED. Author a new numbered Decision (154 -- re-check max at authoring)
+      owning mypy's CI gate-status, ONLY after the human selects one of the three options in context.
+      Text is NOT pre-authored in this plan. The sanctioned path is a DECISIONS.md edit +
+      ops_data_portal --backfill-decisions-md (Decisions 84/92/146; this is the markdown ETL source, not
+      a logs/*.jsonl read cache, so the Single-Portal Invariant is not breached). Forward governance --
+      the Decision 105 CD-ratification lane is NOT engaged.
+bundled_recommendations:
+  - rec-866
+  - rec-2633
+  - rec-2640
+  - rec-2681
+  - rec-2791
+  - rec-2810
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    check_per_file_coverage builds a dotted-module --cov argument (no '/' path separator); on a
+    deliberately-undertested module it returns a non-empty '<100%' error where the pre-fix slash form
+    returned [] (silent skip). Verified by the new behavioral + form-pinning regression tests.
+  - >-
+    The new regression tests in tests/test_coverage_checker_grandfather.py pass, and the existing
+    coverage-checker suites (checks / grandfather / map plus tests/checks/misc/test_validate_test_coverage.py)
+    stay green -- the change is confined to --cov argument form.
+  - >-
+    validate_test_coverage is NOT promoted to pre_sequence and the 100% per-file floor is unchanged
+    (both remain gated behind CD.30's diff-line ratchet per the VTS-07 sequencing gate).
+  - >-
+    docs/ROADMAP-PLATFORM.yaml validates (RoadmapDocument schema); CD.30 detail carries the VTS-07
+    correction; CD.30/T3.7 carry the safe-sequencing + map_source_to_test-relocation annotations; T2.36
+    carries the VTS-05 annotation; T3.7 status is byte-stable 'deferred_post_mvp' with depends_on
+    unchanged (['T3.1']); CD.30 state byte-stable 'pending' with gates ['T3.7'].
+  - >-
+    The six bundled recs (rec-866, rec-2633, rec-2640, rec-2681, rec-2791, rec-2810) close via the
+    squash-merge 'Resolves:' trailer + rec-autoclose; verified closed in the read cache after sync
+    (closure-proof lifecycle, Decision 103).
+  - >-
+    Part B (VTS-15, human-gated): once the human selects an option, docs/DECISIONS.md carries a new
+    numbered Decision owning mypy's gate status; if option (i) the Decision text is the whole
+    deliverable; if option (ii)/(iii) the enforcement is scoped as a tightly-coupled follow-on
+    (option-specific files). NOT executed until the human's choice is recorded (surfaced by the overseer).
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Run the coverage-checker regression tests -- the behavioral test proves the dotted fix flags a
+      deliberately-undertested module, and the form-pinning test proves the --cov argument is dotted.
+    command: bin/venv-python -m pytest tests/test_coverage_checker_grandfather.py -q
+    expected: >-
+      All tests pass, including the new class: check_per_file_coverage returns a non-empty '<100%'
+      error for the undertested tmp_path module, and the constructed --cov value contains no '/'.
+    fix_if: >-
+      The behavioral test errors or returns [] -- the dotted module_str is wrong, or the test wiring
+      (patched ROOT / map_source_to_test / PYTHONPATH for the subprocess) is off; re-check
+      "'.'.join(rel.with_suffix('').parts)" and the subprocess env.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      The assertion lives permanently in tests/test_coverage_checker_grandfather.py; the full post-merge
+      tier runs it every push and --pre self-selects it on any edit to scripts/test_coverage_checker.py
+      (the module under test is its own import-closure target), so a parallel kernel test_selector row
+      would duplicate an already-standing suite guard (Decision 132 / Slice-E lesson: graduate needs a
+      new-in-diff registry row or it reds validate --pre).
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Positive proof (rec-2791 acceptance) that the dotted --cov form actually collects data on a live
+      scripts/ module rather than silently no-opping.
+    command: bin/venv-python -m pytest tests/test_checks_registry.py --cov=scripts.checks._common --cov-report=term-missing -q
+    expected: >-
+      Exit 0 with a real coverage line for scripts/checks/_common.py (100%) and NO
+      'Module ... was never imported' / 'No data was collected' warning.
+    fix_if: >-
+      'never imported' / 'No data' appears (fail_under trips, exit non-zero) -- the dotted module is not
+      resolving; confirm the module is importable from ROOT and cwd is correct.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Demonstration of coverage.py's dotted-module collection on a live module; it depends on _common.py's
+      current 100% coverage (transient repo state), so a graduated fixed-output kernel check would go
+      stale. The durable regression guard is the committed self-contained test in step 1.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Validate the roadmap after the TEXT-only annotations and assert the structural fields of T3.7 and
+      CD.30 are byte-stable (no reactivation, no status/depends_on/gates/state drift).
+    command: >-
+      bin/venv-python -m scripts.roadmap.platform_roadmap && bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); it={i['id']:i for i in d['tier_items']}; cd={c['id']:c for c in d['candidate_decisions']}; assert it['T3.7']['status']=='deferred_post_mvp', it['T3.7']['status']; assert it['T3.7']['depends_on']==['T3.1'], it['T3.7']['depends_on']; assert cd['CD.30']['state']=='pending', cd['CD.30']['state']; assert cd['CD.30']['gates']==['T3.7'], cd['CD.30']['gates']; print('roadmap byte-stable OK')"
+    expected: >-
+      'PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema.' followed by
+      'roadmap byte-stable OK'.
+    fix_if: >-
+      Schema FAIL -- a prose annotation broke the YAML/structure (fix indentation, keep inside the existing
+      detail/intent literal blocks). Byte-stability assert fails -- a status/depends_on/gates/state field
+      drifted; revert to TEXT-only (Decision 93 reactivation validator would otherwise fail loud).
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      The roadmap is continuously validated by the registered validate_platform_roadmap check in both
+      tiers; a kernel row would duplicate a standing gate, and the byte-stability assertion is a one-time
+      guard specific to this plan's TEXT-only-edit invariant.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Non-regression: the full coverage-checker suite plus the validate_test_coverage check test stay
+      green (the change is confined to --cov argument form; mapping/existence semantics are unaffected).
+    command: bin/venv-python -m pytest tests/test_coverage_checker_checks.py tests/test_coverage_checker_grandfather.py tests/test_coverage_checker_map.py tests/checks/misc/test_validate_test_coverage.py -q
+    expected: All pass (0 failures).
+    fix_if: >-
+      A mapping / existence / misc-check test regresses -- the edit touched more than module_str; scope
+      the diff back to the --cov argument form only.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Non-regression is enforced by the standing pytest suites, run by the full tier every push and
+      re-selected in --pre on any edit to the module under test; graduating duplicates existing coverage.
+  - step: 5
+    phase: post-deploy
+    action: >-
+      Closure Obligation (Decision 103): after the squash-merge carries 'Resolves: rec-866, rec-2633,
+      rec-2640, rec-2681, rec-2791, rec-2810', confirm every bundled rec closed in the read cache.
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json; rows={r['id']:r for r in (json.loads(l) for l in open('logs/.recommendations-log.jsonl') if l.strip())}; missing=[x for x in ['rec-866','rec-2633','rec-2640','rec-2681','rec-2791','rec-2810'] if rows.get(x,{}).get('status')!='closed']; assert not missing, missing; print('all six recs closed')"
+    expected: >-
+      'all six recs closed' -- rec-autoclose processed the Resolves: trailer.
+    fix_if: >-
+      Any rec still open -- the Resolves: trailer was missing/malformed; close via
+      'bin/venv-python -m scripts.ops_data_portal --update-rec rec-NNNN --status closed --resolution "..."'.
+    hermetic: false
+    graduation: not-applicable
+  - step: 6
+    phase: post-deploy
+    action: >-
+      Part B (VTS-15, HUMAN-GATED -- runs ONLY after the human selects an option and Decision 154 is
+      authored): confirm docs/DECISIONS.md carries the numbered mypy gate-status Decision and the ops
+      backfill has synced it.
+    command: >-
+      bin/venv-python -c "import re,sys; t=open('docs/DECISIONS.md').read(); sys.exit(0 if re.search(r'^## Decision [0-9]+:.*(mypy|type-check)', t, re.I|re.M) else 1)" && bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md
+    expected: >-
+      The mypy gate-status Decision header is present and the backfill re-upserts ops_decisions from
+      DECISIONS.md (idempotent, number-keyed).
+    fix_if: >-
+      Header absent -- the human has not selected an option yet; HOLD Part B and land Part A only.
+      Backfill error -- confirm the agent_platform portal chain (aws sts get-caller-identity) and re-run.
+    hermetic: false
+    graduation: not-applicable
+constraints:
+  - >-
+    VTS-07 sequencing gate: do NOT promote validate_test_coverage to --pre and do NOT change the 100%
+    floor -- both are blocked behind CD.30's diff-line ratchet (T3.7-gated). The fix is --cov argument
+    FORM only (Decisions 48/124 preserved).
+  - >-
+    Roadmap edits are TEXT-only additive annotations (Decisions 86/147). No status/depends_on/gates/state
+    changes. T3.7 stays deferred_post_mvp byte-stable; adding a depends_on edge or flipping status would
+    trip platform_roadmap.py's Decision 93 reactivation validator (fail-loud). Same annotation-only
+    discipline for CD.30 and T2.36.
+  - >-
+    map_source_to_test is NOT touched -- its relocation out of the coverage-named module (VTS-21 deferred
+    half, Decisions 104/131) is only ANNOTATED as belonging to the future CD.30 rewrite, not performed here.
+  - >-
+    Part B mypy Decision is HUMAN-GATED: do NOT pre-author Decision text and do NOT pick an option. Author
+    only after the human selects, via DECISIONS.md + ops_data_portal --backfill-decisions-md (Decisions
+    84/92/146). Re-check the max '## Decision NNN:' header at authoring time (153 current -> 154). This is
+    forward governance mirroring Decisions 151/152/144/126 -- the Decision 105 CD-ratification lane (R1-R3)
+    is NOT engaged.
+  - >-
+    Part B enforcement is option-dependent: option (i) delivers Decision text only; option (ii)/(iii)
+    enforcement (a validate check + baseline for (iii), or blocking mypy_diff + burn-down for (ii)) lands
+    as a tightly-coupled follow-on IMPLEMENTATION plan with option-specific scope files, since those files
+    cannot be enumerated before the human chooses. THIS plan's Part B scope is bounded to docs/DECISIONS.md.
+  - >-
+    Editing docs/DECISIONS.md does not breach the Single-Portal Invariant: DECISIONS.md is the markdown
+    ETL SOURCE for ops_decisions (Decisions 84/146); the invariant governs the logs/*.jsonl read caches.
+  - >-
+    No STRATEGIC classification (executor freeze active); no rescue agents / workaround loops (Decision
+    55). SLOC: the source edit is line-neutral; new tests kept under 500 SLOC (Decisions 128/130) -- no
+    budget raise.
+  - "VP commands are POSIX/coreutils only; no rg (the CI runner lacks it)."
+context:
+  - >-
+    Decision-scout verdict + CITE list (verbatim decision ids): FLAGS_FOUND (round 1, all NOTE-severity,
+    no BLOCK, no pivot; 106/106 triaged). CITE: dec-48, dec-60, dec-73, dec-135, dec-84, dec-104, dec-131,
+    dec-128, dec-150, dec-55, dec-146, dec-124, dec-93, dec-86, dec-103; candidate decisions CD.29, CD.30
+    (non-Decisions); roadmap items T3.7, T2.36; audit findings VTS-07 / VTS-15 / VTS-21 / VTS-05.
+  - >-
+    gates: decision-scout=FLAGS_FOUND (NOTE-only, no pivot, round 1); plan-critique=pending (Design-B
+    trampoline; final verdict recorded on the implement handback).
+  - >-
+    VTS-07 mechanism (empirically confirmed this session): slash-form --cov=<path> (e.g.
+    scripts/checks/_common) makes coverage.py warn 'Module ... was never imported' / 'No data was
+    collected', writes no .coverage.json, and check_per_file_coverage's own 'if not
+    coverage_json.exists(): continue' then silently skips. Broader than the recs claim: the slash form
+    no-ops for BOTH scripts/ AND src/ (the recs say src/ works; it does not). The dotted form
+    (scripts.checks._common) measures correctly (100%) and -- verified -- survives the check's
+    _COVERAGE_SUBPROCESS=1 child env. Command-line --cov OVERRIDES the pyproject [tool.coverage.run]
+    source=['src'].
+  - >-
+    Decision 124 first established the VTS-07 premise now being corrected: validate_test_coverage is
+    full_sequence-only and merge-base-diff-scoped, so on origin/main checkouts (every main-validate /
+    canary run) the diff is empty and it no-ops. The roadmap CD.30 / T3.7 'already diff-scoped' / 'wired
+    into validate.py enforces' text describes intent, not CI reality.
+  - >-
+    Bundled-rec verification: all six (rec-866, rec-2633, rec-2640, rec-2681, rec-2791, rec-2810) describe
+    the SAME coverage-arg defect in scripts/test_coverage_checker.py and are resolved by the single
+    dotted-form fix. rec-866 frames it as Windows-only cross-platform; the dotted fix subsumes that
+    (dotted resolves on both platforms). rec-2633 / rec-2681 additionally specify the regression test this
+    plan adds. Closure-proof lifecycle per Decision 103 (NOT Decision 70 -- 70 is physical deletion of
+    bootstrap records only).
+  - >-
+    VTS-15 mypy analysis (real repo, this session): full tier runs `mypy src/` (informational,
+    validate.py:308); pre tier runs `mypy --follow-imports=silent <changed_py>` (informational, :483). No
+    [tool.mypy] config exists anywhere. `mypy src/` = 143 errors / 59 files (matches the audit exactly);
+    `mypy scripts/ src/` = 253 errors / 140 files. Split: src/ 72 (40 import-untyped + 32 real), scripts/
+    181 (90 import-untyped + 91 real). 130/253 (51%) are [import-untyped] missing third-party stubs
+    (yaml=59, pandas=10, psycopg2=5, networkx=3) -- silenceable via types-PyYAML / pandas-stubs or
+    [tool.mypy] ignore_missing_imports; the genuine type-logic burn-down is ~123 (or 32 src-only),
+    concentrated (28 in scripts/execute_recommendation.py). AGENTS.md mandates 'type hints required',
+    gated by nothing today (VTS-15: no decision owns the advisory status).
+  - >-
+    VTS-15 Option (i) -- advisory-forever + rationale: DELIVERABLE = Decision text only, no enforcement.
+    Rationale basis: type-only defects overlap heavily with what tests catch (audit VTS-15); ruff E/F/W/I
+    plus pydantic runtime validation are compensating controls; the 123-error burn-down is low-value
+    pre-MVP with a frozen executor and low merge volume. COST minimal; DOWNSIDE leaves AGENTS.md's 'type
+    hints required' aspirational and adds no teeth.
+  - >-
+    VTS-15 Option (ii) -- changed-files mypy gating in --pre after burn-down: DELIVERABLE = Decision +
+    burn-down + make mypy_diff blocking. The pre tier already computes `mypy --follow-imports=silent
+    <changed_py>`; gating means every PR's changed files must be mypy-clean. Seed by silencing the 130
+    import-untyped ([tool.mypy]) then fixing the ~123 real errors across 140 files. COST M-L; DOWNSIDE
+    'dirty-file inheritance' -- a PR touching a still-dirty file is blocked until that file is cleaned,
+    ballooning unrelated scope.
+  - >-
+    VTS-15 Option (iii) -- error-count downward-ratchet (mirrors the SLOC ratchet): DELIVERABLE =
+    Decision + a governed baseline count (config) + a validate_mypy_ratchet check that fails on an
+    unmarked INCREASE and allows decreases -- exactly the validate_sloc_budget_raises pattern. Seed at the
+    current count (scope-dependent: 143 src-only or 253 src+scripts; optionally silence the 130
+    import-untyped first so the baseline tracks the ~123 real errors). COST XS-S, NO blocking burn-down;
+    stops the debt growing immediately and is the natural on-ramp to (ii).
+  - >-
+    VTS-15 RECOMMENDATION (mine, for the human to accept or override -- NOT pre-picked): Option (iii). It
+    adds enforcement teeth at XS-S cost with no burn-down blocking the win, generalizes a proven in-repo
+    mechanism (the SLOC downward-ratchet) so agent-comprehension and governance cost are near-zero, is
+    strictly stronger than (i) and far less disruptive than (ii), and tightens toward (ii) later.
+    Optionally pair with a one-line [tool.mypy] block silencing the 130 import-untyped so the ratchet
+    tracks genuine type-logic errors. Decision 150: the choice clears the significance bar (a durable
+    CI-enforcement architectural commitment).
+  - >-
+    ci_rca HARD-BLOCK deferral (planning-skill Related-Work exemption, logged rationale): 2 unresolved
+    ci_rca recs at preflight -- rec-2842 (terraform/bootstrap IAMRoleCreateBounded missing iam:TagRole)
+    and rec-2836 (terraform init neon 504 flake, scripts/checks/_terraform.py). Both are terraform
+    subsystem, disjoint from this plan's coverage / roadmap / mypy scope (no shared source_file, Decision,
+    or failure category), so this plan satisfies none of the three Related-Work conditions and defers them
+    with this rationale; they belong to a different subsystem tracked separately.
+  - >-
+    Preflight: 0 commits behind origin/main (rebased clean to 5d770b9), venv + creds ok. Ops-outbox
+    anomaly (informational, NOT actioned here): logs/.ops-outbox/ops_recommendations/ holds 8 stale
+    35-byte test fixtures ('{"id": "rec-002", "title": "test"}') -- a Decision 84 I-4 migrated-table
+    anomaly; left untouched (shared working tree, out of this plan's scope) and surfaced to the overseer
+    for separate disposal.
+pre_implementation_checklist:
+  - Branch confirmed not on main (claude/vts-f-plan-coverage-gate-truth-governance)
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md numbering re-checked at authoring time (current max 153 -> Decision 154 for Part B)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - "Part B gate confirmed: the human has selected a VTS-15 mypy option BEFORE Decision 154 is authored; if not, land Part A only and hold Part B"
+execution_steps:
+  - >-
+    Part A / VTS-07 fix -- in scripts/test_coverage_checker.py check_per_file_coverage, replace the
+    slash-form module_str construction (posix path of rel.with_suffix('')) with dotted-module form:
+    "'.'.join(rel.with_suffix('').parts)". This is the ONLY source change -- do not touch
+    map_source_to_test, the 100% floor, or the full_sequence registration.
+  - >-
+    Part A / regression test -- add a class to tests/test_coverage_checker_grandfather.py: (a) a
+    self-contained behavioral test that creates tmp_path/scripts/probe.py (a covered fn + an uncovered
+    fn) and tmp_path/tests/test_probe.py (covers only the covered fn), monkeypatches checker.ROOT=tmp_path,
+    checker.map_source_to_test -> the tmp test, and PYTHONPATH=tmp_path, then asserts
+    check_per_file_coverage([probe]) returns a non-empty '<100%' error (this passes on the dotted fix and
+    would return [] on the slash form); and (b) a form-pinning test that mocks subprocess.Popen and
+    asserts the built --cov argument contains no '/'. Keep the file under 500 SLOC.
+  - >-
+    Part A / roadmap -- append a bracketed '[VTS-07 correction, 2026-07-25]' note to CD.30's detail
+    literal block: the gate is structurally inert in every CI context (full_sequence-only per Decision
+    124; empty merge-base diff on origin/main checkouts; per-file leg additionally no-ops via slash-form
+    --cov, rec-2791 cluster), the safe sequencing is slash->dotted fix -> CD.30 diff-line ratchet ->
+    promote-to-pre (never reorder -- promoting the current 100%-floor form to --pre is a breaking
+    strictness jump), and map_source_to_test relocates out of the coverage-named module at the CD.30
+    rewrite (VTS-21 deferred half, Decisions 104/131). Do NOT edit CD.30 state / gates /
+    narrowly_supersedes / discipline_points.
+  - >-
+    Part A / roadmap -- append a matching '[VTS-07 correction, 2026-07-25]' note to T3.7's intent
+    mechanism-3 text (same correction + safe sequencing + relocation; state explicitly 'annotation only
+    per Decision 93 -- stays deferred_post_mvp'). Keep T3.7 status ('deferred_post_mvp') and depends_on
+    (['T3.1']) BYTE-STABLE; add no depends_on edges (the Decision 93 reactivation validator fails loud).
+  - >-
+    Part A / roadmap -- append a '[VTS-05 annotation, 2026-07-25]' note to T2.36's intent: the manifest's
+    cross-run escape-rate query is Decision 135's reversal-condition-(a) evaluator (the defer/escape rate
+    is recorded per selection-run but aggregated by nothing, and the deferral is circular -- T2.36's
+    manifest-registration trigger presupposes the query), to be scoped as the reversal-condition
+    instrument when T2.36 lands. Annotation only; keep T2.36 status ('not_started') and depends_on byte-stable.
+  - >-
+    Execute Part A Verification Plan steps 1-4 (step 5 post-merge); loop until pass. Commit with
+    'feat(coverage-gate-truth-governance): ...' and prepare the squash-merge body with
+    'Resolves: rec-866, rec-2633, rec-2640, rec-2681, rec-2791, rec-2810'.
+  - >-
+    Part B / VTS-15 (HUMAN-GATED -- do NOT run until the human has selected option i, ii, or iii):
+    re-check the max '## Decision NNN:' header in docs/DECISIONS.md (currently 153 -> 154) and author
+    '## Decision 154: <mypy CI gate status>' capturing the human's chosen option with rationale (route
+    rationale to the Decision per Decision 86; it clears the significance bar per Decision 150). Do NOT
+    run the Decision 105 CD-ratification lane (this is forward governance, not a CD realization).
+  - >-
+    Part B / enforcement -- if option (i): the Decision text is the whole deliverable (no code). If option
+    (ii) or (iii): open a tightly-coupled follow-on IMPLEMENTATION plan for the enforcement with
+    option-specific scope -- (iii) a governed baseline (e.g. config/mypy_baseline.*) + a
+    validate_mypy_ratchet check registered per scripts/CLAUDE.md (module under scripts/checks/, tier entry
+    in registry.py, facade re-export in validate.py), mirroring validate_sloc_budget_raises; (ii) make
+    mypy_diff blocking after the burn-down plus optional [tool.mypy] stub-silencing.
+  - >-
+    Part B -- run 'bin/venv-python -m scripts.ops_data_portal --backfill-decisions-md' to sync
+    ops_decisions from DECISIONS.md (Decisions 84/92/146); verify via Verification Plan step 6.
+  - >-
+    Report: what landed (Part A always; Part B only if the human selected an option), verification
+    results, and the rec-closure outcome.
+rollback: >-
+  Part A is a self-contained --cov argument form change plus additive tests and additive roadmap
+  annotations; revert the commit to restore prior behavior (the gate returns to its pre-fix inert state
+  -- no data loss). Part B: if a mis-numbered or incorrect Decision lands, correct docs/DECISIONS.md and
+  re-run ops_data_portal --backfill-decisions-md (idempotent, number-keyed).
