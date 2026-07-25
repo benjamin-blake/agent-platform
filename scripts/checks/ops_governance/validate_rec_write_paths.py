@@ -33,7 +33,7 @@ def validate_rec_write_paths(failed: list[str]) -> None:
     _PATTERNS = [
         re.compile(r'RECS_JSONL\.open\(["\']a["\']'),
         re.compile(r'RECS_JSONL\.open\(["\']w["\']'),
-        re.compile(r'recommendations-log\.jsonl.*open\(.*["\'][aw]["\']', re.DOTALL),
+        re.compile(r'open\([^)]*recommendations-log\.jsonl[^)]*["\'][aw]["\']'),
         re.compile(r"append_jsonl\s*\(\s*_RECS_KEY"),
         re.compile(r'append_jsonl\s*\(\s*["\']\.recommendations-log\.jsonl["\']'),
     ]
