@@ -278,3 +278,43 @@ class TestWholeRepoScanCoverage:
         assert "Cyclomatic complexity" in failed[0]
         captured = capsys.readouterr()
         assert "test_heavy_dispatch" in captured.out
+
+
+class TestVerifierCoverageArgv:
+    """VTS-21: --verifier-coverage main()-argv wiring, plus the --coverage deprecated alias."""
+
+    def _run_main(self, monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
+        monkeypatch.setattr(sys, "argv", ["validate", flag])
+        monkeypatch.setenv("_VALIDATE_DEPTH", "0")
+        monkeypatch.setenv("CI", "true")  # skip the branch guard; not under test here
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    def test_verifier_coverage_flag_runs_report_and_exits_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._run_main(monkeypatch, "--verifier-coverage")
+        with patch("validate.run_coverage_check") as mock_report, pytest.raises(SystemExit) as exc_info:
+            _validate.main()
+        assert exc_info.value.code == 0
+        mock_report.assert_called_once()
+
+    def test_coverage_deprecated_alias_resolves_to_same_behavior(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._run_main(monkeypatch, "--coverage")
+        with patch("validate.run_coverage_check") as mock_report, pytest.raises(SystemExit) as exc_info:
+            _validate.main()
+        assert exc_info.value.code == 0
+        mock_report.assert_called_once()
+
+    def test_coverage_alias_prints_deprecation_note(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._run_main(monkeypatch, "--coverage")
+        with patch("validate.run_coverage_check"), pytest.raises(SystemExit):
+            _validate.main()
+        assert "DEPRECATED" in capsys.readouterr().out
+
+    def test_verifier_coverage_flag_no_deprecation_note(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._run_main(monkeypatch, "--verifier-coverage")
+        with patch("validate.run_coverage_check"), pytest.raises(SystemExit):
+            _validate.main()
+        assert "DEPRECATED" not in capsys.readouterr().out
