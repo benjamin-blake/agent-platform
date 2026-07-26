@@ -381,7 +381,7 @@ File-count observations (re-derive):
   (root, plus several under `config/` and `terraform/`).
 - Root directory holds ~31 tracked entries (19 files + 12 dirs), including portal files
   (`README.md`, `AGENTS.md`,
-  `CLAUDE.md`, `EVALUATION-PROMPTS.yaml`, `SECURITY.md`, `LICENCE`), build/config
+  `CLAUDE.md`, `EVALUATION-PROMPTS.yaml`, `SECURITY.md`, `LICENSE`), build/config
   (`setup.py`, `pyproject.toml`, `requirements.txt`, `requirements.lock`, `requirements-fast.txt`,
   `requirements-dev.txt`, `.importlinter`, `.pre-commit-config.yaml`, `.secrets.baseline`,
   `.mcp.json`), and dirs.
