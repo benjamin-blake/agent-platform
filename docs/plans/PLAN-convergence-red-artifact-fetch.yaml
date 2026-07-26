@@ -91,12 +91,16 @@ scope:
       values are exactly gated-apply=fetch, apply-sandbox=assert, apply-reconcile=fetch,
       gated-apply-reconcile=fetch. (c) WRITE CONTRACT: write-convergence-record's pre-apply-failure
       input defaults to "false", its branch is ordered after the routed branch and before the
-      STARVED branch, and its read-back verify compares against PRIOR_STATUS rather than a literal.
+      STARVED branch, its read-back verify compares against PRIOR_STATUS rather than a literal, and
+      ALL FOUR write-convergence-record call sites pass a pre-apply-failure input.
       (d) SIDE-CHECKOUT WIRING (proves the plan's headline claim mechanically): for BOTH reconcile
       jobs, a second actions/checkout with path .dispatch-tooling appears at a LATER step index than
       the root RED_SHA checkout, the build step's uses equals
       ./.dispatch-tooling/.github/actions/build-ducklake-artifacts, AND it passes
-      working-directory: .dispatch-tooling. (e) DECISION 154: the ## Decision 154 block exists in
+      working-directory: .dispatch-tooling, AND that the .dispatch-tooling checkout does NOT carry
+      ref: ${{ env.RED_SHA }} -- both root checkouts declare that ref on the immediately preceding
+      lines (reconcile.yml:183, :515), so a copy-pasted ref would satisfy every other assertion
+      while still loading the RED_SHA module. (e) DECISION 154: the ## Decision 154 block exists in
       docs/DECISIONS.md and contains its reversal conditions -- scoped to that block, since the
       phrase already appears 47 times elsewhere in the file.
   - file: scripts/build_lambda_config.py
@@ -113,7 +117,12 @@ scope:
     purpose: >-
       Sole-SoT update (Decision 92 point 5): record the THREE-branch convergence write semantics --
       green on apply success, red on genuine apply failure, non-status infra_error marker on a
-      pre-apply failure -- so the contract does not drift from the code.
+      pre-apply failure -- so the contract does not drift from the code. ALSO correct lines 179-181,
+      which still assert the three DuckLake layers "remain coupled -- layer replacement is not yet
+      decoupled": false since T2.42 c1, as all three carry ignore_changes = [source_code_hash]
+      (ducklake_lambdas.tf:74,:94; ducklake_catalog_dr.tf:205). This is the same stale premise Part
+      1f corrects in two workflow comments, and this plan's lambda-packages relocation safety
+      argument depends on it being false.
   - file: docs/DECISIONS.md
     action: Modify
     purpose: >-
@@ -231,7 +240,10 @@ verification_plan:
       change the layer bytes -- which under the ducklake_lambdas.tf SILENT-FREEZE GUARD publishes no
       new layer version and silently freezes deps. Re-pin to the versions the reviewed layer carries.
     hermetic: false
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Non-hermetic: requires live S3 and agent_platform credentials, and asserts a point-in-time
+      byte fact about one specific reviewed artifact sha rather than a standing invariant.
 
   - step: 6
     phase: pre-deploy
@@ -309,9 +321,13 @@ verification_plan:
     expected: >-
       Passes -- side-checkout at path .dispatch-tooling appears after the root checkout, the build
       step uses ./.dispatch-tooling/.github/actions/build-ducklake-artifacts, and it passes
-      working-directory: .dispatch-tooling.
+      working-directory: .dispatch-tooling, and the side-checkout carries no RED_SHA ref.
     fix_if: >-
-      A side-checkout placed before the root checkout is wiped by its git clean. A repointed uses
+      A side-checkout placed before the root checkout is wiped by its git clean. A copy-pasted
+      ref: ${{ env.RED_SHA }} on the new step is the highest-probability failure: it passes the
+      ordering, uses and working-directory assertions while still loading the old module, whose
+      composite action exits 1 on the unknown fetch mode -- so build_ducklake fails, the allow-list
+      marks it a pre-apply failure, the record stays red, and the episode survives every re-dispatch. A repointed uses
       without working-directory still runs python3 -m scripts.ci.ducklake_artifacts against the
       RED_SHA workspace root, loading the old module with no fetch mode -- the episode stays stuck.
     hermetic: true
@@ -392,9 +408,13 @@ verification_plan:
       apply-sandbox path has no DEP-10 stale-plan fallthrough (that exists only in
       apply-reconcile), so per terraform-apply-sandbox.yml:824-825 a stale plan fails CLOSED and
       re-latches red. A re-run would also execute the workflow tree at 702d6d6 -- i.e. without
-      Parts 1 and 2. The fresh-plan dispatch is stale-immune by construction. If the fresh plan
-      routes to gated-apply, approve it; the oidc.tf delta is an in-budget IAM inline-policy add
-      (Decision 92 point 5) and should guard-PASS, so a route there is itself a finding.
+      Parts 1 and 2. The fresh-plan dispatch is stale-immune by construction. The oidc.tf delta is an in-budget IAM
+      inline-policy add (Decision 92 point 5) and should guard-PASS, so a guard ROUTE is itself a
+      finding -- and note the recovery is NOT "approve gated-apply": that job is gated on
+      github.event_name == 'push' and is unreachable from a workflow_dispatch (the same rec-2647 /
+      rec-2523 deadlock described above), and Reconcile is unavailable because the record is green
+      by then. The reachable recovery is to land a trivial terraform/personal/** PR and approve
+      gated-apply on the resulting push path.
 
   - step: 16
     phase: post-deploy
@@ -428,7 +448,15 @@ constraints:
     (:320) yet MUST keep latching red -- a guard exit 1 is a fail-closed IAM/trust/destroy verdict
     (Decision 77 / Decision 55) and an explicit reviewer REVISE is a plan rejection, neither of
     which is an infra error. The acceptance test must assert the failure-clause step ids are a
-    SUBSET of the allow-list, so naming guard, review, replan or guard_fresh fails CI.
+    SUBSET of the allow-list, so naming guard, review, replan or guard_fresh fails CI. Two
+    deliberate properties of that list, to be stated in Decision 154 rather than left implicit:
+    (i) it is under-inclusive on purpose -- `plan` (terraform-apply-sandbox.yml:275) and `replan`
+    (reconcile.yml:349) are pre-apply yet keep latching red, which is fail-closed and safe, though
+    it means a plan failure during VP15's drain re-latches red; (ii) `fetch_plan` IS in the list,
+    and its failure set includes the DEP-07 c2 sha256 digest-mismatch branch
+    (terraform-apply-sandbox.yml:262) -- so a saved-plan TAMPER signal is downgraded from the sole
+    hard block to a non-status marker. Defensible (the job still fails red in Actions and ci-rca
+    still files Critical on the sandbox path) but must be named so reversal condition (a) covers it.
   - >-
     pre-apply-failure must be computed INLINE at the write-convergence-record step, never routed
     through an aggregator. apply-reconcile's existing `resolved` step (reconcile.yml:405) is defined
@@ -661,12 +689,18 @@ execution_steps:
   - >-
     Part 3b -- wire pre-apply-failure at all four call sites as the conjunction defined in
     constraints: every apply-step id in the job reports 'skipped' AND a named pre-apply step reports
-    'failure'. First ADD the missing step ids this depends on -- apply-sandbox: "Materialise tfvars
-    from Secrets Manager", "Terraform init"; gated-apply: "Terraform init", "Fetch saved plan from
-    S3" (reconcile's build step already carries id: build_ducklake). Apply-step ids per job:
+    'failure'. First ADD the missing step ids this depends on, per the IMPLEMENTER OWES bullet -- apply-sandbox:
+    "Materialise tfvars from Secrets Manager", "Terraform init"; gated-apply: "Terraform init",
+    "Fetch saved plan from S3"; gated-apply-reconcile: its build step (reconcile.yml:565) PLUS its
+    Materialise tfvars, Terraform init and Fetch saved plan steps -- that is the job VP14's DEP-02
+    approval path actually runs through, so omitting it silently breaks the resolution. Only
+    apply-reconcile's build step already carries id: build_ducklake (reconcile.yml:262). Apply-step ids per job:
     apply-sandbox=apply; gated-apply=apply; apply-reconcile=apply AND apply_fresh (two apply steps,
-    so BOTH must report skipped); gated-apply-reconcile=apply. apply-reconcile's existing `resolved`
-    aggregator step may carry the computation, provided its own expression satisfies both clauses.
+    so BOTH must report skipped); gated-apply-reconcile=apply. Compute the expression INLINE at each
+    write-convergence-record step -- do NOT route it through apply-reconcile's `resolved` aggregator
+    (reconcile.yml:405), which is defined after both apply steps and would violate the allow-list
+    subset rule. Wire ALL FOUR call sites; a two-of-four implementation would pass every VP step,
+    because clause (a) of the acceptance test is vacuously true for a job that passes no input.
   - >-
     Part 3c -- scripts/convergence_health/record.py and assess.py: parse the marker, add infra_error
     to HealthVerdict, floor severity at "low" when present, and keep it out of the red-age
