@@ -42,10 +42,12 @@ scope:
   - file: scripts/verify_ci_workflow.py
     action: Modify
     purpose: >-
-      Add _check_ci_rca_fetch_classification: assert the "Fetch failed run logs" step invokes the
-      module, and that the workflow nowhere greps a transient-error pattern against the fetched log --
-      matched robustly enough that neither a renamed pattern variable nor a renamed log-path variable
-      evades it. Register it in the _COMMANDS dict.
+      Add _check_ci_rca_fetch_classification as an ALLOWLIST over the "Fetch failed run logs" run:
+      body: assert it invokes scripts.ci_rca.fetch_logs, and that it contains NO pattern-matching
+      construct (grep/egrep/rg/awk/sed/case/=~ or an inline python -c). Because the step body reduces
+      to the module invocation plus test -s, an allowlist is both simpler and strictly stronger than
+      enumerating evasion shapes -- a blocklist over arbitrary shell is non-exhaustive by
+      construction (heredoc, case, awk, $(...) indirection all evade it). Register it in _COMMANDS.
   - file: tests/verify_ci_workflow/test_ci_rca_and_canary.py
     action: Modify
     purpose: >-
@@ -83,9 +85,11 @@ acceptance_criteria:
     still retried up to 3 attempts and, if never satisfied, still fails loudly with a non-zero exit
     so the agent is never invoked on an absent log (rec-2117 / rec-2118 / rec-2718 contract intact).
   - >-
-    The transient-error pattern set is never evaluated against the fetched log body: enforced
-    structurally over .github/workflows/ci-rca.yml by the new guard, and behaviourally over
-    scripts/ci_rca/fetch_logs.py by the classifier tests.
+    The transient-error pattern set is never evaluated against the fetched log body. Enforced over
+    .github/workflows/ci-rca.yml by an ALLOWLIST guard -- the "Fetch failed run logs" run: body must
+    contain the module invocation and the test -s assertion and NO pattern-matching construct at all
+    -- which delivers "never" by construction, unlike a blocklist of known evasion shapes. Enforced
+    over scripts/ci_rca/fetch_logs.py behaviourally by the classifier tests.
   - >-
     /tmp/ci-rca-failed.log still receives the gh stdout byte-for-byte, so the evidence bundle
     (--log-file) and the agent prompt consume identical content to today on the success path (strictly:
@@ -171,18 +175,22 @@ verification_plan:
   - step: 5
     phase: pre-deploy
     action: >-
-      Assert the structural guard FAILS on workflows that reintroduce the log-body grep -- including
-      the two evasion shapes: a renamed pattern variable, and a renamed log-path variable.
+      Assert the ALLOWLIST guard rejects any pattern-matching construct in the step body, whatever
+      shape it takes -- this is what makes acceptance criterion 4's "never" true by construction
+      rather than by enumeration.
     command: >-
       bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_rca_and_canary.py -k fetch_classification -q
     expected: >-
-      All tests pass, including negative cases where a synthetic ci-rca.yml greps a transient pattern
-      against the fetched log via (a) the literal path, (b) a renamed pattern variable, and (c) a
-      renamed path variable -- each raising AssertionError.
+      All tests pass: the pass case is the real post-change step body; the negative cases each add ONE
+      pattern-matching construct to an otherwise-valid body -- the literal historical grep, a renamed
+      pattern variable, a renamed log-path variable, and at least one shape a blocklist would have
+      missed (e.g. case/awk/rg or an inline python -c) -- and every one raises AssertionError. A
+      further negative case drops the module invocation entirely and also raises.
     fix_if: >-
-      A negative case does not raise -- the guard is matching too narrowly. Key it on the semantic
-      shape (a transient-pattern grep whose target resolves to the fetched log) rather than on any
-      single literal identifier.
+      A negative case does not raise -- the allowlist is admitting a construct it should reject.
+      Tighten it to reject the construct class rather than adding another literal to a blocklist; if
+      that proves impossible for some shape, say so explicitly and soften acceptance criterion 4
+      rather than leaving it overclaiming.
     hermetic: true
     graduation: graduate
     graduation_check_id: "ci-rca-fetch-classification-guard-rejects-log-body-grep"
@@ -192,22 +200,30 @@ verification_plan:
       TIER PLACEMENT -- assert the guard actually runs in the FAST tier, which is the authoritative
       pre-merge gate (Decision 73 point 2 / Decision 83). Guards the specific defect this plan was
       revised to fix: validate_ci_rca_trigger is registered in full_sequence ONLY (pre=False), so
-      anchoring on it would have made the guard post-merge-only.
+      anchoring on it would have made the guard post-merge-only. Asserts the FULL chain -- aggregator
+      in pre_sequence AND the guard present in the aggregator's guards list AND the guard passes --
+      because the first and third alone would still succeed if the implementer wired the guard into
+      verify_ci_workflow.py and _COMMANDS but forgot the aggregator entry, leaving it in NO tier.
     command: >-
-      bin/venv-python -c "from scripts.checks import registry; from scripts.verify_ci_workflow import _check_ci_rca_fetch_classification as g; names={s.name for s in registry.pre_sequence()}; assert 'validate_ci_workflow_guards' in names, names; g(); print('PRE_TIER_OK')"
-    expected: 'Prints PRE_TIER_OK -- the aggregator carrying the new guard is in pre_sequence, and the guard itself passes against the real workflow.'
+      bin/venv-python -c "import inspect; from scripts.checks import registry; import scripts.checks.ci_guards.validate_ci_workflow_guards as agg; from scripts.verify_ci_workflow import _check_ci_rca_fetch_classification as g; assert 'validate_ci_workflow_guards' in {s.name for s in registry.pre_sequence()}, 'aggregator not in pre_sequence'; src=inspect.getsource(agg); assert 'ci-rca-fetch-classification' in src and '_check_ci_rca_fetch_classification' in src, 'guard not wired into the aggregator guards list'; g(); print('PRE_TIER_OK')"
+    expected: 'Prints PRE_TIER_OK -- the aggregator is in pre_sequence, the guard is wired into its guards list, and the guard passes against the real workflow.'
     fix_if: >-
-      AssertionError on the membership check means the aggregator was moved out of pre_sequence;
-      ImportError on the guard means it was not added to scripts/verify_ci_workflow.py. Do NOT
-      "fix" this by registering a separate check module -- the aggregator is the chosen home.
+      "aggregator not in pre_sequence" means it was moved out of the fast tier; "guard not wired into
+      the aggregator guards list" means the label/function entry is missing from
+      validate_ci_workflow_guards.py (the exact silent-no-tier failure this step exists to catch);
+      ImportError means the guard was never added to scripts/verify_ci_workflow.py. Do NOT "fix" any
+      of these by registering a separate check module -- the aggregator is the chosen home.
     hermetic: true
     graduation: graduate
     graduation_check_id: "ci-rca-fetch-classification-guard-runs-in-pre-tier"
   - step: 7
     phase: pre-deploy
     action: >-
-      Run rec-2857's own acceptance criterion -- the step NAME survives and no line of the workflow
-      greps a transient pattern against the log path.
+      Run a STRENGTHENED form of rec-2857's acceptance criterion -- the step NAME survives and no line
+      of the workflow greps a transient pattern against the log path. (The rec's literal acceptance
+      greps for the exact historical string "grep -qiE .$TRANSIENT_ERROR_RE. /tmp/ci-rca-failed.log";
+      this form is broader and both pass post-change, so the rec's own criterion is satisfied a
+      fortiori.)
     command: >-
       grep -q "Fetch failed run logs" .github/workflows/ci-rca.yml && ! grep "ci-rca-failed.log" .github/workflows/ci-rca.yml | grep -q "TRANSIENT_ERROR_RE" && echo ACCEPTANCE_MET
     expected: 'Prints ACCEPTANCE_MET.'
@@ -240,7 +256,7 @@ verification_plan:
       CLOSURE OBLIGATION -- after the squash-merge carrying the Resolves: trailer, confirm rec-2857 is
       actually closed in the warehouse (not merely that its acceptance command passes).
     command: >-
-      bin/venv-python -m scripts.sync.ops pull && bin/venv-python -c "import json,pathlib; r=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; m=[x for x in r if x.get('id')=='rec-2857']; print(m[0]['status']); assert m and m[0]['status']=='closed'"
+      bin/venv-python -m scripts.ops_data_portal --sync && bin/venv-python -c "import json,pathlib; r=[json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]; m=[x for x in r if x.get('id')=='rec-2857']; assert m, 'rec-2857 not in cache'; print(m[0]['status']); assert m[0]['status']=='closed'"
     expected: 'Prints "closed".'
     fix_if: >-
       Prints "open" -- rec-autoclose.yml did not fire (check the Resolves: trailer landed in the
@@ -303,19 +319,21 @@ context:
     protection makes pr-validate the required check), Decision 104 (one concern per file).
   - >-
     "gates: decision-scout=FLAGS_FOUND (3 NOTE flags, all resolved in this document);
-    plan-critique=REVISE then PROCEED after 2 round(s)"
+    plan-critique=REVISE (round 1), REVISE (round 2) -- round 3 verdict recorded on receipt, never
+    pre-written"
   - >-
     Decision-scout NOTE 1 resolved (Decision 48, tier): drafted V3, re-declared V2. Decision 142 ruled
     this exact file family (.github/workflows/ci-rca.yml + scripts/ci_rca/** + tests) V2, reasoning
     that an intra-repo CI artifact contract is verified behaviourally via unit tests, structural greps
     of the workflow wiring, and the natural post-merge self-test -- not a Lambda deploy; Decision 135
     ruled a ci.yml step edit V2 likewise. compute_affected_artifacts returns {} for this scope set.
-    COUNTER-PRECEDENT, disclosed: this plan's own direct predecessor
+    COUNTER-PRECEDENTS, both disclosed: (1) this plan's own direct predecessor
     PLAN-resolve-ci-rca-canary-red.yaml -- the plan that introduced the very predicate being fixed, on
-    the same file -- received the identical scout flag and deliberately RETAINED the conservative V3.
-    V2 is chosen here because Decision 48's V3 trigger list is explicitly exhaustive and
-    .github/workflows/*.yml is not on it, and because the behavioural leg the conservative label was
-    protecting is supplied instead by post-deploy VP step 10 (live dispatch) and VP step 9 (closure).
+    the same file -- received the identical scout flag and deliberately RETAINED the conservative V3;
+    (2) rec-2857 itself was filed with verification_tier: V3. V2 is chosen against both because
+    Decision 48's V3 trigger list is explicitly exhaustive and .github/workflows/*.yml is not on it,
+    and because the behavioural leg the conservative label was protecting is supplied instead by
+    post-deploy VP step 10 (live dispatch) and VP step 9 (closure).
   - >-
     Decision-scout NOTE 2 resolved (Decision 104, one concern per file), REVISED after plan-critique:
     the guard is NOT a new check module and is NOT bolted into validate_ci_rca_trigger. It is added to
@@ -349,16 +367,35 @@ context:
     shipped predicate against a synthetic ducklake_writer log containing "HTTP 502: Bad Gateway"
     reproduces the rejection deterministically.
   - >-
-    Design drift, not merely a bug - PLAN-resolve-ci-rca-canary-red.yaml:179 (which introduced this
-    guard for rec-2718) specified ANCHORED patterns, "^failed to get (jobs|run) | HTTP 5xx: |
-    Service Unavailable". The shipped regex is unanchored. This plan restores the stated intent and
-    goes further (stream separation), rather than reversing a prior decision. That predecessor plan
-    also recorded a non-blocking plan-critique suggestion to move this predicate into a unit-tested
-    scripts/ci_rca/ helper -- this plan executes that suggestion.
+    Relationship to the predecessor, stated precisely - PLAN-resolve-ci-rca-canary-red.yaml:179
+    (which introduced this guard for rec-2718) specified a content check against the log file, using
+    ANCHORED patterns: "^failed to get (jobs|run) | HTTP 5xx: | Service Unavailable". Two things
+    happened: the shipped regex dropped the anchoring, and the mechanism itself (any content check
+    over the log body) is unsound for this job. So this plan SUPERSEDES the predecessor's specified
+    mechanism rather than restoring it; only its anchoring intent survives, applied to gh's stderr.
+    No Decision is reversed -- a plan is not a Decision. That predecessor also recorded a non-blocking
+    plan-critique suggestion to move this predicate into a unit-tested scripts/ci_rca/ helper
+    (PLAN-resolve-ci-rca-canary-red.yaml:169) -- this plan executes that suggestion.
   - >-
     In-repo precedent for the corrected shape - .github/actions/terraform-init-retry/action.yml
     captures rc, accepts on rc == 0 regardless of content, and greps output for transient signatures
     only on the failure path. Same principle: classify on exit status; inspect content only on failure.
+    Its FORM (a composite action) was considered and deliberately NOT adopted: a composite action
+    would have kept the classifier default-branch-pinned and dissolved the Decision 143 trust concern
+    disclosed below, but it would also have kept the logic in shell, unreachable by pytest. Offline
+    unit-testability is the whole value-add here -- it is what makes the defect provable without a
+    live ci-rca dispatch, which matters precisely because ci-rca is the broken component -- and it is
+    what the predecessor plan's own critique asked for. The trust delta is mitigated instead by the
+    retained YAML-side test -s.
+  - >-
+    LOAD-BEARING ASSUMPTION, disclosed - the classifier's correctness now rests on "gh run view"
+    exiting non-zero on a transient API 5xx. VP steps 1-4 fake subprocess.run (so they prove the
+    classifier, not gh) and VP step 10 exercises only the success path, so the transient path is not
+    proven end-to-end against the real client. Evidence this holds: rec-2718's incident record shows
+    the "||" fallback chain at ci-rca.yml:171-172 demonstrably firing, which requires a non-zero exit.
+    Residual risk is bounded to an "rc=0 with an error body on stdout" case, which the non-empty-stdout
+    test plus the retained YAML test -s together narrow further. Accepted, not scoped -- proving gh's
+    exit-code fidelity would require a live outage to reproduce.
   - >-
     BEHAVIOUR CHANGE, disclosed (not a pure preservation) - the fallback from --log-failed to --log
     WIDENS: ci-rca.yml:171-173 fires it on a non-zero exit only, whereas this module additionally
@@ -432,26 +469,31 @@ execution_steps:
     TestFallbackChain and TestOutputContract. Fake subprocess.run; inject the sleep function; assert
     on attempt counts, exit codes and written file bytes.
   - >-
-    Modify scripts/verify_ci_workflow.py -- add _check_ci_rca_fetch_classification asserting (a) the
-    "Fetch failed run logs" step exists and invokes scripts.ci_rca.fetch_logs, and (b) the workflow
-    nowhere greps a transient-error pattern against the fetched log. Match on the semantic shape, so
-    that neither renaming the pattern variable nor renaming the log-path variable evades the guard.
-    Add it to the _COMMANDS dict.
+    Modify scripts/verify_ci_workflow.py -- add _check_ci_rca_fetch_classification as an ALLOWLIST
+    over the "Fetch failed run logs" step's run: body: assert (a) it invokes
+    scripts.ci_rca.fetch_logs, and (b) it contains NO pattern-matching construct
+    (grep/egrep/rg/awk/sed/case/=~/inline python -c). Do NOT implement this as a blocklist of known
+    evasion shapes -- the post-change body is just the module invocation plus test -s, so an
+    allowlist is simpler and is the only form that makes acceptance criterion 4's "never" true by
+    construction. Add it to the _COMMANDS dict.
   - >-
-    Modify tests/verify_ci_workflow/test_ci_rca_and_canary.py -- add a pass-path test plus three
-    negative-path tests (literal path, renamed pattern variable, renamed path variable), following the
-    existing patch-based _load conventions in that module. Name them so "-k fetch_classification"
-    selects exactly this set.
+    Modify tests/verify_ci_workflow/test_ci_rca_and_canary.py -- add a pass-path test plus negative
+    tests covering the literal historical grep, a renamed pattern variable, a renamed log-path
+    variable, at least one shape a blocklist would have missed (case/awk/rg or an inline python -c),
+    and a body missing the module invocation. Follow the existing patch-based _load conventions in
+    that module. Name them so "-k fetch_classification" selects exactly this set.
   - >-
     Modify scripts/checks/ci_guards/validate_ci_workflow_guards.py -- add
     _check_ci_rca_fetch_classification to the import block and
-    ("ci-rca-fetch-classification", _check_ci_rca_fetch_classification) to the guards list. No
-    registry.py or validate.py edit: the aggregator is already registered in both sequences and
-    already re-exported.
+    ("ci-rca-fetch-classification", _check_ci_rca_fetch_classification) to the guards list. Refresh
+    the docstring, which enumerates only 5 of the (soon 9) guards. No registry.py or validate.py
+    edit: the aggregator is already registered in both sequences and already re-exported.
   - >-
-    Modify tests/checks/ci_guards/test_validate_ci_workflow_guards.py -- patch the ninth guard in the
-    all-succeed case and add a case asserting its failure appends
-    "ci-workflow guard: ci-rca-fetch-classification".
+    Modify tests/checks/ci_guards/test_validate_ci_workflow_guards.py -- add a case asserting the
+    guard's failure appends "ci-workflow guard: ci-rca-fetch-classification". NOTE: that
+    negative-label case is the one that actually proves aggregator membership; the all-succeed case
+    patches a bare MagicMock() module which auto-creates every attribute, so adding the ninth guard
+    there is a no-op. Refresh the module docstring, which still says "four ci guards".
   - >-
     Execute the Verification Plan -- run each step; loop until pass. DISCRIMINATION PROOF for step 1:
     do NOT attempt to run it against the pre-change tree (both the module and its test are new, so it
