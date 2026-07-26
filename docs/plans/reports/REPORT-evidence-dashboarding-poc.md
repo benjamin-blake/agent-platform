@@ -6,6 +6,17 @@
 > Evidence (evidence.dev) should become this repository's standard human-facing analytical
 > presentation layer; this report tries to falsify it. The roadmap entries are the canonical forward
 > intent and CD.42 is the pattern decision; this report is the design rationale they point back to.
+>
+> **Scope note.** "Report-only" means nothing is built, installed or adopted. It does not mean
+> nothing changes: the authoring plan also enacts roadmap bookkeeping -- two new deferred tier items,
+> one new pending candidate decision, and a surgical amendment to the exit criteria of a third,
+> pre-existing item (T2.51, section 3.3). Those edits are forward intent and routing, not
+> implementation, and T2.51's criteria were all verified `status: open` first so no provenance was
+> re-pointed (Decision 136 / CD.39).
+>
+> **Evidence base.** npm figures in section 5 were measured during authoring and are explicitly
+> point-in-time; section 11.2 converts them into thresholds to be re-measured rather than
+> conclusions to be inherited.
 
 ## 1. Verdict of this report
 
@@ -18,7 +29,7 @@ none of them are about Evidence's quality:
 
 | # | Precondition | Owner |
 |---|---|---|
-| P1 | No analytical-aggregate dataset exists to present. The `NAMED_READS` registry is 12 operational-lookup verbs over 3 tables, with zero aggregates. | T2.52 |
+| P1 | No dataset at an analytical grain exists to present. The `NAMED_READS` registry is 12 verbs over 3 tables; three use aggregate SQL, but all are single-table operational counters. | T2.52 |
 | P2 | Standing human-audience Markdown pages are forbidden as repository artefacts (Decision 127), and the obvious carve-out precedent does not transfer (section 4.1). | CD.42 / T2.53 |
 | P3 | Evidence's multi-file static output collides with CD.41 invariant (b), an open question `REPORT-cost-visibility-dashboard.md` section 5.4 deliberately deferred (section 4.2). | T2.53 |
 
@@ -32,6 +43,17 @@ present is the build-ahead-of-need shape Decision 87 consciously refused.
 A secondary finding changes the shape of the eventual test: **Evidence should not be evaluated in
 isolation**. Section 8 establishes a three-way comparison (Evidence / Astro-with-charts /
 Observable Framework) as the correct experiment.
+
+**One measured result is significant enough to record in the verdict.** On figures taken during
+authoring, Evidence's resolved tree carries **3 critical and 21 high advisories, roughly 18 of them
+with no forward fix** (npm's only remediation is a major *downgrade*), and the bare package **fails
+to install** without `--legacy-peer-deps` (sections 5.3, 5.5). Against the thresholds this report
+commits to in section 11.2, **Evidence fails T1 and T3 as measured today**. That is not a verdict --
+the thresholds are to be re-measured at proof-of-concept time, the template scaffold is untested,
+and a failing arm does not reject the class -- but it does mean the burden of proof has shifted, and
+the report says so rather than deferring an already-visible result. It is also why section 11.2
+states thresholds numerically: they were written after the measurement, so they must be falsifiable
+rather than tuned to pass.
 
 ## 2. What the hypothesis gets right
 
@@ -65,25 +87,51 @@ not built against a misreading in either direction.
 `docs/contracts/ducklake_reader.yaml` documents a `query_ops` verb accepting a caller-supplied
 single-statement read-only `SELECT`/`WITH`. Decision 84 I-3 **retains it explicitly for the data
 quality harness and marks it for restriction or retirement in a follow-up**. It is therefore a
-sanctioned, scheduled-for-retirement exception for one internal consumer, not a precedent, and the
-hypothesis's constraint states the target invariant correctly.
+sanctioned, scheduled-for-retirement exception, not a precedent, and the hypothesis's constraint
+states the target invariant correctly.
 
-**The constraint that survives, and that the proof of concept must honour:** an Evidence (or any
-presentation-layer) source adapter must consume `named_read` verbs **only**, and must never become
-`query_ops`'s second tenant. A presentation layer is a durable, load-bearing consumer; wiring one
-to `query_ops` would convert a retiring exception into something that cannot be retired.
+Two precisions matter for adapter design, because the boundary is more permeable than "one
+scheduled-for-retirement exception" suggests:
 
-### 3.2 Analytical aggregates do not exist yet (this is the prerequisite, not an objection)
+- **`query_ops` has two live call sites, not one.** The DQ harness
+  (`scripts/data_quality_execute.py`) is the sanctioned consumer, but
+  `src/common/iceberg_reader.py` also exposes it through a **generic `reader.query()` path**
+  available to any caller of that module. The second is the one that matters for adapter design: it
+  is a general-purpose door, not a harness-specific one.
+- **The FROM target is caller-controlled.** `docs/contracts/ducklake_reader.yaml` states plainly
+  that `_history` and other `ops_*` tables **are** reachable, and that the boundary is "read-only
+  SELECT plus the S3-read-only IAM role", *not* current-projection-only. It also warns that the
+  handler docstrings claiming otherwise are stale.
+
+**The constraint that survives, and that the proof of concept must honour:** a presentation-layer
+source adapter binds to `named_read` verbs **only**. It must not become `query_ops`'s next tenant --
+a presentation layer is a durable, load-bearing consumer, and wiring one there would convert a
+retiring exception into something that cannot be retired.
+
+**And it must not bind to `read_ops_current` either.** That verb takes a structural
+`{column, value}` filter rather than SQL, so an adapter using it would satisfy the *letter* of "no
+caller SQL crosses the boundary" while bypassing named verbs entirely and re-acquiring exactly the
+freeform-query semantics the constraint exists to prevent. The invariant is **"named verbs only"**,
+not "no SQL"; section 11.1 states it in that stronger form deliberately.
+
+### 3.2 No dataset at an analytical grain exists yet (the prerequisite, not an objection)
 
 The `NAMED_READS` registry (`src/common/ducklake_scd2_schema.py`, `NAMED_READS_VERSION = 3`)
 contains **12 verbs over 3 tables** -- `ops_recommendations`, `ops_decisions`,
-`ops_priority_queue` -- and every one is an operational lookup (`open_recs`, `rec_by_id`,
-`ci_rca_open`, `recs_by_title_prefix`, `count_by_status`, `priority_queue_current`, and so on).
-There is **no analytical-aggregate verb of any kind**.
+`ops_priority_queue`.
 
-The hypothesis's claim is that named verbs are the *pattern to follow*, which is correct. The
-consequence is that the analytical-aggregate verb class is **net-new design work**, which is why it
-is scoped as T2.52 and made a prerequisite of T2.53 rather than assumed available.
+Precisely: **three of those verbs already use aggregate SQL** -- `count_by_status`
+(`GROUP BY status`), `forward_fix_recursion` (`GROUP BY file HAVING COUNT(*) >= 3`) and
+`decisions_max_updated` (`max(last_updated_timestamp)`). What none of them does is aggregate at an
+**analytical/business grain**: there is no time bucketing, no dimensional breakdown, no cross-table
+join, no actual-versus-estimated classification, and no versioned analytical response schema. They
+are single-table operational counters and scalars that feed preflight gauges.
+
+This *strengthens* rather than weakens the case for T2.52: the registry pattern already
+accommodates aggregate SQL behind a named verb, so T2.52 is an **extension of a proven pattern**,
+not the invention of a new one. The hypothesis's claim that named verbs are the pattern to follow is
+correct. What is genuinely absent is the analytical grain, which is why T2.52 is scoped as a
+prerequisite of T2.53 rather than assumed available.
 
 ### 3.3 Cost data and DuckLake (routing amendment, not a re-scope)
 
@@ -133,6 +181,37 @@ the loop. The mirror analogy does not carry the exception's load-bearing propert
 unobtainable" is a legitimate outcome. This is a pre-committed **reject** criterion (section 11),
 not a checkbox to be ticked during implementation.
 
+#### 4.1.1 Principle versus enforcement mechanism -- and why it decides the comparison
+
+The guard's *enforcement* is narrower than the decision's *principle*, and the gap is load-bearing.
+`validate_prose_allowlist` enumerates its corpus via `git ls-files '*.md'`
+(`scripts/checks/hygiene/validate_prose_allowlist.py`, `_tracked_md_files`). It therefore inspects
+tracked **`.md` files only**. Applied to the comparison set:
+
+| Candidate | Page file type | Trips the guard as written |
+|---|---|---|
+| Evidence | `.md` | Yes |
+| Observable Framework | `.md` | Yes |
+| Astro (+ charting library) | `.astro` (and `.mdx` if used) | **No** -- passes trivially |
+
+Two readings, and the report deliberately does **not** pick one, because picking one is T2.53's job:
+
+- **Principled reading.** Decision 127's rule is about *audience-of-record*, not file extension. A
+  human-audience dashboard page written in `.astro` is the same artefact class as one written in
+  `.md`; the guard simply does not reach it yet. Under this reading the precondition binds **all
+  three candidates equally**, and "choose Astro instead" is **not** an escape from P2.
+- **Mechanical reading.** The guard is the operative control, and `.astro` files are outside it.
+  Under this reading Astro sidesteps P2 today -- but only as an artifact of enforcement scope, which
+  is exactly the kind of accidental exemption that gets closed the moment someone notices.
+
+**This must be resolved before, not during, the proof of concept**, because it changes what the
+experiment is measuring. If the principled reading holds, P2 is a property of the whole
+code-defined-dashboard class and an unobtainable amendment rejects all three arms. If the mechanical
+reading holds, Astro enjoys an advantage that the repository would probably want to remove on
+sight -- which makes it an unsound basis for a durable platform choice. Resolving it is criterion
+c5's real content (section 11.2 item 1), and section 13 records it as the question that gates the
+rest.
+
 ### 4.2 CD.41 invariant (b) -- multi-file static serving (P3)
 
 CD.41 invariant (b): the confidential payload never transits Cloudflare; it flows AWS to browser
@@ -153,6 +232,18 @@ resolution, and the tension is real rather than merely deferred:
   Access gate and requires re-implementing authentication at the edge (a CloudFront Function JWT
   check, or signed cookies).
 
+**The TTL dimension is the harder half, and it is not about file count at all.** CD.41 fixes the
+presigned GET at **<= 5 minutes** and explicitly characterises it as a replayable bearer capability.
+A dashboard is not a single load: Evidence fetches `[query_hash].arrow` files **lazily, at
+interaction time**, so a session lasting longer than five minutes hits link expiry **mid-session**
+rather than at page load. Every subsequent interaction needs a freshly minted capability.
+
+That collapses the option space. A one-shot 302-to-presigned-URL redirect cannot serve an
+interactive session under a five-minute TTL, so the compliant mechanisms reduce to **edge-side JWT
+verification or signed cookies** at a non-Cloudflare-proxied origin -- not one of three roughly
+equal options, but effectively mandatory. Single-object bundling survives only for a genuinely
+static, non-interactive artifact, which is the MVP instance T2.51 already contemplates.
+
 CD.41 fixes the invariant, not the mechanism, so a compliant answer exists. It is engineering work
 that the hypothesis does not account for, and ownership of the question moves to T2.53.
 
@@ -170,17 +261,22 @@ frozen at 40 since **2024-12-10**. Sibling packages `@evidence-dev/core-componen
 `@evidence-dev/sdk` (4.0.2) and `@evidence-dev/duckdb` (2.0.1) all last published on that same
 **2026-02-06** date.
 
-Two honest readings, and the report does not pick one:
+**The obvious readings are both wrong, and the timeline is why.** Within the v40 line, `40.1.2`
+shipped 2025-04-11 and `40.1.3` did not arrive until 2025-11-03 -- a **prior gap of roughly seven
+months that subsequently resolved**. That single fact retires both tempting narratives:
 
-- **Charitable:** the project matured. Forty major versions in three years followed by fourteen-plus
-  months on a single major is a stabilisation curve, not a death curve.
-- **Adverse:** organisation-wide publish silence of roughly five to six months is a liveness
-  question for a load-bearing dependency on a security-relevant surface, where security patches for
-  a large transitive Node tree depend on upstream responsiveness.
+- It **weakens the adverse reading**: the current gap of roughly five to six months is *within this
+  project's own observed normal*, so silence of this length is not evidence of abandonment.
+- It **also destroys the charitable "stabilisation curve" reading**: a project that has already gone
+  quiet for seven months and come back is not on a smooth maturation glide path; it is a project
+  with irregular, bursty maintenance.
 
-Publish silence is not abandonment -- it can reflect a release-process change or genuine maintenance
-mode. The correct treatment is a **gating liveness check** (section 11), not an assumption in
-either direction.
+The honest conclusion is that **publish cadence alone cannot answer the liveness question here**,
+in either direction. What actually matters for a load-bearing dependency is responsiveness *to
+security advisories* (section 5.3 shows why that is the binding constraint), which cadence does not
+measure. The correct treatment is a **gating liveness check with a stated threshold** (section 11),
+assessed on advisory response rather than publish frequency. Note also that the package carries
+live `next` and `features-a` dist-tags, which this report has not examined.
 
 ### 5.2 Comparative liveness
 
@@ -191,19 +287,40 @@ either direction.
 | `@observablehq/framework` | 1.13.4 | 2026-04-06 |
 | `@evidence-dev/evidence` | 40.1.8 | 2026-02-06 |
 
-### 5.3 The dependency surface is effectively frozen
+### 5.3 The dependency surface is frozen, and that is a security posture rather than upgrade friction
 
-`@evidence-dev/evidence@40.1.8` declares 10 dependencies, 6 devDependencies and 13 peer
-dependencies, with **exact pins** across the framework tier: `@sveltejs/kit 2.8.4`,
-`svelte 4.2.19`, `vite 5.4.21`, `typescript 5.4.2`, `tailwindcss 3.4.18`,
-`@sveltejs/adapter-static 3.0.1`. Note Svelte **4**, not 5.
+`@evidence-dev/evidence@40.1.8` declares **10 dependencies, 6 devDependencies and 13 peer
+dependencies**, with exact pins across the framework tier. The split matters: `@sveltejs/kit 2.8.4`
+and `@sveltejs/adapter-static 3.0.1` are **direct dependencies**, while `svelte 4.2.19`,
+`vite 5.4.21`, `typescript 5.4.2` and `tailwindcss 3.4.18` are **peer dependencies** the consuming
+project must supply at those exact versions. Note Svelte **4**, not 5.
 
-The consequence is concrete: **the transitive tree cannot be independently patched.** A Dependabot
-bump to svelte, vite or SvelteKit breaks the exact peer pins, so upgrades are gated on upstream
-republishing -- which section 5.1 shows has slowed sharply. This repository's Dependabot
-configuration (`.github/dependabot.yml`) currently covers `pip` and `github-actions` only, so
-adoption additionally requires a new npm ecosystem entry, which is a governed `.github/` and
-`terraform/github/` surface under Decision 83, not a free edit.
+**Measured, not inferred.** Resolving the tree in this container yields **641 total dependencies**
+(592 production, 50 optional; 593 packages installed), and `npm audit --json` reports **30
+vulnerabilities: 3 critical, 21 high, 5 moderate, 1 low**.
+
+The decisive figure is not the count but the **fix path**. Of those advisories, **18 report
+`fixAvailable` as a major *downgrade* to `@evidence-dev/evidence@29.0.3`** -- including
+`@evidence-dev/sdk` (critical), `@sveltejs/kit` (high) and `@evidence-dev/preprocess` (high). npm
+cannot fix these forward at all. Only 12 are in-range fixable, and those are peripheral tooling
+(eslint, vitest). So the accurate statement is not "upgrades are gated on upstream republishing" but
+**"a substantial share of the advisory surface is unresolvable at adoption time, in either
+direction."**
+
+**Why that lands harder in this repository than in most.** This repo is PUBLIC, with GHAS,
+Dependabot alerts and a standing `ghas-probe` monitor whose dated evidence is recorded against
+Decision 83. Two things follow that are easy to conflate and must not be:
+
+- **Dependabot *version updates*** are configured per-ecosystem in `.github/dependabot.yml`
+  (currently `pip` and `github-actions` only). Adding an npm entry is a governed `.github/` and
+  `terraform/github/` surface change under Decision 83.
+- **Dependabot *alerts* are repository-wide and automatic.** They fire on any manifest in the repo
+  **regardless of `dependabot.yml`**, and on a public repository they are visible security signal.
+
+Adoption therefore injects roughly two dozen high-and-critical advisories that **cannot be
+remediated forward** onto a public security surface that Decision 83 treats as continuously
+live-verified. Declining to add the npm ecosystem entry does not avoid this; it only removes the
+update PRs while leaving the alerts.
 
 ### 5.4 Build-time telemetry
 
@@ -212,15 +329,34 @@ phone-home is a governance item under the confidential-data boundary (Decisions 
 footnote. It must be **explicitly disabled and the disablement verified**, and that verification is
 a pre-committed exit criterion rather than a configuration note.
 
-### 5.5 Container feasibility (favourable)
+### 5.5 Container feasibility (mixed -- the environment is fine, the install is not)
 
-The standard ephemeral development container carries Node **v22.22.2**, npm **10.9.7**, a
-pre-installed Chromium under `PLAYWRIGHT_BROWSERS_PATH`, and reachable npm registry access through
-the agent proxy (verified by live `npm view` and `npm pack` calls this session). The agent-side
-render-and-inspect loop the hypothesis describes is therefore **feasible in principle**; nothing in
-the environment blocks it. The repository currently tracks **zero** JavaScript or TypeScript files
-and has no `package.json`, so any adoption introduces the repository's first Node dependency
-surface.
+**The environment is favourable.** The standard ephemeral development container carries Node
+**v22.22.2**, npm **10.9.7**, a pre-installed Chromium under `PLAYWRIGHT_BROWSERS_PATH`, and
+reachable npm registry access through the agent proxy. The repository currently tracks **zero**
+JavaScript or TypeScript files and has no `package.json`, so any adoption introduces the
+repository's first Node dependency surface.
+
+**The install is not.** A bare `npm install @evidence-dev/evidence@40.1.8` **fails** in this
+container with `ERESOLVE unable to resolve dependency tree`. The conflict is intrinsic to the pinned
+tree rather than environmental: `ts-node@10.9.2` (pulled in transitively via
+`postcss-load-config@4.0.2`, itself a pinned peer of Evidence) declares a loose
+`peer typescript ">=2.7"`, so npm hoists `typescript@7.0.2`; that violates `svelte-preprocess@5.1.3`'s
+`peerOptional typescript ">=3.9.5 || ^4.0.0 || ^5.0.0"`, and `svelte-preprocess@5.1.3` is itself an
+exact peer pin of Evidence.
+
+The install succeeds **only** under `--legacy-peer-deps`, which is npm's explicit instruction to
+accept a resolution it considers incorrect and potentially broken. This is section 5.3's frozen-pin
+thesis **already materialised**, not a future risk.
+
+**Install path validated (stated precisely, because it bounds the claim).** The measurement above is
+a **bare install of the `@evidence-dev/evidence` package** into an empty project. Evidence's
+documented scaffold path is a project template (`npx degit evidence-dev/template`), which ships its
+own `package.json` supplying the peer versions and may well resolve cleanly. **That path was not
+tested here.** So the honest finding is narrower than "Evidence cannot be installed": it is that the
+**package's declared peer graph does not self-resolve under current npm**, and any adoption must
+therefore pin its own resolution -- which is itself the maintenance burden under evaluation. Testing
+the template scaffold is the first task of the proof of concept, not a settled matter.
 
 ## 6. Where the second semantic layer actually lives
 
@@ -261,6 +397,17 @@ A `.gitignore` entry is a convention, not a guard. The required control is a **d
 pattern -- asserting that no build artifact is tracked. Additionally, a production build executed on
 a GitHub-hosted runner would transit confidential data through CI; builds against live data belong
 in-AWS, or under strict artifact and log discipline.
+
+**There is currently no coverage at all, and the timing is the problem.** `.gitignore` today
+contains **no** entry for `node_modules/`, `.svelte-kit/`, `package-lock.json`, `*.parquet` or
+`*.arrow` -- unsurprising in a repository that tracks zero JavaScript files, but consequential the
+moment one runs an install. Section 5.3 measured that first install at **593 packages**, and a
+build additionally materialises query results to disk.
+
+So the guard cannot be an **adopt** criterion, because adoption happens *after* the proof of concept
+has already run installs and builds on a branch of a public repository. Ignore rules plus the
+deterministic check are therefore a **precondition of opening any proof-of-concept branch**, not an
+exit criterion of finishing one. Section 11 states it in that position.
 
 ## 8. Alternatives adjudicated
 
@@ -405,65 +552,116 @@ stale-snapshot handling.
 
 ## 11. Pre-committed criteria
 
-Committed now, before the experiment, so the verdict is not rationalised afterwards.
+Committed now, before the experiment, so the verdict is not rationalised afterwards. The criteria
+are deliberately split three ways, because the experiment is three-way: what follows applies to
+**every** candidate unless a subsection says otherwise. A single Evidence-shaped checklist would
+have made "adopt Astro" unreachable by construction.
 
-### 11.1 Adopt requires all of
+Where a criterion can carry a number, it carries one. A criterion that cannot be failed is not a
+criterion, and the qualitative form of these gates was the largest weakness of this section's first
+draft.
+
+### 11.0 Preconditions -- satisfied BEFORE a proof-of-concept branch is opened
+
+These are not exit criteria. The proof of concept runs installs and builds on a branch of a **public
+repository**, so these must hold first (section 7).
+
+- P0.1 `.gitignore` covers `node_modules/`, `.svelte-kit/`, build output directories, `*.parquet`
+  and `*.arrow`; and the deterministic tracked-artifact guard (Decision 104 registry pattern) is
+  registered and passing.
+- P0.2 The section 4.1.1 question is **resolved in writing**: does Decision 127's audience-of-record
+  rule bind non-`.md` dashboard pages, or is the `.md` scope of `validate_prose_allowlist` an
+  enforcement artifact? The answer determines whether P2 binds one arm or all three, so it must
+  precede the comparison rather than emerge from it.
+
+### 11.1 Tool-neutral criteria -- all candidates must satisfy all of
 
 1. An agent scaffolds, renders, inspects and iterates the dashboard entirely within an ephemeral
    container, from contract-derived fixtures, with no live data and no credentials.
-2. The source adapter consumes `named_read` verbs only; no caller SQL crosses the read boundary and
-   `query_ops` gains no second tenant (section 3.1).
+2. The source adapter binds to `named_read` verbs **only** -- not `query_ops`, and not
+   `read_ops_current` (section 3.1). "Named verbs only" is the invariant; "no caller SQL" is too
+   weak, because a structural-filter verb satisfies the latter while defeating the former.
 3. Fixture and live adapters expose **identical** schemas.
-4. A strict build detects broken queries, schemas and components (it fails, rather than rendering an
-   error component).
-5. Browser tests detect material layout and accessibility failures on deliberately broken fixtures.
-6. An acceptable result is reached **without substantial custom framework components** -- built-in
-   components plus chart configuration suffice.
-7. A **scoped Decision-127 amendment is obtained on its own grounds** (section 4.1).
-8. A compliant answer to CD.41 invariant (b) for multi-file serving is identified and costed
-   (section 4.2).
-9. A **deterministic guard** (registered `validate.py` check or `never-commit` extension) asserts no
-   build artifact is tracked (section 7).
-10. Upstream telemetry is disabled and the disablement is verified.
-11. An upstream-liveness check passes at proof-of-concept time (section 5.1 re-verified, plus
-    repository commit activity and security-advisory responsiveness).
-12. The egress budget (Decision 88) and partition-every-table (Decision 137) constraints are
-    satisfied by the T2.52 datasets the proof of concept consumes.
-13. The QuickSight rejection is **re-adjudicated** against the proof of concept's measured build and
-    carry cost, and still holds (section 8.1).
-14. Moving a semantic asset from a virtual query to a persisted materialization does not require
-    changing the page contract.
-15. The operating and dependency burden is proportionate for a sole-operator platform.
+4. A strict build **fails** (non-zero exit) on a broken query, a schema mismatch or an unresolvable
+   dataset -- it does not render an error component and exit zero.
+5. Browser tests detect material layout and accessibility failures **on deliberately broken
+   fixtures** -- demonstrated, not asserted.
+6. Upstream build-time telemetry, if any, is disabled and the disablement is **verified**.
+7. The egress budget (Decision 88) and partition-every-table (Decision 137) constraints are
+   satisfied by the T2.52 datasets consumed.
+8. Moving a semantic asset from a virtual query to a persisted materialization requires **no change**
+   to the page contract.
+9. A **working prototype** of a CD.41-invariant-(b)-compliant serving mechanism exists -- not a
+   sketch, and not merely "identified and costed". Section 4.2's TTL analysis means this is
+   realistically edge-JWT or signed cookies, so a design note does not discharge it.
+10. The QuickSight rejection is **re-adjudicated** against measured build and carry cost, and still
+    holds (section 8.1).
 
-### 11.2 Reject if any of
+### 11.2 Supply-chain thresholds -- numeric, applied per candidate
 
-1. The Decision-127 amendment is **unobtainable** on its own grounds.
-2. Useful dashboards require arbitrary SQL in page files, or the local query behaviour creates an
-   unavoidable second semantic layer (section 6).
-3. The data-source plugin interface cannot cleanly express the named-verb model.
-4. Agents cannot render and debug reliably in the standard ephemeral environment.
-5. Acceptable results require extensive custom Svelte components, turning the tool into a custom
-   frontend framework by another name.
-6. Accessibility, responsiveness or visual-testing standards cannot be met.
-7. Static output becomes too large or slow for expected datasets.
-8. Upstream liveness or plugin compatibility is inadequate for a load-bearing dependency
-   (section 5.1, 5.3).
-9. The supply-chain and upgrade burden exceeds the value of the reporting components -- specifically
-   including the frozen-pin problem, which cannot be mitigated by Dependabot.
-10. Astro or Observable Framework meets the validated requirements at materially lower long-term
-    complexity.
-11. Required interactions turn out to be transactional, write-oriented, highly stateful or
-    operational rather than analytical.
-12. Per-user row-level authorization must be enforced inside the application rather than before
-    dataset publication.
-13. Data must be continuously live at a latency incompatible with scheduled or event-driven builds.
+Measured on the resolved tree at proof-of-concept time, not inherited from section 5:
 
-### 11.3 Constrain
+- T1 **Unresolvable advisories:** zero `critical` and no more than **3 `high`** advisories for which
+  no forward fix exists. Evidence measured **3 critical and roughly 18 fix-forward-unavailable**
+  today (section 5.3), so on current figures Evidence **fails T1** -- which is precisely why the
+  threshold is stated in advance.
+- T2 **Tree size:** transitive dependency count recorded, with anything above **750** requiring an
+  explicit written justification rather than an automatic pass.
+- T3 **Install integrity:** the project installs **without `--legacy-peer-deps`** or any equivalent
+  resolution override. Evidence's bare package currently fails this; the template scaffold is
+  untested (section 5.5).
+- T4 **Liveness:** a security-relevant publish or a documented advisory response within the
+  preceding **9 months** (chosen to sit above this project's own observed ~7-month quiet period, so
+  the threshold measures responsiveness rather than cadence -- section 5.1).
+
+### 11.3 Per-arm adopt bar
+
+- **Evidence adopts** if 11.0-11.2 hold, a scoped Decision-127 amendment is obtained on its own
+  grounds (section 4.1), and an acceptable result needs **no substantial custom Svelte components**
+  -- built-in components plus chart configuration suffice.
+- **Observable Framework adopts** if 11.0-11.2 hold and the same Decision-127 amendment is obtained
+  (its pages are `.md`, so it collides identically -- section 4.1.1).
+- **Astro adopts** if 11.0-11.2 hold **and** the repository accepts owning chart integration, layout
+  primitives, formatting and empty/stale/partial states directly (section 8.2) -- costed in
+  estimated build effort, not waved through. If section 4.1.1 resolves to the *principled* reading,
+  Astro needs the Decision-127 amendment too and gains no exemption from `.astro` file extensions.
+- **No candidate adopts** if none clears its bar. "No UI layer -- structured agent reports suffice"
+  is then the verdict, and it is a real outcome rather than a failure to decide.
+
+### 11.4 Reject -- whole class, or a single arm
+
+**Whole class** (no candidate adopts) if any of:
+
+1. The section 4.1.1 question resolves to the **principled** reading AND a Decision-127 amendment is
+   **unobtainable** on its own grounds -- this rejects every code-defined dashboard, `.md` or
+   `.astro`.
+2. Required interactions turn out to be transactional, write-oriented, highly stateful or
+   operational rather than analytical.
+3. Per-user row-level authorization must be enforced inside the application rather than before
+   dataset publication.
+4. Data must be continuously live at a latency incompatible with scheduled or event-driven builds.
+5. No compliant CD.41 invariant (b) serving mechanism can be prototyped (section 4.2).
+
+**A single arm** is rejected if any of:
+
+6. It fails any threshold in 11.2.
+7. Useful dashboards require arbitrary SQL in its page files, or its local query behaviour creates
+   an unavoidable second semantic layer (section 6).
+8. Its data-source plugin interface cannot cleanly express the named-verb model.
+9. Agents cannot render and debug it reliably in the standard ephemeral environment.
+10. Acceptable results require extensive custom components, turning it into a bespoke frontend
+    framework by another name.
+11. Its accessibility, responsiveness or visual-testing standards cannot be met.
+12. Its static output is too large or slow for expected datasets.
+13. Another arm meets the validated requirements at materially lower long-term complexity.
+
+### 11.5 Constrain
 
 Adoption limited to a narrow reporting use case (for example the private cost dashboard alone), with
 no commitment to telemetry, data quality, operational governance or product analytics. Constrain is
-the expected outcome if section 11.1 largely holds but 11.2 items 8 or 9 (upstream and supply chain)
-remain uncomfortable.
+the expected outcome if 11.0-11.1 hold for some arm but its 11.2 supply-chain thresholds remain
+uncomfortable at a level short of outright failure -- a bounded, single-tenant blast radius being an
+acceptable way to carry a dependency one would not want platform-wide.
 
 ## 12. Roadmap placement and sequencing
 
@@ -487,10 +685,24 @@ remain uncomfortable.
 
 - Section 5 figures are point-in-time and **must be re-verified** at proof-of-concept time.
 - Whether a Decision-127 amendment is obtainable on its own grounds is genuinely open, and it gates
-  everything else. It is worth settling **before** the proof of concept spends effort, since a
-  negative answer rejects the whole class of code-defined Markdown dashboards, not just Evidence.
-- The compliant CD.41 invariant (b) mechanism for multi-file serving is unresolved (edge JWT
-  verification versus signed cookies versus a single-object bundling strategy).
+  everything else. Settle it **before** the proof of concept spends effort: a negative answer under
+  the principled reading rejects the whole class of code-defined dashboards, not just Evidence.
+  Section 4.1.1's principle-versus-mechanism question is part of this and must be answered first.
+- The compliant CD.41 invariant (b) mechanism is unresolved, though section 4.2's TTL analysis
+  narrows it to **edge JWT verification or signed cookies**; single-object bundling survives only
+  for a non-interactive artifact.
+- **Named-verb payload feasibility for analytical extracts is unexamined.** Only 2 of the 12 current
+  verbs (`open_recs`, `recs_by_title_prefix`) are `paginable`, and `named_read` returns JSON rows
+  over a Lambda Function URL with a response-size ceiling this report has not measured. A
+  build-time-materializing renderer pulls whole datasets, so if the boundary cannot physically carry
+  an analytical extract within its limits, T2.52 needs a **bulk-extract verb class** (paginated or
+  streamed) in addition to aggregate verbs, and criterion 11.1.2 is otherwise unsatisfiable. Measure
+  the ceiling before designing the verbs, and weigh the result against the Decision 88 egress
+  budget.
+- The Decision 88 egress criterion is stated without a numeric budget, unlike section 11.2's
+  supply-chain thresholds. Quantifying it is T2.52's work.
+- Whether Evidence's **template scaffold** resolves cleanly where the bare package does not
+  (section 5.5) is untested and is the proof of concept's first task.
 - The analytical-aggregate verb set itself is unenumerated; T2.52 owns naming the grains.
 - Whether an npm ecosystem entry in Dependabot is even useful given the exact-pin problem
   (section 5.3) is open -- it may produce only unmergeable pull requests.

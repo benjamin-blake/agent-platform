@@ -65,18 +65,22 @@ verification_plan:
     fix_if: >-
       A schema/graph error prints -> fix the offending item or CD shape (id, depends_on, structured
       exit_criteria) and re-run.
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the already-registered validate_platform_roadmap check in validate.py -- graduating it would add a second registry row asserting the identical property.
   - step: 2
     phase: pre-deploy
     action: >-
       Confirm T2.52 and T2.53 are well-shaped, both deferred, the dependency edge exists, and CD.42
       is pending and gates T2.53.
-    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); it={i['id']:i for i in d['tier_items']}; cd={c['id']:c for c in d['candidate_decisions']}; a=it['T2.52']; b=it['T2.53']; assert a['status']=='deferred_post_mvp' and b['status']=='deferred_post_mvp'; assert a['strategic'] is False and b['strategic'] is False; assert b['depends_on']==['T2.52']; assert len(a['exit_criteria'])>=6 and len(b['exit_criteria'])>=10; assert all(c['status']=='open' for c in a['exit_criteria']+b['exit_criteria']); assert cd['CD.42']['state']=='pending' and cd['CD.42']['gates']==['T2.53']; print('T2.52+T2.53+CD.42 ok')"
+    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); it={i['id']:i for i in d['tier_items']}; cd={c['id']:c for c in d['candidate_decisions']}; a=it['T2.52']; b=it['T2.53']; assert a['status']=='deferred_post_mvp' and b['status']=='deferred_post_mvp'; assert a['strategic'] is False and b['strategic'] is False; assert b['depends_on']==['T2.52']; assert len(a['exit_criteria'])>=6 and len(b['exit_criteria'])>=10; assert all(c['status']=='open' for c in a['exit_criteria']+b['exit_criteria']); assert cd['CD.42']['state']=='pending' and cd['CD.42']['gates']==['T2.53']; assert 'DEFERRAL RATIONALE' in a['progress_note'] and 'DEFERRAL RATIONALE' in b['progress_note']; assert 'ACTIVATION TRIGGER' in a['progress_note'] and 'ACTIVATION TRIGGER' in b['progress_note']; print('T2.52+T2.53+CD.42 ok')"
     expected: "T2.52+T2.53+CD.42 ok"
     fix_if: >-
       KeyError/AssertionError -> the item or CD is missing, mis-typed, or under-specified; correct
       it and re-run.
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Transient single-edit bookkeeping assertion. The asserted properties change legitimately on reactivation (status flips deferred_post_mvp -> not_started, criteria statuses flip to met), so a standing guard would fail by design later.
   - step: 3
     phase: pre-deploy
     action: >-
@@ -87,7 +91,9 @@ verification_plan:
     fix_if: >-
       A live item id prints -> it depends on a deferred item (Decision 93 invariant); remove the
       edge or reclassify.
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Already enforced by the platform_roadmap.py model_validator at load time per Decision 93's no-live-dep invariant -- a registry row would duplicate a schema-level guarantee.
   - step: 4
     phase: pre-deploy
     action: >-
@@ -98,22 +104,29 @@ verification_plan:
     fix_if: >-
       AssertionError -> either a criterion was already met/rehomed (add new criteria instead of
       rewriting text), or the amendment text is missing; correct and re-run.
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Transient single-edit bookkeeping assertion about one amendment. T2.51's criteria statuses change legitimately as the item progresses, so pinning them as a standing check would fail by design.
   - step: 5
     phase: pre-deploy
     action: Validate this REPORT-ONLY plan document against the PlanDocument schema.
     command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-evidence-dashboarding-poc.yaml
     expected: The plan validates (exit 0) against the PlanDocument schema.
     fix_if: A validation error prints -> fix the offending field and re-run.
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the already-registered validate_plan_documents check, which re-validates the whole docs/plans directory in both presubmit tiers.
   - step: 6
     phase: pre-deploy
     action: >-
       Confirm the deliverable exists and carries the load-bearing findings -- both structural
       collisions, the QuickSight adjudication, and the pre-committed criteria.
-    command: test -f docs/plans/reports/REPORT-evidence-dashboarding-poc.md && grep -c -E "T2\.52|T2\.53|CD\.42|Decision 127|CD\.41|QuickSight|Pre-committed" docs/plans/reports/REPORT-evidence-dashboarding-poc.md
-    expected: A count >= 7 (the report names both new items, the new CD, both collisions, the managed alternative, and the criteria section).
-    fix_if: File missing or count low -> write/repair the deliverable so it carries those findings.
+    command: 'test -f docs/plans/reports/REPORT-evidence-dashboarding-poc.md && for t in "T2.52" "T2.53" "CD.42" "Decision 127" "CD.41" "QuickSight" "point-in-time" "named_read"; do grep -q -- "$t" docs/plans/reports/REPORT-evidence-dashboarding-poc.md || { echo "missing: $t"; exit 1; }; done; echo "report findings ok"'
+    expected: "report findings ok"
+    fix_if: >-
+      A "missing: <token>" line prints -> the deliverable does not carry that finding; write or
+      repair it. The per-token loop is deliberate: an alternation `grep -c` counts matching LINES,
+      so eight mentions of a single token would pass while every other finding was absent.
     graduation: not-applicable
   - step: 7
     phase: pre-deploy
@@ -122,7 +135,9 @@ verification_plan:
     command: bin/venv-python -c "n=sum(1 for _ in open('docs/ROADMAP-PLATFORM.yaml')); assert n<10000, n; print('roadmap lines', n, '< 10000 ceiling')"
     expected: A line count under 10,000.
     fix_if: At or over the ceiling -> compact terminal content in place (Decision 147) before adding.
-    graduation: not-applicable
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the Decision 114 roadmap line-ceiling guard already registered in validate.py (_roadmap_size_issues).
 constraints:
   - No implementation this session -- REPORT-ONLY; nothing is adopted, scaffolded, or installed.
   - >-
@@ -205,11 +220,44 @@ context:
     (2026-04-06). Container: Node v22.22.2, npm 10.9.7, pre-installed Chromium, npm reachable; repo
     tracks zero JS/TS files and has no package.json.
   - >-
+    Measured during the report-critique round (resolved tree, scratchpad only, no repository
+    artifact): bare `npm install @evidence-dev/evidence@40.1.8` FAILS with ERESOLVE -- ts-node's
+    loose `typescript >=2.7` peer hoists typescript@7.0.2, violating svelte-preprocess@5.1.3's
+    peerOptional `>=3.9.5 || ^4.0.0 || ^5.0.0`, both of which are Evidence's own exact peer pins --
+    and succeeds only under --legacy-peer-deps. Resolved tree: 641 transitive dependencies (592 prod
+    + 50 optional); npm audit 30 vulnerabilities (3 critical, 21 high, 5 moderate, 1 low), ~18 of
+    which report fixAvailable as a major DOWNGRADE to @evidence-dev/evidence@29.0.3 (no forward fix)
+    including @evidence-dev/sdk critical and @sveltejs/kit high. Liveness nuance: v40.1.2
+    (2025-04-11) -> v40.1.3 (2025-11-03) is a prior ~7-month gap that RESOLVED, so the current
+    ~5.7-month silence is within observed normal -- retiring both the "abandoned" and the
+    "stabilisation curve" readings. Bound on the claim: this measured the BARE PACKAGE, not the
+    documented `npx degit evidence-dev/template` scaffold, which ships its own package.json and may
+    resolve cleanly; testing it is T2.53's first task, not a settled matter.
+  - >-
+    Report-critique findings folded into the deliverable and the roadmap: criteria restructured into
+    preconditions (11.0) / tool-neutral (11.1) / NUMERIC supply-chain thresholds (11.2) / per-arm
+    adopt bars (11.3), because the first draft's criteria were Evidence-shaped while the experiment
+    is three-way, and were qualitative enough to be unfalsifiable; the artifact guard moved from an
+    adopt criterion to a PRECONDITION of opening a PoC branch (the PoC itself runs installs on a
+    public repo); validate_prose_allowlist's `git ls-files '*.md'` scope surfaced as decisive (Astro
+    .astro pages pass the Decision 127 guard trivially while Evidence and Observable .md pages
+    collide, so principle-vs-mechanism must be resolved BEFORE the comparison); and CD.41's <=5-min
+    TTL plus lazy [query_hash].arrow fetching means link expiry lands MID-SESSION, narrowing
+    compliant serving to edge-JWT or signed cookies rather than three equal options.
+  - >-
     Live-repo grounding: NAMED_READS (src/common/ducklake_scd2_schema.py, NAMED_READS_VERSION 3) is
-    12 operational-lookup verbs over ops_recommendations / ops_decisions / ops_priority_queue with
-    zero aggregates; docs/contracts/data-modeling-standard.yaml defines only scd2 and append_only
-    with no derived-asset mode; preflight reports telemetry "not migrated (Phase 4)" and data
-    quality 0 tables / 0 checks / no run.
+    12 verbs over ops_recommendations / ops_decisions / ops_priority_queue, of which THREE already
+    use aggregate SQL (count_by_status, forward_fix_recursion, decisions_max_updated) -- all
+    single-table operational counters feeding preflight gauges, none at an analytical/business grain
+    (no time bucketing, dimensional breakdown, cross-table join, or versioned analytical schema). An
+    earlier draft claimed "zero aggregates"; that was corrected by the report-critique gate, and the
+    precise version strengthens T2.52 (it EXTENDS a proven registry pattern rather than inventing
+    one). Only 2 of 12 verbs are paginable. query_ops has TWO live call sites (the DQ harness and a
+    generic reader.query() path in src/common/iceberg_reader.py) with a caller-controlled FROM target
+    reaching _history; read_ops_current is a third surface and a loophole in any "no caller SQL"
+    phrasing. docs/contracts/data-modeling-standard.yaml defines only scd2 and append_only with no
+    derived-asset mode; .gitignore has no node coverage; preflight reports telemetry "not migrated
+    (Phase 4)" and data quality 0 tables / 0 checks / no run.
   - >-
     Tier Item Freshness Gate on T2.51 (the item this plan amends): not silently complete (c1-c5 all
     open), all files_in_scope resolve or are marked new, no supersession by a sibling, and its

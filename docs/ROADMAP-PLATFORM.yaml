@@ -1315,9 +1315,14 @@ candidate_decisions:
     filed_via: pending_log_decision_lambda
     discipline_points:
       - >-
-        Source adapters bind to `named_read` verbs only; `query_ops` gains no second tenant
-        (Decision 84 I-3). Build-time reads honour the Decision 88 egress budget -- never re-query
-        data already in the local read cache; reuse warm connections.
+        Source adapters bind to `named_read` verbs ONLY. Not `query_ops` (Decision 84 I-3 retains it
+        for the DQ harness and marks it for retirement; it already has two live call sites and a
+        caller-controlled FROM target reaching _history and other ops_* tables), and not
+        `read_ops_current` (a structural {column,value} filter satisfies the LETTER of "no caller
+        SQL" while bypassing named verbs entirely). The invariant is NAMED VERBS ONLY, not "no SQL"
+        -- stating it the weaker way leaves a loophole a durable consumer will eventually take.
+        Build-time reads honour the Decision 88 egress budget -- never re-query data already in the
+        local read cache; reuse warm connections.
       - >-
         Custom components are exceptional and require evidence that built-in components or chart
         configuration are insufficient. Extensive custom components mean the tool has become a
@@ -5550,8 +5555,13 @@ tier_items:
 
       (1) A NET-NEW CLASS of analytical-aggregate `named_read` verbs. Today's NAMED_READS registry
       (src/common/ducklake_scd2_schema.py, NAMED_READS_VERSION 3) is 12 verbs over 3 tables
-      (ops_recommendations, ops_decisions, ops_priority_queue) and every one is an OPERATIONAL
-      LOOKUP -- there is no aggregate verb of any kind. Aggregate verbs own business aggregation,
+      (ops_recommendations, ops_decisions, ops_priority_queue). Three of them DO use aggregate SQL
+      (count_by_status GROUP BY status; forward_fix_recursion GROUP BY file HAVING COUNT(*) >= 3;
+      decisions_max_updated max(...)) -- but all three are single-table OPERATIONAL COUNTERS feeding
+      preflight gauges, with no time bucketing, no dimensional breakdown, no cross-table join, no
+      actual-vs-estimated classification and no versioned analytical response schema. What is absent
+      is the ANALYTICAL GRAIN, not aggregate SQL -- so this item EXTENDS a proven registry pattern
+      rather than inventing one. Aggregate verbs own business aggregation,
       join semantics, dataset grain, actual-vs-estimated classification, authorized columns,
       date/cardinality bounds, stable ordering, and a versioned response schema, so that agents and
       any human projection consume the SAME governed dataset (CD.42(a)). Named verbs are SERVING
@@ -5601,6 +5611,17 @@ tier_items:
           ducklake_reader over a real governed table, with a declared response schema, bounded
           results, stable ordering, and the registry_version stamp usable for build-time
           compatibility checking. The verb is a SERVING LEAF: it invokes no other verb
+        status: open
+      - id: c7
+        text: >-
+          The named_read response-size ceiling for ANALYTICAL EXTRACTS is measured (only 2 of the 12
+          current verbs -- open_recs, recs_by_title_prefix -- are paginable, and named_read returns
+          JSON rows over a Lambda Function URL), and the verb design accommodates it: either the
+          analytical grain fits within the ceiling, or a paginated/streamed BULK-EXTRACT verb class
+          is designed alongside the aggregate verbs. Measure before designing -- a build-time-
+          materializing consumer pulls whole datasets, and if the boundary cannot physically carry
+          them then the named-verbs-only invariant (CD.42(c)) is unsatisfiable for that consumer.
+          Weigh the result against the Decision 88 egress budget
         status: open
       - id: c4
         text: >-
@@ -5679,10 +5700,15 @@ tier_items:
         status: open
       - id: c2
         text: >-
-          The source adapter consumes `named_read` verbs ONLY; no caller SQL crosses the read
-          boundary and `query_ops` gains no second tenant (Decision 84 I-3). Fixture and live
-          adapters expose IDENTICAL schemas, and a strict build FAILS (rather than rendering an
-          error component) on a broken query, a schema mismatch, or an unresolvable dataset
+          The source adapter binds to `named_read` verbs ONLY -- NOT `query_ops` (Decision 84 I-3
+          retains it for the DQ harness and marks it for retirement; note it has TWO live call sites
+          today, including a generic reader.query() path in src/common/iceberg_reader.py, and its
+          FROM target is caller-controlled so _history and other ops_* tables are reachable) and NOT
+          `read_ops_current` (whose structural {column,value} filter would satisfy the LETTER of "no
+          caller SQL" while bypassing named verbs entirely). The invariant is NAMED VERBS ONLY, not
+          "no SQL". Fixture and live adapters expose IDENTICAL schemas, and a strict build FAILS
+          (rather than rendering an error component) on a broken query, a schema mismatch, or an
+          unresolvable dataset
         status: open
       - id: c3
         text: >-
@@ -5702,37 +5728,57 @@ tier_items:
         status: open
       - id: c5
         text: >-
-          A scoped Decision-127 amendment permitting standing human-audience dashboard pages is
-          obtained ON ITS OWN GROUNDS (NOT by analogy to the Decision 101(c) marketing/** carve-out,
-          whose one-way-downstream basis does not transfer). If the amendment is judged
-          unobtainable, that is a REJECT verdict for the entire code-defined-Markdown-dashboard
-          class and this item closes with that finding recorded -- a legitimate completion, not a
-          failure
+          RESOLVED FIRST, before the comparison runs: does Decision 127's audience-of-record rule
+          bind NON-.md dashboard pages? validate_prose_allowlist enumerates its corpus via
+          `git ls-files '*.md'`, so Evidence (.md) and Observable Framework (.md) trip it while Astro
+          (.astro) passes trivially -- an asymmetry that decides the three-way comparison and must
+          not emerge from it. Under the PRINCIPLED reading the rule binds all three and "pick Astro"
+          is no escape; under the MECHANICAL reading Astro's exemption is an enforcement artifact and
+          an unsound basis for a durable platform choice. THEN: a scoped Decision-127 amendment
+          permitting standing human-audience dashboard pages is obtained ON ITS OWN GROUNDS (NOT by
+          analogy to the Decision 101(c) marketing/** carve-out, whose one-way-downstream basis does
+          not transfer). If judged unobtainable under the principled reading, that is a REJECT
+          verdict for the entire code-defined-dashboard class and this item closes with that finding
+          recorded -- a legitimate completion, not a failure
         status: open
       - id: c6
         text: >-
-          A CD.41-invariant-(b)-compliant serving mechanism for the chosen renderer's output is
-          identified and costed (edge JWT verification, signed cookies, or single-object bundling),
-          OR the multi-file renderer is rejected on that basis. This question is REHOMED here from
-          T2.51 c3 / REPORT-cost-visibility-dashboard section 5.4
+          A WORKING PROTOTYPE (not a design note) of a CD.41-invariant-(b)-compliant serving
+          mechanism exists, OR the renderer is rejected on that basis. The option space is narrower
+          than "multi-file vs single-object": CD.41 fixes the presigned GET at <=5 min, and an
+          interactive dashboard fetches prerendered query artifacts LAZILY at interaction time, so
+          link expiry lands MID-SESSION and a one-shot 302-to-presigned-URL cannot serve the session
+          at all. Compliant mechanisms therefore reduce to edge-side JWT verification or signed
+          cookies at a non-Cloudflare-proxied origin; single-object bundling survives only for a
+          genuinely non-interactive artifact. REHOMED here from T2.51 c3 /
+          REPORT-cost-visibility-dashboard section 5.4
         status: open
       - id: c7
         text: >-
-          A DETERMINISTIC GUARD -- a registered validate.py check or a never-commit extension per the
-          Decision 104 registry pattern, NOT a .gitignore convention -- asserts that no build
-          artifact is tracked. This repository is PUBLIC and a materialized ops-table or cost
-          extract is definitionally the "export of operational data" Decision 111/CD.20 forbids on
-          the public surface; the existing never-commit hook covers account IDs and secret shapes
-          only. Production builds against live data run in-AWS, never on a GitHub-hosted runner
-          without artifact and log discipline
+          PRECONDITION, NOT AN EXIT GATE (satisfied BEFORE the first proof-of-concept branch is
+          opened, because the PoC itself runs installs and builds -- ~593 packages on first install
+          -- on a branch of a PUBLIC repository): .gitignore covers node_modules/, .svelte-kit/,
+          build output, *.parquet and *.arrow (it covers NONE of these today), AND a DETERMINISTIC
+          GUARD -- a registered validate.py check or a never-commit extension per the Decision 104
+          registry pattern, NOT a .gitignore convention -- asserts that no build artifact is tracked.
+          A materialized ops-table or cost extract is definitionally the "export of operational data"
+          Decision 111/CD.20 forbids on the public surface; the existing never-commit hook covers
+          account IDs and secret shapes only. Production builds against live data run in-AWS, never
+          on a GitHub-hosted runner without artifact and log discipline
         status: open
       - id: c8
         text: >-
           Any upstream build-time telemetry is disabled AND the disablement is VERIFIED (Evidence
-          ships @evidence-dev/telemetry as a direct dependency). An upstream-liveness check is run at
-          proof-of-concept time -- publish cadence, repository commit activity, security-advisory
-          responsiveness -- and its figures re-verified rather than inherited from the scoping
-          report, whose npm data is explicitly point-in-time
+          ships @evidence-dev/telemetry as a direct dependency). The NUMERIC supply-chain thresholds
+          in REPORT-evidence-dashboarding-poc section 11.2 are re-measured (never inherited -- the
+          scoping figures are explicitly point-in-time) and applied per candidate: T1 zero critical
+          and <=3 high advisories lacking a forward fix; T2 transitive dependency count recorded,
+          >750 requires written justification; T3 installs WITHOUT --legacy-peer-deps or equivalent
+          override; T4 a security-relevant publish or documented advisory response within the
+          preceding 9 months (a window set above the project's own observed ~7-month quiet period, so
+          it measures responsiveness rather than cadence). Scoping-time measurement: Evidence FAILS
+          T1 (3 critical / 21 high, ~18 with no forward fix -- npm offers only a major downgrade) and
+          FAILS T3 (bare package ERESOLVEs; template scaffold untested)
         status: open
       - id: c9
         text: >-
@@ -5755,7 +5801,7 @@ tier_items:
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): author as atomic IMPLEMENTATION plan(s) at reactivation
     status: deferred_post_mvp
-    progress_note: "Scoped deferred_post_mvp (Decision 93 conscious-deferral rule) via PLAN-evidence-dashboarding-poc / REPORT-evidence-dashboarding-poc. DEFERRAL RATIONALE: a human-facing analytical presentation layer is by construction outside the rec -> implement -> validate -> merge -> deploy -> observe -> next rec loop that defines the Platform-MVP boundary (the same basis on which Decision 93 parked T2.11a/T2.11b), and no candidate tenant has a live governed dataset -- cost data is unbuilt (T2.51 deferred), telemetry unmigrated (T2.36), DQ coverage 0 tables / 0 checks. ACTIVATION TRIGGER: T2.52 completes AND a real human reader exists for the dataset it exposes. SCOPING FINDINGS (npm, 2026-07-26, POINT-IN-TIME -- re-verify at reactivation): @evidence-dev/evidence published 406 versions in 2023, 179 in 2024, 13 in 2025, 1 in 2026 (last 2026-02-06, same date as core-components/sdk/duckdb), major frozen at 40 since 2024-12-10; peer tree hard-pinned (@sveltejs/kit 2.8.4, svelte 4.2.19, vite 5.4.21, typescript 5.4.2) so Dependabot structurally cannot service it; @evidence-dev/telemetry is a direct dependency; @evidence-dev/universal-sql plus a shipped /explore/console page means the deployed artifact carries a client-side DuckDB-WASM query console, which is the 'second semantic layer' on the hypothesis's own reject list. Comparators far more active: astro 7.1.3 (2026-07-20), @astrojs/starlight 0.41.4 (2026-07-22), @observablehq/framework 1.13.4 (2026-04-06). Container feasibility favourable: Node v22.22.2, npm 10.9.7, pre-installed Chromium, npm registry reachable; repo tracks zero JS/TS files today. Transitive active dependents: none. Reactivate by restoring status -> not_started."
+    progress_note: "Scoped deferred_post_mvp (Decision 93 conscious-deferral rule) via PLAN-evidence-dashboarding-poc / REPORT-evidence-dashboarding-poc. DEFERRAL RATIONALE: a human-facing analytical presentation layer is by construction outside the rec -> implement -> validate -> merge -> deploy -> observe -> next rec loop that defines the Platform-MVP boundary (the same basis on which Decision 93 parked T2.11a/T2.11b), and no candidate tenant has a live governed dataset -- cost data is unbuilt (T2.51 deferred), telemetry unmigrated (T2.36), DQ coverage 0 tables / 0 checks. ACTIVATION TRIGGER: T2.52 completes AND a real human reader exists for the dataset it exposes. SCOPING FINDINGS (npm, 2026-07-26, POINT-IN-TIME -- re-verify at reactivation): @evidence-dev/evidence published 406 versions in 2023, 179 in 2024, 13 in 2025, 1 in 2026 (last 2026-02-06, same date as core-components/sdk/duckdb), major frozen at 40 since 2024-12-10; peer tree hard-pinned (@sveltejs/kit 2.8.4, svelte 4.2.19, vite 5.4.21, typescript 5.4.2) so Dependabot structurally cannot service it; @evidence-dev/telemetry is a direct dependency; @evidence-dev/universal-sql plus a shipped /explore/console page means the deployed artifact carries a client-side DuckDB-WASM query console, which is the 'second semantic layer' on the hypothesis's own reject list. MEASURED (resolved tree, same date): bare `npm install @evidence-dev/evidence@40.1.8` FAILS with ERESOLVE (ts-node's loose typescript >=2.7 peer hoists typescript@7.0.2, violating svelte-preprocess@5.1.3's peerOptional ^4/^5) and succeeds only under --legacy-peer-deps; 641 transitive dependencies; npm audit 30 vulnerabilities (3 critical, 21 high, 5 moderate, 1 low) of which ~18 have NO forward fix -- npm's only remediation is a major DOWNGRADE to @evidence-dev/evidence@29.0.3. Note Dependabot ALERTS are repo-wide and fire regardless of .github/dependabot.yml, so on this PUBLIC repo adoption injects unresolvable high/critical alerts onto the surface Decision 83's ghas-probe monitor treats as live evidence -- distinct from Dependabot VERSION UPDATES, which are the per-ecosystem dependabot.yml entry. Against REPORT section 11.2 thresholds Evidence FAILS T1 and T3 as measured (the template scaffold path, `npx degit evidence-dev/template`, is UNTESTED and is the PoC's first task). Caveat on liveness: v40.1.2 (2025-04-11) -> v40.1.3 (2025-11-03) is a PRIOR ~7-month gap that resolved, so the current ~5.7-month silence is within this project's observed normal -- which weakens the adverse reading AND destroys the 'stabilisation curve' reading; cadence alone cannot settle liveness, hence T4 measures advisory responsiveness. Comparators far more active: astro 7.1.3 (2026-07-20), @astrojs/starlight 0.41.4 (2026-07-22), @observablehq/framework 1.13.4 (2026-04-06). Container: Node v22.22.2, npm 10.9.7, pre-installed Chromium, npm registry reachable; repo tracks zero JS/TS files and .gitignore has NO node coverage today. Transitive active dependents: none. Reactivate by restoring status -> not_started."
 
   # ----- T3: Trust loop closure -----
   - id: T3.1
