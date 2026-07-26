@@ -353,9 +353,13 @@ Decision 83. Two things follow that are easy to conflate and must not be:
 - **Dependabot *alerts* are repository-wide and automatic.** They fire on any manifest in the repo
   **regardless of `dependabot.yml`**, and on a public repository they are visible security signal.
 
-Adoption therefore injects roughly two dozen high-and-critical advisories that **cannot be
-remediated forward** onto a public security surface that Decision 83 treats as continuously
-live-verified. Declining to add the npm ecosystem entry does not avoid this; it only removes the
+Adoption therefore injects advisories that **cannot be remediated forward** onto a public security
+surface that Decision 83 treats as continuously live-verified: **6 unresolvable high-and-critical**
+as shipped (4 critical + 2 high), or **5** pruned (4 critical + 1 high). The count is smaller than
+the headline advisory totals, and that is the point -- these are the ones with no remediation at
+all, in either direction. (An earlier draft said "roughly two dozen", conflating the bare tree's 24
+*total* high-and-critical with the *unresolvable* subset -- exactly the units error section 11.2's
+T1 definition was rewritten to prevent.) Declining to add the npm ecosystem entry does not avoid this; it only removes the
 update PRs while leaving the alerts.
 
 ### 5.4 Build-time telemetry
@@ -449,7 +453,7 @@ in-AWS, or under strict artifact and log discipline.
 **There is currently no coverage at all, and the timing is the problem.** `.gitignore` today
 contains **no** entry for `node_modules/`, `.svelte-kit/`, `package-lock.json`, `*.parquet` or
 `*.arrow` -- unsurprising in a repository that tracks zero JavaScript files, but consequential the
-moment one runs an install. Section 5.3 measured that first install at **593 packages**, and a
+moment one runs an install. Section 5.5 measured that first install at **1,311 packages**, and a
 build additionally materialises query results to disk.
 
 So the guard cannot be an **adopt** criterion, because adoption happens *after* the proof of concept
@@ -694,14 +698,23 @@ is called out explicitly here so the distinction is not lost again.
 
   | Arm | Deps | Advisories | `fixAvailable: false` | T1 |
   |---|---|---|---|---|
-  | Evidence (scaffold, pruned) | 928 | 46 | **4 critical**, 1 high, 7 moderate | **FAIL** |
-  | Observable Framework | (re-measure) | 6 | 0 | pass |
-  | Astro | (re-measure) | 0 | 0 | pass |
+  | Evidence (scaffold, pruned) | 928 | 46 | **4 critical**, 1 high, 7 moderate | **FAIL** (measured) |
+  | Observable Framework | not measured | 6 (reported, unverified) | 0 (reported, unverified) | **unmeasured -- provisional** |
+  | Astro **+ charting library** | not measured | not measured | not measured | **unmeasured -- no library named** |
 
-  Evidence fails on four unresolvable criticals that **survive pruning to the minimum surface**
-  (section 5.3) -- they are its own core packages.
+  **Only the Evidence row is a measurement.** Evidence fails on four unresolvable criticals that
+  **survive pruning to the minimum surface** (section 5.3) -- they are its own core packages.
+
+  The other two rows are deliberately *not* recorded as passes. Observable's figures reached this
+  report second-hand during critique and were never independently taken; the Astro row cannot be
+  filled at all, because bare `astro` is not the specified arm (section 8.2) and a charting library
+  is precisely where that arm would acquire its transitive weight. **Recording "pass" for an
+  unmeasured arm while the measured arm fails is the exact asymmetry the one-survivor disclosure
+  below exists to police**, so the table states absence of measurement rather than absence of
+  findings.
 - **T2 -- Tree size (RECORDED METRIC, not a threshold).** The transitive dependency count is recorded
-  and reported (Evidence: 641 transitive, 593 installed). It deliberately carries **no numeric cap**:
+  and reported on the adoption-relevant artifact (Evidence: **1,387** as shipped, **928** pruned;
+  the bare package's 641 is a diagnostic, not an adoption figure). It carries **no numeric cap**:
   any cap this report could name would be calibrated against the one tree it has measured, which is
   threshold-tuning rather than measurement. Size informs the section 11.3 per-arm judgement and the
   Constrain disposition; **it never rejects an arm on its own.**
@@ -715,9 +728,14 @@ is called out explicitly here so the distinction is not lost again.
   either direction, so a cadence-derived window would re-import the measure that section rejects.
   An arm fails T4 if its open advisories show **no upstream remediation activity** (a fix, a
   documented mitigation, or a maintainer response on the advisory) at the time of measurement.
-  **Evidence's T4 result is adverse on present evidence**: roughly 18 advisories whose only offered
-  remediation is a major *downgrade* is prima facie non-response. It is recorded as adverse rather
-  than failed only because this report has not inspected the upstream issue tracker, which the
+
+  **Evidence's T4 result is adverse on present evidence**, resting on the same set T1 uses -- the
+  **19 `fixAvailable: false` advisories** on the shipped scaffold, 4 of them critical and in
+  Evidence's own core. Advisories with no remediation of any kind are prima facie non-response.
+  (An earlier draft justified T4 from a different set: the ~18 *downgrade-only* advisories on the
+  bare tree. That was doubly wrong -- it used the category T1 deliberately excludes, on an artifact
+  that is not the adoption path. One threshold, one evidence base.) It is recorded as **adverse
+  rather than failed** because this report has not inspected the upstream issue tracker, which the
   proof of concept must do before ruling.
 
 **Threshold-tuning disclosure.** T1's numbers were chosen after measuring Evidence. That ordering is
@@ -734,12 +752,20 @@ the one arm that escapes `validate_prose_allowlist` under section 4.1.1's mechan
 criteria set that eliminates two of three arms **and** happens to favour the arm the repository has
 already ratified elsewhere (Decision 101(e)) deserves suspicion, not satisfaction.
 
-Two guards against rubber-stamping that outcome: (1) T1 is defined on `fixAvailable: false` rather
-than the looser major-change reading precisely **because** the looser reading would eliminate
-Observable Framework too and leave exactly one survivor; (2) if the proof of concept finds only one
-arm standing, it must state **which criterion did the eliminating and whether that criterion is
-load-bearing or incidental** before recommending adoption. An uncontested winner is a weaker result
-than a contested one, and should be reported as such.
+Three guards against rubber-stamping that outcome:
+
+1. T1 is defined on `fixAvailable: false` rather than the looser major-change reading, in part
+   because the looser reading was reported during critique to eliminate Observable Framework as
+   well, leaving exactly one survivor. **That report was never independently verified here**, so it
+   is a reason to define the threshold conservatively, not a measured finding -- and it is recorded
+   as such rather than dressed up as one.
+2. Only one arm has actually been measured. Until Observable and the Astro-plus-charting-library arm
+   are measured on the same basis, **no comparative claim is available at all** -- a single measured
+   failure is not a comparison.
+3. If the proof of concept does find only one arm standing, it must state **which criterion did the
+   eliminating and whether that criterion is load-bearing or incidental** before recommending
+   adoption. An uncontested winner is a weaker result than a contested one, and should be reported
+   as such.
 
 ### 11.3 Per-arm adopt bar
 
@@ -847,8 +873,14 @@ that was failed.
   budget.
 - The Decision 88 egress criterion is stated without a numeric budget, unlike section 11.2's
   supply-chain thresholds. Quantifying it is T2.52's work.
-- Whether Evidence's **template scaffold** resolves cleanly where the bare package does not
-  (section 5.5) is untested and is the proof of concept's first task.
+- **Lockfile ownership.** The scaffold's clean install depends on an upstream-authored
+  `package-lock.json`, not on a self-resolving peer graph (section 5.5). The open question is not
+  *whether* it installs -- it does -- but how to guard the failure mode: any action that regenerates
+  the lock (`npm audit fix`, a Dependabot bump, a different package manager) re-enters the
+  unresolved graph. Whether that is manageable is a T2.53 finding.
+- **Observable Framework and the Astro arm are unmeasured.** Section 11.2's T1 table records them as
+  provisional, and the Astro arm as specified (Astro *plus a charting library*) has never been
+  measured at all -- no library is named. Both must be measured before any comparative claim.
 - The analytical-aggregate verb set itself is unenumerated; T2.52 owns naming the grains.
 - Whether an npm ecosystem entry in Dependabot is even useful given the exact-pin problem
   (section 5.3) is open -- it may produce only unmergeable pull requests.
