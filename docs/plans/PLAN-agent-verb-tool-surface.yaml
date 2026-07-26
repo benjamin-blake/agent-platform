@@ -18,10 +18,18 @@ scope:
       Add DuckLakeReader.describe() -- a public client method for the existing server-side describe
       action, so the typed NAMED_READS schema becomes client-reachable. This is the precise missing
       link: the server has served describe since CD.10/CD.15 and no client can call it. Sole-home
-      discipline (Decision 104) puts it beside named()/query(). Also decide explicitly whether
-      describe() joins the Reader Protocol, which today declares only current_state and
-      latest_snapshot -- named() is already an undeclared extra, so adding a second one silently
-      widens the same gap.
+      discipline (Decision 104) puts it beside named()/query(). TWO decisions must be made
+      deliberately here, not by omission. (1) Whether describe() joins the Reader Protocol, which
+      today declares only current_state and latest_snapshot -- named() is already an undeclared
+      extra, so adding a second one silently widens the same gap (mypy will flag
+      make_reader(...).describe(); mypy_diff is informational in --pre, so this is a design call,
+      not a gate). (2) How structured boundary errors survive: _invoke (line 439) currently collapses
+      EVERY non-200 into one flat string -- RuntimeError(f"ducklake_reader {action} failed
+      (HTTP {status}): {text}") -- destroying the reader's own 400 {"ok": false, "error": ...,
+      "actions": [...]} and 500 {"ok": false, "error_type": ...} shapes before any caller sees them.
+      Acceptance criterion 5 is therefore UNREACHABLE unless _invoke is extended to raise a
+      structured exception carrying status and parsed body. Preferred: extend _invoke (sole-home,
+      Decision 104). Rejected: regexing the message string, which is not a durable typed mapping.
   - file: scripts/agent_sdk/__init__.py
     action: Create
     purpose: Facade re-exporting the server entrypoint and the typed error types.
@@ -51,6 +59,33 @@ scope:
       import-linter/lockfile discipline governs how a dependency lands; no active decision forbids
       one. Decision 79: Lambda manifests list pip packages explicitly with no transitive resolution,
       so this dependency does NOT auto-bundle into any Lambda zip.
+  - file: requirements-fast.txt
+    action: Modify
+    purpose: >-
+      Add `mcp` here TOO, not only to requirements.txt. VERIFIED MECHANISM:
+      _excluded_heavy_import_names() (scripts/checks/_scaffolding.py:291-299) is computed as
+      requirements.txt distributions MINUS requirements-fast.txt distributions, and pr-validate
+      installs only requirements-fast + requirements-dev. A fast-tier-absent dependency puts
+      tests/test_agent_sdk_mcp_server.py into the deferred-by-uncollectability set, so run_pytest_diff
+      returns GREEN having run none of VP steps 2-7 -- including step 2, the derivation property this
+      whole plan turns on. Omitting this file would defer every behavioural claim past the merge
+      gate while declaring V3. This file's own header already requires runtime-tool constraints to
+      match requirements.txt.
+  - file: requirements.lock
+    action: Modify
+    purpose: >-
+      Pin `mcp`. validate_lockfile_sync sits in pre_sequence (scripts/checks/registry.py:148), and
+      adding a requirement without its pin makes import_governance.check_lockfile_sync() report
+      "missing pins for: mcp" -- reddening both VP step 9 and the authoritative pr-validate gate.
+      In scope because constraint 1 would otherwise forbid the only fix.
+  - file: tests/test_agent_sdk_errors.py
+    action: Create
+    purpose: >-
+      Tests for the typed error mapping. Post-whitelist, map_source_to_test resolves
+      scripts/agent_sdk/errors.py to this path; omitting it violates the repo test-colocation norm
+      and fails a local full-tier run (validate_test_coverage is FULL-tier only, so it would not
+      redden the PR -- it is still owed). scripts/agent_sdk/__init__.py is correctly exempt via
+      excluded_names.
   - file: scripts/test_coverage_checker.py
     action: Modify
     purpose: >-
@@ -108,7 +143,8 @@ acceptance_criteria:
     exists to eliminate.
   - >-
     Boundary error responses map onto distinct typed Python exceptions rather than a single generic
-    failure.
+    failure. Requires _invoke to stop collapsing non-200 responses into one flat message string --
+    see the iceberg_reader.py scope row; this criterion is unreachable without that change.
   - >-
     T0.8's roadmap entry no longer names the retired log-rec / log-decision / query Lambdas, no
     longer frames the end-state as a Python library, and records the deferred write leg.
@@ -247,9 +283,12 @@ verification_plan:
     command: bin/venv-python -m scripts.validate --pre
     expected: 'All checks pass; exit 0.'
     fix_if: >-
-      validate_contract_drift fails -- the reader surface changed against its live Class B verb
-      contract (Decision 118 / CD.25); update the contract, keeping field semantics generated rather
-      than hand-edited (Decision 65).
+      validate_lockfile_sync reports "missing pins for: mcp" -- add the pin to requirements.lock
+      (in scope for exactly this reason). validate_contract_drift fails -- the reader surface
+      changed against its live Class B verb contract (Decision 118 / CD.25); update the contract,
+      keeping field semantics generated rather than hand-edited (Decision 65). If
+      tests/test_agent_sdk_mcp_server.py is reported DEFERRED rather than run, `mcp` is missing from
+      requirements-fast.txt -- fix that rather than accepting the green.
     hermetic: false
     graduation: not-applicable
   - step: 10
@@ -265,12 +304,18 @@ verification_plan:
     command: >-
       mcp__github__actions_run_trigger(owner="benjamin-blake", repo="agent-platform", workflow_id="deploy-prod-lambdas.yml", ref="main"), then poll mcp__github__actions_get and read the smoke job with mcp__github__get_job_logs
     expected: >-
-      The deploy job builds and deploys data-pipeline.zip and ops-compaction.zip, and the smoke job
-      passes its per-function invocation gates after asserting deployment-record freshness.
+      The deploy job reports deployed == 'true' and builds/deploys data-pipeline.zip and
+      ops-compaction.zip; the smoke job then concludes SUCCESS (not skipped) after asserting
+      deployment-record freshness and running its per-function invocation gates. Assert both
+      explicitly: the smoke job is gated `if: needs.deploy.outputs.deployed == 'true'`, so in the
+      pre-provisioning window (vars.DEPLOY_ROLE_PROVISIONED != 'true') a failed assume-role no-ops
+      green and smoke never runs -- a skipped smoke is NOT a pass.
     fix_if: >-
-      The smoke job fails -- do NOT retry by dispatching again. Read the failing function's gate
-      output; a stale/partially-written deployment record fails closed by design, so a red smoke is
-      a real signal, not flake. Do not fall back to the local break-glass command.
+      Smoke concluded `skipped` -- the deploy no-opped; check DEPLOY_ROLE_PROVISIONED and the
+      assume-role step rather than treating the green run as success. Smoke FAILED -- do NOT retry
+      by dispatching again; read the failing function's gate output, since a stale or
+      partially-written deployment record fails closed by design, so a red smoke is a real signal,
+      not flake. Do not fall back to the local break-glass command.
   - step: 11
     phase: post-deploy
     action: >-
@@ -279,20 +324,25 @@ verification_plan:
       NOT DuckLakeReader.named() directly: a direct named() call passes on unmodified main and
       proves nothing about this plan.
     command: >-
-      bin/venv-python -m pytest "tests/test_agent_sdk_mcp_server.py::TestEndToEnd::test_rec_by_id_tool_returns_exactly_one_row_against_live_boundary" -q
+      bin/venv-python -m pytest "tests/test_agent_sdk_mcp_server.py::TestEndToEnd::test_rec_by_id_tool_returns_exactly_one_row_against_live_boundary" -q -rs | tee /tmp/e2e.txt && grep -qE '1 passed' /tmp/e2e.txt && ! grep -qE 'skipped' /tmp/e2e.txt && echo E2E_PROVEN
     expected: >-
-      1 passed. The test discovers a rec id at runtime via the open_recs tool, invokes the
-      rec_by_id tool with it through the MCP surface, and asserts exactly one row whose id matches
-      the requested id.
+      Prints E2E_PROVEN. The test discovers a rec id at runtime via the open_recs tool, invokes the
+      rec_by_id tool with that id through the MCP surface, and asserts exactly one row whose id
+      matches. The command deliberately distinguishes PASS from SKIP -- `pytest -q` exits 0 on a
+      skip too, so a bare exit-code check would report green having never run the plan's only
+      end-to-end proof.
     fix_if: >-
-      Fails at tool discovery -- the server did not project rec_by_id (re-run VP step 2). Fails at
-      invocation -- the projection is passing params in a shape the verb does not accept; compare
-      against the describe schema. Do NOT weaken this to a direct reader call to make it pass; a
-      direct call is the tautology this step replaced. Do NOT hardcode a rec id -- ids close over
-      time and a fixed id makes the assertion data-dependent.
+      Reports skipped -- this test must carry @pytest.mark.integration (tests/conftest.py installs
+      an autouse socket-block tripwire; see tests/common/iceberg_reader/test_warehouse_parity.py for
+      the precedent) AND must NOT carry a credentials-skip guard, or absent credentials silently
+      pass this gate. Fails at tool discovery -- the server did not project rec_by_id (re-run VP
+      step 2). Fails at invocation -- params are in a shape the verb does not accept; compare
+      against the describe schema. Do NOT weaken this to a direct reader call: a direct
+      DuckLakeReader.named() call passes on unmodified main and is the tautology this step replaced.
+      Do NOT hardcode a rec id -- ids close over time.
 constraints:
   - >-
-    Only the eleven files in the Scope table may be modified. Out-of-scope defects become
+    Only the fourteen files in the Scope table may be modified. Out-of-scope defects become
     recommendations via scripts/ops_data_portal, not inline fixes.
   - >-
     Do NOT touch src/common/ducklake_scd2_schema.py (home of NAMED_READS and describe_named_reads).
@@ -375,7 +425,9 @@ context:
     src/common/**. So a shared-module change that the manifest graph says affects two ACTIVE prod
     artifacts will not auto-deploy on merge. VP step 10 therefore uses workflow_dispatch explicitly.
     The general gap -- governed-channel trigger paths diverging from the manifest graph, which can
-    silently skip a prod deploy -- is out of scope here and warrants its own recommendation.
+    silently skip a prod deploy -- is out of scope here. File it as a recommendation during
+    implementation via scripts.ops_data_portal (source=implement-agent, target
+    .github/workflows/deploy-prod-lambdas.yml) rather than leaving it as an unowned note.
   - >-
     OPERATOR DESIGN INTENT (the anchor for this work) -- fetching one recommendation should be one
     query returning one row. Pulling entire tables into a local cache and then re-querying that
@@ -437,15 +489,20 @@ execution_steps:
   - >-
     Create scripts/agent_sdk/__init__.py -- facade re-exporting the server entrypoint and error types.
   - >-
-    Modify requirements.txt -- add the mcp SDK, pinned consistently with the file's existing style.
+    Modify requirements.txt AND requirements-fast.txt -- add the mcp SDK to BOTH, pinned
+    consistently with each file's existing style, then pin it in requirements.lock. Fast-tier
+    membership is not optional here: without it the plan's own unit tests are deferred out of the
+    authoritative pre-merge gate (see the requirements-fast.txt scope row).
   - >-
     Modify .mcp.json -- register the server as a stdio command invoking
     bin/venv-python -m scripts.agent_sdk.mcp_server, alongside the existing github-full entry.
   - >-
-    Create the two test modules at the mapper-resolved paths, with the class names VP steps 2-7 and
-    11 select (TestProjection, TestReadOnlySurface, TestFailLoud, TestTypedErrors,
-    TestToolDescriptions, TestEndToEnd). Stub describe in the unit tests; TestEndToEnd is the one
-    live-boundary test and belongs with the post-deploy step.
+    Create the three test modules at the mapper-resolved paths, with the class names VP steps 2-7
+    and 11 select (TestProjection, TestReadOnlySurface, TestFailLoud, TestTypedErrors,
+    TestToolDescriptions, TestEndToEnd). Stub describe in the unit tests. TestEndToEnd is the one
+    live-boundary test: mark it @pytest.mark.integration so the conftest socket tripwire admits it,
+    and do NOT give it a credentials-skip guard -- VP step 11 must fail loudly on absent
+    credentials rather than skip green.
   - >-
     Modify config/agent/verification_registry/registry.yaml -- add the NEW-in-diff graduated rows
     for each `graduate` disposition, using the graduation_check_id values verbatim as row identities.
