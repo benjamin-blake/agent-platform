@@ -272,15 +272,32 @@ contract_table_ops:
     id_keyspace: caller
     reconcile_scope: ducklake
     pending_reconcile:
-      # Seeded 2026-07-25: `intent` (PR f0e701d / Decision 151) shipped in the deployed reader/
-      # writer/maintenance spec on 2026-07-24 without the physical ALTER ever landing --
-      # INCIDENT ORIGIN in the plan context. Cleared to `reconciled` (both sides) only once VP
-      # step 10's reconcile_columns response body evidences the ALTER on that physical table.
-      history: [intent]
-      current: [intent]
+      history: []
+      current: []
     reconciled:
-      history: {}
-      current: {}
+      # Closed 2026-07-25: `intent` (PR f0e701d / Decision 151) shipped in the deployed reader/
+      # writer/maintenance spec on 2026-07-24 without the physical ALTER ever landing --
+      # INCIDENT ORIGIN in the plan context. Cleared via the admin-tier reconcile_columns action
+      # against the deployed ducklake_maintenance function (VP step 10); evidence below is that
+      # invocation's full response body.
+      history:
+        intent:
+          at: "2026-07-26"
+          evidence: >-
+            reconcile_columns(table=ops_decisions) response: {"ok": true, "action":
+            "reconcile_columns", "table": "ops_decisions", "meta_schema": "ducklake_ops",
+            "data_path": "s3://agent-platform-data-lake/ducklake/", "added_history": ["intent"],
+            "added_current": ["intent"], "columns_pre_existing": {"history": false, "current":
+            false}}
+      current:
+        intent:
+          at: "2026-07-26"
+          evidence: >-
+            reconcile_columns(table=ops_decisions) response: {"ok": true, "action":
+            "reconcile_columns", "table": "ops_decisions", "meta_schema": "ducklake_ops",
+            "data_path": "s3://agent-platform-data-lake/ducklake/", "added_history": ["intent"],
+            "added_current": ["intent"], "columns_pre_existing": {"history": false, "current":
+            false}}
 
   # No Class A contract -- status/entity_id_prefix/id_keyspace/migration_columns do not apply.
   # Schema lives in dormant_ops_tables.ops_priority_queue above; this entry carries ONLY the
