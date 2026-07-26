@@ -1,0 +1,433 @@
+schema_version: 1
+slug: "agent-verb-tool-surface"
+intent: >-
+  Make the DuckLake named verbs a first-class agent tool surface -- projected as MCP tools derived
+  from the warehouse's own describe endpoint -- so an agent fetches one recommendation with one
+  typed tool call instead of pulling whole tables into a local cache and re-querying it in Python.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-agent-verb-tool-surface.yaml
+phase: >-
+  Platform tier_item T0.8 (Agent SDK shim), re-grounded. Licensed by Decision 81 cl.2 ("The
+  verb/tool surface behind writer and reader is deliberately left extensible and is NOT frozen by
+  this decision"). Depends on T0.7a/T0.7b/T0.7c, all complete.
+scope:
+  - file: src/common/iceberg_reader.py
+    action: Modify
+    purpose: >-
+      Add DuckLakeReader.describe() -- a public client method for the existing server-side describe
+      action, so the typed NAMED_READS schema becomes client-reachable. This is the precise missing
+      link: the server has served describe since CD.10/CD.15 and no client can call it. Sole-home
+      discipline (Decision 104) puts it beside named()/query() rather than in a second client.
+  - file: scripts/agent_sdk/__init__.py
+    action: Create
+    purpose: Facade re-exporting the public surface (server entrypoint + typed errors).
+  - file: scripts/agent_sdk/errors.py
+    action: Create
+    purpose: >-
+      Typed exceptions mapping the writer's EXISTING error_type envelope (schema_gate 422,
+      status_transition 422, referential 409, action 400, occ_exhausted 503, version_mismatch 500,
+      runtime 500 -- ducklake_writer/handler.py:279-291) onto Python exception types. Satisfies
+      T0.8's typed-errors exit criterion by mapping what the server already emits, not by inventing
+      a parallel taxonomy.
+  - file: scripts/agent_sdk/mcp_server.py
+    action: Create
+    purpose: >-
+      MCP stdio server that calls describe() at startup and PROJECTS one tool per verb. The tool
+      list is DERIVED, never hand-maintained -- adding a verb to NAMED_READS must require zero edits
+      here. Reads project the full describe output; WRITES project a closed allowlist of exactly
+      {file_ops, update_ops}. The writer's _ACTIONS table also holds create_tables, churn,
+      loudfail_probe, reset_warm_connection and other infra/probe actions that must NEVER become
+      agent tools -- so the write leg is an allowlist, never a projection of _ACTIONS.
+  - file: .mcp.json
+    action: Modify
+    purpose: >-
+      Register the server alongside github-full. Decision 76 is the precedent that an MCP server is
+      a sanctioned agent tool transport.
+  - file: requirements.txt
+    action: Modify
+    purpose: >-
+      Add the official `mcp` SDK (operator decision at the planning gate). Decision 80's
+      import-linter/lockfile discipline governs how a dependency lands; no active decision forbids
+      one. Note Decision 79: Lambda manifests list pip packages explicitly with no transitive
+      resolution, so this dependency does NOT auto-bundle into any Lambda zip.
+  - file: docs/contracts/file-router.yaml
+    action: Modify
+    purpose: >-
+      Register scripts/agent_sdk/ as a nested subpackage home. Verified necessary:
+      map_source_to_test(Path("scripts/agent_sdk/mcp_server.py")) currently returns None, so the
+      coverage checker cannot resolve a test path for the new package until the home is declared.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Re-ground T0.8 on two counts. (1) STALE SURFACES: its exit criteria name the log-rec /
+      log-decision / query Lambdas from T0.7a/b/c, which no longer exist -- src/lambdas/ now holds
+      ducklake_reader / ducklake_writer after the Decision 84 consolidation, and Decision 91 cl.4
+      already re-grounded T0.7a/b/c off those deleted stubs while T0.8 was missed. (2) FRAMING: its
+      intent ("Agent imports verbs; doesn't see HTTP") and files_in_scope (a scripts/agent_sdk
+      client.py) describe a Python library, which would duplicate DuckLakeReader's existing Function
+      URL discovery and SigV4. Re-ground to the tool-surface end-state and drop client.py.
+  - file: tests/agent_sdk/test_mcp_server.py
+    action: Create
+    purpose: >-
+      Behavioural tests for the projection: derivation from describe, the write allowlist, typed
+      error mapping, and fail-loud startup. Path assumes the mirror rule once file-router registers
+      the home; confirm with map_source_to_test before writing (VP step 1).
+  - file: tests/common/iceberg_reader/test_describe.py
+    action: Create
+    purpose: >-
+      Tests for the new describe() client method. tests/common/iceberg_reader is a concern-split
+      test PACKAGE directory (mapper-derived, verified).
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    An agent can fetch a single recommendation by id with ONE typed tool call, with no whole-table
+    cache pull and no client-side filtering -- the operator's stated design intent for this work.
+  - >-
+    The tool list is DERIVED from the warehouse's describe output: adding a verb to NAMED_READS
+    surfaces a new tool with zero edits to the MCP server. Hand-registration is structurally
+    impossible for reads.
+  - >-
+    The write surface is a closed allowlist of exactly {file_ops, update_ops}. No infra or probe
+    action from the writer's _ACTIONS table (create_tables, churn, loudfail_probe,
+    reset_warm_connection, idempotency_probe, partition_probe, inlining_probe, connect_probe,
+    write, write_ops, create_ops_tables) is reachable as a tool.
+  - >-
+    DuckLakeReader.query (free-SQL) is NOT projected as a tool -- Decision 84 I-3 removes caller SQL
+    from application paths, so the projection must expose no free-SQL escape.
+  - >-
+    A failed describe call at startup fails LOUDLY (Decision 55). There is no fallback to a
+    hardcoded verb list -- that fallback would silently reinstate the hand-registration this design
+    exists to eliminate.
+  - >-
+    The writer's existing typed error envelope maps onto typed Python exceptions, so a schema_gate
+    or referential rejection surfaces as a distinct error rather than a generic failure.
+  - >-
+    T0.8's roadmap entry no longer names the retired log-rec / log-decision / query Lambdas and no
+    longer frames the end-state as a Python library.
+  - >-
+    Both active Lambda artifacts affected by the iceberg_reader.py change (data-pipeline,
+    ops-compaction) are rebuilt, redeployed and smoke-tested.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Confirm the coverage mapper resolves the new package home before any test file is written --
+      it returns None today, so this must be fixed by the file-router registration first.
+    command: >-
+      bin/venv-python -c "from pathlib import Path; from scripts.test_coverage_checker import map_source_to_test; p=map_source_to_test(Path('scripts/agent_sdk/mcp_server.py')); print(p); assert p is not None, 'agent_sdk home still unregistered'"
+    expected: 'Prints a concrete tests/ path (not None).'
+    fix_if: >-
+      Prints None -- scripts/agent_sdk/ is not yet a declared nested home. Register it in
+      docs/contracts/file-router.yaml, then re-run and write the test file at the path this prints
+      rather than the path this plan guessed.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "agent-sdk-home-resolves-to-test-path"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      THE GENERATIVE RULE -- assert the tool list is DERIVED, not hand-maintained. Inject a fake
+      verb into a stubbed describe payload and assert a corresponding tool appears with no edit to
+      the server module. This is the single most important test in the plan: it is what prevents the
+      hand-registration drift this work exists to remove.
+    command: >-
+      bin/venv-python -m pytest "tests/agent_sdk/test_mcp_server.py::TestProjection::test_new_verb_in_describe_yields_new_tool_without_code_change" -q
+    expected: >-
+      1 passed. A verb present only in the stubbed describe response is projected as a tool, with
+      its param schema carried through from describe.
+    fix_if: >-
+      Fails -- the server is filtering against a local list of known verbs. Remove the local list;
+      the projection must iterate whatever describe returns.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "agent-verb-tools-derived-from-describe"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert the write allowlist is closed -- every non-allowlisted writer action is unreachable as
+      a tool, and free-SQL query is not projected.
+    command: >-
+      bin/venv-python -m pytest "tests/agent_sdk/test_mcp_server.py::TestWriteAllowlist" -q
+    expected: >-
+      All pass. Exactly {file_ops, update_ops} are exposed from the write side; create_tables,
+      churn, loudfail_probe, reset_warm_connection, write, write_ops and create_ops_tables are each
+      asserted absent, and no tool exposes a raw SQL parameter.
+    fix_if: >-
+      Any infra/probe action is reachable -- the write leg is projecting _ACTIONS rather than an
+      explicit allowlist. Invert it to an allowlist; a blocklist over a table that grows is
+      non-exhaustive by construction.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "agent-verb-write-allowlist-closed"
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Assert fail-loud startup (Decision 55) -- a describe failure must raise, never degrade to a
+      hardcoded verb list.
+    command: >-
+      bin/venv-python -m pytest "tests/agent_sdk/test_mcp_server.py::TestFailLoud" -q
+    expected: 'All pass. A raising/failing describe propagates a typed error and the server does not start with a partial or default tool list.'
+    fix_if: >-
+      The server starts with a fallback list -- delete the fallback. A silent default here
+      reinstates hand-registration under a different name.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "agent-verb-server-fails-loud-on-describe-failure"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert the writer's typed error envelope maps onto distinct Python exception types.
+    command: >-
+      bin/venv-python -m pytest "tests/agent_sdk/test_mcp_server.py::TestTypedErrors" -q
+    expected: >-
+      All pass. Each of schema_gate, status_transition, referential, action, occ_exhausted,
+      version_mismatch and runtime maps to its own exception type, and an unknown error_type maps to
+      a generic-but-loud fallback rather than being swallowed.
+    fix_if: >-
+      Errors collapse to a single type -- map from the server's error_type field, which
+      ducklake_writer/handler.py already emits; do not invent a parallel taxonomy.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "agent-verb-typed-error-mapping"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Assert describe() is reachable on the reader client and returns the live verb schema.
+    command: >-
+      bin/venv-python -m pytest "tests/common/iceberg_reader/test_describe.py" -q
+    expected: 'All pass -- describe() issues the describe action and returns the per-verb param schema.'
+    fix_if: >-
+      Fails -- confirm describe() goes through the reader's existing _invoke path rather than
+      opening a second transport.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "ducklake-reader-describe-client-method"
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Decision 126 ambience mitigation -- assert each read tool's description carries the
+      cache-first guidance, so the sanctioned path is also the most visible one rather than relying
+      on plan prose to carry it.
+    command: >-
+      bin/venv-python -m pytest "tests/agent_sdk/test_mcp_server.py::TestToolDescriptions" -q
+    expected: 'All pass -- every projected read tool description names the read-cache-first rule and the Decision 88 egress budget.'
+    fix_if: >-
+      Descriptions omit it -- add it to the projection template so it applies to every verb
+      automatically, including verbs added later.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This asserts on advisory prose inside tool descriptions, whose exact wording is expected to be
+      tuned as rec-2867's egress measurement lands and possibly narrows Decision 88 invariant (ii).
+      Graduating a check that pins wording we intend to revise would create a standing guard against
+      our own follow-up work.
+  - step: 8
+    phase: pre-deploy
+    action: >-
+      Full fast-tier presubmit -- registry, SLOC (iceberg_reader.py is 405 SLOC and unregistered, so
+      the ~500 default applies; decompose rather than raise if the describe() addition crosses it,
+      per Decision 128), coverage mapping, and contract-drift against docs/contracts/ducklake_reader.yaml.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: 'All checks pass; exit 0.'
+    fix_if: >-
+      validate_contract_drift fails -- the reader surface changed against its live Class B verb
+      contract (Decision 118 / CD.25); update the contract, and keep any field semantics generated
+      rather than hand-edited (Decision 65).
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: post-deploy
+    action: >-
+      V3 per-artifact rebuild/deploy/smoke. src/common/iceberg_reader.py is bundled into TWO ACTIVE
+      artifacts -- compute_affected_artifacts returns {data-pipeline, ops-compaction}, both
+      status:active -- so Decision 79 / CD.16 requires build + deploy + smoke for each. Their
+      channel_class is decoupled_build_pipeline, for which the local build_lambda --deploy IS the
+      routine path (not break-glass; that caveat applies to the four terraform-managed DuckLake
+      Lambdas only).
+    command: >-
+      bin/venv-python -m scripts.build_lambda --deploy 2>&1 | tail -20
+    expected: 'Both data-pipeline and ops-compaction rebuild and deploy successfully.'
+    fix_if: >-
+      A deploy fails -- do NOT proceed to the smoke step. Diagnose; if the failure is an IAM or
+      channel issue rather than a code issue, consult docs/contracts/deploy-paths.yaml for the
+      governed path before reaching for a local permission grant.
+  - step: 10
+    phase: post-deploy
+    action: >-
+      END-TO-END PROOF of the operator intent -- fetch exactly one recommendation by id through the
+      tool path and confirm no whole-table pull occurred.
+    command: >-
+      bin/venv-python -c "from src.common.iceberg_reader import make_reader; rows = make_reader(table='ops_recommendations').named('rec_by_id', id='rec-2867'); print('rows:', len(rows)); assert len(rows) == 1, rows; print(rows[0]['id'])"
+    expected: >-
+      Prints "rows: 1" then "rec-2867". One row returned for one request -- the shape this plan
+      exists to deliver.
+    fix_if: >-
+      Returns 0 rows or raises -- confirm the reader boundary is reachable and the profile chain is
+      live (aws sts get-caller-identity --profile agent_platform). More than 1 row means the verb's
+      server-side SQL is not keyed on id.
+constraints:
+  - >-
+    Only the ten files in the Scope table may be modified. Out-of-scope defects become
+    recommendations via scripts/ops_data_portal, not inline fixes.
+  - >-
+    Do NOT touch src/common/ducklake_scd2_schema.py (home of NAMED_READS and describe_named_reads).
+    It is bundled in SEVEN active manifests; touching it expands the V3 deploy set from two
+    artifacts to seven. This plan is a client-side projection and needs no server-side change.
+  - >-
+    Do NOT build a second SigV4/Function-URL client. DuckLakeReader already resolves the URL
+    (env -> SSM -> terraform output -> GetFunctionUrlConfig) and signs SigV4; the writer transport
+    already exists at scripts/ops_portal/writer_transport.py. Reuse both (Decision 104 sole-home).
+  - >-
+    Never project DuckLakeReader.query or any free-SQL parameter as a tool -- Decision 84 I-3
+    removes caller SQL from application paths.
+  - 'Fail loudly; no fallback verb list, no rescue loops (Decision 55).'
+  - >-
+    Python 3.12+, type hints, ruff at line length 127, no emojis, ASCII hyphens only. Never raise
+    during module import.
+context:
+  - >-
+    "decision-scout verdict + CITE list (verbatim decision ids)": verdict FLAGS_FOUND, 106 of 106
+    decisions triaged. CITE -- Decision 91 (CD.10's six-Lambda enumeration superseded; cl.4
+    re-grounded T0.7a/b/c off deleted stubs), Decision 81 cl.2/cl.7 (the affirmative licence: the
+    verb/tool surface is deliberately left extensible and NOT frozen), Decision 84 I-3 (named-verb
+    boundary; no caller SQL), Decision 79 + Decision 48 (per-Lambda deploy gating + tier),
+    Decision 118 / CD.25 (docs/contracts/ducklake_reader.yaml is a live Class B verb contract bound
+    by validate_contract_drift), Decision 55 (fail loudly), Decision 104 (sole-home discipline --
+    describe() belongs on DuckLakeReader, not a second client), Decision 128 (SLOC
+    decompose-by-default), Decision 86 (rationale -> Decision, semantics -> contract; no new
+    standing prose doc). RELATED -- Decision 76 (GitHub MCP is precedent that an MCP server is a
+    sanctioned agent transport; nothing forbids a new one), Decision 80 (governs HOW a dependency
+    lands, not whether), Decision 66 (a describe-derived tool schema is Precision Context Injection
+    realized on the read axis), Decision 143 (worst-reachable-verb identity scoping -- ENGAGED by
+    this plan, see below), Decision 124 (its CD.10/T1.5 "import-site sweep to agent_sdk verbs" note
+    is superseded by this framing), Decision 132 / Decision 148 (graduation + hermetic defaults).
+  - >-
+    "gates: decision-scout=FLAGS_FOUND (2 flags resolved, 1 spirit flag mitigated);
+    plan-critique=<verdict> recorded on receipt, never pre-written"
+  - >-
+    SCOUT FLAG 1 RESOLVED (Decision 91 [WARN]) -- the framing "re-ground T0.8 onto CD.10's
+    tool-surface end-state" was WRONG as originally drafted and is corrected here. CD.10's literal
+    "Agent Tooling Platform = Lambda per tool" enumeration was already superseded by Decision 91
+    cl.3 and Decision 81 cl.2; only CD.10's PlatformDev/PlatformAdmin two-principal allow-list
+    survives. This plan is therefore licensed by RATIFIED Decision 81 cl.2, not gated behind pending
+    CD.10. Stated explicitly so the R1-R3 ratification guard does not later find a text/build
+    mismatch: the realized surface is a CLIENT-SIDE PROJECTION over the two existing Lambdas, and
+    deliberately differs from CD.10's literal per-Lambda text.
+  - >-
+    SCOUT FLAG 2 RESOLVED (Decision 88 [NOTE]) -- the feared blocker does not exist. Decision 88
+    invariant (ii) EXPLICITLY sanctions named-verb reads ("a genuinely-needed warehouse read uses a
+    registered named verb (Decision 84 I-3)"). The "never call _make_reader()" rule is NOT in
+    Decision 88 or AGENTS.md; it lives at .claude/skills/planning/SKILL.md:223 and is scoped to the
+    relevance gate only. No rule needs narrowing for this plan to proceed, and the planning-skill
+    gate rule is deliberately left unnarrowed here.
+  - >-
+    SCOUT SPIRIT FLAG MITIGATED (Decision 126 [NOTE], ambience beats sanction) -- Decision 126's
+    durable lesson is that agents reach for whatever surface is most VISIBLE, not whichever is
+    sanctioned. Making 12 live warehouse reads as visible as Read/Grep risks making the warehouse
+    more visible than the read-cache Decision 88 currently designates as default. Mitigation is
+    structural, not prose: VP step 7 asserts the cache-first guidance is carried inside every
+    projected tool's DESCRIPTION, applied by the projection template so it covers verbs added later
+    automatically.
+  - >-
+    DECISION 143 ENGAGED, disclosed -- the operator chose to project READ and WRITE verbs in one
+    surface. The scout flagged that Decision 143's worst-reachable-verb identity scoping is dormant
+    while a surface is reader-only and engages immediately once writer verbs are projected
+    alongside: the tool surface's identity must then be scoped to its worst reachable verb, which is
+    a write. This is the accepted cost of actually replacing ops_data_portal as the agent surface
+    rather than adding a read-only convenience layer. The closed {file_ops, update_ops} allowlist
+    (acceptance criterion 3) is what bounds that identity -- it is a security boundary here, not
+    merely tidiness, because the writer's _ACTIONS table also holds create_tables and destructive
+    probe actions.
+  - >-
+    TIER CORRECTION, verified against the manifest graph -- the decision-scout reported that
+    src/common/iceberg_reader.py "appears in ZERO Lambda manifests" and concluded V2. That is FALSE:
+    compute_affected_artifacts over this scope returns {data-pipeline: [...], ops-compaction: [...]},
+    and both manifests are status:active. Per Decision 79 / CD.16 this plan is therefore V3 and
+    carries per-artifact build/deploy/smoke steps (VP step 9). The scout's decision analysis was
+    sound; only this mechanical claim was wrong, and it was caught by running the graph rather than
+    trusting the report.
+  - >-
+    OPERATOR DESIGN INTENT (the anchor for this work) -- fetching one recommendation should be one
+    query returning one row. Pulling entire tables into a local cache and then re-querying that
+    cache in Python is backwards for KB-scale data. VP step 10 is the direct end-to-end proof of
+    exactly this. The complementary question -- whether Decision 88 invariant (ii)'s cache-first
+    rule should still gate verb use at all -- is deliberately SPLIT OUT to rec-2867 to keep this
+    scope tight, per operator direction. That rec carries the Decision 88 clause-2 measurement
+    obligation (never discharged; no egress figures recorded anywhere) and the observation that the
+    D2 cold-ATTACH driver, which dominated the 2026-06-15 breach, has since been fixed by the warm
+    connection cache in src/common/ducklake_runtime.py.
+  - >-
+    Recon findings that shaped the scope: 12 NAMED_READS verbs exist with typed param schemas;
+    describe_named_reads() is served by BOTH handlers and labelled agent-facing (CD.10/CD.15) yet
+    NOTHING under scripts/ consumes it; DuckLakeReader has named() and query() but NO describe(), so
+    no client can fetch the schema that would drive tool generation -- that one missing method is
+    the whole gap; .mcp.json registers only github-full; no mcp package is pinned.
+  - >-
+    Operator decisions recorded at the planning gate: (1) use the official `mcp` SDK rather than
+    hand-rolling a stdio JSON-RPC server -- the hand-roll would make protocol correctness a
+    permanent local maintenance burden; (2) project reads AND writes in one surface rather than
+    reads-only, accepting the Decision 143 consequence above.
+  - >-
+    Branch was cut fresh from origin/main after PR #762 merged; 0 commits behind/ahead at planning
+    time and no Scope-file overlap with recent main changes.
+pre_implementation_checklist:
+  - 'Branch confirmed not on main'
+  - 'docs/PROJECT_CONTEXT.md read'
+  - 'DECISIONS.md read (or the CITE list above consulted via decision-scout)'
+  - 'All files in scope located and readable'
+  - 'Acceptance criteria understood and verifiable'
+  - >-
+    Read src/common/iceberg_reader.py's named()/query()/_invoke first -- describe() mirrors their
+    shape and must reuse _invoke, not open a second transport.
+  - >-
+    Read src/lambdas/ducklake_writer/handler.py's _ACTIONS table and error_type envelope first --
+    the write allowlist and the typed-error mapping both derive from what is already there.
+execution_steps:
+  - >-
+    Modify src/common/iceberg_reader.py -- add DuckLakeReader.describe() returning the per-verb
+    schema, implemented as self._invoke({"action": "describe"}) and mirroring named()'s loud-fail
+    posture. Do not add a fallback.
+  - >-
+    Modify docs/contracts/file-router.yaml -- register scripts/agent_sdk/ as a nested subpackage
+    home, then re-run VP step 1 and use the path it prints for the test files.
+  - >-
+    Create scripts/agent_sdk/errors.py -- one exception type per error_type the writer emits
+    (schema_gate, status_transition, referential, action, occ_exhausted, version_mismatch, runtime)
+    plus a loud generic fallback for an unrecognised error_type.
+  - >-
+    Create scripts/agent_sdk/mcp_server.py -- on startup call DuckLakeReader.describe() and project
+    one tool per returned verb, carrying each verb's param schema and a shared description template
+    that includes the cache-first guidance. Project the write side from a module-level literal
+    allowlist of exactly {file_ops, update_ops}, routed through
+    scripts/ops_portal/writer_transport. Never project query or any free-SQL parameter. Raise on a
+    failed describe.
+  - >-
+    Create scripts/agent_sdk/__init__.py -- facade re-exporting the server entrypoint and the error
+    types.
+  - >-
+    Modify requirements.txt -- add the mcp SDK, pinned consistently with the file's existing style.
+  - >-
+    Modify .mcp.json -- register the server as a stdio command invoking
+    bin/venv-python -m scripts.agent_sdk.mcp_server, alongside the existing github-full entry.
+  - >-
+    Create the two test modules at the mapper-resolved paths, with the class names VP steps 2-7
+    select (TestProjection, TestWriteAllowlist, TestFailLoud, TestTypedErrors, TestToolDescriptions).
+    Stub describe() rather than calling the live boundary in unit tests.
+  - >-
+    Modify docs/ROADMAP-PLATFORM.yaml -- re-ground T0.8's intent, files_in_scope and exit_criteria:
+    drop client.py, drop the retired log-rec/log-decision/query Lambda names, and restate the
+    end-state as a describe-derived tool projection. Do NOT flip T0.8's status -- criterion flips
+    happen only in /implement's bookkeeping walk on a verified VP pass.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. VP step 2 is the crux (the
+    derivation property). On unrecoverable V3 failure stop and RCA (Decision 55).
+  - 'Report: what was implemented, verification results, and the VP step 9/10 deploy and end-to-end outcomes.'
+work_areas: []
+rollback: >-
+  Revert the commit and redeploy the two affected artifacts from the prior build (VP step 9's
+  command against the reverted tree). The MCP server registration in .mcp.json is additive and
+  inert once the module is gone, but remove it in the same revert so the harness does not attempt to
+  start a missing server. describe() on DuckLakeReader is purely additive and safe to leave if a
+  partial revert is ever needed; nothing else depends on it.
