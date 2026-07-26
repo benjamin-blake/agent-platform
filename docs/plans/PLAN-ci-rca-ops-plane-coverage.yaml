@@ -1,0 +1,498 @@
+---
+schema_version: 1
+slug: "ci-rca-ops-plane-coverage"
+intent: >-
+  Close the signal-ingestion gap that made the 2026-07-24 ops_decisions outage invisible to the
+  platform (rec-2849): ci-rca.yml watches only three workflows, so an ops-plane write failure files no
+  recommendation and reaches a human only by email. Widen the watched set by two adjudicated entries,
+  add a fail-closed exclusion so a DESIGNED fail-closed refusal does not mint a queue-blocking
+  critical, and guard the set against silent removal.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-rca-ops-plane-coverage.yaml
+phase: >-
+  No tier_item alignment. Soft-warn exception category `ad_hoc_rec` -- resolves rec-2849, the keystone
+  detection gap found by the ducklake-writer-errors RCA. Extends the Decision 72 RCA-as-Plan-Source
+  mechanism; advances no tier_item.
+scope:
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Add `rec-autoclose` and `deploy-ducklake-lambdas` to the `workflow_run.workflows` filter, and add
+      a designed-refusal skip step that gates the agent step via a step output -- mirroring the existing
+      fp_dedup / convergence-dedup skip shape (~lines 321/350) rather than inventing a mechanism. The
+      step consumes the `/tmp/ci-rca-jobs.json` that the existing `Fetch jobs JSON` step (lines 181-189)
+      already writes, so no second jobs API call is added. No dedup special-casing is needed: non-sandbox
+      workflows already anchor on head_sha.
+  - file: scripts/ci_rca/designed_refusal.py
+    action: Create
+    purpose: >-
+      The fail-closed predicate as a testable module, mirroring convergence_dedup.py exactly: a thin
+      invocation-only shell taking `--jobs-json /tmp/ci-rca-jobs.json` and a workflow slug, doing NO
+      network call of its own, emitting `key=value` to stdout, `main() -> int`. Returns skip=true ONLY
+      when the resolved failing-job set is non-empty AND every member is declared for that slug
+      (currently deploy-ducklake-lambdas -> {reconcile-gate}). Returns skip=false on an empty set, an
+      unparseable/`{}` file, or any undeclared failing job. Fail-closed is the point: Decision 55
+      forbids a loose suppression, and Decision 119's narrow anchored proxy-skip is the shape to copy.
+  - file: scripts/verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      Extend `_check_ci_rca_filter` (line 169) to assert every REQUIRED watched workflow is present,
+      plus a uniqueness assertion. Closes a live hole: `terraform-apply-sandbox` is in the filter today
+      but unguarded, so the CD.35 wiring could be deleted silently. This is the anti-recurrence lever.
+  - file: tests/verify_ci_workflow/test_ci_rca_and_canary.py
+    action: Modify
+    purpose: >-
+      Add a NEW test class (e.g. `TestCheckCiRcaFilterRequiredSet`) with one drop-one-entry case per
+      required workflow plus a duplicate-entry case. A new class is required, not just new cases: VP
+      step 2's registry row must name a node id absent from origin/main (see H1 note in context). The
+      existing two-entry `["CI", "Main Canary"]` fixtures at lines 22/39/62 also need updating.
+  - file: tests/test_ci_rca_designed_refusal.py
+    action: Create
+    purpose: >-
+      Unit coverage for the predicate's behaviours including both fail-closed paths. NOTE the path:
+      `map_source_to_test(scripts/ci_rca/designed_refusal.py)` resolves to this FLAT file, not a
+      `tests/ci_rca/` mirror package -- `scripts/ci_rca/` is still on the pre-inversion grandfather path
+      (`_NESTED_SUBPACKAGE_TEST_PREFIX["ci_rca"] = "test_ci_rca_"`), and only `evidence.py` has retired
+      to a mirror. Verified: convergence_dedup.py maps to tests/test_ci_rca_convergence_dedup.py.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Decision 132 cl.2 -- registry rows for the three `graduate`-dispositioned VP steps (1, 2, 4). In
+      Scope so this plan's own "no files outside Scope" constraint does not forbid the write
+      validate_graduation_completeness requires. Row shape is PER-SLOT, not uniform -- see
+      REGISTRY-ROW SHAPE in context. Steps 1 and 2 are pytest invocations and MUST use
+      `primitive_slot: test_selector` with `check_spec.node_id` (no `command` key exists on that slot).
+      Step 4 uses `command_exit_zero` with `check_spec.command` as a LIST invoking bare `python`.
+  - file: docs/contracts/ci-rca-lifecycle.yaml
+    action: Modify
+    purpose: >-
+      Record in the owning contract (Decision 142 point 6 names this file as the semantics home): the
+      watched set with a one-line adjudication per entry INCLUDING the three deliberate exclusions and
+      their reasons; the designed-refusal exclusion and its fail-closed rule; and the rec-autoclose
+      closure dependency (CLOSURE TRAP below). Per Decision 142 point 6 / Decision 118 this is a
+      NON-ritual projection contract -- add no `contract:`/`class:` block; the edit triggers neither the
+      CD.25 ritual nor validate_contract_drift.
+bundled_recommendations:
+  - rec-2849
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    ci-rca.yml's `workflow_run.workflows` filter CONTAINS all five required entries (CI, Main Canary,
+    terraform-apply-sandbox, rec-autoclose, deploy-ducklake-lambdas) with no duplicates. A required-
+    membership floor plus uniqueness, NOT an exact-set assertion: the guard's job is to prevent silent
+    REMOVAL, while growth is governed by the contract's per-entry adjudication requirement.
+  - >-
+    designed_refusal returns skip=true ONLY when the resolved failing-job set is non-empty AND every
+    member is declared for that workflow slug; it returns skip=false on an empty set, on an
+    unparseable or `{}` jobs file, and on any run where an undeclared job also failed.
+  - >-
+    `bin/venv-python -m scripts.verify_ci_workflow ci-rca-filter` FAILS when any required workflow is
+    absent from the filter, and passes against the real file.
+  - >-
+    docs/contracts/ci-rca-lifecycle.yaml records the watched set with a per-entry adjudication, the
+    three deliberate exclusions with reasons, the designed-refusal fail-closed rule, and the
+    rec-autoclose closure dependency. No `contract:` block is added.
+  - >-
+    `bin/venv-python -m scripts.validate --pre` exits 0 within the Decision 153 / Decision 73 300s
+    fast-tier budget.
+  - >-
+    LIVE PROOF: an operator-triggered ci-rca run against the historical rec-autoclose failure run
+    30101021966 completes, and a new source=ci_rca rec appears whose context names the ducklake_writer
+    502 on ops_decisions -- proving the non-pytest ops-plane path works end to end.
+  - >-
+    Both rec-2849 and the live-proof rec are closed, and the live-proof rec's context_v2_json carries a
+    non-empty fixed_by_sha (asserted executably by VP step 8) so it cannot later fail closed to a
+    spurious REGRESSION under Decision 142 point 3.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise the predicate -- skip when only a declared designed-refusal job failed; do NOT skip when
+      an undeclared job also failed; do NOT skip on an empty job set; do NOT skip on a `{}` or
+      unparseable jobs file.
+    command: bin/venv-python -m pytest tests/test_ci_rca_designed_refusal.py -q
+    expected: All tests pass, including both fail-closed cases.
+    fix_if: >-
+      If either fail-closed test passes while the predicate returns skip=true, the suppression fails OPEN
+      and would mask a genuine failure -- the masking shape Decision 55 forbids. The predicate must
+      default to skip=false on any uncertainty; only an affirmatively-resolved all-declared-jobs failure
+      skips.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "ci-rca-designed-refusal-fail-closed"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Prove the extended guard rejects a filter missing any required entry -- including
+      terraform-apply-sandbox, which is unguarded today -- and rejects duplicates.
+    command: >-
+      bin/venv-python -m pytest
+      tests/verify_ci_workflow/test_ci_rca_and_canary.py::TestCheckCiRcaFilterRequiredSet -q
+    expected: >-
+      All cases pass: one drop-one-entry case per required workflow, plus a duplicate-entry case.
+    fix_if: >-
+      If dropping terraform-apply-sandbox still passes, the guard was extended to the two new entries
+      only and the pre-existing hole survives -- assert the full required set, not the delta. The
+      registry row for this step MUST use this `::TestCheckCiRcaFilterRequiredSet` node id, never the
+      whole file: the file exists and passes on origin/main, so a file-level row would PASS on both
+      differential legs, be rejected as tautological, and redden --pre. Use `::ClassName`, never `-k`.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "ci-rca-filter-guard-full-required-set"
+  - step: 3
+    phase: pre-deploy
+    action: Run the real guard against the real workflow file.
+    command: bin/venv-python -m scripts.verify_ci_workflow ci-rca-filter
+    expected: Exit 0.
+    fix_if: >-
+      A failure names the missing entry. Do not relax the guard to make it pass -- add the entry to
+      ci-rca.yml's filter.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      Inadmissible as a differential: validate_verification_registry's make_worktree_revert_runner
+      reverts the WHOLE worktree to origin/main, where the old guard runs against the old filter and
+      passes. The row would PASS on both legs, be rejected as tautological, and redden --pre. Step 2
+      carries the graduated coverage via a test class that does not exist on main.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm the contract records the watched set, all three exclusions, the fail-closed rule, and the
+      closure dependency -- and that no ritual block was added.
+    command: >-
+      bin/venv-python -c "import pathlib,yaml;
+      p=pathlib.Path('docs/contracts/ci-rca-lifecycle.yaml'); raw=p.read_text(encoding='utf-8');
+      d=yaml.safe_load(raw); assert 'contract' not in d and 'class' not in d, 'non-ritual contract must
+      gain no contract/class block';
+      [raw.index(k) for k in ('rec-autoclose','deploy-ducklake-lambdas','terraform-drift',
+      'convergence-health','dedup-probe','reconcile-gate','stamp_fixed_by_sha')];
+      print('CONTRACT_RECORDS_WATCHED_SET')"
+    expected: Prints CONTRACT_RECORDS_WATCHED_SET, exit 0.
+    fix_if: >-
+      A ValueError names the missing token. The three EXCLUDED workflows must appear with their reasons
+      -- an exclusion recorded nowhere is indistinguishable from an oversight and gets re-litigated. A
+      failure on the contract/class assertion means the edit over-ritualised a non-ritual projection
+      (Decision 142 point 6 / Decision 118). Tokens are checked against the file's RAW TEXT, not
+      yaml.dump output, which would round-trip through the emitter and change quoting.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "ci-rca-lifecycle-records-watched-set"
+  - step: 5
+    phase: pre-deploy
+    action: Confirm the change lands non-wedging.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: Exit 0, within the 300s fast-tier budget.
+    fix_if: >-
+      A red on the ci-rca-filter or taxonomy checks means the filter and guard disagree. Fix the
+      disagreement; never raise the budget or drop a check.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      A bare command_exit_zero over `scripts.validate --pre` itself. Graduating it into
+      config/agent/verification_registry/registry.yaml -- which `validate --pre` consumes -- is circular.
+  - step: 6
+    phase: post-deploy
+    action: >-
+      LIVE PROOF that the non-pytest ops-plane failing path files end to end. NOTE what this does and
+      does not prove: `workflow_dispatch` with an explicit run_id bypasses the `workflows:` filter by
+      construction, so this exercises the log-tail -> filing path for a rec-autoclose-shaped failure, NOT
+      the filter widening -- that is covered by VP steps 2-3. Trigger ci-rca against the incident's own
+      rec-autoclose run with force_rca to bypass dedup. AGENT-RUNNABLE
+      via the MCP tool ONLY -- the `gh` CLI is NOT available in this environment, so a `gh workflow run`
+      formulation would be operator-only. Verified inputs: run_id (required string) and force_rca
+      (optional boolean) exist on ci-rca.yml, and run 30101021966 is name=rec-autoclose, run_number=581,
+      event=push, head_branch=main, conclusion=failure, head_sha=f0e701d1.
+    command: >-
+      echo "operator or agent: mcp__github__actions_run_trigger(owner=benjamin-blake,
+      repo=agent-platform, workflow_id=ci-rca.yml, ref=main,
+      inputs={run_id: '30101021966', force_rca: 'true'}) -- then proceed to step 7"
+    expected: >-
+      The dispatched run completes with conclusion=success and reaches the filing step. NOTE a fidelity
+      caveat: on workflow_dispatch the checkout falls back to github.sha (current main), NOT the incident
+      commit, so bundle fields derived from the working tree are not a faithful replay -- the log-tail
+      signature this proof targets is unaffected.
+    fix_if: >-
+      If the run reports no pytest-junit and then files nothing, the log-tail fallback is not reached for
+      this workflow slug -- compare against how terraform-apply-sandbox takes that path. If it skips as a
+      designed refusal, the predicate is matching the wrong slug (rec-autoclose declares no
+      designed-refusal job at all).
+  - step: 7
+    phase: post-deploy
+    action: >-
+      Assert the live proof actually filed, and that rec-2849 closed. This step's verdict is stable: it
+      runs BEFORE the closures in step 8, so it is never re-run against a changed state.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --sync >/dev/null 2>&1
+      && bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      cur={};
+      [cur.__setitem__(r['id'], r) for r in rows];
+      proof=[r for r in cur.values() if r.get('source')=='ci_rca'
+      and 'ops_decisions' in (r.get('context') or '') and r.get('status')=='open'];
+      assert proof, 'live-proof rec not filed -- step 6 did not reach the filing step';
+      print('LIVE_PROOF_REC=' + proof[0]['id']);
+      assert cur['rec-2849']['status']=='closed', cur['rec-2849']['status'];
+      print('REC_2849_CLOSED')"
+    expected: Prints LIVE_PROOF_REC=<id> then REC_2849_CLOSED, exit 0.
+    fix_if: >-
+      If the proof rec is absent there are TWO possible causes, so do not misdiagnose: either step 6's
+      dispatched run did not reach the filing step (read its logs before re-dispatching), or it filed but
+      the RCA agent's authored context lacks the literal token `ops_decisions` this selector greps for --
+      inspect the open source=ci_rca set by hand before concluding the run failed. Note also that a
+      re-dispatched step 6 can leave TWO open proof recs; this selector takes the first arbitrarily, so
+      close the orphan too or it lingers as an open Critical carrying Decision 73's L5/L6. If rec-2849 is still open, the Resolves trailer did not reach the
+      SQUASH-MERGE commit body (rec-2679/rec-2733: a single-commit squash drops a trailer present only in
+      the PR description); close it via `ops_data_portal --update-rec rec-2849 --status closed
+      --resolution "..."`. Note the irony to check here: rec-2849's own closure is processed BY
+      rec-autoclose, the workflow whose coverage this plan fixes -- if rec-autoclose is itself failing,
+      use the manual path. That is the CLOSURE TRAP in practice, on this very plan.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Close the live-proof rec AND stamp its fixed_by_sha, then assert both landed. The stamp is not
+      optional: Decision 142 point 3 fails a closed head with no fixed_by_sha closed to a `REGRESSION: `
+      / priority=Critical rec on the next fingerprint match, so an unstamped closure would plant the very
+      trap this plan documents -- via the plan's own verification step. Precedent:
+      PLAN-ci-rca-classify-failure-dedup-fix.yaml:115 stamps at manual-close time. Substitute
+      <proof_id> from step 7's output and <merge_sha> for this PR's squash-merge commit.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --update-rec <proof_id> --status closed
+      --resolution "live-proof artifact for PLAN-ci-rca-ops-plane-coverage VP6; no code defect"
+      && bin/venv-python -c "from scripts.ops_portal.ci_rca_lifecycle import stamp_fixed_by_sha;
+      stamp_fixed_by_sha('<proof_id>', '<merge_sha>')"
+      && bin/venv-python -m scripts.ops_data_portal --sync >/dev/null 2>&1
+      && bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      cur={};
+      [cur.__setitem__(r['id'], r) for r in rows];
+      r=cur['<proof_id>']; assert r['status']=='closed', r['status'];
+      v=json.loads(r.get('context_v2_json') or '{}');
+      assert v.get('fixed_by_sha'), 'fixed_by_sha not stamped -- next fingerprint match will fail closed
+      to a spurious REGRESSION (Decision 142 point 3)';
+      print('PROOF_REC_CLOSED_AND_STAMPED ' + v['fixed_by_sha'])"
+    expected: Prints PROOF_REC_CLOSED_AND_STAMPED with the sha, exit 0.
+    fix_if: >-
+      If status is closed but fixed_by_sha is empty, the stamp call silently no-opped -- do NOT leave it;
+      re-run stamp_fixed_by_sha and re-verify. A closed ci_rca head with no fix proof is exactly the
+      Decision 142 point 3 trap, and leaving it planted would make the next matching rec-autoclose failure
+      file a spurious critical carrying Decision 73's L5 planning block.
+constraints:
+  - >-
+    No rescue agents or workaround loops (Decision 55). A failing post-deploy leg stops and RCAs.
+  - >-
+    Signal emission ONLY (Decision 84 I-4). Do not add write buffering, an outbox, retry/replay, or any
+    path that re-stages ops rows from logs/.decisions-index.jsonl. The open robustness recs on this seam
+    (rec-2471, rec-2679, rec-2733) invite a replay fix; that is out of scope and forbidden here.
+  - >-
+    The designed-refusal predicate FAILS CLOSED. Any uncertainty -- empty job set, `{}` jobs file, parse
+    error, unrecognised job name -- files the rec. It performs NO network call: it consumes the
+    `/tmp/ci-rca-jobs.json` the existing Fetch jobs JSON step already writes (which itself writes `{}` on
+    failure, supplying the fail-closed input with a concrete producer), exactly as convergence_dedup.py
+    consumes /tmp/commit-statuses.json.
+  - >-
+    Do not widen the watched set beyond the two adjudicated entries. Each ci_rca rec is
+    priority=critical and carries Decision 73's L5 (hard-blocks /plan from scoping unrelated work) and
+    L6 (auto-merge pause), so every addition widens a planning-queue wedge. The exclusions are
+    load-bearing, not laziness.
+  - >-
+    ci-rca.yml must NOT be added to its own filter (loop guard, ~line 34), and dedup-probe must not be
+    added -- it deliberately injects synthetic source=ci_rca failures, so watching it couples the probe
+    to the mechanism it probes.
+  - >-
+    docs/contracts/ci-rca-lifecycle.yaml is a NON-ritual projection contract (Decision 142 point 6 /
+    Decision 118): add no `contract:` or `class:` block.
+  - >-
+    Mint no new numbered Decision (Decision 150 significance bar): a watched-workflow-set change is
+    field semantics routing to the owning contract, not a durable architectural commitment.
+  - >-
+    No taxonomy edit is needed or permitted: config/ci_rca_taxonomy.yaml's workflow_to_tier ALREADY
+    carries `rec-autoclose: not_a_gate` and `deploy-ducklake-lambdas: not_a_gate`, so
+    validate_ci_rca_taxonomy stays green untouched.
+  - >-
+    Files outside the Scope table are not modified. Out-of-scope findings become recommendations via
+    scripts/ops_data_portal.py, not inline fixes.
+context:
+  - >-
+    "Decision-scout verdict + CITE list (verbatim decision ids)": verdict FLAGS_FOUND, 106 of 106
+    decisions triaged. CITE list: dec-142 (incl. points 3, 4(a), 6), dec-118, dec-072, dec-092 (point 6),
+    dec-055, dec-119, dec-084 (I-4), dec-073 (points 3/4 = L5/L6), dec-103, dec-150, dec-061, dec-062,
+    dec-094, dec-129, dec-131, dec-128, dec-070, dec-153, dec-132.
+  - "gates: decision-scout=FLAGS_FOUND (106/106 triaged); plan-critique=PROCEED after 3 round(s)"
+  - >-
+    ORIGIN. rec-2849, filed from the ducklake-writer-errors RCA (CloudWatch alarm 2026-07-24T14:31:12Z).
+    ci-rca.yml's filter is ["CI", "Main Canary", "terraform-apply-sandbox"]. rec-autoclose runs 581
+    (14:26:27Z) and 585 (16:21:23Z) both failed with `ducklake_writer write_ops ops_decisions failed
+    (HTTP 502)`, taking ops_decisions hard-down for read AND write -- and because rec-autoclose is absent
+    from that filter, neither failure filed anything. The outage reached a human only as an SNS email,
+    roughly four hours later. The substrate fix landed in #756; this plan closes the reason nobody knew.
+  - >-
+    WATCHED-SET ADJUDICATION, re-grounded after plan-critique round 1 exposed a self-defeating
+    justification. Draft 1 justified ADDing deploy-ducklake-lambdas by citing
+    PLAN-ducklake-applied-schema-gate residual risk (4) -- the standing reconcile-refusal red being
+    invisible to ci-rca -- and then made `reconcile-gate` the SOLE member of its suppression set,
+    re-hiding exactly that signal. That was incoherent. Corrected posture: deploy-ducklake-lambdas is
+    added on its OWN merits -- a build, deploy, or smoke failure in the governed code-deploy channel is
+    genuinely invisible today and genuinely warrants a critical -- while the STANDING reconcile-refusal
+    red is routed to the Decision 62 alarm-not-gate monitor lane, the same treatment convergence-health
+    gets, tracked in rec-2854. Rationale for not letting the refusal file a critical: it is a standing
+    state persisting until an operator reconciles, so on every push it would mint a fresh L5/L6 critical
+    -- a rec storm plus a planning-queue wedge, with the refusal already self-documenting (the gate
+    prints the invoke) and already blocking the deploy. Full verdicts: ADD rec-autoclose (the incident's
+    only in-repo signal). ADD deploy-ducklake-lambdas (build/deploy/smoke failures only). EXCLUDE
+    terraform-drift -- Decision 92 point 6 assigns drift to the ops-portal alarm-only path and it already
+    files `--source tf_drift`, so watching it double-records one event and blurs the Decision 61 source
+    discriminator. EXCLUDE convergence-health -- environmental reds would create a STANDING wedge;
+    Decision 62's lane is correct (rec-2854). EXCLUDE dedup-probe -- it injects synthetic source=ci_rca
+    failures. All exclusions are recorded IN the contract.
+  - >-
+    CLOSURE TRAP (Decision 142 point 3 + cl.4(a)), verified verbatim by plan-critique: rec-autoclose.yml
+    is the SOLE caller of ci_rca_lifecycle.stamp_fixed_by_sha, and Decision 142 point 3 says a closed
+    head with NO fixed_by_sha "FAILS CLOSED to a REGRESSION ... priority=Critical". So when a
+    rec-autoclose failure files a ci_rca rec, the fix PR's Resolves trailer must be processed by the very
+    workflow that is broken -- fixed_by_sha may never be stamped, manufacturing a spurious critical from
+    a real fix. We still watch rec-autoclose (the alternative is the 2026-07-24 silence), but the
+    dependency is recorded in the contract, the manual `ops_data_portal --update-rec` path is named as
+    the closure route for this rec class, and VP step 8 stamps the live-proof rec while VP step 7 carries
+    the note -- because this plan's own closure runs through that path.
+  - >-
+    HONEST LIMITATIONS, both directions. (1) Cannot self-report: ci-rca files THROUGH the ops portal, so
+    the ingestion path shares the substrate it reports on and a total ducklake_writer outage is
+    unreportable. The 2026-07-24 incident is covered only because it was scoped to ops_decisions while
+    ops_recommendations stayed healthy (1553 rows throughout). rec-2850 (SNS alarm -> rec, out-of-band, no
+    portal dependency) is the genuine complement, deliberately out of scope -- bundling an
+    AWS/SNS/Lambda/terraform workstream with a GitHub-Actions config change is the scope creep that took
+    the previous plan five critique rounds. (2) Fail-open amplification, the inverse shape:
+    find_open_ci_rca_rec_by_fingerprint fails OPEN on reader-unreachable (ci_rca_runtime.py:74-77,
+    "failing open (dedup skipped, filing proceeds)"), and flake_escalation/resolve_chain also need the
+    reader. Since rec-autoclose runs on EVERY push to main, a reader-side outage with a healthy writer
+    files one fresh L5/L6 critical per push with no brake. Named, not engineered around -- a brake would
+    be a new mechanism this plan is not scoped to add.
+  - >-
+    MECHANISM REUSE, verified against the files. (a) ci-rca.yml's pytest-junit download is best-effort
+    with an error_signature_from_log_tail fallback already exercised by terraform-apply-sandbox, so a
+    non-pytest ops-plane failure is a solved case. (b) Dedup anchors terraform-apply-sandbox on the red
+    convergence record's commit and every other workflow on head_sha -- neither addition needs
+    special-casing. (c) The rca job `if` requires head_branch == default_branch (line 41); rec-autoclose
+    fires on push to main unconditionally and deploy-ducklake-lambdas on push to main with path filters,
+    so both satisfy it. (d) The concurrency group already keys on workflow name. (e) The jobs list is
+    already fetched to /tmp/ci-rca-jobs.json (lines 181-189, continue-on-error, `{}` on failure). (f)
+    config/ci_rca_taxonomy.yaml already maps both new entries to not_a_gate. The only genuinely new
+    artefact is the predicate module.
+  - >-
+    WHY A MODULE, NOT WORKFLOW SHELL. The failing-job NAME is absent from the workflow_run event payload,
+    so a predicate is unavoidable; putting it in scripts/ci_rca/designed_refusal.py (sibling to
+    convergence_dedup.py) makes the fail-closed behaviour unit-testable, which is what Decision 55
+    actually demands -- an untestable suppression buried in YAML is how a fail-open bug survives. It
+    adds no API call: the jobs JSON already exists on disk by the time it runs. Verified: none of
+    deploy-ducklake-lambdas.yml's jobs sets a `name:` key, so the API display name equals the job id and
+    `reconcile-gate` is the correct declared member.
+  - >-
+    REGISTRY-ROW SHAPE, and the two interpreter hazards that decide it. A graduated row is admitted only
+    if it FAILS on an origin/main worktree and PASSES on HEAD, so the interpreter it runs under decides
+    admission. Two traps, verified in this container: (a) NEVER `bin/venv-python` -- a differential
+    worktree has no `.venv`, so it exits 1 for ENVIRONMENT reasons on the main leg and the row is
+    falsely admitted on a non-semantic failure (this genuinely happened to
+    `build-lambda-deploy-function-subset`, registry.yaml ~1746, graduated 2026-07-25 by the immediately
+    preceding plan); (b) NEVER bare `python -m pytest` -- the PATH interpreter has no pytest ("No module
+    named pytest"), so such a row FAILS on the HEAD leg too and is rejected as not-passing-on-HEAD,
+    reddening --pre. Bare `python` is fine for a yaml/stdlib token check (yaml IS importable there),
+    which is why the hazard is invisible by analogy to the existing command_exit_zero rows. The escape
+    for pytest steps is `primitive_slot: test_selector`, whose TestSelectorCheck runs
+    [sys.executable, -m, pytest, node_id] -- sys.executable is the LIVE venv interpreter (validate is
+    launched via bin/venv-python), so pytest is present on both legs and the differential is decided on
+    semantics. 50 of the registry's rows already use that slot, including the class-level precedent
+    `pre-tier-registry-isolation-guard`.
+  - >-
+    CI-RCA HARD-BLOCK STATUS (required: ci_rca_unresolved_recs was non-empty at planning time). rec-2836
+    ("Terraform init flakes on kislerdm/neon 504 Gateway Timeout", source=ci_rca, priority=Critical, file
+    scripts/checks/_terraform.py) is open, and the human has confirmed a CONCURRENT AGENT owns it -- this
+    is not a deferral by this session. This plan satisfies none of the three Related-Work conditions
+    against it (different file, different Decision Record, different failure category: a terraform-init
+    network flake vs a ci-rca coverage gap). Implement-time note: if rec-2836 has not landed when this
+    plan executes, expect Decision 73's L6 auto-merge pause to still apply.
+  - >-
+    STATE AT PLANNING TIME. Branch cut from origin/main at 47b3932, 0 behind / 0 ahead. The designated
+    branch was restarted from main because its prior PR (#755) merged -- follow-up work is a fresh
+    change, never stacked on merged history. ops_decisions verified recovered this session (134 rows,
+    `intent` present, reconcile evidence columns_pre_existing false/false). NOT this plan's business: the
+    convergence record has been red 22.6h at d4db904 because PR #754's gated apply awaits human approval
+    in the tf-gated-apply Environment -- a pending-approval state, not a failure; the human is handling
+    it, and the RCA-gap-alert false positive it exposes is noted in rec-2854.
+  - >-
+    LAMBDA DEPLOYMENT ASSESSMENT: none required -- compute_affected_artifacts() returns {} for every
+    scope file. No .tf in scope, so no Infrastructure Assessment and no speculative-plan interaction.
+    DATA-MODEL ASSESSMENT: not applicable -- no table, grain, merge_key, identity scheme, or warehouse
+    write path changes; the plan only widens which failures produce a rec through the existing portal.
+  - >-
+    SLOC: verify_ci_workflow.py is 372 lines with no config/sloc_budgets.yaml entry, so the 500 default
+    applies and roughly +20 lines is comfortable; designed_refusal.py is expected around 70 lines. No
+    Decision 128 decomposition or raise is in play. tests/verify_ci_workflow/ is a mirror package
+    (Decision 130/131); tests/test_ci_rca_designed_refusal.py is deliberately FLAT per the grandfather
+    path -- see the scope row.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Read ci-rca.yml's Fetch jobs JSON step (lines 181-189) and the fp_dedup / convergence-dedup skip
+    steps (~321/350) before writing the designed-refusal step, so it consumes the existing artifact and
+    mirrors the established output-gating shape
+  - >-
+    Read scripts/ci_rca/convergence_dedup.py before writing designed_refusal.py -- it is the shape to
+    copy (thin invocation-only shell, injected callables, key=value stdout, main() -> int, no network)
+  - >-
+    Confirmed VP step 6 will run via mcp__github__actions_run_trigger (the `gh` CLI is NOT available in
+    this environment) or that an operator will trigger it
+execution_steps:
+  - >-
+    Create scripts/ci_rca/designed_refusal.py mirroring convergence_dedup.py: a declared mapping of
+    workflow slug -> designed-refusal job names (only deploy-ducklake-lambdas -> {reconcile-gate}), a
+    `--jobs-json` argument defaulting to /tmp/ci-rca-jobs.json, key=value stdout, main() -> int, no
+    network call. skip=true only when the resolved failing-job set is non-empty and fully declared.
+  - >-
+    Create tests/test_ci_rca_designed_refusal.py (FLAT path -- see the scope row) covering the four
+    behaviours in VP step 1, both fail-closed paths included.
+  - >-
+    Modify .github/workflows/ci-rca.yml: extend the workflow_run.workflows filter to the five required
+    entries, and add a designed-refusal step AFTER Fetch jobs JSON that invokes the module against
+    /tmp/ci-rca-jobs.json and sets a step output gating the agent step, mirroring the fp_dedup /
+    convergence-dedup shape. Do NOT add ci-rca.yml or dedup-probe to the filter.
+  - >-
+    Extend scripts/verify_ci_workflow.py's _check_ci_rca_filter to assert every required workflow is
+    present plus a uniqueness assertion (membership floor, not exact set), keeping the existing
+    head_branch/default_branch and FILED:-marker assertions intact.
+  - >-
+    Update tests/verify_ci_workflow/test_ci_rca_and_canary.py: refresh the two-entry fixtures to the
+    required set, and add a NEW class TestCheckCiRcaFilterRequiredSet with a drop-one-entry case per
+    required workflow plus a duplicate case -- the new class is what makes VP step 2's registry row
+    admissible.
+  - >-
+    Amend docs/contracts/ci-rca-lifecycle.yaml with the watched set (per-entry adjudication), the three
+    recorded exclusions and reasons, the designed-refusal fail-closed rule, and the rec-autoclose closure
+    dependency. Add no contract:/class: block.
+  - >-
+    Add registry rows in config/agent/verification_registry/registry.yaml for VP steps 1, 2 and 4.
+    Steps 1 and 2 use `primitive_slot: test_selector` with `check_spec.node_id`
+    (tests/test_ci_rca_designed_refusal.py, and
+    tests/verify_ci_workflow/test_ci_rca_and_canary.py::TestCheckCiRcaFilterRequiredSet -- the class
+    node, never the file, never `-k`). Step 4 uses `command_exit_zero` with check_spec.command as a
+    LIST invoking bare `python`. Do NOT apply one shape to all three -- see REGISTRY-ROW SHAPE.
+  - Execute Verification Plan steps 1-5 (pre-deploy) -- run each step; loop until pass.
+  - >-
+    Include `Resolves: rec-2849` in the SQUASH-MERGE COMMIT BODY -- not the PR description alone
+    (rec-2679/rec-2733: a single-commit squash drops it).
+  - >-
+    Execute VP steps 6-8 (post-deploy) after merge. Step 8 both closes AND stamps the live-proof rec --
+    do not skip the stamp; on an unrecoverable V3 failure stop and RCA (Decision 55).
+  - 'Report: what was implemented, verification results, and the live-proof rec id from VP step 6'
+work_areas: []
+rollback: >-
+  Revert the PR. The change is additive: the filter returns to three entries, the guard to its two
+  assertions, and the predicate module becomes unreferenced. No data migration and no deployed artifact
+  is involved, so the revert is complete. Any rec filed by VP step 6's live proof stays closed on its own
+  resolution, with its fixed_by_sha stamp intact.
