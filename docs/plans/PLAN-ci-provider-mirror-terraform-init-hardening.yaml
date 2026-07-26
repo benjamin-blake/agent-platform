@@ -1,0 +1,554 @@
+schema_version: 1
+slug: "ci-provider-mirror-terraform-init-hardening"
+intent: >-
+  Decouple the required terraform-validate CI check from github.com provider-asset availability by
+  extending the Decision 120 S3-backed provider filesystem_mirror to GitHub-hosted runners, and widen
+  the transient-init retry window -- so an upstream registry outage stops reddening a
+  branch-protection-gating check and blocking the self-improvement loop's merge path.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-provider-mirror-terraform-init-hardening.yaml
+phase: >-
+  CI reliability / ci_rca forward fix for rec-2836. No tier_item covers this work: source=ci_rca is a
+  soft-warn exception category, so the Tier Item Freshness Gate is skipped by design. Adjacent to the
+  Decision 119/120 provider-mirror lineage and the Decision 83 required-check surface.
+
+scope:
+  - file: .github/workflows/ci.yml
+    action: Modify
+    purpose: >-
+      terraform-validate job ONLY. Add id-token:write to the job permissions (currently contents:read
+      only -- without it every OIDC mint fails and the whole fix silently no-ops). Add an
+      event-conditional, continue-on-error OIDC step (agent-platform-github-ci-branch on push,
+      agent-platform-github-ci-pr on pull_request), then sync the canonical S3 mirror, render
+      config/terraform/cc-web.tfrc's __TF_MIRROR_DIR__ placeholder, and export TF_CLI_CONFIG_FILE --
+      every stage gated so failure degrades to today's direct-fetch behaviour rather than wedging the
+      check. CRITICAL: the third gate is EXACT-LOCKED-VERSION presence, never mere directory
+      non-emptiness. Parse the kislerdm/neon version from terraform/personal/.terraform.lock.hcl and
+      require the matching package in the synced tree; the tfrc excludes kislerdm/* from direct, so an
+      exported tfrc over a mirror missing that exact version has NO fallback and would red the check.
+      Each fail-open branch emits a visible reason to stdout and $GITHUB_STEP_SUMMARY. Add a
+      fail-CLOSED invariant step: when creds succeeded AND the sync was non-empty AND the locked neon
+      version is present, TF_CLI_CONFIG_FILE MUST be set, else exit 1. Rewrite the job's stale header comment,
+      whose two clauses ("Makes ZERO AWS calls ... so no OIDC step is added" and "a branch-role OIDC
+      step here would reject PR events whose sub claim is refs/pull/*") both become false.
+  - file: terraform/personal/oidc.tf
+    action: Modify
+    purpose: >-
+      Add ONE read-only, path-scoped statement to the github_ci_pr inline policy: s3:GetObject on
+      ${aws_s3_bucket.data_lake.arn}/tf-provider-mirror/*, Sid S3ReadProviderMirror. The
+      github_ci_branch role already carries S3ReadWrite on ${data_lake.arn}/* (whole bucket), so the
+      push leg needs no IAM change. No trust-policy edit, no destroy, no new role.
+  - file: scripts/checks/_terraform.py
+    action: Modify
+    purpose: >-
+      Raise _terraform_init_with_retry max_attempts 3 -> 5 with backoff capped at 16s (~30s aggregate
+      window vs today's ~6s), and add the phrase "Gateway Timeout" to _TRANSIENT_INIT_SIGNATURES --
+      the safe phrase, never a bare "504" substring, mirroring Decision 119's own narrow-predicate
+      reasoning in _is_proxy_blocked_init. Correct the stale module-docstring/comment claim that names
+      .github/workflows/terraform-apply-sandbox.yml as the parity consumer (those loops were extracted
+      to .github/actions/terraform-init-retry/action.yml).
+  - file: .github/workflows/terraform-drift.yml
+    action: Modify
+    purpose: >-
+      Signature parity: add Gateway Timeout to the init-retry grep -qE alternation and refresh the
+      enumerating comment. FORCED coupling -- test_drift_workflow_init_retry_signature_parity asserts
+      every _TRANSIENT_INIT_SIGNATURES entry appears in that grep line. Also correct its stale
+      "the three grep -qE sites in terraform-apply-sandbox.yml" cross-reference.
+  - file: .github/actions/terraform-init-retry/action.yml
+    action: Modify
+    purpose: >-
+      Same signature parity edit on the composite action's grep -qE alternation and its enumerating
+      comment. This consumer is currently covered by NO parity test; the plan adds that coverage.
+  - file: config/terraform/cc-web.tfrc
+    action: Modify
+    purpose: >-
+      Header comment only. Record that the file now serves two consumers (CC-web sessions via
+      bin/setup-cloud-env.sh, and GitHub-hosted terraform-validate). Deliberately NOT renamed -- a
+      rename would orphan the path named verbatim in Decision 120's ratified body and in
+      terraform/CLAUDE.md, and the forward-direction amendment convention forbids editing a ratified
+      Decision's original text to chase it.
+  - file: bin/setup-cloud-env.sh
+    action: Modify
+    purpose: >-
+      Close rec-2518 (set RESOLVED_TFRC to the literal sibling path "$HOME/.terraform-mirror.tfrc" --
+      a sibling FILE of $MIRROR_DIR="$HOME/.terraform-mirror", not a child of it -- so the resolved
+      tfrc cannot inflate the ls -A non-empty gate on later runs) and rec-2519 (add --delete to the
+      local aws s3 sync so a shrunk upstream mirror cannot leave stale provider bytes). THESE TWO ARE
+      COUPLED AND MUST LAND IN THE SAME EDIT: adding --delete while RESOLVED_TFRC still lives inside
+      $MIRROR_DIR would delete the live tfrc on the next sync. An implementer must not split them.
+      DELIBERATE ASYMMETRY (not an oversight): the exact-locked-version gate added to the CI leg is
+      NOT propagated to this CC-web leg, which keeps its existing directory-non-emptiness gate. The
+      consequence differs in kind -- a version-incomplete mirror here fails one interactive local
+      init in an admin container, whereas in CI it would red a required, branch-protection-gating
+      check. Decision 120 already accepted the local behaviour. Tightening it is a separate,
+      lower-value change; do not fold it in here.
+  - file: terraform/CLAUDE.md
+    action: Modify
+    purpose: >-
+      Truth fix: the "Running terraform/personal/ on CC-web" section describes the mirror as a
+      CC-web-only mechanism. GitHub-hosted terraform-validate now consumes it too. Ambient Layer-1
+      surface, so drift here is load-bearing.
+  - file: tests/validate/test_terraform_checks.py
+    action: Modify
+    purpose: >-
+      Cover the widened retry window (a transient init succeeding on attempt 4 or 5 must now pass
+      rather than fail) and Gateway-Timeout classification, exercising the real
+      _terraform_init_with_retry code path.
+  - file: tests/test_terraform_drift_acceptance.py
+    action: Modify
+    purpose: >-
+      Extend the existing signature-parity guard to ALSO assert parity for
+      .github/actions/terraform-init-retry/action.yml, anchoring on its non-comment grep -qE line
+      (the enumerating comment must not be able to satisfy the guard).
+  - file: tests/test_ci_provider_mirror_acceptance.py
+    action: Create
+    purpose: >-
+      Assert the terraform-validate job carries id-token:write, event-conditional role selection,
+      continue-on-error on the creds step, the fail-open gating chain, the fail-closed
+      TF_CLI_CONFIG_FILE invariant, and a visible reason on every degradation branch; and assert the
+      tfrc's filesystem_mirror include and direct exclude patterns stay symmetric (an asymmetry would
+      exclude kislerdm from direct with nothing serving it).
+
+bundled_recommendations:
+  - rec-2836
+  - rec-2518
+  - rec-2519
+
+infrastructure_dependencies:
+  - >-
+    terraform/personal/oidc.tf: aws_iam_role_policy UPDATE on agent-platform-github-ci-pr, adding one
+    read-only s3:GetObject statement scoped to the tf-provider-mirror/* prefix. Classified IN-BUDGET
+    for the Decision 92 point 5 / Decision 144 authority-budget v2 auto-apply path
+    (in_budget_actions = create|update; managed set = in_budget_managed_role_prefix agent-platform-*;
+    machine-readable table at terraform/bootstrap/authority_budget.json, sole SoT
+    docs/contracts/environment-taxonomy.md Axis A + Guard classification). No trust diff, no destroy,
+    no role CREATE -- so it does NOT route to the human-gated tf-gated-apply Environment. Decision 129
+    point 3 independently confirms a read-only grant addition does not touch the IAM write budget.
+  - >-
+    Speculative-plan pipeline (Decision 77 / Decision 92 / T2.21): the PR-time plan is reviewed and
+    saved, then re-applied verbatim at merge with no re-plan. Do NOT run terraform init/validate/plan
+    locally for terraform/personal (Decision 119 -- the CC-web proxy blocks the kislerdm/neon
+    github.com checksum fetch, and terraform is not installed in this session class). The required
+    terraform-validate job and the speculative-plan job are the authoritative verifiers.
+  - >-
+    IAM-before-consumer ordering: the github_ci_pr grant must be APPLIED before a pull_request-event
+    terraform-validate run can read the mirror. Until it applies, the PR leg degrades fail-open to
+    direct fetch -- correct and non-wedging, but it means the PR that introduces this change cannot
+    itself prove the PR-leg read. Post-merge push-to-main runs use the branch role, which already has
+    the grant, so the main leg is provable immediately.
+  - >-
+    No Lambda artifact is affected: no scope file matches a lambda_manifest pattern, so no build,
+    deploy, or smoke-test step is required (Decision 79 / CD.16 per-Lambda gating).
+
+acceptance_criteria:
+  - >-
+    On a pull_request or push-to-main run where the OIDC assume, the S3 mirror sync, and the
+    EXACT-LOCKED-VERSION kislerdm/neon package check all succeed, terraform-validate resolves the neon
+    provider from the local filesystem_mirror with kislerdm/* excluded from direct -- so a github.com
+    provider-asset outage cannot red the check.
+  - >-
+    On ANY failure of that chain (fork PR unable to mint an OIDC token, AWS/OIDC outage, empty sync,
+    a neon tree present but NOT at the version pinned in .terraform.lock.hcl, or the package absent
+    entirely) the job skips the tfrc export, prints a reason naming which gate failed to both stdout
+    and $GITHUB_STEP_SUMMARY, and completes exactly as it does today. The required check never wedges
+    (Decision 83 non-wedging).
+  - >-
+    The activation gate keys on the exact version parsed from terraform/personal/.terraform.lock.hcl,
+    never on directory non-emptiness. A lockfile bump, a lagging seed workflow, or a partial sync
+    therefore degrades fail-open instead of exporting a tfrc whose direct-exclude leaves init with no
+    fallback.
+  - >-
+    When all three gates DID succeed, an unset TF_CLI_CONFIG_FILE fails the job loudly -- silent
+    degradation is possible only for a named, printed reason.
+  - >-
+    _terraform_init_with_retry allows 5 attempts with backoff capped at 16s, and classifies a
+    "Gateway Timeout" body as transient; the tuple is a bare-substring-free phrase, not "504".
+  - >-
+    Every _TRANSIENT_INIT_SIGNATURES entry appears in the executable grep -qE line of BOTH bash
+    consumers (terraform-drift.yml and the terraform-init-retry composite action), asserted by test
+    against the non-comment line so an enumerating comment cannot satisfy the guard.
+  - >-
+    github_ci_pr carries exactly one new statement, read-only (s3:GetObject) and scoped to
+    tf-provider-mirror/*; it gains no write action and no wider resource.
+  - >-
+    rec-2836, rec-2518 and rec-2519 are closed via the Resolves: trailer, and no stale claim survives
+    that the provider mirror is CC-web-only or that terraform-validate makes zero AWS calls.
+
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      Exercise the widened retry window and Gateway-Timeout classification against the real
+      _terraform_init_with_retry code path (not a structural grep).
+    command: bin/venv-python -m pytest tests/validate/test_terraform_checks.py -q
+    expected: >-
+      All pass, including a case where init returns a "504 Gateway Timeout returned from github.com"
+      body and succeeds on attempt 4 or 5 (which would FAIL under the old max_attempts=3), and a case
+      asserting the backoff is capped at 16s.
+    fix_if: >-
+      A transient body still exhausts at 3 attempts (max_attempts not raised), or "Gateway Timeout" is
+      not classified transient, or the cap is missing and backoff grows to 2^4=16/2^5=32 uncapped.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: terraform-init-retry-window-and-gateway-timeout
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert signature parity across BOTH bash consumers, anchored on the executable grep -qE line
+      rather than the enumerating comment.
+    command: bin/venv-python -m pytest tests/test_terraform_drift_acceptance.py -q
+    expected: >-
+      All pass, including the NEW composite-action parity case; every _TRANSIENT_INIT_SIGNATURES entry
+      (now including "Gateway Timeout") is present in each consumer's non-comment grep -qE line.
+    fix_if: >-
+      A consumer's grep alternation is missing the new signature, or the new test anchors on a comment
+      substring and so passes while the executable regex has regressed.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: terraform-init-retry-signature-parity-both-consumers
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert the terraform-validate job's structural contract: id-token permission, event-conditional
+      role selection, fail-open gating with a visible reason, and the fail-closed
+      TF_CLI_CONFIG_FILE invariant; plus tfrc include/exclude symmetry.
+    command: bin/venv-python -m pytest tests/test_ci_provider_mirror_acceptance.py -q
+    expected: >-
+      All pass. In particular the id-token:write assertion fails against the pre-change ci.yml; the
+      symmetry assertion fails if filesystem_mirror include and direct exclude patterns diverge; and
+      the version-gate assertion fails if the activation condition tests directory non-emptiness
+      rather than the exact version parsed from .terraform.lock.hcl.
+    fix_if: >-
+      id-token:write is absent (every OIDC mint would fail and the fix would silently no-op); the
+      creds step lacks continue-on-error; a degradation branch prints no reason; the activation gate
+      keys on directory non-emptiness instead of the locked version (this is the wedge path -- an
+      exported tfrc has no direct fallback); or the fail-closed invariant is missing so a broken
+      render degrades silently.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: ci-terraform-validate-provider-mirror-contract
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm the github_ci_pr grant is read-only and path-scoped -- no write verb, no bucket-wide
+      resource -- before it reaches the apply pipeline.
+    command: >-
+      grep -A6 'S3ReadProviderMirror' terraform/personal/oidc.tf | grep -q 'tf-provider-mirror/\*' &&
+      ! grep -A6 'S3ReadProviderMirror' terraform/personal/oidc.tf | grep -qE 's3:(Put|Delete|\*)'
+    expected: >-
+      Exit 0: the statement scopes to the tf-provider-mirror/* prefix and contains no Put/Delete/
+      wildcard S3 action.
+    fix_if: >-
+      The grant is bucket-wide, or carries a write verb -- either would widen the read-only PR role
+      beyond what Decision 129 point 3 sanctions and beyond the in-budget classification.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: github-ci-pr-mirror-grant-read-only-and-scoped
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Confirm the mirror-hygiene fixes landed: the resolved tfrc is written outside $MIRROR_DIR
+      (rec-2518) and the local sync deletes removed upstream bytes (rec-2519).
+    command: >-
+      grep -qF 'RESOLVED_TFRC="$HOME/.terraform-mirror.tfrc"' bin/setup-cloud-env.sh
+      && grep -q 'aws s3 sync "s3://agent-platform-data-lake/tf-provider-mirror/".*--delete' bin/setup-cloud-env.sh
+    expected: >-
+      Exit 0: RESOLVED_TFRC is set to the literal sibling path "$HOME/.terraform-mirror.tfrc" (a
+      sibling FILE of $MIRROR_DIR, not a child), and the local sync carries --delete.
+    fix_if: >-
+      Asserted POSITIVELY on the literal path on purpose -- a negative "not inside $MIRROR_DIR" check
+      is evadable by the brace form "${MIRROR_DIR}/...", which would pass while leaving rec-2518
+      unfixed. If this fails, the resolved tfrc is still inside the mirror dir (it would keep
+      inflating the ls -A non-empty gate), or --delete is absent so stale provider bytes survive a
+      shrunk upstream mirror. Both fixes must land together: --delete with the tfrc still inside
+      $MIRROR_DIR would delete the live tfrc on the next sync.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: setup-cloud-env-mirror-hygiene
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Stale-reference sweep: no surviving claim that the provider mirror is CC-web-only, that
+      terraform-validate makes zero AWS calls, or that terraform-apply-sandbox.yml holds the retry
+      loops.
+    command: >-
+      ! grep -rn 'no OIDC step is added' .github/workflows/ci.yml && ! grep -rn 'the three grep -qE
+      sites in terraform-apply-sandbox' .github/workflows/terraform-drift.yml && ! grep -n 'bounded
+      retry loop in$' scripts/checks/_terraform.py
+    expected: "Exit 0: all three stale claims are gone."
+    fix_if: >-
+      Any stale claim survives -- reproducing exactly the smeared-stale-surface failure mode Decision
+      126 exists to close.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: provider-mirror-stale-claim-sweep
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Terraform formatting on the edited root, tool-gated. Per Decision 119 no local terraform
+      init/validate/plan is attempted for terraform/personal -- validate is CI-delegated.
+    command: >-
+      sh -c 'command -v terraform >/dev/null 2>&1 && terraform -chdir=terraform/personal fmt -check
+      -no-color || echo "SKIP: terraform absent -- fmt/validate delegated to the terraform-validate CI job"'
+    expected: "Exit 0: either fmt -check passes, or a visible SKIP when terraform is absent."
+    fix_if: "oidc.tf is misformatted; run terraform fmt in a container where terraform is installed, or let CI report it."
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: pre-deploy
+    action: "Run the authoritative fast presubmit tier across the whole change."
+    command: bin/venv-python -m scripts.validate --pre
+    expected: "Exit 0 -- ruff, mypy, the affected-set pytest selection, and every registered --pre validator pass."
+    fix_if: "Any validator fails; fix forward on the branch. Never weaken a check to make it pass (Decision 55)."
+    hermetic: false
+    graduation: not-applicable
+  - step: 9
+    phase: post-deploy
+    action: >-
+      Confirm the read-only grant is LIVE on the applied role -- proving the IAM diff actually applied
+      rather than merely being planned.
+    command: >-
+      aws iam get-role-policy --role-name agent-platform-github-ci-pr --policy-name
+      agent-platform-github-ci-pr --profile agent_platform --query
+      "PolicyDocument.Statement[?Sid=='S3ReadProviderMirror'].Action" --output text
+    expected: "Prints s3:GetObject -- the statement exists on the applied inline policy."
+    fix_if: >-
+      Empty output means the apply has not landed (check the terraform-apply-sandbox convergence
+      record and the deterministic guard classification); the PR leg stays fail-open until it does.
+    hermetic: false
+  - step: 10
+    phase: post-deploy
+    action: >-
+      Prove the mirror content CI depends on is present and syncable, exercising the same sync the job
+      performs.
+    command: >-
+      rm -rf /tmp/tfm-verify && aws s3 sync s3://agent-platform-data-lake/tf-provider-mirror/
+      /tmp/tfm-verify --only-show-errors --profile agent_platform && test -n "$(ls -A
+      /tmp/tfm-verify/registry.terraform.io/kislerdm/neon 2>/dev/null)"
+    expected: "Exit 0 -- the neon package tree is present in the canonical S3 mirror."
+    fix_if: >-
+      Empty or missing: the mirror was never seeded or has gone stale. Re-run
+      .github/workflows/terraform-provider-mirror-seed.yml (workflow_dispatch on main) before relying
+      on the CI leg; until then the job correctly degrades fail-open.
+    hermetic: false
+  - step: 11
+    phase: post-deploy
+    action: >-
+      Confirm the end-to-end behaviour on the run itself: terraform-validate green AND its log
+      reporting the mirror gate ACTIVE. Because the exported tfrc excludes kislerdm/* from direct, a
+      successful init under an active gate is proof the provider was served by the mirror.
+    command: >-
+      bin/venv-python -m scripts.validate --terraform-only
+    expected: >-
+      In CI with the gate active: exit 0 with "provider-mirror: ACTIVE" in the job log. Locally in
+      CC-web: a visible terraform-absent SKIP (Decision 119) -- the authoritative verifier is the
+      required terraform-validate check on the head SHA, confirmed via pull_request_read get_check_runs
+      before merge.
+    fix_if: >-
+      Init fails WITH the gate active: this should now be unreachable -- the version gate exists
+      precisely to prevent it -- so treat it as a version-gate defect, not a mirror-content problem.
+      Confirm the gate parses .terraform.lock.hcl rather than testing directory non-emptiness. Job
+      green but the log shows a fallback reason: read which gate failed (creds, empty sync, or a
+      version mismatch) and fix that gate, not the fallback; a version mismatch means re-seeding via
+      terraform-provider-mirror-seed.yml.
+    hermetic: false
+  - step: 12
+    phase: post-deploy
+    action: "Confirm the three bundled recommendations closed via the Resolves: trailer."
+    command: >-
+      bin/venv-python -m scripts.sync.ops pull && grep -E '"id": "rec-(2836|2518|2519)"'
+      logs/.recommendations-log.jsonl | grep '"status": "closed"' | grep -oE 'rec-(2836|2518|2519)'
+      | sort -u | wc -l
+    expected: >-
+      Prints 3 -- all three recs are closed in the warehouse-derived read cache. Counts DISTINCT ids
+      rather than matching lines, so the assertion holds even if the cache ever projects history rows
+      rather than one current row per rec.
+    fix_if: >-
+      Fewer than 3: the Resolves: trailer was missing or malformed in the squash-merge commit body.
+      Close the remainder via ops_data_portal --update-rec (Decision 70 fallback); never edit the
+      JSONL cache directly.
+    hermetic: false
+
+constraints:
+  - >-
+    Decision 119: never author a local terraform init/validate/plan step for terraform/personal in
+    this session class. Local terraform VP steps are grep-only, with fmt -check tool-gated on
+    terraform being present. validate/plan are CI-delegated.
+  - >-
+    Decision 83: main-protection is deliberately non-wedging. terraform-validate is a REQUIRED check --
+    every added step must fail open (never red the check) on credential, network, or mirror-content
+    failure. Note the asymmetry that makes this sharp: config/terraform/cc-web.tfrc excludes
+    kislerdm/* from direct, and terraform's provider_installation has NO method-chaining, so once the
+    tfrc is exported there is no direct fallback whatsoever. Exporting it over an incomplete mirror
+    would therefore RED a required check in a state that passes today. The exact-locked-version gate
+    is the mitigation and is load-bearing, not a refinement. The only fail-closed branch is the
+    internal consistency invariant, which fires solely when all three gates already succeeded.
+  - >-
+    Decision 55: graceful degradation is sanctioned, silent degradation is not. Every fail-open branch
+    MUST print which gate failed, to stdout and $GITHUB_STEP_SUMMARY. No workaround loops, no rescue
+    agents, no weakening a check to make it pass.
+  - >-
+    Decision 120: .github/workflows/terraform-provider-mirror-seed.yml remains the SOLE egress-having
+    seeder and S3 remains the SOLE canonical mirror store. This plan adds a read-only consumer, never
+    a second seeder or a second store -- that property is why the S3 route was chosen over an
+    actions/cache-backed replica.
+  - >-
+    Decision 100: use terraform's own provider_installation/filesystem_mirror primitive and aws s3
+    sync. Vendor nothing the managed primitive already exposes; hand-roll no fetch/verify script.
+  - >-
+    Decision 126: do not edit Decision 120's ratified body. config/terraform/cc-web.tfrc keeps its
+    filename precisely so no ratified text is orphaned; the amendment convention is forward-direction
+    only.
+  - >-
+    Decision 128 / Decision 130: decompose by default, never raise a SLOC budget. No scope file is
+    near its budget; keep tests/test_ci_provider_mirror_acceptance.py under 500 SLOC.
+  - >-
+    Only files in the Scope table may be modified. Out-of-scope findings become recommendations via
+    scripts/ops_data_portal, never inline fixes.
+  - >-
+    Public repository: never commit AWS account IDs, ARNs containing them, ExternalIds, or
+    credentials. Use ${var.account_id} / vars.AWS_ACCOUNT_ID indirection, as the existing workflows do.
+
+context:
+  - >-
+    Root cause (rec-2836, CI run 30108750561): terraform init of terraform/personal failed with
+    "failed to retrieve authentication checksums for provider ... 504 Gateway Timeout returned from
+    github.com". The output DID match _TRANSIENT_INIT_SIGNATURES via "could not query provider
+    registry", so all 3 retries fired -- but max_attempts=3 with 2^attempt backoff yields a ~6s total
+    wait, far short of the outage. Classified environment / instance_of_known_pattern; prior art
+    rec-2237 (introduced the current retry), rec-2481, rec-2514.
+  - >-
+    Structural gap: Decision 120's mirror was only ever wired to CC-web sessions via
+    bin/setup-cloud-env.sh. GitHub-hosted terraform-validate had no mirror at all, leaving a required,
+    branch-protection-gating check directly coupled to github.com availability.
+  - >-
+    Verified sub-claim matrix (this session): ci.yml declares on.push.branches=[main], so the push leg
+    is ALWAYS refs/heads/main -- matched by github_ci_branch's trust (refs/heads/main,
+    refs/heads/agent/*). The pull_request leg presents sub repo:OWNER/REPO:pull_request, matched by
+    github_ci_pr's trust. There is therefore no claude/* push leg to cover. The decision-scout's
+    Decision 94 flag assumed terraform-validate fires on arbitrary pushes; it does not. The flag's
+    actionable half DOES stand and is in scope: the job's permissions block is contents:read only, so
+    id-token:write must be added or every OIDC mint fails and the fix silently no-ops.
+  - >-
+    Decision-scout verdict FLAGS_FOUND (106 of 106 triaged), no BLOCK. CITE list (verbatim ids):
+    Decision 119, Decision 120, Decision 92, Decision 144, Decision 129, Decision 83, Decision 135,
+    Decision 48, Decision 132, Decision 94. Flag resolutions -- Decision 132 WARN: graduation
+    dispositions declared on all eight pre-deploy steps. Decision 94 NOTE: premise corrected above;
+    id-token:write folded into scope. Decision 55 NOTE: visible-reason requirement folded into the
+    acceptance criteria and constraints. Decision 126 SPIRIT NOTE: the stale ci.yml comment block is
+    now an explicit scope item and step 6 sweeps for it.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
+  - >-
+    Tier rationale: V3, not the V2 that Decisions 135 and 142 set for ci.yml-touching changes. Those
+    precedents were ci.yml-STEP-only with zero .tf in scope; terraform/personal/oidc.tf is squarely on
+    Decision 48's V3 trigger list and rule 1 is highest-tier-wins, so they distinguish rather than
+    conflict. AGENTS.md's "never add a check to ci.yml without validate.py first" is not engaged --
+    these are job setup steps, not registered checks (the Decision 135 reading).
+  - >-
+    Rejected alternative (actions/cache-backed mirror replica, no AWS creds): smaller and IAM-free,
+    but it would have made terraform-validate a SECOND egress-having seeder with its own store,
+    against the single-seeder property Decision 120's framing asserts and whose staleness its reversal
+    condition is written against. The S3 route keeps one seeder and one canonical store. Also rejected:
+    retry-widening alone -- a ~30s window still cannot ride out a multi-minute github.com incident, so
+    it is defence-in-depth here, not the fix.
+  - >-
+    Complexity: 11 scope files exceeds the >5 STRATEGIC heuristic, but STRATEGIC is suspended per
+    AGENTS.md Temporary Operational Constraints (Decision 67), so this is authored as a single larger
+    IMPLEMENTATION plan. The work is one causal chain and does not split cleanly.
+  - >-
+    Related-Work check (ci_rca HARD BLOCK): satisfied on condition 1 -- scope includes
+    scripts/checks/_terraform.py, exactly the source_file rec-2836 cites. rec-2836 is the sole
+    unresolved ci-rca rec at planning time.
+  - >-
+    Deferred, NOT in scope: preflight reported convergence_rca_gap_alert=red_22.78h. Traced to run
+    30160878397's gated-apply job (commit d4db904, 2026-07-25T15:34Z), which failed at "Build DuckLake
+    lambda packages" -- a different failure category with no ci_rca rec filed. Deferred per human
+    decision; it needs its own triage.
+  - >-
+    Filed this session, out of scope: rec-2853 -- GitHub repo secrets TF_VAR_PLATFORM_ADMIN_EXTERNAL_ID
+    and TF_VAR_PLATFORM_DEV_EXTERNAL_ID are referenced nowhere in the repo and are not
+    terraform-managed. Unreferenced secrets on a public repo are standing surface with no offsetting
+    value; disposition (wire or delete) belongs in its own change.
+  - >-
+    Bundled-rec relevance re-checked at planning time via evaluate_rec_relevance(run_acceptance_probe
+    =False) per Decision 55: rec-2836, rec-2518 and rec-2519 all returned "unknown" (no staleness
+    signals), so all three are bundleable.
+  - >-
+    Main freshness: 0 behind at preflight, 2 behind by plan-commit time (fb3de4b, 2cfd695 -- both
+    plan/roadmap artefacts touching only docs/plans/, docs/plans/reports/ and
+    docs/ROADMAP-PLATFORM.yaml). Overlapping Scope files: NONE. The Main Divergence Assessment is
+    therefore a no-op; the branch rebases onto origin/main at commit-flow time per the git-ops rule.
+  - >-
+    Plan-critique round 1 caught a wedge path this plan originally contained: the activation gate
+    tested neon-directory non-emptiness, but cc-web.tfrc excludes kislerdm/* from direct and
+    provider_installation has no method-chaining, so an exported tfrc over a mirror missing the LOCKED
+    version would have redded a required check in a state that passes today. The gate now keys on the
+    exact version parsed from .terraform.lock.hcl. Recorded here because the failure mode is
+    non-obvious and any future edit to the gate must preserve the version check.
+  - >-
+    Decomposition considered and rejected (plan-critique Q2): the retry/signature-parity half carries
+    no IAM dependency and could ship first, which would make the github_ci_pr grant live before the PR
+    that consumes it. Kept as one plan because the fail-open design makes the ordering harmless -- the
+    PR leg simply degrades to direct fetch until the grant applies -- and splitting would duplicate the
+    test and stale-comment sweeps across two PRs.
+
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md read (or the decision-scout CITE list above consumed in lieu of a full read)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+  - >-
+    Re-read terraform/personal/oidc.tf's github_ci_pr policy document immediately before editing --
+    it is DRY-composed (T2.34) via source_policy_documents, so the new statement belongs in the
+    inline statement list, not in the shared ci_ssm_refresh_read fragment.
+
+execution_steps:
+  - >-
+    terraform/personal/oidc.tf -- add the S3ReadProviderMirror statement (s3:GetObject on
+    ${aws_s3_bucket.data_lake.arn}/tf-provider-mirror/*) to data.aws_iam_policy_document.github_ci_pr,
+    alongside the existing S3ReadConvergenceRecord statement it most resembles. Read-only, path-scoped,
+    no trust change.
+  - >-
+    .github/workflows/ci.yml -- in the terraform-validate job: add id-token:write to permissions;
+    rewrite the stale header comment; add the continue-on-error event-conditional OIDC step; add the
+    gated mirror-sync + tfrc-render + TF_CLI_CONFIG_FILE export with a printed reason on every
+    fail-open branch (stdout AND $GITHUB_STEP_SUMMARY, including a "provider-mirror: ACTIVE" line on
+    the success path); add the fail-closed consistency invariant; leave the validate.py invocation
+    itself unchanged. The third gate MUST parse the kislerdm/neon version out of
+    terraform/personal/.terraform.lock.hcl and require that exact version in the synced tree (the
+    packed mirror layout names it terraform-provider-neon_<version>_<os>_<arch>.zip). Directory
+    non-emptiness is NOT an acceptable gate -- see the wedge-path note in context.
+  - >-
+    scripts/checks/_terraform.py -- add "Gateway Timeout" to _TRANSIENT_INIT_SIGNATURES, raise
+    max_attempts to 5, cap the backoff at 16s, and correct the stale parity-consumer comment.
+  - >-
+    .github/workflows/terraform-drift.yml and .github/actions/terraform-init-retry/action.yml --
+    propagate the signature to both executable grep -qE alternations and refresh both enumerating
+    comments; correct the drift workflow's stale terraform-apply-sandbox.yml cross-reference.
+  - >-
+    config/terraform/cc-web.tfrc (header comment, two consumers) and terraform/CLAUDE.md (mirror is no
+    longer CC-web-only) -- truth fixes only, no behavioural change.
+  - >-
+    bin/setup-cloud-env.sh -- move RESOLVED_TFRC outside $MIRROR_DIR (rec-2518) and add --delete to
+    the local sync (rec-2519); keep the existing non-empty gate on TF_CLI_CONFIG_FILE export intact.
+  - >-
+    Tests -- extend tests/validate/test_terraform_checks.py and tests/test_terraform_drift_acceptance.py;
+    create tests/test_ci_provider_mirror_acceptance.py. Each new assertion must fail against the
+    pre-change tree; confirm that before accepting it.
+  - >-
+    Execute Verification Plan -- run each step; loop until pass; on unrecoverable V3 failure stop and
+    RCA (Decision 55).
+  - >-
+    Commit with the Resolves: rec-2836, rec-2518, rec-2519 trailer in the squash-merge body, then
+    report: what was implemented, verification results, and which fail-open branches were exercised.
+
+work_areas: []
+
+rollback: >-
+  Fully revertible by reverting the squash-merge commit. The ci.yml steps are additive and fail open,
+  so reverting restores today's direct-fetch behaviour with no cleanup. The IAM statement is
+  read-only and additive: reverting it removes the grant via the same in-budget auto-apply path, and
+  the PR leg simply resumes degrading fail-open. No data migration, no state surgery, and nothing in
+  the canonical S3 mirror is written or deleted by this change -- it is a read-only consumer.
