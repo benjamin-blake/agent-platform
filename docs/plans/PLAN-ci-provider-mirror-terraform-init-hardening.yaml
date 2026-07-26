@@ -23,9 +23,13 @@ scope:
       agent-platform-github-ci-pr on pull_request), then sync the canonical S3 mirror, render
       config/terraform/cc-web.tfrc's __TF_MIRROR_DIR__ placeholder, and export TF_CLI_CONFIG_FILE --
       every stage gated so failure degrades to today's direct-fetch behaviour rather than wedging the
-      check. Each fail-open branch emits a visible reason to stdout and $GITHUB_STEP_SUMMARY. Add a
-      fail-CLOSED invariant step: when creds succeeded AND the sync was non-empty AND the neon package
-      is present, TF_CLI_CONFIG_FILE MUST be set, else exit 1. Rewrite the job's stale header comment,
+      check. CRITICAL: the third gate is EXACT-LOCKED-VERSION presence, never mere directory
+      non-emptiness. Parse the kislerdm/neon version from terraform/personal/.terraform.lock.hcl and
+      require the matching package in the synced tree; the tfrc excludes kislerdm/* from direct, so an
+      exported tfrc over a mirror missing that exact version has NO fallback and would red the check.
+      Each fail-open branch emits a visible reason to stdout and $GITHUB_STEP_SUMMARY. Add a
+      fail-CLOSED invariant step: when creds succeeded AND the sync was non-empty AND the locked neon
+      version is present, TF_CLI_CONFIG_FILE MUST be set, else exit 1. Rewrite the job's stale header comment,
       whose two clauses ("Makes ZERO AWS calls ... so no OIDC step is added" and "a branch-role OIDC
       step here would reject PR events whose sub claim is refs/pull/*") both become false.
   - file: terraform/personal/oidc.tf
@@ -67,9 +71,12 @@ scope:
   - file: bin/setup-cloud-env.sh
     action: Modify
     purpose: >-
-      Close rec-2518 (write RESOLVED_TFRC to a sibling path OUTSIDE $MIRROR_DIR so the leftover tfrc
-      cannot inflate the ls -A non-empty gate on later runs) and rec-2519 (add --delete to the local
-      aws s3 sync so a shrunk upstream mirror cannot leave stale provider bytes).
+      Close rec-2518 (set RESOLVED_TFRC to the literal sibling path "$HOME/.terraform-mirror.tfrc" --
+      a sibling FILE of $MIRROR_DIR="$HOME/.terraform-mirror", not a child of it -- so the resolved
+      tfrc cannot inflate the ls -A non-empty gate on later runs) and rec-2519 (add --delete to the
+      local aws s3 sync so a shrunk upstream mirror cannot leave stale provider bytes). THESE TWO ARE
+      COUPLED AND MUST LAND IN THE SAME EDIT: adding --delete while RESOLVED_TFRC still lives inside
+      $MIRROR_DIR would delete the live tfrc on the next sync. An implementer must not split them.
   - file: terraform/CLAUDE.md
     action: Modify
     purpose: >-
@@ -131,14 +138,20 @@ infrastructure_dependencies:
 acceptance_criteria:
   - >-
     On a pull_request or push-to-main run where the OIDC assume, the S3 mirror sync, and the
-    kislerdm/neon package check all succeed, terraform-validate resolves the neon provider from the
-    local filesystem_mirror with kislerdm/* excluded from direct -- so a github.com provider-asset
-    outage cannot red the check.
+    EXACT-LOCKED-VERSION kislerdm/neon package check all succeed, terraform-validate resolves the neon
+    provider from the local filesystem_mirror with kislerdm/* excluded from direct -- so a github.com
+    provider-asset outage cannot red the check.
   - >-
     On ANY failure of that chain (fork PR unable to mint an OIDC token, AWS/OIDC outage, empty sync,
-    missing neon package) the job skips the tfrc export, prints a reason naming which gate failed to
-    both stdout and $GITHUB_STEP_SUMMARY, and completes exactly as it does today. The required check
-    never wedges (Decision 83 non-wedging).
+    a neon tree present but NOT at the version pinned in .terraform.lock.hcl, or the package absent
+    entirely) the job skips the tfrc export, prints a reason naming which gate failed to both stdout
+    and $GITHUB_STEP_SUMMARY, and completes exactly as it does today. The required check never wedges
+    (Decision 83 non-wedging).
+  - >-
+    The activation gate keys on the exact version parsed from terraform/personal/.terraform.lock.hcl,
+    never on directory non-emptiness. A lockfile bump, a lagging seed workflow, or a partial sync
+    therefore degrades fail-open instead of exporting a tfrc whose direct-exclude leaves init with no
+    fallback.
   - >-
     When all three gates DID succeed, an unset TF_CLI_CONFIG_FILE fails the job loudly -- silent
     degradation is possible only for a named, printed reason.
@@ -196,12 +209,16 @@ verification_plan:
       TF_CLI_CONFIG_FILE invariant; plus tfrc include/exclude symmetry.
     command: bin/venv-python -m pytest tests/test_ci_provider_mirror_acceptance.py -q
     expected: >-
-      All pass. In particular the id-token:write assertion fails against the pre-change ci.yml, and the
-      symmetry assertion fails if filesystem_mirror include and direct exclude patterns diverge.
+      All pass. In particular the id-token:write assertion fails against the pre-change ci.yml; the
+      symmetry assertion fails if filesystem_mirror include and direct exclude patterns diverge; and
+      the version-gate assertion fails if the activation condition tests directory non-emptiness
+      rather than the exact version parsed from .terraform.lock.hcl.
     fix_if: >-
       id-token:write is absent (every OIDC mint would fail and the fix would silently no-op); the
-      creds step lacks continue-on-error; a degradation branch prints no reason; or the fail-closed
-      invariant is missing so a broken render degrades silently.
+      creds step lacks continue-on-error; a degradation branch prints no reason; the activation gate
+      keys on directory non-emptiness instead of the locked version (this is the wedge path -- an
+      exported tfrc has no direct fallback); or the fail-closed invariant is missing so a broken
+      render degrades silently.
     hermetic: true
     graduation: graduate
     graduation_check_id: ci-terraform-validate-provider-mirror-contract
@@ -228,14 +245,18 @@ verification_plan:
       Confirm the mirror-hygiene fixes landed: the resolved tfrc is written outside $MIRROR_DIR
       (rec-2518) and the local sync deletes removed upstream bytes (rec-2519).
     command: >-
-      grep -q 'RESOLVED_TFRC=' bin/setup-cloud-env.sh && ! grep -q 'RESOLVED_TFRC="$MIRROR_DIR' bin/setup-cloud-env.sh
+      grep -qF 'RESOLVED_TFRC="$HOME/.terraform-mirror.tfrc"' bin/setup-cloud-env.sh
       && grep -q 'aws s3 sync "s3://agent-platform-data-lake/tf-provider-mirror/".*--delete' bin/setup-cloud-env.sh
     expected: >-
-      Exit 0: RESOLVED_TFRC resolves to a sibling path, not a child of $MIRROR_DIR, and the local sync
-      carries --delete.
+      Exit 0: RESOLVED_TFRC is set to the literal sibling path "$HOME/.terraform-mirror.tfrc" (a
+      sibling FILE of $MIRROR_DIR, not a child), and the local sync carries --delete.
     fix_if: >-
-      The resolved tfrc is still written inside the mirror dir (it would keep inflating the ls -A
-      non-empty gate), or --delete is absent so stale provider bytes survive a shrunk upstream mirror.
+      Asserted POSITIVELY on the literal path on purpose -- a negative "not inside $MIRROR_DIR" check
+      is evadable by the brace form "${MIRROR_DIR}/...", which would pass while leaving rec-2518
+      unfixed. If this fails, the resolved tfrc is still inside the mirror dir (it would keep
+      inflating the ls -A non-empty gate), or --delete is absent so stale provider bytes survive a
+      shrunk upstream mirror. Both fixes must land together: --delete with the tfrc still inside
+      $MIRROR_DIR would delete the live tfrc on the next sync.
     hermetic: true
     graduation: graduate
     graduation_check_id: setup-cloud-env-mirror-hygiene
@@ -319,18 +340,24 @@ verification_plan:
       required terraform-validate check on the head SHA, confirmed via pull_request_read get_check_runs
       before merge.
     fix_if: >-
-      Init fails WITH the gate active: the mirror is missing the locked version -- confirm
-      .terraform.lock.hcl's kislerdm/neon version matches the seeded tree and re-seed. Job green but
-      the log shows a fallback reason: read which gate failed (creds, empty sync, or missing package)
-      and fix that gate, not the fallback.
+      Init fails WITH the gate active: this should now be unreachable -- the version gate exists
+      precisely to prevent it -- so treat it as a version-gate defect, not a mirror-content problem.
+      Confirm the gate parses .terraform.lock.hcl rather than testing directory non-emptiness. Job
+      green but the log shows a fallback reason: read which gate failed (creds, empty sync, or a
+      version mismatch) and fix that gate, not the fallback; a version mismatch means re-seeding via
+      terraform-provider-mirror-seed.yml.
     hermetic: false
   - step: 12
     phase: post-deploy
     action: "Confirm the three bundled recommendations closed via the Resolves: trailer."
     command: >-
       bin/venv-python -m scripts.sync.ops pull && grep -E '"id": "rec-(2836|2518|2519)"'
-      logs/.recommendations-log.jsonl | grep -c '"status": "closed"'
-    expected: "Prints 3 -- all three recs are closed in the warehouse-derived read cache."
+      logs/.recommendations-log.jsonl | grep '"status": "closed"' | grep -oE 'rec-(2836|2518|2519)'
+      | sort -u | wc -l
+    expected: >-
+      Prints 3 -- all three recs are closed in the warehouse-derived read cache. Counts DISTINCT ids
+      rather than matching lines, so the assertion holds even if the cache ever projects history rows
+      rather than one current row per rec.
     fix_if: >-
       Fewer than 3: the Resolves: trailer was missing or malformed in the squash-merge commit body.
       Close the remainder via ops_data_portal --update-rec (Decision 70 fallback); never edit the
@@ -345,8 +372,12 @@ constraints:
   - >-
     Decision 83: main-protection is deliberately non-wedging. terraform-validate is a REQUIRED check --
     every added step must fail open (never red the check) on credential, network, or mirror-content
-    failure. The only fail-closed branch is the internal consistency invariant, which fires solely
-    when all three gates already succeeded.
+    failure. Note the asymmetry that makes this sharp: config/terraform/cc-web.tfrc excludes
+    kislerdm/* from direct, and terraform's provider_installation has NO method-chaining, so once the
+    tfrc is exported there is no direct fallback whatsoever. Exporting it over an incomplete mirror
+    would therefore RED a required check in a state that passes today. The exact-locked-version gate
+    is the mitigation and is load-bearing, not a refinement. The only fail-closed branch is the
+    internal consistency invariant, which fires solely when all three gates already succeeded.
   - >-
     Decision 55: graceful degradation is sanctioned, silent degradation is not. Every fail-open branch
     MUST print which gate failed, to stdout and $GITHUB_STEP_SUMMARY. No workaround loops, no rescue
@@ -439,8 +470,23 @@ context:
     =False) per Decision 55: rec-2836, rec-2518 and rec-2519 all returned "unknown" (no staleness
     signals), so all three are bundleable.
   - >-
-    Main freshness at planning time: 0 behind, 0 ahead of origin/main; no Scope-file overlap with
-    main_files_changed_since_branch. The Main Divergence Assessment is a no-op for this plan.
+    Main freshness: 0 behind at preflight, 2 behind by plan-commit time (fb3de4b, 2cfd695 -- both
+    plan/roadmap artefacts touching only docs/plans/, docs/plans/reports/ and
+    docs/ROADMAP-PLATFORM.yaml). Overlapping Scope files: NONE. The Main Divergence Assessment is
+    therefore a no-op; the branch rebases onto origin/main at commit-flow time per the git-ops rule.
+  - >-
+    Plan-critique round 1 caught a wedge path this plan originally contained: the activation gate
+    tested neon-directory non-emptiness, but cc-web.tfrc excludes kislerdm/* from direct and
+    provider_installation has no method-chaining, so an exported tfrc over a mirror missing the LOCKED
+    version would have redded a required check in a state that passes today. The gate now keys on the
+    exact version parsed from .terraform.lock.hcl. Recorded here because the failure mode is
+    non-obvious and any future edit to the gate must preserve the version check.
+  - >-
+    Decomposition considered and rejected (plan-critique Q2): the retry/signature-parity half carries
+    no IAM dependency and could ship first, which would make the github_ci_pr grant live before the PR
+    that consumes it. Kept as one plan because the fail-open design makes the ordering harmless -- the
+    PR leg simply degrades to direct fetch until the grant applies -- and splitting would duplicate the
+    test and stale-comment sweeps across two PRs.
 
 pre_implementation_checklist:
   - Branch confirmed not on main
@@ -465,7 +511,10 @@ execution_steps:
     gated mirror-sync + tfrc-render + TF_CLI_CONFIG_FILE export with a printed reason on every
     fail-open branch (stdout AND $GITHUB_STEP_SUMMARY, including a "provider-mirror: ACTIVE" line on
     the success path); add the fail-closed consistency invariant; leave the validate.py invocation
-    itself unchanged.
+    itself unchanged. The third gate MUST parse the kislerdm/neon version out of
+    terraform/personal/.terraform.lock.hcl and require that exact version in the synced tree (the
+    packed mirror layout names it terraform-provider-neon_<version>_<os>_<arch>.zip). Directory
+    non-emptiness is NOT an acceptable gate -- see the wedge-path note in context.
   - >-
     scripts/checks/_terraform.py -- add "Gateway Timeout" to _TRANSIENT_INIT_SIGNATURES, raise
     max_attempts to 5, cap the backoff at 16s, and correct the stale parity-consumer comment.
