@@ -21,6 +21,17 @@ from src.common.ducklake_version import pinned_duckdb_version
 pytestmark = pytest.mark.unit
 
 
+def test_ducklake_deps_all_exact_pinned():
+    """Decision 154 / rec-2862: every DUCKLAKE_DEPS entry is exact-pinned ('=='), no floor pins
+    ('>=') or compatible-release pins ('~=') survive. A surviving floor pin leaves the build
+    time-variant -- a PyPI release published inside a human-approval window can resolve to bytes
+    nobody reviewed, reproducing the rec-2862 failure class."""
+    for entry in bl_config.DUCKLAKE_DEPS:
+        assert "==" in entry, f"{entry!r} is not exact-pinned"
+        assert ">=" not in entry, f"{entry!r} is still a floor pin"
+        assert "~=" not in entry, f"{entry!r} is still a compatible-release pin"
+
+
 class TestPinnedConstants:
     def test_pinned_duckdb_version(self):
         assert PINNED_DUCKDB_VERSION == pinned_duckdb_version()
@@ -161,6 +172,22 @@ class TestGetLambdaFilePatterns:
         """Any failure resolving scripts.lambda_manifest degrades to [] (import-safety, never raises)."""
         with patch.dict(sys.modules, {"scripts.lambda_manifest": None}):
             assert bl_config._get_lambda_file_patterns() == []
+
+    def test_sys_path_injection_when_root_absent(self):
+        """When ROOT is not already on sys.path, the function injects it for the duration of the
+        call and removes it again afterward (the injected/finally branch)."""
+        root_str = str(bl_config.ROOT)
+        was_present = root_str in sys.path
+        if was_present:
+            sys.path.remove(root_str)
+        try:
+            assert root_str not in sys.path
+            result = bl_config._get_lambda_file_patterns()
+            assert isinstance(result, list)
+            assert root_str not in sys.path  # removed again by the finally block
+        finally:
+            if was_present and root_str not in sys.path:
+                sys.path.insert(0, root_str)
 
 
 class TestProfilelessArgv:

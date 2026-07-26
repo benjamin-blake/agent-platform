@@ -253,7 +253,7 @@ verification_plan:
     fix_if: >-
       If infra_error yields severity "none" the episode goes silent in preflight, which trades one
       failure mode (platform halt) for a worse one (invisible breakage).
-    hermetic: true
+    hermetic: false
     graduation: graduate
     graduation_check_id: convergence-health-infra-error-suite
 
@@ -615,6 +615,19 @@ context:
   - >-
     Branch was 0 commits behind origin/main at planning time (main_freshness ok, no overlapping
     files), so no rebase decision was deferred.
+  - >-
+    IMPLEMENT-TIME CORRECTION (VP step 6 hermetic marker): the CI-side Interactive VP Replay gate
+    (validate_vp_replay.py, T3.15/VF-01) independently re-executes every pre-deploy step marked
+    hermetic: true, literally, inside the credentials-free --pre PR-gate job -- which installs
+    requirements-fast.txt, NOT requirements.txt, and therefore has no boto3. tests/convergence_health/
+    test_record.py imports boto3 at MODULE scope specifically so the fast tier's normal --collect-only
+    selection PROACTIVELY DEFERS this file to the full tier instead of hitting a runtime
+    ModuleNotFoundError (see the file's own module docstring) -- but the VP-replay mechanism runs the
+    literal command directly, bypassing that deferral, and fails collection. Step 6's `hermetic` field
+    was corrected from true to false at implement time (Decision 55: fail-loud, forward-fix rather than
+    weaken the CI gate) -- the step remains graduate-disposition (already independently admitted via
+    the real differential gate) and was executed and confirmed PASS locally as part of the VP
+    Compliance Gate; only its automated CI-side re-replay is what the hermetic:false correction skips.
 
 pre_implementation_checklist:
   - Branch confirmed not on main

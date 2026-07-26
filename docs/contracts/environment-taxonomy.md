@@ -44,7 +44,17 @@ When the deterministic guard exits 2 (IAM/trust/destroy diff), the `apply-sandbo
 `routed=true` and exits green (routing is not a failure). A `gated-apply` job (`needs: apply-sandbox`,
 `environment: tf-gated-apply`) then blocks until benjamin-blake approves in GitHub Actions. On
 approval, it applies the SAME saved plan.bin the guard inspected (no re-plan, Decision 77 no-TOCTOU)
-and writes the convergence record green/red via the T2.20 always-run write. The Environment is the
+and writes the convergence record via the T2.20 always-run write, whose write semantics are now
+THREE-BRANCH (Decision 154 / rec-2862, amends Decision 92 by forward reference): status=green on
+apply success; status=red on a genuine apply failure (an apply step ran and infrastructure may be
+in an unknown state); or, on a PRE-apply failure (artifact fetch / tfvars / terraform init / saved-
+plan fetch failed with NO apply step having run at all), a non-status `infra_error` MARKER merged
+via the same read-modify-write shape as the `pending_gated` marker below -- status is left
+UNCHANGED and the write verifies via read-back, so a pre-apply failure never latches the
+platform-halting red that only a genuine apply failure should latch. The `pre-apply-failure` input
+that selects the third branch is a caller-computed, closed-allow-list conjunction (never inferred
+from a positional "before apply" rule) -- see Decision 154 for the full derivation and its
+reversal conditions. The Environment is the
 authorization boundary -- the required reviewer gates JOB EXECUTION. Because the `gated-apply` job
 declares `environment: tf-gated-apply`, GitHub sets its OIDC sub to
 `repo:OWNER/REPO:environment:tf-gated-apply` (the env claim REPLACES the ref claim), so
@@ -177,8 +187,16 @@ are now DECOUPLED, conformant: every `aws_lambda_function` resource in `terrafor
 ducklake_lambdas.tf`, `ducklake_catalog_dr.tf`, and `ducklake_maintenance.tf` carries a
 `lifecycle { ignore_changes = [source_code_hash] }` block as of #544 (commit 32a00616), so a
 code-only redeploy no longer surfaces as a Terraform diff on the guarded auto-apply path. Layers
-(`ducklake-deps-layer`, `ducklake-extensions-layer`, `ducklake-pgclient-layer`) remain coupled --
-layer replacement is not yet decoupled (tracked by T2.42). The governed code-deploy channel for
+(`ducklake-deps-layer`, `ducklake-extensions-layer`, `ducklake-pgclient-layer`) are ALSO decoupled,
+as of T2.42 c1: every `aws_lambda_layer_version` resource for the three layers carries the same
+`lifecycle { ignore_changes = [source_code_hash] }` block (`ducklake_lambdas.tf:74,94`;
+`ducklake_catalog_dr.tf:205`) -- a routine rebuild's non-reproducible zip bytes no longer surface
+as a layer create+delete (replace) diff on the guarded auto-apply path. This is load-bearing for
+Decision 154 / rec-2862's fetch_reviewed() route (`scripts/ci/ducklake_artifacts.py`): the
+human-gated apply paths (gated-apply, both Reconcile jobs) fetch the already-reviewed per-sha
+artifacts and server-side copy them onto the fixed key instead of rebuilding, and this decoupling
+is precisely why a verbatim saved-plan apply never re-evaluates `filemd5()` against the local tree
+regardless of where that fetch step's working directory lands. The governed code-deploy channel for
 the four functions landed at T2.38: `.github/workflows/deploy-ducklake-lambdas.yml`; local
 `build_lambda --ducklake-only --deploy` is now a genuinely non-default break-glass fallback. This
 file remains the sole SoT for the apply-model / guard classification -- the interim/target state

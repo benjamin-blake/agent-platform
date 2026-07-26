@@ -24,6 +24,15 @@ against. The calling composite action's own `mode: assert|skip-assert` input dec
 to pass here -- independent of the workflow's REAL triggering github.event_name (Reconcile is
 workflow_dispatch-triggered but always wants assert semantics, matching the push-path parity its
 rebuild-from-the-red-commit intentionally mirrors).
+
+Decision 154 / rec-2862: the composite action's fourth mode, 'fetch', calls fetch_reviewed()
+below instead of rebuilding at all. Every human-gated apply path (gated-apply, apply-reconcile,
+gated-apply-reconcile) sits behind an unbounded approval wait; rebuilding after that wait can
+resolve a dependency to a version published during the wait, producing bytes that were never
+reviewed (the exact rec-2862 TOCTOU). fetch_reviewed() instead downloads the already-reviewed
+per-sha artifacts and server-side copies them onto the fixed key -- the push-path apply-sandbox
+job keeps mode='assert' as the reproducibility canary, since it runs immediately after the
+rebuild with no approval-wait exposure window.
 """
 
 from __future__ import annotations
@@ -135,19 +144,97 @@ def assert_and_upload(
     print(f"Uploaded {len(names)} DuckLake artifact(s) to s3://{bucket}/lambda-packages/ (fixed + per-sha dual-write).")
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint for the build-ducklake-artifacts composite action: build (unless
-    --skip-build) then assert_and_upload().
+def fetch_reviewed(
+    names: list[str],
+    artifact_sha: str,
+    bucket: str,
+    region: str = "eu-west-2",
+    *,
+    packages_dir: str | Path = "lambda-packages",
+    s3_client: Any = None,
+) -> None:
+    """Download the reviewed per-sha artifacts and server-side copy each onto its fixed key.
 
-    Usage: ducklake_artifacts.py <event_name> <artifact_sha> <bucket> [--region REGION] [--skip-build]
+    For a human-gated apply consuming an already-reviewed plan (gated-apply, apply-reconcile,
+    gated-apply-reconcile), the artifact that must land is the one a reviewer looked at, not a
+    fresh rebuild -- rebuilding invites the exact TOCTOU rec-2862 hit (a dependency resolving to a
+    newer version between review and approval). This downloads
+    lambda-packages/<artifact_sha>/<name> for every name into packages_dir, raising
+    DucklakeArtifactError (fail-closed, Decision 77 no-TOCTOU) on any missing per-sha object
+    BEFORE any copy is attempted -- mirrors assert_and_upload's all-or-nothing batch semantics
+    (rec-2755 parity). Once every object is confirmed present, each per-sha object is
+    server-side copy_object'd onto its fixed key (lambda-packages/<name>) -- the key terraform's
+    static s3_key reads. Deliberately does NOT re-upload to the per-sha key: that key IS the
+    immutable reviewed reference, and rewriting it would be a self-copy moving ~183 MB for no
+    gain. Prints DUCKLAKE_FETCH_OK on success so a green convergence record can be attributed to
+    this route (see the caller's write-convergence-record step).
+
+    s3_client is injected for testability (boto3.client("s3", region_name=region) when None).
+    """
+    if s3_client is None:
+        import boto3  # noqa: PLC0415
+
+        s3_client = boto3.client("s3", region_name=region)
+
+    packages_root = Path(packages_dir)
+    packages_root.mkdir(parents=True, exist_ok=True)
+
+    for name in names:
+        key = f"lambda-packages/{artifact_sha}/{name}"
+        local_path = packages_root / name
+        try:
+            s3_client.download_file(bucket, key, str(local_path))
+        except Exception as exc:  # noqa: BLE001 -- any fetch failure fails closed (Decision 77 no-TOCTOU)
+            raise DucklakeArtifactError(
+                f"DUCKLAKE_FETCH_MISSING {name}: no reviewed per-sha S3 object found at {key}; "
+                f"failing closed (Decision 77 no-TOCTOU). Underlying: {exc}"
+            ) from exc
+
+    for name in names:
+        key = f"lambda-packages/{artifact_sha}/{name}"
+        s3_client.copy_object(Bucket=bucket, CopySource={"Bucket": bucket, "Key": key}, Key=f"lambda-packages/{name}")
+
+    print(
+        f"DUCKLAKE_FETCH_OK: fetched {len(names)} reviewed DuckLake artifact(s) from "
+        f"lambda-packages/{artifact_sha}/ and server-side-copied each onto its fixed key."
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for the build-ducklake-artifacts composite action.
+
+    --mode build (default): build (unless --skip-build) then assert_and_upload() -- the existing
+    rebuild path (assert / skip-assert / upload-only composite modes).
+    --mode fetch: fetch_reviewed() -- downloads the reviewed per-sha artifacts and server-side
+    copies them onto the fixed key, with no rebuild.
+
+    Usage: ducklake_artifacts.py <event_name> <artifact_sha> <bucket> [--region REGION] [--skip-build] [--mode {build,fetch}]
     """
     parser = argparse.ArgumentParser(prog="ducklake_artifacts.py")
-    parser.add_argument("event_name", help="'push' runs the byte-identity assert; anything else skips it.")
+    parser.add_argument(
+        "event_name", help="'push' runs the byte-identity assert; anything else skips it. Unused in --mode fetch."
+    )
     parser.add_argument("artifact_sha", help="Content-addressing sha for the per-sha S3 key.")
     parser.add_argument("bucket", help="S3 bucket for the DuckLake artifacts.")
     parser.add_argument("--region", default="eu-west-2")
-    parser.add_argument("--skip-build", action="store_true", help="Skip the build step (artifacts already built).")
+    parser.add_argument(
+        "--skip-build", action="store_true", help="Skip the build step (artifacts already built). Ignored in --mode fetch."
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("build", "fetch"),
+        default="build",
+        help="'build' rebuilds and asserts/uploads (default); 'fetch' downloads the reviewed per-sha artifacts instead.",
+    )
     args = parser.parse_args(argv)
+
+    if args.mode == "fetch":
+        try:
+            fetch_reviewed(list(DUCKLAKE_ARTIFACT_NAMES), args.artifact_sha, args.bucket, args.region)
+        except DucklakeArtifactError as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
+        return 0
 
     if not args.skip_build:
         build_ducklake_only()

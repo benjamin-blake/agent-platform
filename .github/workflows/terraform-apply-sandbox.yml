@@ -198,10 +198,14 @@ jobs:
         # Fetch the agent-platform-terraform-personal-tfvars secret (apply role SecretsManagerReadOnly
         # grant) and write it to the gitignored terraform.personal.tfvars. Fail-closed: if the fetch
         # fails the step exits non-zero and blocks all downstream steps (no continue-on-error).
+        # id: tfvars is in the CLOSED pre-apply-failure allow-list (Decision 154 / rec-2862).
+        id: tfvars
         if: success()
         uses: ./.github/actions/materialise-tfvars
 
       - name: Terraform init (S3 backend, sandbox)
+        # id: tf_init is in the CLOSED pre-apply-failure allow-list (Decision 154 / rec-2862).
+        id: tf_init
         if: success()
         uses: ./.github/actions/terraform-init-retry
         with:
@@ -336,6 +340,13 @@ jobs:
         # (plan/guard internal error/an explicit REVISE/apply failure). Guard BLOCK (exit 2 ->
         # routed=true) is NOT a failure -- the record is not latched red on this path; the
         # gated-apply job writes the record after the human-approved apply (Decision 55 anti-masking).
+        # Decision 154 / rec-2862: pre-apply-failure is the CLOSED-allow-list conjunction, computed
+        # INLINE (never via an aggregator) -- (a) the SOLE apply step reports 'skipped' (safety-
+        # critical: if it ran, infrastructure may have been mutated and the record must latch red)
+        # AND (b) one of {artifact_sha, tfvars, tf_init, build_ducklake, fetch_plan} reports
+        # 'failure'. `plan` and `guard`/`review` are deliberately EXCLUDED -- they must keep
+        # latching red (a plan failure, a fail-closed guard verdict, or an explicit reviewer
+        # REVISE are not infra errors).
         if: always()
         uses: ./.github/actions/write-convergence-record
         with:
@@ -344,6 +355,10 @@ jobs:
           refused: ${{ steps.precond.outputs.refused }}
           routed: ${{ steps.guard.outputs.routed }}
           review-outcome: ${{ steps.review.outputs.outcome }}
+          pre-apply-failure: >-
+            ${{ steps.apply.outcome == 'skipped' && (steps.artifact_sha.outcome == 'failure' || steps.tfvars.outcome == 'failure' || steps.tf_init.outcome == 'failure' || steps.build_ducklake.outcome == 'failure' || steps.fetch_plan.outcome == 'failure') }}
+          failed-step: >-
+            ${{ steps.artifact_sha.outcome == 'failure' && 'artifact_sha' || (steps.tfvars.outcome == 'failure' && 'tfvars' || (steps.tf_init.outcome == 'failure' && 'tf_init' || (steps.build_ducklake.outcome == 'failure' && 'build_ducklake' || (steps.fetch_plan.outcome == 'failure' && 'fetch_plan' || '')))) }}
 
       - name: Best-effort post-merge SHA->PR wake
         # CD.35 5.3 / Decision 76 (poll-free): the push event's workflow_run.pull_requests[] is
@@ -767,6 +782,8 @@ jobs:
           python-version: '3.12'
 
       - name: Terraform init (S3 backend, sandbox)
+        # id: tf_init is in the CLOSED pre-apply-failure allow-list (Decision 154 / rec-2862).
+        id: tf_init
         uses: ./.github/actions/terraform-init-retry
         with:
           working-directory: ${{ env.WORKDIR }}
@@ -789,21 +806,20 @@ jobs:
           fi
           echo "value=${VALUE}" >> "$GITHUB_OUTPUT"
 
-      - name: Build DuckLake lambda packages (rebuild before apply, PLAN-ducklake-source-hash-decouple)
+      - name: Fetch reviewed DuckLake lambda packages (no rebuild, Decision 154 / rec-2862)
         id: build_ducklake
-        # Mirrors apply-sandbox's "Build DuckLake lambda packages" step: lambda-packages/ is
-        # gitignored, so filemd5() in the terraform config silently resolves to null on a CI checkout
-        # and terraform never detects layer/function content changes without a rebuild here. Forward
-        # -looking defense-in-depth for a FUTURE gated-apply-routed change touching the layer
-        # aws_lambda_layer_version source_code_hash values (function-level source_code_hash is now
-        # ignore_changes-decoupled; layers are not). This job is push-only, so the assert always
-        # runs (mode: assert): the plan.bin about to be applied was reviewed against the PR job's
-        # uploaded S3 objects -- assert the freshly rebuilt zips are byte-identical to those
-        # objects BEFORE re-uploading (Decision 77 no-TOCTOU).
+        # This job sits behind an UNBOUNDED human-approval wait (tf-gated-apply Environment). A
+        # rebuild after that wait can resolve a dependency to a version published DURING the
+        # wait, producing bytes nobody reviewed -- the exact rec-2862 hit (pytz 2026.3.post1
+        # published between the PR's byte-identical assert and the human's approval). Fetch the
+        # already-reviewed per-sha artifacts instead and server-side copy them onto the fixed key
+        # (scripts/ci/ducklake_artifacts.py fetch_reviewed(), fail-closed on any missing per-sha
+        # object -- Decision 77 no-TOCTOU is preserved by the ORIGINAL PR-time assert plus this
+        # fetch's own fail-closed missing-object check, not by a repeated rebuild-assert here).
         if: success()
         uses: ./.github/actions/build-ducklake-artifacts
         with:
-          mode: assert
+          mode: fetch
           artifact-sha: ${{ steps.artifact_sha.outputs.value }}
 
       - name: Fetch saved plan from S3 (gated-apply path, T2.22)
@@ -811,6 +827,8 @@ jobs:
         # plan.bin from S3 (DEP-07 c3), digest-verified (DEP-07 c2). Same logic as apply-sandbox's
         # "Fetch saved plan" step. No re-plan -- applies the guard-inspected plan verbatim (Decision
         # 77 no-TOCTOU). No plan.json needed here (no re-guard in this job).
+        # id: fetch_plan is in the CLOSED pre-apply-failure allow-list (Decision 154 / rec-2862).
+        id: fetch_plan
         uses: ./.github/actions/fetch-saved-plan
         with:
           resolve-from-sha: ${{ github.sha }}
@@ -855,12 +873,21 @@ jobs:
         # does not reliably re-dispatch workflow_run-triggered workflows on a re-run's completion.
         # The job's own failure-path self-dispatch step (below, gated on run_attempt != '1') is the
         # reliable backstop for the re-run path; workflow_run remains the attempt-1 path.
+        #
+        # Decision 154 / rec-2862: pre-apply-failure is the CLOSED-allow-list conjunction, computed
+        # INLINE -- (a) the SOLE apply step reports 'skipped' AND (b) one of {artifact_sha, tf_init,
+        # build_ducklake, fetch_plan} reports 'failure' (no tfvars step in this job -- the applied
+        # plan.bin is self-contained and needs no -var-file).
         if: always()
         uses: ./.github/actions/write-convergence-record
         with:
           sha: ${{ github.sha }}
           apply-outcome: ${{ steps.apply.outcome }}
           working-directory: ${{ env.WORKDIR }}
+          pre-apply-failure: >-
+            ${{ steps.apply.outcome == 'skipped' && (steps.artifact_sha.outcome == 'failure' || steps.tf_init.outcome == 'failure' || steps.build_ducklake.outcome == 'failure' || steps.fetch_plan.outcome == 'failure') }}
+          failed-step: >-
+            ${{ steps.artifact_sha.outcome == 'failure' && 'artifact_sha' || (steps.tf_init.outcome == 'failure' && 'tf_init' || (steps.build_ducklake.outcome == 'failure' && 'build_ducklake' || (steps.fetch_plan.outcome == 'failure' && 'fetch_plan' || ''))) }}
 
       - name: Best-effort post-merge SHA->PR wake
         # Best-effort wake to re-engage a held subscription after the gated apply completes.

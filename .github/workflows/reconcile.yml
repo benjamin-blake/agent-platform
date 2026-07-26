@@ -6,8 +6,21 @@ name: reconcile
 # scripts/ci/reconcile_target.py (no operator-supplied SHA), re-runs the SAME deterministic guard
 # terraform-apply-sandbox.yml uses, and re-applies the SAME plan.bin that was reviewed on the red
 # commit's originating PR (no re-plan -- Decision 77 no-TOCTOU: only the frozen plan ARTIFACT is
-# reused; the tooling that inspects it -- guard.py, review_verdict.py, this workflow file itself --
-# runs at whatever the dispatch ref currently is, same as the existing acknowledge-and-retry path).
+# reused).
+#
+# Ref-resolution note (narrowed by Decision 154 / rec-2862 -- do NOT restate the old blanket
+# claim): this workflow FILE ITSELF -- its job/step/`if:` definitions -- is always read at
+# whatever the dispatch ref currently is; that is GitHub's own workflow-resolution behaviour, not
+# something this file controls. That is NOT the same as saying the tooling those steps invoke
+# resolves there too. apply-reconcile and gated-apply-reconcile both checkout ref: env.RED_SHA as
+# their FIRST step, and every `uses: ./.github/actions/...` local composite-action reference in
+# those jobs resolves against THAT checkout, not the dispatch ref -- so guard.py,
+# review_verdict.py, fetch-saved-plan, materialise-tfvars, terraform-init-retry and
+# write-convergence-record all still resolve from the RED_SHA checkout. The ONE exception is the
+# artifact-fetch step ("Fetch reviewed DuckLake lambda packages"), which this plan repoints at a
+# second, dispatch-ref-pinned checkout (path: .dispatch-tooling) specifically so it can load the
+# NEW scripts.ci.ducklake_artifacts --mode fetch path added at the dispatch ref -- the RED_SHA
+# checkout's copy predates this fix and is exactly what was stuck.
 #
 # Guard-PASS -> the apply-reconcile job below re-applies directly, behind the SAME
 #               digest-fed subagent review gate as terraform-apply-sandbox.yml (T2.39): nothing
@@ -171,16 +184,35 @@ jobs:
 
     steps:
       - name: Checkout the red commit
-        # Explicitly the RED commit (not the dispatch ref's tip): the DuckLake lambda-zip rebuild
-        # below must reproduce the EXACT bytes plan.bin was captured against (its filename/
-        # source_code_hash inputs are read from disk at apply time even though the diff itself is
-        # frozen), so the checked-out tree must match the commit that plan.bin was planned from.
+        # Explicitly the RED commit (not the dispatch ref's tip): the checked-out tree must match
+        # the commit plan.bin was planned from, so terraform apply's own state/plan-serial checks
+        # operate against the same tree the guard and reviewer inspected (Decision 77 no-TOCTOU).
+        # NOT because a DuckLake lambda-zip rebuild needs to reproduce source_code_hash bytes from
+        # this tree -- Decision 154 / rec-2862 replaced that rebuild with fetch_reviewed() below,
+        # and every DuckLake function and layer carries ignore_changes = [source_code_hash]
+        # (ducklake_lambdas.tf:74,94,302,347) regardless, so filemd5() against this checkout was
+        # never load-bearing for the applied diff (see docs/contracts/environment-taxonomy.md).
         # Any red commit Reconcile is ever dispatched against postdates this plan's merge (Reconcile
         # cannot meaningfully run before it exists), so scripts/terraform_apply_guard.py --digest,
         # scripts/ci/review_verdict.py, and scripts/ci/reconcile_target.py are always present here.
         uses: actions/checkout@v7
         with:
           ref: ${{ env.RED_SHA }}
+
+      - name: Checkout dispatch-ref tooling (side-checkout, Decision 154 / rec-2862)
+        # Full checkout (not sparse) at path .dispatch-tooling -- .github/ must be present for the
+        # composite action reference the fetch step below resolves against. Placed AFTER the root
+        # RED_SHA checkout above: that checkout's git clean would otherwise wipe a side-checkout
+        # placed before it. No ref: input -- defaults to the dispatch ref (this workflow file's
+        # own trigger), NOT env.RED_SHA. This is the mechanism that lets the "Fetch reviewed
+        # DuckLake lambda packages" step below load the NEW scripts.ci.ducklake_artifacts (added
+        # at the dispatch ref) even while the root checkout is pinned to the red, pre-fix commit.
+        # Everything else in this job (guard.py, review_verdict.py, fetch-saved-plan,
+        # materialise-tfvars, terraform-init-retry, write-convergence-record) still resolves from
+        # the RED_SHA root checkout -- only the artifact-fetch step moves to the dispatch ref.
+        uses: actions/checkout@v7
+        with:
+          path: .dispatch-tooling
 
       - name: Configure AWS credentials (OIDC -- apply role, main only)
         uses: aws-actions/configure-aws-credentials@v6
@@ -232,10 +264,14 @@ jobs:
           exit 1
 
       - name: Materialise tfvars from Secrets Manager
+        # id: tfvars is in the CLOSED pre-apply-failure allow-list (Decision 154 / rec-2862).
+        id: tfvars
         if: success()
         uses: ./.github/actions/materialise-tfvars
 
       - name: Terraform init (S3 backend, sandbox)
+        # id: tf_init is in the CLOSED pre-apply-failure allow-list (Decision 154 / rec-2862).
+        id: tf_init
         if: success()
         uses: ./.github/actions/terraform-init-retry
         with:
@@ -258,20 +294,30 @@ jobs:
           fi
           echo "value=${VALUE}" >> "$GITHUB_OUTPUT"
 
-      - name: Build DuckLake lambda packages (rebuild + assert byte-identical, rec-2512 parity)
+      - name: Fetch reviewed DuckLake lambda packages (no rebuild, Decision 154 / rec-2862)
         id: build_ducklake
-        # Rebuilds from the RED commit's checked-out tree (see the Checkout step above) and
-        # asserts byte-identical to whatever the red commit's originating PR uploaded (mode:
-        # assert). If a LATER commit has since changed DuckLake lambda source and successfully
-        # applied (overwriting these same S3 keys with newer content), this assert correctly FAILS
-        # CLOSED rather than silently applying content that no longer matches plan.bin's
-        # expectations -- the episode is genuinely stale and needs a fresh PR/plan, not a
-        # Reconcile of the old one.
+        # Loads scripts.ci.ducklake_artifacts from the DISPATCH-REF side-checkout
+        # (.dispatch-tooling), not the RED_SHA root checkout -- the RED_SHA copy has no --mode
+        # fetch, which is precisely why this route was previously unreachable (the stuck
+        # episode). working-directory MUST be .dispatch-tooling: the composite action's body runs
+        # `python3 -m scripts.ci.ducklake_artifacts` under working-directory, so leaving it at the
+        # default "." would still resolve the OLD RED_SHA module and die on the unrecognized
+        # --mode argument. Consequence: lambda-packages/ lands under .dispatch-tooling/, NOT at
+        # the workspace root -- safe because the fetch path's load-bearing output is the
+        # server-side copy_object onto the fixed key, and every DuckLake function and layer
+        # carries ignore_changes = [source_code_hash] (ducklake_lambdas.tf:74,94,302,347), so the
+        # verbatim saved-plan apply never re-evaluates filemd5 against the local tree -- the local
+        # download itself is dead weight on this call site (~183 MB terraform never reads here),
+        # retained only for call-site symmetry with the sandbox path, not for correctness. No
+        # rebuild here, so no re-assert either -- Decision 77 no-TOCTOU is preserved by the
+        # ORIGINAL PR-time byte-identical assert plus this fetch's own fail-closed missing-object
+        # check (scripts/ci/ducklake_artifacts.py fetch_reviewed()), not by a second rebuild-assert.
         if: success()
-        uses: ./.github/actions/build-ducklake-artifacts
+        uses: ./.dispatch-tooling/.github/actions/build-ducklake-artifacts
         with:
-          mode: assert
+          mode: fetch
           artifact-sha: ${{ steps.artifact_sha.outputs.value }}
+          working-directory: .dispatch-tooling
 
       - name: Fetch saved plan from S3 (no re-plan, T2.21 parity)
         # Resolves the red commit's originating PR (number + head sha) and fetches the SAME
@@ -279,6 +325,8 @@ jobs:
         # digest-verified (DEP-07 c2) -- never re-plans. Fails closed if no PR or no saved plan is
         # found; recovery is the SAME workflow_dispatch acknowledge-and-retry path
         # terraform-apply-sandbox.yml already exposes (which DOES re-plan, human-reviewed).
+        # id: fetch_plan is in the CLOSED pre-apply-failure allow-list (Decision 154 / rec-2862).
+        id: fetch_plan
         if: success()
         uses: ./.github/actions/fetch-saved-plan
         with:
@@ -436,6 +484,14 @@ jobs:
         # routed, or the reviewer was STARVED. green iff apply succeeded; red on any genuine
         # non-success (guard internal error / an explicit REVISE / apply failure). Consumes the
         # RESOLVED triple above so the saved-plan and fresh-replan paths share one write.
+        #
+        # Decision 154 / rec-2862: pre-apply-failure is computed INLINE from steps.apply /
+        # steps.apply_fresh directly -- NEVER via steps.resolved (that aggregator is defined AFTER
+        # both apply steps, which would contradict the subset rule). BOTH apply steps (apply AND
+        # apply_fresh -- this job's DEP-10 stale-fallthrough can run either or both) must report
+        # 'skipped' AND one of {artifact_sha, tfvars, tf_init, build_ducklake, fetch_plan} must
+        # report 'failure'. guard/review/replan/guard_fresh/review_fresh are deliberately EXCLUDED
+        # -- they must keep latching red.
         if: always()
         uses: ./.github/actions/write-convergence-record
         with:
@@ -446,6 +502,10 @@ jobs:
           review-outcome: ${{ steps.resolved.outputs.review_outcome }}
           plan-sha-mode: unchecked
           working-directory: ${{ env.WORKDIR }}
+          pre-apply-failure: >-
+            ${{ steps.apply.outcome == 'skipped' && steps.apply_fresh.outcome == 'skipped' && (steps.artifact_sha.outcome == 'failure' || steps.tfvars.outcome == 'failure' || steps.tf_init.outcome == 'failure' || steps.build_ducklake.outcome == 'failure' || steps.fetch_plan.outcome == 'failure') }}
+          failed-step: >-
+            ${{ steps.artifact_sha.outcome == 'failure' && 'artifact_sha' || (steps.tfvars.outcome == 'failure' && 'tfvars' || (steps.tf_init.outcome == 'failure' && 'tf_init' || (steps.build_ducklake.outcome == 'failure' && 'build_ducklake' || (steps.fetch_plan.outcome == 'failure' && 'fetch_plan' || '')))) }}
 
       - name: Best-effort wake comment on the red commit's originating PR
         if: always() && steps.recheck.outputs.still_actionable == 'true'
@@ -514,6 +574,21 @@ jobs:
         with:
           ref: ${{ env.RED_SHA }}
 
+      - name: Checkout dispatch-ref tooling (side-checkout, Decision 154 / rec-2862)
+        # Full checkout (not sparse) at path .dispatch-tooling -- .github/ must be present for the
+        # composite action reference the fetch step below resolves against. Placed AFTER the root
+        # RED_SHA checkout above: that checkout's git clean would otherwise wipe a side-checkout
+        # placed before it. No ref: input -- defaults to the dispatch ref (this workflow file's
+        # own trigger), NOT env.RED_SHA. This is the mechanism that lets the "Fetch reviewed
+        # DuckLake lambda packages" step below load the NEW scripts.ci.ducklake_artifacts (added
+        # at the dispatch ref) even while the root checkout is pinned to the red, pre-fix commit.
+        # Everything else in this job (materialise-tfvars, terraform-init-retry, fetch-saved-plan,
+        # write-convergence-record) still resolves from the RED_SHA root checkout -- only the
+        # artifact-fetch step moves to the dispatch ref.
+        uses: actions/checkout@v7
+        with:
+          path: .dispatch-tooling
+
       - name: Configure AWS credentials (OIDC -- apply role, main only)
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -536,12 +611,14 @@ jobs:
           python-version: '3.12'
 
       - name: Materialise tfvars from Secrets Manager
+        id: tfvars
         # Consolidation note: this job previously omitted the log-masking step (a latent gap on a
         # PUBLIC repo, Decision 101) -- the shared materialise-tfvars action always includes it,
         # closing the gap here as a disclosed, low-risk side effect of DEP-08 consolidation.
         uses: ./.github/actions/materialise-tfvars
 
       - name: Terraform init (S3 backend, sandbox)
+        id: tf_init
         uses: ./.github/actions/terraform-init-retry
         with:
           working-directory: ${{ env.WORKDIR }}
@@ -562,15 +639,25 @@ jobs:
           fi
           echo "value=${VALUE}" >> "$GITHUB_OUTPUT"
 
-      - name: Build DuckLake lambda packages (rebuild + assert byte-identical)
-        # T2.42 c3 (DEP-03): the byte-assert reads the per-artifact-sha key
-        # (lambda-packages/<sha>/<name>, overwrite-immune) instead of the fixed key. The upload
-        # dual-writes BOTH the fixed key (keeps terraform's static s3_key genuine-republish read
-        # fed) AND the per-sha key.
-        uses: ./.github/actions/build-ducklake-artifacts
+      - name: Fetch reviewed DuckLake lambda packages (no rebuild, Decision 154 / rec-2862)
+        id: build_ducklake
+        # Loads scripts.ci.ducklake_artifacts from the DISPATCH-REF side-checkout
+        # (.dispatch-tooling), not the RED_SHA root checkout -- the RED_SHA copy has no --mode
+        # fetch. working-directory MUST be .dispatch-tooling: the composite action's body runs
+        # `python3 -m scripts.ci.ducklake_artifacts` under working-directory, so leaving it at the
+        # default "." would still resolve the OLD RED_SHA module and die on the unrecognized
+        # --mode argument. This is precisely the job VP14's DEP-02 approval path runs through, so
+        # a mis-wired working-directory here would break the resolution the whole plan exists to
+        # deliver. Consequence: lambda-packages/ lands under .dispatch-tooling/, NOT at the
+        # workspace root -- safe because the fetch path's load-bearing output is the server-side
+        # copy_object onto the fixed key, and every DuckLake function and layer carries
+        # ignore_changes = [source_code_hash] (ducklake_lambdas.tf:74,94,302,347), so the
+        # verbatim saved-plan apply never re-evaluates filemd5 against the local tree.
+        uses: ./.dispatch-tooling/.github/actions/build-ducklake-artifacts
         with:
-          mode: assert
+          mode: fetch
           artifact-sha: ${{ steps.artifact_sha.outputs.value }}
+          working-directory: .dispatch-tooling
 
       - name: Download fresh plan.bin artifact (RECONCILE_FRESH_PLAN_ARTIFACT handoff)
         # DEP-10: the stale-fallthrough's fresh re-plan was guard-ROUTEd in apply-reconcile --
@@ -600,6 +687,7 @@ jobs:
           echo "RECONCILE_FRESH_PLAN_ARTIFACT sha256 verified: ${ACTUAL}"
 
       - name: Fetch saved plan from S3 (gated -- no re-plan)
+        id: fetch_plan
         # Content-addressed by (pr, sha) -- DEP-07 c3, digest-verified -- DEP-07 c2. No plan.json
         # needed here (no re-guard in this job). Skipped when the fresh-replan artifact above
         # already supplied plan.bin (DEP-10 stale fallthrough's routed residual).
@@ -621,6 +709,11 @@ jobs:
         # serialises ALL applies against the same tfstate + record while this job holds the group
         # pending approval -- the SAME implicit serialisation invariant terraform-apply-sandbox.yml's
         # gated-apply job already relies on.
+        #
+        # Decision 154 / rec-2862: pre-apply-failure is the CLOSED-allow-list conjunction, computed
+        # INLINE -- (a) the SOLE apply step reports 'skipped' AND (b) one of {artifact_sha, tfvars,
+        # tf_init, build_ducklake, fetch_plan} reports 'failure'. This is precisely the job VP14's
+        # DEP-02 approval path runs through.
         if: always()
         uses: ./.github/actions/write-convergence-record
         with:
@@ -628,6 +721,10 @@ jobs:
           apply-outcome: ${{ steps.apply.outcome }}
           plan-sha-mode: unchecked
           working-directory: ${{ env.WORKDIR }}
+          pre-apply-failure: >-
+            ${{ steps.apply.outcome == 'skipped' && (steps.artifact_sha.outcome == 'failure' || steps.tfvars.outcome == 'failure' || steps.tf_init.outcome == 'failure' || steps.build_ducklake.outcome == 'failure' || steps.fetch_plan.outcome == 'failure') }}
+          failed-step: >-
+            ${{ steps.artifact_sha.outcome == 'failure' && 'artifact_sha' || (steps.tfvars.outcome == 'failure' && 'tfvars' || (steps.tf_init.outcome == 'failure' && 'tf_init' || (steps.build_ducklake.outcome == 'failure' && 'build_ducklake' || (steps.fetch_plan.outcome == 'failure' && 'fetch_plan' || '')))) }}
 
       - name: Best-effort wake comment on the red commit's originating PR
         if: always()

@@ -1,8 +1,11 @@
-"""Tests for scripts/ci/ducklake_artifacts.py (T2.42 c4 / rec-2659, DEP-08).
+"""Tests for scripts/ci/ducklake_artifacts.py (T2.42 c4 / rec-2659, DEP-08; fetch_reviewed +
+Decision 154 / rec-2862).
 
 Covers: byte-mismatch fails closed; on push the assert runs and a missing per-sha object fails
 closed; the dual-write targets BOTH the fixed and per-sha keys; workflow_dispatch (any non-"push"
-event_name) skips the assert. No live S3 -- boto3 is fully mocked via an injected fake client.
+event_name) skips the assert; fetch_reviewed() downloads the reviewed per-sha artifacts and
+server-side copies them onto the fixed key with no rebuild, failing closed on any missing object.
+No live S3 -- boto3 is fully mocked via an injected fake client.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from scripts.ci.ducklake_artifacts import (
     _md5_hex,
     assert_and_upload,
     build_ducklake_only,
+    fetch_reviewed,
     main,
 )
 
@@ -41,11 +45,18 @@ class _NoSuchKeyError(Exception):
 
 
 class _FakeS3Client:
-    """objects: {key: bytes} pre-seeds get_object reads. uploads: list of (local_path, bucket, key)."""
+    """objects: {key: bytes} pre-seeds get_object/download_file reads.
+
+    uploads: list of (local_path, bucket, key) from upload_file.
+    downloads: list of (bucket, key, filename) from download_file.
+    copies: list of (bucket, copy_source, key) from copy_object.
+    """
 
     def __init__(self, objects: dict[str, bytes] | None = None) -> None:
         self.objects = objects or {}
         self.uploads: list[tuple[str, str, str]] = []
+        self.downloads: list[tuple[str, str, str]] = []
+        self.copies: list[tuple[str, dict[str, str], str]] = []
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
         if Key not in self.objects:
@@ -54,6 +65,15 @@ class _FakeS3Client:
 
     def upload_file(self, local_path: str, bucket: str, key: str) -> None:
         self.uploads.append((local_path, bucket, key))
+
+    def download_file(self, bucket: str, key: str, filename: str) -> None:
+        if key not in self.objects:
+            raise _NoSuchKeyError(f"NoSuchKey: {key}")
+        Path(filename).write_bytes(self.objects[key])
+        self.downloads.append((bucket, key, filename))
+
+    def copy_object(self, Bucket: str, CopySource: dict[str, str], Key: str) -> None:  # noqa: N803
+        self.copies.append((Bucket, CopySource, Key))
 
 
 def _write_packages(tmp_path: Path, names: list[str], content: bytes = b"zip-bytes") -> Path:
@@ -267,3 +287,152 @@ def test_main_custom_region_is_passed_through() -> None:
         with patch("scripts.ci.ducklake_artifacts.assert_and_upload") as mock_assert:
             main(["push", "sha4", "bucket-w", "--region", "us-east-1"])
     assert mock_assert.call_args == call(list(DUCKLAKE_ARTIFACT_NAMES), "sha4", "push", "bucket-w", "us-east-1")
+
+
+# ---------------------------------------------------------------------------
+# fetch_reviewed -- Decision 154 / rec-2862: download reviewed per-sha artifacts, server-side
+# copy each onto its fixed key, fail closed on any missing object, no rebuild.
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_set_equals_assert_set() -> None:
+    """fetch_reviewed iterates exactly DUCKLAKE_ARTIFACT_NAMES -- the fetch set and the assert
+    set cannot drift apart because both are driven off the same tuple (proves acceptance
+    criterion 2's fetch-set-equals-assert-set clause)."""
+    sha = "fetchsetsha"
+    objects = {f"lambda-packages/{sha}/{n}": b"reviewed-bytes" for n in DUCKLAKE_ARTIFACT_NAMES}
+    client = _FakeS3Client(objects=objects)
+
+    fetch_reviewed(
+        list(DUCKLAKE_ARTIFACT_NAMES), sha, "my-bucket", packages_dir="/tmp/unused-fetch-set-equals", s3_client=client
+    )
+
+    fetched_keys = {key for (_, key, _) in client.downloads}
+    assert fetched_keys == {f"lambda-packages/{sha}/{n}" for n in DUCKLAKE_ARTIFACT_NAMES}
+    assert len(client.downloads) == len(DUCKLAKE_ARTIFACT_NAMES)
+
+
+def test_fetch_reviewed_fails_closed_on_missing_object(tmp_path: Path) -> None:
+    """A missing per-sha reference object raises DucklakeArtifactError before any copy is
+    attempted -- a missing reviewed artifact must never let an apply proceed on unreviewed
+    content (Decision 77 no-TOCTOU)."""
+    names = ["ducklake-writer.zip", "ducklake-reader.zip"]
+    sha = "missingobjsha"
+    # Only the first name's per-sha object exists; the second is missing.
+    client = _FakeS3Client(objects={f"lambda-packages/{sha}/ducklake-writer.zip": b"reviewed-bytes"})
+
+    with pytest.raises(DucklakeArtifactError, match="DUCKLAKE_FETCH_MISSING"):
+        fetch_reviewed(names, sha, "my-bucket", packages_dir=tmp_path, s3_client=client)
+
+    assert client.copies == []  # fail-closed: no copy_object attempted
+
+
+def test_fetch_reviewed_copies_onto_fixed_key_without_rewriting_per_sha(tmp_path: Path) -> None:
+    """Each per-sha object is server-side copy_object'd onto its fixed key. The per-sha reference
+    key is NEVER itself the copy_object destination -- rewriting it would be a self-copy moving
+    ~183 MB for no gain, and it is the immutable reviewed reference."""
+    names = list(DUCKLAKE_ARTIFACT_NAMES)
+    sha = "copysha"
+    objects = {f"lambda-packages/{sha}/{n}": b"reviewed-bytes" for n in names}
+    client = _FakeS3Client(objects=objects)
+
+    fetch_reviewed(names, sha, "bucket-x", packages_dir=tmp_path, s3_client=client)
+
+    assert len(client.copies) == len(names)
+    for bucket, copy_source, dest_key in client.copies:
+        assert bucket == "bucket-x"
+        assert dest_key in {f"lambda-packages/{n}" for n in names}
+        assert not dest_key.startswith(f"lambda-packages/{sha}/")  # never rewrites the per-sha key
+        assert copy_source == {
+            "Bucket": "bucket-x",
+            "Key": f"lambda-packages/{sha}/{dest_key.removeprefix('lambda-packages/')}",
+        }
+
+
+def test_fetch_reviewed_downloads_into_packages_dir(tmp_path: Path) -> None:
+    names = ["ducklake-writer.zip"]
+    sha = "downloadsha"
+    client = _FakeS3Client(objects={f"lambda-packages/{sha}/ducklake-writer.zip": b"reviewed-bytes"})
+
+    fetch_reviewed(names, sha, "my-bucket", packages_dir=tmp_path, s3_client=client)
+
+    downloaded_path = tmp_path / "ducklake-writer.zip"
+    assert downloaded_path.read_bytes() == b"reviewed-bytes"
+
+
+def test_fetch_reviewed_prints_fetch_ok_marker(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    names = ["ducklake-writer.zip"]
+    sha = "markersha"
+    client = _FakeS3Client(objects={f"lambda-packages/{sha}/ducklake-writer.zip": b"bytes"})
+
+    fetch_reviewed(names, sha, "my-bucket", packages_dir=tmp_path, s3_client=client)
+
+    assert "DUCKLAKE_FETCH_OK" in capsys.readouterr().out
+
+
+def test_fetch_reviewed_prints_no_marker_on_failure(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    names = ["ducklake-writer.zip"]
+    client = _FakeS3Client(objects={})
+
+    with pytest.raises(DucklakeArtifactError):
+        fetch_reviewed(names, "sha", "my-bucket", packages_dir=tmp_path, s3_client=client)
+
+    assert "DUCKLAKE_FETCH_OK" not in capsys.readouterr().out
+
+
+def test_fetch_reviewed_constructs_boto3_client_when_none_injected(tmp_path: Path) -> None:
+    names = ["ducklake-writer.zip"]
+    sha = "noneinjectedsha"
+    fake_client = _FakeS3Client(objects={f"lambda-packages/{sha}/ducklake-writer.zip": b"bytes"})
+    fake_boto3 = MagicMock()
+    fake_boto3.client.return_value = fake_client
+
+    with patch.dict("sys.modules", {"boto3": fake_boto3}):
+        fetch_reviewed(names, sha, "bucket", region="eu-west-1", packages_dir=tmp_path)
+
+    fake_boto3.client.assert_called_once_with("s3", region_name="eu-west-1")
+    assert len(fake_client.copies) == 1
+
+
+# ---------------------------------------------------------------------------
+# main() --mode fetch: no rebuild, no assert_and_upload call, fetch_reviewed wired correctly
+# ---------------------------------------------------------------------------
+
+
+def test_main_mode_fetch_never_invokes_build_ducklake_only(tmp_path: Path) -> None:
+    with patch("scripts.ci.ducklake_artifacts.build_ducklake_only") as mock_build:
+        with patch("scripts.ci.ducklake_artifacts.fetch_reviewed") as mock_fetch:
+            rc = main(["push", "sha5", "bucket-v", "--mode", "fetch", "--skip-build"])
+    assert rc == 0
+    mock_build.assert_not_called()
+    mock_fetch.assert_called_once_with(list(DUCKLAKE_ARTIFACT_NAMES), "sha5", "bucket-v", "eu-west-2")
+
+
+def test_main_mode_fetch_never_invokes_assert_and_upload() -> None:
+    with patch("scripts.ci.ducklake_artifacts.build_ducklake_only") as mock_build:
+        with patch("scripts.ci.ducklake_artifacts.assert_and_upload") as mock_assert:
+            with patch("scripts.ci.ducklake_artifacts.fetch_reviewed"):
+                rc = main(["workflow_dispatch", "sha6", "bucket-u", "--mode", "fetch"])
+    assert rc == 0
+    mock_build.assert_not_called()
+    mock_assert.assert_not_called()
+
+
+def test_main_mode_fetch_surfaces_ducklake_artifact_error_as_exit_one(capsys: pytest.CaptureFixture) -> None:
+    with patch(
+        "scripts.ci.ducklake_artifacts.fetch_reviewed",
+        side_effect=DucklakeArtifactError("DUCKLAKE_FETCH_MISSING boom"),
+    ):
+        rc = main(["push", "sha7", "bucket-t", "--mode", "fetch"])
+    assert rc == 1
+    assert "DUCKLAKE_FETCH_MISSING" in capsys.readouterr().err
+
+
+def test_main_default_mode_is_build_and_unaffected_by_fetch_addition() -> None:
+    """Backward-compat: omitting --mode preserves the pre-existing build+assert_and_upload path."""
+    with patch("scripts.ci.ducklake_artifacts.build_ducklake_only") as mock_build:
+        with patch("scripts.ci.ducklake_artifacts.assert_and_upload") as mock_assert:
+            rc = main(["push", "sha8", "bucket-s"])
+    assert rc == 0
+    mock_build.assert_called_once()
+    mock_assert.assert_called_once()

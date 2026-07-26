@@ -169,3 +169,88 @@ class TestAssessHealth:
         assert v.status == "red"
         assert v.severity == "low"
         assert v.pending_gated == marker
+
+    # Decision 154 / rec-2862: infra_error HealthVerdict field -- present / absent / severity floor.
+
+    def test_infra_error_absent_by_default(self) -> None:
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": ""}
+        v = assess_health(rec, git_runner=lambda cmd: "")
+        assert v.infra_error is None
+
+    def test_infra_error_none_when_record_is_none(self) -> None:
+        v = assess_health(None)
+        assert v.infra_error is None
+
+    def test_infra_error_present_when_marker_in_record(self) -> None:
+        marker = {
+            "routed_at": "2026-06-27T00:00:00Z",
+            "run_url": "https://example.com/run/1",
+            "commit_sha": "abc123",
+            "failed_step": "tf_init",
+        }
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": "", "infra_error": marker}
+        v = assess_health(rec, git_runner=lambda cmd: "")
+        assert v.infra_error == marker
+
+    def test_infra_error_floors_severity_at_low_from_none(self) -> None:
+        """The marker alone (green status, no other escalation signal) raises severity from
+        'none' to 'low' -- the health surface must show the pre-apply-failure episode."""
+        marker = {"routed_at": "2026-06-27T00:00:00Z", "run_url": "https://example.com/run/1", "commit_sha": "abc123"}
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": "", "infra_error": marker}
+        v = assess_health(rec, git_runner=lambda cmd: "")
+        assert v.infra_error is not None
+        assert v.severity == "low"
+
+    def test_infra_error_never_downgrades_high_severity(self) -> None:
+        """The floor only ever RAISES severity -- a marker coexisting with a stuck-approval
+        escalation (already 'high') must never downgrade it to 'low'."""
+        marker = {"routed_at": "2026-06-27T00:00:00Z", "run_url": "https://example.com/run/1", "commit_sha": "abc123"}
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": "", "infra_error": marker}
+        stuck = [{"run_id": 1, "age_hours": 8.0, "url": "https://example.com"}]
+        v = assess_health(rec, stuck_approvals=stuck, git_runner=lambda cmd: "")
+        assert v.infra_error is not None
+        assert v.severity == "high"
+
+    def test_infra_error_does_not_upgrade_red_low_to_something_else(self) -> None:
+        """infra_error coexisting with an under-threshold red status must not change that red's
+        own age-based severity -- the floor only adds a 'low' the record would not otherwise
+        have; a red-under-threshold record already reads 'low' with or without the marker."""
+        now = datetime(2026, 6, 27, 3, 0, tzinfo=timezone.utc)
+        marker = {"routed_at": "2026-06-26T00:00:00Z", "run_url": "https://example.com/run/2", "commit_sha": "def456"}
+        rec = {
+            "status": "red",
+            "timestamp": "2026-06-27T00:00:00Z",
+            "drift_detected_at": "2026-06-27T00:00:00Z",
+            "commit_sha": "",
+            "infra_error": marker,
+        }
+        v = assess_health(rec, git_runner=lambda cmd: "", now=now)
+        assert v.status == "red"
+        assert v.severity == "low"
+        assert v.infra_error == marker
+
+    def test_infra_error_excluded_from_red_age_escalation_high(self) -> None:
+        """infra_error must not itself push an over-threshold red to a DIFFERENT severity than
+        the red-age computation already would -- the marker is orthogonal to red-age escalation,
+        never a substitute input to it."""
+        now = datetime(2026, 6, 27, 20, 0, tzinfo=timezone.utc)
+        marker = {"routed_at": "2026-06-24T00:00:00Z", "run_url": "https://example.com/run/3", "commit_sha": "ghi789"}
+        rec = {
+            "status": "red",
+            "timestamp": "2026-06-24T22:09:58Z",
+            "drift_detected_at": "2026-06-26T11:52:07Z",
+            "commit_sha": "",
+            "infra_error": marker,
+        }
+        v = assess_health(rec, git_runner=lambda cmd: "", now=now)
+        assert v.status == "red"
+        assert v.severity == "high"
+        assert v.infra_error == marker
+
+    def test_infra_error_malformed_marker_does_not_floor_severity(self) -> None:
+        """A malformed marker (not a dict) reads as absent -- severity stays 'none', matching
+        read_infra_error_marker's degrade-to-None contract."""
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z", "commit_sha": "", "infra_error": "not-a-dict"}
+        v = assess_health(rec, git_runner=lambda cmd: "")
+        assert v.infra_error is None
+        assert v.severity == "none"

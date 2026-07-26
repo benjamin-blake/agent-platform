@@ -5,8 +5,12 @@ description: >-
   across terraform-apply-sandbox.yml (apply-sandbox, gated-apply) and reconcile.yml
   (apply-reconcile, gated-apply-reconcile), DEP-08/rec-2663 -- "the exact code the audit warns
   must not drift; one copy is the point." Carries the always-run skip conditions verbatim
-  (refused / still-actionable / routed / STARVED review), green iff apply succeeded, the
-  CONVERGENCE_WRITE_VERIFY read-back verify, and plan_sha=sha256(plan.bin).
+  (refused / still-actionable / routed / pre-apply-failure / STARVED review), green iff apply
+  succeeded, the CONVERGENCE_WRITE_VERIFY read-back verify, and plan_sha=sha256(plan.bin).
+  Decision 154 / rec-2862: a THREE-branch write semantics -- green on apply success, red on a
+  genuine apply failure, and a non-status infra_error marker (status unchanged, read-back
+  verified) on a pre-apply failure, since the apply never ran and infrastructure is therefore in
+  its last-known state, not an unknown one (see docs/contracts/environment-taxonomy.md).
 
 inputs:
   sha:
@@ -27,6 +31,23 @@ inputs:
     description: "'true' skips the write without overwriting (the guard routed to gated-apply; the gated-apply job writes the record after human approval instead)."
     required: false
     default: "false"
+  pre-apply-failure:
+    description: >-
+      Decision 154 / rec-2862. 'true' merges a non-status infra_error MARKER (status unchanged,
+      read-back verified against the PRIOR status) instead of latching status=red. Fail-closed
+      default "false" (an unset/malformed input latches red, never masks). MUST be the
+      caller-computed conjunction of (a) every apply step in the job reports outcome 'skipped' --
+      the safety-critical half, since infrastructure may have been mutated if any apply step
+      started -- and (b) a step from the CLOSED allow-list {artifact_sha, tfvars, tf_init,
+      build_ducklake, fetch_plan} reports outcome 'failure'. Computed INLINE by the caller at
+      each call site, never routed through a job-level aggregator (AGENTS.md / this plan's
+      constraints).
+    required: false
+    default: "false"
+  failed-step:
+    description: "Caller-computed name of the pre-apply step that failed, for the infra_error marker's failed_step field. Only meaningful when pre-apply-failure is 'true'."
+    required: false
+    default: ""
   review-outcome:
     description: "'starved' skips the write without overwriting (reviewer-infra failure, not a plan rejection or a genuine apply failure -- Decision 55 anti-masking)."
     required: false
@@ -64,6 +85,8 @@ runs:
         REFUSED: ${{ inputs.refused }}
         STILL_ACTIONABLE: ${{ inputs.still-actionable }}
         ROUTED: ${{ inputs.routed }}
+        PRE_APPLY_FAILURE: ${{ inputs.pre-apply-failure }}
+        FAILED_STEP: ${{ inputs.failed-step }}
         REVIEW_OUTCOME: ${{ inputs.review-outcome }}
         APPLY_OUTCOME: ${{ inputs.apply-outcome }}
         SHA: ${{ inputs.sha }}
@@ -117,6 +140,41 @@ runs:
             exit 1
           fi
           echo "Convergence record read-back verified: status unchanged (${READBACK_STATUS}), pending_gated marker present."
+          exit 0
+        fi
+        if [ "$PRE_APPLY_FAILURE" = "true" ]; then
+          # Decision 154 / rec-2862: a failure BEFORE terraform apply ran (artifact fetch, tfvars,
+          # init, saved-plan fetch) does not satisfy red's predicate -- "an apply ran and left
+          # infrastructure in an unknown state". The apply never ran, so infrastructure is in its
+          # last-known state. Merge a non-status infra_error MARKER (mirrors the pending_gated
+          # read-modify-write shape immediately above): status stays UNCHANGED (read-modify-write,
+          # anti-masking Decision 55), only the infra_error field is added/refreshed.
+          echo "Pre-apply failure (no apply step ran; failed_step=${FAILED_STEP}): merging a non-status infra_error MARKER -- status stays unchanged (anti-masking, Decision 55/154); infrastructure was never touched by an apply this run."
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RUN_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          EXISTING=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "{}")
+          PRIOR_STATUS=$(printf '%s' "$EXISTING" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','green'))" 2>/dev/null || echo "green")
+          RECORD=$(EXISTING="$EXISTING" TS="$TS" RUN_URL="$RUN_URL" SHA="$SHA" FAILED_STEP="$FAILED_STEP" python3 -c "
+        import json, os
+        existing = json.loads(os.environ.get('EXISTING', '{}') or '{}')
+        existing.setdefault('status', 'green')
+        existing['infra_error'] = {
+            'routed_at': os.environ['TS'],
+            'run_url': os.environ['RUN_URL'],
+            'commit_sha': os.environ['SHA'],
+            'failed_step': os.environ.get('FAILED_STEP', ''),
+        }
+        print(json.dumps(existing))
+        ")
+          printf '%s' "$RECORD" | aws s3 cp - "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" --content-type application/json
+          echo "Wrote infra_error marker (status unchanged): ${RECORD}"
+          READBACK=$(aws s3 cp "s3://${CONVERGENCE_BUCKET}/${CONVERGENCE_KEY}" - 2>/dev/null || echo "")
+          READBACK_STATUS=$(printf '%s' "$READBACK" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status','UNREADABLE'))" 2>/dev/null || echo "UNREADABLE")
+          if [ "$READBACK_STATUS" != "$PRIOR_STATUS" ]; then
+            echo "::error::CONVERGENCE_WRITE_VERIFY read-back status '${READBACK_STATUS}' != prior status '${PRIOR_STATUS}' after infra_error marker merge; status must stay unchanged on a pre-apply-failure episode."
+            exit 1
+          fi
+          echo "Convergence record read-back verified: status unchanged (${READBACK_STATUS}), infra_error marker present."
           exit 0
         fi
         if [ "$REVIEW_OUTCOME" = "starved" ]; then
