@@ -126,6 +126,10 @@ def pre_sequence() -> list[Step]:
         _c("validate_data_model_standard"),
         _c("validate_placement"),
         _c("validate_field_semantics_drift"),
+        _c(
+            "validate_reconcile_pending_gate",
+            pre_globs=("docs/contracts/ops_*.yaml", "config/lambda/ducklake/field_semantics.static.yaml"),
+        ),
         _c("validate_deploy_channel_conformance"),
         _c("validate_reversal_stanzas"),
         _c("validate_ci_rca_taxonomy"),
@@ -222,6 +226,7 @@ def full_sequence() -> list[Step]:
         _c("validate_portal_drift"),
         _c("validate_rec_relevance_contract"),
         _c("validate_field_semantics_drift"),
+        _c("validate_reconcile_pending_gate"),
         _c("validate_deploy_channel_conformance"),
         _c("validate_reversal_stanzas"),
         _c("validate_ci_rca_taxonomy"),

@@ -39,6 +39,8 @@ def _args(**kw):
         region="eu-west-2",
         deploy=False,
         ducklake_only=False,
+        ducklake_functions=None,
+        ducklake_deploy_only=False,
         list_bundle=None,
     )
     for k, v in kw.items():
@@ -111,6 +113,26 @@ class TestRunBuilds:
         ):
             with pytest.raises(SystemExit):
                 bl._run_ducklake_build(_args(skip_upload=False))
+
+    def test_run_ducklake_build_deploy_only_skips_build_and_upload(self):
+        """--ducklake-deploy-only (hotfix follow-up to the 2026-07-24 ops_decisions incident):
+        no build/upload phase, only update_lambda_functions against existing S3 artifacts."""
+        with (
+            patch("scripts.build_lambda.resolve_bucket", return_value="bk"),
+            patch("scripts.build_lambda.build_ducklake_function_package") as mock_build_fn,
+            patch("scripts.build_lambda.upload_to_s3") as mock_upload,
+            patch("scripts.build_lambda.update_lambda_functions") as mock_update,
+        ):
+            bl._run_ducklake_build(_args(deploy=True, ducklake_deploy_only=True))
+        mock_build_fn.assert_not_called()
+        mock_upload.assert_not_called()
+        mock_update.assert_called_once()
+        assert mock_update.call_args.kwargs.get("only_ducklake") is True
+
+    def test_run_ducklake_build_deploy_only_requires_deploy_flag(self):
+        with patch("scripts.build_lambda.resolve_bucket", return_value="bk"):
+            with pytest.raises(SystemExit):
+                bl._run_ducklake_build(_args(deploy=False, ducklake_deploy_only=True))
 
     def test_run_prod_build_skip_upload_warns_on_large_layer(self):
         big = _FakePath(size=260 * 1024 * 1024, name="deps.zip")  # > 250 MB WARN, < 262 MB hard

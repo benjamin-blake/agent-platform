@@ -134,9 +134,35 @@ def _run_prod_build(args: argparse.Namespace) -> None:
 
 
 def _run_ducklake_build(args: argparse.Namespace) -> None:
-    """Build (+optionally upload/deploy) ONLY the T2.17/T2.18 DuckLake artifacts (Decision 79 hygiene)."""
+    """Build (+optionally upload/deploy) ONLY the T2.17/T2.18 DuckLake artifacts (Decision 79 hygiene).
+
+    ``--ducklake-functions`` and ``--ducklake-deploy-only`` (hotfix follow-up to the 2026-07-24
+    ops_decisions incident) split the deploy leg from the build/upload leg so a governed pipeline
+    can deploy the five DuckLake functions in two gated stages (maintenance first, serving last)
+    without building and uploading the same artifacts twice. Both default to today's behaviour
+    when omitted: every existing caller and the Decision 125 break-glass path are byte-identical.
+    """
     args.profile = _resolve_ducklake_profile(args.profile)
     bucket = args.bucket or resolve_bucket(args.profile)
+    only_functions = set(args.ducklake_functions.split(",")) if getattr(args, "ducklake_functions", None) else None
+
+    if getattr(args, "ducklake_deploy_only", False):
+        if not args.deploy:
+            print("ERROR: --ducklake-deploy-only requires --deploy.")
+            sys.exit(1)
+        artifact_sha = _resolve_artifact_sha()
+        print("[1/1] Deploying DuckLake Lambda function code from existing S3 artifacts (--ducklake-deploy-only)...")
+        update_lambda_functions(
+            bucket,
+            args.profile,
+            args.region,
+            only_ducklake=True,
+            artifact_sha=artifact_sha,
+            only_functions=only_functions,
+        )
+        print("  OK DuckLake Lambda functions updated (deploy-only, no build/upload).")
+        return
+
     with tempfile.TemporaryDirectory(prefix="ducklake-build-") as tmp:
         temp_dir = Path(tmp)
 
@@ -195,7 +221,14 @@ def _run_ducklake_build(args: argparse.Namespace) -> None:
                     "[3b/4] Updating DuckLake Lambda function code "
                     "(writer + reader + maintenance + maintenance-smoke + catalog-dr)..."
                 )
-                update_lambda_functions(bucket, args.profile, args.region, only_ducklake=True, artifact_sha=artifact_sha)
+                update_lambda_functions(
+                    bucket,
+                    args.profile,
+                    args.region,
+                    only_ducklake=True,
+                    artifact_sha=artifact_sha,
+                    only_functions=only_functions,
+                )
                 print("  OK DuckLake Lambda functions updated")
         else:
             print("[3/4] Skipping S3 upload (--skip-upload)")
@@ -226,6 +259,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Stage a manifest-driven bundle and emit its static file list (skip_pip=True). "
         "ARTIFACT_SLUG is the src/lambdas/<name>/ directory name (e.g. data-pipeline).",
+    )
+    parser.add_argument(
+        "--ducklake-functions",
+        default=None,
+        metavar="FN1,FN2,...",
+        help="Comma-separated subset of the full AWS DuckLake function names (e.g. "
+        "agent-platform-ducklake-writer) to deploy -- not bare slugs. Requires --ducklake-only "
+        "--deploy. Omit to deploy all five, unchanged from today's behaviour.",
+    )
+    parser.add_argument(
+        "--ducklake-deploy-only",
+        action="store_true",
+        help="Skip the build/upload phase entirely and call update_lambda_functions() against "
+        "DuckLake artifacts already uploaded to S3 by a prior --ducklake-only build in the same "
+        "run (the deploy-serving leg of the split deploy pipeline, hotfix follow-up to the "
+        "2026-07-24 ops_decisions incident). Requires --ducklake-only --deploy.",
     )
     parser.add_argument(
         "--ducklake-publish-canary-layers",
@@ -266,5 +315,5 @@ def main() -> None:
     print("  Next: terraform apply")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

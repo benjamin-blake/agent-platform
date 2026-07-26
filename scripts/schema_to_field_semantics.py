@@ -18,6 +18,14 @@ CLI:
 Migration-columns enforcement: every sidecar migration_columns entry must be a subset of
 (and type-consistent with) the table's projected columns. Raises on violation (rec-2232).
 
+Reconcile-pending-gate subset enforcement (hotfix follow-up to the 2026-07-24 ops_decisions
+incident): every sidecar contract_table_ops[*].pending_reconcile / reconciled column must be a
+subset of the table's declared columns (Class A contract fields for the two contract tables;
+the sidecar's own columns: block for the four non-contract tables), and a current-side entry is
+rejected for any append_only table (no current projection exists to reconcile). Runs over ALL
+SIX contract_table_ops entries, not only the two contract-backed ones -- the emission path never
+reads reconcile_scope/pending_reconcile/reconciled, so this is the only place they are validated.
+
 Fail-closed rules:
   - Unmapped iceberg_type raises ValueError (never silently defaults).
   - contract.governance.merge_key must be present for each contract-backed table.
@@ -109,6 +117,49 @@ def _enforce_migration_columns_subset(
                     f"{table_id}: migration_columns[{location!r}][{col_name!r}].sql_type "
                     f"mismatch: {mig_sql!r} vs projected {proj_sql!r} (rec-2232 type-consistency)"
                 )
+
+
+def _enforce_reconcile_pending_subset(
+    table_id: str,
+    ops_entry: dict[str, Any],
+    declared_columns: set[str],
+    write_mode: str,
+) -> None:
+    """Raise if a contract_table_ops entry's reconcile-governance keys are malformed.
+
+    Mirrors _enforce_migration_columns_subset (rec-2232): every pending_reconcile/reconciled
+    column must be a subset of declared_columns. Also enforces reconcile_scope is a recognised
+    value, and rejects a current-side entry for an append_only table (its current projection
+    does not exist -- ScdTableSpec.current_table=None -- so nothing there could ever reconcile).
+    """
+    scope = ops_entry.get("reconcile_scope")
+    if scope not in ("ducklake", "exempt"):
+        raise ValueError(f"{table_id}: contract_table_ops.reconcile_scope must be 'ducklake' or 'exempt', got {scope!r}")
+
+    for block_name in ("pending_reconcile", "reconciled"):
+        block = ops_entry.get(block_name)
+        if not block:
+            continue
+        history_cols = list(block.get("history") or [])
+        current_cols = list(block.get("current") or [])
+
+        for col_name in history_cols:
+            if col_name not in declared_columns:
+                raise ValueError(
+                    f"{table_id}: {block_name}['history'][{col_name!r}] is not a declared column -- "
+                    "not a subset (reconcile-pending-gate subset enforcement)"
+                )
+        for col_name in current_cols:
+            if col_name not in declared_columns:
+                raise ValueError(
+                    f"{table_id}: {block_name}['current'][{col_name!r}] is not a declared column -- "
+                    "not a subset (reconcile-pending-gate subset enforcement)"
+                )
+        if current_cols and write_mode == "append_only":
+            raise ValueError(
+                f"{table_id}: {block_name}['current'] names column(s) {current_cols} but this table is "
+                "write_mode append_only -- no current projection exists to reconcile (APPEND-ONLY invariant)"
+            )
 
 
 def _project_contract_table(
@@ -206,6 +257,13 @@ def generate(*, include_prose: bool = False) -> dict[str, Any]:
     for table_id in _SMOKE_TABLE_IDS:
         if table_id in smoke:
             ops_tables[table_id] = smoke[table_id]
+
+    # Standalone subset-validation pass over EVERY contract_table_ops entry (rec-2232 mirror) --
+    # not only the two contract-backed tables. Never emitted; raises on violation (Decision 55).
+    for table_id, ops_entry in contract_table_ops.items():
+        declared_columns = set(ops_tables.get(table_id, {}).get("columns", {}))
+        write_mode = ops_tables.get(table_id, {}).get("write_mode", "scd2")
+        _enforce_reconcile_pending_subset(table_id, ops_entry, declared_columns, write_mode)
 
     doc["ops_tables"] = ops_tables
     return doc
