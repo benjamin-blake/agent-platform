@@ -245,12 +245,44 @@ context:
     ~2.4x. Corrected figures (documented scaffold): 1387 deps, 78 advisories (10C/26H/39M/3L), 19
     with fixAvailable:false versus the bare tree's ZERO. Additional measurement taken this session
     and not raised by either gate: pruning to the 4 packages a cost dashboard needs gives 928 deps /
-    46 advisories / 12 unresolvable, but the FOUR UNRESOLVABLE CRITICALS ARE UNCHANGED
-    (@evidence-dev/core-components, @evidence-dev/sdk, @evidence-dev/tailwind, vitest) because they
-    are Evidence's own core -- so the T1 failure is IRREDUCIBLE and pruning removes noise, not
-    signal. Also verified: the scaffold passes only because a 654KB package-lock.json ships with it
+    46 advisories / 12 unresolvable, with the unresolvable-critical entries unchanged -- so the T1
+    failure is IRREDUCIBLE and pruning removes noise, not signal. (NB: round 2 read those four
+    entries as four distinct criticals in Evidence's core. Round 3 corrected that to ONE CVE counted
+    four times via ancestor propagation -- see the round-3 context entry above, which supersedes this
+    characterisation while leaving the irreducibility conclusion intact.) Also verified: the scaffold passes only because a 654KB package-lock.json ships with it
     (its package.json declares no svelte/typescript/vite/tailwindcss at all); deleting the lock
     reproduces the identical ERESOLVE, so adoption inherits an upstream-authored lockfile.
+  - >-
+    ROUND-3 CORRECTED THE VERDICT-CARRYING CLAIM (verified independently this session via npm audit
+    `via` chains, not taken on the gate's word). The round-2 revision asserted "four unresolvable
+    criticals in Evidence's own core". That is ONE CVE counted four times: npm audit reports severity
+    against every ANCESTOR of a vulnerable package, and only `vitest` (UI-server arbitrary file
+    read/execute) is a root advisory -- propagated up vitest -> @evidence-dev/sdk ->
+    @evidence-dev/tailwind -> @evidence-dev/core-components, so Evidence's packages appear as
+    ancestors OF the CVE rather than as vulnerable code. The T1 failure IS still irreducible, because
+    @evidence-dev/sdk declares vitest in `dependencies` not `devDependencies` (an upstream packaging
+    defect no consumer-side pruning removes) -- but the vulnerable surface is `vitest --ui`, never
+    executed by `evidence build`, so the real cost is a permanently-open unresolvable critical
+    Dependabot alert on a PUBLIC repo (Decision 83 signal hygiene), NOT an exploitable production
+    path. Net effect: this round moved the conclusion IN EVIDENCE'S FAVOUR -- the strongest finding
+    against it was overstated. Propagated to the report, T2.53 c8 and the T2.53 progress_note.
+  - >-
+    Round-3 threshold repairs: T1's counting unit is now DISTINCT ROOT ADVISORIES (deduplicated
+    before the limits apply) -- counting npm entries let tree depth reject an arm, reintroducing the
+    size-based rejection T2 was demoted to avoid -- plus a runtime-reachable vs build/test-tooling
+    annotation, since the two are not equivalent risk. T4 was made INDEPENDENT of T1 again: the
+    round-2 fix had re-pointed T4 at T1's own advisory set, making them the same test so an arm would
+    be rejected twice on one measurement while presenting two findings; T4 now measures upstream
+    maintainer engagement (issue/PR/mitigation/security-policy response, 6-month window) and an arm
+    with zero advisories is recorded T4 NOT-APPLICABLE rather than a pass, so a clean supply chain
+    cannot be laundered into a liveness finding. Comparator figures RESTORED as measured (the round-3
+    retreat to "unverified" was itself an over-correction): Observable Framework 334 deps / 6
+    advisories / 0 unresolvable, bare astro 296 / 0 / 0 -- with "Astro + a charting library", the
+    actually-specified arm, still genuinely unmeasured because no library is named. Sequencing rule
+    added (report section 10, T2.53 c1): measure c8 thresholds and resolve c5 BEFORE scaffolding,
+    since either can eliminate an arm or the whole class for minutes of effort, and on present
+    figures Evidence would be eliminated before section 6's shipped-query-console question -- the
+    likeliest honest falsifier -- is ever tested.
   - >-
     Round-2 structural corrections (defects the round-1 revision itself introduced): T2 had no fail
     state yet 11.4 rejected on "any threshold in 11.2" -- demoted to a RECORDED METRIC and removed

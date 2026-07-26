@@ -51,20 +51,31 @@ sections 5.3, 5.5):
 - **T3 (install integrity): PASSES.** The scaffold installs cleanly -- exit 0, 1,311 packages, no
   `--legacy-peer-deps`. An earlier draft of this report claimed the opposite from a bare-package
   install; that was measuring the wrong artifact and is corrected here.
-- **T1 (unresolvable advisories): FAILS, irreducibly.** The scaffold carries **78 advisories
-  (10 critical, 26 high, 39 moderate, 3 low)** across **1,387 dependencies**, of which **19 report
-  `fixAvailable: false`** -- genuinely unresolvable, not merely downgrade-only. Pruning to the four
-  packages a cost dashboard actually needs cuts the tree to 928 dependencies and 46 advisories, but
-  **the four unresolvable criticals do not move**: `@evidence-dev/core-components`,
-  `@evidence-dev/sdk`, `@evidence-dev/tailwind` and `vitest`. They are Evidence's **own core**, not
-  optional connectors, so no configuration choice removes them.
-- **T4 (advisory responsiveness): adverse but unmeasured.** Nineteen unresolvable advisories is
-  prima facie non-response, but this report has not inspected the upstream issue tracker. It is
-  recorded as adverse, not failed.
+- **T1 (unresolvable advisories): FAILS, irreducibly -- but on one advisory, not four.** The scaffold
+  carries **78 advisories (10 critical, 26 high, 39 moderate, 3 low)** across **1,387 dependencies**,
+  of which **19 report `fixAvailable: false`**. Pruning to the four packages a cost dashboard needs
+  cuts the tree to 928 dependencies and 46 advisories, and the unresolvable-critical entries do not
+  move. **But those four entries are one CVE counted four times** (section 5.3): the sole
+  unresolvable critical *root* advisory is **`vitest`** -- "when the Vitest UI server is listening,
+  an arbitrary file can be read and executed" -- which npm audit propagates up the chain
+  `vitest -> @evidence-dev/sdk -> @evidence-dev/tailwind -> @evidence-dev/core-components`, since it
+  reports severity against every ancestor. Evidence's own packages appear as *ancestors of* the
+  vulnerability, not as vulnerable code.
+- **T4 (advisory responsiveness): unmeasured.** This report has not inspected the upstream issue
+  tracker, which is the only thing T4 measures. Recorded as unmeasured -- an earlier draft inferred
+  it from the T1 advisory set, which made the two thresholds the same test (section 11.2).
 
-That last point is the substantive one: **pruning removes noise, not signal.** A minimum-viable
-Evidence install still carries four unresolvable criticals, on a public repository whose security
-surface Decision 83 treats as continuously live-verified evidence.
+**What survives, stated at its true weight.** The failure is irreducible for a real reason:
+`@evidence-dev/sdk` declares `vitest` in `dependencies` rather than `devDependencies` -- a test
+runner shipped as a runtime dependency, which is an upstream **packaging defect**. No consumer-side
+pruning removes it.
+
+But the exposure is narrower than "unfixable criticals in Evidence's core": the vulnerable surface
+is `vitest --ui`, a test-runner dev server that `evidence build` never executes. **The real cost is
+an unresolvable, permanently-open critical Dependabot alert on a public repository** whose security
+surface Decision 83 treats as continuously live-verified evidence -- a governance and signal-hygiene
+cost, not an exploitable production path. That distinction is load-bearing, and an earlier draft of
+this report overstated it.
 
 This is not a final verdict -- thresholds are re-measured at proof-of-concept time, and a failing arm
 does not reject the class. But the burden of proof has shifted, and the report says so rather than
@@ -330,13 +341,34 @@ the bare package's: a bare `npm install @evidence-dev/evidence` produces a tree 
 | Scaffold, pruned to 4 needed packages | **928** | **46** (7 / 15 / 23 / 1) | **12** (4C, 1H, 7M) |
 | Bare package (diagnostic only) | 641 | 30 (3 / 21 / 5 / 1) | 0 |
 
-**The decisive finding is what pruning does not fix.** Removing the eleven datasource connectors a
-cost dashboard has no use for (BigQuery, Databricks, Snowflake, MSSQL, MySQL, Postgres, Trino,
-MotherDuck, SQLite, and the rest, which the template installs by default) removes a third of the
-tree and 41 percent of the advisories -- but the **four unresolvable criticals are identical in both
-rows**: `@evidence-dev/core-components`, `@evidence-dev/sdk`, `@evidence-dev/tailwind` and `vitest`.
-Those are Evidence's own core packages. **No configuration choice removes them**, which is what
-makes the T1 failure irreducible rather than a matter of trimming.
+**The decisive finding is what pruning does not fix.** The template ships 14 `@evidence-dev/*`
+dependencies by default, of which ten are datasource connectors a cost dashboard has no use for
+(BigQuery, Databricks, Snowflake, MSSQL, MySQL, Postgres, Trino, MotherDuck, SQLite, source-
+javascript). Removing them cuts a third of the tree and 41 percent of the advisories -- but the
+unresolvable-critical entries are identical in both rows.
+
+**Those entries are one CVE, not four.** npm audit reports severity against every *ancestor* of a
+vulnerable package, so tree depth manufactures entries. Reading the `via` chains:
+
+| Entry (`fixAvailable: false`, critical) | Root advisory? | Reached via |
+|---|---|---|
+| `vitest` | **yes** | the CVE itself |
+| `@evidence-dev/sdk` | no | `@vitest/coverage-v8` -> `vitest` |
+| `@evidence-dev/tailwind` | no | `@evidence-dev/sdk` |
+| `@evidence-dev/core-components` | no | `@evidence-dev/tailwind` |
+
+Enumerating distinct root advisories across the pruned tree yields **exactly one unresolvable
+critical**: `vitest`, "when the Vitest UI server is listening, an arbitrary file can be read and
+executed."
+
+**Why it is nonetheless irreducible, and what it actually costs.** `@evidence-dev/sdk` declares
+`vitest` in `dependencies`, not `devDependencies` -- a test runner shipped as a runtime dependency.
+That is an upstream **packaging defect**, and no consumer-side pruning or configuration removes it.
+But the vulnerable surface is `vitest --ui`, a test-runner dev server never executed by
+`evidence build`. So the cost is **a permanently-open, unresolvable critical Dependabot alert on a
+public repository** -- a governance and signal-hygiene problem against Decision 83's continuously
+live-verified security surface -- rather than an exploitable production path. Both halves matter:
+the alert is real and cannot be closed; the exploit path is not there.
 
 Note also the direction of the earlier error: the bare tree showed **zero** `fixAvailable: false`
 advisories, so measuring the wrong artifact simultaneously **over-stated** the install problem and
@@ -567,6 +599,21 @@ materialized aggregates.
 Bounded, fixture-driven, ephemeral-container-only, three-way. Emits an adopt / constrain / reject
 verdict against criteria committed **before** the experiment runs (section 11).
 
+**Sequencing: measure section 11.2 before building anything.** The supply-chain thresholds are cheap
+(minutes per arm, no scaffolding) and can eliminate an arm outright. Scaffolding all three arms
+first would spend the expensive effort on arms already known to be rejected -- and on present
+figures Evidence would be eliminated before section 6's shipped-query-console question is ever
+tested, which this report calls the single most likely honest falsifier. So:
+
+1. **Measure 11.2 per arm** (install integrity, root-advisory counts, tree size, upstream
+   responsiveness). Record results; eliminate what fails.
+2. **Resolve P0.2** -- the section 4.1.1 principle-versus-mechanism question -- which can eliminate
+   the whole class and costs no build effort at all.
+3. **Then scaffold and compare** the surviving arms against 11.1.
+
+If step 1 or 2 leaves nothing standing, the verdict is reached without building anything, which is
+a successful outcome for a proof of concept rather than a curtailed one.
+
 ```
 analytical-aggregate named-verb response contracts   (from T2.52)
         |
@@ -691,27 +738,37 @@ is called out explicitly here so the distinction is not lost again.
   fix" is ambiguous across two distinct `npm audit` states and conflating them flips the verdict:
   T1 counts **only advisories reporting `fixAvailable: false`** (genuinely unresolvable). Advisories
   whose `fixAvailable` is a dict requiring a major change are **recorded separately** and do not
-  count toward T1 -- a major upgrade is disruptive, not impossible. An arm fails T1 on **any
-  unresolvable `critical`**, or on **more than 3 unresolvable `high`**.
+  count toward T1 -- a major upgrade is disruptive, not impossible.
 
-  Measured against all three arms, on the adoption-relevant artifact for each:
+  **The unit is a distinct root advisory, not an npm-audit entry.** npm reports severity against
+  every ancestor of a vulnerable package, so a single CVE in a deep tree produces many entries and
+  the same CVE in a shallow tree produces one (section 5.3: four Evidence entries, one `vitest`
+  CVE). Counting entries would let tree depth reject an arm through T1 -- reintroducing exactly the
+  size-based rejection T2 was deliberately demoted to avoid. **Deduplicate by root advisory before
+  applying the limits.**
 
-  | Arm | Deps | Advisories | `fixAvailable: false` | T1 |
+  An arm fails T1 on **any unresolvable `critical` root advisory**, or on **more than 3 unresolvable
+  `high`**. Record alongside, without it affecting the verdict, whether each is **runtime-reachable**
+  or confined to **build/test tooling** -- the two are not equivalent risk, and the distinction is
+  what separates a real exposure from an unclosable alert.
+
+  Measured on the adoption-relevant artifact for each arm:
+
+  | Arm | Deps | Advisories | Unresolvable root advisories | T1 |
   |---|---|---|---|---|
-  | Evidence (scaffold, pruned) | 928 | 46 | **4 critical**, 1 high, 7 moderate | **FAIL** (measured) |
-  | Observable Framework | not measured | 6 (reported, unverified) | 0 (reported, unverified) | **unmeasured -- provisional** |
+  | Evidence (scaffold, pruned) | 928 | 46 | **1 critical** (`vitest`, build/test tooling), 1 high, 7 moderate | **FAIL** |
+  | Observable Framework | 334 | 6 | **0** (all six offer a downgrade-only fix) | pass |
+  | Astro (bare -- *not* the specified arm) | 296 | 0 | 0 | n/a |
   | Astro **+ charting library** | not measured | not measured | not measured | **unmeasured -- no library named** |
 
-  **Only the Evidence row is a measurement.** Evidence fails on four unresolvable criticals that
-  **survive pruning to the minimum surface** (section 5.3) -- they are its own core packages.
+  Evidence fails on **one** unresolvable critical root advisory that survives pruning to the minimum
+  surface, because `@evidence-dev/sdk` ships `vitest` as a runtime dependency (section 5.3). It is
+  build/test tooling, so the cost is an unclosable public alert rather than an exploitable path --
+  a genuine T1 failure at its true weight, neither dismissed nor inflated.
 
-  The other two rows are deliberately *not* recorded as passes. Observable's figures reached this
-  report second-hand during critique and were never independently taken; the Astro row cannot be
-  filled at all, because bare `astro` is not the specified arm (section 8.2) and a charting library
-  is precisely where that arm would acquire its transitive weight. **Recording "pass" for an
-  unmeasured arm while the measured arm fails is the exact asymmetry the one-survivor disclosure
-  below exists to police**, so the table states absence of measurement rather than absence of
-  findings.
+  The Astro **arm as specified** remains unmeasured: bare `astro` is not that arm (section 8.2), and
+  a charting library is precisely where it would acquire transitive weight. Its clean bare figures
+  must not be read as an arm-level result.
 - **T2 -- Tree size (RECORDED METRIC, not a threshold).** The transitive dependency count is recorded
   and reported on the adoption-relevant artifact (Evidence: **1,387** as shipped, **928** pruned;
   the bare package's 641 is a diagnostic, not an adoption figure). It carries **no numeric cap**:
@@ -726,17 +783,26 @@ is called out explicitly here so the distinction is not lost again.
 - **T4 -- Advisory responsiveness (THRESHOLD).** Assessed on **response to security advisories
   alone**, not publish cadence -- section 5.1 establishes that cadence cannot settle liveness in
   either direction, so a cadence-derived window would re-import the measure that section rejects.
-  An arm fails T4 if its open advisories show **no upstream remediation activity** (a fix, a
-  documented mitigation, or a maintainer response on the advisory) at the time of measurement.
+  **T4 is measured on the upstream project, not on the advisory set** -- this independence is
+  deliberate and was got wrong twice. An arm fails T4 if, for its open advisories, the upstream
+  repository shows **no maintainer engagement** (no issue or pull request acknowledging them, no
+  documented mitigation, no security-policy response) within a **6-month** window preceding
+  measurement.
 
-  **Evidence's T4 result is adverse on present evidence**, resting on the same set T1 uses -- the
-  **19 `fixAvailable: false` advisories** on the shipped scaffold, 4 of them critical and in
-  Evidence's own core. Advisories with no remediation of any kind are prima facie non-response.
-  (An earlier draft justified T4 from a different set: the ~18 *downgrade-only* advisories on the
-  bare tree. That was doubly wrong -- it used the category T1 deliberately excludes, on an artifact
-  that is not the adoption path. One threshold, one evidence base.) It is recorded as **adverse
-  rather than failed** because this report has not inspected the upstream issue tracker, which the
-  proof of concept must do before ruling.
+  Two failure modes this phrasing exists to avoid:
+
+  - **Collinearity with T1.** A previous draft defined T4 over T1's own `fixAvailable: false` set,
+    which made the two thresholds the same test: an arm failing T1 would near-automatically fail T4,
+    and §11.4 item 6 would reject it twice over on one measurement while presenting two independent
+    findings. Whether an advisory is *fixable* (T1) and whether maintainers are *responsive* (T4)
+    are different questions and must be measured on different evidence.
+  - **Vacuity at zero.** An arm with no open advisories passes T4 by having nothing to respond to,
+    which is not evidence of responsiveness. Record such an arm as **T4 not applicable**, never as a
+    T4 pass, so a clean supply chain cannot be laundered into a liveness finding.
+
+  **Evidence's T4 result is UNMEASURED.** This report has not inspected Evidence's issue tracker,
+  and every prior attempt to infer T4 from advisory data was an instance of the collinearity error
+  above. Measuring it is a proof-of-concept task, and its outcome is genuinely open.
 
 **Threshold-tuning disclosure.** T1's numbers were chosen after measuring Evidence. That ordering is
 unavoidable here -- the measurement is what prompted the thresholds -- so the mitigation is
@@ -754,18 +820,22 @@ already ratified elsewhere (Decision 101(e)) deserves suspicion, not satisfactio
 
 Three guards against rubber-stamping that outcome:
 
-1. T1 is defined on `fixAvailable: false` rather than the looser major-change reading, in part
-   because the looser reading was reported during critique to eliminate Observable Framework as
-   well, leaving exactly one survivor. **That report was never independently verified here**, so it
-   is a reason to define the threshold conservatively, not a measured finding -- and it is recorded
-   as such rather than dressed up as one.
-2. Only one arm has actually been measured. Until Observable and the Astro-plus-charting-library arm
-   are measured on the same basis, **no comparative claim is available at all** -- a single measured
-   failure is not a comparison.
+1. T1 is defined on `fixAvailable: false` rather than the looser major-change reading, and
+   deduplicated to root advisories. Both choices matter: under the looser reading **Observable
+   Framework also fails T1** (all six of its advisories are downgrade-only, five of them high,
+   exceeding the limit of 3), which would leave exactly one survivor; and counting entries rather
+   than root advisories would inflate Evidence's single `vitest` CVE into four. A threshold that
+   eliminates arms by *measurement convention* rather than by substance is not a threshold.
+2. **The Astro arm as specified is still unmeasured**, so no complete comparison exists yet. Bare
+   `astro` (296 deps, 0 advisories) is not the arm; a charting library is where that arm acquires
+   its weight. A single measured failure alongside an unmeasured favourite is not a result.
 3. If the proof of concept does find only one arm standing, it must state **which criterion did the
    eliminating and whether that criterion is load-bearing or incidental** before recommending
-   adoption. An uncontested winner is a weaker result than a contested one, and should be reported
-   as such.
+   adoption. Applied to today's figures, that test bites immediately: Evidence's T1 failure is one
+   build/test-tooling CVE producing an unclosable public alert -- load-bearing for a public
+   repository's security hygiene, but not an exploitable production path, and a reader who saw only
+   "fails T1" would badly misjudge it. An uncontested winner is a weaker result than a contested one,
+   and should be reported as such.
 
 ### 11.3 Per-arm adopt bar
 
