@@ -18,8 +18,10 @@ _REAL_RCA_IF = (
     "&& github.event.workflow_run.head_branch == github.event.repository.default_branch)"
 )
 
+_REQUIRED_WORKFLOWS = ["CI", "Main Canary", "terraform-apply-sandbox", "rec-autoclose", "deploy-ducklake-lambdas"]
+
 _REAL_RCA_DATA = {
-    "on": {"workflow_run": {"workflows": ["CI", "Main Canary"], "types": ["completed"]}},
+    "on": {"workflow_run": {"workflows": list(_REQUIRED_WORKFLOWS), "types": ["completed"]}},
     "jobs": {"rca": {"if": _REAL_RCA_IF, "runs-on": "ubuntu-latest", "steps": []}},
 }
 
@@ -33,10 +35,47 @@ class TestCheckCiRcaFilterPassPath:
         _check_ci_rca_filter()
 
 
+class TestCheckCiRcaFilterRequiredSet:
+    """PLAN-ci-rca-ops-plane-coverage: the required-membership floor closes the pre-existing
+    hole where terraform-apply-sandbox sat in the filter unguarded (rec-2849). One drop-one-entry
+    case per required workflow, plus a duplicate-entry case."""
+
+    @pytest.mark.parametrize("dropped", _REQUIRED_WORKFLOWS)
+    def test_fails_when_required_entry_missing(self, dropped: str) -> None:
+        workflows = [w for w in _REQUIRED_WORKFLOWS if w != dropped]
+        rca_data = {
+            "on": {"workflow_run": {"workflows": workflows}},
+            "jobs": {"rca": {"if": _REAL_RCA_IF, "steps": []}},
+        }
+        with (
+            patch("scripts.verify_ci_workflow._load") as mock_load,
+            patch("scripts.verify_ci_workflow.Path") as mock_path,
+        ):
+            mock_load.side_effect = lambda p: _REAL_CANARY_DATA if "canary" in p else rca_data
+            mock_path.return_value.read_text.return_value = _FILED_MARKER_CONTENT
+            with pytest.raises(AssertionError, match="missing required entries"):
+                _check_ci_rca_filter()
+
+    def test_fails_on_duplicate_entry(self) -> None:
+        workflows = [*_REQUIRED_WORKFLOWS, "CI"]
+        rca_data = {
+            "on": {"workflow_run": {"workflows": workflows}},
+            "jobs": {"rca": {"if": _REAL_RCA_IF, "steps": []}},
+        }
+        with (
+            patch("scripts.verify_ci_workflow._load") as mock_load,
+            patch("scripts.verify_ci_workflow.Path") as mock_path,
+        ):
+            mock_load.side_effect = lambda p: _REAL_CANARY_DATA if "canary" in p else rca_data
+            mock_path.return_value.read_text.return_value = _FILED_MARKER_CONTENT
+            with pytest.raises(AssertionError, match="duplicate entries"):
+                _check_ci_rca_filter()
+
+
 class TestCheckCiRcaFilterMainBranchGate:
     def test_fails_when_head_branch_missing(self) -> None:
         rca_data_no_gate = {
-            "on": {"workflow_run": {"workflows": ["CI", "Main Canary"]}},
+            "on": {"workflow_run": {"workflows": list(_REQUIRED_WORKFLOWS)}},
             "jobs": {
                 "rca": {
                     "if": (
@@ -59,7 +98,7 @@ class TestCheckCiRcaFilterMainBranchGate:
 
     def test_fails_when_default_branch_missing(self) -> None:
         rca_data_partial_gate = {
-            "on": {"workflow_run": {"workflows": ["CI", "Main Canary"]}},
+            "on": {"workflow_run": {"workflows": list(_REQUIRED_WORKFLOWS)}},
             "jobs": {
                 "rca": {
                     "if": (

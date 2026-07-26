@@ -129,3 +129,78 @@ constraints:
   - "All new CiRcaContext fields are Optional[...]=None -- no schema_version ceiling raise (backward-compatible additions)."
   - "The inactivity sweep reads via DuckLake reader named verbs only; never re-stages from logs/.recommendations-log.jsonl."
   - "All rec writes (fix-link stamp, regression filing, inactivity close) transit the ops portal (file_rec/update_rec) -- Decision 84 single-portal invariant."
+
+# PLAN-ci-rca-ops-plane-coverage (rec-2849): ci-rca.yml's workflow_run.workflows filter -- the
+# required-membership floor scripts/verify_ci_workflow.py's _check_ci_rca_filter guards against
+# silent removal. Growth beyond this set is governed by the per-entry adjudication requirement
+# here, not by the guard (which only asserts a floor + uniqueness).
+watched_workflow_set:
+  watched:
+    CI: "The pr-validate/main-validate gate -- Decision 72 origin of the ci-rca mechanism."
+    Main Canary: >-
+      Scheduled drift canary re-running scripts.validate on main. Resolved dynamically from
+      main-canary.yml's own name field by both the guard and this contract's intent, never
+      hardcoded, so a canary rename cannot desync the two.
+    terraform-apply-sandbox: >-
+      CD.35/T2.20: sandbox apply failures and convergence-red refusals. Dedup anchors on the red
+      convergence record's commit_sha, not the refusing run's head_sha, so one underlying apply
+      failure and every later refusal collapse to one rec.
+    rec-autoclose: >-
+      ADDED (rec-2849): the 2026-07-24 ducklake-writer-errors incident's own gap. rec-autoclose is
+      an ops-plane write path (stamps fixed_by_sha, closes recs from a Resolves trailer); its
+      absence from the filter meant runs 581/585 both failed with a ducklake_writer 502 on
+      ops_decisions and filed nothing -- the outage reached a human only via an SNS email, roughly
+      four hours later. See closure_dependency below for the coupling this creates with this
+      workflow's own closure path.
+    deploy-ducklake-lambdas: >-
+      ADDED on its own merits: a build/deploy/smoke failure in the governed code-deploy CD channel
+      is genuinely invisible today and warrants a critical. Its STANDING reconcile-gate refusal (a
+      designed, self-documenting block on a reconcile-pending predicate, Decision 88 -- not a
+      defect) is excluded from filing via the designed_refusal predicate below; the refusal itself
+      is routed to the Decision 62 alarm-not-gate monitor lane instead (rec-2854), the same
+      treatment convergence-health gets.
+  excluded:
+    terraform-drift: >-
+      Decision 92 point 6 assigns drift to the ops-portal alarm-only path, which already files
+      --source tf_drift directly. Watching terraform-drift.yml here would double-record one event
+      and blur the Decision 61 source discriminator.
+    convergence-health: >-
+      A STANDING environmental red would mint a fresh L5/L6 critical on every push with no brake --
+      a rec storm plus a planning-queue wedge. Decision 62's alarm-not-gate monitor lane is the
+      correct treatment (rec-2854), not a ci-rca watch.
+    dedup-probe: >-
+      Deliberately injects synthetic source=ci_rca failures to exercise the dedup mechanism;
+      watching it would couple the probe to the mechanism it probes.
+
+# The fail-closed predicate (scripts/ci_rca/designed_refusal.py) that lets deploy-ducklake-lambdas
+# be watched without the STANDING reconcile-gate refusal minting a fresh critical on every push.
+designed_refusal:
+  module: scripts/ci_rca/designed_refusal.py
+  rule: >-
+    Consumed by a ci-rca.yml step ("Designed-refusal check") that gates the "Run ci-rca agent"
+    step via a step output, mirroring the existing fp_dedup / convergence-dedup skip shape.
+    Returns skip=true ONLY when the run's resolved failing-job set is non-empty AND every member
+    is a DECLARED designed-refusal job for that workflow slug. Any uncertainty -- an empty
+    failing-job set, an unparseable/`{}` jobs file, or an undeclared failing job (even alongside a
+    declared one) -- returns skip=false, so the agent still runs and files (Decision 55: no loose
+    suppression).
+  declared_jobs:
+    deploy-ducklake-lambdas: ["reconcile-gate"]
+
+# CLOSURE TRAP (Decision 142 point 3 + cl.4(a)): rec-autoclose.yml is the SOLE caller of
+# ci_rca_lifecycle.stamp_fixed_by_sha, and a closed ci_rca head with no fixed_by_sha FAILS CLOSED
+# to a REGRESSION / priority=Critical rec on the next fingerprint match. So when a rec-autoclose
+# failure files a ci_rca rec, that rec's own fix PR's Resolves trailer must be processed by the
+# very workflow that is broken -- fixed_by_sha may never get stamped automatically, manufacturing
+# a spurious critical from a real fix.
+closure_dependency:
+  trap: >-
+    Watching rec-autoclose is still correct (the alternative is the 2026-07-24 silence), but a
+    rec-autoclose-sourced ci_rca rec cannot assume its own closure will auto-stamp fixed_by_sha.
+  manual_route: >-
+    Close via `bin/venv-python -m scripts.ops_data_portal --update-rec <rec-id> --status closed
+    --resolution "..."` then stamp explicitly:
+    `bin/venv-python -c "from scripts.ops_portal.ci_rca_lifecycle import stamp_fixed_by_sha;
+    stamp_fixed_by_sha('<rec-id>', '<merge-sha>')"`. This is the closure route for a
+    rec-autoclose-sourced ci_rca rec whenever rec-autoclose itself cannot be trusted to process
+    the Resolves trailer.

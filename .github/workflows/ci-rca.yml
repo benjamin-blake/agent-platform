@@ -9,7 +9,14 @@ on:
     # refusals-while-red they cause) file source=ci_rca recs. The dedup step below anchors
     # terraform-apply-sandbox failures on the red convergence record's commit so one underlying
     # apply failure + every later refusal collapse to ONE rec.
-    workflows: ["CI", "Main Canary", "terraform-apply-sandbox"]
+    # PLAN-ci-rca-ops-plane-coverage (rec-2849): rec-autoclose and deploy-ducklake-lambdas are
+    # ADDED -- the 2026-07-24 ducklake-writer-errors incident went unrecorded because rec-autoclose
+    # (an ops-plane write path) was absent from this filter. deploy-ducklake-lambdas' STANDING
+    # reconcile-gate refusal is a designed refusal, not a defect -- it is excluded from filing via
+    # the designed-refusal skip step below, never by omitting the workflow from this filter.
+    # terraform-drift, convergence-health, and dedup-probe are deliberately EXCLUDED -- see
+    # docs/contracts/ci-rca-lifecycle.yaml's watched_workflow_set for the per-entry adjudication.
+    workflows: ["CI", "Main Canary", "terraform-apply-sandbox", "rec-autoclose", "deploy-ducklake-lambdas"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -187,6 +194,19 @@ jobs:
           RUN_ID="${{ steps.meta.outputs.run_id }}"
           gh run view "$RUN_ID" --repo "${{ github.repository }}" --json jobs \
             > /tmp/ci-rca-jobs.json 2>/dev/null || echo '{}' > /tmp/ci-rca-jobs.json
+
+      - name: Designed-refusal check (fail-closed skip predicate)
+        # PLAN-ci-rca-ops-plane-coverage: a STANDING, self-documenting refusal (e.g.
+        # deploy-ducklake-lambdas' reconcile-gate) should not mint a fresh L5/L6 critical on every
+        # push. No network call -- consumes the jobs JSON the step above already wrote. Fails
+        # CLOSED (skip=false) on any uncertainty, so an undeclared failure always files.
+        id: designed_refusal
+        run: |
+          WORKFLOW_SLUG="${{ steps.meta.outputs.workflow_slug }}"
+          OUTPUT=$(bin/venv-python -m scripts.ci_rca.designed_refusal --jobs-json /tmp/ci-rca-jobs.json --workflow-slug "$WORKFLOW_SLUG")
+          echo "$OUTPUT"
+          SKIP=$(echo "$OUTPUT" | grep '^skip=' | cut -d= -f2)
+          echo "skip=${SKIP}" >> "$GITHUB_OUTPUT"
 
       - name: Fetch junit report (v2 fingerprint substrate)
         # ci-rca-identity-lifecycle: best-effort download of the failing run's own pytest-junit
@@ -382,7 +402,7 @@ jobs:
 
       - name: Run ci-rca agent
         id: rca_agent
-        if: steps.dedup.outputs.already_filed != 'true' && steps.fp_dedup.outputs.deduped != 'true'
+        if: steps.dedup.outputs.already_filed != 'true' && steps.fp_dedup.outputs.deduped != 'true' && steps.designed_refusal.outputs.skip != 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ github.token }}

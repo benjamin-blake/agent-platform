@@ -166,6 +166,16 @@ def _check_canary() -> None:
     assert "--pre" not in steps_text, "canary steps contain --pre (should not)"
 
 
+# PLAN-ci-rca-ops-plane-coverage: the required-membership floor for ci-rca.yml's
+# workflow_run.workflows filter. "Main Canary" is resolved dynamically from main-canary.yml's own
+# name field below rather than hardcoded here, so a canary rename does not desync the two checks.
+# This is a FLOOR, not an exact-set assertion (growth beyond these entries is governed by the
+# per-entry adjudication requirement in docs/contracts/ci-rca-lifecycle.yaml, not by this guard) --
+# its job is only to prevent silent REMOVAL, per rec-2849 (terraform-apply-sandbox was in the
+# filter but unguarded here, so the CD.35 wiring could have been deleted silently).
+_REQUIRED_CI_RCA_WORKFLOWS = ("CI", "terraform-apply-sandbox", "rec-autoclose", "deploy-ducklake-lambdas")
+
+
 def _check_ci_rca_filter() -> None:
     canary_data = _load(".github/workflows/main-canary.yml")
     canary_name = canary_data.get("name")
@@ -176,8 +186,11 @@ def _check_ci_rca_filter() -> None:
     workflow_run = on.get("workflow_run", {})
     workflows = workflow_run.get("workflows", [])
 
-    assert "CI" in workflows, f"ci-rca.yml workflows list missing 'CI': {workflows}"
-    assert canary_name in workflows, f"ci-rca.yml workflows list missing {canary_name!r}: {workflows}"
+    required = (*_REQUIRED_CI_RCA_WORKFLOWS, canary_name)
+    missing = [w for w in required if w not in workflows]
+    assert not missing, f"ci-rca.yml workflows list missing required entries {missing}: {workflows}"
+
+    assert len(workflows) == len(set(workflows)), f"ci-rca.yml workflows list has duplicate entries: {workflows}"
 
     rca_job_if = rca_data.get("jobs", {}).get("rca", {}).get("if", "")
     assert "head_branch" in rca_job_if, (
