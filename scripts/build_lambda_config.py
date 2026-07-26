@@ -43,19 +43,28 @@ PROD_DEPS = [
 
 # DuckLake deps layer (ducklake-deps): duckdb pinned exactly, plus the runtime's import-time deps.
 # pyyaml is required by ducklake_runtime.load_field_semantics; boto3 is provided by the Lambda base.
+#
+# Decision 154 / rec-2862: every entry below is EXACT-pinned (never a floor pin, `>=`/`~=`). A
+# floor pin left this build time-variant -- a PyPI release published inside a human-approval
+# window (pytz 2026.3.post1, observed between the PR's byte-identical assert and the reviewer's
+# approval) resolved to different bytes on rebuild, which is precisely the rec-2862 TOCTOU. Exact
+# pins make the resolved set a function of this file's content alone, not of wall-clock timing.
+# Versions below equal those already baked into the reviewed deps layer (VP5) -- this pin
+# introduces zero artifact-byte change. Bumping any of these pins is a deliberate, reviewed
+# version-bump PR, not a background drift.
 DUCKLAKE_DEPS = [
     f"duckdb=={PINNED_DUCKDB_VERSION}",
-    "psycopg2-binary>=2.9.0",
-    "python-ulid>=2.2.0",
+    "psycopg2-binary==2.9.12",
+    "python-ulid==4.0.1",
     # python-ulid imports `from typing_extensions import Self` unconditionally, but its dependency
     # marker only requires typing_extensions on python<3.11. Building for 3.12 therefore skips it,
     # so the write path ImportErrors at runtime (ModuleNotFoundError: typing_extensions). Pin it.
-    "typing_extensions>=4.0",
+    "typing_extensions==4.16.0",
     # duckdb lazily imports pytz when it converts tz-aware Python datetimes to/from its TIMESTAMP
     # types (the SCD2 path binds UTC-aware ULID timestamps). duckdb declares no hard pytz dep, so it
     # must be bundled explicitly or the write/read paths raise InvalidInputException at runtime.
-    "pytz>=2024.1",
-    "pyyaml>=6.0",
+    "pytz==2026.3",
+    "pyyaml==6.0.3",
 ]
 
 # DuckLake extensions baked into the ducklake-extensions layer: (LOAD name, published file stem).

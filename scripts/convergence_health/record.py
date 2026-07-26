@@ -37,6 +37,22 @@ def read_convergence_record(
         raise
 
 
+def read_infra_error_marker(record: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Return the record's infra_error marker (Decision 154 / rec-2862) if present and
+    well-formed, else None.
+
+    Mirrors write-convergence-record's merge shape (a dict with routed_at/run_url/commit_sha/
+    failed_step). Any other shape (missing, or present but not a dict -- a malformed write, hand
+    edit, or a future schema change) degrades to None rather than raising: this is a health-surface
+    READ, not the write path's own validation, so a malformed marker should read as "no marker"
+    (severity floor not applied) rather than crash the health sensor.
+    """
+    marker = record.get("infra_error")
+    if not isinstance(marker, dict):
+        return None
+    return marker
+
+
 def derive_red_since(record: dict[str, Any]) -> datetime:
     """Return the datetime when the record entered the current red episode.
 

@@ -1,24 +1,29 @@
 name: build-ducklake-artifacts
 description: >-
-  Build the DuckLake Lambda artifacts and upload them to S3, in one of three modes. Single copy
-  of the "Build DuckLake lambda packages" step that existed 5x across terraform-apply-sandbox.yml
-  and reconcile.yml (DEP-08); the assert+dual-write body for the 'assert'/'skip-assert' modes
-  lives in the tested scripts/ci/ducklake_artifacts.py (T2.42 c4 / rec-2659).
+  Build the DuckLake Lambda artifacts and upload them to S3, or fetch the already-reviewed
+  artifacts without rebuilding, in one of four modes. Single copy of the "Build DuckLake lambda
+  packages" step that existed 5x across terraform-apply-sandbox.yml and reconcile.yml (DEP-08);
+  the assert+dual-write body for the 'assert'/'skip-assert' modes and the fetch+copy body for
+  'fetch' both live in the tested scripts/ci/ducklake_artifacts.py (T2.42 c4 / rec-2659; fetch:
+  Decision 154 / rec-2862).
 
 inputs:
   mode:
     description: >-
       'assert' rebuilds via --skip-upload, byte-checks the seven build/apply-path artifacts
-      against their per-sha S3 reference (Decision 77 no-TOCTOU), then dual-writes them (sandbox
-      push + gated-apply, and both Reconcile call sites -- every site that re-applies a
-      previously-reviewed plan). 'skip-assert' rebuilds via --skip-upload and dual-writes those
-      same seven artifacts with no prior check (a fresh workflow_dispatch plan with nothing to
-      compare against yet). 'upload-only' runs `build_lambda --ducklake-only` WITHOUT
-      --skip-upload -- the PR speculative-plan job's first-upload path, which builds and
-      dual-writes all EIGHT artifacts (including ducklake-maintenance-smoke.zip, which the other
-      two modes deliberately exclude -- see scripts/ci/ducklake_artifacts.py's
-      DUCKLAKE_ARTIFACT_NAMES) via build_lambda's own internal upload_to_s3, with no separate
-      assert since there is nothing yet to compare against.
+      against their per-sha S3 reference (Decision 77 no-TOCTOU), then dual-writes them (the
+      sandbox push path -- the sole remaining reproducibility canary). 'skip-assert' rebuilds via
+      --skip-upload and dual-writes those same seven artifacts with no prior check (a fresh
+      workflow_dispatch plan with nothing to compare against yet). 'upload-only' runs
+      `build_lambda --ducklake-only` WITHOUT --skip-upload -- the PR speculative-plan job's
+      first-upload path, which builds and dual-writes all EIGHT artifacts (including
+      ducklake-maintenance-smoke.zip, which the other modes deliberately exclude -- see
+      scripts/ci/ducklake_artifacts.py's DUCKLAKE_ARTIFACT_NAMES) via build_lambda's own internal
+      upload_to_s3, with no separate assert since there is nothing yet to compare against.
+      'fetch' does NOT rebuild: it downloads the seven reviewed per-sha artifacts and server-side
+      copies each onto its fixed key (gated-apply, and both Reconcile call sites -- every
+      human-gated site that re-applies a previously-reviewed plan after an unbounded approval
+      wait, where a rebuild could resolve a dependency to bytes nobody reviewed).
     required: true
   artifact-sha:
     description: >-
@@ -64,12 +69,17 @@ runs:
           python3 -m scripts.build_lambda --ducklake-only --profile "" --bucket "$BUCKET"
           exit 0
         fi
+        if [ "$MODE" = "fetch" ]; then
+          echo "Fetching reviewed DuckLake artifacts from lambda-packages/${ARTIFACT_SHA}/ -- no rebuild (Decision 154 / rec-2862)."
+          python3 -m scripts.ci.ducklake_artifacts "workflow_dispatch" "$ARTIFACT_SHA" "$BUCKET" --region "$REGION" --mode fetch --skip-build
+          exit 0
+        fi
         if [ "$MODE" = "assert" ]; then
           EVENT_ARG="push"
         elif [ "$MODE" = "skip-assert" ]; then
           EVENT_ARG="workflow_dispatch"
         else
-          echo "::error::build-ducklake-artifacts: unknown mode '${MODE}' (expected 'assert', 'skip-assert', or 'upload-only')" >&2
+          echo "::error::build-ducklake-artifacts: unknown mode '${MODE}' (expected 'assert', 'skip-assert', 'upload-only', or 'fetch')" >&2
           exit 1
         fi
         echo "Content-addressed artifact namespace: lambda-packages/${ARTIFACT_SHA}/"

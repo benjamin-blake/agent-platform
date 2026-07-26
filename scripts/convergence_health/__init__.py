@@ -73,6 +73,7 @@ from scripts.convergence_health.record import (
     count_unapplied_tf_commits,
     derive_red_since,
     read_convergence_record,
+    read_infra_error_marker,
     record_age_hours,
     red_age_hours,
 )
@@ -115,6 +116,7 @@ __all__ = [
     "main_ducklake_drift",
     "main_prod_drift",
     "read_convergence_record",
+    "read_infra_error_marker",
     "record_age_hours",
     "red_age_hours",
 ]

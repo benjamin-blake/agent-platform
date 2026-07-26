@@ -21,6 +21,8 @@ from scripts.convergence_health import (
     count_unapplied_tf_commits,
     derive_red_since,
     read_convergence_record,
+    read_infra_error_marker,
+    record_age_hours,
     red_age_hours,
 )
 
@@ -73,6 +75,27 @@ class TestRedAgeHours:
         now = datetime(2026, 6, 27, 3, 0, tzinfo=timezone.utc)
         age = red_age_hours(rec, now=now)
         assert age == pytest.approx(3.0, abs=0.01)
+
+    def test_now_defaults_to_current_time_when_not_provided(self) -> None:
+        """The now=None default path resolves datetime.now(timezone.utc) internally."""
+        rec = {
+            "status": "red",
+            "timestamp": "2020-01-01T00:00:00Z",
+            "drift_detected_at": "2020-01-01T00:00:00Z",
+        }
+        assert red_age_hours(rec) > 0
+
+
+class TestRecordAgeHours:
+    def test_computes_age_against_provided_now(self) -> None:
+        rec = {"status": "green", "timestamp": "2026-06-27T00:00:00Z"}
+        now = datetime(2026, 6, 27, 3, 0, tzinfo=timezone.utc)
+        assert record_age_hours(rec, now=now) == pytest.approx(3.0, abs=0.01)
+
+    def test_now_defaults_to_current_time_when_not_provided(self) -> None:
+        """The now=None default path resolves datetime.now(timezone.utc) internally."""
+        rec = {"status": "green", "timestamp": "2020-01-01T00:00:00Z"}
+        assert record_age_hours(rec) > 0
 
 
 class TestCountUnappliedTfCommits:
@@ -127,6 +150,38 @@ class TestReadConvergenceRecordReraise:
         s3.get_object.side_effect = err
         with pytest.raises(ClientError):
             read_convergence_record(s3)
+
+
+class TestReadInfraErrorMarker:
+    """Decision 154 / rec-2862: infra_error marker parsing -- absent and malformed markers."""
+
+    def test_absent_when_no_infra_error_key(self) -> None:
+        assert read_infra_error_marker({"status": "green"}) is None
+
+    def test_absent_on_empty_record(self) -> None:
+        assert read_infra_error_marker({}) is None
+
+    def test_present_when_well_formed_dict(self) -> None:
+        marker = {
+            "routed_at": "2026-06-27T00:00:00Z",
+            "run_url": "https://example.com/run/1",
+            "commit_sha": "abc123",
+            "failed_step": "tf_init",
+        }
+        rec = {"status": "green", "infra_error": marker}
+        assert read_infra_error_marker(rec) == marker
+
+    def test_malformed_string_marker_degrades_to_none(self) -> None:
+        rec = {"status": "green", "infra_error": "not-a-dict"}
+        assert read_infra_error_marker(rec) is None
+
+    def test_malformed_list_marker_degrades_to_none(self) -> None:
+        rec = {"status": "green", "infra_error": ["not", "a", "dict"]}
+        assert read_infra_error_marker(rec) is None
+
+    def test_malformed_int_marker_degrades_to_none(self) -> None:
+        rec = {"status": "green", "infra_error": 42}
+        assert read_infra_error_marker(rec) is None
 
 
 class TestCountUnappliedTfCommitsDefaultRunner:
