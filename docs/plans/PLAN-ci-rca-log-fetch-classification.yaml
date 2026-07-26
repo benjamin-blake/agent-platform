@@ -57,11 +57,25 @@ scope:
     action: Modify
     purpose: >-
       Add ("ci-rca-fetch-classification", _check_ci_rca_fetch_classification) to the guards list and
-      the import block. This aggregator is the purpose-built home for verify_ci_workflow._check_*
-      guards ("wires ... into the presubmit tier"), already carries eight of them with per-guard
-      labels and rec-2027 error hardening, and is registered in BOTH pre_sequence and full_sequence --
-      so the new guard gains fast-tier (authoritative pre-merge) coverage with no registry.py or
-      validate.py change, and inherits the existing config/ci_rca_taxonomy.yaml mapping.
+      the import block, and hoist the currently-local guards list to a module-level _GUARDS constant
+      so VP step 6 can assert real tuple membership rather than a source-text proxy (a text match
+      would be satisfied by the import line plus a docstring mention, with the tuple never added).
+      This aggregator is the purpose-built home for verify_ci_workflow._check_* guards ("wires ...
+      into the presubmit tier"), already carries eight of them with per-guard labels and rec-2027
+      error hardening, and is registered in BOTH pre_sequence and full_sequence -- so the new guard
+      gains fast-tier (authoritative pre-merge) coverage with no registry.py or validate.py change,
+      and inherits the existing config/ci_rca_taxonomy.yaml mapping.
+  - file: config/agent/verification_registry/registry.yaml
+    action: Modify
+    purpose: >-
+      Retire the superseded graduated row ci-rca-log-fetch-503-guard-present (line 904, graduated
+      2026-07-17 by plan_slug resolve-ci-rca-canary-red) in the SAME change that adds this plan's
+      graduated rows. Its check_spec asserts that ci-rca.yml still contains 'failed to get jobs',
+      'HTTP 5|Service Unavailable' AND '! *grep' -- i.e. it pins the exact predicate this plan
+      removes, so after the merge it would assert the PRESENCE of the rec-2857 defect and directly
+      contradict this plan's own ci-rca-fetch-classification-guard-rejects-log-body-grep row. It does
+      not redden CI (validate_verification_registry replays only NEW-in-diff rows), which is exactly
+      why it would rot silently. Decision 132 / CD.29: validation is a curated asset.
   - file: tests/checks/ci_guards/test_validate_ci_workflow_guards.py
     action: Modify
     purpose: >-
@@ -93,7 +107,8 @@ acceptance_criteria:
   - >-
     /tmp/ci-rca-failed.log still receives the gh stdout byte-for-byte, so the evidence bundle
     (--log-file) and the agent prompt consume identical content to today on the success path (strictly:
-    identical whenever gh writes nothing to stdout that it previously interleaved with stderr).
+    identical whenever gh writes nothing to STDERR -- today the file is stdout and stderr merged via
+    2>&1, whereas after this change it is stdout only).
   - >-
     A structural regression guard fails CI if the log-body grep is reintroduced, and that guard runs
     in the FAST tier (scripts.checks.registry.pre_sequence) -- the authoritative pre-merge gate under
@@ -179,7 +194,7 @@ verification_plan:
       shape it takes -- this is what makes acceptance criterion 4's "never" true by construction
       rather than by enumeration.
     command: >-
-      bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_rca_and_canary.py -k fetch_classification -q
+      bin/venv-python -m pytest "tests/verify_ci_workflow/test_ci_rca_and_canary.py::TestCheckCiRcaFetchClassification" -q
     expected: >-
       All tests pass: the pass case is the real post-change step body; the negative cases each add ONE
       pattern-matching construct to an otherwise-valid body -- the literal historical grep, a renamed
@@ -205,7 +220,7 @@ verification_plan:
       because the first and third alone would still succeed if the implementer wired the guard into
       verify_ci_workflow.py and _COMMANDS but forgot the aggregator entry, leaving it in NO tier.
     command: >-
-      bin/venv-python -c "import inspect; from scripts.checks import registry; import scripts.checks.ci_guards.validate_ci_workflow_guards as agg; from scripts.verify_ci_workflow import _check_ci_rca_fetch_classification as g; assert 'validate_ci_workflow_guards' in {s.name for s in registry.pre_sequence()}, 'aggregator not in pre_sequence'; src=inspect.getsource(agg); assert 'ci-rca-fetch-classification' in src and '_check_ci_rca_fetch_classification' in src, 'guard not wired into the aggregator guards list'; g(); print('PRE_TIER_OK')"
+      bin/venv-python -c "from scripts.checks import registry; import scripts.checks.ci_guards.validate_ci_workflow_guards as agg; from scripts.verify_ci_workflow import _check_ci_rca_fetch_classification as g; assert 'validate_ci_workflow_guards' in {s.name for s in registry.pre_sequence()}, 'aggregator not in pre_sequence'; assert ('ci-rca-fetch-classification', g) in agg._GUARDS, 'guard not wired into the aggregator _GUARDS list'; g(); print('PRE_TIER_OK')"
     expected: 'Prints PRE_TIER_OK -- the aggregator is in pre_sequence, the guard is wired into its guards list, and the guard passes against the real workflow.'
     fix_if: >-
       "aggregator not in pre_sequence" means it was moved out of the fast tier; "guard not wired into
@@ -281,7 +296,7 @@ verification_plan:
       behaviour; re-dispatch against a more recent failing run before concluding the fix is wrong.
 constraints:
   - >-
-    Only the seven files in the Scope table may be modified. Out-of-scope defects become
+    Only the eight files in the Scope table may be modified. Out-of-scope defects become
     recommendations via scripts/ops_data_portal, not inline fixes.
   - >-
     Preserve the step NAME "Fetch failed run logs" and the output path /tmp/ci-rca-failed.log
@@ -319,8 +334,8 @@ context:
     protection makes pr-validate the required check), Decision 104 (one concern per file).
   - >-
     "gates: decision-scout=FLAGS_FOUND (3 NOTE flags, all resolved in this document);
-    plan-critique=REVISE (round 1), REVISE (round 2) -- round 3 verdict recorded on receipt, never
-    pre-written"
+    plan-critique=PROCEED after 3 round(s) -- REVISE (round 1, 9 items), REVISE (round 2, 3 items),
+    PROCEED (round 3, non-blocking hardening only, all 5 items applied)"
   - >-
     Decision-scout NOTE 1 resolved (Decision 48, tier): drafted V3, re-declared V2. Decision 142 ruled
     this exact file family (.github/workflows/ci-rca.yml + scripts/ci_rca/** + tests) V2, reasoning
@@ -414,11 +429,12 @@ context:
     broken, the CI-RCA signal path used to confirm the rec-2836 forward fix cannot complete. This plan
     is therefore a prerequisite of the open ci-rca rec's closure, not unrelated work scoped around it.
   - >-
-    Complexity classification - 7 scope files exceeds the >5-file STRATEGIC heuristic, but STRATEGIC
+    Complexity classification - 8 scope files exceeds the >5-file STRATEGIC heuristic, but STRATEGIC
     plan-type declarations are suspended under the executor freeze (AGENTS.md Temporary Operational
     Constraints; Decision 67 STRATEGIC clause retained). Authored as a single IMPLEMENTATION plan per
-    the freeze override. Three of the seven files are tests and one is a two-line insertion into an
-    existing aggregator, so the substantive surface is two modules.
+    the freeze override. Three of the eight files are tests, one is a small insertion into an existing
+    aggregator, and one is a single-row deletion from a config registry, so the substantive surface is
+    two modules.
   - >-
     Branch was 0 commits behind and 0 ahead of origin/main at planning time
     (main_freshness.status=ok); the Main Divergence Assessment found no Scope-file overlap.
@@ -460,8 +476,10 @@ execution_steps:
     (currently lines 161-186) with the module invocation "bin/venv-python -m scripts.ci_rca.fetch_logs
     --run-id \"$RUN_ID\" --repo \"${{ github.repository }}\" --out /tmp/ci-rca-failed.log", followed
     by the retained fail-closed assertion "test -s /tmp/ci-rca-failed.log". Keep the step name and the
-    GH_TOKEN env block unchanged. Update the step comment to record why the body grep was removed
-    (rec-2857) without deleting the rec-2117 / rec-2118 / rec-2718 provenance.
+    GH_TOKEN env block unchanged. Record why the body grep was removed (rec-2857) without deleting
+    the rec-2117 / rec-2118 / rec-2718 provenance -- but place that comment ABOVE the step (as a YAML
+    comment outside the run: block), NOT inside the run: body: the allowlist guard scans the run:
+    text, and the word "grep" in an explanatory comment would otherwise self-trip it.
   - >-
     Create tests/test_ci_rca_fetch_logs.py with classes TestClassification (containing BOTH
     test_successful_fetch_with_5xx_in_log_body_is_accepted and
@@ -481,13 +499,21 @@ execution_steps:
     tests covering the literal historical grep, a renamed pattern variable, a renamed log-path
     variable, at least one shape a blocklist would have missed (case/awk/rg or an inline python -c),
     and a body missing the module invocation. Follow the existing patch-based _load conventions in
-    that module. Name them so "-k fetch_classification" selects exactly this set.
+    that module. Collect them all under ONE class named TestCheckCiRcaFetchClassification so VP step
+    5 can select by "::ClassName" rather than "-k" (the repo's documented -k brittleness gotcha, and
+    this selector becomes a graduated check_spec).
   - >-
-    Modify scripts/checks/ci_guards/validate_ci_workflow_guards.py -- add
-    _check_ci_rca_fetch_classification to the import block and
-    ("ci-rca-fetch-classification", _check_ci_rca_fetch_classification) to the guards list. Refresh
-    the docstring, which enumerates only 5 of the (soon 9) guards. No registry.py or validate.py
-    edit: the aggregator is already registered in both sequences and already re-exported.
+    Modify scripts/checks/ci_guards/validate_ci_workflow_guards.py -- hoist the local guards list to
+    a module-level _GUARDS constant, add _check_ci_rca_fetch_classification to the import block, and
+    add ("ci-rca-fetch-classification", _check_ci_rca_fetch_classification) to _GUARDS. Keep the
+    function iterating _GUARDS so behaviour is unchanged. Refresh the docstring, which enumerates
+    only 5 of the (soon 9) guards. No registry.py or validate.py edit: the aggregator is already
+    registered in both sequences and already re-exported.
+  - >-
+    Modify config/agent/verification_registry/registry.yaml -- DELETE the superseded
+    ci-rca-log-fetch-503-guard-present row (line 904). Do this in the same commit as the VF-05
+    bookkeeping walk that adds this plan's five graduated rows, so the registry never simultaneously
+    asserts both the presence and the absence of the log-body grep.
   - >-
     Modify tests/checks/ci_guards/test_validate_ci_workflow_guards.py -- add a case asserting the
     guard's failure appends "ci-workflow guard: ci-rca-fetch-classification". NOTE: that
