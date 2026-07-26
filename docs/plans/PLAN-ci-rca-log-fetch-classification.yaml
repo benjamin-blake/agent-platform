@@ -1,0 +1,404 @@
+schema_version: 1
+slug: "ci-rca-log-fetch-classification"
+intent: >-
+  Restore CI-RCA's ability to diagnose ops-plane HTTP-5xx failures by separating the two signals
+  ci-rca.yml currently conflates -- whether the log FETCH failed, versus what the fetched log
+  CONTAINS -- so the self-improvement loop keeps producing root-cause recs for exactly the failure
+  class it was just widened to watch.
+plan_type: IMPLEMENTATION
+verification_tier: V2
+plan_path: docs/plans/PLAN-ci-rca-log-fetch-classification.yaml
+phase: >-
+  CI reliability / ci-rca harness integrity. Forward fix for rec-2857 (source=manual, ad_hoc_rec).
+  No tier_item covers this work -- an ad_hoc_rec naming no tier_item is a soft-warn exception
+  category, so the Tier Item Freshness Gate is skipped by design. Directly downstream of
+  PLAN-ci-rca-ops-plane-coverage (#760, merged) and upstream of the verification path for
+  PLAN-ci-provider-mirror-terraform-init-hardening (#759, merged, bundles ci-rca rec-2836).
+scope:
+  - file: scripts/ci_rca/fetch_logs.py
+    action: Create
+    purpose: >-
+      Thin fetch/classify/retry module mirroring scripts/ci_rca/designed_refusal.py's shape
+      (argparse CLI, no shared state). Classifies "log fetched" on the gh process exit status plus
+      non-empty stdout; captures stderr to a SEPARATE stream and applies the anchored transient-error
+      patterns to that stream only, never to the log body. Preserves the --log-failed then --log
+      fallback chain and the fail-loudly-after-3-attempts contract (rec-2117 / rec-2118 / rec-2718).
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Replace the "Fetch failed run logs" step BODY with a call to the new module, retaining the step
+      NAME verbatim (rec-2857's acceptance criterion greps for it) and the /tmp/ci-rca-failed.log
+      output path (the evidence-bundle --log-file consumer at line 277 and the agent prompt at line
+      439 are unchanged). Retain a YAML-side `test -s` fail-closed assertion so the terminal
+      fail-closed behaviour stays pinned to the default-branch workflow file (Decision 143 mitigation).
+  - file: tests/test_ci_rca_fetch_logs.py
+    action: Create
+    purpose: >-
+      Behavioural unit tests for the classifier, including the rec-2857 regression proof -- a
+      SUCCESSFUL fetch whose log body contains "HTTP 502" must be ACCEPTED -- plus transient-stderr
+      retry, fallback-chain, fail-loud-on-exhaustion, and byte-for-byte stdout passthrough.
+      Path is mapper-derived (scripts.test_coverage_checker.map_source_to_test), not guessed.
+  - file: scripts/verify_ci_workflow.py
+    action: Modify
+    purpose: >-
+      Add _check_ci_rca_fetch_classification: assert the "Fetch failed run logs" step invokes the
+      module and that no line of the workflow greps a transient-error pattern against the log path
+      (regression guard against reintroduction). Register it in the _COMMANDS dict.
+  - file: tests/verify_ci_workflow/test_ci_rca_and_canary.py
+    action: Modify
+    purpose: >-
+      Pass-path and fail-path tests for the new structural guard, following the existing
+      TestCheckCiRcaFilter* patch-based conventions in this module.
+  - file: scripts/checks/ci_guards/validate_ci_rca_fetch_classification.py
+    action: Create
+    purpose: >-
+      Separate @registry.register check wiring the new guard into the presubmit tier. A distinct
+      module rather than an addition to validate_ci_rca_trigger, whose scope is narrowly
+      trigger-correctness ("assert ci-rca.yml fires only on the authoritative main-branch CI gate")
+      -- one concern per file (Decision 104).
+  - file: tests/checks/ci_guards/test_validate_ci_rca_fetch_classification.py
+    action: Create
+    purpose: >-
+      Tests for the registered check's pass/fail behaviour and failure-list append, mirroring
+      tests/checks/ci_guards/test_validate_ci_rca_trigger.py. Path is mapper-derived.
+  - file: scripts/checks/registry.py
+    action: Modify
+    purpose: >-
+      Insert validate_ci_rca_fetch_classification into the ordered tier sequence(s) alongside
+      validate_ci_rca_trigger (registry.py:182).
+  - file: scripts/validate.py
+    action: Modify
+    purpose: >-
+      Add the facade re-export line for the new check. Dispatch is globals()[name](failed) with no
+      auto-discovery, so without this line validate --pre KeyErrors on the check name and the
+      reachability tests in tests/test_checks_registry.py fail (scripts/CLAUDE.md).
+bundled_recommendations:
+  - rec-2857
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    A successfully-fetched failure log whose BODY contains an HTTP 5xx string (e.g. "HTTP 502",
+    "Service Unavailable") is accepted as fetched and written through unmodified -- the rec-2857
+    defect no longer reproduces.
+  - >-
+    A genuine transient gh fetch failure (non-zero exit, transient signature on gh's OWN stderr) is
+    still retried up to 3 attempts and, if never satisfied, still fails loudly with a non-zero exit
+    so the agent is never invoked on an absent log (rec-2117 / rec-2118 / rec-2718 contract intact).
+  - >-
+    The transient-error pattern set is never evaluated against the fetched log body anywhere in the
+    codebase or the workflow.
+  - >-
+    /tmp/ci-rca-failed.log still receives the gh stdout byte-for-byte, so the evidence bundle
+    (--log-file) and the agent prompt consume identical content to today on the success path.
+  - >-
+    A structural regression guard fails CI if the log-body grep is reintroduced, and that guard is
+    reachable through scripts/validate.py (Decision 60 -- a check is only a gate if it runs via
+    validate.py).
+  - >-
+    rec-2857's own acceptance command passes, and rec-2857 is closed via the Resolves: trailer.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: >-
+      rec-2857 REGRESSION PROOF -- assert a successful fetch whose log body contains "HTTP 502" is
+      ACCEPTED. This is the crux: run it against the pre-change tree and it must FAIL (defect
+      reproduced), against the post-change tree it must PASS.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py::TestClassification::test_successful_fetch_with_5xx_in_log_body_is_accepted -q
+    expected: >-
+      1 passed. The classifier returns fetched=True on the FIRST attempt and the output file content
+      equals the gh stdout exactly, despite "HTTP 502" appearing in the body.
+    fix_if: >-
+      Fails or errors -- the classifier is still inspecting the log body. Confirm the transient
+      pattern set is applied to the captured stderr stream only and that the fetched/not-fetched
+      decision derives from the subprocess returncode plus a non-empty-stdout test.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "ci-rca-fetch-accepts-5xx-log-body"
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Assert the rec-2718 contract survives -- a genuine transient fetch failure (non-zero exit,
+      transient signature on stderr, empty stdout) is retried and then fails loudly.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py::TestTransientRetry -q
+    expected: >-
+      All tests pass -- 3 attempts are made against a transient stderr signature, and exhaustion
+      returns a non-zero exit code rather than declaring the log fetched.
+    fix_if: >-
+      A transient failure is silently treated as success, or the retry count changed. Restore the
+      3-attempt loop and the non-zero terminal exit; do NOT weaken it to a warning (Decision 55 --
+      fail loudly, no workaround automation).
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "ci-rca-fetch-fails-loud-on-transient-stderr"
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Assert the --log-failed then --log fallback chain and the byte-for-byte stdout passthrough to
+      the output path that downstream consumers read.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py::TestFallbackChain tests/test_ci_rca_fetch_logs.py::TestOutputContract -q
+    expected: >-
+      All tests pass -- an empty-but-rc-0 --log-failed falls through to --log, and the written file
+      content is identical to the captured stdout with no added stderr text.
+    fix_if: >-
+      Fallback does not fire on an empty rc-0 result, or the output file contains interleaved stderr.
+      Ensure stdout and stderr are captured to separate buffers and only stdout is written.
+    hermetic: false
+    graduation: waive
+    graduation_waiver_reason: >-
+      Covered transitively by the step 1 and step 2 graduated checks, which both assert on the same
+      classifier return value and output-path contract. Graduating a third overlapping selector adds
+      registry surface without adding an independent regression signal.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Assert the structural regression guard actually FAILS on a workflow that reintroduces the
+      log-body grep (negative case), not merely that it passes today.
+    command: >-
+      bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_rca_and_canary.py -k fetch_classification -q
+    expected: >-
+      All tests pass, including a case where a synthetic ci-rca.yml greps the transient pattern
+      against /tmp/ci-rca-failed.log and the guard raises AssertionError.
+    fix_if: >-
+      The negative case does not raise -- the guard is matching too narrowly (e.g. keyed on the exact
+      old variable name). Key it on the co-occurrence of the log path and a transient-pattern grep on
+      one line, so a renamed variable cannot slip past.
+    hermetic: false
+    graduation: graduate
+    graduation_check_id: "ci-rca-fetch-classification-guard-rejects-log-body-grep"
+  - step: 5
+    phase: pre-deploy
+    action: >-
+      Assert the new check is reachable through validate.py by name (Decision 60 gate wiring), which
+      also proves the registry entry and the validate.py facade re-export line are both present.
+    command: >-
+      bin/venv-python -c "import scripts.validate as v; f=[]; v.validate_ci_rca_fetch_classification(f); print('FAILED_LIST', f); assert not f"
+    expected: >-
+      Prints the check's PASS line then "FAILED_LIST []". A NameError/AttributeError here means the
+      facade re-export line is missing from scripts/validate.py.
+    fix_if: >-
+      AttributeError -- add the "from scripts.checks.ci_guards.validate_ci_rca_fetch_classification
+      import validate_ci_rca_fetch_classification  # noqa: F401,E402" line to validate.py's re-export
+      block and insert the name into the ordered tier sequence in scripts/checks/registry.py.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "ci-rca-fetch-classification-check-reachable-via-validate"
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Run rec-2857's own acceptance criterion -- the step NAME survives and no line of the workflow
+      greps a transient pattern against the log path.
+    command: >-
+      grep -q "Fetch failed run logs" .github/workflows/ci-rca.yml && ! grep "ci-rca-failed.log" .github/workflows/ci-rca.yml | grep -q "TRANSIENT_ERROR_RE" && echo ACCEPTANCE_MET
+    expected: 'Prints ACCEPTANCE_MET.'
+    fix_if: >-
+      No output -- either the step was renamed (restore the exact name; the rec acceptance and the
+      structural guard both key on it) or the log-body grep is still present in the workflow.
+    hermetic: true
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is rec-2857's own closure assertion, and its structural content is already graduated as
+      ci-rca-fetch-classification-guard-rejects-log-body-grep (step 4) which enforces the same
+      invariant with a proven negative case. Graduating the rec's ad-hoc grep form as well would
+      register a weaker duplicate of a check that already exists.
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Full fast-tier presubmit -- confirms no collateral breakage across the check registry, SLOC
+      budgets (Decision 128 -- verify_ci_workflow.py must stay under 500 with no raise marker), and
+      the test-coverage mapping for both new modules.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: 'All checks pass; exit 0.'
+    fix_if: >-
+      Any check fails -- fix forward in this plan's scope. If validate_sloc_limits flags
+      verify_ci_workflow.py, decompose rather than raising the budget (Decision 128).
+    hermetic: false
+    graduation: not-applicable
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Live end-to-end confirmation on main -- dispatch ci-rca against the run whose HTTP-502 log
+      reproduced rec-2857, and confirm the job now gets PAST "Fetch failed run logs".
+    command: >-
+      gh workflow run ci-rca.yml -f run_id=30101021966 -f force_rca=true && sleep 90 && gh run list --workflow=ci-rca.yml --limit 1
+    expected: >-
+      The dispatched run reaches the "Designed-refusal check" and "Run ci-rca agent" steps. The
+      "Fetch failed run logs" step succeeds on attempt 1 rather than failing after 3 attempts (~63s).
+    fix_if: >-
+      The step still fails -- inspect its log. If gh reports a genuine non-zero exit, the run's logs
+      really are unavailable (a different failure than rec-2857) and the loud failure is correct
+      behaviour; re-dispatch against a more recent failing run before concluding the fix is wrong.
+    hermetic: false
+constraints:
+  - >-
+    Only the nine files in the Scope table may be modified. Out-of-scope defects become
+    recommendations via scripts/ops_data_portal, not inline fixes.
+  - >-
+    Preserve the step NAME "Fetch failed run logs" and the output path /tmp/ci-rca-failed.log
+    verbatim -- rec-2857's acceptance, the structural guard, the evidence-bundle --log-file consumer
+    (ci-rca.yml:277) and the agent prompt (ci-rca.yml:439) all depend on them.
+  - >-
+    Fail loudly on exhaustion; never degrade the fetch failure to a warning or invoke the agent on an
+    absent log (Decision 55; rec-2117 / rec-2118 / rec-2718).
+  - >-
+    Anchor the transient-error patterns when matching gh's stderr, restoring the intent
+    PLAN-resolve-ci-rca-canary-red.yaml:179 specified ("^failed to get (jobs|run)") and the shipped
+    unanchored regex dropped.
+  - >-
+    Do not add a CI check to .github/workflows/ci.yml -- scripts/validate.py is the single source of
+    truth (AGENTS.md merge protocol).
+  - 'No rescue agents or workaround loops (Decision 55).'
+  - >-
+    Python 3.12+, type hints, ruff at line length 127, no emojis, ASCII hyphens only. Subprocess calls
+    pass text=True with encoding="utf-8". Never raise during module import.
+context:
+  - >-
+    "decision-scout verdict + CITE list (verbatim decision ids)": verdict FLAGS_FOUND, 106 of 106
+    decisions triaged. CITE -- Decision 72 (RCA-as-Plan-Source; originating architecture of ci-rca.yml
+    and the gh --log-failed fetch), Decision 55 (deterministic retry stays valid; fail loudly, no
+    workaround automation), Decision 60 (a check is only a gate if it runs via validate.py),
+    Decision 142 (fingerprint v2; the evidence --log-file consumer is the downstream contract the
+    byte-for-byte path preservation protects), Decision 128 (SLOC decompose-by-default),
+    Decision 132 (graduation dispositions mandatory on pre-deploy VP steps), Decision 73 (two-tier
+    diff-aware CI with forward-fix). RELATED -- Decision 131 (test-colocation mirror rule; both new
+    test paths are mapper-derived), Decision 148 (hermetic VP-replay default), Decision 153 (fast-tier
+    budget), Decision 100/75 (managed-service-native check PASSES -- gh remains the native client;
+    only the classify/retry wrapper relocates, no hand-rolled REST replacement).
+  - >-
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)"
+  - >-
+    Decision-scout NOTE 1 resolved (Decision 48, tier): the plan was drafted V3 and re-declared V2 on
+    precedent. Decision 142 ruled this exact file family (.github/workflows/ci-rca.yml +
+    scripts/ci_rca/** + tests) V2, reasoning that an intra-repo CI artifact contract is verified
+    behaviourally via unit tests, structural greps of the workflow wiring, and the natural post-merge
+    self-test -- not a Lambda deploy; Decision 135 ruled a ci.yml step edit V2 likewise.
+    compute_affected_artifacts returns {} for this scope set. The live dispatch is retained as VP
+    step 8 (post-deploy) as that same post-merge self-test.
+  - >-
+    Decision-scout NOTE 2 resolved (Decision 104, one concern per file): the guard is registered as a
+    NEW check module, validate_ci_rca_fetch_classification, rather than bolted into
+    validate_ci_rca_trigger, whose docstring scopes it to trigger-correctness only. Matches the
+    one-check-per-concern practice already visible in scripts/checks/ci_guards/.
+  - >-
+    Decision-scout NOTE 3 disclosed (Decision 143, SPIRIT -- trust boundary): moving the fetch
+    classifier from the workflow YAML into scripts/ci_rca/fetch_logs.py relocates a classifier that
+    decides whether untrusted log content indicates a broken fetch, from the default-branch-pinned
+    workflow file into the head_sha-checked-out, PR-mutable tree. This follows established practice
+    rather than introducing it -- designed_refusal.py, evidence.py, dedup.py, filing.py and
+    convergence_dedup.py are all already invoked this way from the same job. Mitigation applied - the
+    terminal fail-closed assertion (test -s on the log path) is RETAINED in the workflow YAML, so the
+    fail-closed terminal behaviour stays default-branch-pinned even if the module is edited.
+  - >-
+    Root cause, confirmed by offline replay rather than inference - ci-rca.yml:171-173 runs
+    "gh run view ... > /tmp/ci-rca-failed.log 2>&1", merging gh's error channel into the log content.
+    With that distinction destroyed, the only remaining fetch-failure signal is a content grep, so
+    line 174 greps the whole downloaded log against TRANSIENT_ERROR_RE. A genuine failure log
+    containing "HTTP 502" is rejected as a failed FETCH, retried 3x against identical content, and the
+    step exits 1 -- the run never reaches the designed-refusal check or the agent. Replaying the
+    shipped predicate against a synthetic ducklake_writer log containing "HTTP 502: Bad Gateway"
+    reproduces the rejection deterministically.
+  - >-
+    Design drift, not merely a bug - PLAN-resolve-ci-rca-canary-red.yaml:179 (which introduced this
+    guard for rec-2718) specified ANCHORED patterns, "^failed to get (jobs|run) | HTTP 5xx: |
+    Service Unavailable". The shipped regex is unanchored. This plan restores the stated intent and
+    goes further (stream separation), rather than reversing a prior decision.
+  - >-
+    In-repo precedent for the corrected shape - .github/actions/terraform-init-retry/action.yml
+    captures rc, and only greps the command's own output when rc is non-zero. Same principle:
+    classify on exit status; inspect content only on the failure path.
+  - >-
+    ci-rca HARD BLOCK deferral rationale (required -- rec-2836 is open and unresolved at planning
+    time). This plan satisfies none of the three formal Related-Work conditions: it touches
+    .github/workflows/ci-rca.yml rather than rec-2836's scripts/checks/_terraform.py, and its failure
+    category (ci-rca harness false-positive) differs from rec-2836's (terraform init transient).
+    Deferral is nonetheless justified on two grounds. First, rec-2836 is ALREADY covered by an
+    approved plan merged to main -- PLAN-ci-provider-mirror-terraform-init-hardening.yaml (#759),
+    which lists rec-2836 in bundled_recommendations -- so this session displaces no rec-2836 work.
+    Second, per the human at planning time, rec-2857 is actively BLOCKING that plan's implementation
+    agent from verifying its fix: with ci-rca's log fetch broken, the CI-RCA signal path used to
+    confirm the rec-2836 forward fix cannot complete. This plan is therefore a prerequisite of the
+    open ci-rca rec's closure, not unrelated work scoped around it.
+  - >-
+    Complexity classification - 9 scope files exceeds the >5-file STRATEGIC heuristic, but STRATEGIC
+    plan-type declarations are suspended under the executor freeze (AGENTS.md Temporary Operational
+    Constraints; Decision 67 STRATEGIC clause retained). Authored as a single larger IMPLEMENTATION
+    plan per the freeze override. Four of the nine files are tests or one-line wiring
+    (registry.py, validate.py), so the substantive surface is three modules.
+  - >-
+    Branch was 0 commits behind and 0 ahead of origin/main at planning time
+    (main_freshness.status=ok); the Main Divergence Assessment found no Scope-file overlap.
+  - >-
+    Not in scope - docs/contracts/ci-rca-lifecycle.yaml does not describe the fetch step, so no
+    contract update is required. No .tf files and no Lambda-packaged files are touched, so the
+    Infrastructure and Lambda Deployment assessments do not fire (compute_affected_artifacts returns
+    {} for this scope set).
+pre_implementation_checklist:
+  - 'Branch confirmed not on main'
+  - 'docs/PROJECT_CONTEXT.md read'
+  - 'DECISIONS.md read (or the CITE list above consulted via decision-scout)'
+  - 'All files in scope located and readable'
+  - 'Acceptance criteria understood and verifiable'
+  - >-
+    Read .github/actions/terraform-init-retry/action.yml first -- it is the in-repo precedent for the
+    corrected classify-on-rc shape.
+  - >-
+    Read scripts/ci_rca/designed_refusal.py first -- the new module mirrors its thin-CLI shape and
+    docstring conventions.
+execution_steps:
+  - >-
+    Create scripts/ci_rca/fetch_logs.py. Expose a testable classifier function (e.g.
+    fetch_run_log(run_id, repo, out_path, attempts=3, sleep_fn=...) returning a typed result) plus an
+    argparse main(). Per attempt: run "gh run view <run-id> --repo <repo> --log-failed" via
+    subprocess.run with capture_output=True, text=True, encoding="utf-8"; treat it as fetched when
+    returncode == 0 AND stdout is non-empty; otherwise fall back to the same call without
+    --log-failed. Write ONLY stdout to out_path. Match the anchored transient patterns against the
+    captured STDERR only, to classify the failure for the log message. Sleep between attempts with an
+    injectable sleep function so tests do not wall-clock. Return non-zero from main() after
+    exhaustion, printing the loud rec-2117 / rec-2118 / rec-2718 error text. Do not raise at import.
+  - >-
+    Modify .github/workflows/ci-rca.yml -- replace the body of the "Fetch failed run logs" step
+    (currently lines 161-186) with the module invocation "bin/venv-python -m scripts.ci_rca.fetch_logs
+    --run-id \"$RUN_ID\" --repo \"${{ github.repository }}\" --out /tmp/ci-rca-failed.log", followed
+    by the retained fail-closed assertion "test -s /tmp/ci-rca-failed.log". Keep the step name and the
+    GH_TOKEN env block unchanged. Update the step comment to record why the body grep was removed
+    (rec-2857) without deleting the rec-2117 / rec-2118 / rec-2718 provenance.
+  - >-
+    Create tests/test_ci_rca_fetch_logs.py with classes TestClassification (including
+    test_successful_fetch_with_5xx_in_log_body_is_accepted -- the rec-2857 regression proof),
+    TestTransientRetry, TestFallbackChain and TestOutputContract. Fake subprocess.run; inject the
+    sleep function; assert on attempt counts, exit codes and written file bytes.
+  - >-
+    Modify scripts/verify_ci_workflow.py -- add _check_ci_rca_fetch_classification asserting (a) the
+    "Fetch failed run logs" step exists and invokes scripts.ci_rca.fetch_logs, and (b) no line of the
+    workflow contains both the log path and a transient-pattern grep. Add it to the _COMMANDS dict.
+  - >-
+    Modify tests/verify_ci_workflow/test_ci_rca_and_canary.py -- add pass-path and negative-path tests
+    for the new guard, following the existing patch-based _load conventions in that module.
+  - >-
+    Create scripts/checks/ci_guards/validate_ci_rca_fetch_classification.py mirroring
+    validate_ci_rca_trigger.py's structure (@registry.register, _ensure_root_on_path, append to failed
+    on exception), delegating to the new _check_ function.
+  - >-
+    Create tests/checks/ci_guards/test_validate_ci_rca_fetch_classification.py mirroring
+    tests/checks/ci_guards/test_validate_ci_rca_trigger.py.
+  - >-
+    Modify scripts/checks/registry.py -- insert the new check name into the ordered tier sequence
+    adjacent to validate_ci_rca_trigger (registry.py:182). Modify scripts/validate.py -- add the
+    matching "# noqa: F401,E402" facade re-export line.
+  - >-
+    Execute the Verification Plan -- run each step; loop until pass. VP step 1 is the crux: confirm it
+    FAILS against the pre-change classifier before accepting the post-change PASS, so the test is
+    proven to discriminate. On unrecoverable failure stop and RCA (Decision 55).
+  - >-
+    Commit with the Resolves: rec-2857 trailer in the squash-merge body so rec-autoclose.yml closes
+    the rec.
+  - 'Report: what was implemented, verification results, and the VP step 8 live-dispatch outcome.'
+work_areas: []
+rollback: >-
+  Single-commit revert. The workflow step name, its output path and every downstream consumer are
+  unchanged, so reverting scripts/ci_rca/fetch_logs.py plus the ci-rca.yml step body restores the
+  prior behaviour exactly -- including, deliberately, the rec-2857 defect. The new check module,
+  registry entry and validate.py re-export line must be reverted in the same commit or validate --pre
+  will KeyError on a registered-but-unimported check name.
