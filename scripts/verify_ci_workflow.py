@@ -30,6 +30,14 @@ def _get_steps_text(job: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _get_step_run_text(job: dict[str, Any], step_name: str) -> str:
+    """Return the `run:` block text of one specific named step within a job."""
+    for step in job.get("steps", []):
+        if step.get("name") == step_name:
+            return step.get("run") or ""
+    raise AssertionError(f"step {step_name!r} not found in job")
+
+
 def _check_jobs_and_flags() -> None:
     data = _load(".github/workflows/ci.yml")
     jobs = data.get("jobs", {})
@@ -354,6 +362,34 @@ def _check_terraform_apply_concurrency() -> None:
     )
 
 
+_PATTERN_MATCHING_CONSTRUCT_RE = re.compile(
+    r"\bgrep\b|\begrep\b|\brg\b|\bawk\b|\bsed\b|\bcase\b|=~|\bpython[0-9.]*\s+-c\b",
+    re.IGNORECASE,
+)
+
+
+def _check_ci_rca_fetch_classification() -> None:
+    """ALLOWLIST guard (rec-2857 forward fix): the "Fetch failed run logs" step's run: body must
+    invoke scripts.ci_rca.fetch_logs and must contain NO pattern-matching construct at all --
+    grep/egrep/rg/awk/sed/case/=~/inline `python -c`. An allowlist (assert the ABSENCE of the
+    whole construct class) is strictly stronger than a blocklist of known evasion shapes: the
+    post-change step body reduces to just the module invocation plus `test -s`, so there is no
+    legitimate pattern-matching construct left that a blocklist would need to carve out. This
+    guards against the log-body content grep (rec-2857) being reintroduced in any shell form.
+    """
+    data = _load(".github/workflows/ci-rca.yml")
+    job = data.get("jobs", {}).get("rca", {})
+    run_text = _get_step_run_text(job, "Fetch failed run logs")
+
+    assert "scripts.ci_rca.fetch_logs" in run_text, "'Fetch failed run logs' step no longer invokes scripts.ci_rca.fetch_logs"
+
+    match = _PATTERN_MATCHING_CONSTRUCT_RE.search(run_text)
+    assert match is None, (
+        f"'Fetch failed run logs' step run: body contains a pattern-matching construct "
+        f"({match.group(0)!r}) -- the log-body content check must never be reintroduced (rec-2857)"
+    )
+
+
 _COMMANDS = {
     "jobs-and-flags": _check_jobs_and_flags,
     "concurrency": _check_concurrency,
@@ -364,6 +400,7 @@ _COMMANDS = {
     "validate-single-source": _check_validate_single_source,
     "signal-green-needs": _check_signal_green_needs,
     "terraform-apply-concurrency": _check_terraform_apply_concurrency,
+    "ci-rca-fetch-classification": _check_ci_rca_fetch_classification,
 }
 
 
