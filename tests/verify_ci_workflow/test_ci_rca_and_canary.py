@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.verify_ci_workflow import _check_canary, _check_ci_rca_filter
+from scripts.verify_ci_workflow import _check_canary, _check_ci_rca_fetch_classification, _check_ci_rca_filter
 
 _REAL_RCA_IF = (
     "github.event_name == 'workflow_dispatch' || "
@@ -206,3 +206,101 @@ class TestCheckCanaryFailPath:
             mock_load.return_value = data
             with pytest.raises(AssertionError, match="--pre"):
                 _check_canary()
+
+
+# ---------------------------------------------------------------------------
+# _check_ci_rca_fetch_classification (rec-2857 forward fix -- ALLOWLIST guard)
+# ---------------------------------------------------------------------------
+
+_PASSING_FETCH_STEP_BODY = (
+    'RUN_ID="${{ steps.meta.outputs.run_id }}"\n'
+    'bin/venv-python -m scripts.ci_rca.fetch_logs --run-id "$RUN_ID" '
+    '--repo "${{ github.repository }}" --out /tmp/ci-rca-failed.log\n'
+    "test -s /tmp/ci-rca-failed.log\n"
+)
+
+
+def _rca_data_with_fetch_step(run_body: str) -> dict[str, Any]:
+    return {
+        "jobs": {
+            "rca": {
+                "steps": [
+                    {"name": "Resolve run metadata"},
+                    {"name": "Fetch failed run logs", "run": run_body},
+                    {"name": "Fetch jobs JSON"},
+                ]
+            }
+        }
+    }
+
+
+class TestCheckCiRcaFetchClassification:
+    def test_passes_on_real_post_change_step_body(self) -> None:
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(_PASSING_FETCH_STEP_BODY)
+            _check_ci_rca_fetch_classification()
+
+    def test_rejects_literal_historical_grep(self) -> None:
+        body = _PASSING_FETCH_STEP_BODY + (
+            "TRANSIENT_ERROR_RE='failed to get jobs|failed to get run|HTTP 5[0-9][0-9]|Service Unavailable'\n"
+            'grep -qiE "$TRANSIENT_ERROR_RE" /tmp/ci-rca-failed.log\n'
+        )
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(body)
+            with pytest.raises(AssertionError, match="pattern-matching construct"):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_renamed_pattern_variable(self) -> None:
+        body = _PASSING_FETCH_STEP_BODY + ("PATTERN_X='HTTP 5[0-9][0-9]'\ngrep -qiE \"$PATTERN_X\" /tmp/ci-rca-failed.log\n")
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(body)
+            with pytest.raises(AssertionError, match="pattern-matching construct"):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_renamed_log_path_variable(self) -> None:
+        body = _PASSING_FETCH_STEP_BODY + ('LOGFILE=/tmp/ci-rca-failed.log\ngrep -qiE "HTTP 5" "$LOGFILE"\n')
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(body)
+            with pytest.raises(AssertionError, match="pattern-matching construct"):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_case_statement_shape_a_blocklist_would_miss(self) -> None:
+        body = _PASSING_FETCH_STEP_BODY + ('case "$(cat /tmp/ci-rca-failed.log)" in\n  *"HTTP 5"*) exit 1 ;;\nesac\n')
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(body)
+            with pytest.raises(AssertionError, match="pattern-matching construct"):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_awk_shape_a_blocklist_would_miss(self) -> None:
+        body = _PASSING_FETCH_STEP_BODY + ("awk '/HTTP 5/{exit 1}' /tmp/ci-rca-failed.log\n")
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(body)
+            with pytest.raises(AssertionError, match="pattern-matching construct"):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_inline_python_c_shape_a_blocklist_would_miss(self) -> None:
+        body = _PASSING_FETCH_STEP_BODY + (
+            "python3 -c \"import re,sys; sys.exit(1 if re.search('HTTP 5', open('/tmp/ci-rca-failed.log').read()) else 0)\"\n"
+        )
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(body)
+            with pytest.raises(AssertionError, match="pattern-matching construct"):
+                _check_ci_rca_fetch_classification()
+
+    def test_rejects_missing_module_invocation(self) -> None:
+        body = (
+            'RUN_ID="${{ steps.meta.outputs.run_id }}"\n'
+            'echo "no module call here" > /tmp/ci-rca-failed.log\n'
+            "test -s /tmp/ci-rca-failed.log\n"
+        )
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = _rca_data_with_fetch_step(body)
+            with pytest.raises(AssertionError, match="no longer invokes scripts.ci_rca.fetch_logs"):
+                _check_ci_rca_fetch_classification()
+
+    def test_fails_when_step_not_found(self) -> None:
+        rca_data = {"jobs": {"rca": {"steps": [{"name": "Some other step", "run": "echo hi"}]}}}
+        with patch("scripts.verify_ci_workflow._load") as mock_load:
+            mock_load.return_value = rca_data
+            with pytest.raises(AssertionError, match="not found in job"):
+                _check_ci_rca_fetch_classification()

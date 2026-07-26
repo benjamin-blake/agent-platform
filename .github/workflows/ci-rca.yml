@@ -155,35 +155,21 @@ jobs:
           echo "workflow_slug=${WORKFLOW_SLUG}" >> "$GITHUB_OUTPUT"
           echo "workflow_name=${WORKFLOW_NAME}" >> "$GITHUB_OUTPUT"
 
+      # rec-2857 forward fix: the fetch/classify/retry logic (previously an inline content grep
+      # against the merged stdout+stderr stream, which false-positived on a genuine HTTP-5xx log
+      # BODY) now lives in scripts/ci_rca/fetch_logs.py, unit-tested and structurally guarded by
+      # _check_ci_rca_fetch_classification (an allowlist over this step's run: body -- see
+      # scripts/checks/ci_guards/validate_ci_workflow_guards.py). The rec-2117 / rec-2118 /
+      # rec-2718 retry provenance lives in that module's docstring. `test -s` below is retained
+      # as a YAML-side fail-closed backstop (Decision 143 mitigation) pinned to this
+      # default-branch-checked-out file, independent of the module's own exit status.
       - name: Fetch failed run logs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID="${{ steps.meta.outputs.run_id }}"
-          # Retry loop: the workflow_run log-availability race means logs may not
-          # be ready immediately after the triggering run completes (rec-2117 / rec-2118).
-          # A transient gh API error (e.g. "failed to get jobs: HTTP 503: Service Unavailable")
-          # writes non-empty stderr into the log file, so `test -s` alone falsely satisfies
-          # "log fetched" and the retry loop never fires (rec-2718). Reject that content.
-          TRANSIENT_ERROR_RE='failed to get jobs|failed to get run|HTTP 5[0-9][0-9]|Service Unavailable'
-          LOG_FETCHED=false
-          for ATTEMPT in 1 2 3; do
-            gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > /tmp/ci-rca-failed.log 2>&1 \
-              || gh run view "$RUN_ID" --repo "${{ github.repository }}" --log > /tmp/ci-rca-failed.log 2>&1 \
-              || true
-            if test -s /tmp/ci-rca-failed.log && ! grep -qiE "$TRANSIENT_ERROR_RE" /tmp/ci-rca-failed.log; then
-              LOG_FETCHED=true
-              break
-            fi
-            echo "Attempt ${ATTEMPT}: log empty, unavailable, or a transient gh API error; waiting before retry..." >&2
-            sleep $((ATTEMPT * 10))
-          done
-          if [ "$LOG_FETCHED" != "true" ]; then
-            echo "::error::ci-rca: log file is empty or only contains a transient gh API error after ${ATTEMPT} attempts for run ${RUN_ID}. " \
-              "The log may not be available yet or the run produced no output. Failing loudly so " \
-              "the agent is not invoked on a 0-byte log (rec-2117 / rec-2118 / rec-2718)."
-            exit 1
-          fi
+          bin/venv-python -m scripts.ci_rca.fetch_logs --run-id "$RUN_ID" --repo "${{ github.repository }}" --out /tmp/ci-rca-failed.log
+          test -s /tmp/ci-rca-failed.log
 
       - name: Fetch jobs JSON
         id: jobs_json
