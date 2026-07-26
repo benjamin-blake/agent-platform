@@ -1255,6 +1255,91 @@ candidate_decisions:
         projection, so migration is plumbing with zero data movement. Cites Decisions 73, 83, 101,
         100, 75, 55, 98, 144, 126, 105, 150.
 
+  - id: CD.42
+    title: Presentation-layer boundary -- a code-defined human-facing analytical layer is a projection, never a semantic authority
+    detail: |
+      Scoped to the INTERNAL analytical surface only. Establishes the boundary any human-facing
+      analytical presentation layer must hold, independent of which tool wins T2.53's three-way
+      comparison (Evidence / Astro+charts / Observable Framework):
+
+      (a) SEMANTIC AUTHORITY STAYS SERVER-SIDE. Business aggregation, join semantics, dataset
+      grain, actual-vs-estimated classification, authorized columns, date/cardinality bounds,
+      stable ordering, and response schema+version are owned by ducklake_reader named verbs. The
+      presentation layer owns only field-to-component mapping, layout, narrative, formatting,
+      presentation-safe sort/filter/pivot, and empty/stale/partial/error states. Business semantics
+      never live in page files.
+
+      (b) GIT IS AUTHORITATIVE for pages, components, themes, layouts, source declarations and the
+      machine-readable visual contract. No browser-authored state is required for normal
+      development or production operation. This is the property that distinguishes the code-defined
+      route from a managed BI tool (QuickSight), whose running metadata store is authoritative and
+      whose export is a projection -- the inverse. That adjudication (Decisions 100/75) is
+      re-opened, not settled, by T2.53's measured cost findings.
+
+      (c) NAMED VERBS ONLY. A source adapter invokes registered `named_read` verbs at build time
+      and materializes bounded results. No caller SQL crosses the read boundary, and the adapter
+      MUST NOT become a second tenant of `query_ops` -- Decision 84 I-3 retains that verb solely for
+      the DQ harness and marks it for restriction/retirement, so a durable presentation-layer
+      consumer would convert a retiring exception into an unretirable one. Agents continue to
+      consume named verbs directly and never scrape rendered output to recover data.
+
+      (d) PRECONDITION OF ADOPT -- Decision 127. Standing Markdown pages whose audience-of-record is
+      a human dashboard viewer are the artefact class Decision 127 forbids, enforced repo-wide by
+      validate_prose_allowlist. A scoped amendment must be argued ON ITS OWN GROUNDS; the Decision
+      101(c) marketing/** carve-out does NOT transfer, because that exception rests on one-way
+      downstream-ness (never fed back into agent context) and an internal analytical dashboard
+      exists precisely to inform how the operator directs agents. "The amendment is unobtainable"
+      is a legitimate REJECT outcome for the whole class of code-defined Markdown dashboards, not
+      just for one tool.
+
+      (e) DATA-BEARING ARTIFACT. The build output is treated as data. A deterministic guard (a
+      registered validate.py check or a never-commit extension per the Decision 104 registry
+      pattern) -- not a .gitignore convention -- asserts no build artifact is tracked, because this
+      repository is PUBLIC and a materialized ops-table extract is definitionally the "export of
+      operational data" Decision 111/CD.20 forbids on the public surface. A failed data refresh
+      never publishes false zeroes and never replaces the last known-good artifact (Decisions 55,
+      62/CD.12).
+
+      SCOPE FENCE: CD.42 does NOT amend Decision 101(e) -- Astro + Starlight on Cloudflare Pages
+      remains the ratified stack for the public marketing surface regardless of T2.53's verdict.
+      CD.42 does not authorise a presentation layer for transactional or operational-control
+      interfaces; those are out of scope and need a fresh Decision.
+
+      Kept UNRATIFIED per Decisions 105/150: this is a durable, reversal-relevant commitment
+      (clears the significance bar) but its sole tenant T2.53 is deferred_post_mvp, so it ratifies
+      to a numbered Decision on the proof-of-concept verdict (adopt / constrain / reject), carrying
+      the winning tool name and reversal conditions. Design rationale:
+      docs/plans/reports/REPORT-evidence-dashboarding-poc.md.
+    gates: [T2.53]
+    state: pending
+    filed_via: pending_log_decision_lambda
+    discipline_points:
+      - >-
+        Source adapters bind to `named_read` verbs only; `query_ops` gains no second tenant
+        (Decision 84 I-3). Build-time reads honour the Decision 88 egress budget -- never re-query
+        data already in the local read cache; reuse warm connections.
+      - >-
+        Custom components are exceptional and require evidence that built-in components or chart
+        configuration are insufficient. Extensive custom components mean the tool has become a
+        bespoke frontend framework, which is a REJECT signal, not an implementation detail.
+      - >-
+        The Node/toolchain dependency surface is isolated and pinned, and upstream project liveness
+        is a GATING check at adoption time (publish cadence, repository commit activity, security
+        advisory responsiveness), re-verified rather than inherited from the scoping report.
+      - >-
+        Any upstream build-time telemetry is explicitly disabled AND the disablement is verified as
+        an exit criterion (confidential-data boundary, Decisions 73/83/101).
+      - >-
+        Visual accessibility and responsive behaviour are programmatically checked. Mechanizable
+        gates (strict build, schema match, zero console errors, axe violations, viewport overflow)
+        are separated from aesthetic judgement, which stays with the human -- a passing check suite
+        is not a claim that the dashboard is good.
+      - >-
+        Reversal: the presentation layer is a read-only projection over governed datasets, so
+        replacing it (or removing the UI entirely and reverting to structured agent reports) is
+        plumbing with zero data movement and no change to the named-verb contracts. Cites Decisions
+        84, 86, 88, 93, 100, 101, 104, 105, 111, 127, 137, 150, 55, 62, 75, 87.
+
 tier_items:
   # ----- T-1: Governance ratification + harness integration -----
   - id: T-1.0
@@ -5409,22 +5494,34 @@ tier_items:
         text: >-
           A scheduled daily job pulls AWS Cost Explorer plus the per-vendor billing/usage APIs
           (Anthropic usage API; DeepSeek; Neon via its billing/management HTTPS API, NEVER a
-          DuckLake catalog query -- Decision 88) into a private-S3 snapshot at grain one row per
+          DuckLake catalog query -- Decision 88) into a GOVERNED DUCKLAKE TABLE at grain one row per
           vendor per cost-date per as-of/pull-date (append-only, event-time-partitioned; CE
-          current-month figures are provisional and get restated). A stale/absent snapshot or an
-          unparseable source fails loud / files a rec, never silently shows stale-as-current
+          current-month figures are provisional and get restated). [Amended by
+          PLAN-evidence-dashboarding-poc: the original text specified a bespoke private-S3 snapshot
+          file. DuckLake IS Parquet-in-S3 with catalog metadata in Neon, so the stated grain was
+          already DuckLake-shaped -- this is a routing amendment, not a re-scope. Writes transit
+          ducklake_writer; reads transit ducklake_reader named verbs, so the same governed dataset
+          serves agents and any human-facing projection (CD.42(a)/(c)). Confidential figures still
+          rest only in the personal AWS account and are never committed.] A stale/absent snapshot or
+          an unparseable source fails loud / files a rec, never silently shows stale-as-current
           (Decision 55/62)
         status: open
       - id: c3
         text: >-
-          A rendered static projection (spend by vendor AND its trend over time) is served via the
-          CD.41 pattern: Cloudflare Access authenticates a private Access-gated subdomain of
-          theseus.support; an in-AWS Lambda verifies the Access JWT (JWKS/iss/aud/exp) and mints a
-          <=5-min single-object presigned GET (a TTL-bounded bearer capability -- S3 does not check
-          the JWT). The browser loads directly from S3. No AWS credential leaves AWS; the payload
-          never transits Cloudflare (only the short-lived capability pointer does, once). The
-          renderer is unconstrained (static pre-rendered is the MVP instance, not a pattern
-          constraint)
+          A rendered static projection (spend by vendor AND its trend over time), sourced from c2's
+          governed table via ducklake_reader named verbs (never caller SQL, never direct catalog or
+          object-store access -- CD.42(c)), is served via the CD.41 pattern: Cloudflare Access
+          authenticates a private Access-gated subdomain of theseus.support; an in-AWS Lambda
+          verifies the Access JWT (JWKS/iss/aud/exp) and mints a <=5-min single-object presigned GET
+          (a TTL-bounded bearer capability -- S3 does not check the JWT). The browser loads directly
+          from S3. No AWS credential leaves AWS; the payload never transits Cloudflare (only the
+          short-lived capability pointer does, once). The renderer is unconstrained (static
+          pre-rendered is the MVP instance, not a pattern constraint). [Amended by
+          PLAN-evidence-dashboarding-poc: the renderer CHOICE and the unresolved multi-file-static-
+          site vs CD.41-invariant-(b) serving question (REPORT-cost-visibility-dashboard section
+          5.4) are REHOMED to tier item T2.53 and are no longer decided by this item. If T2.53
+          rejects a multi-file renderer, this criterion is satisfiable by the single-object MVP
+          instance as originally written.]
         status: open
       - id: c4
         text: >-
@@ -5442,7 +5539,223 @@ tier_items:
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): author as atomic IMPLEMENTATION plan(s) at reactivation
     status: deferred_post_mvp
-    progress_note: "Scoped deferred_post_mvp (Decision 93) via PLAN-cost-visibility-dashboard / REPORT-cost-visibility-dashboard (2b architecture; Fable advice-consulted). Value scales with spend; today variable spend is noise vs the (out-of-scope) fixed subscription -- the two future cost 'whales' are inference (activity-driven, near-term) and S3 storage (data-driven, long-term). Activation trigger: the frozen executor (Decision 67) unfreezes and LLM-API spend is non-trivial, OR the monthly cost_reconciliation begins tripping thresholds regularly. Precedes the Semanto marketing surface (ROADMAP-SEMANTO S1.x) in priority but has NO dependency on it (private-AWS + Cloudflare-Access vs public-Cloudflare-Pages surfaces). Transitive active dependents: none. Reactivate by restoring status -> not_started; ratify CD.41 and re-ground the stale anthropic_pool_size_usd baseline against the owner's current subscription tier at that time."
+    progress_note: "Scoped deferred_post_mvp (Decision 93) via PLAN-cost-visibility-dashboard / REPORT-cost-visibility-dashboard (2b architecture; Fable advice-consulted). Value scales with spend; today variable spend is noise vs the (out-of-scope) fixed subscription -- the two future cost 'whales' are inference (activity-driven, near-term) and S3 storage (data-driven, long-term). Activation trigger: the frozen executor (Decision 67) unfreezes and LLM-API spend is non-trivial, OR the monthly cost_reconciliation begins tripping thresholds regularly. Precedes the Semanto marketing surface (ROADMAP-SEMANTO S1.x) in priority but has NO dependency on it (private-AWS + Cloudflare-Access vs public-Cloudflare-Pages surfaces). Transitive active dependents: none. Reactivate by restoring status -> not_started; ratify CD.41 and re-ground the stale anthropic_pool_size_usd baseline against the owner's current subscription tier at that time. AMENDED 2026-07-26 (PLAN-evidence-dashboarding-poc, REPORT-evidence-dashboarding-poc): c2 routes the cost snapshot into a GOVERNED DUCKLAKE TABLE served by named verbs rather than a bespoke private-S3 snapshot file (routing amendment, not a re-scope -- DuckLake is Parquet-in-S3 and the stated grain was already DuckLake-shaped), so one governed dataset serves agents and any human projection; c3's RENDERER CHOICE and the unresolved multi-file-static-site vs CD.41-invariant-(b) serving question (REPORT-cost-visibility-dashboard section 5.4) are REHOMED to T2.53. All five criteria were status:open at amendment time, so no met_by provenance was re-pointed (Decision 136/CD.39)."
+
+  - id: T2.52
+    tier: T2
+    name: Analytical/semantic layer -- aggregate named-verb class + derived-asset materialization mode
+    intent: |
+      The prerequisite that must exist before any human-facing analytical presentation layer is
+      worth testing. Two halves:
+
+      (1) A NET-NEW CLASS of analytical-aggregate `named_read` verbs. Today's NAMED_READS registry
+      (src/common/ducklake_scd2_schema.py, NAMED_READS_VERSION 3) is 12 verbs over 3 tables
+      (ops_recommendations, ops_decisions, ops_priority_queue) and every one is an OPERATIONAL
+      LOOKUP -- there is no aggregate verb of any kind. Aggregate verbs own business aggregation,
+      join semantics, dataset grain, actual-vs-estimated classification, authorized columns,
+      date/cardinality bounds, stable ordering, and a versioned response schema, so that agents and
+      any human projection consume the SAME governed dataset (CD.42(a)). Named verbs are SERVING
+      LEAVES: a verb never invokes another verb (that would compound Lambda latency and failure,
+      obscure lineage, complicate backfills, and prevent atomic publication).
+
+      (2) A REBUILDABLE-DERIVED-ASSET write mode in docs/contracts/data-modeling-standard.yaml,
+      which today defines only scd2 and append_only and has no mode for derived aggregates. Derived
+      aggregates must NOT be force-fitted into SCD2 (they are not mutable entities): admissible
+      shapes are append-only aggregate snapshots, incrementally replaced time partitions, versioned
+      materialization runs with a current pointer, or complete atomic rebuilds. A logical asset must
+      be able to move from a virtual query to a persisted materialization WITHOUT changing its
+      named-verb contract or any downstream consumer.
+
+      Asset-oriented, not verb-oriented: the DAG connects data assets (source facts -> canonical
+      domain assets -> reusable aggregates -> semantic projections) and named verbs sit at the edge
+      as serving leaves. Design rationale: docs/plans/reports/REPORT-evidence-dashboarding-poc.md
+      section 9.
+    depends_on: []
+    files_in_scope:
+      - docs/contracts/data-modeling-standard.yaml    # touch -- add the rebuildable-derived-asset write mode
+      - docs/contracts/storage-substrate.yaml    # touch -- per-asset substrate/grain/write-mode entries
+      - src/common/ducklake_scd2_schema.py    # touch -- analytical-aggregate NamedRead entries (registry version bump)
+      - src/lambdas/ducklake_reader/handler.py    # touch -- serve the new verb class (no new action; named_read dispatch)
+      - docs/contracts/ducklake_reader.yaml    # touch -- document the aggregate verb surface
+    exit_criteria:
+      - id: c1
+        text: >-
+          docs/contracts/data-modeling-standard.yaml declares a rebuildable-derived-asset write mode
+          alongside scd2/append_only, enumerating the admissible materialization shapes (append-only
+          aggregate snapshot, incrementally replaced time partition, versioned run with a current
+          pointer, complete atomic rebuild) and, per asset, the required declarations: asset id,
+          one-row-per grain, input assets, output schema contract, virtual-vs-persisted
+          materialization, incremental watermark and lookback, late-arrival/correction behaviour,
+          partitioning, backfill behaviour, atomic publication method, freshness expectation, DQ
+          checks, and code+input lineage
+        status: open
+      - id: c2
+        text: >-
+          The new write mode opens NO unpartitioned-table path -- every derived asset declares a
+          partition column, and any per-table exception is named explicitly rather than expressed as
+          a loosened uniform rule (Decision 137 / CD.9, which is absolute)
+        status: open
+      - id: c3
+        text: >-
+          At least one analytical-aggregate verb is registered in NAMED_READS and served by
+          ducklake_reader over a real governed table, with a declared response schema, bounded
+          results, stable ordering, and the registry_version stamp usable for build-time
+          compatibility checking. The verb is a SERVING LEAF: it invokes no other verb
+        status: open
+      - id: c4
+        text: >-
+          A logical asset is demonstrated to move from a virtual query to a persisted
+          materialization WITHOUT any change to its named-verb response contract (the property that
+          makes downstream consumers, human or agent, insensitive to materialization decisions)
+        status: open
+      - id: c5
+        text: >-
+          Aggregate-verb serving honours the Decision 88 Neon egress budget -- warm-connection reuse
+          and no re-query of data already held in the local read cache. A per-build or per-page full
+          catalog read is the amplification shape that produced the 2026-06-15 free-tier breach and
+          is explicitly out of bounds
+        status: open
+      - id: c6
+        text: >-
+          docs/contracts/ducklake_reader.yaml documents the aggregate verb surface, and the verbs are
+          reachable via the existing `named_read` action -- no new caller-SQL path is introduced and
+          `query_ops` gains no new tenant (Decision 84 I-3 retains it for the DQ harness only and
+          marks it for restriction/retirement)
+        status: open
+    related_candidate_decisions: [CD.9, CD.42]
+    related_decisions: [78, 81, 84, 86, 87, 88, 93, 96, 97, 118, 127, 137, 141]
+    effort: L
+    strategic: false    # freeze override (AGENTS.md / CD.17): author as atomic IMPLEMENTATION plan(s) at reactivation
+    status: deferred_post_mvp
+    progress_note: "Scoped deferred_post_mvp (Decision 93 conscious-deferral rule) via PLAN-evidence-dashboarding-poc / REPORT-evidence-dashboarding-poc. DEFERRAL RATIONALE: an analytical aggregate layer serves human-facing reporting and cross-table analysis, both outside the rec -> implement -> validate -> merge -> deploy -> observe -> next rec loop that defines the Platform-MVP boundary; and no consumer exists for it today -- cost data is unbuilt (T2.51 deferred), telemetry is unmigrated (T2.36 / Decision 84 Phase 4), and data-quality coverage is 0 tables / 0 checks. Building it now is the build-ahead-of-need shape Decision 87 consciously refused. ACTIVATION TRIGGER: a governed dataset exists that a human or an analysis agent actually needs to read in aggregate -- concretely T2.51 reactivates, OR telemetry lands on DuckLake (T2.36), OR data-quality coverage becomes non-zero. Triggered by a real tenant, never scheduled ahead of one. Note docs/contracts/data-modeling-standard.yaml carries no top-level contract:/class: key, so validate_contract_drift skips it and the CD.25 pre-codegen ratification ritual (Decision 118) does NOT apply to the write-mode amendment. Transitive active dependents: none (T2.53 is itself deferred). Reactivate by restoring status -> not_started."
+
+  - id: T2.53
+    tier: T2
+    name: Human-facing analytical presentation layer -- bounded three-way proof of concept (adopt/constrain/reject)
+    intent: |
+      Test whether a code-defined, Git-governed presentation layer -- backed EXCLUSIVELY by
+      versioned ducklake_reader named datasets -- can serve as this repository's standard
+      agent-authored, human-facing analytical surface WITHOUT introducing a second semantic
+      authority or disproportionate frontend infrastructure. Bounded proof of concept, NOT
+      platform-wide adoption; its output is an adopt / constrain / reject verdict against criteria
+      committed BEFORE the experiment runs (REPORT-evidence-dashboarding-poc section 11).
+
+      THREE-WAY, not a referendum on one tool: Evidence (evidence.dev) vs Astro-with-a-charting-
+      library vs Observable Framework. Evaluating Evidence alone cannot answer the question that
+      actually matters -- whether the data-aware component library is worth a second Node stack,
+      given Decision 101(e) already ratifies Astro + Starlight for the public marketing surface.
+
+      DEPENDS ON T2.52 EVEN THOUGH IT USES NO LIVE DATA. The agent development loop is
+      fixture-driven for determinism and to avoid credentials and egress -- but the fixtures are
+      CONTRACT-DERIVED: the generator emits data conforming to a named verb's declared response
+      schema. Without T2.52's analytical-aggregate schema contracts there is nothing to derive
+      fixtures from, and the proof of concept would test invented shapes no governed dataset will
+      ever produce. The dependency is on the CONTRACTS, not on live data or materialized aggregates.
+
+      Two blocking preconditions, both established at scoping and neither a quality judgement about
+      any tool: (1) Decision 127 forbids standing human-audience Markdown as a repository artefact,
+      and the Decision 101(c) marketing/** carve-out does NOT transfer (it rests on one-way
+      downstream-ness; an internal dashboard feeds back into how the operator directs agents), so
+      the amendment must be argued on its own grounds and may prove unobtainable; (2) a multi-file
+      static site collides with CD.41 invariant (b) -- CloudFront/OAC behind Cloudflare Access
+      breaks (b), and preserving (b) forces a non-Cloudflare-proxied origin that loses the Access
+      gate and needs edge-side JWT verification. Full analysis:
+      docs/plans/reports/REPORT-evidence-dashboarding-poc.md.
+    depends_on: [T2.52]
+    files_in_scope:
+      - config/agent/visual_contract.yaml    # new -- machine-readable design contract (semantic colours, number formats, actual-vs-estimated, chart conventions, viewports, missing-data behaviour)
+      - scripts/dashboard/    # new subpackage -- contract-derived fixture generator + named-verb source adapter
+      - docs/plans/reports/REPORT-evidence-dashboarding-poc.md    # touch -- record the verdict and the re-verified upstream figures
+      - .github/dependabot.yml    # touch -- npm ecosystem entry IF and only if a Node stack is adopted (Decision 83 governed surface)
+    exit_criteria:
+      - id: c1
+        text: >-
+          An agent scaffolds, renders, inspects and iterates a dashboard for all three candidates
+          entirely within an ephemeral development container, from contract-derived fixtures, with
+          NO live data and NO credentials. Fixtures exercise adversarial presentation states: empty
+          datasets, single and many series, long labels, missing/partial periods, actual vs
+          estimated values, outliers, zeroes, negative adjustments, stale data, wide tables, and
+          both mobile and desktop viewports
+        status: open
+      - id: c2
+        text: >-
+          The source adapter consumes `named_read` verbs ONLY; no caller SQL crosses the read
+          boundary and `query_ops` gains no second tenant (Decision 84 I-3). Fixture and live
+          adapters expose IDENTICAL schemas, and a strict build FAILS (rather than rendering an
+          error component) on a broken query, a schema mismatch, or an unresolvable dataset
+        status: open
+      - id: c3
+        text: >-
+          Mechanizable gates are implemented and demonstrated to CATCH DELIBERATELY BROKEN fixtures:
+          zero browser console errors, zero axe accessibility violations at the agreed conformance
+          level, no horizontal overflow at declared viewports, and captured diffable screenshots.
+          Aesthetic judgement is explicitly NOT mechanized -- screenshots are presented for a human
+          verdict, and a passing check suite is never reported as "the dashboard is good"
+        status: open
+      - id: c4
+        text: >-
+          config/agent/visual_contract.yaml exists and governs semantic colours, number formats,
+          actual-vs-estimated presentation, chart conventions, responsive viewports and missing-data
+          behaviour, so individual agents cannot invent inconsistent UI semantics. Actual,
+          estimated, forecast, unreconciled, missing and zero values are visibly distinguished and
+          never silently combined
+        status: open
+      - id: c5
+        text: >-
+          A scoped Decision-127 amendment permitting standing human-audience dashboard pages is
+          obtained ON ITS OWN GROUNDS (NOT by analogy to the Decision 101(c) marketing/** carve-out,
+          whose one-way-downstream basis does not transfer). If the amendment is judged
+          unobtainable, that is a REJECT verdict for the entire code-defined-Markdown-dashboard
+          class and this item closes with that finding recorded -- a legitimate completion, not a
+          failure
+        status: open
+      - id: c6
+        text: >-
+          A CD.41-invariant-(b)-compliant serving mechanism for the chosen renderer's output is
+          identified and costed (edge JWT verification, signed cookies, or single-object bundling),
+          OR the multi-file renderer is rejected on that basis. This question is REHOMED here from
+          T2.51 c3 / REPORT-cost-visibility-dashboard section 5.4
+        status: open
+      - id: c7
+        text: >-
+          A DETERMINISTIC GUARD -- a registered validate.py check or a never-commit extension per the
+          Decision 104 registry pattern, NOT a .gitignore convention -- asserts that no build
+          artifact is tracked. This repository is PUBLIC and a materialized ops-table or cost
+          extract is definitionally the "export of operational data" Decision 111/CD.20 forbids on
+          the public surface; the existing never-commit hook covers account IDs and secret shapes
+          only. Production builds against live data run in-AWS, never on a GitHub-hosted runner
+          without artifact and log discipline
+        status: open
+      - id: c8
+        text: >-
+          Any upstream build-time telemetry is disabled AND the disablement is VERIFIED (Evidence
+          ships @evidence-dev/telemetry as a direct dependency). An upstream-liveness check is run at
+          proof-of-concept time -- publish cadence, repository commit activity, security-advisory
+          responsiveness -- and its figures re-verified rather than inherited from the scoping
+          report, whose npm data is explicitly point-in-time
+        status: open
+      - id: c9
+        text: >-
+          The AWS QuickSight rejection is RE-ADJUDICATED against the proof of concept's MEASURED
+          build and carry cost (Decisions 100/75; discriminator: Git-authoritative definition vs
+          service-side-authoritative metadata whose export is a projection). If code-defined costs
+          materially more than its agent-inspectability is worth, the managed option is reconsidered
+          on evidence rather than deemed settled by the scoping report
+        status: open
+      - id: c10
+        text: >-
+          An adopt / constrain / reject verdict is recorded against the pre-committed criteria in
+          REPORT-evidence-dashboarding-poc section 11, naming the winning candidate (or none), and
+          CD.42 is ratified to a numbered Decision carrying that verdict and its reversal conditions
+          (Decisions 105/150). "No UI layer -- structured agent reports suffice" is an admissible
+          verdict and must not be treated as a null result
+        status: open
+    related_candidate_decisions: [CD.41, CD.42]
+    related_decisions: [55, 62, 75, 83, 84, 86, 87, 88, 93, 100, 101, 104, 105, 111, 127, 132, 133, 150]
+    effort: L
+    strategic: false    # freeze override (AGENTS.md / CD.17): author as atomic IMPLEMENTATION plan(s) at reactivation
+    status: deferred_post_mvp
+    progress_note: "Scoped deferred_post_mvp (Decision 93 conscious-deferral rule) via PLAN-evidence-dashboarding-poc / REPORT-evidence-dashboarding-poc. DEFERRAL RATIONALE: a human-facing analytical presentation layer is by construction outside the rec -> implement -> validate -> merge -> deploy -> observe -> next rec loop that defines the Platform-MVP boundary (the same basis on which Decision 93 parked T2.11a/T2.11b), and no candidate tenant has a live governed dataset -- cost data is unbuilt (T2.51 deferred), telemetry unmigrated (T2.36), DQ coverage 0 tables / 0 checks. ACTIVATION TRIGGER: T2.52 completes AND a real human reader exists for the dataset it exposes. SCOPING FINDINGS (npm, 2026-07-26, POINT-IN-TIME -- re-verify at reactivation): @evidence-dev/evidence published 406 versions in 2023, 179 in 2024, 13 in 2025, 1 in 2026 (last 2026-02-06, same date as core-components/sdk/duckdb), major frozen at 40 since 2024-12-10; peer tree hard-pinned (@sveltejs/kit 2.8.4, svelte 4.2.19, vite 5.4.21, typescript 5.4.2) so Dependabot structurally cannot service it; @evidence-dev/telemetry is a direct dependency; @evidence-dev/universal-sql plus a shipped /explore/console page means the deployed artifact carries a client-side DuckDB-WASM query console, which is the 'second semantic layer' on the hypothesis's own reject list. Comparators far more active: astro 7.1.3 (2026-07-20), @astrojs/starlight 0.41.4 (2026-07-22), @observablehq/framework 1.13.4 (2026-04-06). Container feasibility favourable: Node v22.22.2, npm 10.9.7, pre-installed Chromium, npm registry reachable; repo tracks zero JS/TS files today. Transitive active dependents: none. Reactivate by restoring status -> not_started."
 
   # ----- T3: Trust loop closure -----
   - id: T3.1
