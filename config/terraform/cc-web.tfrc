@@ -1,14 +1,24 @@
-# Terraform CLI config for CC-web sessions (rec-2514 / Decision 119 reversal mechanism).
+# Terraform CLI config, TWO consumers (rec-2514 / Decision 119 reversal mechanism; PLAN-ci-provider-
+# mirror-terraform-init-hardening extended the second consumer below):
+#   1. CC-web admin-container sessions, via bin/setup-cloud-env.sh (INSTALL_TERRAFORM=1).
+#   2. GitHub-hosted terraform-validate (.github/workflows/ci.yml), which renders its own resolved
+#      copy directly in the job -- decoupling the required, branch-protection-gating check from
+#      github.com provider-asset availability.
 #
 # Routes the kislerdm/neon provider (terraform/personal) through a local filesystem_mirror seeded
 # from s3://agent-platform-data-lake/tf-provider-mirror/ (see
 # .github/workflows/terraform-provider-mirror-seed.yml) instead of a direct github.com checksum
-# fetch, which the CC-web outbound proxy 403s (Decision 119). hashicorp/* providers still resolve
-# direct from releases.hashicorp.com, which the proxy does not block.
+# fetch, which the CC-web outbound proxy 403s (Decision 119) and which an upstream github.com
+# outage can independently 5xx regardless of proxy. hashicorp/* providers still resolve direct
+# from releases.hashicorp.com, which neither the proxy nor this mirror concern affects.
 #
-# __TF_MIRROR_DIR__ is a literal placeholder, NOT a shell variable -- it is substituted by
-# bin/setup-cloud-env.sh into a resolved copy of this file before TF_CLI_CONFIG_FILE is exported.
-# This committed copy is never edited in place at runtime.
+# Deliberately NOT renamed despite serving two consumers now -- a rename would orphan the path
+# named verbatim in Decision 120's ratified body and in terraform/CLAUDE.md (the forward-direction
+# amendment convention forbids editing a ratified Decision's original text to chase it).
+#
+# __TF_MIRROR_DIR__ is a literal placeholder, NOT a shell variable -- each consumer substitutes it
+# into its own resolved copy of this file before TF_CLI_CONFIG_FILE is exported. This committed
+# copy is never edited in place at runtime by either consumer.
 provider_installation {
   filesystem_mirror {
     path    = "__TF_MIRROR_DIR__"

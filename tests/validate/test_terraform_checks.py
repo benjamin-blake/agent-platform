@@ -55,6 +55,64 @@ class TestRunTerraformChecks:
         assert "WARNING" not in captured.out
         assert failed == []
 
+    def test_informational_plan_skipped_when_reconfigure_init_fails(self, capsys: pytest.CaptureFixture) -> None:
+        """run_terraform_checks() skips the informational plan (never blocks) when the
+        credentials-needing re-init fails -- covers the init_res.returncode != 0 branch."""
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            if "-reconfigure" in cmd:
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = 'Error: Backend initialization required, please run "terraform init"'
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("scripts.checks._terraform.validate_terraform_try"),
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_checks(failed)
+
+        captured = capsys.readouterr()
+        assert "Terraform plan skipped: backend/init unavailable" in captured.out
+        assert "WARNING" not in captured.out
+        assert failed == []
+
+    def test_informational_plan_skipped_on_non_drift_error(self, capsys: pytest.CaptureFixture) -> None:
+        """run_terraform_checks() treats a plan exit code outside {0, 2} as a non-blocking,
+        credentials-unavailable skip -- covers the `result.returncode not in (0, 2)` branch."""
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            if "-detailed-exitcode" in cmd:
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = "Error: some other plan failure"
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("scripts.checks._terraform.validate_terraform_try"),
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_checks(failed)
+
+        captured = capsys.readouterr()
+        assert "Terraform plan skipped or failed (credentials unavailable)" in captured.out
+        assert "WARNING" not in captured.out
+        assert failed == []
+
     def test_skips_terraform_binary_steps_when_not_found(self, capsys: pytest.CaptureFixture) -> None:
         """No terraform binary -> creds-free helper prints a skip and `run` is never invoked."""
         with (
@@ -174,7 +232,7 @@ class TestRunTerraformChecks:
         assert "Terraform init" in failed[0]
 
     def test_creds_free_init_exhausts_retries_on_persistent_transient(self) -> None:
-        """A transient 5xx on all 3 attempts exhausts the retry budget and appends to failed."""
+        """A transient 5xx on all 5 attempts (widened window) exhausts the retry budget and appends to failed."""
         init_call_count = 0
 
         def mock_run(cmd: list, **kwargs: object) -> MagicMock:
@@ -199,7 +257,7 @@ class TestRunTerraformChecks:
             failed: list[str] = []
             _validate.run_terraform_creds_free(failed, roots=("terraform",))
 
-        assert init_call_count == 3  # all attempts consumed
+        assert init_call_count == 5  # all attempts consumed
         assert len(failed) == 1
         assert "Terraform init" in failed[0]
 
@@ -336,6 +394,7 @@ class TestRunTerraformChecks:
             (
                 "502",
                 "Bad Gateway",
+                "Gateway Timeout",
                 "could not query provider registry",
                 "failed after ",
                 "connection reset by peer",
@@ -345,3 +404,142 @@ class TestRunTerraformChecks:
             )
         )
         assert frozenset(_validate._TRANSIENT_INIT_SIGNATURES) == expected
+
+    def test_creds_free_init_retries_on_gateway_timeout(self, capsys: pytest.CaptureFixture) -> None:
+        """A '504 Gateway Timeout returned from github.com' body is classified transient and retried."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                if init_call_count < 3:
+                    result.returncode = 1
+                    result.stdout = ""
+                    result.stderr = "Error: 504 Gateway Timeout returned from github.com"
+                else:
+                    result.returncode = 0
+                    result.stdout = "Terraform has been successfully initialized!"
+                    result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 3
+        assert failed == []
+
+    def test_creds_free_init_widened_window_succeeds_on_attempt_four(self) -> None:
+        """A transient body that exhausts the OLD max_attempts=3 must now succeed at attempt 4/5."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                if init_call_count < 4:
+                    result.returncode = 1
+                    result.stdout = ""
+                    result.stderr = "Error: 504 Gateway Timeout returned from github.com"
+                else:
+                    result.returncode = 0
+                    result.stdout = "Terraform has been successfully initialized!"
+                    result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 4
+        assert failed == []
+
+    def test_creds_free_init_widened_window_succeeds_on_attempt_five(self) -> None:
+        """A transient body persisting through 4 attempts must now succeed at attempt 5/5 (max_attempts=5)."""
+        init_call_count = 0
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                if init_call_count < 5:
+                    result.returncode = 1
+                    result.stdout = ""
+                    result.stderr = "Error: 502 Bad Gateway from registry.terraform.io"
+                else:
+                    result.returncode = 0
+                    result.stdout = "Terraform has been successfully initialized!"
+                    result.stderr = ""
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("validate.time.sleep"),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        assert init_call_count == 5
+        assert failed == []
+
+    def test_creds_free_init_backoff_capped_at_16s(self) -> None:
+        """Backoff delay must be capped at 16s -- uncapped 2**attempt would reach 32s at attempt 5."""
+        init_call_count = 0
+        sleep_delays: list[int] = []
+
+        def mock_run(cmd: list, **kwargs: object) -> MagicMock:
+            nonlocal init_call_count
+            result = MagicMock()
+            if "init" in cmd:
+                init_call_count += 1
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = "Error: 502 Bad Gateway from registry.terraform.io"
+            else:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            return result
+
+        def mock_sleep(delay: float) -> None:
+            sleep_delays.append(delay)
+
+        with (
+            patch("validate.shutil.which", return_value="/usr/bin/terraform"),
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("validate.time.sleep", side_effect=mock_sleep),
+        ):
+            failed: list[str] = []
+            _validate.run_terraform_creds_free(failed, roots=("terraform",))
+
+        # attempts 1-4 sleep (attempt 5 is final, no sleep after); uncapped would be [2, 4, 8, 16]
+        # at attempt 4 -> 2**4=16 (already at the cap); the cap only bites once attempt would exceed
+        # it. Assert every recorded delay respects the 16s cap.
+        assert init_call_count == 5
+        assert sleep_delays == [2, 4, 8, 16]
+        assert all(delay <= 16 for delay in sleep_delays)

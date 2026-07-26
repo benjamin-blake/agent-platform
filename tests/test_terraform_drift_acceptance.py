@@ -18,6 +18,7 @@ from scripts.executor.acceptance_lint import lint_acceptance_command
 
 WORKFLOWS_DIR = Path(".github/workflows")
 DRIFT_WORKFLOW = WORKFLOWS_DIR / "terraform-drift.yml"
+INIT_RETRY_ACTION = Path(".github/actions/terraform-init-retry/action.yml")
 
 _PORTAL_PATTERN = re.compile(r"scripts\.ops_data_portal|\.venv/bin/python\s+-m\s+scripts\.ops_data_portal")
 _ACCEPTANCE_DOUBLE = re.compile(r'--acceptance\s+"([^"]+)"')
@@ -188,3 +189,21 @@ def test_drift_workflow_init_retry_signature_parity() -> None:
     retry_line = grep_lines[0]
     missing = [sig for sig in _TRANSIENT_INIT_SIGNATURES if sig not in retry_line]
     assert not missing, f"terraform-drift.yml init-retry grep -qE line is missing signatures: {missing}"
+
+
+def test_terraform_init_retry_action_signature_parity() -> None:
+    """.github/actions/terraform-init-retry/action.yml must carry every
+    _TRANSIENT_INIT_SIGNATURES entry in its executable grep -qE line, anchored on the
+    non-comment line so the enumerating comment above it cannot satisfy the guard.
+
+    This consumer had NO parity test prior to PLAN-ci-provider-mirror-terraform-init-hardening;
+    this test adds that coverage.
+    """
+    lines = INIT_RETRY_ACTION.read_text(encoding="utf-8").splitlines()
+    grep_lines = [ln for ln in lines if not ln.lstrip().startswith("#") and "grep -qE" in ln]
+    assert len(grep_lines) == 1, f"expected exactly one non-comment grep -qE line, found {len(grep_lines)}"
+    retry_line = grep_lines[0]
+    missing = [sig for sig in _TRANSIENT_INIT_SIGNATURES if sig not in retry_line]
+    assert not missing, (
+        f".github/actions/terraform-init-retry/action.yml init-retry grep -qE line is missing signatures: {missing}"
+    )

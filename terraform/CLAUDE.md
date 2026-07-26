@@ -38,14 +38,15 @@ with nothing in the mirror to serve). With that mirror synced, local `terraform 
 
 This RELAXES but does NOT REMOVE the CI-delegation: routine (non-admin) `terraform validate`/`plan`/`apply`
 for `terraform/personal` remain CI-mediated and authoritative regardless of any given container's
-mirror state -- `validate` via the required `terraform-validate` job (Decision 83); `plan`/`apply` via
-the speculative-plan + apply-the-saved-plan pipeline described below (Decision 77 / Decision 92). The
-mirror-enabled local-init path exists for the ADMIN container's interactive human-gated apply loop
-(IAM/trust/destroy changes that guard-BLOCK the CD pipeline, Decision 94 escape hatch; hand-applied
-recovery) -- it is not a general invitation to bypass the CI pipeline for routine changes. See
-Decision 119 for the original constraint and Decision 120 for the realized reversal mechanism and its
-own reversal conditions (mirror sync ceasing to be maintained falls back to this section's original
-CI-delegated posture with no code change required).
+mirror state -- `validate` via the required `terraform-validate` job (Decision 83; NOT CC-web-only
+-- mirror-consuming, read-only, version-gated, fail-open, rec-2836); `plan`/`apply`
+via the speculative-plan + apply-the-saved-plan pipeline described below (Decision 77 / Decision 92).
+The mirror-enabled local-init path exists for the ADMIN container's interactive human-gated apply
+loop (IAM/trust/destroy changes that guard-BLOCK the CD pipeline, Decision 94 escape hatch) --
+not a routine-change CI bypass. See Decision 119 for the original
+constraint and Decision 120 for the realized reversal mechanism and its own reversal conditions
+(mirror sync ceasing to be maintained falls back to this section's original CI-delegated posture
+with no code change required).
 
 `terraform/personal/terraform.personal.tfvars` is **gitignored** (`.gitignore`:
 `terraform/**/terraform.personal.tfvars`), so it is NOT in the fresh clone and there is no standalone
