@@ -125,6 +125,12 @@ class Reader(Protocol):
 
     Both DuckDBIcebergReader and any future Athena-backed implementation must
     satisfy this protocol without changing call sites (CD.8).
+
+    named(), query() and describe() are deliberately NOT part of this Protocol -- named() and
+    query() were already undeclared DuckLakeReader-only extras before this file added describe(),
+    so widening the Protocol to cover the new method would silently formalise that gap by omission
+    rather than by decision. A caller that needs describe() holds a DuckLakeReader (or the
+    narrower structural type it needs), not the Reader Protocol.
     """
 
     def current_state(
@@ -345,6 +351,38 @@ class DuckDBIcebergReader:
             return None
 
 
+class ReaderInvokeError(RuntimeError):
+    """A ducklake_reader invocation returned a non-200 response.
+
+    Carries the HTTP status and the parsed JSON error body (when the body parses as JSON; None
+    otherwise) alongside the flat message, so a caller building typed exceptions on top (e.g.
+    scripts/agent_sdk/errors.py) can map the boundary's own {"ok": false, "error"/"error_type"}
+    shapes instead of regexing this exception's message string. Defined HERE (not imported from
+    scripts/agent_sdk/errors.py) because this module is bundled into the data-pipeline and
+    ops-compaction Lambda manifests, which enumerate scripts/ files explicitly and do not include
+    scripts/agent_sdk/** -- a module-scope import from there would ModuleNotFoundError in both
+    prod Lambdas. errors.py imports FROM here, never the reverse. Subclassing RuntimeError keeps
+    the existing repo-wide `except RuntimeError` reader site (scripts/verifiers/athena_views.py)
+    from regressing.
+    """
+
+    def __init__(self, action: str | None, status: int | None, text: str, body: dict[str, Any] | None) -> None:
+        self.action = action
+        self.status = status
+        self.text = text
+        self.body = body
+        super().__init__(f"ducklake_reader {action!r} failed (HTTP {status}): {text[:300]}")
+
+
+def _parse_error_body(text: str) -> dict[str, Any] | None:
+    """Best-effort JSON-parse of a reader error response body; None if it isn't a JSON object."""
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 class DuckLakeReader:
     """DuckLake closed-boundary read layer (T2.19 / Decision 81): reads transit ducklake_reader.
 
@@ -416,6 +454,7 @@ class DuckLakeReader:
 
         last_status: int | None = None
         last_text = ""
+        last_body: dict[str, Any] | None = None
         for attempt in range(_READER_MAX_ATTEMPTS):
             # Re-sign per attempt: SigV4 carries a timestamp, so a fresh request avoids skew on retry.
             aws_req = AWSRequest(method="POST", url=url, data=body, headers={"Content-Type": "application/json"})
@@ -423,7 +462,8 @@ class DuckLakeReader:
             resp = requests.post(url, data=body, headers=dict(aws_req.headers), timeout=180)
             if resp.status_code == 200:
                 return resp.json()
-            last_status, last_text = resp.status_code, resp.text[:300]
+            last_status, last_text = resp.status_code, resp.text
+            last_body = _parse_error_body(resp.text)
             if resp.status_code in _READER_TRANSIENT_STATUS and attempt < _READER_MAX_ATTEMPTS - 1:
                 # Cold-resume: give Neon time to wake, then re-invoke (reads are idempotent).
                 logger.warning(
@@ -436,7 +476,7 @@ class DuckLakeReader:
                 time.sleep(_READER_RETRY_BACKOFF_S[attempt])
                 continue
             break
-        raise RuntimeError(f"ducklake_reader {payload.get('action')!r} failed (HTTP {last_status}): {last_text}")
+        raise ReaderInvokeError(payload.get("action"), last_status, last_text, last_body)
 
     def current_state(
         self,
@@ -473,6 +513,17 @@ class DuckLakeReader:
     def latest_snapshot(self, table: str) -> int | None:
         """DuckLake current is a live projection (no Iceberg snapshot id). Returns None by contract."""
         return None
+
+    def describe(self) -> dict[str, dict[str, Any]]:
+        """Return the per-verb parameter schema for every NAMED_READS entry (CD.10 / CD.15).
+
+        Mirrors named()'s loud-fail posture: an unreachable or erroring reader raises
+        (ReaderInvokeError, or the _reader_url resolution RuntimeError) rather than degrading to
+        a stale or hardcoded verb list -- a caller projecting a tool surface from this (e.g.
+        scripts/agent_sdk/mcp_server.py) must never silently fall back to hand-registration.
+        """
+        body = self._invoke({"action": "describe"})
+        return dict(body.get("verbs", {}))
 
     def named(self, verb: str, **params: Any) -> list[dict]:
         """Execute a pre-established read verb on the reader (Decision 84 I-3).

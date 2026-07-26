@@ -2090,19 +2090,29 @@ tier_items:
     completed_at: "2026-07-07"
   - id: T0.8
     tier: T0
-    name: Agent SDK shim (boto3 + sigv4 wrapper)
-    intent: Hide Function URL discovery, sigv4 signing, retry, error mapping behind a thin Python module. Agent imports verbs; doesn't see HTTP.
+    name: Agent verb/tool surface (DuckLake NAMED_READS projection)
+    intent: >-
+      Project the DuckLake reader's registered NAMED_READS verbs as a first-class agent tool
+      surface -- an MCP stdio server derived from the reader's own describe() schema -- so an
+      agent fetches one row with one typed tool call instead of pulling a whole table into a
+      local cache and re-querying it in Python. WRITE LEG DEFERRED (operator decision,
+      agent-verb-tool-surface plan, round-1 critique): its only prospective bound was a
+      module-level Python literal inside the agent-editable server module, weaker than the
+      in-handler guard Decision 143 requires; it ships separately once an IAM identity boundary
+      exists.
     depends_on: [T0.7a, T0.7b, T0.7c]
     files_in_scope:
-      - scripts/agent_sdk/__init__.py    # new
-      - scripts/agent_sdk/client.py    # new
-      - scripts/agent_sdk/errors.py    # new
-      - scripts/agent_sdk/verbs.py    # new — re-exports typed verb signatures from Pydantic models
+      - scripts/agent_sdk/__init__.py    # facade re-exporting the server entrypoint and error types
+      - scripts/agent_sdk/mcp_server.py    # derived MCP tool projection over DuckLakeReader.describe()
+      - scripts/agent_sdk/errors.py    # typed exceptions for the reader boundary's error responses
+      - src/common/iceberg_reader.py    # DuckLakeReader.describe() client method
     exit_criteria:
-      - "agent_sdk.log_rec(payload: RecPayload) -> RecResponse works against deployed Lambdas"
-      - "agent_sdk.log_decision(payload) and agent_sdk.query.get_rec_by_id(rec_id) work"
-      - "Lambda Function URLs are resolved via terraform outputs or SSM Parameter Store"
-      - "Typed errors raise typed exceptions (DqValidationError, StatefulInvariantError, InfraError)"
+      - "An agent fetches a single recommendation by id with ONE typed tool call, no whole-table cache pull"
+      - "The tool list is DERIVED from DuckLakeReader.describe(): adding a verb to NAMED_READS surfaces a new tool with zero server edits"
+      - "The projected surface is READ-ONLY: no write verb, no infra/probe action, and no free-SQL parameter is exposed"
+      - "A failed describe() call at startup fails loudly; there is no fallback to a hardcoded verb list"
+      - "Boundary error responses map onto distinct typed exceptions rather than one generic failure"
+      - "Write leg is DEFERRED pending an IAM identity boundary (Decision 143); tracked separately, not by this item"
     related_candidate_decisions: [CD.10]
     effort: S
     strategic: false
