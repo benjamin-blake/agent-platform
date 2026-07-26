@@ -194,8 +194,14 @@ fi
 if [ "${INSTALL_TERRAFORM:-0}" = "1" ]; then
     t0=$SECONDS
     MIRROR_DIR="$HOME/.terraform-mirror"
-    RESOLVED_TFRC="$MIRROR_DIR/cc-web.tfrc"
-    if aws s3 sync "s3://agent-platform-data-lake/tf-provider-mirror/" "$MIRROR_DIR" --only-show-errors \
+    # rec-2518: RESOLVED_TFRC is a sibling FILE of $MIRROR_DIR, not a child of it -- writing the
+    # resolved tfrc inside $MIRROR_DIR would inflate the `ls -A "$MIRROR_DIR"` non-empty gate below
+    # (the tfrc itself would count as mirror content even on an otherwise-empty sync).
+    RESOLVED_TFRC="$HOME/.terraform-mirror.tfrc"
+    # rec-2519: --delete so a shrunk upstream mirror cannot leave stale provider bytes locally.
+    # COUPLED with the RESOLVED_TFRC move above -- do not add --delete while RESOLVED_TFRC still
+    # lives inside $MIRROR_DIR, or this sync would delete the live tfrc on the next run.
+    if aws s3 sync "s3://agent-platform-data-lake/tf-provider-mirror/" "$MIRROR_DIR" --only-show-errors --delete \
         && [ -n "$(ls -A "$MIRROR_DIR" 2>/dev/null)" ]; then
         sed "s|__TF_MIRROR_DIR__|${MIRROR_DIR}|g" "$REPO_ROOT/config/terraform/cc-web.tfrc" > "$RESOLVED_TFRC"
         export TF_CLI_CONFIG_FILE="$RESOLVED_TFRC"

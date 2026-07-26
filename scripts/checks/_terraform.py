@@ -24,13 +24,14 @@ from scripts.checks.iam_tf.validate_terraform_try import validate_terraform_try
 
 # Transient terraform registry.terraform.io 5xx signatures, plus provider-download network
 # transients (connection reset / timeout / handshake / truncated stream); used by
-# _terraform_init_with_retry and by the bounded retry loop in
-# .github/workflows/terraform-apply-sandbox.yml (parity required). Parity is substring
-# (Python `in`) vs ERE (bash `grep -qE`) and therefore holds only for metacharacter-free
+# _terraform_init_with_retry and by the bounded retry loops in terraform-drift.yml and the
+# .github/actions/terraform-init-retry/action.yml composite action (parity required). Parity is
+# substring (Python `in`) vs ERE (bash `grep -qE`) and therefore holds only for metacharacter-free
 # signatures.
 _TRANSIENT_INIT_SIGNATURES: tuple[str, ...] = (
     "502",
     "Bad Gateway",
+    "Gateway Timeout",
     "could not query provider registry",
     "failed after ",
     "connection reset by peer",
@@ -85,7 +86,7 @@ def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) ->
     Matches invoke_step output format for the step header.
     """
     print(f"\n=== {label} ===")
-    max_attempts = 3
+    max_attempts = 5
     for attempt in range(1, max_attempts + 1):
         result = _common.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=_common.ROOT)
         if result.returncode == 0:
@@ -103,7 +104,7 @@ def _terraform_init_with_retry(label: str, cmd: list[str], failed: list[str]) ->
             return "proxy_blocked"
         is_transient = any(sig in combined for sig in _TRANSIENT_INIT_SIGNATURES)
         if is_transient and attempt < max_attempts:
-            delay = 2**attempt
+            delay = min(2**attempt, 16)
             print(f"transient registry error (attempt {attempt}/{max_attempts}); retrying in {delay}s...")
             print(combined, end="")
             time.sleep(delay)

@@ -1827,3 +1827,81 @@ entries:
         assert 'contract' not in d and 'class' not in d
         for k in ('rec-autoclose', 'deploy-ducklake-lambdas', 'terraform-drift', 'convergence-health', 'dedup-probe', 'reconcile-gate', 'stamp_fixed_by_sha'):
             raw.index(k)
+  - check_id: terraform-init-retry-window-and-gateway-timeout
+    primitive_slot: command_exit_zero
+    guard_target: scripts/checks/_terraform.py
+    guard_symbol: _terraform_init_with_retry
+    plan_slug: ci-provider-mirror-terraform-init-hardening
+    graduated_at: '2026-07-26'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -q 'max_attempts = 5' scripts/checks/_terraform.py && grep -q '"Gateway Timeout"' scripts/checks/_terraform.py && grep -q 'min(2\*\*attempt, 16)' scripts/checks/_terraform.py
+  - check_id: terraform-init-retry-signature-parity-both-consumers
+    primitive_slot: command_exit_zero
+    guard_target: .github/actions/terraform-init-retry/action.yml
+    guard_symbol: null
+    plan_slug: ci-provider-mirror-terraform-init-hardening
+    graduated_at: '2026-07-26'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -E 'grep -qE' .github/actions/terraform-init-retry/action.yml | grep -q 'Gateway Timeout' && grep -E 'grep -qE' .github/workflows/terraform-drift.yml | grep -q 'Gateway Timeout'
+  - check_id: ci-terraform-validate-provider-mirror-contract
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/ci.yml
+    guard_symbol: null
+    plan_slug: ci-provider-mirror-terraform-init-hardening
+    graduated_at: '2026-07-26'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -q 'id: mirror_gate' .github/workflows/ci.yml && grep -q 'Provider-mirror fail-closed consistency invariant' .github/workflows/ci.yml && grep -q "github.event_name == 'pull_request' && 'agent-platform-github-ci-pr'" .github/workflows/ci.yml && grep -q 'terraform-provider-neon_${NEON_VERSION}_' .github/workflows/ci.yml
+  - check_id: github-ci-pr-mirror-grant-read-only-and-scoped
+    primitive_slot: command_exit_zero
+    guard_target: terraform/personal/oidc.tf
+    guard_symbol: github_ci_pr
+    plan_slug: ci-provider-mirror-terraform-init-hardening
+    graduated_at: '2026-07-26'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -A6 'S3ReadProviderMirror' terraform/personal/oidc.tf | grep -q 'tf-provider-mirror/\*' && ! grep -A6 'S3ReadProviderMirror' terraform/personal/oidc.tf | grep -qE 's3:(Put|Delete|\*)'
+  - check_id: setup-cloud-env-mirror-hygiene
+    primitive_slot: command_exit_zero
+    guard_target: bin/setup-cloud-env.sh
+    guard_symbol: null
+    plan_slug: ci-provider-mirror-terraform-init-hardening
+    graduated_at: '2026-07-26'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        grep -qF 'RESOLVED_TFRC="$HOME/.terraform-mirror.tfrc"' bin/setup-cloud-env.sh && grep -q 'aws s3 sync "s3://agent-platform-data-lake/tf-provider-mirror/".*--delete' bin/setup-cloud-env.sh
+  - check_id: provider-mirror-stale-claim-sweep
+    primitive_slot: command_exit_zero
+    guard_target: .github/workflows/ci.yml
+    guard_symbol: null
+    plan_slug: ci-provider-mirror-terraform-init-hardening
+    graduated_at: '2026-07-26'
+    graduated_by: implement-agent
+    check_spec:
+      command:
+      - bash
+      - -c
+      - |
+        ! grep -rn 'no OIDC step is added' .github/workflows/ci.yml && ! grep -rn 'the three grep -qE sites in terraform-apply-sandbox' .github/workflows/terraform-drift.yml && ! grep -n 'bounded retry loop in$' scripts/checks/_terraform.py

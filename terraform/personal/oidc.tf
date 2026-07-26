@@ -652,6 +652,18 @@ data "aws_iam_policy_document" "github_ci_pr" {
   }
 
   statement {
+    # PLAN-ci-provider-mirror-terraform-init-hardening (rec-2836): read-only, path-scoped grant
+    # so the terraform-validate job's pull_request leg can consume the Decision 120 S3-backed
+    # provider filesystem_mirror instead of a direct github.com checksum fetch. GetObject only --
+    # no write action, no wider resource. Mirrors S3ReadConvergenceRecord's shape immediately
+    # above (single-purpose, prefix-scoped read grant on this same bucket).
+    sid       = "S3ReadProviderMirror"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.data_lake.arn}/tf-provider-mirror/*"]
+  }
+
+  statement {
     sid    = "S3List"
     effect = "Allow"
     actions = [
