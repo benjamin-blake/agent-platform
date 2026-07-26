@@ -30,6 +30,14 @@ scope:
       Acceptance criterion 5 is therefore UNREACHABLE unless _invoke is extended to raise a
       structured exception carrying status and parsed body. Preferred: extend _invoke (sole-home,
       Decision 104). Rejected: regexing the message string, which is not a durable typed mapping.
+      CRITICAL PLACEMENT CONSTRAINT: define that structured exception IN THIS FILE, as a
+      RuntimeError subclass -- do NOT import it from scripts/agent_sdk/errors.py at module scope.
+      This file is bundled into data-pipeline and ops-compaction, whose manifests enumerate
+      scripts/ files explicitly and do NOT include scripts/agent_sdk/**, so a module-scope import
+      would ModuleNotFoundError in both prod Lambdas immediately after VP step 10 deploys.
+      Subclassing RuntimeError also keeps the one repo-wide `except RuntimeError` reader site
+      (scripts/verifiers/athena_views.py) from regressing. errors.py maps FROM this exception to the
+      agent-facing taxonomy, never the other direction.
   - file: scripts/agent_sdk/__init__.py
     action: Create
     purpose: Facade re-exporting the server entrypoint and the typed error types.
@@ -70,7 +78,10 @@ scope:
       returns GREEN having run none of VP steps 2-7 -- including step 2, the derivation property this
       whole plan turns on. Omitting this file would defer every behavioural claim past the merge
       gate while declaring V3. This file's own header already requires runtime-tool constraints to
-      match requirements.txt.
+      match requirements.txt -- add `mcp` to that header enumeration too, so the file's own stated
+      invariant stays self-describing. Note the fast-tier install widens by mcp's transitive tree
+      (anyio/httpx/starlette/uvicorn/pydantic-settings/sse-starlette); trivial against the
+      deliberately-excluded heavy set, but a real cost and a new Dependabot surface.
   - file: requirements.lock
     action: Modify
     purpose: >-
@@ -196,8 +207,10 @@ verification_plan:
       bin/venv-python -m pytest "tests/test_agent_sdk_mcp_server.py::TestReadOnlySurface" -q
     expected: >-
       All pass. file_ops, update_ops, write_ops, create_ops_tables, create_tables, churn and the
-      probe actions are each asserted absent from the tool list, no tool accepts a `sql` parameter,
-      and DuckLakeReader.query is not projected.
+      probe actions are each asserted absent from the tool list, no tool accepts a raw SQL
+      parameter, and DuckLakeReader.query is not projected. (Deliberately no backtick-delimited
+      literals in this field: validate_vp_replay extracts them and requires each to appear in the
+      command's own stdout, which a quiet pytest run never prints.)
     fix_if: >-
       Any write or SQL surface is reachable -- the projection is pulling from something wider than
       the read describe output. Project strictly from the read describe response.
@@ -266,8 +279,11 @@ verification_plan:
       pre-deploy step stubs describe, so without this the projection's entire premise is unverified
       against the real boundary.
     command: >-
-      bin/venv-python -c "from src.common.iceberg_reader import make_reader; d = make_reader(table='ops_recommendations').describe(); print('verbs:', len(d)); assert len(d) > 0, d"
-    expected: 'Prints a non-zero verb count (12 at planning time).'
+      bin/venv-python -c "from src.common.iceberg_reader import make_reader; d = make_reader(table='ops_recommendations').describe(); print('verbs:', len(d)); assert 'rec_by_id' in d, sorted(d)"
+    expected: >-
+      Prints a verb count (12 at planning time) and the rec_by_id assertion holds. Asserts a SHAPE,
+      not a bare non-zero length: action_describe returns {"ok": true, "verbs": {...}}, so a
+      describe() that forgets to unwrap would print 2 and still satisfy a len > 0 check.
     fix_if: >-
       Raises or returns empty -- confirm the profile chain is live (aws sts get-caller-identity
       --profile agent_platform). If credentials are unavailable this step SKIPS in degraded mode
@@ -324,7 +340,7 @@ verification_plan:
       NOT DuckLakeReader.named() directly: a direct named() call passes on unmodified main and
       proves nothing about this plan.
     command: >-
-      bin/venv-python -m pytest "tests/test_agent_sdk_mcp_server.py::TestEndToEnd::test_rec_by_id_tool_returns_exactly_one_row_against_live_boundary" -q -rs | tee /tmp/e2e.txt && grep -qE '1 passed' /tmp/e2e.txt && ! grep -qE 'skipped' /tmp/e2e.txt && echo E2E_PROVEN
+      bin/venv-python -m pytest "tests/test_agent_sdk_mcp_server.py::TestEndToEnd::test_rec_by_id_tool_returns_exactly_one_row_against_live_boundary" -q -rs | tee logs/debug/e2e-tool-surface.txt && grep -qE '1 passed' logs/debug/e2e-tool-surface.txt && ! grep -qE 'skipped' logs/debug/e2e-tool-surface.txt && echo E2E_PROVEN
     expected: >-
       Prints E2E_PROVEN. The test discovers a rec id at runtime via the open_recs tool, invokes the
       rec_by_id tool with that id through the MCP surface, and asserts exactly one row whose id
@@ -332,14 +348,33 @@ verification_plan:
       skip too, so a bare exit-code check would report green having never run the plan's only
       end-to-end proof.
     fix_if: >-
-      Reports skipped -- this test must carry @pytest.mark.integration (tests/conftest.py installs
-      an autouse socket-block tripwire; see tests/common/iceberg_reader/test_warehouse_parity.py for
-      the precedent) AND must NOT carry a credentials-skip guard, or absent credentials silently
-      pass this gate. Fails at tool discovery -- the server did not project rec_by_id (re-run VP
+      Reports skipped -- this test must carry BOTH @pytest.mark.integration (for conftest's autouse
+      socket-block tripwire; see tests/common/iceberg_reader/test_warehouse_parity.py) AND
+      @pytest.mark.aws (conftest's _block_unmocked_aws_client opts out only on that marker). Without
+      the aws marker the failure is MISLEADING: the tripwire's RuntimeError is swallowed by
+      _resolve_function_url_via_ssm's bare `except Exception`, so it surfaces as "DUCKLAKE_READER_URL
+      not set, SSM unavailable" while VP step 8 (no conftest) passes -- a contradiction that wastes
+      diagnosis time. The test must also NOT carry a credentials-skip guard, or absent credentials
+      silently pass this gate. Fails at tool discovery -- the server did not project rec_by_id (re-run VP
       step 2). Fails at invocation -- params are in a shape the verb does not accept; compare
       against the describe schema. Do NOT weaken this to a direct reader call: a direct
       DuckLakeReader.named() call passes on unmodified main and is the tautology this step replaced.
       Do NOT hardcode a rec id -- ids close over time.
+  - step: 12
+    phase: pre-deploy
+    action: >-
+      Verify acceptance criterion 6 (the T0.8 re-grounding), which was otherwise the only acceptance
+      criterion in this plan with no verification step and no graduated guard.
+    command: >-
+      bin/venv-python -c "import yaml,pathlib; d=yaml.safe_load(pathlib.Path('docs/ROADMAP-PLATFORM.yaml').read_text()); t=[i for i in d['tier_items'] if i['id']=='T0.8'][0]; blob=yaml.dump(t); assert 'client.py' not in blob, 'stale client.py still in T0.8'; assert 'imports verbs' not in blob, 'stale library framing still in T0.8'; assert 'defer' in blob.lower(), 'write-leg deferral not recorded'; print('T0.8_REGROUNDED')"
+    expected: 'Prints T0.8_REGROUNDED -- the stale client.py path and library framing are gone and the write-leg deferral is recorded.'
+    fix_if: >-
+      An assertion names the offending remnant. Re-ground that part of the T0.8 entry. Do NOT flip
+      T0.8's status to satisfy this -- status flips belong to the implement bookkeeping walk on a
+      verified VP pass.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "t08-regrounded-off-library-framing"
 constraints:
   - >-
     Only the fourteen files in the Scope table may be modified. Out-of-scope defects become
@@ -441,6 +476,12 @@ context:
     dominated the 2026-06-15 breach, has since been fixed by the warm-connection cache in
     src/common/ducklake_runtime.py.
   - >-
+    KNOWN LIMITATION, disclosed -- MCP fetches the tool list once at server startup, so a verb newly
+    added to NAMED_READS surfaces only on the next session (server restart). The derivation property
+    (VP step 2) still holds; freshness is per-session, not live. This is inherent to the stdio
+    transport and is NOT a derivation defect -- recorded here so a future session does not
+    misdiagnose it as one.
+  - >-
     Recon findings that shaped the scope: 12 NAMED_READS verbs exist with typed param schemas;
     describe_named_reads() is served by BOTH handlers and labelled agent-facing (CD.10/CD.15) yet
     NOTHING under scripts/ consumes it; DuckLakeReader has named() and query() but NO describe(), so
@@ -470,8 +511,10 @@ pre_implementation_checklist:
     projection and the typed-error mapping both derive from what it actually returns.
 execution_steps:
   - >-
-    Modify src/common/iceberg_reader.py -- add DuckLakeReader.describe() implemented as
-    self._invoke({"action": "describe"}), mirroring named()'s loud-fail posture, with no fallback.
+    Modify src/common/iceberg_reader.py -- add DuckLakeReader.describe() returning body["verbs"]
+    from self._invoke({"action": "describe"}), mirroring named()'s list(body.get("rows", []))
+    unwrapping and its loud-fail posture, with no fallback. Returning the raw envelope would hand
+    callers {"ok", "verbs"} instead of the verb map.
     Decide and record whether describe() joins the Reader Protocol (which today declares only
     current_state and latest_snapshot); if it does not, note that callers must hold a DuckLakeReader
     rather than the Protocol type.
@@ -499,10 +542,15 @@ execution_steps:
   - >-
     Create the three test modules at the mapper-resolved paths, with the class names VP steps 2-7
     and 11 select (TestProjection, TestReadOnlySurface, TestFailLoud, TestTypedErrors,
-    TestToolDescriptions, TestEndToEnd). Stub describe in the unit tests. TestEndToEnd is the one
-    live-boundary test: mark it @pytest.mark.integration so the conftest socket tripwire admits it,
-    and do NOT give it a credentials-skip guard -- VP step 11 must fail loudly on absent
-    credentials rather than skip green.
+    TestToolDescriptions, TestEndToEnd). Stub describe in the unit tests by patching
+    DuckLakeReader._invoke directly. Do NOT add a module-level boto3/requests import to
+    tests/common/iceberg_reader/test_describe.py: its sibling test_ducklake_reader.py is a declared
+    HEAVY-DEP MARKER MODULE that imports boto3 at module scope deliberately so the fast tier defers
+    it -- copying that convention would turn VP step 6's replay into a collection error, since
+    validate_vp_replay is returncode-only and has no heavy-dep deferral. TestEndToEnd is the one
+    live-boundary test: mark it BOTH @pytest.mark.integration and @pytest.mark.aws, and do NOT give
+    it a credentials-skip guard -- VP step 11 must fail loudly on absent credentials rather than
+    skip green.
   - >-
     Modify config/agent/verification_registry/registry.yaml -- add the NEW-in-diff graduated rows
     for each `graduate` disposition, using the graduation_check_id values verbatim as row identities.
