@@ -5686,8 +5686,11 @@ tier_items:
     files_in_scope:
       - config/agent/visual_contract.yaml    # new -- machine-readable design contract (semantic colours, number formats, actual-vs-estimated, chart conventions, viewports, missing-data behaviour)
       - scripts/dashboard/    # new subpackage -- contract-derived fixture generator + named-verb source adapter
+      - .gitignore    # touch -- c7 precondition: node_modules/, .svelte-kit/, build output, *.parquet, *.arrow
+      - scripts/checks/hygiene/    # touch -- c7 precondition: deterministic tracked-build-artifact guard (Decision 104 registry pattern)
+      - terraform/personal/dashboard_serving.tf    # new -- c6 ONLY: edge-JWT / signed-cookie serving prototype at a non-Cloudflare-proxied origin. CREDENTIALED + CD.41-GATED, sequenced AFTER the in-container comparison; deliberately NOT part of the fixture-driven, credential-free c1 run
       - docs/plans/reports/REPORT-evidence-dashboarding-poc.md    # touch -- record the verdict and the re-verified upstream figures
-      - .github/dependabot.yml    # touch -- npm ecosystem entry IF and only if a Node stack is adopted (Decision 83 governed surface)
+      - .github/dependabot.yml    # touch -- npm ecosystem entry IF and only if a Node stack is adopted (Decision 83 governed surface; note Dependabot ALERTS are repo-wide and fire regardless of this file)
     exit_criteria:
       - id: c1
         text: >-
@@ -5743,8 +5746,13 @@ tier_items:
         status: open
       - id: c6
         text: >-
+          SEPARATE, CREDENTIALED, CD.41-GATED SUB-TASK -- sequenced AFTER c1's fixture-driven
+          in-container comparison and after CD.41 ratifies, because a credential-free ephemeral-
+          container run structurally cannot stand up an AWS origin plus a Cloudflare Access app, and
+          CD.41 is itself unratified and gated on the deferred T2.51. Its failure is a CLASS-LEVEL
+          reject (it defeats every code-defined renderer equally), never a per-arm discriminator.
           A WORKING PROTOTYPE (not a design note) of a CD.41-invariant-(b)-compliant serving
-          mechanism exists, OR the renderer is rejected on that basis. The option space is narrower
+          mechanism exists, OR the renderer class is rejected on that basis. The option space is narrower
           than "multi-file vs single-object": CD.41 fixes the presigned GET at <=5 min, and an
           interactive dashboard fetches prerendered query artifacts LAZILY at interaction time, so
           link expiry lands MID-SESSION and a one-shot 302-to-presigned-URL cannot serve the session
@@ -5756,8 +5764,13 @@ tier_items:
       - id: c7
         text: >-
           PRECONDITION, NOT AN EXIT GATE (satisfied BEFORE the first proof-of-concept branch is
-          opened, because the PoC itself runs installs and builds -- ~593 packages on first install
-          -- on a branch of a PUBLIC repository): .gitignore covers node_modules/, .svelte-kit/,
+          opened, because the PoC itself runs installs and builds -- 1311 packages for the Evidence
+          scaffold -- on a branch of a PUBLIC repository). INDEPENDENTLY LANDABLE: this is ordinary
+          repo hygiene with no dependency on T2.52/T2.53 or any adoption decision, so any session may
+          land it as standalone work; registering it here records the OBLIGATION, not a scheduling
+          constraint. Until it lands the binding rule is absolute and needs no roadmap item: NO
+          `npm install` inside the repository tree (scratch-directory installs are unaffected).
+          Content: .gitignore covers node_modules/, .svelte-kit/,
           build output, *.parquet and *.arrow (it covers NONE of these today), AND a DETERMINISTIC
           GUARD -- a registered validate.py check or a never-commit extension per the Decision 104
           registry pattern, NOT a .gitignore convention -- asserts that no build artifact is tracked.
@@ -5771,14 +5784,25 @@ tier_items:
           Any upstream build-time telemetry is disabled AND the disablement is VERIFIED (Evidence
           ships @evidence-dev/telemetry as a direct dependency). The NUMERIC supply-chain thresholds
           in REPORT-evidence-dashboarding-poc section 11.2 are re-measured (never inherited -- the
-          scoping figures are explicitly point-in-time) and applied per candidate: T1 zero critical
-          and <=3 high advisories lacking a forward fix; T2 transitive dependency count recorded,
-          >750 requires written justification; T3 installs WITHOUT --legacy-peer-deps or equivalent
-          override; T4 a security-relevant publish or documented advisory response within the
-          preceding 9 months (a window set above the project's own observed ~7-month quiet period, so
-          it measures responsiveness rather than cadence). Scoping-time measurement: Evidence FAILS
-          T1 (3 critical / 21 high, ~18 with no forward fix -- npm offers only a major downgrade) and
-          FAILS T3 (bare package ERESOLVEs; template scaffold untested)
+          scoping figures are explicitly point-in-time) and applied per candidate, on the install
+          path adoption would actually use: T1 (THRESHOLD) counts ONLY advisories reporting
+          npm's `fixAvailable: false` -- major-change fixes are recorded separately, not counted --
+          and fails on any unresolvable critical or >3 unresolvable high; T2 (RECORDED METRIC, NOT a
+          threshold -- it never rejects an arm) transitive dependency count; T3 (THRESHOLD) installs
+          WITHOUT --legacy-peer-deps or equivalent override; T4 (THRESHOLD) advisory RESPONSIVENESS
+          only, never publish cadence (which REPORT section 5.1 shows cannot settle liveness in
+          either direction). Scoping-time measurement on the documented scaffold: Evidence PASSES T3
+          (npx degit evidence-dev/template + npm install = exit 0, 1311 packages, no flags -- but
+          ONLY because a 654KB package-lock.json ships with the template; delete it and the identical
+          ERESOLVE returns, so adoption inherits an upstream-authored lockfile) and FAILS T1
+          IRREDUCIBLY: the scaffold carries 1387 deps / 78 advisories (10C/26H/39M/3L) with 19
+          fixAvailable:false, and pruning to the 4 packages a cost dashboard needs cuts that to 928
+          deps / 46 advisories / 12 unresolvable BUT LEAVES THE FOUR UNRESOLVABLE CRITICALS
+          UNCHANGED (@evidence-dev/core-components, @evidence-dev/sdk, @evidence-dev/tailwind,
+          vitest) because they are Evidence's OWN CORE, not optional connectors. T4 adverse but
+          unmeasured (upstream issue tracker not inspected). ONE-SURVIVOR GUARD: if only one arm
+          survives, state which criterion eliminated the others and whether it is load-bearing or
+          incidental before recommending adoption -- an uncontested winner is a weaker result
         status: open
       - id: c9
         text: >-
@@ -5801,7 +5825,7 @@ tier_items:
     effort: L
     strategic: false    # freeze override (AGENTS.md / CD.17): author as atomic IMPLEMENTATION plan(s) at reactivation
     status: deferred_post_mvp
-    progress_note: "Scoped deferred_post_mvp (Decision 93 conscious-deferral rule) via PLAN-evidence-dashboarding-poc / REPORT-evidence-dashboarding-poc. DEFERRAL RATIONALE: a human-facing analytical presentation layer is by construction outside the rec -> implement -> validate -> merge -> deploy -> observe -> next rec loop that defines the Platform-MVP boundary (the same basis on which Decision 93 parked T2.11a/T2.11b), and no candidate tenant has a live governed dataset -- cost data is unbuilt (T2.51 deferred), telemetry unmigrated (T2.36), DQ coverage 0 tables / 0 checks. ACTIVATION TRIGGER: T2.52 completes AND a real human reader exists for the dataset it exposes. SCOPING FINDINGS (npm, 2026-07-26, POINT-IN-TIME -- re-verify at reactivation): @evidence-dev/evidence published 406 versions in 2023, 179 in 2024, 13 in 2025, 1 in 2026 (last 2026-02-06, same date as core-components/sdk/duckdb), major frozen at 40 since 2024-12-10; peer tree hard-pinned (@sveltejs/kit 2.8.4, svelte 4.2.19, vite 5.4.21, typescript 5.4.2) so Dependabot structurally cannot service it; @evidence-dev/telemetry is a direct dependency; @evidence-dev/universal-sql plus a shipped /explore/console page means the deployed artifact carries a client-side DuckDB-WASM query console, which is the 'second semantic layer' on the hypothesis's own reject list. MEASURED (resolved tree, same date): bare `npm install @evidence-dev/evidence@40.1.8` FAILS with ERESOLVE (ts-node's loose typescript >=2.7 peer hoists typescript@7.0.2, violating svelte-preprocess@5.1.3's peerOptional ^4/^5) and succeeds only under --legacy-peer-deps; 641 transitive dependencies; npm audit 30 vulnerabilities (3 critical, 21 high, 5 moderate, 1 low) of which ~18 have NO forward fix -- npm's only remediation is a major DOWNGRADE to @evidence-dev/evidence@29.0.3. Note Dependabot ALERTS are repo-wide and fire regardless of .github/dependabot.yml, so on this PUBLIC repo adoption injects unresolvable high/critical alerts onto the surface Decision 83's ghas-probe monitor treats as live evidence -- distinct from Dependabot VERSION UPDATES, which are the per-ecosystem dependabot.yml entry. Against REPORT section 11.2 thresholds Evidence FAILS T1 and T3 as measured (the template scaffold path, `npx degit evidence-dev/template`, is UNTESTED and is the PoC's first task). Caveat on liveness: v40.1.2 (2025-04-11) -> v40.1.3 (2025-11-03) is a PRIOR ~7-month gap that resolved, so the current ~5.7-month silence is within this project's observed normal -- which weakens the adverse reading AND destroys the 'stabilisation curve' reading; cadence alone cannot settle liveness, hence T4 measures advisory responsiveness. Comparators far more active: astro 7.1.3 (2026-07-20), @astrojs/starlight 0.41.4 (2026-07-22), @observablehq/framework 1.13.4 (2026-04-06). Container: Node v22.22.2, npm 10.9.7, pre-installed Chromium, npm registry reachable; repo tracks zero JS/TS files and .gitignore has NO node coverage today. Transitive active dependents: none. Reactivate by restoring status -> not_started."
+    progress_note: "Scoped deferred_post_mvp (Decision 93 conscious-deferral rule) via PLAN-evidence-dashboarding-poc / REPORT-evidence-dashboarding-poc. DEFERRAL RATIONALE: a human-facing analytical presentation layer is by construction outside the rec -> implement -> validate -> merge -> deploy -> observe -> next rec loop that defines the Platform-MVP boundary (the same basis on which Decision 93 parked T2.11a/T2.11b), and no candidate tenant has a live governed dataset -- cost data is unbuilt (T2.51 deferred), telemetry unmigrated (T2.36), DQ coverage 0 tables / 0 checks. ACTIVATION TRIGGER: T2.52 completes AND a real human reader exists for the dataset it exposes. SCOPING FINDINGS (npm, 2026-07-26, POINT-IN-TIME -- re-verify at reactivation): @evidence-dev/evidence published 406 versions in 2023, 179 in 2024, 13 in 2025, 1 in 2026 (last 2026-02-06, same date as core-components/sdk/duckdb), major frozen at 40 since 2024-12-10; peer tree hard-pinned (@sveltejs/kit 2.8.4, svelte 4.2.19, vite 5.4.21, typescript 5.4.2) so Dependabot structurally cannot service it; @evidence-dev/telemetry is a direct dependency; @evidence-dev/universal-sql plus a shipped /explore/console page means the deployed artifact carries a client-side DuckDB-WASM query console, which is the 'second semantic layer' on the hypothesis's own reject list. MEASURED on the DOCUMENTED SCAFFOLD (the adoption-relevant artifact; an earlier draft measured a bare package install and got the opposite T3 answer): `npx degit evidence-dev/template` + `npm install` SUCCEEDS -- exit 0, 1311 packages, no flags -- so Evidence PASSES T3. It passes ONLY because a 654KB package-lock.json ships with the template; the template's package.json declares NO svelte/typescript/vite/tailwindcss at all, and deleting the lock reproduces the identical ERESOLVE (ts-node's loose typescript >=2.7 peer hoists typescript@7.0.2, violating svelte-preprocess@5.1.3's peerOptional ^4/^5). Adoption therefore INHERITS AN UPSTREAM-AUTHORED LOCKFILE and does not control its own resolution; regenerating it (npm audit fix, a Dependabot bump, a different package manager) is the failure mode to guard. Scaffold surface: 1387 deps, 78 advisories (10C/26H/39M/3L), 19 with fixAvailable:false. Pruned to the 4 packages a cost dashboard needs: 928 deps, 46 advisories, 12 unresolvable -- BUT THE FOUR UNRESOLVABLE CRITICALS ARE UNCHANGED (@evidence-dev/core-components, @evidence-dev/sdk, @evidence-dev/tailwind, vitest), because they are Evidence's OWN CORE, not optional connectors. So Evidence FAILS T1 IRREDUCIBLY -- pruning removes noise, not signal. Note Dependabot ALERTS are repo-wide and fire regardless of .github/dependabot.yml, so on this PUBLIC repo adoption injects unresolvable critical alerts onto the surface Decision 83's ghas-probe monitor treats as live evidence -- distinct from Dependabot VERSION UPDATES, which are the per-ecosystem dependabot.yml entry. Dist-tags examined: legacy/features-a/features-b/dropdown-preview/next all trail 40.1.8 badly -- stale branch tags, not a parallel live release train. Caveat on liveness: v40.1.2 (2025-04-11) -> v40.1.3 (2025-11-03) is a PRIOR ~7-month gap that resolved, so the current ~5.7-month silence is within this project's observed normal -- which weakens the adverse reading AND destroys the 'stabilisation curve' reading; cadence alone cannot settle liveness, hence T4 measures advisory responsiveness. Comparators far more active: astro 7.1.3 (2026-07-20), @astrojs/starlight 0.41.4 (2026-07-22), @observablehq/framework 1.13.4 (2026-04-06). Container: Node v22.22.2, npm 10.9.7, pre-installed Chromium, npm registry reachable; repo tracks zero JS/TS files and .gitignore has NO node coverage today. Transitive active dependents: none. Reactivate by restoring status -> not_started."
 
   # ----- T3: Trust loop closure -----
   - id: T3.1

@@ -44,16 +44,31 @@ A secondary finding changes the shape of the eventual test: **Evidence should no
 isolation**. Section 8 establishes a three-way comparison (Evidence / Astro-with-charts /
 Observable Framework) as the correct experiment.
 
-**One measured result is significant enough to record in the verdict.** On figures taken during
-authoring, Evidence's resolved tree carries **3 critical and 21 high advisories, roughly 18 of them
-with no forward fix** (npm's only remediation is a major *downgrade*), and the bare package **fails
-to install** without `--legacy-peer-deps` (sections 5.3, 5.5). Against the thresholds this report
-commits to in section 11.2, **Evidence fails T1 and T3 as measured today**. That is not a verdict --
-the thresholds are to be re-measured at proof-of-concept time, the template scaffold is untested,
-and a failing arm does not reject the class -- but it does mean the burden of proof has shifted, and
-the report says so rather than deferring an already-visible result. It is also why section 11.2
-states thresholds numerically: they were written after the measurement, so they must be falsifiable
-rather than tuned to pass.
+**One measured result is significant enough to record in the verdict.** Measured on Evidence's
+**documented scaffold** (`npx degit evidence-dev/template`, the adoption-relevant artifact --
+sections 5.3, 5.5):
+
+- **T3 (install integrity): PASSES.** The scaffold installs cleanly -- exit 0, 1,311 packages, no
+  `--legacy-peer-deps`. An earlier draft of this report claimed the opposite from a bare-package
+  install; that was measuring the wrong artifact and is corrected here.
+- **T1 (unresolvable advisories): FAILS, irreducibly.** The scaffold carries **78 advisories
+  (10 critical, 26 high, 39 moderate, 3 low)** across **1,387 dependencies**, of which **19 report
+  `fixAvailable: false`** -- genuinely unresolvable, not merely downgrade-only. Pruning to the four
+  packages a cost dashboard actually needs cuts the tree to 928 dependencies and 46 advisories, but
+  **the four unresolvable criticals do not move**: `@evidence-dev/core-components`,
+  `@evidence-dev/sdk`, `@evidence-dev/tailwind` and `vitest`. They are Evidence's **own core**, not
+  optional connectors, so no configuration choice removes them.
+- **T4 (advisory responsiveness): adverse but unmeasured.** Nineteen unresolvable advisories is
+  prima facie non-response, but this report has not inspected the upstream issue tracker. It is
+  recorded as adverse, not failed.
+
+That last point is the substantive one: **pruning removes noise, not signal.** A minimum-viable
+Evidence install still carries four unresolvable criticals, on a public repository whose security
+surface Decision 83 treats as continuously live-verified evidence.
+
+This is not a final verdict -- thresholds are re-measured at proof-of-concept time, and a failing arm
+does not reject the class. But the burden of proof has shifted, and the report says so rather than
+deferring an already-visible result.
 
 ## 2. What the hypothesis gets right
 
@@ -202,7 +217,10 @@ Two readings, and the report deliberately does **not** pick one, because picking
   three candidates equally**, and "choose Astro instead" is **not** an escape from P2.
 - **Mechanical reading.** The guard is the operative control, and `.astro` files are outside it.
   Under this reading Astro sidesteps P2 today -- but only as an artifact of enforcement scope, which
-  is exactly the kind of accidental exemption that gets closed the moment someone notices.
+  is exactly the kind of accidental exemption that gets closed the moment someone notices. The
+  mechanical reading is further weakened by the guard **failing open**: it skips silently when the
+  `prose_allowlist` key is absent from the file router, so "the guard is the operative control" is
+  a weaker claim than it first appears.
 
 **This must be resolved before, not during, the proof of concept**, because it changes what the
 experiment is measuring. If the principled reading holds, P2 is a property of the whole
@@ -275,8 +293,15 @@ The honest conclusion is that **publish cadence alone cannot answer the liveness
 in either direction. What actually matters for a load-bearing dependency is responsiveness *to
 security advisories* (section 5.3 shows why that is the binding constraint), which cadence does not
 measure. The correct treatment is a **gating liveness check with a stated threshold** (section 11),
-assessed on advisory response rather than publish frequency. Note also that the package carries
-live `next` and `features-a` dist-tags, which this report has not examined.
+assessed on advisory response rather than publish frequency.
+
+**Dist-tags, examined (they are not a live release train).** The package publishes `legacy@23.0.4`,
+`features-a@27.0.0-features-a.8`, `features-b@36.0.0-features-b.6`,
+`dropdown-preview@39.1.4-dropdown-preview.0` and `next@0.0.0-52469075` alongside `latest@40.1.8`.
+Every one trails the current major, several by more than a decade of major versions. These are
+**stale branch tags, not maintained channels** -- so there is no parallel active development stream
+that the `latest` cadence is failing to capture, and examining them mildly **strengthens** the
+adverse reading rather than qualifying it.
 
 ### 5.2 Comparative liveness
 
@@ -295,17 +320,28 @@ and `@sveltejs/adapter-static 3.0.1` are **direct dependencies**, while `svelte 
 `vite 5.4.21`, `typescript 5.4.2` and `tailwindcss 3.4.18` are **peer dependencies** the consuming
 project must supply at those exact versions. Note Svelte **4**, not 5.
 
-**Measured, not inferred.** Resolving the tree in this container yields **641 total dependencies**
-(592 production, 50 optional; 593 packages installed), and `npm audit --json` reports **30
-vulnerabilities: 3 critical, 21 high, 5 moderate, 1 low**.
+**Measured on the adoption-relevant artifact.** The figures that matter are the **scaffold's**, not
+the bare package's: a bare `npm install @evidence-dev/evidence` produces a tree nobody would ship
+(section 5.5 explains why it is only a diagnostic). Three measurements, all reproducible:
 
-The decisive figure is not the count but the **fix path**. Of those advisories, **18 report
-`fixAvailable` as a major *downgrade* to `@evidence-dev/evidence@29.0.3`** -- including
-`@evidence-dev/sdk` (critical), `@sveltejs/kit` (high) and `@evidence-dev/preprocess` (high). npm
-cannot fix these forward at all. Only 12 are in-range fixable, and those are peripheral tooling
-(eslint, vitest). So the accurate statement is not "upgrades are gated on upstream republishing" but
-**"a substantial share of the advisory surface is unresolvable at adoption time, in either
-direction."**
+| Install | Dependencies | Advisories (C/H/M/L) | `fixAvailable: false` |
+|---|---|---|---|
+| Scaffold, as shipped (14 connectors) | **1,387** | **78** (10 / 26 / 39 / 3) | **19** (4C, 2H, 13M) |
+| Scaffold, pruned to 4 needed packages | **928** | **46** (7 / 15 / 23 / 1) | **12** (4C, 1H, 7M) |
+| Bare package (diagnostic only) | 641 | 30 (3 / 21 / 5 / 1) | 0 |
+
+**The decisive finding is what pruning does not fix.** Removing the eleven datasource connectors a
+cost dashboard has no use for (BigQuery, Databricks, Snowflake, MSSQL, MySQL, Postgres, Trino,
+MotherDuck, SQLite, and the rest, which the template installs by default) removes a third of the
+tree and 41 percent of the advisories -- but the **four unresolvable criticals are identical in both
+rows**: `@evidence-dev/core-components`, `@evidence-dev/sdk`, `@evidence-dev/tailwind` and `vitest`.
+Those are Evidence's own core packages. **No configuration choice removes them**, which is what
+makes the T1 failure irreducible rather than a matter of trimming.
+
+Note also the direction of the earlier error: the bare tree showed **zero** `fixAvailable: false`
+advisories, so measuring the wrong artifact simultaneously **over-stated** the install problem and
+**under-stated** the security surface by roughly 2.4x. Both corrections point the same way -- the
+public-repository alert argument below is stronger than the first draft claimed, not weaker.
 
 **Why that lands harder in this repository than in most.** This repo is PUBLIC, with GHAS,
 Dependabot alerts and a standing `ghas-probe` monitor whose dated evidence is recorded against
@@ -337,26 +373,38 @@ reachable npm registry access through the agent proxy. The repository currently 
 JavaScript or TypeScript files and has no `package.json`, so any adoption introduces the
 repository's first Node dependency surface.
 
-**The install is not.** A bare `npm install @evidence-dev/evidence@40.1.8` **fails** in this
-container with `ERESOLVE unable to resolve dependency tree`. The conflict is intrinsic to the pinned
-tree rather than environmental: `ts-node@10.9.2` (pulled in transitively via
-`postcss-load-config@4.0.2`, itself a pinned peer of Evidence) declares a loose
-`peer typescript ">=2.7"`, so npm hoists `typescript@7.0.2`; that violates `svelte-preprocess@5.1.3`'s
-`peerOptional typescript ">=3.9.5 || ^4.0.0 || ^5.0.0"`, and `svelte-preprocess@5.1.3` is itself an
-exact peer pin of Evidence.
+**The documented install path works.** `npx degit evidence-dev/template` followed by a plain
+`npm install` **succeeds: exit 0, 1,311 packages, no flags**. Evidence therefore **passes T3**.
 
-The install succeeds **only** under `--legacy-peer-deps`, which is npm's explicit instruction to
-accept a resolution it considers incorrect and potentially broken. This is section 5.3's frozen-pin
-thesis **already materialised**, not a future risk.
+*(An earlier draft of this report claimed the opposite. It had measured a bare
+`npm install @evidence-dev/evidence@40.1.8` into an empty project, which does fail with `ERESOLVE`:
+`ts-node@10.9.2` -- pulled in via `postcss-load-config@4.0.2`, a pinned peer of Evidence -- declares
+a loose `peer typescript ">=2.7"`, so npm hoists `typescript@7.0.2`, violating
+`svelte-preprocess@5.1.3`'s `peerOptional typescript ">=3.9.5 || ^4.0.0 || ^5.0.0"`, itself another
+of Evidence's exact peer pins. That draft named the untested scaffold as a bound but wrote the
+untested negative into its verdict anyway. Naming a bound is not a substitute for testing something
+this cheap.)*
 
-**Install path validated (stated precisely, because it bounds the claim).** The measurement above is
-a **bare install of the `@evidence-dev/evidence` package** into an empty project. Evidence's
-documented scaffold path is a project template (`npx degit evidence-dev/template`), which ships its
-own `package.json` supplying the peer versions and may well resolve cleanly. **That path was not
-tested here.** So the honest finding is narrower than "Evidence cannot be installed": it is that the
-**package's declared peer graph does not self-resolve under current npm**, and any adoption must
-therefore pin its own resolution -- which is itself the maintenance burden under evaluation. Testing
-the template scaffold is the first task of the proof of concept, not a settled matter.
+**Why it works is the finding worth keeping, and it is not the reassuring answer.** The template's
+`package.json` declares **no** `svelte`, `typescript`, `vite` or `tailwindcss` at all -- only
+`@evidence-dev/*` packages. It resolves solely because a **654 KB `package-lock.json` is committed
+to the template**. Deleting that lockfile and reinstalling reproduces the identical `ERESOLVE`
+(verified).
+
+So the accurate statement is: **Evidence's declared peer graph does not self-resolve under current
+npm, and adoption inherits an upstream-authored lockfile as the thing that makes it work.** The
+consequences are concrete and belong in the adoption decision:
+
+- The repository does not control its own resolution; it inherits upstream's pinned one.
+- Any dependency movement within that tree risks re-entering the unresolved peer graph, which is
+  section 5.3's frozen-pin thesis expressed as a lockfile rather than as version ranges.
+- Regenerating the lockfile -- something a routine `npm audit fix`, a Dependabot bump, or a
+  different package manager may attempt -- is the failure mode to guard against, not an ordinary
+  maintenance action.
+
+**Install paths validated:** the shipped scaffold (passes, with lock), the scaffold with the lockfile
+removed (fails, `ERESOLVE`), a scaffold pruned to four packages (passes, with lock), and the bare
+package (fails). Package managers other than npm were not tested.
 
 ## 6. Where the second semantic layer actually lives
 
@@ -440,6 +488,13 @@ routing, static output, and islands for interactivity. It is also the most activ
 option in the comparison set (section 5.2), and Decision 101(e) already ratifies Astro plus
 Starlight on Cloudflare Pages for the marketing surface, so part of the toolchain cost is sunk
 regardless of what the internal surface chooses.
+
+**This arm is not yet measured as specified.** The comparison arm is "Astro **plus a charting
+library**", and bare `astro` (296 dependencies, 0 advisories) is not that arm. No charting library
+has been named, so the arm's real dependency and advisory surface is unknown on both sides of the
+trade -- and a charting library is exactly where an Astro arm would acquire its transitive weight.
+Naming the library and measuring the combined tree is a T2.53 task; until then, Astro's clean
+supply-chain figures should be read as **provisional and flattering**, not as a result.
 
 The trade is genuine in both directions, and the report does not prejudge it:
 
@@ -574,6 +629,20 @@ repository**, so these must hold first (section 7).
   enforcement artifact? The answer determines whether P2 binds one arm or all three, so it must
   precede the comparison rather than emerge from it.
 
+**Resolving the ownership circularity (important, and a defect in this section's second draft).**
+P0.1 is registered in the ledger as T2.53 exit criterion c7, but T2.53 is `deferred_post_mvp` -- so
+as written, the guard that must exist *before* a proof-of-concept branch opens is owned solely by
+the deferred item whose branch it gates, and no active item owns it. Two things break the loop:
+
+1. **P0.1 is independently landable.** It is ordinary repository hygiene -- ignore rules plus a
+   registered check -- with no dependency on T2.52, T2.53 or any adoption decision. Any session may
+   land it as standalone work; it does not require T2.53 to reactivate, and registering it as c7
+   records the *obligation*, not a scheduling constraint.
+2. **Until it lands, the binding rule is simpler and absolute: no `npm install` may be run inside the
+   repository tree.** Scratch-directory installs (as used to gather section 5's figures) are
+   unaffected, because nothing there is ever tracked. This is the operative control in the interim,
+   and it needs no roadmap item to take effect.
+
 ### 11.1 Tool-neutral criteria -- all candidates must satisfy all of
 
 1. An agent scaffolds, renders, inspects and iterates the dashboard entirely within an ephemeral
@@ -591,28 +660,86 @@ repository**, so these must hold first (section 7).
    satisfied by the T2.52 datasets consumed.
 8. Moving a semantic asset from a virtual query to a persisted materialization requires **no change**
    to the page contract.
-9. A **working prototype** of a CD.41-invariant-(b)-compliant serving mechanism exists -- not a
-   sketch, and not merely "identified and costed". Section 4.2's TTL analysis means this is
-   realistically edge-JWT or signed cookies, so a design note does not discharge it.
-10. The QuickSight rejection is **re-adjudicated** against measured build and carry cost, and still
-    holds (section 8.1).
+9. The QuickSight rejection is **re-adjudicated** against measured build and carry cost, and still
+   holds (section 8.1).
+
+**Deliberately NOT in 11.1: the serving prototype.** An earlier draft required a working
+edge-JWT-or-signed-cookie prototype as an all-candidates criterion, which **contradicted criterion 1**
+-- a run that is credential-free and confined to an ephemeral container cannot stand up an AWS
+origin and a Cloudflare Access application. It also depends on **CD.41, which is itself unratified
+and gated on the deferred T2.51**, so it could not be discharged at proof-of-concept time regardless
+of effort.
+
+The serving question is therefore a **separate, credentialed, CD.41-gated sub-task** (roadmap T2.53
+c6, whose surfaces are declared in that item's `files_in_scope`), sequenced after the in-container
+comparison and after CD.41 ratifies. Its failure mode is preserved as a **class-level reject**
+(section 11.4 item 5) rather than a per-arm criterion, because an unsolvable serving problem defeats
+every code-defined renderer equally -- it is not a discriminator between arms.
 
 ### 11.2 Supply-chain thresholds -- numeric, applied per candidate
 
-Measured on the resolved tree at proof-of-concept time, not inherited from section 5:
+Measured on the resolved tree at proof-of-concept time, not inherited from section 5. Each entry is
+either a **threshold** (has a defined fail state and can reject an arm) or a **recorded metric**
+(informs judgement, never rejects). Mixing the two was a defect in this section's second draft and
+is called out explicitly here so the distinction is not lost again.
 
-- T1 **Unresolvable advisories:** zero `critical` and no more than **3 `high`** advisories for which
-  no forward fix exists. Evidence measured **3 critical and roughly 18 fix-forward-unavailable**
-  today (section 5.3), so on current figures Evidence **fails T1** -- which is precisely why the
-  threshold is stated in advance.
-- T2 **Tree size:** transitive dependency count recorded, with anything above **750** requiring an
-  explicit written justification rather than an automatic pass.
-- T3 **Install integrity:** the project installs **without `--legacy-peer-deps`** or any equivalent
-  resolution override. Evidence's bare package currently fails this; the template scaffold is
-  untested (section 5.5).
-- T4 **Liveness:** a security-relevant publish or a documented advisory response within the
-  preceding **9 months** (chosen to sit above this project's own observed ~7-month quiet period, so
-  the threshold measures responsiveness rather than cadence -- section 5.1).
+- **T1 -- Unresolvable advisories (THRESHOLD).** Defined in **npm's own terms**, because "no forward
+  fix" is ambiguous across two distinct `npm audit` states and conflating them flips the verdict:
+  T1 counts **only advisories reporting `fixAvailable: false`** (genuinely unresolvable). Advisories
+  whose `fixAvailable` is a dict requiring a major change are **recorded separately** and do not
+  count toward T1 -- a major upgrade is disruptive, not impossible. An arm fails T1 on **any
+  unresolvable `critical`**, or on **more than 3 unresolvable `high`**.
+
+  Measured against all three arms, on the adoption-relevant artifact for each:
+
+  | Arm | Deps | Advisories | `fixAvailable: false` | T1 |
+  |---|---|---|---|---|
+  | Evidence (scaffold, pruned) | 928 | 46 | **4 critical**, 1 high, 7 moderate | **FAIL** |
+  | Observable Framework | (re-measure) | 6 | 0 | pass |
+  | Astro | (re-measure) | 0 | 0 | pass |
+
+  Evidence fails on four unresolvable criticals that **survive pruning to the minimum surface**
+  (section 5.3) -- they are its own core packages.
+- **T2 -- Tree size (RECORDED METRIC, not a threshold).** The transitive dependency count is recorded
+  and reported (Evidence: 641 transitive, 593 installed). It deliberately carries **no numeric cap**:
+  any cap this report could name would be calibrated against the one tree it has measured, which is
+  threshold-tuning rather than measurement. Size informs the section 11.3 per-arm judgement and the
+  Constrain disposition; **it never rejects an arm on its own.**
+- **T3 -- Install integrity (THRESHOLD).** The project installs **without `--legacy-peer-deps`** or
+  any equivalent resolution override, **using the install path adoption would actually use**.
+  Evidence **passes T3** via its documented scaffold (section 5.5). Recorded alongside, because it
+  bears on maintenance rather than on T3: that pass depends on an upstream-committed lockfile, and
+  the declared peer graph does not self-resolve without it.
+- **T4 -- Advisory responsiveness (THRESHOLD).** Assessed on **response to security advisories
+  alone**, not publish cadence -- section 5.1 establishes that cadence cannot settle liveness in
+  either direction, so a cadence-derived window would re-import the measure that section rejects.
+  An arm fails T4 if its open advisories show **no upstream remediation activity** (a fix, a
+  documented mitigation, or a maintainer response on the advisory) at the time of measurement.
+  **Evidence's T4 result is adverse on present evidence**: roughly 18 advisories whose only offered
+  remediation is a major *downgrade* is prima facie non-response. It is recorded as adverse rather
+  than failed only because this report has not inspected the upstream issue tracker, which the
+  proof of concept must do before ruling.
+
+**Threshold-tuning disclosure.** T1's numbers were chosen after measuring Evidence. That ordering is
+unavoidable here -- the measurement is what prompted the thresholds -- so the mitigation is
+disclosure plus units that do not flatter the incumbent, not a pretence of blindness. T2 was
+demoted to a metric precisely because no honest cap could be derived from a single measured tree.
+An earlier draft's T4 window was calibrated to sit *above* Evidence's own observed quiet period,
+which is threshold-tuning in the incumbent's favour; it has been re-derived from advisory response.
+
+**One-survivor disclosure (the inverse risk, stated because it is easy to miss).** This report
+opened by worrying that Evidence-shaped criteria would make "adopt Astro" unreachable. The corrected
+measurements create the **opposite** hazard: on present figures T1 fails Evidence, and Astro is also
+the one arm that escapes `validate_prose_allowlist` under section 4.1.1's mechanical reading. A
+criteria set that eliminates two of three arms **and** happens to favour the arm the repository has
+already ratified elsewhere (Decision 101(e)) deserves suspicion, not satisfaction.
+
+Two guards against rubber-stamping that outcome: (1) T1 is defined on `fixAvailable: false` rather
+than the looser major-change reading precisely **because** the looser reading would eliminate
+Observable Framework too and leave exactly one survivor; (2) if the proof of concept finds only one
+arm standing, it must state **which criterion did the eliminating and whether that criterion is
+load-bearing or incidental** before recommending adoption. An uncontested winner is a weaker result
+than a contested one, and should be reported as such.
 
 ### 11.3 Per-arm adopt bar
 
@@ -644,7 +771,8 @@ Measured on the resolved tree at proof-of-concept time, not inherited from secti
 
 **A single arm** is rejected if any of:
 
-6. It fails any threshold in 11.2.
+6. It fails any **threshold** in 11.2 -- that is T1, T3 or T4. T2 is a recorded metric and cannot
+   reject an arm.
 7. Useful dashboards require arbitrary SQL in its page files, or its local query behaviour creates
    an unavoidable second semantic layer (section 6).
 8. Its data-source plugin interface cannot cleanly express the named-verb model.
@@ -654,14 +782,32 @@ Measured on the resolved tree at proof-of-concept time, not inherited from secti
 11. Its accessibility, responsiveness or visual-testing standards cannot be met.
 12. Its static output is too large or slow for expected datasets.
 13. Another arm meets the validated requirements at materially lower long-term complexity.
+14. **Astro-specific:** the repository declines to own chart integration, layout primitives,
+    formatting and empty/stale/partial states directly, having costed them (section 11.3). Recorded
+    explicitly so that failing an arm's own §11.3 bar has a defined disposition for every arm, not
+    only for Evidence via item 10.
 
 ### 11.5 Constrain
 
 Adoption limited to a narrow reporting use case (for example the private cost dashboard alone), with
-no commitment to telemetry, data quality, operational governance or product analytics. Constrain is
-the expected outcome if 11.0-11.1 hold for some arm but its 11.2 supply-chain thresholds remain
-uncomfortable at a level short of outright failure -- a bounded, single-tenant blast radius being an
-acceptable way to carry a dependency one would not want platform-wide.
+no commitment to telemetry, data quality, operational governance or product analytics.
+
+**Constrain is defined against the qualitative findings, not against 11.2.** This matters, because
+11.2's thresholds are binary and 11.4 item 6 makes any threshold failure a reject -- so a Constrain
+disposition keyed to "thresholds uncomfortable but short of failure" would be structurally
+unreachable. It is reachable on exactly these paths:
+
+- An arm clears 11.0, 11.1 and every 11.2 **threshold** (T1, T3, T4), but its recorded **T2** tree
+  size, custom-component burden, or measured build-and-carry cost under 11.3 makes platform-wide
+  standardisation unattractive.
+- An arm clears everything but the Decision-127 amendment is obtained only in a **narrowed** form
+  (for example scoped to one dashboard surface rather than to a general dashboard-page class).
+- Section 6's second-semantic-layer concern (a shipped query console) is judged tolerable for a
+  single private, single-operator tenant but not as a platform-wide default.
+
+A bounded, single-tenant blast radius is an acceptable way to carry a dependency one would not want
+platform-wide -- but only where a threshold has actually been met, never as a softer landing for one
+that was failed.
 
 ## 12. Roadmap placement and sequencing
 
