@@ -77,6 +77,12 @@ scope:
       local aws s3 sync so a shrunk upstream mirror cannot leave stale provider bytes). THESE TWO ARE
       COUPLED AND MUST LAND IN THE SAME EDIT: adding --delete while RESOLVED_TFRC still lives inside
       $MIRROR_DIR would delete the live tfrc on the next sync. An implementer must not split them.
+      DELIBERATE ASYMMETRY (not an oversight): the exact-locked-version gate added to the CI leg is
+      NOT propagated to this CC-web leg, which keeps its existing directory-non-emptiness gate. The
+      consequence differs in kind -- a version-incomplete mirror here fails one interactive local
+      init in an admin container, whereas in CI it would red a required, branch-protection-gating
+      check. Decision 120 already accepted the local behaviour. Tightening it is a separate,
+      lower-value change; do not fold it in here.
   - file: terraform/CLAUDE.md
     action: Modify
     purpose: >-
@@ -432,8 +438,7 @@ context:
     id-token:write folded into scope. Decision 55 NOTE: visible-reason requirement folded into the
     acceptance criteria and constraints. Decision 126 SPIRIT NOTE: the stale ci.yml comment block is
     now an explicit scope item and step 6 sweeps for it.
-  - >-
-    "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 1 round(s)"
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=PROCEED after 2 round(s)"
   - >-
     Tier rationale: V3, not the V2 that Decisions 135 and 142 set for ci.yml-touching changes. Those
     precedents were ci.yml-STEP-only with zero .tf in scope; terraform/personal/oidc.tf is squarely on
