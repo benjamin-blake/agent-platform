@@ -237,8 +237,12 @@ verification_plan:
       print('REC_2849_CLOSED')"
     expected: Prints LIVE_PROOF_REC=<id> then REC_2849_CLOSED, exit 0.
     fix_if: >-
-      If the proof rec is absent, step 6's dispatched run did not reach the filing step -- read its logs
-      before re-dispatching. If rec-2849 is still open, the Resolves trailer did not reach the
+      If the proof rec is absent there are TWO possible causes, so do not misdiagnose: either step 6's
+      dispatched run did not reach the filing step (read its logs before re-dispatching), or it filed but
+      the RCA agent's authored context lacks the literal token `ops_decisions` this selector greps for --
+      inspect the open source=ci_rca set by hand before concluding the run failed. Note also that a
+      re-dispatched step 6 can leave TWO open proof recs; this selector takes the first arbitrarily, so
+      close the orphan too or it lingers as an open Critical carrying Decision 73's L5/L6. If rec-2849 is still open, the Resolves trailer did not reach the
       SQUASH-MERGE commit body (rec-2679/rec-2733: a single-commit squash drops a trailer present only in
       the PR description); close it via `ops_data_portal --update-rec rec-2849 --status closed
       --resolution "..."`. Note the irony to check here: rec-2849's own closure is processed BY
@@ -316,7 +320,7 @@ context:
     decisions triaged. CITE list: dec-142 (incl. points 3, 4(a), 6), dec-118, dec-072, dec-092 (point 6),
     dec-055, dec-119, dec-084 (I-4), dec-073 (points 3/4 = L5/L6), dec-103, dec-150, dec-061, dec-062,
     dec-094, dec-129, dec-131, dec-128, dec-070, dec-153, dec-132.
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=<verdict> after <N> round(s)"
+  - "gates: decision-scout=FLAGS_FOUND (106/106 triaged); plan-critique=PROCEED after 3 round(s)"
   - >-
     ORIGIN. rec-2849, filed from the ducklake-writer-errors RCA (CloudWatch alarm 2026-07-24T14:31:12Z).
     ci-rca.yml's filter is ["CI", "Main Canary", "terraform-apply-sandbox"]. rec-autoclose runs 581
@@ -351,8 +355,8 @@ context:
     workflow that is broken -- fixed_by_sha may never be stamped, manufacturing a spurious critical from
     a real fix. We still watch rec-autoclose (the alternative is the 2026-07-24 silence), but the
     dependency is recorded in the contract, the manual `ops_data_portal --update-rec` path is named as
-    the closure route for this rec class, and VP step 7 both stamps the live-proof rec and carries the
-    note -- because this plan's own closure runs through that path.
+    the closure route for this rec class, and VP step 8 stamps the live-proof rec while VP step 7 carries
+    the note -- because this plan's own closure runs through that path.
   - >-
     HONEST LIMITATIONS, both directions. (1) Cannot self-report: ci-rca files THROUGH the ops portal, so
     the ingestion path shares the substrate it reports on and a total ducklake_writer outage is
