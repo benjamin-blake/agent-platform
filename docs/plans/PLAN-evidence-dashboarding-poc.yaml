@@ -1,0 +1,352 @@
+schema_version: 1
+slug: "evidence-dashboarding-poc"
+intent: >-
+  Stress-test (report-only) the owner's hypothesis that Evidence should become this repository's
+  standard human-facing analytical presentation layer, and place the resulting work on the platform
+  roadmap as a prerequisite analytical-layer item (T2.52) plus a bounded three-way proof of concept
+  (T2.53) governed by a new pending presentation-layer boundary decision (CD.42) -- so the platform
+  gains a legible human surface over its governed datasets without acquiring a second semantic
+  authority or a disproportionate frontend dependency.
+plan_type: REPORT-ONLY
+verification_tier: V1
+plan_path: docs/plans/PLAN-evidence-dashboarding-poc.yaml
+phase: >-
+  Platform tier_items T2.52 + T2.53 (both new, deferred_post_mvp) and an amendment to T2.51. No
+  product-roadmap phase -- this is platform observability/presentation infrastructure.
+scope:
+  - file: docs/plans/reports/REPORT-evidence-dashboarding-poc.md
+    action: Create
+    purpose: >-
+      The stress-test deliverable -- what the hypothesis gets right, premise re-grounding, the two
+      structural collisions (Decision 127 prose taxonomy; CD.41 invariant (b) multi-file serving),
+      verified npm supply-chain evidence, the second-semantic-layer analysis, public-repo exposure,
+      alternatives adjudicated including QuickSight by name, the prerequisite analytical layer, the
+      proof-of-concept design, and pre-committed adopt/constrain/reject criteria.
+  - file: docs/ROADMAP-PLATFORM.yaml
+    action: Modify
+    purpose: >-
+      Add tier item T2.52 (analytical/semantic layer -- aggregate named-verb class + rebuildable-
+      derived-asset write mode) and tier item T2.53 (bounded three-way presentation-layer proof of
+      concept, depends_on T2.52), both deferred_post_mvp with recorded deferral rationale; add
+      candidate decision CD.42 (presentation-layer boundary, pending, gates T2.53); amend T2.51
+      exit criteria c2/c3 and its progress_note (route the cost snapshot into a governed DuckLake
+      table served by named verbs; rehome the renderer choice and the CD.41-(b) serving question to
+      T2.53).
+  - file: docs/plans/PLAN-evidence-dashboarding-poc.yaml
+    action: Create
+    purpose: The REPORT-ONLY planning artifact pointing at the deliverable.
+bundled_recommendations: []
+infrastructure_dependencies: []
+acceptance_criteria:
+  - >-
+    docs/plans/reports/REPORT-evidence-dashboarding-poc.md exists and records: the two structural
+    collisions (Decision 127 standing human-audience prose; CD.41 invariant (b) multi-file static
+    serving), the verified npm supply-chain evidence with its point-in-time caveat, an explicit
+    AWS QuickSight adjudication against Decisions 100/75, and pre-committed adopt / reject /
+    constrain criteria.
+  - >-
+    docs/ROADMAP-PLATFORM.yaml contains schema-valid tier items T2.52 and T2.53 (both
+    deferred_post_mvp, strategic:false, structured exit_criteria per Decision 136, each carrying a
+    recorded deferral rationale per Decision 93) with T2.53 depends_on [T2.52], plus candidate
+    decision CD.42 (state:pending, gates:[T2.53]).
+  - >-
+    T2.51's exit criteria c2 and c3 are amended (governed DuckLake table + named verbs; renderer and
+    CD.41-(b) question rehomed to T2.53) with all five of its criteria still status:open, so no
+    met_by provenance is re-pointed (Decision 136 / CD.39).
+  - >-
+    The roadmap validates (validate_platform_roadmap), this plan validates (plan_document), and the
+    roadmap stays under its Decision 114 line ceiling.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    action: Validate the platform roadmap schema after adding T2.52, T2.53 and CD.42.
+    command: bin/venv-python -m scripts.roadmap.platform_roadmap docs/ROADMAP-PLATFORM.yaml
+    expected: "PASS: docs/ROADMAP-PLATFORM.yaml validates against RoadmapDocument schema."
+    fix_if: >-
+      A schema/graph error prints -> fix the offending item or CD shape (id, depends_on, structured
+      exit_criteria) and re-run.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the already-registered validate_platform_roadmap check in validate.py -- graduating it would add a second registry row asserting the identical property.
+  - step: 2
+    phase: pre-deploy
+    action: >-
+      Confirm T2.52 and T2.53 are well-shaped, both deferred, the dependency edge exists, and CD.42
+      is pending and gates T2.53.
+    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); it={i['id']:i for i in d['tier_items']}; cd={c['id']:c for c in d['candidate_decisions']}; a=it['T2.52']; b=it['T2.53']; assert a['status']=='deferred_post_mvp' and b['status']=='deferred_post_mvp'; assert a['strategic'] is False and b['strategic'] is False; assert b['depends_on']==['T2.52']; assert len(a['exit_criteria'])>=6 and len(b['exit_criteria'])>=10; assert all(c['status']=='open' for c in a['exit_criteria']+b['exit_criteria']); assert cd['CD.42']['state']=='pending' and cd['CD.42']['gates']==['T2.53']; assert 'DEFERRAL RATIONALE' in a['progress_note'] and 'DEFERRAL RATIONALE' in b['progress_note']; assert 'ACTIVATION TRIGGER' in a['progress_note'] and 'ACTIVATION TRIGGER' in b['progress_note']; print('T2.52+T2.53+CD.42 ok')"
+    expected: "T2.52+T2.53+CD.42 ok"
+    fix_if: >-
+      KeyError/AssertionError -> the item or CD is missing, mis-typed, or under-specified; correct
+      it and re-run.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Transient single-edit bookkeeping assertion. The asserted properties change legitimately on reactivation (status flips deferred_post_mvp -> not_started, criteria statuses flip to met), so a standing guard would fail by design later.
+  - step: 3
+    phase: pre-deploy
+    action: >-
+      Confirm the Decision 93 no-live-dep invariant is not violated -- no live (non-deferred) tier
+      item depends on T2.52 or T2.53.
+    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); bad=[i['id'] for i in d['tier_items'] if i['status'] not in ('deferred_post_mvp','complete','reserved') and ({'T2.52','T2.53'} & set(i.get('depends_on') or []))]; assert not bad, bad; print('no-live-dep ok')"
+    expected: "no-live-dep ok"
+    fix_if: >-
+      A live item id prints -> it depends on a deferred item (Decision 93 invariant); remove the
+      edge or reclassify.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Already enforced by the platform_roadmap.py model_validator at load time per Decision 93's no-live-dep invariant -- a registry row would duplicate a schema-level guarantee.
+  - step: 4
+    phase: pre-deploy
+    action: >-
+      Confirm T2.51's amendment is provenance-safe -- all five criteria still status:open, so no
+      met_by is re-pointed (Decision 136 / CD.39) -- and that c2/c3 carry the amendment.
+    command: bin/venv-python -c "import yaml; d=yaml.safe_load(open('docs/ROADMAP-PLATFORM.yaml')); t=[i for i in d['tier_items'] if i['id']=='T2.51'][0]; assert all(c['status']=='open' for c in t['exit_criteria']), 'a criterion is no longer open'; assert not any(c.get('met_by') for c in t['exit_criteria']); c={x['id']:x['text'] for x in t['exit_criteria']}; assert 'GOVERNED DUCKLAKE TABLE' in c['c2']; assert 'T2.53' in c['c3']; print('T2.51 amendment ok')"
+    expected: "T2.51 amendment ok"
+    fix_if: >-
+      AssertionError -> either a criterion was already met/rehomed (add new criteria instead of
+      rewriting text), or the amendment text is missing; correct and re-run.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Transient single-edit bookkeeping assertion about one amendment. T2.51's criteria statuses change legitimately as the item progresses, so pinning them as a standing check would fail by design.
+  - step: 5
+    phase: pre-deploy
+    action: Validate this REPORT-ONLY plan document against the PlanDocument schema.
+    command: bin/venv-python -m scripts.roadmap.plan_document docs/plans/PLAN-evidence-dashboarding-poc.yaml
+    expected: The plan validates (exit 0) against the PlanDocument schema.
+    fix_if: A validation error prints -> fix the offending field and re-run.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the already-registered validate_plan_documents check, which re-validates the whole docs/plans directory in both presubmit tiers.
+  - step: 6
+    phase: pre-deploy
+    action: >-
+      Confirm the deliverable exists and carries the load-bearing findings -- both structural
+      collisions, the QuickSight adjudication, and the pre-committed criteria.
+    command: 'test -f docs/plans/reports/REPORT-evidence-dashboarding-poc.md && for t in "T2.52" "T2.53" "CD.42" "Decision 127" "CD.41" "QuickSight" "point-in-time" "named_read"; do grep -q -- "$t" docs/plans/reports/REPORT-evidence-dashboarding-poc.md || { echo "missing: $t"; exit 1; }; done; echo "report findings ok"'
+    expected: "report findings ok"
+    fix_if: >-
+      A "missing: <token>" line prints -> the deliverable does not carry that finding; write or
+      repair it. The per-token loop is deliberate: an alternation `grep -c` counts matching LINES,
+      so eight mentions of a single token would pass while every other finding was absent.
+    graduation: not-applicable
+  - step: 7
+    phase: pre-deploy
+    action: >-
+      Confirm the roadmap stays within its Decision 114 line ceiling (10,000) after the additions.
+    command: bin/venv-python -c "n=sum(1 for _ in open('docs/ROADMAP-PLATFORM.yaml')); assert n<10000, n; print('roadmap lines', n, '< 10000 ceiling')"
+    expected: A line count under 10,000.
+    fix_if: At or over the ceiling -> compact terminal content in place (Decision 147) before adding.
+    graduation: waive
+    graduation_waiver_reason: >-
+      Duplicates the Decision 114 roadmap line-ceiling guard already registered in validate.py (_roadmap_size_issues).
+constraints:
+  - No implementation this session -- REPORT-ONLY; nothing is adopted, scaffolded, or installed.
+  - >-
+    No npm install, no package.json, and no tracked JavaScript/TypeScript file is created by this
+    plan. Live npm registry reads (npm view / npm pack) were performed in the scratchpad only, for
+    evidence gathering, and left no repository artifact.
+  - >-
+    Confidential figures are never committed to this PUBLIC repository; the report cites no vendor
+    cost amounts, account identifiers, or internal hostnames (Decisions 73/83/101).
+  - >-
+    STRATEGIC filing is frozen (Decision 67 / CD.17) -- both L-effort tier items are authored
+    strategic:false with a freeze-override note, per the T2.19 / T2.51 pattern.
+  - >-
+    Roadmap edits are bookkeeping and forward intent only; no criterion status is flipped and no
+    item status is inferred (Status-Trusted-Never-Inferred).
+  - No rescue agents or workaround loops (Decision 55).
+context:
+  - >-
+    Decision-scout verdict + CITE list: FLAGS_FOUND on both dispatches (106/106 decisions triaged
+    each). CITE: 84, 85, 86, 88, 93, 100, 101, 104, 105, 111, 114, 118, 127, 132, 133, 136, 137,
+    147, 150, 75, 81, 87. Flags accepted and folded in: 111 (leak path widened from vendor cost
+    figures to ops-table exports; deterministic guard replaces gitignore -> T2.53 c7), 100
+    (QuickSight re-adjudication promoted from report prose to T2.53 c9), 127 SPIRIT (the Decision
+    101(c) marketing/** carve-out does NOT transfer -- it rests on one-way downstream-ness and an
+    internal dashboard feeds back into agent direction; amendment must be argued on its own grounds
+    and is a pre-committed REJECT criterion -> T2.53 c5), 75 SPIRIT frame-lock (the T2.53 ->
+    T2.52 edge is justified in T2.53's intent: fixtures are contract-derived, so the dependency is
+    on schema contracts, not live data), 93 (per-item deferral rationale recorded in both
+    progress_notes), 88 + 137 (two CITEs the first dispatch missed -- Neon egress budget and
+    partition-every-table -> T2.52 c5 and c2).
+  - >-
+    Decision-scout flag REJECTED with evidence -- the second dispatch flagged Decision 67 as
+    requiring plan_type IMPLEMENTATION, claiming REPORT-ONLY is a scope descriptor rather than a
+    plan_type value. This is incorrect: scripts/roadmap/plan_document.py:16 declares PlanType =
+    Literal["IMPLEMENTATION", "STRATEGIC", "REPORT-ONLY"], the merged PLAN-cost-visibility-dashboard
+    (PR #731) declares plan_type REPORT-ONLY, and Decision 67 freezes STRATEGIC only. The /plan
+    workflow additionally has a REPORT-ONLY-specific gate (Step 10). Plan remains REPORT-ONLY.
+  - >-
+    Decision-scout flags RESOLVED by checks already run -- 136 (asked to confirm T2.51's c2/c3 are
+    not met/rehomed before rewriting text; confirmed all five criteria status:open, VP step 4 makes
+    this mechanical) and 118/CD.25 (asked whether the contract ritual applies to
+    data-modeling-standard.yaml; it does not -- the file's own header records that it carries no
+    top-level contract:/class: key, so validate_contract_drift skips it).
+  - "gates: decision-scout=FLAGS_FOUND (2 dispatches, 106/106 triaged each; flags accepted/rejected as recorded above); plan-critique=PROCEED; report-critique=<filled at Step 10>"
+  - >-
+    CI-RCA HARD-BLOCK DEFERRED BY EXPLICIT HUMAN DIRECTION. rec-2836 ("Terraform init flakes on
+    kislerdm/neon 504 Gateway Timeout from github.com", priority Critical, source ci_rca,
+    scripts/checks/_terraform.py) was open at planning time. This plan satisfies none of the three
+    Related-Work conditions -- different file, different Decision Record, different failure category
+    (this is a V1 docs/roadmap plan; rec-2836 is a terraform-init network flake). The owner directed
+    at session start that the ci-rca block be set aside for this work as "separate completely".
+    Deferral rationale logged here per the Related-Work Check; rec-2836 remains open and unaddressed
+    and must still be triaged in a subsequent /plan session.
+  - >-
+    Owner corrections applied during scoping, recorded so the report is not read as contradicting
+    them: (a) query_ops is a sanctioned, scheduled-for-retirement exception for the DQ harness, not
+    a caller-SQL precedent -- the surviving finding is the narrower constraint that a presentation
+    adapter must not become its second tenant; (b) the named-verb pattern is the precedent to
+    follow, and the absence of aggregate verbs is the prerequisite (T2.52), not an objection; (c)
+    DuckLake IS Parquet-in-S3 with catalog metadata in Neon, so T2.51's cost snapshot is a routing
+    amendment away from being a governed table, not a re-scope; (d) telemetry/DQ having no live data
+    is exactly what roadmap dependency mapping is for.
+  - >-
+    Owner decisions this session: both items are post-MVP (deferred_post_mvp); the analytical
+    aggregate layer is a PREREQUISITE and is scoped as its own item; the proof of concept is a
+    three-way comparison (Evidence / Astro+charts / Observable Framework) rather than a referendum
+    on Evidence, because Starlight is a documentation theme with no chart or data primitives while
+    Astro itself is a credible candidate already ratified for the marketing surface.
+  - >-
+    Verified evidence gathered this session (npm registry, POINT-IN-TIME 2026-07-26 -- the report
+    and T2.53 c8 both require re-verification at reactivation): @evidence-dev/evidence publish
+    counts 406 (2023) / 179 (2024) / 13 (2025) / 1 (2026), last publish 2026-02-06 shared with
+    core-components, sdk and duckdb; major frozen at 40 since 2024-12-10; exact peer pins
+    @sveltejs/kit 2.8.4, svelte 4.2.19, vite 5.4.21, typescript 5.4.2 which Dependabot (pip +
+    github-actions only) structurally cannot service; @evidence-dev/telemetry is a direct
+    dependency; @evidence-dev/universal-sql plus a shipped /explore/console page ships a
+    client-side DuckDB-WASM query console in the built artifact; @sveltejs/adapter-static plus
+    prerendered_queries/[query_hash].arrow confirms multi-file output. Comparators: astro 7.1.3
+    (2026-07-20), @astrojs/starlight 0.41.4 (2026-07-22), @observablehq/framework 1.13.4
+    (2026-04-06). Container: Node v22.22.2, npm 10.9.7, pre-installed Chromium, npm reachable; repo
+    tracks zero JS/TS files and has no package.json.
+  - >-
+    Measured during the report-critique round (resolved tree, scratchpad only, no repository
+    artifact): bare `npm install @evidence-dev/evidence@40.1.8` FAILS with ERESOLVE -- ts-node's
+    loose `typescript >=2.7` peer hoists typescript@7.0.2, violating svelte-preprocess@5.1.3's
+    peerOptional `>=3.9.5 || ^4.0.0 || ^5.0.0`, both of which are Evidence's own exact peer pins --
+    and succeeds only under --legacy-peer-deps. Resolved tree: 641 transitive dependencies (592 prod
+    + 50 optional); npm audit 30 vulnerabilities (3 critical, 21 high, 5 moderate, 1 low), ~18 of
+    which report fixAvailable as a major DOWNGRADE to @evidence-dev/evidence@29.0.3 (no forward fix)
+    including @evidence-dev/sdk critical and @sveltejs/kit high. Liveness nuance: v40.1.2
+    (2025-04-11) -> v40.1.3 (2025-11-03) is a prior ~7-month gap that RESOLVED, so the current
+    ~5.7-month silence is within observed normal -- retiring both the "abandoned" and the
+    "stabilisation curve" readings. Bound on the claim: this measured the BARE PACKAGE, not the
+    documented `npx degit evidence-dev/template` scaffold, which ships its own package.json and may
+    resolve cleanly; testing it is T2.53's first task, not a settled matter.
+  - >-
+    ROUND-2 CRITIQUE CORRECTED A HEADLINE CLAIM. The round-1 revision asserted that Evidence FAILS
+    the install-integrity threshold, from a bare `npm install @evidence-dev/evidence@40.1.8` that
+    ERESOLVEs. The adversarial round-2 gate ran the DOCUMENTED scaffold instead, and re-verification
+    this session confirms it: `npx degit evidence-dev/template` + `npm install` succeeds (exit 0,
+    1311 packages, no flags), so Evidence PASSES T3. Naming the untested path as a bound was not a
+    substitute for testing something that cheap, and the untested negative had propagated into the
+    report verdict, roadmap c8 and two progress_notes. Root cause: measuring the wrong artifact --
+    which simultaneously OVER-stated the install problem and UNDER-stated the security surface by
+    ~2.4x. Corrected figures (documented scaffold): 1387 deps, 78 advisories (10C/26H/39M/3L), 19
+    with fixAvailable:false versus the bare tree's ZERO. Additional measurement taken this session
+    and not raised by either gate: pruning to the 4 packages a cost dashboard needs gives 928 deps /
+    46 advisories / 12 unresolvable, with the unresolvable-critical entries unchanged -- so the T1
+    failure is IRREDUCIBLE and pruning removes noise, not signal. (NB: round 2 read those four
+    entries as four distinct criticals in Evidence's core. Round 3 corrected that to ONE CVE counted
+    four times via ancestor propagation -- see the round-3 context entry above, which supersedes this
+    characterisation while leaving the irreducibility conclusion intact.) Also verified: the scaffold passes only because a 654KB package-lock.json ships with it
+    (its package.json declares no svelte/typescript/vite/tailwindcss at all); deleting the lock
+    reproduces the identical ERESOLVE, so adoption inherits an upstream-authored lockfile.
+  - >-
+    ROUND-3 CORRECTED THE VERDICT-CARRYING CLAIM (verified independently this session via npm audit
+    `via` chains, not taken on the gate's word). The round-2 revision asserted "four unresolvable
+    criticals in Evidence's own core". That is ONE CVE counted four times: npm audit reports severity
+    against every ANCESTOR of a vulnerable package, and only `vitest` (UI-server arbitrary file
+    read/execute) is a root advisory -- propagated up vitest -> @evidence-dev/sdk ->
+    @evidence-dev/tailwind -> @evidence-dev/core-components, so Evidence's packages appear as
+    ancestors OF the CVE rather than as vulnerable code. The T1 failure IS still irreducible, because
+    @evidence-dev/sdk declares vitest in `dependencies` not `devDependencies` (an upstream packaging
+    defect no consumer-side pruning removes) -- but the vulnerable surface is `vitest --ui`, never
+    executed by `evidence build`, so the real cost is a permanently-open unresolvable critical
+    Dependabot alert on a PUBLIC repo (Decision 83 signal hygiene), NOT an exploitable production
+    path. Net effect: this round moved the conclusion IN EVIDENCE'S FAVOUR -- the strongest finding
+    against it was overstated. Propagated to the report, T2.53 c8 and the T2.53 progress_note.
+  - >-
+    Round-3 threshold repairs: T1's counting unit is now DISTINCT ROOT ADVISORIES (deduplicated
+    before the limits apply) -- counting npm entries let tree depth reject an arm, reintroducing the
+    size-based rejection T2 was demoted to avoid -- plus a runtime-reachable vs build/test-tooling
+    annotation, since the two are not equivalent risk. T4 was made INDEPENDENT of T1 again: the
+    round-2 fix had re-pointed T4 at T1's own advisory set, making them the same test so an arm would
+    be rejected twice on one measurement while presenting two findings; T4 now measures upstream
+    maintainer engagement (issue/PR/mitigation/security-policy response, 6-month window) and an arm
+    with zero advisories is recorded T4 NOT-APPLICABLE rather than a pass, so a clean supply chain
+    cannot be laundered into a liveness finding. Comparator figures RESTORED as measured (the round-3
+    retreat to "unverified" was itself an over-correction): Observable Framework 334 deps / 6
+    advisories / 0 unresolvable, bare astro 296 / 0 / 0 -- with "Astro + a charting library", the
+    actually-specified arm, still genuinely unmeasured because no library is named. Sequencing rule
+    added (report section 10, T2.53 c1): measure c8 thresholds and resolve c5 BEFORE scaffolding,
+    since either can eliminate an arm or the whole class for minutes of effort, and on present
+    figures Evidence would be eliminated before section 6's shipped-query-console question -- the
+    likeliest honest falsifier -- is ever tested.
+  - >-
+    Round-2 structural corrections (defects the round-1 revision itself introduced): T2 had no fail
+    state yet 11.4 rejected on "any threshold in 11.2" -- demoted to a RECORDED METRIC and removed
+    from the reject clause, because no honest cap is derivable from one measured tree; Constrain was
+    keyed to thresholds that are all binary, making the "expected outcome" structurally unreachable
+    -- re-keyed to the qualitative 11.3/11.4 findings; T4's 9-month window was calibrated to sit
+    ABOVE Evidence's own observed quiet period (threshold-tuning in the incumbent's favour) and
+    re-imported the cadence measure section 5.1 rejects -- re-derived from advisory response alone;
+    T1 was undefined against npm's two distinct fixAvailable states -- now defined on
+    `fixAvailable: false` only, deliberately, because the looser major-change reading would also
+    eliminate Observable Framework and leave exactly one survivor; 11.1's serving-prototype criterion
+    contradicted 11.1's own credential-free ephemeral-container criterion (and depended on the
+    unratified, T2.51-gated CD.41) -- re-scoped to a separate credentialed CD.41-gated sub-task whose
+    failure is a class-level reject; P0's artifact guard was circular (declared a precondition in
+    prose, registered as an exit criterion of the deferred item whose branch it gates) -- resolved by
+    recording it as independently landable plus an absolute interim rule of no `npm install` in the
+    repository tree; dist-tags called "live" were examined and are stale branch tags that strengthen
+    the adverse reading; a ONE-SURVIVOR disclosure was added, since criteria that eliminate two of
+    three arms and favour the already-ratified stack deserve suspicion rather than satisfaction.
+  - >-
+    Report-critique findings folded into the deliverable and the roadmap: criteria restructured into
+    preconditions (11.0) / tool-neutral (11.1) / NUMERIC supply-chain thresholds (11.2) / per-arm
+    adopt bars (11.3), because the first draft's criteria were Evidence-shaped while the experiment
+    is three-way, and were qualitative enough to be unfalsifiable; the artifact guard moved from an
+    adopt criterion to a PRECONDITION of opening a PoC branch (the PoC itself runs installs on a
+    public repo); validate_prose_allowlist's `git ls-files '*.md'` scope surfaced as decisive (Astro
+    .astro pages pass the Decision 127 guard trivially while Evidence and Observable .md pages
+    collide, so principle-vs-mechanism must be resolved BEFORE the comparison); and CD.41's <=5-min
+    TTL plus lazy [query_hash].arrow fetching means link expiry lands MID-SESSION, narrowing
+    compliant serving to edge-JWT or signed cookies rather than three equal options.
+  - >-
+    Live-repo grounding: NAMED_READS (src/common/ducklake_scd2_schema.py, NAMED_READS_VERSION 3) is
+    12 verbs over ops_recommendations / ops_decisions / ops_priority_queue, of which THREE already
+    use aggregate SQL (count_by_status, forward_fix_recursion, decisions_max_updated) -- all
+    single-table operational counters feeding preflight gauges, none at an analytical/business grain
+    (no time bucketing, dimensional breakdown, cross-table join, or versioned analytical schema). An
+    earlier draft claimed "zero aggregates"; that was corrected by the report-critique gate, and the
+    precise version strengthens T2.52 (it EXTENDS a proven registry pattern rather than inventing
+    one). Only 2 of 12 verbs are paginable. query_ops has TWO live call sites (the DQ harness and a
+    generic reader.query() path in src/common/iceberg_reader.py) with a caller-controlled FROM target
+    reaching _history; read_ops_current is a third surface and a loophole in any "no caller SQL"
+    phrasing. docs/contracts/data-modeling-standard.yaml defines only scd2 and append_only with no
+    derived-asset mode; .gitignore has no node coverage; preflight reports telemetry "not migrated
+    (Phase 4)" and data quality 0 tables / 0 checks / no run.
+  - >-
+    Tier Item Freshness Gate on T2.51 (the item this plan amends): not silently complete (c1-c5 all
+    open), all files_in_scope resolve or are marked new, no supersession by a sibling, and its
+    gating CDs (CD.28, CD.41) are both correctly still pending. No closeout or re-grounding needed
+    beyond the amendment this plan makes.
+  - >-
+    Branch was 1 commit behind origin/main at planning time (47b3932) with zero overlap against this
+    plan's scope files; rebase performed at commit-flow time per the AGENTS.md rebase phase
+    distinction.
+pre_implementation_checklist:
+  - Branch confirmed not on main
+  - docs/PROJECT_CONTEXT.md read
+  - DECISIONS.md triaged via the decision-scout gate (two dispatches, 106/106 each)
+  - All files in scope located and readable
+  - Acceptance criteria understood and verifiable
+execution_steps:
+  - Write docs/plans/reports/REPORT-evidence-dashboarding-poc.md (the stress-test deliverable).
+  - Add candidate decision CD.42 (pending, gates T2.53) to docs/ROADMAP-PLATFORM.yaml.
+  - Add tier items T2.52 (analytical/semantic layer) and T2.53 (three-way presentation-layer proof of concept, depends_on T2.52) to docs/ROADMAP-PLATFORM.yaml, both deferred_post_mvp with recorded deferral rationale.
+  - Amend T2.51 exit criteria c2/c3 and its progress_note (governed DuckLake table + named verbs; renderer and CD.41-(b) serving question rehomed to T2.53).
+  - Execute the Verification Plan -- run each step; loop until all pass.
+  - "Report: deliverable written, T2.52 + T2.53 + CD.42 placed, T2.51 amended, roadmap + plan validations green."
+work_areas: []
