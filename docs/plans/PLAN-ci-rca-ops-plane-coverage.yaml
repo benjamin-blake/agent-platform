@@ -60,10 +60,10 @@ scope:
     purpose: >-
       Decision 132 cl.2 -- registry rows for the three `graduate`-dispositioned VP steps (1, 2, 4). In
       Scope so this plan's own "no files outside Scope" constraint does not forbid the write
-      validate_graduation_completeness requires. Each row's `check_spec.command` must be a LIST using
-      bare `python` (the shape all existing command_exit_zero rows use) -- a differential worktree has no
-      `.venv`, so a `bin/venv-python` command would FAIL on the origin/main leg for environment reasons
-      rather than semantics, producing a false admission.
+      validate_graduation_completeness requires. Row shape is PER-SLOT, not uniform -- see
+      REGISTRY-ROW SHAPE in context. Steps 1 and 2 are pytest invocations and MUST use
+      `primitive_slot: test_selector` with `check_spec.node_id` (no `command` key exists on that slot).
+      Step 4 uses `command_exit_zero` with `check_spec.command` as a LIST invoking bare `python`.
   - file: docs/contracts/ci-rca-lifecycle.yaml
     action: Modify
     purpose: >-
@@ -101,8 +101,9 @@ acceptance_criteria:
     30101021966 completes, and a new source=ci_rca rec appears whose context names the ducklake_writer
     502 on ops_decisions -- proving the non-pytest ops-plane path works end to end.
   - >-
-    Both rec-2849 and the live-proof rec are closed, and the live-proof rec carries a stamped
-    fixed_by_sha so it cannot later fail closed to a spurious REGRESSION.
+    Both rec-2849 and the live-proof rec are closed, and the live-proof rec's context_v2_json carries a
+    non-empty fixed_by_sha (asserted executably by VP step 8) so it cannot later fail closed to a
+    spurious REGRESSION under Decision 142 point 3.
 verification_plan:
   - step: 1
     phase: pre-deploy
@@ -193,8 +194,11 @@ verification_plan:
   - step: 6
     phase: post-deploy
     action: >-
-      LIVE PROOF that the widened set processes a real non-pytest ops-plane failure end to end. Trigger
-      ci-rca against the incident's own rec-autoclose run with force_rca to bypass dedup. AGENT-RUNNABLE
+      LIVE PROOF that the non-pytest ops-plane failing path files end to end. NOTE what this does and
+      does not prove: `workflow_dispatch` with an explicit run_id bypasses the `workflows:` filter by
+      construction, so this exercises the log-tail -> filing path for a rec-autoclose-shaped failure, NOT
+      the filter widening -- that is covered by VP steps 2-3. Trigger ci-rca against the incident's own
+      rec-autoclose run with force_rca to bypass dedup. AGENT-RUNNABLE
       via the MCP tool ONLY -- the `gh` CLI is NOT available in this environment, so a `gh workflow run`
       formulation would be operator-only. Verified inputs: run_id (required string) and force_rca
       (optional boolean) exist on ci-rca.yml, and run 30101021966 is name=rec-autoclose, run_number=581,
@@ -216,36 +220,61 @@ verification_plan:
   - step: 7
     phase: post-deploy
     action: >-
-      Assert the live proof actually filed, then close BOTH recs and stamp the live-proof rec. The stamp
-      is not optional: Decision 142 point 3 fails a closed head with no fixed_by_sha closed to a
-      `REGRESSION: ` / priority=Critical rec on the next fingerprint match, so an unstamped live-proof
-      closure would plant the very trap this plan documents. Precedent:
-      PLAN-ci-rca-classify-failure-dedup-fix.yaml:115 stamps at manual-close time.
+      Assert the live proof actually filed, and that rec-2849 closed. This step's verdict is stable: it
+      runs BEFORE the closures in step 8, so it is never re-run against a changed state.
     command: >-
       bin/venv-python -m scripts.ops_data_portal --sync >/dev/null 2>&1
       && bin/venv-python -c "import json,pathlib;
       rows=[json.loads(l) for l in
       pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
-      cur={}; [cur.__setitem__(r['id'], r) for r in rows];
+      cur={};
+      [cur.__setitem__(r['id'], r) for r in rows];
       proof=[r for r in cur.values() if r.get('source')=='ci_rca'
       and 'ops_decisions' in (r.get('context') or '') and r.get('status')=='open'];
       assert proof, 'live-proof rec not filed -- step 6 did not reach the filing step';
       print('LIVE_PROOF_REC=' + proof[0]['id']);
       assert cur['rec-2849']['status']=='closed', cur['rec-2849']['status'];
       print('REC_2849_CLOSED')"
-    expected: >-
-      Prints LIVE_PROOF_REC=<id> then REC_2849_CLOSED. The implementer then closes the live-proof rec via
-      `ops_data_portal --update-rec <id> --status closed --resolution "live-proof artifact for
-      PLAN-ci-rca-ops-plane-coverage VP6; no code defect"` AND calls
-      ci_rca_lifecycle.stamp_fixed_by_sha(<id>, <merge_sha>), then re-runs this command expecting the
-      proof rec absent from the open set.
+    expected: Prints LIVE_PROOF_REC=<id> then REC_2849_CLOSED, exit 0.
     fix_if: >-
-      If rec-2849 is still open, the Resolves trailer did not reach the SQUASH-MERGE commit body -- a
-      known trap (rec-2679/rec-2733: a single-commit squash drops a trailer present only in the PR
-      description). Close it via `ops_data_portal --update-rec rec-2849 --status closed --resolution
-      "..."`. Note the irony to check here: rec-2849's own closure is processed BY rec-autoclose, the
-      workflow whose coverage this plan fixes -- and if rec-autoclose is itself failing, use the manual
-      path (this is the CLOSURE TRAP in practice, on this very plan).
+      If the proof rec is absent, step 6's dispatched run did not reach the filing step -- read its logs
+      before re-dispatching. If rec-2849 is still open, the Resolves trailer did not reach the
+      SQUASH-MERGE commit body (rec-2679/rec-2733: a single-commit squash drops a trailer present only in
+      the PR description); close it via `ops_data_portal --update-rec rec-2849 --status closed
+      --resolution "..."`. Note the irony to check here: rec-2849's own closure is processed BY
+      rec-autoclose, the workflow whose coverage this plan fixes -- if rec-autoclose is itself failing,
+      use the manual path. That is the CLOSURE TRAP in practice, on this very plan.
+  - step: 8
+    phase: post-deploy
+    action: >-
+      Close the live-proof rec AND stamp its fixed_by_sha, then assert both landed. The stamp is not
+      optional: Decision 142 point 3 fails a closed head with no fixed_by_sha closed to a `REGRESSION: `
+      / priority=Critical rec on the next fingerprint match, so an unstamped closure would plant the very
+      trap this plan documents -- via the plan's own verification step. Precedent:
+      PLAN-ci-rca-classify-failure-dedup-fix.yaml:115 stamps at manual-close time. Substitute
+      <proof_id> from step 7's output and <merge_sha> for this PR's squash-merge commit.
+    command: >-
+      bin/venv-python -m scripts.ops_data_portal --update-rec <proof_id> --status closed
+      --resolution "live-proof artifact for PLAN-ci-rca-ops-plane-coverage VP6; no code defect"
+      && bin/venv-python -c "from scripts.ops_portal.ci_rca_lifecycle import stamp_fixed_by_sha;
+      stamp_fixed_by_sha('<proof_id>', '<merge_sha>')"
+      && bin/venv-python -m scripts.ops_data_portal --sync >/dev/null 2>&1
+      && bin/venv-python -c "import json,pathlib;
+      rows=[json.loads(l) for l in
+      pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()];
+      cur={};
+      [cur.__setitem__(r['id'], r) for r in rows];
+      r=cur['<proof_id>']; assert r['status']=='closed', r['status'];
+      v=json.loads(r.get('context_v2_json') or '{}');
+      assert v.get('fixed_by_sha'), 'fixed_by_sha not stamped -- next fingerprint match will fail closed
+      to a spurious REGRESSION (Decision 142 point 3)';
+      print('PROOF_REC_CLOSED_AND_STAMPED ' + v['fixed_by_sha'])"
+    expected: Prints PROOF_REC_CLOSED_AND_STAMPED with the sha, exit 0.
+    fix_if: >-
+      If status is closed but fixed_by_sha is empty, the stamp call silently no-opped -- do NOT leave it;
+      re-run stamp_fixed_by_sha and re-verify. A closed ci_rca head with no fix proof is exactly the
+      Decision 142 point 3 trap, and leaving it planted would make the next matching rec-autoclose failure
+      file a spurious critical carrying Decision 73's L5 planning block.
 constraints:
   - >-
     No rescue agents or workaround loops (Decision 55). A failing post-deploy leg stops and RCAs.
@@ -357,6 +386,22 @@ context:
     deploy-ducklake-lambdas.yml's jobs sets a `name:` key, so the API display name equals the job id and
     `reconcile-gate` is the correct declared member.
   - >-
+    REGISTRY-ROW SHAPE, and the two interpreter hazards that decide it. A graduated row is admitted only
+    if it FAILS on an origin/main worktree and PASSES on HEAD, so the interpreter it runs under decides
+    admission. Two traps, verified in this container: (a) NEVER `bin/venv-python` -- a differential
+    worktree has no `.venv`, so it exits 1 for ENVIRONMENT reasons on the main leg and the row is
+    falsely admitted on a non-semantic failure (this genuinely happened to
+    `build-lambda-deploy-function-subset`, registry.yaml ~1746, graduated 2026-07-25 by the immediately
+    preceding plan); (b) NEVER bare `python -m pytest` -- the PATH interpreter has no pytest ("No module
+    named pytest"), so such a row FAILS on the HEAD leg too and is rejected as not-passing-on-HEAD,
+    reddening --pre. Bare `python` is fine for a yaml/stdlib token check (yaml IS importable there),
+    which is why the hazard is invisible by analogy to the existing command_exit_zero rows. The escape
+    for pytest steps is `primitive_slot: test_selector`, whose TestSelectorCheck runs
+    [sys.executable, -m, pytest, node_id] -- sys.executable is the LIVE venv interpreter (validate is
+    launched via bin/venv-python), so pytest is present on both legs and the differential is decided on
+    semantics. 50 of the registry's rows already use that slot, including the class-level precedent
+    `pre-tier-registry-isolation-guard`.
+  - >-
     CI-RCA HARD-BLOCK STATUS (required: ci_rca_unresolved_recs was non-empty at planning time). rec-2836
     ("Terraform init flakes on kislerdm/neon 504 Gateway Timeout", source=ci_rca, priority=Critical, file
     scripts/checks/_terraform.py) is open, and the human has confirmed a CONCURRENT AGENT owns it -- this
@@ -427,16 +472,19 @@ execution_steps:
     recorded exclusions and reasons, the designed-refusal fail-closed rule, and the rec-autoclose closure
     dependency. Add no contract:/class: block.
   - >-
-    Add registry rows in config/agent/verification_registry/registry.yaml for VP steps 1, 2 and 4. Step
-    2's row MUST use the `::TestCheckCiRcaFilterRequiredSet` node id, not the file. Every row's
-    check_spec.command must be a LIST using bare `python`, never bin/venv-python.
+    Add registry rows in config/agent/verification_registry/registry.yaml for VP steps 1, 2 and 4.
+    Steps 1 and 2 use `primitive_slot: test_selector` with `check_spec.node_id`
+    (tests/test_ci_rca_designed_refusal.py, and
+    tests/verify_ci_workflow/test_ci_rca_and_canary.py::TestCheckCiRcaFilterRequiredSet -- the class
+    node, never the file, never `-k`). Step 4 uses `command_exit_zero` with check_spec.command as a
+    LIST invoking bare `python`. Do NOT apply one shape to all three -- see REGISTRY-ROW SHAPE.
   - Execute Verification Plan steps 1-5 (pre-deploy) -- run each step; loop until pass.
   - >-
     Include `Resolves: rec-2849` in the SQUASH-MERGE COMMIT BODY -- not the PR description alone
     (rec-2679/rec-2733: a single-commit squash drops it).
   - >-
-    Execute VP steps 6-7 (post-deploy) after merge, including closing AND stamping the live-proof rec; on
-    an unrecoverable V3 failure stop and RCA (Decision 55).
+    Execute VP steps 6-8 (post-deploy) after merge. Step 8 both closes AND stamps the live-proof rec --
+    do not skip the stamp; on an unrecoverable V3 failure stop and RCA (Decision 55).
   - 'Report: what was implemented, verification results, and the live-proof rec id from VP step 6'
 work_areas: []
 rollback: >-
