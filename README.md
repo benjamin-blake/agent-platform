@@ -73,3 +73,13 @@ Two prospective tenants are named in the roadmap - reaper-tools and dbt-daywork 
 - [docs/ROADMAP-PRODUCT.yaml](docs/ROADMAP-PRODUCT.yaml) - product phases and milestones
 - [SECURITY.md](SECURITY.md) - vulnerability reporting
 - [EVALUATION-PROMPTS.yaml](EVALUATION-PROMPTS.yaml) - evaluator guided-tour index: 12 architecture/governance questions with answer-loci into canonical sources
+
+## License
+
+Copyright 2026 Benjamin Blake.
+
+The code in this repository is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+Third-party dependencies remain subject to their respective licenses.
+
+Project names, trademarks, service marks, and logos are not granted under this license. All associated trademark rights are
+reserved.

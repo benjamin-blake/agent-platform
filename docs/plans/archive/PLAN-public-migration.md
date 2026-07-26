@@ -63,7 +63,7 @@ the /implement chat, verify the active model is Opus before proceeding.
 | `src/main.py` | Modify | Remove hardcoded `print("AWS Account: REDACTED-ACCOUNT-ID")` and any equivalent disclosures |
 | `.github/prompts/build_cv_refactored.prompt.md` | Delete | Personal CV generation file; not a trading-system artefact; must not be in a public repo |
 | `.github/agents/cv-reviewer.agent.md` | Delete | Same -- personal file with explicit employer references |
-| `LICENCE` | Modify | Rewrite `Copyright (C) 2026 REDACTED-COPYRIGHT (The REDACTED-EMPLOYER)` (da-template boilerplate) to the author's own attribution (e.g. MIT, `Copyright (c) 2026 Benjamin Blake`). User confirmed this is their own work; the REDACTED-COPYRIGHT header was copied template scaffolding |
+| `LICENSE` | Modify | Rewrite `Copyright (C) 2026 REDACTED-COPYRIGHT (The REDACTED-EMPLOYER)` (da-template boilerplate) to the author's own attribution (e.g. MIT, `Copyright (c) 2026 Benjamin Blake`). User confirmed this is their own work; the REDACTED-COPYRIGHT header was copied template scaffolding |
 | `.github/copilot-instructions.md` | Modify | Public-facing instruction file: scrub `REDACTED-PERSONAL-ACCOUNT` (-> use placeholder / GH variable reference) and `personal-bedrock-profile`; also carries `REDACTED-ACCOUNT-ID`/`company-aws-profile` (handled by substitutions) |
 | `docs/platform/agent-platform-bootstrap-record.yaml` | Delete | Operational secret: publishes personal account ID + breakglass/service-account ARNs. Purge from history (`--invert-paths`), not just HEAD |
 | `docs/runbooks/policies/*.json` + `*.json.tmpl` | Delete | Operational secrets: full IAM trust/permission policy documents + ARNs (`platform-dev-daily-ops.json`, `platform-dev-trust.json.tmpl`, `platform-admin-trust.json.tmpl`, `agent-service-account-assume-role.json`). Purge from history |
@@ -170,7 +170,7 @@ no longer applied, so no `count` guard is required.
 | 2 | pre-deploy | Scan full git history for secrets (ALL refs) | `gitleaks detect --source . --log-opts="--all" 2>&1 \| tail -20` | 0 findings, or only tokens already in substitutions.txt | Add unaddressed patterns to substitutions.txt; rerun filter-repo |
 | 3 | pre-deploy | truffleHog verified-secret scan | `trufflehog git file://. --only-verified 2>&1 \| tail -20` | 0 verified findings | Rotate any live credential found; rewrite history |
 | 4 | pre-deploy | AUTHORITATIVE GATE: EVERY sensitive token gone from ALL blobs in ALL refs | `for t in REDACTED-ACCOUNT-ID REDACTED-PERSONAL-ACCOUNT REDACTED-EMPLOYER agent-platform agent-platform-svc agent-platform company-aws-profile personal-bedrock-profile company-admin-profile company-static-profile; do echo "== $t =="; git grep -I -i "$t" $(git rev-list --all) -- 2>/dev/null \| head -3; done` | No output under any token (REDACTED-PERSONAL-ACCOUNT only after Step 11b parameterisation) | Add token to substitutions.txt (longest-first); rerun filter-repo; re-verify. THIS gate -- not the enumerated file list -- is authoritative |
-| 5 | pre-deploy | Employer name + REDACTED-COPYRIGHT + live IAM UserIds + home-rig topology across history (ZERO-gate); full name (REVIEW) | `git grep -I -i "REDACTED-EMPLOYER" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i "REDACTED-COPYRIGHT" $(git rev-list --all) 2>/dev/null \| head; git grep -I -E "AIDA[A-Z0-9]{16}" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i -e REDACTED-VPN -e "windows SSH" -e "compute node" -e "home REDACTED-CPU" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i "benjamin blake" $(git rev-list --all) 2>/dev/null \| head` | ZERO output for national-archives/crown-copyright/AIDA/home-rig. The `benjamin blake` results are REVIEWED (name is intentionally public in LICENCE/attribution) -- confirm none tie the author to the deleted CV tooling or the employer | Add the missing `regex:` entry to substitutions.txt and rerun filter-repo; for a stray name-tie, scrub the phrase or purge the file |
+| 5 | pre-deploy | Employer name + REDACTED-COPYRIGHT + live IAM UserIds + home-rig topology across history (ZERO-gate); full name (REVIEW) | `git grep -I -i "REDACTED-EMPLOYER" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i "REDACTED-COPYRIGHT" $(git rev-list --all) 2>/dev/null \| head; git grep -I -E "AIDA[A-Z0-9]{16}" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i -e REDACTED-VPN -e "windows SSH" -e "compute node" -e "home REDACTED-CPU" $(git rev-list --all) 2>/dev/null \| head; git grep -I -i "benjamin blake" $(git rev-list --all) 2>/dev/null \| head` | ZERO output for national-archives/crown-copyright/AIDA/home-rig. The `benjamin blake` results are REVIEWED (name is intentionally public in LICENSE/attribution) -- confirm none tie the author to the deleted CV tooling or the employer | Add the missing `regex:` entry to substitutions.txt and rerun filter-repo; for a stray name-tie, scrub the phrase or purge the file |
 | 6 | pre-deploy | Verify CV files + secrets docs + account verifier purged from ALL history | `git log --all --oneline -- .github/prompts/build_cv_refactored.prompt.md .github/agents/cv-reviewer.agent.md docs/platform/agent-platform-bootstrap-record.yaml docs/runbooks/policies docs/runbooks/platform-account-bootstrap.md scripts/verify_platform_account.py tests/test_verify_platform_account.py \| head` | No output (no commits touch these paths) | Add `--invert-paths --path <each>` to the Pass-1 filter-repo; re-verify |
 | 7 | pre-deploy | Verify commit metadata email | `git log --all --format="%ae" \| sort -u` | Work-account email ABSENT; human identity = GH no-reply; bot authors (Copilot/github-actions/anthropic) retained | Rerun filter-repo with `--mailmap`; force-push |
 | 8 | pre-deploy | Terraform validate (personal module) | `cd terraform/personal && terraform init && terraform validate 2>&1` | "Success! The configuration is valid." | Fix Terraform syntax |
@@ -632,7 +632,7 @@ Notes:
 - `agent-platform` and `agent-platform` are employer-account RESOURCE names (164+ occurrences
   across 40+ tracked files, incl. `logs/runs/*.json`); they MUST be in the rewrite, not just HEAD.
 - `REDACTED-EMPLOYER` plus the regex catch the plain-English employer name in prose (README,
-  GETTING_STARTED) that the underscore form misses. `Crown [Cc]opyright` catches the `LICENCE`
+  GETTING_STARTED) that the underscore form misses. `Crown [Cc]opyright` catches the `LICENSE`
   da-template header (user confirmed this is their own work, not REDACTED-COPYRIGHT).
 - `agent-platform-svc` is a SEPARATE employer IAM-user name -- it is NOT a substring of
   `agent-platform`, so it needs its own rule (it appears in published `docs/plans/PLAN-*.md`).
@@ -646,7 +646,7 @@ Notes:
   `docs/plans/briefings/*` + `docs/audit-reports/*` files. The three home-rig regexes scrub it across
   ALL of them in BOTH history and HEAD (`filter-repo --replace-text` rewrites the tip tree too), so
   no per-file edit is needed beyond the AGENTS.md sentence rewrite (Step 25) for readability.
-- **The author's full name is NOT a token** and is intentionally KEPT (LICENCE attribution, README
+- **The author's full name is NOT a token** and is intentionally KEPT (LICENSE attribution, README
   author). The verification name-grep is therefore a REVIEW check, not a zero-gate: ensure no
   occurrence ties the author to the DELETED CV tooling or the employer. The
   `logs/.customizations-manifest.json` CV entry is edited at HEAD (scope) and its history blob's
@@ -738,7 +738,7 @@ git grep -I -E "AIDA[A-Z0-9]{16}" $(git rev-list --all) -- 2>/dev/null | head -5
 # Home-rig / private-network topology (ZERO-gate)
 git grep -I -i -e "REDACTED-VPN" -e "windows SSH" -e "compute node" -e "home REDACTED-CPU" \
   $(git rev-list --all) -- 2>/dev/null | head -5
-# Full name (REVIEW, not zero-gate): name is intentionally public in LICENCE/attribution.
+# Full name (REVIEW, not zero-gate): name is intentionally public in LICENSE/attribution.
 # Confirm no occurrence ties the author to the deleted CV tooling or the employer.
 git grep -I -i "benjamin blake" $(git rev-list --all) -- 2>/dev/null | head -10
 # The token loop + national-archives/crown-copyright/AIDA/home-rig checks above must be EMPTY.
