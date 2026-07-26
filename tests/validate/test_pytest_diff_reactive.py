@@ -4,7 +4,7 @@ import re
 import sys
 from unittest.mock import MagicMock, patch
 
-from scripts.checks._scaffolding import _PYTEST_FLAGS
+from scripts.checks._scaffolding import _PYTEST_FLAGS, _attribute_failed_test_files
 from tests.fixtures.validate_module import _validate
 
 ROOT = _validate.ROOT
@@ -258,6 +258,107 @@ class TestPytestDiffParallelAndTimeout:
         assert "-n" in rerun_cmd
         assert rerun_cmd[rerun_cmd.index("-n") + 1] == "auto"
         assert "--timeout" in rerun_cmd
+        assert failed == []
+
+
+class TestAttributeFailedTestFiles:
+    """_attribute_failed_test_files narrows the reactive probe to files the combined run's
+    FAILED/ERROR short-summary lines actually implicate (fast-tier budget-breach fix)."""
+
+    def test_extracts_files_from_failed_lines(self) -> None:
+        combined = (
+            "FAILED tests/test_a.py::TestX::test_1 - assert 0 == 1\n"
+            "FAILED tests/test_b.py::TestY::test_2 - ModuleNotFoundError: No module named 'pandas'\n"
+        )
+        result = _attribute_failed_test_files(combined, ["tests/test_a.py", "tests/test_b.py", "tests/test_c.py"])
+        assert result == {"tests/test_a.py", "tests/test_b.py"}
+
+    def test_extracts_files_from_error_lines_too(self) -> None:
+        combined = "ERROR tests/test_a.py::TestX::test_1 - ModuleNotFoundError: No module named 'pandas'\n"
+        assert _attribute_failed_test_files(combined, ["tests/test_a.py"]) == {"tests/test_a.py"}
+
+    def test_returns_none_when_nothing_matches_runnable(self) -> None:
+        combined = "FAILED tests/unrelated.py::test_x - assert 0 == 1\n"
+        assert _attribute_failed_test_files(combined, ["tests/test_a.py"]) is None
+
+    def test_returns_none_on_no_failed_lines_at_all(self) -> None:
+        assert _attribute_failed_test_files("some other output\n", ["tests/test_a.py"]) is None
+
+
+class TestReactiveProbeNarrowing:
+    """rec-2871-adjacent fast-tier budget-breach fix: the reactive probe targets only the files
+    _attribute_failed_test_files implicates, not every runnable file -- a wide affected-set with
+    only a few real failures no longer pays a per-file isolated-probe cost for every file."""
+
+    def test_only_failed_files_are_probed_not_the_whole_runnable_set(self) -> None:
+        probed_files: list[str] = []
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            elif "-q" in cmd:
+                probed_files.append(next(f for f in cmd if f.startswith("tests/test_")))
+                result.returncode = 1
+                result.stdout = "FAILED tests/test_b.py::test_y - ModuleNotFoundError: No module named 'pandas'\n"
+            elif "tests/test_b.py" in cmd:
+                # original combined run over all three files: only test_b.py fails
+                result.returncode = 1
+                result.stdout = "FAILED tests/test_b.py::test_y - ModuleNotFoundError: No module named 'pandas'\n"
+            else:
+                # reactive re-run of survivors (test_b.py deferred, so it's absent here) -- passes
+                result.returncode = 0
+                result.stdout = ""
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_a.py", "tests/test_b.py", "tests/test_c.py"], failed)
+
+        assert probed_files == ["tests/test_b.py"], probed_files
+        assert failed == []
+
+    def test_falls_back_to_probing_whole_runnable_set_when_attribution_finds_nothing(self) -> None:
+        probed_files: list[str] = []
+        combined_run_calls = {"n": 0}
+
+        def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.stderr = ""
+            if "--collect-only" in cmd:
+                result.returncode = 0
+                result.stdout = ""
+            elif "-q" in cmd:
+                probed_files.append(next(f for f in cmd if f.startswith("tests/test_")))
+                result.returncode = 0
+                result.stdout = ""
+            else:
+                combined_run_calls["n"] += 1
+                if combined_run_calls["n"] == 1:
+                    # original combined run: fails with a heavy-dep signature but no parseable
+                    # FAILED/ERROR line -- attribution must fall back to the whole runnable set
+                    result.returncode = 1
+                    result.stdout = "INTERNALERROR ModuleNotFoundError: No module named 'pandas'\n"
+                else:
+                    # reactive re-run of survivors (both files, since neither's isolated probe
+                    # found a heavy-dep signature) -- passes
+                    result.returncode = 0
+                    result.stdout = ""
+            return result
+
+        failed: list[str] = []
+        with (
+            patch("scripts.checks._common.run", side_effect=mock_run),
+            patch("importlib.util.find_spec", return_value=None),
+        ):
+            run_pytest_diff(["tests/test_a.py", "tests/test_b.py"], failed)
+
+        assert sorted(probed_files) == ["tests/test_a.py", "tests/test_b.py"]
         assert failed == []
 
 

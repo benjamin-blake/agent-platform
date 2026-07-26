@@ -14,6 +14,7 @@ import <name>` keep resolving).
 
 from __future__ import annotations
 
+import concurrent.futures
 import importlib.util
 import os
 import re
@@ -56,6 +57,12 @@ _PYTEST_FLAGS = [
     "--timeout-method=thread",
     f"--randomly-seed={_PYTEST_RANDOMLY_SEED}",
 ]
+
+# Concurrency cap for the reactive per-file heavy-dep probe loop (_runtime_heavy_dep_defer_reason).
+# Each probe is its own isolated pytest subprocess (see that function's docstring for why isolation
+# matters) -- running several concurrently is safe (separate processes, no shared state) and turns
+# a serial chain of per-process startup overheads into a bounded number of parallel batches.
+_REACTIVE_PROBE_MAX_WORKERS = 8
 
 
 def run_precommit_checks(failed: list[str], *, all_files: bool, files: list[str] | None = None) -> None:
@@ -351,6 +358,11 @@ _SKIPPED_LINE_RE = re.compile(r"^SKIPPED\s+\[\d+\]\s+(\S+):\d+:\s*(.+)$", re.MUL
 # VTS-04 M1: a pytest section-separator line (e.g. the "short test summary info" banner) --
 # bounds the LAST ERROR-collecting block so it stops there instead of running to end-of-output.
 _SECTION_SEPARATOR_RE = re.compile(r"^=+.+=+$", re.MULTILINE)
+# A pytest short-summary FAILED/ERROR line (e.g. "FAILED tests/foo.py::TestX::test_y - Module...").
+# Used to attribute the combined run's failures back to individual files (see
+# _attribute_failed_test_files below) so the reactive heavy-dep probe targets only the files that
+# actually failed, not every runnable file.
+_FAILED_SUMMARY_LINE_RE = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)", re.MULTILINE)
 
 
 def _match_changed_test_path(file_token: str, changed_tests: list[str]) -> str | None:
@@ -467,6 +479,26 @@ def _reactive_heavy_dep_signature(combined_output: str, excluded: set[str]) -> s
     return None
 
 
+def _attribute_failed_test_files(combined: str, runnable: list[str]) -> set[str] | None:
+    """Extract the subset of `runnable` implicated by the combined run's FAILED/ERROR short-summary
+    lines, so the reactive heavy-dep probe below targets only files that actually failed instead of
+    isolated-re-running every runnable file (rec-2871-adjacent fast-tier budget-breach fix: probing
+    the whole runnable set serially -- one pytest subprocess start per file -- dominated pytest_diff's
+    wall-clock on a diff whose affected-set widened past a few dozen files).
+
+    Returns None (never an empty set) when no FAILED/ERROR line resolves to an entry in `runnable` --
+    the caller falls back to probing the whole runnable set, fail-safe: this function only NARROWS
+    the probe target, it never causes a file that needs checking to be silently skipped.
+    """
+    files: set[str] = set()
+    for match in _FAILED_SUMMARY_LINE_RE.finditer(combined):
+        token = match.group(1).split("::", 1)[0]
+        matched = _match_changed_test_path(token, runnable)
+        if matched:
+            files.add(matched)
+    return files or None
+
+
 def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
     """Orchestrate the --pre pytest-diff step: partition, warn, run once, and reactively fall
     back only on failure (Decision 104 / rec-2485; single-execution reshape).
@@ -479,10 +511,14 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
     Only on a non-zero return does this reactively check whether the failure signature names a
     deliberately-excluded, genuinely-absent heavy dependency (a lazy, function-scope import
     invisible to `--collect-only`, e.g. the rec-2572..2576 test_ops_writer.py shape). If so, it
-    falls back to per-file classification via `_runtime_heavy_dep_defer_reason` over the runnable
-    set, prints DEFERRED warnings for files that resolve to that shape, and re-runs the survivors
-    once (reddening only on a survivor failure). Any other failure shape reddens immediately
-    (fail-closed) -- no reactive re-run is spent chasing a genuine test failure.
+    falls back to per-file classification via `_runtime_heavy_dep_defer_reason` -- targeted at only
+    the files `_attribute_failed_test_files` implicates in the combined run's FAILED/ERROR lines
+    (falling back to the whole runnable set if attribution finds nothing, fail-safe), run
+    CONCURRENTLY (each is its own isolated subprocess, so parallelizing is safe) up to
+    `_REACTIVE_PROBE_MAX_WORKERS` at a time. Prints DEFERRED warnings for files that resolve to that
+    shape, and re-runs the survivors once (reddening only on a survivor failure). Any other failure
+    shape reddens immediately (fail-closed) -- no reactive re-run is spent chasing a genuine test
+    failure.
     """
     if not changed_tests:
         return
@@ -509,13 +545,21 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
         failed.append("Tests (pytest)")
         return
 
-    survivors: list[str] = []
-    for test_file in runnable:
-        runtime_missing = _runtime_heavy_dep_defer_reason(test_file, excluded)
-        if runtime_missing:
-            _print_deferred_warning(test_file, runtime_missing)
-        else:
-            survivors.append(test_file)
+    probe_targets = _attribute_failed_test_files(combined, runnable)
+    if probe_targets is None:
+        probe_targets = set(runnable)
+
+    deferred_from_probe: dict[str, str] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_REACTIVE_PROBE_MAX_WORKERS, len(probe_targets))) as pool:
+        future_to_file = {pool.submit(_runtime_heavy_dep_defer_reason, f, excluded): f for f in probe_targets}
+        for future in concurrent.futures.as_completed(future_to_file):
+            test_file = future_to_file[future]
+            runtime_missing = future.result()
+            if runtime_missing:
+                deferred_from_probe[test_file] = runtime_missing
+    for test_file in sorted(deferred_from_probe):
+        _print_deferred_warning(test_file, deferred_from_probe[test_file])
+    survivors = [f for f in runnable if f not in deferred_from_probe]
     if not survivors:
         print(
             "\nAll remaining changed test file(s) deferred to the full tier on reactive "
