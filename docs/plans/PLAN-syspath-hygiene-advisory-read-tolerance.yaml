@@ -128,12 +128,22 @@ scope:
   - file: tests/ops_data_portal/test_decisions_divergence_guard.py
     action: Modify
     purpose: >-
-      Add branch coverage for the new tolerance via the existing injectable fake-reader seam:
+      Add branch coverage for the new tolerance via the existing injectable fake-reader seam, in a
+      NEW class named TestTransientReaderTolerance (VP step 6 selects it by node id):
       (a) a reader raising a transient RuntimeError makes _assert_no_orphaned_current_rows return
       without raising AND emit the named marker; (b) a reader raising a non-transient RuntimeError
       still raises; (c) a reader returning a genuine NEW orphan still raises the DCG-03 error.
       Assert on the marker text so the corrected framing (transient unavailability, NOT an
       asserted cold-resume) cannot silently regress.
+      ALSO add a second NEW class TestSubstantiveSignalPin with a single test named
+      test_rec_autoclose_exits_nonzero_on_failed_rows (VP step 9 selects it by node id). It parses
+      .github/workflows/rec-autoclose.yml and asserts the DECISIONS.md-backfill step still exits
+      non-zero when the fidelity report reports any failed row, AND that the step carries neither
+      continue-on-error nor a `|| true` that would neutralise that exit. Assert the SEMANTIC
+      property from parsed YAML rather than an exact source literal, so a harmless reflow does not
+      false-FAIL a standing check. This test is the mechanical backstop for Decision 155 reversal
+      condition (c) -- it is deliberately homed here, in the file that owns the tolerance, so that
+      whoever weakens the tolerance meets the pin in the same file.
 
 bundled_recommendations:
   - rec-2876
@@ -165,8 +175,11 @@ acceptance_criteria:
     file passes untouched).
   - >-
     The failed-counter exit at .github/workflows/rec-autoclose.yml:156 -- the independent loud
-    signal the whole non-masking argument depends on -- is pinned by a graduated standing check, so
-    Decision 155 reversal condition (c) is mechanically enforced rather than asserted in prose.
+    signal the whole non-masking argument depends on -- is pinned by a NEW graduated test
+    (TestSubstantiveSignalPin) that also rejects continue-on-error / `|| true` neutralisation, so
+    Decision 155 reversal condition (c) is mechanically enforced rather than asserted in prose. The
+    pin is a test rather than a grep so that it is differentially admissible: a grep on an unchanged
+    file passes on origin/main and validate_verification_registry rejects such a row as tautological.
   - >-
     No Lambda artifact is affected by this scope, so no build/deploy/smoke-test leg is required
     (compute_affected_artifacts returns {}).
@@ -199,7 +212,7 @@ verification_plan:
       Prove the duplicate-path producer class is gone repo-wide -- no module-scope (column-0)
       sys.path.insert remains under tests/, scripts/ or src/. Exit-code-bearing via grep negation,
       so a surviving producer fails the step (plan-critique round 1, R2).
-    command: '! grep -rEn "^sys\.path\.(insert|append|extend)" tests/ scripts/ src/ --include=*.py'
+    command: 'out=$(grep -rEn "^sys\.path\.(insert|append|extend)" tests/ scripts/ src/ --include=*.py); rc=$?; test "$rc" -eq 1 && test -z "$out"'
     expected: >-
       Exit 0 with no output. Baseline at plan time was 9 matches -- six under tests/ and three
       under scripts/ (session/postflight.py:46, roadmap/plan_audit.py:30,
@@ -209,7 +222,10 @@ verification_plan:
     fix_if: >-
       Any surviving hit re-introduces the ambient duplicate-repo-root condition for every future
       test that reasons about sys.path. Note this step alone cannot distinguish a real guard from
-      a bare re-indent -- step 3 is what closes that gap.
+      a bare re-indent -- step 3 is what closes that gap. The exit-code form is deliberate: grep
+      returns 0 on match, 1 on clean no-match and 2 on ERROR, so a bare negation would convert a
+      grep error (bad path, unreadable tree) into a silent PASS. Only rc==1 with empty output
+      passes here.
     hermetic: true
     graduation: graduate
     graduation_check_id: "no-unguarded-module-scope-syspath-insert"
@@ -256,13 +272,16 @@ verification_plan:
       --randomly-seed=12345 -q
     expected: >-
       The derive-the-set test passes -- classifier accepts exactly the reader's authoritative set
-      and rejects its complement. An explicit node id is used rather than `-k derive`: this repo
-      warns against -k selectors twice (docs/PROJECT_CONTEXT.md, tests/CLAUDE.md), and as a
-      GRADUATED standing check a rename would break a -k match silently.
+      and rejects its complement.
     fix_if: >-
       A hard-coded status set in the classifier has diverged from the reader's authority; the
       extraction would then only have de-duplicated the scripts/-side copy while leaving the
-      channel that actually matters open (plan-critique round 1, R5).
+      channel that actually matters open (plan-critique round 1, R5). An explicit node id is used
+      rather than a -k selector: this repo warns against -k twice (docs/PROJECT_CONTEXT.md,
+      tests/CLAUDE.md), and as a GRADUATED standing check a rename would break a -k match silently.
+      Keep this justification OUT of the expected field -- validate_vp_replay treats every
+      backtick-delimited literal in expected as a string that must appear in captured stdout, so
+      prose there becomes a false replay divergence (plan-critique round 3, B2).
     hermetic: true
     graduation: graduate
     graduation_check_id: "reader-transient-set-equals-reader-authority"
@@ -272,12 +291,19 @@ verification_plan:
       Prove the DCG-03 guard tolerates ONLY transient unavailability -- transient skips with the
       named marker, non-transient raises, genuine orphan raises.
     command: >-
-      bin/venv-python -m pytest tests/ops_data_portal/test_decisions_divergence_guard.py
+      bin/venv-python -m pytest
+      "tests/ops_data_portal/test_decisions_divergence_guard.py::TestTransientReaderTolerance"
       --randomly-seed=12345 -q
-    expected: All pass, including the three new branch cases and the marker-text assertion.
+    expected: >-
+      All three new branch cases pass, including the marker-text assertion.
     fix_if: >-
       If the genuine-orphan case stops raising, the Decision 149 DCG-03 invariant has been
-      weakened rather than made transient-tolerant, and the change must be reverted.
+      weakened rather than made transient-tolerant, and the change must be reverted. This step
+      selects the NEW test class by node id rather than running the whole file: the file is green
+      on origin/main, so a whole-file command would PASS on revert and
+      validate_verification_registry's differential gate would reject the graduated row as
+      tautological (plan-critique round 3, R1). Whole-file regression coverage for this file is
+      retained by step 8.
     hermetic: true
     graduation: graduate
     graduation_check_id: "dcg03-orphan-guard-transient-tolerance"
@@ -307,18 +333,26 @@ verification_plan:
       consumer suites still pass together.
     command: >-
       bin/venv-python -m pytest tests/test_data_quality_execute.py
-      tests/ops_data_portal/test_decisions.py tests/test_build_lambda_config.py
-      tests/test_plan_audit.py tests/test_run_skill.py tests/test_postflight_gates.py
-      --randomly-seed=12345 -q
+      tests/ops_data_portal/test_decisions.py tests/ops_data_portal/test_decisions_divergence_guard.py
+      tests/test_build_lambda_config.py tests/test_plan_audit.py tests/test_run_skill.py
+      tests/session/postflight/ --randomly-seed=12345 -q
     expected: All pass with no changes required to tests/test_data_quality_execute.py.
     fix_if: >-
       A data-quality failure means the extracted classifier is not behaviourally identical to the
       private copy it replaced; re-diff the two implementations rather than editing the DQ tests.
       A plan_audit/run_skill/postflight failure means one of the three scripts/ guards broke that
-      module's own import resolution.
+      module's own import resolution. Note the postflight target is tests/session/postflight/ --
+      NOT tests/test_postflight_gates.py, which imports scripts.executor.postflight and would never
+      exercise the scripts/session/postflight.py actually in scope (plan-critique round 3, B5).
     hermetic: true
-    graduation: graduate
-    graduation_check_id: "reader-transient-extraction-consumer-parity"
+    graduation: waive
+    graduation_waiver_reason: >-
+      This step's entire purpose is to prove UNCHANGED behaviour in downstream consumers, so it
+      passes both before and after the change by construction (verified: its files are green on
+      origin/main today). validate_verification_registry's differential gate admits a row only if
+      it FAILS on revert, so a collateral-damage regression check of this shape is inherently
+      inadmissible -- not a classification dodge, a structural property of no-op-by-design checks.
+      The behaviour this plan actually changes is graduated by steps 1-7 and 9.
   - step: 9
     phase: pre-deploy
     action: >-
@@ -326,14 +360,25 @@ verification_plan:
       rec-autoclose must still exit non-zero when the backfill reports any failed row. This is the
       mechanical backstop for Decision 155 reversal condition (c), which would otherwise be prose
       that nothing enforces.
-    command: 'grep -qF ''sys.exit(1 if result["failed"] else 0)'' .github/workflows/rec-autoclose.yml'
+    command: >-
+      bin/venv-python -m pytest
+      "tests/ops_data_portal/test_decisions_divergence_guard.py::TestSubstantiveSignalPin::test_rec_autoclose_exits_nonzero_on_failed_rows"
+      --randomly-seed=12345 -q
     expected: >-
-      Exit 0 -- the failed-counter exit is present at .github/workflows/rec-autoclose.yml:156
-      (verified present at plan time).
+      Passes -- the backfill step in .github/workflows/rec-autoclose.yml still exits non-zero when
+      the fidelity report reports any failed row.
     fix_if: >-
-      If this ever fails, the independent loud signal that justifies skipping the advisory read has
+      A failure means the independent loud signal that justifies skipping the advisory read has
       been removed or weakened, and the DCG-03 skip MUST be reverted in the same change (Decision
-      155 reversal condition (c)). Do not "fix" this step by relaxing the pattern.
+      155 reversal condition (c)). Do NOT "fix" this by relaxing the assertion. This is expressed
+      as a NEW test rather than a raw grep on an unchanged file for two reasons: (1) a grep pin
+      passes on origin/main, so validate_verification_registry's differential gate would reject the
+      graduated row as tautological and turn --pre red (plan-critique round 3, B1); a node id
+      absent on origin/main fails on revert with exit 4 and is therefore admissible. (2) A test can
+      parse the workflow YAML and assert the semantic property tolerant of whitespace and quoting,
+      where an exact-literal grep would false-FAIL on a harmless reflow while still false-PASSing
+      if someone neutralised the step with continue-on-error or `|| true` -- so the test must also
+      assert the step carries neither (plan-critique round 3, R2).
     hermetic: true
     graduation: graduate
     graduation_check_id: "rec-autoclose-failed-counter-exit-present"
@@ -363,8 +408,9 @@ verification_plan:
       This is NOT cosmetic -- see the corrected rationale in Context.
     command: 'git fetch origin main --quiet && SHA=$(git rev-parse origin/main) && bin/venv-python -c "import sys; from scripts.ops_portal.ci_rca_lifecycle import stamp_fixed_by_sha; stamp_fixed_by_sha(''rec-2874'', sys.argv[1]); print(''stamped'', sys.argv[1])" "$SHA"'
     expected: >-
-      Prints "stamped <sha>" where <sha> is this plan's SERVER-SIDE squash-merge commit;
-      rec-2874's context_v2_json.fixed_by_sha then equals it.
+      Prints "stamped <sha>" where <sha> is the freshly-fetched main tip -- this plan's
+      server-side squash-merge commit, absent an intervening merge. Either satisfies the
+      classify_closed_head ancestry purpose; rec-2874's context_v2_json.fixed_by_sha then equals it.
     fix_if: >-
       The explicit `git fetch origin main` is mandatory and must not be dropped: the squash-merge
       happens server-side via merge_pull_request, so without it `git rev-parse origin/main` returns
@@ -423,7 +469,7 @@ context:
     load-bearing for this plan's justification), Decision 72 (RCA-as-plan-source - this plan is the
     required /plan review that AGENTS.md forbids bypassing with an inline patch), Decision 84 (I-3
     closed named-verb read boundary), Decision 142 (fingerprint chain lifecycle - see the VP step
-    10 rationale), Decision 103 (semantic verdicts are close_proposed, never a bare direct close),
+    11 rationale), Decision 103 (semantic verdicts are close_proposed, never a bare direct close),
     Decision 62 (2026-06-16 amendment - weaker corroboration than an earlier draft claimed; see the
     WHY-THIS-IS-NOT-MASKING note). CITATION CORRECTION - an earlier draft attributed the
     derive-the-set-assert-equality pattern used by VP step 5 to "Decision 143". That is a mis-cite
@@ -469,9 +515,13 @@ context:
     of ~150 rows and exits 1 via rec-autoclose.yml:156 (rec-autoclose is in the ci-rca watched
     filter) LONG before the orphan guard is reached. The guard can only be the sole casualty when
     the reader served the entire row loop and blipped on the final read - exactly the observed
-    incident. (2) The guard checks PERSISTENT state (a warehouse row with no matching header), not
-    a transient event, so a skipped run DELAYS detection to the next backfill rather than losing
-    it. Corroborating precedent: scripts/data_quality_execute.py:139 already implements this exact
+    incident. PRECISION (plan-critique round 3, R2): that backfill step is gated by
+    `if: steps.detect-decisions.outputs.changed == 'true'`, so the substantive signal fires only on
+    merges that touch DECISIONS.md. This does NOT weaken the argument, because the orphan guard runs
+    only on that same gated path - the two are co-gated, so wherever the guard can skip, the
+    substantive signal is live. (2) The guard checks PERSISTENT state (a warehouse row with no
+    matching header), not a transient event, so a skipped run DELAYS detection to the next backfill
+    rather than losing it. Corroborating precedent: scripts/data_quality_execute.py:139 already implements this exact
     tolerance on this exact substrate. Decision 62's 2026-06-16 amendment is WEAKER corroboration
     than an earlier draft claimed and is cited only as such: it ratified RELOCATING a
     reader-502-broken check to a non-gating monitor that files a rec, which establishes that
@@ -494,7 +544,7 @@ context:
     fixed_by_sha), so file_regression_record files a REGRESSION-prefixed priority=critical rec that
     re-triggers the /plan hard block.
   - >-
-    VP STEP 10 RATIONALE, CORRECTED (plan-critique round 1, R9). rec-2870 and rec-2874 were closed
+    VP STEP 11 RATIONALE, CORRECTED (plan-critique round 1, R9). rec-2870 and rec-2874 were closed
     by another agent at 23:22/23:23 UTC on 2026-07-26 as "live-proof artifact for
     PLAN-ci-rca-ops-plane-coverage VP6; no code defect", both stamped fixed_by_sha=b0272f6. That
     closure is defensible - the recs were verification output from deliberately re-dispatching
@@ -588,8 +638,8 @@ pre_implementation_checklist:
   - Acceptance criteria understood and verifiable
   - >-
     Baselines re-confirmed before editing - `grep -rEn "^sys\.path\.insert" tests/ scripts/ src/
-    --include=*.py | wc -l` returns 9; the VP step 7 pattern returns 3, all in
-    scripts/data_quality_execute.py; and VP step 1's command currently FAILS. If any baseline no
+    --include=*.py | wc -l` returns 9; VP step 7's file-form command reports exactly ONE
+    matching file (scripts/data_quality_execute.py); and VP step 1's command currently FAILS. If any baseline no
     longer holds, someone has already landed part of this work; re-scope before proceeding.
 
 execution_steps:
@@ -639,7 +689,7 @@ execution_steps:
     RCA (Decision 55).
   - >-
     Include "Resolves: rec-2876" in the squash-merge commit body so rec-autoclose closes it and
-    stamps its fixed_by_sha, then run VP step 10's re-stamp for rec-2874.
+    stamps its fixed_by_sha, then run VP step 11's re-stamp for rec-2874.
   - 'Report: what was implemented, verification results, and the Decision 155 number actually used.'
 
 work_areas: []
@@ -649,5 +699,5 @@ rollback: >-
   and delete tests/test_syspath_hygiene.py; the only effect is the flaky assertion returns. Fix C:
   delete the try/except around the current_state call in _assert_no_orphaned_current_rows, which
   restores the fatal-on-any-reader-error behaviour exactly; the shared classifier can stay in place
-  harmlessly, or be re-inlined into scripts/data_quality_execute.py. VP step 10's re-stamp reverts
+  harmlessly, or be re-inlined into scripts/data_quality_execute.py. VP step 11's re-stamp reverts
   by re-stamping b0272f6. Decision 155 carries its own reversal conditions and revert path.
