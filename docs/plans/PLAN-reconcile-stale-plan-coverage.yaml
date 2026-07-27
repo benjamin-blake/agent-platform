@@ -17,7 +17,14 @@ phase: >-
   (its "TEARDOWN DECOUPLED" context entry, TODO-TEARDOWN-ROUTE = route A). Closes no exit criterion:
   T2.37/T2.47 criteria were adjudicated met when Reconcile landed, and this plan repairs a defect in
   the landed surface rather than completing a criterion -- hence closes_criteria: []; the roadmap
-  touch is a T2.48 progress_note only.
+  touch is a T2.48 progress_note only. T2.48 DISPOSITION (mirrors the sibling plan's clause, since
+  the progress_note lands on T2.48): T2.48 is status=in_progress with c1-c5 met and c6 open; c6 is
+  the recurring Decision-92 authority-budget ratchet review, out of scope for this plan -- so this
+  plan closes no T2.48 criterion either. SEPARATE DATA TENSION, deliberately NOT touched here:
+  T2.47 reads status=not_started while BOTH its criteria (c1, c2) read met. That is a roadmap data
+  inconsistency, not a fact this plan may infer a status flip from
+  (Status-Trusted-Never-Inferred) -- it is folded into a follow-on rec (execution steps), not fixed
+  inline.
 scope:
   - file: .github/workflows/reconcile.yml
     action: Modify
@@ -28,7 +35,13 @@ scope:
       existing DEP-10 fallthrough steps (replan, guard_fresh, review_fresh, apply_fresh,
       upload_fresh_plan_sha256, the upload-artifact step) and the `resolved` aggregator from
       `steps.apply.outputs.stale == 'true'` onto `steps.route.outputs.needs_fresh_plan == 'true'`,
-      and re-word the wake comment off `STALE` onto the new `fresh_reason`. NOTHING ELSE MOVES: the
+      and re-word the wake comment off `STALE` onto the new `fresh_reason` (including pointing the
+      Environment approver at this run's `replan` / `guard_fresh` logs, and dropping the branch that
+      becomes unreachable). Two comment corrections ride along because they are now false and
+      contradict this plan's own safety argument: the `replan` step comment claiming the re-plan
+      happens "against whatever the dispatch ref's tree looks like now" (it is at RED_SHA -- the root
+      checkout is `ref: ${{ env.RED_SHA }}`), and the top-of-file DEP-10 block comment (must state
+      the UNION entry condition). NOTHING ELSE MOVES: the
       guard, the review gate, the sha256 EMIT/VERIFY pair, the run-scoped
       RECONCILE_FRESH_PLAN_ARTIFACT hand-off, and the whole gated-apply-reconcile job are REUSED
       verbatim -- gated-apply-reconcile needs zero edits because it already branches on
@@ -95,11 +108,30 @@ infrastructure_dependencies:
     predates it. Every `uses: ./.github/actions/...` reference still resolves from the RED_SHA
     checkout; this plan adds NO composite action and changes NONE, so that split is untouched.
   - >-
-    Guard classification is UNCHANGED. scripts/terraform_apply_guard.py and
-    .github/actions/deterministic-guard/action.yml are NOT in scope. A destroy still BLOCKs (exit
-    2 -> routed=true, action exits 0), the tf-gated-apply Environment is still the authorization
-    boundary (Decision 92), and the human approval still gates the apply. This plan changes only
-    WHICH plan artifact the already-approved gated job applies, never WHAT gates.
+    Guard classification is UNCHANGED, but the SET OF TERMINAL ROUTES IS NOT -- stated plainly
+    because both gates independently flagged the earlier wording ("changes only WHICH plan artifact
+    the already-approved gated job applies, never WHAT gates") as FALSE. scripts/terraform_apply_guard.py
+    and .github/actions/deterministic-guard/action.yml remain out of scope, a destroy still BLOCKs
+    (exit 2 -> routed=true, action exits 0), and the tf-gated-apply Environment is still the
+    authorization boundary (Decision 92). What DOES change: re-pointing apply_fresh/review_fresh
+    onto needs_fresh_plan opens a cell that was structurally impossible pre-fix. POST-FIX THERE ARE
+    EXACTLY THREE TERMINAL ROUTES out of a saved-plan guard-BLOCK episode:
+    (i) saved-guard-BLOCK x FRESH-guard-PASS -> `review_fresh` (subagent review) then `apply_fresh`
+    AUTO-APPLIES inside apply-reconcile, with the subagent review as the ONLY gate and NO
+    tf-gated-apply Environment approval. Pre-fix this cell could not be reached at all: a saved-plan
+    BLOCK skipped `apply`, `stale` was never set, every fallthrough step was skipped, and the episode
+    ALWAYS reached the gated job. This is a genuine narrowing of the Environment control's reach and
+    is accounted for in the "DELIBERATE PROPERTIES OF THE NEW ROUTE SET" context entry.
+    (ii) saved-guard-BLOCK x FRESH-guard-BLOCK -> the fresh plan.bin is uploaded as
+    RECONCILE_FRESH_PLAN_ARTIFACT and gated-apply-reconcile applies it behind the tf-gated-apply
+    Environment approval (this is the route the DEP-02 teardown is EXPECTED to take, since a destroy
+    always BLOCKs).
+    (iii) the fresh re-plan itself fails -> `replan` fails, every downstream step short-circuits on
+    `success()`, and the always-run record write latches RED. That is pre-ratified: Decision 154
+    point 5(i) names `replan` as deliberately EXCLUDED from the pre-apply-failure allow-list and
+    therefore keeping its red latch, fail-closed and safe.
+    See the TODO-GATE-TIGHTENING context entry -- whether route (i) should be closed off is an OPEN
+    HUMAN DECISION, not settled by this plan.
   - >-
     A fresh re-plan at RED_SHA cannot silently widen the diff. (a) Every source_code_hash in
     terraform/personal is `try(filemd5(...), null)` AND carries `ignore_changes =
@@ -107,10 +139,15 @@ infrastructure_dependencies:
     ducklake_catalog_dr.tf:190/205, 225/255; ducklake_maintenance.tf:159/197;
     ducklake_maintenance_smoke.tf:147/180; prod_lambdas.tf:36-37/349/385/425), so the artifact-fetch
     step landing lambda-packages/ under .dispatch-tooling/ rather than the workspace root cannot
-    manufacture a lambda code diff. (b) A red convergence record is the SOLE hard block on the
-    sandbox apply path, so no terraform/personal apply has landed since 99eb274 -- state is
-    99eb274 plus the partial gated apply, and planning at RED_SHA is therefore the correct base,
-    not a rollback of later work.
+    manufacture a lambda code diff. (b) DIRECT EVIDENCE, not an inference: `git log
+    99eb2740c4402051e47ef12fa2d0e3a08f20a4a3..origin/main -- terraform/personal/` is EMPTY (0
+    commits, verified at authoring). No terraform/personal source has changed since the red commit,
+    so RED_SHA IS main's terraform/personal tree and planning at RED_SHA cannot roll back later
+    work. This replaces the earlier inference ("red is the sole hard block, therefore nothing
+    applied since 99eb274"), which plan-critique correctly called not airtight -- gated-apply jobs
+    carry no convergence precondition of their own, and the human-gated break-glass admin tier
+    bypasses the latch by design, so "red is latched" does not by itself entail "nothing applied".
+    The empty git range does entail it for the only thing that matters here: the plan BASE.
 acceptance_criteria:
   - >-
     The guard-BLOCK x stale-saved-plan cell is COVERED: on a saved-plan guard-BLOCK, apply-reconcile
@@ -125,11 +162,20 @@ acceptance_criteria:
     bit-for-bit unchanged (on PASS, `steps.guard.outputs.routed` is empty, so needs_fresh_plan
     depends solely on stale exactly as today). The change is strictly additive on the BLOCK route.
   - >-
-    Decision 77 no-TOCTOU holds on the new route: the fresh plan is re-guarded by the SAME
-    deterministic guard before anything is handed anywhere, is subagent-reviewed whenever the fresh
-    guard PASSes (unchanged `review_fresh` condition), is byte-verified across the job boundary by
-    the symmetric sha256 EMIT/VERIFY pair, and is applied only behind the tf-gated-apply
-    Environment approval. Nothing is ever applied unguarded or unapproved.
+    Decision 77 no-TOCTOU holds on the new route, and the route set is disclosed rather than
+    asserted away. The fresh plan is re-guarded by the SAME deterministic guard before anything is
+    handed anywhere, and NOTHING IS EVER APPLIED UNGUARDED. What each route is gated by, stated
+    exactly (the earlier "applied only behind the tf-gated-apply Environment approval; nothing is
+    ever applied unguarded or unapproved" was FALSE on route (i) and both gates caught it):
+    (i) fresh-guard-PASS -> `review_fresh` (subagent review, unchanged condition) is the SOLE gate
+    and `apply_fresh` auto-applies in apply-reconcile with NO Environment approval;
+    (ii) fresh-guard-BLOCK -> `review_fresh`/`apply_fresh` are skipped, the fresh plan.bin crosses
+    the job boundary byte-verified by the symmetric sha256 EMIT/VERIFY pair, and gated-apply-reconcile
+    applies it behind the tf-gated-apply Environment approval;
+    (iii) `replan` failure -> red latch, pre-ratified by Decision 154 point 5(i).
+    Route (i) is NEW-in-reach for a saved-plan guard-BLOCK episode and is accounted for in the
+    "DELIBERATE PROPERTIES OF THE NEW ROUTE SET" context entry; whether to close it off is
+    TODO-GATE-TIGHTENING, an open human decision.
   - >-
     A NEW standing --pre gate makes the defect non-reintroducible: label
     `recovery-workflow-topology` runs inside validate_ci_workflow_guards in BOTH tiers, and a
@@ -299,7 +345,7 @@ verification_plan:
       contain recovery_workflow_topology rather than weakening the selector. A failing pre-fix
       negative means the guard does not actually detect the defect it was written for, which makes
       the whole part-(c) claim false.
-    hermetic: false
+    hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
       A pytest selector over tests/ already runs in BOTH standing tiers (pytest_diff in --pre when
@@ -315,22 +361,53 @@ verification_plan:
       id is resolved at runtime and never written down (Decision 101).
     command: |-
       ACCT=$(aws sts get-caller-identity --profile agent_platform_admin --query Account --output text)
-      aws iam simulate-principal-policy --profile agent_platform_admin \
+      OUT=$(aws iam simulate-principal-policy --profile agent_platform_admin \
         --policy-source-arn "arn:aws:iam::${ACCT}:role/agent-platform-github-ci-apply" \
         --action-names iam:ListInstanceProfilesForRole iam:RemoveRoleFromInstanceProfile iam:DeleteRole iam:DeleteRolePolicy \
         --resource-arns "arn:aws:iam::${ACCT}:role/agent-platform-probe-liveproof-role" \
-        --query 'EvaluationResults[].[EvalActionName,EvalDecision]' --output text
+        --query 'EvaluationResults[].[EvalActionName,EvalDecision]' --output text)
+      printf '%s\n' "$OUT"
+      [ "$(printf '%s\n' "$OUT" | wc -l)" -eq 4 ] || { echo "EXPECTED 4 ROWS"; exit 1; }
+      printf '%s\n' "$OUT" | grep -qv "allowed$" && { echo "NOT ALL ALLOWED -- STOP, do not dispatch"; exit 1; }
+      BARN=$(aws iam get-role --role-name agent-platform-github-ci-apply --profile agent_platform_admin \
+        --query 'Role.PermissionsBoundary.PermissionsBoundaryArn' --output text)
+      VER=$(aws iam get-policy --policy-arn "$BARN" --profile agent_platform_admin --query 'Policy.DefaultVersionId' --output text)
+      DOC=$(aws iam get-policy-version --policy-arn "$BARN" --version-id "$VER" --profile agent_platform_admin \
+        --query 'PolicyVersion.Document' --output json)
+      for a in ListInstanceProfilesForRole RemoveRoleFromInstanceProfile; do
+        printf '%s' "$DOC" | grep -q "$a" || { echo "BOUNDARY MISSING iam:$a -- sibling apply incomplete"; exit 1; }
+      done
+      exit 0
     expected: >-
-      Four rows, every EvalDecision = allowed. simulate-principal-policy evaluates the principal's
-      identity policies AND its attached permissions boundary, so `allowed` here means the
-      intersection permits the destroy -- exactly what run 30264239445 lacked.
+      Four rows printed, every EvalDecision = allowed, then no BOUNDARY MISSING line, then exit 0.
+      THE GATE FAILS CLOSED: the row-count assertion and the `grep -qv "allowed$"` assertion each
+      exit 1 -- the earlier form ended in a bare `--output text` query that exits 0 whether the rows
+      read `allowed` or `implicitDeny`, with the STOP living only in fix_if prose (i.e. it could not
+      fail, which is disqualifying for the one gate protecting a human approval).
+      BOUNDARY PREMISE -- ALREADY EMPIRICALLY SETTLED, DO NOT RE-DERIVE: simulate-principal-policy
+      DOES evaluate the principal's ATTACHED permissions boundary, not only its identity policies,
+      and does NOT require the boundary to be passed via PermissionsBoundaryPolicyInputList.
+      Provenance: the sibling plan's decision-scout gate validated exactly this by probing
+      iam:DeleteRolePermissionsBoundary, which came back explicitDeny -- and that Deny exists ONLY
+      in the boundary policy, never in the identity policy. An explicitDeny sourced solely from the
+      boundary proves the boundary layer is inside the evaluation. Recorded here so no future reader
+      re-opens the question. The second block (get-role -> get-policy -> get-policy-version, grep for
+      the two verbs in the boundary document) is BELT-AND-BRACES on top of that settled premise: it
+      asserts the boundary layer DIRECTLY rather than through the simulator, costs no approval, and
+      is admin-read-only.
     fix_if: >-
-      Any implicitDeny/explicitDeny -- the sibling plan
+      "EXPECTED 4 ROWS" -- the simulate call returned a different shape (a typo'd action name is
+      silently dropped from EvaluationResults); fix the action list, do not relax the count.
+      "NOT ALL ALLOWED" (any implicitDeny/explicitDeny) -- the sibling plan
       (docs/plans/PLAN-iam-write-surface-completion.yaml) has not completed its bootstrap admin
       apply, or granted the verb in only one of the two layers. STOP: do NOT dispatch Reconcile.
       Dispatching now burns a human Environment approval and re-latches red for the fourth time.
-      An AccessDenied on simulate-principal-policy itself means you are in the DEV container --
-      re-run in ADMIN.
+      "BOUNDARY MISSING iam:<verb>" with all four simulate rows allowed -- treat as a CONTRADICTION
+      and stop: either the boundary document is structured so a bare grep misses the verb (check for
+      a wildcard such as `iam:*` or `iam:Remove*` before concluding anything) or the identity/boundary
+      intersection is not what the simulate rows imply. Do not dispatch on an unresolved contradiction.
+      An AccessDenied on simulate-principal-policy, get-role, get-policy or get-policy-version means
+      you are in the DEV container -- re-run in ADMIN (PlatformDev holds none of these verbs).
   - step: 8
     phase: post-deploy
     action: >-
@@ -343,36 +420,97 @@ verification_plan:
       by this plan's own merge, and the input is a traceability link only -- Reconcile always reads
       the red commit from the record).
     command: |-
+      SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
       gh workflow run reconcile.yml --ref main
-      sleep 15
-      RUN=$(gh run list --workflow reconcile.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-      echo "reconcile run: $RUN"
-      gh run view "$RUN" --json status,jobs --jq '{status:.status, jobs:[.jobs[]|{name,status,conclusion}]}'
+      RUN=""
+      for _ in $(seq 1 24); do
+        RUN=$(gh run list --workflow reconcile.yml --event workflow_dispatch --limit 20 \
+          --json databaseId,createdAt \
+          --jq "[.[] | select(.createdAt >= \"$SINCE\")] | sort_by(.createdAt) | last | .databaseId // empty")
+        [ -n "$RUN" ] && break
+        sleep 5
+      done
+      [ -n "$RUN" ] || { echo "NO RUN CREATED AT/AFTER $SINCE -- dispatch did not register"; exit 1; }
+      echo "reconcile run: $RUN (dispatched at/after $SINCE) -- RECORD THIS ID"
+      # --- OBSERVE (idempotent; re-runnable standalone with RUN/REPO set from the line above) ---
+      for _ in $(seq 1 90); do
+        J=$(gh api "repos/${REPO}/actions/runs/${RUN}/jobs" --jq '.jobs')
+        [ "$(printf '%s' "$J" | jq -r '.[]|select(.name=="apply-reconcile")|.status')" = "completed" ] && break
+        sleep 20
+      done
+      printf '%s' "$J" | jq -r '.[] | "JOB \(.name) status=\(.status) conclusion=\(.conclusion)"'
+      rc=0
+      assert_step() {
+        got=$(printf '%s' "$J" | jq -r --arg n "$1" \
+          '.[] | select(.name=="apply-reconcile") | .steps[] | select(.name==$n) | .conclusion')
+        echo "STEP [$1] conclusion=${got:-<ABSENT>} expected=$2"
+        [ "$got" = "$2" ] || rc=1
+      }
+      assert_step "Terraform apply (same plan file the guard inspected) -- saved plan" skipped
+      assert_step "Resolve fresh-plan entry condition (saved-plan stale OR saved-plan guard-routed)" success
+      assert_step "Fresh re-plan (STALE_PLAN_FRESH_REPLAN fallthrough)" success
+      assert_step "Deterministic apply guard (fail-closed) -- fresh re-plan" success
+      assert_step "Emit fresh plan.bin sha256 (RECONCILE_FRESH_PLAN_ARTIFACT sha256 job-output EMIT)" success
+      st=$(gh run view "$RUN" --json status --jq .status); echo "run_status=$st"
+      [ "$st" = "waiting" ] || { echo "EXPECTED run status=waiting (tf-gated-apply approval pending)"; rc=1; }
+      exit $rc
     expected: >-
-      apply-reconcile completes successfully (its own apply step SKIPPED -- routed -- with the
-      fresh-replan steps EXECUTED, not skipped), and gated-apply-reconcile sits in
-      waiting/queued pending the Environment approval. The wake comment on PR #779 should say the
-      fresh plan was routed to tf-gated-apply.
+      Exit 0. Every assert_step line matches, run_status=waiting, and gated-apply-reconcile is
+      present in the job list (status waiting/queued) pending the Environment approval. The wake
+      comment on the red commit's originating PR should say the fresh plan was routed to
+      tf-gated-apply.
+      WHY STEP-LEVEL, NOT JOB-LEVEL: the earlier form projected only job-level {name,status,
+      conclusion} while its `expected` prose required the fresh-replan steps "EXECUTED, not
+      skipped". A run where `replan` was STILL SKIPPED (i.e. the defect unfixed) but the job merely
+      succeeded would have read as PASS -- and VP 8-9 are the FIRST AND ONLY runtime proof this plan
+      ever gets, so an unfalsifiable VP 8 leaves the fix unproven end to end. Step conclusions are
+      the observable that actually discriminates.
+      WHY DISPATCH-TIME RESOLUTION: `sleep 15` + `gh run list --limit 1` can resolve a PRIOR
+      reconcile run (a stale dispatch, or an earlier failed attempt), asserting against the wrong
+      run entirely. SINCE is captured BEFORE the dispatch and the run is selected by createdAt.
+      ON `apply-reconcile.outputs.fresh_plan_pending == true`: GitHub's REST API exposes no
+      job-OUTPUT field, so it cannot be read directly. It is defined in reconcile.yml as literally
+      `${{ steps.upload_fresh_plan_sha256.outcome == 'success' }}`, and that step carries no
+      `continue-on-error`, so conclusion == outcome. The assert_step on that step's conclusion is
+      therefore not a proxy for the output -- it is the output's own definition, evaluated on the
+      same run.
+      STEP NAMES ARE LOAD-BEARING: the REST jobs API keys steps by NAME, not by `id`. The five
+      strings above must match the workflow byte-for-byte; the `route` step's name is fixed by
+      execution step 1 for exactly this reason. `gh run view --json jobs` also nests `steps[]` per
+      job and is an acceptable substitute; `gh api repos/{repo}/actions/runs/{id}/jobs` is used here
+      as the guaranteed-shape form.
     fix_if: >-
-      apply-reconcile succeeded with replan/guard_fresh SKIPPED -- the dispatch resolved an OLD copy
-      of reconcile.yml; confirm the fix is merged to main and that --ref main was used. resolve-
-      target reporting actionable=false means someone already cleared the record; re-check the
-      record and stop. A failure inside `replan` means terraform could not plan at RED_SHA -- read
-      the log, do NOT retry blindly (Decision 55).
+      `Fresh re-plan ... conclusion=skipped` (or `<ABSENT>`) -- THIS IS THE UNFIXED DEFECT, or the
+      dispatch resolved an OLD copy of reconcile.yml; confirm the fix is merged to main and that
+      --ref main was used. `<ABSENT>` on the route step means its name does not match execution
+      step 1's mandated string -- fix the workflow's step name, never the assertion.
+      `Terraform apply ... -- saved plan` NOT skipped means the saved-plan guard did not BLOCK,
+      i.e. the diff is no longer a destroy; re-read the plan before proceeding, this plan's whole
+      premise no longer holds. resolve-target reporting actionable=false means someone already
+      cleared the record; re-check the record and stop. A failure inside `replan` means terraform
+      could not plan at RED_SHA -- read the log, do NOT retry blindly (Decision 55); note that a
+      `replan` failure correctly latches RED per Decision 154 point 5(i), so the record staying red
+      is expected behaviour there, not a second defect.
+      If the harness forbids a foreground `sleep`, split at the `--- OBSERVE ---` marker: run the
+      dispatch half once, record the printed RUN id, then re-invoke the observe half (it is
+      idempotent and re-runnable) until apply-reconcile reads completed.
   - step: 9
     phase: post-deploy
     action: >-
       After the human approves the tf-gated-apply Environment, assert the gated apply of the FRESH
       plan succeeded with zero AccessDenied -- the specific failure mode of run 30264239445.
     command: |-
-      RUN=$(gh run list --workflow reconcile.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+      RUN="${RUN:?set RUN to the run id VP step 8 printed -- do NOT re-resolve with --limit 1, which can pick a prior run}"
       gh run view "$RUN" --json conclusion,jobs --jq '{conclusion:.conclusion, jobs:[.jobs[]|{name,conclusion}]}'
       n=$(gh run view "$RUN" --log 2>/dev/null | grep -ci "accessdenied" || true)
       echo "accessdenied_lines=${n:-0}"
       [ "${n:-0}" -eq 0 ]
     expected: >-
       conclusion=success, both apply-reconcile and gated-apply-reconcile conclusion=success, and
-      accessdenied_lines=0.
+      accessdenied_lines=0. RUN is the id VP step 8 printed and must be carried forward explicitly:
+      re-resolving with `gh run list --limit 1` can select a different (prior or newer) reconcile
+      run and assert against the wrong episode -- the same defect B4 corrected in VP step 8.
     fix_if: >-
       accessdenied_lines>0 names a verb the sibling plan still does not grant -- capture the verb
       and the resource, and file it rather than patching inline (Decision 55/72). A stale-plan error
@@ -415,25 +553,41 @@ verification_plan:
       BEFORE rec-2847 is closed, and rec-2847's resolution must name it. Then verify closure in the
       warehouse-synced read cache, not merely assert it.
     command: |-
+      FOLLOW_ON="${FOLLOW_ON:?set FOLLOW_ON to the rec id actually filed for part (b) -- e.g. FOLLOW_ON=rec-2891}"
       bin/venv-python -m scripts.ops_data_portal --sync
-      bin/venv-python -c "
-      import json, pathlib
+      FOLLOW_ON="$FOLLOW_ON" bin/venv-python -c "
+      import json, os, pathlib, re
+      follow_on = os.environ['FOLLOW_ON']
+      assert re.fullmatch(r'rec-\d+', follow_on), f'FOLLOW_ON is not a rec id: {follow_on!r}'
+      assert follow_on != 'rec-2847', 'FOLLOW_ON must be a DIFFERENT rec from rec-2847'
       rows = [json.loads(l) for l in pathlib.Path('logs/.recommendations-log.jsonl').read_text().splitlines() if l.strip()]
-      r = next(x for x in rows if x['id'] == 'rec-2847')
+      by_id = {x['id']: x for x in rows}
+      r = by_id['rec-2847']
       res = r.get('resolution') or ''
       assert r['status'] == 'closed', f\"rec-2847 status={r['status']}\"
-      assert 'rec-' in res.replace('rec-2847', ''), f'resolution names no follow-on rec: {res!r}'
-      print('rec-2847', r['status'], '|', res[:300])
+      assert follow_on in res, f'resolution does not name {follow_on}: {res!r}'
+      f = by_id.get(follow_on)
+      assert f is not None, f'{follow_on} is not in the synced cache -- it was never filed'
+      assert f['status'] == 'open', f'{follow_on} status={f[\"status\"]}, expected open'
+      print('rec-2847', r['status'], '->', follow_on, f['status'], '|', res[:300])
       "
     expected: >-
-      rec-2847 status=closed and its resolution text names at least one OTHER rec id (the
-      single-heal-verb follow-on).
+      rec-2847 status=closed, its resolution text contains the SPECIFIC id passed as FOLLOW_ON, and
+      that id resolves in the SAME synced cache to an existing rec whose status is open.
+      WHY NOT A SUBSTRING TEST: the earlier assertion was
+      `assert 'rec-' in res.replace('rec-2847','')`, which passes on the bare literal string "rec-",
+      on a typo'd id, and on any incidental rec id that happens to appear in the prose -- so it could
+      not distinguish "part (b) has a real owner" from "the resolution mentions the word rec".
+      Binding FOLLOW_ON, matching it against `rec-\d+`, requiring it to differ from rec-2847, and
+      then resolving it to an OPEN row in the cache is what makes the honest-closure claim checkable.
     fix_if: >-
       Status still open -- the Resolves: trailer did not reach rec-autoclose; fall back to
       `bin/venv-python -m scripts.ops_data_portal --update-rec rec-2847 --status closed
-      --resolution "..."`. No follow-on rec id in the resolution -- rec-2847 was closed on a
-      partial fix with no owner for part (b); file the follow-on and re-run --update-rec. Do NOT
-      relax this assertion.
+      --resolution "..."`. `resolution does not name <id>` -- rec-2847 was closed on a partial fix
+      with no owner for part (b); re-run --update-rec with the id in the text. `<id> is not in the
+      synced cache` -- the follow-on was never actually filed (or the portal write failed loudly and
+      was not retried); file it, re-sync, re-run. `<id> status=closed` -- the named follow-on is not
+      a live owner for part (b); file a real one. Do NOT relax any of these assertions.
 constraints:
   - >-
     KEEP THE FIX MINIMAL AND REUSE. One new step plus six `if:` re-pointings plus one aggregator
@@ -443,12 +597,16 @@ constraints:
   - >-
     Guard classification MUST remain unchanged. scripts/terraform_apply_guard.py and
     .github/actions/deterministic-guard/ are out of scope. This plan makes an ALREADY-APPROVED
-    recovery executable; it does not change what gates or who approves.
+    recovery executable. It does NOT change what the guard classifies or who may approve -- but it
+    DOES change the set of terminal routes: see infrastructure_dependencies entry 4 and the
+    "DELIBERATE PROPERTIES OF THE NEW ROUTE SET" context entry. Do not restate the retracted claim
+    that this plan "never changes WHAT gates".
   - >-
     Decision 77 no-TOCTOU: a freshly-planned artifact is re-guarded before it is handed anywhere and
-    is never applied unreviewed and never applied unapproved. Do NOT "simplify" by letting
-    gated-apply-reconcile re-plan for itself after approval -- that would let the human approve one
-    diff and terraform apply another.
+    is NEVER APPLIED UNGUARDED and never applied unreviewed. ("Never applied unapproved" would be
+    false post-fix on route (i), where the subagent review is the sole gate -- see acceptance
+    criterion 3.) Do NOT "simplify" by letting gated-apply-reconcile re-plan for itself after
+    approval -- that would let the human approve one diff and terraform apply another.
   - >-
     Decision 154 subset rule: write-convergence-record's `pre-apply-failure` expression stays
     computed INLINE from steps.apply / steps.apply_fresh outcomes. The new `route` step must NOT be
@@ -475,31 +633,68 @@ constraints:
     file, do not re-dispatch blindly -- each dispatch costs a human Environment approval.
   - >-
     Do NOT edit terraform/CLAUDE.md in this plan. Its red-record recovery guidance is defective and
-    is owned by rec-2846 -- see the REC-2846 NOT BUNDLED context entry.
+    is owned by rec-2846 -- see the REC-2846 NOT BUNDLED context entry. This constraint STANDS
+    unless and until the human resolves TODO-CLAUDEMD-CORRECTION the other way; note that the
+    reason is scope discipline, NOT the prose budget (there are 12 bytes of headroom, so the
+    budget does not block a net-neutral rewording -- that earlier claim is retracted).
+  - >-
+    THREE OPEN HUMAN DECISIONS BLOCK IMPLEMENTATION START: TODO-GATE-TIGHTENING (should route (i)'s
+    auto-apply be closed off?), TODO-REACHABILITY-HARNESS (is the pre-merge GHA-expression
+    reachability proof required?), TODO-CLAUDEMD-CORRECTION (sixth scope row for
+    terraform/CLAUDE.md:86?). The implementer decides NONE of them -- if any is still open when the
+    plan is picked up, stop and ask.
 context:
   - >-
-    "Decision-scout verdict + CITE list (verbatim decision ids)": PENDING -- this plan was authored
-    by a planning SUBAGENT, so the decision-scout gate is dispatched by the overseer via the
-    gate-request trampoline (docs/contracts/overseer-dispatch.yaml#gate_request_trampoline) and this
-    line is replaced with the verbatim verdict + CITE list before commitment. Self-identified
-    must-cite set for the scout to confirm or correct: Decision 77 (speculative plan / no-TOCTOU),
-    Decision 92 (the Environment is the authorization boundary; authorization-division), Decision
-    126 (three agent intents, one trigger each; Reconcile as the single heal verb), Decision 154 /
-    rec-2862 (dispatch-ref side-checkout narrowing + the CLOSED pre-apply-failure allow-list),
-    Decision 55 (no rescue agents, anti-masking), Decision 72 (RCA-as-plan-source), Decision 60
-    (a check is a gate only if validate.py runs it), Decision 101 (public-repo boundary), Decision
-    148 (hermetic default), Decision 128 (SLOC decompose-by-default).
+    "Decision-scout verdict + CITE list (verbatim decision ids)": FLAGS_FOUND. The scout confirmed
+    the core fix is correct, minimal and well-evidenced; its flags were against the plan's TEXT and
+    VERIFICATION PLAN, not the workflow edit. SPIRIT flag: a narrowing of a control's reach (the
+    tf-gated-apply Environment no longer being reached on every saved-plan guard-BLOCK) demands an
+    explicit account in the shape of Decision 154 point 5, not an assertion that nothing moved --
+    discharged by the "DELIBERATE PROPERTIES OF THE NEW ROUTE SET" entry plus the corrected
+    infrastructure_dependencies bullet and acceptance criterion 3. NOTE flag: Decision 148 clause 3
+    hermetic consistency -- discharged by flipping VP step 6 to hermetic: true.
+    CITE list, as corrected by the scout: Decision 77 (speculative plan / no-TOCTOU), Decision 92
+    (the Environment is the authorization boundary; authorization-division), Decision 126 (three
+    agent intents, one trigger each; Reconcile as the single heal verb), Decision 154 / rec-2862
+    (dispatch-ref side-checkout narrowing; the CLOSED pre-apply-failure allow-list; point 5's
+    deliberate-properties SHAPE this plan mirrors; point 5(i) `replan` keeps its red latch; POINT 6,
+    which ALREADY RATIFIES the ci-rca non-watch of reconcile.yml -- cite it, do not re-derive it),
+    Decision 55 (no rescue agents, anti-masking), Decision 72 (RCA-as-plan-source), Decision 60 (a
+    check is a gate only if validate.py runs it), Decision 101 (public-repo boundary), Decision 148
+    (hermetic default; clause 3), Decision 128 (SLOC decompose-by-default), Decision 103 (THE
+    closure-proof authority governing VP step 12's honest-closure assertion -- note its own 2026-07-03
+    amendment records that citing "Decision 70" for closure-proof semantics is a MIS-CITE; Decision 70
+    governs bootstrap-record physical deletion only, and this plan cites it nowhere), Decision 132
+    (the graduation-disposition obligation every VP step's graduation/waiver field discharges),
+    Decision 104 (the check-registry / scripts/checks/ci_guards domain pattern the new
+    `recovery-workflow-topology` guard is registered under, and the _common.py sole-home discipline).
   - >-
-    "gates: decision-scout=PENDING; plan-critique=PENDING after 0 round(s)" -- both gates are
-    overseer-dispatched for this subagent-authored plan; this line records the returned verdicts
-    and round count before the plan is committed.
+    "gates: decision-scout=FLAGS_FOUND; plan-critique=APPROVE-WITH-CHANGES after 1 round(s)" --
+    both gates were overseer-dispatched for this subagent-authored plan and both verified the core
+    fix as correct, minimal and well-evidenced. plan-critique EXPLICITLY VERIFIED AND PASSED, so
+    these are settled and must not be re-litigated: `if: success()` semantics on a skipped
+    predecessor; `guard.outputs.routed` being empty (not 'false') on a guard PASS, so the PASS route
+    depends solely on stale exactly as today; nothing running twice on the PASS route; all 8
+    consumers of `steps.apply.outputs.stale` covered; gated-apply-reconcile needing zero edits; all
+    11 `source_code_hash` sites carrying try(filemd5) + ignore_changes; the SLOC headroom (314/500
+    and 167); the fix half being mergeable while the convergence record is RED; and the ci-rca
+    deferral. This revision addresses the blocking items (VP step 7 failing closed + the settled
+    boundary premise; the auto-apply route disclosure; VP step 8 observing step-level conclusions)
+    and the advisories; three items are deliberately left as marked open human decisions --
+    TODO-GATE-TIGHTENING, TODO-REACHABILITY-HARNESS, TODO-CLAUDEMD-CORRECTION.
   - >-
     THE DEFECT, VERIFIED ON DISK at .github/workflows/reconcile.yml. The saved-plan apply step is
     `if: success() && steps.guard.outputs.routed != 'true'` (line 373). A destroy ALWAYS guard-BLOCKs
     (scripts/terraform_apply_guard.py line 37: BLOCK if .change.actions contains "delete"), so
     routed=='true' and that step is SKIPPED -- which means `steps.apply.outputs.stale` is never set.
-    All three DEP-10 fallthrough steps are gated on `steps.apply.outputs.stale == 'true'` (lines
-    402, 410, 419), so on a guard-BLOCK the fresh-replan path is STRUCTURALLY UNREACHABLE.
+    All SIX DEP-10 fallthrough steps are gated on `steps.apply.outputs.stale == 'true'` -- lines
+    402, 410, 419, 428, 437, 445 (replan, guard_fresh, review_fresh, apply_fresh,
+    upload_fresh_plan_sha256, the upload-artifact step) -- so on a guard-BLOCK the fresh-replan path
+    is STRUCTURALLY UNREACHABLE. (This prose previously read "All three ... (lines 402, 410, 419)",
+    which undercounted by half; `scope`, `execution_steps` and VP step 2's `>= 6` were already
+    correct, and the standing gate's assertion (ii) must cover all SIX. The same miscount exists in
+    the sibling plan docs/plans/PLAN-iam-write-surface-completion.yaml and is NOT corrected here --
+    editing the sibling is out of this revision's scope; it is handed back to the human.)
     gated-apply-reconcile then applies the saved plan.bin verbatim (line 704) with no stale
     handling. The saved plan for THIS episode is stale: the partial gated apply advanced the
     terraform/personal state serial before the probe-role destroy died AccessDenied (rec-2882, run
@@ -519,14 +714,126 @@ context:
     human would approve one diff and terraform would apply another (a real TOCTOU). (4) A second
     Environment approval was REJECTED: the brief and T2.37 both require ONE dispatch, one approval.
   - >-
-    BLAST RADIUS OF THE BEHAVIOUR CHANGE, STATED HONESTLY. On the guard-BLOCK route the gated job
-    now applies a FRESHLY PLANNED artifact instead of the PR-reviewed saved plan.bin. That trades
-    the "apply exactly the bytes the PR reviewer saw" property for reachability. It is bounded by:
-    the same deterministic guard re-classifies the fresh plan; the same Environment approval gates
-    it; the sha256 EMIT/VERIFY pair still proves byte integrity across the job boundary; and this is
-    the SAME trust story the already-sanctioned DEP-10 fresh-ROUTE path uses today (guard + human
-    approval, review_fresh skipped when the fresh guard routes -- unchanged by this plan). The
-    guard-PASS route is bit-for-bit unchanged. This is the single item most worth gate scrutiny.
+    BLAST RADIUS OF THE BEHAVIOUR CHANGE, STATED HONESTLY -- TWO ITEMS, NOT ONE.
+    (1) ARTIFACT SUBSTITUTION on the fresh-guard-BLOCK route (ii): the gated job now applies a
+    FRESHLY PLANNED artifact instead of the PR-reviewed saved plan.bin. That trades the "apply
+    exactly the bytes the PR reviewer saw" property for reachability. It is bounded by: the same
+    deterministic guard re-classifies the fresh plan; the same Environment approval gates it; the
+    sha256 EMIT/VERIFY pair still proves byte integrity across the job boundary; and this is the
+    SAME trust story the already-sanctioned DEP-10 fresh-ROUTE path uses today (guard + human
+    approval, review_fresh skipped when the fresh guard routes -- unchanged by this plan).
+    (2) A NEW TERMINAL ROUTE, route (i) -- saved-guard-BLOCK x FRESH-guard-PASS now ends in an
+    AUTO-APPLY inside apply-reconcile (`apply_fresh`) with the subagent review as the ONLY gate and
+    NO tf-gated-apply Environment approval. Pre-fix this was structurally impossible: a saved-plan
+    BLOCK skipped `apply`, so `stale` was never set, so every fallthrough step was skipped, so the
+    episode ALWAYS reached the Environment-gated job. Re-pointing `apply_fresh`/`review_fresh` onto
+    `needs_fresh_plan` is what opens it. Both gates found this independently; it is NOT a
+    consequence of the artifact substitution in (1) and must not be folded into it.
+    Concretely reachable when: the saved plan contained a destroy/out-of-budget-IAM change that the
+    guard BLOCKed, and by the time the fresh re-plan runs that residual is already gone (e.g. it was
+    applied out of band, or a partial gated apply already destroyed it), leaving an in-budget
+    remainder the fresh guard PASSes. For THIS episode that is a real possibility, since a partial
+    gated apply has already run.
+    The guard-PASS-on-the-saved-plan route is bit-for-bit unchanged. Items (1) and (2) are the two
+    things most worth gate scrutiny; see the next context entry for the deliberate-properties
+    account and TODO-GATE-TIGHTENING for the open option to close (2) off.
+  - >-
+    DELIBERATE PROPERTIES OF THE NEW ROUTE SET (stated here rather than left implicit, mirroring
+    Decision 154 point 5's shape, because a narrowing of a control's reach demands an explicit
+    account rather than an assertion that nothing moved -- decision-scout SPIRIT flag).
+    (i) The Environment control's REACH IS NARROWED, deliberately and not as a side effect. Pre-fix,
+    a saved-plan guard-BLOCK ALWAYS terminated at the tf-gated-apply Environment. Post-fix, the
+    subset of those episodes whose FRESH plan guard-PASSes terminates at `apply_fresh` with only the
+    subagent review. Argument for accepting it: the deterministic guard -- not the Environment -- is
+    the classifier that decides which changes need a human (Decision 92 / Decision 77); a
+    fresh-guard PASS is that classifier saying "in-budget, no destroy, no trust change" about the
+    artifact that will actually be applied, and Reconcile's established contract already auto-applies
+    on a guard-PASS with subagent review substituting for the human. Argument against: the human was
+    on the hook for THIS episode a moment earlier, and the change removes them without their
+    involvement. The plan does not adjudicate this -- see TODO-GATE-TIGHTENING.
+    (ii) `replan` deliberately KEEPS ITS RED LATCH. A fresh re-plan failure is not downgraded to an
+    infra_error marker: Decision 154 point 5(i) names `replan` as an intentional UNDER-inclusion in
+    the closed pre-apply-failure allow-list, fail-closed and safe, and this plan does not touch that
+    allow-list (see the Decision 154 subset-rule constraint). Consequence, accepted: a Reconcile
+    dispatch whose fresh plan cannot be produced re-latches red -- the same outcome as today, so no
+    regression, but also no improvement on that cell.
+    (iii) The change is ADDITIVE on the entry condition, never substitutive: `needs_fresh_plan` is a
+    UNION (stale-saved-plan OR saved-guard-routed), so the pre-existing DEP-10 stale route retains
+    its exact behaviour and VP step 3 asserts the stale detection survived. Nothing that reached the
+    fallthrough before stops reaching it.
+  - >-
+    TODO-GATE-TIGHTENING -- OPEN HUMAN DECISION, NOT DECIDED BY THIS PLAN OR ITS IMPLEMENTER.
+    The question: should route (i) (saved-guard-BLOCK x fresh-guard-PASS -> subagent-reviewed
+    auto-apply, no Environment approval) be CLOSED OFF, so that a saved-plan guard-BLOCK ALWAYS
+    reaches the tf-gated-apply Environment?
+    OPTION A -- DISCLOSE ONLY (what this plan currently implements). `apply_fresh` and
+    `review_fresh` are gated on `success() && steps.route.outputs.needs_fresh_plan == 'true' &&
+    steps.guard_fresh.outputs.routed != 'true'`. Route (i) exists and auto-applies. Pro: the
+    deterministic guard remains the sole classifier of "does this need a human", consistent with
+    Decision 92/77 and with Reconcile's existing guard-PASS-auto-applies contract; no new
+    conditional to keep in sync. Con: silently removes the human from an episode that had one.
+    OPTION B -- TIGHTEN. Add `&& steps.route.outputs.fresh_reason != 'guard_routed'` to BOTH
+    `apply_fresh` and `review_fresh`, so the fresh-replan path can only ever UPLOAD the artifact for
+    the gated job when the entry cause was a saved-plan guard-BLOCK; the pre-existing stale-saved-plan
+    cause keeps its auto-apply. Pro: a saved-plan BLOCK always terminates at the Environment,
+    strictly preserving the pre-fix control reach. Con: a fresh-guard-PASS episode then has NO
+    uploader (`upload_fresh_plan_sha256` is gated on `guard_fresh.outputs.routed == 'true'`), so it
+    would strand with no artifact and no apply unless that gate is ALSO widened -- i.e. Option B is
+    a two-site change, not a one-line one, and VP steps 2 and 4 plus the standing gate's assertions
+    (ii)/(iv) would need their expected shapes updated to match. IMPLEMENTER: do not choose. If this
+    TODO is still unresolved when you pick the plan up, stop and ask.
+  - >-
+    TODO-REACHABILITY-HARNESS -- OPEN HUMAN DECISION, NOT DECIDED BY THIS PLAN OR ITS IMPLEMENTER.
+    plan-critique proposes a cheap PRE-MERGE runtime proof that this plan currently lacks (VP steps
+    1-6 prove structure only; VP steps 8-9 are the first and only runtime evidence and cost a human
+    approval). If the human requires it, drop this specification in verbatim as an additional
+    pre-deploy VP step plus its implementation; if not, delete this entry.
+    SPEC: a ~60-line GitHub-Actions-expression reachability harness over the PARSED reconcile.yml,
+    covering only the token subset the file actually uses -- `success()`, `&&`, `==`, `!=`, string
+    literals, `steps.X.outputs.Y`, `steps.X.outcome`. For a supplied context it evaluates each
+    step's `if:` and reports REACHABLE / UNREACHABLE.
+    CONTEXTS to evaluate: (saved-guard=PASS, apply=success), (PASS, apply=stale), (PASS,
+    apply=failure), (saved-guard=BLOCK, fresh-guard=BLOCK), (saved-guard=BLOCK, fresh-guard=PASS).
+    GROUND TRUTH, non-negotiable: run the harness against the PRE-FIX file and it MUST report
+    `replan` UNREACHABLE under (saved-guard=BLOCK) -- run 30264239445 empirically confirms exactly
+    that, so a harness that reports anything else is wrong and must be fixed before it is trusted.
+    Against the POST-FIX file the same context MUST report `replan` REACHABLE. Ground-truthing
+    against the observed live failure is what distinguishes this from a self-confirming
+    reimplementation of the `if:` expressions.
+    NOTE if adopted: it is a pre-merge proof of REACHABILITY only -- it does not replace VP steps
+    8-9, which prove the workflow actually runs and the apply actually lands.
+  - >-
+    TODO-CLAUDEMD-CORRECTION -- OPEN HUMAN DECISION, NOT DECIDED BY THIS PLAN OR ITS IMPLEMENTER.
+    The question: should this plan take a SIXTH scope row correcting terraform/CLAUDE.md line 86?
+    CORRECTED FACTS FOR THE HUMAN (this plan's earlier reasoning on the budget was WRONG and is
+    retracted here):
+    (1) BUDGET: config/prose_budgets.yaml sets terraform/CLAUDE.md to 30497; the file is 30485 bytes
+    on disk -- 12 BYTES OF HEADROOM. The budget therefore does NOT block a correction. Any
+    net-neutral-or-shrinking rewording is legal today. The claim in the REC-2846 NOT BUNDLED entry
+    that the ratchet blocks this is false and has been corrected there.
+    (2) BLAST RADIUS: terraform/CLAUDE.md is a DIRECTORY-SCOPED CLAUDE.md, ambiently auto-loaded
+    into every session that touches terraform/. The false line therefore reaches every future agent,
+    unprompted -- it is not a doc someone must go looking for. Line 86's row still routes red-record
+    recovery to `terraform-apply-sandbox` via workflow_dispatch acknowledge-and-retry (the push-only
+    path that stranded the 2026-07-25 retry) and still reads "T2.37 (Reconcile, not yet landed)",
+    both of which are false as of T2.37 completing.
+    (3) SCOPE HYGIENE: correcting ONE clause is NOT a rec-2846 closure claim. rec-2846's fix spans
+    lines 86, 149, 154, 203-204, 253-254 PLUS a planning-skill note; a single-row correction leaves
+    rec-2846 open with its remaining rows, exactly as the REC-2846 NOT BUNDLED entry requires.
+    The counter-argument, stated fairly: any terraform/CLAUDE.md edit widens this plan's scope into
+    a file rec-2846 owns, and a partial fix can make the rec look addressed to a future reader.
+    IMPLEMENTER: do not decide. The `constraints` entry forbidding a terraform/CLAUDE.md edit stands
+    until the human resolves this TODO.
+  - >-
+    LAMBDA-ARTIFACT FALSE POSITIVE (Decision 79 / CD.16 gating -- no Lambda steps are owed here).
+    `compute_affected_artifacts` reports `{'data-pipeline': ['docs/ROADMAP-PLATFORM.yaml']}` for this
+    plan's changed set, SOLELY because src/lambdas/data-pipeline/manifest.yaml lines 46-47 bundle
+    docs/ROADMAP-PRODUCT.md and docs/ROADMAP-PLATFORM.yaml into that artifact. A T2.48 progress_note
+    cannot affect Lambda behaviour, and the sibling plan cleared both gates with zero Lambda steps
+    on the same signal. Therefore this plan adds NO build/deploy/smoke-test steps. The manifest
+    over-inclusion is the defect, not the missing steps: it is filed as a follow-on rec (narrow the
+    manifest's roadmap includes, or add a progress-note/doc-only carve-out), never worked around by
+    adding a deploy step to a docs-only change.
   - >-
     REC-2847 PARTIAL CLOSURE (honesty). rec-2847 has three parts. (a) the guard-BLOCK x
     stale-saved-plan fix -- landed IN FULL by this plan. (b) demote terraform-apply-sandbox's
@@ -540,9 +847,26 @@ context:
     demoted, "every flow" reduces to Reconcile). Therefore VP step 12 requires a follow-on rec
     carrying (b) + the generalised (c) to be FILED BEFORE rec-2847 is closed, with its id named in
     rec-2847's resolution.
+    OVERLAP CHECK BEFORE FILING: part (b) overlaps OPEN rec-2846's own fix. rec-2846 is about the
+    DEFECTIVE red-record recovery GUIDANCE that routes operators to the push-only sandbox dispatch;
+    demoting that dispatch to a refuse-with-pointer is arguably the same fix seen from the
+    enforcement side rather than the documentation side. The implementer MUST read rec-2846 before
+    filing and decide whether part (b) belongs as an `update_rec` widening rec-2846 rather than as a
+    third, near-duplicate rec. Whichever way it goes, the rec id that ends up OWNING part (b) is the
+    id named in rec-2847's resolution and passed as VP step 12's FOLLOW_ON -- VP step 12 accepts any
+    `rec-\d+` that differs from rec-2847 and resolves to an OPEN row, so rec-2846 satisfies it if
+    that is the chosen home.
   - >-
     CI-RCA WATCH-LIST RECOMMENDATION: DO NOT add reconcile.yml to ci-rca.yml's `workflows:` filter
-    in this plan. Three concrete blockers, all verified this session. (1) DESIGNED-REFUSAL MIS-FIT:
+    in this plan. FIRST AND GOVERNING: the deferral is ALREADY RATIFIED and does not need
+    re-deriving -- Decision 154 point 6 states outright that on the RECONCILE path family ci-rca does
+    NOT watch reconcile.yml (absent from its workflow filter) and that masking is structurally
+    impossible there anyway, because Reconcile only ever runs against an ALREADY-red record, so
+    leaving status unchanged leaves it RED and the marker can never turn a red into a green on this
+    path family; the operator is woken by Reconcile's own PR wake comment and the still-red record.
+    Cite that, do not re-argue it. The three blockers below are the still-useful ADDITIONAL finding:
+    they are the concrete prerequisites the follow-on rec must carry, all verified this session.
+    (1) DESIGNED-REFUSAL MIS-FIT:
     reconcile.yml's benign "someone else already cleared this episode" no-op is implemented as
     `exit 1` inside the apply-reconcile job (reconcile.yml lines 257-264), so it presents as a
     workflow FAILURE. scripts/ci_rca/designed_refusal.py suppresses at JOB granularity
@@ -562,13 +886,19 @@ context:
   - >-
     REC-2846 NOT BUNDLED (referenced only). rec-2846 fixes the defective red-record recovery
     guidance that sent the 2026-07-25 retry to the push-only sandbox dispatch. Its correct fix spans
-    terraform/CLAUDE.md lines 86, 149, 154, 203-204 and 253-254 PLUS a planning-skill note; the file
-    carries a prose budget (config/prose_budgets.yaml: terraform/CLAUDE.md 30497) that ratchets DOWN
-    only, and a planning session must not modify skills. Bundling it and fixing one row would be a
-    false closure claim. LIVE HAZARD, stated so it is not lost: terraform/CLAUDE.md line 86 still
-    tells an operator to recover a red record via a terraform-apply-sandbox workflow_dispatch and
-    still calls Reconcile "not yet landed". THIS PLAN'S VP STEPS 8-9 ARE AUTHORITATIVE FOR THE
-    TEARDOWN; ignore that row.
+    terraform/CLAUDE.md lines 86, 149, 154, 203-204 and 253-254 PLUS a planning-skill note, and a
+    planning session must not modify skills. Bundling it and fixing one row would be a false closure
+    claim. BUDGET CLAIM RETRACTED: this entry previously implied the prose ratchet
+    (config/prose_budgets.yaml: terraform/CLAUDE.md 30497, ratchets DOWN only) was itself a blocker.
+    It is not -- the file is 30485 bytes on disk, i.e. 12 BYTES OF HEADROOM, so a net-neutral or
+    shrinking rewording is legal today. The real reasons not to bundle are scope discipline and
+    rec-2846's ownership, not the budget. LIVE HAZARD, stated so it is not lost: terraform/CLAUDE.md
+    line 86 still tells an operator to recover a red record via a terraform-apply-sandbox
+    workflow_dispatch and still calls Reconcile "not yet landed", and because that file is a
+    DIRECTORY-SCOPED CLAUDE.md it is ambiently loaded into every session touching terraform/ -- the
+    false line reaches every future agent unprompted. THIS PLAN'S VP STEPS 8-9 ARE AUTHORITATIVE FOR
+    THE TEARDOWN; ignore that row. Whether to correct line 86 here anyway is TODO-CLAUDEMD-CORRECTION
+    (an open human decision, see that entry).
   - >-
     CROSS-PLAN CONSISTENCY. docs/plans/PLAN-iam-write-surface-completion.yaml explicitly DECOUPLED
     the DEP-02 teardown (its "TEARDOWN DECOUPLED" context entry) and left TODO-TEARDOWN-ROUTE open
@@ -592,7 +922,11 @@ context:
     end-to-end proof is VP steps 8-9, POST-MERGE, on the real DEP-02 episode -- and that run costs a
     human Environment approval. This is the residual risk the new standing gate is meant to bound:
     it cannot prove the workflow runs, only that it can never silently regress to the shape that
-    provably does not.
+    provably does not. Because VP steps 8-9 are the sole runtime evidence, VP step 8 was rewritten
+    (B4) to assert STEP-level conclusions rather than job-level status -- a job-level assertion would
+    have passed on a run where `replan` was still skipped, i.e. the only runtime proof would have
+    been unfalsifiable. TODO-REACHABILITY-HARNESS proposes a cheap PRE-merge partial closure of this
+    same gap; whether to adopt it is an open human decision, not settled here.
   - >-
     MAIN DIVERGENCE (assessment-time, not auto-rebased). At authoring the branch was 3 commits
     behind origin/main and the changed set includes docs/ROADMAP-PLATFORM.yaml, which overlaps this
@@ -602,7 +936,9 @@ context:
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
-  - DECISIONS.md read (at minimum Decisions 55, 60, 72, 77, 92, 101, 126, 128, 148, 154)
+  - DECISIONS.md read (at minimum Decisions 55, 60, 72, 77, 92, 101, 103, 104, 126, 128, 132, 148, 154 -- 154 points 5 and 6 specifically)
+  - 'Three open human decisions resolved before starting: TODO-GATE-TIGHTENING, TODO-REACHABILITY-HARNESS, TODO-CLAUDEMD-CORRECTION (stop and ask if any is still open)'
+  - rec-2846 read (part-(b) overlap -- decide update_rec vs a new rec BEFORE filing)
   - .github/workflows/reconcile.yml read IN FULL before any edit -- the `if:` topology is the subject
   - docs/plans/PLAN-iam-write-surface-completion.yaml read (TEARDOWN DECOUPLED + TODO-TEARDOWN-ROUTE)
   - All files in scope located and readable
@@ -618,6 +954,11 @@ execution_steps:
     empty `fresh_reason`. `if: success()` (NOT always()) is deliberate -- a genuine non-stale apply
     failure or a guard internal error must keep short-circuiting to the always-run red record write,
     exactly as today.
+    THE STEP'S `name:` IS LOAD-BEARING AND FIXED, NOT free text: it MUST be exactly
+    `Resolve fresh-plan entry condition (saved-plan stale OR saved-plan guard-routed)`. VP step 8
+    asserts step conclusions through the GitHub REST jobs API, which keys steps by NAME (it does not
+    expose `id`), so any deviation makes the only runtime proof this plan gets read `<ABSENT>`. If
+    the name must change, change VP step 8's assertion string in the same commit.
   - >-
     .github/workflows/reconcile.yml -- re-point the six fallthrough steps. `replan` and `guard_fresh`:
     `if: success() && steps.route.outputs.needs_fresh_plan == 'true'`. `review_fresh` and
@@ -633,12 +974,43 @@ execution_steps:
     "true" ]`. Leave the inner branch bodies untouched. Do NOT touch the write-convergence-record
     step's `pre-apply-failure` / `failed-step` expressions -- Decision 154 requires them computed
     inline from steps.apply / steps.apply_fresh, and `route` must not appear in them.
+    WHILE YOU ARE IN THAT BLOCK, kill the newly-dead branch rather than leaving it: post-fix, the
+    else-branch's `routed=${GUARD_ROUTED:-false}` can NEVER yield true, because reaching the else
+    branch means NEEDS_FRESH != 'true', which (by the route step's own union) means the saved-plan
+    guard did not route. Either drop the `${GUARD_ROUTED:-false}` fallback for a plain `routed=false`
+    (preferred -- it is now provably the only reachable value), or leave it with a one-line comment
+    saying why it is unreachable. This is harmless today, but it is exactly the rot the new standing
+    gate exists to prevent, so do not leave it silently dead.
   - >-
     .github/workflows/reconcile.yml -- update the wake-comment step: replace the `STALE` env with
     `FRESH_REASON: ${{ steps.route.outputs.fresh_reason }}` and branch on it so a guard-routed fresh
     plan is described as "the saved plan was guard-BLOCKed, Reconcile re-planned fresh and routed the
-    fresh plan to tf-gated-apply", distinct from the existing stale-saved-plan wording. Also refresh
-    the DEP-10 block comment at the top of the file to state the union entry condition.
+    fresh plan to tf-gated-apply", distinct from the existing stale-saved-plan wording.
+    (a) POINT THE APPROVER AT WHAT THEY ARE APPROVING. The tf-gated-apply Environment approval is
+    requested BEFORE gated-apply-reconcile runs, so at approval time the reviewer can see NOTHING of
+    the fresh plan from inside that job -- the only evidence exists in the SAME run's apply-reconcile
+    job, in the `replan` and `guard_fresh` step logs. The routed branch of the wake comment must
+    therefore link the run and name those two steps explicitly (e.g. "review the fresh plan in this
+    run's apply-reconcile job -> `Fresh re-plan (STALE_PLAN_FRESH_REPLAN fallthrough)` and
+    `Deterministic apply guard (fail-closed) -- fresh re-plan` before approving"). Without this the
+    approval is uninformed by construction, which is the practical failure mode of the artifact
+    substitution named in the BLAST RADIUS entry.
+    (b) REMOVE THE NOW-UNREACHABLE MESSAGE. Post-fix the branch `ROUTED=true AND NOT FRESH_REASON`
+    (today's plain "Reconcile routed <sha> to the tf-gated-apply job ... the convergence record is
+    unchanged") can no longer be reached on the fresh path: a routed outcome now always carries a
+    fresh_reason. Fold it into the FRESH_REASON branching or delete it -- do not leave dead prose in
+    the operator-facing surface.
+    (c) FIX THE FALSE `replan` COMMENT (reconcile.yml lines ~398-401). It currently reads "Re-plans
+    against whatever the dispatch ref's tree looks like now (same as terraform-apply-sandbox.yml's
+    existing dispatch-ack re-plan exception)". That is FALSE for this workflow: apply-reconcile's
+    ROOT checkout is `ref: ${{ env.RED_SHA }}` (lines 198-200), and only the `.dispatch-tooling`
+    side-checkout is at the dispatch ref (Decision 154 point 2). The re-plan is therefore at RED_SHA,
+    not at the dispatch ref -- and this plan's own infrastructure_dependencies entry 5 (the "cannot
+    silently widen the diff" argument, whose 5(b) evidence is the EMPTY `git log
+    99eb274..origin/main -- terraform/personal/` range) depends on the re-plan being at RED_SHA.
+    Leaving the comment as-is contradicts the plan's own safety argument in the file a future agent
+    reads first. Correct it to say the re-plan runs against the RED_SHA checkout.
+    (d) Refresh the DEP-10 block comment at the top of the file to state the union entry condition.
   - >-
     scripts/verify_ci_workflow.py -- add `_check_recovery_workflow_topology()` implementing the four
     assertions (route step present + both causes in its body; no fallthrough step gated on
@@ -667,21 +1039,39 @@ execution_steps:
     ADMIN container. Only on a four-way `allowed` result proceed to VP steps 8-11 (dispatch, human
     Environment approval, probe-absent, record-green).
   - >-
-    File the two follow-on recs via the ops portal -- call `get_rec_write_guidance()` before
-    `file_rec()` (Precision Context Injection). Rec 1: rec-2847 part (b) + the generalised part (c)
-    -- demote terraform-apply-sandbox's acknowledge_red_commit to a refuse-with-pointer at Reconcile
-    and generalise recovery-workflow-topology to every dispatch-reachable red-recovery flow
-    (source=architectural-review, priority High). Rec 2: make reconcile.yml ci-rca-watchable --
-    (i) separate the benign no-op refusal from the apply-bearing job (or make it a clean skip) so
-    designed_refusal's job granularity can distinguish it, (ii) extend ci-rca.yml's ANCHOR_SHA
-    red-record anchoring to the reconcile slug, (iii) add the watched_workflow_set adjudication entry
-    and the _REQUIRED_CI_RCA_WORKFLOWS tuple entry (source=architectural-review, priority Medium).
+    File the FOUR follow-on recs via the ops portal -- call `get_rec_write_guidance()` before
+    `file_rec()` (Precision Context Injection).
+    Rec 1: rec-2847 part (b) + the generalised part (c) -- demote terraform-apply-sandbox's
+    acknowledge_red_commit to a refuse-with-pointer at Reconcile and generalise
+    recovery-workflow-topology to every dispatch-reachable red-recovery flow
+    (source=architectural-review, priority High). READ rec-2846 FIRST: part (b) overlaps its fix, so
+    decide whether this belongs as an `update_rec` WIDENING rec-2846 instead of a third
+    near-duplicate rec (see the REC-2847 PARTIAL CLOSURE entry). Whichever rec ends up owning part
+    (b) is VP step 12's FOLLOW_ON.
+    Rec 2: make reconcile.yml ci-rca-watchable -- (i) separate the benign no-op refusal from the
+    apply-bearing job (or make it a clean skip) so designed_refusal's job granularity can distinguish
+    it, (ii) extend ci-rca.yml's ANCHOR_SHA red-record anchoring to the reconcile slug, (iii) add the
+    watched_workflow_set adjudication entry and the _REQUIRED_CI_RCA_WORKFLOWS tuple entry
+    (source=architectural-review, priority Medium). Note in its context that Decision 154 point 6
+    already ratifies the current non-watch, so this rec is an upgrade, not a defect report.
+    Rec 3: ROADMAP DATA TENSION -- tier_item T2.47 reads `status: not_started` while BOTH its exit
+    criteria (c1, c2) read `met`. Do NOT flip it inline from this plan (Status-Trusted-Never-Inferred);
+    the rec should ask for an adjudication of which field is authoritative and a correction of the
+    other (source=architectural-review, priority Medium).
+    Rec 4: LAMBDA-MANIFEST OVER-INCLUSION -- `compute_affected_artifacts` reports `data-pipeline`
+    for a docs-only change solely because src/lambdas/data-pipeline/manifest.yaml lines 46-47 bundle
+    docs/ROADMAP-PRODUCT.md and docs/ROADMAP-PLATFORM.yaml. Narrow those includes, or add a
+    doc/progress-note carve-out, so a roadmap progress_note stops falsely implying a Decision 79 /
+    CD.16 Lambda build+deploy+smoke obligation (source=architectural-review, priority Medium).
   - >-
     docs/ROADMAP-PLATFORM.yaml -- append the T2.48 progress_note recording route A, the teardown
-    outcome, and both follow-on rec ids. No status or criterion flip.
+    outcome, and the follow-on rec ids. No status or criterion flip -- and specifically do NOT flip
+    T2.47's status while you are in the file (that is Rec 3's job, not this plan's).
   - >-
     Close rec-2847 via the squash-merge `Resolves: rec-2847` trailer with a resolution naming
-    exactly what landed and the follow-on rec id, then execute VP step 12.
+    exactly what landed (part (a) in full; part (c) narrowed to reconcile.yml's red-recovery
+    topology) and the specific rec id that OWNS part (b), then execute VP step 12 with FOLLOW_ON set
+    to that id.
   - 'Report: what was implemented, verification results, and the residual risk that VP steps 1-6 prove structure only'
 work_areas: []
 rollback: >-
