@@ -264,7 +264,12 @@ def _data_edge_channel(entries: list[tuple[str, str]], repo_root: Path) -> set[s
 
 
 def _mirror_map_channel(changed_source_files: list[str], repo_root: Path) -> set[str]:
-    """Read-only use of scripts.test_coverage_checker.map_source_to_test() (channel 3)."""
+    """Read-only use of scripts.test_coverage_checker.map_source_to_test() (channel 3).
+
+    Concern-split mappings resolve to test package directories. Expand those packages to
+    individual test modules here so the affected-set cap and downstream reactive pytest probes
+    operate on their documented one-module-per-entry grain.
+    """
     hits: set[str] = set()
     for f in changed_source_files:
         result = map_source_to_test(repo_root / f)
@@ -274,7 +279,9 @@ def _mirror_map_channel(changed_source_files: list[str], repo_root: Path) -> set
             if result.exists():
                 hits.add(result.relative_to(repo_root).as_posix())
         elif result.is_dir():
-            hits.add(result.relative_to(repo_root).as_posix())
+            for test_file in sorted(result.rglob("test_*.py")):
+                if "__pycache__" not in test_file.parts and test_file.is_file():
+                    hits.add(test_file.relative_to(repo_root).as_posix())
     return hits
 
 

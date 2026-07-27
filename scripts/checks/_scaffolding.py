@@ -365,14 +365,40 @@ _SECTION_SEPARATOR_RE = re.compile(r"^=+.+=+$", re.MULTILINE)
 _FAILED_SUMMARY_LINE_RE = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)", re.MULTILINE)
 
 
-def _match_changed_test_path(file_token: str, changed_tests: list[str]) -> str | None:
+def _match_changed_test_path(file_token: str, changed_tests: list[str], *, repo_root: Path = _common.ROOT) -> str | None:
     """Resolve a path token echoed by pytest (relative-as-passed, or occasionally an
     absolute/rootdir-relative variant) back to its exact entry in changed_tests."""
     normalized = file_token.replace("\\", "/")
     for f in changed_tests:
         if normalized == f or normalized.endswith("/" + f):
             return f
+        target = repo_root / f
+        if not target.is_dir():
+            continue
+        candidate = repo_root / normalized
+        try:
+            candidate.relative_to(target)
+        except ValueError:
+            continue
+        if candidate.is_file() and candidate.name.startswith("test_") and candidate.suffix == ".py":
+            return candidate.relative_to(repo_root).as_posix()
     return None
+
+
+def _expand_directory_test_targets(targets: list[str]) -> list[str]:
+    """Defensively normalize any legacy directory target to individual test modules."""
+    expanded: list[str] = []
+    for target in targets:
+        path = _common.ROOT / target
+        if not path.is_dir():
+            expanded.append(target)
+            continue
+        expanded.extend(
+            test_file.relative_to(_common.ROOT).as_posix()
+            for test_file in sorted(path.rglob("test_*.py"))
+            if "__pycache__" not in test_file.parts and test_file.is_file()
+        )
+    return list(dict.fromkeys(expanded))
 
 
 def _attribute_batched_collect_errors(combined: str, changed_tests: list[str], excluded: set[str]) -> dict[str, str]:
@@ -479,7 +505,7 @@ def _reactive_heavy_dep_signature(combined_output: str, excluded: set[str]) -> s
     return None
 
 
-def _attribute_failed_test_files(combined: str, runnable: list[str]) -> set[str] | None:
+def _attribute_failed_test_files(combined: str, runnable: list[str], *, repo_root: Path = _common.ROOT) -> set[str] | None:
     """Extract the subset of `runnable` implicated by the combined run's FAILED/ERROR short-summary
     lines, so the reactive heavy-dep probe below targets only files that actually failed instead of
     isolated-re-running every runnable file (rec-2871-adjacent fast-tier budget-breach fix: probing
@@ -493,7 +519,7 @@ def _attribute_failed_test_files(combined: str, runnable: list[str]) -> set[str]
     files: set[str] = set()
     for match in _FAILED_SUMMARY_LINE_RE.finditer(combined):
         token = match.group(1).split("::", 1)[0]
-        matched = _match_changed_test_path(token, runnable)
+        matched = _match_changed_test_path(token, runnable, repo_root=repo_root)
         if matched:
             files.add(matched)
     return files or None
@@ -523,6 +549,7 @@ def run_pytest_diff(changed_tests: list[str], failed: list[str]) -> None:
     if not changed_tests:
         return
     runnable, deferred = partition_changed_tests_by_collectability(changed_tests)
+    runnable = _expand_directory_test_targets(runnable)
     for test_file, missing_dep in deferred:
         _print_deferred_warning(test_file, missing_dep)
     if not runnable:
