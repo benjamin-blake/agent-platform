@@ -2,23 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 WORKFLOW = Path(".github/workflows/ci-rca.yml")
 
 
-def _workflow() -> dict:
-    data = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    if True in data:
-        data["on"] = data.pop(True)
-    return data
-
-
 def test_admission_is_separate_and_least_privilege() -> None:
-    jobs = _workflow()["jobs"]
-    admission = jobs["admission"]
-    assert admission["permissions"] == {"contents": "read", "actions": "read"}
-    assert jobs["rca"]["needs"] == "admission"
+    text = WORKFLOW.read_text(encoding="utf-8")
+    admission = text[text.index("  admission:") : text.index("  bounded-evidence-canary:")]
+    assert "permissions:\n      contents: read\n      actions: read" in admission
+    rca = text[text.index("  rca:") :]
+    assert "needs: admission" in rca
 
 
 def test_jobs_digest_and_manual_refusal_are_fail_closed() -> None:

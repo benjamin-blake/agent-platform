@@ -26,12 +26,23 @@ scope:
       metadata, consume only the bounded envelope, publish bounded native failure diagnostics, expose
       an allowlisted metadata-only canary mode, and replace the unrelated Decision 143 citation with
       truthful provenance.
+  - file: .github/workflows/ci.yml
+    action: Modify
+    purpose: Keep authoritative presubmit hermetic by removing the unsupported whole-run Range probe environment.
+  - file: docs/decisions-index.json
+    action: Modify
+    purpose: Regenerate the derivative decision index from the amended canonical Decision 156 heading.
   - file: scripts/ci_rca/fetch_logs.py
     action: Modify
     purpose: >-
       Replace undifferentiated failed-run output with admitted per-job-ID retrieval, retain stderr-only
       transient classification, remove the unbounded whole-run fallback, and delegate bounded raw-log
       acquisition and envelope construction to cohesive helpers.
+  - file: scripts/ci_rca/log_transport.py
+    action: Create
+    purpose: >-
+      Authenticate only the per-job API request, validate redirects, stream without Range assumptions,
+      redact transport errors, and close interrupted or bounded responses deterministically.
   - file: scripts/ci_rca/log_admission.py
     action: Create
     purpose: >-
@@ -54,11 +65,19 @@ scope:
     purpose: >-
       Enforce the admission boundary, digest comparison, bounded-consumer path, stale-citation removal,
       fail-closed checks, and canary privilege exclusions before workflow-only checks can be trusted.
+  - file: scripts/verify_ci_workflow.py
+    action: Modify
+    purpose: Enforce the production per-job transport and bounded evidence contract as a standing guard.
   - file: tests/test_ci_rca_fetch_logs.py
     action: Modify
     purpose: >-
       Replace whole-log expectations with complete/truncated bounded-envelope, retry, empty-log,
       hostile-input, and recovery-failure coverage.
+  - file: tests/test_ci_rca_log_transport.py
+    action: Create
+    purpose: >-
+      Test 302/307 redirects, host boundaries, credential isolation, response closure, interrupted streams,
+      and stable redacted failures without network access.
   - file: tests/test_ci_rca_bounded_evidence.py
     action: Create
     purpose: >-
@@ -69,6 +88,9 @@ scope:
     purpose: >-
       Mutation-test the workflow trust boundary, counterfactual unbounded commands, citation authority,
       wrong-run/wrong-SHA/wrong-scenario correlation, and no-privilege canary contract.
+  - file: tests/verify_ci_workflow/test_ci_rca_range_probe.py
+    action: Delete
+    purpose: Remove the obsolete whole-run ZIP Range feasibility assertion.
 bundled_recommendations: []
 infrastructure_dependencies:
   - >-
@@ -76,10 +98,9 @@ infrastructure_dependencies:
     Terraform, production deploy, ops-portal write, Claude invocation, or recommendation filing is
     permitted in the canary path.
   - >-
-    A least-privilege metadata-only PR check uses github.token with actions:read to prove that the raw-log
-    recovery redirect honors a one-byte Range request. Local authoring may precede that non-hermetic proof,
-    but merge, activation, and closure claims remain blocked until it passes. The check redacts the signed
-    redirect and discards the single transferred byte.
+    The production retriever uses github.token with actions:read only against individual admitted job-log
+    endpoints. It disables automatic redirects, validates the redirect host class, strips authentication from
+    the signed-URL request, and closes the response as soon as the evidence ceiling is reached.
 acceptance_criteria:
   - >-
     No CI-RCA agent path executes `gh run view --log` or otherwise captures an uncapped whole-run body;
@@ -121,18 +142,21 @@ acceptance_criteria:
 verification_plan:
   - step: 1
     phase: pre-deploy
-    hermetic: false
+    hermetic: true
     action: >-
-      In the PR fast-presubmit job, probe GitHub's run-log archive redirect/range behavior on a safe
-      repository run using the job's native read-only token, without printing log content or signed URLs.
+      Exercise the authenticated per-job HTTP transport with redirect status, host-boundary,
+      credential-isolation, response-closure, and stable redacted-error counterfactuals.
     command: >-
-      CI_RCA_LOG_PROBE_RUN_ID=latest GITHUB_TOKEN='${{ github.token }}' bin/venv-python -m scripts.validate --pre
+      bin/venv-python -m pytest tests/test_ci_rca_log_transport.py -q
     expected: >-
-      The endpoint yields an authenticated redirect/recovery route and the implementation can terminate a
-      streaming/ranged download at its configured ceiling without materializing the complete archive.
+      Only an allowlisted HTTPS 302/307 signed redirect is followed without authentication; malformed or
+      rejected responses close cleanly and expose only stable redacted diagnostics.
     fix_if: >-
-      Keep the PR unmerged and redesign the recovery/acquisition boundary. Local authoring evidence does
-      not override a failed or absent GitHub-native proof.
+      Keep the PR unmerged and correct the production transport; never substitute a post-download truncation.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The standing bounded-contract guard enforces the transport wiring and redirect invariants, while this
+      hermetic command is replayed by the implementation-PR VP gate for behavioral counterfactuals.
   - step: 2
     phase: pre-deploy
     hermetic: true
@@ -141,6 +165,9 @@ verification_plan:
       bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py tests/test_ci_rca_bounded_evidence.py -q
     expected: All focused tests pass.
     fix_if: Diagnose accounting or framing differences; never relax bounds or fail-closed assertions.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The bounded evidence properties are covered by the standing CI-RCA bounded-contract guard; this command is its focused authoring suite.
   - step: 3
     phase: pre-deploy
     hermetic: true
@@ -151,6 +178,9 @@ verification_plan:
       Pass fixtures succeed; uncapped fallback, raw-event use, missing digest comparison, digest mismatch,
       pre-verification consumption, wrong-run/SHA/scenario, stale citation, and privileged canary mutations fail.
     fix_if: Correct implementation or validator coverage; do not rely on workflow review alone.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The workflow trust boundary is covered by the standing CI-RCA bounded-contract guard; this command mutation-tests that same check.
   - step: 4
     phase: pre-deploy
     hermetic: true
@@ -159,6 +189,9 @@ verification_plan:
       bin/venv-python -m pytest tests/test_ci_rca*.py tests/verify_ci_workflow -q
     expected: All selected tests pass.
     fix_if: RCA the regression and preserve existing fail-closed behavior.
+    graduation: waive
+    graduation_waiver_reason: >-
+      This is a broad regression sweep of already-registered standing checks, not a new independently graduatable property.
   - step: 5
     phase: pre-deploy
     hermetic: false
@@ -166,6 +199,9 @@ verification_plan:
     command: bin/venv-python -m scripts.validate --pre
     expected: All authoritative fast-tier checks pass within budget.
     fix_if: Fix the owning check; do not bypass or duplicate validate.py enforcement in workflow YAML.
+    graduation: waive
+    graduation_waiver_reason: >-
+      The authoritative presubmit is the standing check runner itself and cannot be graduated as another nested check.
   - step: 6
     phase: post-deploy
     hermetic: false
@@ -214,7 +250,7 @@ context:
     Accordingly historical version skew is a designed refusal, not a compatibility requirement.
   - >-
     Three independent critique rounds converged on canonical byte framing, plural job/step selection,
-    confidentiality allowlists, feasibility-first API proof, exact live correlation, and cross-job metadata
+    confidentiality allowlists, bounded per-job transport, exact live correlation, and cross-job metadata
     attestation. The final correction requires both jobs to compare the same versioned canonical JSON digest.
   - >-
     Decision 74 created workflow_dispatch specifically for arbitrary past-run recovery, so retiring that
@@ -224,14 +260,14 @@ context:
 pre_implementation_checklist:
   - Branch confirmed not main and worktree ownership transferred serially
   - Authoritative audit and current workflow/retriever re-read
-  - GitHub log API feasibility gate is wired as a merge-blocking PR check before activation
+  - Per-job HTTP transport design is covered by hermetic redirect and bounded-stream counterfactuals
   - Decision 72 preserved and Decision 74 amendment boundary understood
   - Lambda manifest reports no affected active artifact
   - Acceptance criteria and exact live correlation contract understood
 execution_steps:
   - >-
-    Wire Verification Plan step 1 into the existing PR fast-presubmit path before activation; local
-    implementation may proceed, but the slice cannot merge or claim closure until the live proof passes.
+    Implement Verification Plan step 1 in the production per-job HTTP transport and its hermetic tests; do
+    not rely on whole-run ZIP Range behavior or post-download truncation.
   - >-
     Append the narrow Decision 74 amendment and implement the admission job plus canonical metadata
     attestation without changing Decision 72's failed-commit checkout.

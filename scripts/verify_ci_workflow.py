@@ -410,6 +410,11 @@ def _check_ci_rca_bounded_contract() -> None:
     source = Path("scripts/ci_rca/fetch_logs.py").read_text(encoding="utf-8")
     assert '"--log"' not in source and "'--log'" not in source, "CI-RCA retriever contains an uncapped whole-run --log path"
     assert "copy_bounded_lines" in source, "CI-RCA retriever no longer streams through the bounded evidence primitive"
+    transport_source = Path("scripts/ci_rca/log_transport.py").read_text(encoding="utf-8")
+    for invariant in ("_NoRedirect", "_allowed_redirect(location)", "urllib.request.Request(location)", "closing("):
+        assert invariant in transport_source, f"CI-RCA per-job transport invariant missing: {invariant}"
+    assert '"Authorization": f"Bearer {token}"' in transport_source, "CI-RCA API request lost authentication"
+    assert "Range" not in transport_source, "CI-RCA transport incorrectly relies on optional Range behavior"
     assert "Decision 143 mitigation" not in run_text, "CI-RCA workflow restored the stale Decision 143 attribution"
     assert "--admission /tmp/ci-rca-jobs.json" in run_text, "bounded fetch does not consume attested admission"
     assert "--metadata-out /tmp/ci-rca-failed.metadata.json" in run_text, "bounded fetch does not publish typed metadata"
@@ -425,7 +430,7 @@ def _check_ci_rca_bounded_contract() -> None:
         "segment body header differs from admission",
     ):
         assert invariant in envelope_source, f"agent-envelope semantic invariant missing: {invariant}"
-    for invariant in ("_publish_pair", "selection_omitted_job_ids=omitted_job_ids", '"retained_bytes": copied_bytes'):
+    for invariant in ("_publish_pair", "selection_omitted_job_ids=result.omitted_job_ids", '"retained_bytes": copied_bytes'):
         assert invariant in source, f"bounded-fetch semantic invariant missing: {invariant}"
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from typing import Any, BinaryIO, cast
 
 import pytest
 
@@ -12,37 +11,36 @@ from scripts.ci_rca.fetch_logs import FetchOutcome, fetch_run_log
 from scripts.ci_rca.log_admission import canonical_admission
 
 
-class _Process:
-    def __init__(self, body: bytes, returncode: int = 0, stderr: bytes = b"") -> None:
-        self.stdout: BinaryIO | None = io.BytesIO(body)
-        self.returncode = returncode
-        self.stderr_body = stderr
-        self.terminated = False
+class _Stream(io.BytesIO):
+    def __init__(self, body: bytes) -> None:
+        super().__init__(body)
+        self.closed_by_consumer = False
 
-    def terminate(self) -> None:
-        self.terminated = True
-
-    def wait(self, timeout: float | None = None) -> int:
-        return -15 if self.terminated else self.returncode
-
-    def kill(self) -> None:
-        self.terminated = True
+    def close(self) -> None:
+        self.closed_by_consumer = True
+        super().close()
 
 
 class _Factory:
-    def __init__(self, *processes: _Process) -> None:
-        self.processes = list(processes)
-        self.calls: list[list[str]] = []
+    def __init__(self, *streams: _Stream) -> None:
+        self.streams = list(streams)
+        self.calls: list[tuple[str, int]] = []
 
-    def __call__(self, command: list[str], *args: Any, **kwargs: Any) -> fetch_module._Process:
-        self.calls.append(command)
-        process = self.processes.pop(0)
-        stderr = kwargs.get("stderr")
-        if process.stderr_body and hasattr(stderr, "write"):
-            stream = cast(BinaryIO, stderr)
-            stream.write(process.stderr_body)
-            stream.flush()
-        return process
+    def __call__(self, repo: str, job_id: int) -> _Stream:
+        self.calls.append((repo, job_id))
+        return self.streams.pop(0)
+
+
+class _InterruptedStream(_Stream):
+    def __init__(self) -> None:
+        super().__init__(b"partial\n")
+        self._reads = 0
+
+    def readline(self, size: int | None = -1) -> bytes:
+        self._reads += 1
+        if self._reads > 1:
+            raise fetch_module.LogTransportError("CI_RCA_LOG_STREAM_INTERRUPTED")
+        return super().readline(size)
 
 
 def _admission(tmp_path: Path) -> Path:
@@ -77,39 +75,41 @@ def _two_job_admission(tmp_path: Path) -> Path:
 
 
 def test_complete_failed_log_is_written_with_recovery_metadata(tmp_path: Path) -> None:
-    process = _Process(b"job\tstep\tfailure\n")
+    process = _Stream(b"job\tstep\tfailure\n")
     factory = _Factory(process)
     out = tmp_path / "evidence.log"
 
-    outcome = fetch_run_log("42", "o/r", out, admission_path=_admission(tmp_path), popen=factory)
+    outcome = fetch_run_log("42", "o/r", out, admission_path=_admission(tmp_path), stream_opener=factory)
 
     assert outcome == FetchOutcome(True, 1, False)
     assert out.read_bytes().endswith(b"job\tstep\tfailure\n")
     metadata = json.loads((tmp_path / "evidence.log.metadata.json").read_text())
     assert metadata["recovery_url"] == "https://github.com/o/r/actions/runs/42"
     assert metadata["omitted_counts_known"] is True
-    assert factory.calls[0][-1] == "repos/o/r/actions/jobs/9/logs"
+    assert factory.calls[0] == ("o/r", 9)
 
 
 def test_byte_bound_terminates_producer_and_retains_whole_lines(tmp_path: Path) -> None:
-    process = _Process(b"first\nsecond\nthird\n")
+    process = _Stream(b"first\nsecond\nthird\n")
     out = tmp_path / "evidence.log"
 
-    outcome = fetch_run_log("42", "o/r", out, admission_path=_admission(tmp_path), max_bytes=62, popen=_Factory(process))
+    outcome = fetch_run_log(
+        "42", "o/r", out, admission_path=_admission(tmp_path), max_bytes=62, stream_opener=_Factory(process)
+    )
 
     assert outcome == FetchOutcome(True, 1, True)
     assert out.read_bytes().endswith(b"first\nsecond\n")
-    assert process.terminated is True
+    assert process.closed_by_consumer is True
     metadata = json.loads((tmp_path / "evidence.log.metadata.json").read_text())
     assert metadata["segments"][0]["job_id"] == 9
 
 
 def test_oversized_first_line_fails_closed(tmp_path: Path) -> None:
-    process = _Process(b"0123456789\n")
+    process = _Stream(b"0123456789\n")
     out = tmp_path / "evidence.log"
 
     outcome = fetch_run_log(
-        "42", "o/r", out, admission_path=_admission(tmp_path), attempts=1, max_bytes=5, popen=_Factory(process)
+        "42", "o/r", out, admission_path=_admission(tmp_path), attempts=1, max_bytes=5, stream_opener=_Factory(process)
     )
 
     assert outcome.fetched is False
@@ -117,7 +117,7 @@ def test_oversized_first_line_fails_closed(tmp_path: Path) -> None:
 
 
 def test_header_fit_with_oversized_first_raw_line_fails_closed(tmp_path: Path) -> None:
-    process = _Process(b"oversized-first-line\n")
+    process = _Stream(b"oversized-first-line\n")
     out = tmp_path / "evidence.log"
     header = b'{"job_name":"job","segment_job_id":9,"steps":[]}\n'
     outcome = fetch_run_log(
@@ -127,16 +127,16 @@ def test_header_fit_with_oversized_first_raw_line_fails_closed(tmp_path: Path) -
         admission_path=_admission(tmp_path),
         attempts=1,
         max_bytes=len(header) + 5,
-        popen=_Factory(process),
+        stream_opener=_Factory(process),
     )
     assert outcome.fetched is False
-    assert process.terminated is True
+    assert process.closed_by_consumer is True
     assert not out.exists()
     assert not (tmp_path / "evidence.log.metadata.json").exists()
 
 
 def test_empty_fetch_retries_without_whole_run_fallback(tmp_path: Path) -> None:
-    factory = _Factory(_Process(b"", 1), _Process(b"", 1), _Process(b"", 1))
+    factory = _Factory(_Stream(b""), _Stream(b""), _Stream(b""))
     sleeps: list[int] = []
 
     outcome = fetch_run_log(
@@ -144,19 +144,19 @@ def test_empty_fetch_retries_without_whole_run_fallback(tmp_path: Path) -> None:
         "o/r",
         tmp_path / "evidence.log",
         admission_path=_admission(tmp_path),
-        popen=factory,
+        stream_opener=factory,
         sleep_fn=sleeps.append,
     )
 
     assert outcome == FetchOutcome(False, 3, diagnostic="log empty, unavailable, or gh reported a non-transient error")
     assert sleeps == [10, 20]
-    assert all(command[-1] == "repos/o/r/actions/jobs/9/logs" for command in factory.calls)
+    assert factory.calls == [("o/r", 9)] * 3
 
 
 def test_successful_empty_job_body_cannot_succeed_from_segment_header(tmp_path: Path) -> None:
     out = tmp_path / "evidence.log"
     outcome = fetch_run_log(
-        "42", "o/r", out, admission_path=_admission(tmp_path), attempts=1, popen=_Factory(_Process(b"", 0))
+        "42", "o/r", out, admission_path=_admission(tmp_path), attempts=1, stream_opener=_Factory(_Stream(b""))
     )
     assert outcome.fetched is False
     assert not out.exists()
@@ -171,7 +171,7 @@ def test_empty_later_job_fails_closed_instead_of_attesting_header_only_segment(t
         out,
         admission_path=_two_job_admission(tmp_path),
         attempts=1,
-        popen=_Factory(_Process(b"first\n", 0), _Process(b"", 0)),
+        stream_opener=_Factory(_Stream(b"first\n"), _Stream(b"")),
     )
     assert outcome.fetched is False
     assert not out.exists()
@@ -189,7 +189,7 @@ def test_oversized_first_line_in_later_job_fails_entire_multi_job_fetch(tmp_path
         admission_path=_two_job_admission(tmp_path),
         attempts=1,
         max_bytes=len(first_header) + len(b"first\n") + len(second_header) + 5,
-        popen=_Factory(_Process(b"first\n", 0), _Process(b"oversized\n", 0)),
+        stream_opener=_Factory(_Stream(b"first\n"), _Stream(b"oversized\n")),
     )
     assert outcome.fetched is False
     assert not out.exists()
@@ -197,22 +197,55 @@ def test_oversized_first_line_in_later_job_fails_entire_multi_job_fetch(tmp_path
 
 
 def test_transient_classification_reads_stderr_only(tmp_path: Path) -> None:
-    process = _Process(b"", 1, b"failed to get jobs: HTTP 503\n")
+    def unavailable(repo: str, job_id: int) -> _Stream:
+        raise fetch_module.LogTransportError("HTTP 503")
+
+    outcome = fetch_run_log(
+        "42", "o/r", tmp_path / "evidence.log", admission_path=_admission(tmp_path), attempts=1, stream_opener=unavailable
+    )
+    assert outcome.diagnostic == "gh reported a transient error: HTTP 503"
+
+
+def test_midstream_failure_retries_without_publishing_partial_body(tmp_path: Path) -> None:
+    out = tmp_path / "evidence.log"
+    sleeps: list[int] = []
     outcome = fetch_run_log(
         "42",
         "o/r",
-        tmp_path / "evidence.log",
+        out,
         admission_path=_admission(tmp_path),
-        attempts=1,
-        popen=_Factory(process),
+        attempts=2,
+        stream_opener=_Factory(_InterruptedStream(), _Stream(b"complete\n")),
+        sleep_fn=sleeps.append,
     )
-    assert outcome.diagnostic == "gh reported a transient error: failed to get jobs"
+    assert outcome == FetchOutcome(True, 2, False)
+    assert out.read_bytes().endswith(b"complete\n")
+    assert b"partial" not in out.read_bytes()
+    assert sleeps == [10]
+
+
+def test_repeated_midstream_failure_leaves_no_evidence_pair(tmp_path: Path) -> None:
+    out = tmp_path / "evidence.log"
+    outcome = fetch_run_log(
+        "42",
+        "o/r",
+        out,
+        admission_path=_admission(tmp_path),
+        attempts=2,
+        stream_opener=_Factory(_InterruptedStream(), _InterruptedStream()),
+        sleep_fn=lambda _: None,
+    )
+    assert outcome == FetchOutcome(False, 2, diagnostic="log empty, unavailable, or gh reported a non-transient error")
+    assert not out.exists()
+    assert not (tmp_path / "evidence.log.metadata.json").exists()
 
 
 def test_truncation_records_only_acquired_segment_and_selection_omission(tmp_path: Path) -> None:
-    first = _Process(b"first\nsecond\n")
+    first = _Stream(b"first\nsecond\n")
     out = tmp_path / "evidence.log"
-    outcome = fetch_run_log("42", "o/r", out, admission_path=_two_job_admission(tmp_path), max_bytes=80, popen=_Factory(first))
+    outcome = fetch_run_log(
+        "42", "o/r", out, admission_path=_two_job_admission(tmp_path), max_bytes=80, stream_opener=_Factory(first)
+    )
     assert outcome.truncated
     metadata = json.loads((tmp_path / "evidence.log.metadata.json").read_text())
     assert [item["job_id"] for item in metadata["segments"]] == [9]
