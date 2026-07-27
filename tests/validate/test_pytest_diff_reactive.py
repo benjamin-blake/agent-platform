@@ -2,9 +2,10 @@
 
 import re
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scripts.checks._scaffolding import _PYTEST_FLAGS, _attribute_failed_test_files
+from scripts.checks._scaffolding import _PYTEST_FLAGS, _attribute_failed_test_files, _expand_directory_test_targets
 from tests.fixtures.validate_module import _validate
 
 ROOT = _validate.ROOT
@@ -283,6 +284,29 @@ class TestAttributeFailedTestFiles:
 
     def test_returns_none_on_no_failed_lines_at_all(self) -> None:
         assert _attribute_failed_test_files("some other output\n", ["tests/test_a.py"]) is None
+
+    def test_directory_target_attributes_concrete_failed_child(self, tmp_path: Path) -> None:
+        child = tmp_path / "tests" / "validate" / "test_budget.py"
+        child.parent.mkdir(parents=True)
+        child.write_text("def test_budget():\n    assert True\n", encoding="utf-8")
+        combined = "FAILED tests/validate/test_budget.py::test_budget - assert False\n"
+
+        result = _attribute_failed_test_files(combined, ["tests/validate"], repo_root=tmp_path)
+
+        assert result == {"tests/validate/test_budget.py"}
+
+
+class TestDirectoryTargetNormalization:
+    def test_expands_directory_to_real_test_modules(self, tmp_path: Path) -> None:
+        package = tmp_path / "tests" / "validate"
+        package.mkdir(parents=True)
+        (package / "test_budget.py").write_text("def test_budget():\n    assert True\n", encoding="utf-8")
+        (package / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+        with patch("scripts.checks._scaffolding._common.ROOT", tmp_path):
+            result = _expand_directory_test_targets(["tests/validate", "tests/test_other.py"])
+
+        assert result == ["tests/validate/test_budget.py", "tests/test_other.py"]
 
 
 class TestReactiveProbeNarrowing:
