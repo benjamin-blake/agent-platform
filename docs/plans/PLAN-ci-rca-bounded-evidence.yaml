@@ -1,0 +1,255 @@
+schema_version: 1
+slug: "ci-rca-bounded-evidence"
+intent: >-
+  Close audit findings GAL-01 and GAL-03 by replacing CI-RCA's unbounded whole-run fallback with a
+  fail-closed, byte-and-line-bounded evidence envelope that preserves failed job/step identity,
+  explicit truncation accounting, and a GitHub-native raw-evidence recovery route, while correcting
+  the stale Decision 143 authority citation. Preserve Decision 72's failed-commit diagnosis model;
+  automated historical-run replay is deliberately unsupported.
+plan_type: IMPLEMENTATION
+verification_tier: V3
+plan_path: docs/plans/PLAN-ci-rca-bounded-evidence.yaml
+phase: >-
+  GitHub Actions diagnostic safety, audit remediation Slice A. This is the keystone for later GAL-02
+  diagnostic-contract and GAL-04 retention-class slices, but does not implement either later policy.
+scope:
+  - file: docs/DECISIONS.md
+    action: Modify
+    purpose: >-
+      Append a narrow forward Decision amending Decision 74's manual escape hatch: arbitrary past-run
+      replay is no longer an automated CI-RCA guarantee. Preserve Decision 72 for automatic current
+      default-branch failures. Bespoke operator queries remain available for historical investigation.
+  - file: .github/workflows/ci-rca.yml
+    action: Modify
+    purpose: >-
+      Add a least-privilege admission job, bind the privileged job to normalized and attested run/job
+      metadata, consume only the bounded envelope, publish bounded native failure diagnostics, expose
+      an allowlisted metadata-only canary mode, and replace the unrelated Decision 143 citation with
+      truthful provenance.
+  - file: scripts/ci_rca/fetch_logs.py
+    action: Modify
+    purpose: >-
+      Replace undifferentiated failed-run output with admitted per-job-ID retrieval, retain stderr-only
+      transient classification, remove the unbounded whole-run fallback, and delegate bounded raw-log
+      acquisition and envelope construction to cohesive helpers.
+  - file: scripts/ci_rca/log_admission.py
+    action: Create
+    purpose: >-
+      Normalize run identity, validate supported automatic/manual subjects, select failed jobs and
+      steps deterministically, and emit canonical versioned metadata plus its SHA-256 digest.
+  - file: scripts/ci_rca/bounded_evidence.py
+    action: Create
+    purpose: >-
+      Stream raw GitHub log bytes through deterministic whole-line byte/line ceilings and serialize a
+      versioned agent-facing envelope with completeness, retained/omitted counts, identities, recovery
+      metadata, and no raw body on presentation surfaces.
+  - file: scripts/ci_rca/agent_envelope.py
+    action: Create
+    purpose: Strictly validate admission, metadata, body digest, segment identity, accounting, and the independent agent-visible ceiling.
+  - file: scripts/ci_rca/live_probe.py
+    action: Create
+    purpose: Run metadata-only worker scenarios and dispatch/correlate the deployed complete, truncated, and malformed V3 canaries.
+  - file: scripts/checks/ci_guards/validate_ci_workflow_guards.py
+    action: Modify
+    purpose: >-
+      Enforce the admission boundary, digest comparison, bounded-consumer path, stale-citation removal,
+      fail-closed checks, and canary privilege exclusions before workflow-only checks can be trusted.
+  - file: tests/test_ci_rca_fetch_logs.py
+    action: Modify
+    purpose: >-
+      Replace whole-log expectations with complete/truncated bounded-envelope, retry, empty-log,
+      hostile-input, and recovery-failure coverage.
+  - file: tests/test_ci_rca_bounded_evidence.py
+    action: Create
+    purpose: >-
+      Test exact bytes/lines/omissions, UTF-8 boundaries, oversized single lines, stable ordering,
+      canonical metadata digests, and confidentiality allowlists independently of the workflow.
+  - file: tests/verify_ci_workflow/test_ci_rca_bounded_evidence.py
+    action: Create
+    purpose: >-
+      Mutation-test the workflow trust boundary, counterfactual unbounded commands, citation authority,
+      wrong-run/wrong-SHA/wrong-scenario correlation, and no-privilege canary contract.
+bundled_recommendations: []
+infrastructure_dependencies:
+  - >-
+    GitHub Actions REST jobs and run-log archive endpoints using github.token with actions:read. No AWS,
+    Terraform, production deploy, ops-portal write, Claude invocation, or recommendation filing is
+    permitted in the canary path.
+  - >-
+    A least-privilege metadata-only PR check uses github.token with actions:read to prove that the raw-log
+    recovery redirect honors a one-byte Range request. Local authoring may precede that non-hermetic proof,
+    but merge, activation, and closure claims remain blocked until it passes. The check redacts the signed
+    redirect and discards the single transferred byte.
+acceptance_criteria:
+  - >-
+    No CI-RCA agent path executes `gh run view --log` or otherwise captures an uncapped whole-run body;
+    a structural counterfactual inserting that command fails presubmit.
+  - >-
+    The envelope enforces configured maximum bytes and lines while retaining only complete framed lines;
+    complete evidence is marked complete with zero omissions. Truncated evidence reports exact retained
+    byte and line counts and explicitly null omitted counts under a documented no-tail-drain model; it
+    never downloads the omitted tail merely to count it, including UTF-8 and oversized-single-line cases.
+  - >-
+    Every selected evidence segment identifies the failed job and step using stable GitHub identifiers
+    plus allowlisted display names; multiple failures are deterministically ordered and race changes fail
+    closed instead of silently changing the diagnostic subject.
+  - >-
+    Truncated evidence carries a GitHub-native raw recovery URL, run identity, archive expiry/availability
+    caveat, and retrieval instructions. Raw log bodies never enter annotations, summaries, PR comments,
+    outputs, or metadata-only proof artifacts.
+  - >-
+    A separate admission job validates the requested run and emits normalized identity plus canonical
+    jobs metadata. The privileged RCA job re-fetches through URLs derived only from those outputs and
+    proves exact schema version, run/job identity, canonical JSON SHA-256, and URL agreement before any
+    log byte is consumed; mismatch removes staged data and blocks the agent.
+  - >-
+    Automatic workflow_run diagnosis continues to check out the failing default-branch commit per
+    Decision 72. Manual historical replay whose subject lacks the bounded-envelope version is rejected
+    with a stable bounded diagnostic; it is not made compatible through a second control plane.
+  - >-
+    Failed-log-first behavior, stderr-only transient classification, retries, nonempty evidence guard,
+    JUnit-first fingerprints, typed artifacts, native annotations, confidentiality boundaries, and
+    false-green guards remain effective.
+  - >-
+    The workflow no longer claims Decision 143 owns the nonempty-log backstop. The replacement resolves
+    to Decision 72 and the concrete forward-fix lineage, and a focused validator rejects recurrence of
+    this known semantic mismatch.
+  - >-
+    A controlled live canary at the deployed squash SHA proves complete and truncated scenarios and a
+    malformed-evidence refusal using exact workflow id, run id, event, unique correlation id, requested
+    allowlisted scenario, workflow head SHA, checked-out implementation SHA, and proof-summary scenario.
+verification_plan:
+  - step: 1
+    phase: pre-deploy
+    hermetic: false
+    action: >-
+      In the PR fast-presubmit job, probe GitHub's run-log archive redirect/range behavior on a safe
+      repository run using the job's native read-only token, without printing log content or signed URLs.
+    command: >-
+      CI_RCA_LOG_PROBE_RUN_ID=latest GITHUB_TOKEN='${{ github.token }}' bin/venv-python -m scripts.validate --pre
+    expected: >-
+      The endpoint yields an authenticated redirect/recovery route and the implementation can terminate a
+      streaming/ranged download at its configured ceiling without materializing the complete archive.
+    fix_if: >-
+      Keep the PR unmerged and redesign the recovery/acquisition boundary. Local authoring evidence does
+      not override a failed or absent GitHub-native proof.
+  - step: 2
+    phase: pre-deploy
+    hermetic: true
+    action: Run focused unit tests, including uncapped, truncation, recovery, UTF-8, and hostile-name cases.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca_fetch_logs.py tests/test_ci_rca_bounded_evidence.py -q
+    expected: All focused tests pass.
+    fix_if: Diagnose accounting or framing differences; never relax bounds or fail-closed assertions.
+  - step: 3
+    phase: pre-deploy
+    hermetic: true
+    action: Run workflow contract and mutation tests.
+    command: >-
+      bin/venv-python -m pytest tests/verify_ci_workflow/test_ci_rca_bounded_evidence.py -q
+    expected: >-
+      Pass fixtures succeed; uncapped fallback, raw-event use, missing digest comparison, digest mismatch,
+      pre-verification consumption, wrong-run/SHA/scenario, stale citation, and privileged canary mutations fail.
+    fix_if: Correct implementation or validator coverage; do not rely on workflow review alone.
+  - step: 4
+    phase: pre-deploy
+    hermetic: true
+    action: Run all CI-RCA tests to detect regressions in lifecycle, refusal, taxonomy, and evidence consumers.
+    command: >-
+      bin/venv-python -m pytest tests/test_ci_rca*.py tests/verify_ci_workflow -q
+    expected: All selected tests pass.
+    fix_if: RCA the regression and preserve existing fail-closed behavior.
+  - step: 5
+    phase: pre-deploy
+    hermetic: false
+    action: Run the repository authoritative fast presubmit.
+    command: bin/venv-python -m scripts.validate --pre
+    expected: All authoritative fast-tier checks pass within budget.
+    fix_if: Fix the owning check; do not bypass or duplicate validate.py enforcement in workflow YAML.
+  - step: 6
+    phase: post-deploy
+    hermetic: false
+    action: >-
+      From the merged main revision, dispatch each metadata-only canary scenario with a fresh correlation
+      id and EXPECTED_SHA equal to the deployed squash SHA; resolve runs by workflow id, dispatch event,
+      and correlation id, then inspect only bounded proof metadata and native conclusions.
+    command: >-
+      bin/venv-python -m scripts.ci_rca.live_probe --expected-sha "$EXPECTED_SHA" --scenarios complete,truncated,malformed
+    expected: >-
+      Complete and truncated scenarios prove their exact envelope properties; malformed evidence fails
+      closed. Every run matches run id, event, correlation id, scenario, head SHA, implementation SHA,
+      and proof summary, and no canary path obtains OIDC/AWS/ops/Claude/recommendation capability.
+    fix_if: >-
+      Treat wrong-run, wrong-SHA, cross-scenario, missing proof, or unexpected privilege as failure; stop and
+      correct the implementation rather than selecting another run by timestamp.
+constraints:
+  - >-
+    Scope is GAL-01 and GAL-03 only. GAL-02's shared risk contract and GAL-04's purpose-based retention
+    classes are dependent later slices; include only the recovery metadata seam they require.
+  - >-
+    Preserve Decision 72's failed-commit prompt and checkout semantics. Do not introduce a trusted-main
+    control-plane checkout or compatibility machinery for arbitrary historical failures.
+  - >-
+    Append a forward Decision rather than rewriting Decision 74's historical record. Decision numbering is
+    human assigned; backfill through ops_data_portal only after merge and never edit decisions caches.
+  - >-
+    Bound during streaming, before persistence or agent consumption. A post-capture `head`, shell variable,
+    command substitution, or complete archive download does not satisfy GAL-01.
+  - >-
+    Treat run ids, names, archive members, step names, URLs, and dispatch inputs as hostile. Presentation
+    surfaces receive only schema-validated allowlisted metadata and stable codes, never raw evidence.
+  - >-
+    The canary is metadata-only and must have no id-token:write, AWS credential setup, ops portal, Claude
+    token/invocation, PR write, status write, or recommendation-filing route.
+  - >-
+    No Terraform apply or production deployment is authorized. Stop after two attempts on the same live
+    blocker and escalate per overseer policy.
+context:
+  - >-
+    Authoritative audit: audits/github-actions-log-management-c144530f02d1.yaml, GAL-01 and GAL-03.
+    Current-state recon at 30a5cf1 confirmed fetch_logs.py still widens from --log-failed to unbounded
+    --log and ci-rca.yml still calls its nonempty backstop a Decision 143 mitigation.
+  - >-
+    Human clarified that automated RCA of historic runs is not required; bespoke queries are sufficient.
+    Accordingly historical version skew is a designed refusal, not a compatibility requirement.
+  - >-
+    Three independent critique rounds converged on canonical byte framing, plural job/step selection,
+    confidentiality allowlists, feasibility-first API proof, exact live correlation, and cross-job metadata
+    attestation. The final correction requires both jobs to compare the same versioned canonical JSON digest.
+  - >-
+    Decision 74 created workflow_dispatch specifically for arbitrary past-run recovery, so retiring that
+    guarantee requires an explicit forward amendment. Decision 72 remains the authority for automatic
+    failed-commit diagnosis. Decision 143 is unrelated privileged-verb Lambda decomposition.
+  - "gates: G0 approved; G1 approved; plan-critique completed three rounds; corrected plan human-approved"
+pre_implementation_checklist:
+  - Branch confirmed not main and worktree ownership transferred serially
+  - Authoritative audit and current workflow/retriever re-read
+  - GitHub log API feasibility gate is wired as a merge-blocking PR check before activation
+  - Decision 72 preserved and Decision 74 amendment boundary understood
+  - Lambda manifest reports no affected active artifact
+  - Acceptance criteria and exact live correlation contract understood
+execution_steps:
+  - >-
+    Wire Verification Plan step 1 into the existing PR fast-presubmit path before activation; local
+    implementation may proceed, but the slice cannot merge or claim closure until the live proof passes.
+  - >-
+    Append the narrow Decision 74 amendment and implement the admission job plus canonical metadata
+    attestation without changing Decision 72's failed-commit checkout.
+  - >-
+    Implement bounded streaming, deterministic failed job/step selection, the versioned evidence envelope,
+    recovery metadata, and fail-closed consumer validation in cohesive submodules under the SLOC budget.
+  - >-
+    Update ci-rca.yml to consume only verified bounded evidence, correct GAL-03 provenance, and add the
+    isolated metadata-only live canary path.
+  - >-
+    Add validators before relying on workflow checks, add counterfactual fixtures/tests, and execute all
+    pre-deploy verification steps.
+  - >-
+    Commit with feat(ci-rca-bounded-evidence), open the implementation PR, obtain independent review, fix
+    findings until PROCEED, then use the deployed squash SHA for the post-deploy live canary.
+work_areas: []
+rollback: >-
+  Revert the workflow, helpers, validators, and tests together. Do not delete or rewrite the appended
+  Decision; append a reversal Decision if bounded acquisition proves operationally unsuitable. Rollback
+  restores the previous CI-RCA path only as an emergency measure and reopens GAL-01, so disable agent
+  invocation rather than knowingly restoring unbounded ingestion while redesign is pending.

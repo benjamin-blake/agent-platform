@@ -2,6 +2,24 @@
 
 The canonical corpus of ratified architectural and operational decisions, and the sole ETL source for the `ops_decisions` warehouse table (Decision 84). Fully-superseded entries move to `docs/DECISIONS_ARCHIVE.md` per the archival policy in Decision 146.
 
+## Decision 156: Bound automatic CI-RCA evidence at acquisition and retire automated historical-run replay (amends Decisions 72 and 74 by forward reference) (Decided)
+
+**Status:** Decided
+**Date:** 2026-07-27
+**Warehouse ID:** dec-156 (keyed on the decision number; synced to ops_decisions via `ops_data_portal --backfill-decisions-md` post-merge, per Decision 84)
+
+**Problem:** CI-RCA's failed-step fetch widened to `gh run view --log` when failed-step output was empty. Both commands captured their complete output before any consumer could bound it. The agent therefore had an uncapped input path, and the workflow's nonempty backstop incorrectly cited unrelated Decision 143. Decision 74 explicitly allowed manual dispatch against any past run, creating a cross-version safety obligation that the current failed-commit execution model cannot satisfy.
+
+**Decision:** Automatic RCA continues to check out and diagnose the failing default-branch commit as Decision 72 requires. A separate read-only admission job canonicalizes all paginated jobs and steps, and the privileged job re-fetches and digest-compares that exact subject before reading logs. The producer requests each admitted failed job's log by stable job ID, frames each acquired segment with its admitted job and step identities, streams complete lines through raw byte and line ceilings before persistence, terminates the producer when either ceiling is reached, and emits versioned metadata containing the applied limits, retained counts, body digest, acquired segment identities and accounting, explicit selection omissions, truncation state, and the durable GitHub run URL. It does not invoke either whole-output `gh run view` log mode. A separately validated agent envelope enforces its own outer byte ceiling and proves that metadata, admission, and framed body agree. When evidence is truncated, omitted byte and line counts are explicitly marked unknown rather than inferred from a compressed archive or obtained by draining the source. Empty, changed, non-canonical, or digest-mismatched evidence fails closed before agent invocation.
+
+Decision 74's arbitrary historical automated replay guarantee is retired. Historical investigation remains an operator-owned bespoke query; CI-RCA does not add a trusted-main second control plane or version-compatibility machinery. A metadata-only PR presubmit uses only `actions:read` and the native `github.token` to prove the authenticated recovery redirect honors a one-byte Range request. It never prints a signed redirect or log byte, and merge/activation is blocked until this non-hermetic proof passes even though local authoring may proceed without GitHub credentials.
+
+**Rationale:** Bounding at the pipe reader limits agent-visible and persisted evidence without downloading the tail merely to calculate cosmetically exact omission counts. Preserving the failed-commit model keeps Decision 72's feedback semantics for all future default-branch failures, whose commits descend from this boundary. Refusing unsupported historical automation is safer and simpler than executing historical retrieval code or inventing a privileged compatibility plane.
+
+**Reversal conditions:** If GitHub's per-job log endpoint stops streaming through the bounded subprocess pipe, disable agent invocation until a bounded job-log reader is available. If operators establish a durable need for historical automated replay, adopt it only through a new Decision defining an attested control plane and version admission contract. Never restore whole-run capture as a fallback.
+
+**Related:** Decisions 72, 74, and 143 (the last is explicitly not authority for this backstop); audit findings GAL-01 and GAL-03.
+
 ## Decision 155: The DCG-03 orphan guard tolerates a deterministically-classified transient reader outage: skip-with-marker, not job failure (amends Decision 149 clause 3's guard failure-contract by forward reference) (Decided)
 
 **Status:** Decided

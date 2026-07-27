@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+WORKFLOW = Path(".github/workflows/ci-rca.yml")
+
+
+def _workflow() -> dict:
+    data = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    if True in data:
+        data["on"] = data.pop(True)
+    return data
+
+
+def test_admission_is_separate_and_least_privilege() -> None:
+    jobs = _workflow()["jobs"]
+    admission = jobs["admission"]
+    assert admission["permissions"] == {"contents": "read", "actions": "read"}
+    assert jobs["rca"]["needs"] == "admission"
+
+
+def test_jobs_digest_and_manual_refusal_are_fail_closed() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert text.count("scripts.ci_rca.log_admission") >= 2
+    assert "CI_RCA_JOBS_RACE" in text
+    assert "CI_RCA_HISTORICAL_REPLAY_UNSUPPORTED" in text
+    assert "CI_RCA_JOBS_RACE" in text
+
+
+def test_agent_consumes_verified_envelope_and_no_whole_run_fallback_exists() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    source = Path("scripts/ci_rca/fetch_logs.py").read_text(encoding="utf-8")
+    assert "ci-rca-agent-envelope.log" in text
+    assert "scripts.ci_rca.agent_envelope" in text
+    assert '"--log"' not in source
+    assert "Decision 143 mitigation" not in text

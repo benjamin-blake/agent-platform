@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 
 def _load(path: str) -> dict[str, Any]:
@@ -379,6 +379,7 @@ def _check_ci_rca_fetch_classification() -> None:
     """
     data = _load(".github/workflows/ci-rca.yml")
     job = data.get("jobs", {}).get("rca", {})
+
     run_text = _get_step_run_text(job, "Fetch failed run logs")
 
     assert "scripts.ci_rca.fetch_logs" in run_text, "'Fetch failed run logs' step no longer invokes scripts.ci_rca.fetch_logs"
@@ -388,6 +389,44 @@ def _check_ci_rca_fetch_classification() -> None:
         f"'Fetch failed run logs' step run: body contains a pattern-matching construct "
         f"({match.group(0)!r}) -- the log-body content check must never be reintroduced (rec-2857)"
     )
+
+
+def _check_ci_rca_bounded_contract() -> None:
+    data = _load(".github/workflows/ci-rca.yml")
+    job = data.get("jobs", {}).get("rca", {})
+    admission = data.get("jobs", {}).get("admission", {})
+    assert admission.get("permissions") == {"contents": "read", "actions": "read"}, (
+        "CI-RCA admission job is not least privilege"
+    )
+    assert job.get("needs") == "admission", "privileged CI-RCA job is not gated by admission"
+    names = [step.get("name", "") for step in job.get("steps", [])]
+    attest_index = names.index("Fetch and attest jobs JSON before logs")
+    fetch_index = names.index("Fetch failed run logs")
+    envelope_index = names.index("Construct verified agent envelope")
+    assert attest_index < fetch_index < envelope_index, "CI-RCA attestation/envelope ordering is unsafe"
+    canary = data.get("jobs", {}).get("bounded-evidence-canary", {})
+    assert canary.get("permissions") == {"contents": "read"}, "bounded-evidence canary gained write or OIDC privileges"
+    run_text = _get_step_run_text(job, "Fetch failed run logs")
+    source = Path("scripts/ci_rca/fetch_logs.py").read_text(encoding="utf-8")
+    assert '"--log"' not in source and "'--log'" not in source, "CI-RCA retriever contains an uncapped whole-run --log path"
+    assert "copy_bounded_lines" in source, "CI-RCA retriever no longer streams through the bounded evidence primitive"
+    assert "Decision 143 mitigation" not in run_text, "CI-RCA workflow restored the stale Decision 143 attribution"
+    assert "--admission /tmp/ci-rca-jobs.json" in run_text, "bounded fetch does not consume attested admission"
+    assert "--metadata-out /tmp/ci-rca-failed.metadata.json" in run_text, "bounded fetch does not publish typed metadata"
+    envelope_text = _get_step_run_text(job, "Construct verified agent envelope")
+    for argument in ("--admission", "--metadata", "--body", "--out"):
+        assert argument in envelope_text, f"agent envelope invocation omits {argument}"
+    envelope_source = Path("scripts/ci_rca/agent_envelope.py").read_text(encoding="utf-8")
+    for invariant in (
+        "_validate_metadata(metadata, admission, body)",
+        "_validate_segments(metadata, admission, body)",
+        'metadata["recovery_argv"]',
+        'metadata["selection_omitted_job_ids"]',
+        "segment body header differs from admission",
+    ):
+        assert invariant in envelope_source, f"agent-envelope semantic invariant missing: {invariant}"
+    for invariant in ("_publish_pair", "selection_omitted_job_ids=omitted_job_ids", '"retained_bytes": copied_bytes'):
+        assert invariant in source, f"bounded-fetch semantic invariant missing: {invariant}"
 
 
 _COMMANDS = {
@@ -401,6 +440,7 @@ _COMMANDS = {
     "signal-green-needs": _check_signal_green_needs,
     "terraform-apply-concurrency": _check_terraform_apply_concurrency,
     "ci-rca-fetch-classification": _check_ci_rca_fetch_classification,
+    "ci-rca-bounded-contract": _check_ci_rca_bounded_contract,
 }
 
 
