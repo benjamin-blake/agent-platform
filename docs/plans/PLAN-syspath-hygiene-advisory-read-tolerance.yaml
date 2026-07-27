@@ -473,12 +473,13 @@ verification_plan:
     phase: post-deploy
     action: Confirm the bundled recommendation actually closed after merge (closure obligation).
     command: >-
-      bin/venv-python -m scripts.ops_data_portal --sync && grep -c '"id": "rec-2876".*"status": "closed"'
-      logs/.recommendations-log.jsonl
-    expected: rec-2876 present with status closed, resolution naming this plan's merge commit.
+      bin/venv-python -m scripts.ops_data_portal --sync && test "$(grep -cE '"id": "rec-(2876|2878)".*"status": "closed"' logs/.recommendations-log.jsonl)" -eq 2
+    expected: >-
+      Both rec-2876 and rec-2878 present with status closed, resolution naming this plan's merge
+      commit.
     fix_if: >-
-      Still open means the Resolves trailer was missing or malformed in the squash-merge body; fall
-      back to the documented ops_data_portal --update-rec path (Decision 70).
+      Either still open means the Resolves trailer was missing or malformed in the squash-merge
+      body; fall back to the documented ops_data_portal --update-rec path (Decision 70).
 
 constraints:
   - No rescue agents or workaround loops (Decision 55).
@@ -533,6 +534,16 @@ context:
     sys.path.remove(root_str) once; the gw1 worker held 11 copies of the repo root; list.remove()
     drops only the first, so line 184's `assert root_str not in sys.path` fired.
   - >-
+    RECURRENCE CONFIRMED OVERNIGHT (2026-07-27). The same test failed AGAIN on the next push to
+    main (d431839, CI run 30228210303, main-validate), and ci-rca filed rec-2878 at 02:30Z --
+    "test_sys_path_injection_when_root_absent fails on duplicate ROOT entries in sys.path (canary)".
+    Two consecutive red main tips from one flaky test. This is direct evidence for this plan's
+    shard-order-flakiness finding: the same defect recurs on an unrelated commit, so a CI re-run
+    would mask it rather than fix it. rec-2878 is bundled alongside rec-2876; one fix closes both.
+    This branch was rebased onto d431839 at 2026-07-27; every plan baseline was re-verified after
+    the rebase and all still hold (9 unguarded inserts across the same 9 files; exactly 1 file
+    carrying the classifier; scripts/session/postflight.py still maps to tests/session/postflight/;
+    requirements-fast.txt still ships no requests, so the B2 guard-shape reasoning is unchanged).
     CORRECTION TO rec-2876's OWN RCA. Its detection_gap claims the --pre tier skipped the test
     because "the failing PR touched neither" build_lambda_config.py nor its test file. That is
     false: PR #771 (f550d15) touched BOTH and in fact ADDED the failing test. --pre ran it and it
@@ -663,8 +674,8 @@ context:
   - >-
     RELATED-WORK CHECK (ci-rca hard block). Satisfied on condition 1 (same file): the Scope table
     includes tests/test_build_lambda_config.py, which is exactly the source_file cited by the sole
-    remaining unresolved ci-rca rec, rec-2876. rec-2870 and rec-2874 were closed by another agent
-    before this plan was written and are deliberately NOT bundled.
+    unresolved ci-rca recs, rec-2876 AND rec-2878. rec-2870 and rec-2874 were closed by another
+    agent before this plan was written and are deliberately NOT bundled.
   - >-
     MAIN DIVERGENCE. Preflight reported main_freshness ok, 0 behind / 0 ahead, re-verified by an
     explicit `git fetch origin main` after the external rec closures: main tip is still f550d15 and
@@ -752,8 +763,8 @@ execution_steps:
     Execute Verification Plan - run each step; loop until pass; on unrecoverable V3 failure stop and
     RCA (Decision 55).
   - >-
-    Include "Resolves: rec-2876" in the squash-merge commit body so rec-autoclose closes it and
-    stamps its fixed_by_sha, then run VP step 11's re-stamp for rec-2874.
+    Include "Resolves: rec-2876, rec-2878" in the squash-merge commit body so rec-autoclose closes
+    BOTH and stamps their fixed_by_sha, then run VP step 11's re-stamp for rec-2874.
   - 'Report: what was implemented, verification results, and the Decision 155 number actually used.'
 
 work_areas: []
