@@ -5309,13 +5309,25 @@ tier_items:
       - id: c1
         text: >-
           A PR adding a new agent-platform-* Lambda + log group + alarm auto-applies end-to-end
-          with zero AccessDenied and zero bootstrap edit (DEP-01)
-        status: open
+          with zero AccessDenied and zero bootstrap edit (DEP-01). Live-proven 2026-07-24: PR #735
+          added a new agent-platform-* Lambda + log group + alarm and terraform-apply-sandbox run
+          30118451922 applied it end-to-end with zero AccessDenied and zero bootstrap edit; the
+          probe was then cleanly removed via the gated destroy path (PR #739).
+        status: met
+        met_by: t248-passrole-liveproof
       - id: c2
         text: >-
           A PR creating a boundary-carrying agent-platform-* role routes to gated-apply and, on
-          approval, applies with zero AccessDenied without invoking the admin tier (DEP-02)
-        status: open
+          approval, applies with zero AccessDenied without invoking the admin tier (DEP-02).
+          Live-proven 2026-07-27: PR #778 (merge ad9f2fb) created the boundary-carrying probe role
+          agent-platform-probe-liveproof-role; the deterministic guard BLOCKed it to the
+          tf-gated-apply Environment, and on human approval gated-apply run 30263325448 applied the
+          reviewed plan.bin (digest 5c306412) with zero AccessDenied and without invoking the admin
+          tier -- the created role carried the mandatory permissions boundary, its provider
+          default_tags (proving the iam:TagRole companion-verb grant, rec-2842) and its
+          ProbeLiveproofRuntime inline policy.
+        status: met
+        met_by: t248-passrole-liveproof
       - id: c3
         text: >-
           The boundary is attached to all in-scope agent-platform-* CI + execution roles and to
@@ -5364,6 +5376,13 @@ tier_items:
       resource-based-policy surface (no aws_lambda_permission on the probe Lambda), so they do not
       depend on the unshipped DEP-06 guard work. This note does not claim whole-Decision-144-audit
       completion (T2.44/T2.45 open).
+      2026-07-27 (PLAN-t248-passrole-liveproof, PR-4): c1/c2 flip to met (met_by
+      t248-passrole-liveproof) -- both live-proof run-ids are now captured. DEP-01: auto-apply run
+      30118451922 (PR #735, cleanly reverted via PR #739). DEP-02: guard-BLOCKed to tf-gated-apply,
+      human-approved gated-apply run 30263325448 (PR #778, merge ad9f2fb, plan.bin digest 5c306412).
+      Scoped to the DEP-01/DEP-02 live-proof only -- NOT a whole-Decision-144-audit-complete claim;
+      T2.44/T2.45 remain not_started, so item status stays in_progress (that determination is the
+      overseer's G3 call, out of this plan's scope).
 
   - id: T2.49
     tier: T2
