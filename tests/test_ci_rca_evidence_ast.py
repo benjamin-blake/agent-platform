@@ -8,12 +8,10 @@ Also asserts against the LIVE scripts/validate.py:
   validate_sloc_limits -> ["pre", "presubmit"] (duplicate registration case).
 """
 
-import sys
 import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
 
 from scripts.ci_rca.tier_map import build_tier_membership  # noqa: E402
 

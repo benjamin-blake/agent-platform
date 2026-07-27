@@ -29,6 +29,7 @@ markerless entry's intent="" the same way it already drops any other empty optio
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
@@ -38,6 +39,7 @@ import yaml
 from scripts.executor.jsonl_store import DECISIONS_JSONL, Decision
 from scripts.ops_portal._common import ROOT
 from scripts.ops_portal.cache import _refresh_cache_after_write, _sanitize_athena_record, _sync_table
+from scripts.ops_portal.reader_transient import is_reader_unavailable
 from scripts.ops_portal.write_validators import _load_write_time_validators
 from scripts.ops_portal.writer_transport import _ducklake_write
 
@@ -107,6 +109,11 @@ def _fidelity_issue(entry: dict) -> Optional[str]:
     return None
 
 
+# DCG-03 transient-tolerance marker (Decision 155): distinct and greppable, mirrored to
+# GITHUB_STEP_SUMMARY when set, so an accumulating skip stays observable rather than silent.
+_ORPHAN_GUARD_TRANSIENT_MARKER = "[PORTAL] DCG-03 orphan guard SKIPPED (transient reader outage)"
+
+
 def _load_orphan_baseline() -> set[str]:
     """Load the checked-in known-orphaned current-row allowlist (DCG-03 / Decision 149).
 
@@ -160,7 +167,23 @@ def _assert_no_orphaned_current_rows(profile: Optional[str] = None, reader: Opti
 
         active_reader = make_reader(profile=profile)
 
-    current_rows = active_reader.current_state("ops_decisions")
+    try:
+        current_rows = active_reader.current_state("ops_decisions")
+    except Exception as exc:  # noqa: BLE001
+        if not is_reader_unavailable(exc):
+            raise
+        message = (
+            f"{_ORPHAN_GUARD_TRANSIENT_MARKER}: current_state('ops_decisions') raised {exc!r}. "
+            "A 502/503/504 here indicates transient DuckLake reader unavailability, NOT a reliable "
+            "cold-resume signal -- the orphan comparison did not run this backfill. The independent "
+            "per-row backfill loop still exits non-zero on any failed row (Decision 155)."
+        )
+        logger.warning(message)
+        if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(summary_path, "a", encoding="utf-8") as f:
+                f.write(f"\n## DCG-03 orphan guard skipped (transient)\n\n{message}\n")
+        return
+
     current_ids = {row["id"] for row in current_rows if row.get("id")}
 
     baseline = _load_orphan_baseline()

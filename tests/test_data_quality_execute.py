@@ -432,6 +432,41 @@ def test_execute_check_ducklake_hist_and_tbl_both_present():
     assert "{tbl}" in captured["sql"]
 
 
+def test_execute_check_ducklake_is_history_replaces_tbl_with_history_table():
+    """A check whose test_type is 'ulid_history_unique' runs entirely over the history table:
+    {tbl} in its SQL is resolved client-side to the physical history table name."""
+    captured = {}
+
+    class _Reader:
+        def _invoke(self, payload):
+            captured["sql"] = payload["sql"]
+            return {"rows": [{"violation": 0}]}
+
+    check = Check(
+        "ops_execution_plans",
+        "id",
+        "ulid_history_unique",
+        "SELECT COUNT(*) v FROM {tbl} GROUP BY id HAVING COUNT(*) > 1",
+        "d",
+        backend="ducklake",
+    )
+    result = _execute_check_ducklake(check, _Reader())
+    assert result.verdict == "PASS"
+    assert "{tbl}" not in captured["sql"]
+    assert "ops_catalog.ops_execution_plans_history" in captured["sql"]
+
+
+def test_execute_check_ducklake_none_rows_is_error(monkeypatch):
+    """The defensive `rows is None` branch (distinct from an _invoke exception) returns ERROR."""
+    import scripts.data_quality_execute as dqe
+
+    monkeypatch.setattr(dqe, "_query_ops_rows", lambda reader, table, sql: None)
+    check = Check("ops_recommendations", "id", "not_null", "SELECT 1 FROM {tbl}", "d", backend="ducklake")
+    result = _execute_check_ducklake(check, object())
+    assert result.verdict == "ERROR"
+    assert "returned None" in result.detail
+
+
 def test_run_checks_routes_ducklake(monkeypatch):
     class _Reader:
         def _invoke(self, payload):

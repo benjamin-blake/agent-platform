@@ -43,7 +43,9 @@ from pathlib import Path
 # `-m scripts.session.postflight`), and a direct file-path invocation puts sys.path[0] at this
 # file's own directory (scripts/), not the repo root -- without this, `from scripts.postflight
 # import ...` would fail with ModuleNotFoundError under that invocation mode.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from scripts.postflight import _common, housekeeping, remote  # noqa: E402
 

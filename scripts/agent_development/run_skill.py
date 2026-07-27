@@ -27,7 +27,8 @@ def resolve_context_paths(explicit_context: list[str] | None) -> list[str]:
 
 # Add root to sys.path to allow running directly from CLI
 ROOT = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.llm.client import llm_call  # noqa: E402
 

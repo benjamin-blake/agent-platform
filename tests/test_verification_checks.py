@@ -6,7 +6,6 @@ Coverage: all six primitive slots (PASS and FAIL cases), closed-vocabulary guard
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -14,9 +13,6 @@ from unittest import mock
 # ---------------------------------------------------------------------------
 # Module import
 # ---------------------------------------------------------------------------
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from scripts.verification_checks import (  # noqa: E402
     ALL_CHECK_TYPES,
     CANONICAL_SLOTS,

@@ -1,14 +1,12 @@
 """Tests for scripts/ci_rca/taxonomy.py (100% coverage)."""
 
 import re
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
 
 import scripts.ci_rca.taxonomy as taxonomy_mod  # noqa: E402
 from scripts.ci_rca.evidence import _compute_fingerprint, _slugify_workflow  # noqa: E402
