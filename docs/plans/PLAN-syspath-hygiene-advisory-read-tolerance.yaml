@@ -27,27 +27,41 @@ scope:
   - file: tests/test_ci_rca_taxonomy.py
     action: Modify
     purpose: >-
-      Guard the unconditional module-scope `sys.path.insert(0, str(ROOT))` behind
-      `if str(ROOT) not in sys.path:`, matching the already-correct pattern at
-      tests/test_agent_telemetry_writer.py:13. Unguarded, it appends a duplicate repo-root entry
-      every time the module body executes.
+      DELETE the unconditional module-scope `sys.path.insert(0, str(ROOT))` outright. Plan-critique
+      round 4 established it is DEAD CODE, not merely unguarded: tests/__init__.py exists, so
+      pytest's default prepend import mode already puts the repo root on sys.path, and 264 of the
+      273 test files that import scripts.* carry no sys.path line at all. Verified decisively on an
+      origin/main worktree -- stripping this exact line leaves all 39 tests in the file green.
+      Deleting is strictly better than guarding: it satisfies acceptance criteria 2 and 3 trivially,
+      removes the bare-re-indent hazard this plan names, and leaves nothing for a future reader to
+      re-unguard. Keep the ROOT binding (used elsewhere in the file); run `ruff check --fix`
+      afterwards to drop the now-unused `import sys` (its only use was this line).
   - file: tests/test_ci_rca_vacuous_pass.py
     action: Modify
-    purpose: Same guard as tests/test_ci_rca_taxonomy.py -- removes one duplicate-path producer.
+    purpose: >-
+      Same deletion as tests/test_ci_rca_taxonomy.py -- the insert is dead code under pytest's
+      prepend import mode. ROOT is used elsewhere; `import sys` becomes unused, so run `ruff check --fix`.
   - file: tests/test_ci_claude_p_retry.py
     action: Modify
-    purpose: Same guard as tests/test_ci_rca_taxonomy.py -- removes one duplicate-path producer.
+    purpose: >-
+      Same deletion as tests/test_ci_rca_taxonomy.py -- the insert is dead code under pytest's
+      prepend import mode. ROOT is used elsewhere (it feeds WRAPPER) and MUST be kept; `import sys` becomes unused, so run `ruff check --fix`.
   - file: tests/test_ci_rca_tier_map.py
     action: Modify
-    purpose: Same guard as tests/test_ci_rca_taxonomy.py -- removes one duplicate-path producer.
+    purpose: >-
+      Same deletion as tests/test_ci_rca_taxonomy.py -- the insert is dead code under pytest's
+      prepend import mode. ROOT and `sys` are both used elsewhere in the file; no import cleanup needed.
   - file: tests/test_verification_checks.py
     action: Modify
     purpose: >-
-      Same guard, applied to the inline `sys.path.insert(0, str(Path(__file__).parent.parent))`
-      form (this file has no ROOT local; bind one or guard the expression directly).
+      Same deletion, applied to the inline `sys.path.insert(0, str(Path(__file__).parent.parent))`
+      form. This file has no ROOT local, so there is nothing to preserve; Path stays (7 other uses)
+      and `import sys` becomes unused, so run `ruff check --fix`.
   - file: tests/test_ci_rca_evidence_ast.py
     action: Modify
-    purpose: Same guard as tests/test_ci_rca_taxonomy.py -- removes one duplicate-path producer.
+    purpose: >-
+      Same deletion as tests/test_ci_rca_taxonomy.py -- the insert is dead code under pytest's
+      prepend import mode. ROOT and `sys` are both used elsewhere in the file; no import cleanup needed.
   - file: scripts/session/postflight.py
     action: Modify
     purpose: >-
@@ -65,17 +79,20 @@ scope:
   - file: tests/test_syspath_hygiene.py
     action: Create
     purpose: >-
-      Behavioural regression guard proving the guards actually work, not merely that the source
-      looks different. Asserts that re-executing each of the nine guarded module bodies adds ZERO
-      additional copies of the repo root to sys.path. Measured baseline at plan time: importing
-      the six tests/ modules alone takes the count from 1 to 7 (adds exactly 6), and each of the
-      nine adds exactly 1. This is the only check that distinguishes a correct guard from a bare
-      re-indent of the same unguarded insert, which the grep-shaped step 2 alone cannot catch.
-      MECHANISM IS PINNED: re-execute each module body via importlib.util.spec_from_file_location
-      + exec_module. Do NOT use `import tests.test_X` (Decision 131's cross-test-import guard,
-      scripts/checks/hygiene/validate_no_cross_test_imports.py, forbids it on an AST match of
-      ast.Import/ast.ImportFrom) and do NOT use importlib.reload (it requires a prior import, so it
-      inherits the same violation). spec+exec_module was verified working on all nine files.
+      Behavioural regression guard proving the fix actually works, not merely that the source looks
+      different. Asserts that re-executing each of the nine module bodies -- the six whose inserts
+      are DELETED and the three whose inserts are GUARDED -- adds ZERO additional copies of the repo
+      root to sys.path. Measured baseline at plan time: each of the nine adds exactly 1, and the six
+      tests/ modules together take the count from 1 to 7. Deliberately covers all nine rather than
+      only the three guarded ones: for the deleted six it is a standing guard against anyone
+      re-adding the dead insert, and it costs nothing. For the three guarded ones it is the only
+      check that distinguishes a real guard from a bare re-indent, which the grep-shaped step 2
+      cannot catch. MECHANISM IS PINNED: re-execute each module body via
+      importlib.util.spec_from_file_location + exec_module. Do NOT use `import tests.test_X`
+      (Decision 131's cross-test-import guard, scripts/checks/hygiene/validate_no_cross_test_imports.py,
+      forbids it on an AST match of ast.Import/ast.ImportFrom) and do NOT use importlib.reload (it
+      requires a prior import, so it inherits the same violation). spec+exec_module was verified
+      working on all nine files.
   - file: scripts/ops_portal/reader_transient.py
     action: Create
     purpose: >-
@@ -115,8 +132,16 @@ scope:
     purpose: >-
       Cover is_reader_unavailable: each member of the reader's transient set classifies transient;
       a transient-status message that ALSO carries an error_type marker does NOT; a 4xx does NOT;
-      a non-RuntimeError does NOT; requests.ConnectionError/Timeout DO (guarded so the test
-      degrades cleanly where requests is absent -- requirements-fast.txt does not ship it). Also
+      a non-RuntimeError does NOT; requests.ConnectionError/Timeout DO. GUARD SHAPE IS PINNED
+      (plan-critique round 4, B2): the requests dependency MUST be guarded FUNCTION-SCOPED, inside
+      the two ConnectionError/Timeout test bodies only -- NEVER a module-scope
+      pytest.importorskip("requests"). requests is absent from requirements-fast.txt AND is a member
+      of _excluded_heavy_import_names(), so a module-scope skip would skip the WHOLE file in
+      pr-validate: VP steps 4 and 5 would become vacuous exit-0 passes under validate_vp_replay, and
+      both registry rows would degrade to non-fatal `skipped` via _differential_skip_reason. That
+      would silently defeat the derive-the-set parity test, which is this plan's entire anti-drift
+      mechanism for the classifier. TestTransientSetParity needs no requests at all and must always
+      collect and run. Also
       carries the derive-the-set equality test, the same shape Decision 154 used for
       DUCKLAKE_ARTIFACT_NAMES: the classifier accepts exactly
       src.common.iceberg_reader._READER_TRANSIENT_STATUS and rejects its complement, so the
@@ -136,12 +161,18 @@ scope:
       Assert on the marker text so the corrected framing (transient unavailability, NOT an
       asserted cold-resume) cannot silently regress.
       ALSO add a second NEW class TestSubstantiveSignalPin with a single test named
-      test_rec_autoclose_exits_nonzero_on_failed_rows (VP step 9 selects it by node id). It parses
-      .github/workflows/rec-autoclose.yml and asserts the DECISIONS.md-backfill step still exits
-      non-zero when the fidelity report reports any failed row, AND that the step carries neither
-      continue-on-error nor a `|| true` that would neutralise that exit. Assert the SEMANTIC
-      property from parsed YAML rather than an exact source literal, so a harmless reflow does not
-      false-FAIL a standing check. This test is the mechanical backstop for Decision 155 reversal
+      test_rec_autoclose_exits_nonzero_on_failed_rows (VP step 9 selects it by node id).
+      MECHANISM IS PINNED (plan-critique round 4, R2) -- the exit expression lives inside a bash
+      HEREDOC inside the step's `run:` scalar, so it is NOT a YAML-semantic property and a naive
+      yaml.safe_load lookup will not find it. Locate the step by `name: Backfill decisions to
+      warehouse`, extract the heredoc body from its `run:` scalar, ast.parse that body, and assert
+      a sys.exit call whose argument is an IfExp on result["failed"]. Separately assert from the
+      PARSED YAML that the step carries no continue-on-error, that its `run` contains no `|| true`,
+      and that its `if:` is still steps.detect-decisions.outputs.changed == 'true' -- the
+      WHY-THIS-IS-NOT-MASKING argument depends on the guard and the substantive signal being
+      CO-GATED, and an edit to that `if:` would break the co-gating without touching either other
+      property. Asserting the parsed/AST form rather than an exact source literal is what stops a
+      harmless reflow false-FAILing a standing check. This test is the mechanical backstop for Decision 155 reversal
       condition (c) -- it is deliberately homed here, in the file that owns the tolerance, so that
       whoever weakens the tolerance meets the pin in the same file.
 
@@ -200,9 +231,16 @@ verification_plan:
       All collected tests pass. Before the fix this exact command fails with
       "AssertionError: assert '/home/user/agent-platform' not in [...]" (verified at plan time).
     fix_if: >-
-      Still failing means the drain loop is absent or the finally block restored the wrong count;
-      a failure inside one of the six guarded modules means a guard was applied incorrectly and
-      broke that module's own import resolution.
+      Still failing means the drain loop is absent or the finally block restored the wrong count, or
+      a deletion/guard was applied incorrectly and broke a module's own import resolution.
+      HONEST SCOPE OF THIS STEP (measured at plan time, round 4): this step verifies the combined
+      post-fix END STATE, it does NOT isolate the drain fix. On a worktree with only the six
+      deletions and three guards applied -- drain fix absent -- this exact command already PASSES
+      (163 passed), because removing the pollution removes the trigger. The step is still a valid
+      differential (it exits 1 on plain origin/main) and still the right end-state assertion, but do
+      not read it as a regression guard on the drain logic specifically. The drain fix is retained
+      as defence-in-depth: it makes the test correct under ANY future ambient pollution source,
+      rather than relying on the tree staying clean.
     hermetic: true
     graduation: graduate
     graduation_check_id: "syspath-injection-test-under-polluted-path"
@@ -239,9 +277,10 @@ verification_plan:
       All pass -- zero additional repo-root copies across all nine modules (measured baseline:
       the six tests/ modules alone add 6).
     fix_if: >-
-      A non-zero delta means a guard is cosmetic (e.g. the insert was indented under an unrelated
-      block rather than under an `if str(ROOT) not in sys.path` test), which step 2's grep would
-      wrongly pass.
+      A non-zero delta from one of the three scripts/ modules means its guard is cosmetic (e.g. the
+      insert was indented under an unrelated block rather than under an `if <root> not in sys.path`
+      test), which step 2's grep would wrongly pass. A non-zero delta from one of the six tests/
+      modules means its dead insert was re-indented or re-added rather than deleted.
     hermetic: true
     graduation: graduate
     graduation_check_id: "syspath-modules-add-no-duplicate-root"
@@ -264,8 +303,8 @@ verification_plan:
     phase: pre-deploy
     action: >-
       Close the reader/classifier drift channel -- assert the classifier's accepted set EQUALS
-      src.common.iceberg_reader._READER_TRANSIENT_STATUS (derive-the-set, Decision 143 pattern)
-      rather than restating {502,503,504} independently.
+      src.common.iceberg_reader._READER_TRANSIENT_STATUS (derive-the-set, the shape Decision 154
+      used for DUCKLAKE_ARTIFACT_NAMES) rather than restating {502,503,504} independently.
     command: >-
       bin/venv-python -m pytest
       "tests/ops_data_portal/test_reader_transient.py::TestTransientSetParity::test_classifier_set_equals_reader_authority"
@@ -347,12 +386,17 @@ verification_plan:
     hermetic: true
     graduation: waive
     graduation_waiver_reason: >-
-      This step's entire purpose is to prove UNCHANGED behaviour in downstream consumers, so it
-      passes both before and after the change by construction (verified: its files are green on
-      origin/main today). validate_verification_registry's differential gate admits a row only if
-      it FAILS on revert, so a collateral-damage regression check of this shape is inherently
-      inadmissible -- not a classification dodge, a structural property of no-op-by-design checks.
-      The behaviour this plan actually changes is graduated by steps 1-7 and 9.
+      CORRECTED at plan-critique round 4: an earlier draft claimed this step "passes both before
+      and after by construction". That was FALSE and is retracted -- measured on an origin/main
+      worktree, this exact command exits 1 (1 failed, 178 passed), failing on
+      test_sys_path_injection_when_root_absent because it collects tests/test_build_lambda_config.py
+      alongside sys.path-polluting targets. The step IS differentially admissible; it is waived for
+      a different and honest reason: it re-proves step 1's guarantee at ~21s where step 1 proves it
+      at ~2.8s, so graduating it would add roughly 42s (live + revert legs) to every fast-tier run
+      for a signal already graduated. Its genuinely-new half -- collateral-damage regression across
+      the DQ / decisions / plan_audit / run_skill / postflight suites -- IS green on origin/main and
+      is inherently inadmissible, being a prove-nothing-broke check. The behaviour this plan changes
+      is graduated by steps 1-7 and 9.
   - step: 9
     phase: pre-deploy
     action: >-
@@ -391,8 +435,13 @@ verification_plan:
       A SLOC failure would mean a scope file crossed its budget; per Decision 128 decompose rather
       than raise. A placement failure would mean scripts/ops_portal/reader_transient.py needs a
       file-router/allowlist entry. A validate_graduation_completeness failure on the implement-PR
-      leg means the nine graduated steps need their matching rows in
-      config/agent/verification_registry/registry.yaml, keyed on plan_slug + check_id.
+      leg means the EIGHT graduated steps (1-7 and 9; step 8 is waived) need their
+      matching rows in config/agent/verification_registry/registry.yaml, keyed on plan_slug +
+      check_id. Prefer test_selector rows wherever a single node id suffices (steps 3, 4, 5, 6, 9):
+      TestSelectorCheck runs sys.executable, whereas bin/venv-python hard-fails in a fresh
+      differential worktree that has no .venv. Steps 1, 2 and 7 need ["bash", "-c", ...] under
+      command_exit_zero -- none of the command slots use shell=True, and GrepCountCheck reads a
+      single file only.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -499,6 +548,12 @@ context:
     from scripts/session/postflight.py:46, scripts/roadmap/plan_audit.py:30 and
     scripts/agent_development/run_skill.py:30. All three are now in scope; compute_affected_artifacts
     returns {} for them, so the tier is unchanged. Baseline is 9 unguarded inserts repo-wide.
+    ROUND-4 REFINEMENT: the six tests/ inserts turned out to be DEAD CODE, not merely unguarded -
+    tests/__init__.py exists so pytest's prepend import mode already supplies the repo root, 264 of
+    the 273 test files importing scripts.* carry no sys.path line, and stripping the line from
+    test_ci_rca_taxonomy.py on an origin/main worktree left all 39 of its tests green. Those six are
+    therefore DELETED. The three scripts/ inserts ARE load-bearing (scripts/session/postflight.py:40-45
+    documents the file-path self-reinvocation) and are GUARDED, not deleted.
   - >-
     ROOT CAUSE C (evidence from the failing job log, run 30101021966 job 89506781941). This was NOT
     a cold start. Step 7 (which touches DuckLake) succeeded in 2s at 14:28:14. Step 8 then ran
@@ -633,13 +688,16 @@ context:
 pre_implementation_checklist:
   - Branch confirmed not on main
   - docs/PROJECT_CONTEXT.md read
-  - DECISIONS.md read (149, 154, 88, 84, 72, 142, 103, 55, 62, 143 at minimum)
+  - DECISIONS.md read (149, 154, 88, 84, 72, 142, 103, 55, 62 at minimum; NOT 143 -- see the
+    citation correction in Context)
   - All sixteen files in scope located and readable
   - Acceptance criteria understood and verifiable
   - >-
     Baselines re-confirmed before editing - `grep -rEn "^sys\.path\.insert" tests/ scripts/ src/
     --include=*.py | wc -l` returns 9; VP step 7's file-form command reports exactly ONE
-    matching file (scripts/data_quality_execute.py); and VP step 1's command currently FAILS. If any baseline no
+    matching file (scripts/data_quality_execute.py); and VP steps 1 AND 8 both currently FAIL (step
+    8 exits 1 for the same reason as step 1 -- it collects tests/test_build_lambda_config.py
+    alongside polluting targets; that is expected pre-fix, not a surprise regression). If any baseline no
     longer holds, someone has already landed part of this work; re-scope before proceeding.
 
 execution_steps:
@@ -647,13 +705,19 @@ execution_steps:
     tests/test_build_lambda_config.py - replace the single sys.path.remove with a count-preserving
     drain/restore around test_sys_path_injection_when_root_absent.
   - >-
-    Guard the module-scope sys.path.insert in all nine producer modules - six under tests/
-    (test_ci_rca_taxonomy, test_ci_rca_vacuous_pass, test_ci_claude_p_retry, test_ci_rca_tier_map,
-    test_verification_checks, test_ci_rca_evidence_ast) and three under scripts/
-    (session/postflight.py, roadmap/plan_audit.py, agent_development/run_skill.py) - matching
-    tests/test_agent_telemetry_writer.py:13.
+    DELETE the module-scope sys.path.insert from the six tests/ producers (test_ci_rca_taxonomy,
+    test_ci_rca_vacuous_pass, test_ci_claude_p_retry, test_ci_rca_tier_map, test_verification_checks,
+    test_ci_rca_evidence_ast) - they are dead code under pytest's prepend import mode - then run
+    `ruff check --fix` to drop the four now-unused `import sys` lines. Keep every ROOT binding
+    (notably test_ci_claude_p_retry's, which feeds WRAPPER).
   - >-
-    Create tests/test_syspath_hygiene.py asserting each of the nine guarded module bodies adds zero
+    GUARD the module-scope sys.path.insert in the three scripts/ producers (session/postflight.py,
+    roadmap/plan_audit.py, agent_development/run_skill.py) with `if <root> not in sys.path:`,
+    matching tests/test_agent_telemetry_writer.py:13. These three are genuinely load-bearing -
+    scripts/session/postflight.py:40-45 documents the file-path self-reinvocation that needs it -
+    so they are guarded, NOT deleted.
+  - >-
+    Create tests/test_syspath_hygiene.py asserting each of the nine module bodies adds zero
     repo-root copies to sys.path when re-executed via importlib.util.spec_from_file_location +
     exec_module (never `import tests.test_X` or importlib.reload -- both violate Decision 131's
     cross-test-import guard).
@@ -696,7 +760,8 @@ work_areas: []
 
 rollback: >-
   Each of the three changes reverts independently. Fixes A/B: revert the ten touched module files
-  and delete tests/test_syspath_hygiene.py; the only effect is the flaky assertion returns. Fix C:
+  (restoring the six deleted inserts and un-guarding the three scripts/ ones) and delete
+  tests/test_syspath_hygiene.py; the only effect is the flaky assertion returns. Fix C:
   delete the try/except around the current_state call in _assert_no_orphaned_current_rows, which
   restores the fatal-on-any-reader-error behaviour exactly; the shared classifier can stay in place
   harmlessly, or be re-inlined into scripts/data_quality_execute.py. VP step 11's re-stamp reverts
