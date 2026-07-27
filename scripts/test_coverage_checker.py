@@ -230,6 +230,7 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/sync/ops.py",
         "scripts/session/postflight.py",
         "scripts/ci_rca/evidence.py",
+        "scripts/checks/deps/affected_tests.py",
     }
 )
 
