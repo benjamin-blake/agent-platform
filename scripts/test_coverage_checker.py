@@ -78,14 +78,16 @@ _DUCKLAKE_RUNTIME_SPLIT_MODULES = {
 # roadmap keeps full names (empty-suffix -> test_<stem>); llm is mixed (client/utils strip the
 # llm_ prefix, model_registry/github_models_client keep their names) but a single "test_llm_"
 # prefix reproduces all four via the two renamed tests (test_llm_model_registry.py,
-# test_llm_github_models_client.py). Whitelisted to the five known subpackages so a NEW
-# scripts/<pkg>/ does not silently inherit a mapping (do not generalise to any len==3).
+# test_llm_github_models_client.py). agent_sdk keeps full names (test_agent_sdk_<stem>.py), the
+# same convention as roadmap. Whitelisted to the six known subpackages so a NEW scripts/<pkg>/
+# does not silently inherit a mapping (do not generalise to any len==3).
 _NESTED_SUBPACKAGE_TEST_PREFIX = {
     "ci_rca": "test_ci_rca_",
     "session": "test_session_",
     "sync": "test_sync_",
     "roadmap": "test_",
     "llm": "test_llm_",
+    "agent_sdk": "test_agent_sdk_",
 }
 
 
@@ -111,15 +113,16 @@ def _grandfathered_source_to_test(source_path: Path) -> Path | None:
                               special case so every src/lambdas/*/handler.py resolves to its own
                               distinct, real test home instead of colliding on the stem-based
                               tests/test_handler.py fallback (retired).
-    scripts/{ci_rca,session,sync,roadmap,llm}/<name>.py -> the module's kept-in-place flat test
-                              (nested subpackages, RS-01 / rec-164): ci_rca/session/sync strip the
-                              family prefix -> test_ci_rca_/test_session_/test_sync_<name>.py; roadmap
-                              keeps full names -> test_<name>.py; llm is mixed (client/utils strip the
-                              llm_ prefix, model_registry/github_models_client keep their names) but
-                              all four resolve via the single test_llm_ prefix -> test_llm_client.py,
+    scripts/{ci_rca,session,sync,roadmap,llm,agent_sdk}/<name>.py -> the module's kept-in-place
+                              flat test (nested subpackages, RS-01 / rec-164): ci_rca/session/sync
+                              strip the family prefix -> test_ci_rca_/test_session_/test_sync_<name>.py;
+                              roadmap and agent_sdk keep full names -> test_<name>.py /
+                              test_agent_sdk_<name>.py; llm is mixed (client/utils strip the llm_
+                              prefix, model_registry/github_models_client keep their names) but all
+                              four resolve via the single test_llm_ prefix -> test_llm_client.py,
                               test_llm_utils.py, test_llm_model_registry.py,
                               test_llm_github_models_client.py. See _NESTED_SUBPACKAGE_TEST_PREFIX
-                              (whitelisted to these five; no general len==3 rule).
+                              (whitelisted to these six; no general len==3 rule).
 
     Returns None for paths not under src/ or scripts/ -- including scripts/executor/** and
     scripts/ops_portal/**, which deliberately have no source-to-test mapping (Decision 124).
@@ -227,6 +230,7 @@ _CONCERN_SPLIT_TEST_PACKAGES: frozenset[str] = frozenset(
         "scripts/sync/ops.py",
         "scripts/session/postflight.py",
         "scripts/ci_rca/evidence.py",
+        "scripts/checks/deps/affected_tests.py",
     }
 )
 
