@@ -68,9 +68,14 @@ scope:
       Behavioural regression guard proving the guards actually work, not merely that the source
       looks different. Asserts that re-executing each of the nine guarded module bodies adds ZERO
       additional copies of the repo root to sys.path. Measured baseline at plan time: importing
-      the six tests/ modules alone takes the count from 1 to 7 (adds exactly 6). This is the only
-      check that distinguishes a correct guard from a bare re-indent of the same unguarded insert,
-      which the grep-shaped step 2 alone cannot catch.
+      the six tests/ modules alone takes the count from 1 to 7 (adds exactly 6), and each of the
+      nine adds exactly 1. This is the only check that distinguishes a correct guard from a bare
+      re-indent of the same unguarded insert, which the grep-shaped step 2 alone cannot catch.
+      MECHANISM IS PINNED: re-execute each module body via importlib.util.spec_from_file_location
+      + exec_module. Do NOT use `import tests.test_X` (Decision 131's cross-test-import guard,
+      scripts/checks/hygiene/validate_no_cross_test_imports.py, forbids it on an AST match of
+      ast.Import/ast.ImportFrom) and do NOT use importlib.reload (it requires a prior import, so it
+      inherits the same violation). spec+exec_module was verified working on all nine files.
   - file: scripts/ops_portal/reader_transient.py
     action: Create
     purpose: >-
@@ -112,11 +117,14 @@ scope:
       a transient-status message that ALSO carries an error_type marker does NOT; a 4xx does NOT;
       a non-RuntimeError does NOT; requests.ConnectionError/Timeout DO (guarded so the test
       degrades cleanly where requests is absent -- requirements-fast.txt does not ship it). Also
-      carries the derive-the-set equality test (Decision 143 pattern, as Decision 154 used for
-      DUCKLAKE_ARTIFACT_NAMES): the classifier accepts exactly
+      carries the derive-the-set equality test, the same shape Decision 154 used for
+      DUCKLAKE_ARTIFACT_NAMES: the classifier accepts exactly
       src.common.iceberg_reader._READER_TRANSIENT_STATUS and rejects its complement, so the
-      authority and the classifier cannot drift. Reading src/ is not modifying it, so this adds no
-      Lambda artifact and no tier escalation.
+      authority and the classifier cannot drift. That test MUST be named
+      TestTransientSetParity::test_classifier_set_equals_reader_authority -- VP step 5 selects it
+      by explicit node id, not by -k. Reading src/ is not modifying it, so this adds no Lambda
+      artifact and no tier escalation (confirmed: compute_affected_artifacts over the full scope
+      returns {}).
   - file: tests/ops_data_portal/test_decisions_divergence_guard.py
     action: Modify
     purpose: >-
@@ -156,6 +164,10 @@ acceptance_criteria:
     scripts/data_quality_execute.py behaviour is unchanged by the extraction (its existing test
     file passes untouched).
   - >-
+    The failed-counter exit at .github/workflows/rec-autoclose.yml:156 -- the independent loud
+    signal the whole non-masking argument depends on -- is pinned by a graduated standing check, so
+    Decision 155 reversal condition (c) is mechanically enforced rather than asserted in prose.
+  - >-
     No Lambda artifact is affected by this scope, so no build/deploy/smoke-test leg is required
     (compute_affected_artifacts returns {}).
 
@@ -187,11 +199,13 @@ verification_plan:
       Prove the duplicate-path producer class is gone repo-wide -- no module-scope (column-0)
       sys.path.insert remains under tests/, scripts/ or src/. Exit-code-bearing via grep negation,
       so a surviving producer fails the step (plan-critique round 1, R2).
-    command: '! grep -rEn "^sys\.path\.insert" tests/ scripts/ src/ --include=*.py'
+    command: '! grep -rEn "^sys\.path\.(insert|append|extend)" tests/ scripts/ src/ --include=*.py'
     expected: >-
       Exit 0 with no output. Baseline at plan time was 9 matches -- six under tests/ and three
       under scripts/ (session/postflight.py:46, roadmap/plan_audit.py:30,
-      agent_development/run_skill.py:30).
+      agent_development/run_skill.py:30). The alternation covers append/extend as well as insert:
+      zero of those exist today, so it costs nothing now and closes a permanent blind spot in what
+      becomes a STANDING graduated check.
     fix_if: >-
       Any surviving hit re-introduces the ambient duplicate-repo-root condition for every future
       test that reasons about sys.path. Note this step alone cannot distinguish a real guard from
@@ -237,11 +251,14 @@ verification_plan:
       src.common.iceberg_reader._READER_TRANSIENT_STATUS (derive-the-set, Decision 143 pattern)
       rather than restating {502,503,504} independently.
     command: >-
-      bin/venv-python -m pytest tests/ops_data_portal/test_reader_transient.py -k derive
+      bin/venv-python -m pytest
+      "tests/ops_data_portal/test_reader_transient.py::TestTransientSetParity::test_classifier_set_equals_reader_authority"
       --randomly-seed=12345 -q
     expected: >-
       The derive-the-set test passes -- classifier accepts exactly the reader's authoritative set
-      and rejects its complement.
+      and rejects its complement. An explicit node id is used rather than `-k derive`: this repo
+      warns against -k selectors twice (docs/PROJECT_CONTEXT.md, tests/CLAUDE.md), and as a
+      GRADUATED standing check a rename would break a -k match silently.
     fix_if: >-
       A hard-coded status set in the classifier has diverged from the reader's authority; the
       extraction would then only have de-duplicated the scripts/-side copy while leaving the
@@ -269,15 +286,17 @@ verification_plan:
     action: >-
       Prove the transient semantics have exactly one definition AND that it lives in the new
       shared module -- count alone would not prove the old private copy was the one deleted.
-    command: 'test "$(grep -rEn "def (_)?is_reader_unavailable|_TRANSIENT_HTTP_RE" scripts/ src/ --include=*.py | wc -l)" -eq 3 && test "$(grep -rEn "def (_)?is_reader_unavailable|_TRANSIENT_HTTP_RE" scripts/ops_portal/reader_transient.py | wc -l)" -eq 3'
+    command: 'test "$(grep -rEln "def (_)?is_reader_unavailable|_TRANSIENT_HTTP_RE" scripts/ src/ --include=*.py | grep -v "^scripts/ops_portal/reader_transient.py$" | wc -l)" -eq 0 && grep -qE "def is_reader_unavailable" scripts/ops_portal/reader_transient.py'
     expected: >-
-      Exit 0. Exactly 3 matching lines repo-wide (the def, the regex constant, and its in-function
-      use), all 3 inside scripts/ops_portal/reader_transient.py. Baseline at plan time is 3, all
-      inside scripts/data_quality_execute.py (lines 20, 76, 92).
+      Exit 0. NO file outside scripts/ops_portal/reader_transient.py mentions the classifier or its
+      regex constant, and the new module does define it. Baseline at plan time: exactly one file
+      matches (scripts/data_quality_execute.py, lines 20/76/92), so this currently fails.
     fix_if: >-
-      A total other than 3 means the extraction dropped or duplicated a line; 3 total but fewer
-      than 3 in reader_transient.py means the local copy in scripts/data_quality_execute.py
-      survived, so the two consumers can still drift.
+      A surviving match outside the new module means the local copy in
+      scripts/data_quality_execute.py was not deleted, so the two consumers can still drift. This
+      form counts FILES rather than pinning an exact line count, so a second legitimate use of the
+      regex inside the new module does not break a standing check -- the exact-count coupling
+      tests/CLAUDE.md warns about.
     hermetic: true
     graduation: graduate
     graduation_check_id: "reader-transient-classifier-single-definition"
@@ -302,13 +321,33 @@ verification_plan:
     graduation_check_id: "reader-transient-extraction-consumer-parity"
   - step: 9
     phase: pre-deploy
+    action: >-
+      Pin the load-bearing structural dependency that makes the whole non-masking argument valid --
+      rec-autoclose must still exit non-zero when the backfill reports any failed row. This is the
+      mechanical backstop for Decision 155 reversal condition (c), which would otherwise be prose
+      that nothing enforces.
+    command: 'grep -qF ''sys.exit(1 if result["failed"] else 0)'' .github/workflows/rec-autoclose.yml'
+    expected: >-
+      Exit 0 -- the failed-counter exit is present at .github/workflows/rec-autoclose.yml:156
+      (verified present at plan time).
+    fix_if: >-
+      If this ever fails, the independent loud signal that justifies skipping the advisory read has
+      been removed or weakened, and the DCG-03 skip MUST be reverted in the same change (Decision
+      155 reversal condition (c)). Do not "fix" this step by relaxing the pattern.
+    hermetic: true
+    graduation: graduate
+    graduation_check_id: "rec-autoclose-failed-counter-exit-present"
+  - step: 10
+    phase: pre-deploy
     action: Run the authoritative fast-tier presubmit gate over the whole change.
     command: bin/venv-python -m scripts.validate --pre
     expected: PASS -- ruff, mypy, prompt checks, diff-aware pytest, SLOC and placement guards all green.
     fix_if: >-
       A SLOC failure would mean a scope file crossed its budget; per Decision 128 decompose rather
       than raise. A placement failure would mean scripts/ops_portal/reader_transient.py needs a
-      file-router/allowlist entry.
+      file-router/allowlist entry. A validate_graduation_completeness failure on the implement-PR
+      leg means the nine graduated steps need their matching rows in
+      config/agent/verification_registry/registry.yaml, keyed on plan_slug + check_id.
     hermetic: false
     graduation: waive
     graduation_waiver_reason: >-
@@ -316,21 +355,26 @@ verification_plan:
       would register the fast tier as a standing check run BY the fast tier -- a circular
       self-invocation, and the same recursion the _VALIDATE_DEPTH guard exists to prevent. Its
       constituent checks are already independently registered; there is nothing left to graduate.
-  - step: 10
+  - step: 11
     phase: post-deploy
     action: >-
       Re-point rec-2874's fixed_by_sha at the commit that actually removes the fragility, replacing
       b0272f6 (which added rec-autoclose to the ci-rca watched-workflow filter and fixed nothing).
       This is NOT cosmetic -- see the corrected rationale in Context.
-    command: 'SHA=$(git rev-parse origin/main) && bin/venv-python -c "import sys; from scripts.ops_portal.ci_rca_lifecycle import stamp_fixed_by_sha; stamp_fixed_by_sha(''rec-2874'', sys.argv[1]); print(''stamped'', sys.argv[1])" "$SHA"'
+    command: 'git fetch origin main --quiet && SHA=$(git rev-parse origin/main) && bin/venv-python -c "import sys; from scripts.ops_portal.ci_rca_lifecycle import stamp_fixed_by_sha; stamp_fixed_by_sha(''rec-2874'', sys.argv[1]); print(''stamped'', sys.argv[1])" "$SHA"'
     expected: >-
-      Prints "stamped <sha>"; rec-2874's context_v2_json.fixed_by_sha equals this plan's
-      squash-merge SHA.
+      Prints "stamped <sha>" where <sha> is this plan's SERVER-SIDE squash-merge commit;
+      rec-2874's context_v2_json.fixed_by_sha then equals it.
     fix_if: >-
-      stamp_fixed_by_sha raises if rec-2874 is absent from the current projection -- re-run
-      the portal sync first. Note scripts/ops_portal/ci_rca_lifecycle.py has no argparse/__main__,
-      so the importable helper must be called directly as above; a `-m` invocation will fail.
-  - step: 11
+      The explicit `git fetch origin main` is mandatory and must not be dropped: the squash-merge
+      happens server-side via merge_pull_request, so without it `git rev-parse origin/main` returns
+      the STALE local remote-tracking ref -- which at plan time is f550d15, the very red commit this
+      plan exists to clear. If the printed sha equals f550d15 (or any pre-merge tip), the fetch was
+      skipped; re-fetch and re-stamp. Separately, stamp_fixed_by_sha raises if rec-2874 is absent
+      from the current projection -- re-run the portal sync first. Note
+      scripts/ops_portal/ci_rca_lifecycle.py has no argparse/__main__, so the importable helper must
+      be called directly as above; a `-m` invocation will fail.
+  - step: 12
     phase: post-deploy
     action: Confirm the bundled recommendation actually closed after merge (closure obligation).
     command: >-
@@ -380,9 +424,13 @@ context:
     required /plan review that AGENTS.md forbids bypassing with an inline patch), Decision 84 (I-3
     closed named-verb read boundary), Decision 142 (fingerprint chain lifecycle - see the VP step
     10 rationale), Decision 103 (semantic verdicts are close_proposed, never a bare direct close),
-    Decision 62 (2026-06-16 amendment - the ratified precedent for tolerating reader-502-driven
-    check failure on this substrate), Decision 143 (derive-the-set-assert-equality, used by step 5).
-  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE->PROCEED after 2 round(s)"
+    Decision 62 (2026-06-16 amendment - weaker corroboration than an earlier draft claimed; see the
+    WHY-THIS-IS-NOT-MASKING note). CITATION CORRECTION - an earlier draft attributed the
+    derive-the-set-assert-equality pattern used by VP step 5 to "Decision 143". That is a mis-cite
+    inherited from Decision 154's Related line: Decision 143 is about privileged-verb Lambda
+    decomposition and contains no such pattern. The pattern is self-justifying and is now cited by
+    reference to Decision 154's DUCKLAKE_ARTIFACT_NAMES usage instead.
+  - "gates: decision-scout=FLAGS_FOUND; plan-critique=REVISE(r1) -> REVISE(r2) -> PROCEED after 3 round(s)"
   - >-
     ROOT CAUSE A (reproduced locally, not inferred). rec-2876. CI run 30223119628 is the post-merge
     push run on main tip f550d15 (event=push, head_sha=f550d15), conclusion failure, still
@@ -424,8 +472,12 @@ context:
     incident. (2) The guard checks PERSISTENT state (a warehouse row with no matching header), not
     a transient event, so a skipped run DELAYS detection to the next backfill rather than losing
     it. Corroborating precedent: scripts/data_quality_execute.py:139 already implements this exact
-    tolerance on this exact substrate, and Decision 62's 2026-06-16 amendment already ratified
-    tolerating reader-502-driven check failure here. EXPLICITLY NOT RELIED ON: Decision 55's
+    tolerance on this exact substrate. Decision 62's 2026-06-16 amendment is WEAKER corroboration
+    than an earlier draft claimed and is cited only as such: it ratified RELOCATING a
+    reader-502-broken check to a non-gating monitor that files a rec, which establishes that
+    reader-502-driven check failure is a recognised problem on this substrate -- it did NOT ratify
+    skipping in place. The in-place choice is argued on its own merits above and in the
+    Decision 107/62 note (option C2, considered and rejected). EXPLICITLY NOT RELIED ON: Decision 55's
     "deterministic recovery remains valid" carve-out and Decision 88 invariant (i) both ratify
     deterministic RETRY / REOPEN, not deterministic SKIP; citing them as authority for a skip
     over-reads both, and an earlier draft of this plan did so.
@@ -473,7 +525,12 @@ context:
     scripts/ops_portal/decisions.py. Extending this tolerance to any other guard requires a NEW
     clause naming that call site; this Decision licenses no general "advisory guards may skip" rule,
     and does not reclassify the guard itself as advisory - Decision 149 designed it to be loud, and
-    only its dependency-read failure mode is narrowed here. GROUNDS - the two structural facts in
+    only its dependency-read failure mode is narrowed here. UNCOMFORTABLE PROPERTIES, STATED PLAINLY
+    (Decision 154 point 5 precedent) - this scope bound is PROSE ONLY, with no mechanical backstop,
+    and extracting the classifier to a shared importable module puts the same skip one import away
+    from any future guard that wants it; the bound therefore relies on review discipline, and a
+    future author adopting it elsewhere must add a clause rather than merely importing.
+    GROUNDS - the two structural facts in
     the "WHY THIS IS NOT MASKING" note above (independent loud substantive signal; persistent state
     rather than transient event), plus the landed data_quality_execute.py:139 sibling and Decision
     62's 2026-06-16 amendment. OBSERVABILITY - a distinct greppable marker, mirrored to
@@ -483,8 +540,11 @@ context:
     marker is observed more than once in any 7-day window; (b) any incident in which a skipped
     advisory read is shown to have masked a real divergence; (c) the substantive signal that
     justifies this asymmetry (the failed-counter exit at rec-autoclose.yml:156) is removed or
-    weakened, at which point the advisory skip must be reverted in the same change. REVERT PATH -
-    delete the try/except around the current_state call in _assert_no_orphaned_current_rows.
+    weakened, at which point the advisory skip must be reverted in the same change - and unlike (a)
+    and (b) this one IS mechanically enforced, by the graduated standing check
+    rec-autoclose-failed-counter-exit-present (VP step 9), which fails the build if that exit line
+    disappears. REVERT PATH - delete the try/except around the current_state call in
+    _assert_no_orphaned_current_rows.
   - >-
     DECISION 107 / DECISION 62 SPIRIT FLAGS ANSWERED. Decision 107 names recurring
     ducklake_reader cold-resume 502s as a Neon swap-back reversal trigger, so suppressing them
@@ -544,7 +604,9 @@ execution_steps:
     tests/test_agent_telemetry_writer.py:13.
   - >-
     Create tests/test_syspath_hygiene.py asserting each of the nine guarded module bodies adds zero
-    repo-root copies to sys.path when re-executed.
+    repo-root copies to sys.path when re-executed via importlib.util.spec_from_file_location +
+    exec_module (never `import tests.test_X` or importlib.reload -- both violate Decision 131's
+    cross-test-import guard).
   - >-
     Create scripts/ops_portal/reader_transient.py with is_reader_unavailable(exc), lifting the
     behaviour of scripts/data_quality_execute.py's private copy verbatim; docstring states plainly
