@@ -1,7 +1,16 @@
 from unittest.mock import MagicMock, patch
 
-from scripts.data_quality_execute import _execute_check, _execute_check_ducklake, _is_reader_unavailable, run_checks
-from scripts.data_quality_models import Check, CheckResult, RunResult
+import pytest
+
+boto3 = pytest.importorskip("boto3")
+
+from scripts.data_quality_execute import (  # noqa: E402
+    _execute_check,
+    _execute_check_ducklake,
+    _is_reader_unavailable,
+    run_checks,
+)
+from scripts.data_quality_models import Check, CheckResult, RunResult  # noqa: E402
 
 
 def test_execute_check_success():
