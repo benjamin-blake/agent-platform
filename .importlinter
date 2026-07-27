@@ -61,6 +61,18 @@ ignore_imports =
     # stamp_fixed_by_sha calls back into the facade for _fetch_rec_from_reader/update_rec via the
     # same function-local pattern -- mirrors the three carve-outs immediately above.
     scripts.ops_portal.ci_rca_lifecycle -> scripts.ops_data_portal
+    # Decision 155 (PLAN-syspath-hygiene-advisory-read-tolerance): scripts.data_quality_execute
+    # imports scripts.ops_portal.reader_transient (is_reader_unavailable), the extracted transient
+    # DuckLake-reader-outage classifier shared with the DCG-03 orphan guard. reader_transient.py is
+    # a leaf pure-logic module with zero imports of its own (no back-import into ops_data_portal or
+    # scripts.executor), so this edge carries none of the dependency-inversion risk this contract
+    # guards against -- it is flagged only because reader_transient.py's file location falls inside
+    # the scripts.ops_portal layer boundary. The edge is reachable from
+    # scripts.executor.postflight_gates via scripts.verifiers.data_quality's verifier gate, an
+    # already-intentional executor->verifiers edge carved out in the sibling
+    # no-cycles-verifiers-executor contract above; this entry breaks the same transitive path for
+    # THIS contract's static layers check without weakening either layering.
+    scripts.data_quality_execute -> scripts.ops_portal.reader_transient
     # scripts.executor.branch_lifecycle (extracted FROM scripts.execute_recommendation, PLAN-sloc-executor-core)
     # keeps file_hotfix_rec's and _is_poisoned_rec's lazy `from scripts.ops_data_portal import file_rec /
     # find_open_postmortem_for` imports exactly as they were in the facade. That import previously originated

@@ -177,8 +177,8 @@ class TestGetLambdaFilePatterns:
         """When ROOT is not already on sys.path, the function injects it for the duration of the
         call and removes it again afterward (the injected/finally branch)."""
         root_str = str(bl_config.ROOT)
-        was_present = root_str in sys.path
-        if was_present:
+        original_count = sys.path.count(root_str)
+        while root_str in sys.path:
             sys.path.remove(root_str)
         try:
             assert root_str not in sys.path
@@ -186,7 +186,7 @@ class TestGetLambdaFilePatterns:
             assert isinstance(result, list)
             assert root_str not in sys.path  # removed again by the finally block
         finally:
-            if was_present and root_str not in sys.path:
+            for _ in range(original_count):
                 sys.path.insert(0, root_str)
 
 

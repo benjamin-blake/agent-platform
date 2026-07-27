@@ -27,7 +27,8 @@ JSONL_LOG = ROOT / "logs" / ".plan-audit-log.jsonl"
 RECS_LOG = ROOT / "logs" / ".recommendations-log.jsonl"
 
 # Import find_plan_file from the canonical module
-sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from scripts.roadmap.find_plan import find_plan_file  # noqa: E402
 
 

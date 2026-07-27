@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
 
 from scripts.ci_rca.vacuous_pass import (  # noqa: E402
     _TEST_FILE_RE,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 from typing import Any
 
@@ -12,12 +11,12 @@ import yaml
 
 from scripts.data_quality_compile import build_clause8_checks, to_ducklake_sql
 from scripts.data_quality_models import _DQ_DIR, Check, CheckResult, RunResult
+from scripts.ops_portal.reader_transient import is_reader_unavailable as _is_reader_unavailable
 
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 2  # seconds between Athena status checks
 _MAX_POLL = 60  # max seconds to wait for a single query
-_TRANSIENT_HTTP_RE = re.compile(r"failed \(HTTP (?:502|503|504)\)")
 
 # Ops governance tables (the full set; telemetry_* stays on Athena per Decision 78 cl.2).
 _OPS_TABLES: frozenset[str] = frozenset(
@@ -71,27 +70,6 @@ def _query_ops_rows(reader: Any, table: str, sql: str) -> list[dict]:
     """Call the reader's raising _invoke surface and return the rows list."""
     body = reader._invoke({"action": "query_ops", "table": table, "sql": sql, "params": []})
     return list(body.get("rows", []))
-
-
-def _is_reader_unavailable(exc: BaseException) -> bool:
-    """True when exc indicates a transient DuckLake reader infra outage.
-
-    Transient: requests ConnectionError/Timeout, or a RuntimeError whose message
-    matches the reader's own transient set {502,503,504} with no structured error_type marker.
-    Structured handler errors (HTTP 500 + error_type, 4xx) are not transient -- they gate.
-    """
-    try:
-        import requests as _req  # noqa: PLC0415
-
-        if isinstance(exc, (_req.ConnectionError, _req.Timeout)):
-            return True
-    except ImportError:
-        pass
-    if isinstance(exc, RuntimeError):
-        msg = str(exc)
-        if _TRANSIENT_HTTP_RE.search(msg) and "error_type" not in msg:
-            return True
-    return False
 
 
 def _execute_check_ducklake(check: Check, reader: Any) -> CheckResult:
