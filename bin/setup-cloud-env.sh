@@ -73,7 +73,7 @@
 # because it puts the credential in the process environment.)
 #
 # Responsibility split (post T0.2 refactor):
-#   setup-cloud-env.sh -- snapshot-cached installs (venv, deps, AWS CLI, optional Terraform, github-mcp-server, pre-commit hook envs).
+#   setup-cloud-env.sh -- snapshot-cached installs plus Codex bootstrap parity for Claude's SessionStart checks.
 #   .claude/hooks/session_start_aws.sh -- verifies the static-key assume-role chain (every session).
 #   .claude/hooks/session_start_ensure_github_mcp.sh -- self-heals github-mcp-server on stale snapshots (every session).
 #   .claude/hooks/session_start_sync_deps.sh -- self-heals requirements.txt/requirements-dev.txt (and terraform binary) drift on stale snapshots (every session).
@@ -92,7 +92,8 @@
 #   6. Installs the github-mcp-server binary (for the .mcp.json `github-full`
 #      MCP server -- full GitHub toolset incl. Actions: workflow runs / job logs).
 #   7. Pre-builds the pre-commit hook environments into ~/.cache/pre-commit so
-#      the hooks (detect-secrets, ruff, file hygiene) run offline in later sessions.
+#      the hooks (detect-secrets, ruff, file hygiene) run offline in later sessions,
+#      then runs the remaining checkout-local SessionStart checks used by Claude.
 #
 # What it does NOT do:
 #   - Materialise ~/.aws/{credentials,config} or ~/.config/gh-mcp/token (done by
@@ -231,9 +232,7 @@ fi
 # the hook repos (pre-commit-hooks, ruff-pre-commit, detect-secrets) into
 # ~/.cache/pre-commit now -- while setup-time network is available -- so they are
 # baked into the snapshot and run offline in later sessions, mirroring the AWS CLI
-# and github-mcp-server caching above. The per-session .git/hooks wiring (which
-# does NOT survive a fresh clone) is re-applied by
-# .claude/hooks/session_start_precommit.sh.
+# and github-mcp-server caching above.
 t0=$SECONDS
 if [ -x .venv/bin/pre-commit ]; then
     if .venv/bin/pre-commit install-hooks >/dev/null 2>&1; then
@@ -244,5 +243,12 @@ if [ -x .venv/bin/pre-commit ]; then
 else
     log "WARNING: .venv/bin/pre-commit missing (requirements-dev.txt not installed?); skipping hook cache."
 fi
+
+# Codex cloud invokes this tracked setup script instead of .claude/settings.json.
+# The dependency and GitHub MCP SessionStart scripts delegate to the same commands
+# already run above; invoke the remaining checkout-local checks here for parity.
+bash .claude/hooks/session_start_aws.sh
+bash .claude/hooks/session_start_precommit.sh
+bash .claude/hooks/session_start_sync_main.sh
 
 log "Done. Verify with: bin/venv-python -m scripts.session.preflight"
